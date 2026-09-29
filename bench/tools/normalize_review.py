@@ -17,7 +17,7 @@ Native shapes:
 * ``review-code``: the skill's ``composition.json`` (``summary.status``, ``findings`` with
   ``title``, ``priority``, ``action``, ``kind``, ``trigger``, ``impact``, ``change``, ``anchor``;
   ``questions``; ``observations``).
-* ``codex-skill``: a skill's native ``review.json`` with ``status``, ``verdict`` and ``findings``.
+* ``codex-skill`` and ``claude-skill``: a skill's native ``review.json`` with ``status``, ``verdict`` and ``findings``.
   Primary findings alone become scored items; the complete native document and each source finding
   are retained under ``native_payload`` and ``native_fields``.
 * ``claude-builtin``: ``payload.json`` written by ``attempt_audit.py`` with ``final_text`` (the
@@ -335,7 +335,7 @@ def self_test() -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--arm", choices=["review-code", "claude-builtin", "codex", "codex-skill"])
+    parser.add_argument("--arm", choices=["review-code", "claude-builtin", "claude-skill", "codex", "codex-skill"])
     parser.add_argument("--composition"); parser.add_argument("--payload"); parser.add_argument("--stdout")
     parser.add_argument("--native-review")
     parser.add_argument("--sessions-dir"); parser.add_argument("--clone"); parser.add_argument("--out")
@@ -359,9 +359,9 @@ def main() -> int:
             if not args.stdout:
                 parser.error("--stdout is required for codex")
             doc = from_codex(open(args.stdout, encoding="utf-8").read(), args.clone, args.sessions_dir)
-        elif args.arm == "codex-skill":
+        elif args.arm in ("codex-skill", "claude-skill"):
             if not args.native_review:
-                parser.error("--native-review is required for codex-skill")
+                parser.error(f"--native-review is required for {args.arm}")
             doc = from_codex_skill(json.load(open(args.native_review, encoding="utf-8")), args.clone)
         else:
             parser.error("--arm is required")

@@ -204,7 +204,8 @@ def rates_for(path: Path, model: str) -> dict:
     return matches[-1]
 
 
-def launch(args) -> int:
+def prepare_attempt(args, kind: str) -> dict:
+    """Check the frozen run, arm, skill, target and clone pins; write the attempt's input.md."""
     run_dir = Path(args.run).resolve(strict=True)
     attempt = Path(args.attempt_dir).resolve(strict=True)
     clone = Path(args.clone).resolve(strict=True)
@@ -215,8 +216,8 @@ def launch(args) -> int:
         raise RunnerError("run manifest is not frozen")
     arm = read_json(arm_path)
     entry = arm_entry(manifest, arm["id"])
-    if arm.get("kind") != "codex-skill":
-        raise RunnerError("codex skill runner requires a codex arm")
+    if arm.get("kind") != kind:
+        raise RunnerError(f"this runner requires a {kind} arm")
     model, effort = arm.get("model"), arm.get("effort")
     if not model or not effort:
         raise RunnerError("the arm must pin both model and reasoning effort")
@@ -291,9 +292,33 @@ def launch(args) -> int:
     )
     attempt_input = attempt / "input.md"
     attempt_input.write_text(prompt, encoding="utf-8")
-    input_hash = sha256(prompt.encode("utf-8"))
-    before = tree_identity(clone)
-    (attempt / "tree-before.txt").write_text(before + "\n", encoding="utf-8")
+    (attempt / "tree-before.txt").write_text(tree_identity(clone) + "\n", encoding="utf-8")
+    return {"run_dir": run_dir, "attempt": attempt, "clone": clone, "manifest": manifest, "arm": arm,
+            "entry": entry, "model": model, "effort": effort, "skill_source": skill_source,
+            "tree_hash": tree_hash, "runner_config": runner_config, "cache": cache, "work": work,
+            "artifact_root": artifact_root, "skill_name": skill_name, "attempt_input": attempt_input,
+            "input_hash": sha256(prompt.encode("utf-8"))}
+
+
+def copy_frozen_skill(prepared: dict) -> Path:
+    """Copy the frozen skill to the attempt's private work directory, where the prompt names it."""
+    skill_work = prepared["work"] / "frozen-skill"
+    if skill_work.exists():
+        raise RunnerError(f"refusing reused skill workspace: {skill_work}")
+    shutil.copytree(prepared["skill_source"], skill_work)
+    if skill_tree_hash(skill_work)[0] != prepared["tree_hash"]:
+        raise RunnerError("attempt-local skill copy differs from the frozen skill tree")
+    return skill_work
+
+
+def launch(args) -> int:
+    prepared = prepare_attempt(args, "codex-skill")
+    attempt, clone, entry = prepared["attempt"], prepared["clone"], prepared["entry"]
+    model, effort, tree_hash = prepared["model"], prepared["effort"], prepared["tree_hash"]
+    skill_source, skill_name = prepared["skill_source"], prepared["skill_name"]
+    runner_config, artifact_root = prepared["runner_config"], prepared["artifact_root"]
+    cache, work = prepared["cache"], prepared["work"]
+    attempt_input, input_hash = prepared["attempt_input"], prepared["input_hash"]
     receipt = clean_context.prepare(attempt)
     home = Path(receipt["home"])
     codex_home = home / ".codex"
@@ -306,13 +331,7 @@ def launch(args) -> int:
     generated_config = clean_context.configure_codex(home, clone, skill_home)
     shutil.copy2(generated_config, attempt / "codex-config.toml")
     config_hash = sha256(generated_config.read_bytes())
-    skill_work = work / "frozen-skill"
-    if skill_work.exists():
-        raise RunnerError(f"refusing reused skill workspace: {skill_work}")
-    shutil.copytree(skill_source, skill_work)
-    skill_work_hash, _ = skill_tree_hash(skill_work)
-    if skill_work_hash != tree_hash:
-        raise RunnerError("attempt-local skill copy differs from the frozen skill tree")
+    skill_work = copy_frozen_skill(prepared)
     source_codex = Path(os.environ.get("HOME", "")) / ".codex" / "auth.json"
     if not source_codex.is_file():
         raise RunnerError(f"Codex credentials are missing at {source_codex}")
