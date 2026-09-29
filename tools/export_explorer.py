@@ -1,6 +1,7 @@
 """Build a deterministic explorer dataset from preserved benchmark evidence."""
 
 import json
+import os
 from pathlib import Path
 import shutil
 import sys
@@ -8,6 +9,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 BENCH = ROOT / "bench"
 PUBLIC = ROOT / "public"
+BASE_PATH = os.environ.get("BASE_PATH", "/").rstrip("/")
 sys.path.insert(0, str(BENCH / "tools"))
 import scoreboard
 
@@ -21,7 +23,7 @@ def evidence(path):
     destination = PUBLIC / "evidence" / relative
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(path, destination)
-    return "/evidence/" + relative.as_posix()
+    return BASE_PATH + "/evidence/" + relative.as_posix()
 
 
 def usage_tokens(path, record):
@@ -80,7 +82,7 @@ def export_attempt(run, attempt_id, mapping, archives):
             "billing": record.get("usage", {}).get("billing") or "unavailable",
             "predecessor": run.name + "/" + record["predecessor"] if record.get("predecessor") else None,
             "retryReason": record.get("retry_reason"),
-            "detailUrl": "/data/attempts/" + identifier + ".json"}
+            "detailUrl": BASE_PATH + "/data/attempts/" + identifier + ".json"}
 
 
 def build():
