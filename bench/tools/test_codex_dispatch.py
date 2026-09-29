@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""Verify Codex dispatch flags and credential cleanup without calling Codex."""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+
+
+REPO = Path(__file__).resolve().parents[2]
+DISPATCH = Path(__file__).with_name("dispatch.sh")
+
+
+class CodexDispatchTest(unittest.TestCase):
+    def test_model_effort_overrides_are_separate_and_default_is_unforced(self):
+        with tempfile.TemporaryDirectory(prefix=".codex-dispatch-test-", dir=REPO) as scratch:
+            root = Path(scratch)
+            clone = root / "clone"
+            clone.mkdir()
+            subprocess.run(["git", "-C", str(clone), "init", "-q", "-b", "main"], check=True)
+            subprocess.run(["git", "-C", str(clone), "config", "user.name", "Dispatch Test"], check=True)
+            subprocess.run(["git", "-C", str(clone), "config", "user.email", "dispatch-test@example.invalid"], check=True)
+            subprocess.run(["git", "-C", str(clone), "commit", "--allow-empty", "-qm", "fixture"], check=True)
+
+            source_home = root / "source-home"
+            credentials = source_home / ".codex" / "auth.json"
+            credentials.parent.mkdir(parents=True)
+            credentials.write_text('{"fixture":"not a credential"}\n', encoding="utf-8")
+
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            fake_codex = bin_dir / "codex"
+            fake_codex.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json, os, sys\n"
+                "if sys.argv[1:] == ['--version']:\n"
+                "    print('codex-cli 0.0.0-test')\n"
+                "    raise SystemExit(0)\n"
+                "with open(os.environ['CODEX_ARGV_CAPTURE'], 'w', encoding='utf-8') as f:\n"
+                "    json.dump({'argv': sys.argv[1:], 'home': os.environ.get('HOME'),\n"
+                "               'codex_home': os.environ.get('CODEX_HOME')}, f)\n"
+                "raise SystemExit(23)\n",
+                encoding="utf-8",
+            )
+            fake_codex.chmod(0o755)
+            packet = root / "packet.md"
+            packet.write_text("Fixture review packet.\n", encoding="utf-8")
+
+            cases = (
+                ("explicit", "gpt-6-luna", "high", [
+                    "review", "-c", 'sandbox_mode="workspace-write"',
+                    "-c", "sandbox_workspace_write.network_access=false",
+                    "-c", 'model="gpt-6-luna"', "-c", 'review_model="gpt-6-luna"',
+                    "-c", 'model_reasoning_effort="high"', "-",
+                ]),
+                ("default", "", "", [
+                    "review", "-c", 'sandbox_mode="workspace-write"',
+                    "-c", "sandbox_workspace_write.network_access=false", "-",
+                ]),
+            )
+            for name, model, effort, expected_argv in cases:
+                with self.subTest(name=name):
+                    attempt = root / f"attempt-{name}"
+                    capture = root / f"argv-{name}.json"
+                    env = dict(os.environ)
+                    env.update({
+                        "HOME": str(source_home),
+                        "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
+                        "CODEX_ARGV_CAPTURE": str(capture),
+                    })
+                    result = subprocess.run(
+                        [str(DISPATCH), "codex", str(attempt), str(clone), "main", str(packet), model, effort],
+                        env=env,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+
+                    self.assertEqual(result.returncode, 23, result.stderr)
+                    receipt = json.loads(capture.read_text(encoding="utf-8"))
+                    self.assertEqual(receipt["argv"], expected_argv)
+                    self.assertEqual(receipt["home"], str(attempt / "home"))
+                    self.assertEqual(receipt["codex_home"], str(attempt / "home" / ".codex"))
+                    self.assertFalse((attempt / "home" / ".codex" / "auth.json").exists())
+                    dispatch_record = (attempt / "dispatch.txt").read_text(encoding="utf-8")
+                    self.assertIn(f"model={model or '<default>'} effort={effort or '<default>'}", dispatch_record)
+
+
+if __name__ == "__main__":
+    unittest.main()
