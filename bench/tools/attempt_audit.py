@@ -3,12 +3,12 @@
 
 Usage::
 
-    python3 attempt_audit.py --arm claude-builtin|codex|codex-skill|review-code --attempt-dir <dir> \\
+    python3 attempt_audit.py --arm claude-builtin|claude-skill|codex|codex-skill|review-code --attempt-dir <dir> \\
         --clone <path> [--allowed <path>...] [--allowed-prefix <prefix>...] \\
         [--isolation-settings <file>] [--json]
 
-``review-code`` attempts read like ``claude-builtin`` ones (root plus sub-agent transcripts) but
-need no built-in header; the skill's private store lives under a ``/tmp/review-code-`` prefix,
+``review-code`` and ``claude-skill`` attempts read like ``claude-builtin`` ones (root plus sub-agent
+transcripts) but must not run the built-in; the skill's private store lives under a ``/tmp/review-code-`` prefix,
 which the caller allows with ``--allowed-prefix``.
 
 Reads the transcripts the dispatch wrapper collected under ``<attempt-dir>``:
@@ -503,7 +503,7 @@ def expand_refs(command: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--arm", required=True, choices=["claude-builtin", "codex", "codex-skill", "review-code"])
+    parser.add_argument("--arm", required=True, choices=["claude-builtin", "claude-skill", "codex", "codex-skill", "review-code"])
     parser.add_argument("--attempt-dir", required=True)
     parser.add_argument("--clone", required=True)
     parser.add_argument("--allowed", nargs="*", default=[])
@@ -531,7 +531,7 @@ def main() -> int:
     PREFIXES[:] = list(args.allowed_prefix)
     violations, requests = [], []
     try:
-        if args.arm in ("claude-builtin", "review-code"):
+        if args.arm in ("claude-builtin", "claude-skill", "review-code"):
             files, commands, reads, headers, calls, texts, cwds = audit_claude(attempt, roots)
             clone_path = os.path.realpath(args.clone)
             workdirs = [None if not c or os.path.realpath(c) == clone_path else c for c in cwds]
@@ -540,8 +540,8 @@ def main() -> int:
                       "report_findings_calls": len(calls)}
             if args.arm == "claude-builtin" and not headers:
                 violations.append("no built-in prompt header found: the built-in did not run")
-            if args.arm == "review-code" and headers:
-                violations.append("a built-in review prompt ran inside a review-code attempt")
+            if args.arm != "claude-builtin" and headers:
+                violations.append(f"a built-in review prompt ran inside a {args.arm} attempt")
             payload = {"final_text": texts[-1] if texts else None, "report_findings": calls}
             (attempt / "payload.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
         else:
