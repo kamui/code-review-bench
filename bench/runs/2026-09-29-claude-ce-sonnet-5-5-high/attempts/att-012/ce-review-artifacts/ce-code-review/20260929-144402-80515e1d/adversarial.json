@@ -1,0 +1,52 @@
+{
+  "reviewer": "adversarial",
+  "findings": [
+    {
+      "title": "Offset shift breaks UTC-midnight timestamps in UTC- zones",
+      "severity": "P1",
+      "file": "bokehjs/src/lib/models/widgets/date_picker.ts",
+      "line": 83,
+      "why_it_matters": "Python serializes date values (value, min_date, max_date) as UTC-midnight millisecond numbers. The old code read them correctly in every zone by taking the UTC date. The new code subtracts getTimezoneOffset() from those numbers, so in any UTC- zone (all of the Americas) the initial value, and every value later set from Python, shows one day early. min_date and max_date bounds also move one day early. The fix works only for the local-midnight strings that _on_select produces via toDateString(). It trades the UTC+ bug for a UTC- bug on the numeric input path. Handle the two input kinds separately: read UTC components for numbers and local components for strings.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Do not apply a blanket offset shift. In render(), branch on the input type. For a numeric UTC timestamp, keep the original approach: `const d = new Date(v); return new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())`. For a string such as 'Mon Sep 16 2019', which Date parses as local midnight, use local getters: `new Date(d.getFullYear(), d.getMonth(), d.getDate())`. Apply the same branching to min_date and max_date.",
+      "confidence": 100,
+      "evidence": [
+        "bokehjs/src/lib/models/widgets/date_picker.ts:83 -- date.setTime(date.getTime() - timeOffsetInMS)",
+        "bokehjs/src/lib/models/widgets/date_picker.ts:68 -- defaultDate: this._unlocal_date(new Date(this.model.value)),",
+        "bokeh/util/serialization.py:184 -- return (dt.datetime(*obj.timetuple()[:6]) - DT_EPOCH).total_seconds() * 1000 (date -> UTC-midnight ms)",
+        "Executed the old and new _unlocal_date under TZ env values with num=Date.UTC(2019,8,20) (Python date(2019,9,20)). America/Los_Angeles, America/New_York, America/Sao_Paulo and Pacific/Pago_Pago: old=2019-9-20, new=2019-9-19. UTC, Europe/Paris, Asia/Kolkata, Pacific/Auckland and Pacific/Kiritimati: new=2019-9-20 (correct).",
+        "For the string path new Date('Mon Sep 16 2019'): old=2019-9-15 in UTC+ zones, new=2019-9-16 in all tested zones, including US DST days (Mar 10, Nov 3) and Paris Mar 31. This path is fixed correctly."
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Tests never assert the initially displayed date; TZ-dependent",
+      "severity": "P2",
+      "file": "tests/integration/widgets/test_datepicker.py",
+      "line": 68,
+      "why_it_matters": "No test asserts the date shown for the initial Python-supplied value. That is the path the new code breaks in UTC- zones (see the P1 finding). test_basic checks only the label text. The only display assertion is the post-selection '.bk-input' value, which goes through the string path that the fix repairs. The tests use no TZ pinning, so a UTC CI machine exercises neither the UTC+ regression nor the UTC- one. The suite would pass against the original bug and against the new UTC- bug.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Add an assertion that '.foo .bk-input' equals 'Fri Sep 20 2019' immediately after load, before any click. Run the selenium suite under TZ=America/Los_Angeles and TZ=Pacific/Auckland (browser TZ via chromedriver env or a TZ override) so both signs are covered.",
+      "confidence": 75,
+      "evidence": [
+        "tests/integration/widgets/test_datepicker.py:68 -- assert el.get_attribute('value') == 'Mon Sep 16 2019'",
+        "tests/integration/widgets/test_datepicker.py:48 -- assert el.text == \"Select date\""
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "_unlocal_date mutates its argument via date.setTime. All current callers pass a fresh `new Date(...)` (render, lines 68-70), and `new Date(dateObj)` copies, so there is no aliasing or double-shift today. It is a latent trap if a caller ever passes a shared Date.",
+    "getTimezoneOffset is evaluated at the input instant, not at the resulting local date. For local-midnight strings this is correct, including DST days in the zones tested. Zones where the DST transition falls exactly at 00:00 were not exhaustively tested.",
+    "max_date=datetime.utcnow() in the tests is a non-midnight timestamp. The offset shift can move the bound by up to a day near midnight, but the tests only click day 16 of Sept 2019, and today's date is far past that. So the max_date and 'today' selector are not time-fragile, because the picker month comes from value=2019-09-20 and day 16 stays enabled as long as max_date is later than 2019-09-16.",
+    "test_server_on_change_round_trip asserts Python-side old and new values via utcfromtimestamp. It does not verify what the browser displays."
+  ],
+  "testing_gaps": [
+    "No test for a Python-side value update after render, which goes through the numeric path.",
+    "No test for min_date/max_date bound enforcement (disabled days) in non-UTC zones."
+  ]
+}

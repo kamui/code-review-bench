@@ -1,0 +1,33 @@
+{
+  "reviewer": "adversarial",
+  "findings": [
+    {
+      "title": "Client-spoofable x-vercel-isr header re-opens path override on _render",
+      "severity": "P1",
+      "file": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+      "line": 24,
+      "why_it_matters": "The ISR branch trusts a plain request header (`x-vercel-isr: 1`) that carries no secret, and the exact same entrypoint is bundled into both the `_isr` and `_render` functions. Any client that adds that header to a request reaching `_render` (or `_isr`) can set `x_astro_path` and make Astro route/render a different path than the one edge middleware or platform routing authorized, which is precisely the bypass #15959 closed. The regression test only sends the query param without the header, so it stays green. Reproduced in-process against the built _render handler.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Do not let `_render` honor the query override at all: build the ISR function with its own virtual-config flag (e.g. `isrPathOverride: true`, passed only from buildISRFolder) and gate the `else if` branch on that compile-time flag instead of (or in addition to) the header. Assumption: Vercel does not strip or overwrite client-supplied `x-vercel-isr`; if it does, document that guarantee next to the check. Also add a test in path-override-security.test.js sending `x-vercel-isr: 1` + `x_astro_path` to `_render` and asserting the original path is served.",
+      "confidence": 75,
+      "evidence": [
+        "packages/integrations/vercel/src/serverless/entrypoint.ts:24 -- } else if(request.headers.get('x-vercel-isr') === '1') {",
+        "entrypoint.ts:25 -- realPath = url.searchParams.get(ASTRO_PATH_PARAM);  (no secret involved)",
+        "src/index.ts:~450 -- buildServerlessFolder(entryFile, NODE_PATH, ...) and buildISRFolder(entryFile, '_isr', ...) both bundle the same entry, so _render has the same branch",
+        "In-process probe (scratch: tmp/adv/probe.mjs) against built .vercel/output/_functions/entry.mjs of serverless-with-dynamic-routes: GET /api/public?x_astro_path=/api/private -> {\"id\":\"public\"}; same request with header x-vercel-isr: 1 -> {\"id\":\"private\"}; with x-vercel-isr:1 plus an invalid x-astro-middleware-secret -> {\"id\":\"private\"}",
+        "provenance: 71ae51338 (this PR) introduced the branch; 335a20416 (#15959) had made the override secret-only"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Whether Vercel's edge strips or overwrites an externally supplied `x-vercel-isr` header is undocumented and could not be verified offline (no network); exploitability on a real deployment hinges on it. The PR relies on an undocumented platform header for a trust decision.",
+    "In ISR mode, route dests go straight to `/_isr?x_astro_path=$0` regardless of edge middleware, and `allowQuery: [x_astro_path]` lets a client-supplied x_astro_path reach the ISR function; how Vercel merges a client-supplied duplicate `x_astro_path` with the route's `$0` value (and what ISR cache key results) was not verifiable here, so a poisoned-cache variant (`/one?x_astro_path=/other`) is unassessed.",
+    "The override is not validated (any string; empty string yields 404 via pathname setter; encoded '%3F' stays in path segment); only matters if the trust boundary above is weak."
+  ],
+  "testing_gaps": [
+    "No test sends `x-vercel-isr: 1` with `x_astro_path` to `_render` to pin that it must not rewrite the path; nor a positive ISR-function test that the rewrite works (test/isr.test.js only checks generated config, and the ISR fixture has no handler-invocation test). PR states no tests were added."
+  ]
+}

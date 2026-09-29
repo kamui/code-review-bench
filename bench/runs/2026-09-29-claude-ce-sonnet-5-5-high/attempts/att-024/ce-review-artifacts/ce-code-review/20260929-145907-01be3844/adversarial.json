@@ -1,0 +1,31 @@
+{
+  "reviewer": "adversarial",
+  "findings": [
+    {
+      "title": "Composition: formData() then parseBody() re-serializes body, boundary mismatch throws",
+      "severity": "P1",
+      "file": "src/utils/body.ts",
+      "line": 126,
+      "why_it_matters": "A handler or middleware that calls `c.req.formData()` and later `c.req.parseBody()` on the same multipart request now fails with `TypeError: Failed to parse body as FormData` (HTTP 500). Before the change parseBody called `request.formData()`, which returned the cached FormData. Now parseFormData calls `request.arrayBuffer()`. With only `bodyCache.formData` populated, HonoRequest.#cachedBody rebuilds bytes via `new Response(formData).arrayBuffer()`, which generates a fresh random boundary. parseFormData then parses those bytes with the original request's `Content-Type` boundary, so they don't match. Fix by reusing an existing cached formData before touching arrayBuffer.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In parseFormData, when `request instanceof HonoRequest`, short-circuit on the cache: `const formData = request.bodyCache.formData ? await request.bodyCache.formData : await (async () => { ...arrayBuffer + bufferToFormData + cache... })()`. Alternatively call `request.formData()` for HonoRequest (as before) and use the arrayBuffer/bufferToFormData path only for raw Request objects, so case-insensitive handling lives in bufferToFormData. Add a regression test: `await c.req.formData(); await c.req.parseBody()` on a multipart request. Assumption: the new arrayBuffer path exists so bufferToFormData can normalize the media type case.",
+      "confidence": 100,
+      "evidence": [
+        "src/utils/body.ts:126 -- const arrayBuffer = await (request as Request).arrayBuffer()",
+        "src/request.ts:224-236 -- #cachedBody('arrayBuffer') with only bodyCache.formData present takes the anyCachedKey branch: `return new Response(body)[key]()`, re-encoding FormData with a new random boundary and not caching the result",
+        "src/utils/body.ts:127 -- bufferToFormData(arrayBuffer, headers.get('Content-Type') || '') parses the re-encoded bytes with the ORIGINAL request boundary",
+        "Reproduced with esbuild-bundled script in scratch dir: app.post('/a', async c => { await c.req.formData(); return c.json(await c.req.parseBody()) }) with a FormData body returns 500 'TypeError: Failed to parse body as FormData.'. The reverse order (parseBody then formData) works, returning 200 {\"k\":\"v\"}."
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "parseFormData now overwrites `bodyCache.formData` with a new promise on every parseBody call, even when one is already cached (for example after the validator('form') middleware). This is harmless for content, but object identity of the cached FormData changes between calls.",
+    "The validator regexes and parseBody's `split(';')[0].trim()` accept different Content-Type shapes (for example `multipart/form-data ; boundary=x` with whitespace before `;`). parseBody accepts it while validator('form') skips it. This was pre-existing in spirit and only mildly widened by this diff."
+  ],
+  "testing_gaps": [
+    "No test covers calling `c.req.formData()` (or the validator('form') middleware, then formData) before `c.req.parseBody()` on the same HonoRequest. The parseBody tests build raw Request objects, and the old HonoRequest-cache interaction is not exercised at the HonoRequest level."
+  ]
+}

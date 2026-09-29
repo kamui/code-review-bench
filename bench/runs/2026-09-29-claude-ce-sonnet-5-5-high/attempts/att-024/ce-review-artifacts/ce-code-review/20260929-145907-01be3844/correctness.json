@@ -1,0 +1,30 @@
+{
+  "reviewer": "correctness",
+  "findings": [
+    {
+      "title": "parseBody ignores cached formData and re-serializes body after c.req.formData()",
+      "severity": "P1",
+      "file": "src/utils/body.ts",
+      "line": 126,
+      "why_it_matters": "Calling c.req.parseBody() after anything has already populated bodyCache.formData (e.g. `await c.req.formData()` in a middleware, then parseBody in the handler) now fails. For multipart it throws `TypeError: Failed to parse body as FormData.`; for urlencoded it silently returns garbage keys like `------formdata-undici-...\\r\\nContent-Disposition: form-data; name`. Before this change parseBody called request.formData(), which returned the cached FormData. Now it calls request.arrayBuffer(); with only `formData` cached, HonoRequest.#cachedBody falls back to `new Response(cachedFormData).arrayBuffer()`, which re-encodes as multipart with a fresh boundary that no longer matches the original Content-Type header passed to bufferToFormData. Reusing bodyCache.formData when present restores the old behavior.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In parseFormData, reuse an existing cache before reading the body: `if (request instanceof HonoRequest && request.bodyCache.formData) { formData = await request.bodyCache.formData } else { ...arrayBuffer + bufferToFormData + cache... }`. Add a regression test in src/request.test.ts or src/utils/body.test.ts that calls `await req.formData()` and then `await req.parseBody()` for both multipart and urlencoded bodies.",
+      "confidence": 100,
+      "evidence": [
+        "src/utils/body.ts:126 -- const arrayBuffer = await (request as Request).arrayBuffer()",
+        "src/request.ts:228-235 -- const anyCachedKey = Object.keys(bodyCache)[0]; if (anyCachedKey) { return (bodyCache[anyCachedKey]).then((body) => { ... return new Response(body)[key]() }) }  (re-serializes cached FormData with a new boundary)",
+        "Repro (bundled head vs base src, route doing `await c.req.formData(); await c.req.parseBody()`): head multipart -> 'ERR TypeError: Failed to parse body as FormData.'; head urlencoded -> garbage key '------formdata-undici-...'; base -> {\"foo\":\"bar\"} for both.",
+        "provenance: base parseFormData used `await (request as Request).formData()`, which for HonoRequest resolves through #cachedBody('formData') and returned bodyCache.formData directly"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Rejected formData promise is now cached in bodyCache.formData by parseFormData before it resolves, so a later c.req.formData() returns the same rejection (same as before, since raw.formData() also failed); not judged a regression."
+  ],
+  "testing_gaps": [
+    "No test covers c.req.formData() (or a prior parseBody) followed by parseBody() on the same HonoRequest, the path that regressed."
+  ]
+}

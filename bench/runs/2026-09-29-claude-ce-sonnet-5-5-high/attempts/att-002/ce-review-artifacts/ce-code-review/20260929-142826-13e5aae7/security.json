@@ -1,0 +1,49 @@
+{
+  "reviewer": "security",
+  "findings": [
+    {
+      "title": "Shared SSLContext receives per-request client cert via load_cert_chain (CWE-284/CWE-200)",
+      "severity": "P1",
+      "file": "src/requests/adapters.py",
+      "line": 95,
+      "why_it_matters": "With verify=True and a client cert, the process-wide _preloaded_ssl_context is passed to urllib3 together with cert_file/key_file, and urllib3's ssl_wrap_socket calls context.load_cert_chain() on that shared object. The identity persists on the context, so later sessions/pools with verify=True and no cert (other hosts, other users of the process) also present the earlier client certificate to any server that requests one. Concurrent requests with different client certs race on the same context and can handshake with the wrong identity. Previously each pool/connection built its own context, so nothing leaked. Fix: only use the shared context when client_cert is None (fall back to a per-pool context otherwise), or hand each cert-bearing pool a copy of the preloaded context.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In _urllib3_request_context, use `elif verify is True and client_cert is None: pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context`; when a client cert is supplied with verify=True, let urllib3 build its own context and load the default bundle via ca_certs=extract_zipped_paths(DEFAULT_CA_BUNDLE_PATH) (or build a per-pool copy of the default context). Add a regression test asserting the shared context is never passed to a pool that has cert_file set.",
+      "confidence": 100,
+      "evidence": [
+        "src/requests/adapters.py:95 -- pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context  (set regardless of client_cert; cert_file/key_file added at lines 102-108)",
+        "urllib3/util/ssl_.py:429-433 -- if certfile: ... context.load_cert_chain(certfile, keyfile)  (mutates the passed-in ssl_context)",
+        "Offline repro (scratch t1.py, local CA + TLS server with CERT_OPTIONAL): session1.get(url, cert=(client.pem, client.key)) then session2.get(url) with NO cert -> server saw peer cert CN=alice on BOTH connections"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "verify=True overrides a user-configured ssl_context in the adapter's PoolManager (CWE-295/CWE-327)",
+      "severity": "P1",
+      "file": "src/requests/adapters.py",
+      "line": 94,
+      "why_it_matters": "HTTPAdapter subclasses commonly pass their own ssl_context through init_poolmanager(**pool_kwargs) to enforce a minimum TLS version, cipher policy, private CA or pinned trust store. urllib3's _merge_pool_kwargs lets per-request pool_kwargs override connection_pool_kw, so for the default verify=True the requests-supplied shared context silently replaces the adapter's context: the custom TLS policy is dropped (e.g. a TLS 1.3-only or restricted-cipher context becomes the default TLS 1.2+ certifi context) with no error. Before this change requests never set ssl_context, so the adapter's context was honored. Fix: only inject the shared context when the PoolManager has no ssl_context of its own.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Pass the poolmanager into _urllib3_request_context (from _get_connection) and use `elif verify is True and not poolmanager.connection_pool_kw.get(\"ssl_context\"):` (same guard for the proxy_manager path), so an adapter-provided ssl_context is respected. Add a test with an HTTPAdapter subclass whose init_poolmanager sets ssl_context and assert the pool uses it for verify=True.",
+      "confidence": 100,
+      "evidence": [
+        "src/requests/adapters.py:94-95 -- elif verify is True:\\n        pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context",
+        "urllib3/poolmanager.py:400-409 -- base_pool_kwargs = self.connection_pool_kw.copy(); ... base_pool_kwargs[key] = value  (override wins)",
+        "Offline repro (scratch t1.py): adapter whose init_poolmanager sets ssl_context with minimum_version=TLSv1_3; _get_connection(req, True) -> pool.conn_kw['ssl_context'] is the custom context: False; is _preloaded_ssl_context: True"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "urllib3 mutates the shared context on every connection (context.verify_mode = resolve_cert_reqs(cert_reqs), and context.check_hostname = False when a pool sets assert_hostname/assert_fingerprint via init_poolmanager kwargs). Default requests paths only ever set CERT_REQUIRED on it, so verification is not weakened today, but a custom adapter with assert_hostname=False or an overridden cert_verify setting conn.cert_reqs='CERT_NONE' while verify=True would flip shared state for every other verify=True pool (races between threads; the CERT_NONE case now raises ValueError while check_hostname is True). Not verified end to end.",
+      "The preloaded context and its CA bundle are fixed at import time: later changes to DEFAULT_CA_BUNDLE_PATH / certifi, and a missing or unreadable bundle now make `import requests` raise OSError instead of only failing verify=True requests (previously a clear 'Could not find a suitable TLS CA certificate bundle' error at request time). Trust store selection is otherwise the same certifi bundle, so no verification bypass was found."
+    ],
+    "testing_gaps": [
+      "No test asserts that a shared context is not mutated by a client-cert request, nor that an adapter-supplied ssl_context survives verify=True.",
+      "No test covers verify=<directory> now flowing through pool_kwargs['ca_cert_dir'] (and the OSError for a nonexistent path still being raised by cert_verify)."
+    ]
+}
