@@ -33,6 +33,7 @@
 set -eu
 ARM=${1:?arm}; DIR=${2:?attempt-dir}; CLONE=${3:?clone}; BASE=${4:?base-branch}; PACKET=${5:?packet}; MODEL=${6:-}; EFFORT=${7:-}
 CLAUDE_BIN=${BENCH_CLAUDE:-claude}
+CODEX_BIN=${BENCH_CODEX:-codex}
 case "$DIR" in /tmp/*) echo "attempt-dir must not be under /tmp" >&2; exit 2;; esac
 [ -d "$CLONE/.git" ] || { echo "not a clone: $CLONE" >&2; exit 2; }
 [ -f "$PACKET" ] || { echo "no packet: $PACKET" >&2; exit 2; }
@@ -46,6 +47,16 @@ tree_id() { { git -C "$CLONE" rev-parse HEAD; git -C "$CLONE" status --porcelain
 tree_id > "$DIR/tree-before.txt"
 case "$ARM" in
   claude-builtin)
+    CLAUDE_BIN=$(command -v "$CLAUDE_BIN") || { echo "Claude executable not found" >&2; exit 2; }
+    CLAUDE_BIN=$(readlink -f "$CLAUDE_BIN")
+    CLAUDE_SHA256=$(sha256sum "$CLAUDE_BIN" | cut -d' ' -f1)
+    CLAUDE_VERSION=$("$CLAUDE_BIN" --version)
+    if [ -n "${BENCH_CLAUDE_SHA256:-}" ] && [ "$CLAUDE_SHA256" != "$BENCH_CLAUDE_SHA256" ]; then
+      echo "Claude executable hash mismatch" >&2; exit 2
+    fi
+    if [ -n "${BENCH_CLAUDE_VERSION:-}" ] && [ "$CLAUDE_VERSION" != "$BENCH_CLAUDE_VERSION" ]; then
+      echo "Claude executable version mismatch" >&2; exit 2
+    fi
     mkdir -p "$H/.claude"; cp "$HOME/.claude/.credentials.json" "$H/.claude/"
     python3 - "$HOME/.claude.json" "$H/.claude.json" <<'PY'
 import json, sys
@@ -60,10 +71,10 @@ PY
 
 $(cat "$PACKET")"
     printf '%s\n' "$PROMPT" > "$DIR/prompt.txt"
-    { echo "claude $(claude --version)"; echo "model=${MODEL:-<default>} effort=${EFFORT:-<default>} session=$SID"; } > "$DIR/dispatch.txt"
+    { echo "claude $CLAUDE_VERSION"; echo "executable=$CLAUDE_BIN sha256=$CLAUDE_SHA256"; echo "model=${MODEL:-<default>} effort=${EFFORT:-<default>} session=$SID"; } > "$DIR/dispatch.txt"
     printf '{"completion_mode": "render-only", "root_dispatched_at": "%s", "payload_validated_at": null, "completed_at": null}\n' "$(stamp)" > "$DIR/timing.json"
     set +e
-    ( cd "$CLONE" && HOME="$H" CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 timeout 5400 claude -p --safe-mode --session-id "$SID" \
+    ( cd "$CLONE" && HOME="$H" CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 timeout 5400 "$CLAUDE_BIN" -p --safe-mode --session-id "$SID" \
         ${MODEL:+--model "$MODEL"} ${EFFORT:+--effort "$EFFORT"} --max-budget-usd "${ATTEMPT_BUDGET_USD:-15}" --allowedTools "Bash,Read,Glob,Grep,Agent" \
         --output-format stream-json --verbose "$PROMPT" < /dev/null > "$DIR/stdout.jsonl" 2> "$DIR/stderr.txt" )
     RC=$?; set -e
@@ -73,10 +84,20 @@ $(cat "$PACKET")"
       CODEX_RUNTIME_PATH=$(mise bin-paths 2>/dev/null | paste -sd: -)
       if [ -n "$CODEX_RUNTIME_PATH" ]; then PATH="$CODEX_RUNTIME_PATH:$PATH"; export PATH; fi
     fi
+    CODEX_BIN=$(command -v "$CODEX_BIN") || { echo "Codex executable not found" >&2; exit 2; }
+    CODEX_BIN=$(readlink -f "$CODEX_BIN")
+    CODEX_SHA256=$(sha256sum "$CODEX_BIN" | cut -d' ' -f1)
+    CODEX_VERSION=$("$CODEX_BIN" --version)
+    if [ -n "${BENCH_CODEX_SHA256:-}" ] && [ "$CODEX_SHA256" != "$BENCH_CODEX_SHA256" ]; then
+      echo "Codex executable hash mismatch" >&2; exit 2
+    fi
+    if [ -n "${BENCH_CODEX_VERSION:-}" ] && [ "$CODEX_VERSION" != "$BENCH_CODEX_VERSION" ]; then
+      echo "Codex executable version mismatch" >&2; exit 2
+    fi
     mkdir -p "$H/.codex"; cp "$HOME/.codex/auth.json" "$H/.codex/"
     python3 "$(dirname "$0")/clean_context.py" --attempt "$DIR" --configure-codex "$CLONE"
     { cat "$(dirname "$0")/../policies/empty-harness-v1.md"; printf '\nReview scope: the changes that local branch `review-head` introduces relative to local branch `%s`. Obtain the diff with `git diff %s...review-head`; do not review uncommitted changes.\n\n' "$BASE" "$BASE"; cat "$PACKET"; } > "$DIR/prompt.txt"
-    { echo "$(codex --version)"; echo "model=${MODEL:-<default>} effort=${EFFORT:-<default>}";
+    { echo "$CODEX_VERSION"; echo "executable=$CODEX_BIN sha256=$CODEX_SHA256"; echo "model=${MODEL:-<default>} effort=${EFFORT:-<default>}";
       echo "runtime_path=${CODEX_RUNTIME_PATH:-<inherited>}"; } > "$DIR/dispatch.txt"
     mkdir -p "$CLONE-cache" "$CLONE-work"
     CODEX_WRITABLE_ROOTS=$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "$CLONE-cache" "$CLONE-work")
@@ -92,7 +113,7 @@ $(cat "$PACKET")"
     if [ -n "$EFFORT" ]; then set -- "$@" -c "model_reasoning_effort=\"$EFFORT\""; fi
     printf '{"completion_mode": "render-only", "root_dispatched_at": "%s", "payload_validated_at": null, "completed_at": null}\n' "$(stamp)" > "$DIR/timing.json"
     set +e
-    ( cd "$CLONE" && HOME="$H" CODEX_HOME="$H/.codex" timeout 5400 codex review "$@" - \
+    ( cd "$CLONE" && HOME="$H" CODEX_HOME="$H/.codex" timeout 5400 "$CODEX_BIN" review "$@" - \
         < "$DIR/prompt.txt" > "$DIR/stdout.txt" 2> "$DIR/stderr.txt" )
     RC=$?; set -e
     sed -n 's/^session id: //p' "$DIR/stderr.txt" | head -1 > "$DIR/session-id.txt"
