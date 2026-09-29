@@ -66,7 +66,7 @@ export type Configuration = z.infer<typeof configurationSchema>
 export type AttemptDetail = z.infer<typeof detailSchema>
 
 export async function fetchDataset(): Promise<Dataset> {
-  const response = await fetch('/data/benchmark.json')
+  const response = await fetch(`${import.meta.env.BASE_URL}data/benchmark.json`)
   if (!response.ok) throw new Error('Benchmark data could not be loaded. Run bun run data, then reload.')
   return datasetSchema.parse(await response.json())
 }
