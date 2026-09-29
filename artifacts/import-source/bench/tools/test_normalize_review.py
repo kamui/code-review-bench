@@ -123,52 +123,6 @@ class NormalizeReviewCli(unittest.TestCase):
         self.assertEqual(done.returncode, 1)
         self.assertEqual(self.normalized()["parse_status"], "unresolved")
 
-    def test_codex_skill_preserves_native_report_and_normalizes_primary_findings_once(self):
-        native = self.write("ce-review.json", {
-            "status": "complete", "verdict": "Ready with fixes",
-            "findings": [{"#": 1, "title": "Reject empty input", "severity": "P1", "file": "/clone/src/api.ts",
-                          "line": 12, "confidence": "high", "autofix_class": "gated_auto", "owner": "downstream-resolver",
-                          "suggested_fix": "Return a validation error.", "why_it_matters": "The empty input reaches an unsafe branch.",
-                          "first_evidence": "if (!input)", "reviewers": ["correctness"],
-                          "independent_reviewers": ["correctness"]}],
-            "actionable_findings": [{"#": 1, "title": "Reject empty input"}],
-            "pre_existing_findings": [{"title": "Old issue"}],
-            "coverage": {"depth": "full"}, "run_id": "ce-001"})
-        done = self.run_cli("--arm", "codex-skill", "--native-review", str(native), "--clone", "/clone",
-                            "--out", str(self.out), "--timing", str(self.timing))
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        doc = self.normalized()
-        self.assertEqual((doc["arm"], doc["native_verdict"], doc["parse_status"]),
-                         ("codex-skill", "Ready with fixes", "parsed"))
-        self.assertEqual(len(doc["items"]), 1)
-        item = doc["items"][0]
-        self.assertEqual((item["file"], item["line_start"], item["line_end"]), ("src/api.ts", 12, 12))
-        self.assertEqual((item["native_priority"], item["native_action"], item["native_confidence"]),
-                         ("P1", "gated_auto", "high"))
-        self.assertEqual(item["native_fields"]["independent_reviewers"], ["correctness"])
-        self.assertEqual(doc["native_payload"], json.loads(native.read_text(encoding="utf-8")))
-        self.assertIsNotNone(self.stamped())
-
-    def test_codex_skill_complete_empty_report_is_empty(self):
-        native = self.write("ce-review.json", {"status": "complete", "verdict": "Ready to merge", "findings": [],
-                                                "actionable_findings": [], "coverage": {"depth": "lite"}})
-        done = self.run_cli("--arm", "codex-skill", "--native-review", str(native), "--out", str(self.out))
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.normalized()["parse_status"], "empty")
-        self.assertEqual(self.normalized()["native_payload"]["coverage"], {"depth": "lite"})
-
-    def test_codex_skill_incomplete_report_is_unresolved_but_keeps_items(self):
-        native = self.write("ce-review.json", {"status": "degraded", "findings": [
-            {"severity": "P2", "file": "src/a.py", "line": 0, "why_it_matters": "kept"}]})
-        done = self.run_cli("--arm", "codex-skill", "--native-review", str(native), "--out", str(self.out))
-        self.assertEqual(done.returncode, 1)
-        doc = self.normalized()
-        self.assertEqual(doc["parse_status"], "unresolved")
-        self.assertEqual(len(doc["items"]), 1)
-        self.assertTrue(any("title" in note for note in doc["parse_notes"]))
-        self.assertTrue(any("line" in note for note in doc["parse_notes"]))
-        self.assertEqual(doc["native_payload"], json.loads(native.read_text(encoding="utf-8")))
-
     def test_unreadable_input_exits_2_and_writes_nothing(self):
         payload = self.write("payload.json", "{not json")
         done = self.run_cli("--arm", "claude-builtin", "--payload", str(payload), "--out", str(self.out))

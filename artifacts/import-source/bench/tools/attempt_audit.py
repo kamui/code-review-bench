@@ -3,7 +3,7 @@
 
 Usage::
 
-    python3 attempt_audit.py --arm claude-builtin|codex|codex-skill|review-code --attempt-dir <dir> \\
+    python3 attempt_audit.py --arm claude-builtin|codex|review-code --attempt-dir <dir> \\
         --clone <path> [--allowed <path>...] [--allowed-prefix <prefix>...] \\
         [--isolation-settings <file>] [--json]
 
@@ -34,9 +34,8 @@ allowed roots is itself a violation. Codex walks up the directory tree
 looking for ``AGENTS.md``/``AGENTS.override.md`` and the built-in looks for ``CLAUDE.md``;
 a probe of such a guidance file in an ancestor of the clone is recorded under
 ``guidance_probes`` and is a violation only if that file exists. The built-in's prompt header
-line and the built-in Codex rubric marker are checked so the arm that ran is the arm
-that was dispatched. Codex skill runs use native skill artifacts instead of a built-in
-rubric marker. The executed diff command is recorded.
+line and the Codex rubric marker are checked so the arm that ran is the arm
+that was dispatched, and the executed diff command is recorded.
 
 ``--isolation-settings`` names the settings an enforced attempt ran under. A request those settings
 confine (a network tool with no allowed domain, a path the sandbox denies or whose readable
@@ -503,7 +502,7 @@ def expand_refs(command: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--arm", required=True, choices=["claude-builtin", "codex", "codex-skill", "review-code"])
+    parser.add_argument("--arm", required=True, choices=["claude-builtin", "codex", "review-code"])
     parser.add_argument("--attempt-dir", required=True)
     parser.add_argument("--clone", required=True)
     parser.add_argument("--allowed", nargs="*", default=[])
@@ -549,7 +548,7 @@ def main() -> int:
             commands, workdirs = [c for c, _ in calls], [w for _, w in calls]
             reads = []
             report = {"transcripts": [str(f) for f in files], "rubric_markers": rubric}
-            if args.arm == "codex" and rubric == 0:
+            if rubric == 0:
                 violations.append("Codex rubric marker absent: review preset did not run")
     except (OSError, ValueError) as error:
         print(f"attempt_audit.py: {error}", file=sys.stderr)
