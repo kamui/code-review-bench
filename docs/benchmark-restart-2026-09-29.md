@@ -4,6 +4,10 @@ The user approved WSL disk compaction and knows it stops this T3/Codex session. 
 
 ## Storage
 
+Compaction completed on 2026-09-29 at 05:40 EDT. The Windows result reports the VHD shrinking from 539.10 GiB to 240.87 GiB, reclaiming 298.22 GiB. Windows free space measured 388.34 GiB afterward; Linux retained about 745 GiB available. The first launch stopped before shutdown because `fstrim` was absent from the Windows-invoked process's PATH. Commit `471a3e4` fixes the command to `/usr/sbin/fstrim`, which was verified successfully before relaunch.
+
+Reviews resumed after the result was verified. A durable local monitor at `.local/storage-watch/watch.py` samples Windows and Linux free space every 30 seconds and writes `.local/storage-watch/latest.json` and `samples.jsonl`. Below 80 GiB free on Windows or 100 GiB on Linux, it writes worker `STOP.json` markers so active calls can drain without new starts. Its `PAUSED.json` requires inspection before another batch launches. The monitor must be restarted after another WSL shutdown.
+
 Completed-attempt cleanup removed only verified `clone` and `clone-cache` directories. Its receipt log is `.local/workspace-cleanup.jsonl`. Linux usage fell from about 530 GiB to 227 GiB before npm cache cleanup. Windows still had about 35 GiB free because its Ubuntu VHD was 539.1 GiB. The separate npm download cache cleanup receipt is `.local/npm-cache-cleanup.json`; installed packages and npx tools were retained.
 
 The remaining bench-cache was 23 GiB, including 14 GiB of sealed investigation/adjudication work and 5.7 GiB of expanded dependencies. Bench-runs was 18 GiB and includes invalid, interrupted, setup-only and modified workspaces that the pruning guard correctly retains. These directories were not blanket-deleted.
