@@ -139,11 +139,19 @@ describe('preserved benchmark', () => {
     for (const attempt of imported.attempts) {
       const detail = detailSchema.parse(JSON.parse(await readFile(`public${attempt.detailUrl}`, 'utf8')))
       expect(detail.id).toBe(attempt.id)
-      expect(attempt.outputTokens).not.toBeNull()
+      if (attempt.admitted) expect(attempt.outputTokens).not.toBeNull()
       for (const url of [detail.recordUrl, detail.normalizedUrl, detail.archiveUrl]) {
         if (url) expect((await Bun.file(`public${url}`).stat()).size).toBeGreaterThan(0)
       }
       if (detail.archiveUrl) expect(detail.archiveStatus).toBe('verified')
     }
+  })
+
+  test('preserves unknown aggregate usage for interrupted Astra attempts', () => {
+    const setup = imported.configurations.find(row => row.id === 'codex-builtin-astra-high')
+    if (!setup) throw new Error('Missing Astra High configuration')
+    const result = summarize(imported, setup, imported.tasks, 'trials', all)
+    expect(result.score).toBeCloseTo(69.753086, 5)
+    expect(result).toMatchObject({ cost: null, tokens: null, completed: 36, trials: 36, attempts: 42, unresolved: 2 })
   })
 })
