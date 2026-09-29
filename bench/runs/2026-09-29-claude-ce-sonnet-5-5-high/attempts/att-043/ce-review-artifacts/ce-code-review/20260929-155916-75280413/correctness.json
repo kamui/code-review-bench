@@ -1,0 +1,48 @@
+{
+  "reviewer": "correctness",
+  "findings": [
+    {
+      "title": "Shared module-level SSLContext gets client certs loaded into it",
+      "severity": "P1",
+      "file": "src/requests/adapters.py",
+      "line": 95,
+      "why_it_matters": "With verify=True every pool now receives the same module-global _preloaded_ssl_context. When the request also has cert=..., cert_verify sets conn.cert_file/key_file, and urllib3's ssl_wrap_socket calls context.load_cert_chain(certfile, keyfile) on the supplied ssl_context, mutating the shared object. The client certificate/key then remains on the context for every later verify=True connection in the process, including requests to unrelated hosts that were made without cert=, so the client identity is presented to servers it was never meant for. Concurrent threads using different client certs also race on the one context (last load_cert_chain wins). Before this change each pool built its own context, so client certs were isolated per pool.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Only use the shared preloaded context when no client cert is supplied (`elif verify is True and client_cert is None: pool_kwargs['ssl_context'] = _preloaded_ssl_context`). When a client cert is present, fall through to a per-pool context (e.g. do not set ssl_context and let cert_verify/urllib3 load the default CA bundle, or build a fresh context per pool). Add a test that a request with cert= followed by one without does not reuse a context that has the cert loaded.",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:95 -- pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context",
+        "src/requests/adapters.py:97-106 -- pool_kwargs[\"cert_file\"] = client_cert[0] / pool_kwargs[\"key_file\"] = client_cert[1] (set on the same pool_kwargs alongside the shared ssl_context)",
+        "urllib3 2.8.0 util/ssl_.py:428-432 -- `if certfile: ... context.load_cert_chain(certfile, keyfile)` runs on the caller-supplied ssl_context (context = ssl_context at line 407), permanently mutating it"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Import-time CA bundle load makes `import requests` fail if bundle missing",
+      "severity": "P2",
+      "file": "src/requests/adapters.py",
+      "line": 75,
+      "why_it_matters": "The default CA bundle is now loaded at module import. If certs.where() points to a missing or unreadable file (stripped/vendor-patched certifi, broken zipapp extraction, permission problems), `import requests` raises FileNotFoundError/ssl.SSLError, breaking even programs that only use verify=False, plain http, or an explicit verify=<path>. Previously this was reported lazily, and only for verify=True requests, as the friendly OSError 'Could not find a suitable TLS CA certificate bundle'; that check was removed from cert_verify for the default-bundle case, so the friendly message is now gone too.",
+      "autofix_class": "manual",
+      "owner": "human",
+      "requires_verification": true,
+      "suggested_fix": "Build the default context lazily (functools.lru_cache'd helper called from _urllib3_request_context on first verify=True), or wrap the import-time load in try/except and fall back to no preloaded context while preserving the OSError 'Could not find a suitable TLS CA certificate bundle' path for verify=True.",
+      "confidence": 50,
+      "evidence": [
+        "src/requests/adapters.py:75-78 -- _preloaded_ssl_context.load_verify_locations(extract_zipped_paths(DEFAULT_CA_BUNDLE_PATH))",
+        "removed from cert_verify: raise OSError(f\"Could not find a suitable TLS CA certificate bundle, invalid path: {cert_loc}\") for the default-bundle case"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "cert_verify(verify=True) no longer sets conn.ca_certs/ca_cert_dir. Any third-party HTTPAdapter subclass or caller that obtains a connection through the legacy get_connection() (which does not pass the preloaded ssl_context) and then calls cert_verify will have urllib3 fall back to load_default_certs() (OS trust store) instead of certifi's bundle. send() itself always uses _get_connection, so the standard path is unaffected. Callsite completeness: grep-only within this repo.",
+    "The _preloaded_ssl_context is process-global and shared across threads and adapters; urllib3 also sets context.verify_mode on it per connection (safe today only because verify=True always maps to CERT_REQUIRED)."
+  ],
+  "testing_gaps": [
+    "No test covers verify=True combined with cert= followed by a verify=True request without cert (client cert isolation on the shared SSLContext).",
+    "No test covers behavior when the default CA bundle path does not exist (import-time vs. request-time failure)."
+  ]
+}

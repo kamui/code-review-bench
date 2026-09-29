@@ -1,0 +1,31 @@
+{
+  "reviewer": "maintainability-reviewer",
+  "findings": [
+    {
+      "title": "createWorkingDir re-implements existing resolveWorkingDir (duplicate canonical helper)",
+      "severity": "P2",
+      "file": "internal/backup.go",
+      "line": 475,
+      "why_it_matters": "The working-directory default (GIT_WORKING_DIR, else <backupDir>/.working) is now derived in two places: the new createWorkingDir extracted from Run, and resolveWorkingDir, which runProviderBackups uses to decide what cleanupWorkingDir deletes. If one is changed without the other, backups would be created in one directory and cleaned from another (or cleanup would delete the wrong path). The extraction was the natural moment to collapse them; calling resolveWorkingDir(backupDIR) from createWorkingDir removes the duplicate logic with identical behaviour.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In createWorkingDir replace the os.Getenv/filepath.Join block with `workingDIR := resolveWorkingDir(backupDIR)`. The two implementations are behaviourally identical (env var non-empty -> use it, else filepath.Join(backupDir, workingDIRName)); rerun go test ./internal/.",
+      "confidence": 75,
+      "evidence": [
+        "internal/backup.go:475-478 -- workingDIR := os.Getenv(envGitWorkingDir)\n\tif workingDIR == \"\" {\n\t\tworkingDIR = filepath.Join(backupDIR, workingDIRName)\n\t}",
+        "internal/backup.go:140-145 -- func resolveWorkingDir(backupDir string) string { if w := os.Getenv(envGitWorkingDir); w != \"\" { return w }; return filepath.Join(backupDir, workingDIRName) }",
+        "internal/backup.go:52 -- workingDir := resolveWorkingDir(backupDir) (consumer that must match the created directory via cleanupWorkingDir)"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Behaviour-preservation check (function by function) found no regressions: provider ordering in collectProviderBackupResults, startup-config log order/text (including the 'Gitlab backup LFS' and 'Organistations' spellings), checkProvider error text/count semantics, Run early-return ordering, runScheduledJob's global `job` assignment, and the three notification title strings (byte-identical incl. the stray U+FE0F prefixes) all match the old code. go test ./internal/ passes offline.",
+    "Negligible log-only difference: collectProviderBackupResults short-circuits `bitbucketAPITokenDefined() || bitbucketOAuthDefined()`, so when API-token credentials are complete the OAuth env/_FILE vars are no longer read, and GetEnvOrFile's 'file ... does not exist' log line for a dangling *_FILE OAuth var is no longer emitted in that case. Also displayBitBucketStartupConfig now uses strings.EqualFold instead of ToLower(...)==, which differs only for exotic Unicode case folds."
+  ],
+  "testing_gaps": [
+    "backupStatusTitle (new pure function in notify.go) has no direct unit test covering the three branches (succeeded only, mixed, failed/zero); the emoji-prefixed constants are the only guard against silent notification-title drift.",
+    "The extracted startup-config log helpers (logProviderOrgs/BackupsToKeep/CompareMethod/BackupLFS) and Run's new helpers have no test asserting log output, so 'no log-output change' rests on manual reading rather than a regression test."
+  ]
+}

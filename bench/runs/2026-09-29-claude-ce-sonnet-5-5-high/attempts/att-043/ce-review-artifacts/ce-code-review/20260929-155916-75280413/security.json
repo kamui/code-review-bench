@@ -1,0 +1,29 @@
+{
+  "reviewer": "security",
+  "findings": [
+    {
+      "title": "Client cert loaded into shared global SSLContext leaks across connections (CWE-284)",
+      "severity": "P1",
+      "file": "src/requests/adapters.py",
+      "line": 95,
+      "why_it_matters": "With verify=True and cert=..., pool_kwargs carries both the module-global _preloaded_ssl_context and cert_file/key_file. urllib3's ssl_wrap_socket calls context.load_cert_chain(certfile, keyfile) on the supplied ssl_context, which mutates the process-wide shared context. After one request with a client cert, every later verify=True connection in the process (other Sessions, other hosts, requests that passed no cert) reuses that context and presents the same client certificate to any server that asks for one. This silently authenticates unrelated requests as that client identity and leaks the cert identity to unrelated servers. Concurrent connections also mutate the same context (load_cert_chain, verify_mode, check_hostname) without synchronization. Before this change each connection got its own context.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Only attach the shared context when no client cert is supplied: `elif verify is True and client_cert is None: pool_kwargs['ssl_context'] = _preloaded_ssl_context`. When a client cert is given, leave ssl_context unset (or build a per-pool context) and fall back to loading the default CA bundle via ca_certs for that pool. Add a test that a cert-bearing request does not change the shared context.",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:95 -- pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context (set whenever verify is True, independent of client_cert; client_cert handled below into pool_kwargs[\"cert_file\"]/[\"key_file\"])",
+        "urllib3 2.8.0 util/ssl_.py:407-433 -- context = ssl_context ... if certfile: context.load_cert_chain(certfile, keyfile)  (mutates the passed-in shared context)",
+        "urllib3 connection.py:1040-1043 -- context = ssl_context; context.verify_mode = resolve_cert_reqs(cert_reqs)  (further per-connection mutation of the shared context)"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Shared module-level SSLContext is mutated per connection by urllib3 (verify_mode, check_hostname when assert_hostname/assert_fingerprint set via HTTPAdapter subclasses, load_cert_chain), and this is not thread-safe. Behavior depends on the installed urllib3 version; only 2.8.0 was inspected."
+  ],
+  "testing_gaps": [
+    "No test that a request made with cert=(cert,key) and verify=True leaves the shared _preloaded_ssl_context free of a client cert chain, so later cert-less verify=True requests do not present it."
+  ]
+}
