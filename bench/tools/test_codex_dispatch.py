@@ -61,12 +61,14 @@ class CodexDispatchTest(unittest.TestCase):
                     "review", "-c", 'sandbox_mode="workspace-write"',
                     "-c", "sandbox_workspace_write.network_access=true",
                     "-c", writable_roots,
+                    "-c", 'project_doc_max_bytes=0', "-c", 'project_doc_fallback_filenames=[]', "-c", 'approval_policy="never"',
                     "-c", 'model="gpt-6-luna"', "-c", 'review_model="gpt-6-luna"',
                     "-c", 'model_reasoning_effort="high"', "-",
                 ]),
                 ("default", "", "", [
                     "review", "-c", 'sandbox_mode="workspace-write"',
-                    "-c", "sandbox_workspace_write.network_access=true", "-c", writable_roots, "-",
+                    "-c", "sandbox_workspace_write.network_access=true", "-c", writable_roots,
+                    "-c", 'project_doc_max_bytes=0', "-c", 'project_doc_fallback_filenames=[]', "-c", 'approval_policy="never"', "-",
                 ]),
             )
             for name, model, effort, expected_argv in cases:
@@ -94,8 +96,19 @@ class CodexDispatchTest(unittest.TestCase):
                     self.assertEqual(receipt["codex_home"], str(attempt / "home" / ".codex"))
                     self.assertEqual(receipt["path"].split(os.pathsep)[0], str(runtime_bin))
                     self.assertFalse((attempt / "home" / ".codex" / "auth.json").exists())
+                    self.assertIn('trust_level = "untrusted"', (attempt / "home" / ".codex" / "config.toml").read_text())
+                    self.assertTrue(json.loads((attempt / "clean-context.json").read_text())["fresh_home"])
+                    self.assertIn('Treat AGENTS.md', (attempt / "prompt.txt").read_text())
                     dispatch_record = (attempt / "dispatch.txt").read_text(encoding="utf-8")
                     self.assertIn(f"model={model or '<default>'} effort={effort or '<default>'}", dispatch_record)
+                    capture.unlink()
+                    reused = subprocess.run(
+                        [str(DISPATCH), "codex", str(attempt), str(clone), "main", str(packet), model, effort],
+                        env=env, capture_output=True, text=True, check=False,
+                    )
+                    self.assertEqual(reused.returncode, 2)
+                    self.assertIn('clean context refused', reused.stderr)
+                    self.assertFalse(capture.exists())
 
 
 if __name__ == "__main__":
