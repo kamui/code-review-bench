@@ -428,10 +428,25 @@ def dispatch(run: Run, attempt_id: str, claim: dict) -> None:
         hashes = write_input(directory, target_dir, render_policy(run, target), clone)
         claim.update(hashes)
         (directory / "cell.json").write_text(json.dumps(claim, indent=2) + "\n", encoding="utf-8")
-        command = [str(TOOLS / "dispatch.sh"), arm["kind"], str(directory), str(clone), "main", str(directory / "input.md")]
-        command += [arm.get("model") or "", arm.get("effort") or ""]
-        done = tool(command, env)
+        if arm["kind"] == "codex-skill":
+            command = [sys.executable, str(TOOLS / "codex_skill_runner.py"), "--run", str(run.dir),
+                       "--attempt-dir", str(directory), "--clone", str(clone),
+                       "--packet", str(target_dir / "packet.md"), "--arm", str(run.arm_file(cell["arm"])),
+                       "--target", cell["target"]]
+            if os.environ.get("BENCH_RATES"):
+                command += ["--rates", os.environ["BENCH_RATES"]]
+            done = tool(command, env)
+        else:
+            command = [str(TOOLS / "dispatch.sh"), arm["kind"], str(directory), str(clone), "main", str(directory / "input.md")]
+            command += [arm.get("model") or "", arm.get("effort") or ""]
+            done = tool(command, env)
         (directory / "run-cell.log").write_text(done.stdout + done.stderr, encoding="utf-8")
+        if arm["kind"] == "codex-skill" and (directory / "skill-attempt.json").is_file():
+            evidence = read_json(directory / "skill-attempt.json")
+            if evidence.get("prompt_sha256"):
+                claim["input_sha256"] = evidence["prompt_sha256"]
+                claim["prompt_source"] = "runner-assembled input.md"
+                (directory / "cell.json").write_text(json.dumps(claim, indent=2) + "\n", encoding="utf-8")
         if not (directory / "timing.json").is_file():
             # dispatch.sh writes timing.json just before it starts the reviewer; a setup error leaves none.
             raise InputError(f"dispatch.sh exit {done.returncode} before the reviewer started: {done.stderr.strip()}")
@@ -458,7 +473,7 @@ def file(run: Run, attempt_id: str) -> dict:
             "--replicate", str(cell["replicate"]), "--out", str(run.dir / "attempts" / attempt_id),
             "--expect-cli-version", entry["expected_cli_version"],
             "--note", f"input.md sha256 {claim.get('input_sha256')}; run policy sha256 {claim.get('policy_sha256')} (before path substitution)"]
-    if arm["kind"] == "review-code" and entry.get("resolved_skill_tree"):
+    if arm["kind"] in ("review-code", "codex-skill") and entry.get("resolved_skill_tree"):
         argv += ["--expect-skill-tree", entry["resolved_skill_tree"]]
     if os.environ.get("BENCH_RATES"):
         argv += ["--rates", os.environ["BENCH_RATES"]]

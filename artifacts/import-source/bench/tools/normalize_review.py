@@ -17,9 +17,6 @@ Native shapes:
 * ``review-code``: the skill's ``composition.json`` (``summary.status``, ``findings`` with
   ``title``, ``priority``, ``action``, ``kind``, ``trigger``, ``impact``, ``change``, ``anchor``;
   ``questions``; ``observations``).
-* ``codex-skill``: a skill's native ``review.json`` with ``status``, ``verdict`` and ``findings``.
-  Primary findings alone become scored items; the complete native document and each source finding
-  are retained under ``native_payload`` and ``native_fields``.
 * ``claude-builtin``: ``payload.json`` written by ``attempt_audit.py`` with ``final_text`` (the
   final message; the ``high`` variant embeds a fenced JSON array of ``file``/``line``/``summary``/
   ``failure_scenario``) and ``report_findings`` (``ReportFindings`` call inputs, used by the
@@ -102,62 +99,6 @@ def from_review_code(composition: dict, clone) -> dict:
         notes.append("unresolved: composition has no summary.status")
     parse_status = "unresolved" if status is None else ("parsed" if items else "empty")
     return {"parse_status": parse_status, "native_verdict": status, "verdict_source": "composition.summary.status", "items": items, "parse_notes": notes}
-
-
-def from_codex_skill(review: dict, clone=None) -> dict:
-    """Normalize a structured skill report without discarding any native finding fields."""
-    notes = []
-    items = []
-    if not isinstance(review, dict):
-        return {"parse_status": "unresolved", "native_verdict": None, "verdict_source": None,
-                "items": [item(claim=json.dumps(review, ensure_ascii=False))], "parse_notes": [
-                    "unresolved: native skill report is not a JSON object"], "native_payload": review}
-
-    findings = review.get("findings")
-    status = review.get("status")
-    verdict = review.get("verdict")
-    if not isinstance(findings, list):
-        notes.append("unresolved: native skill report has no findings array")
-        findings = []
-
-    for index, finding in enumerate(findings):
-        if not isinstance(finding, dict):
-            notes.append(f"unresolved: finding {index + 1} is not an object")
-            items.append(item(claim=json.dumps(finding, ensure_ascii=False), native_fields=finding))
-            continue
-        title = finding.get("title")
-        if not isinstance(title, str) or not title.strip():
-            notes.append(f"unresolved: finding {index + 1} has no non-empty title")
-        file = finding.get("file")
-        if file is not None and not isinstance(file, str):
-            notes.append(f"unresolved: finding {index + 1} file is not a string or null")
-            file = None
-        line = finding.get("line")
-        if line is not None and (isinstance(line, bool) or not isinstance(line, int) or line < 1):
-            notes.append(f"unresolved: finding {index + 1} line is not a positive integer or null")
-            line = None
-        items.append(item(
-            file=relpath(file, clone) if file else None,
-            line_start=line,
-            line_end=line,
-            claim=title if isinstance(title, str) else json.dumps(finding, ensure_ascii=False),
-            consequence=finding.get("why_it_matters"),
-            proposed_fix=finding.get("suggested_fix"),
-            native_priority=finding.get("severity"),
-            native_action=finding.get("autofix_class"),
-            native_confidence=finding.get("confidence"),
-            kind="finding",
-            native_fields=finding,
-        ))
-
-    if status != "complete":
-        notes.append(f"unresolved: native skill report status is {status!r}, expected 'complete'")
-    if not isinstance(verdict, str) or not verdict.strip():
-        notes.append("unresolved: native skill report has no non-empty verdict")
-    parse_status = "unresolved" if notes else ("parsed" if items else "empty")
-    return {"parse_status": parse_status, "native_verdict": verdict if isinstance(verdict, str) else status,
-            "verdict_source": "review.json.verdict" if isinstance(verdict, str) else "review.json.status",
-            "items": items, "parse_notes": notes, "native_payload": review}
 
 
 def from_claude_builtin(payload: dict) -> dict:
@@ -335,9 +276,8 @@ def self_test() -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--arm", choices=["review-code", "claude-builtin", "codex", "codex-skill"])
+    parser.add_argument("--arm", choices=["review-code", "claude-builtin", "codex"])
     parser.add_argument("--composition"); parser.add_argument("--payload"); parser.add_argument("--stdout")
-    parser.add_argument("--native-review")
     parser.add_argument("--sessions-dir"); parser.add_argument("--clone"); parser.add_argument("--out")
     parser.add_argument("--render"); parser.add_argument("--timing"); parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
@@ -359,10 +299,6 @@ def main() -> int:
             if not args.stdout:
                 parser.error("--stdout is required for codex")
             doc = from_codex(open(args.stdout, encoding="utf-8").read(), args.clone, args.sessions_dir)
-        elif args.arm == "codex-skill":
-            if not args.native_review:
-                parser.error("--native-review is required for codex-skill")
-            doc = from_codex_skill(json.load(open(args.native_review, encoding="utf-8")), args.clone)
         else:
             parser.error("--arm is required")
     except (OSError, json.JSONDecodeError) as error:

@@ -15,12 +15,12 @@ from xml.sax.saxutils import escape
 THEMES = {
     "light": {"surface": "#fcfcfb", "primary": "#0b0b0b", "secondary": "#52514e", "muted": "#898781",
               "grid": "#e1e0d9", "axis": "#c3c2b7",
-              "methods": {"claude-builtin": "#2a78d6", "review-code": "#eb6834", "codex": "#1baf7a", "ce-code-review": "#b75286", "thermo-nuclear-code-quality-review": "#92722c"}},
+              "methods": {"claude-builtin": "#2a78d6", "review-code": "#eb6834", "codex": "#1baf7a"}},
     "dark": {"surface": "#1a1a19", "primary": "#ffffff", "secondary": "#c3c2b7", "muted": "#898781",
              "grid": "#2c2c2a", "axis": "#383835",
-             "methods": {"claude-builtin": "#3987e5", "review-code": "#d95926", "codex": "#199e70", "ce-code-review": "#d678ab", "thermo-nuclear-code-quality-review": "#c6a655"}},
+             "methods": {"claude-builtin": "#3987e5", "review-code": "#d95926", "codex": "#199e70"}},
 }
-METHOD_NAMES = {"claude-builtin": "Claude Code built-in", "review-code": "/review-code", "codex": "Codex review", "ce-code-review": "/ce-code-review", "thermo-nuclear-code-quality-review": "/thermo-nuclear-code-quality-review"}
+METHOD_NAMES = {"claude-builtin": "Claude Code built-in", "review-code": "/review-code", "codex": "Codex review"}
 WIDTH, HEIGHT = 720, 440
 LEFT, RIGHT, TOP, BOTTOM = 64, 150, 84, 60
 FONT = "system-ui, -apple-system, 'Segoe UI', sans-serif"

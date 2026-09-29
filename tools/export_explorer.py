@@ -123,7 +123,7 @@ def build():
         configuration = {"id": entry["id"], "label": entry["label"], "short": entry["short"].replace(" · ", " / "),
                                "version": entry["version"], "method": entry["method"],
                                "reviewEdition": entry["review_edition"], "reviewChange": entry["review_change"],
-                               "skillProvenanceUrl": evidence(BENCH / "skill-provenance.json") if entry["method"] == "review-code" else None,
+                               "skillProvenanceUrl": evidence(BENCH / entry["skill_provenance"]) if entry.get("skill_provenance") else evidence(BENCH / "skill-provenance.json") if entry["method"] == "review-code" else None,
                                "builtin": entry["method"] in {"codex", "claude-builtin"}, "note": entry.get("note", ""),
                                "billing": "list-price-equivalent" if item["list_price"] else "api-dollars"}
         arms = [read(BENCH / "arms" / f"{source['arm']}.json") for source in entry["sources"]]
