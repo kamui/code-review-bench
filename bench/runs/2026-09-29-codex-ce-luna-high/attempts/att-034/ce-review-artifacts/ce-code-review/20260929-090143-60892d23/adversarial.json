@@ -1,0 +1,29 @@
+{
+  "reviewer": "adversarial",
+  "findings": [
+    {
+      "title": "Cleanup can restore an entry deleted concurrently",
+      "severity": "P2",
+      "file": "weed/filer/redis2/universal_redis_store.go",
+      "line": 250,
+      "why_it_matters": "If a listing sees an expired or otherwise missing value while an insert recreates it, a concurrent DeleteEntry can remove the recreated value and index member after the helper's Exists check. The helper then re-adds the member, leaving an orphaned directory index entry after both operations finish; subsequent listings must encounter and clean it again.",
+      "autofix_class": "manual",
+      "owner": "human",
+      "requires_verification": true,
+      "suggested_fix": "Make the helper's remove/check/re-add decision atomic in Redis, for example with a Lua script that removes the member, checks the value key, and conditionally restores the member as one operation. This lets a later DeleteEntry remove the index after the helper, while an InsertEntry that has not yet indexed its value can still add the member afterward.",
+      "confidence": 75,
+      "evidence": [
+        "weed/filer/redis2/universal_redis_store.go:250: store.Client.ZAddNX(ctx, dirListKey, redis.Z{Score: 0, Member: fileName})",
+        "weed/filer/redis2/universal_redis_store.go:238: if err := store.Client.ZRem(ctx, dirListKey, fileName).Err(); err != nil {",
+        "weed/filer/redis2/universal_redis_store.go:245: exists, err := store.Client.Exists(ctx, store.getKey(string(path))).Result()",
+        "weed/filer/redis2/universal_redis_store.go:68: if err = store.Client.ZAddNX(ctx, store.getKey(genDirectoryListKey(dir)), redis.Z{Score: 0, Member: name}).Err(); err != nil {",
+        "weed/filer/redis2/universal_redis_store.go:126: _, err = store.Client.Del(ctx, store.getKey(string(fullpath))).Result()",
+        "weed/filer/redis2/universal_redis_store.go:136: _, err = store.Client.ZRem(ctx, store.getKey(genDirectoryListKey(dir)), name).Result()",
+        "Interleaving: the stale member is present but its value is absent; listing's FindEntry returns ErrNotFound; InsertEntry writes the value and pauses before its ZAddNX; listing ZRems the old member and Exists sees the inserted value; DeleteEntry deletes the value and ZREMs the parent member; listing then executes this ZAddNX, and the resumed InsertEntry's ZAddNX is a no-op. The final state is a directory member with no value."
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [],
+  "testing_gaps": []
+}
