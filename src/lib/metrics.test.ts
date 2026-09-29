@@ -6,7 +6,7 @@ import { commonTasks, modelComparisonSegments, money, summarize } from './metric
 
 const all = { concern: '', severity: 'all' } satisfies Parameters<typeof summarize>[4]
 const imported = datasetSchema.parse(JSON.parse(await readFile('public/data/benchmark.json', 'utf8')))
-const configuration: Configuration = { id: 'setup', label: 'Setup', short: 'Setup', version: '1', method: 'builtin', builtin: true, note: '', billing: 'api-dollars', models: ['model'], reasoningEffort: 'high', reasoningSource: 'explicit', reviewEdition: 'baseline', reviewChange: null, skillProvenanceUrl: null }
+const configuration: Configuration = { id: 'setup', label: 'Setup', short: 'Setup', version: '1', method: 'builtin', builtin: true, experimental: false, note: '', billing: 'api-dollars', models: ['model'], reasoningEffort: 'high', reasoningSource: 'explicit', reviewEdition: 'baseline', reviewChange: null, skillProvenanceUrl: null }
 
 function task(id: string, count: number): Task {
   return { id, repo: id, pr: 1, head: 'head', base: 'base', shape: 'fixture', language: 'TypeScript', registerVersion: 1,

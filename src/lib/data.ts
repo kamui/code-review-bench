@@ -33,7 +33,7 @@ export const outcomeSchema = z.object({
 
 export const configurationSchema = z.object({
   id: z.string(), label: z.string(), short: z.string(), version: z.string(), method: z.string(),
-  builtin: z.boolean(), note: z.string(), billing: z.string(), models: z.array(z.string()),
+  builtin: z.boolean(), experimental: z.boolean(), note: z.string(), billing: z.string(), models: z.array(z.string()),
   reasoningEffort: z.string().nullable(), reasoningSource: z.enum(['explicit', 'catalog-default', 'unrecorded']),
   reviewEdition: z.string(), reviewChange: z.object({ summary: z.string(), url: z.string().url() }).nullable(),
   skillProvenanceUrl: z.string().nullable(),
