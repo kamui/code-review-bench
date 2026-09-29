@@ -536,15 +536,12 @@ def file_attempt(args) -> tuple:
     # Output directory.
     out = os.path.abspath(args.out)
     os.makedirs(out, exist_ok=True)
-    for name in ("dispatch.txt", "timing.json", "audit.json", "normalized.json", "stop.json", "stop.recorded.json", "isolation.json", "isolation-settings.json", "clean-context.json", "prompt.txt"):
+    for name in ("dispatch.txt", "timing.json", "audit.json", "normalized.json", "stop.json", "stop.recorded.json", "isolation.json", "isolation-settings.json"):
         src, dest = os.path.join(attempt_dir, name), os.path.join(out, name)
         if os.path.exists(src):
             shutil.copy2(src, dest)
         elif os.path.exists(dest):
             os.remove(dest)  # a re-filing drops what the attempt directory no longer holds
-    codex_config = Path(attempt_dir) / "home/.codex/config.toml"
-    if codex_config.is_file():
-        shutil.copy2(codex_config, Path(out) / "codex-config.toml")
     native_name = os.path.basename(native_rel)
     if native_path:
         shutil.copy2(native_path, os.path.join(out, native_name))
