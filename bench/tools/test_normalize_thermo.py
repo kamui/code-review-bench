@@ -58,6 +58,17 @@ class ThermoNormalizerTests(unittest.TestCase):
         self.assertEqual(self.run_cli().returncode, 0)
         self.assertEqual(json.loads(self.out.read_text(encoding="utf-8"))["parse_status"], "empty")
 
+    def test_questions_remain_questions_when_findings_are_empty(self):
+        (self.root / "summary.md").write_text("No actionable findings.\n", encoding="utf-8")
+        (self.root / "finding-index.json").write_text(json.dumps({"findings": [], "questions": [
+            {"report_path": "detail.md", "quote": "Reject the empty cache.", "title": "Reject the empty cache."}
+        ]}), encoding="utf-8")
+        done = self.run_cli()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        normalized = json.loads(self.out.read_text(encoding="utf-8"))
+        self.assertEqual(normalized["parse_status"], "parsed")
+        self.assertEqual(normalized["items"][0]["kind"], "question")
+
     def test_report_path_cannot_escape_root(self):
         self.index["findings"][0]["report_path"] = "../outside.md"
         (self.root / "finding-index.json").write_text(json.dumps(self.index), encoding="utf-8")
