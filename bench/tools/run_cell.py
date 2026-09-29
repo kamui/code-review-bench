@@ -84,6 +84,7 @@ REPO = BENCH.parent
 sys.path.insert(0, str(TOOLS))
 import check_manifest  # noqa: E402
 import review_isolation  # noqa: E402
+import prune_workspace  # noqa: E402
 
 ATTEMPT = re.compile(r"^att-(\d{3,})$")
 
@@ -469,7 +470,13 @@ def file(run: Run, attempt_id: str) -> dict:
     done = tool(argv)
     if done.returncode != 0:
         raise InputError(f"file_attempt.py exit {done.returncode}: {done.stdout.strip()} {done.stderr.strip()}")
-    return read_json(run.dir / "attempts" / attempt_id / "attempt.json")
+    record = read_json(run.dir / "attempts" / attempt_id / "attempt.json")
+    if record["disposition"] == "valid completed":
+        try:
+            prune_workspace.prune(run.dir / "attempts" / attempt_id, directory, apply=True)
+        except (prune_workspace.Refused, OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
+            raise InputError(f"{attempt_id}: evidence filed, but workspace cleanup failed: {error}") from error
+    return record
 
 
 def claim_and_run(run_dir: Path, work: Path, args) -> dict:
