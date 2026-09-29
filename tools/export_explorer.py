@@ -2,6 +2,7 @@
 
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 import shutil
 import sys
@@ -33,6 +34,23 @@ def usage_tokens(path, record):
     if any(not isinstance(line.get("output_tokens"), (int, float)) for line in lines):
         return None
     return sum(line["output_tokens"] for line in lines) if lines else None
+
+
+def duration_seconds(record):
+    timing = record.get("timing", {})
+    start = timing.get("dispatched_at")
+    end = timing.get("completed_at") if record["disposition"] == "valid completed" else timing.get("stopped_at")
+    if not isinstance(start, str) or not isinstance(end, str):
+        return None
+    try:
+        start = datetime.fromisoformat(start.replace("Z", "+00:00"))
+        end = datetime.fromisoformat(end.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if start.tzinfo is None or end.tzinfo is None:
+        return None
+    duration = (end - start).total_seconds()
+    return duration if duration >= 0 else None
 
 
 def export_attempt(run, attempt_id, mapping, archives):
@@ -79,6 +97,7 @@ def export_attempt(run, attempt_id, mapping, archives):
             "duplicates": len(items) - len({i["duplicateGroup"] or i["id"] for i in items}),
             "cost": record.get("usage", {}).get("priced_total_usd"),
             "outputTokens": usage_tokens(directory / "usage-requests.jsonl", record),
+            "durationSeconds": duration_seconds(record),
             "billing": record.get("usage", {}).get("billing") or "unavailable",
             "predecessor": run.name + "/" + record["predecessor"] if record.get("predecessor") else None,
             "retryReason": record.get("retry_reason"),
