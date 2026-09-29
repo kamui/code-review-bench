@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -56,6 +57,9 @@ class CodexDispatchTest(unittest.TestCase):
             packet.write_text("Fixture review packet.\n", encoding="utf-8")
 
             writable_roots = "sandbox_workspace_write.writable_roots=" + json.dumps([str(clone) + "-cache", str(clone) + "-work"])
+            pinned_codex = root / "pinned-codex"
+            pinned_codex.write_bytes(fake_codex.read_bytes())
+            pinned_codex.chmod(0o755)
             cases = (
                 ("explicit", "gpt-6-luna", "high", [
                     "review", "-c", 'sandbox_mode="workspace-write"',
@@ -81,6 +85,10 @@ class CodexDispatchTest(unittest.TestCase):
                         "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
                         "CODEX_ARGV_CAPTURE": str(capture),
                     })
+                    if name == "explicit":
+                        env.update({"BENCH_CODEX": str(pinned_codex),
+                                    "BENCH_CODEX_SHA256": hashlib.sha256(pinned_codex.read_bytes()).hexdigest(),
+                                    "BENCH_CODEX_VERSION": "codex-cli 0.0.0-test"})
                     result = subprocess.run(
                         [str(DISPATCH), "codex", str(attempt), str(clone), "main", str(packet), model, effort],
                         env=env,
@@ -101,6 +109,8 @@ class CodexDispatchTest(unittest.TestCase):
                     self.assertIn('Treat AGENTS.md', (attempt / "prompt.txt").read_text())
                     dispatch_record = (attempt / "dispatch.txt").read_text(encoding="utf-8")
                     self.assertIn(f"model={model or '<default>'} effort={effort or '<default>'}", dispatch_record)
+                    executable = pinned_codex if name == "explicit" else fake_codex
+                    self.assertIn(f"executable={executable.resolve()} sha256={hashlib.sha256(executable.read_bytes()).hexdigest()}", dispatch_record)
                     capture.unlink()
                     reused = subprocess.run(
                         [str(DISPATCH), "codex", str(attempt), str(clone), "main", str(packet), model, effort],
@@ -109,6 +119,21 @@ class CodexDispatchTest(unittest.TestCase):
                     self.assertEqual(reused.returncode, 2)
                     self.assertIn('clean context refused', reused.stderr)
                     self.assertFalse(capture.exists())
+
+            for variable, value in (("BENCH_CODEX_SHA256", "wrong"), ("BENCH_CODEX_VERSION", "wrong")):
+                with self.subTest(mismatch=variable):
+                    attempt = root / variable
+                    env.update({"BENCH_CODEX": str(pinned_codex),
+                                "BENCH_CODEX_SHA256": hashlib.sha256(pinned_codex.read_bytes()).hexdigest(),
+                                "BENCH_CODEX_VERSION": "codex-cli 0.0.0-test", variable: value})
+                    result = subprocess.run(
+                        [str(DISPATCH), "codex", str(attempt), str(clone), "main", str(packet)],
+                        env=env, capture_output=True, text=True, check=False,
+                    )
+                    self.assertEqual(result.returncode, 2, result.stderr)
+                    self.assertIn("mismatch", result.stderr)
+                    self.assertFalse(capture.exists())
+                    self.assertFalse((attempt / "home" / ".codex" / "auth.json").exists())
 
 
 if __name__ == "__main__":
