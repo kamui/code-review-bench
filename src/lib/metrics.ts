@@ -103,10 +103,10 @@ export function summarize(dataset: Dataset, configuration: Configuration, tasks:
   }
 }
 
-export function modelComparisonSegments(points: { x: number; y: number; configuration: Pick<Configuration, 'method' | 'version'> }[]) {
+export function modelComparisonSegments(points: { x: number; y: number; configuration: Pick<Configuration, 'method' | 'reviewEdition'> }[]) {
   const groups = new Map<string, typeof points>()
   for (const point of points) {
-    const key = JSON.stringify([point.configuration.method, point.configuration.version])
+    const key = JSON.stringify([point.configuration.method, point.configuration.reviewEdition])
     const group = groups.get(key)
     if (group) group.push(point)
     else groups.set(key, [point])
@@ -114,7 +114,7 @@ export function modelComparisonSegments(points: { x: number; y: number; configur
   return Array.from(groups.values()).flatMap(group =>
     group.sort((left, right) => right.x - left.x || left.y - right.y).flatMap((point, index, ordered) => {
       const previous = ordered[index - 1]
-      return previous ? [{ from: { x: previous.x, y: previous.y }, to: { x: point.x, y: point.y } }] : []
+      return previous ? [{ from: { x: previous.x, y: previous.y }, to: { x: point.x, y: point.y }, configuration: point.configuration }] : []
     }),
   )
 }

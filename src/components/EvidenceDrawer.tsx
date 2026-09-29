@@ -37,7 +37,9 @@ function InspectionBody({ dataset, configuration, task }: { dataset: Dataset; co
   }, [attempt])
   const currentTask = task ?? dataset.tasks.find(item => item.id === attempt?.taskId)
   return <Stack gap="lg">
-    {configuration && <><Text size="sm" c="dimmed">{configuration.label}</Text><Badge variant="light">{configuration.version}</Badge><Text size="sm">{configuration.note}</Text></>}
+    {configuration && <><Text size="sm" c="dimmed">{configuration.label}</Text><Group><Badge variant="light">{configuration.version}</Badge><Badge variant="outline">Edition: {configuration.reviewEdition}</Badge></Group><Text size="sm">{configuration.note}</Text>
+      {configuration.reviewChange && <Button component="a" href={configuration.reviewChange.url} target="_blank" rel="noreferrer" variant="subtle" size="xs">Review change: {configuration.reviewChange.summary}</Button>}
+      {configuration.skillProvenanceUrl && <Button component="a" href={configuration.skillProvenanceUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Skill commits & timestamps</Button>}</>}
     {task && <><Text>{task.shape}</Text><Group gap="xs">{task.profile.concerns.map(concern => <Badge variant="light" key={concern}>{concern}</Badge>)}</Group>
       <Group><Button component="a" href={task.sourceUrl} target="_blank" rel="noreferrer" variant="light" size="xs" leftSection={<ExternalLink size={14} />}>Original PR</Button>
         <Button component="a" href={task.packetUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileText size={14} />}>Review packet</Button></Group>
@@ -68,6 +70,7 @@ function InspectionBody({ dataset, configuration, task }: { dataset: Dataset; co
             <Button component="a" href={detail.recordUrl} target="_blank" rel="noreferrer" variant="light" size="xs" leftSection={<FileJson size={14} />}>Attempt record</Button>
             {detail.normalizedUrl && <Button component="a" href={detail.normalizedUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Review JSON</Button>}
             {currentOutcome?.mappingUrl && <Button component="a" href={currentOutcome.mappingUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Grading record</Button>}
+            {currentOutcome?.scorecardUrl && <Button component="a" href={currentOutcome.scorecardUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Grading notes & candidates</Button>}
             {detail.archiveUrl && <Button component="a" href={detail.archiveUrl} download variant="subtle" size="xs" leftSection={<Download size={14} />}>Raw transcript</Button>}
           </Group>
             {!detail.archiveUrl && <Text size="xs" c="dimmed">Transcript archive: {detail.archiveStatus}. No verified download is available.</Text>}
