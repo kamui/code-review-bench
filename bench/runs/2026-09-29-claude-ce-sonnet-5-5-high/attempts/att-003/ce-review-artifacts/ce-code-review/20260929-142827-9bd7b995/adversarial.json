@@ -1,0 +1,46 @@
+{
+  "reviewer": "adversarial",
+  "findings": [
+    {
+      "title": "Client cert loaded into shared module-level SSLContext leaks across requests",
+      "severity": "P1",
+      "file": "src/requests/adapters.py",
+      "line": 95,
+      "why_it_matters": "Every verify=True request now shares one process-global SSLContext, but urllib3 calls context.load_cert_chain(cert_file, key_file) on whatever context it is given. A single request made with cert=(...) permanently installs that client identity on the shared context, so later verify=True requests that pass no cert (other sessions, other hosts, other threads) present the client certificate to arbitrary servers. Concurrent requests with different client certs also race on the same context and can handshake with the wrong identity. Before this change each connection built its own context, so cert scope was per connection.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Only pass the shared preloaded context when client_cert is None; when a client cert is supplied, omit ssl_context (or build a per-request/per-cert context) so urllib3 creates its own context and loads the default CA bundle. Alternatively copy the preloaded context per client-cert pool. Add a regression test with a local TLS server that requests client certs.",
+      "confidence": 100,
+      "evidence": [
+        "src/requests/adapters.py:95 -- pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context",
+        "urllib3/util/ssl_.py:431 -- context.load_cert_chain(certfile, keyfile) executed on the passed-in ssl_context in ssl_wrap_socket",
+        "Repro (local TLS server with CERT_OPTIONAL, verify=True via preloaded ctx trusting server): requests.get(u, cert=(c.crt,c.key)) -> server sees client cert; then requests.get(u) with NO cert -> server still sees CN=client1 cert",
+        "provenance: f21e70bf (this PR) introduced shared ssl_context line"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Default verify=True silently overrides adapter's custom ssl_context from init_poolmanager",
+      "severity": "P1",
+      "file": "src/requests/adapters.py",
+      "line": 95,
+      "why_it_matters": "Adapter subclasses commonly call init_poolmanager(..., ssl_context=ctx) to set custom ciphers, legacy renegotiation, truststore, or a private CA. urllib3 merges per-request pool_kwargs over the manager's connection_pool_kw, so the new pool_kwargs[\"ssl_context\"] replaces the user's context on every default (verify=True) request. Those requests then use the stock context with the certifi bundle, so the user's TLS policy is silently dropped and handshakes to servers needing the custom settings (or trust roots) fail or run with weaker settings than configured.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Do not set pool_kwargs[\"ssl_context\"] from the module function; instead have HTTPAdapter.init_poolmanager set ssl_context (the preloaded one) as a default in pool_kwargs only when the caller did not supply ssl_context (pool_kwargs.setdefault('ssl_context', _preloaded_ssl_context)). Per-request pool_kwargs then no longer clobber user-provided contexts.",
+      "confidence": 100,
+      "evidence": [
+        "src/requests/adapters.py:95 -- pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context",
+        "Repro: adapter subclass with init_poolmanager(*a, ssl_context=ctx, **k); pool from poolmanager.connection_from_host(..., pool_kwargs=_urllib3_request_context(req, True, None)[1]).conn_kw['ssl_context'] is _preloaded_ssl_context, not ctx (prints 'pool uses custom ctx: False uses preloaded: True')",
+        "src/requests/adapters.py:221 -- init_poolmanager(self, connections, maxsize, block=DEFAULT_POOLBLOCK, **pool_kwargs) forwards user ssl_context into PoolManager connection_pool_kw"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "The default CA bundle is now loaded (and zipped-path extracted) at import time of requests.adapters; a missing or unreadable certifi bundle now fails at import with a raw OSError/FileNotFoundError instead of the previous request-time OSError('Could not find a suitable TLS CA certificate bundle'), and verify=True no longer performs the existence check in cert_verify. Not exercised by tests."
+  ],
+  "testing_gaps": []
+}
