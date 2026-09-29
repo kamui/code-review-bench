@@ -13,10 +13,10 @@ const theme = createTheme({
 export const Route = createRootRoute({
   head: () => ({
     meta: [{ charSet: 'utf-8' }, { name: 'viewport', content: 'width=device-width, initial-scale=1' },
-      { title: 'Reviewbench — code review, measured' },
+      { title: 'codereviewbench | Code review, measured' },
       { name: 'description', content: 'Explore real code review findings, cost, and false alarms across models and review methods.' }],
     links: [{ rel: 'stylesheet', href: mantineStylesheet }, { rel: 'stylesheet', href: chartStylesheet }, { rel: 'stylesheet', href: stylesheet }],
   }),
-  component: () => <html lang="en" {...mantineHtmlProps}><head><ColorSchemeScript /><HeadContent /></head>
-    <body><MantineProvider theme={theme}><Outlet /></MantineProvider><Scripts /></body></html>,
+  component: () => <html lang="en" {...mantineHtmlProps}><head><ColorSchemeScript defaultColorScheme="auto" /><HeadContent /></head>
+    <body><MantineProvider theme={theme} defaultColorScheme="auto"><Outlet /></MantineProvider><Scripts /></body></html>,
 })

@@ -3,17 +3,18 @@ import { ArrowUpRight } from 'lucide-react'
 import { z } from 'zod'
 import { compact, modelComparisonSegments, money, percent } from '../lib/metrics'
 import type { Axis, Summary } from '../lib/metrics'
+import type { Configuration } from '../lib/data'
 
 const colors: Record<string, string> = {
-  'claude-builtin-sonnet-5-5': '#5568d9', 'claude-builtin-sonnet-5': '#13887e',
-  'claude-builtin-opus-5-5': '#b57a16', 'codex-builtin': '#bb526e',
-  'review-code-sonnet-5-5': '#8a62b8', 'review-code-sonnet-5-5e12864': '#4d829f',
-  'review-code-sonnet-5-c3c53da': '#778a37',
-  'codex-builtin-luna-high': '#2e8cbb',
-  'codex-builtin-sol-high': '#bf6944',
+  'claude-builtin': '#8b6bd6',
+  codex: '#258f9b',
+  'review-code/v5b-30-x382': '#c17a32',
+  'review-code/v5b-25': '#779846',
 }
 
-export function configurationColor(id: string) { return colors[id] ?? '#607080' }
+export function reviewColor(configuration: Pick<Configuration, 'method' | 'reviewEdition'>) {
+  return colors[`${configuration.method}/${configuration.reviewEdition}`] ?? colors[configuration.method] ?? '#607080'
+}
 
 export const axisLabels: Record<Axis, string> = {
   cost: 'Average review cost', tokens: 'Average output tokens', falseFindings: 'False findings per review',
@@ -39,15 +40,16 @@ export function Chart({ summaries, axis, onSelect }: { summaries: Summary[]; axi
     const configuration = point.summary.configuration
     const [method, ...setup] = configuration.short.split(' / ')
     const right = point.x < max * 0.25
-    const below = points.some((other, index) => index < payload.index && Math.abs(other.x - point.x) < max * 0.2 && Math.abs(other.y - point.y) < 8)
+    const nearbyLabels = points.filter((other, index) => index < payload.index && Math.abs(other.x - point.x) < max * 0.2 && Math.abs(other.y - point.y) < 14).length
+    const labelOffset = nearbyLabels ? 22 + (nearbyLabels - 1) * 28 : -26
     return <g role="button" tabIndex={0} className="chart-point"
       aria-label={`${configuration.short}: ${percent(point.y)}, ${format(point.x)}. Inspect configuration`}
       onClick={() => onSelect(configuration.id)} onKeyDown={event => {
         if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(configuration.id) }
       }}>
       <circle cx={cx} cy={cy} r={15} fill="transparent" />
-      <circle cx={cx} cy={cy} r={6} fill={configurationColor(configuration.id)} stroke="var(--panel)" strokeWidth={2} />
-      <text x={cx + (right ? -12 : 12)} y={cy + (below ? 22 : -26)} textAnchor={right ? 'end' : 'start'} className="point-label">
+      <circle cx={cx} cy={cy} r={6} fill={reviewColor(configuration)} stroke="var(--panel)" strokeWidth={2} />
+      <text x={cx + (right ? -12 : 12)} y={cy + labelOffset} textAnchor={right ? 'end' : 'start'} className="point-label">
         <tspan>{method}</tspan>
         <tspan x={cx + (right ? -12 : 12)} dy={14}>{setup.join(' · ')}</tspan>
       </text>
@@ -57,12 +59,12 @@ export function Chart({ summaries, axis, onSelect }: { summaries: Summary[]; axi
     const parsed = tooltipSchema.safeParse(value)
     const index = parsed.success && parsed.data.active ? parsed.data.payload?.[0]?.payload.index : undefined
     const point = index === undefined ? undefined : points[index]
-    return point ? <div className="chart-tip"><strong>{point.summary.configuration.label}</strong><span>{point.summary.configuration.version}</span><span>Findings score: {percent(point.y)}</span><span>{axisLabels[axis]}: {format(point.x)}</span><span>{point.summary.tasks} tasks / {point.summary.completed} completed reviews</span></div> : null
+    return point ? <div className="chart-tip"><strong>{point.summary.configuration.label}</strong><span>Review edition: {point.summary.configuration.reviewEdition}</span><span>Findings score: {percent(point.y)}</span><span>{axisLabels[axis]}: {format(point.x)}</span><span>{point.summary.tasks} tasks / {point.summary.completed} completed reviews</span></div> : null
   }
   return <div className="plot-shell">
     <div className="plot-hint"><span>Findings score</span><span>Better value <ArrowUpRight size={14} /></span></div>
     <ScatterChart h={360} className="benchmark-chart" data={points.map((point, index) => ({
-      name: point.summary.configuration.short, color: configurationColor(point.summary.configuration.id),
+      name: point.summary.configuration.short, color: reviewColor(point.summary.configuration),
       data: [{ x: point.x, y: point.y, index }],
     }))} dataKey={{ x: 'x', y: 'y' }} xAxisLabel={axisLabels[axis]}
       xAxisProps={{ reversed: true, domain: [0, max], tickCount: 5, allowDecimals: true }}
@@ -71,10 +73,10 @@ export function Chart({ summaries, axis, onSelect }: { summaries: Summary[]; axi
       labels={{ x: axisLabels[axis], y: 'Findings score' }}
       scatterProps={{ shape, isAnimationActive: false }} tooltipProps={{ content: tooltip }}
       scatterChartProps={{ margin: { top: 28, right: 24, bottom: 10, left: 6 } }}
-      referenceLines={connections.map(({ from, to }) => ({
-        segment: [from, to], color: '#93a6b9', strokeDasharray: '4 5', strokeWidth: 1,
+      referenceLines={connections.map(({ from, to, configuration }) => ({
+        segment: [from, to], color: reviewColor(configuration), strokeDasharray: '4 5', strokeWidth: 1.5,
       }))} />
     {!points.length && <div className="plot-empty"><strong>No comparable measurements</strong><span>Select a review setup and tasks with recorded results. Severity views need adjudicated labels.</span></div>}
-    <div className="plot-caption"><span className="model-connection-key" /> Same review method + version across models <span className="caption-separator" /> Hover for values. Select a point to inspect its evidence.</div>
+    <div className="plot-caption"><span className="model-connection-key" /> Same review method + edition across models <span className="caption-separator" /> Hover for values. Select a point to inspect its evidence.</div>
   </div>
 }

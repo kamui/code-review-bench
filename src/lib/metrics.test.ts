@@ -6,7 +6,7 @@ import { commonTasks, modelComparisonSegments, money, summarize } from './metric
 
 const all = { concern: '', severity: 'all' } satisfies Parameters<typeof summarize>[4]
 const imported = datasetSchema.parse(JSON.parse(await readFile('public/data/benchmark.json', 'utf8')))
-const configuration: Configuration = { id: 'setup', label: 'Setup', short: 'Setup', version: '1', method: 'builtin', builtin: true, note: '', billing: 'api-dollars' }
+const configuration: Configuration = { id: 'setup', label: 'Setup', short: 'Setup', version: '1', method: 'builtin', builtin: true, note: '', billing: 'api-dollars', models: ['model'], reasoningEffort: 'high', reasoningSource: 'explicit', reviewEdition: 'baseline', reviewChange: null, skillProvenanceUrl: null }
 
 function task(id: string, count: number): Task {
   return { id, repo: id, pr: 1, head: 'head', base: 'base', shape: 'fixture', language: 'TypeScript', registerVersion: 1,
@@ -22,7 +22,7 @@ function attempt(id: string, taskId: string, recovered: string[], overrides: Par
 }
 
 function outcome(taskId: string, trials: string[][]): Outcome {
-  return { configurationId: configuration.id, taskId, status: 'ran', reason: '', mappingUrl: null,
+  return { configurationId: configuration.id, taskId, status: 'ran', reason: '', mappingUrl: null, scorecardUrl: null,
     attemptIds: trials.flat(), historical: null, trials: trials.map((attemptIds, index) => ({ replicate: index + 1, status: 'valid completed', attemptIds })) }
 }
 
@@ -92,14 +92,15 @@ describe('trial scoring', () => {
     expect(summarize(data, configuration, data.tasks, 'trials', all).score).toBe(50)
   })
 
-  test('connects all models of the same review method and version, including dominated points', () => {
-    expect(modelComparisonSegments([
-      { x: 1, y: 70, configuration: { method: 'review-code', version: 'v1' } },
-      { x: 2, y: 80, configuration: { method: 'review-code', version: 'v1' } },
-      { x: 3, y: 60, configuration: { method: 'review-code', version: 'v1' } },
-      { x: 4, y: 90, configuration: { method: 'review-code', version: 'v2' } },
-      { x: 5, y: 95, configuration: { method: 'builtin', version: 'v1' } },
-    ])).toEqual([
+  test('connects review editions across harness releases and keeps changed editions separate', () => {
+    const points = [
+      { x: 1, y: 70, configuration: { method: 'review-code', reviewEdition: 'v1', version: 'client-1' } },
+      { x: 2, y: 80, configuration: { method: 'review-code', reviewEdition: 'v1', version: 'client-2' } },
+      { x: 3, y: 60, configuration: { method: 'review-code', reviewEdition: 'v1', version: 'client-2' } },
+      { x: 4, y: 90, configuration: { method: 'review-code', reviewEdition: 'v2', version: 'client-2' } },
+      { x: 5, y: 95, configuration: { method: 'builtin', reviewEdition: 'v1', version: 'client-2' } },
+    ]
+    expect(modelComparisonSegments(points).map(({ from, to }) => ({ from, to }))).toEqual([
       { from: { x: 3, y: 60 }, to: { x: 2, y: 80 } },
       { from: { x: 2, y: 80 }, to: { x: 1, y: 70 } },
     ])
