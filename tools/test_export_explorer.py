@@ -8,6 +8,18 @@ import export_explorer as exporter
 
 
 class ExportTest(unittest.TestCase):
+    def test_evidence_urls_respect_site_base_path(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'record.json'
+            source.write_text('{}\n')
+            for base_path in ('', '/code-review-bench'):
+                with self.subTest(base_path=base_path), patch.object(exporter, 'ROOT', root), \
+                        patch.object(exporter, 'PUBLIC', root / 'public'), patch.object(exporter, 'BASE_PATH', base_path):
+                    url = exporter.evidence(source)
+                    self.assertEqual(url, base_path + '/evidence/record.json')
+                    self.assertEqual((root / 'public' / url.removeprefix(base_path + '/')).read_text(), source.read_text())
+
     def test_missing_metering_is_not_zero(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / 'usage.jsonl'
@@ -36,14 +48,17 @@ class ExportTest(unittest.TestCase):
                                   'duplicate_group': 'same-false' if assignment == 'false-finding' else None}
                                  for i, assignment in enumerate(assignments)]}
             archives = {'bench/runs/run/attempts/att-001/attempt.json': {'status': 'mismatch', 'path': 'must-not-be-read'}}
-            with patch.object(exporter, 'ROOT', root), patch.object(exporter, 'PUBLIC', root / 'public'):
+            with patch.object(exporter, 'ROOT', root), patch.object(exporter, 'PUBLIC', root / 'public'), \
+                    patch.object(exporter, 'BASE_PATH', '/code-review-bench'):
                 result = exporter.export_attempt(run, 'att-001', mapping, archives)
+                self.assertEqual(result['detailUrl'], '/code-review-bench/data/attempts/run/att-001.json')
                 self.assertEqual(result['recovered'], ['bug'])
                 self.assertEqual(result['falseFindings'], 1)
                 self.assertEqual(result['rawFalseFindings'], 2)
                 self.assertEqual(result['unresolved'], 1)
                 self.assertFalse(result['complete'])
                 detail = json.loads((root / 'public/data/attempts/run/att-001.json').read_text())
+                self.assertEqual(detail['recordUrl'], '/code-review-bench/evidence/bench/runs/run/attempts/att-001/attempt.json')
                 self.assertIsNone(detail['archiveUrl'])
                 record['disposition'] = 'harness-invalid'
                 (attempt / 'attempt.json').write_text(json.dumps(record))
