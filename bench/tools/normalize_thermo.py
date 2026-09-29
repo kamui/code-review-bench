@@ -89,7 +89,7 @@ def normalize(root: Path, clone: Path | None) -> dict:
         notes.append("unresolved: empty findings array without an explicit no-findings statement in summary.md")
     if explicit_empty and index["findings"]:
         notes.append("unresolved: summary says there are no findings but finding index is non-empty")
-    status = "unresolved" if notes else ("parsed" if index["findings"] else "empty")
+    status = "unresolved" if notes else ("parsed" if items else "empty")
     return {"arm": "codex-skill", "parse_status": status, "native_verdict": None,
             "verdict_source": None, "items": items, "parse_notes": notes,
             "native_payload": index}
