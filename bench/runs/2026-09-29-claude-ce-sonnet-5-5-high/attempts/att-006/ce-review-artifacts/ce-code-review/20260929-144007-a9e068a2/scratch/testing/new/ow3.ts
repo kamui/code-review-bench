@@ -1,0 +1,11 @@
+import { initTRPC } from './server-src';
+import { z } from 'zod';
+import { MiddlewareFunction } from './server-src/core/middleware';
+const t = initTRPC.context<{ a: string }>().create();
+declare function probe<P extends import('./server-src/core/procedure').ProcedureParams>(fn: MiddlewareFunction<any, P>): P;
+const pr = probe((o) => o.next());
+export const i1: never = null as any as typeof pr['_input_in'];
+export const i2: never = null as any as typeof pr['_input_out'];
+export const c1: never = null as any as typeof pr['_ctx_out'];
+const pr2 = probe((o) => o.next({ctx: {q: 1}}));
+export const c2: never = null as any as typeof pr2['_ctx_out'];

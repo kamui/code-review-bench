@@ -1,0 +1,65 @@
+{
+  "reviewer": "correctness",
+  "findings": [
+    {
+      "title": "verify=True overrides adapter-level custom ssl_context",
+      "severity": "P1",
+      "file": "src/requests/adapters.py",
+      "line": 95,
+      "why_it_matters": "Any HTTPAdapter subclass that passes its own ssl_context to init_poolmanager (the common recipe for custom ciphers, min TLS version, legacy-renegotiation flags, or a context with a client cert preloaded) is now silently ignored for default verify=True requests. urllib3's PoolManager._merge_pool_kwargs lets per-request pool_kwargs override connection_pool_kw, so the module-global context replaces the user's. Before this change requests never set ssl_context, so the adapter's context was used. Only set the shared context when the pool manager has no ssl_context of its own (or fall back to loading the CA bundle on the user's context).",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In _get_connection/_urllib3_request_context, only inject _preloaded_ssl_context when the target pool manager's connection_pool_kw has no 'ssl_context' (e.g. pass the manager's kwargs in or do the check in _get_connection); when the adapter supplies its own context, keep the old path and set ca_certs for verify=True in cert_verify so the user's context still gets the default bundle loaded.",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:95 -- pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context",
+        "urllib3/poolmanager.py:400-409 (_merge_pool_kwargs) -- base_pool_kwargs = self.connection_pool_kw.copy(); ... base_pool_kwargs[key] = value  (override wins)",
+        "Scratch repro (att-005/tmp/t1.py): HTTPAdapter subclass with init_poolmanager(ssl_context=ctx); adapter._get_connection(req, True).conn_kw['ssl_context'] is ctx -> False, is requests.adapters._preloaded_ssl_context -> True; with verify=False the custom ctx is still honored -> True"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Client cert loaded into process-wide shared SSLContext",
+      "severity": "P1",
+      "file": "src/requests/adapters.py",
+      "line": 95,
+      "why_it_matters": "With verify=True and cert=..., urllib3's ssl_wrap_socket calls context.load_cert_chain(certfile, keyfile) on the supplied context. Because that context is now one module-level object shared by every verify=True pool, every adapter, and every thread, the first client certificate ever used is installed on it permanently (SSLContext cannot unload a chain). Later verify=True requests without cert, or with a different cert, can present the wrong client identity to servers that request one, and concurrent threads using different certs race between load_cert_chain and the handshake. Previously each pool built its own context, so certs never crossed requests.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Only use the shared preloaded context when client_cert is None; when a client cert is supplied fall back to the previous behavior (no ssl_context, set ca_certs to the default bundle so urllib3 builds a per-pool context), or build a per-cert context by copying/creating a new context and loading the default bundle plus that cert once per pool key.",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:95 -- pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context",
+        "urllib3/util/ssl_.py:429-433 -- if certfile: ... context.load_cert_chain(certfile, keyfile)  (context is the passed ssl_context)",
+        "Scratch repro (att-005/tmp/t1.py): pools for cert=(a,b), cert=None, and a second HTTPAdapter with cert=(a,c) all report conn_kw['ssl_context'] is the same object; only cert_file/key_file differ in the pool key"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Default CA bundle now loaded at import; missing bundle breaks import requests",
+      "severity": "P2",
+      "file": "src/requests/adapters.py",
+      "line": 75,
+      "why_it_matters": "load_verify_locations now runs at module import. If the certifi/default bundle is absent or unreadable (e.g. distro-patched certifi pointing at a system bundle in a container without ca-certificates, a stripped frozen app), `import requests` raises FileNotFoundError/ssl.SSLError even for programs that only use verify=False or never make HTTPS calls. Previously this surfaced at request time as the descriptive OSError 'Could not find a suitable TLS CA certificate bundle', which the new cert_verify no longer emits for verify=True. It also freezes the bundle path at import, so later changes to adapters.DEFAULT_CA_BUNDLE_PATH are no longer honored.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Build the context lazily on first verify=True use (guarded by a lock or functools.lru_cache), and keep raising the existing OSError('Could not find a suitable TLS CA certificate bundle...') when the default bundle path does not exist. Assumes lazy first-use cost is acceptable.",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:75-78 -- _preloaded_ssl_context = create_urllib3_context()\n_preloaded_ssl_context.load_verify_locations(\n    extract_zipped_paths(DEFAULT_CA_BUNDLE_PATH)\n)",
+        "base cert_verify (removed): raise OSError(f\"Could not find a suitable TLS CA certificate bundle, invalid path: {cert_loc}\") at request time for default bundle"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "urllib3 1.26.x compatibility of ssl_context via pool_kwargs (requests supports urllib3<3) was not exercised; only urllib3 2.8.0 in the venv was traced.",
+    "Shared context is also mutated per connection by urllib3 (verify_mode, check_hostname=False when assert_hostname/fingerprint/pyOpenSSL, set_alpn_protocols); values are idempotent for stock requests but a custom adapter passing assert_hostname could flip check_hostname on the shared context for other users (hostname is then matched manually, so verification is retained)."
+  ],
+  "testing_gaps": [
+    "No test covers a custom-adapter ssl_context combined with default verify=True, nor cert=(...) followed by a cert-less verify=True request reusing the shared context."
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "reviewer": "security",
+  "findings": [
+    {
+      "title": "Client-settable x-vercel-isr header re-enables x_astro_path path override (CWE-290, A01 Broken Access Control)",
+      "severity": "P0",
+      "file": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+      "line": 24,
+      "why_it_matters": "The fix trusts a plain request header (`x-vercel-isr: 1`) as proof that the request came from Vercel's ISR rewrite, then lets the `x_astro_path` query param rewrite the URL pathname with no secret. If the Vercel edge does not strip or overwrite that header on external requests, any client can send `x-vercel-isr: 1` plus `?x_astro_path=/protected` to a function that is reachable without the edge middleware and get the protected route rendered. That is the exact bypass that #15959 closed (the secret check existed so the override could not be forged). I confirmed in-process against the built fixture that the header alone flips the behaviour: without it `/api/public?x_astro_path=/api/private` returns id=public, with it the response is id=private. Whether the header is forgeable on the platform could not be verified offline.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Do not use a client-settable header as the trust signal. Assumption: Vercel cannot inject the middleware secret into the ISR rewrite, so scope the override instead: (1) add a build-time flag to the virtual:astro-vercel:config module that is true only for the _isr function bundle and honour the query param only when it is set, so _render never accepts it; and (2) after computing the new URL, require app.match(newRequest) to resolve to a non-excluded ISR route, otherwise ignore the override. If Vercel documents that x-vercel-isr is overwritten at the edge, cite that in a code comment and keep the header check as the secondary guard.",
+      "confidence": 50,
+      "evidence": [
+        "packages/integrations/vercel/src/serverless/entrypoint.ts:24 -- } else if(request.headers.get('x-vercel-isr') === '1') {",
+        "packages/integrations/vercel/src/serverless/entrypoint.ts:25 -- realPath = url.searchParams.get(ASTRO_PATH_PARAM);",
+        "PoC (scratch-security/poc.mjs against built _render.func entry): {} -> 200 {\"id\":\"public\"}; {\"x-vercel-isr\":\"1\"} -> 200 {\"id\":\"private\"} for /api/public?x_astro_path=/api/private",
+        "packages/integrations/vercel/src/index.ts:490 -- : ISR_PATH; ISR-routed pages skip MIDDLEWARE_PATH, so the override on _isr/_render is the only thing standing between the URL and the route that renders",
+        "provenance: 335a20416 Matthew Phillips 2026-03-19 - Require trusted secret for path overrides (#15959)"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Could not verify offline whether Vercel strips or overwrites an inbound x-vercel-isr header, or sets it on direct requests to /_isr; the finding's exploitability depends on this.",
+    "The same entrypoint serves both _render and _isr, so any function reachable directly at /_render or /_isr accepts the ISR override once the header is present."
+  ],
+  "testing_gaps": [
+    "test/path-override-security.test.js has no case sending `x-vercel-isr: 1` with `x_astro_path` on the _render function to assert the override is rejected, and no positive ISR case asserting the legitimate override still works. Both would pin the trust boundary this change moves."
+  ]
+}

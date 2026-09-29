@@ -1,0 +1,49 @@
+{
+  "reviewer": "testing",
+  "findings": [
+    {
+      "title": "New bodyCache.formData assignment in parseBody has no asserting test",
+      "severity": "P2",
+      "file": "src/utils/body.ts",
+      "line": 147,
+      "why_it_matters": "parseBody now consumes the body via arrayBuffer() instead of formData(), so the only thing keeping `c.req.formData()` working after `c.req.parseBody()` is the new `request.bodyCache.formData = ...` assignment. If that line is removed or regressed, `c.req.formData()` after `parseBody()` rejects with 'Content-Type was not one of multipart/form-data or application/x-www-form-urlencoded' (reproduced in a scratch copy with the line deleted), and no test would notice. The existing parseBody tests only call text()/arrayBuffer()/bytes()/blob() through vacuous `expect(async () => ...).not.toThrow()` wrappers (which never await the promise), and the validator '/cached' test passes with or without the assignment because validator falls back to arrayBuffer + bufferToFormData. Add an assertion that awaits `req.formData()` after `req.parseBody()` on a HonoRequest and checks the entries.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In src/request.test.ts under describe('req.parseBody()'), extend 'should parse form data' (or add a case) with `expect(await req.parseBody()).toEqual({foo:'bar'}); const fd = await req.formData(); expect(fd.get('foo')).toBe('bar')`, and replace the `expect(async () => ...).not.toThrow()` lines with awaited assertions such as `expect(await req.text()).toContain('bar')`.",
+      "confidence": 75,
+      "evidence": [
+        "src/utils/body.ts:147 -- request.bodyCache.formData = formDataPromise as unknown as FormData",
+        "src/request.test.ts:378 -- expect(async () => await req.text()).not.toThrow()  (async callback is never awaited; asserts nothing)",
+        "Scratch run: HonoRequest.parseBody() then req.formData() succeeds with the line, and rejects 'Content-Type was not one of \"multipart/form-data\" or \"application/x-www-form-urlencoded\".' with the line deleted; all four touched test files (144 tests) pass on the reviewed tree and none awaits formData() after a form parseBody()"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "bufferToFormData mixed-case test passes without the buffer.ts change",
+      "severity": "P3",
+      "file": "src/utils/buffer.test.ts",
+      "line": 129,
+      "why_it_matters": "The new test 'Should parse mixed-case multipart/form-data media type while keeping the boundary' is meant to guard the lowercase-the-media-type normalization added in buffer.ts, but the Node/undici Response.formData() used by the test suite already accepts 'Multipart/Form-Data; boundary=sampleBoundary' natively (verified in a scratch script against a raw Response with the unmodified header). The test therefore passes on the base implementation, so removing the normalization regex would go undetected in CI. The mixed-case body/validator tests are likewise only sensitive to the media-type check and the /i regexes, not to the buffer.ts normalization. If the normalization targets other runtimes (Bun, Deno, workerd), the test needs to assert the header actually passed to Response, or run in those runtime projects.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Either drop the normalization if it is unnecessary on supported runtimes, or make the test sensitive to it, for example by spying on global Response and asserting the Content-Type header it receives is 'multipart/form-data; boundary=sampleBoundary' (boundary case preserved).",
+      "confidence": 75,
+      "evidence": [
+        "src/utils/buffer.test.ts:129 -- 'Multipart/Form-Data; boundary=sampleBoundary'",
+        "src/utils/buffer.ts:114 -- 'Content-Type': contentType.replace(/^[^;]+/, (mediaType) => mediaType.toLowerCase()),",
+        "Scratch run under node v24.21.0: new Response(buf,{headers:{'Content-Type':'Multipart/Form-Data; boundary=sampleBoundary'}}).formData() returns [['test','Hello']] with no normalization"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Mixed-case tests in body.test.ts and validator.test.ts use runtime-generated multipart boundaries (undici emits lowercase boundaries), so only the buffer.test.ts case exercises a boundary with uppercase characters; a regression that lowercases the whole header would be caught only there, and that test also passes on base (see finding).",
+    "parseBody's media-type check changed from startsWith to exact equality on the token before ';'; no test covers the tightened cases (e.g. 'multipart/form-data-x', whitespace before ';') so the intended boundary of that behavior change is unpinned."
+  ],
+  "testing_gaps": [
+    "parseBody() on a HonoRequest followed by c.req.formData() (the new bodyCache.formData caching path) has no awaited assertion.",
+    "No test for a malformed multipart body passed through parseBody on a HonoRequest, where a rejected promise is now cached in bodyCache.formData and a later validator('form') awaits it outside its try/catch."
+  ]
+}

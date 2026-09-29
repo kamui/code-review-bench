@@ -1,0 +1,32 @@
+{
+  "reviewer": "security",
+  "findings": [
+    {
+      "title": "Untrusted path override re-enabled behind spoofable x-vercel-isr header (CWE-284/CWE-20)",
+      "severity": "P1",
+      "file": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+      "line": 24,
+      "why_it_matters": "PR #15959 made the entrypoint ignore the x_astro_path query param unless a valid middleware secret is present. The new else-if branch turns that override back on for any request carrying `x-vercel-isr: 1`, which is an ordinary request header with no secret behind it. The same entrypoint file is built into every serverless function (`_render` via buildServerlessFolder, and `_isr` via buildISRFolder), so on `_render` (non-ISR routes, ISR-excluded routes, `_image`, `_server-islands`) a request such as `/api/public?x_astro_path=/api/private` plus that header would be served as `/api/private`, letting a client choose a different route than the one the platform routed and authorized at the URL level (for example platform firewall or path-based rules). Whether Vercel strips or overwrites an inbound `x-vercel-isr` from external clients could not be verified here (assumption: it may not); if it does not, this reopens the hole #15959 closed. Scoping the branch to the ISR function's own rewrite shape (`url.pathname === '/_isr'`) or to a build-time ISR flag means `_render` never honors the param, whatever the header says.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Only honor the query param when the request is shaped like the adapter's own ISR rewrite, e.g. `else if (request.headers.get('x-vercel-isr') === '1' && url.pathname === '/_isr')` (export an ISR_PATH-derived constant from ../index.js), or better, inject an `isr` boolean through virtual:astro-vercel:config so only the `_isr` function build enables the branch. Assumption: Vercel invokes the ISR function with pathname `/_isr` as produced by the `/_isr?x_astro_path=$0` dest; verify with the manual e2e used for this PR. Add a negative test (see testing_gaps).",
+      "confidence": 50,
+      "evidence": [
+        "packages/integrations/vercel/src/serverless/entrypoint.ts:24 -- } else if(request.headers.get('x-vercel-isr') === '1') {",
+        "packages/integrations/vercel/src/serverless/entrypoint.ts:25 -- realPath = url.searchParams.get(ASTRO_PATH_PARAM);",
+        "packages/integrations/vercel/src/index.ts:453 -- await builder.buildServerlessFolder(entryFile, NODE_PATH, _config.root); (same entryFile also used at :474 buildISRFolder(entryFile, '_isr', ...)), so `_render` runs the same code",
+        "packages/integrations/vercel/test/path-override-security.test.js:30 -- it('ignores untrusted x_astro_path query param on _render', ...) sends no x-vercel-isr header, so the new bypass is untested",
+        "provenance: 335a20416 Matthew Phillips 2026-03-19 - Require trusted secret for path overrides (#15959)"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Platform behavior unverified: whether Vercel strips or overwrites client-supplied `x-vercel-isr` on inbound external requests, and whether the ISR function sees pathname `/_isr`. The finding's exploitability hinges on the first.",
+    "Duplicate query keys: if a client sends `?x_astro_path=...` on an ISR-routed URL, the order in which Vercel merges it with the dest's `x_astro_path=$0` decides which value `searchParams.get` returns (first wins). Not verifiable offline; it would let a client pick the rendered path (and ISR cache key) for ISR-routed URLs, although Astro-level middleware still runs on the rewritten path."
+  ],
+  "testing_gaps": [
+    "No test exercises the new ISR branch: neither a positive case (x-vercel-isr: 1 plus x_astro_path rewrites the path on `_isr`, which is how the 404 regression from #15959 shipped) nor a negative case in path-override-security.test.js (x-vercel-isr: 1 plus x_astro_path must be ignored on `_render`)."
+  ]
+}
