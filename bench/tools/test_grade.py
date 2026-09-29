@@ -362,19 +362,25 @@ class Map(Mapped):
                 self.assertEqual(attempt["review_level"]["completion"], "completed")
                 shutil.rmtree(self.run_dir / "scoring")
 
-    def test_sonnet_5_5_builtin_ranks_like_opus(self):
+    def test_claude_builtin_variants_rank_like_opus(self):
         opus = next((a for a, spec in sorted(self.attempts.items()) if spec[0] == C and spec[2] == "valid completed"), None)
         if opus is None:
             self.skipTest("this fixture has no valid Opus built-in attempt")
         path = self.run_dir / "attempts" / opus / "attempt.json"
         record = json.loads(path.read_text(encoding="utf-8"))
-        record["cell"]["arm"] = "claude-builtin-sonnet-5-5-high"
-        write_json(path, record)
-        done = self.map(self.verdicts())
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        mapping = json.loads(self.mapping_path().read_text(encoding="utf-8"))
-        attempt = next(a for a in mapping["attempts"] if a["attempt_id"] == opus)
-        self.assertEqual([i["priority_error"] for i in attempt["items"]], self.attempts[opus][6])
+        for arm in ("claude-builtin-sonnet-5-5-high", "claude-builtin-fable-high", "claude-builtin-opus-gaps-high"):
+            with self.subTest(arm=arm):
+                record["cell"]["arm"] = arm
+                write_json(path, record)
+                done = self.map(self.verdicts())
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                mapping = json.loads(self.mapping_path().read_text(encoding="utf-8"))
+                attempt = next(a for a in mapping["attempts"] if a["attempt_id"] == opus)
+                self.assertEqual([i["priority_error"] for i in attempt["items"]], self.attempts[opus][6])
+                self.assertEqual(tuple(attempt["review_level"][key] for key in
+                                       ("approved_on_buggy", "zero_recovery", "false_clean", "completion")),
+                                 self.attempts[opus][7])
+                shutil.rmtree(self.run_dir / "scoring")
 
     def test_codex_models_use_codex_rank_policy(self):
         attempt_id = "att-008"
