@@ -452,7 +452,7 @@ def replay(kind: str, attempt_dir: str, clone: str, allowed_prefixes: list, enfo
         native, root, _ = codex_skill_report(attempt_dir, native_file)
         if normalizer.get("kind") == "thermo":
             normalize = [sys.executable, str(HERE / "normalize_thermo.py"), "--artifact-root", str(root),
-                         "--clone", clone, "--out", os.path.join(attempt_dir, "normalized.json")]
+                         "--clone", clone, "--out", os.path.join(attempt_dir, "normalized.json"), "--arm", kind]
         elif native:
             normalize += ["--native-review", str(native)]
         else:
