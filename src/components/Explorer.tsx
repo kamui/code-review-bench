@@ -34,12 +34,12 @@ export function Explorer() {
 }
 
 function Dashboard({ dataset }: { dataset: Dataset }) {
-  const [selected, setSelected] = useState(dataset.configurations.filter(item => item.builtin).map(item => item.id))
+  const [selected, setSelected] = useState(dataset.configurations.filter(item => !item.experimental).map(item => item.id))
   const modelChoices = dataset.configurations.flatMap(configuration => configuration.models.map(model => ({
     value: model, label: configuration.short.split(' / ').at(-2) ?? model,
   }))).filter((model, index, choices) => choices.findIndex(choice => choice.value === model.value) === index)
   const [selectedModels, setSelectedModels] = useState(modelChoices.map(model => model.value))
-  const [includeSkills, setIncludeSkills] = useState(false)
+  const [includeExperiments, setIncludeExperiments] = useState(false)
   const [axis, setAxis] = useState<Axis>('cost')
   const [version, setVersion] = useState<MetricVersion>('trials')
   const [query, setQuery] = useState('')
@@ -53,7 +53,7 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
   const [sort, setSort] = useState<{ column: ResultsColumn; direction: 'ascending' | 'descending' }>({ column: 'score', direction: 'descending' })
   const { toggleColorScheme } = useMantineColorScheme()
   const colorScheme = useComputedColorScheme('light')
-  const configurations = dataset.configurations.filter(item => includeSkills || item.builtin)
+  const configurations = dataset.configurations.filter(item => includeExperiments || !item.experimental)
   const editions = configurations.filter((item, index) => configurations.findIndex(other => other.method === item.method && other.reviewEdition === item.reviewEdition) === index)
   const activeIds = selected.filter(id => configurations.some(item => item.id === id && item.models.some(model => selectedModels.includes(model))))
   const filter = { concern: findingConcern ?? '', severity }
@@ -146,7 +146,7 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
                 {modelChoices.map(model => <Checkbox key={model.value} label={model.label} checked={selectedModels.includes(model.value)} onChange={() => setSelectedModels(values => values.includes(model.value) ? values.filter(value => value !== model.value) : [...values, model.value])} size="xs" />)}
               </Stack></Popover.Dropdown>
             </Popover>
-            <div className="skill-switch"><Switch checked={includeSkills} onChange={event => setIncludeSkills(event.currentTarget.checked)} label="Include skill experiments" size="xs" /></div>
+            <div className="skill-switch"><Switch checked={includeExperiments} onChange={event => setIncludeExperiments(event.currentTarget.checked)} label="Include skill experiments" size="xs" /></div>
             <Text size="xs" c="dimmed">Each skill includes its selected models. Review editions mark meaningful changes.</Text>
           </aside></div>
           <div className="comparison-strip"><Info size={15} /><span>{version === 'trials'
