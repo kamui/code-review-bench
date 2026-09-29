@@ -1,0 +1,46 @@
+diff --git a/bench/tools/file_attempt.py b/bench/tools/file_attempt.py
+index 9cafa127..7ef3c141 100644
+--- a/bench/tools/file_attempt.py
++++ b/bench/tools/file_attempt.py
+@@ -169,6 +169,13 @@ def claude_transcripts(attempt_dir: str) -> tuple:
+     return roots, subs
+ 
+ 
++def api_errors_only(path: str) -> bool:
++    """True when every assistant record is the CLI's own API-error notice: the request was refused, so nothing was billed."""
++    records = [record for record in jsonl(path) if record.get("type") == "assistant"]
++    return bool(records) and all(record.get("isApiErrorMessage") or (record.get("message") or {}).get("model") == "<synthetic>"
++                                 for record in records)
++
++
+ def claude_observed(paths: list) -> tuple:
+     models, efforts = set(), set()
+     requests = {}
+@@ -566,6 +573,10 @@ def file_attempt(args) -> tuple:
+         roots, subs = claude_transcripts(attempt_dir)
+         transcript_paths = roots + subs
+         meter_paths = subs if kind == "claude-builtin" else roots + subs
++        unbilled = [path for path in meter_paths if api_errors_only(path)]
++        if unbilled and len(unbilled) < len(meter_paths):
++            meter_paths = [path for path in meter_paths if path not in unbilled]
++            notes.append("not metered, no billed request: " + ", ".join(os.path.basename(path) for path in unbilled))
+         models, efforts, requests = claude_observed(transcript_paths)
+         subagent_count = len(subs)
+         if kind == "claude-builtin":
+@@ -912,6 +923,16 @@ def self_test() -> int:
+         assert rec["normalized"]["parse_status"] == "unresolved" and "stopped (exit 1)" in rec["normalized"]["reason"], rec
+         assert rec["observed"]["models"] == ["m-1"] and rec["usage"]["metering_status"] == "complete", rec
+         assert (temp / "o5b" / "normalized.json").is_file() and not (temp / "o5b" / "payload.json").exists()
++        # A subagent whose only request was refused (a session-limit notice) bills nothing and is left out of metering.
++        refused_agent = project / "s1" / "subagents" / "agent-a2.jsonl"
++        refused_agent.write_text(json.dumps({"type": "assistant", "isApiErrorMessage": True, "timestamp": "2026-01-01T00:00:04Z",
++                                             "message": {"model": "<synthetic>", "content": [{"type": "text", "text": "You've hit your session limit"}]}}) + "\n",
++                                 encoding="utf-8")
++        done = run("o5d")
++        rec = json.loads((temp / "o5d" / "attempt.json").read_text(encoding="utf-8"))
++        assert done.returncode == 0 and rec["usage"]["metering_status"] == "complete", (done, rec)
++        assert any("not metered, no billed request: agent-a2.jsonl" in note for note in rec["notes"]), rec["notes"]
++        refused_agent.unlink()
+         (att / "normalized.json").unlink()
+         (att / "dispatch.txt").write_text("claude 9.9.9 (Claude Code)\nmodel=m effort=high\nexit=0\n", encoding="utf-8")
+         done = run("o5c")
