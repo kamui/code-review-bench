@@ -92,8 +92,9 @@ sys.path.insert(0, str(HERE))
 import check_manifest  # noqa: E402
 import review_isolation  # noqa: E402
 
-KINDS = ("review-code", "claude-builtin", "codex")
-NATIVE = {"review-code": "artifacts/composition.json", "claude-builtin": "payload.json", "codex": "stdout.txt"}
+KINDS = ("review-code", "claude-builtin", "codex", "codex-skill")
+NATIVE = {"review-code": "artifacts/composition.json", "claude-builtin": "payload.json", "codex": "stdout.txt",
+          "codex-skill": "native-artifacts.json"}
 RANGE = re.compile(r"(?<![\w./-])([\w./@{}~^-]+?)(\.\.\.?)([\w./@{}~^-]+)")
 
 
@@ -277,6 +278,81 @@ def codex_observed(children: list) -> tuple:
     return sorted(models), sorted(efforts), sorted(sandboxes), rubric, requests
 
 
+def codex_skill_observed(paths: list) -> tuple:
+    """Read model, effort, sandbox and usage evidence from the root and every child rollout."""
+    models, efforts, sandboxes, requests = set(), set(), set(), []
+    for path in paths:
+        model = None
+        for record in jsonl(path):
+            kind = record.get("type")
+            body = record.get("payload") or {}
+            if kind == "turn_context":
+                model = body.get("model") or model
+                if model:
+                    models.add(model)
+                if body.get("effort"):
+                    efforts.add(body["effort"])
+                policy = body.get("sandbox_policy") or {}
+                if policy.get("type"):
+                    sandboxes.add(policy["type"])
+            elif kind == "event_msg" and body.get("type") == "token_count":
+                usage = (body.get("info") or {}).get("last_token_usage")
+                if usage:
+                    requests.append({"thread": os.path.basename(path), "timestamp": record.get("timestamp"),
+                                     "model": model, "input_tokens": usage.get("input_tokens", 0),
+                                     "cached_input_tokens": usage.get("cached_input_tokens", 0),
+                                     "cache_write_input_tokens": usage.get("cache_write_input_tokens", 0),
+                                     "output_tokens": usage.get("output_tokens", 0),
+                                     "reasoning_output_tokens": usage.get("reasoning_output_tokens", 0)})
+    return sorted(models), sorted(efforts), sorted(sandboxes), requests
+
+
+def codex_skill_report(attempt_dir: str, native_file: str = "review.json") -> tuple:
+    """Return the unique CE ``review.json`` and its artifact-root metadata."""
+    index_path = Path(attempt_dir, "native-artifacts.json")
+    if not index_path.is_file():
+        return None, None, None
+    index = read_json(index_path)
+    root = Path(index.get("root", "")).resolve()
+    if not root.is_dir():
+        raise FileError(f"native artifact root is missing: {root}")
+    attempt = Path(attempt_dir).resolve()
+    if not root.is_relative_to(attempt):
+        raise FileError(f"native artifact root escapes the attempt directory: {root}")
+    rows = index.get("files")
+    if not isinstance(rows, list):
+        raise FileError(f"native artifact index has no files array: {index_path}")
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("path"), str):
+            raise FileError(f"invalid native artifact entry in {index_path}")
+        relative = Path(row["path"])
+        if relative.is_absolute() or ".." in relative.parts:
+            raise FileError(f"native artifact path escapes its root: {relative}")
+        artifact = (root / relative).resolve()
+        if not artifact.is_relative_to(root) or not artifact.is_file():
+            raise FileError(f"native artifact is missing or escapes its root: {artifact}")
+        if (row.get("bytes") != artifact.stat().st_size
+                or row.get("sha256") != sha256_file(artifact)):
+            raise FileError(f"native artifact changed since indexing: {relative}")
+    matches = [row for row in rows if Path(row["path"]).name == native_file]
+    if len(matches) != 1:
+        if not matches:
+            return None, root, None
+        raise FileError(f"expected one native {native_file} in {index_path}, found {len(matches)}")
+    relative = Path(matches[0]["path"])
+    if relative.is_absolute() or ".." in relative.parts:
+        raise FileError(f"native review path escapes the artifact root: {relative}")
+    report = (root / relative).resolve()
+    if not report.is_relative_to(root) or not report.is_file():
+        raise FileError(f"native review is missing or escapes the artifact root: {report}")
+    return report, root, relative.as_posix()
+
+
+def codex_skill_config(run_id: str) -> dict:
+    path = BENCH / "runs" / run_id / "inputs" / "runner.json"
+    return read_json(path) if path.is_file() else {}
+
+
 # ---------------------------------------------------------------------------------------------
 # Shared pieces
 
@@ -347,7 +423,7 @@ def archive_transcripts(paths: list, attempt_dir: str, dest: str) -> dict:
             "restoration_check": "passed" if ok else "failed"}
 
 
-def replay(kind: str, attempt_dir: str, clone: str, allowed_prefixes: list, enforced: bool):
+def replay(kind: str, attempt_dir: str, clone: str, allowed_prefixes: list, enforced: bool, run_id: str):
     """Re-run the audit and the normalizer in place; return the superseded stop record, if any."""
     for name in ("audit.json", "normalized.json"):
         path = os.path.join(attempt_dir, name)
@@ -368,6 +444,18 @@ def replay(kind: str, attempt_dir: str, clone: str, allowed_prefixes: list, enfo
         normalize += ["--composition", os.path.join(attempt_dir, "artifacts", "composition.json")]
     elif kind == "claude-builtin":
         normalize += ["--payload", os.path.join(attempt_dir, "payload.json")]
+    elif kind == "codex-skill":
+        normalizer = codex_skill_config(run_id).get("normalizer", {})
+        native_file = normalizer.get("native_file") or (
+            "finding-index.json" if normalizer.get("kind") == "thermo" else "review.json")
+        native, root, _ = codex_skill_report(attempt_dir, native_file)
+        if normalizer.get("kind") == "thermo":
+            normalize = [sys.executable, str(HERE / "normalize_thermo.py"), "--artifact-root", str(root),
+                         "--clone", clone, "--out", os.path.join(attempt_dir, "normalized.json")]
+        elif native:
+            normalize += ["--native-review", str(native)]
+        else:
+            raise FileError(f"no native report found for replay in {attempt_dir}")
     else:
         normalize += ["--stdout", os.path.join(attempt_dir, "stdout.txt"),
                       "--sessions-dir", os.path.join(attempt_dir, "home", ".codex", "sessions")]
@@ -398,7 +486,8 @@ def file_attempt(args) -> tuple:
     rates = read_json(args.rates)
     harness_dir = Path(args.harness_dir)
     profile = arm.get("isolation", {}).get("sandbox")
-    superseded = replay(kind, attempt_dir, clone, args.audit_allowed_prefix or [], profile == review_isolation.ENFORCED) if args.replay else None
+    superseded = replay(kind, attempt_dir, clone, args.audit_allowed_prefix or [],
+                        profile == review_isolation.ENFORCED, args.run_id) if args.replay else None
 
     dispatch_lines = Path(attempt_dir, "dispatch.txt").read_text(encoding="utf-8").splitlines() \
         if os.path.exists(os.path.join(attempt_dir, "dispatch.txt")) else []
@@ -409,11 +498,21 @@ def file_attempt(args) -> tuple:
     exit_code = next((int(m.group(1)) for line in dispatch_lines for m in [re.match(r"exit=(-?\d+)$", line.strip())] if m), None)
     timing_src = read_json(os.path.join(attempt_dir, "timing.json"))
     stop = read_json(os.path.join(attempt_dir, "stop.json")) if os.path.exists(os.path.join(attempt_dir, "stop.json")) else None
-    audit = read_json(os.path.join(attempt_dir, "audit.json"))
+    audit_path = os.path.join(attempt_dir, "audit.json")
+    audit_missing = not os.path.exists(audit_path)
+    audit = read_json(audit_path) if not audit_missing else {
+        "violations": [], "guidance_probes": [], "network_commands": [], "diff_commands": []}
     stopped = stop is not None or exit_code not in (None, 0)
     native_rel = NATIVE[kind]
     native_path = os.path.join(attempt_dir, native_rel)
-    if not os.path.exists(native_path):
+    native_root, native_relative = None, None
+    if kind == "codex-skill":
+        skill_config = codex_skill_config(args.run_id)
+        normalizer = skill_config.get("normalizer", {})
+        native_file = normalizer.get("native_file") or (
+            "finding-index.json" if normalizer.get("kind") == "thermo" else "review.json")
+        native_path, native_root, native_relative = codex_skill_report(attempt_dir, native_file)
+    if not native_path or not os.path.exists(native_path):
         if not stopped:
             raise FileError(f"native output {native_path} is missing")
         native_path = None
@@ -428,16 +527,38 @@ def file_attempt(args) -> tuple:
     trees = [Path(attempt_dir, n).read_text(encoding="utf-8").strip() for n in ("tree-before.txt", "tree-after.txt")]
 
     notes = list(args.note or [])
+    if kind == "codex-skill" and audit_missing:
+        notes.append("attempt audit was unavailable because the runner produced no audit.json")
     prompt_hash = prompt_header = None
     sandbox = None
-    if kind == "codex":
+    if kind in ("codex", "codex-skill"):
         harness = "codex"
-        root, children, transcript_paths = codex_rollouts(attempt_dir)
-        models, efforts, sandboxes, prompt_hash, requests = codex_observed(children)
+        try:
+            root, children, transcript_paths = codex_rollouts(attempt_dir)
+        except FileError:
+            if kind != "codex-skill":
+                raise
+            root, children, transcript_paths = None, [], []
+            notes.append("no Codex rollout transcripts were produced")
+        if kind == "codex-skill":
+            if transcript_paths:
+                models, efforts, sandboxes, requests = codex_skill_observed(transcript_paths)
+            else:
+                models, efforts, sandboxes, requests = [], [], [], []
+            skill_attempt = read_json(os.path.join(attempt_dir, "skill-attempt.json")) if os.path.exists(os.path.join(attempt_dir, "skill-attempt.json")) else {}
+            prompt_hash = skill_attempt.get("prompt_sha256")
+            if skill_attempt.get("root_session_id") and skill_attempt["root_session_id"] != root:
+                notes.append("runner root session id differs from filed rollout root")
+            subagent_count = sum(1 for path in transcript_paths
+                                 if next((r.get("payload", {}).get("parent_thread_id") for r in jsonl(path)
+                                          if r.get("type") == "session_meta"), None))
+            meter_paths = None
+        else:
+            models, efforts, sandboxes, prompt_hash, requests = codex_observed(children)
+            subagent_count = len(children)
+            meter_paths = None
         sandbox = sandboxes[0] if len(sandboxes) == 1 else (", ".join(sandboxes) or None)
-        prompt_header = "You are acting as a reviewer for a proposed code change" if prompt_hash else None
-        subagent_count = len(children)
-        meter_paths = None
+        prompt_header = None if kind == "codex-skill" else ("You are acting as a reviewer for a proposed code change" if prompt_hash else None)
     else:
         harness = "claude-code"
         roots, subs = claude_transcripts(attempt_dir)
@@ -447,7 +568,7 @@ def file_attempt(args) -> tuple:
         subagent_count = len(subs)
         if kind == "claude-builtin":
             prompt_hash, prompt_header = builtin_prompt(subs)
-    match = registry_match(harness_dir, harness, cli_version, prompt_hash)
+    match = None if kind == "codex-skill" else registry_match(harness_dir, harness, cli_version, prompt_hash)
 
     # Usage.
     priced = low = high = None
@@ -456,12 +577,15 @@ def file_attempt(args) -> tuple:
     if rate is None:
         status = "incomplete"
         notes.append(f"usage not priced: observed models {models or 'none'} do not map to one rates.json entry")
-    elif kind == "codex":
+    elif kind in ("codex", "codex-skill") and root:
         out = run_tool([sys.executable, str(HERE / "codex_usage.py"), "--sessions-dir",
                         os.path.join(attempt_dir, "home", ".codex", "sessions"), "--session", root, "--prices",
                         f"{rate['input']},{rate['output']}", "--cached-mult", f"{rate['cache_read'] / rate['input']:g}",
                         "--cache-write-mult", f"{rate['cache_write_5m'] / rate['input']:g}", "--json"])
         priced = low = high = round(json.loads(out)["total"]["cost"], 6)
+    elif kind == "codex-skill":
+        status = "incomplete"
+        notes.append("usage not priced because no root Codex session was observed")
     else:
         out = run_tool([sys.executable, str(HERE / "transcript_usage.py"), *meter_paths, "--prices",
                         f"{rate['input']},{rate['output']}", "--cache-read-mult", f"{rate['cache_read'] / rate['input']:g}",
@@ -478,7 +602,10 @@ def file_attempt(args) -> tuple:
 
     # Disposition.
     skill_tree = None
-    if kind == "review-code" and os.path.exists(os.path.join(attempt_dir, "skill-tree.txt")):
+    if kind == "codex-skill":
+        observed_skill = read_json(os.path.join(attempt_dir, "skill-attempt.json")) if os.path.exists(os.path.join(attempt_dir, "skill-attempt.json")) else {}
+        skill_tree = observed_skill.get("skill_tree_sha256")
+    elif kind == "review-code" and os.path.exists(os.path.join(attempt_dir, "skill-tree.txt")):
         skill_tree = Path(attempt_dir, "skill-tree.txt").read_text(encoding="utf-8").strip()
     elif kind == "review-code":
         skill_tree = next((m.group(1) for line in dispatch_lines for m in [re.search(r"skill_tree=([0-9a-f]{40})", line)] if m), None)
@@ -491,6 +618,8 @@ def file_attempt(args) -> tuple:
         problems.append("tree identity changed during the attempt")
     if audit.get("violations"):
         problems.append(f"read audit: {len(audit['violations'])} violation(s), first {audit['violations'][0]}")
+    if kind == "codex-skill" and audit_missing and not stop:
+        problems.append("attempt audit.json is missing")
     if audit.get("network_commands"):
         problems.append(f"network command: {audit['network_commands'][0]}")
     if arm_model and models and models != [arm_model]:
@@ -517,7 +646,7 @@ def file_attempt(args) -> tuple:
         disposition = "valid completed"
         phase = "result"
     disposition = " ".join(disposition.splitlines())
-    if kind != "review-code" and not checked:
+    if kind not in ("review-code", "codex-skill") and not checked:
         notes.append("no range-bearing diff command observed; the executed range could not be checked")
 
     dispatched = timing_src.get("root_dispatched_at") or timing_src.get("dispatched_at")
@@ -542,11 +671,27 @@ def file_attempt(args) -> tuple:
             shutil.copy2(src, dest)
         elif os.path.exists(dest):
             os.remove(dest)  # a re-filing drops what the attempt directory no longer holds
+    if kind == "codex-skill":
+        for name in ("last-message.txt", "stdout.jsonl", "stderr.txt", "audit.txt", "normalization.txt",
+                     "usage.txt", "tree-before.txt", "tree-after.txt"):
+            src, dest = os.path.join(attempt_dir, name), os.path.join(out, name)
+            if os.path.isfile(src):
+                shutil.copy2(src, dest)
+            elif os.path.exists(dest):
+                os.remove(dest)
     codex_config = Path(attempt_dir) / "home/.codex/config.toml"
     if codex_config.is_file():
         shutil.copy2(codex_config, Path(out) / "codex-config.toml")
     native_name = os.path.basename(native_rel)
-    if native_path:
+    if kind == "codex-skill" and native_root:
+        artifact_dir = native_root.name
+        shutil.copytree(native_root, os.path.join(out, artifact_dir), dirs_exist_ok=True)
+        shutil.copy2(os.path.join(attempt_dir, "native-artifacts.json"), os.path.join(out, "native-artifacts.json"))
+        if os.path.exists(os.path.join(attempt_dir, "skill-attempt.json")):
+            shutil.copy2(os.path.join(attempt_dir, "skill-attempt.json"), os.path.join(out, "skill-attempt.json"))
+        if native_path:
+            native_name = artifact_dir + "/" + native_relative
+    elif native_path:
         shutil.copy2(native_path, os.path.join(out, native_name))
     elif os.path.exists(os.path.join(out, native_name)):
         os.remove(os.path.join(out, native_name))
@@ -560,6 +705,11 @@ def file_attempt(args) -> tuple:
     if kind == "review-code" and native_path:
         composition = read_json(native_path)
         arm_complete = (composition.get("run") or {}).get("coverage") == "complete"
+    elif kind == "codex-skill" and native_path:
+        if skill_config.get("normalizer", {}).get("kind") == "thermo":
+            arm_complete = not read_json(os.path.join(attempt_dir, "skill-attempt.json")).get("violations")
+        else:
+            arm_complete = read_json(native_path).get("status") == "complete"
 
     record = {
         "schema_version": 1,
@@ -604,6 +754,19 @@ def self_test() -> int:
     here = Path(__file__).resolve()
     with tempfile.TemporaryDirectory() as temp:
         temp = Path(temp)
+        root_rollout = temp / "rollout-root.jsonl"
+        root_rollout.write_text("".join(json.dumps(record) + "\n" for record in [
+            {"type": "session_meta", "payload": {"id": "root-only"}},
+            {"type": "turn_context", "payload": {"model": "gpt-6-luna", "effort": "high",
+                                                   "sandbox_policy": {"type": "workspace-write"}}},
+            {"type": "event_msg", "payload": {"type": "token_count", "info": {"last_token_usage": {
+                "input_tokens": 3, "output_tokens": 2}}}},
+        ]), encoding="utf-8")
+        observed = codex_skill_observed([str(root_rollout)])
+        assert observed[:3] == (["gpt-6-luna"], ["high"], ["workspace-write"]), observed
+        assert observed[3] == [{"thread": root_rollout.name, "timestamp": None, "model": "gpt-6-luna",
+                                "input_tokens": 3, "cached_input_tokens": 0, "cache_write_input_tokens": 0,
+                                "output_tokens": 2, "reasoning_output_tokens": 0}], observed[3]
         repo = temp / "clone"
         subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
         ident = ["-c", "user.name=t", "-c", "user.email=t@example.com"]
