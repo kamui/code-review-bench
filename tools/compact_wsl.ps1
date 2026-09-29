@@ -23,7 +23,7 @@ try {
     Get-Command Mount-VHD, Optimize-VHD, Dismount-VHD -ErrorAction Stop | Out-Null
     Write-Host "Compacting $vhd"
     Write-Host ('Before: VHD {0:N2} GiB; C: free {1:N2} GiB' -f ($before / 1GB), ($freeBefore / 1GB))
-    & wsl.exe --distribution $Distribution --user root --exec fstrim -v /
+    & wsl.exe --distribution $Distribution --user root --exec /usr/sbin/fstrim -v /
     if ($LASTEXITCODE -ne 0) { throw 'Linux trim failed; compaction was not started.' }
     & wsl.exe --shutdown
     if ($LASTEXITCODE -ne 0) { throw 'WSL shutdown failed; compaction was not started.' }
