@@ -355,7 +355,8 @@ def launch(args) -> int:
         normalize_command = []
         if normalizer.get("kind") == "thermo":
             normalize_command = [sys.executable, str(TOOLS / "normalize_thermo.py"), "--artifact-root",
-                                 str(artifact_root), "--clone", str(clone), "--out", str(attempt / "normalized.json")]
+                                 str(artifact_root), "--clone", str(clone), "--out", str(attempt / "normalized.json"),
+                                 "--arm", "claude-skill"]
         elif normalizer.get("kind") != "native-review":
             violations.append(f"unknown or missing normalizer kind: {normalizer.get('kind')!r}")
         elif len(reports) != 1:
