@@ -33,6 +33,11 @@ class CodexDispatchTest(unittest.TestCase):
 
             bin_dir = root / "bin"
             bin_dir.mkdir()
+            runtime_bin = root / "runtime-bin"
+            runtime_bin.mkdir()
+            fake_mise = bin_dir / "mise"
+            fake_mise.write_text(f"#!/usr/bin/env python3\nprint({str(runtime_bin)!r})\n", encoding="utf-8")
+            fake_mise.chmod(0o755)
             fake_codex = bin_dir / "codex"
             fake_codex.write_text(
                 "#!/usr/bin/env python3\n"
@@ -42,7 +47,7 @@ class CodexDispatchTest(unittest.TestCase):
                 "    raise SystemExit(0)\n"
                 "with open(os.environ['CODEX_ARGV_CAPTURE'], 'w', encoding='utf-8') as f:\n"
                 "    json.dump({'argv': sys.argv[1:], 'home': os.environ.get('HOME'),\n"
-                "               'codex_home': os.environ.get('CODEX_HOME')}, f)\n"
+                "               'codex_home': os.environ.get('CODEX_HOME'), 'path': os.environ['PATH']}, f)\n"
                 "raise SystemExit(23)\n",
                 encoding="utf-8",
             )
@@ -50,16 +55,18 @@ class CodexDispatchTest(unittest.TestCase):
             packet = root / "packet.md"
             packet.write_text("Fixture review packet.\n", encoding="utf-8")
 
+            writable_roots = "sandbox_workspace_write.writable_roots=" + json.dumps([str(clone) + "-cache", str(clone) + "-work"])
             cases = (
                 ("explicit", "gpt-6-luna", "high", [
                     "review", "-c", 'sandbox_mode="workspace-write"',
-                    "-c", "sandbox_workspace_write.network_access=false",
+                    "-c", "sandbox_workspace_write.network_access=true",
+                    "-c", writable_roots,
                     "-c", 'model="gpt-6-luna"', "-c", 'review_model="gpt-6-luna"',
                     "-c", 'model_reasoning_effort="high"', "-",
                 ]),
                 ("default", "", "", [
                     "review", "-c", 'sandbox_mode="workspace-write"',
-                    "-c", "sandbox_workspace_write.network_access=false", "-",
+                    "-c", "sandbox_workspace_write.network_access=true", "-c", writable_roots, "-",
                 ]),
             )
             for name, model, effort, expected_argv in cases:
@@ -85,6 +92,7 @@ class CodexDispatchTest(unittest.TestCase):
                     self.assertEqual(receipt["argv"], expected_argv)
                     self.assertEqual(receipt["home"], str(attempt / "home"))
                     self.assertEqual(receipt["codex_home"], str(attempt / "home" / ".codex"))
+                    self.assertEqual(receipt["path"].split(os.pathsep)[0], str(runtime_bin))
                     self.assertFalse((attempt / "home" / ".codex" / "auth.json").exists())
                     dispatch_record = (attempt / "dispatch.txt").read_text(encoding="utf-8")
                     self.assertIn(f"model={model or '<default>'} effort={effort or '<default>'}", dispatch_record)
