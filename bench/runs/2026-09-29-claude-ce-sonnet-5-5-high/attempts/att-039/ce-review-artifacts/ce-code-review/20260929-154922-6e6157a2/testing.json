@@ -1,0 +1,67 @@
+{
+  "reviewer": "testing",
+  "findings": [
+    {
+      "title": "Shared module-level SSLContext gets client cert loaded; no test covers verify=True with cert",
+      "severity": "P1",
+      "file": "src/requests/adapters.py",
+      "line": 95,
+      "why_it_matters": "With verify=True and cert=(crt,key), urllib3 calls context.load_cert_chain() on whichever ssl_context it was given. That is now the process-wide _preloaded_ssl_context, so one mTLS request permanently attaches that client cert to every later verify=True request in the process, including requests to unrelated hosts and other sessions. Before this change each pool built its own context. No test exercises verify=True together with cert; the only mTLS test uses verify=False and then an expected-failure default request, so the leak passes CI unnoticed. I confirmed with a spy on urllib3.connection.ssl_wrap_socket that the shared context is passed together with certfile='tests/certs/mtls/client/client.pem'.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Do not hand the shared context to urllib3 when client_cert is not None (fall back to ca_certs=DEFAULT_CA_BUNDLE_PATH-style loading, or copy the context per pool). Add a regression test: send an mTLS request with verify=True and cert=..., then a second verify=True request without cert to a server that records getpeercert(), and assert no client cert is presented. Also add a unit test on _urllib3_request_context(verify=True, client_cert=...) asserting the resulting ssl_context is not the shared module object.",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:95 -- pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context",
+        "urllib3/util/ssl_.py:431 -- context.load_cert_chain(certfile, keyfile)  (urllib3 2.8.0, runs on the passed-in ssl_context when certfile is set)",
+        "src/requests/adapters.py:103-109 -- cert_file/key_file are still placed in pool_kwargs alongside ssl_context",
+        "tests/test_requests.py:2960 -- r1 = s.get(url, verify=False, cert=cert)  (the only mTLS test never uses verify=True with cert)"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Adapter-level custom ssl_context silently overridden for verify=True; untested",
+      "severity": "P1",
+      "file": "src/requests/adapters.py",
+      "line": 95,
+      "why_it_matters": "Subclasses that pass their own ssl_context through init_poolmanager (custom ciphers, minimum TLS version, truststore) lose it for every default verify=True request. The per-request pool_kwargs['ssl_context'] is merged over the PoolManager-level one, so the shared preloaded context wins. I confirmed this with an HTTPAdapter subclass: conn.conn_kw['ssl_context'] is the module preloaded context, not the adapter's. Nothing in the suite asserts precedence between adapter-configured and default contexts, so the regression passes CI.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Only inject _preloaded_ssl_context when the adapter has not configured one, for example by checking self.poolmanager.connection_pool_kw.get('ssl_context') in _get_connection before calling connection_from_host. Add a test that mounts an adapter subclass whose init_poolmanager supplies ssl_context and asserts that context reaches the connection for verify=True.",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:95 -- pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context",
+        "src/requests/adapters.py:244 -- **pool_kwargs,  (init_poolmanager forwards user kwargs such as ssl_context to PoolManager)",
+        "scratch run: USES CUSTOM: False USES PRELOADED: True"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "New ca_cert_dir branch and verify=True positive path have no tests",
+      "severity": "P2",
+      "file": "src/requests/adapters.py",
+      "line": 100,
+      "why_it_matters": "The diff moves CA-directory handling into _urllib3_request_context and changes verify=True to use a preloaded context, yet it adds zero test changes. Nothing exercises verify=<directory> at all (grep of tests for verify= shows only file bundles, False and default). The only default-verify test asserts rejection of a self-signed server, so it would still pass if the preloaded context were empty or ignored. A typo or swapped key in the new isdir branch, or a regression that reverts to per-connection load_verify_locations (the perf goal), would go undetected.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Add unit tests calling _urllib3_request_context directly: verify=True gives ssl_context is requests.adapters._preloaded_ssl_context and no ca_certs; verify=<tmp dir> gives ca_cert_dir; verify=<file> gives ca_certs; verify=False gives CERT_NONE with no ssl_context. Add a cert_verify test asserting conn.ca_certs / ca_cert_dir stay untouched for verify=True and are set for a str path (file and dir).",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:100 -- pool_kwargs[\"ca_cert_dir\"] = verify",
+        "tests/test_requests.py:2859 -- s.get(url)  (only default-verify test; asserts SSLError against self-signed cert)",
+        "git diff 8dd3b26b..4089f3dc --stat -- files.txt lists only src/requests/adapters.py; no test files changed"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Import-time behavior change: the missing-default-bundle OSError ('Could not find a suitable TLS CA certificate bundle') used to be raised per request for verify=True; it is now raised (as a different error) when requests.adapters is imported, and no test covers the missing-bundle case."
+  ],
+  "testing_gaps": [
+    "No test asserts that verify=True requests avoid per-connection load_verify_locations (e.g. conn.ca_certs stays None after cert_verify), so the performance intent has no regression guard.",
+    "verify=True combined with a proxy (proxy_manager_for + pool_kwargs ssl_context) is untested."
+  ]
+}

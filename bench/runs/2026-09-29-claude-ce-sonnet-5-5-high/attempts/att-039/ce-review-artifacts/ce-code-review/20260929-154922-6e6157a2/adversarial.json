@@ -1,0 +1,67 @@
+{
+  "reviewer": "adversarial",
+  "findings": [
+    {
+      "title": "Shared module-level SSLContext leaks client certs across sessions and threads",
+      "severity": "P1",
+      "file": "src/requests/adapters.py",
+      "line": 95,
+      "why_it_matters": "Every verify=True request now hands the same process-wide SSLContext to urllib3, and urllib3 calls context.load_cert_chain(certfile, keyfile) on whatever context it is given. After one request with cert=(A.pem, A.key), the shared context permanently holds A's client certificate. Later verify=True requests from other Sessions or adapters that configured no client cert present A's identity to any server that asks (reproduced locally: the second, cert-less Session's request arrives at an mTLS server as CN=alice). Concurrent Sessions with different client certs also race on the one context, so a handshake can use the other tenant's cert. Before this change each connection built its own context, so this state could not leak.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Use the shared preloaded context only when client_cert is None (add `and client_cert is None`, or set ssl_context only in that case). When a client cert is supplied, fall back to per-connection contexts (leave ssl_context unset and set ca_certs to the default bundle) or copy the preloaded context per pool key. Assumption: mTLS callers accept the per-connection load_verify_locations cost.",
+      "confidence": 100,
+      "evidence": [
+        "src/requests/adapters.py:95 -- pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context",
+        "urllib3/util/ssl_.py:431 -- context.load_cert_chain(certfile, keyfile)  (runs on the caller-supplied ssl_context)",
+        "src/requests/adapters.py:106-112 -- cert_file/key_file are still added to pool_kwargs alongside ssl_context when client_cert is given",
+        "Repro (scratch tmp/adv/leak.py): request 1 with cert=(alice), request 2 from a new Session with no cert; server-side getpeercert() shows CN=alice for both"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Per-request ssl_context overrides custom ssl_context from HTTPAdapter.init_poolmanager subclasses",
+      "severity": "P1",
+      "file": "src/requests/adapters.py",
+      "line": 95,
+      "why_it_matters": "Users who subclass HTTPAdapter and pass their own ssl_context through init_poolmanager (custom minimum TLS version, ciphers, legacy renegotiation, extra CAs) silently lose it for every verify=True request. urllib3's _merge_pool_kwargs lets the per-request pool_kwargs override the manager-level kwargs, so the module-level default context replaces the user's. Their TLS policy stops being applied with no error, and verify=False requests still use it, so the inconsistency is hard to notice. Reproduced: with a custom context set in init_poolmanager, pool.conn_kw['ssl_context'] is the custom object for verify=False and not for verify=True.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Have _urllib3_request_context/_get_connection skip injecting the default context when the adapter's poolmanager.connection_pool_kw already has an ssl_context (make the helper aware of the adapter's pool kwargs, or drop the default from pool_kwargs when 'ssl_context' is already set on the manager). Assumption: an explicit user context should always win over the shared default.",
+      "confidence": 100,
+      "evidence": [
+        "src/requests/adapters.py:95 -- pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context",
+        "urllib3/poolmanager.py:408-409 -- base_pool_kwargs[key] = value  (override wins over connection_pool_kw)",
+        "Repro (scratch tmp/adv/custom.py): 'verify=True custom ctx used: False' / 'verify=False custom ctx used: True'"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Eager import-time CA load makes 'import requests' fail when the bundle is missing",
+      "severity": "P2",
+      "file": "src/requests/adapters.py",
+      "line": 76,
+      "why_it_matters": "The default CA bundle is now read during module import instead of lazily inside cert_verify. In environments where the bundle file is absent (a frozen or PyInstaller app missing cacert.pem, a stripped or repackaged certifi), `import requests` raises FileNotFoundError. Previously only verify=True requests failed, with a clear OSError ('Could not find a suitable TLS CA certificate bundle'). Programs that use verify=False or a custom CA path, and every other library importing requests, now break at startup. Reproduced with a stub certifi whose where() returns a nonexistent path: `import requests` raises FileNotFoundError. The cert_verify OSError message can no longer fire for verify=True.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Build the preloaded context lazily on first verify=True use (functools.lru_cache or a guarded module-level getter called from _urllib3_request_context). Raise the existing OSError('Could not find a suitable TLS CA certificate bundle...') if the bundle is missing. This keeps the one-time load cost and restores import safety.",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:76-78 -- _preloaded_ssl_context.load_verify_locations(\n    extract_zipped_paths(DEFAULT_CA_BUNDLE_PATH)\n)",
+        "Repro with stub certifi.where() -> /nonexistent/cacert.pem: `import requests` -> FileNotFoundError: [Errno 2] No such file or directory"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Code that calls HTTPAdapter.cert_verify(conn, url, True, cert) on a pool obtained outside _get_connection (legacy get_connection()-then-cert_verify subclasses overriding send) no longer gets ca_certs set. urllib3 then falls back to the OS trust store via load_default_certs() rather than certifi, silently changing the trust anchors. Not verified against a concrete third-party adapter.",
+    "The bundle is snapshotted at import, so a long-lived process never sees an updated or rotated certifi bundle file until restart. This is likely acceptable for the stated performance goal."
+  ],
+  "testing_gaps": [
+    "No test covers client-cert (mTLS) requests followed by a cert-less verify=True request in the same process, which would expose the shared-context cert leak. The existing mTLS test only uses verify=False.",
+    "No test covers an HTTPAdapter subclass passing ssl_context via init_poolmanager combined with verify=True."
+  ]
+}

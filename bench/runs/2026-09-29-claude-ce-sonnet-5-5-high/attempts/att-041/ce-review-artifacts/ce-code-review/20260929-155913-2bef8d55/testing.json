@@ -1,0 +1,31 @@
+{
+  "reviewer": "testing",
+  "findings": [
+    {
+      "title": "New verify routing in adapters has no test coverage",
+      "severity": "P2",
+      "file": "src/requests/adapters.py",
+      "line": 100,
+      "why_it_matters": "The diff moves CA selection from cert_verify (conn.ca_certs/ca_cert_dir) into _urllib3_request_context pool kwargs and adds a shared preloaded ssl_context, but no test file changed. Nothing in tests/ exercises verify=<directory> (ca_cert_dir), asserts verify=True yields ssl_context, or asserts cert_verify no longer sets ca_certs for the default. A regression such as dropping the ca_cert_dir branch (directory bundles silently unverifiable, or wrongly passed as ca_certs) or losing ssl_context (falling back to per-connection load_verify_locations, the perf regression this change removes) would pass the current suite. Adding a small unit test on _urllib3_request_context for True/False/file/dir/None would pin the contract without network.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Add a parametrized unit test in tests/test_adapters.py calling requests.adapters._urllib3_request_context(PreparedRequest for https URL, verify, None) asserting: True -> pool_kwargs['ssl_context'] is requests.adapters._preloaded_ssl_context and no ca_certs/ca_cert_dir; False -> cert_reqs CERT_NONE and no CA keys; existing file path (e.g. tests/certs/valid/ca/ca.crt) -> ca_certs; tmp_path directory -> ca_cert_dir. Add a cert_verify test with a mock conn asserting ca_certs/ca_cert_dir untouched for verify=True and ca_cert_dir set for a directory.",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:100 -- pool_kwargs[\"ca_cert_dir\"] = verify",
+        "src/requests/adapters.py:95 -- pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context",
+        "grep of tests/ for cert_verify|_urllib3_request_context|ca_cert_dir|ssl_context finds no test of these (only tests/testserver/server.py server-side ssl_context)",
+        "Existing tests only cover file-path verify (test_requests.py:2892, 2923), invalid path OSError (test_requests.py:927), and verify=True negative case s.get(url) raising SSLError (test_requests.py:2859), which passes for any verification failure regardless of which context is used"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "The import-time preloading of the default CA bundle (including the extract_zipped_paths zipped-bundle case) has no test; a failure there would surface as an ImportError of requests.adapters rather than a request-time error.",
+    "Env-derived failures at base (expired test certs, missing Authority Key Identifier) mean test_different_connection_pool_for_mtls_settings also fails locally (SSLV3_ALERT_CERTIFICATE_EXPIRED on the client cert), further reducing effective TLS-path coverage here; this is environmental, not caused by the diff."
+  ],
+  "testing_gaps": [
+    "No test that a verify=True request succeeds through the preloaded ssl_context against a server whose CA is in the default bundle (would need network or patching the module context); current verify=True coverage is only a negative SSLError case."
+  ]
+}
