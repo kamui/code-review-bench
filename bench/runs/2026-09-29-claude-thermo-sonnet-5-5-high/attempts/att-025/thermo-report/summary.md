@@ -1,0 +1,34 @@
+# Thermo-nuclear review: jonhadfield/soba#195 "refactor: resolve SonarQube findings"
+
+Range reviewed: `c77f548..136a485` (`git diff main...review-head`), 4 files, +312/-305. Detail files: `01_backup-go.md` (backup.go and backup_test.go) and `02_notify-and-docker.md` (notify.go and the Dockerfile).
+
+## Verdict
+
+No presumptive blockers. No file crosses 1,000 lines (`backup.go` goes from 729 to 774, `backup_test.go` shrinks from 1,016 to 989 lines), no ad-hoc branching was added, and behaviour is preserved as far as I can verify: the offline `go test ./internal/ -count=1` passes, and I read the diff line by line for the log output changes because nothing tests `displayStartupConfig`. The PR is a genuine improvement: `Run`, `checkProvider` and the scheduler setup are decomposed sensibly, and merging the two scheduling blocks and the three notification switches removes real duplication.
+
+The refactor is nonetheless aimed at the SonarQube metric rather than at the model. It chops big functions into helpers and leaves the same concepts in play. The strongest missed opportunity is the provider descriptor, described in the first finding, and there are a few smaller items where the extraction stopped one step short.
+
+## Findings
+
+**1. Per-provider knowledge is still spread over parallel lists (missed code-judo move).** In `internal/backup.go`, `collectProviderBackupResults` (line 97) holds a table of token env var plus run function. Five near-identical `display*StartupConfig` functions (lines 233-292) each repeat the "is the token set and non-empty" guard, and `checkProvider` plus `enabledProviderAuth` state the env vars again. Adding a provider means editing three or four places. A single `providerSpec` descriptor (label, token env, orgs env, backups env, compare env, LFS env, run function) driving the collect loop, the startup logging loop and the credential check would delete the five display functions and the five guards outright, and would make the new `logProvider*` helpers unnecessary as separate concepts. Bitbucket's two-mode credential check stays special. This is a strong follow-up rather than a merge blocker. Full proposal in `01_backup-go.md`, Finding 1.
+
+**2. `createWorkingDir` duplicates `resolveWorkingDir` in the same file.** `resolveWorkingDir` (`internal/backup.go:140`) already implements "GIT_WORKING_DIR or backupDir/workingDIRName". The newly extracted `createWorkingDir` (line 473) repeats that logic in its first four lines instead of calling it. Replacing them with `workingDIR := resolveWorkingDir(backupDIR)` deletes the duplicate and removes the risk of the two drifting. See `01_backup-go.md`, Finding 2.
+
+**3. `checkProvidersDefined` still counts to compute a boolean.** In `internal/backup.go` (line 680), `count` is only ever compared with zero, so the "don't count OAuth if the API token is already complete" rule and the two Bitbucket switch cases exist only to avoid double counting a number nobody uses. Handling Bitbucket once, before the loop, and turning `count` (and `checkProvider`'s 0-or-1 return) into a bool deletes the special cases. The hoisting of `bitbucketAPITokenComplete` also quietly removes an order-dependence on Go's random map iteration; that is harmless because only zero versus non-zero is observable, but the PR's "behaviour unchanged" wording does not mention it. See `01_backup-go.md`, Finding 3.
+
+**4. Quirks are now frozen into shared helpers.** `logProviderOrgs` (`internal/backup.go:205`) logs "Organistations", a typo previously in three strings and now in one helper whose own comment spells the word correctly (an automated reviewer flagged this and it went unresolved). The GitLab call passes `"Gitlab"` as the LFS label while its neighbours pass `"GitLab"`, which defeats the purpose of introducing a label parameter. `logProviderBackupLFS` checks presence with `GetEnvOrFile` but reads the value with `envTrue`, which uses `os.Getenv`, so a `_FILE`-only value is reported present yet read as false. Each is a trivial fix now that there is one place to make it; the typo and label fixes change log text and should be called out in the description. See `01_backup-go.md`, Finding 4.
+
+**5. The Gitea orgs test still calls `resetBackups()` twice per iteration, and the helper split is thin.** In `internal/backup_test.go` (around lines 625-640) each switch case resets backups and the loop resets again (an automated reviewer flagged this and it is unresolved). The two new assertion helpers each rebuild the same `path.Join(...)` several times. A `giteaOrgDir` helper and a table of {org, expected dirs, unexpected dirs, repo prefixes} would remove the switch entirely, which is the actual complexity Sonar complained about. See `01_backup-go.md`, Finding 5.
+
+**6. `runScheduledJob` mutates the package global `job` behind a function-looking signature.** In `internal/backup.go` (line 525), the helper assigns `job, err = s.NewJob(...)` to the package-level `var job gocron.Job`, which `runProviderBackups` reads to decide exit-code behaviour. The extraction hides a global write inside a helper that takes the scheduler as a parameter. Returning `(gocron.Job, error)` and letting `scheduleBackups` assign it (or passing the state into `runProviderBackups`) is cleaner. This is pre-existing state, but the refactor was the moment to fix it. See `01_backup-go.md`, Finding 6.
+
+**7. Minor: notify.go and the Dockerfile.** `backupStatusTitle` (`internal/notify.go`) could be the seed of a small `backupStatus` type shared with the `SOBA_NOTIFY_ON_FAILURE_ONLY` logic, and the title constants hide an invisible U+FE0F, which deserves an escape or a comment. In `docker/Dockerfile` the retained `rm -f "/var/cache/apk/*"` is dead code, since `--no-cache` already avoids the cache and the quoted glob does not expand. Neither blocks. See `02_notify-and-docker.md`.
+
+## Proposed remediation sequence
+
+1. Quick wins in this PR's area: use `resolveWorkingDir` in `createWorkingDir`; delete the redundant `resetBackups()` calls in the Gitea test; fix the `"Gitlab"` label; decide on the typo fix and note it in the changelog.
+2. Make `runScheduledJob` return the job instead of writing the global, and convert `checkProvidersDefined` and `checkProvider` to booleans with Bitbucket handled once.
+3. Introduce the `providerSpec` descriptor and collapse the five `display*StartupConfig` functions, the collect table and the credential check into loops over it. Add a small test capturing `displayStartupConfig` log output first so the "log output unchanged" claim is actually enforced.
+4. Table-drive `TestGiteaOrgsRepositoryBackup`.
+
+Verification status: tests pass offline; the Dockerfile could not be built (no Docker); live provider tests skipped. All findings come from reading the diff and the surrounding file.
