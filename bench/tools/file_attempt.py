@@ -92,9 +92,10 @@ sys.path.insert(0, str(HERE))
 import check_manifest  # noqa: E402
 import review_isolation  # noqa: E402
 
-KINDS = ("review-code", "claude-builtin", "codex", "codex-skill")
+KINDS = ("review-code", "claude-builtin", "claude-skill", "codex", "codex-skill")
+SKILL_RUNNER_KINDS = ("codex-skill", "claude-skill")
 NATIVE = {"review-code": "artifacts/composition.json", "claude-builtin": "payload.json", "codex": "stdout.txt",
-          "codex-skill": "native-artifacts.json"}
+          "codex-skill": "native-artifacts.json", "claude-skill": "native-artifacts.json"}
 RANGE = re.compile(r"(?<![\w./-])([\w./@{}~^-]+?)(\.\.\.?)([\w./@{}~^-]+)")
 
 
@@ -444,7 +445,7 @@ def replay(kind: str, attempt_dir: str, clone: str, allowed_prefixes: list, enfo
         normalize += ["--composition", os.path.join(attempt_dir, "artifacts", "composition.json")]
     elif kind == "claude-builtin":
         normalize += ["--payload", os.path.join(attempt_dir, "payload.json")]
-    elif kind == "codex-skill":
+    elif kind in SKILL_RUNNER_KINDS:
         normalizer = codex_skill_config(run_id).get("normalizer", {})
         native_file = normalizer.get("native_file") or (
             "finding-index.json" if normalizer.get("kind") == "thermo" else "review.json")
@@ -506,7 +507,7 @@ def file_attempt(args) -> tuple:
     native_rel = NATIVE[kind]
     native_path = os.path.join(attempt_dir, native_rel)
     native_root, native_relative = None, None
-    if kind == "codex-skill":
+    if kind in SKILL_RUNNER_KINDS:
         skill_config = codex_skill_config(args.run_id)
         normalizer = skill_config.get("normalizer", {})
         native_file = normalizer.get("native_file") or (
@@ -528,7 +529,7 @@ def file_attempt(args) -> tuple:
     trees = [Path(attempt_dir, n).read_text(encoding="utf-8").strip() for n in ("tree-before.txt", "tree-after.txt")]
 
     notes = list(args.note or [])
-    if kind == "codex-skill" and audit_missing:
+    if kind in SKILL_RUNNER_KINDS and audit_missing:
         notes.append("attempt audit was unavailable because the runner produced no audit.json")
     prompt_hash = prompt_header = None
     sandbox = None
@@ -569,7 +570,9 @@ def file_attempt(args) -> tuple:
         subagent_count = len(subs)
         if kind == "claude-builtin":
             prompt_hash, prompt_header = builtin_prompt(subs)
-    match = None if kind == "codex-skill" else registry_match(harness_dir, harness, cli_version, prompt_hash)
+        elif kind == "claude-skill" and os.path.exists(os.path.join(attempt_dir, "skill-attempt.json")):
+            prompt_hash = read_json(os.path.join(attempt_dir, "skill-attempt.json")).get("prompt_sha256")
+    match = None if kind in SKILL_RUNNER_KINDS else registry_match(harness_dir, harness, cli_version, prompt_hash)
 
     # Usage.
     priced = low = high = None
@@ -603,7 +606,7 @@ def file_attempt(args) -> tuple:
 
     # Disposition.
     skill_tree = None
-    if kind == "codex-skill":
+    if kind in SKILL_RUNNER_KINDS:
         observed_skill = read_json(os.path.join(attempt_dir, "skill-attempt.json")) if os.path.exists(os.path.join(attempt_dir, "skill-attempt.json")) else {}
         skill_tree = observed_skill.get("skill_tree_sha256")
     elif kind == "review-code" and os.path.exists(os.path.join(attempt_dir, "skill-tree.txt")):
@@ -619,7 +622,7 @@ def file_attempt(args) -> tuple:
         problems.append("tree identity changed during the attempt")
     if audit.get("violations"):
         problems.append(f"read audit: {len(audit['violations'])} violation(s), first {audit['violations'][0]}")
-    if kind == "codex-skill" and audit_missing and not stop:
+    if kind in SKILL_RUNNER_KINDS and audit_missing and not stop:
         problems.append("attempt audit.json is missing")
     if audit.get("network_commands"):
         problems.append(f"network command: {audit['network_commands'][0]}")
@@ -647,7 +650,7 @@ def file_attempt(args) -> tuple:
         disposition = "valid completed"
         phase = "result"
     disposition = " ".join(disposition.splitlines())
-    if kind not in ("review-code", "codex-skill") and not checked:
+    if kind not in ("review-code", *SKILL_RUNNER_KINDS) and not checked:
         notes.append("no range-bearing diff command observed; the executed range could not be checked")
 
     dispatched = timing_src.get("root_dispatched_at") or timing_src.get("dispatched_at")
@@ -672,9 +675,9 @@ def file_attempt(args) -> tuple:
             shutil.copy2(src, dest)
         elif os.path.exists(dest):
             os.remove(dest)  # a re-filing drops what the attempt directory no longer holds
-    if kind == "codex-skill":
+    if kind in SKILL_RUNNER_KINDS:
         for name in ("last-message.txt", "stdout.jsonl", "stderr.txt", "audit.txt", "normalization.txt",
-                     "usage.txt", "tree-before.txt", "tree-after.txt"):
+                     "usage.txt", "tree-before.txt", "tree-after.txt", "session-id.txt"):
             src, dest = os.path.join(attempt_dir, name), os.path.join(out, name)
             if os.path.isfile(src):
                 shutil.copy2(src, dest)
@@ -684,7 +687,7 @@ def file_attempt(args) -> tuple:
     if codex_config.is_file():
         shutil.copy2(codex_config, Path(out) / "codex-config.toml")
     native_name = os.path.basename(native_rel)
-    if kind == "codex-skill" and native_root:
+    if kind in SKILL_RUNNER_KINDS and native_root:
         artifact_dir = native_root.name
         shutil.copytree(native_root, os.path.join(out, artifact_dir), dirs_exist_ok=True)
         shutil.copy2(os.path.join(attempt_dir, "native-artifacts.json"), os.path.join(out, "native-artifacts.json"))
@@ -708,7 +711,7 @@ def file_attempt(args) -> tuple:
     elif kind == "review-code" and native_path:
         composition = read_json(native_path)
         arm_complete = (composition.get("run") or {}).get("coverage") == "complete"
-    elif kind == "codex-skill" and native_path:
+    elif kind in SKILL_RUNNER_KINDS and native_path:
         if skill_config.get("normalizer", {}).get("kind") == "thermo":
             arm_complete = not read_json(os.path.join(attempt_dir, "skill-attempt.json")).get("violations")
         else:
