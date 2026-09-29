@@ -9,6 +9,8 @@ const colors: Record<string, string> = {
   'claude-builtin-opus-5-5': '#b57a16', 'codex-builtin': '#bb526e',
   'review-code-sonnet-5-5': '#8a62b8', 'review-code-sonnet-5-5e12864': '#4d829f',
   'review-code-sonnet-5-c3c53da': '#778a37',
+  'codex-builtin-luna-high': '#2e8cbb',
+  'codex-builtin-sol-high': '#bf6944',
 }
 
 export function configurationColor(id: string) { return colors[id] ?? '#607080' }
@@ -35,6 +37,7 @@ export function Chart({ summaries, axis, onSelect }: { summaries: Summary[]; axi
     const point = points[payload.index]
     if (!point) return <g />
     const configuration = point.summary.configuration
+    const [method, ...setup] = configuration.short.split(' / ')
     const right = point.x < max * 0.25
     const below = points.some((other, index) => index < payload.index && Math.abs(other.x - point.x) < max * 0.2 && Math.abs(other.y - point.y) < 8)
     return <g role="button" tabIndex={0} className="chart-point"
@@ -44,8 +47,9 @@ export function Chart({ summaries, axis, onSelect }: { summaries: Summary[]; axi
       }}>
       <circle cx={cx} cy={cy} r={15} fill="transparent" />
       <circle cx={cx} cy={cy} r={6} fill={configurationColor(configuration.id)} stroke="var(--panel)" strokeWidth={2} />
-      <text x={cx + (right ? -12 : 12)} y={cy + (below ? 22 : -12)} textAnchor={right ? 'end' : 'start'} className="point-label">
-        {configuration.short.replace('Built-in / ', '').replace('Codex / ', '')}
+      <text x={cx + (right ? -12 : 12)} y={cy + (below ? 22 : -26)} textAnchor={right ? 'end' : 'start'} className="point-label">
+        <tspan>{method}</tspan>
+        <tspan x={cx + (right ? -12 : 12)} dy={14}>{setup.join(' · ')}</tspan>
       </text>
     </g>
   }
@@ -53,7 +57,7 @@ export function Chart({ summaries, axis, onSelect }: { summaries: Summary[]; axi
     const parsed = tooltipSchema.safeParse(value)
     const index = parsed.success && parsed.data.active ? parsed.data.payload?.[0]?.payload.index : undefined
     const point = index === undefined ? undefined : points[index]
-    return point ? <div className="chart-tip"><strong>{point.summary.configuration.short}</strong><span>{point.summary.configuration.version}</span><span>Findings score: {percent(point.y)}</span><span>{axisLabels[axis]}: {format(point.x)}</span><span>{point.summary.tasks} tasks / {point.summary.completed} completed reviews</span></div> : null
+    return point ? <div className="chart-tip"><strong>{point.summary.configuration.label}</strong><span>{point.summary.configuration.version}</span><span>Findings score: {percent(point.y)}</span><span>{axisLabels[axis]}: {format(point.x)}</span><span>{point.summary.tasks} tasks / {point.summary.completed} completed reviews</span></div> : null
   }
   return <div className="plot-shell">
     <div className="plot-hint"><span>Findings score</span><span>Better value <ArrowUpRight size={14} /></span></div>

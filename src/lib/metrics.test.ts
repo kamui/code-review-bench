@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFile } from 'node:fs/promises'
 import { datasetSchema, detailSchema } from './data'
 import type { Attempt, Configuration, Dataset, Outcome, Task } from './data'
-import { commonTasks, modelComparisonSegments, summarize } from './metrics'
+import { commonTasks, modelComparisonSegments, money, summarize } from './metrics'
 
 const all = { concern: '', severity: 'all' } satisfies Parameters<typeof summarize>[4]
 const imported = datasetSchema.parse(JSON.parse(await readFile('public/data/benchmark.json', 'utf8')))
@@ -32,6 +32,11 @@ function dataset(tasks: Task[], attempts: Attempt[], outcomes: Outcome[]): Datas
 }
 
 describe('trial scoring', () => {
+  test('does not display a measured sub-cent cost as free', () => {
+    expect(money(0.0017)).toBe('$0.0017')
+    expect(money(0)).toBe('$0.00')
+    expect(money(null)).toBe('—')
+  })
   test('weights PRs equally, deduplicates recovery, and excludes clean tasks from detection', () => {
     const data = dataset([task('many', 3), task('one', 1), task('clean', 0)],
       [attempt('a', 'many', ['many-0', 'many-0']), attempt('b', 'one', ['one-0']), attempt('c', 'clean', [], { falseFindings: 6 })],
@@ -121,10 +126,10 @@ describe('preserved benchmark', () => {
       'claude-builtin-opus-5-5': { score: 86, cost: '0.36', falseFindings: '0.33' },
       'codex-builtin': { score: 62, cost: '0.29', falseFindings: '0.00' },
     }
-    for (const setup of builtins) {
+    for (const [id, published] of Object.entries(expected)) {
+      const setup = builtins.find(configuration => configuration.id === id)
+      if (!setup) throw new Error(`Missing published configuration ${id}`)
       const result = summarize(imported, setup, shared, 'historical', all)
-      const published = expected[setup.id]
-      if (!published) throw new Error(`Missing published expectation for ${setup.id}`)
       expect({ score: Math.round(result.score ?? -1), cost: result.cost?.toFixed(2), falseFindings: result.falseFindings?.toFixed(2) }).toEqual(published)
     }
   })

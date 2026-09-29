@@ -120,6 +120,6 @@ export function modelComparisonSegments(points: { x: number; y: number; configur
 }
 
 export const percent = (value: number | null): string => value === null ? '—' : `${value.toFixed(1)}%`
-export const money = (value: number | null): string => value === null ? '—' : `$${value.toFixed(2)}`
+export const money = (value: number | null): string => value === null ? '—' : `$${value.toFixed(value > 0 && value < 0.01 ? 4 : 2)}`
 export const compact = (value: number | null): string => value === null ? '—'
   : new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value)
