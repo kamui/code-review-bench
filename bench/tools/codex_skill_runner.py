@@ -10,9 +10,9 @@ The run supplies ``inputs/skill-pin.json``, the frozen tree under ``inputs/skill
 ``inputs/invocation.md``, ``inputs/runner.json`` and ``inputs/shared-policy.md``. The
 attempt directory must already exist and must not contain a HOME. The runner checks
 the run and arm pins, creates a clean HOME before copying credentials, invokes one
-new Codex CLI ``exec`` session, and retains its raw output, rollout tree, usage,
-    session evidence, and native skill artifacts. It does not resume a session or normalize a
-skill's native report.
+new Codex CLI ``exec`` root session, and retains its raw output, rollout tree, usage,
+session evidence, and native skill artifacts. It never resumes a session and runs the
+normalizer selected by the frozen ``runner.json``.
 
 Exit codes: 0 the session completed and all observed reviewer contexts used the
 pinned model and effort; 1 the session completed with a pin or model-policy
@@ -35,7 +35,6 @@ import time
 
 TOOLS = Path(__file__).resolve().parent
 BENCH = TOOLS.parent
-REPO = BENCH.parent
 sys.path.insert(0, str(TOOLS))
 import clean_context  # noqa: E402
 
@@ -435,7 +434,7 @@ def launch(args) -> int:
         violations.append("review clone tree identity changed")
     if not report_rows:
         violations.append("skill produced no native report artifacts")
-    if root_id:
+    if rollouts:
         audit_command = [sys.executable, str(TOOLS / "attempt_audit.py"), "--arm", "codex-skill",
                          "--attempt-dir", str(attempt), "--clone", str(clone)]
         audited = run(audit_command)
@@ -446,6 +445,8 @@ def launch(args) -> int:
             audit = read_json(attempt / "audit.json")
             if audit.get("violations"):
                 violations.extend(f"audit: {issue}" for issue in audit["violations"])
+            elif audited.returncode != 0:
+                violations.append(f"attempt audit exited {audited.returncode} without a violation list")
         except RunnerError as error:
             violations.append(f"attempt audit produced no usable audit.json: {error}")
     elif not (attempt / "audit.json").exists():
