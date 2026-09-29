@@ -111,6 +111,7 @@ TOOLS = Path(__file__).resolve().parent
 BENCH = TOOLS.parent
 sys.path.insert(0, str(TOOLS))
 import check_manifest  # noqa: E402
+import claims  # noqa: E402
 from normalize_review import render  # noqa: E402
 from score import Inconsistent, InputError, load_register, read_json, target_dir  # noqa: E402
 
@@ -220,10 +221,39 @@ def prepare(args) -> list:
               .replace("{ALLOWANCE}", allowance))
     if defect:
         prompt = prompt.replace("{DEFECT}", f"{defect['id']}, {defect['title']}")
+    claim_snapshot, claim_text = None, None
+    if getattr(args, "claim_registry", None):
+        if args.only_defect:
+            raise Inconsistent("--claim-registry requires a full grading, without --only-defect")
+        try:
+            refs, cases = claims.load_registry(args.claim_registry)
+            selected = [(ref, case) for ref, case in zip(refs, cases) if case["target"] == args.target]
+            for _ref, case in selected:
+                if any(case["revision"][field] != entry[field] for field in ("packet_sha256", "diff_manifest_sha256")):
+                    raise ValueError(f"{case['claim_id']}: grading manifest uses a different packet or diff")
+                decision = case["decision"]
+                if decision and decision["status"] == "approved" and decision["outcome"] == "eligible":
+                    if decision["register"]["sha256"] != digest:
+                        raise ValueError(f"{case['claim_id']}: prepare with the decision's reference version")
+            claim_text = claims.grading_context([case for _ref, case in selected])
+            tokens_by_attempt = {review["attempt_id"]: review["token"] for review in reviews}
+            for _ref, case in selected:
+                for link in case["links"]:
+                    original, _item, _grade = claims.source_item(link, case["target"])
+                    if original["run_id"] == manifest["run_id"] and link["attempt_id"] in tokens_by_attempt:
+                        number = int(link["item_id"].removeprefix("item-")) + 1
+                        claim_text += (f"\n{case['claim_id']} {link['relation']}: "
+                                       f"{tokens_by_attempt[link['attempt_id']]} item {number}\n")
+            claim_snapshot = {"cases": [ref for ref, _case in selected],
+                              "context_sha256": sha256(claim_text.encode("utf-8"))}
+            prompt += "\n\nRead claims.md for pinned shared eligibility decisions and item matches.\n"
+        except (ValueError, KeyError, IndexError, OSError) as error:
+            raise Inconsistent(f"shared claims: {error}") from error
     problems = [f"prompt.md keeps the placeholder {p}" for p in sorted(set(re.findall(r"\{[A-Z_]+\}", prompt)))]
     identifying = ({*records, *(r["cell"]["arm"] for r in records.values()), manifest["run_id"],
                     str(run_dir.resolve())} - {""})
-    for name, text in [("prompt.md", prompt)] + [(f"reviews/{r['token']}.md", r["text"]) for r in reviews]:
+    for name, text in ([("prompt.md", prompt)] + [(f"reviews/{r['token']}.md", r["text"]) for r in reviews]
+                       + ([("claims.md", claim_text)] if claim_text is not None else [])):
         problems.extend(f"{name} names {s!r}" for s in sorted(identifying) if s in text)
     problems.extend(f"prompt.md names the absolute path {p}" for p in
                     (str(work), os.path.expanduser("~"), str(BENCH.parent)) if p in prompt)
@@ -245,11 +275,15 @@ def prepare(args) -> list:
     (work / "rubric.md").write_bytes(rubric)
     (work / "packet.md").write_bytes(packet)
     (work / "prompt.md").write_text(prompt, encoding="utf-8")
+    if claim_text is not None:
+        (work / "claims.md").write_text(claim_text, encoding="utf-8")
     key = {"run_id": manifest["run_id"], "target": args.target,
            "register": {"version": register["version"], "sha256": digest}, "only_defect": args.only_defect,
            "template_sha256": sha256(template_raw), "prompt_sha256": sha256(prompt.encode("utf-8")),
            "created_at": now(),
            "reviews": [{"token": r["token"], "attempt_id": r["attempt_id"], "items": r["items"]} for r in reviews]}
+    if claim_snapshot is not None:
+        key["claim_snapshot"] = claim_snapshot
     descriptor = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
         os.fchmod(handle.fileno(), 0o600)
@@ -623,10 +657,11 @@ def grader_line(record: dict) -> str:
             f"{record['session_id']}; read audit clean")
 
 
-def evidence_access(register_version: int, reviews: int) -> str:
+def evidence_access(register_version: int, reviews: int, shared_claims=False) -> str:
     return (f"the grader's working directory only: prompt.md, register.json (register v{register_version}), rubric.md, "
             f"packet.md, reviews/ ({reviews} reviews rendered under blind tokens), clone/ (offline clone at the pinned "
-            "head) and clone-cache/ (its dependency cache)")
+            "head) and clone-cache/ (its dependency cache)"
+            + (", claims.md (pinned shared eligibility decisions and blinded item matches)" if shared_claims else ""))
 
 
 def dispatch_record(work: Path, key: dict) -> tuple:
@@ -731,12 +766,23 @@ def map_verdicts(args) -> list:
         "supersedes": args.supersedes, "revision_reason": args.reason,
         "register": {"version": register["version"], "sha256": digest}, "rubric_version": manifest["rubric_version"],
         "scored_by": {"adjudicator": grader_line(record), "blind": True,
-                      "evidence_access": evidence_access(register["version"], len(key["reviews"]))},
+                      "evidence_access": evidence_access(register["version"], len(key["reviews"]), "claim_snapshot" in key)},
         "scored_at": record["completed_at"],
         "attempts": [unblind(entry, verdicts, records[entry["attempt_id"]], docs[entry["attempt_id"]], buggy)
                      for entry in sorted(key["reviews"], key=lambda r: r["attempt_id"])],
     }
+    if "claim_snapshot" in key:
+        mapping["claim_snapshot"] = key["claim_snapshot"]
     problems = check_manifest.validate(read_json(BENCH / "schema" / "mapping.schema.json"), mapping)
+    if "claim_snapshot" in key:
+        try:
+            snapshot = key["claim_snapshot"]
+            if sha256(read_bytes(work / "claims.md")) != snapshot["context_sha256"]:
+                raise ValueError("claims.md changed after preparation")
+            pinned_cases = claims.load_cases(snapshot["cases"])
+            problems.extend(claims.mapping_problems(mapping, pinned_cases))
+        except (ValueError, KeyError, IndexError, OSError) as error:
+            problems.append(f"shared claims: {error}")
     if problems:
         raise Inconsistent("\n".join(f"mapping {p}" for p in problems))
     where = {r["token"]: r["attempt_id"] for r in key["reviews"]}
@@ -850,6 +896,9 @@ def revise(args) -> list:
         raise Inconsistent("\n".join(problems + [f"--from {args.from_version}: no {base_path}"]))
     base, base_key = read_json(base_path), read_json(args.base_key)
     regrade_key = read_json(args.key) if args.key else None
+    if "claim_snapshot" in base or "claim_snapshot" in base_key or (regrade_key and "claim_snapshot" in regrade_key):
+        raise Inconsistent("shared claims require a complete prepare/map re-grade, including previously rejected items; "
+                           "revise does not implement that reconciliation")
     for name, key in (("the base key", base_key), ("the re-grade key", regrade_key)):
         if key and (key["run_id"], key["target"]) != (manifest["run_id"], args.target):
             problems.append(f"{name} is for {key['run_id']}/{key['target']}, not {manifest['run_id']}/{args.target}")
@@ -975,6 +1024,7 @@ def main() -> int:
     p.add_argument("--template", required=True)
     p.add_argument("--register-version", type=int, help="default: the cohort entry's register_version")
     p.add_argument("--only-defect", help="re-grade for this defect alone; the template must have {DEFECT}")
+    p.add_argument("--claim-registry", help="pin shared claim versions and enforce their matched item decisions")
     p.add_argument("--opened", help="directory of opened sealed registers, <dir>/<target>/register.v<N>.json")
     p.add_argument("--cache-root", help="passed to provision.py (its default: ~/.t3/bench-cache)")
     p.add_argument("--provision", default=str(TOOLS / "provision.py"), help="a script with provision.py's prepare interface")
