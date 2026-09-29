@@ -379,7 +379,8 @@ class Map(Mapped):
     def test_codex_models_use_codex_rank_policy(self):
         attempt_id = "att-008"
         path = self.run_dir / "attempts" / attempt_id / "attempt.json"
-        for arm in ("codex-luna-high", "codex-sol-high", "codex-luna-high-writable", "codex-sol-high-writable"):
+        for arm in ("codex-luna-high", "codex-sol-high", "codex-luna-high-writable", "codex-sol-high-writable",
+                    "codex-astra-high-writable"):
             with self.subTest(arm=arm):
                 record = json.loads(path.read_text(encoding="utf-8"))
                 record["cell"]["arm"] = arm
