@@ -376,20 +376,23 @@ class Map(Mapped):
         attempt = next(a for a in mapping["attempts"] if a["attempt_id"] == opus)
         self.assertEqual([i["priority_error"] for i in attempt["items"]], self.attempts[opus][6])
 
-    def test_codex_luna_high_uses_codex_rank_policy(self):
+    def test_codex_models_use_codex_rank_policy(self):
         attempt_id = "att-008"
         path = self.run_dir / "attempts" / attempt_id / "attempt.json"
-        record = json.loads(path.read_text(encoding="utf-8"))
-        record["cell"]["arm"] = "codex-luna-high"
-        write_json(path, record)
+        for arm in ("codex-luna-high", "codex-sol-high"):
+            with self.subTest(arm=arm):
+                record = json.loads(path.read_text(encoding="utf-8"))
+                record["cell"]["arm"] = arm
+                write_json(path, record)
 
-        done = self.map(self.verdicts())
+                done = self.map(self.verdicts())
 
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        mapping = json.loads(self.mapping_path().read_text(encoding="utf-8"))
-        attempt = next(a for a in mapping["attempts"] if a["attempt_id"] == attempt_id)
-        self.assertEqual([i["priority_error"] for i in attempt["items"]], [True, False])
-        self.assertEqual(attempt["review_level"]["native_verdict"], "Summary.")
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                mapping = json.loads(self.mapping_path().read_text(encoding="utf-8"))
+                attempt = next(a for a in mapping["attempts"] if a["attempt_id"] == attempt_id)
+                self.assertEqual([i["priority_error"] for i in attempt["items"]], [True, False])
+                self.assertEqual(attempt["review_level"]["native_verdict"], "Summary.")
+                shutil.rmtree(self.run_dir / "scoring")
 
     def test_valid_verdicts_unblind_to_a_scorable_mapping(self):
         done = self.map(self.verdicts())
@@ -525,6 +528,7 @@ class MapClean(Map):
 
     test_invalid_verdicts_are_refused = None
     test_an_arm_without_a_rule_is_refused = None
+    test_codex_models_use_codex_rank_policy = None
 
 
 class Revise(Mapped):
