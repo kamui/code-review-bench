@@ -669,7 +669,7 @@ def file_attempt(args) -> tuple:
     # Output directory.
     out = os.path.abspath(args.out)
     os.makedirs(out, exist_ok=True)
-    for name in ("dispatch.txt", "timing.json", "audit.json", "normalized.json", "stop.json", "stop.recorded.json", "isolation.json", "isolation-settings.json", "clean-context.json", "prompt.txt"):
+    for name in ("dispatch.txt", "timing.json", "audit.json", "normalized.json", "stop.json", "stop.recorded.json", "isolation.json", "isolation-settings.json", "clean-context.json", "prompt.txt", "sandbox.json"):
         src, dest = os.path.join(attempt_dir, name), os.path.join(out, name)
         if os.path.exists(src):
             shutil.copy2(src, dest)
