@@ -1,0 +1,53 @@
+{
+  "reviewer": "testing",
+  "findings": [
+    {
+      "title": "New x-vercel-isr path-rewrite branch has no test at all",
+      "severity": "P1",
+      "file": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+      "line": 24,
+      "why_it_matters": "The diff adds a behavior-changing branch that rewrites url.pathname from a query param, and adds zero test files. The bug it fixes (every ISR route 404ing after #15959) shipped because isr.test.js only asserts generated JSON config and route tables and never invokes the built function; the same blind spot remains, so a further change to this branch (header name, param name, precedence over the secret check) would ship unnoticed. The ISR fixture already builds _isr.func with the same entry.mjs handler, so a test can import it exactly like path-override-security.test.js does and send `x-vercel-isr: 1` plus `?x_astro_path=/one`.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Add a test to packages/integrations/vercel/test/isr.test.js (or a new file) that loads ../.vercel/output/functions/_isr.func handler via the loadFunctionModule pattern from path-override-security.test.js and asserts: (a) Request('https://example.com/_isr?x_astro_path=/one', {headers: {'x-vercel-isr': '1'}}) renders the /one page (200, expected body), not 404; (b) the same request without the x-vercel-isr header does not rewrite (renders/404s per the literal /_isr path). Assumption: the isr fixture output is importable in-process like the serverless-with-dynamic-routes fixture.",
+      "confidence": 100,
+      "evidence": [
+        "packages/integrations/vercel/src/serverless/entrypoint.ts:24 -- } else if(request.headers.get('x-vercel-isr') === '1') {",
+        "packages/integrations/vercel/src/serverless/entrypoint.ts:25 -- realPath = url.searchParams.get(ASTRO_PATH_PARAM);",
+        "grep for x-vercel-isr under packages/integrations/vercel/test returns no matches; x_astro_path appears in tests only in isr.test.js config/route assertions (lines 23, 62, 66) and as an ignored-untrusted param in path-override-security.test.js:33",
+        "isr.test.js has two tests, both reading generated JSON ('generates expected prerender config', 'generates expected routes'); ran `node --test test/isr.test.js`: 2 pass, neither calls the function handler",
+        "PR body: 'No additional test cases added. Manual e2e tests performed on a test vercel project.'"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Security tests do not cover spoofed x-vercel-isr header on _render",
+      "severity": "P2",
+      "file": "packages/integrations/vercel/test/path-override-security.test.js",
+      "line": 30,
+      "why_it_matters": "path-override-security.test.js exists to prove untrusted clients cannot override the routed path (#15959). The new else-if trusts a plain request header (`x-vercel-isr: 1`) with no secret, so the untrusted-query-param scenario is now reachable with one extra header. Both existing tests send only the bare query param or bare x-astro-path header, so they still pass while the new branch is the one that decides the outcome; they no longer prove the property their names claim for a client that adds `x-vercel-isr: 1`. _render and _isr use the same built entry.mjs (the ISR fixture's _isr.func handler is dist/server/entry.mjs), so nothing in code or tests distinguishes them. Whether Vercel strips/sets that header at the edge cannot be verified here; the test would pin the intended contract either way.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Add a case next to the existing two: fetch new Request('https://example.com/api/public?x_astro_path=/api/private', {headers: {'x-vercel-isr': '1'}}) against _render and assert the intended outcome (body.id === 'public' if the header alone must not be trusted, or explicitly document/assert the rewrite if it is deliberately allowed). Assumption: the intended contract is that only Vercel-originated ISR requests may rewrite; if the entrypoint cannot distinguish them, the test will surface that decision.",
+      "confidence": 75,
+      "evidence": [
+        "packages/integrations/vercel/test/path-override-security.test.js:33 -- new Request('https://example.com/api/public?x_astro_path=/api/private'),",
+        "packages/integrations/vercel/test/path-override-security.test.js:43-45 -- headers: { 'x-astro-path': '/api/private', },",
+        "packages/integrations/vercel/src/serverless/entrypoint.ts:24 -- } else if(request.headers.get('x-vercel-isr') === '1') {",
+        "test/fixtures/isr/.vercel/output/functions/_isr.func/.vc-config.json handler -> dist/server/entry.mjs (same entry as _render)",
+        "provenance: 335a20416 Require trusted secret for path overrides (#15959)"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Whether Vercel actually strips or overwrites a client-supplied x-vercel-isr header, and whether the header reaches the function on cache revalidation, is platform behavior not verifiable in this offline clone; the new branch's correctness rests on that assumption.",
+    "path-override-security.test.js could not be built in this sandbox run (ERR_MODULE_NOT_FOUND for a .prerender entry in serverless-with-dynamic-routes fixture, concurrent-build/environment artifact suspected); its current pass state was not confirmed."
+  ],
+  "testing_gaps": [
+    "No test invokes the ISR function handler; the /_isr?x_astro_path=$0 rewrite target in the route table is asserted as a string only, never exercised against the entrypoint that consumes x_astro_path.",
+    "Edge cases of the new branch are unexercised: x-vercel-isr: 1 with a missing x_astro_path (realPath null so typeof check skips the rewrite), and the ordering where a valid middleware secret takes precedence over the ISR header."
+  ]
+}
