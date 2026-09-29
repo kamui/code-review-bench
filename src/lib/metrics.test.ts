@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFile } from 'node:fs/promises'
 import { datasetSchema, detailSchema } from './data'
 import type { Attempt, Configuration, Dataset, Outcome, Task } from './data'
-import { commonTasks, modelComparisonSegments, money, summarize } from './metrics'
+import { commonTasks, duration, modelComparisonSegments, money, summarize } from './metrics'
 
 const all = { concern: '', severity: 'all' } satisfies Parameters<typeof summarize>[4]
 const imported = datasetSchema.parse(JSON.parse(await readFile('public/data/benchmark.json', 'utf8')))
@@ -18,7 +18,7 @@ function task(id: string, count: number): Task {
 function attempt(id: string, taskId: string, recovered: string[], overrides: Partial<Attempt> = {}): Attempt {
   return { id, label: id, runId: 'run', taskId, replicate: 1, disposition: 'valid completed', complete: true, admitted: true,
     recovered, falseFindings: 0, rawFalseFindings: 0, noise: 0, unresolved: 0, duplicates: 0, cost: 1, outputTokens: 100,
-    billing: 'api-dollars', predecessor: null, retryReason: null, detailUrl: '', ...overrides }
+    durationSeconds: 60, billing: 'api-dollars', predecessor: null, retryReason: null, detailUrl: '', ...overrides }
 }
 
 function outcome(taskId: string, trials: string[][]): Outcome {
@@ -108,6 +108,57 @@ describe('trial scoring', () => {
   })
 })
 
+describe('review time', () => {
+  test('uses all shared completed trials, including clean tasks, for the median, mean, and middle 50%', () => {
+    const data = dataset([task('a', 1), task('clean', 0), task('excluded', 1)],
+      [attempt('a1', 'a', ['a-0'], { durationSeconds: 60 }), attempt('a2', 'a', [], { durationSeconds: 120 }),
+        attempt('a3', 'a', [], { durationSeconds: 180 }), attempt('c1', 'clean', [], { durationSeconds: 240 }),
+        attempt('c2', 'clean', [], { durationSeconds: 300 }), attempt('c3', 'clean', [], { durationSeconds: 900 }),
+        attempt('excluded', 'excluded', [], { durationSeconds: 10000 })],
+      [outcome('a', [['a1'], ['a2'], ['a3']]), outcome('clean', [['c1'], ['c2'], ['c3']]), outcome('excluded', [['excluded']])])
+    for (const version of ['trials', 'historical'] satisfies Parameters<typeof summarize>[3][]) {
+      expect(summarize(data, configuration, data.tasks.slice(0, 2), version, all).time).toEqual({
+        median: 210, mean: 300, q1: 135, q3: 285, reviews: 6, tasks: 2,
+      })
+    }
+  })
+
+  test('includes every replacement attempt in the completed trial time', () => {
+    const data = dataset([task('a', 1)], [
+      attempt('failed', 'a', [], { admitted: false, complete: false, durationSeconds: 20 }),
+      attempt('replacement', 'a', [], { durationSeconds: 40, predecessor: 'failed' }),
+    ], [outcome('a', [['failed', 'replacement']])])
+    expect(summarize(data, configuration, data.tasks, 'trials', all).time).toEqual({
+      median: 60, mean: 60, q1: 60, q3: 60, reviews: 1, tasks: 1,
+    })
+    data.attempts[0] = attempt('failed', 'a', [], { admitted: false, complete: false, durationSeconds: null })
+    expect(summarize(data, configuration, data.tasks, 'trials', all).time).toBeNull()
+  })
+
+  test('keeps missing timing unavailable and excludes failed or incomplete terminal reviews', () => {
+    const data = dataset([task('a', 1), task('b', 1)], [attempt('a1', 'a', [], { durationSeconds: 120 }),
+      attempt('b1', 'b', [], { admitted: false, complete: false, durationSeconds: 1 }),
+      attempt('b2', 'b', [], { complete: false, durationSeconds: 10 })],
+    [outcome('a', [['a1']]), outcome('b', [['b1'], ['b2']])])
+    expect(summarize(data, configuration, data.tasks, 'trials', all)).toMatchObject({
+      time: { median: 120, mean: 120, q1: 120, q3: 120, reviews: 1, tasks: 1 }, completed: 1, trials: 3,
+    })
+    expect(summarize(data, configuration, data.tasks.slice(1), 'trials', all).time).toBeNull()
+    data.attempts[0] = attempt('a1', 'a', [], { durationSeconds: null })
+    expect(summarize(data, configuration, data.tasks, 'trials', all).time).toBeNull()
+    data.outcomes = [outcome('a', [['a1'], []])]
+    expect(summarize(data, configuration, data.tasks, 'trials', all).time).toBeNull()
+  })
+
+  test('formats review times with units and preserves a recorded zero', () => {
+    expect(duration(0)).toBe('0 s')
+    expect(duration(45)).toBe('45 s')
+    expect(duration(90)).toBe('1.5 min')
+    const data = dataset([task('a', 1)], [attempt('a1', 'a', [], { durationSeconds: 0 })], [outcome('a', [['a1']])])
+    expect(summarize(data, configuration, data.tasks, 'trials', all).time?.median).toBe(0)
+  })
+})
+
 describe('preserved benchmark', () => {
   const builtins = imported.configurations.filter(row => row.builtin)
   const shared = commonTasks(imported, builtins.map(row => row.id), imported.tasks)
@@ -140,6 +191,7 @@ describe('preserved benchmark', () => {
       const detail = detailSchema.parse(JSON.parse(await readFile(`public${attempt.detailUrl}`, 'utf8')))
       expect(detail.id).toBe(attempt.id)
       if (attempt.admitted) expect(attempt.outputTokens).not.toBeNull()
+      if (attempt.admitted) expect(attempt.durationSeconds).not.toBeNull()
       for (const url of [detail.recordUrl, detail.normalizedUrl, detail.archiveUrl]) {
         if (url) expect((await Bun.file(`public${url}`).stat()).size).toBeGreaterThan(0)
       }
