@@ -84,7 +84,8 @@ def export_attempt(run, attempt_id, mapping, archives):
 
 
 def build():
-    registry = read(BENCH / "scoreboard.json")
+    current_registry = BENCH / "scoreboard.current.json"
+    registry = read(current_registry if current_registry.exists() else BENCH / "scoreboard.json")
     suite = registry["suites"][0]
     problems = []
     cohort = scoreboard.load_cohort(BENCH, suite, problems)
@@ -95,6 +96,9 @@ def build():
     profiles = read(BENCH / "profiles.json")
     imported = read(BENCH / "import-manifest.json")
     archives = {a["attempt"]: a for a in imported["transcripts"]}
+    for path in sorted((BENCH / "runs").glob("*/transcripts.json")):
+        for archive in read(path):
+            archives[archive["attempt"]] = archive
     tasks = []
     for task_id, identity in cohort["targets"].items():
         directory = BENCH / "targets" / task_id

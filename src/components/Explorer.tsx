@@ -83,7 +83,7 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
       </section>
 
       <section id="leaderboard" className="leaderboard-section">
-        <Group justify="space-between" align="center" mb="lg"><div><Group gap="sm"><Title order={2}>The leaderboard</Title><Badge variant="light" color="gray">Historical evidence</Badge></Group>
+        <Group justify="space-between" align="center" mb="lg"><div><Group gap="sm"><Title order={2}>The leaderboard</Title><Badge variant="light" color="gray">Recorded evidence</Badge></Group>
           <Text size="sm" c="dimmed" mt={5}>Same tasks. Different review setups. Tradeoffs you can inspect.</Text></div>
           <Select aria-label="Metric version" value={version} w={225} data={[{ value: 'trials', label: 'Trial-based metrics v1' }, { value: 'historical', label: 'Published historical metrics' }]}
             onChange={value => { if (value === 'trials' || value === 'historical') setVersion(value) }} />
@@ -123,7 +123,7 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
           </Table.Tr>)}</Table.Tbody>
         </Table></Table.ScrollContainer>
         {!summaries.length && <Text ta="center" c="dimmed" py="xl">Select a review setup to start a comparison.</Text>}
-        <Text size="xs" c="dimmed" mt="sm">* Codex cost is a list-price equivalent. Output includes reasoning and subagents. All results use historical model-assisted judgments; profile labels are proposed.</Text>
+        <Text size="xs" c="dimmed" mt="sm">* Codex cost is a list-price equivalent. Output includes reasoning and subagents. Results use model-assisted judgments; profile labels are proposed.</Text>
       </section>
 
       <section id="tasks" className="tasks-section">

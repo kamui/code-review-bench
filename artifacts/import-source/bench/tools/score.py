@@ -132,10 +132,10 @@ def pick_mapping(run_dir: Path, target_id: str, wanted) -> tuple:
     return read_json(directory / f"mapping.v{versions[-1]}.json"), versions[-1]
 
 
-def rate_table(as_of, rates_path=BENCH / "rates.json") -> dict:
+def rate_table(as_of) -> dict:
     """Per model, the rates.json entry with the latest as_of on or before the date (all if None)."""
     table = {}
-    for entry in read_json(rates_path)["rates"]:
+    for entry in read_json(BENCH / "rates.json")["rates"]:
         if as_of and entry["as_of"] > as_of:
             continue
         if entry["model"] not in table or entry["as_of"] > table[entry["model"]]["as_of"]:
@@ -289,11 +289,10 @@ def row(key: dict, scored: list, cells: list, targets: dict) -> dict:
     }
 
 
-def compute(run_dir: Path, wanted_mappings: dict, opened, common_as_of, metric_code: str,
-            rates_path=BENCH / "rates.json") -> dict:
+def compute(run_dir: Path, wanted_mappings: dict, opened, common_as_of, metric_code: str) -> dict:
     manifest = read_json(run_dir / "manifest.json")
-    table = rate_table(common_as_of, rates_path) if common_as_of else {
-        r["model"]: e for r in manifest["rates"] for e in read_json(rates_path)["rates"]
+    table = rate_table(common_as_of) if common_as_of else {
+        r["model"]: e for r in manifest["rates"] for e in read_json(BENCH / "rates.json")["rates"]
         if e["model"] == r["model"] and e["as_of"] == r["as_of"]}
     records = {}
     attempts_dir = run_dir / "attempts"
@@ -467,7 +466,6 @@ def main() -> int:
     parser.add_argument("--mapping", action="append", default=[], help="<target>=<version>")
     parser.add_argument("--opened", help="directory of opened sealed registers, <dir>/<target>/register.v<N>.json")
     parser.add_argument("--common-rates-as-of", help="reprice every request at the rates.json entries in force on this date")
-    parser.add_argument("--rates", type=Path, default=BENCH / "rates.json", help="dated rate catalog for repricing")
     parser.add_argument("--metric-code-revision", help="default: the last commit touching bench/tools")
     args = parser.parse_args()
     if args.self_test:
@@ -482,7 +480,7 @@ def main() -> int:
         wanted[target_id] = int(version)
     try:
         results = compute(Path(args.run), wanted, args.opened, args.common_rates_as_of,
-                          args.metric_code_revision or head_revision(), args.rates)
+                          args.metric_code_revision or head_revision())
         problems = check_manifest.validate(read_json(BENCH / "schema" / "results.schema.json"), results)
         if problems:
             raise Inconsistent("\n".join(problems))
