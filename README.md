@@ -44,6 +44,8 @@ These are model-assisted judgments, not a human-audited official release. Profil
 
 The [Luna and Sol run report](docs/results-2026-09-29.md) includes the new 72 reviews and both comparison cohorts.
 
+Repeated disputed findings now have a [shared claim adjudication workflow](docs/claim-adjudication.md), with versioned evidence, blinded dossiers and a consistency gate for new grades. The initial ripgrep and SeaweedFS cases remain pending human decisions.
+
 See [the design](docs/v1-design.md), [domain definitions](CONTEXT.md), and [failure follow-up](docs/failure-followup.md).
 
 ## Preserved evidence
@@ -73,6 +75,7 @@ The imported `bench/README.md` and research documents are historical snapshots a
 ```sh
 bun run verify:import
 bun run verify:historical
+bun run verify:claims
 bun run test
 bun run typecheck
 bun run build
