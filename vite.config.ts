@@ -8,7 +8,8 @@ const evidenceDirectories = ['.local', 'artifacts', 'bench'].map(directory =>
 )
 
 export default defineConfig({
-  plugins: [tanstackStart(), react()],
+  base: process.env.BASE_PATH || '/',
+  plugins: [tanstackStart({ prerender: { enabled: true, crawlLinks: false } }), react()],
   server: {
     port: 3000,
     host: '0.0.0.0',
