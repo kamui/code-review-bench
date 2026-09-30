@@ -48,6 +48,8 @@ export const configurationSchema = z.object({
   reasoningEffort: z.string().nullable(), reasoningSource: z.enum(['explicit', 'catalog-default', 'unrecorded']),
   reviewEdition: z.string(), reviewChange: z.object({ summary: z.string(), url: z.string().url() }).nullable(),
   skillProvenanceUrl: z.string().nullable(),
+  skillReleases: z.array(z.object({ version: z.string().nullable(), date: z.string(),
+    dateSource: z.enum(['release', 'commit']), provenanceUrl: z.string() })),
 })
 
 export const datasetSchema = z.object({
@@ -78,6 +80,12 @@ export type Attempt = z.infer<typeof attemptSchema>
 export type Outcome = z.infer<typeof outcomeSchema>
 export type Configuration = z.infer<typeof configurationSchema>
 export type AttemptDetail = z.infer<typeof detailSchema>
+
+export function skillReleaseLabel(configurations: Pick<Configuration, 'skillReleases'>[]) {
+  return Array.from(new Set(configurations.flatMap(configuration => configuration.skillReleases.map(release =>
+    `${release.version ? `${release.version} · ` : ''}${release.dateSource === 'release' ? 'Released' : 'Updated'} ${release.date}`,
+  )))).join('; ')
+}
 
 export async function fetchDataset(): Promise<Dataset> {
   const response = await fetch(`${import.meta.env.BASE_URL}data/benchmark.json`)
