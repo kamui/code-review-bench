@@ -4,7 +4,7 @@ import { ActionIcon, Alert, Anchor, Badge, Button, Checkbox, Container, Group, L
 import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpDown, ArrowUpRight, Check, ChevronDown, CodeXml, Database, Info, Moon, Search, Sun } from 'lucide-react'
 import { fetchDataset, skillReleaseLabel } from '../lib/data'
 import type { Configuration, Dataset, Task } from '../lib/data'
-import { average, commonTasks, compact, eligibleDefects, money, percent, summarize, taskScore } from '../lib/metrics'
+import { average, compact, eligibleDefects, leaderboardComparison, money, percent, taskScore } from '../lib/metrics'
 import type { Axis, SeverityFilter } from '../lib/metrics'
 import { Chart, reviewColor } from './Chart'
 import { EvidenceDrawer } from './EvidenceDrawer'
@@ -63,13 +63,11 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
     (!area || task.profile.areas.includes(area)) && (!change || task.profile.changeKinds.includes(change)) &&
     (!technology || task.profile.technologies.includes(technology)) && (!concern || task.profile.concerns.includes(concern)),
   )
-  const shared = commonTasks(dataset, activeIds, candidates)
+  const { tasks: shared, summaries: comparisonSummaries } = leaderboardComparison(dataset, candidates, filter)
   const sharedIds = new Set(shared.map(task => task.id))
-  const summaries = configurations.filter(item => activeIds.includes(item.id)).map(configuration =>
-    summarize(dataset, configuration, shared, filter),
-  ).sort((left, right) => (right.score ?? -1) - (left.score ?? -1))
-  const tableTasks = commonTasks(dataset, dataset.configurations.map(item => item.id), candidates)
-  const tableSummaries = dataset.configurations.map(configuration => summarize(dataset, configuration, tableTasks, filter))
+  const summaries = comparisonSummaries.filter(row => activeIds.includes(row.configuration.id))
+    .sort((left, right) => (right.score ?? -1) - (left.score ?? -1))
+  const tableSummaries = [...comparisonSummaries]
     .sort((left, right) => {
       const a = sort.column === 'setup' ? left.configuration.short : left[sort.column]
       const b = sort.column === 'setup' ? right.configuration.short : right[sort.column]
@@ -80,6 +78,7 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
     })
   const defectCount = shared.reduce((sum, task) => sum + eligibleDefects(task, filter).length, 0)
   const unresolved = summaries.reduce((sum, row) => sum + row.unresolved, 0)
+  const incompleteCoverage = summaries.filter(row => row.tasks < shared.length)
   const attempts = useMemo(() => new Map(dataset.attempts.map(attempt => [attempt.id, attempt])), [dataset])
   const labels = (key: keyof Task['profile']) => Array.from(new Set(dataset.tasks.flatMap(task => task.profile[key]))).sort()
   const editionIds = (configuration: Configuration) => configurations.filter(item => item.method === configuration.method && item.reviewEdition === configuration.reviewEdition).map(item => item.id)
@@ -129,7 +128,7 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
             <div className="chart-toolbar"><SegmentedControl value={axis} onChange={value => {
               if (value === 'cost' || value === 'tokens' || value === 'falseFindings' || value === 'time') setAxis(value)
             }} data={[{ label: 'Cost', value: 'cost' }, { label: 'Output tokens', value: 'tokens' }, { label: 'False findings', value: 'falseFindings' }, { label: 'Time', value: 'time' }]} />
-              <Group gap="md"><Text size="xs" c="dimmed">{shared.length} shared tasks / {defectCount} reference problems</Text>
+              <Group gap="md"><Text size="xs" c="dimmed">{shared.length} comparison tasks / {defectCount} reference problems</Text>
                 <Switch checked={showLabels} onChange={event => setShowLabels(event.currentTarget.checked)} label="Show labels" size="xs" />
               </Group>
             </div>
@@ -151,27 +150,29 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
             <div className="skill-switch"><Switch checked={includeExperiments} onChange={event => setIncludeExperiments(event.currentTarget.checked)} label="Include skill experiments" size="xs" /></div>
             <Text size="xs" c="dimmed">Each skill includes its selected models. Review editions mark meaningful changes.</Text>
           </aside></div>
-          <div className="comparison-strip"><Info size={15} /><span>Each PR has equal weight. Retry usage is included; false findings never reduce the detection score.</span></div>
+          <div className="comparison-strip"><Info size={15} /><span>Chart and table use tasks shared by all standard setups. Skill and model selections change visibility; task filters change the comparison.</span></div>
         </Paper>
+        {incompleteCoverage.length > 0 && <Alert color="blue" mt="md">Not plotted because task coverage is incomplete: {incompleteCoverage.map(row => `${row.configuration.short} (${row.tasks}/${shared.length} tasks)`).join('; ')}. Filter tasks to compare their recorded results, or inspect them in the table.</Alert>}
         {unresolved > 0 && <Alert color="yellow" mt="md">{unresolved} unresolved grading assignments. False-finding measurements are provisional.</Alert>}
         {severity !== 'all' && <Alert color="blue" mt="md">Severity has not been adjudicated for these reference findings. High-severity and critical-only scores are unavailable; unclassified does not mean low severity.</Alert>}
         <Text size="sm" mt="xl" fw={600}>All review setups</Text>
-        <Text size="xs" c="dimmed" mt={4}>Includes skill experiments. {tableTasks.length} shared tasks after task filters; chart selections do not hide table rows.</Text>
+        <Text size="xs" c="dimmed" mt={4}>Includes skill experiments. Same {shared.length} comparison tasks as the chart. Scores and averages require full task coverage; chart selections do not hide table rows.</Text>
         <Table.ScrollContainer minWidth={700} mt="lg"><Table verticalSpacing="md" className="leaderboard-table" aria-label="All review setup results">
           <Table.Thead><Table.Tr>{resultsColumns.map(column => <Table.Th key={column.key} aria-sort={sort.column === column.key ? sort.direction : 'none'}>
             <button className="text-button sort-heading" onClick={() => setSort(current => ({ column: column.key, direction: current.column === column.key && current.direction === 'ascending' ? 'descending' : 'ascending' }))}>
               {column.label}{sort.column === column.key ? sort.direction === 'ascending' ? <ArrowUp size={13} aria-hidden="true" /> : <ArrowDown size={13} aria-hidden="true" /> : <ArrowUpDown size={13} aria-hidden="true" />}
             </button>
-          </Table.Th>)}<Table.Th /></Table.Tr></Table.Thead>
+          </Table.Th>)}<Table.Th>Task coverage</Table.Th><Table.Th /></Table.Tr></Table.Thead>
           <Table.Tbody>{tableSummaries.map(row => <Table.Tr key={row.configuration.id}>
             <Table.Td><button className="text-button setup-label" onClick={() => setInspection({ kind: 'configuration', id: row.configuration.id })}><span className="color-dot" style={{ background: reviewColor(row.configuration) }} />{row.configuration.short}</button></Table.Td>
             <Table.Td><span className="score-value">{percent(row.score)}</span></Table.Td><Table.Td>{money(row.cost)}{row.configuration.billing === 'list-price-equivalent' && <Tooltip label="List-price equivalent for subscription quota"><span className="estimate-marker">*</span></Tooltip>}</Table.Td>
             <Table.Td>{compact(row.tokens)}</Table.Td><Table.Td>{row.falseFindings?.toFixed(2) ?? '—'}</Table.Td><Table.Td><span className="completion-count">{row.completed}/{row.trials}</span></Table.Td>
+            <Table.Td>{row.tasks}/{shared.length}</Table.Td>
             <Table.Td><ActionIcon aria-label={`Inspect ${row.configuration.short}`} variant="subtle" color="gray" onClick={() => setInspection({ kind: 'configuration', id: row.configuration.id })}><ArrowUpRight size={18} /></ActionIcon></Table.Td>
           </Table.Tr>)}</Table.Tbody>
         </Table></Table.ScrollContainer>
-        {!tableTasks.length && <Text ta="center" c="dimmed" py="xl">No tasks are shared by every setup with these filters.</Text>}
-        <Text size="xs" c="dimmed" mt="sm">* Codex cost is a list-price equivalent. Output includes reasoning and subagents. Results use model-assisted judgments; profile labels are proposed.</Text>
+        {!shared.length && <Text ta="center" c="dimmed" py="xl">No tasks are shared by all standard setups with these filters.</Text>}
+        <Text size="xs" c="dimmed" mt="sm">Each PR has equal weight. Retry usage is included; false findings never reduce detection scores. * Codex cost is a list-price equivalent. Output includes reasoning and subagents. Results use model-assisted judgments; profile labels are proposed.</Text>
         <MethodologyViews dataset={dataset} configurations={configurations.filter(c => activeIds.includes(c.id))} tasks={shared} filter={filter} />
       </section>
 
