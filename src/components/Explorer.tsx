@@ -5,7 +5,7 @@ import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpDown, ArrowUpRight, Check, 
 import { fetchDataset, skillReleaseLabel } from '../lib/data'
 import type { Configuration, Dataset, Task } from '../lib/data'
 import { average, commonTasks, compact, eligibleDefects, money, percent, summarize, taskScore } from '../lib/metrics'
-import type { Axis, MetricVersion, SeverityFilter } from '../lib/metrics'
+import type { Axis, SeverityFilter } from '../lib/metrics'
 import { Chart, reviewColor } from './Chart'
 import { EvidenceDrawer } from './EvidenceDrawer'
 import { MethodologyViews } from './MethodologyViews'
@@ -43,7 +43,6 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
   const [includeExperiments, setIncludeExperiments] = useState(false)
   const [axis, setAxis] = useState<Axis>('cost')
   const [showLabels, setShowLabels] = useState(true)
-  const [version, setVersion] = useState<MetricVersion>('trials')
   const [query, setQuery] = useState('')
   const [area, setArea] = useState<string | null>(null)
   const [change, setChange] = useState<string | null>(null)
@@ -67,10 +66,10 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
   const shared = commonTasks(dataset, activeIds, candidates)
   const sharedIds = new Set(shared.map(task => task.id))
   const summaries = configurations.filter(item => activeIds.includes(item.id)).map(configuration =>
-    summarize(dataset, configuration, shared, version, filter),
+    summarize(dataset, configuration, shared, filter),
   ).sort((left, right) => (right.score ?? -1) - (left.score ?? -1))
   const tableTasks = commonTasks(dataset, dataset.configurations.map(item => item.id), candidates)
-  const tableSummaries = dataset.configurations.map(configuration => summarize(dataset, configuration, tableTasks, version, filter))
+  const tableSummaries = dataset.configurations.map(configuration => summarize(dataset, configuration, tableTasks, filter))
     .sort((left, right) => {
       const a = sort.column === 'setup' ? left.configuration.short : left[sort.column]
       const b = sort.column === 'setup' ? right.configuration.short : right[sort.column]
@@ -123,8 +122,7 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
       <section id="leaderboard" className="leaderboard-section">
         <Group justify="space-between" align="center" mb="lg"><div><Title order={2}>The leaderboard</Title>
           <Text size="sm" c="dimmed" mt={5}>Same tasks. Different review setups. Tradeoffs you can inspect.</Text></div>
-          <Select aria-label="Metric version" value={version} w={225} data={[{ value: 'trials', label: 'Trial-based metrics v1' }, { value: 'historical', label: 'Published historical metrics' }]}
-            onChange={value => { if (value === 'trials' || value === 'historical') setVersion(value) }} />
+          <Badge variant="light" color="gray">Rubric v2</Badge>
         </Group>
         <Paper withBorder radius="lg" className="leaderboard-paper">
           <div className="chart-layout"><div className="chart-main">
@@ -153,13 +151,10 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
             <div className="skill-switch"><Switch checked={includeExperiments} onChange={event => setIncludeExperiments(event.currentTarget.checked)} label="Include skill experiments" size="xs" /></div>
             <Text size="xs" c="dimmed">Each skill includes its selected models. Review editions mark meaningful changes.</Text>
           </aside></div>
-          <div className="comparison-strip"><Info size={15} /><span>{version === 'trials'
-            ? 'Each PR has equal weight. Retry usage is included; false findings never reduce the detection score.'
-            : 'Original published calculations: all attempts affect recall and cost; false findings use completed reviews.'}</span></div>
+          <div className="comparison-strip"><Info size={15} /><span>Each PR has equal weight. Retry usage is included; false findings never reduce the detection score.</span></div>
         </Paper>
         {unresolved > 0 && <Alert color="yellow" mt="md">{unresolved} unresolved grading assignments. False-finding measurements are provisional.</Alert>}
         {severity !== 'all' && <Alert color="blue" mt="md">Severity has not been adjudicated for these reference findings. High-severity and critical-only scores are unavailable; unclassified does not mean low severity.</Alert>}
-        {version === 'historical' && findingConcern && <Alert color="blue" mt="md">Published scores do not have finding-category breakdowns. Select trial-based metrics to inspect this concern.</Alert>}
         <Text size="sm" mt="xl" fw={600}>All review setups</Text>
         <Text size="xs" c="dimmed" mt={4}>Includes skill experiments. {tableTasks.length} shared tasks after task filters; chart selections do not hide table rows.</Text>
         <Table.ScrollContainer minWidth={700} mt="lg"><Table verticalSpacing="md" className="leaderboard-table" aria-label="All review setup results">
@@ -177,7 +172,7 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
         </Table></Table.ScrollContainer>
         {!tableTasks.length && <Text ta="center" c="dimmed" py="xl">No tasks are shared by every setup with these filters.</Text>}
         <Text size="xs" c="dimmed" mt="sm">* Codex cost is a list-price equivalent. Output includes reasoning and subagents. Results use model-assisted judgments; profile labels are proposed.</Text>
-        <MethodologyViews dataset={dataset} configurations={configurations.filter(c => activeIds.includes(c.id))} tasks={shared} filter={filter} version={version} />
+        <MethodologyViews dataset={dataset} configurations={configurations.filter(c => activeIds.includes(c.id))} tasks={shared} filter={filter} />
       </section>
 
       <section id="tasks" className="tasks-section">
@@ -203,7 +198,7 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
               const scores = activeIds.flatMap(id => {
                 const outcome = dataset.outcomes.find(row => row.configurationId === id && row.taskId === task.id && row.status === 'ran')
                 if (!outcome) return []
-                const score = version === 'historical' ? (findingConcern || severity !== 'all' ? null : outcome.historical?.score ?? null) : taskScore(task, outcome, attempts, filter)
+                const score = taskScore(task, outcome, attempts, filter)
                 return score === null ? [] : [score * 100]
               })
               return <Table.Tr key={task.id}><Table.Td><button className="text-button task-name" onClick={() => setInspection({ kind: 'task', id: task.id })}>{task.repo}<span>#{task.pr}</span></button><Text size="xs" c="dimmed" mt={4} maw={340}>{task.shape}</Text></Table.Td>
@@ -225,8 +220,8 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
       <section id="methodology" className="methodology-section"><div><Title order={2}>What the numbers mean</Title><Text c="dimmed" mt="sm" maw={600}>Finding a real problem, giving a useful fix, and avoiding false alarms are different skills. We keep them visible separately.</Text></div>
         <div className="methodology-grid"><div><h3>Detection, without penalties</h3><p>Each known problem counts once. Repeated trials are averaged within each PR, then each buggy PR gets equal weight. False findings and fix suggestions do not change detection credit.</p></div>
           <div><h3>A complete review setup</h3><p>We compare the client, model, effort, and method together. Native tools and subagents count toward usage. Shared task versions keep the comparison meaningful.</p></div>
-          <div><h3>Evidence that can be revisited</h3><p>Reference findings are versioned. New and disputed findings wait for adjudication. Failed runs, fix suggestions, and original judgments stay available.</p></div></div>
-        <Group gap="md" mt="lg"><Anchor href={`${import.meta.env.BASE_URL}evidence/bench/SCOREBOARD.md`} target="_blank" size="sm">Published historical scoreboard</Anchor><Anchor href={`${import.meta.env.BASE_URL}evidence/bench/import-manifest.json`} target="_blank" size="sm">Import checksums</Anchor><Anchor href={`${import.meta.env.BASE_URL}data/benchmark.json`} download size="sm"><Group gap={5}><ArrowDownToLine size={14} />Download explorer data</Group></Anchor></Group>
+          <div><h3>Evidence that can be revisited</h3><p>Reference findings are versioned. New and disputed findings wait for adjudication. Failed runs, fix suggestions, and claim judgments stay available.</p></div></div>
+        <Group gap="md" mt="lg"><Anchor href={`${import.meta.env.BASE_URL}data/benchmark.json`} download size="sm"><Group gap={5}><ArrowDownToLine size={14} />Download explorer data</Group></Anchor></Group>
         <Text size="xs" c="dimmed" mt="lg">Imported from skills revision {dataset.revision.slice(0, 10)}. {dataset.import.files.toLocaleString()} preserved source files and {dataset.import.transcripts} transcript references. {dataset.import.mismatches} superseded archive references have recorded hash mismatches; the two main run archives are verified.</Text>
       </section>
       <footer className="site-footer"><span>code<span className="brand-review">review</span>bench.</span><Anchor href="https://deepswe.datacurve.ai/" target="_blank" rel="noreferrer" size="xs" c="dimmed">Inspired by DeepSWE</Anchor></footer>

@@ -9,7 +9,9 @@ Usage::
 The registry (``schema_version`` 1) lists suites, newest first. A suite has ``id``, ``title``,
 ``summary``, ``reference`` (the id of the entry to beat), ``cohort_run`` (a run directory relative
 to the registry whose manifest cohort fixes the suite's targets, packet hashes, diff identities
-and register versions) and ``entries``. An entry has ``id``, ``label``, ``version`` (free text for
+and register versions) and ``entries``. Optional ``cohort_results`` pins the rubric and register
+versions to a versioned results file, while keeping task identities from the frozen manifest.
+An entry has ``id``, ``label``, ``version`` (free text for
 the reviewer version it ran), ``sources`` and an optional ``note``. A source has ``run`` (a run
 directory relative to the registry), ``results`` (a ``results.v<N>.json`` in that run written by
 ``score.py``, or null while the run is not scored) and ``arm`` (an arm id of that run's manifest).
@@ -54,6 +56,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import sys
 
 TOOLS = Path(__file__).resolve().parent
@@ -107,8 +110,28 @@ def load_cohort(root: Path, suite: dict, problems: list):
         problems.append(f"{suite['id']}: cohort run manifest {os.path.relpath(path, root)} is missing")
         return None
     manifest = read_json(path)
-    return {"rubric": manifest["rubric_version"],
-            "targets": identities(manifest, {c["target"]: c["register_version"] for c in manifest["cohort"]})}
+    registers = {c["target"]: c["register_version"] for c in manifest["cohort"]}
+    rubric = manifest["rubric_version"]
+    if "cohort_results" in suite:
+        name = suite["cohort_results"]
+        if not isinstance(name, str) or not re.fullmatch(r"results\.v\d+\.json", name):
+            problems.append(f"{suite['id']}: cohort_results must name a versioned results file")
+            return None
+        results_path = path.with_name(name)
+        if not results_path.is_file():
+            problems.append(f"{suite['id']}: cohort results {os.path.relpath(results_path, root)} is missing")
+            return None
+        results = read_json(results_path)
+        inputs = results.get("inputs", [])
+        registers = {i["target"]: i["register_version"] for i in inputs}
+        rubric = results.get("rubric_version")
+        if len(registers) != len(inputs) or set(registers) != {c["target"] for c in manifest["cohort"]}:
+            problems.append(f"{suite['id']}: cohort results must cover every cohort target exactly once")
+        if rubric not in (1, 2) or any(type(v) is not int or v < 1 for v in registers.values()):
+            problems.append(f"{suite['id']}: cohort results contain invalid rubric or register versions")
+        if results.get("run_id") != manifest.get("run_id"):
+            problems.append(f"{suite['id']}: cohort results belong to a different run")
+    return {"rubric": rubric, "targets": identities(manifest, registers)}
 
 
 def load_source(root: Path, where: str, spec: dict, problems: list):
@@ -328,8 +351,12 @@ class Board:
 
     def sources_section(self) -> list:
         cohort_dir = self.root / self.suite["cohort_run"]
-        lines = [f"The {len(self.targets)} targets and their register versions come from "
-                 f"[`{cohort_dir.name}`]({self.link(cohort_dir)}). Rows come from:", ""]
+        if "cohort_results" in self.suite:
+            lines = [f"The {len(self.targets)} targets come from [`{cohort_dir.name}`]({self.link(cohort_dir)}); "
+                     f"rubric and register versions are pinned by `{self.suite['cohort_results']}`. Rows come from:", ""]
+        else:
+            lines = [f"The {len(self.targets)} targets and their register versions come from "
+                     f"[`{cohort_dir.name}`]({self.link(cohort_dir)}). Rows come from:", ""]
         grouped = {}
         for item in self.loaded:
             for source in item["sources"]:
