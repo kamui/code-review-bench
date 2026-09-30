@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Accordion, Alert, Badge, Button, Code, Drawer, Group, Loader, Paper, Select, Stack, Tabs, Text, Title } from '@mantine/core'
 import { ExternalLink, FileJson, FileText, Download } from 'lucide-react'
-import { fetchDetail } from '../lib/data'
+import { fetchDetail, skillReleaseLabel } from '../lib/data'
 import type { Attempt, AttemptDetail, Configuration, Dataset, Task } from '../lib/data'
 import { compact, money } from '../lib/metrics'
 
@@ -37,7 +37,8 @@ function InspectionBody({ dataset, configuration, task }: { dataset: Dataset; co
   }, [attempt])
   const currentTask = task ?? dataset.tasks.find(item => item.id === attempt?.taskId)
   return <Stack gap="lg">
-    {configuration && <><Text size="sm" c="dimmed">{configuration.label}</Text><Group><Badge variant="light">{configuration.version}</Badge><Badge variant="outline">Edition: {configuration.reviewEdition}</Badge></Group><Text size="sm">{configuration.note}</Text>
+    {configuration && <><Text size="sm" c="dimmed">{configuration.label}</Text><Group><Badge variant="light">{configuration.version}</Badge>{!configuration.builtin && <Badge variant="outline">{skillReleaseLabel([configuration])}</Badge>}</Group><Text size="sm">{configuration.note}</Text>
+      {Array.from(new Set(configuration.skillReleases.map(release => release.provenanceUrl))).map(url => <Button key={url} component="a" href={url} target="_blank" rel="noreferrer" variant="subtle" size="xs">Skill release provenance</Button>)}
       {configuration.reviewChange && <Button component="a" href={configuration.reviewChange.url} target="_blank" rel="noreferrer" variant="subtle" size="xs">Review change: {configuration.reviewChange.summary}</Button>}
       {configuration.skillProvenanceUrl && <Button component="a" href={configuration.skillProvenanceUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Skill commits & timestamps</Button>}</>}
     {task && <><Text>{task.shape}</Text><Group gap="xs">{task.profile.concerns.map(concern => <Badge variant="light" key={concern}>{concern}</Badge>)}</Group>
