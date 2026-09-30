@@ -14,6 +14,7 @@ BASE_PATH = os.environ.get("BASE_PATH", "/").rstrip("/")
 sys.path.insert(0, str(BENCH / "tools"))
 import scoreboard
 import claim_grading
+import skill_provenance
 
 
 def read(path):
@@ -52,6 +53,23 @@ def duration_seconds(record):
         return None
     duration = (end - start).total_seconds()
     return duration if duration >= 0 else None
+
+
+def skill_releases(item, recovered):
+    records = {}
+    for source in item['sources']:
+        manifest = read(source['run_dir'] / 'manifest.json')
+        arm = next(arm for arm in manifest['arms'] if arm['id'] == source['spec']['arm'])
+        record = skill_provenance.verify_pin(source['run_dir'], arm)
+        provenance_path = source['run_dir'] / arm['skill_provenance']['path'] if record else BENCH / 'skill-provenance.v2.json'
+        record = record or recovered.get(arm['resolved_skill_tree'])
+        if record:
+            key = (record['version'], record['date'], record['date_source'])
+            records[key] = {'version': record['version'], 'date': record['date'], 'dateSource': record['date_source'],
+                            'provenanceUrl': evidence(provenance_path)}
+    if item['entry']['method'] not in {'codex', 'claude-builtin'} and not records:
+        raise ValueError(f"{item['entry']['id']}: skill release provenance is missing")
+    return list(records.values())
 
 
 def export_attempt(run, attempt_id, mapping, archives):
@@ -143,11 +161,14 @@ def build():
                       "sourceUrl": f"https://github.com/{target['repo']}/pull/{target['pr']}"})
 
     configurations, outcomes, attempts = [], [], {}
+    recovered = read(BENCH / 'skill-provenance.v2.json')['skills']
     for item in loaded:
         entry = item["entry"]
+        releases = skill_releases(item, recovered)
         configuration = {"id": entry["id"], "label": entry["label"], "short": entry["short"].replace(" · ", " / "),
                                "version": entry["version"], "method": entry["method"],
                                "reviewEdition": entry["review_edition"], "reviewChange": entry["review_change"],
+                               "skillReleases": releases,
                                "skillProvenanceUrl": evidence(BENCH / entry["skill_provenance"]) if entry.get("skill_provenance") else evidence(BENCH / "skill-provenance.json") if entry["method"] == "review-code" else None,
                                "experimental": entry["experimental"],
                                "builtin": entry["method"] in {"codex", "claude-builtin"}, "note": entry.get("note", ""),

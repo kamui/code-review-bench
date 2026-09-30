@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { ActionIcon, Alert, Anchor, Badge, Button, Checkbox, Container, Group, Loader, Paper, Popover,
   SegmentedControl, Select, Stack, Switch, Table, Tabs, Text, TextInput, Title, Tooltip, useComputedColorScheme, useMantineColorScheme } from '@mantine/core'
 import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpDown, ArrowUpRight, Check, ChevronDown, CodeXml, Database, Info, Moon, Search, Sun } from 'lucide-react'
-import { fetchDataset } from '../lib/data'
+import { fetchDataset, skillReleaseLabel } from '../lib/data'
 import type { Configuration, Dataset, Task } from '../lib/data'
 import { average, commonTasks, compact, eligibleDefects, money, percent, summarize, taskScore } from '../lib/metrics'
 import type { Axis, MetricVersion, SeverityFilter } from '../lib/metrics'
@@ -138,7 +138,7 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
             <Stack gap="md">{editions.map(configuration => <div className="configuration-option" key={`${configuration.method}/${configuration.reviewEdition}`}>
               <Checkbox checked={editionIds(configuration).every(id => selected.includes(id))} indeterminate={editionIds(configuration).some(id => selected.includes(id)) && !editionIds(configuration).every(id => selected.includes(id))} color={reviewColor(configuration)} onChange={() => toggleEdition(configuration)}
                 label={<span className="configuration-name">{configuration.builtin ? configuration.method === 'codex' ? 'Codex built-in' : 'Claude built-in' : `/${configuration.method}`}</span>} />
-              {!configuration.builtin && <span className="configuration-version">Review edition: {configuration.reviewEdition}</span>}
+              {!configuration.builtin && <span className="configuration-version">{skillReleaseLabel(configurations.filter(item => item.method === configuration.method && item.reviewEdition === configuration.reviewEdition))}</span>}
               {configuration.reviewChange && <Anchor className="configuration-version" href={configuration.reviewChange.url} target="_blank" rel="noreferrer">Review changed: {configuration.reviewChange.summary}</Anchor>}
             </div>)}</Stack>
             <Popover position="bottom-end" width={230} withArrow>
