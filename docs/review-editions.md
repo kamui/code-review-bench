@@ -10,7 +10,7 @@ Record an edition change in `review_change` with a short explanation and source 
 
 Codex and Claude built-ins each use one baseline edition across the recorded client versions. No review-specific changelog boundary is registered for these runs. The checked sources are [Codex 0.157.0](https://github.com/openai/codex/releases/tag/rust-v0.157.0), [Codex 0.158.0](https://github.com/openai/codex/releases/tag/rust-v0.158.0), and the [Claude Code changelog](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md). General runtime, sandbox, or authorization-review changes remain execution metadata. The recorded Claude prompts differ by model; this is visible in the evidence and does not by itself establish a release boundary.
 
-The explorer publishes the `/review-code` workflow edition `v5b-30-x382`. This edition changes the regression-test review rule and verification/report workflow. The [source comparison](https://github.com/kamui/skills/compare/bfed2957be58232dabb8a247a109d75a2b48993b...05e336791ffd7f42abb74421df47032405fe0b52) includes these changes in the referenced rubric, output procedure, renderer, and design. Its later test-script-only changes do not create another edition.
+The explorer publishes the `/review-code` workflow edition `v5b-30-x382` on Sonnet 5.5 High. This edition changes the regression-test review rule and verification/report workflow. The [source comparison](https://github.com/kamui/skills/compare/bfed2957be58232dabb8a247a109d75a2b48993b...05e336791ffd7f42abb74421df47032405fe0b52) includes these changes in the referenced rubric, output procedure, renderer, and design. Its later test-script-only changes do not create another edition.
 
 ## Raw evidence
 
