@@ -10,7 +10,6 @@ const colors: Record<string, string> = {
   'claude-builtin': '#8b6bd6',
   codex: '#258f9b',
   'review-code/v5b-30-x382': '#c17a32',
-  'review-code/v5b-25': '#779846',
   'ce-code-review': '#b75286',
   'thermo-nuclear-code-quality-review': '#92722c',
 }
