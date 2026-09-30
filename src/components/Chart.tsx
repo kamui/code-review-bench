@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { compact, duration, modelComparisonSegments, money, percent } from '../lib/metrics'
 import type { Axis, Summary } from '../lib/metrics'
 import type { Configuration } from '../lib/data'
+import { skillReleaseLabel } from '../lib/data'
 
 const colors: Record<string, string> = {
   'claude-builtin': '#8b6bd6',
@@ -62,7 +63,7 @@ export function Chart({ summaries, axis, showLabels, onSelect }: { summaries: Su
     const parsed = tooltipSchema.safeParse(value)
     const index = parsed.success && parsed.data.active ? parsed.data.payload?.[0]?.payload.index : undefined
     const point = index === undefined ? undefined : points[index]
-    return point ? <div className="chart-tip"><strong>{point.summary.configuration.label}</strong><span>Review edition: {point.summary.configuration.reviewEdition}</span><span>Findings score: {percent(point.y)}</span><span>{axisLabels[axis]}: {format(point.x)}</span>
+    return point ? <div className="chart-tip"><strong>{point.summary.configuration.label}</strong>{!point.summary.configuration.builtin && <span>Skill: {skillReleaseLabel([point.summary.configuration])}</span>}<span>Findings score: {percent(point.y)}</span><span>{axisLabels[axis]}: {format(point.x)}</span>
       {axis === 'time' && point.summary.time && <><span>Mean review time: {duration(point.summary.time.mean)}</span>
         <span>Middle 50%: {duration(point.summary.time.q1)} to {duration(point.summary.time.q3)}</span>
         <span>{point.summary.time.tasks} PRs · {point.summary.time.reviews} timed reviews</span></>}
