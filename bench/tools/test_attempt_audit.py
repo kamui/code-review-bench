@@ -422,6 +422,13 @@ class AttemptAudit(unittest.TestCase):
                 self.assertEqual(rc, 1, violations)
                 self.assertTrue(any(str(self.outside) in v for v in violations), violations)
 
+    def test_quoted_search_wildcards_do_not_expand_to_parent_directories(self):
+        rc, violations = self.bash('grep -rn "OverwriteIfDefined\\|Simplify<.* & " src',
+                                   "rg ' .? ' src", "grep ' .[.] ' src")
+        self.assertEqual((rc, violations), (0, []))
+        rc, violations = self.bash("cat '../outside/x'")
+        self.assertEqual(rc, 1, violations)
+
     def test_relative_operands_follow_cd(self):
         rc, violations = self.bash("cd src/../.. && cat outside/register.json")
         self.assertEqual(rc, 1)

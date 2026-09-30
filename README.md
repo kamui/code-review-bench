@@ -44,7 +44,11 @@ These are model-assisted judgments, not a human-audited official release. Profil
 
 The [Luna and Sol run report](docs/results-2026-09-29.md) includes the new 72 reviews and both comparison cohorts.
 
-Repeated disputed findings now have a [shared claim adjudication workflow](docs/claim-adjudication.md), with versioned evidence, blinded dossiers and a consistency gate for new grades. The initial ripgrep and SeaweedFS cases remain pending human decisions.
+Repeated disputed findings have a [shared claim adjudication workflow](docs/claim-adjudication.md), with versioned evidence, blinded dossiers and a consistency gate for new grades. The initial ripgrep and SeaweedFS cases have saved user eligibility rulings, awaiting the next reference release and complete regrading. The [maintainer evidence workflow](docs/maintainer-adjudication.md) archives upstream discussion and records separate dispositions in shadow mode; unknown upstream disposition does not reject a technically approved finding.
+
+The [finding-threshold workflow](docs/finding-threshold.md) records the accepted obligation-based rule and testing calibration. [Rubric v2 integration](docs/methodology-integration.md) implements the first four recommendations in grading, scoring and explorer reporting. Historical grades remain intact; applying v2 requires regrading the saved outputs and auditing the next reference release.
+
+The [methodology progress tracker](docs/benchmark-methodology-progress.md) preserves the original five recommendations. The [reading-burden rules](docs/reading-burden.md) and [task-sensitivity views](docs/task-sensitivity.md) record the agreed directions for recommendations 3 and 4. The accepted [PR selection process](docs/pr-selection.md) is saved for later. New target selection is deferred at the user's request; regrading and release approval remain pending.
 
 See [the design](docs/v1-design.md), [domain definitions](CONTEXT.md), and [failure follow-up](docs/failure-followup.md).
 
@@ -76,6 +80,7 @@ The imported `bench/README.md` and research documents are historical snapshots a
 bun run verify:import
 bun run verify:historical
 bun run verify:claims
+bun run audit:maintainers
 bun run test
 bun run typecheck
 bun run build
