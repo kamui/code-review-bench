@@ -69,6 +69,22 @@ class ThermoNormalizerTests(unittest.TestCase):
         self.assertEqual(normalized["parse_status"], "parsed")
         self.assertEqual(normalized["items"][0]["kind"], "question")
 
+    def test_explicit_no_code_quality_findings_is_empty(self):
+        (self.root / "finding-index.json").write_text(json.dumps({"findings": [], "questions": []}), encoding="utf-8")
+        for statement in ("No actionable code-quality findings.", "No code quality findings."):
+            with self.subTest(statement=statement):
+                (self.root / "summary.md").write_text(statement, encoding="utf-8")
+                done = self.run_cli()
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertEqual(json.loads(self.out.read_text())["parse_status"], "empty")
+
+    def test_no_code_quality_findings_cannot_hide_a_nonempty_index(self):
+        (self.root / "summary.md").write_text("No actionable code-quality findings.\n", encoding="utf-8")
+        done = self.run_cli()
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("unresolved: summary says there are no findings but finding index is non-empty",
+                      json.loads(self.out.read_text())["parse_notes"])
+
     def test_report_path_cannot_escape_root(self):
         self.index["findings"][0]["report_path"] = "../outside.md"
         (self.root / "finding-index.json").write_text(json.dumps(self.index), encoding="utf-8")

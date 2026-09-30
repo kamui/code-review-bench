@@ -65,7 +65,7 @@ def normalize(root: Path, clone: Path | None, arm: str = "codex-skill") -> dict:
     questions = index.get("questions", [])
     if not isinstance(questions, list):
         raise NormalizeError("finding-index.json questions must be an array")
-    explicit_empty = bool(re.search(r"\bno\s+(?:actionable\s+)?findings\b", summary_text, re.I))
+    explicit_empty = bool(re.search(r"\bno\s+(?:actionable\s+)?(?:code[- ]quality\s+)?findings\b", summary_text, re.I))
     notes: list[str] = []
     items = []
 
