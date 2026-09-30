@@ -42,6 +42,7 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
   const [selectedModels, setSelectedModels] = useState(modelChoices.map(model => model.value))
   const [includeExperiments, setIncludeExperiments] = useState(false)
   const [axis, setAxis] = useState<Axis>('cost')
+  const [showLabels, setShowLabels] = useState(true)
   const [version, setVersion] = useState<MetricVersion>('trials')
   const [query, setQuery] = useState('')
   const [area, setArea] = useState<string | null>(null)
@@ -130,9 +131,11 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
             <div className="chart-toolbar"><SegmentedControl value={axis} onChange={value => {
               if (value === 'cost' || value === 'tokens' || value === 'falseFindings' || value === 'time') setAxis(value)
             }} data={[{ label: 'Cost', value: 'cost' }, { label: 'Output tokens', value: 'tokens' }, { label: 'False findings', value: 'falseFindings' }, { label: 'Time', value: 'time' }]} />
-              <Text size="xs" c="dimmed">{shared.length} shared tasks / {defectCount} reference problems</Text>
+              <Group gap="md"><Text size="xs" c="dimmed">{shared.length} shared tasks / {defectCount} reference problems</Text>
+                <Switch checked={showLabels} onChange={event => setShowLabels(event.currentTarget.checked)} label="Show labels" size="xs" />
+              </Group>
             </div>
-            <Chart summaries={summaries} axis={axis} onSelect={id => setInspection({ kind: 'configuration', id })} />
+            <Chart summaries={summaries} axis={axis} showLabels={showLabels} onSelect={id => setInspection({ kind: 'configuration', id })} />
           </div>
           <aside className="configuration-list" aria-label="Review skills"><Group justify="space-between" mb="lg"><Text fw={650} size="sm">Review skills</Text><Text size="xs" c="dimmed">{editions.filter(edition => editionIds(edition).some(id => selected.includes(id))).length} selected</Text></Group>
             <Stack gap="md">{editions.map(configuration => <div className="configuration-option" key={`${configuration.method}/${configuration.reviewEdition}`}>
