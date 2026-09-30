@@ -1,0 +1,48 @@
+{
+  "reviewer": "testing",
+  "findings": [
+    {
+      "title": "No regression test for the ISR path-restore branch",
+      "severity": "P1",
+      "file": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+      "line": 24,
+      "why_it_matters": "This PR fixes a regression where every ISR route returned 404, and that regression shipped because no test ran the built _isr function with the rewritten `/_isr?x_astro_path=<path>` request. The existing suites still cannot catch it: isr.test.js only checks the generated config JSON, and path-override-security.test.js only checks that overrides are rejected. If someone tightens the override gate again, every ISR page will 404 while CI stays green. An in-process probe shows the test is cheap. The built fixtures/isr _isr function returns 404 without `x-vercel-isr: 1` and returns 200 `<h1>One</h1>` with the header. A test that asserts this pins the contract this PR restores.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In test/isr.test.js, add a case that reuses the loadFunctionModule helper from path-override-security.test.js (or moves it into test-utils.js) to load the `_isr` function. Call `fetch(new Request('https://example.com/_isr?x_astro_path=/one', { headers: { 'x-vercel-isr': '1' } }))` and assert status 200 and that the body contains `<h1>One</h1>`. Assumption: the fixture's one.astro stays the ISR page covered by the `^/one/?$ -> /_isr?x_astro_path=$0` route.",
+      "confidence": 75,
+      "evidence": [
+        "packages/integrations/vercel/src/serverless/entrypoint.ts:24 -- } else if(request.headers.get('x-vercel-isr') === '1') {",
+        "packages/integrations/vercel/src/index.ts:63 -- const ISR_PATH = `/_isr?${ASTRO_PATH_PARAM}=$0`;",
+        "test/isr.test.js only asserts _isr.prerender-config.json and config.json routes; it never invokes a built function",
+        "Probe (tmp/isr-probe2.mjs, built fixtures/isr _isr.func): no header -> 404 Not Found; {'x-vercel-isr':'1'} -> 200 <h1>One</h1>",
+        "provenance: 335a20416 Require trusted secret for path overrides (#15959) introduced the ISR regression and its tests all passed; the fix 71ae51338 adds no test"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Security suite has no case for spoofed x-vercel-isr header",
+      "severity": "P1",
+      "file": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+      "line": 25,
+      "why_it_matters": "The new branch lets anyone who sends `x-vercel-isr: 1` override the rendered path. _isr and _render use the same handler (identical `.vc-config.json` handler `dist/server/entry.mjs`), so the handler cannot tell whether it runs as the ISR function. When the built _render function gets `/api/public?x_astro_path=/api/private` with `x-vercel-isr: 1`, it currently returns `{\"id\":\"private\"}`. Without the header it returns `public`. path-override-security.test.js only covers the no-header case, so it still passes even though the boundary #15959 closed is open again for any client that can set this header. Whether Vercel strips a client-supplied `x-vercel-isr` is a platform guarantee that neither the code nor the tests pin down. A negative test would force that decision into the code, for example by also requiring the `/_isr` pathname or another server-only signal.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In test/path-override-security.test.js, add `it('ignores x_astro_path on _render even with x-vercel-isr header')`. It sends `new Request('https://example.com/api/public?x_astro_path=/api/private', { headers: { 'x-vercel-isr': '1' } })` to the _render function and asserts `body.id === 'public'`. To make it pass, narrow the gate in entrypoint.ts to honor the query param only when `url.pathname === '/_isr'` and `x-vercel-isr === '1'`. Assumption: Vercel invokes the ISR function at the `/_isr` path produced by ISR_PATH. If the maintainers conclude Vercel guarantees the header cannot be spoofed, keep the test but document that platform dependency in a comment beside the branch.",
+      "confidence": 75,
+      "evidence": [
+        "packages/integrations/vercel/src/serverless/entrypoint.ts:25 -- realPath = url.searchParams.get(ASTRO_PATH_PARAM);",
+        "packages/integrations/vercel/test/path-override-security.test.js:33 -- new Request('https://example.com/api/public?x_astro_path=/api/private'),  (no x-vercel-isr header case exists)",
+        "fixtures/isr/.vercel/output/functions/_isr.func/.vc-config.json and _render.func/.vc-config.json both use handler packages/integrations/vercel/test/fixtures/isr/dist/server/entry.mjs",
+        "Probe (tmp/isr-probe.mjs, built serverless-with-dynamic-routes _render.func): no header -> 200 {\"id\":\"public\"}; x-vercel-isr: 1 -> 200 {\"id\":\"private\"}"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Real Vercel platform behavior can't be tested offline: whether the edge or firewall strips or overwrites a client-supplied `x-vercel-isr` header on requests to _render or _isr. The in-process probes cover only the handler logic."
+  ],
+  "testing_gaps": []
+}

@@ -1,0 +1,34 @@
+{
+  "reviewer": "testing",
+  "findings": [
+    {
+      "title": "Controlled-path clearErrors (Form error clearing) has no test",
+      "severity": "P2",
+      "file": "packages/react/src/field/control/FieldControl.tsx",
+      "line": 110,
+      "why_it_matters": "The PR's headline fix is that a programmatic or user change to a controlled Field.Control now clears a stale error (\"a resolved error stayed visible\"), and the controlled path is now the only place `clearErrors(name)` runs for controlled inputs because `onChange` returns early when `isControlled`. No test in the suite puts a controlled Field.Control inside a `<Form errors>`: every new controlled test uses a bare Field.Root, and the Form error-clearing tests (Form.test.tsx ~732/759, FieldControl.test.tsx 'does not clear errors or validate when change is prevented') are all uncontrolled. Deleting line 110 leaves the whole suite green, and controlled forms would then keep showing a server error after the user edits the field. A scratch probe confirmed the current code does clear the error, so the test can be added as-is.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Add to FieldControl.test.tsx: hoist `const SERVER_ERRORS = { message: 'Server error' }` to module scope (an inline object literal re-applies the error each parent render via Form's useValueChanged(externalErrors)), render `<Form errors={SERVER_ERRORS}><Field.Root name=\"message\"><Field.Control value={value} onValueChange={setValue} /><Field.Error /></Field.Root></Form>` from a stateful App with a 'set' button calling setValue('x'). Assert 'Server error' is visible, click 'set' (and separately fireEvent.change the textbox), then assert it is gone. Optionally add an onSubmit-mode case: `required` controlled control, submit to show the valueMissing error, click 'set', assert the error disappears. Both pass against the current head in a scratch run.",
+      "confidence": 75,
+      "evidence": [
+        "packages/react/src/field/control/FieldControl.tsx:110 -- clearErrors(name);",
+        "packages/react/src/field/control/FieldControl.tsx:144-146 -- if (isControlled) { return; }  (onChange no longer clears errors for controlled inputs, so line 110 is the only path)",
+        "grep of packages/react/src for Field.Control with value={...} (multiline) matches only FieldControl.test.tsx and FieldRoot.test.tsx; neither wraps the controlled control in <Form errors>",
+        "Scratch probe (tmp/testing/probe.test.tsx): controlled control in <Form errors={SERVER_ERRORS}> -- typing clears 'Server error'; programmatic set clears a post-submit 'Required' error -- both pass on head"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Registered value is now `String(value)`, and `useFieldControlRegistration.validate` commits `registration.value` on Form submit, so a Field.Root `validate` fn now receives \"5\" rather than 5 on submit for `value={5}`. Before this PR the submit path passed the number and the change path passed a string. The PR body does not mention this contract change and no test pins the submit-time argument type.",
+    "Controlled mode no longer applies the `defaultPrevented` guard (react#9023 workaround). If a consumer calls setValue from a default-prevented input event, the useValueChanged path now clears errors and validates. The only prevented-event test ('does not clear errors or validate when change is prevented') is uncontrolled."
+  ],
+  "testing_gaps": [
+    "The PR says it rejects or rewrites controlled values, but neither case has a direct test. Rejection (`value=\"\"` with a no-op onValueChange: validate not called, no data-filled/data-dirty) and rewrite (for example uppercasing in onValueChange: validate receives the rewritten value) are both untested. Today the only thing guarding this is the double-validation test.",
+    "The PR claims that a pending async validator for the old value can no longer publish after a programmatic change. No test covers this, for example a deferred-promise validate followed by a programmatic setValue, asserting the stale result is dropped.",
+    "The PR says array values also failed dirty-clearing by reference. Only the numeric case is tested. There is no test with an array-valued controlled Field.Control returning to its initial value.",
+    "'does not validate when the change is canceled' only checks that validate is not called. It does not check that a Form error stays visible after details.cancel()."
+  ]
+}

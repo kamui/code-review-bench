@@ -1,0 +1,47 @@
+{
+  "reviewer": "correctness",
+  "findings": [
+    {
+      "title": "Overwrite<any, X> now yields a union, so apps with an `any` context lose arbitrary ctx access after a ctx-extending middleware",
+      "severity": "P2",
+      "file": "packages/server/src/core/internals/utils.ts",
+      "line": 11,
+      "why_it_matters": "With `initTRPC.context<any>()` (or a createContext whose inferred return is `any`), a resolver after `.use(o => o.next({ ctx: { user } }))` can no longer read other ctx properties: `ctx.somethingElse` fails with TS2339 because ctx is now `{ user: string } | { [x: string]: any; ... }`. `any extends object ? A : B` takes both branches, so the new top-level `TType extends object` check turns `Overwrite<any, {user}>` into a union containing the plain `{ user: string }` member. Before, `any extends any` took only the mapped branch, which kept an `any` index signature. ResolveOptions and MiddlewareFunction both compute ctx as `Overwrite<config ctx, _ctx_out>`, so this regresses the ctx merge that the intent says must not break. Handling `any` explicitly before the object check brings back the old single-branch result.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Guard `any` before the object check, e.g. `export type Overwrite<TType, TWith> = 0 extends 1 & TType ? { [K in keyof TType | keyof TWith]: K extends keyof TWith ? TWith[K] : K extends keyof TType ? TType[K] : never } : TType extends object ? ...existing body...`, and add a type test using `initTRPC.context<any>()` with a ctx-extending middleware that reads a non-declared ctx key.",
+      "confidence": 75,
+      "evidence": [
+        "packages/server/src/core/internals/utils.ts:11 -- export type Overwrite<TType, TWith> = TType extends object",
+        "packages/server/src/core/internals/utils.ts:70-71 -- ctx: Simplify<Overwrite<TParams['_config']['$types']['ctx'], TParams['_ctx_out']>>",
+        "tsc (head, scratch): initTRPC.context<any>().create(); t.procedure.use((o) => o.next({ ctx: { user: 'x' } })).query(({ ctx }) => ctx.somethingElse) -> error TS2339: Property 'somethingElse' does not exist on type '{ user: string; } | { [x: string]: any; [x: number]: any; [x: symbol]: any; } | ...'",
+        "tsc (base 2abb2d5c, same scratch file): no error for the same code"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Doc comment and dead `: TType` branch say TType is kept when TWith is never, but Overwrite<X, never> is never",
+      "severity": "P3",
+      "file": "packages/server/src/core/internals/utils.ts",
+      "line": 29,
+      "why_it_matters": "The new doc comment says TType is replaced by TWith 'unless TWith is never', and line 29's `: TType` fallback seems to back that up. But `TWith extends any` is a distributive conditional, so a `never` TWith produces `never` and the `: TType` branch can never be reached (checked with tsc: Overwrite<string, never> is never). Nothing in the current code hits this, but a maintainer who trusts the comment could rely on TType being preserved.",
+      "autofix_class": "advisory",
+      "owner": "downstream-resolver",
+      "requires_verification": false,
+      "suggested_fix": "Either reword the comment to say the result is `never` when TWith is never and replace the dead `: TType` with `: never`, or, if keeping TType is the intended behavior, add `[TWith] extends [never] ? TType : ...` as an explicit non-distributive check first.",
+      "confidence": 50,
+      "evidence": [
+        "packages/server/src/core/internals/utils.ts:26-29 -- ? TWith extends any ? TWith : TType",
+        "packages/server/src/core/internals/utils.ts:8-9 -- Otherwise it will overwrite the entire TType with TWith, unless TWith is never."
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Array/tuple inputs followed by .use() still go through the key-by-key mapped branch (Overwrite<string[], string[]> is not identical to string[] and tuples lose their shape), though the result is still assignable to string[]; this matches base behavior."
+  ],
+  "testing_gaps": [
+    "The regression test declares `voidWithMiddleware` but never asserts on it. It also has no case for optional primitive input (`z.string().optional()`), which the new distributive branch now correctly infers as `string | undefined`."
+  ]
+}

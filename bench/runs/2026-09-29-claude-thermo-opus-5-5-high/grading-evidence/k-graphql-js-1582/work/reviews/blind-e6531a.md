@@ -1,0 +1,25 @@
+# Review blind-e6531a
+
+### Item 1
+Location: src/error/__tests__/GraphQLError-test.js:57-64
+Claim: In `src/error/__tests__/GraphQLError-test.js:57-64`, the test "creates new stack if original error has no stack" used to pass `{ message: 'original' }` as the original error. To satisfy Flow's `?Error` parameter, the PR changed that to `new Error('original')`. A real V8 `Error` always has a `stack`, so the constructor now takes the `originalError.stack` branch at `src/error/GraphQLError.js:195-200`. That is the same branch the preceding test, "uses the stack of an original error", already covers. The fallback this test is named for is no longer exercised with an original error present. The assertion only checks that `e.stack` is a string, so it cannot notice. I checked this with a scratch script against the real module: with the PR's fixture, `e.stack === original.stack` is `true`. The fix is to keep a real `Error` but make it stackless (`delete original.stack`, which I also checked at runtime), and to assert `e.stack !== original.stack`. If Flow rejects the `delete`, fall back to a local `const original: any = { message: 'original' }`, the same idiom the PR already uses in `locatedError-test.js`. Full evidence and the worked test are in `02_error-and-jsutils-tests.md` (Finding 2.1).
+Consequence: —
+Fix: —
+
+### Item 2
+Location: src/error/GraphQLError.js:25
+Claim: In `src/error/GraphQLError.js:25`, the PR widens `nodes` in the `declare class` constructor to `$ReadOnlyArray<ASTNode> | ASTNode | void | null`. The widening is correct, and the runtime already treats `null` like `undefined`. But the actual `export function GraphQLError` signature at line 94 still says `… | void`. The file now states two different contracts for one parameter, and the declare/implementation pair already drifted on `originalError`, so this adds a second drift. The longhand `| void | null` also sits among siblings that all use Flow's `?T` shorthand. The author's stated goal was to make `nodes` consistent with the other arguments, so the consistent spelling is `nodes?: ?($ReadOnlyArray<ASTNode> | ASTNode)`, and it should be written in both places. This is behavior-preserving and removes drift instead of adding it. Worked proposal in `01_error-constructor-typing.md` (Finding 1.1).
+Consequence: —
+Fix: —
+
+### Item 3
+Location: src/error/__tests__/printError-test.js:62-80
+Claim: In `src/error/__tests__/printError-test.js:62-80`, the Flow conversion turns a one-liner per document into a three-line extract, refine and index sequence written twice. It names the results `opA`/`opB`, although the next line's `invariant` asserts they are object type definitions, not operations. It then adds a separate `invariant(fieldA && fieldB)` on line 80. Flow types array index reads as `T`, not `?T`, so that `invariant` and the `opA &&`/`opB &&` conjuncts refine nothing. The same no-op guards appear in the new shared fixture at `src/error/__tests__/GraphQLError-test.js:24-26` (`operationNode &&` and the whole `invariant(fieldNode)`). A small local helper, `firstFieldType(doc)`, would do the needed refinements once: the `kind` check, and the `fields` check because `fields` is optional in the AST type. That deletes the duplicated block and the dead guards and restores the original `fieldTypeA`/`fieldTypeB` names. This is a reasoned claim: Flow was not run. Worked code in `02_error-and-jsutils-tests.md` (Finding 2.2).
+Consequence: —
+Fix: —
+
+### Item 4
+Location: src/jsutils/__tests__/inspect-test.js:31-32
+Claim: In `src/jsutils/__tests__/inspect-test.js:31-32`, the PR adds an unexplained `// $FlowFixMe` only because Flow's lib def rejects `String.raw` as a template tag. `String.raw` is there only to avoid one backslash escape. Writing `expect(inspect('"')).to.equal('"\\""');` removes the tag and the suppression. It also stops the suppression from hiding any future type error in the `inspect` call on that line. There is precedent in `schemaPrinter-test.js:178`, which is why this is minor. If the suppression stays, it should give a reason, as `objectValues.js` and `isInteger.js` do. Details in `02_error-and-jsutils-tests.md` (Finding 2.3).
+Consequence: —
+Fix: —

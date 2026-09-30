@@ -1,0 +1,33 @@
+{
+  "reviewer": "testing",
+  "findings": [
+    {
+      "title": "Refactored credential-gating helpers have no offline test",
+      "severity": "P2",
+      "file": "internal/backup.go",
+      "line": 438,
+      "why_it_matters": "The PR says behaviour is unchanged, but the offline suite (the part CI actually runs without provider credentials) never exercises the rewritten credential-gating branches. That covers the partial user/password config error in checkUserAndPasswordProvider, the defined-but-blank token error in checkJustTokenProvider, the BitBucket API-token vs OAuth de-duplication in checkProvidersDefined, and the env-var-to-provider dispatch table in collectProviderBackupResults. The only offline tests are TestCheckProvidersFailureWhenNoneDefined (count==0) and TestGitHubEnvs (orgs without token). Every other path goes through live-provider tests that skip. I traced the new code by hand and it matches the old code, so nothing is broken today. But a copy error in these new helpers, such as a swapped provider func in the table or an inverted `foundCount` comparison, would still pass CI. These helpers are now small, pure functions that read env vars, so characterization tests are cheap.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Add a table-driven TestCheckProvider in internal/backup_test.go using t.Setenv plus unsetEnvVarsExcept([]string{envPath}). Cases: (a) AzureDevOps with only envAzureDevOpsUserName set returns (0, err containing \"AzureDevOps parameter 'AZURE_DEVOPS_PAT' is not defined\"), using the real env constant name; (b) AzureDevOps with both set returns (1, nil); (c) GitHub with envGitHubToken=\"  \" returns (0, err containing \"is not defined\"); (d) GitHub token set returns (1, nil). Also add checkProvidersDefined cases where both BitBucket API-token and OAuth vars are set, and where only the OAuth vars are set; each should return nil.",
+      "confidence": 50,
+      "evidence": [
+        "internal/backup.go:438 -- func checkUserAndPasswordProvider(provider string, outputErrs *strings.Builder) int {",
+        "internal/backup.go:414 -- func checkJustTokenProvider(provider string, outputErrs *strings.Builder) int {",
+        "internal/backup.go:114-129 -- tokenProviders table {envGiteaToken, Gitea}, {envGitHubToken, GitHub}, ... dispatched via p.run(backupDir)",
+        "internal/backup_test.go:787-802 -- TestCheckProvidersFailureWhenNoneDefined is the only direct checkProvidersDefined test and covers only the count==0 path",
+        "grep of internal/*_test.go: no test references checkProvider, collectProviderBackupResults, bitbucketAPITokenDefined, or bitbucketOAuthDefined"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "The PR says 'log output unchanged' for displayStartupConfig, but no test captures logger output. I checked equivalence by hand only: the GitLab LFS line keeps the 'Gitlab' casing, the compare-method strings come from compareTypeRefs/compareTypeClone ('refs'/'clone'), and BitBucket's strings.ToLower(x)==\"refs\" became EqualFold, which is equivalent for an ASCII constant. Any future drift in this output will not be caught.",
+    "Run's scheduled paths (interval/cron through runScheduledJob, including the global `job` assignment that runProviderBackups later reads for NextRun) are only exercised by manual/live runs. No test covers the scheduler branches before or after this diff."
+  ],
+  "testing_gaps": [
+    "backupStatusTitle (internal/notify.go:31) is a new pure function that sets the Telegram/ntfy/Slack titles, and it has no test. A 4-row table test would pin the three titles byte-for-byte, including the leading U+FE0F variation selectors I checked against main: (1,0)->succeeded, (1,1)->errors, (0,1)->failed, (0,0)->failed.",
+    "TestFailureIfGitBackupDirUndefined (internal/backup_test.go:819) uses require.Errorf with the message as a format string, so it passes on any error from Run. That includes logRequestTimeout or checkProvidersDefined failures that now come from separate helpers. It should assert require.ErrorContains(t, err, envGitBackupDir+\" must be set\") so the refactored validateStartupConfig path is the one actually proven."
+  ]
+}

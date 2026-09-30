@@ -1,0 +1,32 @@
+{
+  "reviewer": "security",
+  "findings": [
+    {
+      "title": "parseBody after c.req.formData() fails or returns corrupted data",
+      "severity": "P1",
+      "file": "src/utils/body.ts",
+      "line": 143,
+      "why_it_matters": "Any app where middleware or the handler calls `c.req.formData()` before `c.req.parseBody()` now breaks. For multipart requests parseBody throws `TypeError: Failed to parse body as FormData.` (an unhandled 500). For urlencoded requests it silently returns attacker-shaped garbage keys such as `{\"------formdata-undici-...\\r\\nContent-Disposition: form-data; name\": \"\\\"foo\\\"...\"}` instead of `{foo: 'bar'}`. The cause is that parseFormData now always calls `request.arrayBuffer()`. When only `formData` is cached, `#cachedBody` rebuilds the bytes with `new Response(formData).arrayBuffer()`, which re-serializes the data as multipart under a new boundary. Those bytes are then parsed against the original Content-Type (the old boundary, or urlencoded). Before this change parseBody called `request.formData()` and got the cached FormData back. The code also stores the rejected promise in `bodyCache.formData`, so later `c.req.formData()` calls fail too. This breaks the intent's promise not to regress c.req body-caching behavior. Reusing an existing `bodyCache.formData` first, as validator.ts already does, restores the old behavior.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In parseFormData, when `request instanceof HonoRequest && request.bodyCache.formData` is set, reuse the cached FormData: `formData = await request.bodyCache.formData`. This mirrors validator.ts:115-116. Only fall back to `arrayBuffer()` + `bufferToFormData` (and populate the cache) when no FormData is cached. Add a regression test that calls `c.req.formData()` and then `c.req.parseBody()` for both multipart and urlencoded bodies.",
+      "confidence": 100,
+      "evidence": [
+        "src/utils/body.ts:143 -- const arrayBuffer = await (request as Request).arrayBuffer()",
+        "src/request.ts:228-235 -- const anyCachedKey = Object.keys(bodyCache)[0] ... return new Response(body)[key]()  (FormData re-serialized with a fresh multipart boundary)",
+        "src/utils/body.ts:144 -- bufferToFormData(arrayBuffer, headers.get('Content-Type') || '')  (parsed against the ORIGINAL boundary / urlencoded type)",
+        "src/utils/body.ts:147 -- request.bodyCache.formData = formDataPromise as unknown as FormData  (overwrites good cached FormData with the rejected promise)",
+        "Empirical (esbuild+node against HEAD): handler `await c.req.formData(); await c.req.parseBody()` -> multipart: 500 'TypeError: Failed to parse body as FormData.'; urlencoded: 200 {\"------formdata-undici-097223617106\\r\\nContent-Disposition: form-data; name\":\"\\\"foo\\\"\\r\\n\\r\\nbar\\r\\n------formdata-undici-097223617106--\\r\\n\"}",
+        "Base behavior: `const formData = await (request as Request).formData()` -> HonoRequest.formData() -> #cachedBody('formData') returns the cached FormData directly"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "parseBody's form path now keeps the whole raw body in `bodyCache.arrayBuffer` and also holds the parsed FormData, so a request retains about 2x the body's memory for its lifetime, where the old native `formData()` held one copy. Only matters for apps that accept large bodies without the bodyLimit middleware."
+  ],
+  "testing_gaps": [
+    "No test covers calling `c.req.formData()` before `c.req.parseBody()`, or `parseBody()` followed by `c.req.formData()`/`cloneRawRequest`, even though the new code changes which body cache key comes first (arrayBuffer now precedes formData)."
+  ]
+}

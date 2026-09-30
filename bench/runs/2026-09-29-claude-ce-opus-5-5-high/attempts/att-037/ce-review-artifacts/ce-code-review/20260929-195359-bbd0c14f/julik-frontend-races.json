@@ -1,0 +1,28 @@
+{
+  "reviewer": "julik-frontend-races",
+  "findings": [
+    {
+      "title": "Remounted controlled control keeps stale data-filled for empty value",
+      "severity": "P3",
+      "file": "packages/react/src/field/control/FieldControl.tsx",
+      "line": 99,
+      "why_it_matters": "If a controlled Field.Control unmounts, its value is cleared to '' while it is unmounted, and then it remounts inside the same Field.Root, the field still reports data-filled (and data-dirty) even though the input is empty. Styling that keys off data-filled, such as a floating label, stays in the raised position. Field.Root state outlives the control, and useValueChanged treats the remount as its first render, so it never fires. The new mount effect only ever sets filled to true. The base mount effect cleared it (`hasExternalValue && valueProp === '' -> setFilled(false)`), so this narrow path regressed. A scratch jsdom test confirmed the result: after typing 'a', unmounting, calling setValue(''), and remounting, data-filled is still ''.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In the mount-time layout effect, when the control is controlled, set filled from the controlled value in both directions. For example: `if (isControlled) { setFilled(serializedValue !== undefined && serializedValue !== ''); } else if (validation.inputRef.current?.value) { setFilled(true); }`. Keep the deps mount-only by reading isControlled/serializedValue through a ref or a stable callback. Assumption: leave dirty on remount unchanged, as it was on base.",
+      "confidence": 50,
+      "evidence": [
+        "packages/react/src/field/control/FieldControl.tsx:99-103 -- useIsoLayoutEffect(() => { if (validation.inputRef.current?.value) { setFilled(true); } }, [validation.inputRef, setFilled]);",
+        "Removed in diff (base FieldControl.tsx): `} else if (hasExternalValue && valueProp === '') { setFilled(false); }`",
+        "packages/react/src/internals/useValueChanged.ts:7-11 -- valueRef is initialized to the mount value, so the callback never fires on (re)mount",
+        "Scratch test (tmp/julik-frontend-races/remount.test.tsx): after type 'a' -> unmount -> setValue('') -> remount, root data-filled='' and data-dirty=''"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [],
+  "testing_gaps": [
+    "The PR says a programmatic controlled change now stops a pending async validator for the old value from publishing (validation.change -> commit bumps validationCommitIdRef). No test covers this. Add one: an async validate is pending for 'a', setValue('') comes from code, and the late result must not show."
+  ]
+}

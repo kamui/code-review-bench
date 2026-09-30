@@ -1,0 +1,30 @@
+{
+  "reviewer": "correctness",
+  "findings": [
+    {
+      "title": "parseBody breaks after c.req.formData() already consumed body",
+      "severity": "P1",
+      "file": "src/utils/body.ts",
+      "line": 126,
+      "why_it_matters": "A handler or middleware that calls `await c.req.formData()` and later `c.req.parseBody()` now fails. For multipart it throws `Failed to parse body as FormData.`; for urlencoded it silently returns a garbage object whose key is the multipart text. Base returned `{ message: 'hello' }` in both cases. The cause: parseFormData now calls `request.arrayBuffer()`, and HonoRequest's #cachedBody serves that by re-serializing the cached FormData via `new Response(formData).arrayBuffer()`. That produces multipart bytes with a fresh boundary, which are then parsed against the original request Content-Type (old boundary, or urlencoded). The failed/garbage promise is also written back into `bodyCache.formData`, so a later `c.req.formData()` in the same request is poisoned too. Reusing an existing `bodyCache.formData`, the same short-circuit validator.ts already uses (`if (c.req.bodyCache.formData) formData = await c.req.bodyCache.formData`), restores the old cache-hit behavior.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "At the top of parseFormData, when `request instanceof HonoRequest && request.bodyCache.formData` is set, use `const formData = await request.bodyCache.formData` and skip the arrayBuffer/bufferToFormData path. Only read arrayBuffer and set bodyCache.formData when no FormData is cached. This mirrors validator.ts:115-116. Add a test that calls c.req.formData() then c.req.parseBody() for both multipart and urlencoded.",
+      "confidence": 100,
+      "evidence": [
+        "src/utils/body.ts:126 -- const arrayBuffer = await (request as Request).arrayBuffer()",
+        "src/request.ts:228-235 -- const anyCachedKey = Object.keys(bodyCache)[0]; if (anyCachedKey) { return (bodyCache[anyCachedKey]).then((body) => { ... return new Response(body)[key]() }) }",
+        "src/utils/body.ts:127-130 -- bufferToFormData(arrayBuffer, headers.get('Content-Type') || ''); request.bodyCache.formData = formDataPromise (overwrites the valid cached FormData with the failing promise)",
+        "src/validator/validator.ts:115-116 -- if (c.req.bodyCache.formData) { formData = await c.req.bodyCache.formData } (existing reuse pattern)",
+        "Probe at HEAD (app.request with FormData body; handler: await c.req.formData(); await c.req.parseBody()): multipart -> 'ERR Failed to parse body as FormData.'; urlencoded -> {\"------formdata-undici-...\\r\\nContent-Disposition: form-data; name\":\"\\\"message\\\"...\"}",
+        "Same probe at base 9728702 (git archive): multipart -> {\"message\":\"hello\"}; urlencoded -> {\"message\":\"hello\"}"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [],
+  "testing_gaps": [
+    "No test covers calling c.req.formData() (or any other cached body read) before c.req.parseBody(). The new arrayBuffer-based parseFormData depends on HonoRequest body-cache interplay that the existing suite does not test; the regression above passes all 144 tests in body/validator/buffer/request suites."
+  ]
+}

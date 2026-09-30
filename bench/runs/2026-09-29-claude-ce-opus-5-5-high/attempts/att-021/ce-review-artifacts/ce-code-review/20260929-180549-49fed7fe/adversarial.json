@@ -1,0 +1,51 @@
+{
+  "reviewer": "adversarial",
+  "findings": [
+    {
+      "title": "Client-sent x-vercel-isr header reopens path-override bypass on _render",
+      "severity": "P1",
+      "file": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+      "line": 24,
+      "why_it_matters": "Anyone can reopen the untrusted path override that #15959 closed. They only need to add the plain request header `x-vercel-isr: 1` and `?x_astro_path=<target>` to a request that lands on the regular `_render` function. `_render` and `_isr` are built from the same entryFile, and nothing ties the new branch to the ISR function or to a secret. So a request routed as `/api/public` renders `/api/private`, which defeats Vercel-side path controls (vercel.json rules, firewall and protection keyed on the public path). I reproduced this in-process against the already-built `_render` fixture. The one thing I could not check offline is whether Vercel's edge strips a client-supplied `x-vercel-isr` header. Restricting the branch to the ISR function (for example by also requiring the invoked pathname to be `/_isr`, or by baking an `isIsr` flag into the ISR build) keeps ISR working and closes the header-only bypass.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Honor the query param only when the ISR function itself is being invoked, e.g. `} else if (url.pathname === '/_isr' && request.headers.get('x-vercel-isr') === '1') {` (assumes Vercel invokes the ISR function with pathname `/_isr`, which the ISR_PATH comment in index.ts implies), or preferably emit a build-time flag for the `_isr` function (a separate entry or virtual config value) so `_render` never honors `x_astro_path`. Add a case to test/path-override-security.test.js: `_render.fetch(new Request('https://example.com/api/public?x_astro_path=/api/private', { headers: { 'x-vercel-isr': '1' } }))` must return id 'public'.",
+      "confidence": 75,
+      "evidence": [
+        "packages/integrations/vercel/src/serverless/entrypoint.ts:24 -- } else if(request.headers.get('x-vercel-isr') === '1') {",
+        "packages/integrations/vercel/src/serverless/entrypoint.ts:25 -- realPath = url.searchParams.get(ASTRO_PATH_PARAM);",
+        "packages/integrations/vercel/src/index.ts:452,474 -- builder.buildServerlessFolder(entryFile, NODE_PATH, ...) and builder.buildISRFolder(entryFile, '_isr', ...) share the same entry, so _render contains the new branch (confirmed in built chunk entrypoint_Bvfzwt1s.mjs:13997)",
+        "In-process repro (PRERENDER=true) against test/fixtures/serverless-with-dynamic-routes _render: Request('https://example.com/api/public?x_astro_path=/api/private') -> {\"id\":\"public\"}; same request with header x-vercel-isr: 1 -> {\"id\":\"private\"}; also '/nonexistent?x_astro_path=/api/private' + header -> 200 {\"id\":\"private\"}",
+        "packages/integrations/vercel/test/path-override-security.test.js asserts exactly this bypass is closed ('ignores untrusted x_astro_path query param on _render') but does not send x-vercel-isr, so the suite stays green",
+        "Platform assumption (unverifiable offline): Vercel does not strip or overwrite a client-supplied x-vercel-isr request header before invoking a non-prerender function"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Direct /_isr?x_astro_path=<excluded route> renders ISR-excluded routes and skips edge middleware",
+      "severity": "P2",
+      "file": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+      "line": 25,
+      "why_it_matters": "The ISR function now renders whatever path is in `x_astro_path` without checking that the path is an ISR route. If a client can call `/_isr?x_astro_path=/two` directly (the ISR fixture's routes start with `handle: filesystem`, and Vercel presumably sets x-vercel-isr on every invocation of the prerender function), routes that were explicitly excluded from ISR get rendered by the ISR function and cached for `expiration` seconds under that key. With middlewareMode 'edge', those excluded routes are normally reached only through `_middleware`, so this path skips the edge middleware that guards them. This is platform-dependent: I could not confirm offline that `/_isr` is directly reachable or that the header is set on direct hits.",
+      "autofix_class": "advisory",
+      "owner": "human",
+      "requires_verification": true,
+      "suggested_fix": "In the ISR branch, after rewriting, reject the override when the matched route is excluded from ISR or is not an ISR route (e.g. bake the ISR-excluded route patterns into the _isr function config at build time and return 404 when app.match on realPath hits one), assuming ISR routes are exactly the non-excluded, non-prerendered routes emitted with dest ISR_PATH in index.ts.",
+      "confidence": 50,
+      "evidence": [
+        "packages/integrations/vercel/src/serverless/entrypoint.ts:25 -- realPath = url.searchParams.get(ASTRO_PATH_PARAM);",
+        "packages/integrations/vercel/src/index.ts:476-490 -- only non-excluded routes get dest ISR_PATH; excluded ones go to `_middlewareEntryPoint ? MIDDLEWARE_PATH : NODE_PATH`",
+        "test/fixtures/isr/.vercel/output/config.json -- routes begin with { \"handle\": \"filesystem\" }, so the _isr function path may be matched directly",
+        "test/fixtures/isr/astro.config.mjs -- exclude: [\"/two\", \"/excluded/[dynamic]\", \"/excluded/[...rest]\", /^\\/api/]"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Whether Vercel strips or overwrites client-supplied `x-vercel-isr` headers at the edge is undocumented and could not be verified offline. The whole trust model of this fix depends on it, and the PR gives no evidence either way."
+  ],
+  "testing_gaps": [
+    "path-override-security.test.js has no case that sends `x-vercel-isr: 1` to `_render` with `?x_astro_path=`, and nothing tests that `_isr` still honors the param. The ISR regression this PR fixes could come back unnoticed, and so could the bypass it risks reopening."
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "findings": [
+    {
+      "report_path": "summary.md",
+      "title": "The lock makes the quit-sentinel protocol deletable, but the PR layers the lock on top of it and leaves a now-false comment",
+      "quote": "### 1. The lock makes the quit-sentinel protocol deletable, but the PR layers the lock on top of it and leaves a now-false comment\n\n`lib/batcher/batcher.go:243-252` (with the sentinel at `:60` and `:208-211`). `Shutdown` still stops `commitLoop` by sending an in-band `{quit: true}` request, and the comment at `:248-250` explains why: closing `b.in` \"will cause write to closed channel in Commit\". This PR is exactly what makes that false. Every send on `b.in` now happens under `admitMu`, after checking `b.closed`, and `Shutdown` closes `b.closed` under the same lock. So `Commit` can no longer write to a closed `b.in`.\n\nWhat remains is two overlapping mechanisms: a mutex that does the real ordering, and a sentinel that needs a mode flag (`quit bool`) on every real `request` plus a special-case branch in `commitLoop`. The comment actively misleads the reader about which of the two provides safety.\n\nThe remedy is to replace the sentinel send with `close(b.in)` under `admitMu`. That lets you delete the `quit` field, the `if req.quit` branch and the stale comment, and have `commitLoop` exit on `req, ok := <-b.in; !ok`. Channel close semantics then guarantee that every admitted request is drained before the loop exits, which is exactly the invariant issue #9687 asked for. Any future unguarded send would panic loudly instead of reproducing today's silent hang or lost upload. `Shutdown` also stops blocking on a full buffer while holding the lock.\n\nI verified this in a scratch copy through `go test -overlay`: `go test -count=3 -race` passed the whole package. Once `b.closed` is only read under the lock, it could also become a plain `bool` (reasoned, not executed). Full diff and reasoning: `01_batcher_shutdown_protocol.md`, Finding 1.1.",
+      "file": "lib/batcher/batcher.go",
+      "line_start": 243,
+      "line_end": 252
+    },
+    {
+      "report_path": "summary.md",
+      "title": "`Commit` threads manual Lock/Unlock through its body, with an early-return unlock and unrelated work inside the critical section",
+      "quote": "### 2. `Commit` threads manual Lock/Unlock through its body, with an early-return unlock and unrelated work inside the critical section\n\n`lib/batcher/batcher.go:267-281`. The admission critical section is spread across `Commit`: a `Lock` at the top, an extra `Unlock` in the `select` early-return branch, and a final `Unlock` after the send. Any future early return added in between leaks the lock and deadlocks both later `Commit` calls and `Shutdown`. The locked region also contains `fs.Debugf`, which formats the message and calls the backend `Fs`'s `String()`, and a `make(chan \u2026)`, neither of which is part of admission.\n\nThe remedy is to extract `func (b *Batcher) admit(req request) error` whose entire body is `Lock; defer Unlock; check closed; send`, documented with the invariant it protects. `Commit` then only builds the request, calls `admit`, and waits on the response. This was verified as part of the same scratch redesign in finding 1. Worked code: `01_batcher_shutdown_protocol.md`, Finding 1.2.",
+      "file": "lib/batcher/batcher.go",
+      "line_start": 267,
+      "line_end": 281
+    },
+    {
+      "report_path": "summary.md",
+      "title": "The regression test depends on where a debug log line sits, and asserts only one of the two legal outcomes of the race",
+      "quote": "### 3. The regression test depends on where a debug log line sits, and asserts only one of the two legal outcomes of the race\n\n`lib/batcher/batcher_test.go:22-35`, `:239-311`, which depends on `batcher.go:274`. The test pauses `Commit` mid-admission by setting the process-global log level to Debug and passing a `blockingStringer` as the batcher's logging identity. It relies on `fs.Debugf` inside `Commit` calling `String()` between the closed-check and the send. Nothing on the production side records that dependency.\n\nI moved the log line out of the critical section, which is a behaviour-preserving cleanup that finding 2 would naturally invite. Both subtests then failed at `:295` with `batcher is shutting down`, even though that is the correct result for a commit that loses the race. Moving the log line after the send instead would make the test pass on the unfixed code too (reasoned from control flow). The deeper issue is the assertion: `require.NoError` treats one interleaving as the only correct result, while the real contract is \"processed or explicitly rejected, never hung or dropped\". The test also mutates global config mid-test, and on fixed code its 100 ms wait always runs out, so it acts as a fixed sleep.\n\nThe remedy is to assert the either/or invariant instead. Add a comment at the production `Debugf` (or inside `admit`) naming the test that depends on it. Consider adding a bounded, hook-free stress test modelled on the maintainer's 8-concurrent-Commit reproduction. Details and verification: `02_regression_test.md`, Finding 2.1.",
+      "file": "lib/batcher/batcher_test.go",
+      "line_start": 239,
+      "line_end": 311
+    }
+  ],
+  "questions": []
+}

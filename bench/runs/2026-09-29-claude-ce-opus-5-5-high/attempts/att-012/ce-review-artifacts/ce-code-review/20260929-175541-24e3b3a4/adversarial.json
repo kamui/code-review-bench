@@ -1,0 +1,52 @@
+{
+  "reviewer": "adversarial",
+  "findings": [
+    {
+      "title": "UTC- users now see Python-supplied value/min/max one day early",
+      "severity": "P1",
+      "file": "bokehjs/src/lib/models/widgets/date_picker.ts",
+      "line": 83,
+      "why_it_matters": "_unlocal_date receives two different representations: numeric UTC-midnight ms timestamps (every Python-side value/min_date/max_date, serialized by convert_datetime_type) and local-midnight strings produced by _on_select via toDateString(). The old code was correct for the numeric form everywhere and wrong for the string form in UTC+. The new unconditional shift fixes the string form but breaks the numeric form for every UTC- user (all of the Americas, Pago Pago etc.): the initial date, any date set from Python/server, and the min/max bounds all render one day early. With min_date shifted a day early users can pick a date before the allowed minimum; with max_date shifted a day early the real last allowed day is disabled. This moves the #9129 bug from UTC+ to UTC- and breaks the stated intent of not regressing UTC- users or min/max bounds.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Branch on the input representation instead of always shifting. Assumption: numbers are UTC-midnight ms from Python; strings are local dates from toDateString(). E.g.\n\n_unlocal_date(value: string | number): Date {\n  const date = new Date(value)\n  if (typeof value === \"number\")\n    return new Date(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())\n  return new Date(date.getFullYear(), date.getMonth(), date.getDate())\n}\n\nand call it as this._unlocal_date(this.model.value) etc. (ISO-only strings like \"2019-09-20\" set from BokehJS would parse as UTC and need a regex branch if they are to be supported). Verified in node: correct date for both representations in UTC, Europe/Paris, America/Los_Angeles, Pacific/Kiritimati, Pacific/Pago_Pago.",
+      "confidence": 100,
+      "evidence": [
+        "bokehjs/src/lib/models/widgets/date_picker.ts:83: date.setTime(date.getTime() - timeOffsetInMS)",
+        "Callers: date_picker.ts:68 `defaultDate: this._unlocal_date(new Date(this.model.value))`, :70 minDate, :71 maxDate -- all run on initial render with Python-supplied values.",
+        "bokeh/util/serialization.py:183-184 serializes a Python date as UTC-midnight ms: `return (dt.datetime(*obj.timetuple()[:6]) - DT_EPOCH).total_seconds() * 1000`.",
+        "Scenario: DatePicker(value=date(2019,9,20)) -> JS receives 1568937600000 (2019-09-20T00:00Z). In America/Los_Angeles getTimezoneOffset()=420, so setTime subtracts 7h -> 2019-09-19T17:00Z -> toISOString().substr(0,10)='2019-09-19' -> Pikaday shows Thu Sep 19 2019.",
+        "Node reproduction (scratch script, TZ-varied): TZ=America/Los_Angeles python date(2019,9,20)->ms old: Fri Sep 20 2019 | new: Thu Sep 19 2019; TZ=Pacific/Pago_Pago same regression; TZ=Europe/Paris string 'Mon Sep 16 2019' old: Sun Sep 15 | new: Mon Sep 16 (the intended fix).",
+        "Same path applies to min_date/max_date: a UTC- user's allowable range becomes [min-1, max-1]."
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "New DatePicker tests pass identically with or without the fix",
+      "severity": "P2",
+      "file": "tests/integration/widgets/test_datepicker.py",
+      "line": 462,
+      "why_it_matters": "The bug and the change are both functions of the browser's timezone offset, but the integration tests run in whatever TZ the CI browser has (nothing in the repo pins one; CI runners are normally UTC). At offset 0 the new setTime shift is a no-op, so the tests pass for the old buggy code, the new code, and the UTC- regression above alike. test_basic also never asserts the initially displayed input value, which is exactly the path that regresses for UTC- users. The tests therefore give green signal for a change they do not exercise.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Add a displayed-value assertion for the initial render (e.g. assert the .bk-input value == 'Fri Sep 20 2019' in test_basic) and run the DatePicker tests with the browser forced into a non-UTC zone on both sides (e.g. launch Chrome with TZ=America/Los_Angeles and TZ=Europe/Paris, or parametrize). Additionally add a BokehJS unit test for _unlocal_date that feeds both a UTC-ms number and a toDateString() string; unit tests can stub Date.prototype.getTimezoneOffset if the runner TZ cannot be changed.",
+      "confidence": 75,
+      "evidence": [
+        "tests/integration/widgets/test_datepicker.py:462: assert el.get_attribute('value') == 'Mon Sep 16 2019'",
+        "test_basic (lines 436-444) only asserts the label text and console errors; no assertion on the rendered date from value=datetime(2019, 9, 20).",
+        "No TZ configuration found: grep for TZ/timezone in .travis.yml, ci/, scripts/, bokeh/_testing returns nothing relevant.",
+        "Node run with TZ=UTC: old and new _unlocal_date produce identical output for every input (number and string), so a UTC-hosted Selenium run cannot distinguish them."
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Date properties accept full datetimes (validate allows datetime.date subclasses and transform does not truncate), which serialize with a time component. With the new shift, a UTC+ user sees the next day when the UTC time is >= 24h minus their offset: node shows datetime 2019-09-20T23:00Z rendering as Sat Sep 21 in Europe/Paris (old: Fri Sep 20), and the tests' own max_date=datetime.utcnow() renders as tomorrow in Pacific/Kiritimati after 10:00 UTC. Whether a datetime's UTC or local calendar date is intended is ambiguous, but the behaviour changed.",
+    "A null/None value now renders as Wed Dec 31 1969 instead of Thu Jan 01 1970 in UTC- zones; both are wrong. The root issue is that value is unguarded, which predates this PR."
+  ],
+  "testing_gaps": [
+    "No BokehJS unit test covers _unlocal_date or the representation mismatch between numeric UTC-ms values from Python and toDateString() strings from _on_select."
+  ]
+}

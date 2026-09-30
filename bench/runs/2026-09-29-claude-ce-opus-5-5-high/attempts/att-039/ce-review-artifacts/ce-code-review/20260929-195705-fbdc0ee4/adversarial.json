@@ -1,0 +1,50 @@
+{
+  "reviewer": "adversarial",
+  "findings": [
+    {
+      "title": "Controlled mode bypasses prevented-change guard, clearing server errors",
+      "severity": "P2",
+      "file": "packages/react/src/field/control/FieldControl.tsx",
+      "line": 144,
+      "why_it_matters": "When a change event is default-prevented (the React #9023 workaround), an uncontrolled Field.Control still skips clearErrors and validation. A controlled one now does not. The early `if (isControlled) return;` skips the `defaultPrevented` check, onValueChange still fires, and a typical `onValueChange={setValue}` updates the value. The useValueChanged layout effect then calls clearErrors(name) and validation.change() without asking whether the originating event was prevented. The Form server error disappears and the validator runs, which is exactly what the existing 'does not clear errors or validate when change is prevented' test forbids. That test only covers uncontrolled mode, so it stays green. Recording the prevented or canceled state in a ref inside onChange and consuming it in the useValueChanged callback carries the guard over to the controlled path.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In onChange, before the controlled early return, set a ref such as `skipNextSyncRef.current = event.nativeEvent.defaultPrevented || details.isCanceled`. In the useValueChanged callback, when the ref is set, still update dirty and filled but skip clearErrors(name) and validation.change(), then reset the ref. Add a controlled variant of the 'does not clear errors or validate when change is prevented' test that uses `value`/`onValueChange={setValue}` and a stable `errors` object.",
+      "confidence": 75,
+      "evidence": [
+        "packages/react/src/field/control/FieldControl.tsx:144 -- if (isControlled) { return; }  (runs before the `if (!event.nativeEvent.defaultPrevented && !details.isCanceled)` guard at :153)",
+        "packages/react/src/field/control/FieldControl.tsx:105-114 -- useValueChanged(serializedValue, () => { ... clearErrors(name); ... validation.change(serializedValue); }) has no knowledge of whether the originating event was prevented",
+        "Base (30b8ea200) controlled path: onValueChange -> setDirty/setFilled -> `if (!event.nativeEvent.defaultPrevented) { clearErrors(name); validation.change(inputValue); }`, so a controlled prevented change never cleared errors or validated",
+        "Scratch jsdom test (the existing prevented-change test made controlled: useState + onValueChange={setValue}, stable `errors={{message:'Server error'}}` object, capture-phase preventDefault on 'input'): result `value=a validated=1 serverErrorPresent=false`. The existing uncontrolled test expects validate not called and 'Server error' still shown.",
+        "packages/react/src/field/control/FieldControl.test.tsx: 'does not clear errors or validate when change is prevented' renders `<Field.Control onValueChange={handleValueChange} />` (uncontrolled only), so the regression passes CI"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Remounted controlled control with empty value keeps stale data-filled",
+      "severity": "P3",
+      "file": "packages/react/src/field/control/FieldControl.tsx",
+      "line": 99,
+      "why_it_matters": "If a Field.Control unmounts and remounts inside the same Field.Root (keyed, or conditionally rendered) and comes back with an empty controlled value, the root keeps `data-filled` even though the input is empty. The new mount effect only ever calls setFilled(true). useValueChanged seeds its ref with the mount value, so it never fires for the remount. The removed effect handled this case with `hasExternalValue && valueProp === ''` -> setFilled(false). Styling that keys off data-filled, such as floating labels, would show the filled state over an empty input.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Have the mount effect set both directions for controlled values, e.g. `if (serializedValue !== undefined) setFilled(serializedValue !== ''); else if (validation.inputRef.current?.value) setFilled(true);`. Keep the dependency list mount-only so it does not double up with useValueChanged.",
+      "confidence": 50,
+      "evidence": [
+        "packages/react/src/field/control/FieldControl.tsx:99-103 -- useIsoLayoutEffect(() => { if (validation.inputRef.current?.value) { setFilled(true); } }, [validation.inputRef, setFilled]);",
+        "Removed code: `} else if (hasExternalValue && valueProp === '') { setFilled(false); }`",
+        "Scratch jsdom test: Field.Root > keyed Field.Control value='abc'; clicking a button does setValue('') plus a key bump. Result: `REMOUNT after filled= true value= ` (empty input, root still data-filled)"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Async-populated controlled values (fetch, then setValue) now mark the field dirty and, in onChange mode, run validation before any user interaction. This happens because the initial-value baseline is captured once at mount (useFieldControlRegistration.captureInitialValue). The behavior matches NumberField/Combobox/OTP and the documented 'key Field.Root for a fresh baseline' design, but it changes what existing Field.Control consumers see.",
+    "Inline `errors={{...}}` object literals on <Form> hide the new clearErrors path. Form's useValueChanged(externalErrors) re-applies the prop after every parent re-render, so a controlled keystroke's clearErrors is overwritten. Tests using inline literals can go green while stable-errors apps behave differently."
+  ],
+  "testing_gaps": [
+    "No controlled-mode variant of 'does not clear errors or validate when change is prevented' or 'does not validate when the change is canceled'. Both new tests are uncontrolled, so the controlled early-return path's handling of prevented or canceled events is untested."
+  ]
+}

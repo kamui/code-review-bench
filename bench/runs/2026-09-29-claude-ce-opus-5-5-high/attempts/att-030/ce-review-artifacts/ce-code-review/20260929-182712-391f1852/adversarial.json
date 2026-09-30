@@ -1,0 +1,32 @@
+{
+  "reviewer": "adversarial",
+  "findings": [
+    {
+      "title": "Enable-and-load in one render marks field dirty, loses baseline",
+      "severity": "P2",
+      "file": "packages/react/src/field/control/FieldControl.tsx",
+      "line": 111,
+      "why_it_matters": "A common edit-form pattern (`<Field.Root disabled={loading}>` with `value={data?.name ?? ''}`) now shows `data-dirty` right after the data loads, even though the user has not touched anything. In `validationMode=\"onChange\"` it gets worse: the loaded value is never recorded as the baseline, so the field stays dirty even after the user types and then restores the loaded value. The cause is timing. While the control is disabled, `useRegisterFieldControl` does not register it, so `captureInitialValue` first runs in the same commit where the value changes. It queues `initialValue: 'John'` with `setValidityData`, but the new `useValueChanged` callback compares against `validityData.initialValue` from the render closure, which is still `null`, so `setDirty('John' !== '')` sets dirty. In onChange mode, `validation.change` then runs `commit`, which calls `setValidityData({... initialValue: validityData.initialValue})` with that same stale `null`, overwriting the captured baseline. `initialValueCapturedRef` is already true, so the baseline is never captured again. On the base commit, only the user-driven onChange path set dirty and the baseline survived. A scratch test against both trees confirms this: base gives dirtyAfterLoad=false and dirtyAfterReturn=false, and this PR gives true/true in onChange mode and true/false in onSubmit mode.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Make the baseline visible in the same commit that captures it. (1) In useFieldControlRegistration, store the captured value in a ref (e.g. `initialValueRef.current = initialValue` inside captureInitialValue) and expose a `getInitialValue()` through FieldRootContext. Use that in FieldControl's useValueChanged callback and onChange handler instead of the `validityData.initialValue` closure. (2) In useFieldValidation.commit/publishAllValid, stop writing `initialValue: validityData.initialValue` from the closure; use a functional update such as `setValidityData(prev => ({ ...nextValidityData, initialValue: prev.initialValue }))` so an initialValue queued earlier in the commit is not overwritten. Simpler alternative if (1) is too broad: skip the sync in the useValueChanged callback when the registration captured the baseline in this same layout pass, e.g. by tracking the previous `disabled` in a ref and returning early on the disabled-to-enabled transition. Assumption: a value that arrives together with enabling should be treated as the initial value, which matches base behavior.",
+      "confidence": 75,
+      "evidence": [
+        "packages/react/src/field/control/FieldControl.tsx:111 -- setDirty(serializedValue !== (validityData.initialValue ?? ''));",
+        "packages/react/src/internals/field-register-control/useRegisterFieldControl.ts -- `if (!enabled) { registerFieldControl(source, undefined); return; }` so a control that mounts disabled defers captureInitialValue until the commit where it becomes enabled",
+        "packages/react/src/internals/field-register-control/useFieldControlRegistration.ts captureInitialValue -- `initialValueCapturedRef.current = true; ... setValidityData((prev) => prev.initialValue === initialValue ? prev : { ...prev, initialValue })` (queued state update, not visible to the closure used by the same commit's useValueChanged callback)",
+        "packages/react/src/field/root/useFieldValidation.ts:302-313 -- commit publishes `initialValue: validityData.initialValue` (stale null) via a non-functional setValidityData after the functional capture update, so the captured baseline is overwritten in onChange mode",
+        "Scratch repro: Field.Root disabled={loading} validationMode=onChange + controlled Field.Control value=''; one click sets loading=false and value='John' -> data-dirty set; type 'Johnx' then 'John' -> data-dirty still set. onSubmit mode: dirty after load=true, clears after the round trip. The same test against base 30b8ea2 FieldControl: both false.",
+        "The useValueChanged sync that triggers this is new in this diff: `useValueChanged(serializedValue, () => { ... clearErrors(name); setDirty(...); setFilled(...); validation.change(serializedValue); })` at FieldControl.tsx:105-115"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Sibling controls that already sync through useValueChanged (OTPFieldRoot.tsx:199-203 and AriaCombobox.tsx:1060-1078 both call setDirty against the `validityData.initialValue` closure and then validation.change) likely share the same disabled-to-enabled baseline race. The root cause in useFieldValidation.commit writing a stale `initialValue` is shared code; I did not reproduce it for the siblings."
+  ],
+  "testing_gaps": [
+    "No test covers a controlled Field.Control that mounts disabled and receives its first real value in the same render that enables it (the async edit-form load pattern). The test should check that data-dirty stays unset after load and clears after the user modifies and then restores the loaded value, in both onSubmit and onChange validation modes."
+  ]
+}

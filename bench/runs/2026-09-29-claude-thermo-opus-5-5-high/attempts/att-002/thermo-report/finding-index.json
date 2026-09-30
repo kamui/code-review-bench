@@ -1,0 +1,37 @@
+{
+  "findings": [
+    {
+      "report_path": "summary.md",
+      "title": "1. Verify policy split across two layers, with duplicated dispatch and a half-dead `cert_verify` (structural / missed code-judo)",
+      "quote": "In `src/requests/adapters.py`, `_urllib3_request_context` (lines 91\u2013100) now decides part of\nthe trust policy: `verify is True` means use the global preloaded context, and a string means\n`isdir` \u2192 `ca_cert_dir`, else `ca_certs`. `cert_verify` (lines 297\u2013317) still runs the\nexistence check and then repeats the same `isdir` dispatch on the pool. To find out which trust\nstore a request uses, a reader has to follow both functions plus the comment at lines 300\u2013303,\nwhich states an invariant nothing enforces (\"the connection will be using a context with the\ndefault certificates already loaded\"). That comment also calls `verify` \"a boolean\" in a branch\n`False` never reaches, and it pairs with an unchecked \"must be a str then\" assumption. The split\nalso limits the speedup to the literal `verify=True` case. Custom bundles still set `ca_certs`,\nso urllib3 reloads them on every connection. The same goes for every `REQUESTS_CA_BUNDLE` /\n`CURL_CA_BUNDLE` user, because `Session.merge_environment_settings` turns `True` into a path\nstring. The code-judo move: one helper maps `verify` to pool kwargs, and every verifying case\ngets an `lru_cache`'d context keyed by CA path. The helper does the existence check and the\nfile/dir dispatch once. The `verify is True` branch goes away because the default bundle is\njust another path, and `cert_verify` keeps only client-cert handling plus a legacy fallback.\nFull evidence and the worked proposal are in `01_adapters_tls_policy.md` \u00a7 Finding 1.",
+      "file": "src/requests/adapters.py",
+      "line_start": 91,
+      "line_end": 317
+    },
+    {
+      "report_path": "summary.md",
+      "title": "2. The `verify is True` branch silently overrides a subclass's `ssl_context` (structural regression, security-relevant)",
+      "quote": "`_urllib3_request_context` lines 94\u201395 always write\n`pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context`. urllib3 merges per-request pool kwargs\nover the manager's `connection_pool_kw`. So an `HTTPAdapter` subclass that overrides the\ndocumented `init_poolmanager` hook to pass its own `ssl_context` (custom ciphers, truststore,\nand so on) loses that context whenever `verify=True`, which is the default. There is no error.\nA probe confirmed it: at head, the pool for `verify=True` carries the preloaded context and not\nthe subclass's. At the merge-base, all three verify modes keep the custom context. This is an\noptimisation for the default configuration placed in a path that every configuration shares.\nThe fix is to make the default context a fallback: inject it only when the manager has no\n`ssl_context`, by passing the manager's kwargs into the helper from Finding 1. Add a regression\ntest asserting `conn.conn_kw[\"ssl_context\"] is custom`. See `01_adapters_tls_policy.md` \u00a7\nFinding 2.",
+      "file": "src/requests/adapters.py",
+      "line_start": 94,
+      "line_end": 95
+    },
+    {
+      "report_path": "summary.md",
+      "title": "3. Import-time global side effect breaks no-`ssl` imports, loses the curated missing-bundle error, and freezes `DEFAULT_CA_BUNDLE_PATH` (boundary / lifecycle)",
+      "quote": "Lines 75\u201378 build an `SSLContext` and load the certifi bundle during `import requests`, and the\nPR deletes the old `os.path.exists` guard for the default path. Probes against head and the\nmerge-base confirmed four consequences. First, with `ssl` unavailable, base imports fine and\nhead fails with `TypeError: Can't create an SSLContext object without an ssl module`. Second,\nwhen the bundle is missing, base raises\n`OSError: Could not find a suitable TLS CA certificate bundle, invalid path: ...` at request\ntime, while head raises a bare `FileNotFoundError` from `import requests`. That hurts exactly\nthe zipapp/freezer users the review was worried about, even programs that never make an HTTPS\nrequest. Third, reassigning `requests.adapters.DEFAULT_CA_BUNDLE_PATH` after import is no longer\nhonoured. Fourth, `extract_zipped_paths` now writes to a temp directory at import. The remedy\nis a lazy, memoised accessor that reads `DEFAULT_CA_BUNDLE_PATH` at call time and keeps the\noriginal `OSError`. That keeps the full performance win, since the bundle still loads once per\nprocess, and the helper from Finding 1 already has this shape. See `01_adapters_tls_policy.md`\n\u00a7 Finding 3.",
+      "file": "src/requests/adapters.py",
+      "line_start": 75,
+      "line_end": 78
+    },
+    {
+      "report_path": "summary.md",
+      "title": "4. No test pins the new pool/context contract (test coverage)",
+      "quote": "The PR adds no tests. The author said in review that the context was unreachable, but it is\nexposed as `adapter._get_connection(prepared, verify).conn_kw[\"ssl_context\"]`, and the existing\n`test_different_connection_pool_for_tls_settings_*` tests (`tests/test_requests.py:2833`\nonward) already call `_get_connection`. Add small assertions for three cases: `verify=True`\nuses the shared context, a custom bundle does not touch it, and a subclass context wins over\nthe default. Add an import-side-effect test once Finding 3 is fixed. Finding 2 would have been\ncaught by the third assertion. See `01_adapters_tls_policy.md` \u00a7 Finding 4.",
+      "file": "tests/test_requests.py",
+      "line_start": 2833,
+      "line_end": 2833
+    }
+  ],
+  "questions": []
+}
