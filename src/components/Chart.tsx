@@ -26,7 +26,7 @@ export const axisLabels: Record<Axis, string> = {
 const coordinateSchema = z.object({ cx: z.number(), cy: z.number(), payload: z.object({ index: z.number() }) })
 const tooltipSchema = z.object({ active: z.boolean().optional(), payload: z.array(z.object({ payload: z.object({ index: z.number() }) })).optional() })
 
-export function Chart({ summaries, axis, onSelect }: { summaries: Summary[]; axis: Axis; onSelect: (id: string) => void }) {
+export function Chart({ summaries, axis, showLabels, onSelect }: { summaries: Summary[]; axis: Axis; showLabels: boolean; onSelect: (id: string) => void }) {
   const points = summaries.flatMap(summary => {
     const value = axis === 'time' ? summary.time?.median ?? null : summary[axis]
     return value === null || summary.score === null ? [] : [{ summary, x: value, y: summary.score }]
@@ -52,10 +52,10 @@ export function Chart({ summaries, axis, onSelect }: { summaries: Summary[]; axi
       }}>
       <circle cx={cx} cy={cy} r={15} fill="transparent" />
       <circle cx={cx} cy={cy} r={6} fill={reviewColor(configuration)} stroke="var(--panel)" strokeWidth={2} />
-      <text x={cx + (right ? -12 : 12)} y={cy + labelOffset} textAnchor={right ? 'end' : 'start'} className="point-label">
+      {showLabels && <text x={cx + (right ? -12 : 12)} y={cy + labelOffset} textAnchor={right ? 'end' : 'start'} className="point-label">
         <tspan>{method}</tspan>
         <tspan x={cx + (right ? -12 : 12)} dy={14}>{setup.join(' · ')}</tspan>
-      </text>
+      </text>}
     </g>
   }
   const tooltip = (value: unknown) => {
