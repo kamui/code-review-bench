@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { z } from 'zod'
 import { datasetSchema, detailSchema } from './data'
 import type { Attempt, Configuration, Dataset, Outcome, Task } from './data'
-import { commonTasks, compareTasks, duration, feedbackSummary, leaderboardComparison, modelComparisonSegments, money, summarize } from './metrics'
+import { commonTasks, compareTasks, duration, feedbackSummary, leaderboardComparison, money, scoreRange, summarize, takeaways } from './metrics'
 
 const all = { concern: '', severity: 'all' } satisfies Parameters<typeof summarize>[3]
 const imported = datasetSchema.parse(JSON.parse(await readFile('public/data/benchmark.json', 'utf8')))
@@ -100,19 +100,23 @@ describe('trial scoring', () => {
     expect(summarize(data, configuration, data.tasks, all).score).toBe(50)
   })
 
-  test('connects review editions across harness releases and keeps changed editions separate', () => {
-    const points = [
-      { x: 1, y: 70, configuration: { method: 'review-code', reviewEdition: 'v1', version: 'client-1' } },
-      { x: 2, y: 80, configuration: { method: 'review-code', reviewEdition: 'v1', version: 'client-2' } },
-      { x: 3, y: 60, configuration: { method: 'review-code', reviewEdition: 'v1', version: 'client-2' } },
-      { x: 4, y: 90, configuration: { method: 'review-code', reviewEdition: 'v2', version: 'client-2' } },
-      { x: 5, y: 95, configuration: { method: 'builtin', reviewEdition: 'v1', version: 'client-2' } },
-    ]
-    expect(modelComparisonSegments(points).map(({ from, to }) => ({ from, to }))).toEqual([
-      { from: { x: 3, y: 60 }, to: { x: 2, y: 80 } },
-      { from: { x: 2, y: 80 }, to: { x: 1, y: 70 } },
-    ])
-    expect(modelComparisonSegments([])).toEqual([])
+  test('reports the score range when any one buggy PR is left out', () => {
+    const data = dataset([task('a', 1), task('b', 1), task('c', 2), task('clean', 0)],
+      [attempt('a1', 'a', ['a-0']), attempt('b1', 'b', []), attempt('c1', 'c', ['c-0']), attempt('k1', 'clean', [])],
+      [outcome('a', [['a1']]), outcome('b', [['b1']]), outcome('c', [['c1']]), outcome('clean', [['k1']])])
+    expect(scoreRange(data, configuration, data.tasks, all)).toEqual({ low: 25, high: 75 })
+    expect(scoreRange(data, configuration, [data.tasks[0]!], all)).toBeNull()
+  })
+})
+
+describe('takeaways', () => {
+  const row = (id: string, score: number | null, cost: number | null, falseFindings: number | null) =>
+    ({ ...summarize(dataset([], [], []), { ...configuration, id }, [], all), score, cost, falseFindings })
+  test('breaks score ties by cost and only recommends setups at or above the strong-score line', () => {
+    const result = takeaways([row('pricey', 90, 4, 0), row('cheap', 90, 0.5, 0.4), row('weak', 50, 0.01, 0), row('quiet', 85, 1, 0)])
+    expect(result.top?.configuration.id).toBe('cheap')
+    expect(result.cheapest?.configuration.id).toBe('cheap')
+    expect(result.quietest?.configuration.id).toBe('pricey')
   })
 })
 
