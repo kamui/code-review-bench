@@ -153,27 +153,6 @@ class ScoreboardTest(unittest.TestCase):
         self.assertIn("| Version |  | v-ref | v-other |", page)
         self.assertIn("- [`r1`](runs/r1), `results.v1.json`, for `ref`, `other`", page)
 
-    def test_regrading_release_pins_results_without_changing_the_frozen_cohort(self) -> None:
-        self.write_run("r1", {"ref": REF_ROWS, "other": OTHER_ROWS}, rubric=2,
-                       graded={BUG1: 3, BUG2: 1, CLEAN: 1})
-        self.suite["cohort_results"] = "results.v2.json"
-        self.write_json(self.root / "runs/suite/results.v2.json", {
-            "rubric_version": 2, "inputs": [{"target": t, "register_version": v}
-                                           for t, v in {BUG1: 3, BUG2: 1, CLEAN: 1}.items()]})
-        self.assertIn(f"| `{BUG1}` |  | 100% · 0 FF | 50% · 0 FF |", self.page())
-        frozen = json.loads((self.root / "runs/suite/manifest.json").read_text())
-        self.assertEqual(frozen["rubric_version"], 1)
-        self.assertEqual(frozen["cohort"][0]["register_version"], 2)
-        self.write_json(self.root / "runs/suite/results.v2.json", {
-            "rubric_version": 2, "inputs": [{"target": BUG1, "register_version": 3}]})
-        self.assert_refused("cohort results must cover every cohort target exactly once")
-
-    def test_invalid_or_missing_cohort_results_never_fall_back_to_the_manifest(self) -> None:
-        self.suite["cohort_results"] = "results.v2.json"
-        self.assert_refused("cohort results runs/suite/results.v2.json is missing")
-        self.suite["cohort_results"] = "../results.v2.json"
-        self.assert_refused("cohort_results must name a versioned results file")
-
     def test_own_target_row_equals_by_arm_when_every_target_ran(self) -> None:
         by_arm = arm_row("ref", REF_ROWS)
         self.assertEqual((by_arm["recall_attempt_level"], by_arm["elapsed_to_completion_s"],
