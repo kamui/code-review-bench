@@ -226,7 +226,7 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
         <Group gap="md" mt="lg"><Anchor href={`${import.meta.env.BASE_URL}evidence/bench/SCOREBOARD.md`} target="_blank" size="sm">Published historical scoreboard</Anchor><Anchor href={`${import.meta.env.BASE_URL}evidence/bench/import-manifest.json`} target="_blank" size="sm">Import checksums</Anchor><Anchor href={`${import.meta.env.BASE_URL}data/benchmark.json`} download size="sm"><Group gap={5}><ArrowDownToLine size={14} />Download explorer data</Group></Anchor></Group>
         <Text size="xs" c="dimmed" mt="lg">Imported from skills revision {dataset.revision.slice(0, 10)}. {dataset.import.files.toLocaleString()} preserved source files and {dataset.import.transcripts} transcript references. {dataset.import.mismatches} superseded archive references have recorded hash mismatches; the two main run archives are verified.</Text>
       </section>
-      <footer className="site-footer"><span>code<span className="brand-review">review</span>bench.</span><Text size="xs" c="dimmed">Built to inspect the evidence, not just the ranking.</Text><Anchor href="https://deepswe.datacurve.ai/" target="_blank" rel="noreferrer" size="xs" c="dimmed">Inspired by DeepSWE</Anchor></footer>
+      <footer className="site-footer"><span>code<span className="brand-review">review</span>bench.</span><Anchor href="https://deepswe.datacurve.ai/" target="_blank" rel="noreferrer" size="xs" c="dimmed">Inspired by DeepSWE</Anchor></footer>
     </Container>
     <EvidenceDrawer dataset={dataset} inspection={inspection} onClose={() => setInspection(null)} />
   </>
