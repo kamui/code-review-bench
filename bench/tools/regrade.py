@@ -11,6 +11,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tarfile
+import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
 TOOLS = ROOT / "bench/tools"
@@ -64,7 +65,7 @@ def allowance(cap, used, items):
     remaining = money(cap) - money(used) - Decimal(1)
     if remaining < 1:
         return None
-    desired = min(Decimal(4), max(Decimal(1), Decimal("0.5") + Decimal(items) * Decimal("0.03")))
+    desired = min(Decimal(4), max(Decimal(2), Decimal("0.5") + Decimal(items) * Decimal("0.05")))
     return min(remaining, desired).quantize(Decimal("0.01"), rounding=ROUND_FLOOR)
 
 
@@ -72,6 +73,14 @@ def invoke(args, log):
     with log.open("x") as output:
         return subprocess.run([sys.executable, str(TOOLS / "grade.py"), *map(str, args)],
                               cwd=ROOT, stdout=output, stderr=subprocess.STDOUT).returncode
+
+
+def grading_workspace(attempt):
+    pointer = attempt / "work"
+    if not pointer.exists() and not pointer.is_symlink():
+        neutral = ROOT / ".local/rubric-v2-2026-09-30/grader-workspaces" / uuid.uuid4().hex
+        pointer.symlink_to(neutral, target_is_directory=True)
+    return pointer.resolve()
 
 
 def archive_attempt(attempt):
@@ -167,17 +176,22 @@ def execute(authorization_path, directory, limit=None):
             if receipt["exit_code"] != 0 or not receipt["verdicts_present"] or receipt["audit_violations"]:
                 save_status(directory, authorization, plan, rows, "failed", f"Paid attempt requires investigation: {attempt}")
                 return 1
-        work, key = attempt / "work", attempt / "key.json"
         attempt.mkdir(parents=True, exist_ok=True)
+        work, key = grading_workspace(attempt), attempt / "key.json"
         if not key.exists():
-            code = invoke(["prepare", "--run", run, "--target", target, "--work", work, "--key", key,
-                           "--rubric-version", "2", "--register-version", targets[target]["nextRegisterVersion"],
-                           "--claim-registry", checked(plan["registry"])], attempt / "prepare.log")
+            prepare = ["prepare", "--run", run, "--target", target, "--work", work, "--key", key,
+                       "--rubric-version", "2", "--register-version", targets[target]["nextRegisterVersion"],
+                       "--claim-registry", checked(plan["registry"])]
+            if "graderTemplate" in authorization:
+                prepare += ["--template", checked(authorization["graderTemplate"])]
+            code = invoke(prepare, attempt / "prepare.log")
             if code:
                 row.update(state="prepare-failed", workspace=str(attempt.relative_to(ROOT)))
                 save_status(directory, authorization, plan, rows, "failed", f"Prepare failed for {run}/{target}")
                 return code
         if not (work / "dispatch.json").exists():
+            if not read(key).get("workspace_identity_blinded", False):
+                raise ValueError(f"legacy preparation needs a fresh neutral attempt: {attempt}")
             with (attempt / "reservation.json").open("x") as handle:
                 json.dump({"maxBudgetUsd": float(batch_cap), "spentBeforeUpperUsd": float(used),
                            "authorizationSha256": digest(authorization_path)}, handle)
