@@ -9,6 +9,14 @@ import claim_grading
 
 
 class ExportTest(unittest.TestCase):
+    def test_missing_current_registry_never_falls_back_to_the_archive(self):
+        with TemporaryDirectory() as directory:
+            bench = Path(directory)
+            (bench / 'scoreboard.json').write_text('{"suites": []}')
+            with patch.object(exporter, 'BENCH', bench):
+                with self.assertRaises(FileNotFoundError):
+                    exporter.build()
+
     def test_skill_metadata_uses_the_pinned_tree_and_preserves_multiple_release_dates(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

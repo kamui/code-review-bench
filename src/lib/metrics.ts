@@ -1,6 +1,5 @@
 import type { Attempt, Configuration, Dataset, Outcome, Task } from './data'
 
-export type MetricVersion = 'trials' | 'historical'
 export type Axis = 'cost' | 'tokens' | 'falseFindings' | 'time'
 export type SeverityFilter = 'all' | 'high' | 'critical'
 export type DetectionFilter = { concern: string; severity: SeverityFilter }
@@ -65,7 +64,7 @@ export type Summary = {
   duplicates: number
 }
 
-export function summarize(dataset: Dataset, configuration: Configuration, tasks: Task[], version: MetricVersion,
+export function summarize(dataset: Dataset, configuration: Configuration, tasks: Task[],
   filter: DetectionFilter): Summary {
   const attempts = new Map(dataset.attempts.map(attempt => [attempt.id, attempt]))
   const rows = tasks.flatMap(task => {
@@ -76,19 +75,14 @@ export function summarize(dataset: Dataset, configuration: Configuration, tasks:
   const allAttempts = trials.flatMap(trial => trial.records)
   const terminals = trials.flatMap(trial => trial.terminal ? [trial.terminal] : [])
   const buggyRows = rows.filter(({ task }) => eligibleDefects(task, filter).length > 0)
-  const scores = buggyRows.map(({ task, outcome }) => version === 'historical'
-    ? outcome.historical?.score ?? null : taskScore(task, outcome, attempts, filter))
-  const restrictedHistorical = version === 'historical' && (filter.concern !== '' || filter.severity !== 'all')
-  const score = restrictedHistorical || scores.some(value => value === null) ? null
+  const scores = buggyRows.map(({ task, outcome }) => taskScore(task, outcome, attempts, filter))
+  const score = scores.some(value => value === null) ? null
     : average(scores.flatMap(value => value === null ? [] : [value]))
   const cost = measuredTotal(allAttempts.map(attempt => attempt.cost))
   const tokens = measuredTotal(allAttempts.map(attempt => attempt.outputTokens))
-  const divisor = version === 'historical' ? allAttempts.length : trials.length
-  const oldValid = rows.reduce((sum, { outcome }) => sum + (outcome.historical?.valid ?? 0), 0)
-  const falseCount = version === 'historical'
-    ? rows.reduce((sum, { outcome }) => sum + (outcome.historical?.falseFindings ?? 0), 0)
-    : terminals.reduce((sum, attempt) => sum + (attempt.admitted ? attempt.falseFindings : 0), 0)
-  const falseDenominator = version === 'historical' ? oldValid : trials.length
+  const divisor = trials.length
+  const falseCount = terminals.reduce((sum, attempt) => sum + (attempt.admitted ? attempt.falseFindings : 0), 0)
+  const falseDenominator = trials.length
   const pending = terminals.length !== trials.length
   const completedTrials = trials.filter(trial => trial.terminal?.complete)
   const durations = completedTrials.map(trial => measuredTotal(trial.records.map(attempt => attempt.durationSeconds)))
@@ -166,7 +160,6 @@ export function feedbackSummary(dataset: Dataset, configurationId: string, candi
   const admitted = rows.flatMap(row => row.terminal?.admitted ? [row.terminal] : [])
   const measured = admitted.filter(attempt => attempt.feedback && attempt.feedback.kind !== 'unavailable')
   const graded = admitted.filter(attempt => attempt.feedback?.kind === 'claims')
-  const legacy = admitted.filter(attempt => attempt.feedback?.kind === 'legacy')
   const completeVolume = admitted.length > 0 && measured.length === admitted.length && !pending
   const completeClaims = admitted.length > 0 && graded.length === admitted.length && !pending
   const items = completeVolume ? measured.reduce((sum, a) => sum + (a.feedback && a.feedback.kind !== 'unavailable' ? a.feedback.items : 0), 0) : null
@@ -176,9 +169,6 @@ export function feedbackSummary(dataset: Dataset, configurationId: string, candi
   const cleanClaimGraded = clean.length > 0 && clean.every(a => a.feedback?.kind === 'claims') && !pending
   return { trials: rows.length, pendingTrials: rows.filter(row => !row.terminal).length,
     admittedReviews: admitted.length, measuredReviews: measured.length, claimGradedReviews: graded.length,
-    legacyReviews: legacy.length, legacyNonMaterialItems: legacy.reduce((sum, a) => sum + a.noise, 0),
-    legacyUnresolvedItems: legacy.reduce((sum, a) => sum + a.unresolved, 0),
-    legacyDuplicateItems: legacy.reduce((sum, a) => sum + a.duplicates, 0),
     items, itemsPerReview: items === null ? null : items / admitted.length,
     falsePerAdmittedReview: admitted.length && !pending ? admitted.reduce((sum, a) => sum + a.falseFindings, 0) / admitted.length : null,
     falsePerTrial: rows.length && !pending ? admitted.reduce((sum, a) => sum + a.falseFindings, 0) / rows.length : null,
