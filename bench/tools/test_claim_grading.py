@@ -141,6 +141,26 @@ class ClaimMap(Grade):
         self.assertEqual(unchanged, malformed)
         self.assertEqual(wrapped, [])
 
+    def test_item_scoped_claim_ids_are_normalized_without_changing_raw_assessments(self):
+        self.verdicts["reviews"][self.token]["items"]["2"]["claims"][0]["id"] = "c1"
+        done = self.map()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(json.loads((self.work / "verdicts.json").read_text()), self.verdicts)
+        mapped = json.loads((self.run_dir / f"scoring/{TARGET}/mapping.v1.json").read_text())
+        ids = [claim["id"] for item in mapped["attempts"][0]["items"] for claim in item["claims"]]
+        self.assertEqual(ids, ["item-1-c1", "item-1-c2", "item-2-c1"])
+        self.assertIn("normalized item-scoped claim IDs", mapped["scored_by"]["adjudicator"])
+        normalized, tokens = grade.normalize_item_claim_ids(self.verdicts, {self.token: 2})
+        self.assertEqual(tokens, [self.token])
+        for number, item in self.verdicts["reviews"][self.token]["items"].items():
+            for before, after in zip(item["claims"], normalized["reviews"][self.token]["items"][number]["claims"]):
+                self.assertEqual({k: v for k, v in before.items() if k != "id"},
+                                 {k: v for k, v in after.items() if k != "id"})
+        self.verdicts["reviews"][self.token]["items"]["1"]["claims"][1]["id"] = "c1"
+        unchanged, tokens = grade.normalize_item_claim_ids(self.verdicts, {self.token: 2})
+        self.assertEqual(unchanged, self.verdicts)
+        self.assertEqual(tokens, [])
+
     def test_multiple_novel_candidates_in_one_item_are_kept_unresolved(self):
         candidates = []
         for i, c in enumerate(self.verdicts["reviews"][self.token]["items"]["1"]["claims"], 1):
