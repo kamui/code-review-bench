@@ -127,8 +127,8 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
         <Paper withBorder radius="lg" className="leaderboard-paper">
           <div className="chart-layout"><div className="chart-main">
             <div className="chart-toolbar"><SegmentedControl value={axis} onChange={value => {
-              if (value === 'cost' || value === 'tokens' || value === 'falseFindings') setAxis(value)
-            }} data={[{ label: 'Cost', value: 'cost' }, { label: 'Output tokens', value: 'tokens' }, { label: 'False findings', value: 'falseFindings' }]} />
+              if (value === 'cost' || value === 'tokens' || value === 'falseFindings' || value === 'time') setAxis(value)
+            }} data={[{ label: 'Cost', value: 'cost' }, { label: 'Output tokens', value: 'tokens' }, { label: 'False findings', value: 'falseFindings' }, { label: 'Time', value: 'time' }]} />
               <Text size="xs" c="dimmed">{shared.length} shared tasks / {defectCount} reference problems</Text>
             </div>
             <Chart summaries={summaries} axis={axis} onSelect={id => setInspection({ kind: 'configuration', id })} />
