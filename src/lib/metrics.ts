@@ -197,20 +197,25 @@ export function feedbackSummary(dataset: Dataset, configurationId: string, candi
     unadmittedFalseOccurrences: rows.reduce((sum, row) => sum + (row.terminal && !row.terminal.admitted ? row.terminal.rawFalseFindings : 0), 0) }
 }
 
-export function modelComparisonSegments(points: { x: number; y: number; configuration: Pick<Configuration, 'method' | 'reviewEdition'> }[]) {
-  const groups = new Map<string, typeof points>()
-  for (const point of points) {
-    const key = JSON.stringify([point.configuration.method, point.configuration.reviewEdition])
-    const group = groups.get(key)
-    if (group) group.push(point)
-    else groups.set(key, [point])
-  }
-  return Array.from(groups.values()).flatMap(group =>
-    group.sort((left, right) => right.x - left.x || left.y - right.y).flatMap((point, index, ordered) => {
-      const previous = ordered[index - 1]
-      return previous ? [{ from: { x: previous.x, y: previous.y }, to: { x: point.x, y: point.y }, configuration: point.configuration }] : []
-    }),
-  )
+export function scoreRange(dataset: Dataset, configuration: Configuration, tasks: Task[], filter: DetectionFilter): { low: number; high: number } | null {
+  const buggy = tasks.filter(task => eligibleDefects(task, filter).length > 0)
+  if (buggy.length < 2) return null
+  const scores = buggy.map(omitted => summarize(dataset, configuration, tasks.filter(task => task.id !== omitted.id), filter).score)
+  if (scores.some(score => score === null)) return null
+  const measured = scores.flatMap(score => score === null ? [] : [score])
+  return { low: Math.min(...measured), high: Math.max(...measured) }
+}
+
+export const strongScore = 80
+
+export function takeaways(summaries: Summary[]) {
+  const scored = summaries.filter(row => row.score !== null)
+  const strong = scored.filter(row => (row.score ?? 0) >= strongScore)
+  const lowest = (rows: Summary[], key: 'cost' | 'falseFindings') => rows.filter(row => row[key] !== null)
+    .sort((left, right) => (left[key] ?? 0) - (right[key] ?? 0) || (right.score ?? 0) - (left.score ?? 0))[0]
+  const top = [...scored].sort((left, right) => (right.score ?? 0) - (left.score ?? 0) ||
+    (left.cost ?? Infinity) - (right.cost ?? Infinity))[0]
+  return { top, cheapest: lowest(strong, 'cost'), quietest: lowest(strong, 'falseFindings') }
 }
 
 export const percent = (value: number | null): string => value === null ? '—' : `${value.toFixed(1)}%`
