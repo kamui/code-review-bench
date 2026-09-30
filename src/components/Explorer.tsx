@@ -86,6 +86,11 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
     const ids = editionIds(configuration)
     setSelected(values => ids.every(id => values.includes(id)) ? values.filter(value => !ids.includes(value)) : Array.from(new Set([...values, ...ids])))
   }
+  const toggleExperiments = (checked: boolean) => {
+    const ids = dataset.configurations.filter(item => item.experimental).map(item => item.id)
+    setIncludeExperiments(checked)
+    setSelected(values => checked ? Array.from(new Set([...values, ...ids])) : values.filter(value => !ids.includes(value)))
+  }
   const resetFilters = () => { setQuery(''); setArea(null); setChange(null); setTechnology(null); setConcern(null); setFindingConcern(null); setSeverity('all') }
   const allDefects = dataset.tasks.reduce((sum, task) => sum + task.defects.length, 0)
   const methodCount = new Set(dataset.configurations.map(item => item.method)).size
@@ -135,6 +140,7 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
             <Chart summaries={summaries} axis={axis} showLabels={showLabels} onSelect={id => setInspection({ kind: 'configuration', id })} />
           </div>
           <aside className="configuration-list" aria-label="Review skills"><Group justify="space-between" mb="lg"><Text fw={650} size="sm">Review skills</Text><Text size="xs" c="dimmed">{editions.filter(edition => editionIds(edition).some(id => selected.includes(id))).length} selected</Text></Group>
+            <div className="skill-switch"><Switch checked={includeExperiments} onChange={event => toggleExperiments(event.currentTarget.checked)} label="Include skill experiments" size="xs" /></div>
             <Stack gap="md">{editions.map(configuration => <div className="configuration-option" key={`${configuration.method}/${configuration.reviewEdition}`}>
               <Checkbox checked={editionIds(configuration).every(id => selected.includes(id))} indeterminate={editionIds(configuration).some(id => selected.includes(id)) && !editionIds(configuration).every(id => selected.includes(id))} color={reviewColor(configuration)} onChange={() => toggleEdition(configuration)}
                 label={<span className="configuration-name">{configuration.builtin ? configuration.method === 'codex' ? 'Codex built-in' : 'Claude built-in' : `/${configuration.method}`}</span>} />
@@ -147,7 +153,6 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
                 {modelChoices.map(model => <Checkbox key={model.value} label={model.label} checked={selectedModels.includes(model.value)} onChange={() => setSelectedModels(values => values.includes(model.value) ? values.filter(value => value !== model.value) : [...values, model.value])} size="xs" />)}
               </Stack></Popover.Dropdown>
             </Popover>
-            <div className="skill-switch"><Switch checked={includeExperiments} onChange={event => setIncludeExperiments(event.currentTarget.checked)} label="Include skill experiments" size="xs" /></div>
             <Text size="xs" c="dimmed">Each skill includes its selected models. Review editions mark meaningful changes.</Text>
           </aside></div>
           <div className="comparison-strip"><Info size={15} /><span>Chart and table use tasks shared by all standard setups. Skill and model selections change visibility; task filters change the comparison.</span></div>
