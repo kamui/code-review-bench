@@ -1,0 +1,33 @@
+{
+  "reviewer": "correctness",
+  "findings": [
+    {
+      "title": "ISR path override trusts client-controllable header in every function",
+      "severity": "P0",
+      "file": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+      "line": 24,
+      "why_it_matters": "If a client can send `x-vercel-isr: 1` and have it reach the function, the path-override bypass that #15959 closed is back: `GET /api/public?x_astro_path=/api/private` with that header renders `/api/private`. That skips Vercel routing, edge middleware, and firewall rules scoped to the real path, and ISR can cache the result under the attacker's `x_astro_path` key. The check lives in the shared entrypoint, so the non-ISR `_render` function honors it too, even though Vercel never invokes `_render` as ISR. That covers deployments with no ISR configured and ISR-excluded routes that go through middleware. Running the built fixture confirmed it: `_render` returned `{\"id\":\"private\"}` for `/api/public?x_astro_path=/api/private` with the header, and `{\"id\":\"public\"}` without it. Whether Vercel's edge strips a client-supplied `x-vercel-isr` could not be checked offline, so exploitability is still unconfirmed.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Narrow the ISR branch so only the ISR function honors it. Add a build-time flag that is true only for the `_isr` function build, for example a separate entry or an `isr` field on `virtual:astro-vercel:config` set from `buildISRFolder`. Also require `url.pathname === '/_isr'` together with `request.headers.get('x-vercel-isr') === '1'`. Before merging, confirm with Vercel docs or support that client-supplied `x-vercel-isr` headers are stripped or overwritten at the edge. If they are not, ISR invocations need a secret that the platform injects instead. Add a regression test to path-override-security.test.js asserting that `_render` ignores `x_astro_path` even when `x-vercel-isr: 1` is sent.",
+      "confidence": 50,
+      "evidence": [
+        "packages/integrations/vercel/src/serverless/entrypoint.ts:24 -- } else if(request.headers.get('x-vercel-isr') === '1') {",
+        "packages/integrations/vercel/src/serverless/entrypoint.ts:25 -- realPath = url.searchParams.get(ASTRO_PATH_PARAM);",
+        "packages/integrations/vercel/src/index.ts:499 -- await builder.buildServerlessFolder(entryFile, NODE_PATH, _config.root);  (the non-ISR _render uses the same entrypoint)",
+        "packages/integrations/vercel/src/index.ts:701-702 -- buildISRFolder calls this.buildServerlessFolder(entry, ...) with the same entry, so _isr and _render share the code",
+        "In-process repro against the built fixture _render.func: fetch('https://example.com/api/public?x_astro_path=/api/private', {headers:{'x-vercel-isr':'1'}}) -> 200 {\"id\":\"private\"}; without the header -> {\"id\":\"public\"}",
+        "provenance: 335a20416 Matthew Phillips 2026-03-19 - Require trusted secret for path overrides (#15959) removed the unconditional x_astro_path query fallback"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Platform assumption: the fix relies on Vercel reliably setting `x-vercel-isr: 1` on ISR invocations and stripping or overwriting a client-supplied value. This could not be verified offline. The PR's manual e2e deployment covers only the first half.",
+    "With edge middleware plus ISR, ISR routes go straight to /_isr (index.ts:490) and skip middleware. If /_isr can be reached with an arbitrary x_astro_path, ISR-excluded routes that normally go through MIDDLEWARE_PATH could be rendered without middleware. Checking the pathname alone does not close this."
+  ],
+  "testing_gaps": [
+    "No test covers the new ISR branch. There should be a test that calls the built `_isr` function with `x-vercel-isr: 1` and `/_isr?x_astro_path=/one`, asserting the `/one` route renders (the regression this PR fixes). A matching test should assert that `_render` ignores `x_astro_path` when the same header is sent."
+  ]
+}

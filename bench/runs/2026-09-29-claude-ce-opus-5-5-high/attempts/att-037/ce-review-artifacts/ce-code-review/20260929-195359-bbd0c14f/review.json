@@ -1,0 +1,267 @@
+{
+ "status": "complete",
+ "verdict": "Ready with fixes",
+ "verdict_reasoning": "No P0/P1. Two confirmed P2 actionable findings: #3 (a prevented input on a controlled Field.Control now clears Form server errors and runs validation, which breaks the react#9023 workaround contract) and #1 (the controlled clearErrors path the PR's headline fix depends on has no test). One P2 design decision for maintainers (#2): code-driven resets and async loads now raise new validation errors. Fix order: decide #2 first, then fix #3 and add #1's test so both pin the callback's final shape.",
+ "scope": {
+  "base": "30b8ea2004fa999bed151204208676c6c0a9d261",
+  "branch": "review-head",
+  "head_sha": "14d39e5d1ad6b7aca2fb067415dba09c6bea219b",
+  "pr_url": "https://github.com/mui/base-ui/pull/5460",
+  "files_changed": 2
+ },
+ "intent": "Make Field.Control sync controlled value prop changes (including programmatic ones such as clear buttons or form resets) into field state (filled, dirty, validity, pending async validation) via useValueChanged, matching sibling controls; register the String()-serialized controlled value so dirty comparison works for non-string values; make onChange own only the uncontrolled path; honor details.cancel() from onValueChange. Must not regress uncontrolled behavior, Form integration, validation modes, or initial-value/dirty/filled semantics.",
+ "intent_confidence": "explicit",
+ "reviewers": [
+  "correctness",
+  "project-standards",
+  "testing",
+  "adversarial",
+  "julik-frontend-races"
+ ],
+ "findings": [
+  {
+   "#": 1,
+   "title": "Controlled-path Form error clearing has no test",
+   "severity": "P2",
+   "file": "packages/react/src/field/control/FieldControl.tsx",
+   "line": 110,
+   "confidence": 75,
+   "autofix_class": "gated_auto",
+   "owner": "downstream-resolver",
+   "requires_verification": true,
+   "pre_existing": false,
+   "suggested_fix": "Add a FieldControl.test.tsx case with a module-level `const errors = { message: 'Server error' }` and `<Form errors={errors}><Field.Root name=\"message\"><Field.Control value={value} onValueChange={setValue} /><Field.Error /></Field.Root><button onClick={() => setValue('x')}>set</button></Form>`. Assert that 'Server error' is present, then that it is gone after (a) `fireEvent.change(textbox, { target: { value: 'a' } })` and (b) a fresh render where only the button is clicked. The errors object must stay referentially stable, because an inline literal re-applies the error on every controlled rerender.",
+   "first_evidence": "packages/react/src/field/control/FieldControl.tsx:110 -- clearErrors(name);",
+   "why_it_matters": "The PR says it fixes a bug where a resolved server error stayed visible after a programmatic change. Now that `onChange` returns early when the field is controlled, the `clearErrors(name)` call inside `useValueChanged` is the only thing that clears a `<Form errors>` entry for a controlled Field.Control. That covers user typing as well as programmatic changes. No test in the suite renders a controlled Field.Control inside a Form with `errors`. The only prevented/clear-errors test uses an uncontrolled control, and Form.test.tsx has no controlled Field.Control at all. Deleting line 110 would leave every test passing, while server errors would stick on every controlled input, including the typical react-hook-form/Formik setup. I confirmed the current behavior works with a scratch test. The Form `errors` object has to be referentially stable across renders, because an inline literal re-applies the error on every controlled rerender and makes the test fail for the wrong reason.",
+   "evidence": [
+    "packages/react/src/field/control/FieldControl.tsx:110 -- clearErrors(name);",
+    "packages/react/src/field/control/FieldControl.tsx:144-146 -- if (isControlled) { return; } (onChange no longer clears errors for controlled controls)",
+    "packages/react/src/field/control/FieldControl.test.tsx:207-221 -- the only Form-errors test in the file uses an uncontrolled `<Field.Control onValueChange={handleValueChange} />`",
+    "grep of packages/react/src/{field,form,input} tests: controlled Field.Control appears only in FieldControl.test.tsx (no Form) and FieldRoot.test.tsx:1636/1755 (no Form errors); Form.test.tsx has no `value={` on any Field.Control",
+    "Scratch test (tmp/testing/fc.test.tsx) passes on the reviewed head for both controlled typing and programmatic set with a stable errors object; with an inline `errors={{...}}` literal the controlled-typing case fails because the rerender re-applies the error"
+   ],
+   "reviewers": [
+    "testing"
+   ],
+   "independent_reviewers": [
+    "testing"
+   ],
+   "validation_status": "confirmed",
+   "validation_reason": "At head, FieldControl.tsx:144-146 returns early from onChange for controlled controls, so the clearErrors(name) at :110 in useValueChanged is the only path that clears a Form error. A grep of FieldControl.test.tsx, Form.test.tsx, FieldRoot.test.tsx, FieldError.test.tsx and the Input tests found no test that renders a controlled Field.Control or Input inside <Form errors>: the only FieldControl Form test (:203-226) is uncontrolled, and every Form.test.tsx errors case uses an uncontrolled <Field.Control />, so removing line 110 would not fail any test (the precondition, a controlled input in a Form with server errors, is the common RHF/Formik setup, but incidence was not measured)."
+  },
+  {
+   "#": 2,
+   "title": "Reset after successful submit surfaces required error on cleared field",
+   "severity": "P2",
+   "file": "packages/react/src/field/control/FieldControl.tsx",
+   "line": 114,
+   "confidence": 75,
+   "autofix_class": "manual",
+   "owner": "human",
+   "requires_verification": true,
+   "pre_existing": false,
+   "suggested_fix": "Track user-originated values in onChange (userValueRef.current = inputValue before the isControlled early return). In the useValueChanged callback, for code-driven changes (serializedValue !== userValueRef.current), still update dirty, filled and clearErrors, but call validation.change only when fieldState.valid === false. Resolved errors still clear, while resets and async loads no longer raise new errors. This assumes maintainers do not want code-driven changes to raise new errors. It conflicts with the new 'syncs state and validates when the controlled value changes programmatically' test, so it needs a maintainer decision.",
+   "first_evidence": "packages/react/src/field/control/FieldControl.tsx:105-114 -- useValueChanged(serializedValue, () => { ... clearErrors(name); setDirty(serializedValue !== (validityData.initialValue ?? '')); setFilled(serializedValue !== ''); validation.change(serializedValue); });",
+   "why_it_matters": "The PR names 'a form library reset' as a case it fixes, but a reset now leaves the field showing an error. Take a common contact form: a controlled required `Field.Control` inside `<Form onFormSubmit={() => setValue('')}>`. The user types, submits successfully, and the code clears the input. The field immediately gets aria-invalid and shows 'Constraints not satisfied'. That happens because the new sync path treats a change made from code exactly like a keystroke: `submitAttemptedRef` stays true after the submit, and `markedDirtyRef` stays true even after `setDirty(false)`, so `validation.change('')` publishes valueMissing. The same path also affects forms that load data after mount. With `validationMode=\"onChange\"`, a value loaded from the server marks the field dirty (against the '' baseline captured at mount) and shows validation errors before the user has touched it. On base neither case changed validity or dirty state. Sibling controls behave the same way, but text inputs are where clear-on-submit and load-after-mount are most common. A fix is to validate code-driven changes only when that clears an existing error.",
+   "evidence": [
+    "packages/react/src/field/control/FieldControl.tsx:105-114 -- useValueChanged(serializedValue, () => { ... clearErrors(name); setDirty(serializedValue !== (validityData.initialValue ?? '')); setFilled(serializedValue !== ''); validation.change(serializedValue); });",
+    "packages/react/src/field/root/FieldRoot.tsx:87-91 -- shouldValidateOnChange = validationMode === 'onChange' || (validationMode === 'onSubmit' && submitAttemptedRef.current)  (Form.tsx:112 sets submitAttemptedRef.current = true on every submit and never resets it)",
+    "packages/react/src/field/root/FieldRoot.tsx:69-77 -- setDirty marks markedDirtyRef.current = true and never clears it, so useFieldValidation.ts:225 no longer suppresses valueMissing after a reset",
+    "Scratch repro (jsdom), Form + required controlled Field.Control, type 'hello', submit, onFormSubmit clears the value: BASE aria-invalid=null, no error; HEAD aria-invalid=true, Field.Error 'Constraints not satisfied'",
+    "Scratch repro, validationMode=onChange, validate returns 'bad', value set from '' to 'Loaded from server' in code after mount: BASE dirty=false, invalid=false, validate calls=0; HEAD dirty=true, invalid=true, validate calls=1, error 'bad' shown",
+    "fast-pass: packages/react/src/field/control/FieldControl.tsx:114 -- validation.change(serializedValue);"
+   ],
+   "reviewers": [
+    "adversarial",
+    "fast-pass"
+   ],
+   "independent_reviewers": [
+    "adversarial"
+   ],
+   "decision_needed": "Whether code-driven controlled value changes (resets, async loads) should raise new validation errors or only clear stale ones. The PR's new test 'syncs state and validates when the controlled value changes programmatically' pins the current behavior, and sibling controls (NumberField, Select, etc.) already validate on code-driven changes, so the fix trades sibling parity for reset ergonomics."
+  },
+  {
+   "#": 3,
+   "title": "Prevented input on a controlled control now clears server errors and validates",
+   "severity": "P2",
+   "file": "packages/react/src/field/control/FieldControl.tsx",
+   "line": 144,
+   "confidence": 75,
+   "autofix_class": "manual",
+   "owner": "downstream-resolver",
+   "requires_verification": true,
+   "pre_existing": false,
+   "suggested_fix": "Before the controlled early return in onChange, add `if (event.nativeEvent.defaultPrevented || details.isCanceled) blockedValueRef.current = inputValue;`. At the top of the useValueChanged callback, when blockedValueRef.current === serializedValue, clear the ref and update only dirty and filled, skipping clearErrors and validation.change. This mirrors NumberFieldInput's blockRevalidationRef. Add a controlled variant of the prevented-change test.",
+   "first_evidence": "packages/react/src/field/control/FieldControl.tsx:144-146 -- if (isControlled) { return; }  (runs before the gate at :153 `if (!event.nativeEvent.defaultPrevented && !details.isCanceled) {`)",
+   "why_it_matters": "On base, an input event whose default was prevented did not clear Form server errors or run validation, in both controlled and uncontrolled mode. This is the react#9023 workaround that the existing test 'does not clear errors or validate when change is prevented' covers. The new `if (isControlled) return;` skips that `defaultPrevented` / `isCanceled` gate for controlled inputs. When the consumer's onValueChange stores the value, useValueChanged calls `clearErrors(name)` and `validation.change` without the check. As a result, a controlled field in a Form with `errors` loses its server error and runs the validator on a prevented input. The existing test only covers uncontrolled mode, so CI stays green. Recording the prevented value, as NumberField does with its `blockRevalidationRef`, would restore the contract.",
+   "evidence": [
+    "packages/react/src/field/control/FieldControl.tsx:144-146 -- if (isControlled) { return; }  (runs before the gate at :153 `if (!event.nativeEvent.defaultPrevented && !details.isCanceled) {`)",
+    "packages/react/src/field/control/FieldControl.tsx:110-114 -- clearErrors(name); ... validation.change(serializedValue);  (no defaultPrevented/isCanceled check on the controlled sync path)",
+    "packages/react/src/field/control/FieldControl.test.tsx:203-226 -- the existing prevented-change test renders an uncontrolled <Field.Control onValueChange={handleValueChange} />, so the controlled path is not covered",
+    "Scratch repro, controlled Field.Control in <Form errors={ERR}> with a stable errors object, validationMode=onChange, capture-phase preventDefault on 'input': BASE validate calls=0, 'Server error' still shown; HEAD validate calls=1, 'Server error' removed"
+   ],
+   "reviewers": [
+    "adversarial"
+   ],
+   "independent_reviewers": [
+    "adversarial"
+   ],
+   "validation_status": "confirmed",
+   "validation_reason": "Scratch jsdom test on head 14d39e5d1 (vitest 4.1.8; controlled Field.Control with onValueChange storing the value, inside <Form errors={stable ERR}>, validationMode=onChange, capture-phase preventDefault on a cancelable input event) observed validate called 1 time and 'Server error' removed. Base code (diff lines 342-361) only ran clearErrors/validation.change behind `!defaultPrevented` and had no useValueChanged sync, so the head's early return at :144 bypasses that gate via the ungated :110-114 path; the precondition (a prevented input event on a controlled control) is reachable, but real-world incidence was not measured."
+  }
+ ],
+ "actionable_findings": [
+  {
+   "#": 1,
+   "title": "Controlled-path Form error clearing has no test",
+   "severity": "P2",
+   "file": "packages/react/src/field/control/FieldControl.tsx",
+   "line": 110,
+   "confidence": 75,
+   "autofix_class": "gated_auto",
+   "owner": "downstream-resolver",
+   "requires_verification": true,
+   "pre_existing": false,
+   "suggested_fix": "Add a FieldControl.test.tsx case with a module-level `const errors = { message: 'Server error' }` and `<Form errors={errors}><Field.Root name=\"message\"><Field.Control value={value} onValueChange={setValue} /><Field.Error /></Field.Root><button onClick={() => setValue('x')}>set</button></Form>`. Assert that 'Server error' is present, then that it is gone after (a) `fireEvent.change(textbox, { target: { value: 'a' } })` and (b) a fresh render where only the button is clicked. The errors object must stay referentially stable, because an inline literal re-applies the error on every controlled rerender.",
+   "first_evidence": "packages/react/src/field/control/FieldControl.tsx:110 -- clearErrors(name);",
+   "why_it_matters": "The PR says it fixes a bug where a resolved server error stayed visible after a programmatic change. Now that `onChange` returns early when the field is controlled, the `clearErrors(name)` call inside `useValueChanged` is the only thing that clears a `<Form errors>` entry for a controlled Field.Control. That covers user typing as well as programmatic changes. No test in the suite renders a controlled Field.Control inside a Form with `errors`. The only prevented/clear-errors test uses an uncontrolled control, and Form.test.tsx has no controlled Field.Control at all. Deleting line 110 would leave every test passing, while server errors would stick on every controlled input, including the typical react-hook-form/Formik setup. I confirmed the current behavior works with a scratch test. The Form `errors` object has to be referentially stable across renders, because an inline literal re-applies the error on every controlled rerender and makes the test fail for the wrong reason.",
+   "evidence": [
+    "packages/react/src/field/control/FieldControl.tsx:110 -- clearErrors(name);",
+    "packages/react/src/field/control/FieldControl.tsx:144-146 -- if (isControlled) { return; } (onChange no longer clears errors for controlled controls)",
+    "packages/react/src/field/control/FieldControl.test.tsx:207-221 -- the only Form-errors test in the file uses an uncontrolled `<Field.Control onValueChange={handleValueChange} />`",
+    "grep of packages/react/src/{field,form,input} tests: controlled Field.Control appears only in FieldControl.test.tsx (no Form) and FieldRoot.test.tsx:1636/1755 (no Form errors); Form.test.tsx has no `value={` on any Field.Control",
+    "Scratch test (tmp/testing/fc.test.tsx) passes on the reviewed head for both controlled typing and programmatic set with a stable errors object; with an inline `errors={{...}}` literal the controlled-typing case fails because the rerender re-applies the error"
+   ],
+   "reviewers": [
+    "testing"
+   ],
+   "independent_reviewers": [
+    "testing"
+   ],
+   "validation_status": "confirmed",
+   "validation_reason": "At head, FieldControl.tsx:144-146 returns early from onChange for controlled controls, so the clearErrors(name) at :110 in useValueChanged is the only path that clears a Form error. A grep of FieldControl.test.tsx, Form.test.tsx, FieldRoot.test.tsx, FieldError.test.tsx and the Input tests found no test that renders a controlled Field.Control or Input inside <Form errors>: the only FieldControl Form test (:203-226) is uncontrolled, and every Form.test.tsx errors case uses an uncontrolled <Field.Control />, so removing line 110 would not fail any test (the precondition, a controlled input in a Form with server errors, is the common RHF/Formik setup, but incidence was not measured)."
+  },
+  {
+   "#": 3,
+   "title": "Prevented input on a controlled control now clears server errors and validates",
+   "severity": "P2",
+   "file": "packages/react/src/field/control/FieldControl.tsx",
+   "line": 144,
+   "confidence": 75,
+   "autofix_class": "manual",
+   "owner": "downstream-resolver",
+   "requires_verification": true,
+   "pre_existing": false,
+   "suggested_fix": "Before the controlled early return in onChange, add `if (event.nativeEvent.defaultPrevented || details.isCanceled) blockedValueRef.current = inputValue;`. At the top of the useValueChanged callback, when blockedValueRef.current === serializedValue, clear the ref and update only dirty and filled, skipping clearErrors and validation.change. This mirrors NumberFieldInput's blockRevalidationRef. Add a controlled variant of the prevented-change test.",
+   "first_evidence": "packages/react/src/field/control/FieldControl.tsx:144-146 -- if (isControlled) { return; }  (runs before the gate at :153 `if (!event.nativeEvent.defaultPrevented && !details.isCanceled) {`)",
+   "why_it_matters": "On base, an input event whose default was prevented did not clear Form server errors or run validation, in both controlled and uncontrolled mode. This is the react#9023 workaround that the existing test 'does not clear errors or validate when change is prevented' covers. The new `if (isControlled) return;` skips that `defaultPrevented` / `isCanceled` gate for controlled inputs. When the consumer's onValueChange stores the value, useValueChanged calls `clearErrors(name)` and `validation.change` without the check. As a result, a controlled field in a Form with `errors` loses its server error and runs the validator on a prevented input. The existing test only covers uncontrolled mode, so CI stays green. Recording the prevented value, as NumberField does with its `blockRevalidationRef`, would restore the contract.",
+   "evidence": [
+    "packages/react/src/field/control/FieldControl.tsx:144-146 -- if (isControlled) { return; }  (runs before the gate at :153 `if (!event.nativeEvent.defaultPrevented && !details.isCanceled) {`)",
+    "packages/react/src/field/control/FieldControl.tsx:110-114 -- clearErrors(name); ... validation.change(serializedValue);  (no defaultPrevented/isCanceled check on the controlled sync path)",
+    "packages/react/src/field/control/FieldControl.test.tsx:203-226 -- the existing prevented-change test renders an uncontrolled <Field.Control onValueChange={handleValueChange} />, so the controlled path is not covered",
+    "Scratch repro, controlled Field.Control in <Form errors={ERR}> with a stable errors object, validationMode=onChange, capture-phase preventDefault on 'input': BASE validate calls=0, 'Server error' still shown; HEAD validate calls=1, 'Server error' removed"
+   ],
+   "reviewers": [
+    "adversarial"
+   ],
+   "independent_reviewers": [
+    "adversarial"
+   ],
+   "validation_status": "confirmed",
+   "validation_reason": "Scratch jsdom test on head 14d39e5d1 (vitest 4.1.8; controlled Field.Control with onValueChange storing the value, inside <Form errors={stable ERR}>, validationMode=onChange, capture-phase preventDefault on a cancelable input event) observed validate called 1 time and 'Server error' removed. Base code (diff lines 342-361) only ran clearErrors/validation.change behind `!defaultPrevented` and had no useValueChanged sync, so the head's early return at :144 bypasses that gate via the ungated :110-114 path; the precondition (a prevented input event on a controlled control) is reachable, but real-world incidence was not measured."
+  }
+ ],
+ "triage_groups": [
+  {
+   "title": "Controlled sync callback treats every controlled value change as a user edit",
+   "findings": [
+    2,
+    3,
+    1
+   ],
+   "context": "The new useValueChanged callback (FieldControl.tsx:105-115) runs clearErrors(name) and validation.change for every controlled value change, whether it came from a keystroke, a prevented input, or code (reset/async load); only the uncontrolled onChange path keeps the defaultPrevented/isCanceled gate.",
+   "preferred_resolution": "Decide #2 first (should code-driven changes validate or only clear stale errors?). Then fix #3 by recording blocked/prevented values in onChange before the controlled early return and skipping clearErrors/validation.change for them in the callback. Add #1's controlled Form-errors test alongside, so neither change silently drops the clearErrors call the PR's headline fix depends on.",
+   "why": "All three touch the same callback and the same clearErrors/validation.change pair; the #2 decision determines the callback's shape that #3's fix and #1's test must pin.",
+   "kind": "decision-gate"
+  }
+ ],
+ "pre_existing_findings": [],
+ "requirements_completeness": null,
+ "learnings": [],
+ "agent_native_gaps": [],
+ "deployment_notes": [],
+ "residual_risks": [
+  "Remounted controlled Field.Control with an empty value keeps a stale data-filled (FieldControl.tsx:99-103). A controlled control that remounts inside a persistent Field.Root (key change, or unmount -> setValue('') -> remount) with value '' keeps data-filled (and data-dirty) from the previous control, because the new mount effect only ever sets filled to true and useValueChanged never fires on mount; base cleared it via `hasExternalValue && valueProp === '' -> setFilled(false)`. Reproduced by correctness and julik-frontend-races scratch jsdom tests; narrow path, P3 at anchor 50 (below the confidence threshold). Fix: in the mount effect set filled both ways, e.g. setFilled(Boolean(validation.inputRef.current?.value)).",
+  "Submit-time Field.Root `validate` (and Form.actionsRef.validate) now receives the String()-serialized controlled value instead of the raw value (e.g. \"5\" instead of 5) because the control registers serializedValue. Consistent with change/blur paths, which already passed DOM strings, but it is an observable argument-type change the PR body does not mention; validators checking typeof or comparing arrays structurally change behavior (adversarial scratch repro; correctness concurs)."
+ ],
+ "testing_gaps": [
+  "No test covers the PR's claim that a programmatic controlled change supersedes a pending async validator for the old value (relies on commit() bumping validationCommitIdRef). Add: async validate pending for 'a', setValue('') from code, late result must not show. (julik-frontend-races, correctness)",
+  "No test asserts that a controlled value the consumer rejects (onValueChange that ignores the value) leaves data-dirty/data-filled unset and does not validate; a partial regression that moves setDirty/setFilled ahead of the `if (isControlled) return` guard would pass the suite. (testing)"
+ ],
+ "coverage": {
+  "depth": "full",
+  "cross_model": {
+   "outcome": "not-run",
+   "note": "Cross-model adversarial pass not run: the user requested a single-model configuration and prohibited running another model; the adversarial lens ran as the in-process adversarial reviewer on the session model."
+  },
+  "validator": {
+   "batch": [
+    1,
+    3
+   ],
+   "outcome": "verdicts",
+   "confirmed": [
+    1,
+    3
+   ],
+   "rejected": [],
+   "unresolved": [],
+   "malformed": [],
+   "failed": [],
+   "shortcut_skipped": 0,
+   "shortcut_basis": "No finding has corroboration from an adversarial-<provider> peer with independence_verified:true; the cross-model peer was not run."
+  },
+  "suppressed_by_anchor": {
+   "50": 3
+  },
+  "suppressed_after_reconciliation": {
+   "50": 1
+  },
+  "mode_aware_demotions": {
+   "primary_demoted": 0,
+   "suppressed_routed_to_residual_risks": 1,
+   "suppressed_discarded": 0
+  },
+  "quote_check_demotions": 0,
+  "first_evidence_backfilled": 0,
+  "failed_reviewers": [],
+  "applied": 0,
+  "compound_packs": {
+   "roots": [],
+   "warnings": [],
+   "errors": []
+  },
+  "notes": [
+   "Cross-model adversarial pass not run: the user requested a single-model configuration and prohibited running another model; the adversarial lens ran as the in-process adversarial reviewer on the session model.",
+   "Project standards: graded against root AGENTS.md and CLAUDE.md as the instruction-file fallback (no CODING_STANDARDS.md in the reviewed tree); project-standards returned no findings.",
+   "Scope: base:30b8ea2004fa (merge-base) vs the working tree at review-head 14d39e5d1; tree is clean, no untracked files excluded.",
+   "PR #5460 was already MERGED at the frozen cutoff; reviewed via explicit base: on the local checkout, so the PR skip rule did not apply.",
+   "No plan document found; requirements completeness not assessed (intent taken from the PR body). Settlement suppression was not evaluated.",
+   "No learnings corpus (docs/solutions) and no declared Compound Packs; learnings not assessed.",
+   "Browser (chromium) test mode unavailable; only jsdom unit tests could be executed.",
+   "Reviewers: correctness, project-standards, testing, adversarial (in-process), julik-frontend-races all returned structured output; none failed or timed out.",
+   "Suppressed: 3 candidates at anchor 50 before reconciliation (1 fast-pass merged into #2; 2 same-defect remount findings merged into one), leaving 1 suppressed at anchor 50, routed to residual_risks.",
+   "Mode-aware demotion: 0 primary findings demoted; 1 suppressed candidate routed to residual_risks.",
+   "Quote-the-line check demoted 0 anchor-75/100 findings; first_evidence_backfilled: 0.",
+   "Agreement between in-process reviewers (testing/correctness on #1, adversarial/testing on #3, correctness/julik on the remount risk) is recorded but never raised confidence: all reviewers share one serving model.",
+   "Validator shortcut: 0 findings skipped (no cross-model corroboration with independence_verified exists in this run). Validator batch: 2 selected (#1, #3; every actionable finding; no P0/P1). #2 is a P2 report-only design call owned by human and is not selected.",
+   "Validator batch outcome: verdicts landed inside the bound for both selected findings (#1, #3): 2 confirmed, 0 rejected, 0 unresolved, 0 malformed, 0 failed, 0 shortcut-skipped. Both confirmations state that real-world incidence was not measured, so each carries validation_status 'confirmed' with that reason.",
+   "Protected-subject classification: none of #1, #3 (or #2) alleges a failure in a protected subject; the validator returned protected_subject null for both; no reclassifications.",
+   "No P0/P1 findings; no finding has degraded validation.",
+   "#2 (P2, manual, owner human) is a report-only design decision and was not validated; it conflicts with the PR's own new test and with sibling-control parity.",
+   "Stage 5c not run: report-only (mode:agent, apply_local false); no changes were made to the reviewed checkout."
+  ]
+ },
+ "artifact_path": "/home/jack/.t3/bench-runs/2026-09-29-claude-ce-opus-5-5-high/att-037/clone-work/ce-review-artifacts/ce-code-review/20260929-195359-bbd0c14f",
+ "run_id": "20260929-195359-bbd0c14f"
+}

@@ -1,0 +1,31 @@
+{
+  "reviewer": "security",
+  "findings": [
+    {
+      "title": "Path override gated on spoofable x-vercel-isr header (CWE-284, OWASP A01)",
+      "severity": "P1",
+      "file": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+      "line": 24,
+      "why_it_matters": "The only thing gating the query-param path override is a plain request header, and `_render` and `_isr` are built from the same entry file (index.ts buildServerlessFolder/buildISRFolder both use `entryFile`). So any request reaching the `_render` function (all non-ISR and `isr.exclude` routes) that carries `x-vercel-isr: 1` plus `?x_astro_path=/private` now renders `/private` while upstream path-based gating (Astro edge middleware, Vercel firewall/WAF rules, vercel.json route rules) evaluated `/public`. That is exactly the bypass #15959 closed and that path-override-security.test.js asserts against; the header just has to be added to the test request. Unless Vercel strips or overwrites client-supplied `x-vercel-isr` (not documented or verified anywhere in the repo), this reopens the vulnerability. Restricting the override to requests actually addressed to the ISR rewrite target limits it to the function that needs it.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Only honor the query param when the request is addressed to the ISR rewrite target, not on any function that shares the entrypoint, e.g. `} else if (url.pathname === '/_isr' && request.headers.get('x-vercel-isr') === '1') { realPath = url.searchParams.get(ASTRO_PATH_PARAM); }` (assumes, per the index.ts comment on ISR_PATH, that ISR invocations see the rewritten `/_isr` path). A stronger alternative is to carry a build-time secret in the ISR rewrite destination (`/_isr?x_astro_path=$0&<secret-param>=<middlewareSecret>`; config.json is not client-visible and allowQuery keeps it out of the cache key) and require it here. In both cases, add a case to path-override-security.test.js: `_render` fetched with `x-vercel-isr: 1` and `?x_astro_path=/api/private` must still return `public`.",
+      "confidence": 75,
+      "evidence": [
+        "packages/integrations/vercel/src/serverless/entrypoint.ts:24-25: } else if(request.headers.get('x-vercel-isr') === '1') {\n\t\t\trealPath = url.searchParams.get(ASTRO_PATH_PARAM);",
+        "packages/integrations/vercel/src/index.ts:474 and 441-452: `_isr` and `_render` (NODE_PATH) are both built from the same `entryFile`, so the header-gated branch is active in `_render` too.",
+        "packages/integrations/vercel/test/path-override-security.test.js: 'ignores untrusted x_astro_path query param on _render' fetches `https://example.com/api/public?x_astro_path=/api/private` and expects `public`; with the added header the new branch rewrites to /api/private.",
+        "packages/integrations/vercel/src/index.ts:462-471: `isr.exclude` routes are routed to `_middleware`/`_render`, and excluded routes are commonly the ones gated by edge middleware.",
+        "provenance: 335a20416 Matthew Phillips 2026-03-19 - Require trusted secret for path overrides (#15959), which removed the unconditional query-param override."
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Even when the override is limited to the `_isr` function, a client can request `/_isr?x_astro_path=/some-excluded-route` directly (Build Output API functions are routable by folder path). If Vercel sets `x-vercel-isr` on that invocation, routes the user listed in `isr.exclude` (often because edge middleware must gate them) render without edge middleware and are cached by ISR. I could not verify Vercel's behavior offline. Checking that realPath does not match an `isr.exclude` route, or requiring a rewrite-only secret, would close this."
+  ],
+  "testing_gaps": [
+    "path-override-security.test.js does not cover the new branch. It needs a case where `_render` receives `x-vercel-isr: 1` with `?x_astro_path=/api/private` and must not rewrite, plus a positive case showing the `_isr` function rewrites to the query-param path."
+  ]
+}

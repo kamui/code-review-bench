@@ -1,0 +1,12 @@
+{
+  "reviewer": "performance",
+  "findings": [],
+  "residual_risks": [
+    "Import-time cost moved onto every process: src/requests/adapters.py:72-75 (`_preloaded_ssl_context = create_urllib3_context()` / `.load_verify_locations(extract_zipped_paths(DEFAULT_CA_BUNDLE_PATH))`) now parses the full certifi bundle (and, for zipped/pyinstaller installs, may extract it to disk) at `import requests`, even in processes that never make an HTTPS request or only use verify=False / a custom bundle. One-time cost, so not flagged as a finding; lazy initialization on first verify=True use would avoid it for short-lived CLIs if import time becomes a concern.",
+    "Speedup does not reach the REQUESTS_CA_BUNDLE / CURL_CA_BUNDLE path: sessions.py:768-769 converts verify=True into a string path when those env vars are set (common in container/corporate setups), so _urllib3_request_context takes the `ca_certs`/`ca_cert_dir` branch and urllib3 still creates a fresh context and calls load_verify_locations per new connection (urllib3 util/ssl_.py:414-415). This matches the stated intent (string paths keep loading) but means the concurrency gain is absent for those users.",
+    "Out-of-lane note (for correctness/security reviewers): pool_kwargs['ssl_context'] = _preloaded_ssl_context overrides any ssl_context an HTTPAdapter subclass placed in init_poolmanager's connection_pool_kw, because urllib3 PoolManager._merge_pool_kwargs lets override keys replace base keys; and urllib3 connection.py:1042 mutates `context.verify_mode` on the shared module-level context per connection."
+  ],
+  "testing_gaps": [
+    "No test guards the performance contract: nothing asserts that repeated verify=True requests reuse one pool whose ssl_context is _preloaded_ssl_context and that cert_verify leaves conn.ca_certs/ca_cert_dir unset for verify=True (tests/ has no reference to _preloaded_ssl_context or ssl_context in adapter tests), so a future change reintroducing per-connection load_verify_locations would go unnoticed."
+  ]
+}

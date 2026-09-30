@@ -1,0 +1,31 @@
+{
+  "reviewer": "api-contract",
+  "findings": [
+    {
+      "title": "any-typed context: ctx becomes a union after ctx-extending middleware",
+      "severity": "P2",
+      "file": "packages/server/src/core/internals/utils.ts",
+      "line": 19,
+      "why_it_matters": "Some apps declare their context as `any`, either with `initTRPC.context<any>()` or through an untyped createContext. Code like `t.procedure.use(o => o.next({ ctx: { a: 1 } })).query(({ ctx }) => ctx.whatever)` compiled at base and now fails with TS2339: \"Property 'whatever' does not exist on type '{ a: number; } | { [x: string]: any; ... }'\". The procedure builder seeds `_ctx_out` from the root ctx (`procedureBuilder.ts:214`), so the first `Overwrite<any, {a:number}>` hits the new naked `TType extends object` check. With `any` as the checked type, TypeScript returns the union of both branches: the merged index-signature object plus the bare `TWith`. Before the change, `TType extends any` resolved `any` to the single merged `{[x:string]: any, a: number}`. An `IsAny` guard that keeps the old merge for `any` removes this regression and still fixes the primitive case.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Add an `any` guard in front of the new branches so `any` keeps the old merged shape: `export type Overwrite<TType, TWith> = 0 extends 1 & TType ? { [K in keyof TType | keyof TWith]: K extends keyof TWith ? TWith[K] : K extends keyof TType ? TType[K] : never } : TType extends object ? ...existing... ;` (the merged mapped type could be pulled into a shared helper). Tested in scratch: `Fixed<any,{a:number}>` gives `.a: number` and still allows arbitrary keys; `Fixed<string,string>` is `string`; object merges are unchanged. Add a regression type test that uses `initTRPC.context<any>()` with a ctx-extending `.use()`.",
+      "confidence": 100,
+      "evidence": [
+        "packages/server/src/core/internals/utils.ts:19 -- export type Overwrite<TType, TWith> = TType extends object",
+        "packages/server/src/core/internals/procedureBuilder.ts:214 -- _ctx_out: TConfig['$types']['ctx'];",
+        "packages/server/src/core/internals/procedureBuilder.ts:38 -- _ctx_out: Overwrite<TPrev['_ctx_out'], TNext['_ctx_out']>;",
+        "Scratch tsc at HEAD: `initTRPC.context<any>().create().procedure.use((opts) => opts.next({ ctx: { a: 1 } })).query(({ ctx }) => { const y: string = ctx.whatever; ... })` -> error TS2339: Property 'whatever' does not exist on type '{ a: number; } | { [x: string]: any; [x: number]: any; [x: symbol]: any; } | ...'. The same file type-checks against base 2abb2d5c, where ctx is `{ [x: string]: any; [x: number]: any; [x: symbol]: any; }`."
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Array and tuple inputs are still garbled after `.use()`. At both base and head, `.input(z.array(z.string())).use(mw)` infers `inferRouterInputs[...]` as a structural mapped object (`{ [x: number]: string; [iterator]...; map...; ... }`) rather than `string[]`, and tuples lose their tuple shape. Arrays extend `object`, so they take the key-by-key merge branch. This is the same bug class as the PR, left unfixed. It is not a regression: element access and methods still type-check.",
+    "The new doc comment says `Overwrite` keeps TType when \"TWith is never\", but the `: TType` fallback can't be reached. The conditional distributes over a naked `never`, so the result is always `never`, as it was at base. This doesn't change behavior, but the documented contract is wrong."
+  ],
+  "testing_gaps": [
+    "The regression test covers only `z.string()`. There is no type test that object context merging still works across chained `.use()` calls (ctx override of a root key, adding new keys) or that chained object `.input()` merging still works after `.use()`. The rewrite changes the branch those cases take. They pass in scratch checks, but nothing in the suite locks them in."
+  ]
+}

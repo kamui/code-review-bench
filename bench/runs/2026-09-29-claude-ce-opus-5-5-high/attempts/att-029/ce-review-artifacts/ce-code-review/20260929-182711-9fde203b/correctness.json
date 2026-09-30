@@ -1,0 +1,31 @@
+{
+  "reviewer": "correctness",
+  "findings": [
+    {
+      "title": "Remounted controlled control no longer resets stale filled state",
+      "severity": "P3",
+      "file": "packages/react/src/field/control/FieldControl.tsx",
+      "line": 100,
+      "why_it_matters": "If a Field.Control unmounts while its Field.Root stays mounted, and the controlled value is cleared before the control mounts again, the field keeps `data-filled` set even though the input is empty. The base mount effect had an `else if (hasExternalValue && valueProp === '') setFilled(false)` branch that fixed this on remount. The new mount effect only ever sets filled to true, and useValueChanged starts from the remounted value, so nothing clears it. A scratch jsdom test shows `data-filled` stays set after remount with value '' on head, and is cleared on base. This is a narrow case because the control has to be conditionally rendered inside a persistent Field.Root.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In the mount-time layout effect, set filled from the DOM both ways: `setFilled(Boolean(validation.inputRef.current?.value))`. This keeps the new test 'does not set filled state on mount for an empty controlled value' passing, because filled starts false. Assumption: Field.Root has only one Field.Control, so resetting filled on mount cannot overwrite another control's state.",
+      "confidence": 50,
+      "evidence": [
+        "packages/react/src/field/control/FieldControl.tsx:99-103 -- useIsoLayoutEffect(() => { if (validation.inputRef.current?.value) { setFilled(true); } }, [validation.inputRef, setFilled]);",
+        "base FieldControl.tsx (removed): } else if (hasExternalValue && valueProp === '') { setFilled(false); }",
+        "scratch test (Field.Root persistent, Field.Control hidden -> value set to '' -> shown): head data-filled=true, base data-filled=false"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Post-submit reset now surfaces required errors: after a Form submit attempt, `submitAttemptedRef` stays true and `markedDirtyRef` is never reset. Resetting a required controlled Field.Control to '' (for example in onFormSubmit) now runs validation.change('') and immediately shows valueMissing ('Constraints not satisfied', data-invalid). Base left the field valid. A scratch test confirmed this on head, and Checkbox.Root behaves the same way on head, so this is intentional sibling parity and not a defect of this diff. Still, form-library resets of text inputs will now look different to users.",
+    "Controlled mode no longer respects the React #9023 defaultPrevented workaround. If an input event is prevented but the consumer still accepts the value in onValueChange, the field now clears form errors and validates (scratch test: validate called 1x on head vs 0x on base). This looks correct because the value really did change, but the existing 'change is prevented' test covers only uncontrolled mode."
+  ],
+  "testing_gaps": [
+    "No test covers the PR's claim that a controlled value the consumer rejects (keeps it unchanged) or rewrites (for example uppercases it) never reaches field state. Example: onValueChange={() => {}} on a Form field with a server error should keep the error and skip validate, and an uppercasing consumer should have validate receive 'A', not 'a'.",
+    "No test covers a programmatic controlled change that supersedes a pending async validator for the old value, which the PR body names as a fixed bug."
+  ]
+}

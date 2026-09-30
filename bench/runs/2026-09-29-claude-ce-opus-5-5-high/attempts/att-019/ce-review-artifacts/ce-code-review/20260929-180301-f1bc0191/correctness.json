@@ -1,0 +1,33 @@
+{
+  "reviewer": "correctness",
+  "findings": [
+    {
+      "title": "Client-supplied x-vercel-isr header reopens path-override bypass",
+      "severity": "P1",
+      "file": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+      "line": 24,
+      "why_it_matters": "The x_astro_path override is now gated only by a request header, `x-vercel-isr: 1`, and a client can send that header. The same entrypoint bundle is built into both `_render` (NODE_PATH) and `_isr` (index.ts:453 and index.ts:703 both call buildServerlessFolder with the same entryFile). So on `_render`, a request like `GET /api/public?x_astro_path=/api/private` with `x-vercel-isr: 1` renders `/api/private` instead of `/api/public`. This is exactly the case path-override-security.test.js asserts against; the test only passes because it leaves the header off. The code no longer enforces the invariant #15959 added and the stated intent requires ('must not reopen the path-override bypass'). Whether this is exploitable in production depends on Vercel stripping or overwriting an inbound `x-vercel-isr` header, and nothing in the repo relies on or documents that. The fix is to gate the query override on something the client cannot forge. Options are a build-time flag that only the `_isr` function bundle has, or a secret added to the internal ISR rewrite dest, the same way the edge middleware already passes `middlewareSecret`.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Do not trust a request header to authorize the override. Preferred: add an `isIsr` (or similar) value to the `_isr` function's build, e.g. through the virtual:astro-vercel:config module or a separate entry, and honor `url.searchParams.get(ASTRO_PATH_PARAM)` only when that flag is true, so `_render` never applies it. Alternative: put a build-time secret in the ISR rewrite dest (`/_isr?x_astro_path=$0&<secret-param>=<secret>`) and require it. If you rely on `x-vercel-isr` at all, keep it only as an extra condition after the build-time flag. Then extend path-override-security.test.js with a case that sends `x-vercel-isr: 1` plus `?x_astro_path=/api/private` to `_render` and asserts `public`, and add a positive case on the `_isr` function.",
+      "confidence": 75,
+      "evidence": [
+        "packages/integrations/vercel/src/serverless/entrypoint.ts:24: } else if(request.headers.get('x-vercel-isr') === '1') {",
+        "packages/integrations/vercel/src/serverless/entrypoint.ts:25: realPath = url.searchParams.get(ASTRO_PATH_PARAM);",
+        "packages/integrations/vercel/src/index.ts:453: await builder.buildServerlessFolder(entryFile, NODE_PATH, _config.root); and index.ts:703 buildISRFolder -> this.buildServerlessFolder(entry, functionName, root) -- same entrypoint bundle serves both _render and _isr",
+        "packages/integrations/vercel/test/path-override-security.test.js:33: new Request('https://example.com/api/public?x_astro_path=/api/private') -- the regression test sends no x-vercel-isr header, so the new branch is never exercised",
+        "provenance: 335a20416 Matthew Phillips 2026-03-19 - Require trusted secret for path overrides (#15959)"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Could not confirm whether Vercel strips, overwrites, or reliably sets `x-vercel-isr` on inbound requests (no network access, and it is not referenced anywhere else in the repo). If the platform does not set it on ISR invocations, the fix does not restore ISR. If the platform does not strip client copies, the bypass above is exploitable.",
+    "The `_isr` function is reachable directly at `/_isr?x_astro_path=<any path>`, which is inherent to the ISR rewrite design and predates #15959. Any Vercel-level path rules, for example firewall or edge rules keyed on the original path, do not apply to the path rendered through that route."
+  ],
+  "testing_gaps": [
+    "No test covers the ISR function honoring `x_astro_path` when `x-vercel-isr: 1` is present. The regression that caused the 404 would go uncaught again.",
+    "path-override-security.test.js does not send a forged `x-vercel-isr: 1` header to `_render`, so the new branch's effect on the untrusted-path case is untested."
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "reviewer": "api-contract",
+  "findings": [
+    {
+      "title": "parseBody breaks after prior c.req.formData() call",
+      "severity": "P1",
+      "file": "src/utils/body.ts",
+      "line": 126,
+      "why_it_matters": "A handler or middleware that calls `await c.req.formData()` and later `await c.req.parseBody()` worked at base, but now fails. For multipart it throws `TypeError: Failed to parse body as FormData.` (HTTP 500). For urlencoded it quietly returns garbage keys such as `{\"------formdata-undici-...\\r\\nContent-Disposition: form-data; name\": ...}`. parseFormData now always calls `arrayBuffer()`. When only `formData` is cached, HonoRequest#cachedBody rebuilds the bytes with `new Response(formData).arrayBuffer()`, which re-serializes them as multipart with a new boundary. bufferToFormData then parses those bytes against the original request's Content-Type, whose boundary or media type no longer matches. Reusing `bodyCache.formData` when it is present fixes this. validator.ts:115 already does exactly that for the same cache.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In parseFormData, before reading the ArrayBuffer, short-circuit on an existing cache, mirroring validator.ts:115-116: `if (request instanceof HonoRequest && request.bodyCache.formData) { const cached = await request.bodyCache.formData; return convertFormDataToBodyData<T>(cached, options) }`. Otherwise keep the new arrayBuffer + bufferToFormData path. Add a regression test: `await c.req.formData(); await c.req.parseBody()` for both multipart and urlencoded bodies.",
+      "confidence": 100,
+      "evidence": [
+        "src/utils/body.ts:126 -- const arrayBuffer = await (request as Request).arrayBuffer()",
+        "src/utils/body.ts:127 -- const formDataPromise = bufferToFormData(arrayBuffer, headers.get('Content-Type') || '')",
+        "src/request.ts:228-235 -- const anyCachedKey = Object.keys(bodyCache)[0]; if (anyCachedKey) { return (bodyCache[anyCachedKey]).then((body) => { ... return new Response(body)[key]() }) }",
+        "src/validator/validator.ts:115-116 -- if (c.req.bodyCache.formData) { formData = await c.req.bodyCache.formData  (existing pattern that reuses the cache)",
+        "Empirical (esbuild+node scratch, app handler `await c.req.formData(); return c.json(await c.req.parseBody())`): HEAD multipart -> 500 'Failed to parse body as FormData.'; HEAD urlencoded -> 200 with key '------formdata-undici-...Content-Disposition: form-data; name'; BASE 9728702 -> 200 {\"message\":\"hello\"} for both"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "parseBody no longer calls `Request.formData()` on raw Request inputs; it reads `arrayBuffer()` and re-parses. Callers or tests that stub or override `formData()` on the Request passed to parseBody will see that stub bypassed. The PR's own test had to drop its `vi.spyOn(req, 'formData')` for this reason. This is an observable behavior change (Hyrum's Law) for a public util, and neither the PR nor any docs mention it."
+  ],
+  "testing_gaps": [
+    "No test covers calling `c.req.formData()` (or anything else that caches only `formData`) before `c.req.parseBody()`. That is the ordering the new arrayBuffer-based path breaks."
+  ]
+}

@@ -1,0 +1,152 @@
+[
+ {
+  "reviewer": "synthesis",
+  "findings": [
+   {
+    "autofix_class": "gated_auto",
+    "confidence": 75,
+    "evidence": [
+     "packages/react/src/field/control/FieldControl.tsx:110 -- clearErrors(name);",
+     "packages/react/src/field/control/FieldControl.test.tsx:153-178 -- 'syncs state and validates when the controlled value changes programmatically' asserts only data-filled, data-dirty, validate call count and last arg",
+     "Mutation (scratch copy of head with `clearErrors(name);` removed from the useValueChanged callback): the scratch mirrors of the committed tests (numeric dirty, programmatic sync, cancel, validates-once) all pass; only the scratch test F (programmatic change clears Form errors) fails",
+     "Scratch tests F/G/J: base FAIL, head PASS"
+    ],
+    "file": "packages/react/src/field/control/FieldControl.tsx",
+    "first_evidence": "packages/react/src/field/control/FieldControl.tsx:110 -- clearErrors(name);",
+    "independent_reviewers": [
+     "testing"
+    ],
+    "line": 110,
+    "owner": "downstream-resolver",
+    "pre_existing": false,
+    "requires_verification": true,
+    "reviewers": [
+     "testing"
+    ],
+    "severity": "P2",
+    "suggested_fix": "Add to FieldControl.test.tsx: (1) `<Form errors={ERRORS}>` with ERRORS hoisted to module scope (an inline object literal re-syncs errors on every App render and hides the behavior), a controlled `<Field.Root name=\"message\">` + `<Field.Error />`, and a button that calls setValue('external'); assert 'Server error' disappears after the click. (2) validationMode=\"onChange\" with validate returning 'Bad' for 'bad'; type 'bad', assert 'Bad' is shown, click a button that sets 'good', and assert 'Bad' is gone. (3) An async validate that returns a deferred promise for 'old'; type 'old', set 'new' programmatically, resolve the old promise with 'Stale' inside act, and assert 'Stale' is never rendered.",
+    "title": "Headline error-clearing and stale-async claims have no tests"
+   },
+   {
+    "autofix_class": "manual",
+    "confidence": 75,
+    "evidence": [
+     "packages/react/src/field/control/FieldControl.tsx:144 -- if (isControlled) { return; }  (runs before the `!event.nativeEvent.defaultPrevented && !details.isCanceled` guard at line 153)",
+     "packages/react/src/field/control/FieldControl.tsx:105-115 -- useValueChanged(serializedValue, () => { ... clearErrors(name); ... validation.change(serializedValue); }) has no knowledge of the originating event's prevented/canceled state",
+     "Base (pre-diff) onChange applied `if (!event.nativeEvent.defaultPrevented) { clearErrors(name); validation.change(inputValue); }` regardless of controlled mode",
+     "Scenario: <Form errors={ERRORS}> + <Field.Root name=\"message\" validationMode=\"onChange\" validate={validate}> + <Field.Control value={value} onValueChange={setValue} />; capture-phase input listener calls preventDefault; fireEvent.input(control, {cancelable: true, target: {value: 'a'}})",
+     "Scratch probe result (head): validate called 1 time, 'Server error' no longer in the document. Same scenario uncontrolled (existing test) keeps the error and does not validate.",
+     "Second probe: onValueChange={(v, d) => { d.cancel(); setValue(v); }} with validationMode=onChange -> validate still called once",
+     "packages/react/src/field/control/FieldControl.tsx:105-115 -- useValueChanged(serializedValue, () => { ... clearErrors(name); setDirty(...); setFilled(...); validation.change(serializedValue); })  (no prevented/canceled check)",
+     "Base (30b8ea200) FieldControl onChange: `if (!event.nativeEvent.defaultPrevented) { clearErrors(name); validation.change(inputValue); }` applied to controlled and uncontrolled alike",
+     "Scratch test at tmp/julik-frontend-races/race.test.tsx (controlled, Form errors={SERVER_ERRORS} stable, capture preventDefault, fireEvent.input) observed { validateCalls: 1, serverErrorShown: false, value: 'a' }",
+     "packages/react/src/form/Form.tsx:73-76 -- errors state re-synced from externalErrors in an effect; the existing test passes an inline object, so the error is restored on every render and the regression is masked",
+     "packages/react/src/field/control/FieldControl.tsx:144 -- if (isControlled) { return; }  (runs before the `if (!event.nativeEvent.defaultPrevented && !details.isCanceled)` guard at :153)",
+     "packages/react/src/field/control/FieldControl.tsx:105-114 -- useValueChanged(serializedValue, () => { ... clearErrors(name); ... validation.change(serializedValue); }) has no defaultPrevented guard",
+     "packages/react/src/field/control/FieldControl.test.tsx:210 -- <Field.Control onValueChange={handleValueChange} /> (the only preventDefault test is uncontrolled)",
+     "Scratch run (tmp/testing/run/fc.test.tsx, test K: controlled + capture-phase preventDefault + Form errors): base 30b8ea200 PASS, head 14d39e5d1 FAIL ('expected vi.fn() to not be called at all, but actually been called 1 times')"
+    ],
+    "file": "packages/react/src/field/control/FieldControl.tsx",
+    "first_evidence": "packages/react/src/field/control/FieldControl.tsx:144 -- if (isControlled) { return; }  (runs before the `!event.nativeEvent.defaultPrevented && !details.isCanceled` guard at line 153)",
+    "independent_reviewers": [
+     "adversarial",
+     "julik-frontend-races",
+     "testing"
+    ],
+    "line": 144,
+    "owner": "downstream-resolver",
+    "pre_existing": false,
+    "requires_verification": true,
+    "reviewers": [
+     "adversarial",
+     "julik-frontend-races",
+     "testing"
+    ],
+    "severity": "P2",
+    "suggested_fix": "In onChange, when controlled, record the event outcome before returning, e.g. `skipValidationRef.current = event.nativeEvent.defaultPrevented || details.isCanceled;`. In the useValueChanged callback, still update dirty and filled, but skip `clearErrors(name)` and `validation.change(serializedValue)` when `skipValidationRef.current` is true, then reset the ref to false. Also reset it at the start of each onChange so a stale flag cannot suppress a later programmatic change. Add a controlled variant of the 'does not clear errors or validate when change is prevented' test.",
+    "title": "Controlled field: prevented input still clears server error and validates"
+   },
+   {
+    "autofix_class": "gated_auto",
+    "confidence": 75,
+    "evidence": [
+     "packages/react/src/field/control/FieldControl.tsx:142-146 -- // Controlled values sync from the `value` prop instead, so that a value the consumer rejects or rewrites never reaches the field state. if (isControlled) { return; }",
+     "packages/react/src/field/control/FieldControl.test.tsx:108-125 -- only asserts expect(validate).toHaveBeenCalledTimes(1)",
+     "Mutation (early return moved below setDirty/setFilled): the scratch mirrors of the committed tests pass; only the scratch test E (rejected value leaves dirty/filled unset) fails. Scratch test E: base FAIL, head PASS"
+    ],
+    "file": "packages/react/src/field/control/FieldControl.tsx",
+    "first_evidence": "packages/react/src/field/control/FieldControl.tsx:142-146 -- // Controlled values sync from the `value` prop instead, so that a value the consumer rejects or rewrites never reaches the field state. if (isControlled) { return; }",
+    "independent_reviewers": [
+     "testing"
+    ],
+    "line": 144,
+    "owner": "downstream-resolver",
+    "pre_existing": false,
+    "requires_verification": false,
+    "reviewers": [
+     "testing"
+    ],
+    "severity": "P3",
+    "suggested_fix": "Add a test that renders `<Field.Root data-testid=\"root\" validationMode=\"onChange\" validate={validate}><Field.Control value=\"\" onValueChange={() => {}} /></Field.Root>`, types 'a', and asserts validate was not called and root has neither data-dirty nor data-filled. Optionally add a rewrite case (onValueChange={(v) => setValue(v.toUpperCase())}) that asserts validate receives the rewritten value.",
+    "title": "Rejected/rewritten controlled value contract only partially pinned"
+   },
+   {
+    "autofix_class": "gated_auto",
+    "confidence": 50,
+    "evidence": [
+     "packages/react/src/field/control/FieldControl.tsx:144 -- if (isControlled) {",
+     "packages/react/src/field/control/FieldControl.tsx:83 -- const isControlled = valueProp !== undefined;",
+     "packages/react/src/field/control/FieldControl.tsx:86 -- const serializedValue = value == null ? undefined : String(value);",
+     "packages/react/src/field/control/FieldControl.tsx:106 -- if (serializedValue === undefined) { return; }",
+     "Scratch test (head): <Field.Control value={null as any} /> + fireEvent.change('abc') -> DOM 'abc', data-dirty null, data-filled null, validate calls 0",
+     "Base removed code: `const hasExternalValue = valueProp != null;` -- base treated null as not-controlled for filled sync"
+    ],
+    "file": "packages/react/src/field/control/FieldControl.tsx",
+    "first_evidence": "packages/react/src/field/control/FieldControl.tsx:144 -- if (isControlled) {",
+    "independent_reviewers": [
+     "correctness"
+    ],
+    "line": 144,
+    "owner": "downstream-resolver",
+    "pre_existing": false,
+    "requires_verification": true,
+    "reviewers": [
+     "correctness"
+    ],
+    "severity": "P3",
+    "suggested_fix": "In onChange, return early only when the controlled sync path will run: replace `if (isControlled) { return; }` with `if (serializedValue !== undefined) { return; }` (assumes null should behave like uncontrolled, matching React's own treatment and the base `valueProp != null` check).",
+    "title": "value={null} now silently drops all field state updates"
+   },
+   {
+    "autofix_class": "advisory",
+    "confidence": 50,
+    "file": "packages/react/src/field/control/FieldControl.tsx",
+    "first_evidence": "packages/react/src/field/control/FieldControl.tsx:150 -- if (!event.nativeEvent.defaultPrevented && !details.isCanceled) {",
+    "independent_reviewers": [],
+    "line": 150,
+    "owner": "human",
+    "pre_existing": false,
+    "requires_verification": true,
+    "reviewers": [
+     "fast-pass"
+    ],
+    "severity": "P3",
+    "suggested_fix": "Return before setDirty/setFilled when details.isCanceled, or document that cancel only suppresses validation.",
+    "title": "Canceled uncontrolled change still updates dirty and filled"
+   }
+  ],
+  "residual_risks": [
+   "Registering the serialized value also changes what submit-time and actionsRef validation pass to `validate` and expose as validityData.value/initialValue for controlled non-string values: a scratch test with a controlled value={5} showed Form-submit validate receiving the string '5' (typeof string), where base passed the raw number 5 via registration.value. This now matches the onChange/onBlur paths, which already passed strings, but the PR does not mention this observable contract change.",
+   "The `defaultPrevented` guard (react#9023 workaround) now applies only to uncontrolled inputs. In a scratch test, a controlled input whose cancelable input event was prevented still ran validate once, because the consumer's value echo goes through useValueChanged. Base skipped validation here. The existing test only covers the uncontrolled variant.",
+   "Mutation checks ran against scratch tests that mirror the new committed FieldControl tests, not against the committed test file itself. The committed file depends on the repo's #test-utils/@mui/internal-test-utils setup, and running it against mutants would have required mutating the clone. The committed render-count test was not mirrored, but the mutations above do not change render counts: setState with the same value bails out.",
+   "Registered value is now String(value): for a controlled non-string value (e.g. value={5}), the value passed to the Field `validate` callback on submit / actions.validate() via getRegistrationValue, and validityData.value/initialValue, change from number to string. This matches what the typing path already passed, but it changes behavior for consumers doing typeof checks.",
+   "Programmatic controlled changes now set dirty, and in onChange mode they also validate. Examples are async-loaded initial data arriving after mount (initialValue was captured as '' at first registration) and a reset to '' on a required field after the user typed (markedDirtyRef is never reset, so valueMissing shows). Switch and OTP Field use the same pattern, so this looks like a library-wide design choice rather than a defect in this diff."
+  ],
+  "testing_gaps": [
+   "No test covers the preventDefault/`preventBaseUIHandler` case for a controlled Field.Control, so it is unspecified whether the controlled sync path should respect a prevented change.",
+   "The PR says array controlled values were also stuck dirty ('Array values failed the same way by reference'), but only the numeric case is tested. Add a case with a controlled array value (e.g. value={['a','b']} serialized to 'a,b') that returns to its initial value and asserts data-dirty clears.",
+   "No test covers preventDefault on the native input event for a controlled Field.Control. The existing prevented-change test is uncontrolled only.",
+   "The PR description says a pending async validator for the old value can no longer publish after a programmatic controlled change (validation.change -> commit bumps validationCommitIdRef). No test covers this: an async `validate` whose promise resolves after `setValue('external')` should not overwrite the newer result."
+  ]
+ }
+]

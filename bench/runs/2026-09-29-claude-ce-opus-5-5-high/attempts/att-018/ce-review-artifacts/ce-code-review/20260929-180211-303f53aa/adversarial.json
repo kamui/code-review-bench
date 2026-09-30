@@ -1,0 +1,47 @@
+{
+  "reviewer": "adversarial",
+  "findings": [
+    {
+      "title": "Sourcing before compinit hits _rg fallback, errors every startup",
+      "severity": "P2",
+      "file": "crates/core/flags/complete/rg.zsh",
+      "line": 441,
+      "why_it_matters": "The FAQ tells users to add `source <(rg --generate complete-zsh)` to .zshrc but never says it has to come after `compinit`. If the line runs before compinit, or in a shell that never runs compinit, `compdef` is not defined yet. The new guard then takes the `_rg \"$@\"` fallback, which was added for the CI harness, and the shell prints `_rg:341: command not found: _arguments` at every startup. rg completion is never registered in that case, because compinit only scans fpath and the sourced `_rg` is not there. The same missing ordering note affects the fpath method: `fpath=(...)` added after compinit, such as after oh-my-zsh.sh, is ignored. Documenting 'after compinit' for the source method and 'before compinit' for fpath fixes both. Making the no-compdef fallback run `_rg` only when `_RG_COMPLETE_LIST_ARGS` is set would stop the startup error without affecting ci/test-complete.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "FAQ: say that the `source <(...)` line must come after `autoload -U compinit && compinit` (or after the framework that runs compinit), and that `fpath=(...)` must come before compinit. Script (optional hardening, assuming ci/test-complete is the only intended caller that has no compsys): change the guard to `if [[ $funcstack[1] == _rg || $_RG_COMPLETE_LIST_ARGS == (1|t*|y*) ]]; then _rg \"$@\"; elif (( $+functions[compdef] )); then compdef _rg rg; else print -ru2 'rg: zsh completion requires compinit to be loaded first'; fi`.",
+      "confidence": 75,
+      "evidence": [
+        "crates/core/flags/complete/rg.zsh:441 -- if [[ $funcstack[1] == _rg ]] || (( ! $+functions[compdef] )); then",
+        "FAQ.md:135 -- $ source <(rg --generate complete-zsh)   (instructions say 'add the following to your $HOME/.zshrc' with no mention of compinit ordering)",
+        "Reproduced in zsh 5.8.1 (`zsh -f`, fpath with stock compsys functions, no compinit yet): `source _rg` -> `_rg:341: command not found: _arguments`, exit=1; after `compinit`, the same source gives exit=0 and `$_comps[rg]=_rg`.",
+        "Step chain: .zshrc sources rg completion before compinit -> $+functions[compdef]==0 -> fallback branch runs _rg outside completion context -> _arguments missing -> error printed on every shell start, and compdef is never called, so rg has no completion.",
+        "FAQ.md:128 -- fpath=($HOME/.zsh-complete $fpath)  (no 'before compinit' note; compinit builds _comps from fpath at the time it runs)"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Copy-pasting FAQ zshrc snippet adds `$ ` command, fails",
+      "severity": "P3",
+      "file": "FAQ.md",
+      "line": 135,
+      "why_it_matters": "The snippet is introduced as 'add the following to your $HOME/.zshrc file', but its only line starts with a shell-prompt `$ `. A user who pastes it as written gets `zsh: command not found: $` on every shell start and no completions. The fpath snippet just above correctly leaves out the prompt, so this one is inconsistent within the same section.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": false,
+      "suggested_fix": "Change FAQ.md:135 to `source <(rg --generate complete-zsh)` (drop the leading `$ `), matching the fpath snippet at FAQ.md:128.",
+      "confidence": 100,
+      "evidence": [
+        "FAQ.md:135 -- $ source <(rg --generate complete-zsh)",
+        "FAQ.md:128 -- fpath=($HOME/.zsh-complete $fpath)  (sibling zshrc snippet has no prompt prefix)",
+        "zsh -f -c '$ print hi' -> zsh:1: command not found: $ (exit 127)"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "ci/test-complete depends on `compdef` not being defined in the environment where it runs. It runs as a non-interactive `#!/usr/bin/env zsh`, so /etc/zshenv and ~/.zshenv still load. If either one runs compinit, the sourced script takes the `compdef _rg rg` branch, prints nothing, and the harness fails with 'Failed to get comp_args'. That failure is loud (red), not a silent pass."
+  ],
+  "testing_gaps": []
+}

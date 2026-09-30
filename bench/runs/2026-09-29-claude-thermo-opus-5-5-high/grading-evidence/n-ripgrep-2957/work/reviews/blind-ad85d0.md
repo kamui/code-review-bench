@@ -1,0 +1,13 @@
+# Review blind-ad85d0
+
+### Item 1
+Location: crates/core/flags/complete/rg.zsh:437-445
+Claim: `crates/core/flags/complete/rg.zsh:437-445` replaces `_rg "$@"` with `if [[ $funcstack[1] == _rg ]] || (( ! $+functions[compdef] )); then _rg "$@"; else compdef _rg rg; fi`. The file is now loaded three ways — autoloaded by compsys (must run `_rg`), sourced by a user (must `compdef`), and sourced by `ci/test-complete` (must run `_rg` to dump specs) — but the condition does not name any of them. The `funcstack` test checks the installed file name rather than the execution mode, and the `! $+functions[compdef]` test, which is there only for the CI harness, is equally true for any user who sources the script before `compinit`; I verified that this path prints `_rg:341: command not found: _arguments` at shell start-up, and that a copy installed on `fpath` as `_ripgrep` re-registers itself on first use instead of completing. The comment "Don't run the completion function when being sourced by itself" is also wrong for that branch. The code-judo move is to dispatch on the fact zsh already exposes — `$zsh_eval_context[-1] == loadautofunc` while an autoloaded body runs, `file` while sourced — register with `compdef` only when it exists (otherwise print a one-line "run compinit first" hint or do nothing), and have `ci/test-complete` call `_rg` itself after sourcing (`( _RG_COMPLETE_LIST_ARGS=1; source $1 2>/dev/null; _rg )`). That deletes the hidden test mode from shipped code and the file-name coupling in one step; I verified all five load paths of that variant in scratch zsh. Replace the two issue/PR URLs with a comment that names the three contexts. Full evidence and the worked variant are in `01_zsh-completion-loader.md`.
+Consequence: —
+Fix: —
+
+### Item 2
+Location: FAQ.md:131-139
+Claim: `FAQ.md:131-139` tells users to "add the following to your `$HOME/.zshrc` file" and then shows `$ source <(rg --generate complete-zsh)`; the `$ ` prompt marker makes the line fail verbatim (`command not found: $`, verified), and it contradicts the `fpath=(...)` `.zshrc` block four lines earlier, which correctly has no prompt marker. More substantively, the `fpath` line only works if it runs before `compinit`, and the `source` line only works if it runs after `compinit` — with the trailer as merged, sourcing first reproduces the #2956 error on every start-up — yet the FAQ mentions neither. Drop the `$ `, add "before `compinit`" / "after `compinit`" to the two instructions, and fix the caveat sentence ("easier to set up, it is generally slower"). Proposed replacement text is in `02_faq-docs.md`.
+Consequence: —
+Fix: —
