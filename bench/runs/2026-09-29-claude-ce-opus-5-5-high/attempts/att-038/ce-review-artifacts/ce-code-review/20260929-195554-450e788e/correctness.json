@@ -1,0 +1,32 @@
+{
+  "reviewer": "correctness",
+  "findings": [
+    {
+      "title": "Remounted controlled empty control leaves stale data-filled",
+      "severity": "P2",
+      "file": "packages/react/src/field/control/FieldControl.tsx",
+      "line": 99,
+      "why_it_matters": "When a Field.Control unmounts and remounts inside a persistent Field.Root (conditional render, keyed remount, swapping between two controls) and its controlled value is now '', the field keeps data-filled from the previous mount. Styles such as floating labels stay in the filled position over an empty input. The base mount effect ran `else if (hasExternalValue && valueProp === '') setFilled(false)`. The new mount effect only ever sets filled to true, and useValueChanged does not fire on mount because its ref starts at the current value, so nothing clears filled. Reproduced in jsdom: type 'abc', hide the control, set the value to '', show it again. On head, data-filled is still present. On base (main FieldControl.tsx), it is cleared.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Make the mount-time filled sync symmetric for the controlled case: in the mount layout effect, when `serializedValue !== undefined` call `setFilled(serializedValue !== '')`, otherwise keep `if (validation.inputRef.current?.value) setFilled(true)`. Only filled is restored. Dirty/validity on remount stay as they were on base. Add a test that remounts a controlled control with '' after it was filled.",
+      "confidence": 75,
+      "evidence": [
+        "packages/react/src/field/control/FieldControl.tsx:99-103 -- useIsoLayoutEffect(() => { if (validation.inputRef.current?.value) { setFilled(true); } }, [validation.inputRef, setFilled]);",
+        "base (main) FieldControl.tsx removed lines -- } else if (hasExternalValue && valueProp === '') { setFilled(false); }",
+        "packages/react/src/internals/useValueChanged.ts -- const valueRef = React.useRef(value); ... if (valueRef.current !== value) onChangeCallback(...) (does not fire on mount)",
+        "Scratch jsdom repro (tmp/correctness/h.test.tsx): after remount with value '' head data-filled='' (set), base data-filled=null"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Field.Root `validate` now receives the String()-serialized controlled value on submit and actionsRef.validate(), because useFieldControlRegistration's validate() commits registration.value, which is now serializedValue. Consumers passing value={5} whose validator checks `typeof v === 'number'` or array values will see a string. This is consistent with the onChange/onBlur paths, which already passed DOM strings.",
+    "Controlled values that arrive after mount, such as edit forms that load data asynchronously, now flip data-dirty, set markedDirtyRef, and run validation.change. This matches sibling controls (OTPField, NumberField) but is new for Field.Control/Input.",
+    "The mount-time filled check now relies only on the DOM ref. A render prop that does not attach `ref` to the input no longer gets filled=true on mount for a non-empty controlled value. The removed `valueProp !== ''` branch did not need the ref."
+  ],
+  "testing_gaps": [
+    "No test covers a controlled Field.Control remounting inside a persistent Field.Root after its value changed while unmounted (filled/dirty state on remount)."
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "reviewer": "testing",
+  "findings": [
+    {
+      "title": "Client cert loaded into shared global SSLContext; untested, test pollutes it",
+      "severity": "P1",
+      "file": "src/requests/adapters.py",
+      "line": 95,
+      "why_it_matters": "A request with verify=True and cert=(...) now makes urllib3's ssl_wrap_socket call load_cert_chain() on the module-level _preloaded_ssl_context, so that client certificate stays loaded and is offered to every later verify=True connection in the process, including connections to unrelated hosts and other Sessions. No test checks that the shared context stays isolated. The existing test_different_connection_pool_for_mtls_settings actually triggers the mutation (`s.get(url, cert=cert)` with the default verify=True), which leaves module-level state dirty for tests that run after it. A scratch spy confirmed load_cert_chain was called on adapters._preloaded_ssl_context with the mTLS client pair.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Only share _preloaded_ssl_context when client_cert is None. When a client cert is present, skip the ssl_context kwarg (or build a fresh create_urllib3_context() and load the default bundle into it). Add a regression test that spies on or wraps adapters._preloaded_ssl_context.load_cert_chain (or asserts the pool's conn_kw['ssl_context'] is not the shared object), sends a verify=True request with cert=('tests/certs/mtls/client/client.pem', 'tests/certs/mtls/client/client.key') to a local TLSServer, and asserts the shared context was never given the client cert.",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:95 --         pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context",
+        "urllib3/util/ssl_.py:407,429-431 -- context = ssl_context ... if certfile: ... context.load_cert_chain(certfile, keyfile)",
+        "tests/test_requests.py:2963 --                 s.get(url, cert=cert)   (verify defaults to True, so the shared context gets mutated)",
+        "scratch run (tmp/leak_check.py): load_cert_chain on shared global ctx: [('tests/certs/mtls/client/client.pem', 'tests/certs/mtls/client/client.key')]"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "verify=True silently overrides subclass-provided ssl_context; no test",
+      "severity": "P1",
+      "file": "src/requests/adapters.py",
+      "line": 95,
+      "why_it_matters": "HTTPAdapter subclasses commonly pass a custom ssl_context through init_poolmanager (custom ciphers, TLS versions, truststore/OS stores, or custom CAs). urllib3's _merge_pool_kwargs lets per-request pool_kwargs override connection_pool_kw, so every verify=True request now runs on _preloaded_ssl_context and the user's context is discarded. Their TLS settings stop applying with no error. The stated intent requires no regression for HTTPAdapter subclasses, yet no test covers a subclass that supplies ssl_context.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In HTTPAdapter._get_connection, drop pool_kwargs['ssl_context'] when the target manager's connection_pool_kw already has an 'ssl_context' (the user's context wins). Add a test that subclasses HTTPAdapter, overrides init_poolmanager to pass ssl_context=custom_ctx, mounts it, calls adapter._get_connection(prepared_https_request, True), and asserts conn.conn_kw['ssl_context'] is custom_ctx.",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:95 --         pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context",
+        "urllib3/poolmanager.py:400-409 -- base_pool_kwargs = self.connection_pool_kw.copy() ... base_pool_kwargs[key] = value",
+        "grep tests/ for init_poolmanager|ssl_context|HTTPAdapter subclass -> no matches outside tests/testserver/server.py"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "No test pins the verify=True fast path the PR adds",
+      "severity": "P2",
+      "file": "src/requests/adapters.py",
+      "line": 297,
+      "why_it_matters": "The point of the change is that verify=True pools use the preloaded context and cert_verify no longer sets conn.ca_certs, so connecting skips load_verify_locations(). The only verify=True test (test_different_connection_pool_for_tls_settings_verify_True) checks just that a self-signed server is rejected and that two pools exist, and it passes identically at base. If someone restores `conn.ca_certs = extract_zipped_paths(DEFAULT_CA_BUNDLE_PATH)` in cert_verify, or drops the ssl_context kwarg, the performance regression the PR fixes comes back unnoticed.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Add a unit test: build an HTTPAdapter and a PreparedRequest for an https URL, call adapter._get_connection(req, True), and assert conn.conn_kw['ssl_context'] is requests.adapters._preloaded_ssl_context. Then call adapter.cert_verify(conn, url, True, None) and assert conn.ca_certs is None and conn.ca_cert_dir is None, with conn.cert_reqs == 'CERT_REQUIRED'.",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:297 --         if url.lower().startswith(\"https\") and verify:",
+        "tests/test_requests.py:2858-2862 -- with pytest.raises(requests.exceptions.SSLError): s.get(url) ... assert 2 == len(s.adapters[\"https://\"].poolmanager.pools)"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Default CA bundle is now loaded at import time (adapters.py:75-78). A missing or unreadable DEFAULT_CA_BUNDLE_PATH, or a broken zipped/frozen certifi, now makes `import requests` fail with a raw ssl error, even for verify=False users. Before, requests raised the clear 'Could not find a suitable TLS CA certificate bundle' OSError at request time. The default-bundle branch of that error was removed, and no test covers either behavior.",
+    "The shared _preloaded_ssl_context is also mutated by urllib3's _ssl_wrap_socket_and_match_hostname (context.verify_mode, and context.check_hostname=False when a pool has assert_hostname/assert_fingerprint). A subclass or proxy config that sets those on one pool could weaken hostname checking for every other verify=True pool in the process. Not exercised by any test."
+  ],
+  "testing_gaps": [
+    "New ca_cert_dir branch in _urllib3_request_context (adapters.py:99-100) has no test. No test passes a CA directory as verify, so nothing covers the fix that stops a directory being sent as ca_certs (which fed load_verify_locations(cafile=dir)). Add a case using a tmp dir of c_rehash'd CA certs (or assert pool_kwargs/conn_kw contain ca_cert_dir and not ca_certs)."
+  ]
+}

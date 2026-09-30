@@ -1,0 +1,19 @@
+# Review blind-32db55
+
+### Item 1
+Location: weed/filer/redis2/universal_redis_store.go:208-251
+Claim: In `weed/filer/redis2/universal_redis_store.go`, `ListDirectoryEntries` now reaps dead children in two places. The not-found branch (line 208) calls the new `removeOrphanedDirectoryListMember`, which runs `ZREM`, re-checks the value with `EXISTS`, and restores the member with `ZADDNX` unless the value is confirmed absent. The logical-expiry branch (lines 214-219) still runs an inline `Del` + bare `ZRem` with both results discarded. After its `DEL`, the expiry branch is in exactly the state the helper was written for, so it has the same index-member loss that the second commit fixed next door. The PR also adds its call two levels deep in the existing `if err != nil { log; if ErrNotFound {...} ; break } else { if ttl { if expired {...} } }` ladder. It leaves the default-verbosity `glog.V(0)` line firing for what is now a normal, self-healing event. Remedy: rename the helper for the guarantee it provides (for example `dropDirectoryListMember`: remove unless the value exists, and keep the member on error), and state that invariant in its doc comment. Call it from both the not-found and the expiry branches, the latter after its value `DEL`. Then flatten the loop into a four-case `switch` over the `FindEntry` outcomes: not-found, error, expired, live. That gives one procedure with one comment and no nested ladder, and the error log stays with real errors. The worked rewrite, and the reason for keeping `fileName` as a verbatim parameter rather than deriving it via `DirAndName`, are in `01_redis2_store.md`.
+Consequence: —
+Fix: —
+
+### Item 2
+Location: weed/filer/redis2/universal_redis_store_test.go:83-143
+Claim: In `weed/filer/redis2/universal_redis_store_test.go`, only `TestListDirectoryEntriesRemovesOrphanedIndexMembers` loops over `keyPrefix` `""` and `"sw:"`. `TestRemoveOrphanedDirectoryListMemberKeepsRecreatedEntry` and `TestListDirectoryEntriesRemovesIndexMembersExpiredByRedis` run only with `""`. The only key the new helper builds itself is `store.getKey(string(path))` in the `EXISTS` re-check (`universal_redis_store.go:245`). If that `getKey` were dropped, every test would still pass. The prefixed orphan test expects removal, and the unprefixed `EXISTS` returns 0 anyway. The recreate test uses an empty prefix, where both keys coincide. Meanwhile every production deployment with `keyPrefix` set would lose the recreate guard silently. That is the exact failure class the PR body warns about. Remedy: hoist the prefix loop into a shared `forEachKeyPrefix(t, fn)` runner and run all three tests through it. Also state the prefixed directory-index key once in a test helper instead of rebuilding it at lines 74 and 110. I verified this by mutation reasoning, not execution, since no Redis was available. Details in `02_redis2_tests.md`.
+Consequence: —
+Fix: —
+
+### Item 3
+Location: weed/filer/redis2/universal_redis_store.go:214-219
+Claim: `Filer.doListDirectoryEntries` (`weed/filer/filer.go:461-499`) and `Filer.FindEntry` (`filer.go:426-437`) already apply the canonical `Crtime + TtlSec` policy and delete expired entries through `Store.DeleteOneEntry`. That makes the redis2 store's own expiry branch (`universal_redis_store.go:214-219`) a second copy of filer policy inside a store adapter. It is also where the pre-existing value-loss race the PR body scopes out comes from. If every production caller of `ListDirectoryEntries` goes through the filer, deleting that branch would leave the loop with a single dead-child case and remove the race rather than needing a compare-and-delete. Direct store callers (metadata tooling that iterates a `FilerStore` without the filer) would start seeing logically expired entries, so this needs a caller audit and is not a blocker here. See `01_redis2_store.md`.
+Consequence: —
+Fix: —

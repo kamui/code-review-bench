@@ -1,0 +1,30 @@
+{
+  "reviewer": "api-contract",
+  "findings": [
+    {
+      "title": "any-typed context loses index access after ctx-extending middleware",
+      "severity": "P1",
+      "file": "packages/server/src/core/internals/utils.ts",
+      "line": 11,
+      "why_it_matters": "Apps whose context is `any` (`initTRPC.context<any>()`, or a createContext that infers to any) stop compiling as soon as a middleware adds to ctx: `t.procedure.use((o) => o.next({ ctx: { a: 1 } })).query(({ ctx }) => ctx.foo)` compiled before this change but now fails with TS2339 \"Property 'foo' does not exist on type '{ a: number; } | { [x: string]: any; ... }'\". Because the new top-level check is `TType extends object` and not `TType extends any`, an `any` TType takes both conditional branches. The result is a union with the bare `{ a: number }`, so the resolver's ctx is no longer indexable. Distributing with `extends any` first and making the object test non-distributive (`[TType, TWith] extends [object, object]`) avoids the any split. That keeps the old any behavior and still fixes the primitive-input bug.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Restructure so `any` never reaches a top-level `extends object` check:\n\nexport type Overwrite<TType, TWith> = TType extends any\n  ? TWith extends any\n    ? [TType, TWith] extends [object, object]\n      ? { [K in keyof TType | keyof TWith]: K extends keyof TWith ? TWith[K] : K extends keyof TType ? TType[K] : never }\n      : TWith\n    : never\n  : never;\n\nThis was verified in scratch: Fix<any,{a:1}> still allows `.foo`, Fix<string,string> = string, optional-object and union-ctx cases match. Also add a regression test using `initTRPC.context<any>()` with a ctx-extending middleware.",
+      "confidence": 100,
+      "evidence": [
+        "packages/server/src/core/internals/utils.ts:11 -- export type Overwrite<TType, TWith> = TType extends object",
+        "Scratch tsc, HEAD sources: `initTRPC.context<any>().create(); t.procedure.use((o) => o.next({ ctx: { a: 1 } })).query(({ ctx }) => ctx.foo)` -> error TS2339: Property 'foo' does not exist on type '{ a: number; } | { [x: string]: any; [x: number]: any; [x: symbol]: any; } | { ... }'",
+        "The same file compiled against a copy of server/src with main's utils.ts (old `TType extends any ? TWith extends any ? {mapped} ...`) gives no error on that line",
+        "Consumers: middleware.ts:136 and utils.ts:71 both use `Simplify<Overwrite<TParams['_config']['$types']['ctx'], TParams['_ctx_out']>>` for the ctx exposed to middlewares and resolvers"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Doc comment says TWith replaces TType 'unless TWith is never', but Overwrite<X, never> still evaluates to never (distribution over never), so the `: TType` branch at utils.ts:29 is unreachable. This matches the old behavior, so it is not a regression, but the comment misstates the contract."
+  ],
+  "testing_gaps": [
+    "The regression test covers only a string input plus middleware. Checked via scratch tsc: optional/nullable/void inputs with middleware now infer as `string | void | undefined`, `string | null`, and `void | undefined` (before: mangled `{}`/object unions). These inputs have no assertions, and neither does an any-typed context with a ctx-extending middleware."
+  ]
+}

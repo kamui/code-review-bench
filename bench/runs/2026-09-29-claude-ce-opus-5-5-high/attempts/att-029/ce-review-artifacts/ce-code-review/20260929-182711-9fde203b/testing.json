@@ -1,0 +1,51 @@
+{
+  "reviewer": "testing",
+  "findings": [
+    {
+      "title": "Rejected or rewritten controlled value contract has no test",
+      "severity": "P2",
+      "file": "packages/react/src/field/control/FieldControl.tsx",
+      "line": 144,
+      "why_it_matters": "The PR promises that a controlled value the consumer rejects or rewrites never reaches field state (no data-dirty/data-filled, no validation of the raw keystroke). No test covers either case. The new controlled tests all use `onValueChange={setValue}`, which accepts every keystroke unchanged, so the rejected and accepted paths look the same. If someone moves the `if (isControlled) return` below `setDirty`/`setFilled` (only validation stays gated), every test still passes. The render-count test still passes because dirty/filled only flip on the first keystroke, and 'validates once' still passes because validation stays gated. Yet a consumer that rejects input would get a stuck data-filled/data-dirty on an empty field.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": false,
+      "suggested_fix": "Add two cases to FieldControl.test.tsx. (1) Rejected: `<Field.Root data-testid=\"root\" validationMode=\"onChange\" validate={validate}><Field.Control value=\"\" onValueChange={() => {}} /></Field.Root>`, type 'a', then assert root has no data-dirty, no data-filled, and validate was not called. (2) Rewritten: `onValueChange={(v) => setValue(v.toUpperCase())}`, type 'a', then assert `validate.mock.calls.map(c => c[0])` equals ['A']. Both pass on the reviewed head (checked in a scratch run).",
+      "confidence": 75,
+      "evidence": [
+        "packages/react/src/field/control/FieldControl.tsx:144 -- if (isControlled) {",
+        "packages/react/src/field/control/FieldControl.tsx:142-143 -- // Controlled values sync from the `value` prop instead, so that a value the consumer // rejects or rewrites never reaches the field state.",
+        "packages/react/src/field/control/FieldControl.test.tsx:104 -- every new controlled test uses an accepting handler: <Field.Control value={value} onValueChange={setValue} />",
+        "PR body: 'A controlled value the consumer rejects or rewrites no longer reaches the field state, matching Combobox, Number Field and OTP Field.'",
+        "Scratch probe (tmp/scratch/testing-reviewer/probe.test.tsx) on reviewed head: rejected-value test (no dirty/filled/validate) and uppercase-rewrite test (validate called with ['A']) both pass, so these tests would lock in current behavior"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Form error clearing on controlled value change untested",
+      "severity": "P2",
+      "file": "packages/react/src/field/control/FieldControl.tsx",
+      "line": 110,
+      "why_it_matters": "For controlled fields, the `useValueChanged` callback is now the only place that clears server errors passed through `<Form errors>`, because onChange returns before its `clearErrors` call. No test in the repo renders a controlled Field.Control inside a Form with `errors`. The only Form-errors test in FieldControl.test.tsx is uncontrolled, and the new programmatic-change test has no Form. Deleting `clearErrors(name)` at line 110 would fail no test. Users would then keep seeing a stale server error after typing a fix or after a clear/reset button changes the value, which is one of the bugs the PR says it fixes.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": false,
+      "suggested_fix": "Add a test: define `const errors = { message: 'Server error' }` at module or test scope (a stable reference, so Form's own useValueChanged(externalErrors) does not re-apply it), render `<Form errors={errors}><Field.Root name=\"message\"><Field.Control value={v} onValueChange={setV} /><Field.Error /></Field.Root><button onClick={() => setV('x')}>set</button></Form>`, click set, and assert 'Server error' is gone. Optionally add a typed-change variant. This passes on the reviewed head (scratch probe).",
+      "confidence": 75,
+      "evidence": [
+        "packages/react/src/field/control/FieldControl.tsx:110 -- clearErrors(name);",
+        "packages/react/src/field/control/FieldControl.tsx:144-146 -- if (isControlled) { return; } (the onChange clearErrors at line 154 is now unreachable for controlled fields)",
+        "Grep for controlled `<Field.Control ... value={` across packages/react/src: only FieldRoot.test.tsx:1636, :1755 and the new FieldControl tests. None are inside a <Form errors>.",
+        "packages/react/src/field/control/FieldControl.test.tsx:203-226 -- the only Form-errors test uses an uncontrolled <Field.Control onValueChange={handleValueChange} />",
+        "Scratch probe: programmatic change with a stable errors object clears 'Server error' on the reviewed head"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "When `<Form errors={{...}}>` is an inline object literal in the same component that owns the controlled value, typing into the controlled Field.Control does not clear the server error. My scratch probe confirmed this on the reviewed head. The cause is ordering: the child's clearErrors runs first, then Form's parent-level useValueChanged(externalErrors) sees a new object reference on the rerender and re-applies the errors. By reading the code this also happened before this diff (clearErrors in the handler, same rerender), but I did not run it against base. Tests for the clearing path need a stable errors reference, or they will hide or misreport this."
+  ],
+  "testing_gaps": [
+    "No test mounts a controlled Field.Control with a non-empty `value` and checks data-filled. The diff removed the valueProp-based mount branch, so this now relies only on the DOM read in the mount layout effect. The new mount test uses uncontrolled `defaultValue=\"foo\"`."
+  ]
+}

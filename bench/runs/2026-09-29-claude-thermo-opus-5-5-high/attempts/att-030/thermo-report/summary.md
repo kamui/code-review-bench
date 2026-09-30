@@ -1,0 +1,54 @@
+# Thermo-nuclear code quality review — `mui/base-ui#5460`
+
+"[field] Sync controlled value changes with field state", range `30b8ea200..14d39e5d1`
+(`git diff main...review-head`). Two files changed: `packages/react/src/field/control/FieldControl.tsx`
+(179 → 207 lines) and its test file (+149 / −6).
+
+## Verdict
+
+**Request changes (small, targeted).** The PR has the right goal and mostly the right mechanism. Moving
+controlled sync onto `useValueChanged` brings `Field.Control` in line with the other Field controls.
+Registering the string form of the value fixes the `"5" !== 5` dirty bug properly, and the new tests
+cover the reported bugs. The existing suite passes at head (26 passed, 1 jsdom-skipped).
+
+The problem is how it was wired. "One owner per mode" landed as two hand-inlined copies of the same
+four-step sync algorithm, and the copies already drift in order and gating. That drift causes two
+behavior changes, confirmed by probes run against both base and head. First, `details.cancel()` in
+uncontrolled mode now updates dirty/filled but skips validation. Second, the React #9023
+`defaultPrevented` guard no longer applies to controlled inputs. Neither is mentioned in the PR body,
+and the tests don't pin either one. One local extraction fixes the structure and forces an explicit
+decision on both behaviors. File size is not a concern.
+
+## Findings
+
+### 1. Two owners, two diverging copies of one sync algorithm (structural / missed code-judo)
+
+In `packages/react/src/field/control/FieldControl.tsx`, the controlled owner (the `useValueChanged` block, lines 105–115) and the uncontrolled owner (the tail of `onChange`, lines 148–156) each hand-inline the same sequence: clear form errors, recompute dirty against `validityData.initialValue`, recompute filled, call `validation.change`. The two copies already disagree. The controlled copy clears errors before marking dirty, while the uncontrolled copy marks dirty first and carries the only comment about the `markedDirtyRef` ordering rule. The uncontrolled copy gates half of its steps on `defaultPrevented`/`isCanceled`, and the controlled copy has no gate at all. Mode detection also happens twice, with two different predicates (`serializedValue === undefined` in the effect, `isControlled` in the handler), and those predicates do not quite partition the modes: `value={null}` is owned by neither path. The code-judo move is to extract one `syncFieldValue(nextValue: string)` stable callback that holds the sequence once, in the documented order. `useValueChanged` then calls it for the controlled value, and `onChange` calls it for the uncontrolled value behind a single early return (`isControlled || defaultPrevented || isCanceled`). This deletes the duplicate sequence, the half-applied gate and the order drift, and leaves two triggers over one algorithm, which is the real shape of the problem. Also rename `serializedValue` to something like `domValue`, because the current name suggests the canonical `internals/serializeValue.ts`, whose JSON semantics would break array dirty tracking if someone "reused" it here. I also considered a bigger move: tracking the uncontrolled value in state so `useValueChanged` owns both modes, as Number Field does. I rejected it because it breaks the pinned uncontrolled render budget. The worked code and the rejected alternative are in `01_field-control-sync.md` (Finding 1).
+
+### 2. `details.cancel()` half-applies an uncontrolled change (atomicity)
+
+The new `!details.isCanceled` check at `FieldControl.tsx` line 153 sits after the unconditional `setDirty`/`setFilled` writes at lines 149–150. A canceled uncontrolled change therefore marks the field dirty and filled for the new DOM value but skips `clearErrors` and validation, so the field shows state for one value and validity for another. A scratch probe confirms this: at head, the root has `data-dirty` and `data-filled` while `validate` was called 0 times; at base, validate was called once. This is the same kind of staleness the PR sets out to remove, and it contradicts the PR body's claim that cancel "now stops the internal handling". In controlled mode, cancel has no independent effect, because sync follows whatever the consumer commits. Decide once what cancel means for an input whose DOM value cannot be reverted, and apply it to the whole sync. Gating the entire `syncFieldValue` call matches the siblings, where a canceled change leaves internal state untouched. Pin that decision with a test that checks dirty, filled and validation together; the new `does not validate when the change is canceled` test only checks `validate`. Evidence and probe table are in `01_field-control-sync.md` (Finding 2).
+
+### 3. The React #9023 `defaultPrevented` guard silently stops covering controlled inputs (verified behavior change)
+
+At base, `onChange` skipped `clearErrors` and `validation.change` for prevented events in both modes. At head, controlled `onChange` returns before the guard (`FieldControl.tsx` lines 142–146), and the controlled sync in `useValueChanged` (lines 105–115) has no guard. A scratch probe used a controlled `Field.Control` inside `<Form errors={{ message: 'Server error' }}>` and sent it a prevented, cancelable `input` event. At base, the server error stays visible and `validate` is not called. At head, the server error is cleared and `validate` runs once. The only test that pins the guard (`does not clear errors or validate when change is prevented`) uses an uncontrolled control, so the suite misses the change. This may be an acceptable consequence of "the `value` prop is the source of truth", but it should be deliberate. Either scope the workaround comment to uncontrolled mode and add a controlled twin of the test that pins the new behavior, or carry the prevention into the controlled sync with a one-shot ref, following Number Field's `blockRevalidationRef` precedent. I recommend the first unless the #9023 case is known to hit controlled inputs. Details are in `01_field-control-sync.md` (Finding 3).
+
+### 4. The sync sequence is now copied into every Field control with no canonical home (follow-up, canonical layer)
+
+With this PR, the clear-errors / set-dirty / set-filled / `validation.change` sequence exists as a hand-written `useValueChanged` block in ten places: Switch, Checkbox, CheckboxGroup, RadioGroup, Select, Slider, OTP Field, Combobox (twice), Number Field input, and now `FieldControl.tsx` lines 105–115. The copies already disagree on step order, which matters because `validation.change` reads `markedDirtyRef` (Slider validates before marking dirty). They also disagree on whether `clearErrors` is guarded by a defined name. The field layer that owns `setDirty`, `setFilled`, `validation` and the ordering rule should own this sequence, for example as a `useFieldValueSync(value, { name, isDirty, isFilled, enabled })` hook next to `useRegisterFieldControl` that returns the sync callback for imperative triggers. This PR should not have to migrate nine other controls. But it is the change that makes the pattern universal, so it should either land the helper for `Field.Control` (which also resolves finding 1) or file the consolidation explicitly. The inventory table and worked hook are in `02_field-sync-pattern.md`.
+
+## Non-findings
+
+The file grows by 28 lines and stays far below any decomposition threshold. The extra render per keystroke in `onChange` validation mode is disclosed and matches Number Field. Registering the string value only feeds `initialValue` capture, because the form's `getValue` is still overridden by the DOM read, so no other consumer is affected. `String(value)` matches how React writes non-string `value`s into the DOM, so the fixed dirty comparison is sound for the cases the PR targets.
+
+## Remediation sequence
+
+1. Extract `syncFieldValue` inside `FieldControl.tsx`, route both triggers through it, and rename `serializedValue` (finding 1).
+2. Pick the uncontrolled cancel semantics, apply them to the whole sync through the single early return, and extend the cancel test to assert dirty and filled too (finding 2).
+3. Decide the controlled `defaultPrevented` contract, update the workaround comment, and add a controlled twin of the prevented-change test (finding 3).
+4. Optionally hoist `syncFieldValue` into a shared `useFieldValueSync` in the field internals now, or file it as the follow-up that migrates the other nine controls (finding 4).
+
+## Detail files
+
+- `01_field-control-sync.md` — the diff walkthrough, commands run, base-vs-head probe table, findings 1–3 with worked code, and the rejected fuller code-judo.
+- `02_field-sync-pattern.md` — the cross-control inventory of the sync sequence and the worked `useFieldValueSync` proposal (finding 4).
