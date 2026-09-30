@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFile } from 'node:fs/promises'
 import { datasetSchema, detailSchema } from './data'
 import type { Attempt, Configuration, Dataset, Outcome, Task } from './data'
-import { commonTasks, duration, modelComparisonSegments, money, summarize } from './metrics'
+import { commonTasks, compareTasks, duration, feedbackSummary, modelComparisonSegments, money, summarize } from './metrics'
 
 const all = { concern: '', severity: 'all' } satisfies Parameters<typeof summarize>[4]
 const imported = datasetSchema.parse(JSON.parse(await readFile('public/data/benchmark.json', 'utf8')))
@@ -85,6 +85,13 @@ describe('trial scoring', () => {
     expect(summarize(data, configuration, data.tasks, 'trials', all)).toMatchObject({ score: null, cost: null, tokens: null, falseFindings: null })
   })
 
+  test('a missing replacement cannot fall back to its predecessor', () => {
+    const data = dataset([task('a', 1)], [attempt('original', 'a', ['a-0'])],
+      [outcome('a', [['original', 'missing-replacement']])])
+    expect(summarize(data, configuration, data.tasks, 'trials', all).score).toBeNull()
+    expect(feedbackSummary(data, configuration.id, data.tasks).pendingTrials).toBe(1)
+  })
+
   test('filters reference concerns and does not invent severity for unclassified findings', () => {
     const data = dataset([task('a', 2)], [attempt('a1', 'a', ['a-0'])], [outcome('a', [['a1']])])
     expect(summarize(data, configuration, data.tasks, 'trials', { concern: 'Security', severity: 'all' }).score).toBeNull()
@@ -159,6 +166,49 @@ describe('review time', () => {
   })
 })
 
+describe('task sensitivity and feedback workload', () => {
+  test('omits entire PRs, weights uneven repetitions equally and excludes clean tasks', () => {
+    const data = dataset([task('a', 1), task('b', 1), task('clean', 0)],
+      [attempt('a1', 'a', ['a-0']), attempt('a2', 'a', []), attempt('b1', 'b', ['b-0']),
+        attempt('other-a', 'a', []), attempt('other-b', 'b', []), attempt('clean', 'clean', [])],
+      [outcome('a', [['a1'], ['a2']]), outcome('b', [['b1']]), outcome('clean', [['clean']]),
+        { ...outcome('a', [['other-a']]), configurationId: 'other' },
+        { ...outcome('b', [['other-b']]), configurationId: 'other' },
+        { ...outcome('clean', [['clean']]), configurationId: 'other' }])
+    const result = compareTasks(data, configuration.id, 'other', data.tasks, all)
+    expect(result.rows).toHaveLength(2)
+    expect(result.full.delta).toBe(75)
+    expect(result.omissions.map(row => row.delta)).toEqual([100, 50])
+    expect(result.rows[0]?.configurations[0]).toMatchObject({ min: 0, max: 100 })
+    expect(result).toMatchObject({ wins: 2, ties: 0, losses: 0, pending: 0 })
+    expect(compareTasks(data, configuration.id, 'other', data.tasks.filter(task => task.id === 'a'), all).omissions[0]?.delta).toBeNull()
+    expect(compareTasks(data, configuration.id, 'other', data.tasks, { concern: 'Security', severity: 'all' }).rows).toHaveLength(0)
+  })
+
+  test('reports legacy volume but does not invent advisory or refutation breakdowns', () => {
+    const data = dataset([task('a', 1)], [attempt('a1', 'a', [], { feedback: { kind: 'legacy', items: 5 }, falseFindings: 2 }),
+      attempt('stopped', 'a', [], { admitted: false, complete: false, rawFalseFindings: 3 })],
+      [outcome('a', [['a1'], ['stopped']])])
+    expect(feedbackSummary(data, configuration.id, data.tasks)).toMatchObject({ admittedReviews: 1,
+      items: 5, itemsPerReview: 5, falsePerAdmittedReview: 2, falsePerTrial: 1, advisory: null,
+      refuted: null, unsupported: null, claimGradedReviews: 0, unadmittedFalseOccurrences: 3 })
+  })
+
+  test('counts claim outcomes and clean exposure with explicit coverage', () => {
+    const feedback = { kind: 'claims', items: 1, occurrences: 2, distinct: 2, duplicates: 0, mixedItems: 1, unresolvedItems: 0,
+      outcomes: { eligible: { distinct: 1, occurrences: 1 }, advisory: { distinct: 0, occurrences: 0 },
+        inconsequential: { distinct: 0, occurrences: 0 }, 'scope-excluded': { distinct: 0, occurrences: 0 },
+        refuted: { distinct: 1, occurrences: 1 }, unsupported: { distinct: 0, occurrences: 0 }, unresolved: { distinct: 0, occurrences: 0 } } } satisfies NonNullable<Attempt['feedback']>
+    const data = dataset([task('a', 1), task('clean', 0)], [attempt('a1', 'a', ['a-0'], { feedback }),
+      attempt('c1', 'clean', [], { feedback: { ...feedback, outcomes: { ...feedback.outcomes, eligible: { distinct: 0, occurrences: 0 } } } })],
+      [outcome('a', [['a1']]), outcome('clean', [['c1']])])
+    expect(feedbackSummary(data, configuration.id, data.tasks)).toMatchObject({ items: 2, claimGradedReviews: 2,
+      refuted: 2, mixedItems: 2, advisory: 0, cleanRefutedFraction: 1, cleanUnsupportedFraction: 0 })
+    data.attempts[1] = attempt('c1', 'clean', [], { feedback: { kind: 'unavailable', observedItems: 1 } })
+    expect(feedbackSummary(data, configuration.id, data.tasks)).toMatchObject({ items: null, refuted: null, cleanRefutedFraction: null })
+  })
+})
+
 describe('preserved benchmark', () => {
   const builtins = imported.configurations.filter(row => row.builtin)
   const shared = commonTasks(imported, builtins.map(row => row.id), imported.tasks)
@@ -205,5 +255,13 @@ describe('preserved benchmark', () => {
     const result = summarize(imported, setup, imported.tasks, 'trials', all)
     expect(result.score).toBeCloseTo(69.753086, 5)
     expect(result).toMatchObject({ cost: null, tokens: null, completed: 36, trials: 36, attempts: 42, unresolved: 2 })
+  })
+
+  test('reproduces the saved Sol/Astra sensitivity examples from the real data', () => {
+    const comparison = compareTasks(imported, 'codex-builtin-sol-high', 'codex-builtin-astra-high', imported.tasks, all)
+    expect(comparison.rows).toHaveLength(9)
+    expect(comparison.full.delta).toBeCloseTo(0)
+    expect(comparison.omissions.find(row => row.task.id === 'n-ripgrep-2957')?.delta).toBeCloseTo(-12.5)
+    expect(comparison.omissions.find(row => row.task.id === 's-seaweedfs-10735')?.delta).toBeCloseTo(8.3333333333)
   })
 })

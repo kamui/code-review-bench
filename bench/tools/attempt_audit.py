@@ -269,8 +269,8 @@ def tokens(segment: str) -> list:
         return [t.strip("'\"") for t in segment.split()]
 
 
-def command_words(text: str) -> list:
-    lexer = shlex.shlex(text, posix=True, punctuation_chars=";&|")
+def command_words(text: str, preserve_quotes=False) -> list:
+    lexer = shlex.shlex(text, posix=not preserve_quotes, punctuation_chars=";&|")
     lexer.whitespace_split = True
     lexer.commenters = ""
     groups = [[]]
@@ -308,18 +308,24 @@ def paths_in(text: str, cwd: str, base: str = None):
     unquoted(commands, scripts)
     for start, end in scripts:
         found.extend(paths_in(commands[start + 1:end], cwd, base))
-    for words in command_words(commands):
+    raw_groups = command_words(commands, preserve_quotes=True)
+    for group, words in enumerate(command_words(commands)):
+        raw_words = raw_groups[group] if group < len(raw_groups) and len(raw_groups[group]) == len(words) else []
         for index, word in enumerate(words):
+            raw = raw_words[index] if raw_words else ""
+            quoted_literal = (len(raw) >= 2 and raw[0] in "'\"" and raw[-1] == raw[0]
+                              and not any(value in raw for value in ("$", "`")))
+            expand = (lambda value: value) if quoted_literal else climbs
             if index == 1 and words[0] == "cd":
                 if word.startswith("/") and os.path.normpath(climbs(word)) in found:
                     found.remove(os.path.normpath(climbs(word)))
                 elif word.startswith("~/") and word[1:] in tilde:
                     tilde.remove(word[1:])
                 continue
-            for run in map(climbs, RUN.findall(word)):
+            for run in map(expand, RUN.findall(word)):
                 if run and not run.startswith("/") and ".." in run.split("/"):
                     relative.append(os.path.normpath(os.path.join(here, run)))
-            operand = climbs(word.split("=", 1)[1] if word.startswith("-") and "=" in word else word)
+            operand = expand(word.split("=", 1)[1] if word.startswith("-") and "=" in word else word)
             if operand.startswith("/"):
                 found.append(os.path.normpath(operand))
             elif operand.startswith("~/"):

@@ -8,6 +8,7 @@ import { average, commonTasks, compact, eligibleDefects, money, percent, summari
 import type { Axis, MetricVersion, SeverityFilter } from '../lib/metrics'
 import { Chart, reviewColor } from './Chart'
 import { EvidenceDrawer } from './EvidenceDrawer'
+import { MethodologyViews } from './MethodologyViews'
 import type { Inspection } from './EvidenceDrawer'
 
 type LoadState = { kind: 'loading' } | { kind: 'failed'; message: string } | { kind: 'ready'; dataset: Dataset }
@@ -153,7 +154,7 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
             ? 'Each PR has equal weight. Retry usage is included; false findings never reduce the detection score.'
             : 'Original published calculations: all attempts affect recall and cost; false findings use completed reviews.'}</span></div>
         </Paper>
-        {unresolved > 0 && <Alert color="yellow" mt="md">{unresolved} unresolved claims. False-finding measurements are provisional.</Alert>}
+        {unresolved > 0 && <Alert color="yellow" mt="md">{unresolved} unresolved grading assignments. False-finding measurements are provisional.</Alert>}
         {severity !== 'all' && <Alert color="blue" mt="md">Severity has not been adjudicated for these reference findings. High-severity and critical-only scores are unavailable; unclassified does not mean low severity.</Alert>}
         {version === 'historical' && findingConcern && <Alert color="blue" mt="md">Published scores do not have finding-category breakdowns. Select trial-based metrics to inspect this concern.</Alert>}
         <Text size="sm" mt="xl" fw={600}>All review setups</Text>
@@ -173,6 +174,7 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
         </Table></Table.ScrollContainer>
         {!tableTasks.length && <Text ta="center" c="dimmed" py="xl">No tasks are shared by every setup with these filters.</Text>}
         <Text size="xs" c="dimmed" mt="sm">* Codex cost is a list-price equivalent. Output includes reasoning and subagents. Results use model-assisted judgments; profile labels are proposed.</Text>
+        <MethodologyViews dataset={dataset} configurations={configurations.filter(c => activeIds.includes(c.id))} tasks={shared} filter={filter} version={version} />
       </section>
 
       <section id="tasks" className="tasks-section">
@@ -203,7 +205,7 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
               })
               return <Table.Tr key={task.id}><Table.Td><button className="text-button task-name" onClick={() => setInspection({ kind: 'task', id: task.id })}>{task.repo}<span>#{task.pr}</span></button><Text size="xs" c="dimmed" mt={4} maw={340}>{task.shape}</Text></Table.Td>
                 <Table.Td><Group gap={5} maw={220}>{[...task.profile.technologies, ...task.profile.changeKinds].map(label => <Badge key={label} color="gray" variant="light" size="xs">{label}</Badge>)}</Group></Table.Td>
-                <Table.Td>{task.defects.length ? <Text size="sm">{task.defects.length} {task.defects.length === 1 ? 'problem' : 'problems'}</Text> : <Badge color="teal" variant="light" size="sm">Judged clean</Badge>}</Table.Td>
+                <Table.Td>{task.defects.length ? <Text size="sm">{task.defects.length} {task.defects.length === 1 ? 'problem' : 'problems'}</Text> : <Badge color="gray" variant="light" size="sm">No registered problem</Badge>}</Table.Td>
                 <Table.Td>{percent(sharedIds.has(task.id) ? average(scores) : null)}</Table.Td><Table.Td>{sharedIds.has(task.id) ? <span className="included-label"><Check size={14} /> Included</span> : <Text size="xs" c="dimmed">Not shared</Text>}</Table.Td>
                 <Table.Td><ActionIcon aria-label={`Inspect ${task.repo} PR ${task.pr}`} variant="subtle" color="gray" onClick={() => setInspection({ kind: 'task', id: task.id })}><ArrowUpRight size={18} /></ActionIcon></Table.Td></Table.Tr>
             })}</Table.Tbody></Table></Table.ScrollContainer>
