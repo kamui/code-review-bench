@@ -85,6 +85,7 @@ sys.path.insert(0, str(TOOLS))
 import check_manifest  # noqa: E402
 import review_isolation  # noqa: E402
 import prune_workspace  # noqa: E402
+import skill_provenance
 
 ATTEMPT = re.compile(r"^att-(\d{3,})$")
 SKILL_RUNNERS = {"codex-skill": "codex_skill_runner.py", "claude-skill": "claude_skill_runner.py"}
@@ -238,6 +239,10 @@ def check_frozen(run: Run) -> None:
             raise InputError(f"no arm file {path}")
         if sha256_file(path) != arm["arm_file_sha256"]:
             raise Refused(f"arm file {path.name} no longer hashes to the frozen arm_file_sha256")
+        try:
+            skill_provenance.verify_pin(run.dir, arm)
+        except (ValueError, OSError, KeyError) as error:
+            raise Refused(f"skill provenance for {arm['id']}: {error}") from error
         definition = read_json(path)
         if definition.get("isolation", {}).get("sandbox") in review_isolation.PROFILES:
             version = tool([os.environ.get("BENCH_CLAUDE", "claude"), "--version"])
