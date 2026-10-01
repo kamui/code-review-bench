@@ -1,6 +1,7 @@
-name: Deploy site to GitHub Pages
+name: CI and GitHub Pages
 
 on:
+  pull_request:
   push:
     branches: [main]
   workflow_dispatch:
@@ -10,12 +11,18 @@ permissions:
   pages: read
 
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: pages-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   build:
+    name: Web and evidence
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -28,22 +35,93 @@ jobs:
         with:
           python-version: '3.12'
       - name: Configure Pages
+        if: github.event_name != 'pull_request'
         id: pages
         uses: actions/configure-pages@v5
       - run: bun install --frozen-lockfile
+      - name: Verify preserved evidence
+        run: |
+          bun run verify:import
+          bun run verify:historical
+          bun run verify:claims
+      - name: Test scoring and exports
+        run: bun run test:web
       - name: Build static site
         run: |
           bun run build
           test -f dist/client/index.html
         env:
-          BASE_PATH: ${{ steps.pages.outputs.base_path }}/
+          BASE_PATH: ${{ github.event_name == 'pull_request' && format('/{0}/', github.event.repository.name) || format('{0}/', steps.pages.outputs.base_path) }}
+      - name: Check types after route generation
+        run: bun run typecheck
       - name: Upload site
+        if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v3
         with:
           path: dist/client
 
+  grading:
+    name: Grading regressions
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    env:
+      BENCH_DISK_RESERVE_GIB: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.10'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+          cache: false
+      - name: Install sandbox tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap ripgrep
+      - name: Test benchmark tools and provisioning
+        run: bun run test:bench
+
+  client:
+    name: Client compatibility
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    env:
+      CLAUDE_VERSION: '2.1.287'
+      DISABLE_AUTOUPDATER: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.10'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install sandbox tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap ripgrep
+      - name: Install pinned Claude client
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash -s -- "$CLAUDE_VERSION"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Verify client version
+        run: test "$(claude --version)" = "$CLAUDE_VERSION (Claude Code)"
+      - name: Test client against the local fake API
+        run: bun run test:client
+
   deploy:
-    needs: build
+    if: github.event_name != 'pull_request'
+    needs: [build, grading, client]
     runs-on: ubuntu-latest
     permissions:
       pages: write
