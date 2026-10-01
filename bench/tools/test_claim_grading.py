@@ -103,8 +103,14 @@ class ClaimMap(Grade):
 
     def map(self):
         write_json(self.work / "verdicts.json", self.verdicts)
+        self.raw = (self.work / "verdicts.json").read_bytes()
         return cli("map", "--run", str(self.run_dir), "--target", TARGET, "--work", str(self.work),
                    "--key", str(self.key), "--version", "1")
+
+    def correction(self):
+        receipt = json.loads((self.run_dir / f"scoring/{TARGET}/verdict-normalization.v1.json").read_text())
+        self.assertEqual(receipt["raw_sha256"], hashlib.sha256(self.raw).hexdigest())
+        return receipt
 
     def test_in_session_and_mapping_use_the_same_blinded_validator(self):
         import copy
@@ -152,6 +158,9 @@ class ClaimMap(Grade):
         mapping = json.loads((self.run_dir / f"scoring/{TARGET}/mapping.v1.json").read_text())
         self.assertIn(hashlib.sha256(receipt.read_bytes()).hexdigest(), mapping["scored_by"]["adjudicator"])
         self.assertEqual((self.work / "verdicts.json").read_bytes(), raw)
+        self.assertEqual(deviation["raw_verdict_sha256"], hashlib.sha256(raw).hexdigest())
+        self.assertIn(f"raw verdict sha256 {hashlib.sha256(raw).hexdigest()}", mapping["scored_by"]["adjudicator"])
+        self.assertFalse((self.run_dir / f"scoring/{TARGET}/verdict-normalization.v1.json").exists())
         self.assertEqual(self.key.read_bytes(), original_key)
         (self.work / "packet.md").write_text("changed")
         self.assertIn("grading inputs changed", "\n".join(grade.check_prepared(self.work, self.key_doc, dispatching=False)))
@@ -182,12 +191,22 @@ class ClaimMap(Grade):
         self.assertIn("normalized review changed", done.stdout)
 
     def test_omitted_items_wrapper_is_normalized_without_changing_raw_verdicts(self):
-        self.verdicts["reviews"][self.token] = self.verdicts["reviews"][self.token]["items"]
+        items = self.verdicts["reviews"][self.token]["items"]
+        self.verdicts["reviews"][self.token] = items
         done = self.map()
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(json.loads((self.work / "verdicts.json").read_text()), self.verdicts)
+        self.assertEqual((self.work / "verdicts.json").read_bytes(), self.raw)
         mapped = json.loads((self.run_dir / f"scoring/{TARGET}/mapping.v1.json").read_text())
         self.assertIn("normalized omitted review-items wrappers", mapped["scored_by"]["adjudicator"])
+        self.assertEqual([item["claims"] for item in mapped["attempts"][0]["items"]],
+                         [item["claims"] for item in items.values()])
+        receipt = self.correction()
+        self.assertEqual((receipt["wrapped_reviews"], receipt["renumbered_reviews"]), ([self.token], []))
+        self.assertEqual(receipt["verdicts"], {"reviews": {self.token: {"items": items}}, "new_candidates": []})
+        again = self.map()
+        self.assertEqual(again.returncode, 1)
+        self.assertIn("verdict-normalization.v1.json exists; a mapping version is never overwritten", again.stdout)
+        self.assertEqual(self.correction(), receipt)
         malformed = {"reviews": {self.token: {"1": {}}}, "new_candidates": []}
         unchanged, wrapped = grade.normalize_claim_review_shape(malformed, {self.token: 2})
         self.assertEqual(unchanged, malformed)
@@ -197,13 +216,18 @@ class ClaimMap(Grade):
         self.verdicts["reviews"][self.token]["items"]["2"]["claims"][0]["id"] = "c1"
         done = self.map()
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(json.loads((self.work / "verdicts.json").read_text()), self.verdicts)
+        self.assertEqual((self.work / "verdicts.json").read_bytes(), self.raw)
         mapped = json.loads((self.run_dir / f"scoring/{TARGET}/mapping.v1.json").read_text())
         ids = [claim["id"] for item in mapped["attempts"][0]["items"] for claim in item["claims"]]
         self.assertEqual(ids, ["item-1-c1", "item-1-c2", "item-2-c1"])
         self.assertIn("normalized item-scoped claim IDs", mapped["scored_by"]["adjudicator"])
         normalized, tokens = grade.normalize_item_claim_ids(self.verdicts, {self.token: 2})
         self.assertEqual(tokens, [self.token])
+        receipt = self.correction()
+        self.assertEqual((receipt["wrapped_reviews"], receipt["renumbered_reviews"]), ([], [self.token]))
+        self.assertEqual(receipt["verdicts"], normalized)
+        self.assertEqual([item["claims"] for item in mapped["attempts"][0]["items"]],
+                         [item["claims"] for item in normalized["reviews"][self.token]["items"].values()])
         for number, item in self.verdicts["reviews"][self.token]["items"].items():
             for before, after in zip(item["claims"], normalized["reviews"][self.token]["items"][number]["claims"]):
                 self.assertEqual({k: v for k, v in before.items() if k != "id"},
