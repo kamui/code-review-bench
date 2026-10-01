@@ -81,22 +81,24 @@ bun run verify:historical
 bun run verify:claims
 bun run audit:maintainers
 bun run test
-bun run typecheck
 bun run build
+bun run typecheck
 bun run preview
 ```
 
-`bun run test` checks trial scoring, historical reproduction, exported evidence, and usage handling. The original tool suite is also available:
+`bun run test` runs three suites: `test:web` checks scoring and exported evidence, `test:bench` discovers benchmark-tool tests and runs the provisioning self-test, and `test:client` checks the installed Claude client against a local fake API. Build before type checking so TanStack generates the route types. The original tool suite is also available:
 
 ```sh
 python3 -m unittest discover -s bench/tools -p 'test_*.py'
 ```
 
-Some original tests need a working Linux sandbox or a live client probe and skip when unavailable. Exploring or building the app does not execute paid reviews.
+The benchmark suite requires Linux namespaces, bubblewrap, ripgrep, and Go. The client suite also requires Claude Code 2.1.287. Sandbox checks fail when enforcement is unavailable; optional reviewer integration checks skip unless explicitly enabled. The client probe uses a dummy key and makes no paid model requests. Exploring or building the app does not execute paid reviews.
 
 ## GitHub Pages
 
-In the repository's **Settings > Pages**, select **GitHub Actions** as the publishing source. The [Pages workflow](.github/workflows/pages.yml) builds and deploys the site on pushes to `main` and can also be run manually from the Actions tab.
+In the repository's **Settings > Pages**, select **GitHub Actions** as the publishing source. The [CI and Pages workflow](.github/workflows/pages.yml) runs web and evidence checks, grading regressions, and client compatibility in parallel on pull requests and pushes to `main`. Pushes to `main` deploy only after all three jobs pass. The workflow can also be run manually from the Actions tab.
+
+The grading job sets `BENCH_DISK_RESERVE_GIB=0` for its temporary fixtures to fit hosted runner storage. The explicit low-space tests still exercise refusal, and production preparation retains its 20 GiB default reserve.
 
 The build prerenders the home page and publishes `dist/client`, including the generated data and evidence. The workflow reads the site's base path from GitHub Pages so assets and downloads work under the repository path or a custom domain. To build locally for the repository path:
 
