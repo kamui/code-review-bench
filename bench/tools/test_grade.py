@@ -552,6 +552,8 @@ class Map(Mapped):
         self.assertTrue(mapping["scored_by"]["blind"])
         self.assertIn(f"prompt sha256 {self.key_doc['prompt_sha256']}", mapping["scored_by"]["adjudicator"])
         self.assertIn(f"session {self.dispatch['session_id']}", mapping["scored_by"]["adjudicator"])
+        self.assertIn("--restricted, native tools disabled, grading MCP only", mapping["scored_by"]["adjudicator"])
+        self.assertNotIn("--safe-mode", mapping["scored_by"]["adjudicator"])
         self.check_extras(mapping)
         card = (self.run_dir / "scoring" / TARGET / "scorecard.v1.md").read_text(encoding="utf-8")
         self.assertEqual([line for line in card.splitlines() if line.startswith("## att-")],
@@ -618,6 +620,13 @@ class Map(Mapped):
                 self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
                 self.assertIn(expected, done.stdout)
                 self.assertFalse(self.mapping_path().exists())
+
+    def test_legacy_grader_record_keeps_its_safe_mode_harness(self):
+        import grade as grading
+        legacy = {key: value for key, value in self.dispatch.items() if key != "enforcement"}
+        line = grading.grader_line(legacy)
+        self.assertIn("--safe-mode", line)
+        self.assertNotIn("--restricted", line)
 
     def test_dispatch_record_gates_the_mapping(self):
         cases = [

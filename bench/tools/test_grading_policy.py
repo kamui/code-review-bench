@@ -79,9 +79,9 @@ except OSError:
 else:
     raise AssertionError("external network available")
 server = socket.socket()
-server.bind(("127.0.0.1", 0))
+server.bind(("localhost", 0))
 server.listen(1)
-client = socket.create_connection(server.getsockname(), 1)
+client = socket.create_connection(("localhost", server.getsockname()[1]), 1)
 connection, _ = server.accept()
 client.sendall(b"fixture")
 assert connection.recv(7) == b"fixture"
@@ -136,6 +136,25 @@ print("read-only source; private key absent; external network denied; fixture lo
         self.assertEqual(result["exit_code"], 0, result["stderr"])
         self.assertIn("+changed", result["stdout"])
 
+    def test_scratch_sed_scripts_and_git_repositories_cannot_execute_commands(self):
+        policy.probe(self.work)
+        scratch = self.work / "clone-work"
+        (scratch / "-f").write_text("")
+        (scratch / "s.sed").write_text("1e touch marker\n")
+        (scratch / "in.txt").write_text("input\n")
+        subprocess.run(["git", "init", "-q", str(scratch)], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(scratch), "config", "diff.fixture.textconv", "touch marker"], check=True)
+        (scratch / ".gitattributes").write_text("*.txt diff=fixture\n")
+        (scratch / "other.txt").write_text("other\n")
+        for argv in (["sed", "-f", "s.sed", "in.txt"],
+                     ["sed", "-n", "1p", "-f", "s.sed"],
+                     ["git", "diff", "--no-index", "in.txt", "other.txt"]):
+            with self.subTest(argv=argv), self.assertRaises(policy.Denied):
+                policy.execute(self.work, self.policy, {"argv": argv, "cwd": "clone-work"})
+        self.assertFalse((scratch / "marker").exists())
+        result = policy.execute(self.work, self.policy, {"argv": ["sed", "-n", "1p", "in.txt"], "cwd": "clone-work"})
+        self.assertEqual(result["stdout"], "input\n")
+
     def test_stdin_reading_command_leaves_the_mcp_pipe_usable(self):
         policy_path = self.work.parent / "policy.json"
         policy_path.write_text(json.dumps(self.policy))
@@ -175,7 +194,7 @@ print("read-only source; private key absent; external network denied; fixture lo
         self.assertEqual(response["content"][0]["text"], "use the pinned virtualenv Python for focused checks")
 
     def test_literal_code_tokens_remain_searchable_without_a_shell(self):
-        for pattern in ("<-ctx.Done()", "=>", "x && y", "x; y"):
+        for pattern in ("<-ctx.Done()", "=>", "x && y", "x; y", "/api/v1", "../literal"):
             argv, _, _ = policy.command(self.work, self.policy, ["rg", "--", pattern, "file.txt"], "clone")
             self.assertEqual(argv[2], pattern)
 
