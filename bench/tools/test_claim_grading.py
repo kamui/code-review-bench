@@ -134,6 +134,28 @@ class ClaimMap(Grade):
                                   str(self.work / "verdicts.json")], capture_output=True, text=True)
         self.assertEqual(session.returncode, 1)
 
+    def test_mapping_rule_repair_reuses_raw_verdicts_and_versions_runner_evidence(self):
+        from argparse import Namespace
+        from unittest.mock import patch
+        write_json(self.work / "verdicts.json", self.verdicts)
+        raw = (self.work / "verdicts.json").read_bytes()
+        original_key = self.key.read_bytes()
+        changed = {**grade.runner_files(), "grade.py": "0" * 64}
+        with patch.object(grade, "runner_files", return_value=changed):
+            self.assertIn("runner changed", "\n".join(grade.check_prepared(self.work, self.key_doc)))
+            grade.map_verdicts(Namespace(run=str(self.run_dir), target=TARGET, work=str(self.work),
+                                        key=str(self.key), version=1, supersedes=None, reason=None, opened=None))
+        receipt = self.run_dir / f"scoring/{TARGET}/runner-deviation.v2.json"
+        deviation = json.loads(receipt.read_text())
+        self.assertEqual(deviation["files"], changed)
+        self.assertEqual(deviation["prepared"], self.key_doc["runner_deviation"])
+        mapping = json.loads((self.run_dir / f"scoring/{TARGET}/mapping.v1.json").read_text())
+        self.assertIn(hashlib.sha256(receipt.read_bytes()).hexdigest(), mapping["scored_by"]["adjudicator"])
+        self.assertEqual((self.work / "verdicts.json").read_bytes(), raw)
+        self.assertEqual(self.key.read_bytes(), original_key)
+        (self.work / "packet.md").write_text("changed")
+        self.assertIn("grading inputs changed", "\n".join(grade.check_prepared(self.work, self.key_doc, dispatching=False)))
+
     def test_prepare_and_map_pin_rule_and_claims_without_editing_manifest(self):
         self.assertEqual(self.key_doc["rubric_version"], 2)
         self.assertEqual(self.key_doc["source_rubric_version"], 1)

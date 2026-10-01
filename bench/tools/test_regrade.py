@@ -9,6 +9,18 @@ import regrade
 
 
 class RegradingBudget(unittest.TestCase):
+    def test_dispatch_arguments_parse_with_the_pinned_key_and_client(self):
+        import grade
+        import sys
+        arguments = regrade.dispatch_arguments(Path("work"), Path("key.json"),
+                                              {"model": "claude-opus-5-5", "effort": "high"}, 2, "2.1.286")
+        with patch.object(sys, "argv", ["grade.py", *map(str, arguments)]), patch.object(grade, "dispatch", return_value=[]) as dispatch:
+            self.assertEqual(grade.main(), 0)
+        self.assertEqual(dispatch.call_args.args[0].key, "key.json")
+        self.assertEqual(dispatch.call_args.args[0].expected_cli_version, "2.1.286")
+        with self.assertRaisesRegex(ValueError, "pinned"):
+            regrade.dispatch_arguments(Path("work"), Path("key.json"), {"model": "m", "effort": "high"}, 2, None)
+
     def test_neutral_workspace_preserves_receipts_and_portable_evidence(self):
         with tempfile.TemporaryDirectory() as temp, patch.object(regrade, "ROOT", Path(temp)):
             directory = Path(temp) / '.local/queue-4'
