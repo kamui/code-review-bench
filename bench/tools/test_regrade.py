@@ -18,6 +18,7 @@ class RegradingBudget(unittest.TestCase):
             self.assertEqual(grade.main(), 0)
         self.assertEqual(dispatch.call_args.args[0].key, "key.json")
         self.assertEqual(dispatch.call_args.args[0].expected_cli_version, "2.1.286")
+        self.assertEqual(dispatch.call_args.args[0].timeout, 900)
         with self.assertRaisesRegex(ValueError, "pinned"):
             regrade.dispatch_arguments(Path("work"), Path("key.json"), {"model": "m", "effort": "high"}, 2, None)
 
