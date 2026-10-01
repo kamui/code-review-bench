@@ -67,6 +67,6 @@ python3 bench/tools/prune_workspace.py --grading-work <work> --target bench/targ
   --mapping bench/runs/<run>/scoring/<target>/mapping.v<N>.json --apply
 ```
 
-It refuses a workspace with no dispatch record; a session that failed, timed out, was not priced or recorded an access violation; a session the mapping does not name; missing or changed verdicts; and a clone that changed.
+It refuses a workspace with no dispatch record; a session that failed, timed out, was not priced or recorded an access violation; a session the mapping does not name; missing verdicts; verdicts that differ from the hash the mapping records, where it records one; and a clone that changed.
 
 The check reads the free space of the filesystem that holds the workspace, on Linux and macOS alike. It cannot see a host drive beneath a virtual disk. Under WSL2 the virtual disk grows on the Windows drive and does not shrink when files are deleted, so that drive can fill while Linux still reports free space. Raise the reserve to cover the difference there.
