@@ -980,5 +980,25 @@ class Dispatch(Grade):
         self.assertIn("already dispatched", done.stdout)
 
 
+class RunnerInputs(unittest.TestCase):
+    def test_imported_claim_changes_require_a_new_runner_edition(self):
+        import grade
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temporary:
+            tools = Path(temporary) / "tools"
+            tools.mkdir()
+            for name in grade.runner_files():
+                shutil.copyfile(TOOLS / name, tools / name)
+            with patch.object(grade, "TOOLS", tools):
+                original = grade.runner_files()
+                key = {"runner_deviation": {"files": original}}
+                self.assertEqual(grade.check_prepared(Path(temporary), key), [])
+                (tools / "claims.py").write_text((tools / "claims.py").read_text() + "\n")
+                self.assertIn("runner changed after preparation; record a new versioned deviation",
+                              grade.check_prepared(Path(temporary), key))
+                self.assertNotEqual(grade.runner_files()["claims.py"], original["claims.py"])
+                self.assertEqual(grade.check_prepared(Path(temporary), key, dispatching=False), [])
+
+
 if __name__ == "__main__":
     unittest.main()
