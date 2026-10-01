@@ -50,6 +50,12 @@ duration, and the existing file's ``mirror`` block carried over. A non-zero smok
 observation, not a failure; a missing or mismatched archive, a restore with a dangling symlink,
 or a post-clone step that fails or dirties the tree, is a failure.
 
+Before cloning, ``prepare`` estimates what it will write (the mirror's objects, the checked-out tree and
+the extracted archive, in 4 KiB blocks) and refuses unless the output's filesystem would keep
+``BENCH_DISK_RESERVE_GIB`` (default 20) free beyond it; the reserve covers what the estimate cannot
+see, such as post-clone steps and builds during the session. Preparations that share a cache root
+run one at a time, so each sees the space the previous one took.
+
 The cache root defaults to ``~/.t3/bench-cache``. Nothing under it enters the repository.
 
 Exit codes: 0 built, verified or written; 1 a check failed, one line per failure on stdout (a
@@ -61,6 +67,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import fcntl
 import hashlib
 import json
 import os
@@ -71,6 +78,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 
@@ -78,6 +86,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import diff_identity  # noqa: E402
 
 DEFAULT_CACHE_ROOT = os.path.join(os.path.expanduser("~"), ".t3", "bench-cache")
+DEFAULT_RESERVE_GIB = 20
+GIB = 1 << 30
+BLOCK = 4096
 EMPTY_CACHE = {"kind": "none", "build": [], "post_clone": [], "env": {}, "smoke": []}
 
 
@@ -414,12 +425,70 @@ def restore_cache(target: dict, cfg: dict, cache_root: str, dest: str) -> tuple:
     return step, []
 
 
+def blocks(size: int) -> int:
+    return -(-size // BLOCK) * BLOCK
+
+
+def space_needed(target: dict, cfg: dict, cache_root: str) -> int:
+    """Bytes ``prepare`` writes before its post-clone steps: the mirror's objects (a clone on another
+    filesystem copies them), the checked-out tree and the extracted cache archive."""
+    mirror = mirror_path(cache_root, target)
+    needed = sum(os.lstat(os.path.join(root, name)).st_blocks * 512
+                 for root, _dirs, files in os.walk(mirror) for name in files)
+    for line in git("-C", mirror, "ls-tree", "-r", "-l", target["head"]).splitlines():
+        size = line.split(None, 4)[3]
+        needed += blocks(int(size)) if size.isdigit() else BLOCK
+    archive = archive_path(cache_root, target)
+    if cfg["build"] and os.path.isfile(archive):
+        try:
+            with tarfile.open(archive, "r|gz") as bundle:
+                needed += sum(blocks(member.size) if member.isreg() else BLOCK for member in bundle)
+        except (tarfile.TarError, OSError, EOFError):
+            pass  # restore_cache refuses an archive that tar cannot read
+    return needed
+
+
+def space_refusal(free: int, needed: int, reserve: int, out: str) -> list:
+    if free - needed >= reserve:
+        return []
+    return [f"disk space: {out} needs about {needed / GIB:.1f} GiB and a {reserve / GIB:.1f} GiB reserve, but its "
+            f"filesystem has {free / GIB:.1f} GiB free; nothing was cloned"]
+
+
+def space_failures(target: dict, cfg: dict, cache_root: str, out: str) -> list:
+    raw = os.environ.get("BENCH_DISK_RESERVE_GIB", str(DEFAULT_RESERVE_GIB))
+    try:
+        reserve = float(raw)
+    except ValueError:
+        reserve = -1.0
+    if not 0 <= reserve < float("inf"):
+        raise ProvisionError(f"BENCH_DISK_RESERVE_GIB is not a non-negative number: {raw!r}")
+    if not os.path.isdir(mirror_path(cache_root, target)):
+        return []
+    existing = os.path.abspath(out)
+    while not os.path.isdir(existing):
+        existing = os.path.dirname(existing)
+    return space_refusal(shutil.disk_usage(existing).free, space_needed(target, cfg, cache_root), int(reserve * GIB), out)
+
+
 def prepare(target: dict, cache_root: str, out: str, revision: str = "head") -> dict:
-    """Clone (checking out the base branch for ``revision`` base), restore the cache archive into
-    ``<out>-cache`` and run the post-clone steps; return the provisioning record with a
-    ``failures`` list."""
+    """``prepare_locked`` under the cache root's lock, which serializes preparations."""
+    path = os.path.join(cache_root, "prepare.lock")
+    try:
+        lock = open(path, "a", encoding="utf-8")
+    except OSError as error:
+        raise ProvisionError(f"cannot lock {path}: {error}") from error
+    with lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return prepare_locked(target, cache_root, out, revision)
+
+
+def prepare_locked(target: dict, cache_root: str, out: str, revision: str) -> dict:
+    """Check the free space, clone (checking out the base branch for ``revision`` base), restore the
+    cache archive into ``<out>-cache`` and run the post-clone steps; return the provisioning record
+    with a ``failures`` list."""
     cfg = cache_config(target)
-    failures = make_clone(target, cache_root, out)
+    failures = space_failures(target, cfg, cache_root, out) or make_clone(target, cache_root, out)
     record = {"recipe": "; ".join(cfg["post_clone"]) or "none", "duration_seconds": 0.0, "tree_clean_after": None,
               "steps": [], "failures": failures}
     if failures:
@@ -561,9 +630,9 @@ def self_test() -> int:
         (target_dir / "target.json").write_text(json.dumps(target), encoding="utf-8")
         cache = str(Path(temp, "cache"))
 
-        def run(*argv):
+        def run(*argv, **options):
             return subprocess.run([sys.executable, str(here), *argv, "--cache-root", cache], capture_output=True,
-                                  text=True, encoding="utf-8")
+                                  text=True, encoding="utf-8", **options)
 
         done = run("mirror", "--target", str(target_dir), "--staging", staging)
         assert done.returncode == 0, done
@@ -623,6 +692,33 @@ def self_test() -> int:
         assert Path(prepared + "-cache", "store", "written").is_file(), "the clone writes into its own restore"
         assert not Path(cache, "caches", "t-1", "store", "written").exists(), "the build directory must stay untouched"
         assert sha256_file(str(archive)) == entry["sha256"]
+        # Too little room is refused before anything is written, and leaves the output free for a later run.
+        tight = str(Path(temp, "tight"))
+        done = run("prepare", "--target", str(target_dir), "--out", tight, env=dict(os.environ, BENCH_DISK_RESERVE_GIB="1e9"))
+        assert done.returncode == 1 and "disk space:" in done.stdout and "nothing was cloned" in done.stdout, done
+        assert not any(os.path.lexists(tight + suffix) for suffix in ("", "-cache", "-work")), "a refusal must write nothing"
+        done = run("prepare", "--target", str(target_dir), "--out", tight, env=dict(os.environ, BENCH_DISK_RESERVE_GIB="much"))
+        assert done.returncode == 2 and "BENCH_DISK_RESERVE_GIB" in done.stderr and not os.path.lexists(tight), done
+        done = run("prepare", "--target", str(target_dir), "--out", tight, env=dict(os.environ, BENCH_DISK_RESERVE_GIB="0"))
+        assert done.returncode == 0, done
+        # The estimate counts the mirror's objects, every checked-out file and every extracted cache entry.
+        objects = sum(os.lstat(os.path.join(root, name)).st_blocks * 512 for root, _dirs, files in os.walk(mirror) for name in files)
+        bare = space_needed(target, cache_config(target), cache)
+        assert bare == objects + BLOCK, (bare, objects)
+        with tarfile.open(archive, "r:gz") as bundle:
+            entries = len(bundle.getmembers())
+        assert space_needed(with_cache, cache_config(with_cache), cache) == bare + entries * BLOCK, entries
+        assert space_refusal(10 * GIB, 6 * GIB, 5 * GIB, tight) and not space_refusal(11 * GIB, 6 * GIB, 5 * GIB, tight)
+        # A second preparation waits for the one holding the cache root's lock.
+        with open(Path(cache, "prepare.lock"), "a", encoding="utf-8") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            waiting = str(Path(temp, "waiting"))
+            try:
+                run("prepare", "--target", str(target_dir), "--out", waiting, timeout=2)
+            except subprocess.TimeoutExpired:
+                assert not os.path.lexists(waiting), "a waiting preparation must not have started"
+            else:
+                raise AssertionError("a preparation ran while another held the lock")
         smoke_out = str(Path(temp, "smoke.json"))
         Path(smoke_out).write_text(json.dumps({"source": "recorded", "source_document": "old.md", "mirror": {"built_at": "x"}}),
                                    encoding="utf-8")
