@@ -39,9 +39,34 @@ python3 bench/tools/test_grading_policy.py
 python3 bench/tools/test_grading_client.py
 python3 bench/tools/test_codex_dispatch.py
 python3 bench/tools/test_claude_dispatch.py
+python3 bench/tools/test_prune_workspace.py
+python3 bench/tools/provision.py --self-test
 bun run verify:claims
 ```
 
 The policy and installed-client tests require Linux namespaces and bubblewrap. They fail when enforcement is unavailable. The client test uses a dummy key and a local fake API, never the user's credentials or a paid request.
 
 For `regrade.py`, pin the enforcing client with `--expected-cli-version VERSION` or `grader.cliVersion` in a new authorization. Missing version information is rejected before reserving a dispatch. Existing authorizations and frozen runner copies remain unchanged.
+
+## Disk space
+
+A grading workspace holds a clone, its restored dependency cache and scratch space; the larger targets take several gibibytes each. Two mechanisms keep them from filling the disk.
+
+`provision.py prepare`, which review and grading preparation both call, estimates the clone and the extracted cache before it writes anything. It refuses, with nothing cloned, unless the workspace's filesystem would still have `BENCH_DISK_RESERVE_GIB` gibibytes free afterwards (default 20). The estimate counts the mirror's objects, the checked-out tree and the extracted archive. It cannot see post-clone steps, builds during a session or other programs, so the reserve has to cover those. Preparations that share a cache root wait for one another, so each one counts the space the previous one took. After a refused or failed `grade.py prepare`, WORK is empty and no key exists: free space, then prepare again.
+
+`grade.py map` removes the workspace's `clone` and `clone-cache` once the dispatch record and the verdicts pass every check, before it writes the mapping. `clone-work`, `home`, the verdicts, the dispatch record, the prepared inputs and the logs stay, and `workspace-pruned.json` records what was removed and the filesystem's free space before and after. A clone that is not clean at the target's head is kept: mapping stops with exit 2 and writes nothing, so the same version maps again once the clone has been inspected. A later mapping version needs no clone.
+
+Grade one target at a time, from preparation through mapping, so that at most one clone exists at once.
+
+A workspace that never reaches a mapping keeps its clone: an unfinished, failed, rejected or refused session. It counts against the free space until someone inspects and removes it. A workspace that was mapped before this cleanup existed, or a re-grade that `revise` consumed, has a mapping that names its session. Preview the same verified cleanup for those, then apply it:
+
+```sh
+python3 bench/tools/prune_workspace.py --grading-work <work> --target bench/targets/<target> \
+  --mapping bench/runs/<run>/scoring/<target>/mapping.v<N>.json
+python3 bench/tools/prune_workspace.py --grading-work <work> --target bench/targets/<target> \
+  --mapping bench/runs/<run>/scoring/<target>/mapping.v<N>.json --apply
+```
+
+It refuses a workspace with no dispatch record; a session that failed, timed out, was not priced or recorded an access violation; a session the mapping does not name; missing or changed verdicts; and a clone that changed.
+
+The check reads the free space of the filesystem that holds the workspace, on Linux and macOS alike. It cannot see a host drive beneath a virtual disk. Under WSL2 the virtual disk grows on the Windows drive and does not shrink when files are deleted, so that drive can fill while Linux still reports free space. Raise the reserve to cover the difference there.
