@@ -158,7 +158,7 @@ def command(work, policy, argv, cwd):
         for index, arg in enumerate(argv[1:], 1):
             if name != "rg" and any(c in arg for c in (";", "&&", "||", "`", "$(", "\n", ">", "<")):
                 raise Denied("compound commands and shell substitutions are not accepted; use separate argv calls")
-            if name == "rg" and index > 1 and argv[index - 1] == "--":
+            if name == "rg" and index == 2 and argv[1] == "--":
                 continue
             if arg.startswith("/") or "../" in arg:
                 try:
