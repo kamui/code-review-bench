@@ -82,7 +82,8 @@ def run(work, key, model, effort, timeout, user_home, rate):
     clean_context.prepare(work)
     exit_code = None
     try:
-        codex_grading.configure_client(work, protected=(key.resolve(), user_home.resolve()))
+        codex_grading.configure_client(work, protected=(key.resolve(), user_home.resolve()),
+                                       execution_policy=(work / "execution-policy.md").read_text())
         descriptor = os.open(credentials, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, "wb") as handle:
             handle.write((user_home / ".codex/auth.json").read_bytes())
@@ -109,4 +110,5 @@ def run(work, key, model, effort, timeout, user_home, rate):
                             "billing": "list-price-equivalent"}}
     if exit_code != 0:
         result["usage"]["high"] = None
-    return {**result, "exit_code": exit_code, "budget_policy": "codex-unbounded"}
+    return {**result, "exit_code": exit_code, "budget_policy": "codex-unbounded",
+            "provider_call_possible": True}

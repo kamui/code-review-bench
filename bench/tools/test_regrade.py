@@ -708,6 +708,19 @@ class RegradingBudget(unittest.TestCase):
                 (attempt / 'work/dispatch.json').write_text(json.dumps({'exit_code': index - 1, 'usage': {'high': amount}}))
             self.assertEqual(regrade.ledger(directory), (regrade.money('1.625'), []))
 
+    def test_codex_receipts_without_execution_metadata_cannot_prove_zero_charge(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            attempt = directory / "batches/run/target/attempt-1"
+            (attempt / "work").mkdir(parents=True)
+            (attempt / "reservation.json").write_text('{"maxBudgetUsd":null}')
+            (attempt / "work/dispatch.json").write_text(json.dumps({
+                "budget_policy": "codex-unbounded", "models_observed": [], "usage": {"high": None}}))
+            self.assertEqual(regrade.ledger(directory), (0, [None]))
+            (attempt / "budget-resolution.json").write_text('{"evidence":[],"chargeUpperUsd":0}')
+            with self.assertRaisesRegex(ValueError, "zero-charge"):
+                regrade.ledger(directory)
+
 
 if __name__ == '__main__':
     unittest.main()

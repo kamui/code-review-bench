@@ -34,8 +34,8 @@ def require(condition, message):
         raise RuntimeError(message)
 
 
-def configure_client(work: Path, protected=()) -> Path:
-    config = clean_context.configure_codex(work / "home", work)
+def configure_client(work: Path, protected=(), execution_policy=None) -> Path:
+    config = clean_context.configure_codex(work / "home", work, policy_text=execution_policy)
     catalog_path = work / "home/.codex/grading-models.json"
     shutil.copyfile(MODEL_CATALOG, catalog_path)
     settings = [

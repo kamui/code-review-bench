@@ -72,7 +72,7 @@ def ledger(directory, active=()):
     """(settled upper charges, outstanding reservations). Unbounded reservations have an unknown amount.
     A reservation stays outstanding until a priced receipt or a zero-charge proof settles it;
     ``active`` attempts are still writing their receipts.
-    A proof needs a session that observed no model: a receipt saying so, or an intact workspace with no receipt
+    A proof needs no possible provider call: a legacy receipt observing no model, or an intact workspace with no receipt
     and no ``home``, which ``grade.py dispatch`` creates only after its last gate before the paid call."""
     settled, outstanding = Decimal(0), []
     for reservation in sorted(directory.glob("batches/*/*/attempt-*/reservation.json")):
@@ -87,7 +87,9 @@ def ledger(directory, active=()):
             for ref in proof["evidence"]:
                 checked(ref)
             work = attempt / "work"
-            started = record["models_observed"] if record else not work.is_dir() or (work / "home").exists()
+            started = (record["models_observed"] or record.get("provider_call_possible",
+                       record.get("budget_policy") == "codex-unbounded")) if record else (
+                       not work.is_dir() or (work / "home").exists())
             if started or money(proof["chargeUpperUsd"]) != 0:
                 raise ValueError(f"invalid zero-charge proof: {resolution}")
         else:
