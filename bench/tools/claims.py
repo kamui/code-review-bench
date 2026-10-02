@@ -326,6 +326,12 @@ def load_extracts(path):
     selections = {record["source"]["path"]: record for record in manifest["records"]}
     if len(selections) != len(manifest["records"]):
         raise ValueError("evidence extracts: an evidence source is listed twice")
+    for selection in selections.values():
+        for extract in selection["extracts"]:
+            if ("pointer" in extract) == ("lines" in extract):
+                raise ValueError("evidence extracts: select exactly one JSON pointer or line range")
+            if "lines" in extract and extract["lines"]["end"] < extract["lines"]["start"]:
+                raise ValueError("evidence extracts: line range ends before it starts")
     return selections
 
 
@@ -349,20 +355,29 @@ def outline(value, indent=""):
 
 
 def extracted(record, selection, claim_id):
-    """Packet lines for the selected parts of one pinned JSON evidence record."""
+    """Packet lines for the selected parts of one pinned evidence record."""
     lines = []
     for extract in selection["extracts"]:
-        value = record
-        try:
-            for token in extract["pointer"].split("/")[1:]:
-                token = token.replace("~1", "/").replace("~0", "~")
-                value = value[int(token)] if isinstance(value, list) else value[token]
-        except (KeyError, IndexError, ValueError, TypeError):
-            raise ValueError(f"{claim_id}: extract {extract['pointer']} is missing from its pinned record") from None
-        label = f"  - {EXTRACT_KINDS[extract['kind']]} `{extract['pointer'][1:]}`:"
+        if "lines" in extract:
+            start, end = extract["lines"]["start"], extract["lines"]["end"]
+            source_lines = record.splitlines()
+            coordinate = f"{Path(selection['source']['path']).name}:{start}-{end}"
+            if start < 1 or end < start or end > len(source_lines):
+                raise ValueError(f"{claim_id}: extract {coordinate} is missing from its pinned record")
+            value = "\n".join(source_lines[start - 1:end])
+        else:
+            value = json.loads(record)
+            coordinate = extract["pointer"]
+            try:
+                for token in coordinate.split("/")[1:]:
+                    token = token.replace("~1", "/").replace("~0", "~")
+                    value = value[int(token)] if isinstance(value, list) else value[token]
+            except (KeyError, IndexError, ValueError, TypeError):
+                raise ValueError(f"{claim_id}: extract {coordinate} is missing from its pinned record") from None
+        label = f"  - {EXTRACT_KINDS[extract['kind']]} `{coordinate.lstrip('/')}`:"
         body = outline(value, "      ")
         if sum(map(len, body)) > EXTRACT_LIMIT:
-            raise ValueError(f"{claim_id}: extract {extract['pointer']} exceeds {EXTRACT_LIMIT} characters; "
+            raise ValueError(f"{claim_id}: extract {coordinate} exceeds {EXTRACT_LIMIT} characters; "
                              "select a narrower part of the record")
         lines += [f"{label} {body[0].strip()}"] if len(body) == 1 and not isinstance(value, (dict, list)) else [label, *body]
     return lines
@@ -401,7 +416,7 @@ def evidence_packet(case, extracts, root=ROOT):
             if selection and selection["source"] != entry["source"]:
                 raise ValueError(f"{case['claim_id']}: evidence extracts pin another version of {label}'s source")
             if selection:
-                section.extend(extracted(read(path), selection, case["claim_id"]))
+                section.extend(extracted(path.read_text(encoding="utf-8"), selection, case["claim_id"]))
         if section:
             lines += [f"## {heading}", "", *section, ""]
     if not sources:
