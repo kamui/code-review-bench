@@ -40,7 +40,7 @@ their blinded item matches. ``--claim-evidence EXTRACTS`` adds ``evidence/<claim
 matched to one of these reviews, built by ``claims.grading_evidence`` from the claim's pinned evidence without
 review or grading records, and lists the files in ``claims.md``. EXTRACTS is a manifest in this repository
 (``bench/schema/claim-evidence-extracts.schema.json``) naming the anchors, excerpts, results and limits to copy
-from each pinned JSON evidence record. It is refused when a packet names a run, arm, model, attempt, home
+from each pinned evidence record by JSON pointer or inclusive text line range. It is refused when a packet names a run, arm, model, attempt, home
 directory or a claim, run or research path. The key's ``claim_snapshot.evidence`` records the contract, the
 manifest's hash, each packet's SHA-256 and its sources; ``runner_deviation.context`` hashes that record.
 
