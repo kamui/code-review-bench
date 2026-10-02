@@ -89,7 +89,7 @@ def price(cell: str) -> float:
     return float(match[1])
 
 
-def parse_prices(provider: str, markdown: str, models: list[str]) -> dict:
+def parse_prices(provider: str, markdown: str, models: list[str]) -> tuple[dict, dict]:
     if provider == "openai":
         header = ["Model", "Short context input", "Short context cached input", "Short context cache writes",
                   "Short context output", "Long context input", "Long context cached input",
@@ -101,20 +101,22 @@ def parse_prices(provider: str, markdown: str, models: list[str]) -> dict:
                   "Cache hits and refreshes", "Output tokens"]
         rows = table_rows(markdown, "Model pricing", header)
         positions = (1, 5, 4, 2, 3)
-    result = {}
+    prices, unsupported = {}, {}
     for row in rows:
         name = row[0]
         if provider == "anthropic":
             name = re.sub(r"\s+\(.*", "", name).lower().replace(".", "-").replace(" ", "-")
         if name not in models:
             continue
-        if len(row) != len(header) or name in result:
+        if len(row) != len(header) or name in prices or name in unsupported:
             raise RateError(f"ambiguous provider pricing row for {name}")
-        result[name] = {field: price(row[index]) for field, index in zip(FIELDS, positions)}
-    missing = sorted(set(models) - result.keys())
-    if missing:
-        raise RateError(f"provider has no supported standard short-context prices for {', '.join(missing)}")
-    return result
+        try:
+            prices[name] = {field: price(row[index]) for field, index in zip(FIELDS, positions)}
+        except RateError as error:
+            unsupported[name] = str(error)
+    for name in sorted(set(models) - prices.keys() - unsupported.keys()):
+        unsupported[name] = "no standard short-context row in the provider table"
+    return prices, unsupported
 
 
 def fetch(url: str) -> str:
@@ -131,21 +133,29 @@ def inspect(catalog: dict, models: list[str] | None = None) -> dict:
         if provider is None:
             raise RateError(f"unsupported rate provider for {model}")
         grouped[provider].append(model)
-    observed, sources = {}, {}
+    observed, sources, unsupported = {}, {}, {}
     for provider, selected in grouped.items():
         if not selected:
             continue
         markdown = fetch(SOURCES[provider])
         sources[provider] = {"url": SOURCES[provider], "sha256": hashlib.sha256(markdown.encode()).hexdigest()}
-        observed.update(parse_prices(provider, markdown, selected))
+        prices, skipped = parse_prices(provider, markdown, selected)
+        if skipped and (models or not prices):
+            raise RateError("provider has no supported standard short-context prices: "
+                            + "; ".join(f"{model} ({reason})" for model, reason in skipped.items()))
+        observed.update(prices)
+        unsupported.update(skipped)
     changes = []
     for model, row in saved.items():
+        if model in unsupported:
+            continue
         fields = {field: {"saved": row[field], "current": observed[model][field]}
                   for field in FIELDS if row[field] != observed[model][field]}
         if fields:
             changes.append({"model": model, "fields": fields})
     return {"checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "sources": sources, "models": list(saved), "prices": observed, "changes": changes}
+            "sources": sources, "models": [model for model in saved if model in observed], "prices": observed,
+            "changes": changes, "unsupported": unsupported}
 
 
 def refresh(path: Path, models: list[str] | None = None) -> dict:
@@ -202,6 +212,8 @@ def main() -> int:
         for change in report["changes"]:
             for field, values in change["fields"].items():
                 print(f"{change['model']} {field}: {values['saved']} -> {values['current']} USD per million tokens")
+        for model, reason in report["unsupported"].items():
+            print(f"{model} skipped: {reason}")
         print(f"{len(report['models'])} models checked; {len(report['changes'])} changed"
               + ("; catalog refreshed" if report.get("refreshed") else ""))
     return 1 if args.command == "check" and report["changes"] else 0
