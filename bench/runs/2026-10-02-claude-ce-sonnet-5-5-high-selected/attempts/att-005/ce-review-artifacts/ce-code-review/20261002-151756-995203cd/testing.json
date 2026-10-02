@@ -1,0 +1,30 @@
+{
+  "reviewer": "testing",
+  "findings": [
+    {
+      "title": "No test that non-matching sessions still flush when fallbacks are set",
+      "severity": "P2",
+      "file": "tests/auth_tests/test_basic.py",
+      "line": 144,
+      "why_it_matters": "The only new test covers the fallback-match path. The new else branch (hash matches neither the current secret nor any fallback, so flush and anonymous) is never run with SECRET_KEY_FALLBACKS non-empty, and neither is the missing-session-hash case. A regression that made the fallback check too permissive, such as dropping the `session_hash and` guard or mis-handling `any(...)`, would let a stale or tampered session authenticate or raise TypeError. The new test would still pass. The existing invalidation tests all run with empty fallbacks, so the loop is a no-op there. Adding a case with a non-matching fallback, and one with the hash removed, would pin this security-relevant behaviour.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Add tests to TestGetUser. (1) Log in, then change the user's password and call get_user under override_settings(SECRET_KEY='newsecret', SECRET_KEY_FALLBACKS=['unrelated-old-secret']); assert AnonymousUser is returned and the session was flushed (session_key changed or empty). (2) Log in, delete request.session[HASH_SESSION_KEY], and call get_user with SECRET_KEY_FALLBACKS set; assert AnonymousUser and no exception.",
+      "confidence": 75,
+      "evidence": [
+        "django/contrib/auth/__init__.py:213 -- if session_hash and any(",
+        "django/contrib/auth/__init__.py:220 -- request.session.flush()",
+        "tests/auth_tests/test_basic.py:144-165 -- only test_get_user_fallback_secret, which has a matching fallback; grep of tests/ shows no other test combining SECRET_KEY_FALLBACKS with get_user or HASH_SESSION_KEY"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Fallback verification calls user.get_session_auth_fallback_hash(), which only exists on AbstractBaseUser. A custom user model that duck-types or overrides get_session_auth_hash() would get AttributeError, or have its override ignored on the fallback path, when the hash fails to verify. No test covers it. Only checked by reading the diff; not run."
+  ],
+  "testing_gaps": [
+    "get_session_auth_fallback_hash() is not tested directly: the multi-fallback order and the empty-fallbacks case (generator yields nothing) are covered only indirectly through the single-fallback get_user test.",
+    "The new test does not check that cycle_key keeps the session data and that the session store holds the rewritten hash. It does check this indirectly, since the second get_user call with only the new secret returns a User."
+  ]
+}

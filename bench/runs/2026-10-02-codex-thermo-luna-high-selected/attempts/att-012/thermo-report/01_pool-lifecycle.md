@@ -1,0 +1,17 @@
+# PostgreSQL pool lifecycle
+
+## Finding: pooled connections are returned with session state intact
+
+**Evidence.** In `django/db/backends/postgresql/base.py:345-348`, `get_new_connection()` opens the pool and calls `getconn()`. In `:369-383`, `_configure_connection()` applies Django's timezone and optional `assume_role` and is passed as the pool's `configure` callback at `:228-233`. That callback configures newly created physical connections; it is not invoked for each checkout. In `_close()` at `:385-399`, Django returns an acquired connection with `self.connection._pool.putconn(self.connection)` and then forgets its reference. There is no reset or session-state cleanup on that path.
+
+This makes pooled `close()` observably different from the prior direct connection close. PostgreSQL session changes made through a cursor can persist when the connection is returned. A subsequent borrower of the same physical connection may observe that state; Django's one-time configure callback does not re-establish its baseline on checkout. The explicit role setup is also session-scoped. The issue is therefore not limited to an uncommon custom setting: the close operation returns a reusable session without ensuring the baseline expected by the next logical Django connection.
+
+**Structural assessment.** The implementation places initialization at physical connection creation while logical Django connections are checked out repeatedly. That splits the connection contract across two lifetimes and makes correctness depend on whichever session state happens to remain after a borrower. The pool boundary is the canonical place to centralize this policy; adding more cleanup calls to individual query or transaction paths would scatter the problem.
+
+**Worked code-judo proposal.** Model pool checkout and return as the lifecycle of a Django logical connection. Keep the physical-connection initialization needed for newly created sessions, and add a single supported pool reset callback that restores the Django baseline before a returned session becomes available again. That reset should cover rollback/transaction cleanup as well as session-level settings such as role and timezone. If a connection cannot be safely reset, discard it rather than return it for reuse. Have `_close()` use the pool's public return API and let the pool own reset and disposal, instead of exposing the pool's private `_pool` back-reference at the Django call site.
+
+This removes the current split between setup-on-create and unmanaged state-on-return. It also gives the lifecycle one owner, instead of asking callers to know which parts of the PostgreSQL session the pool preserves.
+
+**Actionable remediation.** Define and document the session baseline a pooled Django connection guarantees. Configure reset behavior at pool construction and ensure it runs for every successful return. Make sure close and error paths either return a reset connection or discard it. Add focused tests that change a session-level setting, close the Django wrapper, reacquire the same physical connection, and observe the configured baseline; cover `assume_role` and timezone setup where practical.
+
+**Verification status.** This finding is based on static inspection of the pinned diff and surrounding lifecycle methods. Tests were not run under the execution policy. Measured file sizes after the change: `django/db/backends/postgresql/base.py` is 615 lines (from the diff's original 487); `django/db/backends/base/base.py` is 792 lines. Neither crosses the skill's 1,000-line threshold.

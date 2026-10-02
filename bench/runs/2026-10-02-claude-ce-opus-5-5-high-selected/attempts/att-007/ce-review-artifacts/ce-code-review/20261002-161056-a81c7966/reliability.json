@@ -1,0 +1,76 @@
+{
+  "reviewer": "reliability",
+  "findings": [
+    {
+      "title": "Pool plus assume_role wedges: configure callback re-enters the pool",
+      "severity": "P1",
+      "file": "django/db/backends/postgresql/base.py",
+      "line": 101,
+      "why_it_matters": "With both OPTIONS['pool'] and OPTIONS['assume_role'] set, no pooled connection can ever be configured: every query blocks for the pool timeout (30s by default) and then fails with PoolTimeout, while the pool keeps retrying in the background. The pool runs the configure callback in its worker threads, and SET ROLE is composed through ops.compose_sql(), which opens a cursor on the Django DatabaseWrapper; that wrapper has no connection yet, so it calls connect() and pool.getconn() from inside the worker that is supposed to produce the connection. Composing the statement on the raw psycopg connection passed to the callback removes the re-entry, which is what the comment above _configure_connection already requires.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In the module-level ensure_role(), stop calling ops.compose_sql() (which goes through DatabaseWrapper.cursor()). Build the statement from the raw connection argument instead, e.g. for psycopg 3 `cursor.execute(ClientCursor(connection).mogrify(\"SET ROLE %s\", [role_name]))` and for psycopg2 `cursor.execute(cursor.mogrify(\"SET ROLE %s\", [role_name]))`, or use a server-side parameterised form parallel to set_time_zone_sql(): `cursor.execute(\"SELECT set_config('role', %s, false)\", [role_name])`. Add a pooled test for assume_role (test_connect_role was switched to no_pool_connection(), so the pooled path is untested).",
+      "confidence": 75,
+      "evidence": [
+        "django/db/backends/postgresql/base.py:101 -- sql = ops.compose_sql(\"SET ROLE %s\", [role_name])",
+        "django/db/backends/postgresql/operations.py:192-193 -- def compose_sql(self, sql, params): return mogrify(sql, params, self.connection)  (self.connection is the DatabaseWrapper)",
+        "django/db/backends/postgresql/psycopg_any.py:20-22 -- def mogrify(sql, params, connection): with connection.cursor() as cursor: return ClientCursor(cursor.connection).mogrify(sql, params)",
+        "django/db/backends/postgresql/base.py:231 -- configure=self._configure_connection, (bound method of the wrapper that created the pool; psycopg_pool/pool.py:635 calls self._configure(conn) from the AddConnection worker)",
+        "django/db/backends/postgresql/base.py:370-373 -- comment: 'Make sure that whatever is done here does not access anything on self aside from variables.'",
+        "Offline reproduction (real psycopg_pool 3.3.3, stub connection_class, pool timeout=3): without assume_role get_new_connection() returns in 0.0s; with assume_role the workers log \"error connecting in 'pool-1': couldn't get a connection after 3.00 sec\" and the caller raises psycopg_pool.PoolTimeout after 3.0s.",
+        "tests/backends/postgresql/tests.py:402 -- new_connection = no_pool_connection()  (test_connect_role bypasses the pool)"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Pool keyed by alias keeps serving the pre-test database",
+      "severity": "P1",
+      "file": "django/db/backends/postgresql/base.py",
+      "line": 208,
+      "why_it_matters": "A test run with pooling enabled can execute migrate, fixtures and TransactionTestCase flushes against the real database instead of the test database. The pool is cached per alias with the connection parameters frozen at creation, and get_new_connection() ignores the freshly computed conn_params when a pool exists, so once create_test_db() rewrites settings_dict['NAME'] the alias still draws connections to the old name. This is reached whenever a pool for the alias exists before the switch: deterministically through the _nodb_cursor() fallback (no access to the 'postgres' database), which builds its temporary wrapper with alias=self.alias and so registers a pool for the real database, and also when anything queries the alias before test setup (for example in AppConfig.ready()). The same staleness applies to set_as_test_mirror() and setup_worker_connection(). Only ensure_timezone(), _clone_test_db() and _destroy_test_db() close the pool today; closing it at each settings rewrite, and keeping the fallback wrapper out of the pool, restores the non-pooled behaviour.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Invalidate the alias's pool whenever the wrapper's connection settings are rewritten: call self.connection.close_pool() right after NAME is reassigned in create_test_db() (base/creation.py:64-66, e.g. via a PostgreSQL DatabaseCreation hook), in set_as_test_mirror() and in setup_worker_connection(). In DatabaseWrapper._nodb_cursor()'s fallback, build the temporary wrapper with pooling disabled (\"OPTIONS\": {**self.settings_dict[\"OPTIONS\"], \"pool\": False}) so it cannot register a pool under self.alias. More robust alternative: have the pool property compare the cached pool's kwargs with get_connection_params() and recreate the pool when they differ. Assumption: pools are meant to follow settings_dict changes the way non-pooled connections do.",
+      "confidence": 75,
+      "evidence": [
+        "django/db/backends/postgresql/base.py:208 -- if self.alias not in self._connection_pools:",
+        "django/db/backends/postgresql/base.py:345-348 -- if self.pool: self.pool.open(); connection = self.pool.getconn()  (conn_params is unused on the pooled path)",
+        "django/db/backends/base/creation.py:62-66 -- self._create_test_db(verbosity, autoclobber, keepdb); self.connection.close(); ...; self.connection.settings_dict[\"NAME\"] = test_database_name  (no close_pool())",
+        "django/db/backends/postgresql/base.py:529-535 -- conn = self.__class__({**self.settings_dict, \"NAME\": connection.settings_dict[\"NAME\"]}, alias=self.alias)  (fallback wrapper is pooled under the real alias; the base path uses alias=NO_DB_ALIAS at base/base.py:710)",
+        "django/db/backends/base/creation.py:111 and :383-384 -- set_as_test_mirror() and setup_worker_connection() also rewrite settings_dict and only call connection.close()",
+        "Offline reproduction (real psycopg_pool 3.3.3, stub connection_class): pool created with dbname 'realdb'; after settings_dict['NAME'] = 'test_realdb', get_connection_params()['dbname'] is 'test_realdb' but w.pool is the same object and get_new_connection() returns a connection opened against 'realdb'. Replaying the _nodb_cursor() fallback construction with no prior pool gives the same result."
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Docs say pool is ignored with psycopg2; code raises",
+      "severity": "P3",
+      "file": "docs/ref/databases.txt",
+      "line": 271,
+      "why_it_matters": "A project on psycopg2 that sets OPTIONS['pool'] expecting the documented no-op gets ImproperlyConfigured on every connection attempt instead. Failing fast is the safer behaviour, so the documentation (and the test name test_connect_pool_setting_ignored_for_psycopg2, which asserts the error) should say that the option requires psycopg 3 rather than that it is ignored.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": false,
+      "suggested_fix": "Change docs/ref/databases.txt:270-271 to state that the option requires psycopg 3 with psycopg[pool]/psycopg-pool installed and raises ImproperlyConfigured with psycopg2, and rename the test to match (e.g. test_connect_pool_setting_requires_psycopg3).",
+      "confidence": 100,
+      "evidence": [
+        "docs/ref/databases.txt:270-271 -- This option requires ``psycopg[pool]`` or :pypi:`psycopg-pool` to be installed and is ignored with ``psycopg2``.",
+        "django/db/backends/postgresql/base.py:290-292 -- pool_options = conn_params.pop(\"pool\", None); if pool_options and not is_psycopg3: raise ImproperlyConfigured(\"Database pooling requires psycopg >= 3\")",
+        "tests/backends/postgresql/tests.py -- test_connect_pool_setting_ignored_for_psycopg2 asserts ImproperlyConfigured(\"Database pooling requires psycopg >= 3\")"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Fail-fast is lost on the pooled path: with the database down or the pool exhausted (psycopg_pool defaults: min_size=max_size=4, timeout=30s, reconnect_timeout=300s), get_new_connection() blocks each caller for the pool timeout and then raises PoolTimeout; the underlying connect error is only logged at WARNING on the 'psycopg.pool' logger. The docs added here do not mention sizing or timeout, so 'pool': True on a server with more than 4 concurrent DB-using threads queues requests behind a 30s wait.",
+    "A pooled connection is returned only from DatabaseWrapper._close(); BaseDatabaseWrapper has no __del__, so a thread that uses the ORM outside the request cycle and exits without connection.close() permanently removes a slot from the pool (psycopg_pool getconn docstring: 'failing to do so will deplete the pool'), whereas the non-pooled path frees the server connection on garbage collection.",
+    "Fork safety not verified: _connection_pools is a class-level dict, psycopg_pool has no fork handling (no register_at_fork/pid check found in the installed 3.3.3 source), and connections.close_all() does not close pools. A pool opened before fork (preloading servers, the fork-based parallel test runner if the parent connects after the last clone) is inherited with idle sockets shared with the parent and no worker threads in the child.",
+    "Both P1 findings were reproduced against the real psycopg_pool with a stub connection_class because no PostgreSQL server is provisioned; they were not run against a live server."
+  ],
+  "testing_gaps": [
+    "No test exercises OPTIONS['assume_role'] together with OPTIONS['pool']; test_connect_role was moved to no_pool_connection(), so the pool's configure callback path for SET ROLE is never run.",
+    "No test checks that a pooled alias follows a settings_dict['NAME'] change (create_test_db, set_as_test_mirror, setup_worker_connection, or the _nodb_cursor fallback wrapper); only the TIME_ZONE/USE_TZ change is covered via ensure_timezone()."
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "reviewer": "adversarial",
+  "findings": [
+    {
+      "title": "Default proto codec now rejects legacy (non-ProtoReflect) v1 messages",
+      "severity": "P1",
+      "file": "encoding/proto/proto.go",
+      "line": 41,
+      "why_it_matters": "Any application whose RPC messages are legacy v1-only generated types (no ProtoReflect method, e.g. old protoc-gen-go or gogo output) used to marshal/unmarshal through the default codec because github.com/golang/protobuf proto.Message is the v1 interface (Reset/String/ProtoMessage) and its Marshal wraps legacy messages. After the import swap, v.(proto.Message) asserts the v2 interface that requires ProtoReflect, so every such RPC fails with 'failed to marshal, message is %T, want proto.Message'. This is a silent public behavior regression of the default codec, contrary to the 'behavior should be preserved' intent; repo's own reflection/grpc_testing_not_regenerate/testv3.go types have zero ProtoReflect methods and are exactly this shape. Converting via protoadapt.MessageV2Of (accepting protoadapt.MessageV1) in both Marshal and Unmarshal preserves legacy support.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In codec.Marshal/Unmarshal accept v1 or v2 messages: add helper messageV2Of(v any) proto.Message that returns v if it is proto.Message, else protoadapt.MessageV2Of(v.(protoadapt.MessageV1)) (error if neither), then call proto.Marshal/Unmarshal on the result. Add a test with a legacy-only message.",
+      "confidence": 100,
+      "evidence": [
+        "encoding/proto/proto.go:41 -- vv, ok := v.(proto.Message)   (import now \"google.golang.org/protobuf/proto\"; previously \"github.com/golang/protobuf/proto\")",
+        "encoding/proto/proto.go:49 -- vv, ok := v.(proto.Message)",
+        "gomodcache golang/protobuf@v1.5.3/proto/proto.go:50 -- type Message = protoiface.MessageV1 (v1 interface, no ProtoReflect)",
+        "gomodcache google.golang.org/protobuf@v1.32.0/proto/proto.go:24 -- type Message = protoreflect.ProtoMessage (requires ProtoReflect)",
+        "reflection/grpc_testing_not_regenerate/testv3.go contains 0 occurrences of ProtoReflect (legacy message shape)"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Invalid load_reporting_interval error reports a stale nil err",
+      "severity": "P3",
+      "file": "xds/internal/xdsclient/transport/loadreport.go",
+      "line": 174,
+      "why_it_matters": "When the management server sends an invalid (or missing) load_reporting_interval, the client logs 'invalid load_reporting_interval: <nil>' instead of the validation reason. The rewrite from ptypes.Duration (which returned the error) to a bare CheckValid() != nil discards the error, and the %v formats the outer err from stream.Recv(), which is always nil at this point. Operators lose the only diagnostic for a misconfigured LRS server. Validation semantics themselves (nil/out-of-range rejected) are preserved.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": false,
+      "suggested_fix": "Capture the error: rInterval := resp.GetLoadReportingInterval(); if err := rInterval.CheckValid(); err != nil { return nil, 0, fmt.Errorf(\"invalid load_reporting_interval: %v\", err) }",
+      "confidence": 100,
+      "evidence": [
+        "xds/internal/xdsclient/transport/loadreport.go:174-175 -- if rInterval.CheckValid() != nil {\n\t\treturn nil, 0, fmt.Errorf(\"invalid load_reporting_interval: %v\", err)",
+        "xds/internal/xdsclient/transport/loadreport.go:165-168 -- resp, err := stream.Recv(); if err != nil { return nil, 0, ... } so err is nil at line 175"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "test/tools/go.mod downgrades golang.org/x/tools v0.17.0 -> v0.14.0 and adds x/sys v0.13.0 / x/sync v0.4.0 (go.sum) while leaving x/mod v0.14.0 and x/exp/typeparams 20240119 untouched; unrelated to the proto migration and not verifiable offline (module lookup disabled). It silently pins the goimports/vet tooling used by vet.sh to an older release; confirm this was intentional (go mod tidy artifact) and that `go run golang.org/x/tools/cmd/goimports` and staticcheck still resolve.",
+    "status.Details() now returns anypb.UnmarshalNew results and different error text (e.g. protoimpl error 'invalid empty type URL' instead of 'message type url \"\" is invalid'); callers matching on the error string, or consuming legacy v1-registered detail types (previously unwrapped to the v1 value via ptypes.DynamicAny), may observe a different dynamic type/message. Not demonstrated for any in-repo caller.",
+    "internal/pretty.ToJSON v1 branch switched from jsonpb.Marshaler{Indent} to protojson.MarshalOptions{Indent}; no unit test covers pretty output, so any log-format drift (e.g. Any resolution, field naming) is unverified. Reasoned equivalent for generated messages."
+  ],
+  "testing_gaps": [
+    "No test exercises encoding/proto codec with a legacy v1-only message, which is why the codec regression passes the suite (go test ./encoding/... passes).",
+    "No test covers recvFirstLoadStatsResponse error text for an invalid load_reporting_interval."
+  ]
+}
