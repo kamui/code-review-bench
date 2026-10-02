@@ -199,6 +199,13 @@ def pinned_client(expected_cli_version):
     return expected_cli_version
 
 
+def dispatch_timeout(grader):
+    timeout = grader.get("timeoutSeconds", 900)
+    if type(timeout) is not int or timeout <= 0:
+        raise ValueError("grader.timeoutSeconds must be a positive integer")
+    return timeout
+
+
 def dispatch_arguments(work, key, grader, budget, expected_cli_version):
     args = ["dispatch", "--work", work, "--key", key, "--model", grader["model"],
             "--effort", grader["effort"], "--expected-cli-version", pinned_client(expected_cli_version)]
@@ -208,7 +215,7 @@ def dispatch_arguments(work, key, grader, budget, expected_cli_version):
         args += ["--allow-unbounded-codex"]
     else:
         args += ["--max-budget-usd", budget]
-    return [*args, "--timeout", "900"]
+    return [*args, "--timeout", str(dispatch_timeout(grader))]
 
 
 def execute(authorization_path, directory, limit=None, expected_cli_version=None, workers=1):
@@ -227,6 +234,7 @@ def execute(authorization_path, directory, limit=None, expected_cli_version=None
         checked(ref)
     cap = authorized_cap(authorization)
     grader = authorization["grader"]
+    dispatch_timeout(grader)
     cli_version = expected_cli_version or grader.get("cliVersion")
     workspaces, archives = planned_root(execution["workspaceRoot"]), planned_root(execution["archiveRoot"])
     groups = defaultdict(list)

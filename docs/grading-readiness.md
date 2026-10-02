@@ -85,6 +85,8 @@ For authorized uncapped Codex work, set `budgetCapUsd` to `null`, `budgetPolicy`
 
 Pin the enforcing client with `--expected-cli-version VERSION` or `grader.cliVersion`. The controller rejects missing version information before it reserves a dispatch.
 
+The controller defaults to a 900-second session limit. Set `grader.timeoutSeconds` to a positive integer in the pinned authorization when a batch needs more time. A changed limit requires a new authorization; preserve timed-out attempts and their usage before starting replacements.
+
 The execution plan replaces the dated paths and the pilot ordering of the first rubric-v2 queues:
 
 ```json
