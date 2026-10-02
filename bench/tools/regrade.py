@@ -207,6 +207,10 @@ def execute(authorization_path, directory, limit=None, expected_cli_version=None
         context += ["--template", checked(authorization["graderTemplate"])]
     if "claimEvidence" in authorization:
         context += ["--claim-evidence", checked(authorization["claimEvidence"])]
+    if "cacheReplacements" in authorization:
+        context += ["--cache-replacements", checked(authorization["cacheReplacements"])]
+    if "cacheRoot" in execution:
+        context += ["--cache-root", planned_root(execution["cacheRoot"])]
     rows = [{"run": run, "target": target, "reviews": len(groups[(run, target)]), "state": "pending"}
             for run, target in ordered]
     previous = read(directory / "status.json") if (directory / "status.json").exists() else {}
@@ -229,6 +233,8 @@ def execute(authorization_path, directory, limit=None, expected_cli_version=None
         save()
 
     def check_inputs(row):
+        if "cacheReplacements" in authorization:
+            checked(authorization["cacheReplacements"])
         for review in groups[(row["run"], row["target"])]:
             checked(review["review"])
             checked(review["record"])
@@ -325,8 +331,14 @@ def execute(authorization_path, directory, limit=None, expected_cli_version=None
                 row["state"] = "prepare-failed"
                 block("failed", f"Prepare failed for {run}/{target}", code)
                 return True
-        if not read(key).get("workspace_identity_blinded", False):
+        prepared = read(key)
+        if not prepared.get("workspace_identity_blinded", False):
             raise ValueError(f"legacy preparation needs a fresh neutral attempt: {attempt}")
+        if "cacheReplacements" in authorization:
+            checked(authorization["cacheReplacements"])
+            consumed = prepared.get("runner_deviation", {}).get("provisioning", {}).get("manifest", {}).get("sha256")
+            if consumed != authorization["cacheReplacements"]["sha256"]:
+                raise ValueError(f"prepared cache replacement differs from authorization: {attempt}")
         dispatch = dispatch_arguments(work, key, grader, budget, cli_version)
         with (attempt / "reservation.json").open("x") as handle:
             json.dump({"maxBudgetUsd": float(budget), "spentBeforeUpperUsd": float(settled),
