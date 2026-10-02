@@ -384,13 +384,14 @@ def evidence_packet(case, extracts, root=ROOT):
              f"Pinned head `{case['revision']['head']}`, base `{case['revision']['base_sha']}`. "
              f"Approved outcome: {outcome}.", "", EVIDENCE_BOUNDARY, ""]
     sources, withheld = [], []
+    runs = root / "bench/runs"
     for stance, heading in STANCES:
         section = []
         for entry in case["evidence"]:
             if entry["stance"] != stance:
                 continue
             path = resolve(entry["source"], root)
-            if path.relative_to(root.resolve()).parts[:2] == ("bench", "runs"):
+            if any(parent.samefile(runs) for parent in path.parents):
                 withheld.append(entry["source"])
                 continue
             label = f"E{len(sources) + 1}"
