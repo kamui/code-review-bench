@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""List the benchmarks the default models have and the ones still missing.
+"""List the benchmarks the roster has and the ones still missing.
 
 Usage::
 
-    python3 bench/tools/models.py [--root DIR]
+    python3 bench/tools/roster.py [--root DIR]
 
-``bench/models.json`` holds the hand-edited default list, an object keyed by client. Each client
-maps the models it runs to the list of efforts to benchmark them at.
+``bench/roster.json`` is the hand-edited roster: the clients, models and efforts that benchmarks
+run against by default. It is an object keyed by client, and each client maps the models it runs
+to the list of efforts to benchmark them at.
 
 Review methods are not listed. A method counts as running on a client once any entry in
 ``bench/scoreboard.current.json`` has benchmarked it there, the client being that of the source
@@ -16,10 +17,10 @@ the id of the entry whose source arm runs that model at that effort on that clie
 when the suite has none. A method that has never run on a model's client is not printed for that model. Nothing is
 written and no reviewer or grader is started.
 
-Exit codes: 0 the lines were printed; 1 the list cannot be used, one line per violation on stdout
+Exit codes: 0 the lines were printed; 1 the roster cannot be used, one line per violation on stdout
 (a client with no ``bench/harness/<client>.json``, a model with no ``bench/rates.current.json``
-entry, a model without a list of distinct efforts, an empty list); 2 an input cannot be read,
-named on stderr, which includes a key written twice in the list.
+entry, a model without a list of distinct efforts, an empty roster); 2 an input cannot be read,
+named on stderr, which includes a key written twice in the roster.
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ from pathlib import Path
 import sys
 
 REPO = Path(__file__).resolve().parents[2]
-LIST = "bench/models.json"
+ROSTER = "bench/roster.json"
 CLIENT_OF_KIND = {"claude-builtin": "claude-code", "claude-skill": "claude-code", "review-code": "claude-code",
                   "codex": "codex", "codex-skill": "codex"}
 
@@ -54,29 +55,29 @@ def read_json(path: Path, object_pairs_hook=None):
         raise InputError(f"cannot read {path}: {error}") from error
 
 
-def read_list(root: Path) -> tuple:
-    """Return the listed models, one per effort, and the list's violations."""
-    listed = read_json(root / LIST, unique_keys)
+def read_roster(root: Path) -> tuple:
+    """Return the listed models, one per effort, and the roster's violations."""
+    listed = read_json(root / ROSTER, unique_keys)
     if not isinstance(listed, dict):
-        return [], [f"{LIST}: needs an object keyed by client"]
+        return [], [f"{ROSTER}: needs an object keyed by client"]
     priced = {rate["model"] for rate in read_json(root / "bench/rates.current.json")["rates"]}
     models, problems = [], []
     for client, efforts_of in listed.items():
         if not (root / "bench/harness" / f"{client}.json").is_file():
-            problems.append(f"{LIST}: client {client} has no bench/harness/{client}.json")
+            problems.append(f"{ROSTER}: client {client} has no bench/harness/{client}.json")
         if not isinstance(efforts_of, dict):
-            problems.append(f"{LIST}: {client} needs an object of models")
+            problems.append(f"{ROSTER}: {client} needs an object of models")
             continue
         for model, efforts in efforts_of.items():
             if model not in priced:
-                problems.append(f"{LIST}: model {model} has no entry in bench/rates.current.json")
+                problems.append(f"{ROSTER}: model {model} has no entry in bench/rates.current.json")
             named = isinstance(efforts, list) and efforts and all(effort and isinstance(effort, str) for effort in efforts)
             if not named or len(set(efforts)) != len(efforts):
-                problems.append(f"{LIST}: {client} {model} needs a list of distinct efforts")
+                problems.append(f"{ROSTER}: {client} {model} needs a list of distinct efforts")
                 continue
             models.extend({"client": client, "model": model, "effort": effort} for effort in efforts)
     if not models and not problems:
-        problems.append(f"{LIST}: lists no models")
+        problems.append(f"{ROSTER}: lists no models")
     return models, problems
 
 
@@ -111,10 +112,10 @@ def main() -> int:
     parser.add_argument("--root", type=Path, default=REPO, help="repository to read (default: this one)")
     args = parser.parse_args()
     try:
-        models, problems = read_list(args.root)
+        models, problems = read_roster(args.root)
         lines = problems or status(args.root, models)
     except InputError as error:
-        print(f"models.py: {error}", file=sys.stderr)
+        print(f"roster.py: {error}", file=sys.stderr)
         return 2
     for line in lines:
         print(line)
