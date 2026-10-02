@@ -33,7 +33,7 @@ The [Refresh model rates workflow](../.github/workflows/rates.yml) runs daily at
 
 When prices differ, the workflow commits only `bench/rates.current.json` to `automation/refresh-model-rates` and opens or updates one pull request. An unchanged catalog produces no commit or new pull request. Updates need to be merged before new runs use them. Commits use the triggering user as author and `github-actions[bot]` as committer.
 
-The repository must enable **Settings > Actions > General > Workflow permissions > Allow GitHub Actions to create and approve pull requests**. The workflow uses the repository's `GITHUB_TOKEN` with contents and pull-request write permissions. This setting is currently disabled and must be enabled before rate-update PR creation can succeed. The workflow does not approve or merge pull requests. Under [GitHub's token rules](https://docs.github.com/en/actions/concepts/security/github_token#when-github_token-triggers-workflow-runs), CI on token-created pull requests can require a maintainer to select **Approve workflows to run**.
+The repository must enable **Settings > Actions > General > Workflow permissions > Allow GitHub Actions to create and approve pull requests**. The workflow uses the repository's `GITHUB_TOKEN` with contents and pull-request write permissions. The workflow does not approve or merge pull requests. Under [GitHub's token rules](https://docs.github.com/en/actions/concepts/security/github_token#when-github_token-triggers-workflow-runs), CI on token-created pull requests can require a maintainer to select **Approve workflows to run**.
 
 ## Runner change v1
 
