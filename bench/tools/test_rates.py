@@ -122,7 +122,7 @@ class RatesTests(unittest.TestCase):
         self.assertEqual(saved[:3], rows)
         self.assertEqual([(row["model"], row["output"]) for row in saved[3:]], [(MODEL, 10)])
         for model in ("gpt-retired", "gpt-unpriced"):
-            refused = self.command("check", "--model", model)
+            refused = self.command("check", "--model", MODEL, "--model", model)
             self.assertEqual(refused.returncode, 1, refused.stdout + refused.stderr)
             self.assertIn(model, refused.stdout)
 
