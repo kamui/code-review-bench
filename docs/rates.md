@@ -27,6 +27,14 @@ Refresh preserves old entries and adds one entry with today's UTC date for each 
 
 Run `rates:refresh` before freezing a new benchmark and pin the selected dated entries in its manifest. Refreshing the catalog does not change saved costs or the website. `bun run data` exports existing benchmark evidence.
 
+## Daily refresh
+
+The [Refresh model rates workflow](../.github/workflows/rates.yml) runs daily at 09:23 UTC and can also be started manually. It checks out the default branch, runs the focused tests, refreshes provider prices, and verifies the catalog schema and preserved imports. Source failures stop the job before committing changes.
+
+When prices differ, the workflow commits only `bench/rates.current.json` to `automation/refresh-model-rates` and opens or updates one pull request. An unchanged catalog produces no commit or new pull request. Updates need to be merged before new runs use them. Commits use the triggering user as author and `github-actions[bot]` as committer.
+
+The repository must enable **Settings > Actions > General > Workflow permissions > Allow GitHub Actions to create and approve pull requests**. The workflow uses the repository's `GITHUB_TOKEN` with contents and pull-request write permissions. This setting is currently disabled and must be enabled before rate-update PR creation can succeed. The workflow does not approve or merge pull requests. Under [GitHub's token rules](https://docs.github.com/en/actions/concepts/security/github_token#when-github_token-triggers-workflow-runs), CI on token-created pull requests can require a maintainer to select **Approve workflows to run**.
+
 ## Runner change v1
 
 The `rates-check-v1` policy adds a provider check to current `bench/tools/run_cell.py` before claiming a real attempt. It checks the selected arm's explicit model against the manifest's dated rate pin, using `BENCH_RATES` when set or `bench/rates.current.json` otherwise. Changed prices, a missing pin, or an unavailable source refuse dispatch before provisioning or payment. Refresh the catalog and freeze a new run when prices change.
