@@ -24,6 +24,10 @@ _Avoid_: Attempt, when counting scheduled repetitions independently of infrastru
 The complete practical setup being compared: review method, client and version, model, effort, and execution settings.
 _Avoid_: Model, when naming a leaderboard entry.
 
+**Roster**:
+The clients, models, and efforts that benchmarks currently run against by default. A new benchmark covers the whole roster; other models and clients can still be benchmarked on request.
+_Avoid_: Model list, when the client and effort are part of what is recorded.
+
 **Finding**:
 A problem reported by a reviewer. A finding is a claim whose validity must be assessed, not proof that a defect exists.
 
