@@ -52,7 +52,8 @@ The clone is made by ``provision.py prepare`` at ``<attempt>/clone`` (cache at `
 work directory ``clone-work``). ``BENCH_CACHE_ROOT`` names a cache root other than the default.
 ``BENCH_CACHE_REPLACEMENTS`` lists replacement-cache manifests separated by ``os.pathsep``, for
 targets whose frozen archive was deleted and rebuilt; the cell's target takes the one manifest
-that lists it, and ``cell.json`` and the attempt's notes record that manifest's path and hash.
+that lists it, and ``cell.json`` and the attempt's notes record that manifest's hash and its path,
+relative to the repository when it is inside it.
 The reviewer's input is ``input.md``: the target's ``packet.md``
 bytes, then the run policy rendered from the manifest's ``execution_policy`` and the target's
 allowance and unavailability, with ``<clone>``, ``<cache>`` and the work directory explained by
@@ -427,7 +428,9 @@ def cache_selection(target_id: str) -> tuple:
         raise Refused(f"{target_id} is listed by {len(listing)} cache replacement manifests")
     if not listing:
         return argv, None
-    return argv + ["--cache-replacements", str(listing[0])], {"path": str(listing[0]), "sha256": sha256_file(listing[0])}
+    manifest = listing[0]
+    recorded = manifest.relative_to(REPO).as_posix() if manifest.is_relative_to(REPO) else str(manifest)
+    return argv + ["--cache-replacements", str(manifest)], {"path": recorded, "sha256": sha256_file(manifest)}
 
 
 def dispatch(run: Run, attempt_id: str, claim: dict) -> None:
@@ -729,7 +732,7 @@ def self_test() -> int:
             calls.clear()
             return run
 
-        real_tool, started, provisioned = tool, False, []
+        real_tool, real_repo, started, provisioned = tool, REPO, False, []
         listing, other = base / "listing.json", base / "other.json"
         listing.write_text(json.dumps({"targets": [{"target": "t1"}]}), encoding="utf-8")
         other.write_text(json.dumps({"targets": [{"target": "t2"}]}), encoding="utf-8")
@@ -741,6 +744,10 @@ def self_test() -> int:
             os.environ.update(cache_env)
             assert cache_selection("t1") == (["--cache-root", str(base / "cache"), "--cache-replacements", selected["path"]], selected)
             assert cache_selection("t3") == (["--cache-root", str(base / "cache")], None)
+            globals()["REPO"] = base.resolve()
+            assert cache_selection("t1") == (["--cache-root", str(base / "cache"), "--cache-replacements", selected["path"]],
+                                             {**selected, "path": "listing.json"})
+            globals()["REPO"] = real_repo
             os.environ["BENCH_CACHE_REPLACEMENTS"] = os.pathsep.join([str(listing), str(listing)])
             try:
                 cache_selection("t1")
@@ -768,7 +775,7 @@ def self_test() -> int:
             assert provisioned[-1] == ["--cache-root", str(base / "cache"), "--cache-replacements", selected["path"]], provisioned
             assert read_json(work / "att-006" / "cell.json")["cache_replacements"] == selected
         finally:
-            globals()["tool"] = real_tool
+            globals().update(tool=real_tool, REPO=real_repo)
             for name, value in saved_env.items():
                 os.environ.pop(name, None) if value is None else os.environ.update({name: value})
     print("self-test ok")
