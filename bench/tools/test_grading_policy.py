@@ -44,6 +44,16 @@ class CommandPolicy(unittest.TestCase):
         with self.assertRaises(ValueError):
             policy.call(self.work, self.policy, "inspect", {"path": "home/.claude/.credentials.json"})
 
+    def test_evidence_packets_are_inspectable_and_never_writable(self):
+        work = self.work.resolve()
+        (work / "evidence").mkdir()
+        (work / "evidence/CL-example.md").write_text("Pinned evidence")
+        self.assertEqual(policy.call(work, self.policy, "inspect", {"path": "evidence/CL-example.md"}), "Pinned evidence")
+        with self.assertRaises(policy.Denied):
+            policy.call(work, self.policy, "write_scratch", {"path": "evidence/CL-example.md", "text": "changed"})
+        mounts = policy.sandbox(work, ["/usr/bin/true"])
+        self.assertEqual(mounts[mounts.index(str(work / "evidence")) - 1], "--ro-bind")
+
     def test_focused_go_and_django_commands_preserve_the_allowance(self):
         go = {**self.policy, "test_kind": "go"}
         argv, env, test = policy.command(self.work, go, ["go", "test", "./internal/foo", "-run", "TestFoo"], "clone")
