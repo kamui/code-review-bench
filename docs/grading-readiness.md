@@ -47,7 +47,64 @@ bun run verify:claims
 
 The policy and installed-client tests require Linux namespaces and bubblewrap. They fail when enforcement is unavailable. The client test uses a dummy key and a local fake API, never the user's credentials or a paid request.
 
-For `regrade.py`, pin the enforcing client with `--expected-cli-version VERSION` or `grader.cliVersion` in a new authorization. Missing version information is rejected before reserving a dispatch. Existing authorizations and frozen runner copies remain unchanged.
+## Run a pinned queue
+
+`regrade.py` grades every comparable batch of a pinned plan under one authorization:
+
+```sh
+python3 bench/tools/regrade.py --authorization <authorization.json> --directory <queue-directory> \
+  --workers 3 --expected-cli-version 2.1.286
+```
+
+`--workers` is the number of paid sessions that may run at once. It defaults to 1. Each batch still gets its own neutral workspace, home, session and context receipt, and the grader, rubric, registry and reference settings are the same for every batch. Concurrency shortens wall time. It does not change the tokens a batch uses.
+
+The authorization pins these inputs by path and SHA-256, and the controller refuses to start when one changed:
+
+- `sourcePlan`, the saved-review plan from `methodology.py`.
+- `executionPlan`, described below.
+- `runnerDeviations`, which must include `bench/tools/regrade.py`. A changed controller therefore needs a new authorization version. Earlier authorizations pin earlier controllers and stay as they are.
+- `graderTemplate` and `claimEvidence`, both optional. `claimEvidence` is an [extracts manifest](claim-adjudication.md#supply-pinned-evidence-to-graders) that preflight and preparation receive as `--claim-evidence`.
+
+Pin the enforcing client with `--expected-cli-version VERSION` or `grader.cliVersion`. The controller rejects missing version information before it reserves a dispatch.
+
+The execution plan replaces the dated paths and the pilot ordering of the first rubric-v2 queues:
+
+```json
+{
+  "workspaceRoot": ".local/<cohort>/grader-workspaces",
+  "archiveRoot": "bench/regrading/<cohort>",
+  "order": [{"run": "bench/runs/<run>", "target": "<target>"}]
+}
+```
+
+Both roots are relative to the repository. `order` names every comparable batch of the source plan once, and batches launch in that order. New workspaces are `<workspaceRoot>/<random id>`, and archives are `<archiveRoot>/<run name>/<target>/attempt-<N>`. Existing workspaces, receipts and archives under `bench/regrading/rubric-v2-2026-09-30` are not moved or rewritten.
+
+One coordinator process holds `controller.lock` in the queue directory. It alone prepares workspaces and writes `status.json`, reservations, mappings and archives. A worker only runs `grade.py dispatch` for the one batch it was given. A second controller on the same directory exits 2.
+
+Before the first new dispatch, the coordinator checks every pinned input of the queued batches and runs `grade.py preflight` once per run with the queue's targets, references and grader settings. A failed preflight reserves nothing.
+
+### Budget
+
+The coordinator derives the budget from the queue directory on every decision, so a restart sees the same numbers:
+
+- A settled charge is the `usage.high` of an attempt's `dispatch.json`. Failed and replaced attempts stay in the total.
+- An outstanding reservation is the `maxBudgetUsd` of a `reservation.json` whose attempt has no priced receipt. It stays outstanding at its maximum until a priced receipt or a `budget-resolution.json` zero-charge proof settles it. Nothing else releases it. The proof pins its evidence files by hash and states `chargeUpperUsd` 0. The controller accepts it only when the receipt observed no model, or when the attempt's workspace still exists with no receipt and no `home`, which `grade.py dispatch` creates after its last check before the paid call. A proof for any other attempt stops the controller.
+
+A new batch is reserved only when settled charges, outstanding reservations, the new reservation and one dollar of headroom for each of those reservations fit `budgetCapUsd`. The coordinator writes `reservation.json` before it starts the worker. While another reservation is active, a batch waits until its full allowance fits. `status.json` reports `spentUpperUsd`, `reservedUsd` and `outstandingReservations` separately.
+
+### Failures and restarts
+
+A failed preparation, dispatch or mapping, a receipt that needs investigation and an exhausted cap all stop new launches. Sessions that are already running finish, and the coordinator settles and maps the ones that succeeded. Nothing is deleted.
+
+One case leaves a successful batch unmapped. When its settled charge brings settled charges plus outstanding reservations above `budgetCapUsd`, the coordinator keeps the receipt, marks the batch `budget-stopped` and stops new launches. The run exits 3 unless an earlier failure already set its exit code. The batch stays that way on every restart while the total exceeds the cap.
+
+A restart reads the queue directory. Apart from that case, it maps every attempt that has a reservation and a good receipt, and does not dispatch that batch again. An attempt with a reservation and no receipt, or with a failed receipt, stops new launches with exit 1 until someone inspects it. To grade that batch again, create the next `attempt-<N>` directory beside it. The earlier attempt's charge or reservation stays in the budget. This also applies after a zero-charge proof settled the earlier attempt: the proof releases its reservation, and only the next attempt directory lets the batch run.
+
+Each mapped batch records its session and context ids in `status.json`. The coordinator refuses a batch whose session or context id repeats another's. The archive of a mapped attempt holds the key, reservation, logs, prepared inputs, `validator/`, `evidence/`, reviews, verdicts, receipts and transcripts, and `evidence.json` lists each file's SHA-256.
+
+### Measure a run
+
+`status.json` appends one `invocations` entry per controller run with `workers`, `peakActive` and `wallSeconds`, the elapsed time of that run. Report wall time from `wallSeconds`. The sum of the batches' session durations counts overlapping time twice and is not wall time. Report spend from `spentUpperUsd`, and report `reservedUsd` beside it as unsettled.
 
 ## Disk space
 
@@ -57,7 +114,7 @@ A grading workspace holds a clone, its restored dependency cache and scratch spa
 
 `grade.py map` removes the workspace's `clone` and `clone-cache` once the dispatch record and the verdicts pass every check, before it writes the mapping. `clone-work`, `home`, the verdicts, the dispatch record, the prepared inputs and the logs stay, and `workspace-pruned.json` records what was removed and the filesystem's free space before and after. A clone that is not clean at the target's head is kept: mapping stops with exit 2 and writes nothing, so the same version maps again once the clone has been inspected. A later mapping version needs no clone.
 
-Grade one target at a time, from preparation through mapping, so that at most one clone exists at once.
+Grade one target at a time, from preparation through mapping, so that at most one clone exists at once. `regrade.py --workers N` is the exception: it keeps at most N unmapped clones from its own launches, prepares them one after another under the same free-space check, and removes each clone when it maps the batch.
 
 A workspace that never reaches a mapping keeps its clone: an unfinished, failed, rejected or refused session. It counts against the free space until someone inspects and removes it. A workspace that was mapped before this cleanup existed, or a re-grade that `revise` consumed, has a mapping that names its session. Preview the same verified cleanup for those, then apply it:
 
