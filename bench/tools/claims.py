@@ -390,7 +390,7 @@ def evidence_packet(case, extracts, root=ROOT):
             if entry["stance"] != stance:
                 continue
             path = resolve(entry["source"], root)
-            if entry["source"]["path"].startswith("bench/runs/"):
+            if path.relative_to(root.resolve()).parts[:2] == ("bench", "runs"):
                 withheld.append(entry["source"])
                 continue
             label = f"E{len(sources) + 1}"
