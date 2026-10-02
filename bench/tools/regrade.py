@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regrade a pinned saved-review queue with bounded concurrency within its saved total authorization.
+"""Regrade a pinned saved-review queue with bounded concurrency and an explicit spending policy.
 
 One coordinator holds the controller lock and alone writes status, reservations, settlements and mappings.
 Each worker runs one reserved ``grade.py dispatch`` in its own neutral workspace and returns its exit code.
@@ -49,9 +49,29 @@ def money(value):
     return amount
 
 
+def authorized_cap(authorization):
+    cap = authorization["budgetCapUsd"]
+    codex = authorization["grader"]["model"].startswith("gpt-")
+    unbounded = authorization.get("budgetPolicy") == "codex-unbounded"
+    if cap is None:
+        if not codex or not unbounded:
+            raise ValueError("a null budget cap requires a Codex grader and budgetPolicy codex-unbounded")
+        return None
+    if unbounded:
+        raise ValueError("budgetPolicy codex-unbounded requires a null budget cap")
+    if codex:
+        raise ValueError("bounded Codex dispatch requires a verified dollar hard cap")
+    return money(cap)
+
+
+def reserved_total(outstanding):
+    return None if None in outstanding else sum(outstanding, Decimal(0))
+
+
 def ledger(directory, active=()):
-    """(settled upper charges, outstanding reservations). A reservation stays outstanding at its maximum until a
-    priced receipt or a zero-charge proof settles it; ``active`` attempts are still writing their receipts.
+    """(settled upper charges, outstanding reservations). Unbounded reservations have an unknown amount.
+    A reservation stays outstanding until a priced receipt or a zero-charge proof settles it;
+    ``active`` attempts are still writing their receipts.
     A proof needs a session that observed no model: a receipt saying so, or an intact workspace with no receipt
     and no ``home``, which ``grade.py dispatch`` creates only after its last gate before the paid call."""
     settled, outstanding = Decimal(0), []
@@ -71,7 +91,8 @@ def ledger(directory, active=()):
             if started or money(proof["chargeUpperUsd"]) != 0:
                 raise ValueError(f"invalid zero-charge proof: {resolution}")
         else:
-            outstanding.append(money(read(reservation)["maxBudgetUsd"]))
+            budget = read(reservation)["maxBudgetUsd"]
+            outstanding.append(None if budget is None else money(budget))
     return settled, outstanding
 
 
@@ -127,6 +148,10 @@ def archive_attempt(attempt, archives):
     files += list((work / "reviews").glob("*.md"))
     files += [path for name in ("validator", "evidence") for path in (work / name).rglob("*") if path.is_file()]
     files += list((work / "home/.claude/projects").glob("*/*.jsonl"))
+    files += list((work / "home/.codex/sessions").rglob("*.jsonl"))
+    config = work / "home/.codex/config.toml"
+    if config.is_file():
+        files.append(config)
     output = archives / attempt.parents[1].name / attempt.parent.name / attempt.name
     output.mkdir(parents=True, exist_ok=True)
     receipt = output / "evidence.json"
@@ -156,10 +181,11 @@ def save_status(directory, authorization, plan, rows, state, reason=None, invoca
            "plannedReviews": len(plan["reviews"]), "batches": rows, "invocations": list(invocations)}
     try:
         settled, outstanding = ledger(directory, active)
-        doc.update(spentUpperUsd=float(settled), reservedUsd=float(sum(outstanding)),
-                   outstandingReservations=len(outstanding))
+        reserved = reserved_total(outstanding)
+        doc.update(spentUpperUsd=float(settled), reservedUsd=None if reserved is None else float(reserved),
+                   outstandingReservations=len(outstanding), unknownReservations=outstanding.count(None))
     except FAILURES:
-        doc.update(spentUpperUsd=None, reservedUsd=None, outstandingReservations=None)
+        doc.update(spentUpperUsd=None, reservedUsd=None, outstandingReservations=None, unknownReservations=None)
     temporary = directory / "status.tmp"
     temporary.write_text(json.dumps(doc, indent=2) + "\n")
     temporary.replace(directory / "status.json")
@@ -172,9 +198,15 @@ def pinned_client(expected_cli_version):
 
 
 def dispatch_arguments(work, key, grader, budget, expected_cli_version):
-    return ["dispatch", "--work", work, "--key", key, "--model", grader["model"],
-            "--effort", grader["effort"], "--expected-cli-version", pinned_client(expected_cli_version),
-            "--max-budget-usd", budget, "--timeout", "900"]
+    args = ["dispatch", "--work", work, "--key", key, "--model", grader["model"],
+            "--effort", grader["effort"], "--expected-cli-version", pinned_client(expected_cli_version)]
+    if budget is None:
+        if not grader["model"].startswith("gpt-"):
+            raise ValueError("unbounded dispatch requires a Codex grader")
+        args += ["--allow-unbounded-codex"]
+    else:
+        args += ["--max-budget-usd", budget]
+    return [*args, "--timeout", "900"]
 
 
 def execute(authorization_path, directory, limit=None, expected_cli_version=None, workers=1):
@@ -182,6 +214,7 @@ def execute(authorization_path, directory, limit=None, expected_cli_version=None
         raise ValueError("--workers must be at least 1")
     clock = time.monotonic()
     authorization = read(authorization_path)
+    authorization_hash = digest(authorization_path)
     plan = read(checked(authorization["sourcePlan"]))
     execution = read(checked(authorization["executionPlan"]))
     if CONTROLLER not in [ref["path"] for ref in authorization["runnerDeviations"]]:
@@ -190,7 +223,7 @@ def execute(authorization_path, directory, limit=None, expected_cli_version=None
         checked(ref)
     for ref in plan["cases"]:
         checked(ref)
-    cap = money(authorization["budgetCapUsd"])
+    cap = authorized_cap(authorization)
     grader = authorization["grader"]
     cli_version = expected_cli_version or grader.get("cliVersion")
     workspaces, archives = planned_root(execution["workspaceRoot"]), planned_root(execution["archiveRoot"])
@@ -264,7 +297,7 @@ def execute(authorization_path, directory, limit=None, expected_cli_version=None
             row["state"] = "dispatch-failed"
             return block("failed", f"Paid attempt requires investigation: {attempt}", code or 1)
         settled, outstanding = ledger(directory, active)
-        if settled + sum(outstanding) > cap:
+        if cap is not None and settled + sum(outstanding) > cap:
             row["state"] = "budget-stopped"
             return block("budget-stopped", "Metered usage reached the total cap", 3)
         identity = {"sessionId": record["session_id"], "contextId": read(work / "clean-context.json")["context_id"]}
@@ -288,7 +321,9 @@ def execute(authorization_path, directory, limit=None, expected_cli_version=None
                    dispatchSha256=digest(receipt), evidence=archive_attempt(attempt, archives), **identity)
         completed += 1
         save()
-        print(f"Mapped {run}/{target} v{version}; {row['reviews']} reviews; cumulative ${settled}", flush=True)
+        spending = (f"known priced usage ${settled}; {len(outstanding)} unsettled sessions" if cap is None
+                    else f"cumulative ${settled}")
+        print(f"Mapped {run}/{target} v{version}; {row['reviews']} reviews; {spending}", flush=True)
 
     def preflight():
         runs = defaultdict(list)
@@ -302,6 +337,8 @@ def execute(authorization_path, directory, limit=None, expected_cli_version=None
                     "--model", grader["model"], "--expected-cli-version", pinned_client(cli_version), *context]
             for name in names:
                 args += ["--target", name, "--reference", f"{name}={targets[name]['nextRegisterVersion']}"]
+            if cap is None:
+                args += ["--allow-unbounded-codex"]
             code = invoke(args, unused_log(directory / "preflight" / f"{Path(run).name}.log"))
             if code:
                 return block("failed", f"Queue preflight failed for {run}", code)
@@ -313,13 +350,15 @@ def execute(authorization_path, directory, limit=None, expected_cli_version=None
         attempt = latest_attempt(directory, run, target)
         settled, outstanding = ledger(directory, active)
         items = sum(review["items"] for review in groups[(run, target)])
-        budget = allowance(cap, settled + sum(outstanding) + HEADROOM * len(outstanding), items)
-        if active and (budget is None or budget < desired(items)):
-            return False
-        if budget is None:
-            print(f"Stopped at ${settled}: total authorization ${cap}", flush=True)
-            block("budget-stopped", "Insufficient reserved budget for another batch", 3)
-            return True
+        budget = None
+        if cap is not None:
+            budget = allowance(cap, settled + sum(outstanding) + HEADROOM * len(outstanding), items)
+            if active and (budget is None or budget < desired(items)):
+                return False
+            if budget is None:
+                print(f"Stopped at ${settled}: total authorization ${cap}", flush=True)
+                block("budget-stopped", "Insufficient reserved budget for another batch", 3)
+                return True
         attempt.mkdir(parents=True, exist_ok=True)
         work, key = grading_workspace(attempt, workspaces), attempt / "key.json"
         row["workspace"] = str(attempt.relative_to(ROOT))
@@ -340,16 +379,22 @@ def execute(authorization_path, directory, limit=None, expected_cli_version=None
             if consumed != authorization["cacheReplacements"]["sha256"]:
                 raise ValueError(f"prepared cache replacement differs from authorization: {attempt}")
         dispatch = dispatch_arguments(work, key, grader, budget, cli_version)
+        if digest(authorization_path) != authorization_hash:
+            raise ValueError("authorization changed before reservation")
+        reserved = reserved_total(outstanding)
         with (attempt / "reservation.json").open("x") as handle:
-            json.dump({"maxBudgetUsd": float(budget), "spentBeforeUpperUsd": float(settled),
-                       "reservedBeforeUsd": float(sum(outstanding)),
-                       "authorizationSha256": digest(authorization_path)}, handle)
+            json.dump({"maxBudgetUsd": None if budget is None else float(budget), "spentBeforeUpperUsd": float(settled),
+                       "reservedBeforeUsd": None if reserved is None else float(reserved),
+                       "authorizationSha256": authorization_hash}, handle)
         row["state"] = "dispatching"
         active[attempt] = (row, pool.submit(invoke, dispatch, attempt / "dispatch.log"))
         invocation["peakActive"] = max(invocation["peakActive"], len(active))
         save()
         return True
 
+    for reservation in directory.glob("batches/*/*/attempt-*/reservation.json"):
+        if read(reservation)["authorizationSha256"] != authorization_hash:
+            raise ValueError(f"reserved attempt authorization changed: {reservation}")
     for row in rows:
         if row["state"] == "mapped":
             if "evidence" not in row:

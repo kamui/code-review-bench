@@ -136,6 +136,8 @@ import grading_validation  # noqa: E402
 import grading_policy  # noqa: E402
 from grading_validation import check_verdicts, check_regrade  # noqa: E402
 import clean_context  # noqa: E402
+import codex_grade_dispatch  # noqa: E402
+import codex_grading  # noqa: E402
 from normalize_review import render as render_review  # noqa: E402
 import provision  # noqa: E402
 import prune_workspace  # noqa: E402
@@ -409,7 +411,9 @@ def prepare(args) -> list:
                                                              *sorted((work / "evidence").glob("*.md")),
                                                              *([work / "claims.md"] if claim_text is not None else [])]},
            "validator": validator_files, "command_policy_sha256": sha256(policy_raw), "profiles_sha256": policy["profiles_sha256"],
-           "runner_deviation": {"version": 1, "files": runner_files(), **({} if evidence is None else {"context": {
+           "runner_deviation": {"version": 1, "files": runner_files(),
+                                "codex_catalog_sha256": sha256(read_bytes(BENCH / "harness/codex-grading-models.v1.json")),
+                                **({} if evidence is None else {"context": {
                "contract": claims.EVIDENCE_CONTRACT,
                "sha256": sha256(json.dumps(claim_snapshot["evidence"], sort_keys=True).encode("utf-8"))}})},
            "reviews": [{"token": r["token"], "attempt_id": r["attempt_id"], "items": r["items"]} for r in reviews]}
@@ -449,7 +453,8 @@ def runner_files():
     return {name: sha256(read_bytes(TOOLS / name)) for name in
             ("grade.py", "grading-hosts.v1", "grading_policy.py", "grading_client_probe.py", "grading_validation.py", "claim_grading.py", "check_manifest.py",
              "claims.py", "score.py", "normalize_review.py", "clean_context.py", "attempt_audit.py", "transcript_usage.py", "provision.py",
-             "prune_workspace.py", "upstream.py", "review_isolation.py", "diff_identity.py")}
+             "prune_workspace.py", "upstream.py", "review_isolation.py", "diff_identity.py",
+             "codex_grade_dispatch.py", "codex_grading.py", "codex_usage.py")}
 
 
 def check_prepared(work, key, *, dispatching=True):
@@ -468,6 +473,9 @@ def check_prepared(work, key, *, dispatching=True):
     if {f"evidence/{path.name}" for path in (work / "evidence").glob("*")} != pinned:
         problems.append("evidence packets changed after preparation")
     if dispatching:
+        catalog = key.get("runner_deviation", {}).get("codex_catalog_sha256")
+        if catalog and catalog != sha256(read_bytes(BENCH / "harness/codex-grading-models.v1.json")):
+            problems.append("Codex grading catalog changed after preparation")
         replacement = key.get("runner_deviation", {}).get("provisioning")
         if replacement:
             try:
@@ -483,7 +491,20 @@ def check_prepared(work, key, *, dispatching=True):
     return problems
 
 
-def client_preflight(model, expected_version):
+def client_preflight(model, expected_version, allow_unbounded_codex=False):
+    if model.startswith("gpt-"):
+        if not allow_unbounded_codex:
+            raise Inconsistent("Codex grading requires --allow-unbounded-codex; the client has no verified "
+                               "per-session dollar limit and cannot use a bounded reservation")
+        supported = {entry["slug"] for entry in read_json(codex_grading.MODEL_CATALOG)["models"]}
+        if model not in supported:
+            raise Inconsistent(f"Codex model {model} has no pinned grading tool profile")
+        if rate_for(model) is None:
+            raise Inconsistent(f"no price entry for {model}; dispatch refused before a model call")
+        try:
+            return codex_grade_dispatch.preflight(expected_version, Path(os.path.expanduser("~")))
+        except ValueError as error:
+            raise Inconsistent(str(error)) from error
     if rate_for(model) is None:
         raise Inconsistent(f"no rates.json entry for {model}; dispatch refused before payment")
     credentials = Path(os.path.expanduser("~")) / ".claude/.credentials.json"
@@ -504,8 +525,9 @@ def client_preflight(model, expected_version):
     return version
 
 
-def check_client_enforcement():
-    result = subprocess.run([sys.executable, str(TOOLS / "grading_client_probe.py")], capture_output=True, text=True, timeout=90)
+def check_client_enforcement(model=None):
+    probe = "codex_grading.py" if model and model.startswith("gpt-") else "grading_client_probe.py"
+    result = subprocess.run([sys.executable, str(TOOLS / probe)], capture_output=True, text=True, timeout=90)
     if result.returncode:
         raise Inconsistent("pinned client enforcement probe failed; dispatch refused before payment")
     return json.loads(result.stdout)
@@ -516,8 +538,8 @@ def preflight(args):
     if not offline:
         if not args.model or not args.expected_cli_version:
             raise Inconsistent("client preflight requires --model and --expected-cli-version; use --offline for inputs only")
-        client_preflight(args.model, args.expected_cli_version)
-        check_client_enforcement()
+        client_preflight(args.model, args.expected_cli_version, getattr(args, "allow_unbounded_codex", False))
+        check_client_enforcement(args.model)
     manifest = read_json(Path(args.run) / "manifest.json")
     targets = args.target or [entry["target"] for entry in manifest["cohort"]]
     versions = dict(value.split("=", 1) for value in args.reference)
@@ -537,7 +559,8 @@ def preflight(args):
 
 
 def rate_for(model: str):
-    matches = [r for r in read_json(BENCH / "rates.json")["rates"] if r["model"] == model]
+    pricing = "rates.current.json" if model.startswith("gpt-") else "rates.json"
+    matches = [r for r in read_json(BENCH / pricing)["rates"] if r["model"] == model]
     return sorted(matches, key=lambda r: r["as_of"])[-1] if matches else None
 
 
@@ -594,6 +617,10 @@ def trimmed_claude_json(source: Path) -> dict:
 
 
 def dispatch(args) -> list:
+    if args.model.startswith("gpt-"):
+        return dispatch_codex(args)
+    if args.max_budget_usd is None:
+        raise Inconsistent("Claude dispatch requires --max-budget-usd")
     work = Path(args.work).resolve()
     prompt = read_bytes(work / "prompt.md")
     if (work / "home").exists() or (work / "dispatch.json").exists():
@@ -711,6 +738,61 @@ def dispatch(args) -> list:
         reasons.append("no verdicts.json written")
     if not reasons:
         print(f"graded in {work}: session {session[:8]}, ${usage['priced_total_usd']}")
+    return reasons
+
+
+def dispatch_codex(args):
+    work = Path(args.work).resolve()
+    prompt = read_bytes(work / "prompt.md")
+    if (work / "home").exists() or (work / "dispatch.json").exists():
+        raise Inconsistent(f"{work} was already dispatched; prepare a new directory")
+    if args.max_budget_usd is not None:
+        raise Inconsistent("Codex cannot enforce --max-budget-usd; use explicitly authorized unbounded mode")
+    version = client_preflight(args.model, args.expected_cli_version, args.allow_unbounded_codex)
+    key = read_json(args.key)
+    if not (work / "command-policy.json").is_file() or not (work / "validator/inputs.json").is_file():
+        raise Inconsistent("legacy workspace has no enforcement/validator; prepare a fresh versioned workspace")
+    problems = check_prepared(work, key)
+    if problems:
+        raise Inconsistent("\n".join(problems))
+    user_home = Path(os.path.expanduser("~"))
+    try:
+        enforcement = grading_policy.probe(work, protected=(Path(args.key), user_home))
+        enforcement["client_probe"] = check_client_enforcement(args.model)
+    except grading_policy.Denied as error:
+        raise Inconsistent(str(error)) from error
+    dispatched_at = now()
+    enforcement["native_tools"] = "mcp-metadata-only"
+    enforcement["native_helpers"] = sorted(codex_grading.AUX_TOOL_NAMES)
+    (work / "timing.json").write_text(json.dumps({"root_dispatched_at": dispatched_at}) + "\n")
+    result = codex_grade_dispatch.run(work, Path(args.key), args.model, args.effort, args.timeout,
+                                     user_home, rate_for(args.model))
+    result["audit_violations"].extend(check_prepared(work, key))
+    completed_at = now()
+    enforcement["command_policy_sha256"] = key["command_policy_sha256"]
+    enforcement["logs"] = {name: sha256(read_bytes(work / name)) for name in
+                           ("command-audit.jsonl", "policy-audit.jsonl") if (work / name).is_file()}
+    record = {**result, "cli_version": version, "model": args.model, "effort": args.effort,
+              "prompt_sha256": sha256(prompt), "dispatched_at": dispatched_at, "completed_at": completed_at,
+              "verdicts_present": (work / "verdicts.json").is_file(), "enforcement": enforcement}
+    (work / "dispatch.json").write_text(json.dumps(record, indent=2) + "\n")
+    reasons = []
+    if result["exit_code"] != 0:
+        reasons.append(f"Codex session exit {result['exit_code']}; timeout limit {args.timeout} s")
+    reasons.extend(result["audit_violations"])
+    if result["models_observed"] != [args.model] or result["subagents"]:
+        reasons.append("Codex grader did not run the pinned model alone")
+    if result["usage"]["priced_total_usd"] is None:
+        reasons.append("Codex usage was not priced")
+    if not record["verdicts_present"]:
+        reasons.append("no verdicts.json written")
+    if args.run and result["usage"]["priced_total_usd"] is not None:
+        charge = {"at": completed_at, "step": args.step, "usd": result["usage"]["priced_total_usd"],
+                  "model": args.model, "billing": "list-price-equivalent", "session": result["session_id"]}
+        with (Path(args.run) / "charges.jsonl").open("a") as handle:
+            handle.write(json.dumps(charge) + "\n")
+    if not reasons:
+        print(f"graded in {work}: Codex session {result['session_id']}, list-price equivalent ${result['usage']['priced_total_usd']}")
     return reasons
 
 
@@ -927,7 +1009,14 @@ def dispatch_record(work: Path, key: dict) -> tuple:
     problems = []
     if "command_policy_sha256" in key:
         enforcement = record.get("enforcement", {})
-        if (enforcement.get("native_tools") != "none" or enforcement.get("probe_exit") != 0
+        native = enforcement.get("native_tools") == "none"
+        if record.get("budget_policy") == "codex-unbounded" and record["model"].startswith("gpt-"):
+            native = (enforcement.get("native_tools") == "mcp-metadata-only"
+                      and enforcement.get("native_helpers") == sorted(codex_grading.AUX_TOOL_NAMES)
+                      and enforcement.get("client_probe", {}).get("native_helpers") == sorted(codex_grading.AUX_TOOL_NAMES)
+                      and enforcement.get("client_probe", {}).get("native_resource_helpers_confined") is True
+                      and enforcement.get("client_probe", {}).get("all_tools_completed") is True)
+        if (not native or enforcement.get("probe_exit") != 0
                 or enforcement.get("command_policy_sha256") != key["command_policy_sha256"]):
             problems.append("dispatch lacks the pinned command-enforcement receipt")
         for name, digest in enforcement.get("logs", {}).items():
@@ -1346,6 +1435,7 @@ def main() -> int:
     f.add_argument("--key-root", required=True)
     f.add_argument("--model")
     f.add_argument("--expected-cli-version")
+    f.add_argument("--allow-unbounded-codex", action="store_true", help="explicitly authorize Codex without a dollar limit")
     f.add_argument("--offline", action="store_true", help="check saved inputs and caches without any client, credential or pricing checks")
     f.add_argument("--reference", action="append", default=[], help="TARGET=VERSION")
     p.add_argument("--work", required=True)
@@ -1372,7 +1462,8 @@ def main() -> int:
     d.add_argument("--model", required=True)
     d.add_argument("--expected-cli-version", required=True)
     d.add_argument("--effort", required=True)
-    d.add_argument("--max-budget-usd", required=True, type=float)
+    d.add_argument("--max-budget-usd", type=float, help="required for Claude; unsupported for Codex")
+    d.add_argument("--allow-unbounded-codex", action="store_true", help="explicitly authorize Codex without a dollar limit")
     d.add_argument("--run", help="run directory whose charges.jsonl gets the session's charge")
     d.add_argument("--step", help="the charge line's step label")
     d.add_argument("--timeout", type=int, default=5400)
