@@ -3,9 +3,10 @@
 
 Usage::
 
-    python3 docs/research/skill-matrix-2026-10-02/make_runs.py
+    python3 docs/research/skill-matrix-2026-10-02/make_runs.py [RUN_ID ...]
 
-Each run copies the frozen inputs of the run that already benchmarked the same review method, so a
+Without arguments it creates the new arms and the fifteen runs of the first freeze. With run ids it
+creates only those runs, for a later freeze. Each run copies the frozen inputs of the run that already benchmarked the same review method, so a
 setup keeps one skill snapshot, invocation, client and execution policy across task cohorts. It
 refuses to overwrite an existing arm or run. ``freeze.py`` pins the freeze commit afterwards.
 """
@@ -13,6 +14,7 @@ refuses to overwrite an existing arm or run. ``freeze.py`` pins the freeze commi
 import hashlib
 import json
 import shutil
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -104,6 +106,12 @@ RUNS = [
     {"id": "codex-thermo-luna-high-selected", "template": "2026-09-29-codex-thermo-high", "cohort": "selected",
      "arms": ["codex-thermo-high"], "attempt_usd": 0.2},
 ]
+LATER = [
+    {"id": "claude-builtin-fable-selected", "template": "2026-09-29-claude-fable-high", "cohort": "selected",
+     "arms": ["claude-builtin-fable-high"], "attempt_usd": None,
+     "what": "Added on the user's instruction to run the Fable 5.1 built-in after every other bench, if Claude plan "
+             "usage remains."},
+]
 for skill, template in (("ce", "2026-09-29-codex-ce-luna-high"), ("thermo", "2026-09-29-codex-thermo-high")):
     for name, model in (("sol61", "gpt-6.1-sol"), ("astra", "gpt-6-astra")):
         arm = f"codex-{skill}-{name}-high"
@@ -118,11 +126,13 @@ for skill, template in (("ce", "2026-09-29-codex-ce-luna-high"), ("thermo", "202
 def main():
     registers = published_registers()
     provenance = read(BENCH / "skill-provenance.v2.json")["skills"]
-    for source, arm_id, model, label, budget in ARMS:
-        path, arm = new_arm(source, arm_id, model, label, budget)
-        write(path, arm)
+    wanted = sys.argv[1:]
+    if not wanted:
+        for source, arm_id, model, label, budget in ARMS:
+            path, arm = new_arm(source, arm_id, model, label, budget)
+            write(path, arm)
     original = [entry["target"] for entry in read(BENCH / "runs/2026-09-29-codex-ce-luna-high/manifest.json")["cohort"]]
-    for spec in RUNS:
+    for spec in ([row for row in RUNS + LATER if row["id"] in wanted] if wanted else RUNS):
         run = BENCH / "runs" / f"{DATE}-{spec['id']}"
         source = BENCH / "runs" / spec["template"]
         run.mkdir()
