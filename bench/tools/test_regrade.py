@@ -316,6 +316,17 @@ class Controller(unittest.TestCase):
         status = cohort.status()
         self.assertEqual((status["state"], status["spentUpperUsd"], status["reservedUsd"]), ("budget-stopped", 1.5, 0.0))
 
+    def test_a_charge_beyond_the_cap_leaves_its_batch_unmapped(self):
+        cohort = Cohort(self.root, 3)
+        cohort.outcomes = {"pr-1": {"high": 3.5}}
+        for _restart in range(2):
+            self.assertEqual(cohort.run(), 3)
+            self.assertEqual(cohort.launched, ["pr-1"])
+            self.assertEqual(cohort.rows()["pr-1"]["state"], "budget-stopped")
+            self.assertFalse((self.root / RUN / "scoring").exists())
+            status = cohort.status()
+            self.assertEqual((status["state"], status["spentUpperUsd"]), ("budget-stopped", 3.5))
+
     def test_blocking_preflight_reserves_nothing(self):
         cohort = Cohort(self.root, 100)
         cohort.preflight_code = 1
@@ -452,6 +463,11 @@ class RegradingBudget(unittest.TestCase):
             self.assertEqual(regrade.ledger(directory), (0, []))
             (work / 'dispatch.json').write_text('{"usage": {"high": 0.25}')
             self.assertEqual(regrade.ledger(directory, {attempt}), (0, [regrade.money('2.5')]))
+            (work / 'dispatch.json').unlink()
+            self.assertEqual(regrade.ledger(directory), (0, []))
+            (work / 'home').mkdir()
+            with self.assertRaisesRegex(ValueError, 'zero-charge'):
+                regrade.ledger(directory)
 
     def test_failed_attempt_charges_remain_in_total(self):
         with tempfile.TemporaryDirectory() as temp:

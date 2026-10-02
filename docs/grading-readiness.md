@@ -88,7 +88,7 @@ Before the first new dispatch, the coordinator checks every pinned input of the 
 The coordinator derives the budget from the queue directory on every decision, so a restart sees the same numbers:
 
 - A settled charge is the `usage.high` of an attempt's `dispatch.json`. Failed and replaced attempts stay in the total.
-- An outstanding reservation is the `maxBudgetUsd` of a `reservation.json` whose attempt has no priced receipt. It stays outstanding at its maximum until a priced receipt or a `budget-resolution.json` zero-charge proof settles it. Nothing else releases it.
+- An outstanding reservation is the `maxBudgetUsd` of a `reservation.json` whose attempt has no priced receipt. It stays outstanding at its maximum until a priced receipt or a `budget-resolution.json` zero-charge proof settles it. Nothing else releases it. The proof pins its evidence files by hash and states `chargeUpperUsd` 0. The controller accepts it only when the receipt observed no model, or when the attempt has no receipt and no `work/home`, which `grade.py dispatch` creates after its last check before the paid call. A proof for any other attempt stops the controller.
 
 A new batch is reserved only when settled charges, outstanding reservations, the new reservation and one dollar of headroom for each of those reservations fit `budgetCapUsd`. The coordinator writes `reservation.json` before it starts the worker. While another reservation is active, a batch waits until its full allowance fits. `status.json` reports `spentUpperUsd`, `reservedUsd` and `outstandingReservations` separately.
 
@@ -96,7 +96,9 @@ A new batch is reserved only when settled charges, outstanding reservations, the
 
 A failed preparation, dispatch or mapping, a receipt that needs investigation and an exhausted cap all stop new launches. Sessions that are already running finish, and the coordinator settles and maps the ones that succeeded. Nothing is deleted.
 
-A restart reads the queue directory. It maps every attempt that has a reservation and a good receipt, and does not dispatch that batch again. An attempt with a reservation and no receipt, or with a failed receipt, stops new launches with exit 1 until someone inspects it. To grade that batch again, create the next `attempt-<N>` directory beside it. The earlier attempt's charge or reservation stays in the budget.
+One case leaves a successful batch unmapped. When its settled charge brings settled charges plus outstanding reservations above `budgetCapUsd`, the coordinator keeps the receipt, marks the batch `budget-stopped` and exits 3. The batch stays that way on every restart while the total exceeds the cap.
+
+A restart reads the queue directory. Apart from that case, it maps every attempt that has a reservation and a good receipt, and does not dispatch that batch again. An attempt with a reservation and no receipt, or with a failed receipt, stops new launches with exit 1 until someone inspects it. To grade that batch again, create the next `attempt-<N>` directory beside it. The earlier attempt's charge or reservation stays in the budget.
 
 Each mapped batch records its session and context ids in `status.json`. The coordinator refuses a batch whose session or context id repeats another's. The archive of a mapped attempt holds the key, reservation, logs, prepared inputs, `validator/`, `evidence/`, reviews, verdicts, receipts and transcripts, and `evidence.json` lists each file's SHA-256.
 
