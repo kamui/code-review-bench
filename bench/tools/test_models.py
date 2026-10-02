@@ -7,10 +7,7 @@ import tempfile
 import unittest
 
 MODELS = Path(__file__).resolve().parent / "models.py"
-OPUS = {"model": "claude-opus-5-5", "client": "claude-code", "effort": "high"}
-LUNA = {"model": "gpt-6-luna", "client": "codex", "effort": "high"}
-ASTRA = {"model": "gpt-6-astra", "client": "codex", "effort": "high"}
-NOVA = {"model": "gpt-7-nova", "client": "codex", "effort": "high", "note": "released this week"}
+LISTED = {"claude-code": {"claude-opus-5-5": ["high"]}, "codex": {"gpt-6-luna": ["high"], "gpt-6-astra": ["high"]}}
 
 
 class ModelsTest(unittest.TestCase):
@@ -24,12 +21,10 @@ class ModelsTest(unittest.TestCase):
             self.write(f"harness/{client}.json", {})
         self.write("rates.current.json", {"rates": [{"model": model} for model in
                                                     ("claude-opus-5-5", "gpt-6-luna", "gpt-6-astra", "gpt-7-nova")]})
-        arms = {"builtin-opus": ("claude-builtin", "claude-opus-5-5", "high"),
-                "ce-retired": ("claude-skill", "claude-sonnet-5", "high"),
-                "ce-luna": ("codex-skill", "gpt-6-luna", "high"),
-                "ce-astra-medium": ("codex-skill", "gpt-6-astra", "medium")}
-        for arm, (kind, model, effort) in arms.items():
-            self.write(f"arms/{arm}.json", {"kind": kind, "model": model, "effort": effort})
+        self.arm("builtin-opus", "claude-builtin", "claude-opus-5-5")
+        self.arm("ce-retired", "claude-skill", "claude-sonnet-5")
+        self.arm("ce-luna", "codex-skill", "gpt-6-luna")
+        self.arm("ce-astra-medium", "codex-skill", "gpt-6-astra", "medium")
         self.suites = [
             {"id": "twelve", "entries": [self.entry("opus-builtin", "claude-builtin", "builtin-opus"),
                                          self.entry("retired-ce", "ce-code-review", "ce-retired"),
@@ -38,16 +33,16 @@ class ModelsTest(unittest.TestCase):
                                          {"id": "uncharted", "sources": [{"arm": "ce-astra-medium"}]}]},
             {"id": "selected", "entries": [self.entry("luna-ce", "ce-code-review", "ce-luna")]}]
         self.write("scoreboard.current.json", {"suites": self.suites})
-        self.listing([OPUS, LUNA, ASTRA])
+        self.write("models.json", LISTED)
 
     def write(self, name, value):
         (self.bench / name).write_text(json.dumps(value), encoding="utf-8")
 
+    def arm(self, arm, kind, model, effort="high"):
+        self.write(f"arms/{arm}.json", {"kind": kind, "model": model, "effort": effort})
+
     def entry(self, entry_id, method, arm):
         return {"id": entry_id, "method": method, "sources": [{"arm": arm}]}
-
-    def listing(self, models):
-        self.write("models.json", {"models": models})
 
     def run_models(self, *arguments):
         return subprocess.run([sys.executable, str(MODELS), *arguments], capture_output=True, text=True, encoding="utf-8")
@@ -56,6 +51,9 @@ class ModelsTest(unittest.TestCase):
         result = self.run_models("--root", str(self.bench.parent))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return [tuple(line.split("\t")) for line in result.stdout.splitlines()]
+
+    def added(self, before):
+        return [line for line in self.lines() if line not in before]
 
     def test_shipped_list_is_usable(self):
         result = self.run_models()
@@ -73,38 +71,51 @@ class ModelsTest(unittest.TestCase):
             ("selected", "ce-code-review", "codex", "gpt-6-luna", "high", "luna-ce"),
             ("selected", "ce-code-review", "codex", "gpt-6-astra", "high", "missing")])
 
-    def test_one_edited_entry_adds_or_retires_a_model(self):
+    def test_one_edited_line_adds_a_model_an_effort_or_retires_a_model(self):
         before = self.lines()
-        self.listing([OPUS, LUNA, ASTRA, NOVA])
-        self.assertEqual([line for line in self.lines() if line not in before],
-                         [("twelve", "ce-code-review", "codex", "gpt-7-nova", "high", "missing"),
-                          ("selected", "ce-code-review", "codex", "gpt-7-nova", "high", "missing")])
-        self.listing([OPUS, LUNA])
+        self.write("models.json", {**LISTED, "codex": {**LISTED["codex"], "gpt-7-nova": ["high"]}})
+        self.assertEqual(self.added(before), [("twelve", "ce-code-review", "codex", "gpt-7-nova", "high", "missing"),
+                                              ("selected", "ce-code-review", "codex", "gpt-7-nova", "high", "missing")])
+        self.write("models.json", {**LISTED, "codex": {**LISTED["codex"], "gpt-6-astra": ["high", "medium"]}})
+        self.assertEqual(self.added(before), [("twelve", "ce-code-review", "codex", "gpt-6-astra", "medium", "astra-ce-medium"),
+                                              ("selected", "ce-code-review", "codex", "gpt-6-astra", "medium", "missing")])
+        self.write("models.json", {**LISTED, "codex": {"gpt-6-luna": ["high"]}})
         self.assertEqual(self.lines(), [line for line in before if line[3] != "gpt-6-astra"])
 
     def test_a_method_reaches_a_client_with_its_first_benchmark_there(self):
         before = self.lines()
-        self.write("arms/builtin-luna.json", {"kind": "codex", "model": "gpt-6-luna", "effort": "high"})
+        self.arm("builtin-luna", "codex", "gpt-6-luna")
         self.suites[1]["entries"].append(self.entry("luna-builtin", "claude-builtin", "builtin-luna"))
         self.write("scoreboard.current.json", {"suites": self.suites})
-        self.assertEqual([line for line in self.lines() if line not in before],
-                         [("twelve", "claude-builtin", "codex", "gpt-6-luna", "high", "missing"),
-                          ("twelve", "claude-builtin", "codex", "gpt-6-astra", "high", "missing"),
-                          ("selected", "claude-builtin", "codex", "gpt-6-luna", "high", "luna-builtin"),
-                          ("selected", "claude-builtin", "codex", "gpt-6-astra", "high", "missing")])
+        self.assertEqual(self.added(before), [("twelve", "claude-builtin", "codex", "gpt-6-luna", "high", "missing"),
+                                              ("twelve", "claude-builtin", "codex", "gpt-6-astra", "high", "missing"),
+                                              ("selected", "claude-builtin", "codex", "gpt-6-luna", "high", "luna-builtin"),
+                                              ("selected", "claude-builtin", "codex", "gpt-6-astra", "high", "missing")])
+
+    def test_a_benchmark_on_one_client_does_not_cover_the_model_on_another(self):
+        before = self.lines()
+        self.write("models.json", {**LISTED, "codex": {**LISTED["codex"], "claude-opus-5-5": ["high"]}})
+        self.arm("ce-opus", "claude-skill", "claude-opus-5-5")
+        self.suites[0]["entries"].append(self.entry("opus-ce", "ce-code-review", "ce-opus"))
+        self.write("scoreboard.current.json", {"suites": self.suites})
+        self.assertEqual(self.added(before), [("twelve", "ce-code-review", "claude-code", "claude-opus-5-5", "high", "opus-ce"),
+                                              ("twelve", "ce-code-review", "codex", "claude-opus-5-5", "high", "missing"),
+                                              ("selected", "ce-code-review", "codex", "claude-opus-5-5", "high", "missing")])
 
     def test_refuses_a_list_that_cannot_be_used(self):
         cases = [
-            ([OPUS, {**LUNA, "model": "gpt-6-lnua"}],
-             "bench/models.json: models[1]: model gpt-6-lnua has no entry in bench/rates.current.json"),
-            ([{**LUNA, "client": "codecs"}], "bench/models.json: models[0]: client codecs has no bench/harness/codecs.json"),
-            ([OPUS, LUNA, dict(LUNA)], "bench/models.json: models[2]: repeats gpt-6-luna at high"),
-            ([OPUS, {"model": "gpt-7-nova", "client": "codex"}], "bench/models.json: models[1]: needs model, client and effort"),
-            ([OPUS, "gpt-6-luna"], "bench/models.json: models[1]: needs model, client and effort"),
-            ([], "bench/models.json: models must be a non-empty array")]
-        for models, reason in cases:
+            ({"codex": {"gpt-6-lnua": ["high"]}}, "bench/models.json: model gpt-6-lnua has no entry in bench/rates.current.json"),
+            ({"codecs": {"gpt-6-luna": ["high"]}}, "bench/models.json: client codecs has no bench/harness/codecs.json"),
+            ({"codex": ["gpt-6-luna"]}, "bench/models.json: codex needs an object of models"),
+            ({"codex": {"gpt-6-luna": "high"}}, "bench/models.json: codex gpt-6-luna needs a list of distinct efforts"),
+            ({"codex": {"gpt-6-luna": []}}, "bench/models.json: codex gpt-6-luna needs a list of distinct efforts"),
+            ({"codex": {"gpt-6-luna": ["high", 3]}}, "bench/models.json: codex gpt-6-luna needs a list of distinct efforts"),
+            ({"codex": {"gpt-6-luna": ["high", "high"]}}, "bench/models.json: codex gpt-6-luna needs a list of distinct efforts"),
+            (["gpt-6-luna"], "bench/models.json: needs an object keyed by client"),
+            ({"codex": {}}, "bench/models.json: lists no models")]
+        for listed, reason in cases:
             with self.subTest(reason=reason):
-                self.listing(models)
+                self.write("models.json", listed)
                 result = self.run_models("--root", str(self.bench.parent))
                 self.assertEqual((result.returncode, result.stdout.splitlines()), (1, [reason]), result.stderr)
 
@@ -115,14 +126,16 @@ class ModelsTest(unittest.TestCase):
             self.assertIn(named, result.stderr)
             self.assertNotIn("Traceback", result.stderr)
 
-        self.write("arms/ce-luna.json", {"kind": "gemini-skill", "model": "gpt-6-luna", "effort": "high"})
+        self.arm("ce-luna", "gemini-skill", "gpt-6-luna")
         exits_two("gemini-skill")
         (self.bench / "arms/ce-luna.json").unlink()
         exits_two("ce-luna.json")
-        (self.bench / "models.json").write_text('{"models": [\n  {"model": "gpt-6-luna"}\n  {"model": "gpt-6-astra"}\n]}',
-                                                encoding="utf-8")
+        listed = self.bench / "models.json"
+        listed.write_text('{"codex": {"gpt-6-luna": ["high"], "gpt-6-astra": ["high"], "gpt-6-luna": ["medium"]}}', encoding="utf-8")
+        exits_two("gpt-6-luna is written more than once")
+        listed.write_text('{"codex": {"gpt-6-luna": ["high"]\n "gpt-6-astra": ["high"]}}', encoding="utf-8")
         exits_two("models.json")
-        (self.bench / "models.json").unlink()
+        listed.unlink()
         exits_two("models.json")
 
 
