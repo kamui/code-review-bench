@@ -468,6 +468,13 @@ class RegradingBudget(unittest.TestCase):
             (work / 'home').mkdir()
             with self.assertRaisesRegex(ValueError, 'zero-charge'):
                 regrade.ledger(directory)
+            shutil.rmtree(work)
+            with self.assertRaisesRegex(ValueError, 'zero-charge'):
+                regrade.ledger(directory)
+            (attempt / 'budget-resolution.json').write_text('{}')
+            regrade.save_status(directory, {'budgetCapUsd': 1, 'grader': {'model': 'm', 'effort': 'high'}},
+                                {'reviews': []}, [], 'failed')
+            self.assertIsNone(regrade.read(directory / 'status.json')['spentUpperUsd'])
 
     def test_failed_attempt_charges_remain_in_total(self):
         with tempfile.TemporaryDirectory() as temp:
