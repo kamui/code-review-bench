@@ -25,14 +25,16 @@ def main():
         manifest = json.loads(path.read_text(encoding="utf-8"))
         if manifest.get("frozen_at"):
             continue
-        relative = path.relative_to(ROOT).as_posix()
-        committed = subprocess.check_output(["git", "-C", str(ROOT), "show", f"{commit}:{relative}"])
-        if committed != path.read_bytes():
-            raise SystemExit(f"{relative} differs from {commit}")
-        for arm in manifest["arms"]:
-            arm_path = f"bench/arms/{arm['id']}.json"
-            if subprocess.check_output(["git", "-C", str(ROOT), "show", f"{commit}:{arm_path}"]) != (ROOT / arm_path).read_bytes():
-                raise SystemExit(f"{arm_path} differs from {commit}")
+        inputs = path.parent / "inputs"
+        on_disk = sorted(file.relative_to(ROOT).as_posix() for file in inputs.rglob("*") if not file.is_dir())
+        listed = subprocess.check_output(["git", "-C", str(ROOT), "ls-tree", "-r", "-z", "--name-only", commit, "--",
+                                          inputs.relative_to(ROOT).as_posix()], text=True)
+        if on_disk != sorted(filter(None, listed.split("\0"))):
+            raise SystemExit(f"{inputs.relative_to(ROOT).as_posix()} does not hold the files of {commit}")
+        arms = [f"bench/arms/{arm['id']}.json" for arm in manifest["arms"]]
+        for relative in [path.relative_to(ROOT).as_posix(), *on_disk, *arms]:
+            if subprocess.check_output(["git", "-C", str(ROOT), "show", f"{commit}:{relative}"]) != (ROOT / relative).read_bytes():
+                raise SystemExit(f"{relative} differs from {commit}")
         manifest = {key: value for key, value in manifest.items() if key != "metric_code_revision"}
         ordered = {}
         for key, value in manifest.items():
