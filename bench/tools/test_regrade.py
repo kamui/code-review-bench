@@ -581,6 +581,25 @@ class Controller(unittest.TestCase):
 
 
 class RegradingBudget(unittest.TestCase):
+    def test_pinned_timeout_reaches_dispatch(self):
+        import grade
+        arguments = regrade.dispatch_arguments(Path("work"), Path("key.json"),
+                                              {"model": "gpt-6-astra", "effort": "high", "timeoutSeconds": 5400},
+                                              None, "0.160.0")
+        with patch.object(sys, "argv", ["grade.py", *map(str, arguments)]), patch.object(grade, "dispatch", return_value=[]) as dispatch:
+            self.assertEqual(grade.main(), 0)
+        self.assertEqual(dispatch.call_args.args[0].timeout, 5400)
+
+    def test_invalid_timeout_is_refused_before_preflight(self):
+        for timeout in (True, False, 0, -1, 1.5, "5400", None):
+            with self.subTest(timeout=timeout), tempfile.TemporaryDirectory() as temp:
+                cohort = Cohort(Path(temp), 20)
+                cohort.authorization["grader"]["timeoutSeconds"] = timeout
+                cohort.authorize()
+                with self.assertRaisesRegex(ValueError, "positive integer"):
+                    cohort.run()
+                self.assertEqual(cohort.dispatches, [])
+
     def test_dispatch_arguments_parse_with_the_pinned_key_and_client(self):
         import grade
         arguments = regrade.dispatch_arguments(Path("work"), Path("key.json"),
