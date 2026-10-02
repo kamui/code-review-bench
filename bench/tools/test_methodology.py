@@ -65,7 +65,7 @@ class ReconciliationPlan(unittest.TestCase):
         for target in ("m-grpc-go-7390", "q-soba-195", "t-rclone-9699"):
             self.assertEqual(targets[target]["cleanControlAudit"], "pending")
         self.assertEqual(self.plan["prSelection"], "deferred at user request")
-        self.assertEqual(len(self.plan["sharedClaimItems"]), 108)
+        self.assertEqual(len(self.plan["sharedClaimItems"]), 222)
 
 
 if __name__ == "__main__":
