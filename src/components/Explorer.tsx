@@ -68,7 +68,7 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
     (!area || task.profile.areas.includes(area)) && (!change || task.profile.changeKinds.includes(change)) &&
     (!technology || task.profile.technologies.includes(technology)) && (!concern || task.profile.concerns.includes(concern)),
   )
-  const { tasks: shared, summaries: comparisonSummaries } = leaderboardComparison(dataset, candidates, filter)
+  const { tasks: shared, summaries: comparisonSummaries } = leaderboardComparison(dataset, activeIds, candidates, filter)
   const sharedIds = new Set(shared.map(task => task.id))
   const summaries = comparisonSummaries.filter(row => activeIds.includes(row.configuration.id))
     .sort((left, right) => (right.score ?? -1) - (left.score ?? -1))
@@ -171,15 +171,25 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
               {configuration.reviewChange && <Anchor className="configuration-version" href={configuration.reviewChange.url} target="_blank" rel="noreferrer">Review changed: {configuration.reviewChange.summary}</Anchor>}
             </div>)}</Stack>
             <p className="shape-key"><span><Mark configuration={{ method: '', reviewEdition: '', builtin: true }} /> Built-in reviewer</span><span><Mark configuration={{ method: '', reviewEdition: '', builtin: false }} /> Skill</span></p>
+            <Popover position="bottom-end" width={360} withArrow>
+              <Popover.Target><Button variant="subtle" color="gray" size="xs" mt="md" rightSection={<ChevronDown size={14} />}>Review setups ({configurations.filter(item => selected.includes(item.id)).length}/{configurations.length})</Button></Popover.Target>
+              <Popover.Dropdown style={{ maxHeight: '70vh', overflowY: 'auto', maxWidth: 'calc(100vw - 24px)' }}><Stack gap="sm">
+                <Group justify="space-between"><Text size="xs" fw={600}>Review setups</Text><Group gap="xs">
+                  <Button variant="subtle" size="compact-xs" onClick={() => setSelected(configurations.map(item => item.id))}>Select all</Button>
+                  <Button variant="subtle" size="compact-xs" onClick={() => setSelected([])}>Clear all</Button>
+                </Group></Group>
+                {configurations.map(configuration => <Checkbox key={configuration.id} label={configuration.short} checked={selected.includes(configuration.id)} onChange={() => setSelected(values => values.includes(configuration.id) ? values.filter(id => id !== configuration.id) : [...values, configuration.id])} size="xs" />)}
+              </Stack></Popover.Dropdown>
+            </Popover>
             <Popover position="bottom-end" width={230} withArrow>
               <Popover.Target><Button variant="subtle" color="gray" size="xs" mt="md" rightSection={<ChevronDown size={14} />}>Models ({selectedModels.length}/{modelChoices.length})</Button></Popover.Target>
               <Popover.Dropdown><Stack gap="sm"><Group justify="space-between"><Text size="xs" fw={600}>Models</Text><Button variant="subtle" size="compact-xs" onClick={() => setSelectedModels(modelChoices.map(model => model.value))}>Select all</Button></Group>
                 {modelChoices.map(model => <Checkbox key={model.value} label={model.label} checked={selectedModels.includes(model.value)} onChange={() => setSelectedModels(values => values.includes(model.value) ? values.filter(value => value !== model.value) : [...values, model.value])} size="xs" />)}
               </Stack></Popover.Dropdown>
             </Popover>
-            <Text size="xs" c="dimmed">Each method includes its selected models. Review editions mark meaningful changes.</Text>
+            <Text size="xs" c="dimmed">Choose methods or individual setups, then narrow by model. Review editions mark meaningful changes.</Text>
           </aside></div>
-          <div className="comparison-strip"><Info size={15} aria-hidden="true" /><span>Chart and table use tasks shared by all standard setups. Skill and model selections change visibility; task filters change the comparison.</span></div>
+          <div className="comparison-strip"><Info size={15} aria-hidden="true" /><span>Chart and table use tasks shared by the selected standard setups. Skill, model and task filters change the comparison. Experiments do not shrink its task coverage.</span></div>
         </Paper>
         {incompleteCoverage.length > 0 && <Alert color="blue" mt="md">Not plotted because task coverage is incomplete: {incompleteCoverage.map(row => `${row.configuration.short} (${row.tasks}/${shared.length} tasks)`).join('; ')}. Filter tasks to compare their recorded results, or inspect them in the table.</Alert>}
         {unresolved > 0 && <Alert color="yellow" mt="md">{unresolved} unresolved grading assignments. False-finding measurements are provisional.</Alert>}
@@ -200,7 +210,7 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
             <Table.Td><ActionIcon aria-label={`Inspect ${row.configuration.short}`} variant="subtle" color="gray" onClick={() => setInspection({ kind: 'configuration', id: row.configuration.id })}><ArrowUpRight size={18} /></ActionIcon></Table.Td>
           </Table.Tr>)}</Table.Tbody>
         </Table></Table.ScrollContainer>
-        {!shared.length && <Text ta="center" c="dimmed" py="xl">No tasks are shared by all standard setups with these filters.</Text>}
+        {!shared.length && <Text ta="center" c="dimmed" py="xl">No tasks are shared by the selected standard setups with these filters.</Text>}
         <Text size="xs" c="dimmed" mt="sm" className="footnote">Each PR has equal weight. Retry usage is included; false findings never reduce detection scores. * Codex cost is a list-price equivalent. Output includes reasoning and subagents. Results use model-assisted judgments; profile labels are proposed.</Text>
         <MethodologyViews dataset={dataset} configurations={configurations.filter(c => activeIds.includes(c.id))} tasks={shared} filter={filter} />
       </section>
