@@ -697,6 +697,16 @@ class Map(Mapped):
                 self.assertIn(expected, done.stdout)
                 self.assertFalse(self.mapping_path().exists())
 
+    def test_codex_grader_record_names_its_actual_client_and_tools(self):
+        import grade as grading
+        record = dict(self.dispatch, budget_policy="codex-unbounded", model="gpt-6-astra", cli_version="0.160.0")
+        line = grading.grader_line(record)
+        self.assertIn("headless Codex CLI 0.160.0", line)
+        self.assertIn("grading MCP and inert resource metadata helpers only", line)
+        self.assertNotIn("Claude Code", line)
+        self.assertNotIn("--restricted", line)
+        self.assertNotIn("--safe-mode", line)
+
     def test_legacy_grader_record_keeps_its_safe_mode_harness(self):
         import grade as grading
         legacy = {key: value for key, value in self.dispatch.items() if key != "enforcement"}
