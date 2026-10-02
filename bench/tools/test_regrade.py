@@ -43,6 +43,8 @@ class Cohort:
         self.lock, self.barrier = threading.Lock(), None
         self.launched, self.inflight, self.charged, self.exposures, self.peak = [], {}, Decimal(0), [], 0
         self.outcomes, self.preflights, self.preflight_code, self.map_crashes = {}, [], 0, False
+        self.dispatches = []
+        self.commands = []
         self.directory.mkdir(parents=True)
         (root / "bench/tools").mkdir(parents=True)
         shutil.copy(regrade.__file__, root / regrade.CONTROLLER)
@@ -84,7 +86,11 @@ class Cohort:
 
     def invoke(self, args, log):
         log.open("x").close()
-        return getattr(self, args[0])(dict(zip(args[1::2], args[2::2])))
+        self.commands.append(args)
+        options, arguments = {}, iter(args[1:])
+        for name in arguments:
+            options[name] = True if name == "--allow-unbounded-codex" else next(arguments)
+        return getattr(self, args[0])(options)
 
     def preflight(self, options):
         self.preflights.append(options)
@@ -113,11 +119,14 @@ class Cohort:
         outcome = {"code": 0, "high": 0.5, **self.outcomes.get(name, {})}
         with self.lock:
             self.launched.append(name)
+            self.dispatches.append(options)
             if name in self.inflight:
                 raise AssertionError(f"{name} dispatched twice at once")
-            self.inflight[name] = Decimal(str(options["--max-budget-usd"]))
+            budget = options.get("--max-budget-usd")
+            self.inflight[name] = None if budget is None else Decimal(str(budget))
             self.peak = max(self.peak, len(self.inflight))
-            self.exposures.append(self.charged + sum(amount + regrade.HEADROOM for amount in self.inflight.values()))
+            if all(amount is not None for amount in self.inflight.values()):
+                self.exposures.append(self.charged + sum(amount + regrade.HEADROOM for amount in self.inflight.values()))
             position = len(self.launched)
         if self.barrier and position <= self.barrier.parties:
             self.barrier.wait(timeout=20)
@@ -130,16 +139,19 @@ class Cohort:
             clean_context.prepare(work)
             (work / "verdicts.json").write_text(json.dumps(self.verdicts(name, key)))
             (work / "dispatch.json").write_text(json.dumps({
-                "session_id": str(uuid.uuid4()), "cli_version": "9.9.9", "model": MODEL, "effort": "high",
+                "session_id": str(uuid.uuid4()), "cli_version": "9.9.9", "model": options["--model"], "effort": "high",
                 "prompt_sha256": key.get("prompt_sha256"), "exit_code": outcome["code"], "verdicts_present": True,
                 "usage": {"priced_total_usd": outcome["high"], "high": outcome["high"]}, "audit_violations": [],
-                "models_observed": [MODEL], "subagents": 0, "completed_at": "2026-01-01T00:00:00Z",
+                "models_observed": [options["--model"]], "subagents": 0, "completed_at": "2026-01-01T00:00:00Z",
                 "enforcement": {"native_tools": "none", "probe_exit": 0,
                                 "command_policy_sha256": key.get("command_policy_sha256")}}))
         with self.lock:
             held = self.inflight.pop(name)
             priced = "crash" not in outcome and outcome["high"] is not None
-            self.charged += Decimal(str(outcome["high"])) if priced else held + regrade.HEADROOM
+            if priced:
+                self.charged += Decimal(str(outcome["high"]))
+            elif held is not None:
+                self.charged += held + regrade.HEADROOM
         if "crash" in outcome:
             raise Crash
         return outcome["code"]
@@ -205,6 +217,109 @@ class Controller(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
+
+    def codex_cohort(self, root=None, jobs=5):
+        cohort = Cohort(root or self.root, None, jobs)
+        cohort.authorization.update(budgetPolicy="codex-unbounded", grader={
+            "model": "gpt-6.1-sol", "effort": "high", "cliVersion": "0.160.0"})
+        cohort.authorize()
+        return cohort
+
+    def test_unbounded_codex_preflights_the_full_queue_and_reports_measured_cost(self):
+        cohort = self.codex_cohort()
+        cohort.barrier = threading.Barrier(3)
+        self.assertEqual(cohort.run(workers=3), 0)
+        self.assertEqual(cohort.peak, 3)
+        self.assertEqual(sorted(cohort.launched), [target for _run, target in cohort.jobs])
+        preflight = next(args for args in cohort.commands if args[0] == "preflight")
+        self.assertEqual(preflight[-1], "--allow-unbounded-codex")
+        self.assertEqual(preflight.count("--allow-unbounded-codex"), 1)
+        self.assertEqual([preflight[index + 1] for index, argument in enumerate(preflight) if argument == "--target"],
+                         [target for _run, target in cohort.jobs])
+        for arguments in cohort.dispatches:
+            self.assertTrue(arguments["--allow-unbounded-codex"])
+            self.assertNotIn("--max-budget-usd", arguments)
+        status = cohort.status()
+        self.assertEqual((status["budgetCapUsd"], status["spentUpperUsd"], status["reservedUsd"]), (None, 2.5, 0.0))
+        self.assertEqual((status["outstandingReservations"], status["unknownReservations"]), (0, 0))
+        reservations = list(cohort.directory.glob("batches/*/*/attempt-*/reservation.json"))
+        self.assertEqual(len(reservations), 5)
+        self.assertTrue(all(regrade.read(path)["maxBudgetUsd"] is None for path in reservations))
+
+    def test_unbounded_codex_does_not_redispatch_a_crashed_session(self):
+        cohort = self.codex_cohort(jobs=2)
+        cohort.outcomes = {"pr-1": {"crash": True}}
+        with self.assertRaises(Crash):
+            cohort.run()
+        cohort.outcomes = {}
+        self.assertEqual(cohort.run(), 1)
+        self.assertEqual(cohort.launched, ["pr-1"])
+        status = cohort.status()
+        self.assertEqual(status["batches"][0]["state"], "unsettled")
+        self.assertIsNone(status["reservedUsd"])
+        self.assertEqual((status["outstandingReservations"], status["unknownReservations"]), (1, 1))
+
+    def test_unbounded_codex_keeps_an_unpriced_failed_session_outstanding(self):
+        cohort = self.codex_cohort(jobs=2)
+        cohort.outcomes = {"pr-1": {"code": 1, "high": None}}
+        self.assertEqual(cohort.run(), 1)
+        self.assertEqual(cohort.launched, ["pr-1"])
+        status = cohort.status()
+        self.assertEqual(status["spentUpperUsd"], 0.0)
+        self.assertIsNone(status["reservedUsd"])
+        self.assertEqual((status["outstandingReservations"], status["unknownReservations"]), (1, 1))
+
+    def test_unbounded_codex_maps_an_unpriced_success_without_zero_settlement(self):
+        cohort = self.codex_cohort(jobs=1)
+        cohort.outcomes = {"pr-1": {"high": None}}
+        self.assertEqual(cohort.run(), 0)
+        status = cohort.status()
+        self.assertEqual(status["batches"][0]["state"], "mapped")
+        self.assertIsNone(status["batches"][0]["costUpperUsd"])
+        self.assertIsNone(status["reservedUsd"])
+        self.assertEqual((status["outstandingReservations"], status["unknownReservations"]), (1, 1))
+        self.assertEqual(cohort.run(), 0)
+        self.assertEqual(cohort.launched, ["pr-1"])
+
+    def test_changed_authorization_cannot_restart_a_reserved_attempt(self):
+        cohort = self.codex_cohort(jobs=1)
+        self.assertEqual(cohort.run(), 0)
+        cohort.authorization["grader"]["effort"] = "medium"
+        cohort.authorize()
+        with self.assertRaisesRegex(ValueError, "authorization changed"):
+            cohort.run()
+        self.assertEqual(cohort.launched, ["pr-1"])
+
+    def test_changed_authorization_during_preparation_reserves_nothing(self):
+        cohort = self.codex_cohort(jobs=1)
+        prepare = cohort.prepare
+
+        def mutate(options):
+            code = prepare(options)
+            cohort.authorization["grader"]["effort"] = "medium"
+            cohort.authorize()
+            return code
+
+        cohort.prepare = mutate
+        self.assertEqual(cohort.run(), 2)
+        self.assertEqual(cohort.launched, [])
+        self.assertIn("authorization changed", cohort.status()["reason"])
+        self.assertEqual(list(cohort.directory.glob("batches/*/*/attempt-*/reservation.json")), [])
+
+    def test_null_cap_requires_the_explicit_codex_policy_and_model(self):
+        invalid = [({"model": MODEL, "effort": "high"}, "codex-unbounded", None),
+                   ({"model": "gpt-6.1-sol", "effort": "high"}, None, None),
+                   ({"model": "gpt-6.1-sol", "effort": "high"}, "codex-unbounded", 10),
+                   ({"model": "gpt-6.1-sol", "effort": "high"}, None, 10)]
+        for index, (grader, policy, cap) in enumerate(invalid):
+            with self.subTest(grader=grader, policy=policy, cap=cap):
+                cohort = self.codex_cohort(self.root / str(index), jobs=1)
+                cohort.authorization.update(grader=grader, budgetPolicy=policy, budgetCapUsd=cap)
+                cohort.authorize()
+                with self.assertRaises(ValueError):
+                    cohort.run()
+                self.assertEqual(cohort.launched, [])
+                self.assertEqual(list(cohort.directory.glob("batches/*/*/attempt-*/reservation.json")), [])
 
     def test_workers_bound_concurrent_dispatches_and_each_batch_runs_once(self):
         cohort = Cohort(self.root, 100)
@@ -497,6 +612,35 @@ class RegradingBudget(unittest.TestCase):
                 self.assertTrue(member.isfile())
                 self.assertEqual(json.load(bundle.extractfile(member))['usage']['high'], 0.5)
 
+    def test_codex_archive_keeps_sessions_and_config_without_credentials(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(regrade, "ROOT", Path(temp).resolve()):
+            root = Path(temp).resolve()
+            attempt = root / "queue/batches/run/target/attempt-1"
+            work = attempt / "work"
+            sessions = work / "home/.codex/sessions/2026/10/02"
+            sessions.mkdir(parents=True)
+            (sessions / "rollout-session.jsonl").write_text('{"type":"session_meta"}\n')
+            (work / "clean-context.json").write_text('{"fresh_home":true}')
+            (work / "home/.codex/config.toml").write_text('approval_policy = "never"\n')
+            (work / "home/.codex/auth.json").write_text('{"fixture":"credential"}')
+            receipt = regrade.read(root / regrade.archive_attempt(attempt, root / "archive")["path"])
+            names = {entry["path"] for entry in receipt["files"]}
+            self.assertIn("work/home/.codex/sessions/2026/10/02/rollout-session.jsonl", names)
+            self.assertIn("work/home/.codex/config.toml", names)
+            self.assertIn("work/clean-context.json", names)
+            self.assertNotIn("work/home/.codex/auth.json", names)
+            with tarfile.open(root / receipt["archive"]["path"]) as archive:
+                self.assertEqual(set(archive.getnames()), names)
+
+    def test_unbounded_dispatch_arguments_require_a_codex_model(self):
+        arguments = regrade.dispatch_arguments(Path("work"), Path("key.json"),
+                                              {"model": "gpt-6.1-sol", "effort": "high"}, None, "0.160.0")
+        self.assertIn("--allow-unbounded-codex", arguments)
+        self.assertNotIn("--max-budget-usd", arguments)
+        with self.assertRaisesRegex(ValueError, "Codex"):
+            regrade.dispatch_arguments(Path("work"), Path("key.json"),
+                                       {"model": "claude-opus-5-5", "effort": "high"}, None, "2.1.286")
+
     def test_existing_workspace_is_preserved_for_mapping_paid_attempts(self):
         with tempfile.TemporaryDirectory() as temp:
             attempt = Path(temp).resolve() / 'attempt-1'
@@ -563,6 +707,19 @@ class RegradingBudget(unittest.TestCase):
                 (attempt / 'reservation.json').write_text('{}')
                 (attempt / 'work/dispatch.json').write_text(json.dumps({'exit_code': index - 1, 'usage': {'high': amount}}))
             self.assertEqual(regrade.ledger(directory), (regrade.money('1.625'), []))
+
+    def test_codex_receipts_without_execution_metadata_cannot_prove_zero_charge(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            attempt = directory / "batches/run/target/attempt-1"
+            (attempt / "work").mkdir(parents=True)
+            (attempt / "reservation.json").write_text('{"maxBudgetUsd":null}')
+            (attempt / "work/dispatch.json").write_text(json.dumps({
+                "budget_policy": "codex-unbounded", "models_observed": [], "usage": {"high": None}}))
+            self.assertEqual(regrade.ledger(directory), (0, [None]))
+            (attempt / "budget-resolution.json").write_text('{"evidence":[],"chargeUpperUsd":0}')
+            with self.assertRaisesRegex(ValueError, "zero-charge"):
+                regrade.ledger(directory)
 
 
 if __name__ == '__main__':
