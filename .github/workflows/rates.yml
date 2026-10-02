@@ -1,0 +1,62 @@
+name: Refresh model rates
+
+on:
+  schedule:
+    - cron: '23 9 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: refresh-model-rates
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    name: Check prices and propose changed rates
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test rate updates
+        run: python3 -m unittest discover -s bench/tools -p test_rates.py -v
+      - name: Refresh provider prices
+        run: python3 bench/tools/rates.py refresh --json
+      - name: Verify updated catalog
+        run: |
+          python3 bench/tools/check_manifest.py bench/schema/rates.schema.json bench/rates.current.json
+          python3 tools/import_benchmark.py --check
+      - name: Propose changed rates
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1
+        with:
+          branch: automation/refresh-model-rates
+          add-paths: bench/rates.current.json
+          commit-message: 'chore(bench): refresh model token rates'
+          title: 'chore(bench): refresh model token rates'
+          body: |
+            ## Why
+
+            Update the dated catalog when official provider prices change.
+
+            ## Scope
+
+            - Append changed model prices to `bench/rates.current.json`.
+
+            ## Blast Radius
+
+            Existing entries, frozen runs, and recorded costs remain unchanged. New runs can pin the updated entries.
+
+            ## Verification
+
+            - Focused rate tests passed.
+            - Provider refresh, catalog schema validation, and import integrity checks passed.
+            - [Workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
