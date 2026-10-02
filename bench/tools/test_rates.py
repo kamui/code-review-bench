@@ -107,6 +107,34 @@ class RatesTests(unittest.TestCase):
         self.assertIn("columns changed", result.stdout)
         self.assertEqual(self.catalog.read_bytes(), original)
 
+    def test_full_catalog_run_skips_unsupported_models_and_explicit_selection_refuses_them(self):
+        self.row["output"] = 9
+        rows = [self.row, {**self.row, "model": "gpt-retired"}, {**self.row, "model": "gpt-unpriced"}]
+        self.catalog.write_text(json.dumps({"schema_version": 1, "rates": rows}), encoding="utf-8")
+        unpriced = "| gpt-unpriced | $2.00 | - | $2.50 | $9.00 | $4.00 | $0.20 | $5.00 | $15.00 |\n### Batch"
+        (self.directory / "openai.md").write_text(OPENAI.replace("### Batch", unpriced, 1), encoding="utf-8")
+        result = self.command("refresh", "--json")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["models"], [MODEL])
+        self.assertEqual(sorted(report["unsupported"]), ["gpt-retired", "gpt-unpriced"])
+        saved = json.loads(self.catalog.read_text(encoding="utf-8"))["rates"]
+        self.assertEqual(saved[:3], rows)
+        self.assertEqual([(row["model"], row["output"]) for row in saved[3:]], [(MODEL, 10)])
+        for model in ("gpt-retired", "gpt-unpriced"):
+            refused = self.command("check", "--model", model)
+            self.assertEqual(refused.returncode, 1, refused.stdout + refused.stderr)
+            self.assertIn(model, refused.stdout)
+
+    def test_provider_listing_no_cataloged_model_is_refused(self):
+        self.row["model"] = "gpt-retired"
+        self.write_catalog()
+        original = self.catalog.read_bytes()
+        result = self.command("refresh")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("gpt-retired", result.stdout)
+        self.assertEqual(self.catalog.read_bytes(), original)
+
     def test_same_day_change_cannot_overwrite_history(self):
         self.row.update(output=9, as_of=rates.datetime.now(rates.timezone.utc).date().isoformat())
         self.write_catalog()
@@ -122,7 +150,8 @@ class RatesTests(unittest.TestCase):
                 rates.refresh(path)
 
     def test_anthropic_cache_prices_are_read_directly(self):
-        parsed = rates.parse_prices("anthropic", ANTHROPIC, ["claude-opus-5-5"])
+        parsed, unsupported = rates.parse_prices("anthropic", ANTHROPIC, ["claude-opus-5-5"])
+        self.assertEqual(unsupported, {})
         self.assertEqual(parsed["claude-opus-5-5"], {"input": 4, "output": 20, "cache_read": 0.2,
                                                     "cache_write_5m": 5, "cache_write_1h": 8})
 
