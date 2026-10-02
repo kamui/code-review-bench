@@ -3,12 +3,13 @@
 
 Usage::
 
-    python3 docs/research/skill-matrix-2026-10-02/claim_intake.py inventory --out DIR --key KEY
+    python3 docs/research/skill-matrix-2026-10-02/claim_intake.py inventory --out DIR --key KEY [--run RUN ...]
     python3 docs/research/skill-matrix-2026-10-02/claim_intake.py apply --proposals DIR --key KEY --record OUT
 
 ``inventory`` writes, for every target that has a registered claim, ``DIR/<target>.json``: the
 target's canonical claims without their decisions, and every item of a 2026-10-02 review that no
-claim links yet, under a random token with run and attempt paths removed. KEY maps tokens to their
+claim links yet, under a random token with run and attempt paths removed; ``--run`` limits the
+reviews to the named runs. KEY maps tokens to their
 sources and stays outside the assessor's directory.
 
 An assessor writes ``DIR/<target>.proposals.json``, one entry per token, each with a ``matches``
@@ -57,6 +58,7 @@ def inventory(args):
     for target in sorted({case["target"] for case in cases}):
         linked = {(link["review"]["path"], link["item_id"]) for case in cases for link in case["links"]}
         rows = [row for row in claims.inventory(target) if row["review"]["path"].startswith(RUN_PREFIX)
+                and (not args.run or row["review"]["path"].split("/")[2] in args.run)
                 and (row["review"]["path"], row["item_id"]) not in linked]
         secrets.SystemRandom().shuffle(rows)
         items = []
@@ -131,6 +133,7 @@ def main():
     inv = commands.add_parser("inventory")
     inv.add_argument("--out", required=True)
     inv.add_argument("--key", required=True)
+    inv.add_argument("--run", nargs="*", default=[])
     app = commands.add_parser("apply")
     app.add_argument("--proposals", required=True)
     app.add_argument("--key", required=True)
