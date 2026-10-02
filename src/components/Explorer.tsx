@@ -136,8 +136,7 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
       </section>
 
       <section id="leaderboard" className="leaderboard-section">
-        <Group justify="space-between" align="end" mb="lg"><div><Title order={2}>The leaderboard</Title>
-          <Text size="sm" c="dimmed" mt={5}>Same tasks. Different review setups. Tradeoffs you can inspect.</Text></div>
+        <Group justify="space-between" align="end" mb="lg"><div><Title order={2}>The leaderboard</Title></div>
           <Badge variant="light" color="gray">Rubric v2</Badge>
         </Group>
         {highlights.top && <dl className="takeaways" aria-label="Takeaways for the selected setups">
