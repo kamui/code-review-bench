@@ -5,8 +5,8 @@ Usage::
 
     python3 docs/research/skill-matrix-2026-10-02/freeze.py <commit>
 
-The commit must contain every run's manifest, inputs and arm files exactly as they are on disk.
-An already frozen manifest is refused.
+It freezes every unfrozen 2026-10-02 run. The commit must contain each such run's manifest, inputs
+and arm files exactly as they are on disk.
 """
 
 import json
@@ -24,7 +24,7 @@ def main():
     for path in sorted((ROOT / "bench/runs").glob("2026-10-02-*/manifest.json")):
         manifest = json.loads(path.read_text(encoding="utf-8"))
         if manifest.get("frozen_at"):
-            raise SystemExit(f"{path} is already frozen")
+            continue
         relative = path.relative_to(ROOT).as_posix()
         committed = subprocess.check_output(["git", "-C", str(ROOT), "show", f"{commit}:{relative}"])
         if committed != path.read_bytes():
