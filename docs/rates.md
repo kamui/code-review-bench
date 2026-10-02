@@ -21,7 +21,7 @@ python3 bench/tools/rates.py check --model gpt-6.1-sol --json
 python3 bench/tools/rates.py refresh --model claude-sonnet-5-5
 ```
 
-The command checks only models already in the catalog. Add a model's initial entry and billing policy before checking it. A changed provider table returns exit 1, as does a model selected with `--model` whose prices are missing from its provider table or unsupported. A run over the whole catalog reports such a model as skipped and still checks the others, unless a provider lists none of its cataloged models, which returns exit 1. Source or file failures return exit 2. A successful check returns 0; differing prices return 1. A successful refresh returns 0.
+The command checks only models already in the catalog. Add a model's initial entry and billing policy before checking it. A changed provider table returns exit 1, as does a model selected with `--model` whose prices are missing from its provider table or unsupported. A run over the whole catalog reports such a model as skipped and still checks the others, unless a provider has supported prices for none of its cataloged models, which returns exit 1. Source or file failures return exit 2. A successful check returns 0; differing prices return 1. A successful refresh returns 0.
 
 Refresh preserves old entries and adds one entry with today's UTC date for each changed model. An unchanged catalog keeps its original bytes. Concurrent refreshes use a file lock, and replacement is atomic after all selected models have been checked. A second change on the same date is refused because the catalog identifies entries by model and date. The command refuses refresh destinations in frozen runs, preserved artifacts, and the imported `bench/rates.json`.
 
