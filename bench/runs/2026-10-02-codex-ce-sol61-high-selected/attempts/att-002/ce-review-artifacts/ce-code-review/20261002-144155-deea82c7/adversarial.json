@@ -1,0 +1,48 @@
+{
+  "reviewer": "adversarial",
+  "findings": [
+    {
+      "title": "Assuming a role prevents pooled connections from becoming available",
+      "severity": "P1",
+      "file": "django/db/backends/postgresql/base.py",
+      "line": 101,
+      "why_it_matters": "Enabling pool alongside the existing assume_role option prevents the initial database connection from completing. Pool workers recursively request another pooled connection before making their own configured connection available, so ordinary ORM requests fail with PoolTimeout instead of connecting as the configured role.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "confidence": 100,
+      "evidence": [
+        "django/db/backends/postgresql/base.py:101:             sql = ops.compose_sql(\"SET ROLE %s\", [role_name])",
+        "Trigger: configure OPTIONS with both pool and assume_role. The new pool installs configure=self._configure_connection at base.py:231, and _configure_connection calls ensure_role(connection, self.ops, role_name) at line 381 before returning the new physical connection to the pool.",
+        "DatabaseOperations.compose_sql() at django/db/backends/postgresql/operations.py:193 passes its Django wrapper to mogrify(); psycopg_any.mogrify() at line 22 opens connection.cursor() on that wrapper rather than using the physical connection currently being configured.",
+        "During initial acquisition, wrapper.connection is still None because get_new_connection() is waiting for pool.getconn(). Therefore wrapper.cursor() calls ensure_connection()/connect()/pool.getconn() again inside the pool worker, while the first physical connection is unavailable until configure returns. Every new connection follows the same recursion.",
+        "Focused offline reproduction used the installed real psycopg_pool, min_size=0, max_size=1, timeout=0.1, num_workers=1, and a mocked physical connection with UTC timezone and IDLE status. pool.getconn() raised PoolTimeout, a spy observed wrapper.connect() called once from the callback, and no SET ROLE was sent to the physical cursor. No PostgreSQL server or network was used."
+      ],
+      "pre_existing": false,
+      "suggested_fix": "Compose SET ROLE with the driver's SQL/Identifier helpers and execute it directly on the supplied physical connection's cursor, importing the composable SQL helper for both drivers. Pool configuration must not use ops.compose_sql(), which opens a cursor on the Django wrapper. Add a pooled assume_role regression test."
+    },
+    {
+      "title": "An existing production pool redirects test migrations to production",
+      "severity": "P1",
+      "file": "django/db/backends/postgresql/base.py",
+      "line": 239,
+      "why_it_matters": "If an alias's pool has been initialized before test database setup, switching the wrapper NAME to test_<name> leaves its cached pool pointed at the original database. Test migrations and later tests acquire original-database connections; destructive tests such as TransactionTestCase flush can erase application data. The test runner's database isolation guarantee is lost.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "confidence": 100,
+      "evidence": [
+        "django/db/backends/postgresql/base.py:239:             self._connection_pools.setdefault(self.alias, pool)",
+        "Trigger: initialize the configured alias's pool before calling test database setup, for example via an earlier query or custom runner setup. The pool constructor captures get_connection_params() at lines 224-229, including the original dbname, and subsequent accesses return the cached object solely by alias at line 241.",
+        "BaseDatabaseCreation.create_test_db() at django/db/backends/base/creation.py:64-66 calls wrapper.close() and switches NAME to the test database. The new PostgreSQL _close() returns physical connections to the existing pool, rather than discarding that pool. No PostgreSQL create_test_db() override or pool invalidation runs before the following migrate command at lines 78-83.",
+        "The new lifecycle cleanup in django/db/backends/postgresql/creation.py covers cloning and destruction only. It does not clear an already initialized original-database pool before test database creation or the NAME transition.",
+        "Focused offline reproduction instantiated the real pool for app_db, then called the actual create_test_db(serialize=False) with database creation, management commands, and ensure_connection mocked to avoid a server. At the migrate/createcachetable boundary, wrapper.settings_dict['NAME'] was test_app_db while wrapper.pool.kwargs['dbname'] remained app_db, and the identical cached pool survived the transition.",
+        "docs/topics/testing/overview.txt:201-211 explicitly describes queries during module imports and AppConfig.ready() occurring before test database setup. That existing startup hazard is newly compounded here: the original connection target persists into the actual test execution instead of being replaced after setup."
+      ],
+      "pre_existing": false,
+      "suggested_fix": "Close and discard the PostgreSQL pool before create_test_db() changes the connection target, so migration connections are acquired from a freshly constructed test-database pool. Apply the same lifecycle rule to mirror/worker target switches and to teardown when keepdb restores the original NAME. Add a regression that initializes an original-database pool before test setup and checks that subsequent acquisitions target the test database."
+    }
+  ],
+  "residual_risks": [],
+  "testing_gaps": []
+}
