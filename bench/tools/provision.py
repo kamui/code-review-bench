@@ -593,6 +593,10 @@ def cmd_prepare(args) -> int:
 
 
 def cmd_smoke(args) -> int:
+    if args.cache_replacements and not args.out:
+        raise ProvisionError("smoke with --cache-replacements requires --out to preserve the frozen receipt")
+    if args.cache_replacements and Path(args.out).resolve() == Path(args.target, "smoke.json").resolve():
+        raise ProvisionError("replacement smoke output must differ from the frozen target's smoke.json")
     target = load_target(args.target, args.cache_replacements)
     cfg = cache_config(target)
     out = os.path.abspath(args.out) if args.out else os.path.join(os.path.abspath(args.target), "smoke.json")
@@ -644,6 +648,9 @@ def cmd_smoke(args) -> int:
                   + (" Each clone restored its own copy of the cache archive after checking its recorded hash."
                      if cfg["build"] else "")],
     }
+    if args.cache_replacements:
+        manifest = target["_cache_replacement"]["manifest"]
+        smoke["notes"].append(f"Cache replacement manifest {manifest['path']} sha256:{manifest['sha256']} selected the archive.")
     if "base" in records:
         base = records["base"]
         smoke["notes"].append(f"Base-revision checks ran in a second clone with {target['local_base_branch']} (the merge-base) "
