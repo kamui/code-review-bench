@@ -207,6 +207,10 @@ def execute(authorization_path, directory, limit=None, expected_cli_version=None
         context += ["--template", checked(authorization["graderTemplate"])]
     if "claimEvidence" in authorization:
         context += ["--claim-evidence", checked(authorization["claimEvidence"])]
+    if "cacheReplacements" in authorization:
+        context += ["--cache-replacements", checked(authorization["cacheReplacements"])]
+    if "cacheRoot" in execution:
+        context += ["--cache-root", planned_root(execution["cacheRoot"])]
     rows = [{"run": run, "target": target, "reviews": len(groups[(run, target)]), "state": "pending"}
             for run, target in ordered]
     previous = read(directory / "status.json") if (directory / "status.json").exists() else {}

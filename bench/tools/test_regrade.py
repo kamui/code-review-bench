@@ -214,6 +214,20 @@ class Controller(unittest.TestCase):
         self.assertEqual(cohort.preflights[0]["--expected-cli-version"], "9.9.9")
         self.assertEqual(len(cohort.preflights), 1)
 
+    def test_replacement_manifest_and_cache_root_reach_preflight_and_preparation(self):
+        cohort = Cohort(self.root, 100, jobs=1)
+        cohort.execution["cacheRoot"] = ".local/replacement-cache"
+        cohort.authorization["cacheReplacements"] = pin(self.root, "cache-replacements.json", {"targets": []})
+        cohort.authorize()
+        with patch.object(cohort, "prepare", wraps=cohort.prepare) as prepared:
+            self.assertEqual(cohort.run(), 0)
+        for options in [cohort.preflights[0], prepared.call_args.args[0]]:
+            self.assertEqual(options["--cache-replacements"], self.root / "cache-replacements.json")
+            self.assertEqual(options["--cache-root"], self.root / ".local/replacement-cache")
+        (self.root / "cache-replacements.json").write_text("changed")
+        with self.assertRaisesRegex(ValueError, "pinned input changed"):
+            cohort.run()
+
     def test_one_worker_dispatches_in_plan_order_one_at_a_time(self):
         cohort = Cohort(self.root, 100)
         cohort.execution["order"].reverse()

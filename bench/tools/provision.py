@@ -56,6 +56,10 @@ the extracted archive, in 4 KiB blocks) and refuses unless the output's filesyst
 see, such as post-clone steps and builds during the session. Preparations that share a cache root
 run one at a time, so each sees the space the previous one took.
 
+For deleted frozen caches, ``check``, ``prepare`` and ``smoke`` accept ``--cache-replacements``.
+The versioned manifest pins the unchanged target and recipe's successful build receipt, and replaces
+only the expected archive hash in memory. It never rewrites ``target.json``.
+
 The cache root defaults to ``~/.t3/bench-cache``. Nothing under it enters the repository.
 
 Exit codes: 0 built, verified or written; 1 a check failed, one line per failure on stdout (a
@@ -84,6 +88,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import diff_identity  # noqa: E402
+import check_manifest  # noqa: E402
 
 DEFAULT_CACHE_ROOT = os.path.join(os.path.expanduser("~"), ".t3", "bench-cache")
 DEFAULT_RESERVE_GIB = 20
@@ -110,7 +115,7 @@ def has_object(repo: str, sha: str) -> bool:
     return subprocess.run(["git", "-C", repo, "cat-file", "-e", sha], capture_output=True).returncode == 0
 
 
-def load_target(target_dir: str) -> dict:
+def load_target(target_dir: str, replacements: str = None) -> dict:
     path = Path(target_dir, "target.json")
     try:
         target = json.loads(path.read_text(encoding="utf-8"))
@@ -119,7 +124,59 @@ def load_target(target_dir: str) -> dict:
     for key in ("id", "head", "merge_base", "negative_shas", "diff_manifest_sha256", "local_base_branch"):
         if key not in target:
             raise ProvisionError(f"{path}: missing {key}")
+    if replacements:
+        apply_replacement(target, path, Path(replacements))
     return target
+
+
+def apply_replacement(target: dict, target_path: Path, manifest_path: Path) -> None:
+    try:
+        raw = manifest_path.read_bytes()
+        manifest = json.loads(raw)
+        schema_raw = Path(__file__).resolve().parents[1].joinpath(
+            "schema/cache-replacements.schema.json").read_bytes()
+        schema = json.loads(schema_raw)
+        problems = check_manifest.validate(schema, manifest)
+        if problems:
+            raise ValueError("; ".join(problems))
+        ids = [entry["target"] for entry in manifest["targets"]]
+        if len(ids) != len(set(ids)):
+            raise ValueError("duplicate replacement target")
+        entry = next((entry for entry in manifest["targets"] if entry["target"] == target["id"]), None)
+        if entry is None:
+            raise ValueError(f"no replacement for {target['id']}")
+        if entry["target_sha256"] != sha256_file(str(target_path)):
+            raise ValueError("frozen target changed")
+        cfg = cache_config(target)
+        archives = [value for value in target["provisioning"]["dependency_identity"]
+                    if value["name"] == f"cache archive ({cfg['kind']})"]
+        if len(archives) != 1 or archives[0]["sha256"] != entry["original_sha256"]:
+            raise ValueError("original cache identity differs")
+        ref = entry["build_receipt"]
+        relative = Path(ref["path"])
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ValueError("build receipt must be relative to the replacement manifest")
+        receipt_path = manifest_path.parent / relative
+        receipt_raw = receipt_path.read_bytes()
+        if hashlib.sha256(receipt_raw).hexdigest() != ref["sha256"]:
+            raise ValueError("build receipt changed")
+        receipt = json.loads(receipt_raw)
+        if (receipt["target"] != target["id"] or receipt["kind"] != cfg["kind"]
+                or receipt["target_sha256"] != entry["target_sha256"]
+                or receipt["archive"]["sha256"] != entry["sha256"]
+                or [step["command"] for step in receipt["build"]] != cfg["build"]
+                or any(step["exit_code"] != 0 for step in receipt["build"])):
+            raise ValueError("build receipt does not prove the frozen recipe and replacement archive")
+        target["_cache_replacement"] = {
+            "contract": "cache-replacements-v1",
+            "schema_sha256": hashlib.sha256(schema_raw).hexdigest(),
+            "manifest": {"path": str(manifest_path.resolve()), "sha256": hashlib.sha256(raw).hexdigest()},
+            "manifest_text": raw.decode("utf-8"), "build_receipt_text": receipt_raw.decode("utf-8"),
+            "target_path": str(target_path.resolve()), "selection": entry,
+        }
+        archives[0]["sha256"] = entry["sha256"]
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise ProvisionError(f"cache replacement: {error}") from error
 
 
 def cache_config(target: dict) -> dict:
@@ -302,7 +359,7 @@ def cmd_mirror(args) -> int:
 
 
 def cmd_check(args) -> int:
-    target = load_target(args.target)
+    target = load_target(args.target, args.cache_replacements)
     path = mirror_path(args.cache_root, target)
     if not os.path.isdir(path):
         raise ProvisionError(f"no mirror at {path}")
@@ -359,13 +416,15 @@ def cmd_cache(args) -> int:
         for command in cfg["build"]:
             rendered = render(command, subs)
             code, duration, output, _stdout = shell(rendered, scratch, env)
-            steps.append({"command": command, "exit_code": code, "duration_seconds": duration})
+            steps.append({"command": command, "exit_code": code, "duration_seconds": duration,
+                          "output_tail": tail(output)})
             if code != 0:
                 print(f"build step failed (exit {code}): {rendered}")
                 print(tail(output))
                 remove_tree(cache)
                 return 1
-        record = {"target": target["id"], "kind": cfg["kind"], "built_at": started, "finished_at": now(),
+        record = {"target": target["id"], "target_sha256": sha256_file(str(Path(args.target, "target.json"))),
+                  "kind": cfg["kind"], "built_at": started, "finished_at": now(),
                   "platform": platform_record(), "cache": cache, "build": steps, "archive": None}
         if cfg["build"]:
             archive = archive_path(args.cache_root, target)
@@ -527,14 +586,14 @@ def prepare_locked(target: dict, cache_root: str, out: str, revision: str) -> di
 
 
 def cmd_prepare(args) -> int:
-    target = load_target(args.target)
+    target = load_target(args.target, args.cache_replacements)
     record = prepare(target, args.cache_root, os.path.abspath(args.out))
     print(json.dumps(record, indent=2))
     return 1 if record["failures"] else 0
 
 
 def cmd_smoke(args) -> int:
-    target = load_target(args.target)
+    target = load_target(args.target, args.cache_replacements)
     cfg = cache_config(target)
     out = os.path.abspath(args.out) if args.out else os.path.join(os.path.abspath(args.target), "smoke.json")
     wanted = {item.get("revision", "head") for item in cfg["smoke"]}
@@ -785,6 +844,8 @@ def main() -> int:
         p = sub.add_parser(name)
         p.add_argument("--target", required=True, help="target directory holding target.json")
         p.add_argument("--cache-root", default=DEFAULT_CACHE_ROOT)
+        if name in ("check", "prepare", "smoke"):
+            p.add_argument("--cache-replacements", help="versioned replacement archive identities; never modifies target.json")
         if name == "mirror":
             p.add_argument("--staging", required=True, help="full clone holding the head and the merge-base")
         if name in ("clone", "prepare"):
