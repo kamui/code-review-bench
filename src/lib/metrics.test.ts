@@ -212,15 +212,55 @@ describe('task sensitivity and feedback workload', () => {
   })
 })
 
+describe('selected configuration comparison', () => {
+  const selected = ['astra', 'luna', 'sol']
+  const historicalTasks = Array.from({ length: 12 }, (_, index) => task(`historical-${index}`, 1))
+  const selectedTasks = Array.from({ length: 5 }, (_, index) => task(`selected-${index}`, 1))
+  const tasks = [...historicalTasks, ...selectedTasks]
+  const setups = [...selected, 'other', 'experiment'].map(id => ({ ...configuration, id, experimental: id === 'experiment' }))
+  const outcomes = setups.flatMap(setup => {
+    const covered = setup.experimental ? historicalTasks.slice(0, 4) : setup.id === 'other' ? historicalTasks.slice(0, 9) : tasks
+    return covered.map(task => ({ ...outcome(task.id, [[`${setup.id}/${task.id}`]]), configurationId: setup.id }))
+  })
+  const records = outcomes.flatMap(row => row.attemptIds.map(id => attempt(id, row.taskId, [`${row.taskId}-0`])))
+  const data: Dataset = { ...dataset(tasks, records, outcomes), configurations: setups }
+
+  test('selects all matching tasks for the active baseline configurations', () => {
+    expect(leaderboardComparison(data, selected, tasks, all).tasks).toEqual(tasks)
+    expect(leaderboardComparison(data, selected, selectedTasks, all).tasks).toEqual(selectedTasks)
+    expect(leaderboardComparison(data, setups.filter(setup => !setup.experimental).map(setup => setup.id), tasks, all).tasks).toEqual(historicalTasks.slice(0, 9))
+    const selectedComparison = leaderboardComparison(data, selected, selectedTasks, all)
+    expect(selectedComparison.summaries.filter(row => selected.includes(row.configuration.id)).every(row => row.tasks === 5 && row.score === 100)).toBe(true)
+    expect(selectedComparison.summaries.find(row => row.configuration.id === 'other')?.score).toBeNull()
+  })
+
+  test('keeps sparse experiments outside the selected baseline intersection', () => {
+    const mixed = leaderboardComparison(data, [...selected, 'experiment'], tasks, all)
+    expect(mixed.tasks).toEqual(tasks)
+    expect(mixed.summaries.find(row => row.configuration.id === 'experiment')).toMatchObject({ tasks: 4, score: null, cost: null })
+    expect(leaderboardComparison(data, ['experiment'], tasks, all).tasks).toEqual(historicalTasks.slice(0, 9))
+    expect(leaderboardComparison(data, ['experiment'], historicalTasks.slice(0, 4), all).summaries.find(row => row.configuration.id === 'experiment')?.score).toBe(100)
+    expect(leaderboardComparison(data, [], tasks, all).tasks).toEqual([])
+  })
+})
+
 describe('preserved benchmark', () => {
   const builtins = imported.configurations.filter(row => row.builtin)
+  const allConfigurations = imported.configurations.map(row => row.id)
+  const selectedRun = '2026-09-30-selected-prs-review-only'
+  const selectedTaskIds = new Set(imported.attempts.filter(attempt => attempt.runId === selectedRun).map(attempt => attempt.taskId))
+  const historical: Dataset = { ...imported,
+    tasks: imported.tasks.filter(task => !selectedTaskIds.has(task.id)),
+    attempts: imported.attempts.filter(attempt => attempt.runId !== selectedRun),
+    outcomes: imported.outcomes.filter(row => !selectedTaskIds.has(row.taskId)),
+  }
   const shared = commonTasks(imported, builtins.map(row => row.id), imported.tasks)
   const sparseExperiment: Dataset = { ...imported, outcomes: imported.outcomes.filter(row =>
     row.configurationId !== 'review-code-sonnet-5-5' || ['k-graphql-js-1582', 'l-bokeh-9232', 'm-grpc-go-7390', 'p-hono-5067'].includes(row.taskId),
   ) }
 
   test('keeps sparse skill experiments from shrinking the leaderboard to four tasks', () => {
-    const comparison = leaderboardComparison(sparseExperiment, imported.tasks, all)
+    const comparison = leaderboardComparison(sparseExperiment, allConfigurations, imported.tasks, all)
     expect(comparison.tasks).toHaveLength(9)
     expect(comparison.summaries.find(row => row.configuration.id === 'claude-builtin-sonnet-5-5')?.score).toBeCloseTo(83.3333333333)
     expect(comparison.summaries.find(row => row.configuration.id === 'claude-builtin-sonnet-5')?.score).toBeCloseTo(75)
@@ -232,14 +272,14 @@ describe('preserved benchmark', () => {
 
   test('lets sparse experiments be compared when task filters select covered tasks', () => {
     const candidates = imported.tasks.filter(task => task.id === 'p-hono-5067')
-    const comparison = leaderboardComparison(sparseExperiment, candidates, all)
+    const comparison = leaderboardComparison(sparseExperiment, allConfigurations, candidates, all)
     expect(comparison.tasks).toEqual(candidates)
     expect(comparison.summaries.every(row => row.tasks === 1 && row.score !== null)).toBe(true)
-    expect(leaderboardComparison(sparseExperiment, [], all).summaries.every(row => row.score === null)).toBe(true)
+    expect(leaderboardComparison(sparseExperiment, allConfigurations, [], all).summaries.every(row => row.score === null)).toBe(true)
   })
 
   test('keeps changed reference versions and unrun tasks out of the common comparison', () => {
-    expect(imported.tasks).toHaveLength(12)
+    expect(imported.tasks).toHaveLength(17)
     expect(shared).toHaveLength(9)
     expect(shared.map(row => row.id)).not.toContain('i-requests-6667')
     expect(shared.map(row => row.id)).not.toContain('s-seaweedfs-10735')
@@ -249,8 +289,11 @@ describe('preserved benchmark', () => {
   test('publishes only rubric-v2 claim grading and current reference problems', () => {
     expect(imported.schemaVersion).toBe(2)
     expect(imported.grading.rubricVersion).toBe(2)
-    expect(imported.tasks.reduce((sum, task) => sum + task.defects.length, 0)).toBe(17)
-    expect(imported.attempts).toHaveLength(565)
+    expect(imported.tasks.reduce((sum, task) => sum + task.defects.length, 0)).toBe(30)
+    expect(imported.attempts).toHaveLength(610)
+    expect(historical.tasks).toHaveLength(12)
+    expect(historical.tasks.reduce((sum, task) => sum + task.defects.length, 0)).toBe(17)
+    expect(historical.attempts).toHaveLength(565)
     expect(imported.attempts.every(attempt => attempt.feedback?.kind === 'claims' || attempt.feedback?.kind === 'unavailable')).toBe(true)
     expect(imported.grading.neutralWorkspaceReviews + imported.grading.legacyWorkspaceReviews).toBe(imported.attempts.length)
     expect(imported.outcomes.every(outcome => !('historical' in outcome))).toBe(true)
@@ -277,7 +320,7 @@ describe('preserved benchmark', () => {
   test('preserves unknown aggregate usage for interrupted Astra attempts', () => {
     const setup = imported.configurations.find(row => row.id === 'codex-builtin-astra-high')
     if (!setup) throw new Error('Missing Astra High configuration')
-    const result = summarize(imported, setup, imported.tasks, all)
+    const result = summarize(historical, setup, historical.tasks, all)
     expect(result.score).toBeCloseTo(67.901234568, 5)
     expect(result).toMatchObject({ cost: null, tokens: null, completed: 36, trials: 36, attempts: 42, unresolved: 6 })
   })
