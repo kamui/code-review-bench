@@ -8,7 +8,8 @@ Usage::
     python3 docs/research/skill-matrix-2026-10-02/publish.py register
 
 ``score`` collects each published run's transcript references and writes its next results file.
-``audit`` writes ``grading-completion.v1.json`` from the grading controllers' status files.
+``audit`` writes ``grading-completion.v1.json`` from the grading controllers' status files; each
+queue's authorization pins the claim registry and plans it graded under.
 ``register`` adds the runs to ``bench/scoreboard.current.json``. A setup that appears in both
 suites keeps one description, so a note added here is added to both of its entries. Each step
 refuses to overwrite its output.
@@ -77,7 +78,7 @@ def score():
         version = len(list(directory.glob("results.v*.json"))) + 1
         subprocess.run([sys.executable, str(BENCH / "tools/score.py"), "--run", str(directory),
                         "--out", str(directory / f"results.v{version}.json"),
-                        "--rates", str(BENCH / "rates.current.json")], check=True)
+                        "--rates", str(BENCH / "rates.current.json"), "--rubric-version", "2"], check=True)
 
 
 def audit(statuses):
@@ -102,7 +103,7 @@ def audit(statuses):
         raise SystemExit("grading sessions or contexts are not unique per batch")
     with (HERE / "grading-completion.v1.json").open("x", encoding="utf-8") as handle:
         json.dump({"schemaVersion": 1, "grader": "claude-opus-5-5 at high effort, Claude Code 2.1.287",
-                   "registry": ref(BENCH / "claims/registry.json"), "mappedBatches": len(batches), "mappedReviews": reviews,
+                   "authorizations": [ref(path) for path in sorted(HERE.glob("authorization.*.json"))], "mappedBatches": len(batches), "mappedReviews": reviews,
                    "neutralWorkspaceReviews": reviews, "legacyWorkspaceReviews": 0, "uniqueGraderSessions": len(sessions),
                    "uniqueFreshContexts": len(contexts), "settledChargeUpperUsd": round(spent, 6),
                    "billing": "list-price-equivalent; the grader ran on the Claude plan", "batches": batches}, handle, indent=2)
