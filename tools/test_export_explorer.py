@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -92,6 +93,45 @@ def suite_fixture(root):
 
 
 class ExportTest(unittest.TestCase):
+    def test_billing_correction_changes_labels_without_repricing_or_rewriting_evidence(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            registry = suite_fixture(root)
+            bench = root / 'bench'
+            registry_path = bench / 'scoreboard.current.json'
+            record_path = bench / 'runs/first/attempts/original-high/attempt.json'
+            record = exporter.read(record_path)
+            record['usage']['billing'] = 'api-dollars'
+            record_path.write_text(json.dumps(record))
+            original_bytes = record_path.read_bytes()
+            receipt = bench / 'billing.json'
+            receipt.write_text(json.dumps({'schema_version': 1, 'billing': 'list-price-equivalent',
+                                          'sources': [{'run': 'runs/first', 'arm': 'high'}]}))
+            with patch.object(exporter, 'ROOT', root), patch.object(exporter, 'BENCH', bench), \
+                    patch.object(exporter, 'PUBLIC', root / 'public'), patch.object(exporter, 'BASE_PATH', '/bench'):
+                registry_path.write_text(json.dumps(registry))
+                exporter.build()
+                before = exporter.read(root / 'public/data/benchmark.json')
+                for suite in registry['suites']:
+                    for entry in suite['entries']:
+                        for source in entry['sources']:
+                            if source['run'] == 'runs/first':
+                                source['billing_correction'] = {
+                                    'path': 'billing.json', 'sha256': hashlib.sha256(receipt.read_bytes()).hexdigest()}
+                registry_path.write_text(json.dumps(registry))
+                exporter.build()
+                after = exporter.read(root / 'public/data/benchmark.json')
+                self.assertEqual(after['configurations'][0]['billing'], 'list-price-equivalent')
+                self.assertEqual(after['attempts'][0]['billing'], 'list-price-equivalent')
+                self.assertEqual(record_path.read_bytes(), original_bytes)
+                detail = exporter.read(root / 'public/data/attempts/first/original-high.json')
+                self.assertEqual(detail['record'], record)
+                self.assertEqual(detail['billingCorrectionUrl'], '/bench/evidence/bench/billing.json')
+                self.assertEqual((root / 'public/evidence/bench/billing.json').read_bytes(), receipt.read_bytes())
+                before['configurations'][0]['billing'] = 'list-price-equivalent'
+                before['attempts'][0]['billing'] = 'list-price-equivalent'
+                self.assertEqual(after, before)
+
     def test_all_suites_preserve_existing_results_and_count_distinct_tasks_methods_and_models(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

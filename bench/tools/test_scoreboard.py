@@ -11,6 +11,7 @@ Exit codes: 0 every test passed; 1 a test failed.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 from pathlib import Path
 import statistics
@@ -152,6 +153,23 @@ class ScoreboardTest(unittest.TestCase):
         self.assertIn(f"| `{CLEAN}` |  | clean · 2 FF | clean · 0 FF |", page)
         self.assertIn("| Version |  | v-ref | v-other |", page)
         self.assertIn("- [`r1`](runs/r1), `results.v1.json`, for `ref`, `other`", page)
+
+    def test_billing_correction_is_scoped_and_requires_unchanged_receipt(self) -> None:
+        source = self.suite['entries'][0]['sources'][0]
+        receipt = self.root / 'billing.json'
+        self.write_json(receipt, {'schema_version': 1, 'billing': 'list-price-equivalent',
+                                 'sources': [{'run': 'runs/r1', 'arm': 'ref'}]})
+        source['billing_correction'] = {'path': 'billing.json',
+                                        'sha256': hashlib.sha256(receipt.read_bytes()).hexdigest()}
+        page = self.page()
+        self.assertIn(REF_OWN.replace('$0.33', '$0.33 †'), page)
+        self.assertIn(OTHER_OWN, page)
+        self.assertTrue(any(line.startswith('† List-price equivalent.') for line in page))
+        self.suite['entries'][1]['sources'][0]['billing_correction'] = source['billing_correction']
+        self.assert_refused('billing correction receipt must declare a billing mode and cover this run/arm')
+        del self.suite['entries'][1]['sources'][0]['billing_correction']
+        receipt.write_text(receipt.read_text() + '\n')
+        self.assert_refused('billing correction receipt hash mismatch')
 
     def test_regrading_release_pins_results_without_changing_the_frozen_cohort(self) -> None:
         self.write_run("r1", {"ref": REF_ROWS, "other": OTHER_ROWS}, rubric=2,

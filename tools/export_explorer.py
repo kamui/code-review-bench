@@ -72,7 +72,7 @@ def skill_releases(item, recovered):
     return list(records.values())
 
 
-def export_attempt(run, attempt_id, mapping, archives):
+def export_attempt(run, attempt_id, mapping, archives, billing_correction=None):
     directory = run / "attempts" / attempt_id
     record_path = directory / "attempt.json"
     record = read(record_path)
@@ -101,6 +101,7 @@ def export_attempt(run, attempt_id, mapping, archives):
     complete = admitted and record.get("arm_reported_complete") is not False and mapping.get("review_level", {}).get("completion") != "incomplete"
     identifier = run.name + "/" + attempt_id
     detail = {"id": identifier, "items": items, "record": record,
+              "billingCorrectionUrl": evidence(billing_correction["receipt"]) if billing_correction else None,
               "stop": stop, "adjudication": mapping.get("review_level", {}),
               "recordUrl": evidence(record_path), "normalizedUrl": evidence(normalized_path) if normalized_path.exists() else None,
               "archiveUrl": archive_url, "archiveStatus": archive["status"] if archive else "missing"}
@@ -122,7 +123,7 @@ def export_attempt(run, attempt_id, mapping, archives):
             "cost": record.get("usage", {}).get("priced_total_usd"),
             "outputTokens": usage_tokens(directory / "usage-requests.jsonl", record),
             "durationSeconds": duration_seconds(record),
-            "billing": record.get("usage", {}).get("billing") or "unavailable",
+            "billing": scoreboard.attempt_billing(record, billing_correction),
             "predecessor": run.name + "/" + record["predecessor"] if record.get("predecessor") else None,
             "retryReason": record.get("retry_reason"),
             "detailUrl": BASE_PATH + "/data/attempts/" + identifier + ".json"}
@@ -258,7 +259,8 @@ def build():
             for cell in cells:
                 ids = []
                 for attempt_id in cell["attempts"]:
-                    attempt = export_attempt(run, attempt_id, rulings.get(attempt_id, {}), archives)
+                    attempt = export_attempt(run, attempt_id, rulings.get(attempt_id, {}), archives,
+                                             source["billing_correction"])
                     attempts[attempt["id"]] = attempt
                     if attempt["admitted"]:
                         observed = read(run / "attempts" / attempt_id / "attempt.json")["observed"]

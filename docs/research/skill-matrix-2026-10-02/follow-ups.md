@@ -1,6 +1,6 @@
 # Follow-ups
 
-Follow-ups from the 2026-10-02 skill-matrix benchmark. The combined-finding rule and link corrections are settled locally; regrading and the other changes remain open.
+Follow-ups from the 2026-10-02 skill-matrix benchmark. The combined-finding rule, link corrections and subscription labels are corrected. Regrading and the storage changes remain open.
 
 ## Combined findings in claim intake
 
@@ -31,9 +31,11 @@ Validation passed: the registry contains 21 claims and 520 links with no pending
 
 ## Subscription cost labels
 
-The audit summary describes subscription list-price equivalents, but its underlying review rows retain `api-dollars` for Claude. `bench/tools/file_attempt.py` derives that label from the rate table; `bench/tools/scoreboard.py` and `tools/export_explorer.py` carry it into the site. The site's footnote singles out Codex.
+The owner confirmed Claude Max 20x has been active since the repository was created. The [billing receipt](../../../bench/billing/claude-max.v1.json) records that confirmation and the 15 published Claude run/arm pairs. The current scoreboard registry pins the receipt by SHA-256. The scoreboard and explorer now apply its billing category to those sources while preserving frozen attempt records, which still contain the original `api-dollars` label.
 
-Correct the presentation through explicit billing provenance for the affected runs, preserving frozen attempt records and their numeric costs. Future filing should distinguish the authentication/billing mode from the rates used to price tokens. Use "list-price equivalent" rather than "plan-usage equivalent": token prices do not measure subscription quota consumption.
+The chart, table and review detail now describe subscription costs as list-price equivalents. Each affected review links to the correction receipt. Comparing exports found exactly 396 changed attempt labels and nine changed setup labels; all other dataset values, including prices, scores and hero counts, are identical. Validation passed 68 tests, type checking, the production build and a local browser check of the labels and receipt link.
+
+The correction covers saved published sources, not future account use. Future filing still needs billing mode recorded separately from the token rate table; `file_attempt.py` has not changed. The saved audit rows and historical scoreboard retain their original evidence labels. Token prices do not measure subscription quota consumption.
 
 ## Saved source copies
 

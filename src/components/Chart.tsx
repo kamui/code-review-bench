@@ -92,7 +92,7 @@ export function Chart({ summaries, ranges, axis, view, showAllLabels, onSelect }
       {view === 'models' && <span>Each row is one model. Marks show the findings score each review method reached with it.</span>}
       {view !== 'models' && unplotted.length > 0 && <span>No {axisLabels[axis].toLowerCase()} recorded for {unplotted.map(point => point.summary.configuration.short).join(', ')}.</span>}
       {axis === 'time' && <span>Completed reviews only. Includes replacement attempts; excludes gaps between attempts, provisioning, and grading.</span>}
-      {axis === 'cost' && points.some(point => point.summary.configuration.billing === 'list-price-equivalent') && <span>* List-price equivalent for subscription quota.</span>}
+      {axis === 'cost' && points.some(point => point.summary.configuration.billing === 'list-price-equivalent') && <span>* Subscription usage valued at token list prices, not a bill or quota measurement.</span>}
     </div>}
   </div>
 }

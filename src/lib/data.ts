@@ -63,6 +63,7 @@ export const detailSchema = z.object({
     skill_tree: z.string().nullable(), sandbox: z.string().nullable(), subagent_count: z.number(),
   }) }), stop: z.unknown(), adjudication: z.unknown(),
   recordUrl: z.string(), normalizedUrl: z.string().nullable(), archiveUrl: z.string().nullable(), archiveStatus: z.string(),
+  billingCorrectionUrl: z.string().nullable(),
   items: z.array(z.object({ id: z.string(), claim: z.string(), consequence: z.string(), file: z.string(),
     line: nullableNumber, proposedFix: z.string().nullable(), assignment: z.string(),
     duplicateGroup: z.string().nullable(), fixSufficiency: z.string(), notes: z.string(),
