@@ -204,14 +204,14 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
           </Table.Th>)}<Table.Th>Task coverage</Table.Th><Table.Th /></Table.Tr></Table.Thead>
           <Table.Tbody>{tableSummaries.map(row => <Table.Tr key={row.configuration.id}>
             <Table.Td><button className="text-button setup-label" onClick={() => setInspection({ kind: 'configuration', id: row.configuration.id })}><Mark configuration={row.configuration} size={10} />{row.configuration.short}</button></Table.Td>
-            <Table.Td><span className="score-value">{percent(row.score)}</span></Table.Td><Table.Td>{money(row.cost)}{row.configuration.billing === 'list-price-equivalent' && <Tooltip label="List-price equivalent for subscription quota"><span className="estimate-marker">*</span></Tooltip>}</Table.Td>
+            <Table.Td><span className="score-value">{percent(row.score)}</span></Table.Td><Table.Td>{money(row.cost)}{row.configuration.billing === 'list-price-equivalent' && <Tooltip label="Subscription usage valued at token list prices; not a bill or quota measurement"><span className="estimate-marker">*</span></Tooltip>}</Table.Td>
             <Table.Td>{compact(row.tokens)}</Table.Td><Table.Td>{row.falseFindings?.toFixed(2) ?? '—'}</Table.Td><Table.Td><span className="completion-count">{row.completed}/{row.trials}</span></Table.Td>
             <Table.Td>{row.tasks}/{shared.length}</Table.Td>
             <Table.Td><ActionIcon aria-label={`Inspect ${row.configuration.short}`} variant="subtle" color="gray" onClick={() => setInspection({ kind: 'configuration', id: row.configuration.id })}><ArrowUpRight size={18} /></ActionIcon></Table.Td>
           </Table.Tr>)}</Table.Tbody>
         </Table></Table.ScrollContainer>
         {!shared.length && <Text ta="center" c="dimmed" py="xl">No tasks are shared by the selected standard setups with these filters.</Text>}
-        <Text size="xs" c="dimmed" mt="sm" className="footnote">Each PR has equal weight. Retry usage is included; false findings never reduce detection scores. * Codex cost is a list-price equivalent. Output includes reasoning and subagents. Results use model-assisted judgments; profile labels are proposed.</Text>
+        <Text size="xs" c="dimmed" mt="sm" className="footnote">Each PR has equal weight. Retry usage is included; false findings never reduce detection scores. * Subscription usage valued at token list prices, not a bill or quota measurement. Output includes reasoning and subagents. Results use model-assisted judgments; profile labels are proposed.</Text>
         <MethodologyViews dataset={dataset} configurations={configurations.filter(c => activeIds.includes(c.id))} tasks={shared} filter={filter} />
       </section>
 
