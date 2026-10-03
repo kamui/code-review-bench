@@ -293,7 +293,9 @@ def verify_pins(value, root):
 
 def source_item(link, target, root=ROOT):
     path = resolve_pin(link["review"], root)
-    parts = path.relative_to(Path(root).resolve()).parts
+    relative = path.relative_to(Path(root).resolve())
+    require(link["review"]["path"] == relative.as_posix(), "claim review path is not canonical")
+    parts = relative.parts
     require(len(parts) == 6 and parts[:2] == ("bench", "runs")
             and parts[3:] == ("attempts", link["attempt_id"], "normalized.json"), "claim link is not an exact source item")
     record = read_json(path.parent / "attempt.json")
@@ -301,6 +303,7 @@ def source_item(link, target, root=ROOT):
     manifest = read_json(Path(root) / "bench/runs" / parts[2] / "manifest.json")
     cohort = unique(manifest["cohort"], "target", parts[2])
     number = int(link["item_id"].removeprefix("item-"))
+    require(link["item_id"] == f"item-{number}", "claim source item id is not canonical")
     items = read_json(path)["items"]
     require(number < len(items), "claim source item is missing")
     return cohort[target], items[number]
