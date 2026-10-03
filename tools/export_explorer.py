@@ -154,12 +154,14 @@ def build():
         billing = {read(BENCH / s["billing_correction"]["path"])["billing"] if s.get("billing_correction")
                    else record["usage"]["billing"] for s in sources for record in records
                    if record["cell"]["arm"] == s["arm"] and record["run_id"] == Path(s["run"]).name}
+        provenance = entry.get("skill_provenance") or ("skill-provenance.json" if entry["method"] == "review-code" else None)
         configurations.append({"id": entry["id"], "label": entry["label"], "short": entry["short"].replace(" · ", " / "),
             "version": entry["version"], "method": entry["method"], "reviewEdition": entry["review_edition"],
             "reviewChange": entry["review_change"], "skillReleases": releases,
-            "skillProvenanceUrl": evidence(BENCH / entry["skill_provenance"]) if entry.get("skill_provenance") else None,
+            "skillProvenanceUrl": evidence(BENCH / provenance) if provenance else None,
             "experimental": entry["experimental"], "builtin": entry["method"] in {"codex", "claude-builtin"},
-            "note": entry["note"], "billing": next(iter(billing)) if len(billing) == 1 else "mixed", "models": sorted(models),
+            "note": entry["note"], "billing": "list-price-equivalent" if "list-price-equivalent" in billing
+                else next(iter(billing)) if len(billing) == 1 else "mixed", "models": sorted(models),
             "reasoningEffort": entry.get("reasoning_effort", next(iter(efforts)) if len(efforts) == 1 else None),
             "reasoningSource": entry.get("reasoning_source", "explicit" if len(efforts) == 1 else "unrecorded")})
         for task in tasks:
