@@ -43,6 +43,8 @@ Each source reference records a repository-relative path and SHA-256. Validation
 
 Use `equivalent` only when the item identifies the same trigger, mechanism, consequence and relationship to the PR, with enough detail to assess that problem. Similar wording is insufficient. Use `related` for combined findings, different prerequisites or failure mechanisms, broad design concerns, and test recommendations. Related items appear in the queue but receive no automatic assignment constraint. Inspect each assertion before splitting or rematching a combined item.
 
+When an item asserts several distinct problems, link the whole item as `related` to each canonical claim. Do not choose a leading problem for an `equivalent` link. Grade the assertions separately, retaining the original review item and requiring evidence for each assertion. Merely naming another code path or offering several remedies for the same problem does not make an item combined. The [combined-finding correction](research/skill-matrix-2026-10-02/combined-findings-correction.v1.json) records the user's confirmation of this rule and the affected historical links.
+
 An equivalent match also asserts that the item identifies the canonical problem well enough for recovery if it is eligible. If later assessment disproves that match, narrow it to `related` with a reason in a new claim version. Do not award credit merely because an item mentions the same function.
 
 ## Record the eligibility decision
