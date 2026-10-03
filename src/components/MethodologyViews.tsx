@@ -79,6 +79,7 @@ export function MethodologyViews({ dataset, configurations, cards }: {
             { label: 'Admitted control reviews', value: row => String(row.card.controls.admitted) },
             { label: 'Correctly silent', value: row => share(row.card.controls.cleanFraction) },
             { label: 'Refuted or unsupported', value: row => row.card.controls.audited ? String(row.card.controls.alarmed) : null },
+            { label: 'Unresolved', value: row => row.card.controls.audited ? String(row.card.controls.unresolved) : null },
             { label: 'Missing output', value: row => row.card.controls.audited ? String(row.card.controls.missingOutput) : null },
             { label: 'Unaudited controls', value: row => String(row.card.controls.unaudited.length) },
             { label: 'Unadmitted outputs', value: row => String(row.card.delivery.unadmitted) },
