@@ -2,7 +2,7 @@
 """Check offline answer-table populations and cost/timing samples.
 
 Usage: python3 -B bench/tools/test_answers.py
-Inputs: synthetic attempts and result rows; no network or model calls.
+Inputs: synthetic attempts and scores; no network or model calls.
 Exit codes: 0 every test passed; 1 a test failed.
 """
 
@@ -13,6 +13,8 @@ import importlib.util
 import io
 from pathlib import Path
 import unittest
+
+import score
 
 SCRIPT = Path(__file__).resolve().parents[2] / "docs/research/builtin-review-benchmark-2026-09-24/answers.py"
 SPEC = importlib.util.spec_from_file_location("answers", SCRIPT)
@@ -29,11 +31,18 @@ def rendered(function, *args):
 
 class Accounting(unittest.TestCase):
     def test_invalid_attempt_counts_stay_out_of_valid_review_rates(self):
-        valid = {"count": 1, "buggy_count": 1, "false_findings_raw": 0, "false_findings_unique": 0,
-                 "approved_on_buggy": 1, "zero_recovery": 1, "false_clean": 1, "noise_items": 1}
-        rows = [{"key": {"arm": arm}, "attempts_included": 2, "valid_reviews": valid, "recall_attempt_level": 0.0,
-                 "recall_completed_only": 0.0, "false_findings_raw": 0, "false_findings_unique": 0,
-                 "approved_on_buggy": 2, "zero_recovery": 2, "false_clean": 2, "noise_items": 7} for arm in answers.ORDER]
+        record = {"attempt_id": "valid", "disposition": "valid completed",
+                  "usage": {"priced_total_usd": 1}, "timing": {}}
+        level = {"completion": "completed", "approved_on_buggy": True,
+                 "zero_recovery": True, "false_clean": True}
+        entry = {"items": [{"assignment": "non-material", "priority_error": "n/a"}], "review_level": level}
+        register = {"defects": [{"id": "GT-1"}]}
+        valid = score.score_attempt(record, entry, register, 1)
+        invalid = score.score_attempt(dict(record, disposition="harness-invalid: audit"),
+                                      dict(entry, items=entry["items"] * 6), register, 1)
+        rows = [score.row({"arm": arm}, [("t", valid), ("t", invalid)],
+                          [{"target": "t", "status": "valid completed", "attempts": ["bad", "valid"]}],
+                          {"t": {"buggy": True}}) for arm in answers.ORDER]
         table = rendered(answers.review_table, {"by_arm": rows})
         self.assertIn("| Attempts | Valid reviews |", table)
         self.assertIn("| A review-code | 2 | 1 | 0.000 (0.000) | 0.00 / 0.00 (0 / 0) | 1/1 | 1/1 | 1/1 | 1.0 (1 items) |", table)

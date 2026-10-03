@@ -1,216 +1,36 @@
-import type { Attempt, Configuration, Dataset, Outcome, Task } from './data'
+import type { Configuration } from './data'
+import type { Measure, Scorecard } from './scoring'
 
-export type Axis = 'cost' | 'tokens' | 'falseFindings' | 'time'
-export type SeverityFilter = 'all' | 'high' | 'critical'
-export type DetectionFilter = { concern: string; severity: SeverityFilter }
+export type Axis = 'cost' | 'tokens' | 'refuted' | 'time'
 
-export const average = (values: number[]): number | null =>
-  values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null
-
-function measuredTotal(values: (number | null)[]): number | null {
-  if (!values.length || values.some(value => value === null)) return null
-  return values.reduce<number>((sum, value) => sum + (value ?? 0), 0)
-}
-
-export function eligibleDefects(task: Task, filter: DetectionFilter) {
-  return task.defects.filter(defect =>
-    (!filter.concern || defect.concerns.includes(filter.concern)) &&
-    (filter.severity === 'all' || defect.severity === 'Critical' ||
-      (filter.severity === 'high' && defect.severity === 'High')),
-  )
-}
-
-export function commonTasks(dataset: Dataset, selected: string[], candidates: Task[]): Task[] {
-  if (!selected.length) return []
-  return candidates.filter(task => selected.every(id => dataset.outcomes.some(outcome =>
-    outcome.configurationId === id && outcome.taskId === task.id && outcome.status === 'ran',
-  )))
-}
-
-function trialAttempts(outcome: Outcome, attempts: Map<string, Attempt>) {
-  return outcome.trials.map(trial => {
-    const records = trial.attemptIds.flatMap(id => {
-      const attempt = attempts.get(id)
-      return attempt ? [attempt] : []
-    })
-    const terminal = attempts.get(trial.attemptIds.at(-1) ?? '')
-    return { records, terminal, pending: trial.status === 'pending' || !terminal }
-  })
-}
-
-export function taskScore(task: Task, outcome: Outcome, attempts: Map<string, Attempt>, filter: DetectionFilter): number | null {
-  const eligible = eligibleDefects(task, filter)
-  if (!eligible.length || !outcome.trials.length) return null
-  const trials = trialAttempts(outcome, attempts)
-  if (trials.some(trial => trial.pending || trial.terminal?.feedback?.kind === 'unavailable')) return null
-  return average(trials.map(({ terminal }) =>
-    eligible.filter(defect => terminal?.admitted && terminal.recovered.includes(defect.id)).length / eligible.length,
-  ))
-}
+export const measured = <T>(measure: Measure<T>): T | null => measure.kind === 'available' ? measure.value : null
+export const scaled = (fraction: number | null): number | null => fraction === null ? null : fraction * 100
+export const points = (measure: Measure): number | null => scaled(measured(measure))
 
 export type Summary = {
   configuration: Configuration
+  card: Scorecard
   score: number | null
+  range: { low: number; high: number } | null
   cost: number | null
   tokens: number | null
-  falseFindings: number | null
+  refuted: number | null
   time: { median: number; mean: number; q1: number; q3: number; reviews: number; tasks: number } | null
   completed: number
   trials: number
-  attempts: number
   tasks: number
-  defects: number
-  unresolved: number | null
-  noise: number | null
-  duplicates: number | null
 }
 
-export function summarize(dataset: Dataset, configuration: Configuration, tasks: Task[],
-  filter: DetectionFilter): Summary {
-  const attempts = new Map(dataset.attempts.map(attempt => [attempt.id, attempt]))
-  const rows = tasks.flatMap(task => {
-    const outcome = dataset.outcomes.find(row => row.configurationId === configuration.id && row.taskId === task.id && row.status === 'ran')
-    return outcome ? [{ task, outcome }] : []
-  })
-  const trials = rows.flatMap(({ outcome }) => trialAttempts(outcome, attempts))
-  const allAttempts = trials.flatMap(trial => trial.records)
-  const terminals = trials.flatMap(trial => trial.terminal ? [trial.terminal] : [])
-  const buggyRows = rows.filter(({ task }) => eligibleDefects(task, filter).length > 0)
-  const scores = buggyRows.map(({ task, outcome }) => taskScore(task, outcome, attempts, filter))
-  const score = scores.some(value => value === null) ? null
-    : average(scores.flatMap(value => value === null ? [] : [value]))
-  const cost = measuredTotal(allAttempts.map(attempt => attempt.cost))
-  const tokens = measuredTotal(allAttempts.map(attempt => attempt.outputTokens))
-  const divisor = trials.length
-  const falseCount = measuredTotal(terminals.map(attempt => attempt.admitted ? attempt.falseFindings : 0))
-  const falseDenominator = trials.length
-  const pending = trials.some(trial => trial.pending)
-  const completedTrials = trials.filter(trial => trial.terminal?.complete)
-  const durations = completedTrials.map(trial => measuredTotal(trial.records.map(attempt => attempt.durationSeconds)))
-  const measured = durations.flatMap(value => value === null ? [] : [value]).sort((left, right) => left - right)
-  const mean = average(measured)
-  const quantile = (fraction: number): number => {
-    const position = (measured.length - 1) * fraction
-    const lower = measured[Math.floor(position)] ?? 0
-    const upper = measured[Math.ceil(position)] ?? lower
-    return lower + (upper - lower) * (position % 1)
-  }
+export function summarize(configuration: Configuration, card: Scorecard): Summary {
+  const detection = card.detection.all, range = measured(detection.omissions.equalPr), time = measured(card.time.summary)
   return {
-    configuration, score: score === null ? null : score * 100,
-    cost: cost === null || !divisor || pending ? null : cost / divisor,
-    tokens: tokens === null || !divisor || pending ? null : tokens / divisor,
-    falseFindings: falseDenominator && !pending && falseCount !== null ? falseCount / falseDenominator : null,
-    time: mean === null || pending || durations.some(value => value === null) ? null : {
-      median: quantile(0.5), mean, q1: quantile(0.25), q3: quantile(0.75), reviews: measured.length,
-      tasks: rows.filter(({ outcome }) => outcome.trials.some(trial => attempts.get(trial.attemptIds.at(-1) ?? '')?.complete)).length,
-    },
-    completed: terminals.filter(attempt => attempt.complete).length,
-    trials: trials.length, attempts: allAttempts.length, tasks: rows.length,
-    defects: buggyRows.reduce((sum, { task }) => sum + eligibleDefects(task, filter).length, 0),
-    unresolved: measuredTotal(terminals.map(attempt => attempt.unresolved)),
-    noise: measuredTotal(terminals.map(attempt => attempt.noise)),
-    duplicates: measuredTotal(terminals.map(attempt => attempt.duplicates)),
+    configuration, card, score: points(detection.equalPr),
+    range: range && { low: range.low * 100, high: range.high * 100 },
+    cost: measured(card.cost.perTrial), tokens: measured(card.tokens.perTrial),
+    refuted: measured(card.reliability.outcomes.refuted.perAdmittedReview),
+    time: time && { ...time, reviews: card.time.completed, tasks: card.time.tasks },
+    completed: card.delivery.complete, trials: card.delivery.scheduled, tasks: card.coverage.ran,
   }
-}
-
-export function leaderboardComparison(dataset: Dataset, selected: string[], candidates: Task[], filter: DetectionFilter) {
-  const baseline = dataset.configurations.filter(configuration => !configuration.experimental).map(configuration => configuration.id)
-  const selectedBaseline = baseline.filter(id => selected.includes(id))
-  const comparison = selectedBaseline.length ? selectedBaseline : selected.length ? baseline : []
-  const tasks = commonTasks(dataset, comparison, candidates)
-  const summaries = dataset.configurations.map(configuration => {
-    const summary = summarize(dataset, configuration, tasks, filter)
-    return summary.tasks === tasks.length ? summary : {
-      ...summary, score: null, cost: null, tokens: null, falseFindings: null, time: null,
-    }
-  })
-  return { tasks, summaries }
-}
-
-export function compareTasks(dataset: Dataset, a: string, b: string, candidates: Task[], filter: DetectionFilter) {
-  const attempts = new Map(dataset.attempts.map(attempt => [attempt.id, attempt]))
-  const shared = commonTasks(dataset, [a, b], candidates).filter(task => eligibleDefects(task, filter).length > 0)
-  const rows = shared.map(task => {
-    const configurations = [a, b].map(id => {
-      const outcome = dataset.outcomes.find(row => row.configurationId === id && row.taskId === task.id && row.status === 'ran')
-      const repetitions = outcome?.trials.map(trial => {
-        const terminal = attempts.get(trial.attemptIds.at(-1) ?? '')
-        const defects = eligibleDefects(task, filter)
-        const recovered = terminal && terminal.feedback?.kind !== 'unavailable'
-          ? defects.filter(d => terminal.admitted && terminal.recovered.includes(d.id)).length : null
-        return { replicate: trial.replicate, attemptId: terminal?.id ?? null,
-          admitted: terminal?.admitted ?? false, complete: terminal?.complete ?? false,
-          recovered, references: defects.length, score: recovered === null ? null : 100 * recovered / defects.length }
-      }) ?? []
-      const available = repetitions.flatMap(trial => trial.score === null ? [] : [trial.score])
-      return { id, mean: outcome ? taskScore(task, outcome, attempts, filter) : null,
-        min: available.length ? Math.min(...available) : null, max: available.length ? Math.max(...available) : null,
-        repetitions }
-    })
-    const left = configurations[0]?.mean ?? null, right = configurations[1]?.mean ?? null
-    return { task, configurations, delta: left === null || right === null ? null : 100 * (left - right) }
-  })
-  const mean = (id: string, omitted: string | null) => {
-    const values = rows.filter(row => row.task.id !== omitted).map(row => row.configurations.find(c => c.id === id)?.mean ?? null)
-    return values.some(value => value === null) ? null : average(values.flatMap(value => value === null ? [] : [100 * value]))
-  }
-  const difference = (omitted: string | null) => {
-    const left = mean(a, omitted), right = mean(b, omitted)
-    return { a: left, b: right, delta: left === null || right === null ? null : left - right }
-  }
-  return { rows, full: difference(null), omissions: rows.map(row => ({ task: row.task,
-    remainingTasks: rows.length - 1, ...difference(row.task.id) })),
-    wins: rows.filter(row => row.delta !== null && row.delta > 1e-9).length,
-    ties: rows.filter(row => row.delta !== null && Math.abs(row.delta) <= 1e-9).length,
-    losses: rows.filter(row => row.delta !== null && row.delta < -1e-9).length,
-    pending: rows.filter(row => row.delta === null).length }
-}
-
-export function feedbackSummary(dataset: Dataset, configurationId: string, candidates: Task[]) {
-  const attempts = new Map(dataset.attempts.map(attempt => [attempt.id, attempt]))
-  const rows = candidates.flatMap(task => {
-    const outcome = dataset.outcomes.find(row => row.configurationId === configurationId && row.taskId === task.id && row.status === 'ran')
-    return outcome ? outcome.trials.map(trial => ({ task, terminal: attempts.get(trial.attemptIds.at(-1) ?? ''), pending: trial.status === 'pending' })) : []
-  })
-  const pending = rows.some(row => row.pending || !row.terminal)
-  const admitted = rows.flatMap(row => row.terminal?.admitted ? [row.terminal] : [])
-  const measured = admitted.filter(attempt => attempt.feedback && attempt.feedback.kind !== 'unavailable')
-  const graded = admitted.filter(attempt => attempt.feedback?.kind === 'claims')
-  const completeVolume = admitted.length > 0 && measured.length === admitted.length && !pending
-  const completeClaims = admitted.length > 0 && graded.length === admitted.length && !pending
-  const items = completeVolume ? measured.reduce((sum, a) => sum + (a.feedback && a.feedback.kind !== 'unavailable' ? a.feedback.items : 0), 0) : null
-  const outcome = (key: keyof Extract<NonNullable<Attempt['feedback']>, { kind: 'claims' }>['outcomes']) => completeClaims
-    ? graded.reduce((sum, a) => sum + (a.feedback?.kind === 'claims' ? a.feedback.outcomes[key].distinct : 0), 0) : null
-  const clean = rows.flatMap(row => !row.task.defects.length && row.terminal?.admitted ? [row.terminal] : [])
-  const cleanClaimGraded = clean.length > 0 && clean.every(a => a.feedback?.kind === 'claims') && !pending
-  return { trials: rows.length, pendingTrials: rows.filter(row => row.pending || !row.terminal).length,
-    admittedReviews: admitted.length, measuredReviews: measured.length, claimGradedReviews: graded.length,
-    items, itemsPerReview: items === null ? null : items / admitted.length,
-    falsePerAdmittedReview: admitted.length && !pending && admitted.every(a => a.falseFindings !== null)
-      ? admitted.reduce((sum, a) => sum + (a.falseFindings ?? 0), 0) / admitted.length : null,
-    falsePerTrial: rows.length && !pending && admitted.every(a => a.falseFindings !== null)
-      ? admitted.reduce((sum, a) => sum + (a.falseFindings ?? 0), 0) / rows.length : null,
-    advisory: outcome('advisory'), inconsequential: outcome('inconsequential'), scopeExcluded: outcome('scope-excluded'),
-    refuted: outcome('refuted'), unsupported: outcome('unsupported'), unresolved: outcome('unresolved'),
-    duplicates: completeClaims ? graded.reduce((sum, a) => sum + (a.feedback?.kind === 'claims' ? a.feedback.duplicates : 0), 0) : null,
-    distinctClaims: completeClaims ? graded.reduce((sum, a) => sum + (a.feedback?.kind === 'claims' ? a.feedback.distinct : 0), 0) : null,
-    claimOccurrences: completeClaims ? graded.reduce((sum, a) => sum + (a.feedback?.kind === 'claims' ? a.feedback.occurrences : 0), 0) : null,
-    mixedItems: completeClaims ? graded.reduce((sum, a) => sum + (a.feedback?.kind === 'claims' ? a.feedback.mixedItems : 0), 0) : null,
-    cleanReviews: clean.length,
-    cleanRefutedFraction: cleanClaimGraded ? clean.filter(a => a.feedback?.kind === 'claims' && a.feedback.outcomes.refuted.distinct > 0).length / clean.length : null,
-    cleanUnsupportedFraction: cleanClaimGraded ? clean.filter(a => a.feedback?.kind === 'claims' && a.feedback.outcomes.unsupported.distinct > 0).length / clean.length : null,
-    cleanUnresolvedFraction: cleanClaimGraded ? clean.filter(a => a.feedback?.kind === 'claims' && a.feedback.outcomes.unresolved.distinct > 0).length / clean.length : null,
-    unadmittedOutputs: rows.filter(row => row.terminal && !row.terminal.admitted).length,
-    unadmittedFalseOccurrences: measuredTotal(rows.map(row => row.terminal && !row.terminal.admitted ? row.terminal.rawFalseFindings : 0)) }
-}
-
-export function scoreRange(dataset: Dataset, configuration: Configuration, tasks: Task[], filter: DetectionFilter): { low: number; high: number } | null {
-  const buggy = tasks.filter(task => eligibleDefects(task, filter).length > 0)
-  if (buggy.length < 2) return null
-  const scores = buggy.map(omitted => summarize(dataset, configuration, tasks.filter(task => task.id !== omitted.id), filter).score)
-  if (scores.some(score => score === null)) return null
-  const measured = scores.flatMap(score => score === null ? [] : [score])
-  return { low: Math.min(...measured), high: Math.max(...measured) }
 }
 
 export const strongScore = 80
@@ -218,11 +38,11 @@ export const strongScore = 80
 export function takeaways(summaries: Summary[]) {
   const scored = summaries.filter(row => row.score !== null)
   const strong = scored.filter(row => (row.score ?? 0) >= strongScore)
-  const lowest = (rows: Summary[], key: 'cost' | 'falseFindings') => rows.filter(row => row[key] !== null)
+  const lowest = (rows: Summary[], key: 'cost' | 'refuted') => rows.filter(row => row[key] !== null)
     .sort((left, right) => (left[key] ?? 0) - (right[key] ?? 0) || (right.score ?? 0) - (left.score ?? 0))[0]
   const top = [...scored].sort((left, right) => (right.score ?? 0) - (left.score ?? 0) ||
     (left.cost ?? Infinity) - (right.cost ?? Infinity))[0]
-  return { top, cheapest: lowest(strong, 'cost'), quietest: lowest(strong, 'falseFindings') }
+  return { top, cheapest: lowest(strong, 'cost'), quietest: lowest(strong, 'refuted') }
 }
 
 export const percent = (value: number | null): string => value === null ? '—' : `${value.toFixed(1)}%`

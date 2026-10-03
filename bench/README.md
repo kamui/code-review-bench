@@ -5,8 +5,8 @@ Method: [`docs/research/code-review-one-shot-method.md`](../docs/research/code-r
 Scripts follow [`docs/agents/scripts.md`](../docs/agents/scripts.md): standard-library Python 3.9+,
 `--self-test` or a `test_<name>.py` sibling, exit codes 0/1/2.
 
-**Scoreboard.** [`SCOREBOARD.md`](SCOREBOARD.md) shows the headline numbers per reviewer. `tools/scoreboard.py`
-generates it from `scoreboard.json`, and `tools/scoreboard.py --check` fails when it is stale.
+**Scoreboard.** [`SCOREBOARD.md`](SCOREBOARD.md) is a frozen snapshot of the earlier grading; its generator is
+retired. Current measures come from `bun run scorecard` and the explorer, which share `src/lib/scoring.ts`.
 
 **Status (2026-09-24): design §8 steps 1–6 done; the first run is frozen and awaits dispatch.** The schemas, rubric v1, rates, harness
 registries, the manifest checker, and the migrated tools exist (steps 1 and 2, with the three
@@ -32,10 +32,10 @@ and sealed under `targets/`, and the first scored run frozen as `runs/2026-09-24
 | `targets/<id>/` | `target.json`, frozen `packet.md`, `register.v<N>.json` (`register.v<N>.json.enc` while sealed), `smoke.json`; a migrated target also keeps `packet.legacy.md` |
 | `arms/<id>.json` | reviewer configurations as data |
 | `roster.json` | the roster: the models benchmarks run against by default, by client, each with its efforts, edited by hand; `tools/roster.py` prints which method and model combinations are benchmarked and which are `missing` |
-| `tools/` | `dispatch.sh`, `attempt_audit.py`, `normalize_review.py`, `codex_usage.py`, `transcript_usage.py`, `build_packet.py`, `check_manifest.py`, `diff_identity.py`, `derive_packet.py`, `provision.py`, `file_attempt.py`, `seal.py`, `run_cell.py`, `grade.py`, `score.py`, `compare.py`, `scoreboard.py`, `scoreboard_svg.py` |
+| `tools/` | `dispatch.sh`, `attempt_audit.py`, `normalize_review.py`, `codex_usage.py`, `transcript_usage.py`, `build_packet.py`, `check_manifest.py`, `diff_identity.py`, `derive_packet.py`, `provision.py`, `file_attempt.py`, `seal.py`, `run_cell.py`, `grade.py`, `score.py`, `compare.py`, `scoreboard_svg.py` |
 | `runs/<date>-<label>/` | frozen manifest, `charges.jsonl`, pre-dispatch probes, attempt records, mappings, results; a fixture run also holds its fixture target |
-| `scoreboard.json` | the scoreboard registry, naming per suite the cohort run that fixes its targets and per row the reviewer version and the runs, results files and arms it reads |
-| `SCOREBOARD.md`, `scoreboard/*.svg` | the generated scoreboard and its charts; never edited by hand |
+| `scoreboard.json` | the earlier scoreboard registry, kept as imported evidence |
+| `SCOREBOARD.md`, `scoreboard/*.svg` | the earlier generated scoreboard and its charts, kept as imported evidence |
 
 Mirrors, dependency caches and transcripts live outside the repository under `~/.t3/bench-cache/`
 with their hashes recorded in the manifests.
@@ -211,19 +211,18 @@ family's recovery and fix sufficiency, removes the workspace's verified `clone` 
 
 The mappings, results and scoreboard below are the earlier grading record, kept as evidence.
 
-`score.py` computes `results.v<M>.json` from the attempt records, one mapping per target and the
+`score.py` derives per-attempt facts from the attempt records, one mapping per target and the
 register version each mapping names, checked by hash (a sealed register is read from the plaintext
 `seal.py` opened, checked against the hash `target.json` records). It reports every planned cell
-as valid completed, incomplete, harness-invalid or unattempted, and per target and arm, per arm,
-per shape and per cohort group: attempt-level and completed-only recall (macro over buggy targets,
-null when a target is missing), raw and unique false findings, the three review-level columns, fix
-sufficiency, noise, cost as metered and repriced at one date's rates, and median elapsed times.
+as valid completed, incomplete, harness-invalid or unattempted, and per mapped attempt: recall, raw
+and unique false findings, the three review-level flags, fix sufficiency, noise, cost as metered
+and repriced at one date's rates, and elapsed times. It computes nothing across attempts.
 
 `compare.py` puts two runs side by side under the comparison contract: per target, whether the
 packet, diff identity, register version, rubric, metric code, execution policy and provisioning
 identity match, differ or were not recorded; per arm, the declared dimensions that changed, a
-CLI or prompt change labelled as a product-version delta; and the metrics for every target of
-either cohort, with the missing ones and the non-comparable ones named rather than dropped.
+CLI or prompt change labelled as a product-version delta. Every target of either cohort is listed,
+with the missing ones and the non-comparable ones named rather than dropped.
 
 ## Three rules
 
