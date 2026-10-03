@@ -65,6 +65,42 @@ class ExportTest(unittest.TestCase):
             with self.assertRaises(current.InputError):
                 self.build_fixture(root)
 
+    def test_mixed_billing_keeps_the_list_price_marker(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            selected, documents = fixture(root)
+            record = current.read_json(root / selected['attempts'][0]['record']['path'])
+            record.update(attempt_id='att-002', cell={**record['cell'], 'replicate': 2})
+            record['usage']['billing'] = 'api-dollars'
+            attempt = root / 'bench/runs/run/attempts/att-002'
+            attempt.mkdir()
+            original = root / 'bench/runs/run/attempts/att-001'
+            for name in ('payload.json', 'normalized.json', 'usage-requests.jsonl'):
+                (attempt / name).write_bytes((original / name).read_bytes())
+            write(root, 'bench/runs/run/attempts/att-002/attempt.json', record)
+            save_current(root, current.inventory(root), documents)
+            result = self.build_fixture(root)
+            self.assertEqual(result['configurations'][0]['billing'], 'list-price-equivalent')
+            self.assertEqual({a['billing'] for a in result['attempts']}, {'api-dollars', 'list-price-equivalent'})
+
+    def test_review_code_provenance_fallback_is_published(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            _, documents = fixture(root)
+            registry = current.read_json(root / 'bench/scoreboard.current.json')
+            registry['configurations'][0]['method'] = 'review-code'
+            write(root, 'bench/scoreboard.current.json', registry)
+            write(root, 'bench/skill-provenance.json', {'skills': {}})
+            manifest = current.read_json(root / 'bench/runs/run/manifest.json')
+            manifest['arms'][0]['resolved_skill_tree'] = 'fixture-tree'
+            write(root, 'bench/runs/run/manifest.json', manifest)
+            write(root, 'bench/skill-provenance.v2.json', {'skills': {'fixture-tree': {
+                'version': None, 'date': '2026-10-03', 'date_source': 'commit'}}})
+            save_current(root, current.inventory(root), documents)
+            result = self.build_fixture(root)
+            self.assertEqual(result['configurations'][0]['skillProvenanceUrl'], '/bench/evidence/bench/skill-provenance.json')
+            self.assertEqual(current.read_json(root / 'public/evidence/bench/skill-provenance.json'), {'skills': {}})
+
     def test_review_duration_uses_the_filed_end_event_and_excludes_retry_gaps(self):
         record = {'disposition': 'valid completed', 'timing': {
             'dispatched_at': '2026-09-29T10:00:00Z', 'completed_at': '2026-09-29T10:02:00Z',
