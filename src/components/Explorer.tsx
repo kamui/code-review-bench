@@ -5,8 +5,9 @@ import { useMediaQuery } from '@mantine/hooks'
 import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpDown, ArrowUpRight, Check, ChevronDown, CodeXml, Database, Info, Moon, Search, Sun, X } from 'lucide-react'
 import { fetchDataset, skillReleaseLabel } from '../lib/data'
 import type { Configuration, Dataset, Task } from '../lib/data'
-import { average, compact, eligibleDefects, leaderboardComparison, money, percent, scoreRange, strongScore, takeaways, taskScore } from '../lib/metrics'
-import type { Axis, SeverityFilter, Summary } from '../lib/metrics'
+import { compact, money, percent, points, strongScore, summarize, takeaways } from '../lib/metrics'
+import type { Axis, Summary } from '../lib/metrics'
+import { candidates as pendingCandidates, leaderboard, meanTaskRecall, references } from '../lib/scoring'
 import { Chart, Mark } from './Chart'
 import type { ChartView } from './Chart'
 import { EvidenceDrawer } from './EvidenceDrawer'
@@ -14,11 +15,11 @@ import { MethodologyViews } from './MethodologyViews'
 import type { Inspection } from './EvidenceDrawer'
 
 type LoadState = { kind: 'loading' } | { kind: 'failed'; message: string } | { kind: 'ready'; dataset: Dataset }
-type ResultsColumn = 'setup' | 'score' | 'cost' | 'tokens' | 'falseFindings' | 'completed'
+type ResultsColumn = 'setup' | 'score' | 'cost' | 'tokens' | 'refuted' | 'completed'
 const resultsColumns: { key: ResultsColumn; label: string }[] = [
   { key: 'setup', label: 'Review setup' }, { key: 'score', label: 'Findings score' },
   { key: 'cost', label: 'Avg cost' }, { key: 'tokens', label: 'Output tokens' },
-  { key: 'falseFindings', label: 'False / review' }, { key: 'completed', label: 'Completed' },
+  { key: 'refuted', label: 'Refuted / review' }, { key: 'completed', label: 'Completed' },
 ]
 
 export function Explorer() {
@@ -54,7 +55,6 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
   const [technology, setTechnology] = useState<string | null>(null)
   const [concern, setConcern] = useState<string | null>(null)
   const [findingConcern, setFindingConcern] = useState<string | null>(null)
-  const [severity, setSeverity] = useState<SeverityFilter>('all')
   const [inspection, setInspection] = useState<Inspection | null>(null)
   const [sort, setSort] = useState<{ column: ResultsColumn; direction: 'ascending' | 'descending' }>({ column: 'score', direction: 'descending' })
   const { toggleColorScheme } = useMantineColorScheme()
@@ -62,17 +62,22 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
   const configurations = dataset.configurations.filter(item => includeExperiments || !item.experimental)
   const editions = configurations.filter((item, index) => configurations.findIndex(other => other.method === item.method && other.reviewEdition === item.reviewEdition) === index)
   const activeIds = selected.filter(id => configurations.some(item => item.id === id && item.models.some(model => selectedModels.includes(model))))
-  const filter = { concern: findingConcern ?? '', severity }
   const candidates = dataset.tasks.filter(task =>
     `${task.repo} ${task.pr} ${task.shape}`.toLowerCase().includes(query.toLowerCase()) &&
     (!area || task.profile.areas.includes(area)) && (!change || task.profile.changeKinds.includes(change)) &&
     (!technology || task.profile.technologies.includes(technology)) && (!concern || task.profile.concerns.includes(concern)),
   )
-  const { tasks: shared, summaries: comparisonSummaries } = leaderboardComparison(dataset, activeIds, candidates, filter)
-  const sharedIds = new Set(shared.map(task => task.id))
+  const board = useMemo(() => leaderboard(dataset, { selected: activeIds, candidateTaskIds: candidates.map(task => task.id), concern: findingConcern }),
+    [dataset, activeIds.join(), candidates.map(task => task.id).join(), findingConcern])
+  const sharedIds = new Set(board.selection.taskIds)
+  const shared = dataset.tasks.filter(task => sharedIds.has(task.id))
+  const comparisonSummaries = dataset.configurations.flatMap(configuration => {
+    const card = board.cards.find(item => item.configurationId === configuration.id)
+    return card ? [summarize(configuration, card)] : []
+  })
   const summaries = comparisonSummaries.filter(row => activeIds.includes(row.configuration.id))
     .sort((left, right) => (right.score ?? -1) - (left.score ?? -1))
-  const ranges = new Map(summaries.map(summary => [summary.configuration.id, summary.score === null ? null : scoreRange(dataset, summary.configuration, shared, filter)]))
+  const ranges = new Map(summaries.map(summary => [summary.configuration.id, summary.range]))
   const highlights = takeaways(summaries)
   const tableSummaries = [...comparisonSummaries].sort((left, right) => {
       const a = sort.column === 'setup' ? left.configuration.short : left[sort.column]
@@ -82,10 +87,11 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
       const comparison = typeof a === 'string' && typeof b === 'string' ? a.localeCompare(b) : Number(a) - Number(b)
       return (sort.direction === 'ascending' ? comparison : -comparison) || left.configuration.short.localeCompare(right.configuration.short)
     })
-  const defectCount = shared.reduce((sum, task) => sum + eligibleDefects(task, filter).length, 0)
-  const unresolved = summaries.reduce((sum, row) => sum + (row.unresolved ?? 0), 0)
+  const referenceCount = shared.flatMap(task => references(task, findingConcern)).length
+  const candidateCount = shared.flatMap(task => pendingCandidates(task, findingConcern)).length
+  const unresolved = summaries.some(row => row.card.reliability.outcomes.unresolved.distinct > 0)
   const incompleteCoverage = summaries.filter(row => row.tasks < shared.length)
-  const attempts = useMemo(() => new Map(dataset.attempts.map(attempt => [attempt.id, attempt])), [dataset])
+  const ungraded = !dataset.evidence.coverage.complete
   const labels = (key: keyof Task['profile']) => Array.from(new Set(dataset.tasks.flatMap(task => task.profile[key]))).sort()
   const editionIds = (configuration: Configuration) => configurations.filter(item => item.method === configuration.method && item.reviewEdition === configuration.reviewEdition).map(item => item.id)
   const toggleEdition = (configuration: Configuration) => {
@@ -97,14 +103,13 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
     setIncludeExperiments(checked)
     setSelected(values => checked ? Array.from(new Set([...values, ...ids])) : values.filter(value => !ids.includes(value)))
   }
-  const resetFilters = () => { setQuery(''); setArea(null); setChange(null); setTechnology(null); setConcern(null); setFindingConcern(null); setSeverity('all') }
+  const resetFilters = () => { setQuery(''); setArea(null); setChange(null); setTechnology(null); setConcern(null); setFindingConcern(null) }
   const activeFilters = [
     query && { label: `Search: ${query}`, clear: () => setQuery('') }, area && { label: `Code area: ${area}`, clear: () => setArea(null) },
     change && { label: `Change: ${change}`, clear: () => setChange(null) }, technology && { label: `Technology: ${technology}`, clear: () => setTechnology(null) },
     concern && { label: `Task concern: ${concern}`, clear: () => setConcern(null) }, findingConcern && { label: `Findings: ${findingConcern}`, clear: () => setFindingConcern(null) },
-    severity !== 'all' && { label: severity === 'high' ? 'Critical + High' : 'Critical only', clear: () => setSeverity('all') },
   ].flatMap(item => item ? [item] : [])
-  const allDefects = dataset.tasks.reduce((sum, task) => sum + task.defects.length, 0)
+  const allDefects = dataset.tasks.flatMap(task => task.families).length
   const methodCount = new Set(dataset.configurations.map(item => item.method)).size
   const modelCount = new Set(dataset.configurations.flatMap(item => item.models)).size
   return <>
@@ -129,7 +134,7 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
         </div>
         <dl className="corpus-stats" aria-label="Benchmark statistics">
           <div><dt>PR tasks</dt><dd>{dataset.tasks.length}</dd></div>
-          <div><dt>{dataset.grading.kind === 'ungraded' ? 'provisional problems' : 'known problems'}</dt><dd>{allDefects}</dd></div>
+          <div><dt>{ungraded ? 'provisional problems' : 'known problems'}</dt><dd>{allDefects}</dd></div>
           <div><dt>review methods</dt><dd>{methodCount}</dd></div>
           <div><dt>models tested</dt><dd>{modelCount}</dd></div>
         </dl>
@@ -137,13 +142,13 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
 
       <section id="leaderboard" className="leaderboard-section">
         <Group justify="space-between" align="end" mb="lg"><div><Title order={2}>The leaderboard</Title></div>
-          <Badge variant="light" color="gray">{dataset.grading.kind === 'ungraded' ? 'Ungraded v1 preview' : 'Rubric v2'}</Badge>
+          <Badge variant="light" color="gray">{ungraded ? 'Ungraded v1 preview' : 'Current v1'}</Badge>
         </Group>
-        {dataset.grading.kind === 'ungraded' && <Alert color="yellow" mb="md">{dataset.grading.qualification} Saved reviews, delivery and usage remain available. Detection and false-finding measurements are unavailable.</Alert>}
+        {ungraded && <Alert color="yellow" mb="md">{dataset.evidence.coverage.reason} {dataset.evidence.coverage.assessedReviews} of {dataset.evidence.coverage.requiredReviews} admitted reviews are assessed. Saved reviews, delivery and usage remain available. Measures that need missing assessments are unavailable.</Alert>}
         {highlights.top && <dl className="takeaways" aria-label="Takeaways for the selected setups">
           <Takeaway term="Highest findings score" row={highlights.top} detail={row => row.cost === null ? percent(row.score) : `${percent(row.score)} at ${money(row.cost)}${row.configuration.billing === 'list-price-equivalent' ? '*' : ''}`} />
           <Takeaway term={`Cheapest at ${strongScore}%+`} row={highlights.cheapest} detail={row => `${money(row.cost)}${row.configuration.billing === 'list-price-equivalent' ? '*' : ''} for ${percent(row.score)}`} />
-          <Takeaway term={`Fewest false findings at ${strongScore}%+`} row={highlights.quietest} detail={row => `${row.falseFindings?.toFixed(2)} per review, ${percent(row.score)}`} />
+          <Takeaway term={`Fewest refuted claims at ${strongScore}%+`} row={highlights.quietest} detail={row => `${row.refuted?.toFixed(2)} per admitted review, ${percent(row.score)}`} />
         </dl>}
         <Paper withBorder radius="lg" className="leaderboard-paper">
           <div className="chart-layout"><div className="chart-main">
@@ -152,16 +157,16 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
                 if (value === 'skills' || value === 'ranking' || value === 'models' || value === 'tradeoff') setView(value)
               }} data={[{ label: 'By skill', value: 'skills' }, { label: 'Ranking', value: 'ranking' }, { label: 'By model', value: 'models' }, { label: 'Tradeoff', value: 'tradeoff' }]} />}
               <SegmentedControl aria-label="Compare against" value={axis} onChange={value => {
-                if (value === 'cost' || value === 'tokens' || value === 'falseFindings' || value === 'time') setAxis(value)
-              }} data={[{ label: 'Cost', value: 'cost' }, { label: 'Tokens', value: 'tokens' }, { label: 'False findings', value: 'falseFindings' }, { label: 'Time', value: 'time' }]} />
+                if (value === 'cost' || value === 'tokens' || value === 'refuted' || value === 'time') setAxis(value)
+              }} data={[{ label: 'Cost', value: 'cost' }, { label: 'Tokens', value: 'tokens' }, { label: 'Refuted claims', value: 'refuted' }, { label: 'Time', value: 'time' }]} />
             </div>
             <div className="chart-context">
-              <span className="basis-chip">{dataset.grading.kind === 'ungraded' ? 'Selected' : 'Scored on'} {shared.length} PRs · {defectCount} {dataset.grading.kind === 'ungraded' ? 'provisional' : 'reference'} problems</span>
+              <span className="basis-chip">{ungraded ? 'Selected' : 'Scored on'} {shared.length} PRs · {referenceCount} reference problems{candidateCount > 0 && ` · ${candidateCount} awaiting eligibility`}</span>
               {activeFilters.map(item => <button type="button" key={item.label} className="filter-chip" onClick={item.clear} aria-label={`Remove filter ${item.label}`}>{item.label}<X size={12} aria-hidden="true" /></button>)}
               {activeFilters.length > 0 && <a className="filter-link" href="#tasks">Edit filters</a>}
               {chartView === 'tradeoff' && <Switch className="label-switch" checked={showAllLabels} onChange={event => setShowAllLabels(event.currentTarget.checked)} label="Label every point" size="xs" />}
             </div>
-            {dataset.grading.kind === 'ungraded' ? <div className="plot-empty"><strong>Current judgments pending</strong><span>Detection and false-finding comparisons will appear after current assessments.</span></div>
+            {ungraded ? <div className="plot-empty"><strong>Current judgments pending</strong><span>Detection and reliability comparisons will appear after current assessments.</span></div>
               : <Chart summaries={summaries} ranges={ranges} axis={axis} view={chartView} showAllLabels={showAllLabels} onSelect={id => setInspection({ kind: 'configuration', id })} />}
           </div>
           <aside className="configuration-list" aria-label="Review methods"><Group justify="space-between" mb="lg"><Text fw={650} size="sm">Review methods</Text><Text size="xs" c="dimmed">{editions.filter(edition => editionIds(edition).some(id => selected.includes(id))).length} selected</Text></Group>
@@ -194,8 +199,7 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
           <div className="comparison-strip"><Info size={15} aria-hidden="true" /><span>Chart and table use tasks shared by the selected standard setups. Skill, model and task filters change the comparison. Experiments do not shrink its task coverage.</span></div>
         </Paper>
         {incompleteCoverage.length > 0 && <Alert color="blue" mt="md">Not plotted because task coverage is incomplete: {incompleteCoverage.map(row => `${row.configuration.short} (${row.tasks}/${shared.length} tasks)`).join('; ')}. Filter tasks to compare their recorded results, or inspect them in the table.</Alert>}
-        {unresolved > 0 && <Alert color="yellow" mt="md">{unresolved} unresolved grading assignments. False-finding measurements are provisional.</Alert>}
-        {severity !== 'all' && <Alert color="blue" mt="md">Severity has not been adjudicated for these reference findings. High-severity and critical-only scores are unavailable; unclassified does not mean low severity.</Alert>}
+        {unresolved && <Alert color="yellow" mt="md">Some claim assessments are unresolved. Reliability measurements are provisional.</Alert>}
         <Text size="sm" mt="xl" fw={600}>All review setups</Text>
         <Text size="xs" c="dimmed" mt={4}>Includes skill experiments. Same {shared.length} comparison tasks as the chart. Scores and averages require full task coverage; chart selections do not hide table rows.</Text>
         <Table.ScrollContainer minWidth={700} mt="md"><Table verticalSpacing="sm" className="leaderboard-table" aria-label="All review setup results">
@@ -207,15 +211,15 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
           <Table.Tbody>{tableSummaries.map(row => <Table.Tr key={row.configuration.id}>
             <Table.Td><button className="text-button setup-label" onClick={() => setInspection({ kind: 'configuration', id: row.configuration.id })}><Mark configuration={row.configuration} size={10} />{row.configuration.short}</button></Table.Td>
             <Table.Td><span className="score-value">{percent(row.score)}</span></Table.Td><Table.Td>{money(row.cost)}{row.configuration.billing === 'list-price-equivalent' && <Tooltip label="Subscription usage valued at token list prices; not a bill or quota measurement"><span className="estimate-marker">*</span></Tooltip>}</Table.Td>
-            <Table.Td>{compact(row.tokens)}</Table.Td><Table.Td>{row.falseFindings?.toFixed(2) ?? '—'}</Table.Td><Table.Td><span className="completion-count">{row.completed}/{row.trials}</span></Table.Td>
+            <Table.Td>{compact(row.tokens)}</Table.Td><Table.Td>{row.refuted?.toFixed(2) ?? '—'}</Table.Td><Table.Td><span className="completion-count">{row.completed}/{row.trials}</span></Table.Td>
             <Table.Td>{row.tasks}/{shared.length}</Table.Td>
             <Table.Td><ActionIcon aria-label={`Inspect ${row.configuration.short}`} variant="subtle" color="gray" onClick={() => setInspection({ kind: 'configuration', id: row.configuration.id })}><ArrowUpRight size={18} /></ActionIcon></Table.Td>
           </Table.Tr>)}</Table.Tbody>
         </Table></Table.ScrollContainer>
         {!shared.length && <Text ta="center" c="dimmed" py="xl">No tasks are shared by the selected standard setups with these filters.</Text>}
-        <Text size="xs" c="dimmed" mt="sm" className="footnote">Retry usage is included. * Subscription usage is valued at token list prices. Output includes reasoning and subagents. {dataset.grading.kind === 'ungraded' ? 'Current claim judgments are unavailable; profile labels are proposed.' : 'Each PR has equal weight; false findings never reduce detection scores.'}</Text>
+        <Text size="xs" c="dimmed" mt="sm" className="footnote">Retry usage is included. * Subscription usage is valued at token list prices. Output includes reasoning and subagents. {ungraded ? 'Current claim judgments are incomplete; profile labels are proposed.' : 'Each PR has equal weight; refuted claims never reduce detection scores.'}</Text>
         <Text size="sm" mt="sm"><Anchor href="https://github.com/kamui/code-review-bench/blob/main/docs/research/skill-matrix-2026-10-02/README.md#time-and-cost" target="_blank" rel="noreferrer">October 2 time and cost report</Anchor> · Per-setup and per-task totals, including failed attempts and held runs, with grading listed separately. This report covers a fixed batch.</Text>
-        <MethodologyViews dataset={dataset} configurations={configurations.filter(c => activeIds.includes(c.id))} tasks={shared} filter={filter} />
+        <MethodologyViews dataset={dataset} configurations={configurations.filter(c => activeIds.includes(c.id))} cards={board.cards} />
       </section>
 
       <section id="tasks" className="tasks-section">
@@ -229,8 +233,6 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
           </div>
           <Group gap="sm" mt="md" justify="space-between"><Group gap="sm"><Text size="xs" c="dimmed">Score breakdown</Text>
             <Select aria-label="Finding concern" placeholder="All finding concerns" data={labels('concerns')} value={findingConcern} onChange={setFindingConcern} clearable size="xs" w={200} />
-            <Select aria-label="Reference severity" value={severity} size="xs" w={175} data={[{ value: 'all', label: 'All severities' }, { value: 'high', label: 'Critical + High' }, { value: 'critical', label: 'Critical only' }]}
-              onChange={value => { if (value === 'all' || value === 'high' || value === 'critical') setSeverity(value) }} />
           </Group><Button variant="subtle" color="gray" size="xs" onClick={resetFilters}>Reset filters</Button></Group>
         </Paper>
         <Text size="xs" c="dimmed" mt="sm" mb="md">Filters update the comparison above. Concern labels describe review opportunities; finding breakdowns count only matching reference problems.</Text>
@@ -238,16 +240,10 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
           <Tabs.Panel value="catalog" pt="md"><Table.ScrollContainer minWidth={720}><Table verticalSpacing="md" className="task-table" highlightOnHover>
             <Table.Thead><Table.Tr><Table.Th>Pull request</Table.Th><Table.Th>Profile</Table.Th><Table.Th>References</Table.Th><Table.Th>Avg detection</Table.Th><Table.Th>In comparison</Table.Th><Table.Th /></Table.Tr></Table.Thead>
             <Table.Tbody>{candidates.map(task => {
-              const scores = activeIds.flatMap(id => {
-                const outcome = dataset.outcomes.find(row => row.configurationId === id && row.taskId === task.id && row.status === 'ran')
-                if (!outcome) return []
-                const score = taskScore(task, outcome, attempts, filter)
-                return score === null ? [] : [score * 100]
-              })
               return <Table.Tr key={task.id}><Table.Td><button className="text-button task-name" onClick={() => setInspection({ kind: 'task', id: task.id })}>{task.repo}<span>#{task.pr}</span></button><Text size="xs" c="dimmed" mt={4} maw={340}>{task.shape}</Text></Table.Td>
                 <Table.Td><Group gap={5} maw={220}>{[...task.profile.technologies, ...task.profile.changeKinds].map(label => <Badge key={label} color="gray" variant="light" size="sm">{label}</Badge>)}</Group></Table.Td>
-                <Table.Td>{task.defects.length ? <Text size="sm">{task.defects.length} {task.defects.length === 1 ? 'problem' : 'problems'}</Text> : <Badge color="gray" variant="light" size="sm">No registered problem</Badge>}</Table.Td>
-                <Table.Td><DetectionBar value={sharedIds.has(task.id) ? average(scores) : null} /></Table.Td><Table.Td>{sharedIds.has(task.id) ? <span className="included-label"><Check size={14} aria-hidden="true" /> Included</span>
+                <Table.Td>{task.families.length ? <Text size="sm">{task.families.length} {task.families.length === 1 ? 'problem' : 'problems'}</Text> : <Badge color="gray" variant="light" size="sm">No registered problem</Badge>}</Table.Td>
+                <Table.Td><DetectionBar value={points(meanTaskRecall(board.cards.filter(card => activeIds.includes(card.configurationId)), task.id, 'all'))} /></Table.Td><Table.Td>{sharedIds.has(task.id) ? <span className="included-label"><Check size={14} aria-hidden="true" /> Included</span>
                   : <Tooltip label="At least one selected setup has no result for this PR"><Text size="xs" c="dimmed" className="missing-label">Missing results</Text></Tooltip>}</Table.Td>
                 <Table.Td><ActionIcon aria-label={`Inspect ${task.repo} PR ${task.pr}`} variant="subtle" color="gray" onClick={() => setInspection({ kind: 'task', id: task.id })}><ArrowUpRight size={18} /></ActionIcon></Table.Td></Table.Tr>
             })}</Table.Tbody></Table></Table.ScrollContainer>
@@ -287,7 +283,7 @@ const plural = (count: number, word: string) => `${count} ${word}${count === 1 ?
 
 function CoverageMatrix({ tasks }: { tasks: Task[] }) {
   const rows = concerns.map(concern => ({ concern, tagged: tasks.filter(task => task.profile.concerns.includes(concern)).length,
-    references: tasks.flatMap(task => task.defects).filter(defect => defect.concerns.includes(concern)).length }))
+    references: tasks.flatMap(task => task.families).filter(family => family.concerns.includes(concern)).length }))
   const maxReferences = Math.max(enoughReferences, ...rows.map(row => row.references))
   return <Table.ScrollContainer minWidth={560}><Table className="coverage-table" verticalSpacing="sm" aria-label="Review concern coverage">
     <Table.Thead><Table.Tr><Table.Th>Concern</Table.Th><Table.Th>Tasks tagged</Table.Th><Table.Th>Reference problems <span className="threshold-key">(tick marks {enoughReferences})</span></Table.Th><Table.Th>Comparable?</Table.Th></Table.Tr></Table.Thead>
