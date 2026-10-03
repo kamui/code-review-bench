@@ -1,0 +1,45 @@
+{
+  "reviewer": "testing",
+  "findings": [
+    {
+      "title": "No test that a non-matching hash still flushes with fallbacks configured",
+      "severity": "P2",
+      "file": "tests/auth_tests/test_basic.py",
+      "line": 215,
+      "why_it_matters": "The diff adds a new branch in get_user() that decides between cycling the session (fallback match) and flushing it. The only new test covers the match case. If the any(...) check were inverted or always true, or the empty-hash guard were dropped, a tampered, stale or password-changed session hash would be accepted while SECRET_KEY_FALLBACKS is set and no test would fail. The existing flush assertion in test_middleware.py runs without fallbacks and never reaches the new else path.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Add a test in TestGetUser: log in, then under override_settings(SECRET_KEY='newsecret', SECRET_KEY_FALLBACKS=['unrelated']) call get_user(request) and assert it returns AnonymousUser and that the session was flushed (session_key changed / HASH_SESSION_KEY absent). Add a variant after changing the user's password with the correct fallback configured, and one with HASH_SESSION_KEY removed from the session.",
+      "confidence": 75,
+      "evidence": [
+        "tests/auth_tests/test_basic.py:215 -- def test_get_user_fallback_secret(self):  (only new test; asserts User returned in both phases)",
+        "django/contrib/auth/__init__.py:39-40 (new) -- request.session.flush(); user = None  (else branch under any(...) with fallbacks, untested)"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Fallback test does not assert the stored session hash was rewritten",
+      "severity": "P3",
+      "file": "tests/auth_tests/test_basic.py",
+      "line": 231,
+      "why_it_matters": "The second phase only checks that get_user() returns the user after the fallback is removed. It never inspects request.session[HASH_SESSION_KEY], so it does not distinguish a rewritten hash from some other path that still authenticates. It also reuses the same request.session object rather than a fresh request loaded from the session store, so persistence of the cycled session is not exercised. The rewrite is the core of the fix, so the test should state it directly.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "After the first get_user() call, assert request.session[HASH_SESSION_KEY] == created_user.get_session_auth_hash() computed under the new SECRET_KEY, and in phase two assert get_user still succeeds using a request whose session is reloaded from the store.",
+      "confidence": 50,
+      "evidence": [
+        "tests/auth_tests/test_basic.py:231-236 -- # Remove the fallback secret. ... with override_settings(SECRET_KEY=\"newsecret\"): user = get_user(request); self.assertIsInstance(user, User)"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "get_user() now calls user.get_session_auth_fallback_hash() on any user object exposing get_session_auth_hash. A custom user model that implements get_session_auth_hash without subclassing AbstractBaseUser would raise AttributeError on a hash mismatch, and no test covers such a user. This was not verified at runtime; the correctness reviewer owns the behavioral question.",
+    "Customized get_session_auth_hash overrides on user models are not exercised with fallback secrets; the fallback generator calls the private _get_session_auth_hash and bypasses overrides."
+  ],
+  "testing_gaps": [
+    "Empty or missing HASH_SESSION_KEY with SECRET_KEY_FALLBACKS set is not tested; the `session_hash and any(...)` guard is untested."
+  ]
+}

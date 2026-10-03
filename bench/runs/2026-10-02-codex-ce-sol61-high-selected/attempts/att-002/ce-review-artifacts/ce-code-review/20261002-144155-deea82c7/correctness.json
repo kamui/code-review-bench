@@ -1,0 +1,68 @@
+{
+  "reviewer": "correctness",
+  "findings": [
+    {
+      "title": "Rebuild pools before switching to the test database",
+      "severity": "P1",
+      "file": "django/db/backends/postgresql/base.py",
+      "line": 348,
+      "why_it_matters": "A pool created before test-database setup retains the original database in its connection kwargs. In particular, the explicitly supported _nodb_cursor fallback creates such a pool under the default alias when connecting to postgres fails. BaseDatabaseCreation.create_test_db() then closes only the wrapper, changes NAME to the test database, and invokes migrate; pooled acquisition ignores the new connection parameters and still returns connections to the original database. Migrations and test writes can therefore modify the original database instead of the test database.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "confidence": 100,
+      "evidence": [
+        "django/db/backends/postgresql/base.py:348:             connection = self.pool.getconn()",
+        "django/db/backends/postgresql/base.py:208:         if self.alias not in self._connection_pools:",
+        "django/db/backends/postgresql/base.py:224:             connect_kwargs = self.get_connection_params()",
+        "django/db/backends/postgresql/base.py:534:                         alias=self.alias,",
+        "django/db/backends/base/creation.py:64-66: self.connection.close() is followed by settings.DATABASES[self.connection.alias]['NAME'] = test_database_name and self.connection.settings_dict['NAME'] = test_database_name; no pool invalidation occurs before call_command('migrate', database=self.connection.alias).",
+        "Offline reproduction used actual create_test_db(), actual ConnectionPool, fake raw connections, and a fake postgres connection refusal. It logged connect to postgres, connect to production, CREATE DATABASE test_production, then wrapper current database: test_production; actual connection database: production; pool database: production. Only management commands were mocked; no server was contacted."
+      ],
+      "pre_existing": false,
+      "suggested_fix": "Invalidate the PostgreSQL pool after _create_test_db() returns and before BaseDatabaseCreation changes NAME and runs migrations, including pools created by its administrative fallback. A PostgreSQL _create_test_db() override that delegates to super and then closes the pool provides this ordering. Also make the administrative fallback use NO_DB_ALIAS so it cannot populate or reuse the application alias's pool. Add a regression covering an already-created production pool and the failed-postgres fallback."
+    },
+    {
+      "title": "Configure assumed roles using the raw pooled connection",
+      "severity": "P1",
+      "file": "django/db/backends/postgresql/base.py",
+      "line": 101,
+      "why_it_matters": "With pool enabled and assume_role set, the configure callback runs before a connection has been assigned to the Django wrapper. ops.compose_sql() calls mogrify() with that wrapper, which opens a Django cursor and recursively checks out another pool connection from the configuration worker. Every new connection needs the same callback, so startup cannot finish and requests fail with a pool timeout. An already-connected wrapper also risks thread-sharing failures because the callback runs in a pool worker.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "confidence": 100,
+      "evidence": [
+        "django/db/backends/postgresql/base.py:101:             sql = ops.compose_sql(\"SET ROLE %s\", [role_name])",
+        "django/db/backends/postgresql/base.py:231:                 configure=self._configure_connection,",
+        "django/db/backends/postgresql/base.py:381:         commit_role = ensure_role(connection, self.ops, role_name)",
+        "django/db/backends/postgresql/operations.py:193:         return mogrify(sql, params, self.connection)",
+        "django/db/backends/postgresql/psycopg_any.py:21-23: mogrify(sql, params, connection) opens connection.cursor() before calling ClientCursor(cursor.connection).mogrify(sql, params). Here connection is the Django wrapper rather than the raw connection given to ensure_role().",
+        "Offline reproduction with actual ConnectionPool, a fake raw connection, assume_role='some_role', min_size=max_size=1, num_workers=1, and timeout=0.15 created a raw connection and entered its cursor, then the configure worker logged couldn't get a connection after 0.15 sec and wrapper.ensure_connection() raised OperationalError with the same timeout."
+      ],
+      "pre_existing": false,
+      "suggested_fix": "Import mogrify from psycopg_any and compose SET ROLE against the raw connection passed to ensure_role(), e.g. mogrify('SET ROLE %s', [role_name], connection), instead of using ops.compose_sql(). Add a pooled assume_role connection test."
+    },
+    {
+      "title": "Treat an empty pool options dictionary as enabled",
+      "severity": "P2",
+      "file": "django/db/backends/postgresql/base.py",
+      "line": 205,
+      "why_it_matters": "The documented dictionary configuration accepts pool options, but OPTIONS={'pool': {}} silently disables pooling because the empty dictionary is falsey. Users passing an empty options dictionary to select default settings instead receive direct connections, so the configured pool is never constructed or used.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "confidence": 100,
+      "evidence": [
+        "django/db/backends/postgresql/base.py:205:         if self.alias == NO_DB_ALIAS or not pool_options:",
+        "docs/ref/databases.txt:255-258: pool may be a dict passed to psycopg_pool.ConnectionPool or True to use the defaults; no requirement that the dict contain an option is documented.",
+        "Offline check instantiated a PostgreSQL wrapper with OPTIONS['pool'] = {}; wrapper.pool returned None.",
+        "django/db/backends/postgresql/base.py:291:         if pool_options and not is_psycopg3:"
+      ],
+      "pre_existing": false,
+      "suggested_fix": "Disable pooling only when the option is absent/None or explicitly False, allowing {} to construct the default pool. Apply the same activation predicate to psycopg-version validation and pool-dependent feature skips, and cover pool={} alongside pool=True."
+    }
+  ],
+  "residual_risks": [],
+  "testing_gaps": []
+}

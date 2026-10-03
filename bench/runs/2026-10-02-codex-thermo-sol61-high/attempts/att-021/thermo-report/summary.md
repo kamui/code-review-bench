@@ -1,0 +1,19 @@
+# grpc/grpc-go#7390 — maintainability review
+
+Approve the pinned change. There are no actionable findings and no unresolved review questions. The implementation improves the atomicity of connection admission without adding branches, state, wrappers, or policy checks. The lock-consuming helper has an explicit name and contract, and both callers satisfy that contract.
+
+This review covers `daab56344e612097fd50c46c433de5d9b6013837..76ef33f44a600c3ed1a385979fd1dfbcade3fbb6`, inspected with `git diff main...review-head`. Only `clientconn.go` changes, with six added and seven deleted lines. The frozen thermo-nuclear-code-quality-review skill supplied the review criteria. One primary reviewer performed the review; no child reviewers or external material were used.
+
+In `clientconn.go:905–923`, `connect` now retains `ac.mu` between checking Idle and calling the transport-reset helper. The helper publishes Connecting before unlocking at `clientconn.go:1261–1262`. A competing connection request therefore cannot observe the same Idle admission window. This uses the existing connectivity state as the synchronization model and deletes the release/reacquire gap instead of introducing a second connection-in-progress flag.
+
+In `clientconn.go:940–997`, the address-update path retains the mutex while handing the restart to a goroutine. This deserves scrutiny because the mutex is released by another goroutine, but the handoff is bounded and correct: the helper reads the newly installed context and addresses, checks cancellation, publishes Connecting, and unlocks before dialing. An old transport's deferred `GracefulClose` can wait for that unlock through its synchronous `onClose` callback; the helper's locked prefix does not depend on that callback. Shutdown and further address updates cannot interleave with the initial restart snapshot. The helper name and comment identify the transferred lock responsibility.
+
+The file decreases from 1,839 to 1,838 lines. It was already above the skill's 1,000-line threshold, and this patch neither crosses that threshold nor introduces a new responsibility. Connection admission remains in `addrConn`, state publication uses the existing helper, and asynchronous balancer notification retains its existing serializer. There is no new conditional, optional mode, cast, exported API, or duplicate utility.
+
+The structural alternatives were worked through rather than assumed away. Splitting locked preparation from transport execution would remove the cross-goroutine unlock, but it would add an attempt snapshot or closure contract, more helpers, and orchestration at both callers. Moving only Connecting into `connect` would leave the address-update restart window unresolved. Extracting the broader `addrConn` implementation would be an independent file-organization change. None presents a demonstrated dramatic simplification of this patch. The detailed report includes a worked preparation/execution proposal and explains the tradeoffs.
+
+Three focused offline test commands passed with the race detector: selected cancellation, backoff, and address-update tests in the root package; selected reconnection and address-removal tests in `./test`; and 20 repetitions of `Test/AuthorityRevive` in `./xds/internal/xdsclient/tests`. These support the source analysis but do not prove every possible goroutine schedule. The full suite and the PR body's 100,000-run experiment were not rerun.
+
+No remediation is required. Retain the atomic admission boundary, the explicit unlock contract, and the existing cancellation checks. The review did not edit the checkout. Post-test checks found a clean working tree and unchanged hashes for `clientconn.go`, `go.mod`, and `go.sum`.
+
+Full source evidence, lock-path analysis, measurements, verification commands, and code-judo alternatives are in [01_addrconn.md](01_addrconn.md).

@@ -1,0 +1,76 @@
+[
+ {
+  "reviewer": "correctness",
+  "findings": [],
+  "residual_risks": [
+   "Custom user models overriding get_session_auth_hash() are not covered by the fallback path (fallback always recomputes via base _get_session_auth_hash); sessions still flushed on rotation. Not a regression.",
+   "get_user() guards with hasattr(user,'get_session_auth_hash') but then calls user.get_session_auth_fallback_hash() on mismatch; a duck-typed user not subclassing AbstractBaseUser would raise AttributeError instead of flushing."
+  ],
+  "testing_gaps": [
+   "No test covers a non-matching fallback secret (session must still be flushed, AnonymousUser returned) with SECRET_KEY_FALLBACKS set."
+  ]
+ },
+ {
+  "reviewer": "security",
+  "findings": [],
+  "residual_risks": [
+   "Custom user models defining get_session_auth_hash() without subclassing AbstractBaseUser will hit AttributeError on user.get_session_auth_fallback_hash() whenever stored hash mismatches (e.g. password change), yielding a 500 instead of a flush. Fails closed.",
+   "AbstractBaseUser subclasses overriding get_session_auth_hash() get no fallback support; fails closed.",
+   "Any key left in SECRET_KEY_FALLBACKS keeps matching sessions valid; intended semantics."
+  ],
+  "testing_gaps": [
+   "No test asserts that a session hash matching neither SECRET_KEY nor any fallback is flushed with SECRET_KEY_FALLBACKS non-empty, nor empty/missing session hash with fallbacks."
+  ]
+ },
+ {
+  "reviewer": "testing",
+  "findings": [
+   {
+    "title": "No test that non-matching sessions still flush when fallbacks are set",
+    "severity": "P2",
+    "file": "tests/auth_tests/test_basic.py",
+    "line": 144,
+    "confidence": 75,
+    "autofix_class": "manual",
+    "owner": "downstream-resolver",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "Add tests to TestGetUser: (1) log in, change password, call get_user under override_settings(SECRET_KEY='newsecret', SECRET_KEY_FALLBACKS=['unrelated-old-secret']); assert AnonymousUser and session flushed. (2) delete request.session[HASH_SESSION_KEY] and call get_user with fallbacks set; assert AnonymousUser and no exception.",
+    "first_evidence": "django/contrib/auth/__init__.py:213 -- if session_hash and any("
+   }
+  ],
+  "residual_risks": [
+   "get_session_auth_fallback_hash() requires AbstractBaseUser; custom user models duck-typing or overriding get_session_auth_hash() would get AttributeError or ignored override on fallback path. Not run."
+  ],
+  "testing_gaps": [
+   "get_session_auth_fallback_hash() not tested directly (multi-fallback order, empty fallbacks).",
+   "New test does not directly assert session data preserved across cycle_key and the stored rewritten hash."
+  ]
+ },
+ {
+  "reviewer": "adversarial",
+  "findings": [
+   {
+    "title": "Fallback match deletes old session immediately; 5xx or parallel request logs user out",
+    "severity": "P2",
+    "file": "django/contrib/auth/__init__.py",
+    "line": 217,
+    "confidence": 75,
+    "autofix_class": "advisory",
+    "owner": "human",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "Drop cycle_key() and only set request.session[HASH_SESSION_KEY] = session_auth_hash (the in-place rewrite still persists on the next normal save), or document that a key cycle is intentional. Assumption: key rotation on fallback match is a design choice rather than a security requirement, since the session key itself is not derived from SECRET_KEY.",
+    "first_evidence": "django/contrib/auth/__init__.py:217 -- request.session.cycle_key()"
+   }
+  ],
+  "residual_risks": [
+   "get_user() now calls user.get_session_auth_fallback_hash() on every hash mismatch, even when SECRET_KEY_FALLBACKS is empty. A user object that defines get_session_auth_hash() (the existing hasattr guard) but does not inherit AbstractBaseUser would raise AttributeError (a 500) on a normal password-change invalidation instead of flushing the session. Nothing in the repo does this, so it is a third-party/duck-typed user risk only.",
+   "AbstractBaseUser subclasses that override get_session_auth_hash() (a documented customization) are not covered by the fallback. get_session_auth_fallback_hash() always uses the base formula via _get_session_auth_hash, so sessions for such models are still invalidated on rotation and the fix does nothing for them. The new docs do not say so.",
+   "login() at django/contrib/auth/__init__.py:106-116 compares the stored hash only against the current secret. If login() is called for the same user while the session still holds a fallback-secret hash and get_user() has not run first, the session is flushed and anonymous session data is lost."
+  ],
+  "testing_gaps": [
+   "No test covers a stale hash that matches no fallback, with SECRET_KEY_FALLBACKS set and with it empty, to confirm the session is still flushed and AnonymousUser is returned."
+  ]
+ }
+]
