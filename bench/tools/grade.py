@@ -882,17 +882,21 @@ def graded(entry: dict, verdict: dict, facts: dict, families: list, evidence: li
 
 
 def candidate_records(verdicts: dict, grades: list, tokens: dict, task: dict, run: str, receipt: dict, existing: list) -> list:
-    """The candidate register after this assessment. A candidate keeps its identity, first-recorded time and
-    decision while it names the same original items; candidates this assessment does not raise stay."""
+    """The candidate register after this assessment. A candidate is identified by the original wording its
+    claims quote, so it keeps its first-recorded time and decision while a reassessment raises the same
+    assertion; candidates this assessment does not raise stay."""
     by_attempt = {grade["attempt_id"]: grade for grade in grades}
-    records = {candidate["id"]: candidate for candidate in existing}
+    records, raised = {candidate["id"]: candidate for candidate in existing}, {}
     named = {(token, claim["id"]): claim["candidate"] for token, review in verdicts["reviews"].items()
              for item in review["items"].values() for claim in item["claims"] if claim["candidate"]}
     for candidate in verdicts["new_candidates"]:
         anchors = [claim["anchor"] for token, attempt_id in sorted(tokens.items(), key=lambda pair: pair[1])
                    for claim in by_attempt[attempt_id]["claims"] if named.get((token, claim["id"])) == candidate["id"]]
-        identity = sorted({(a["review"]["path"], a["item_id"]) for a in anchors})
-        identifier = "NC-" + current_grading.digest({"target": task["id"], "items": identity})[:12]
+        identity = sorted({(a["review"]["path"], a["item_id"], a["quote"]) for a in anchors})
+        identifier = "NC-" + current_grading.digest({"target": task["id"], "wording": identity})[:12]
+        if raised.setdefault(identifier, candidate["id"]) != candidate["id"]:
+            raise Inconsistent(f"new candidates {raised[identifier]} and {candidate['id']} quote the same original "
+                               "wording; one assertion is one candidate")
         earlier = records.get(identifier, {})
         records[identifier] = {"id": identifier, "target": task["id"], "revision": task["revision"],
                                "recorded_at": earlier.get("recorded_at", now()),

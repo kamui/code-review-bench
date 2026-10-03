@@ -632,15 +632,28 @@ class CurrentGrading(unittest.TestCase):
         self.assertEqual(status["pending_candidates"], [{"id": record["id"], "target": "t-example",
                                                          "recorded_at": "2026-10-01T00:00:00Z", "limits": "No reproduction was run.",
                                                          "relevance": "Could become a new causal family."}])
-        record["decision"] = d["id"]
+        ruling = approved(self.documents, self.root, record["id"], outcome="refuted")
+        record["decision"] = ruling["id"]
         self.check()
         status = current.coverage_status(self.selected, self.documents)
         self.assertEqual((status["controls"], status["pending_candidates"]), ({"t-example": "audited-clean"}, []))
+        for field, value in (("status", "proposed"), ("outcome", "unresolved")):
+            saved = ruling[field]
+            ruling[field] = value
+            with self.assertRaisesRegex(current.Inconsistent, "only an approved saved human ruling resolves a candidate"):
+                self.check()
+            ruling[field] = saved
+        record["decision"] = d["id"]
+        with self.assertRaisesRegex(current.Inconsistent, "adjudication does not apply"):
+            self.check()
+        record["decision"] = None
+        self.check()
+        self.assertEqual(current.coverage_status(self.selected, self.documents)["controls"], {"t-example": "provisional"})
 
     def test_candidate_needs_its_task_revision_original_wording_and_an_applicable_decision(self):
         for fields, message in (({"revision": {**self.documents["claim"]["claims"][0]["revision"], "head": "f" * 40}}, "candidate revision differs"),
                                 ({"anchors": []}, "candidate needs its original anchors"),
-                                ({"decision": "AD-missing"}, "candidate decision does not apply")):
+                                ({"decision": "AD-missing"}, "unknown adjudication AD-missing")):
             self.candidate(**fields)
             with self.assertRaisesRegex(current.Inconsistent, message):
                 self.check()

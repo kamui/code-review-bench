@@ -406,8 +406,9 @@ def validate_documents(documents, selected, root=ROOT, grades=True):
         for anchor in candidate["anchors"]:
             validate_anchor(anchor, anchor["review"], target, root)
         if candidate["decision"] is not None:
-            require(candidate["decision"] in decisions and decisions[candidate["decision"]]["target"] == target,
-                    f"{candidate['id']}: candidate decision does not apply")
+            d = applicable_decision(candidate["decision"], decisions, target, candidate["revision"], candidate["id"], "eligibility")
+            require(d["status"] == "approved" and d["outcome"] != "unresolved",
+                    f"{candidate['id']}: only an approved saved human ruling resolves a candidate")
     if grades:
         validate_grades(documents, selected, references, claims, root)
 
