@@ -28,7 +28,7 @@ function outcome(taskId: string, trials: string[][]): Outcome {
 }
 
 function dataset(tasks: Task[], attempts: Attempt[], outcomes: Outcome[]): Dataset {
-  return { schemaVersion: 2, release: 'fixture', revision: 'fixture', profileStatus: 'proposed', grading: { rubricVersion: 2, qualification: '', auditUrl: '', neutralWorkspaceReviews: 0, legacyWorkspaceReviews: 0 }, configurations: [configuration],
+  return { schemaVersion: 2, release: 'fixture', revision: 'fixture', profileStatus: 'proposed', grading: { kind: 'graded', rubricVersion: 2, qualification: '', auditUrl: '', neutralWorkspaceReviews: 0, legacyWorkspaceReviews: 0 }, configurations: [configuration],
     tasks, attempts, outcomes, import: { files: 0, transcripts: 0, mismatches: 0 } }
 }
 
@@ -244,92 +244,40 @@ describe('selected configuration comparison', () => {
   })
 })
 
-describe('preserved benchmark', () => {
-  const builtins = imported.configurations.filter(row => row.builtin)
-  const allConfigurations = imported.configurations.map(row => row.id)
-  const selectedRun = '2026-09-30-selected-prs-review-only'
-  const selectedTaskIds = new Set(imported.attempts.filter(attempt => attempt.runId === selectedRun).map(attempt => attempt.taskId))
-  const historical: Dataset = { ...imported,
-    tasks: imported.tasks.filter(task => !selectedTaskIds.has(task.id)),
-    attempts: imported.attempts.filter(attempt => !selectedTaskIds.has(attempt.taskId)),
-    outcomes: imported.outcomes.filter(row => !selectedTaskIds.has(row.taskId)),
-  }
-  const shared = commonTasks(imported, builtins.map(row => row.id), imported.tasks)
-  const sparseExperiment: Dataset = { ...imported, outcomes: imported.outcomes.filter(row =>
-    row.configurationId !== 'review-code-sonnet-5-5' || ['k-graphql-js-1582', 'l-bokeh-9232', 'm-grpc-go-7390', 'p-hono-5067'].includes(row.taskId),
-  ) }
-
-  test('keeps sparse skill experiments from shrinking the leaderboard to four tasks', () => {
-    const comparison = leaderboardComparison(sparseExperiment, allConfigurations, imported.tasks, all)
-    expect(comparison.tasks).toHaveLength(9)
-    expect(comparison.summaries.find(row => row.configuration.id === 'claude-builtin-sonnet-5-5')?.score).toBeCloseTo(83.3333333333)
-    expect(comparison.summaries.find(row => row.configuration.id === 'claude-builtin-sonnet-5')?.score).toBeCloseTo(75)
-    expect(comparison.summaries.find(row => row.configuration.id === 'claude-builtin-opus-5-5')?.score).toBeCloseTo(76.1904761905)
-    expect(comparison.summaries.find(row => row.configuration.id === 'review-code-sonnet-5-5')).toMatchObject({
-      tasks: 4, score: null, cost: null, tokens: null, falseFindings: null, time: null,
-    })
-  })
-
-  test('lets sparse experiments be compared when task filters select covered tasks', () => {
-    const candidates = imported.tasks.filter(task => task.id === 'p-hono-5067')
-    const comparison = leaderboardComparison(sparseExperiment, allConfigurations, candidates, all)
-    expect(comparison.tasks).toEqual(candidates)
-    expect(comparison.summaries.every(row => row.tasks === 1 && row.score !== null)).toBe(true)
-    expect(leaderboardComparison(sparseExperiment, allConfigurations, [], all).summaries.every(row => row.score === null)).toBe(true)
-  })
-
-  test('keeps changed reference versions and unrun tasks out of the common comparison', () => {
+describe('current ungraded preview', () => {
+  test('preserves saved delivery and usage without inventing judgment values', () => {
+    expect(imported.grading.kind).toBe('ungraded')
     expect(imported.tasks).toHaveLength(17)
-    expect(shared).toHaveLength(9)
-    expect(shared.map(row => row.id)).not.toContain('i-requests-6667')
-    expect(shared.map(row => row.id)).not.toContain('s-seaweedfs-10735')
-    expect(commonTasks(imported, [], imported.tasks)).toEqual([])
-  })
-
-  test('publishes only rubric-v2 claim grading and current reference problems', () => {
-    expect(imported.schemaVersion).toBe(2)
-    expect(imported.grading.rubricVersion).toBe(2)
-    expect(imported.tasks.reduce((sum, task) => sum + task.defects.length, 0)).toBe(30)
+    expect(imported.configurations).toHaveLength(17)
     expect(imported.attempts).toHaveLength(793)
-    expect(historical.tasks).toHaveLength(12)
-    expect(historical.tasks.reduce((sum, task) => sum + task.defects.length, 0)).toBe(17)
-    expect(historical.attempts).toHaveLength(604)
-    expect(imported.attempts.every(attempt => attempt.feedback?.kind === 'claims' || attempt.feedback?.kind === 'unavailable')).toBe(true)
-    expect(imported.grading.neutralWorkspaceReviews + imported.grading.legacyWorkspaceReviews).toBe(imported.attempts.length)
-    expect(imported.outcomes.every(outcome => !('historical' in outcome))).toBe(true)
-    expect(datasetSchema.safeParse({ ...imported, schemaVersion: 1 }).success).toBe(false)
-    expect(datasetSchema.safeParse({ ...imported, grading: { ...imported.grading, rubricVersion: 1 } }).success).toBe(false)
-    expect(datasetSchema.safeParse({ ...imported, attempts: [{ ...imported.attempts[0], feedback: { kind: 'legacy', items: 1 } }] }).success).toBe(false)
+    expect(imported.tasks.reduce((sum, task) => sum + task.defects.length, 0)).toBe(30)
+    expect(imported.attempts.every(attempt => attempt.feedback?.kind === 'unavailable' && attempt.falseFindings === null)).toBe(true)
+    const setup = imported.configurations[0]
+    if (!setup) throw new Error('Missing preview configuration')
+    const summary = summarize(imported, setup, imported.tasks, all)
+    expect(summary.score).toBeNull()
+    expect(summary.falseFindings).toBeNull()
+    expect(summary.completed).toBeGreaterThan(0)
+    expect(summary.cost).not.toBeNull()
+    const comparison = compareTasks(imported, setup.id, setup.id, imported.tasks, all)
+    expect(comparison.full.delta).toBeNull()
+    expect(comparison.rows.every(row => row.configurations.every(c => c.repetitions.every(r => r.score === null)))).toBe(true)
+    const feedback = feedbackSummary(imported, setup.id, imported.tasks)
+    expect(feedback.falsePerAdmittedReview).toBeNull()
+    expect(feedback.falsePerTrial).toBeNull()
   })
 
-  test('every exported attempt has readable, matching evidence and verified downloads', async () => {
+  test('every exported attempt has matching source evidence and verified downloads', async () => {
     for (const attempt of imported.attempts) {
       const detail = detailSchema.parse(JSON.parse(await readFile(`public${attempt.detailUrl}`, 'utf8')))
       expect(detail.id).toBe(attempt.id)
       const source = z.object({ usage: z.object({ metering_status: z.string().optional() }) }).parse(await Bun.file(`public${detail.recordUrl}`).json())
       if (source.usage.metering_status === 'complete') expect(attempt.outputTokens).not.toBeNull()
       else expect(attempt.outputTokens).toBeNull()
-      if (attempt.admitted) expect(attempt.durationSeconds).not.toBeNull()
       for (const url of [detail.recordUrl, detail.normalizedUrl, detail.archiveUrl]) {
         if (url) expect((await Bun.file(`public${url}`).stat()).size).toBeGreaterThan(0)
       }
       if (detail.archiveUrl) expect(detail.archiveStatus).toBe('verified')
     }
-  })
-
-  test('preserves unknown aggregate usage for interrupted Astra attempts', () => {
-    const setup = imported.configurations.find(row => row.id === 'codex-builtin-astra-high')
-    if (!setup) throw new Error('Missing Astra High configuration')
-    const result = summarize(historical, setup, historical.tasks, all)
-    expect(result.score).toBeCloseTo(67.901234568, 5)
-    expect(result).toMatchObject({ cost: null, tokens: null, completed: 36, trials: 36, attempts: 42, unresolved: 6 })
-  })
-
-  test('reports Sol/Astra sensitivity using the regraded claims', () => {
-    const comparison = compareTasks(imported, 'codex-builtin-sol-high', 'codex-builtin-astra-high', imported.tasks, all)
-    expect(comparison.rows).toHaveLength(9)
-    expect(comparison.full.delta).toBeCloseTo(1.85185185185)
-    expect(comparison.omissions.find(row => row.task.id === 'n-ripgrep-2957')?.delta).toBeCloseTo(-10.4166666667)
-    expect(comparison.omissions.find(row => row.task.id === 's-seaweedfs-10735')?.delta).toBeCloseTo(8.3333333333)
   })
 })
