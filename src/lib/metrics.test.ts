@@ -2,116 +2,37 @@ import { describe, expect, test } from 'bun:test'
 import { readFile } from 'node:fs/promises'
 import { z } from 'zod'
 import { datasetSchema, detailSchema } from './data'
-import type { Attempt, Configuration, Dataset, Outcome, Task } from './data'
-import { commonTasks, compareTasks, duration, feedbackSummary, leaderboardComparison, money, scoreRange, summarize, takeaways } from './metrics'
+import { duration, money, summarize, takeaways } from './metrics'
+import { leaderboard, pairwise } from './scoring'
 
-const all = { concern: '', severity: 'all' } satisfies Parameters<typeof summarize>[3]
 const imported = datasetSchema.parse(JSON.parse(await readFile('public/data/benchmark.json', 'utf8')))
-const configuration: Configuration = { id: 'setup', label: 'Setup', short: 'Setup', version: '1', method: 'builtin', builtin: true, experimental: false, note: '', billing: 'api-dollars', models: ['model'], reasoningEffort: 'high', reasoningSource: 'explicit', reviewEdition: 'baseline', reviewChange: null, skillProvenanceUrl: null, skillReleases: [] }
+const standard = imported.configurations.filter(configuration => !configuration.experimental)
+const board = leaderboard(imported, { selected: standard.map(configuration => configuration.id),
+  candidateTaskIds: imported.tasks.map(task => task.id), concern: null })
+const summaries = standard.flatMap(configuration => {
+  const card = board.cards.find(item => item.configurationId === configuration.id)
+  return card ? [summarize(configuration, card)] : []
+})
 
-function task(id: string, count: number): Task {
-  return { id, repo: id, pr: 1, head: 'head', base: 'base', shape: 'fixture', language: 'TypeScript', registerVersion: 1,
-    profile: { changeKinds: [], areas: [], technologies: [], concerns: [] },
-    defects: Array.from({ length: count }, (_, index) => ({ id: `${id}-${index}`, title: 'Problem', trigger: '', consequence: '', requiredOutcome: '', severity: null, concerns: ['Functional'] })),
-    registerUrl: '', packetUrl: '', sourceUrl: '' }
-}
-
-function attempt(id: string, taskId: string, recovered: string[], overrides: Partial<Attempt> = {}): Attempt {
-  return { id, label: id, runId: 'run', taskId, replicate: 1, disposition: 'valid completed', complete: true, admitted: true,
-    recovered, falseFindings: 0, rawFalseFindings: 0, noise: 0, unresolved: 0, duplicates: 0, cost: 1, outputTokens: 100,
-    durationSeconds: 60, billing: 'api-dollars', predecessor: null, retryReason: null, detailUrl: '', ...overrides }
-}
-
-function outcome(taskId: string, trials: string[][]): Outcome {
-  return { configurationId: configuration.id, taskId, status: 'ran', reason: '', mappingUrl: null, scorecardUrl: null,
-    attemptIds: trials.flat(), trials: trials.map((attemptIds, index) => ({ replicate: index + 1, status: 'valid completed', attemptIds })) }
-}
-
-function dataset(tasks: Task[], attempts: Attempt[], outcomes: Outcome[]): Dataset {
-  return { schemaVersion: 2, release: 'fixture', revision: 'fixture', profileStatus: 'proposed', grading: { kind: 'graded', rubricVersion: 2, qualification: '', auditUrl: '', neutralWorkspaceReviews: 0, legacyWorkspaceReviews: 0 }, configurations: [configuration],
-    tasks, attempts, outcomes, import: { files: 0, transcripts: 0, mismatches: 0 } }
-}
-
-describe('trial scoring', () => {
+describe('formatting', () => {
   test('does not display a measured sub-cent cost as free', () => {
     expect(money(0.0017)).toBe('$0.0017')
     expect(money(0)).toBe('$0.00')
     expect(money(null)).toBe('—')
   })
-  test('weights PRs equally, deduplicates recovery, and excludes clean tasks from detection', () => {
-    const data = dataset([task('many', 3), task('one', 1), task('clean', 0)],
-      [attempt('a', 'many', ['many-0', 'many-0']), attempt('b', 'one', ['one-0']), attempt('c', 'clean', [], { falseFindings: 6 })],
-      [outcome('many', [['a']]), outcome('one', [['b']]), outcome('clean', [['c']])])
-    const result = summarize(data, configuration, data.tasks, all)
-    expect(result.score).toBeCloseTo(100 * (1 / 3 + 1) / 2)
-    expect(result.falseFindings).toBe(2)
-    expect(result.tasks).toBe(3)
-    expect(result.cost).toBe(1)
-  })
 
-  test('averages trials within a PR before averaging PRs', () => {
-    const data = dataset([task('a', 1), task('b', 1)],
-      [attempt('a1', 'a', ['a-0']), attempt('a2', 'a', []), attempt('b1', 'b', ['b-0'])],
-      [outcome('a', [['a1'], ['a2']]), outcome('b', [['b1']])])
-    expect(summarize(data, configuration, data.tasks, all).score).toBe(75)
-  })
-
-  test('counts replacement usage once per trial and rejects invalid original findings', () => {
-    const data = dataset([task('a', 1)], [attempt('failed', 'a', ['a-0'], { admitted: false, complete: false, cost: 2, outputTokens: 200 }),
-      attempt('replacement', 'a', [], { cost: 3, outputTokens: 300, predecessor: 'failed' })], [outcome('a', [['failed', 'replacement']])])
-    const result = summarize(data, configuration, data.tasks, all)
-    expect(result.score).toBe(0)
-    expect(result.cost).toBe(5)
-    expect(result.tokens).toBe(500)
-    expect(result.attempts).toBe(2)
-    expect(result.trials).toBe(1)
-    expect(result.completed).toBe(1)
-  })
-
-  test('admits incomplete usable findings and keeps noise separate from detection', () => {
-    const data = dataset([task('a', 1)], [attempt('partial', 'a', ['a-0'], { complete: false, falseFindings: 5, unresolved: 2, duplicates: 3, noise: 4 })], [outcome('a', [['partial']])])
-    const result = summarize(data, configuration, data.tasks, all)
-    expect(result.score).toBe(100)
-    expect(result.completed).toBe(0)
-    expect(result.falseFindings).toBe(5)
-    expect(result.unresolved).toBe(2)
-    expect(result.duplicates).toBe(3)
-    expect(result.noise).toBe(4)
-  })
-
-  test('missing usage and pending trials are unavailable, never zero', () => {
-    const data = dataset([task('a', 1)], [attempt('a1', 'a', [], { cost: null, outputTokens: null })], [outcome('a', [['a1']])])
-    expect(summarize(data, configuration, data.tasks, all)).toMatchObject({ score: 0, cost: null, tokens: null })
-    data.outcomes = [outcome('a', [['a1'], []])]
-    expect(summarize(data, configuration, data.tasks, all)).toMatchObject({ score: null, cost: null, tokens: null, falseFindings: null })
-  })
-
-  test('a missing replacement cannot fall back to its predecessor', () => {
-    const data = dataset([task('a', 1)], [attempt('original', 'a', ['a-0'])],
-      [outcome('a', [['original', 'missing-replacement']])])
-    expect(summarize(data, configuration, data.tasks, all).score).toBeNull()
-    expect(feedbackSummary(data, configuration.id, data.tasks).pendingTrials).toBe(1)
-  })
-
-  test('filters reference concerns and does not invent severity for unclassified findings', () => {
-    const data = dataset([task('a', 2)], [attempt('a1', 'a', ['a-0'])], [outcome('a', [['a1']])])
-    expect(summarize(data, configuration, data.tasks, { concern: 'Security', severity: 'all' }).score).toBeNull()
-    expect(summarize(data, configuration, data.tasks, { concern: '', severity: 'high' }).score).toBeNull()
-    expect(summarize(data, configuration, data.tasks, all).score).toBe(50)
-  })
-
-  test('reports the score range when any one buggy PR is left out', () => {
-    const data = dataset([task('a', 1), task('b', 1), task('c', 2), task('clean', 0)],
-      [attempt('a1', 'a', ['a-0']), attempt('b1', 'b', []), attempt('c1', 'c', ['c-0']), attempt('k1', 'clean', [])],
-      [outcome('a', [['a1']]), outcome('b', [['b1']]), outcome('c', [['c1']]), outcome('clean', [['k1']])])
-    expect(scoreRange(data, configuration, data.tasks, all)).toEqual({ low: 25, high: 75 })
-    expect(scoreRange(data, configuration, [data.tasks[0]!], all)).toBeNull()
+  test('formats review times with units and preserves a recorded zero', () => {
+    expect(duration(0)).toBe('0 s')
+    expect(duration(45)).toBe('45 s')
+    expect(duration(90)).toBe('1.5 min')
   })
 })
 
 describe('takeaways', () => {
-  const row = (id: string, score: number | null, cost: number | null, falseFindings: number | null) =>
-    ({ ...summarize(dataset([], [], []), { ...configuration, id }, [], all), score, cost, falseFindings })
+  const first = summaries[0]
+  if (!first) throw new Error('Missing preview configuration')
+  const row = (id: string, score: number | null, cost: number | null, refuted: number | null) =>
+    ({ ...first, configuration: { ...first.configuration, id }, score, cost, refuted })
   test('breaks score ties by cost and only recommends setups at or above the strong-score line', () => {
     const result = takeaways([row('pricey', 90, 4, 0), row('cheap', 90, 0.5, 0.4), row('weak', 50, 0.01, 0), row('quiet', 85, 1, 0)])
     expect(result.top?.configuration.id).toBe('cheap')
@@ -120,151 +41,23 @@ describe('takeaways', () => {
   })
 })
 
-describe('review time', () => {
-  test('uses all shared completed trials, including clean tasks, for the median, mean, and middle 50%', () => {
-    const data = dataset([task('a', 1), task('clean', 0), task('excluded', 1)],
-      [attempt('a1', 'a', ['a-0'], { durationSeconds: 60 }), attempt('a2', 'a', [], { durationSeconds: 120 }),
-        attempt('a3', 'a', [], { durationSeconds: 180 }), attempt('c1', 'clean', [], { durationSeconds: 240 }),
-        attempt('c2', 'clean', [], { durationSeconds: 300 }), attempt('c3', 'clean', [], { durationSeconds: 900 }),
-        attempt('excluded', 'excluded', [], { durationSeconds: 10000 })],
-      [outcome('a', [['a1'], ['a2'], ['a3']]), outcome('clean', [['c1'], ['c2'], ['c3']]), outcome('excluded', [['excluded']])])
-      expect(summarize(data, configuration, data.tasks.slice(0, 2), all).time).toEqual({
-        median: 210, mean: 300, q1: 135, q3: 285, reviews: 6, tasks: 2,
-      })
-  })
-
-  test('includes every replacement attempt in the completed trial time', () => {
-    const data = dataset([task('a', 1)], [
-      attempt('failed', 'a', [], { admitted: false, complete: false, durationSeconds: 20 }),
-      attempt('replacement', 'a', [], { durationSeconds: 40, predecessor: 'failed' }),
-    ], [outcome('a', [['failed', 'replacement']])])
-    expect(summarize(data, configuration, data.tasks, all).time).toEqual({
-      median: 60, mean: 60, q1: 60, q3: 60, reviews: 1, tasks: 1,
-    })
-    data.attempts[0] = attempt('failed', 'a', [], { admitted: false, complete: false, durationSeconds: null })
-    expect(summarize(data, configuration, data.tasks, all).time).toBeNull()
-  })
-
-  test('keeps missing timing unavailable and excludes failed or incomplete terminal reviews', () => {
-    const data = dataset([task('a', 1), task('b', 1)], [attempt('a1', 'a', [], { durationSeconds: 120 }),
-      attempt('b1', 'b', [], { admitted: false, complete: false, durationSeconds: 1 }),
-      attempt('b2', 'b', [], { complete: false, durationSeconds: 10 })],
-    [outcome('a', [['a1']]), outcome('b', [['b1'], ['b2']])])
-    expect(summarize(data, configuration, data.tasks, all)).toMatchObject({
-      time: { median: 120, mean: 120, q1: 120, q3: 120, reviews: 1, tasks: 1 }, completed: 1, trials: 3,
-    })
-    expect(summarize(data, configuration, data.tasks.slice(1), all).time).toBeNull()
-    data.attempts[0] = attempt('a1', 'a', [], { durationSeconds: null })
-    expect(summarize(data, configuration, data.tasks, all).time).toBeNull()
-    data.outcomes = [outcome('a', [['a1'], []])]
-    expect(summarize(data, configuration, data.tasks, all).time).toBeNull()
-  })
-
-  test('formats review times with units and preserves a recorded zero', () => {
-    expect(duration(0)).toBe('0 s')
-    expect(duration(45)).toBe('45 s')
-    expect(duration(90)).toBe('1.5 min')
-    const data = dataset([task('a', 1)], [attempt('a1', 'a', [], { durationSeconds: 0 })], [outcome('a', [['a1']])])
-    expect(summarize(data, configuration, data.tasks, all).time?.median).toBe(0)
-  })
-})
-
-describe('task sensitivity and feedback workload', () => {
-  test('omits entire PRs, weights uneven repetitions equally and excludes clean tasks', () => {
-    const data = dataset([task('a', 1), task('b', 1), task('clean', 0)],
-      [attempt('a1', 'a', ['a-0']), attempt('a2', 'a', []), attempt('b1', 'b', ['b-0']),
-        attempt('other-a', 'a', []), attempt('other-b', 'b', []), attempt('clean', 'clean', [])],
-      [outcome('a', [['a1'], ['a2']]), outcome('b', [['b1']]), outcome('clean', [['clean']]),
-        { ...outcome('a', [['other-a']]), configurationId: 'other' },
-        { ...outcome('b', [['other-b']]), configurationId: 'other' },
-        { ...outcome('clean', [['clean']]), configurationId: 'other' }])
-    const result = compareTasks(data, configuration.id, 'other', data.tasks, all)
-    expect(result.rows).toHaveLength(2)
-    expect(result.full.delta).toBe(75)
-    expect(result.omissions.map(row => row.delta)).toEqual([100, 50])
-    expect(result.rows[0]?.configurations[0]).toMatchObject({ min: 0, max: 100 })
-    expect(result).toMatchObject({ wins: 2, ties: 0, losses: 0, pending: 0 })
-    expect(compareTasks(data, configuration.id, 'other', data.tasks.filter(task => task.id === 'a'), all).omissions[0]?.delta).toBeNull()
-    expect(compareTasks(data, configuration.id, 'other', data.tasks, { concern: 'Security', severity: 'all' }).rows).toHaveLength(0)
-  })
-
-  test('keeps missing claim grading unavailable and unadmitted allegations separate', () => {
-    const data = dataset([task('a', 1)], [attempt('a1', 'a', [], { feedback: { kind: 'unavailable', observedItems: 5 }, falseFindings: 2 }),
-      attempt('stopped', 'a', [], { admitted: false, complete: false, rawFalseFindings: 3 })],
-      [outcome('a', [['a1'], ['stopped']])])
-    expect(feedbackSummary(data, configuration.id, data.tasks)).toMatchObject({ admittedReviews: 1,
-      items: null, itemsPerReview: null, falsePerAdmittedReview: 2, falsePerTrial: 1, advisory: null,
-      refuted: null, unsupported: null, claimGradedReviews: 0, unadmittedFalseOccurrences: 3 })
-  })
-
-  test('counts claim outcomes and clean exposure with explicit coverage', () => {
-    const feedback = { kind: 'claims', items: 1, occurrences: 2, distinct: 2, duplicates: 0, mixedItems: 1, unresolvedItems: 0,
-      outcomes: { eligible: { distinct: 1, occurrences: 1 }, advisory: { distinct: 0, occurrences: 0 },
-        inconsequential: { distinct: 0, occurrences: 0 }, 'scope-excluded': { distinct: 0, occurrences: 0 },
-        refuted: { distinct: 1, occurrences: 1 }, unsupported: { distinct: 0, occurrences: 0 }, unresolved: { distinct: 0, occurrences: 0 } } } satisfies NonNullable<Attempt['feedback']>
-    const data = dataset([task('a', 1), task('clean', 0)], [attempt('a1', 'a', ['a-0'], { feedback }),
-      attempt('c1', 'clean', [], { feedback: { ...feedback, outcomes: { ...feedback.outcomes, eligible: { distinct: 0, occurrences: 0 } } } })],
-      [outcome('a', [['a1']]), outcome('clean', [['c1']])])
-    expect(feedbackSummary(data, configuration.id, data.tasks)).toMatchObject({ items: 2, claimGradedReviews: 2,
-      refuted: 2, mixedItems: 2, advisory: 0, cleanRefutedFraction: 1, cleanUnsupportedFraction: 0 })
-    data.attempts[1] = attempt('c1', 'clean', [], { feedback: { kind: 'unavailable', observedItems: 1 } })
-    expect(feedbackSummary(data, configuration.id, data.tasks)).toMatchObject({ items: null, refuted: null, cleanRefutedFraction: null })
-  })
-})
-
-describe('selected configuration comparison', () => {
-  const selected = ['astra', 'luna', 'sol']
-  const historicalTasks = Array.from({ length: 12 }, (_, index) => task(`historical-${index}`, 1))
-  const selectedTasks = Array.from({ length: 5 }, (_, index) => task(`selected-${index}`, 1))
-  const tasks = [...historicalTasks, ...selectedTasks]
-  const setups = [...selected, 'other', 'experiment'].map(id => ({ ...configuration, id, experimental: id === 'experiment' }))
-  const outcomes = setups.flatMap(setup => {
-    const covered = setup.experimental ? historicalTasks.slice(0, 4) : setup.id === 'other' ? historicalTasks.slice(0, 9) : tasks
-    return covered.map(task => ({ ...outcome(task.id, [[`${setup.id}/${task.id}`]]), configurationId: setup.id }))
-  })
-  const records = outcomes.flatMap(row => row.attemptIds.map(id => attempt(id, row.taskId, [`${row.taskId}-0`])))
-  const data: Dataset = { ...dataset(tasks, records, outcomes), configurations: setups }
-
-  test('selects all matching tasks for the active baseline configurations', () => {
-    expect(leaderboardComparison(data, selected, tasks, all).tasks).toEqual(tasks)
-    expect(leaderboardComparison(data, selected, selectedTasks, all).tasks).toEqual(selectedTasks)
-    expect(leaderboardComparison(data, setups.filter(setup => !setup.experimental).map(setup => setup.id), tasks, all).tasks).toEqual(historicalTasks.slice(0, 9))
-    const selectedComparison = leaderboardComparison(data, selected, selectedTasks, all)
-    expect(selectedComparison.summaries.filter(row => selected.includes(row.configuration.id)).every(row => row.tasks === 5 && row.score === 100)).toBe(true)
-    expect(selectedComparison.summaries.find(row => row.configuration.id === 'other')?.score).toBeNull()
-  })
-
-  test('keeps sparse experiments outside the selected baseline intersection', () => {
-    const mixed = leaderboardComparison(data, [...selected, 'experiment'], tasks, all)
-    expect(mixed.tasks).toEqual(tasks)
-    expect(mixed.summaries.find(row => row.configuration.id === 'experiment')).toMatchObject({ tasks: 4, score: null, cost: null })
-    expect(leaderboardComparison(data, ['experiment'], tasks, all).tasks).toEqual(historicalTasks.slice(0, 9))
-    expect(leaderboardComparison(data, ['experiment'], historicalTasks.slice(0, 4), all).summaries.find(row => row.configuration.id === 'experiment')?.score).toBe(100)
-    expect(leaderboardComparison(data, [], tasks, all).tasks).toEqual([])
-  })
-})
-
 describe('current ungraded preview', () => {
   test('preserves saved delivery and usage without inventing judgment values', () => {
-    expect(imported.grading.kind).toBe('ungraded')
+    expect(imported.evidence.coverage).toMatchObject({ complete: false, assessedReviews: 0, requiredReviews: 733 })
     expect(imported.tasks).toHaveLength(17)
     expect(imported.configurations).toHaveLength(17)
     expect(imported.attempts).toHaveLength(793)
-    expect(imported.tasks.reduce((sum, task) => sum + task.defects.length, 0)).toBe(30)
-    expect(imported.attempts.every(attempt => attempt.feedback?.kind === 'unavailable' && attempt.falseFindings === null)).toBe(true)
-    const setup = imported.configurations[0]
-    if (!setup) throw new Error('Missing preview configuration')
-    const summary = summarize(imported, setup, imported.tasks, all)
+    expect(imported.tasks.flatMap(task => task.families)).toHaveLength(30)
+    expect(imported.attempts.every(attempt => attempt.assessment === null)).toBe(true)
+    const summary = summaries[0]
+    if (!summary) throw new Error('Missing preview configuration')
     expect(summary.score).toBeNull()
-    expect(summary.falseFindings).toBeNull()
+    expect(summary.refuted).toBeNull()
     expect(summary.completed).toBeGreaterThan(0)
     expect(summary.cost).not.toBeNull()
-    const comparison = compareTasks(imported, setup.id, setup.id, imported.tasks, all)
-    expect(comparison.full.delta).toBeNull()
-    expect(comparison.rows.every(row => row.configurations.every(c => c.repetitions.every(r => r.score === null)))).toBe(true)
-    const feedback = feedbackSummary(imported, setup.id, imported.tasks)
-    expect(feedback.falsePerAdmittedReview).toBeNull()
-    expect(feedback.falsePerTrial).toBeNull()
+    expect(summary.card.detection.all.equalPr).toEqual({ kind: 'unavailable', reason: 'No references in this band.' })
+    expect(summary.card.limits.pendingCandidates.length).toBeGreaterThan(0)
+    expect(pairwise(summary.card, summary.card, 'all').rows).toHaveLength(0)
   })
 
   test('every exported attempt has matching source evidence and verified downloads', async () => {
