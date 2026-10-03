@@ -266,24 +266,28 @@ def publish(stage):
     """Replace both published directories, restoring the previous pair if either move fails."""
     previous = stage / "previous"
     previous.mkdir()
-    replaced = []
     try:
         for name in ("data", "evidence"):
             if (PUBLIC / name).exists():
                 os.replace(PUBLIC / name, previous / name)
-            replaced.append(name)
             os.replace(stage / name, PUBLIC / name)
     except BaseException:
-        for name in replaced:
-            shutil.rmtree(PUBLIC / name, ignore_errors=True)
+        for name in ("data", "evidence"):
             if (previous / name).exists():
+                shutil.rmtree(PUBLIC / name, ignore_errors=True)
                 os.replace(previous / name, PUBLIC / name)
+            elif not (stage / name).exists():
+                shutil.rmtree(PUBLIC / name, ignore_errors=True)
         raise
+    shutil.rmtree(previous)
 
 
 def build():
     selected, documents = current_grading.load_current(ROOT)
     stage = ROOT / ".cache" / "explorer-export"
+    previous = stage / "previous"
+    if previous.exists() and any(previous.iterdir()):
+        raise current_grading.Inconsistent(f"previous export restoration is incomplete; backups retained at {previous}")
     if stage.exists():
         shutil.rmtree(stage)
     try:
@@ -293,7 +297,8 @@ def build():
         PUBLIC.mkdir(parents=True, exist_ok=True)
         publish(stage)
     finally:
-        shutil.rmtree(stage, ignore_errors=True)
+        if not previous.exists() or not any(previous.iterdir()):
+            shutil.rmtree(stage, ignore_errors=True)
     coverage = dataset["evidence"]["coverage"]
     print(f"Exported current facts: {len(dataset['tasks'])} tasks, {len(dataset['configurations'])} configurations, "
           f"{len(dataset['attempts'])} attempts, {coverage['assessedReviews']}/{coverage['requiredReviews']} admitted reviews assessed")

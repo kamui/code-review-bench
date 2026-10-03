@@ -116,6 +116,88 @@ class ExportTest(unittest.TestCase):
                     self.build_fixture(root)
             self.assertEqual((root / 'public/data/benchmark.json').read_bytes(), before)
 
+    def test_interrupted_backup_moves_restore_the_previous_complete_files(self):
+        for name in ('data', 'evidence'):
+            with self.subTest(name=name), TemporaryDirectory() as directory:
+                root = Path(directory)
+                fixture(root)
+                self.build_fixture(root)
+                published = {path.relative_to(root): path.read_bytes() for path in (root / 'public').rglob('*') if path.is_file()}
+                replace = exporter.os.replace
+
+                def interrupt_after_backup(source, destination):
+                    replace(source, destination)
+                    if destination.parent.name == 'previous' and destination.name == name:
+                        raise KeyboardInterrupt()
+
+                with patch.object(exporter.os, 'replace', side_effect=interrupt_after_backup):
+                    with self.assertRaises(KeyboardInterrupt):
+                        self.build_fixture(root)
+                self.assertEqual({path.relative_to(root): path.read_bytes() for path in (root / 'public').rglob('*') if path.is_file()}, published)
+                self.assertFalse((root / '.cache/explorer-export').exists())
+
+    def test_failed_backup_moves_preserve_untouched_destinations(self):
+        for name in ('data', 'evidence'):
+            with self.subTest(name=name), TemporaryDirectory() as directory:
+                root = Path(directory)
+                fixture(root)
+                self.build_fixture(root)
+                published = {path.relative_to(root): path.read_bytes() for path in (root / 'public').rglob('*') if path.is_file()}
+                replace = exporter.os.replace
+
+                def fail_backup(source, destination):
+                    if destination.parent.name == 'previous' and destination.name == name:
+                        raise OSError('backup failed')
+                    replace(source, destination)
+
+                with patch.object(exporter.os, 'replace', side_effect=fail_backup):
+                    with self.assertRaisesRegex(OSError, 'backup failed'):
+                        self.build_fixture(root)
+                self.assertEqual({path.relative_to(root): path.read_bytes() for path in (root / 'public').rglob('*') if path.is_file()}, published)
+                self.assertFalse((root / '.cache/explorer-export').exists())
+
+    def test_failed_restoration_keeps_backups_across_builds(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture(root)
+            self.build_fixture(root)
+            published = {path.relative_to(root / 'public/evidence'): path.read_bytes()
+                         for path in (root / 'public/evidence').rglob('*') if path.is_file()}
+            replace = exporter.os.replace
+
+            def fail_publication_and_restoration(source, destination):
+                if destination == root / 'public/evidence':
+                    raise OSError('evidence move failed')
+                replace(source, destination)
+
+            with patch.object(exporter.os, 'replace', side_effect=fail_publication_and_restoration):
+                with self.assertRaisesRegex(OSError, 'evidence move failed'):
+                    self.build_fixture(root)
+            previous = root / '.cache/explorer-export/previous/evidence'
+            self.assertEqual({path.relative_to(previous): path.read_bytes() for path in previous.rglob('*') if path.is_file()}, published)
+            with self.assertRaisesRegex(current.Inconsistent, 'backups retained'):
+                self.build_fixture(root)
+            self.assertEqual({path.relative_to(previous): path.read_bytes() for path in previous.rglob('*') if path.is_file()}, published)
+
+    def test_interrupted_first_publication_removes_new_directories(self):
+        for name in ('data', 'evidence'):
+            with self.subTest(name=name), TemporaryDirectory() as directory:
+                root = Path(directory)
+                fixture(root)
+                replace = exporter.os.replace
+
+                def interrupt_after_publication(source, destination):
+                    replace(source, destination)
+                    if destination == root / 'public' / name:
+                        raise KeyboardInterrupt()
+
+                with patch.object(exporter.os, 'replace', side_effect=interrupt_after_publication):
+                    with self.assertRaises(KeyboardInterrupt):
+                        self.build_fixture(root)
+                self.assertFalse((root / 'public/data').exists())
+                self.assertFalse((root / 'public/evidence').exists())
+                self.assertFalse((root / '.cache/explorer-export').exists())
+
     def test_billing_receipt_is_verified_and_exported_without_repricing(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
