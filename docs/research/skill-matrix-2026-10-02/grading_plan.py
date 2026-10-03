@@ -62,6 +62,8 @@ def main():
     parser.add_argument("--cap", required=True, type=float, help="list-price-equivalent accounting bound for the queue")
     parser.add_argument("--cache-replacements", type=Path)
     parser.add_argument("--registry", default="bench/claims/registry.json")
+    parser.add_argument("--receipt", default="The cap is to remaining usage i have on both plans. Use what is left.",
+                        help="the user's words that authorize this queue's plan usage")
     parser.add_argument("runs", nargs="+", type=Path)
     args = parser.parse_args()
     registry = ROOT / args.registry
@@ -115,7 +117,7 @@ def main():
         "schemaVersion": 1,
         "scope": "Grade the saved 2026-10-02 skill-matrix reviews with rubric v2 and the shared claim registry; no review reruns",
         "budgetCapUsd": args.cap,
-        "budgetReceipt": {"speaker": "user", "text": "The cap is to remaining usage i have on both plans. Use what is left.",
+        "budgetReceipt": {"speaker": "user", "text": args.receipt,
                           "note": "The grader runs on the Claude plan. The cap bounds list-price-equivalent accounting; it is not a dollar authorization."},
         "grader": {"model": "claude-opus-5-5", "effort": "high", "cliVersion": "2.1.287", "timeoutSeconds": 2700,
                    "selection": {"speaker": "user", "text": "The Claude Opus 5.5 High to grade."}},
