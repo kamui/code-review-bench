@@ -161,13 +161,58 @@ class CurrentGrading(unittest.TestCase):
         self.assertEqual(result["counts"], {"tasks": 1, "configurations": 1, "source_pairs": 1, "runs": 1,
                          "selected_cells": 2, "selected_attempts": 1, "batches": 1, "excluded_attempts": 1})
 
-    def test_conflicting_placement_and_unscheduled_attempt_are_rejected(self):
+    def test_conflicting_duplicate_source_is_rejected(self):
         registry = current.read_json(self.root / "bench/scoreboard.current.json")
         registry["sources"].append({**registry["sources"][0], "configuration": "other"})
         registry["configurations"].append({**registry["configurations"][0], "id": "other"})
         write(self.root, "bench/scoreboard.current.json", registry)
         with self.assertRaisesRegex(current.Inconsistent, "conflicting duplicate source"):
             current.inventory(self.root)
+
+    def test_conflicting_source_placement_is_rejected(self):
+        registry = current.read_json(self.root / "bench/scoreboard.current.json")
+        manifest = current.read_json(self.root / "bench/runs/run/manifest.json")
+        manifest["run_id"] = "other-run"
+        write(self.root, "bench/runs/other-run/manifest.json", manifest)
+        registry["sources"].append({**registry["sources"][0], "run": "runs/other-run"})
+        write(self.root, "bench/scoreboard.current.json", registry)
+        with self.assertRaisesRegex(current.Inconsistent, "conflicting source placement"):
+            current.inventory(self.root)
+
+    def test_unscheduled_attempt_is_rejected(self):
+        record = current.read_json(self.root / self.selected["attempts"][0]["record"]["path"])
+        record.update(attempt_id="att-999", cell={**record["cell"], "replicate": 3})
+        write(self.root, "bench/runs/run/attempts/att-999/attempt.json", record)
+        with self.assertRaisesRegex(current.Inconsistent, "attempt outside scheduled cells"):
+            current.inventory(self.root)
+
+    def test_changed_packet_bytes_are_rejected(self):
+        (self.root / "bench/targets/t-example/packet.md").write_text("Changed packet", encoding="utf-8")
+        with self.assertRaisesRegex(current.Inconsistent, "packet bytes changed"):
+            current.inventory(self.root)
+
+    def test_changed_manifest_packet_or_diff_identity_is_rejected(self):
+        manifest = current.read_json(self.root / "bench/runs/run/manifest.json")
+        for field in ("packet_sha256", "diff_manifest_sha256"):
+            with self.subTest(field=field):
+                changed = copy.deepcopy(manifest)
+                changed["cohort"][0][field] = "d" * 64
+                write(self.root, "bench/runs/run/manifest.json", changed)
+                with self.assertRaisesRegex(current.Inconsistent, "packet or diff differs"):
+                    current.inventory(self.root)
+
+    def test_stale_grade_fingerprint_is_rejected(self):
+        assessed_grade(self.selected, self.documents, self.root)
+        self.check()
+        self.documents["reference"]["targets"][0]["families"][0]["mechanism"] = "Different causal mechanism"
+        with self.assertRaisesRegex(current.Inconsistent, "grade fingerprint is stale"):
+            self.check()
+
+    def test_receipt_scope_must_be_in_saved_ruling(self):
+        assessed_grade(self.selected, self.documents, self.root)
+        self.documents["adjudication"]["decisions"][0]["receipt_scope"] = "Approval absent from the receipt"
+        with self.assertRaisesRegex(current.Inconsistent, "ruling scope is not in saved receipt"):
+            self.check()
 
     def test_chain_uses_predecessors_and_keeps_stopped_terminal_pending(self):
         first = {"attempt_id": "att-999", "predecessor": None, "retry_reason": None,
@@ -312,7 +357,8 @@ class CurrentGrading(unittest.TestCase):
         first = grade["claims"][0]
         first["duplicate_group"] = "same"
         first["outcome"] = "unresolved"
-        grade["claims"].append({**copy.deepcopy(first), "id": "c2", "family_id": None})
+        self.documents["claim"]["claims"][0]["links"][0]["relation"] = "related"
+        grade["claims"].append({**copy.deepcopy(first), "id": "c2", "family_id": None, "canonical_id": None})
         self.documents["grade"]["batches"][0]["input_fingerprint"] = self.fingerprint()
         with self.assertRaisesRegex(current.Inconsistent, "conflicting duplicate"):
             self.check()
@@ -422,6 +468,67 @@ class CurrentGrading(unittest.TestCase):
             self.check()
         grade["families"][0]["outcome"] = "unresolved"
         self.check()
+
+    def test_unassessed_miss_requires_every_original_item(self):
+        grade = assessed_grade(self.selected, self.documents, self.root)
+        grade.update(state="unassessed", claims=[])
+        grade["families"][0].update(outcome="missed", claim_ids=[], sufficiency="unassessed")
+        with self.assertRaisesRegex(current.Inconsistent, "must account for every original item"):
+            self.check()
+        grade["families"][0]["outcome"] = "unresolved"
+        self.check()
+
+    def test_unassessed_miss_requires_every_applicable_canonical_claim(self):
+        grade = assessed_grade(self.selected, self.documents, self.root)
+        grade["state"] = "unassessed"
+        self.documents["claim"]["claims"][0]["links"][0]["relation"] = "related"
+        case = copy.deepcopy(self.documents["claim"]["claims"][0])
+        case.update(id="CL-t2", adjudication=None)
+        case["links"][0]["relation"] = "equivalent"
+        self.documents["claim"]["claims"].append(case)
+        grade["families"][0].update(outcome="missed", claim_ids=[], sufficiency="unassessed")
+        self.documents["grade"]["batches"][0]["input_fingerprint"] = self.fingerprint()
+        with self.assertRaisesRegex(current.Inconsistent, "omits an applicable canonical claim"):
+            self.check()
+        grade["families"][0].update(outcome="caught", claim_ids=["c1"], sufficiency="absent")
+        self.check()
+
+    def test_pending_equivalent_claim_keeps_its_canonical_family(self):
+        grade = assessed_grade(self.selected, self.documents, self.root)
+        self.documents["adjudication"]["decisions"][1]["status"] = "proposed"
+        grade["claims"][0].update(outcome="unresolved", family_id=None)
+        grade["families"][0].update(outcome="missed", claim_ids=[], sufficiency="unassessed")
+        self.documents["grade"]["batches"][0]["input_fingerprint"] = self.fingerprint()
+        with self.assertRaisesRegex(current.Inconsistent, "contradicts its canonical family"):
+            self.check()
+        grade["claims"][0]["family_id"] = "GT-t1"
+        with self.assertRaisesRegex(current.Inconsistent, "unresolved family recovery cannot be missed"):
+            self.check()
+        grade["families"][0]["outcome"] = "unresolved"
+        self.check()
+
+    def test_unresolved_claim_with_unknown_family_blocks_a_miss(self):
+        grade = assessed_grade(self.selected, self.documents, self.root)
+        self.documents["claim"]["claims"][0].update(adjudication=None, family_id=None)
+        grade["claims"][0].update(outcome="unresolved", family_id=None)
+        grade["families"][0].update(outcome="missed", claim_ids=[], sufficiency="unassessed")
+        self.documents["grade"]["batches"][0]["input_fingerprint"] = self.fingerprint()
+        with self.assertRaisesRegex(current.Inconsistent, "unresolved family recovery cannot be missed"):
+            self.check()
+        grade["families"][0]["outcome"] = "unresolved"
+        self.check()
+
+    def test_fully_accounted_refuted_review_can_establish_a_miss(self):
+        grade = assessed_grade(self.selected, self.documents, self.root)
+        self.documents["adjudication"]["decisions"][1]["outcome"] = "refuted"
+        self.documents["claim"]["claims"][0]["family_id"] = None
+        grade["claims"][0].update(outcome="refuted", family_id=None)
+        grade["families"][0].update(outcome="missed", claim_ids=[], sufficiency="unassessed")
+        self.documents["grade"]["batches"][0]["input_fingerprint"] = self.fingerprint()
+        for state in ("assessed", "unassessed"):
+            with self.subTest(state=state):
+                grade["state"] = state
+                self.check()
 
     def test_pending_family_eligibility_cannot_establish_a_miss(self):
         grade = assessed_grade(self.selected, self.documents, self.root)
