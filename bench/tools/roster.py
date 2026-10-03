@@ -82,7 +82,13 @@ def read_roster(root: Path) -> tuple:
 
 
 def status(root: Path, models: list) -> list:
-    suites = read_json(root / "bench/scoreboard.current.json")["suites"]
+    registry = read_json(root / "bench/scoreboard.current.json")
+    suites = registry["suites"]
+    if registry.get("contract") == "current-cohort-input/v1":
+        configurations = {c["id"]: c for c in registry["configurations"]}
+        suites = [{**s, "entries": [{**configurations[c], "sources": [source for source in registry["sources"]
+                    if source["configuration"] == c and set(source["tasks"]) & set(s["tasks"])]}
+                   for c in s["configurations"]]} for s in suites]
     clients, benchmarked = {}, {}
     for suite in suites:
         for entry in suite["entries"]:
