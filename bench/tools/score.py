@@ -66,23 +66,9 @@ BENCH = TOOLS.parent
 sys.path.insert(0, str(TOOLS))
 import check_manifest  # noqa: E402
 import claim_grading  # noqa: E402
+from current_grading import Inconsistent, InputError, load_register, read_json, target_dir  # noqa: E402
 
 SUFFICIENCY = {"sufficient": 3, "partial": 2, "absent": 1}
-
-
-class Inconsistent(Exception):
-    """The inputs disagree; exit code 1."""
-
-
-class InputError(Exception):
-    """An input cannot be read; exit code 2."""
-
-
-def read_json(path) -> dict:
-    try:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError) as error:
-        raise InputError(f"cannot read {path}: {error}") from error
 
 
 def instant(text):
@@ -95,30 +81,6 @@ def seconds_between(start, end):
 
 
 # --- inputs -------------------------------------------------------------------------------------
-
-def target_dir(run_dir: Path, target_id: str) -> Path:
-    for candidate in (BENCH / "targets" / target_id, run_dir / "fixture"):
-        if (candidate / "target.json").is_file() and read_json(candidate / "target.json")["id"] == target_id:
-            return candidate
-    raise InputError(f"no target directory for {target_id}")
-
-
-def load_register(directory: Path, target: dict, version: int, opened) -> tuple:
-    name = f"register.v{version}.json"
-    path = directory / name
-    if not path.is_file():
-        sealed = {f["file"]: f for f in (target.get("sealed") or {}).get("files", [])}
-        if name + ".enc" not in sealed:
-            raise InputError(f"{target['id']}: no {name} and no sealed {name}.enc")
-        if opened is None:
-            raise InputError(f"{target['id']}: {name} is sealed; open it with seal.py and pass --opened")
-        path = Path(opened) / target["id"] / name
-        digest = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
-        if digest != sealed[name + ".enc"]["plaintext_sha256"]:
-            raise Inconsistent(f"{target['id']}: opened {path} does not match the sealed plaintext_sha256")
-    raw = path.read_bytes()
-    return json.loads(raw.decode("utf-8")), hashlib.sha256(raw).hexdigest()
-
 
 def pick_mapping(run_dir: Path, target_id: str, wanted) -> tuple:
     directory = run_dir / "scoring" / target_id
