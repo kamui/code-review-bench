@@ -48,6 +48,10 @@ official provider prices. A change or unavailable source refuses dispatch. The v
 is saved to the attempt's rates.json and used for metering; cell.json retains the source hashes.
 Dry runs, status and filing already-dispatched attempts do not fetch prices.
 
+Each frozen manifest arm must declare billing_mode as api or subscription before a new
+dispatch, including dry runs. The claim saves this account declaration separately from rates;
+filing uses the saved mode. Older claims without it retain explicit legacy rate-table billing.
+
 The clone is made by ``provision.py prepare`` at ``<attempt>/clone`` (cache at ``clone-cache``,
 work directory ``clone-work``). ``BENCH_CACHE_ROOT`` names a cache root other than the default.
 ``BENCH_CACHE_REPLACEMENTS`` lists replacement-cache manifests separated by ``os.pathsep``, for
@@ -520,6 +524,10 @@ def file(run: Run, attempt_id: str) -> dict:
         argv += ["--rates", str(directory / "rates.json")]
     elif os.environ.get("BENCH_RATES"):
         argv += ["--rates", os.environ["BENCH_RATES"]]
+    if "billing_mode" in claim:
+        argv += ["--billing-mode", claim["billing_mode"]]
+    else:
+        argv += ["--legacy-rate-billing"]
     if os.environ.get("BENCH_ARCHIVE_ROOT"):
         argv += ["--archive-root", os.environ["BENCH_ARCHIVE_ROOT"]]
     if claim.get("predecessor"):
@@ -569,6 +577,10 @@ def claim_and_run(run_dir: Path, work: Path, args) -> dict:
         run = Run(run_dir, work)
         check_frozen(run)
         claim = choose(run, args)
+        billing_mode = run.arm_entry(claim["cell"]["arm"]).get("billing_mode")
+        if billing_mode not in ("api", "subscription"):
+            raise Refused("declare billing_mode as api or subscription in the frozen manifest arm before dispatch")
+        claim["billing_mode"] = billing_mode
         target_dir = check_target(run, claim["cell"]["target"])
         attempt_id = next_attempt_id(run)
         caps = run.manifest["caps"]

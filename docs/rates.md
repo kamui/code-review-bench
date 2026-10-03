@@ -21,11 +21,26 @@ python3 bench/tools/rates.py check --model gpt-6.1-sol --json
 python3 bench/tools/rates.py refresh --model claude-sonnet-5-5
 ```
 
-The command checks only models already in the catalog. Add a model's initial entry and billing policy before checking it. A changed provider table returns exit 1, as does a model selected with `--model` whose prices are missing from its provider table or unsupported. A run over the whole catalog reports such a model as skipped and still checks the others, unless a provider has supported prices for none of its cataloged models, which returns exit 1. Source or file failures return exit 2. A successful check returns 0; differing prices return 1. A successful refresh returns 0.
+The command checks only models already in the catalog. Add a model's initial price entry before checking it. The catalog's `billing` field remains for historical compatibility; new runs declare account billing separately. A changed provider table returns exit 1, as does a model selected with `--model` whose prices are missing from its provider table or unsupported. A run over the whole catalog reports such a model as skipped and still checks the others, unless a provider has supported prices for none of its cataloged models, which returns exit 1. Source or file failures return exit 2. A successful check returns 0; differing prices return 1. A successful refresh returns 0.
 
 Refresh preserves old entries and adds one entry with today's UTC date for each changed model. An unchanged catalog keeps its original bytes. Concurrent refreshes use a file lock, and replacement is atomic after all selected models have been checked. A second change on the same date is refused because the catalog identifies entries by model and date. The command refuses refresh destinations in frozen runs, preserved artifacts, and the imported `bench/rates.json`.
 
 Run `rates:refresh` before freezing a new benchmark and pin the selected dated entries in its manifest. Refreshing the catalog does not change saved costs or the website. `bun run data` exports existing benchmark evidence.
+
+## Account billing
+
+Before freezing a new run, set `billing_mode` on each entry in the manifest's `arms` array:
+
+- `subscription` records token costs as `list-price-equivalent`.
+- `api` records token costs as `api-dollars`.
+
+This is an operator declaration about the account used for that run. It does not inspect credentials or prove which account the client authenticated. Use `subscription` for the owner's Claude Max account, as [confirmed by the owner](../bench/billing/claude-max.v1.json). Do not infer billing from the model name or its price entry.
+
+Current `run_cell.py` refuses a missing or invalid declaration before fetching prices, claiming an attempt or dispatching a reviewer. Dry runs check it too. The chosen mode is saved in `cell.json` and passed to filing from that saved claim. A later manifest edit cannot change the billing label of an in-flight attempt.
+
+For direct filing, pass `file_attempt.py --billing-mode subscription` or `--billing-mode api`. The attempt's usage records the mode, `billing_source: declared` and the resulting display label. Changing the mode does not change token counts, numeric costs, budget limits or scores. Missing prices leave cost unknown without changing the declared billing label. Subscription costs do not measure invoices or quota consumption.
+
+Historical manifests and attempts remain unchanged. Filing an older claim without a billing declaration uses the explicit `--legacy-rate-billing` compatibility option and records `billing_source: legacy-rate-table`. Direct callers must select that option deliberately to reproduce historical labels. It is not a default for new filings. Already-frozen runner copies retain their behavior; freeze the updated runner and schemas with a new run to adopt this policy.
 
 ## Daily refresh
 

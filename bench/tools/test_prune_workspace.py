@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 
+import native_artifacts
 import prune_workspace
 
 
@@ -63,6 +64,27 @@ class CleanupTest(unittest.TestCase):
         (self.root / 'transcript.tar.gz').write_bytes(b'changed')
         with self.assertRaises(prune_workspace.Refused):
             prune_workspace.prune(self.attempt, self.workspace, apply=True)
+        self.assertTrue((self.workspace / 'clone-cache').exists())
+
+    def test_corrupt_native_scratch_archive_prevents_cleanup(self):
+        native = self.workspace / 'reports'
+        scratch = native / 'scratch'
+        scratch.mkdir(parents=True)
+        (native / 'review.json').write_text('{}')
+        (scratch / 'probe.py').write_text('print("evidence")')
+        index = self.workspace / 'native-artifacts.json'
+        index.write_text(json.dumps({'root': str(native), 'files': [
+            {'path': p.relative_to(native).as_posix(), 'bytes': p.stat().st_size,
+             'sha256': native_artifacts.digest(p)} for p in native.rglob('*') if p.is_file()]}))
+        (self.attempt / 'attempt.json').unlink()
+        self.record['native_artifact_storage'] = native_artifacts.file_artifacts(
+            native, index, self.attempt, 'review.json')
+        self.save()
+        self.assertFalse(prune_workspace.prune(self.attempt, self.workspace)['applied'])
+        (self.attempt / native_artifacts.ARCHIVE).write_bytes(b'corrupt')
+        with self.assertRaises(prune_workspace.Refused):
+            prune_workspace.prune(self.attempt, self.workspace, apply=True)
+        self.assertTrue((self.workspace / 'clone').exists())
         self.assertTrue((self.workspace / 'clone-cache').exists())
 
     def test_failed_attempt_is_retained(self):

@@ -19,6 +19,7 @@ import re
 import shutil
 import stat
 import subprocess
+import native_artifacts
 
 class Refused(ValueError):
     pass
@@ -49,6 +50,11 @@ def prune(attempt: Path, workspace: Path, *, apply: bool = False) -> dict:
     record = read(attempt / "attempt.json")
     if record["disposition"] != "valid completed":
         raise Refused("attempt did not complete validly")
+    if record.get("native_artifact_storage"):
+        try:
+            native_artifacts.verify(attempt, record["native_artifact_storage"])
+        except (OSError, ValueError, KeyError) as error:
+            raise Refused(f"native artifact storage is unverified: {error}") from error
     if workspace.name != record["attempt_id"] or workspace.parent.name != record["run_id"]:
         raise Refused("workspace identity differs from the filed attempt")
     if workspace.is_symlink():

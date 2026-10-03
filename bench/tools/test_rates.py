@@ -169,7 +169,9 @@ class RatesTests(unittest.TestCase):
     def make_run(self):
         run_dir = self.directory / "run"
         run_dir.mkdir()
-        (run_dir / "manifest.json").write_text(json.dumps({"rates": [{"model": MODEL, "as_of": self.row["as_of"]}]}), encoding="utf-8")
+        (run_dir / "manifest.json").write_text(json.dumps({
+            "arms": [{"id": "test", "billing_mode": "subscription"}],
+            "rates": [{"model": MODEL, "as_of": self.row["as_of"]}]}), encoding="utf-8")
         arm_path = self.directory / "arm.json"
         arm_path.write_text(json.dumps({"model": MODEL}), encoding="utf-8")
         run = run_cell.Run(run_dir, self.directory / "work")
@@ -211,6 +213,25 @@ class RatesTests(unittest.TestCase):
         self.assertFalse((work / "att-001").exists())
         dispatch.assert_not_called()
 
+    def test_missing_or_invalid_billing_stops_before_claim_or_price_check(self):
+        run = self.make_run()
+        work = self.directory / "work"
+        for mode in (None, "api-dollars"):
+            run.manifest["arms"][0]["billing_mode"] = mode
+            for dry_run in (True, False):
+                claim = {"cell": {"arm": "test", "target": "fixture"}, "predecessor": None}
+                args = argparse.Namespace(dry_run=dry_run, quota=None)
+                with self.subTest(mode=mode, dry_run=dry_run), \
+                        patch.object(run_cell, "Run", return_value=run), patch.object(run_cell, "check_frozen"), \
+                        patch.object(run_cell, "choose", return_value=claim), \
+                        patch.object(run_cell, "check_dispatch_rates") as prices, \
+                        patch.object(run_cell, "dispatch") as dispatch:
+                    with self.assertRaisesRegex(run_cell.Refused, "declare billing_mode"):
+                        run_cell.claim_and_run(run.dir, work, args)
+                self.assertFalse((work / "att-001").exists())
+                prices.assert_not_called()
+                dispatch.assert_not_called()
+
     def test_successful_claim_saves_receipt_and_rate_snapshot(self):
         run = self.make_run()
         run.manifest["caps"] = {"replacements": 0}
@@ -229,6 +250,7 @@ class RatesTests(unittest.TestCase):
         receipt = json.loads((directory / "cell.json").read_text(encoding="utf-8"))["rates_check"]
         self.assertEqual(snapshot["rates"], [self.row])
         self.assertEqual(receipt["policy"], "rates-check-v1")
+        self.assertEqual(json.loads((directory / "cell.json").read_text())["billing_mode"], "subscription")
         self.assertEqual(receipt["prices"][MODEL]["output"], snapshot["rates"][0]["output"])
         dispatch.assert_called_once()
 
@@ -252,6 +274,14 @@ class RatesTests(unittest.TestCase):
             run_cell.file(run, attempt)
         argv = tool.call_args.args[0]
         self.assertEqual(argv[argv.index("--rates") + 1], str(snapshot))
+        self.assertIn("--legacy-rate-billing", argv)
+        run.claimed[attempt]["billing_mode"] = "subscription"
+        run.arm_entry = lambda arm: {"expected_cli_version": "test", "billing_mode": "api"}
+        with patch.object(run_cell, "tool", return_value=subprocess.CompletedProcess([], 0, "", "")) as tool:
+            run_cell.file(run, attempt)
+        argv = tool.call_args.args[0]
+        self.assertEqual(argv[argv.index("--billing-mode") + 1], "subscription")
+        self.assertNotIn("--legacy-rate-billing", argv)
 
 
 if __name__ == "__main__":
