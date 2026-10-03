@@ -68,7 +68,7 @@ class Cohort:
                          "record": pin(self.root, f"bench/{RUN}/attempts/{target}/attempt.json", {})} for target in targets]}
         return [(RUN, target) for target in targets]
 
-    def fingerprints(self, batches):
+    def fingerprints(self, batches, current=()):
         return {batch: self.inputs[batch] for batch in batches}
 
     def authorize(self):
@@ -186,8 +186,8 @@ class SavedCohort(Cohort):
         self.plan = methodology.plan(self.root)
         return [(batch["run"], batch["target"]) for batch in self.plan["batches"]]
 
-    def fingerprints(self, batches):
-        return INPUT_FINGERPRINTS(batches)
+    def fingerprints(self, batches, current=()):
+        return INPUT_FINGERPRINTS(batches, current)
 
     def invoke(self, args, log):
         if args[0] == "prepare":
@@ -600,6 +600,39 @@ class Controller(unittest.TestCase):
         cohort.authorize()
         self.assertEqual(cohort.run(), 0)
         self.assertEqual(cohort.launched, ["pr-2", "pr-3", "pr-4", "pr-5"])
+
+    def test_changed_inputs_of_a_planned_current_batch_stop_start_and_resume(self):
+        for resume in (False, True):
+            with self.subTest(resume=resume):
+                cohort = Cohort(self.root / str(resume), 100, jobs=3)
+                cohort.plan["batches"][0]["state"] = "current"
+                cohort.execution["order"].pop(0)
+                cohort.authorize()
+                if resume:
+                    self.assertEqual(cohort.run(limit=1), 0)
+                launched = cohort.launched[:]
+                cohort.inputs[(RUN, "pr-1")] = "f" * 64
+                with self.assertRaisesRegex(ValueError, "relevant inputs changed since the plan; plan and authorize "
+                                                       "the queue again: runs/cohort/pr-1"):
+                    cohort.run()
+                self.assertEqual(cohort.launched, launched)
+                self.assertEqual(len(list(cohort.directory.glob("batches/*/*/attempt-*/reservation.json"))), int(resume))
+
+    def test_removing_a_planned_current_grade_requires_a_new_queue(self):
+        cohort = SavedCohort(self.root, 100, jobs=2)
+        self.assertEqual(cohort.run(limit=1), 0, cohort.status())
+        cohort.plan = methodology.plan(self.root)
+        cohort.execution["order"] = [{"run": batch["run"], "target": batch["target"]}
+                                      for batch in cohort.plan["batches"] if batch["state"] != "current"]
+        cohort.directory = self.root / ".local/replanned-queue"
+        cohort.directory.mkdir()
+        cohort.authorize()
+        grades = self.root / "bench/grading/current/grades.json"
+        grades.write_text(json.dumps({"schema_version": 1, "batches": []}))
+        with self.assertRaisesRegex(ValueError, "planned current batches need grading; plan and authorize the queue again"):
+            cohort.run()
+        self.assertEqual(len(cohort.launched), 1)
+        self.assertEqual(list(cohort.directory.glob("batches/*/*/attempt-*/reservation.json")), [])
 
     def test_a_budget_is_never_invented_or_carried_from_an_earlier_contract(self):
         cohort = Cohort(self.root, 100)

@@ -111,7 +111,7 @@ def allowance(cap, used, items):
     return min(remaining, desired(items)).quantize(Decimal("0.01"), rounding=ROUND_FLOOR)
 
 
-def input_fingerprints(batches):
+def input_fingerprints(batches, current=()):
     """The current input fingerprint of each (run, target) batch. Stale saved grades are refused here, before
     any dispatch, because no batch can be mapped beside them."""
     try:
@@ -121,6 +121,10 @@ def input_fingerprints(batches):
     unknown = [f"{run}/{target}" for run, target in batches if {"run": run, "target": target} not in selected["batches"]]
     if unknown:
         raise ValueError("planned batch is not selected: " + ", ".join(unknown))
+    missing = [f"{run}/{target}" for run, target in current
+               if current_grading.batch_state({"run": run, "target": target}, selected, documents, ROOT)[1] != "current"]
+    if missing:
+        raise ValueError("planned current batches need grading; plan and authorize the queue again: " + ", ".join(missing))
     return {(run, target): current_grading.grading_fingerprint({"run": run, "target": target}, selected, documents,
                                                                documents["policy"], ROOT) for run, target in batches}
 
@@ -256,12 +260,12 @@ def execute(authorization_path, directory, limit=None, expected_cli_version=None
     groups = defaultdict(list)
     for review in plan["reviews"]:
         groups[(review["run"], review["target"])].append(review)
-    planned = {(batch["run"], batch["target"]): batch["inputFingerprint"] for batch in plan["batches"]
-               if batch["state"] != "current"}
+    planned = {(batch["run"], batch["target"]): batch["inputFingerprint"] for batch in plan["batches"]}
+    current = {(batch["run"], batch["target"]) for batch in plan["batches"] if batch["state"] == "current"}
     ordered = [(job["run"], job["target"]) for job in execution["order"]]
-    if len(set(ordered)) != len(ordered) or set(ordered) != set(planned):
+    if len(set(ordered)) != len(ordered) or set(ordered) != set(planned) - current:
         raise ValueError("execution plan order must name every batch awaiting grading exactly once")
-    changed = [f"{run}/{target}" for (run, target), fingerprint in input_fingerprints(ordered).items()
+    changed = [f"{run}/{target}" for (run, target), fingerprint in input_fingerprints(planned, current).items()
                if fingerprint != planned[(run, target)]]
     if changed:
         raise ValueError("relevant inputs changed since the plan; plan and authorize the queue again: " + ", ".join(changed))
