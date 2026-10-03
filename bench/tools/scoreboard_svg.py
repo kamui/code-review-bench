@@ -1,6 +1,6 @@
-"""Render a scoreboard scatter chart as a standalone SVG for bench/SCOREBOARD.md.
+"""Render a scatter chart of review setups as a standalone SVG.
 
-Imported by scoreboard.py; standard library only. Colors are the dataviz reference palette's
+Chart geometry retained from the retired markdown scoreboard; standard library only. Colors are the dataviz reference palette's
 first three categorical slots, validated all-pairs in both modes, with the chrome and ink tokens
 of that palette. Every point carries a direct label and a <title> tooltip, and the page pairs each
 chart with a table, so no value depends on color or hover alone.

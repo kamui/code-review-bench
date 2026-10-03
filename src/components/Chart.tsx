@@ -28,7 +28,7 @@ export function Mark({ configuration, size = 12 }: { configuration: Pick<Configu
 }
 
 export const axisLabels: Record<Axis, string> = {
-  cost: 'Average review cost', tokens: 'Average output tokens', falseFindings: 'False findings per review', time: 'Median review time',
+  cost: 'Average review cost', tokens: 'Average output tokens', refuted: 'Refuted claims per admitted review', time: 'Median review time',
 }
 
 const setupParts = (configuration: Configuration) => {
@@ -51,7 +51,7 @@ function tickLabel(axis: Axis, value: number) {
   return String(value)
 }
 
-const scaleFor = (axis: Axis, values: number[]): Scale => axis === 'falseFindings' ? linearScale(values) : logScale(values)
+const scaleFor = (axis: Axis, values: number[]): Scale => axis === 'refuted' ? linearScale(values) : logScale(values)
 const fraction = (scale: Scale, value: number) => position(scale, value, 0, 100)
 const scoreTicks = [0, 25, 50, 75, 100]
 
