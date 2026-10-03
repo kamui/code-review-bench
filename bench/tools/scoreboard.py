@@ -15,6 +15,8 @@ An entry has ``id``, ``label``, ``version`` (free text for
 the reviewer version it ran), ``sources`` and an optional ``note``. A source has ``run`` (a run
 directory relative to the registry), ``results`` (a ``results.v<N>.json`` in that run written by
 ``score.py``, or null while the run is not scored) and ``arm`` (an arm id of that run's manifest).
+A source may pin a ``billing_correction`` receipt by path and SHA-256. Its declared run/arm
+scope overrides the displayed billing label without changing frozen records or priced amounts.
 An entry with any unscored source is pending everywhere. A suite may add ``chart`` with ``targets``, a
 subset of its cohort; its entries then need ``method`` (``claude-builtin``, ``review-code`` or
 ``codex``) and ``short``, the point label. Every scored entry that ran all chart targets is drawn
@@ -52,6 +54,7 @@ cannot be read.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -99,6 +102,31 @@ def missing_keys(obj, keys) -> list:
     return [k for k in keys if not isinstance(obj, dict) or k not in obj]
 
 
+def load_billing_correction(root: Path, spec: dict):
+    pin = spec.get("billing_correction")
+    if pin is None:
+        return None
+    if (not isinstance(pin, dict) or not isinstance(pin.get("path"), str)
+            or not isinstance(pin.get("sha256"), str)):
+        raise InputError("billing correction needs a path and SHA-256")
+    path = (root / pin["path"]).resolve()
+    if not path.is_relative_to(root.resolve()) or not path.is_file():
+        raise InputError("billing correction must name an existing file within the registry directory")
+    if hashlib.sha256(path.read_bytes()).hexdigest() != pin["sha256"]:
+        raise InputError("billing correction receipt hash mismatch")
+    receipt = read_json(path)
+    if (not isinstance(receipt, dict) or receipt.get("schema_version") != 1
+            or receipt.get("billing") not in (LIST_PRICE, "api-dollars")
+            or not isinstance(receipt.get("sources"), list)
+            or {"run": spec["run"], "arm": spec["arm"]} not in receipt["sources"]):
+        raise InputError("billing correction receipt must declare a billing mode and cover this run/arm")
+    return {"billing": receipt["billing"], "receipt": path}
+
+
+def attempt_billing(record: dict, correction=None):
+    return correction["billing"] if correction else record.get("usage", {}).get("billing") or "unavailable"
+
+
 def identities(manifest: dict, registers: dict) -> dict:
     return {c["target"]: {"packet": c["packet_sha256"], "diff": c["diff_manifest_sha256"],
                           "register": registers.get(c["target"])} for c in manifest["cohort"]}
@@ -135,6 +163,11 @@ def load_cohort(root: Path, suite: dict, problems: list):
 
 
 def load_source(root: Path, where: str, spec: dict, problems: list):
+    try:
+        correction = load_billing_correction(root, spec)
+    except InputError as error:
+        problems.append(f"{where}: {error}")
+        return None
     run_dir = root / spec["run"]
     paths = [run_dir / "manifest.json"] + ([run_dir / spec["results"]] if spec["results"] is not None else [])
     absent = [p for p in paths if not p.is_file()]
@@ -143,7 +176,8 @@ def load_source(root: Path, where: str, spec: dict, problems: list):
     if absent:
         return None
     manifest, arm = read_json(paths[0]), spec["arm"]
-    source = {"spec": spec, "run_dir": run_dir, "rubric": manifest["rubric_version"], "list_price": False}
+    source = {"spec": spec, "run_dir": run_dir, "rubric": manifest["rubric_version"],
+              "billing_correction": correction, "list_price": False}
     if arm not in {a["id"] for a in manifest["arms"]}:
         problems.append(f"{where}: arm {arm} is not in {os.path.relpath(paths[0], root)}")
         return None
@@ -164,7 +198,7 @@ def load_source(root: Path, where: str, spec: dict, problems: list):
         "planned": [c["target"] for c in manifest["planned_cells"] if c["arm"] == arm],
         "elapsed": {a: seconds_between(r["timing"].get("dispatched_at"), r["timing"].get("completed_at"))
                     for a, r in records.items()},
-        "list_price": any(r.get("usage", {}).get("billing") == LIST_PRICE for r in records.values()),
+        "list_price": any(attempt_billing(r, correction) == LIST_PRICE for r in records.values()),
     })
     return source
 

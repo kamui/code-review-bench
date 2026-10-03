@@ -69,6 +69,7 @@ function InspectionBody({ dataset, configuration, task }: { dataset: Dataset; co
             <Text size="xs" c="dimmed">Subagents: {detail.record.observed.subagent_count} / Client-reported sandbox: {detail.record.observed.sandbox ?? 'Not reported'}</Text>
           </Stack></Paper><Group gap="xs">
             <Button component="a" href={detail.recordUrl} target="_blank" rel="noreferrer" variant="light" size="xs" leftSection={<FileJson size={14} />}>Attempt record</Button>
+            {detail.billingCorrectionUrl && <Button component="a" href={detail.billingCorrectionUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Billing correction</Button>}
             {detail.normalizedUrl && <Button component="a" href={detail.normalizedUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Review JSON</Button>}
             {currentOutcome?.mappingUrl && <Button component="a" href={currentOutcome.mappingUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Grading record</Button>}
             {currentOutcome?.scorecardUrl && <Button component="a" href={currentOutcome.scorecardUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Grading notes & candidates</Button>}
@@ -124,7 +125,7 @@ function InspectionBody({ dataset, configuration, task }: { dataset: Dataset; co
 function ReviewSummary({ attempt }: { attempt: Attempt }) {
   return <Paper withBorder p="md" radius="md"><Group justify="space-between" gap="sm">
     <Badge color={attempt.complete ? 'teal' : 'orange'} variant="light">{attempt.complete ? 'Completed' : attempt.admitted ? 'Incomplete coverage' : 'Stopped / invalid'}</Badge>
-    <Text size="sm">{money(attempt.cost)} / {compact(attempt.outputTokens)} output tokens</Text>
+    <Text size="sm">{money(attempt.cost)}{attempt.billing === 'list-price-equivalent' ? ' list-price equivalent' : ''} / {compact(attempt.outputTokens)} output tokens</Text>
   </Group><Text size="sm" mt="sm">{attempt.recovered.length} reference problems found / {attempt.falseFindings} distinct false findings / {attempt.noise} non-material observations</Text>
     {attempt.predecessor && <Text size="xs" c="dimmed" mt="xs">Replacement for {attempt.predecessor}. Trial costs include the original attempt.</Text>}
   </Paper>
