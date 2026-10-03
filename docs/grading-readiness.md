@@ -1,5 +1,7 @@
 # Prepare grading before dispatch
 
+Use Claude Opus 5.5 at high effort as the default grader, as selected by the user. Pin `claude-opus-5-5` and `high` in each authorization. Keep model selection explicit in dispatch commands; use another grader only when the user requests it.
+
 Read [clean context](clean-context.md) and [shared claims](claim-adjudication.md) first. Readiness does not authorize paid grading or publishing scores. Before any paid validation, reconcile review, probe, replacement and calibration charges with the existing $300 all-runs cap and the saved authorizations that count toward it. Unknown usage is not zero, and a new workspace never resets the cap.
 
 Codex grading uses `codex exec` with five confined grading MCP tools and three MCP resource metadata helpers. The sole grading server advertises no resources and refuses every resource method. Native shell, editing, clock, search and delegation tools are absent. A pinned model catalog changes tool metadata while preserving the installed client's native model prompts. Pass `--allow-unbounded-codex` to preflight and dispatch, and omit `--max-budget-usd`. This mode requires explicit authorization without a dollar cap and uses the saved ChatGPT login. It does not fall back to Claude. Usage is recorded in list-price equivalents because ChatGPT usage consumes quota rather than API dollars. The current user instruction waives the budget concern for Codex; earlier capped authorizations remain historical records.
