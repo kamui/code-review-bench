@@ -11,6 +11,7 @@ from __future__ import annotations
 import copy
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -248,6 +249,24 @@ class CurrentGrading(unittest.TestCase):
         review = self.documents["claim"]["claims"][0]["links"][0]["review"]
         review["path"] = review["path"].replace("att-001/", "att-001/./")
         with self.assertRaisesRegex(current.Inconsistent, "claim review path is not canonical"):
+            self.check()
+
+    def test_claim_link_through_a_copied_run_is_rejected(self):
+        self.check()
+        shutil.copytree(self.root / "bench/runs/run", self.root / "bench/runs/copy")
+        review = self.documents["claim"]["claims"][0]["links"][0]["review"]
+        review["path"] = review["path"].replace("runs/run/", "runs/copy/")
+        with self.assertRaisesRegex(current.Inconsistent, "claim source path differs from its attempt identity"):
+            self.check()
+
+    def test_claim_link_through_a_renamed_attempt_is_rejected(self):
+        self.check()
+        attempts = self.root / "bench/runs/run/attempts"
+        shutil.copytree(attempts / "att-001", attempts / "att-002")
+        link = self.documents["claim"]["claims"][0]["links"][0]
+        link["attempt_id"] = "att-002"
+        link["review"]["path"] = link["review"]["path"].replace("att-001/", "att-002/")
+        with self.assertRaisesRegex(current.Inconsistent, "claim source path differs from its attempt identity"):
             self.check()
 
     def test_aliased_claim_item_id_is_rejected(self):

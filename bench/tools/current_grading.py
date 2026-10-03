@@ -299,6 +299,7 @@ def source_item(link, target, root=ROOT):
     require(len(parts) == 6 and parts[:2] == ("bench", "runs")
             and parts[3:] == ("attempts", link["attempt_id"], "normalized.json"), "claim link is not an exact source item")
     record = read_json(path.parent / "attempt.json")
+    require((record["run_id"], record["attempt_id"]) == (parts[2], parts[4]), "claim source path differs from its attempt identity")
     require(record["cell"]["target"] == target, "claim source belongs to another target")
     manifest = read_json(Path(root) / "bench/runs" / parts[2] / "manifest.json")
     cohort = unique(manifest["cohort"], "target", parts[2])
