@@ -64,7 +64,7 @@ def latest(catalog: dict, models: list[str] | None = None) -> dict:
     selected = models or sorted(rows)
     missing = sorted(set(selected) - rows.keys())
     if missing:
-        raise RateError(f"no catalog entry for {', '.join(missing)}; add a model with its billing policy first")
+        raise RateError(f"no catalog entry for {', '.join(missing)}; add a dated price entry first")
     if not selected:
         raise RateError("the rate catalog is empty")
     return {model: rows[model] for model in selected}
