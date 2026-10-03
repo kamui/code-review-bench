@@ -17,13 +17,13 @@ bun run dev
 
 Open the URL printed by Vite, normally `http://localhost:3000`. If that port is occupied, Vite chooses the next available port. No model credentials or skills checkout are needed to explore the saved results.
 
-The app uses React, TypeScript, TanStack Start, and Mantine. [Mantine Charts](https://mantine.dev/charts/scatter-chart/) wraps [Recharts](https://github.com/recharts/recharts) for the scatter plots. Benchmark-specific code computes scores, chooses comparable tasks, and connects points to review evidence.
+The app uses React, TypeScript, TanStack Start, and Mantine. [Mantine Charts](https://mantine.dev/charts/scatter-chart/) wraps [Recharts](https://github.com/recharts/recharts) for the scatter plots. One scoring kernel, `src/lib/scoring.ts`, chooses comparable tasks and computes every measure across reviews for both the app and the command-line scorecard.
 
 ## Explore the preview
 
 Select review configurations and filter PR tasks by area, technology, change or concern. The table shows saved execution coverage and available cost, output-token and delivery measurements. Open a setup or task to inspect original findings, proposed fixes, failures, replacements and verified transcript downloads. Profile labels are proposed; causal families and impact bands await calibration. A task with no saved problem is unaudited.
 
-The chart and judgment comparisons remain unavailable. Missing judgments are not zero detection or zero false findings. The [v1 rebuild](https://github.com/kamui/code-review-bench/issues/24) tracks grading, the shared scoring kernel, calibration and the replacement scorecard.
+The chart and judgment comparisons remain unavailable until current assessments exist. Missing judgments are unavailable, never zero detection or zero refuted claims. `bun run scorecard` prints the same kernel's scorecard for the selected setups; see [scoring and export](docs/current-grading.md#scoring-and-export). The [v1 rebuild](https://github.com/kamui/code-review-bench/issues/24) tracks grading, the shared scoring kernel, calibration and the replacement scorecard.
 
 Trial usage includes failed predecessors once and retains unknown measurements. Review time uses filed dispatch and end events and excludes the gaps between attempts, provisioning and grading. Subscription costs are dated token list-price equivalents. The [Claude Max billing receipt](bench/billing/claude-max.v1.json) changes billing labels without rewriting original prices.
 
@@ -42,8 +42,8 @@ The import pins the merged [skills PR #413](https://github.com/kamui/skills/pull
 | `bench/import-manifest.json` | Source identities, file checksums, and archive verification status |
 | `bench/profiles.json` | Proposed task and finding labels for the explorer |
 | `bench/tools/` | Preserved Python runner, normalization, grading, and scoring tools |
-| `tools/` | Import verification and deterministic explorer export |
-| `src/` | Local web app and scoring tests |
+| `tools/` | Import verification, staged export of per-review facts, and the scorecard command |
+| `src/` | Local web app, scoring kernel and its tests |
 
 All 2,775 imported source files retain their original bytes. When an active tool needs changes, its original is preserved under `artifacts/import-source/`, and the import manifest records that location. There are 288 imported transcript references, with no missing archives. Of these, 279 match their original recorded hashes. Nine superseded audit records reference hashes whose original archive bytes had already been overwritten upstream. The manifest records both expected and available hashes. Neither primary run is affected. The explorer offers downloads only for verified archives.
 
@@ -56,12 +56,12 @@ The imported `bench/README.md` and research documents are historical snapshots a
 ```sh
 bun run verify:import
 bun run verify:current
-bun run verify:historical
 bun run verify:claims
 bun run audit:maintainers
 bun run test
 bun run build
 bun run typecheck
+bun run scorecard
 bun run preview
 ```
 
