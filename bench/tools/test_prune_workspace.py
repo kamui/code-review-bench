@@ -125,8 +125,8 @@ class GradingCleanupTest(unittest.TestCase):
         self.record = {'session_id': 'session-a', 'exit_code': 0, 'verdicts_present': True, 'audit_violations': [],
                        'usage': {'priced_total_usd': 1.5}}
         (self.work / 'verdicts.json').write_text('{"reviews": {}}')
-        self.mapped = ('headless grader; session session-a; read audit clean; raw verdict sha256 '
-                       + hashlib.sha256(b'{"reviews": {}}').hexdigest())
+        self.mapped = {'provenance': {'kind': 'dispatch', 'session_id': 'session-a'},
+                       'verdicts_sha256': hashlib.sha256(b'{"reviews": {}}').hexdigest()}
         self.save()
 
     def save(self):
@@ -178,14 +178,26 @@ class GradingCleanupTest(unittest.TestCase):
         self.assertFalse((self.work / 'workspace-pruned.json').exists())
 
     def test_unmapped_or_rejected_gradings_are_retained(self):
-        for name, adjudicator in {'another session': self.mapped.replace('session-a', 'session-b'),
-                                  'other verdicts': self.mapped[:-64] + '0' * 64}.items():
+        manual = {**self.mapped, 'provenance': {'kind': 'manual', 'identity': 'someone'}}
+        for name, assessment in {'another session': {**self.mapped, 'provenance': {'kind': 'dispatch', 'session_id': 'session-b'}},
+                                 'other verdicts': {**self.mapped, 'verdicts_sha256': '0' * 64},
+                                 'a manual receipt for a dispatched session': manual}.items():
             with self.subTest(name):
                 with self.assertRaises(prune_workspace.Refused):
-                    prune_workspace.prune_grading(self.work, self.head, adjudicator, apply=True)
+                    prune_workspace.prune_grading(self.work, self.head, assessment, apply=True)
                 self.assertEqual(self.kept(), ['clone', 'clone-cache'])
-        legacy = 'headless grader; session session-a; read audit clean'
-        self.assertTrue(prune_workspace.prune_grading(self.work, self.head, legacy, apply=True)['applied'])
+
+    def test_manually_assessed_workspace_is_pruned_without_a_dispatch_record(self):
+        import shutil
+        (self.work / 'dispatch.json').unlink()
+        shutil.rmtree(self.work / 'home')
+        manual = {**self.mapped, 'provenance': {'kind': 'manual', 'identity': 'someone'}}
+        with self.assertRaises(prune_workspace.Refused):
+            prune_workspace.prune_grading(self.work, self.head, {**manual, 'verdicts_sha256': '0' * 64}, apply=True)
+        receipt = prune_workspace.prune_grading(self.work, self.head, manual, apply=True)
+        self.assertEqual(self.kept(), [])
+        self.assertEqual((receipt['applied'], receipt['verdicts_sha256']), (True, manual['verdicts_sha256']))
+        self.assertNotIn('session_id', receipt)
 
     def test_modified_or_moved_clone_is_retained(self):
         with self.assertRaises(prune_workspace.Refused):
@@ -217,9 +229,9 @@ class GradingCleanupTest(unittest.TestCase):
         target = Path(self.temp.name) / 'target'
         target.mkdir()
         (target / 'target.json').write_text(json.dumps({'head': self.head}))
-        mapping = Path(self.temp.name) / 'mapping.v1.json'
-        mapping.write_text(json.dumps({'scored_by': {'adjudicator': self.mapped}}))
-        located = ['--target', str(target), '--mapping', str(mapping)]
+        receipt = Path(self.temp.name) / 'receipt.json'
+        receipt.write_text(json.dumps(self.mapped))
+        located = ['--target', str(target), '--receipt', str(receipt)]
 
         def cli(*extra):
             return subprocess.run([sys.executable, prune_workspace.__file__, '--grading-work', str(self.work), *extra],

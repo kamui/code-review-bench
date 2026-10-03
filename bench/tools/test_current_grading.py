@@ -73,7 +73,8 @@ def fixture(root):
     documents = {"reference": {"schema_version": 1, "targets": [{"target": "t-example", "revision": revision, "families": [family],
                   "control": {"status": "known-problems", "reason": "Provisional known problem", "adjudication": None, "evidence": [source]}}]},
                  "adjudication": {"schema_version": 1, "decisions": []}, "claim": {"schema_version": 1, "claims": [claim]},
-                 "grade": {"schema_version": 1, "batches": []}, "audit": {"state": "unassessed", "evidence": []}}
+                 "grade": {"schema_version": 1, "batches": []}, "candidate": {"schema_version": 1, "candidates": []},
+                 "audit": {"state": "unassessed", "evidence": []}}
     policy = write(root, "bench/grading/current/validation-policy.json", {"contract": "fixture/v1", "recovery": "Supported attributable material claim"})
     documents["policy"] = current.pin_file(policy, root)
     selected = current.inventory(root)
@@ -106,6 +107,20 @@ def approved(documents, root, subject, dimension="eligibility", outcome="eligibl
     return decision
 
 
+def seal(root, batch, fingerprint):
+    """Bind the batch to its inputs and to a saved assessor receipt of those inputs."""
+    directory = "bench/grading/current/assessments/run/t-example/assessment-1"
+    verdicts = write(root, f"{directory}/verdicts.json", {"reviews": {}})
+    receipt = write(root, f"{directory}/receipt.json", {"input_fingerprint": fingerprint, "verdicts_sha256": current.file_hash(verdicts),
+                                                       "provenance": {"kind": "manual", "identity": "fixture"}})
+    batch.update(input_fingerprint=fingerprint, assessor={"kind": "manual", "receipt": current.pin_file(receipt, root),
+                                                           "verdicts": current.pin_file(verdicts, root)})
+
+
+SATISFIED = {"support": "supported", "attribution": "introduced", "reachability": "reachable", "materiality": "material"}
+UNSETTLED = dict.fromkeys(SATISFIED, "unsettled")
+
+
 def assessed_grade(selected, documents, root):
     family = documents["reference"]["targets"][0]["families"][0]
     d = approved(documents, root, family["id"])
@@ -116,13 +131,13 @@ def assessed_grade(selected, documents, root):
     source = claim["links"][0]["review"]
     anchor = {"review": source, "item_id": "item-0", "quote": "A write is lost."}
     grade = {"attempt_id": "att-001", "state": "assessed", "reason": "All original allegations examined",
-             "claims": [{"id": "c1", "anchor": anchor, "canonical_id": claim["id"], "outcome": "eligible",
+             "claims": [{"id": "c1", "anchor": anchor, "canonical_id": claim["id"], "outcome": "eligible", "assessment": dict(SATISFIED),
                          "family_id": family["id"], "duplicate_group": None, "reason": "Supported introduced loss", "evidence": [source]}],
              "families": [{"family_id": family["id"], "outcome": "caught", "claim_ids": ["c1"], "sufficiency": "absent", "reason": "No recommendation inventoried yet"}],
              "recommendations": [], "remedy_inventory": {"state": "complete", "reason": "No recommendation in this example", "anchors": []}, "advice": []}
     batch = {"run": "runs/run", "target": "t-example", "reviews": [grade]}
     documents["grade"]["batches"] = [batch]
-    batch["input_fingerprint"] = current.grading_fingerprint({"run": batch["run"], "target": batch["target"]}, selected, documents, documents["policy"], root)
+    seal(root, batch, current.grading_fingerprint({"run": batch["run"], "target": batch["target"]}, selected, documents, documents["policy"], root))
     return grade
 
 
@@ -135,6 +150,9 @@ class CurrentGrading(unittest.TestCase):
 
     def check(self):
         current.validate_documents(self.documents, self.selected, self.root)
+
+    def seal(self):
+        seal(self.root, self.documents["grade"]["batches"][0], self.fingerprint())
 
     def fingerprint(self):
         return current.grading_fingerprint({"run": "runs/run", "target": "t-example"}, self.selected, self.documents, self.documents["policy"], self.root)
@@ -358,7 +376,7 @@ class CurrentGrading(unittest.TestCase):
         grade["families"][0].update(outcome="unresolved", sufficiency="unassessed")
         self.documents["adjudication"]["decisions"][1]["status"] = "proposed"
         batch = self.documents["grade"]["batches"][0]
-        batch["input_fingerprint"] = self.fingerprint()
+        self.seal()
         with self.assertRaisesRegex(current.Inconsistent, "must remain unresolved"):
             self.check()
         grade["claims"][0]["outcome"] = "unresolved"
@@ -380,7 +398,7 @@ class CurrentGrading(unittest.TestCase):
         grade["claims"][0]["evidence"] = [pin]
         self.documents["claim"]["claims"][0]["links"][0]["review"] = pin
         self.selected = current.inventory(self.root)
-        self.documents["grade"]["batches"][0]["input_fingerprint"] = self.fingerprint()
+        self.seal()
         anchor = {**grade["claims"][0]["anchor"], "quote": "Serialize writes."}
         recommendation = {"id": "remedy-1", "anchors": [anchor], "addressed_claims": ["c1"], "duplicate_group": "serialization",
                           "safety": {"state": "unassessed", "reason": "Independent safety check pending", "independent_checks": []},
@@ -401,7 +419,7 @@ class CurrentGrading(unittest.TestCase):
         first["outcome"] = "unresolved"
         self.documents["claim"]["claims"][0]["links"][0]["relation"] = "related"
         grade["claims"].append({**copy.deepcopy(first), "id": "c2", "family_id": None, "canonical_id": None})
-        self.documents["grade"]["batches"][0]["input_fingerprint"] = self.fingerprint()
+        self.seal()
         with self.assertRaisesRegex(current.Inconsistent, "conflicting duplicate"):
             self.check()
 
@@ -458,7 +476,7 @@ class CurrentGrading(unittest.TestCase):
         grade["families"][0].update(outcome="missed", claim_ids=[], sufficiency="unassessed")
         grade["families"].append({"family_id": family["id"], "outcome": "caught", "claim_ids": ["c1"],
                                   "sufficiency": "absent", "reason": "Assigned to another approved family"})
-        self.documents["grade"]["batches"][0]["input_fingerprint"] = self.fingerprint()
+        self.seal()
         with self.assertRaisesRegex(current.Inconsistent, "canonical family"):
             self.check()
         grade["claims"][0]["canonical_id"] = None
@@ -482,7 +500,7 @@ class CurrentGrading(unittest.TestCase):
         grade["claims"].append({**copy.deepcopy(grade["claims"][0]), "id": "c2", "canonical_id": case["id"], "family_id": family["id"]})
         grade["families"].append({"family_id": family["id"], "outcome": "caught", "claim_ids": ["c2"],
                                   "sufficiency": "absent", "reason": "Related allegation assessed independently"})
-        self.documents["grade"]["batches"][0]["input_fingerprint"] = self.fingerprint()
+        self.seal()
         self.check()
         grade["claims"].pop(0)
         with self.assertRaisesRegex(current.Inconsistent, "omits an applicable canonical claim"):
@@ -505,7 +523,7 @@ class CurrentGrading(unittest.TestCase):
         self.documents["adjudication"]["decisions"][1]["status"] = "proposed"
         grade["claims"][0]["outcome"] = "unresolved"
         grade["families"][0].update(outcome="missed", claim_ids=[], sufficiency="unassessed")
-        self.documents["grade"]["batches"][0]["input_fingerprint"] = self.fingerprint()
+        self.seal()
         with self.assertRaisesRegex(current.Inconsistent, "unresolved family recovery cannot be missed"):
             self.check()
         grade["families"][0]["outcome"] = "unresolved"
@@ -529,7 +547,7 @@ class CurrentGrading(unittest.TestCase):
         case["links"][0]["relation"] = "equivalent"
         self.documents["claim"]["claims"].append(case)
         grade["families"][0].update(outcome="missed", claim_ids=[], sufficiency="unassessed")
-        self.documents["grade"]["batches"][0]["input_fingerprint"] = self.fingerprint()
+        self.seal()
         with self.assertRaisesRegex(current.Inconsistent, "omits an applicable canonical claim"):
             self.check()
         grade["families"][0].update(outcome="caught", claim_ids=["c1"], sufficiency="absent")
@@ -540,7 +558,7 @@ class CurrentGrading(unittest.TestCase):
         self.documents["adjudication"]["decisions"][1]["status"] = "proposed"
         grade["claims"][0].update(outcome="unresolved", family_id=None)
         grade["families"][0].update(outcome="missed", claim_ids=[], sufficiency="unassessed")
-        self.documents["grade"]["batches"][0]["input_fingerprint"] = self.fingerprint()
+        self.seal()
         with self.assertRaisesRegex(current.Inconsistent, "contradicts its canonical family"):
             self.check()
         grade["claims"][0]["family_id"] = "GT-t1"
@@ -554,7 +572,7 @@ class CurrentGrading(unittest.TestCase):
         self.documents["claim"]["claims"][0].update(adjudication=None, family_id=None)
         grade["claims"][0].update(outcome="unresolved", family_id=None)
         grade["families"][0].update(outcome="missed", claim_ids=[], sufficiency="unassessed")
-        self.documents["grade"]["batches"][0]["input_fingerprint"] = self.fingerprint()
+        self.seal()
         with self.assertRaisesRegex(current.Inconsistent, "unresolved family recovery cannot be missed"):
             self.check()
         grade["families"][0]["outcome"] = "unresolved"
@@ -564,9 +582,9 @@ class CurrentGrading(unittest.TestCase):
         grade = assessed_grade(self.selected, self.documents, self.root)
         self.documents["adjudication"]["decisions"][1]["outcome"] = "refuted"
         self.documents["claim"]["claims"][0]["family_id"] = None
-        grade["claims"][0].update(outcome="refuted", family_id=None)
+        grade["claims"][0].update(outcome="refuted", family_id=None, assessment={**SATISFIED, "support": "contradicted"})
         grade["families"][0].update(outcome="missed", claim_ids=[], sufficiency="unassessed")
-        self.documents["grade"]["batches"][0]["input_fingerprint"] = self.fingerprint()
+        self.seal()
         for state in ("assessed", "unassessed"):
             with self.subTest(state=state):
                 grade["state"] = state
@@ -578,13 +596,117 @@ class CurrentGrading(unittest.TestCase):
         family["eligibility"].update(state="pending", adjudication=None)
         self.documents["adjudication"]["decisions"][1]["outcome"] = "refuted"
         self.documents["claim"]["claims"][0]["family_id"] = None
-        grade["claims"][0].update(outcome="refuted", family_id=None)
+        grade["claims"][0].update(outcome="refuted", family_id=None, assessment={**SATISFIED, "support": "contradicted"})
         grade["families"][0].update(outcome="missed", claim_ids=[], sufficiency="unassessed")
-        self.documents["grade"]["batches"][0]["input_fingerprint"] = self.fingerprint()
+        self.seal()
         with self.assertRaisesRegex(current.Inconsistent, "pending family recovery must remain unresolved"):
             self.check()
         grade["families"][0]["outcome"] = "unresolved"
         self.check()
+
+    def candidate(self, **fields):
+        claim = self.documents["claim"]["claims"][0]
+        record = {"id": "NC-0123456789ab", "target": "t-example", "revision": claim["revision"],
+                  "recorded_at": "2026-10-01T00:00:00Z", "claim": "A retry repeats the write.", "evidence": "Read the retry path.",
+                  "limits": "No reproduction was run.", "relevance": "Could become a new causal family.", "confidence": "medium",
+                  "would_settle": "A retry test.",
+                  "anchors": [{"review": claim["links"][0]["review"], "item_id": "item-0", "quote": "A write is lost."}],
+                  "source": {"run": "runs/run", "receipt": claim["links"][0]["review"]}, "decision": None, **fields}
+        self.documents["candidate"]["candidates"] = [record]
+        return record
+
+    def test_pending_candidate_keeps_age_and_limits_and_makes_a_clean_control_provisional(self):
+        reference = self.documents["reference"]["targets"][0]
+        reference["families"] = []
+        self.documents["claim"]["claims"][0]["family_id"] = None
+        d = approved(self.documents, self.root, "t-example", "control", "audited-clean")
+        d["independent_checks"] = [{"source": d["receipt"], "checker": "auditor", "independent_of": "author",
+                                    "result": "confirmed", "reason": "Independent audit found no problem"}]
+        reference["control"].update(status="audited-clean", adjudication=d["id"])
+        self.check()
+        self.assertEqual(current.coverage_status(self.selected, self.documents)["controls"], {"t-example": "audited-clean"})
+        record = self.candidate()
+        self.check()
+        status = current.coverage_status(self.selected, self.documents)
+        self.assertEqual(status["controls"], {"t-example": "provisional"})
+        self.assertEqual(status["pending_candidates"], [{"id": record["id"], "target": "t-example",
+                                                         "recorded_at": "2026-10-01T00:00:00Z", "limits": "No reproduction was run.",
+                                                         "relevance": "Could become a new causal family."}])
+        record["decision"] = d["id"]
+        self.check()
+        status = current.coverage_status(self.selected, self.documents)
+        self.assertEqual((status["controls"], status["pending_candidates"]), ({"t-example": "audited-clean"}, []))
+
+    def test_candidate_needs_its_task_revision_original_wording_and_an_applicable_decision(self):
+        for fields, message in (({"revision": {**self.documents["claim"]["claims"][0]["revision"], "head": "f" * 40}}, "candidate revision differs"),
+                                ({"anchors": []}, "candidate needs its original anchors"),
+                                ({"decision": "AD-missing"}, "candidate decision does not apply")):
+            self.candidate(**fields)
+            with self.assertRaisesRegex(current.Inconsistent, message):
+                self.check()
+        record = self.candidate()
+        record["anchors"][0] = {**record["anchors"][0], "quote": "Words the review never used."}
+        with self.assertRaisesRegex(current.Inconsistent, "anchor quote is not verbatim"):
+            self.check()
+
+    def test_candidates_do_not_invalidate_grading(self):
+        before = self.fingerprint()
+        self.candidate()
+        self.assertEqual(before, self.fingerprint())
+
+    def test_grade_binds_its_assessor_receipt_and_the_four_eligibility_tests(self):
+        grade = assessed_grade(self.selected, self.documents, self.root)
+        self.check()
+        batch = self.documents["grade"]["batches"][0]
+        receipt = self.root / batch["assessor"]["receipt"]["path"]
+        for field, value in (("input_fingerprint", "0" * 64), ("verdicts_sha256", "0" * 64), ("provenance", {"kind": "dispatch"})):
+            write(self.root, str(receipt.relative_to(self.root)), {**current.read_json(receipt), field: value})
+            batch["assessor"]["receipt"] = current.pin_file(receipt, self.root)
+            with self.assertRaisesRegex(current.Inconsistent, "assessor receipt belongs to another assessment"):
+                self.check()
+        self.seal()
+        self.check()
+        grade["claims"][0]["assessment"] = {**SATISFIED, "reachability": "unreachable"}
+        with self.assertRaisesRegex(current.Inconsistent, "must satisfy all four eligibility tests"):
+            self.check()
+
+    def test_batch_state_separates_missing_current_and_stale_grades(self):
+        batch = {"run": "runs/run", "target": "t-example"}
+        self.assertEqual(current.batch_state(batch, self.selected, self.documents, self.root), (self.fingerprint(), "missing"))
+        assessed_grade(self.selected, self.documents, self.root)
+        self.assertEqual(current.batch_state(batch, self.selected, self.documents, self.root)[1], "current")
+        family = copy.deepcopy(self.documents["reference"]["targets"][0]["families"][0])
+        self.documents["reference"]["targets"][0]["families"].append({**family, "id": "GT-t2", "eligibility": {
+            "state": "pending", "reason": "Awaiting eligibility approval", "adjudication": None}})
+        self.assertEqual(current.batch_state(batch, self.selected, self.documents, self.root)[1], "stale")
+        with self.assertRaisesRegex(current.Inconsistent, "grade fingerprint is stale"):
+            self.check()
+        current.validate_documents(self.documents, self.selected, self.root, grades=False)
+
+    def test_coverage_counts_unresolved_judgments_of_admitted_reviews_only(self):
+        grade = assessed_grade(self.selected, self.documents, self.root)
+        grade["claims"][0].update(outcome="unresolved", family_id=None, canonical_id=None)
+        grade["families"][0].update(outcome="unresolved", claim_ids=[], sufficiency="unassessed")
+        self.documents["claim"]["claims"][0]["links"][0]["relation"] = "related"
+        self.seal()
+        self.check()
+        status = current.coverage_status(self.selected, self.documents)
+        self.assertEqual((status["unresolved_recoveries"], status["unresolved_claims"], status["complete"]), (1, 1, False))
+        self.selected["attempts"][0]["admission"]["state"] = "excluded"
+        status = current.coverage_status(self.selected, self.documents)
+        self.assertEqual((status["required_reviews"], status["unresolved_recoveries"], status["unresolved_claims"]), (0, 0, 0))
+
+    def test_validation_policy_pins_are_verified_when_loading(self):
+        rubric = self.root / "bench/rubric/scoring.md"
+        rubric.parent.mkdir(parents=True)
+        rubric.write_text("Rubric\n", encoding="utf-8")
+        write(self.root, "bench/grading/current/validation-policy.json", {"contract": "fixture/v1", "rubric": current.pin_file(rubric, self.root)})
+        self.documents["policy"] = current.pin_file(self.root / "bench/grading/current/validation-policy.json", self.root)
+        save_current(self.root, self.selected, self.documents)
+        current.load_current(self.root)
+        rubric.write_text("Another rubric\n", encoding="utf-8")
+        with self.assertRaisesRegex(current.Inconsistent, "source hash changed: bench/rubric/scoring.md"):
+            current.load_current(self.root)
 
 
 if __name__ == "__main__":
