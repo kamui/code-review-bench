@@ -4,21 +4,29 @@ import { ExternalLink, FileJson, FileText, Download } from 'lucide-react'
 import { fetchDetail, skillReleaseLabel } from '../lib/data'
 import type { Attempt, AttemptDetail, Configuration, Dataset, Task } from '../lib/data'
 import { compact, money } from '../lib/metrics'
-import { reviewFacts } from '../lib/scoring'
+import { pendingCandidates, reviewFacts } from '../lib/scoring'
+
+const outcomeColors: Record<string, string> = { eligible: 'teal', refuted: 'red', unsupported: 'red', unresolved: 'yellow' }
+const controlText: Record<Task['control'], string> = {
+  'audited-clean': 'Audited clean control: an independent audit found no eligible problem.',
+  provisional: 'Provisional control: audited, but a candidate on this PR awaits a ruling, so silence here is not yet counted as correct.',
+  unaudited: 'Unaudited: the reference list is empty and no audit has been done. Silence here is not counted as correct.',
+  'known-problems': 'No approved reference problem yet. This PR has no detection denominator and is not a clean control.',
+}
 
 export type Inspection = { kind: 'task'; id: string } | { kind: 'configuration'; id: string }
 
-export function EvidenceDrawer({ dataset, inspection, onClose }: { dataset: Dataset; inspection: Inspection | null; onClose: () => void }) {
+export function EvidenceDrawer({ dataset, inspection, now, onClose }: { dataset: Dataset; inspection: Inspection | null; now: Date; onClose: () => void }) {
   const configuration = inspection?.kind === 'configuration' ? dataset.configurations.find(item => item.id === inspection.id) : undefined
   const task = inspection?.kind === 'task' ? dataset.tasks.find(item => item.id === inspection.id) : undefined
   return <Drawer opened={inspection !== null} onClose={onClose} position="right" size="xl"
     title={task ? `${task.repo} #${task.pr}` : configuration?.short ?? 'Evidence'}
     classNames={{ title: 'drawer-title' }}>
-    {inspection && <InspectionBody key={`${inspection.kind}:${inspection.id}`} dataset={dataset} configuration={configuration} task={task} />}
+    {inspection && <InspectionBody key={`${inspection.kind}:${inspection.id}`} dataset={dataset} configuration={configuration} task={task} now={now} />}
   </Drawer>
 }
 
-function InspectionBody({ dataset, configuration, task }: { dataset: Dataset; configuration?: Configuration; task?: Task }) {
+function InspectionBody({ dataset, configuration, task, now }: { dataset: Dataset; configuration?: Configuration; task?: Task; now: Date }) {
   const outcomes = dataset.outcomes.filter(outcome => configuration ? outcome.configurationId === configuration.id : outcome.taskId === task?.id)
   const allowed = new Set(outcomes.flatMap(outcome => outcome.attemptIds))
   const attempts = dataset.attempts.filter(attempt => allowed.has(attempt.id))
@@ -27,7 +35,6 @@ function InspectionBody({ dataset, configuration, task }: { dataset: Dataset; co
   const [detail, setDetail] = useState<AttemptDetail | null>(null)
   const [error, setError] = useState('')
   const attempt = attempts.find(item => item.id === attemptId)
-  const currentOutcome = outcomes.find(outcome => outcome.attemptIds.includes(attemptId ?? ''))
   useEffect(() => {
     setDetail(null); setError('')
     if (!attempt) return
@@ -37,17 +44,20 @@ function InspectionBody({ dataset, configuration, task }: { dataset: Dataset; co
     return () => { cancelled = true }
   }, [attempt])
   const currentTask = task ?? dataset.tasks.find(item => item.id === attempt?.taskId)
+  const novel = currentTask ? pendingCandidates(dataset, [currentTask.id], now) : []
   return <Stack gap="lg">
     {configuration && <><Text size="sm" c="dimmed">{configuration.label}</Text><Group><Badge variant="light">{configuration.version}</Badge>{!configuration.builtin && <Badge variant="outline">{skillReleaseLabel([configuration])}</Badge>}</Group><Text size="sm">{configuration.note}</Text>
       {Array.from(new Set(configuration.skillReleases.map(release => release.provenanceUrl))).map(url => <Button key={url} component="a" href={url} target="_blank" rel="noreferrer" variant="subtle" size="xs">Skill release provenance</Button>)}
       {configuration.reviewChange && <Button component="a" href={configuration.reviewChange.url} target="_blank" rel="noreferrer" variant="subtle" size="xs">Review change: {configuration.reviewChange.summary}</Button>}
-      {configuration.skillProvenanceUrl && <Button component="a" href={configuration.skillProvenanceUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Skill commits & timestamps</Button>}</>}
+      {configuration.skillProvenanceUrl && <Button component="a" href={configuration.skillProvenanceUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Skill commits & timestamps</Button>}
+      <Paper withBorder p="md" radius="md"><Text size="sm" fw={650} mb={5}>Comparison conditions</Text>
+        <dl className="conditions">{configuration.conditions.map(condition => <div key={condition.name}><dt>{condition.name}</dt><dd>{condition.values.join(', ')}</dd></div>)}</dl></Paper></>}
     {task && <><Text>{task.shape}</Text><Group gap="xs">{task.profile.concerns.map(concern => <Badge variant="light" key={concern}>{concern}</Badge>)}</Group>
       <Group><Button component="a" href={task.sourceUrl} target="_blank" rel="noreferrer" variant="light" size="xs" leftSection={<ExternalLink size={14} />}>Original PR</Button>
         <Button component="a" href={task.packetUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileText size={14} />}>Review packet</Button></Group>
-      <Text size="xs" c="dimmed">Revision {task.head.slice(0, 10)} / Current reference v{task.registerVersion}. Causal families and impact labels are provisional.</Text></>}
+      <Text size="xs" c="dimmed">Revision {task.head.slice(0, 10)}. Each reference shows its own eligibility and impact state.</Text></>}
     <Tabs value={tab} onChange={setTab}>
-      <Tabs.List><Tabs.Tab value="reviews">Reviews ({attempts.length})</Tabs.Tab><Tabs.Tab value="references">Reference findings</Tabs.Tab><Tabs.Tab value="coverage">Coverage & failures</Tabs.Tab></Tabs.List>
+      <Tabs.List><Tabs.Tab value="reviews">Reviews ({attempts.length})</Tabs.Tab><Tabs.Tab value="references">References and candidates</Tabs.Tab><Tabs.Tab value="coverage">Coverage & failures</Tabs.Tab></Tabs.List>
       <Tabs.Panel value="reviews" pt="lg">
         <Stack gap="md">
           <Select label="Review attempt" searchable value={attemptId} onChange={setAttemptId}
@@ -57,7 +67,6 @@ function InspectionBody({ dataset, configuration, task }: { dataset: Dataset; co
               return { value: item.id, label: `${item.taskId} / ${setup?.short ?? item.runId} / ${item.label}${item.complete ? '' : ' / incomplete or invalid'}` }
             })} />
           {error && <Alert color="red">{error}</Alert>}
-          {currentOutcome?.status === 'not comparable' && <Alert color="yellow">This review is excluded from the current comparison. {currentOutcome.reason} Its grading record preserves the original reference version.</Alert>}
           {attempt && <ReviewSummary attempt={attempt} />}
           {attempt && !detail && !error && <Loader size="sm" />}
           {detail && <><Paper withBorder p="md" radius="md"><Stack gap="xs">
@@ -72,39 +81,46 @@ function InspectionBody({ dataset, configuration, task }: { dataset: Dataset; co
             <Button component="a" href={detail.recordUrl} target="_blank" rel="noreferrer" variant="light" size="xs" leftSection={<FileJson size={14} />}>Attempt record</Button>
             {detail.billingCorrectionUrl && <Button component="a" href={detail.billingCorrectionUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Billing correction</Button>}
             {detail.normalizedUrl && <Button component="a" href={detail.normalizedUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Review JSON</Button>}
-            {currentOutcome?.mappingUrl && <Button component="a" href={currentOutcome.mappingUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Grading record</Button>}
-            {currentOutcome?.scorecardUrl && <Button component="a" href={currentOutcome.scorecardUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Grading notes & candidates</Button>}
+            {detail.assessment.receiptUrl && <Button component="a" href={detail.assessment.receiptUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Current assessment receipt</Button>}
+            {detail.assessment.verdictsUrl && <Button component="a" href={detail.assessment.verdictsUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Assessor verdicts</Button>}
             {detail.archiveUrl && <Button component="a" href={detail.archiveUrl} download variant="subtle" size="xs" leftSection={<Download size={14} />}>Raw transcript</Button>}
           </Group>
             {!detail.archiveUrl && <Text size="xs" c="dimmed">Transcript archive: {detail.archiveStatus}. No verified download is available.</Text>}
+            {detail.assessment.state === 'unassessed' && <Text size="xs" c="dimmed">No current assessment is saved for this review, so its claims have no outcome yet.</Text>}
             {!detail.items.length && <Alert color="gray">This attempt returned no usable findings. Its failure and usage remain in the evidence.</Alert>}
             <Accordion variant="separated">{detail.items.map((item, index) => <Accordion.Item key={item.id} value={item.id}>
-              <Accordion.Control><Group gap="xs" mb={5}><Badge size="xs" color={item.assignment.startsWith('defect:') ? 'teal' : item.assignment === 'false-finding' ? 'red' : 'gray'} variant="light">{item.assignment.replace('defect:', 'Found ')}</Badge>
+              <Accordion.Control><Group gap="xs" mb={5}><Badge size="xs" color={outcomeColors[item.assignment] ?? 'gray'} variant="light">{item.assignment}</Badge>
                 <Text size="xs" c="dimmed">Finding {index + 1}</Text></Group><Text size="sm" fw={550}>{item.claim}</Text></Accordion.Control>
               <Accordion.Panel><Stack gap="sm"><Text size="xs" c="dimmed">{item.file}{item.line === null ? '' : `:${item.line}`}</Text><Text size="sm">{item.consequence}</Text>
-                <Paper p="sm" className="evidence-note"><Text size="xs" fw={650} mb={5}>Adjudication</Text><Text size="sm">{item.notes}</Text></Paper>
+                <Paper p="sm" className="evidence-note"><Text size="xs" fw={650} mb={5}>Current assessment</Text><Text size="sm">{item.notes}</Text></Paper>
                 {item.claims?.map(claim => <Paper withBorder p="sm" key={claim.id}><Stack gap="xs">
-                  <Badge variant="light" color={claim.assignment.startsWith('defect:') ? 'teal' : claim.assignment === 'refuted' || claim.assignment === 'unsupported' ? 'red' : 'gray'}>{claim.assignment}</Badge>
+                  <Badge variant="light" color={outcomeColors[claim.assignment] ?? 'gray'}>{claim.assignment}</Badge>
                   <Text size="sm">{claim.quote}</Text><Text size="sm">{claim.notes}</Text>
-                  {claim.canonical_claim_id && <Text size="xs" c="dimmed">Shared claim: {claim.canonical_claim_id}</Text>}
+                  {claim.canonical_claim_id && <Text size="xs" c="dimmed">Shared claim: {claim.canonical_claim_id}{claim.rulingUrl && <> · <a href={claim.rulingUrl} target="_blank" rel="noreferrer">Saved ruling</a></>}</Text>}
                   {claim.evidence.map((evidence, i) => <Text size="xs" key={i}>{evidence}</Text>)}
                   <Text size="xs">Fix sufficiency: {claim.fix_sufficiency}</Text>
                 </Stack></Paper>)}
-                <Text size="sm"><strong>Fix suggestion: </strong>{item.proposedFix ?? 'No separate suggestion captured. The adjudication may discuss a remedy embedded in the finding.'}</Text>
+                <Text size="sm"><strong>Fix suggestion: </strong>{item.proposedFix ?? 'No separate suggestion captured. The assessment may discuss a remedy embedded in the finding.'}</Text>
                 <Badge variant="outline" color="gray" size="sm">Fix sufficiency: {item.fixSufficiency}</Badge>
               </Stack></Accordion.Panel></Accordion.Item>)}</Accordion>
           </>}
         </Stack>
       </Tabs.Panel>
       <Tabs.Panel value="references" pt="lg">{currentTask && <Stack><Title order={4}>{currentTask.repo}</Title>
-        <Text size="sm" c="dimmed">Current reference v{currentTask.registerVersion}. Causal grouping and impact calibration are pending.</Text>
-        {!currentTask.families.length && <Alert color="gray">No registered defects in this reference set. This task has no detection-score denominator. A completed human audit is still required before calling it a clean control.</Alert>}
+        {!currentTask.families.length && <Alert color="gray">{controlText[currentTask.control]} {currentTask.controlReason}.
+          {currentTask.controlRulingUrl && <> <a href={currentTask.controlRulingUrl} target="_blank" rel="noreferrer">Saved control ruling</a></>}</Alert>}
         <Accordion variant="separated">{currentTask.families.map(defect => <Accordion.Item key={defect.id} value={defect.id}>
           <Accordion.Control><Text size="xs" c="dimmed">{defect.id} / Eligibility {defect.eligibility} / Impact {defect.impact}</Text><Text fw={550} size="sm">{defect.title}</Text></Accordion.Control>
           <Accordion.Panel><Stack gap="sm"><Text size="sm"><strong>Trigger: </strong>{defect.trigger}</Text><Text size="sm"><strong>Consequence: </strong>{defect.consequence}</Text>
-            <Text size="sm"><strong>Required outcome: </strong>{defect.requiredOutcome}</Text></Stack></Accordion.Panel>
+            <Text size="sm"><strong>Required outcome: </strong>{defect.requiredOutcome}</Text>
+            <Text size="sm"><strong>Eligibility {defect.eligibility}: </strong>{defect.eligibilityReason}</Text><Text size="sm"><strong>Impact {defect.impact}: </strong>{defect.impactReason}</Text>
+            {defect.rulings.length > 0 && <Group gap="xs">{defect.rulings.map(ruling => <Button key={ruling.dimension} component="a" href={ruling.url} target="_blank" rel="noreferrer" variant="subtle" size="xs">Saved {ruling.dimension} ruling</Button>)}</Group>}
+          </Stack></Accordion.Panel>
         </Accordion.Item>)}</Accordion>
-        <Button component="a" href={currentTask.registerUrl} target="_blank" rel="noreferrer" variant="light" size="xs">Open full reference register</Button>
+        {novel.length > 0 && <><Title order={5}>Candidates awaiting a ruling</Title>
+          {novel.map(candidate => <Paper withBorder p="sm" key={candidate.id}><Text size="xs" c="dimmed">{candidate.id} / recorded {candidate.recordedAt.slice(0, 10)}, {candidate.ageDays} {candidate.ageDays === 1 ? 'day' : 'days'} ago</Text>
+            <Text size="sm">{candidate.claim}</Text><Text size="sm"><strong>Evidence limits: </strong>{candidate.limits}</Text><Text size="sm"><strong>Decision relevance: </strong>{candidate.relevance}</Text></Paper>)}</>}
+        <Button component="a" href={currentTask.registerUrl} target="_blank" rel="noreferrer" variant="light" size="xs">Open current reference records</Button>
       </Stack>}</Tabs.Panel>
       <Tabs.Panel value="coverage" pt="lg"><Stack>
         <Text size="sm" c="dimmed">All attempts remain visible. Replacements do not erase failed attempts or their usage.</Text>

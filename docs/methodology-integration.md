@@ -72,4 +72,6 @@ The [verification receipt](research/methodology-integration-2026-09-30/verificat
 
 ## Site publication
 
+This section records the earlier rubric-v2 release. The site now shows only the [current v1 scorecard](current-grading.md#explorer-scorecard).
+
 The user explicitly requested a site based exclusively on rubric-v2 results and approved including the three fatal-error recovery attempts previously designated supplemental. The [progress tracker](benchmark-methodology-progress.md#rubric-v2-site-release) records the release scope. All site scores, review claims, feedback outcomes and evidence mapping links now come from the pinned new mappings. No additional model calls were needed. The blinding qualification remains in downloadable data and audit records, without a visible site notice, as requested. Publication follows PR review, merge and deployment.

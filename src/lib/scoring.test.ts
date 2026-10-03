@@ -2,64 +2,14 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { main as fixturePreview } from '../../tools/fixture_preview'
 import { main as scorecardCommand } from '../../tools/scorecard'
-import { datasetSchema } from './data'
-import type { Assessment, Attempt, Configuration, Dataset, Family, Task } from './data'
+import { datasetSchema, detailSchema } from './data'
+import type { Attempt, Dataset, Task } from './data'
+import { assessment, build, claim, claims, failed, family, remedy, review, scorecardFixture, task } from './fixture'
 import { summarize } from './metrics'
-import { comparisonTasks, leaderboard, matched, meanTaskRecall, orderingConflicts, pairwise, recommend, scorecard } from './scoring'
+import { comparisonTasks, leaderboard, matched, meanTaskRecall, orderingConflicts, pairwise, pendingCandidates, recommend, referenceCoverage, scorecard } from './scoring'
 import type { Measure } from './scoring'
-
-type Claim = Assessment['claims'][number]
-type Remedy = Assessment['recommendations'][number]
-type Trial = { attempts: Attempt[]; pending?: true }
-
-const setup = (id: string, experimental = false): Configuration => ({ id, label: id, short: id, version: '1', method: 'builtin', builtin: true,
-  experimental, note: '', billing: 'api-dollars', models: ['model'], reasoningEffort: 'high', reasoningSource: 'explicit', reviewEdition: 'baseline',
-  reviewChange: null, skillProvenanceUrl: null, skillReleases: [] })
-
-const family = (id: string, impact: Family['impact'] = 'unknown', overrides: Partial<Family> = {}): Family => ({ id, title: id, trigger: '',
-  consequence: '', requiredOutcome: '', concerns: ['Functional'], eligibility: 'approved', impact, manifestations: [], ...overrides })
-
-const task = (id: string, families: Family[], control: Task['control'] = 'known-problems'): Task => ({ id, repo: id, pr: 1, head: 'head', base: 'base',
-  shape: 'fixture', language: 'TypeScript', registerVersion: 1, profile: { changeKinds: [], areas: [], technologies: [], concerns: [] },
-  families, control, registerUrl: '', packetUrl: '', sourceUrl: '' })
-
-const claim = (id: string, outcome: Claim['outcome'], overrides: Partial<Claim> = {}): Claim =>
-  ({ id, itemId: id, outcome, familyId: null, canonicalId: null, duplicateGroup: null, ...overrides })
-
-const remedy = (id: string, addressedClaims: string[], safety: Remedy['safety'], sufficiency: Remedy['sufficiency'] = []): Remedy =>
-  ({ id, addressedClaims, safety, sufficiency })
-
-function assessment(subject: Task, caught: string[], overrides: Partial<Assessment> = {}): Assessment {
-  return { state: 'assessed', families: subject.families.filter(item => item.eligibility === 'approved').map(item => ({ familyId: item.id,
-    outcome: caught.includes(item.id) ? 'caught' : 'missed', sufficiency: caught.includes(item.id) ? 'absent' : 'unassessed',
-    claimIds: caught.includes(item.id) ? [`c-${item.id}`] : [] })),
-  claims: caught.map(id => claim(`c-${id}`, 'eligible', { familyId: id })), recommendations: [], remedyInventory: 'complete', advice: [], ...overrides }
-}
-
-let serial = 0
-const review = (subject: Task, caught: string[] | null, overrides: Partial<Attempt> = {}): Attempt => ({ id: `run/att-${serial += 1}`, label: 'att',
-  runId: 'run', taskId: subject.id, replicate: 1, disposition: 'valid completed', complete: true, admitted: true, observedItems: 0,
-  assessment: caught === null ? null : assessment(subject, caught), cost: 1, outputTokens: 100, durationSeconds: 60, billing: 'api-dollars',
-  predecessor: null, retryReason: null, detailUrl: '', ...overrides })
-
-const failed = (subject: Task, overrides: Partial<Attempt> = {}) => review(subject, null, { admitted: false, complete: false, disposition: 'harness-invalid: audit', ...overrides })
-const claims = (subject: Task, found: Claim[], overrides: Partial<Assessment> = {}) => review(subject, null, { assessment: assessment(subject, [], { claims: found, ...overrides }) })
-
-function build(tasks: Task[], cells: Record<string, [Task, (Attempt | Trial)[]][]>, options: { audit?: string; experimental?: string[] } = {}): Dataset {
-  const trials = (rows: (Attempt | Trial)[]): Trial[] => rows.map(row => 'attempts' in row ? row : { attempts: [row] })
-  return datasetSchema.parse({ schemaVersion: 3, release: 'fixture', revision: 'fixture', profileStatus: 'proposed',
-    evidence: { datasetHash: 'fixture', coverage: { requiredReviews: 0, assessedReviews: 0, unresolvedRecoveries: 0, unresolvedClaims: 0, complete: true, reason: '' },
-      audit: { state: options.audit ?? 'assessed', reason: null } },
-    tasks, configurations: Object.keys(cells).map(id => setup(id, options.experimental?.includes(id))),
-    outcomes: Object.entries(cells).flatMap(([configurationId, rows]) => rows.map(([subject, scheduled]) => ({ configurationId, taskId: subject.id,
-      status: 'ran', reason: '', mappingUrl: null, scorecardUrl: null, attemptIds: trials(scheduled).flatMap(trial => trial.attempts.map(attempt => attempt.id)),
-      trials: trials(scheduled).map((trial, index) => ({ replicate: index + 1, state: trial.pending ? 'pending' : 'resolved',
-        reason: trial.pending ? 'Stopped attempt awaits replacement.' : 'valid completed', attemptIds: trial.attempts.map(attempt => attempt.id),
-        terminal: trial.attempts.at(-1)?.id ?? null })) }))),
-    attempts: Object.values(cells).flatMap(rows => rows.flatMap(([, scheduled]) => trials(scheduled).flatMap(trial => trial.attempts))),
-    import: { files: 0, transcripts: 0, mismatches: 0 } })
-}
 
 const card = (data: Dataset, id: string, concern: string | null = null) => scorecard(data, id, { taskIds: data.tasks.map(item => item.id), concern })
 const everything = (data: Dataset) => ({ taskIds: data.tasks.map(item => item.id), concern: null })
@@ -310,6 +260,47 @@ describe('reliability, remedies and controls', () => {
   })
 })
 
+describe('serious misses, reference coverage and pending candidates', () => {
+  const data = scorecardFixture()
+  const everything = { taskIds: data.tasks.map(item => item.id), concern: null }
+
+  test('a serious reference not caught in two or more scheduled trials is a repeated miss, failed trials included', () => {
+    const selective = scorecard(data, 'selective', everything)
+    expect(selective.seriousMisses.families).toEqual([
+      { taskId: 'payments', familyId: 'S1', scheduled: 3, caught: 1, notCaught: 2 }, { taskId: 'payments', familyId: 'S2', scheduled: 3, caught: 0, notCaught: 3 },
+      { taskId: 'queue', familyId: 'S3', scheduled: 3, caught: 0, notCaught: 3 }])
+    expect(value(selective.seriousMisses.repeated)).toBe(3)
+    expect(value(selective.seriousCaught.equalPr)).toBe(0)
+    expect(value(scorecard(data, 'steady', everything).seriousMisses.repeated)).toBe(0)
+    expect(value(scorecard(data, 'silent', everything).seriousMisses.repeated)).toBe(3)
+  })
+
+  test('repeated serious misses are unavailable without serious labels or while a serious outcome is undetermined', () => {
+    expect(reason(scorecard(data, 'steady', { taskIds: ['docs'], concern: null }).seriousMisses.repeated)).toBe('No reference is labelled serious.')
+    const waiting = scorecard(data, 'waiting', everything)
+    expect(reason(waiting.seriousMisses.repeated)).toBe('2 serious outcomes are undetermined.')
+    expect(waiting.seriousMisses.families).toEqual([{ taskId: 'payments', familyId: 'S2', scheduled: 3, caught: 1, notCaught: 1 }])
+    expect(reason(scorecard(data, 'sparse', everything).seriousMisses.repeated)).toBe('Ran 2 of 6 selected PRs.')
+  })
+
+  test('reference coverage counts approved references by band and keeps unaudited and provisional controls apart from audited ones', () => {
+    expect(referenceCoverage(data, everything)).toEqual({ bands: { serious: 3, 'other-material': 3, unknown: 3, all: 9 }, pendingFamilies: 1,
+      controls: { audited: ['audited'], provisional: ['novel'], unaudited: ['empty'] } })
+    expect(referenceCoverage(data, { taskIds: ['docs'], concern: null }).bands).toEqual({ serious: 0, 'other-material': 0, unknown: 2, all: 2 })
+    expect(referenceCoverage(data, { taskIds: everything.taskIds, concern: 'Security' }).bands).toEqual({ serious: 1, 'other-material': 0, unknown: 0, all: 1 })
+  })
+
+  test('a novel candidate keeps its task, age and limits and withholds recommendations on its PR', () => {
+    const now = new Date('2026-10-03T12:00:00Z')
+    expect(pendingCandidates(data, everything.taskIds, now)).toMatchObject([{ id: 'NC-00000000f1c5', taskId: 'novel', ageDays: 13, limits: 'Read from the diff only; no reproduction was run.' }])
+    expect(pendingCandidates(data, ['payments'], now)).toEqual([])
+    expect(pendingCandidates(data, everything.taskIds, new Date('2026-09-01T00:00:00Z'))[0]?.ageDays).toBe(0)
+    expect(scorecard(data, 'steady', everything).limits.pendingCandidates).toEqual([{ taskId: 'queue', id: 'P1', kind: 'family' }, { taskId: 'novel', id: 'NC-00000000f1c5', kind: 'novel' }])
+    expect(scorecard(data, 'steady', { taskIds: ['payments'], concern: null }).limits.pendingCandidates).toEqual([])
+    expect(scorecard(data, 'steady', everything).controls).toMatchObject({ audited: 1, unaudited: ['empty', 'novel'] })
+  })
+})
+
 describe('cost and time', () => {
   test('cost divides every attempt by scheduled trials and missing usage is unavailable', () => {
     const pr = task('pr', [])
@@ -352,6 +343,8 @@ describe('recommendation limits', () => {
     expect(compare(build([labelled], cells(labelled), { audit: 'unassessed' }))).toEqual({ kind: 'none', reasons: ['The evaluator audit is not complete.'] })
     const candidate = task('pr', [family('s', 'serious'), family('new', 'unknown', { eligibility: 'pending' })])
     expect(compare(build([candidate], cells(candidate)))).toEqual({ kind: 'none', reasons: ['1 candidate family awaits an eligibility ruling.'] })
+    const novel = { id: 'NC-000000000001', taskId: 'pr', recordedAt: '2026-10-01T00:00:00Z', claim: 'A retry repeats the write.', limits: 'No reproduction.', relevance: 'New family.' }
+    expect(compare(build([labelled], cells(labelled), { candidates: [novel] }))).toEqual({ kind: 'none', reasons: ['1 novel candidate awaits an eligibility ruling.'] })
     const many = task('pr', [family('s', 'serious'), ...Array.from({ length: 13 }, (_, index) => family(`u${index}`))])
     expect(compare(build([many], cells(many)))).toEqual({ kind: 'none', reasons: ['Exhaustive scenario analysis is deferred for 13 unknown impact labels.'] })
     const none = task('pr', [family('m', 'other-material')])
@@ -393,10 +386,12 @@ describe('selection', () => {
     const [first] = board.cards
     const [configuration] = data.configurations
     if (!first || !configuration) throw new Error('Missing fixture scorecard')
-    expect(summarize(configuration, first)).toMatchObject({ score: 100, range: { low: 100, high: 100 }, cost: 1, tokens: 100, refuted: 0,
+    const view = { band: 'all', estimator: 'equalPr' } as const
+    expect(summarize(configuration, first, view)).toMatchObject({ detection: 100, range: { low: 100, high: 100 }, cost: 1, tokens: 100, refuted: 0,
       time: { median: 60, mean: 60, q1: 60, q3: 60, reviews: 6, tasks: 6 }, completed: 6, trials: 6, tasks: 6 })
     const sparse = board.cards.find(item => item.configurationId === 'other')
-    expect(sparse && summarize(configuration, sparse)).toMatchObject({ score: null, range: null, cost: null, refuted: null, time: null, tasks: 4 })
+    expect(sparse && summarize(configuration, sparse, view)).toMatchObject({ detection: null, range: null, cost: null, refuted: null, time: null, tasks: 4,
+      reasons: { detection: 'Ran 4 of 6 selected PRs.', cost: 'Ran 4 of 6 selected PRs.' } })
   })
 
   test('the export boundary rejects facts that name unknown attempts, families or claims', () => {
@@ -462,6 +457,18 @@ with patch.object(exporter, 'ROOT', root), patch.object(exporter, 'BENCH', root 
     await rm(pending.root, { recursive: true })
   })
 
+  test('the fixture preview writes a current export with a readable detail for every attempt', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'fixture-preview-'))
+    let printed = ''
+    expect(await fixturePreview(['--out', root], text => { printed += text })).toBe(0)
+    expect(printed).toContain('Not benchmark evidence')
+    const data = datasetSchema.parse(JSON.parse(await readFile(join(root, 'benchmark.json'), 'utf8')))
+    expect(data.evidence.coverage.complete).toBe(false)
+    for (const attempt of data.attempts)
+      expect(detailSchema.parse(JSON.parse(await readFile(join(root, attempt.detailUrl.replace('/data/', '')), 'utf8'))).id).toBe(attempt.id)
+    await rm(root, { recursive: true })
+  })
+
   test('the scorecard command reports the same kernel selection and values as the explorer', async () => {
     const single = task('single', [family('one')]), many = task('many', Array.from({ length: 10 }, (_, index) => family(`m${index}`)))
     const data = build([single, many], {
@@ -486,7 +493,7 @@ with patch.object(exporter, 'ROOT', root), patch.object(exporter, 'BENCH', root 
     expect(text).toContain('Aggregation-sensitive orderings: unknown: a and b; all: a and b.')
     expect(text).toContain('Matched refuted per admitted review on 2/2 PRs: a 0.00 (2/2 trials admitted overall); b 0.00 (2/2 trials admitted overall). Excluded: none. Partly admitted matched PRs: none.')
     expect((await run('--configuration', 'ghost')).exitCode).toBe(1)
-    await writeFile(path, JSON.stringify({ ...data, schemaVersion: 2 }))
+    await writeFile(path, JSON.stringify({ ...data, schemaVersion: 3 }))
     expect((await run()).exitCode).toBe(2)
     await rm(root, { recursive: true })
   })
