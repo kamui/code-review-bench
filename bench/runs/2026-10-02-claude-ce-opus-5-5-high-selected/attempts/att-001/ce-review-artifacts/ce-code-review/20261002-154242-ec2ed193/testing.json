@@ -1,0 +1,72 @@
+{
+  "reviewer": "testing",
+  "findings": [
+    {
+      "title": "No codec test for APIv1-only messages; they now fail",
+      "severity": "P1",
+      "file": "encoding/proto/proto.go",
+      "line": 41,
+      "why_it_matters": "Any application whose request/response types implement only the legacy APIv1 message interface (Reset/String/ProtoMessage, e.g. gogo/protobuf or pre-APIv2 generated code) now gets every RPC rejected with \"failed to marshal, message is %T, want proto.Message\"; before the import swap the default codec marshalled those types. The suite cannot see this because every codec test round-trips only the APIv2-generated codec_perf.Buffer, so the stated goal of preserving codec compatibility is unproven and in fact broken. Adapting v1 values with protoadapt.MessageV2Of (the same adapter the diff already uses in Status.WithDetails) restores the behaviour, and a v1-only round-trip case pins it.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In encoding/proto/proto.go add a helper `func messageV2Of(v any) proto.Message { switch v := v.(type) { case protoadapt.MessageV1: return protoadapt.MessageV2Of(v); case protoadapt.MessageV2: return v }; return nil }` and use it in both Marshal and Unmarshal instead of `v.(proto.Message)` (keep the existing error text when it returns nil). In encoding/proto/proto_test.go add a test that round-trips a hand-written v1-only type (struct with `protobuf:\"bytes,1,opt,name=name,proto3\"` tag plus Reset/String/ProtoMessage methods, no ProtoReflect) through codec{}.Marshal/Unmarshal and asserts the field value survives. Define the type locally: importing reflection/grpc_testing_not_regenerate from the in-package test creates an import cycle.",
+      "confidence": 75,
+      "evidence": [
+        "encoding/proto/proto.go:41 -- vv, ok := v.(proto.Message)",
+        "encoding/proto/proto.go:27 -- \"google.golang.org/protobuf/proto\" (was \"github.com/golang/protobuf/proto\"; the unchanged assertion at lines 41 and 49 now requires the APIv2 interface, i.e. a ProtoReflect method)",
+        "encoding/proto/proto_test.go:32 -- p := &pb.Buffer{} (the only message type any codec test uses; pb is the APIv2-generated test/codec_perf package)",
+        "Scratch overlay test run against the reviewed head (file kept outside the clone) with a v1-only message: golang/protobuf proto.Marshal returned bytes=[10 5 104 101 108 108 111] err=<nil>; codec{}.Marshal returned \"failed to marshal, message is *proto.legacyMsg, want proto.Message\"; codec{}.Unmarshal returned \"failed to unmarshal, message is *proto.legacyMsg, want proto.Message\"",
+        "provenance: b8374114 Clement 2024-01-26 - resolve conflicts and add changes"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Status.Details tests miss APIv1-only detail type change",
+      "severity": "P2",
+      "file": "internal/status/status.go",
+      "line": 158,
+      "why_it_matters": "Callers that attach an APIv1-only message with WithDetails and later type-switch on Details() (`case *mypb.LegacyDetail:`) silently stop matching: Details() now hands back protobuf's internal *impl.messageIfaceWrapper instead of the original concrete type, where the old ptypes.DynamicAny path returned the original type. No test notices because every details test uses APIv2-generated messages (errdetails, grpc_testing) and TestStatus_ErrorDetails compares through proto.Equal after asserting both sides to protoreflect.ProtoMessage, which is blind to the concrete Go type. Unwrapping with protoadapt.MessageV1Of returns the same type that was passed to WithDetails, and a test with a legacy message locks that in.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In internal/status/status.go Details(), append `protoadapt.MessageV1Of(detail)` instead of `detail` (it unwraps a wrapped v1 message and returns generated messages unchanged). Add a test in status/status_ext_test.go (external package, so importing google.golang.org/grpc/reflection/grpc_testing_not_regenerate compiles) that calls status.New(codes.Internal, \"x\").WithDetails(&pbv3.SearchResponseV3{State: pbv3.SearchResponseV3_FRESH}) and asserts Details()[0] is a *pbv3.SearchResponseV3 with the same field values; also assert len(Details()) so an empty result cannot pass.",
+      "confidence": 75,
+      "evidence": [
+        "internal/status/status.go:158 -- detail, err := any.UnmarshalNew()",
+        "internal/status/status.go:163 -- details = append(details, detail)",
+        "status/status_test.go:359 -- if !proto.Equal(details[i].(protoreflect.ProtoMessage), tc.details[i].(protoreflect.ProtoMessage)) { (type-insensitive comparison, and the enclosing `for i := range details` loop asserts nothing if Details() comes back short)",
+        "Scratch overlay test run against the reviewed head (file kept outside the clone) using reflection/grpc_testing_not_regenerate.SearchResponseV3: new Details()[0] type=*impl.messageIfaceWrapper, assertable-to-original=false; old path ptypes.UnmarshalAny(any, &ptypes.DynamicAny{}) type=*grpc_testing_not_regenerate.SearchResponseV3, assertable-to-original=true",
+        "provenance: b8374114 Clement 2024-01-26 - resolve conflicts and add changes"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Rewritten LRS interval error branch untested, logs <nil>",
+      "severity": "P3",
+      "file": "xds/internal/xdsclient/transport/loadreport.go",
+      "line": 175,
+      "why_it_matters": "When a management server sends a missing or out-of-range load_reporting_interval, operators now see \"Reading from LRS stream failed: invalid load_reporting_interval: <nil>\" and lose the actual reason, because the rewritten check discards the CheckValid error and formats the already-nil error from stream.Recv. Nothing exercises this branch: both LRS tests only send a valid 50ms interval, so the regression in the rewritten lines went unnoticed. Capturing the CheckValid error and adding one invalid-interval case covers the only error path this hunk touched.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Change to `if err := rInterval.CheckValid(); err != nil { return nil, 0, fmt.Errorf(\"invalid load_reporting_interval: %v\", err) }`. Add a case next to TestReportLoad in xds/internal/xdsclient/transport/loadreport_test.go where the fake LRS server replies with a LoadStatsResponse whose LoadReportingInterval is nil (or &durationpb.Duration{Seconds: 1, Nanos: -1}) and assert that no load report follows the initial request and the stream is re-created (a second initial LoadStatsRequest arrives on the fake server's LRS request channel). Assumption: the error is only logged by lrsRunner, so the test observes the retry rather than the message text.",
+      "confidence": 75,
+      "evidence": [
+        "xds/internal/xdsclient/transport/loadreport.go:174-175 -- if rInterval.CheckValid() != nil { return nil, 0, fmt.Errorf(\"invalid load_reporting_interval: %v\", err)",
+        "xds/internal/xdsclient/transport/loadreport.go:165-168 -- resp, err := stream.Recv(); if err != nil { return ... } (err is necessarily nil when line 175 runs)",
+        "xds/internal/xdsclient/transport/loadreport_test.go:94 and xds/internal/xdsclient/loadreport_test.go:104 -- LoadReportingInterval: &durationpb.Duration{Nanos: 50000000} (the only intervals any test sends; grep for \"invalid load_reporting_interval\" finds no test)"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "test/tools/go.mod moves golang.org/x/tools from v0.17.0 down to v0.14.0 (and go.sum drops x/sync v0.6.0 for v0.4.0), which the stated intent does not describe; this changes the goimports version the vet tooling installs. Effect on vet output not checked.",
+    "Verification scope: `go vet` over the 36 changed non-example packages (root, test, xds, etc.) passed, so changed tests compile, but no package test suites were executed beyond two scratch overlay tests in ./encoding/proto and ./status. Runtime results of the migrated tests (e.g. the new protoimpl.X.NewError(\"invalid empty type URL\") expectation in status/status_test.go:412) were not confirmed by execution.",
+    "examples/ and test/tools/ modules were not built or vetted (separate modules)."
+  ],
+  "testing_gaps": [
+    "balancer/rls convertDuration: a duration that is valid for protobuf but overflows time.Duration (between roughly 9223372036s and 315576000000s, e.g. lookupServiceTimeout \"10000000000s\") was rejected by ptypes.Duration and is now silently saturated to math.MaxInt64 by AsDuration; config_test.go only covers values protojson itself rejects (315576000001s).",
+    "internal/pretty.ToJSON: the APIv1 branch switched from jsonpb to protojson and the package has no test file; its output is returned by the xdsresource ListenerResourceData/ClusterResourceData/RouteConfigResourceData/EndpointsResourceData ToJSON methods, so a small golden-free test (valid JSON, expected field names, fallback to %+v on marshal error) would cover the changed branch."
+  ]
+}

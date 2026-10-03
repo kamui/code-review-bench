@@ -1,0 +1,45 @@
+{
+  "findings": [
+    {
+      "report_path": "summary.md",
+      "quote": "In `internal/pretty/pretty.go:39–61`, the migrated legacy-message branch now calls the same `protojson` serializer as the modern-message branch, but retains a second options object, marshal call, error branch, fallback, and return. The previously meaningful split between `jsonpb` and `protojson` has become incidental complexity: a generated message implementing both interfaces takes the first branch, while a modern-only implementation takes the second, even though nonempty `Indent` already implies multiline output. Normalize the input to `protoadapt.MessageV2` once, then use one protobuf serialization path and one fallback; replace the remaining legacy import with `protoadapt`. This is a concrete opportunity to delete a whole duplicate serialization branch while preserving behavior. Verified by source inspection of both branches and the pinned serializer options; the proposed refactor was not applied. Full evidence and a worked proposal are in [the formatting report](03_formatting.md).",
+      "title": "F1 — Collapse the now-identical protobuf JSON paths",
+      "file": "internal/pretty/pretty.go",
+      "line_start": 39,
+      "line_end": 61
+    },
+    {
+      "report_path": "summary.md",
+      "quote": "In `encoding/proto/proto.go:27`, changing the imported `proto.Message` interface silently narrows both `Marshal` and `Unmarshal` from legacy protobuf messages to messages implementing `ProtoReflect`. Existing generated messages such as the repository’s `SearchRequestV3` now fail both operations with “want proto.Message”, so applications using older generated request or response types lose their default RPC encoding. Keep the implementation on the new protobuf runtime, but normalize legacy and modern messages through one codec-local adapter using `protoadapt.MessageV2Of`; reuse it for both operations and retain rejection of non-message values. The overlay probe fails both operations on the head and passes with the base codec implementation. Full evidence and a worked proposal are in [the message-boundary report](01_message_boundaries.md).",
+      "title": "F2 — Preserve legacy messages at the default codec boundary",
+      "file": "encoding/proto/proto.go",
+      "line_start": 27,
+      "line_end": 27
+    },
+    {
+      "report_path": "summary.md",
+      "quote": "In `internal/status/status.go:158–163`, `Details` now appends the raw result of `Any.UnmarshalNew`, although `WithDetails` still explicitly accepts `protoadapt.MessageV1`. For a registered legacy-only message, this leaks `*impl.messageIfaceWrapper` through the public status API instead of returning the concrete generated message that callers supplied and previously received. Existing type assertions and type switches therefore stop matching, or panic when they assert the concrete type. Convert successful decoded results with `protoadapt.MessageV1Of` before appending them, preserving the existing error entries and modern generated message types. A round trip using `SearchRequestV3` returns the wrapper on the head and the expected concrete type with the base status implementation. Full evidence and a worked proposal are in [the message-boundary report](01_message_boundaries.md).",
+      "title": "F3 — Return original legacy detail types instead of runtime wrappers",
+      "file": "internal/status/status.go",
+      "line_start": 158,
+      "line_end": 163
+    },
+    {
+      "report_path": "summary.md",
+      "quote": "In `balancer/rls/config.go:310`, and likewise `xds/internal/xdsclient/transport/loadreport.go:173–177`, replacing `ptypes.Duration` with `CheckValid` plus `AsDuration` drops the previous rejection of values that overflow Go’s `time.Duration`. `CheckValid` accepts protobuf durations up to 10,000 years, while `AsDuration` silently saturates at the approximately 292-year Go limit. A valid protobuf value of 10,000,000,000 seconds now becomes `2562047h47m16.854775807s` with no error; RLS can accept an enormous lookup timeout and LRS can start a ticker that effectively never reports. Use a checked conversion that validates the protobuf and rejects any value changed by saturation, and reuse that explicit conversion contract at both boundaries while retaining RLS’s existing nil-as-zero policy. Head probes accept positive, negative, and nanosecond-boundary overflow in RLS and positive overflow in LRS; all are rejected by the base implementations. Full evidence and a worked proposal are in [the duration report](02_duration_boundaries.md).",
+      "title": "F4 — Preserve checked conversion to time.Duration",
+      "file": "balancer/rls/config.go",
+      "line_start": 310,
+      "line_end": 310
+    },
+    {
+      "report_path": "summary.md",
+      "quote": "In `xds/internal/xdsclient/transport/loadreport.go:174–175`, the new condition discards the error returned by `rInterval.CheckValid` and formats the earlier `stream.Recv` error instead. That earlier error is necessarily nil on this path, so malformed control-plane intervals now produce `invalid load_reporting_interval: <nil>` and hide the cause of the stream rejection and retry. Bind the validation error in the condition and format that error, or propagate the checked-conversion error when implementing F4. An interval with 1,000,000,000 nanoseconds reproduces the nil diagnostic on the head and returns the actual validation cause with the base implementation. Full evidence and a worked proposal are in [the duration report](02_duration_boundaries.md).",
+      "title": "F5 — Report the actual LRS validation error",
+      "file": "xds/internal/xdsclient/transport/loadreport.go",
+      "line_start": 174,
+      "line_end": 175
+    }
+  ],
+  "questions": []
+}

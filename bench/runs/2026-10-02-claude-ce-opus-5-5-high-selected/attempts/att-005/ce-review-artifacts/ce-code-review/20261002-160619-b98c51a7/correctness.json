@@ -1,0 +1,34 @@
+{
+  "reviewer": "correctness",
+  "findings": [
+    {
+      "title": "Unguarded fallback-hash call breaks duck-typed user models",
+      "severity": "P2",
+      "file": "django/contrib/auth/__init__.py",
+      "line": 215,
+      "why_it_matters": "For a user model that implements its own get_session_auth_hash() without inheriting AbstractBaseUser (a configuration docs/topics/auth/default.txt explicitly supports), every request carrying a stale session now fails with AttributeError (HTTP 500) instead of being logged out. Before this change a hash mismatch (e.g. after a password change from another device, or after a key rotation) flushed the session and returned AnonymousUser; now the mismatch branch calls user.get_session_auth_fallback_hash() unconditionally, raises before flush() runs, and the session is never cleared, so the 500 repeats on every request until the cookie is removed. get_user() already guards the primary method with hasattr(user, \"get_session_auth_hash\"); applying the same guard to the new method restores the previous flush-and-anonymous behaviour for models that do not provide it. This ships in a patch release (4.1.8), so no deprecation path covers the new required method.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In django/contrib/auth/__init__.py get_user(), guard the fallback lookup the same way the primary hash is guarded, e.g. `if session_hash and hasattr(user, \"get_session_auth_fallback_hash\") and any(constant_time_compare(session_hash, h) for h in user.get_session_auth_fallback_hash()):` so that a user object lacking the method falls through to `request.session.flush(); user = None`. Add a test with a user object that defines only get_session_auth_hash() and a mismatching session hash, asserting AnonymousUser is returned and the session is flushed. Assumption: models without the method should keep the pre-change behaviour (no fallback verification) rather than be required to implement it.",
+      "confidence": 75,
+      "evidence": [
+        "django/contrib/auth/__init__.py:213-216 -- if session_hash and any(\n    constant_time_compare(session_hash, fallback_auth_hash)\n    for fallback_auth_hash in user.get_session_auth_fallback_hash()\n):",
+        "django/contrib/auth/__init__.py:200 -- if hasattr(user, \"get_session_auth_hash\"):  (only the pre-existing method is feature-detected; the new method is assumed to exist)",
+        "docs/topics/auth/default.txt:920-923 -- \"If your :setting:`AUTH_USER_MODEL` inherits from AbstractBaseUser or implements its own get_session_auth_hash() method, authenticated sessions will include the hash returned by this function.\"",
+        "django/contrib/auth/base_user.py:141-143 -- get_session_auth_fallback_hash() is defined only on AbstractBaseUser; grep finds no other definition in the tree",
+        "django/contrib/auth/__init__.py:219-221 -- request.session.flush() / user = None sit in the else branch that is never reached once the generator expression's iterable raises AttributeError",
+        "Base (9b22457987) behaviour for the same input: `if not session_hash_verified: request.session.flush(); user = None` with no call to any other user method"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Concurrent requests during the one-time hash upgrade: on a fallback match get_user() calls request.session.cycle_key() (django/contrib/auth/__init__.py:217), which for server-side backends deletes the old session row (django/contrib/sessions/backends/base.py:298-307). A parallel request still carrying the old cookie that loads its session after that delete sees an empty session (db.py:35-39 sets _session_key = None), is treated as anonymous, and SessionMiddleware emits a delete-cookie for it (django/contrib/sessions/middleware.py:36-42); if that response is applied after the first request's new Set-Cookie, the user is logged out anyway. Unlike login()/update_session_auth_hash(), this cycle happens on an arbitrary first post-rotation request (any page that fires parallel authenticated calls), so the window is wider than existing cycle_key call sites. Timing-dependent; not verified by execution.",
+    "User models that override get_session_auth_hash() while inheriting AbstractBaseUser (supported per docs/topics/auth/default.txt:920-923) do not get the fix: get_session_auth_fallback_hash() always calls the base _get_session_auth_hash() (base_user.py:141-152), so the fallback hash never equals a session hash produced by the override and those sessions are still invalidated on key rotation. The new docs entry (docs/topics/auth/customizing.txt:725-730) does not tell such projects to override both methods."
+  ],
+  "testing_gaps": [
+    "No test exercises the reject path with a non-empty SECRET_KEY_FALLBACKS: the new test covers only a fallback match, and tests/auth_tests/test_middleware.py:27 test_changed_password_invalidates_session runs with the default empty list. A case where the session hash matches neither SECRET_KEY nor any fallback (password changed while fallbacks are configured, or the signing key is absent from the fallbacks) should assert AnonymousUser and a flushed session, since that is the stated must-not-weaken invariant.",
+    "tests/auth_tests/test_basic.py test_get_user_fallback_secret asserts the session key changed and that the user still resolves once the fallback is removed, but never asserts request.session[HASH_SESSION_KEY] equals the hash under the new key directly, and does not cover a match on a non-first entry of a multi-key SECRET_KEY_FALLBACKS list."
+  ]
+}

@@ -49,7 +49,12 @@ is saved to the attempt's rates.json and used for metering; cell.json retains th
 Dry runs, status and filing already-dispatched attempts do not fetch prices.
 
 The clone is made by ``provision.py prepare`` at ``<attempt>/clone`` (cache at ``clone-cache``,
-work directory ``clone-work``). The reviewer's input is ``input.md``: the target's ``packet.md``
+work directory ``clone-work``). ``BENCH_CACHE_ROOT`` names a cache root other than the default.
+``BENCH_CACHE_REPLACEMENTS`` lists replacement-cache manifests separated by ``os.pathsep``, for
+targets whose frozen archive was deleted and rebuilt; the cell's target takes the one manifest
+that lists it, and ``cell.json`` and the attempt's notes record that manifest's hash and its path,
+relative to the repository when it is inside it.
+The reviewer's input is ``input.md``: the target's ``packet.md``
 bytes, then the run policy rendered from the manifest's ``execution_policy`` and the target's
 allowance and unavailability, with ``<clone>``, ``<cache>`` and the work directory explained by
 their absolute paths. The policy text before substitution is identical for every arm on a target;
@@ -413,6 +418,21 @@ def extract_skill_tree(work: Path, tree: str) -> Path:
     return destination
 
 
+def cache_selection(target_id: str) -> tuple:
+    """The provisioning arguments for the environment's cache root and the target's replacement manifest."""
+    root = os.environ.get("BENCH_CACHE_ROOT")
+    argv = ["--cache-root", root] if root else []
+    listing = [Path(path).resolve() for path in os.environ.get("BENCH_CACHE_REPLACEMENTS", "").split(os.pathsep)
+               if path and any(entry["target"] == target_id for entry in read_json(path)["targets"])]
+    if len(listing) > 1:
+        raise Refused(f"{target_id} is listed by {len(listing)} cache replacement manifests")
+    if not listing:
+        return argv, None
+    manifest = listing[0]
+    recorded = manifest.relative_to(REPO).as_posix() if manifest.is_relative_to(REPO) else str(manifest)
+    return argv + ["--cache-replacements", str(manifest)], {"path": recorded, "sha256": sha256_file(manifest)}
+
+
 def dispatch(run: Run, attempt_id: str, claim: dict) -> None:
     directory = run.work / attempt_id
     cell = claim["cell"]
@@ -433,7 +453,11 @@ def dispatch(run: Run, attempt_id: str, claim: dict) -> None:
             env["SKILL_TREE"] = str(extract_skill_tree(run.work, tree))
             env["SKILL_TREE_ID"] = tree
         clone = directory / "clone"
-        prepared = tool([sys.executable, str(TOOLS / "provision.py"), "prepare", "--target", str(target_dir), "--out", str(clone)])
+        cache_argv, replacement = cache_selection(cell["target"])
+        if replacement:
+            claim["cache_replacements"] = replacement
+        prepared = tool([sys.executable, str(TOOLS / "provision.py"), "prepare", "--target", str(target_dir),
+                         "--out", str(clone), *cache_argv])
         (directory / "prepare.json").write_text(prepared.stdout, encoding="utf-8")
         if prepared.returncode != 0:
             raise InputError(f"provision.py prepare failed: {prepared.stdout.strip()} {prepared.stderr.strip()}")
@@ -487,6 +511,9 @@ def file(run: Run, attempt_id: str) -> dict:
             "--replicate", str(cell["replicate"]), "--out", str(run.dir / "attempts" / attempt_id),
             "--expect-cli-version", entry["expected_cli_version"],
             "--note", f"input.md sha256 {claim.get('input_sha256')}; run policy sha256 {claim.get('policy_sha256')} (before path substitution)"]
+    if claim.get("cache_replacements"):
+        replacement = claim["cache_replacements"]
+        argv += ["--note", f"dependency cache rebuilt: replacement manifest {replacement['path']} sha256 {replacement['sha256']}"]
     if (arm["kind"] == "review-code" or arm["kind"] in SKILL_RUNNERS) and entry.get("resolved_skill_tree"):
         argv += ["--expect-skill-tree", entry["resolved_skill_tree"]]
     if (directory / "rates.json").is_file():
@@ -688,6 +715,7 @@ def self_test() -> int:
         def fake_tool(argv, env=None):
             calls.append(Path(argv[1] if argv[0] == sys.executable else argv[0]).name)
             if calls[-1] == "provision.py":
+                provisioned.append(argv[argv.index("--out") + 2:])
                 return subprocess.CompletedProcess(argv, 0, "{}", "")
             assert env["ATTEMPT_BUDGET_USD"] == "5.0", env.get("ATTEMPT_BUDGET_USD")
             if started:
@@ -704,9 +732,32 @@ def self_test() -> int:
             calls.clear()
             return run
 
-        real_tool, started = tool, False
+        real_tool, real_repo, started, provisioned = tool, REPO, False, []
+        listing, other = base / "listing.json", base / "other.json"
+        listing.write_text(json.dumps({"targets": [{"target": "t1"}]}), encoding="utf-8")
+        other.write_text(json.dumps({"targets": [{"target": "t2"}]}), encoding="utf-8")
+        selected = {"path": str(listing.resolve()), "sha256": sha256_file(listing)}
+        cache_env = {"BENCH_CACHE_ROOT": str(base / "cache"), "BENCH_CACHE_REPLACEMENTS": os.pathsep.join([str(other), str(listing)])}
+        saved_env = {name: os.environ.get(name) for name in cache_env}
         globals()["tool"] = fake_tool
         try:
+            os.environ.update(cache_env)
+            assert cache_selection("t1") == (["--cache-root", str(base / "cache"), "--cache-replacements", selected["path"]], selected)
+            assert cache_selection("t3") == (["--cache-root", str(base / "cache")], None)
+            globals()["REPO"] = base.resolve()
+            assert cache_selection("t1") == (["--cache-root", str(base / "cache"), "--cache-replacements", selected["path"]],
+                                             {**selected, "path": "listing.json"})
+            globals()["REPO"] = real_repo
+            os.environ["BENCH_CACHE_REPLACEMENTS"] = os.pathsep.join([str(listing), str(listing)])
+            try:
+                cache_selection("t1")
+            except Refused as caught:
+                assert "listed by 2 cache replacement manifests" in str(caught), str(caught)
+            else:
+                raise AssertionError("two manifests for one target: not refused")
+            for name in cache_env:
+                os.environ.pop(name)
+            assert cache_selection("t1") == ([], None)
             for kind, error, needle, ran in (("codex", InputError, "before the reviewer started: no packet", ["provision.py", "dispatch.sh"]),
                                              ("review-code", Refused, "no resolved_skill_tree", [])):
                 run = claimed("att-006", kind)
@@ -718,10 +769,15 @@ def self_test() -> int:
                     raise AssertionError(f"{kind}: not refused")
                 assert not (work / "att-006").exists() and calls == ran, (kind, calls)
             started = True
+            os.environ.update(cache_env)
             dispatch(claimed("att-006", "codex"), "att-006", {"cell": parse_key("t1/arm-a/3")})
             assert (work / "att-006" / "cell.json").is_file() and "att-006" in fresh().in_flight()
+            assert provisioned[-1] == ["--cache-root", str(base / "cache"), "--cache-replacements", selected["path"]], provisioned
+            assert read_json(work / "att-006" / "cell.json")["cache_replacements"] == selected
         finally:
-            globals()["tool"] = real_tool
+            globals().update(tool=real_tool, REPO=real_repo)
+            for name, value in saved_env.items():
+                os.environ.pop(name, None) if value is None else os.environ.update({name: value})
     print("self-test ok")
     return 0
 

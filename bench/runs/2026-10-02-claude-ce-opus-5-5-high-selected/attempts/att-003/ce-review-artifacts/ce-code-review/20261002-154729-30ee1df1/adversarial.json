@@ -1,0 +1,52 @@
+{
+  "reviewer": "adversarial",
+  "findings": [
+    {
+      "title": "Repeated-field query now costs two AST prints per pair",
+      "severity": "P1",
+      "file": "src/validation/rules/OverlappingFieldsCanBeMergedRule.ts",
+      "line": 591,
+      "why_it_matters": "A small query that repeats one field many times now blocks validation for tens of seconds where it used to take a fraction of a second: a ~6 KB document `{ g g g ... }` with 3000 argument-less repeats went from 437 ms to 25,373 ms (about 58x) in a side-by-side run of the base and head rule; with arguments the slowdown is roughly 3x. The rule compares every pair of same-named fields (n^2/2 pairs), and each pair now builds a synthetic object, sorts it, and runs the full visitor-based `print` twice, even when both fields have no arguments; the removed `sameArguments` returned immediately on two empty lists and short-circuited on length mismatch. Restoring a cheap path for the common case (or computing each field's argument string once) removes the per-pair printing and returns the cost to the old level.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Keep the per-pair work cheap. Either (a) restore the pairwise `sameArguments(args1, args2)` with its `arguments1.length !== arguments2.length` early return and add an explicit fast path for two empty argument lists, or (b) keep `stringifyArguments` but memoize it per FieldNode (e.g. a `Map<FieldNode, string>` created alongside `cachedFieldsAndFragmentNames` in the rule and threaded into `findConflict`) and return a constant such as '{}' without calling `print` when `fieldNode.arguments` is empty. Option (b) preserves the simplification while making printing O(fields) instead of O(pairs). Re-run a repeated-field timing (e.g. 3000 repeats of an argument-less field) against the base commit to confirm parity.",
+      "confidence": 100,
+      "evidence": [
+        "src/validation/rules/OverlappingFieldsCanBeMergedRule.ts:591 -- if (stringifyArguments(node1) !== stringifyArguments(node2)) {",
+        "src/validation/rules/OverlappingFieldsCanBeMergedRule.ts:649 -- return print(sortValueNode(inputObjectWithArgs));  (runs a full visit() per call, twice per compared field pair, with no caching and no empty-arguments fast path)",
+        "Removed base code (730d5af8): `if (arguments1.length !== arguments2.length) { return false; } return arguments1.every(...)` -- for two argument-less fields this did no printing at all.",
+        "Scenario: document `{ ` + 'g '.repeat(n) + `}` against `type Query { g: String }`, validated with only OverlappingFieldsCanBeMergedRule; base rule extracted from 730d5af8 and head rule run in the same process (second run timed after a warm-up run). Measured: n=300 base 6.7 ms vs head 271.9 ms; n=1000 base 74.0 ms vs head 2974.1 ms; n=3000 base 436.6 ms vs head 25373.2 ms. Zero errors reported in all cases, so the document is otherwise valid.",
+        "Scenario with arguments: `{ ` + 'f(a: 1, b: 2) '.repeat(n) + `}`: n=300 base 696.5 ms vs head 2175.2 ms; n=1000 base 7268.3 ms vs head 19651.8 ms (about 2.7-3.1x).",
+        "Timings were taken under the repo's Babel on-the-fly transpilation with the register cache disabled, so absolute numbers differ from a production build; the base/head ratio is the relevant signal."
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Duplicate-named arguments flip the rule's verdict both ways",
+      "severity": "P3",
+      "file": "src/validation/rules/OverlappingFieldsCanBeMergedRule.ts",
+      "line": 643,
+      "why_it_matters": "The stated intent is that verdicts stay unchanged, but two documents with repeated argument names now get the opposite answer from this rule: `{ f(a: 1, a: 2) f(a: 1, a: 2) }` used to report 'differing arguments' and now reports nothing, while `{ f(a: 1, a: 1) f(a: 1, b: 2) }` used to pass and now reports a conflict. The old code looked up arguments by first matching name, the new code compares the whole sorted list. Both documents are already rejected by UniqueArgumentNamesRule in the default rule set and the new answers are the more accurate ones, so the visible effect is limited to a changed error count for already-invalid documents and to callers running this rule on its own.",
+      "autofix_class": "advisory",
+      "owner": "human",
+      "requires_verification": false,
+      "suggested_fix": "No code change needed if the new verdicts are accepted as the intended behaviour; in that case add two test cases to src/validation/__tests__/OverlappingFieldsCanBeMergedRule-test.ts pinning `{ f(a: 1, a: 2) f(a: 1, a: 2) }` as no conflict and `{ f(a: 1, a: 1) f(a: 1, b: 2) }` as 'they have differing arguments', and note the behaviour change in the commit message rather than describing the change as a pure simplification.",
+      "confidence": 50,
+      "evidence": [
+        "src/validation/rules/OverlappingFieldsCanBeMergedRule.ts:643 -- fields: args.map((argNode) => ({  (every argument, including repeated names, becomes an object field and takes part in the string comparison)",
+        "Removed base code: `const argument2 = arguments2.find((argument) => argument.name.value === argument1.name.value)` -- only the first argument with a given name was ever compared.",
+        "Side-by-side run of base (730d5af8) and head rule, rule run in isolation: `{ f(a: 1, a: 2) f(a: 1, a: 2) }` base -> 'Fields \"f\" conflict because they have differing arguments', head -> no error; `{ f(a: 1, a: 1) f(a: 1, b: 2) }` base -> no error, head -> 'Fields \"f\" conflict because they have differing arguments'.",
+        "Unchanged in both versions (checked): reordered arguments, reordered input-object fields, differing argument counts, argument vs no argument, and `{ f(a: 1, a: 2) f(a: 2, a: 1) }` (conflict in both)."
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "The with-arguments case at n=3000 on head was not timed to completion (run was stopped at the time limit after base took 67 s); the ~3x ratio is taken from n=300 and n=1000 only.",
+    "Timings were measured through Babel on-the-fly transpilation rather than the published build, so absolute durations are indicative; only the base/head ratio was established."
+  ],
+  "testing_gaps": [
+    "No benchmark under benchmark/ exercises OverlappingFieldsCanBeMergedRule with many same-named fields (the quadratic pair path), so a per-pair cost increase like this one passes the existing suite and benchmarks unnoticed."
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "reviewer": "reliability",
+  "findings": [
+    {
+      "title": "assume_role with pool calls Django wrapper from pool worker thread",
+      "severity": "P1",
+      "file": "django/db/backends/postgresql/base.py",
+      "line": 101,
+      "why_it_matters": "With OPTIONS {'pool': ..., 'assume_role': ...} no pooled connection can ever be configured, so the pool never fills and every request blocks for the pool timeout (30s default) and then fails with PoolTimeout. The pool runs _configure_connection on its own worker thread, but ensure_role() calls ops.compose_sql(), which does mogrify(sql, params, self.connection) with self.connection being the thread-bound DatabaseWrapper, and mogrify calls wrapper.cursor(). If the wrapper is already connected, validate_thread_sharing() raises DatabaseError from the worker thread (reproduced offline); if it is not connected, wrapper.cursor() -> connect() -> pool.getconn() waits on the very pool that is mid-configure. The code comment in _configure_connection says not to touch self, yet ensure_role(connection, self.ops, ...) does so indirectly. Fix by composing the SQL without the Django wrapper (psycopg ClientCursor(connection).mogrify on the raw pool connection), so the callback only uses the raw connection it was handed.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In ensure_role(), stop using ops.compose_sql (which routes through the DatabaseWrapper). For psycopg3 build the statement from the raw connection: `from psycopg import ClientCursor; sql = ClientCursor(connection).mogrify('SET ROLE %s', [role_name])` (psycopg2 path can keep ops.compose_sql since pools are psycopg3-only), or use psycopg.sql.SQL('SET ROLE {}').format(sql.Identifier(role_name)) is NOT equivalent (current behavior quotes as literal), so prefer ClientCursor.mogrify. Add a pool + assume_role test (the existing test_connect_role was switched to no_pool_connection, so the combination is untested).",
+      "confidence": 75,
+      "evidence": [
+        "django/db/backends/postgresql/base.py:101 -- sql = ops.compose_sql(\"SET ROLE %s\", [role_name])",
+        "django/db/backends/postgresql/operations.py:193 -- return mogrify(sql, params, self.connection)",
+        "django/db/backends/postgresql/psycopg_any.py:21 -- with connection.cursor() as cursor:  (connection is the DatabaseWrapper)",
+        "django/db/backends/postgresql/base.py:369-381 -- _configure_connection comment: 'does not access anything on self aside from variables', then ensure_role(connection, self.ops, role_name)",
+        "Offline repro (scratch sim_rel.py): wrapper with pool+assume_role, wrapper.connection set, _configure_connection(raw) from another thread -> DatabaseError('DatabaseWrapper objects created in a thread can only be used in that same thread...')",
+        "psycopg_pool/pool.py _add_connection: configure exceptions are caught as CLIENT_EXCEPTIONS, logged as a warning and rescheduled, so callers only see PoolTimeout"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Pool configure failures surface only as 30s PoolTimeout, hiding root cause",
+      "severity": "P2",
+      "file": "django/db/backends/postgresql/base.py",
+      "line": 347,
+      "why_it_matters": "If the configure callback fails (e.g. nonexistent assume_role, invalid TIME_ZONE, revoked SET ROLE privilege), psycopg_pool catches the exception in its worker, logs only a warning on the 'psycopg.pool' logger and keeps retrying for reconnect_timeout (300s). The request thread blocked in getconn() raises PoolTimeout after the pool timeout (30s) with no mention of the real error, whereas the non-pooled path fails immediately with the PostgreSQL error (test_connect_role asserts that for the non-pool case, and the diff had to bypass the pool in that test). Every request stalls 30s during a role/credential misconfiguration, tying up worker threads, and operators see a generic timeout. Capturing the last configure error and chaining it onto the PoolTimeout (or failing fast) restores a diagnosable failure.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Wrap the configure callback passed to ConnectionPool so it records the last exception (e.g. self._last_configure_error = exc; re-raise), and in get_new_connection catch PoolTimeout around self.pool.getconn() and raise it `from` the recorded error (or include its message). Assumption: keeping psycopg_pool's retry semantics is desired; only the error reporting changes.",
+      "confidence": 75,
+      "evidence": [
+        "django/db/backends/postgresql/base.py:347-348 -- self.pool.open() / connection = self.pool.getconn()",
+        "django/db/backends/postgresql/base.py:233-234 -- configure=self._configure_connection,",
+        "psycopg_pool/pool.py:_add_connection -- except CLIENT_EXCEPTIONS as ex: logger.warning(\"error connecting in %r: %s\", ...) then schedule_task(AddConnection(...), attempt.delay)",
+        "tests/backends/postgresql/tests.py:795 -- test_connect_role switched to no_pool_connection(), i.e. pooled behavior for a bad role is not covered"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Pool slot depletion: a pooled connection is only returned via DatabaseWrapper._close/putconn. Threads that use the ORM and exit without connections.close_all() (ThreadPoolExecutor workers, management-command threads) never return their connection; the pool's accounting is never decremented, so max_size slots can be lost permanently and later callers get PoolTimeout after the pool timeout. Previously the leaked raw connection was simply closed by GC. The new docs section does not warn about this.",
+    "The pool's configure callback is a bound method of the first DatabaseWrapper that creates the pool (class-level _connection_pools keyed by alias only), so it keeps that thread's wrapper alive and reads its ops/settings_dict/timezone_name from worker threads; later per-thread wrappers with changed settings (tests changing TIME_ZONE/OPTIONS) are only honored because close_pool() is invoked from ensure_timezone().",
+    "close_pool() does `if self.pool: self.pool.close(); del self._connection_pools[self.alias]` with no lock: concurrent callers can hit KeyError on the del, and calling it on an alias with no pool constructs a pool just to close it (and raises ImproperlyConfigured when CONN_MAX_AGE != 0). Only reachable from test-DB clone/destroy and the test setting_changed signal in this diff.",
+    "Pool is created from get_connection_params() at first use; if anything connects through the pooled alias before create_test_db switches settings_dict['NAME'], the pool keeps targeting the original database (only _clone_test_db and _destroy_test_db close it). Not hit in the normal runner flow as inspected."
+  ],
+  "testing_gaps": [
+    "No test covers pool + assume_role together (existing role test was changed to bypass the pool), which is exactly the combination that breaks in _configure_connection.",
+    "No test for pool exhaustion recovery when a wrapper's connection is closed inside an atomic block (close() -> putconn -> connection=None -> ProgrammingError path) beyond the unit test that sets the flags manually."
+  ]
+}
