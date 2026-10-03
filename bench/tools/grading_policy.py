@@ -13,7 +13,7 @@ import sys
 VERSION = 1
 INSPECTIONS = {"rg", "cat", "sed", "head", "tail", "ls", "wc", "git"}
 READABLE = {"clone", "clone-cache", "clone-work", "tmp", "reviews", "validator", "evidence",
-            "packet.md", "prompt.md", "rubric.md", "register.json", "claims.md", "verdicts.json"}
+            "packet.md", "prompt.md", "rubric.md", "references.json", "claims.md", "verdicts.json"}
 WRITABLE = {"clone-cache", "clone-work", "tmp"}
 
 

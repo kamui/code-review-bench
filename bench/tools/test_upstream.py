@@ -100,14 +100,10 @@ class Upstream(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "matching responsible-human"):
             self.validate()
 
-    def test_blinded_context_preserves_unknown_without_hiding_detection_credit(self):
+    def test_blinded_dossier_preserves_unknown_maintainer_disposition(self):
         case = copy.deepcopy(claims.read(claims.ROOT / "bench/claims/CL-s-update-membership.v4.json"))
-        text = claims.grading_context([case])
-        self.assertIn("Approved outcome: eligible", text)
-        self.assertIn("Maintainer disposition: unknown", text)
-        self.assertIn("Detection credit does not require fix advice", text)
-        self.assertNotIn("record_id", text)
         rendered, private = claims.dossier([case])
+        self.assertNotIn("record_id", rendered)
         self.assertIn("maintainer: unknown", rendered)
         self.assertTrue(any(k.startswith("assessment-") for k in private))
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare a complete reconciliation queue without altering saved reviews or grades."""
+"""Plan the current grading queue without altering saved reviews or grades."""
 
 import argparse
 import json
@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def plan(root=ROOT):
-    selected, documents = current_grading.load_current(root)
+    selected, documents = current_grading.load_current(root, grades=False)
     targets = [{"target": r["target"], "revision": r["revision"], "families": [f["id"] for f in r["families"]],
                 "control": r["control"], "referenceAudit": "pending"}
                for r in documents["reference"]["targets"]]
@@ -26,11 +26,14 @@ def plan(root=ROOT):
                         "review": attempt["review"], "record": attempt["record"], "items": len(document["items"]),
                         "parseStatus": document["parse_status"], "admission": attempt["admission"],
                         "action": "current-claim-assessment", "reason": "Selected scheduled cell and pinned source identity"})
-    batches = [{**batch, "inputFingerprint": current_grading.grading_fingerprint(batch, selected, documents, documents["policy"], root)}
-               for batch in selected["batches"]]
+    batches = []
+    for batch in selected["batches"]:
+        fingerprint, state = current_grading.batch_state(batch, selected, documents, root)
+        batches.append({**batch, "inputFingerprint": fingerprint, "state": state})
     return {"schemaVersion": 1, "contract": "current-reconciliation/v1", "counts": selected["counts"],
             "publication": "pending current assessments, reference calibration and evaluator audit",
             "targets": targets, "reviews": reviews, "batches": batches,
+            "pendingCandidates": [c for c in documents["candidate"]["candidates"] if c["decision"] is None],
             "sharedClaimItems": [{"claim": c["id"], "target": c["target"], "links": c["links"], "adjudication": c["adjudication"]}
                                  for c in documents["claim"]["claims"]]}
 
@@ -38,12 +41,14 @@ def plan(root=ROOT):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", required=True, type=Path)
+    parser.add_argument("--root", type=Path, default=ROOT, help="repository or fixture root holding bench/")
     args = parser.parse_args()
-    result = plan()
+    result = plan(args.root)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with args.out.open("x", encoding="utf-8") as handle:
         handle.write(json.dumps(result, indent=2) + "\n")
-    print(f"Saved {len(result['reviews'])} selected reviews, {len(result['batches'])} batches, "
+    waiting = sum(batch["state"] != "current" for batch in result["batches"])
+    print(f"Saved {len(result['reviews'])} selected reviews, {len(result['batches'])} batches ({waiting} awaiting grading), "
           f"{len(result['sharedClaimItems'])} shared-claim links. No grades changed.")
 
 
