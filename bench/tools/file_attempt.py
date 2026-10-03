@@ -7,6 +7,7 @@ Usage::
         --arm bench/arms/<arm>.json --run-id <run> --attempt-id att-NNN --replicate N \\
         --out bench/runs/<run>/attempts/att-NNN [--predecessor att-MMM --retry-reason TEXT] \\
         [--replacement-index K] [--replay [--audit-allowed-prefix P ...]] [--note TEXT ...] \\
+        (--billing-mode api|subscription | --legacy-rate-billing) \\
         [--archive-root DIR] [--harness-dir DIR] [--rates FILE] \\
         [--expect-cli-version TEXT] [--expect-skill-tree SHA]
     python3 bench/tools/file_attempt.py --self-test
@@ -58,6 +59,10 @@ to ``<archive-root>/<run>/<attempt>.tar.gz`` (default ``~/.t3/bench-cache/transc
 the repository, because the built-in's proprietary prompt is in them), hashed, and restored into
 a scratch directory to check every member's bytes.
 
+Account billing comes from ``--billing-mode``, independently of the price table. Subscription
+usage is a list-price equivalent; API usage is labeled api-dollars. ``--legacy-rate-billing``
+explicitly reproduces the rate-table label for historical attempts.
+
 The output directory gets ``attempt.json`` plus the small artifacts: ``dispatch.txt``,
 ``timing.json``, ``audit.json``, ``normalized.json``, the native output, ``usage-requests.jsonl``
 and ``stop.json`` when present. A stopped attempt that returned no native output records
@@ -91,6 +96,7 @@ BENCH = HERE.parent
 sys.path.insert(0, str(HERE))
 import check_manifest  # noqa: E402
 import review_isolation  # noqa: E402
+import native_artifacts  # noqa: E402
 
 KINDS = ("review-code", "claude-builtin", "claude-skill", "codex", "codex-skill")
 SKILL_RUNNER_KINDS = ("codex-skill", "claude-skill")
@@ -494,6 +500,8 @@ def file_attempt(args) -> tuple:
         raise FileError(f"{args.arm}: unknown kind {kind!r}")
     target = read_json(os.path.join(args.target, "target.json"))
     rates = read_json(args.rates)
+    if args.billing_mode not in ("api", "subscription") and not args.legacy_rate_billing:
+        raise FileError("declare --billing-mode api or subscription; --legacy-rate-billing is only for historical attempts")
     harness_dir = Path(args.harness_dir)
     profile = arm.get("isolation", {}).get("sandbox")
     superseded = replay(kind, attempt_dir, clone, args.audit_allowed_prefix or [],
@@ -591,6 +599,10 @@ def file_attempt(args) -> tuple:
     priced = low = high = None
     status = "complete"
     rate = rate_for(rates, models[0]) if len(models) == 1 else None
+    if args.billing_mode:
+        billing_label = "list-price-equivalent" if args.billing_mode == "subscription" else "api-dollars"
+    else:
+        billing_label = "list-price-equivalent" if rate and rate["billing"].startswith("list-price") else "api-dollars"
     if rate is None:
         status = "incomplete"
         notes.append(f"usage not priced: observed models {models or 'none'} do not map to one rates.json entry")
@@ -700,10 +712,14 @@ def file_attempt(args) -> tuple:
     if codex_config.is_file():
         shutil.copy2(codex_config, Path(out) / "codex-config.toml")
     native_name = os.path.basename(native_rel)
+    artifact_storage = None
     if kind in SKILL_RUNNER_KINDS and native_root:
         artifact_dir = native_root.name
-        shutil.copytree(native_root, os.path.join(out, artifact_dir), dirs_exist_ok=True)
-        shutil.copy2(os.path.join(attempt_dir, "native-artifacts.json"), os.path.join(out, "native-artifacts.json"))
+        try:
+            artifact_storage = native_artifacts.file_artifacts(
+                native_root, Path(attempt_dir) / "native-artifacts.json", Path(out), native_relative)
+        except (native_artifacts.ArtifactError, OSError, ValueError, KeyError) as error:
+            raise FileError(f"native artifact storage: {error}") from error
         if os.path.exists(os.path.join(attempt_dir, "skill-attempt.json")):
             shutil.copy2(os.path.join(attempt_dir, "skill-attempt.json"), os.path.join(out, "skill-attempt.json"))
         if native_path:
@@ -756,7 +772,8 @@ def file_attempt(args) -> tuple:
         "usage": {"requests": "usage-requests.jsonl", "priced_total_usd": priced,
                   "cost_bounds_usd": {"low": low, "high": high},
                   "rates_as_of": rate["as_of"] if rate else "n/a",
-                  "billing": "list-price-equivalent" if rate and rate["billing"].startswith("list-price") else "api-dollars",
+                  "billing": billing_label,
+                  "billing_source": "declared" if args.billing_mode else "legacy-rate-table",
                   "quota_consumed": None, "metering_status": status},
         "timing": {"dispatched_at": dispatched, "payload_validated_at": validated, "completed_at": completed_value,
                    "stopped_at": stopped_value},
@@ -766,6 +783,10 @@ def file_attempt(args) -> tuple:
         "transcript_archive": archive,
         "notes": notes,
     }
+    if artifact_storage:
+        record["native_artifact_storage"] = artifact_storage
+    if args.billing_mode:
+        record["usage"]["billing_mode"] = args.billing_mode
     return record, out
 
 
@@ -849,12 +870,12 @@ def self_test() -> int:
         (att / "payload.json").write_text("{}", encoding="utf-8")
         subprocess.run(["git", "-C", str(repo), "checkout", "-q", "review-head"], check=True)
 
-        def run(out: str, *extra):
+        def run(out: str, *extra, billing=("--legacy-rate-billing",)):
             return subprocess.run([sys.executable, str(here), "--attempt-dir", str(att), "--clone", str(repo), "--target",
                                    str(temp / "target"), "--arm", str(temp / "arm.json"), "--run-id", "2026-01-01-test",
                                    "--attempt-id", "att-001", "--replicate", "1", "--out", str(temp / out),
                                    "--harness-dir", str(temp / "harness"), "--rates", str(temp / "rates.json"),
-                                   "--archive-root", str(temp / "archive"), *extra],
+                                   "--archive-root", str(temp / "archive"), *billing, *extra],
                                   capture_output=True, text=True, encoding="utf-8")
 
         done = run("o1")
@@ -867,6 +888,25 @@ def self_test() -> int:
         assert rec["observed"]["effort"] == "high" and rec["observed"]["subagent_count"] == 1
         expected_cost = (10 * 2 + 100 * 2.5 + 1000 * 0.2 + 50 * 10) / 1e6
         assert abs(rec["usage"]["priced_total_usd"] - expected_cost) < 1e-9, rec["usage"]
+        assert rec["usage"]["billing_source"] == "legacy-rate-table" and rec["usage"]["billing"] == "api-dollars"
+        rate_doc = read_json(temp / "rates.json")
+        for mode, label in (("subscription", "list-price-equivalent"), ("api", "api-dollars")):
+            rate_doc["rates"][0]["billing"] = "api-dollars" if mode == "subscription" else "list-price-equivalent"
+            (temp / "rates.json").write_text(json.dumps(rate_doc))
+            done = run("billing-" + mode, billing=("--billing-mode", mode))
+            assert done.returncode == 0, done
+            usage = json.loads((temp / ("billing-" + mode) / "attempt.json").read_text())["usage"]
+            assert usage["billing"] == label and usage["billing_mode"] == mode and usage["billing_source"] == "declared", usage
+            assert usage["priced_total_usd"] == rec["usage"]["priced_total_usd"] and usage["cost_bounds_usd"] == rec["usage"]["cost_bounds_usd"], usage
+        rate_doc["rates"][0]["billing"] = "api-dollars"
+        (temp / "rates.json").write_text(json.dumps({"rates": []}))
+        done = run("billing-unpriced", billing=("--billing-mode", "subscription"))
+        assert done.returncode == 0, done
+        usage = read_json(temp / "billing-unpriced" / "attempt.json")["usage"]
+        assert usage["billing"] == "list-price-equivalent" and usage["priced_total_usd"] is None, usage
+        (temp / "rates.json").write_text(json.dumps(rate_doc))
+        done = run("billing-missing", billing=())
+        assert done.returncode == 2 and not (temp / "billing-missing").exists(), done
         assert rec["transcript_archive"]["restoration_check"] == "passed"
         assert (temp / "archive" / "2026-01-01-test" / "att-001.tar.gz").is_file()
         assert (temp / "o1" / "usage-requests.jsonl").read_text(encoding="utf-8").count("\n") == 1
@@ -1016,6 +1056,9 @@ def main() -> int:
     parser.add_argument("--archive-root", default=os.path.join("~", ".t3", "bench-cache", "transcripts"))
     parser.add_argument("--harness-dir", default=str(BENCH / "harness"))
     parser.add_argument("--rates", default=str(BENCH / "rates.json"))
+    billing = parser.add_mutually_exclusive_group()
+    billing.add_argument("--billing-mode", choices=("api", "subscription"), help="account billing, independent of token rates")
+    billing.add_argument("--legacy-rate-billing", action="store_true", help="reproduce historical rate-table billing labels")
     parser.add_argument("--expect-cli-version", help="the CLI version string the run manifest pinned for this arm")
     parser.add_argument("--expect-skill-tree", help="the review-code tree the run manifest resolved")
     args = parser.parse_args()
