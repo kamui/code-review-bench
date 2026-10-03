@@ -10,8 +10,9 @@ callers, from reviewing at once. This holds a lock for its whole life and refuse
 any matrix run has an attempt in flight. Each review is provisioned, dispatched, audited, filed and
 cleaned up by ``run_cell.py --next`` before the next one starts.
 
-It stops, without dispatching again, when a review files as anything but ``valid completed`` (so
-the failure is diagnosed before more usage is spent), when the ChatGPT plan's weekly usage in the
+It stops, without dispatching again, when ``run_cell.py`` exits nonzero, a completed valid attempt
+has no successful cleanup receipt or still holds a clone or cache, or a review files as anything
+but ``valid completed`` (so the failure is diagnosed before more usage is spent), when the ChatGPT plan's weekly usage in the
 last review's sessions has reached ``--weekly-stop`` (default 95), or after ``--count`` reviews
 (default 1). One JSON line per review goes to stdout.
 """
@@ -55,6 +56,24 @@ def in_flight():
     return busy
 
 
+def pending_cleanup():
+    pending = []
+    for directory in sorted((ROOT / "bench/runs").glob("2026-10-0[23]-*")):
+        for record_path in sorted((directory / "attempts").glob("att-*/attempt.json")):
+            workspace = WORK_ROOT / directory.name / record_path.parent.name
+            record = json.loads(record_path.read_text(encoding="utf-8"))
+            if record["disposition"] != "valid completed" or not workspace.exists():
+                continue
+            receipt_path = workspace / "workspace-pruned.json"
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8")) if receipt_path.is_file() else {}
+            candidates = [workspace / name for name in ("clone", "clone-cache")]
+            if workspace.is_symlink() or receipt.get("applied") is not True or any(
+                path.exists() or path.is_symlink() for path in candidates
+            ):
+                pending.append(f"{directory.name}/{record_path.parent.name}")
+    return pending
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("run")
@@ -77,6 +96,9 @@ def main():
         busy = in_flight()
         if busy:
             raise SystemExit(f"attempts in flight: {', '.join(busy)}")
+        pending = pending_cleanup()
+        if pending:
+            raise SystemExit(f"workspace cleanup incomplete: {', '.join(pending)}")
         if used is not None and used >= args.weekly_stop:
             print(json.dumps({"stopped": f"weekly usage {used}% reached the {args.weekly_stop}% stop"}))
             return 0
@@ -84,6 +106,10 @@ def main():
         quota = f"ChatGPT plan, weekly usage {'unknown' if used is None else f'{used}%'} before dispatch; serial dispatch"
         done = subprocess.run([sys.executable, str(TOOLS / "run_cell.py"), "--run", str(run_dir), "--work", str(work),
                                "--next", "--quota", quota], cwd=ROOT, env=env, capture_output=True, text=True)
+        if done.returncode != 0:
+            print(json.dumps({"stopped": "run_cell.py failed", "exit": done.returncode,
+                              "output": (done.stdout + done.stderr)[-600:]}))
+            return 1
         new = sorted({path.name for path in work.glob("att-*")} - before)
         if not new:
             print(json.dumps({"stopped": "nothing dispatched", "exit": done.returncode, "output": (done.stdout + done.stderr)[-600:]}))
