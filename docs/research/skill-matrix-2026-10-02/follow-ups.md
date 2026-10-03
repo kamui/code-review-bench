@@ -1,6 +1,6 @@
 # Follow-ups
 
-Follow-ups from the 2026-10-02 skill-matrix benchmark. The combined-finding rule, link corrections and subscription labels are corrected. Future scratch storage, billing-mode capture and report discoverability are implemented. Regrading remains open.
+Follow-ups from the 2026-10-02 skill-matrix benchmark. The combined-finding rule, link corrections and subscription labels are corrected. Future scratch storage, billing-mode capture and report discoverability are implemented. The affected saved reviews have been regraded and the current registry uses the new results. Held reviewer benchmarks remain separate unfinished work.
 
 ## Combined findings in claim intake
 
@@ -11,7 +11,7 @@ Three blinded assessors linked the new reviews' items to the registered claims (
 
 Both readings pass validation. An `equivalent` link constrains the grader's assignment for that item; a `related` link does not. The difference can therefore change which items a grader may assess freely, though not the eligibility decision.
 
-The user chose the documented rule: relate a combined item to each canonical claim and grade each assertion separately. The workflow now states that the leading problem does not receive an equivalent link. Regrading remains open for the batches whose constraints changed.
+The user chose the documented rule: relate a combined item to each canonical claim and grade each assertion separately. The workflow now states that the leading problem does not receive an equivalent link. The six affected batches were regraded on October 3 as recorded below.
 
 At intake review, seven links were narrowed from `equivalent` to `related` where the assessor itself reported the canonical trigger missing or the finding combined: six grpc-go items on `CL-u-legacy-binarylog` and one django item on `CL-v-psycopg2-pool-doc`.
 
@@ -25,9 +25,19 @@ The five batches containing valid candidates are grpc-go in `2026-10-02-claude-b
 
 The [correction record](combined-findings-correction.v1.json) records 14 narrowed links across six new claim versions. Inspection covered every current-registry item with multiple claim links and an equivalent link, including one additional combined item in the September 30 run. One candidate retains equivalence because it identifies only server-response loss as a production problem; its reference to the request logger describes shared code rather than a separate request-loss allegation. Single-link items were outside this candidate selection.
 
-Eligibility decisions, original claim versions, reviews, grades and published scores remain unchanged. Six existing target batches need fresh grading, covering 28 saved reviews. The record pins their previous mapping hashes and next version numbers. One additional affected run has no prior mapping and only invalid attempts; its corrected links apply if it is graded later. No grader was dispatched for this correction.
+The link correction left eligibility decisions, original claim versions, reviews, grades and published scores unchanged. It identified six target batches for fresh grading, covering 28 saved reviews, and pinned their previous mapping hashes and next version numbers. One additional affected run has no prior mapping and only invalid attempts; its corrected links apply if it is graded later. No grader was dispatched while changing the links.
 
 Validation passed: the registry contains 21 claims and 520 links with no pending eligibility decisions; all six previous mappings remain consistent with the relaxed constraints. Direct comparison verified exactly 14 link edits, unchanged eligibility and evidence, preserved ancestor bytes, and matching source quotes. The claims, claim-grading and grading suites passed 100 tests with one skipped. The grading suite required execution outside the outer sandbox so its own offline sandbox could start. These checks use fake graders and do not replace fresh grading.
+
+### Completed regrading, October 3
+
+The user authorized regrading and publication and confirmed Claude Opus 5.5 High as the default grader. The [authorization](../combined-findings-2026-10-03/authorization.v1.json) pins the six complete-target batches, corrected registry, unchanged rubric and Claude Code 2.1.287. Each batch used a fresh identity-blinded session. The [queue receipt](../combined-findings-2026-10-03/queue-completion.v1.json) records all 28 reviews mapped, no failed attempts, six distinct session and context IDs, $6.602204 in settled list-price-equivalent usage and no outstanding reservations. Two concurrent workers finished in 837.266 seconds of elapsed controller time. The $30 limit was a conservative accounting bound; it did not reset prior usage.
+
+The [publication receipt](../combined-findings-2026-10-03/publication.v1.json) links new result versions for five runs. The [grading audit](../combined-findings-2026-10-03/grading-completion.v1.json) replaces only the six affected batch entries in the earlier audit and preserves its other entries. Earlier mappings, results, raw reviews and eligibility decisions remain unchanged. Every archived member passed its recorded hash check, and each completed grading workspace has a cleanup receipt.
+
+On the five selected tasks, Claude built-in Opus increases from 0.825000 to 0.841667 because `att-022`, `item-6` now receives credit for the already-registered negative LRS overflow problem, `GT-u5`. The grader separated that newly reachable panic from the pre-existing zero/small-negative interval assertion. All other affected setup scores and all false-finding totals stay unchanged. Thermo Sol 6.1 has one fewer unresolved assignment. Review costs and timings are unchanged. See [score changes](../combined-findings-2026-10-03/score-changes.v1.json) and [assertion changes](../combined-findings-2026-10-03/assertion-changes.v1.json).
+
+The fresh sessions reassessed every item in each complete target batch, so these differences cannot all be attributed to the link correction alone. Assertion wording, splitting, duplicate grouping and non-scoring categories also changed. The explorer still contains 17 tasks, 30 known problems, five methods, eight models and 778 attempts.
 
 ## Subscription cost labels
 
