@@ -1,0 +1,21 @@
+{
+  "findings": [
+    {
+      "report_path": "summary.md",
+      "title": "1. The canonical argument string is rebuilt for every field pair instead of once per field",
+      "quote": "In `src/validation/rules/OverlappingFieldsCanBeMergedRule.ts`, `findConflict` now calls `stringifyArguments(node1) !== stringifyArguments(node2)` at line 591, and `stringifyArguments` (lines 637 to 650) allocates a synthetic `ObjectValueNode`, copies and sorts it through `sortValueNode`, and runs `print`, which is a full `visit()` traversal. `findConflict` is called from the two nested loops in `collectConflictsWithin` (line 490) and `collectConflictsBetween` (line 532), so n fields sharing a response name cost n squared printer runs, and the string computed for a node in one comparison is thrown away and recomputed in the next. The base revision was pairwise too, but `sameArguments` returned on `arguments1.length !== arguments2.length` and did no printing at all for empty argument lists; this commit deletes both exits. Measured with only this rule enabled, 300 repeated argument-less fields validate in 7.4 ms at base and 255.8 ms at head, and 1000 such fields in 60.5 ms at base and 2835.9 ms at head, a 47x regression; 100 repeated `f(a: 1)` fields go from 37.0 ms to 111.1 ms. A 2 KB query of the form `{ s s s ... }` therefore costs about three seconds of validation time, which matters because this rule runs on client-supplied documents and a recent commit on this branch (`4175b26e`, \"Prevent Infinite Loop in OverlappingFieldsCanBeMergedRule\") was itself a fix for unbounded work in the same rule. The remedy is to finish the reframing rather than revert it: the string is a function of the field node alone, so compute it once per node and memoize it, for example with a `WeakMap<FieldNode, string>` next to `stringifyArguments`, or in a per-rule cache alongside `cachedFieldsAndFragmentNames` if module-level state is unwanted. A prototype of the `WeakMap` version passes all 46 tests in the rule's test file and validates the same workloads in 8.5 ms, 57.9 ms and 2.6 ms respectively, which is on par with base for argument-less fields and 14x to 50x faster than base for fields with arguments. Full measurements, the commands that produced them, and the worked proposal are in `01_overlapping-fields-argument-comparison.md`.",
+      "file": "src/validation/rules/OverlappingFieldsCanBeMergedRule.ts",
+      "line_start": 637,
+      "line_end": 650
+    },
+    {
+      "report_path": "summary.md",
+      "title": "2. A commit titled \"simplify\" changes what the rule reports for duplicate argument names, with no test",
+      "quote": "The same line, `src/validation/rules/OverlappingFieldsCanBeMergedRule.ts:591`, is not behavior-preserving for fields that repeat an argument name. For `{ f(a: 1, a: 2) f(a: 1, a: 2) }` the base revision reports `Fields \"f\" conflict because they have differing arguments`, because the old `find` always matched the first `a` and compared `2` against `1`; the head revision reports nothing, because both fields print to the same string. I confirmed this by running both revisions of the rule on that document. The new answer is the better one, since the two fields are textually identical and the duplicate is already reported by `UniqueArgumentNamesRule`, but the commit changes no tests and its title says \"simplify\", so the next reader has no way to know the change was intended and nothing stops a later rewrite from flipping it back. Add a test to `src/validation/__tests__/OverlappingFieldsCanBeMergedRule-test.ts` that pins the new behavior for identical fields with duplicated argument names, and say in the commit message that the comparison is no longer strictly equivalent to the old one. Evidence is in the \"Behavior differential\" section of `01_overlapping-fields-argument-comparison.md`.",
+      "file": "src/validation/rules/OverlappingFieldsCanBeMergedRule.ts",
+      "line_start": 591,
+      "line_end": 591
+    }
+  ],
+  "questions": []
+}

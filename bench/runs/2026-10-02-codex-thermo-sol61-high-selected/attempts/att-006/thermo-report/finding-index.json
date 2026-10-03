@@ -1,0 +1,61 @@
+{
+  "findings": [
+    {
+      "report_path": "summary.md",
+      "title": "Collapse the protobuf JSON rendering branches",
+      "quote": "In `internal/pretty/pretty.go:39–61`, the migration makes both protobuf branches use\n`protojson.MarshalOptions` with the same effective indentation, but retains two copies of\nmarshaling, error fallback, and the Any-resolution explanation. The explicit `Multiline: true` in\nthe second branch creates no policy difference: protobuf v1.32.0 treats a nonempty `Indent` as\nmultiline. Normalize v1 inputs with `protoadapt.MessageV2Of` at the input boundary and render all\nprotobuf messages through one branch. This deletes an entire duplicate rendering path and removes\nthe remaining dependency on the old `proto` package from this helper while preserving the ordinary\nJSON fallback. Verification is static against the pinned protobuf implementation; the worked\nreplacement and nil-handling considerations are in\n[04_pretty_and_migration.md](04_pretty_and_migration.md).",
+      "file": "internal/pretty/pretty.go",
+      "line_start": 40,
+      "line_end": 41
+    },
+    {
+      "report_path": "summary.md",
+      "title": "Preserve legacy messages at the default codec boundary",
+      "quote": "In `encoding/proto/proto.go:27`, changing the imported `proto` package rebinds the existing\nassertions in `Marshal` and `Unmarshal` to the v2 interface, which requires `ProtoReflect`. A\nmessage implementing the legacy `Reset`, `String`, and `ProtoMessage` methods now fails both\noperations, although the same message works with the base codec. This changes the accepted RPC\npayload contract during an import migration and makes existing clients or servers using old\ngenerated messages fail before normal application handling. Normalize either message interface to v2\nusing the canonical `protoadapt` conversions, share that normalization between the two codec\nmethods, and retain the existing rejection of unrelated inputs. The overlay reproduction fails both\noperations at head and passes against the base implementation;\n[01_codec_and_binarylog.md](01_codec_and_binarylog.md) contains the evidence and worked boundary\ndesign.",
+      "file": "encoding/proto/proto.go",
+      "line_start": 27,
+      "line_end": 27
+    },
+    {
+      "report_path": "summary.md",
+      "title": "Preserve legacy payloads in both binary-log directions",
+      "quote": "In `internal/binarylog/method_logger.go:31`, the new `proto` import also narrows the existing\nassertions in `ClientMessage.toProto` and `ServerMessage.toProto`. A legacy protobuf message falls\ninto the unsupported-input branch and produces a normal message log entry with empty data and length\nzero instead of its serialized payload. Both directions reproduce this loss at head, while the base\nimplementations record the expected eight bytes. Fix the logging boundary independently of the codec\nso legacy messages remain loggable, including when an application uses a compatible custom codec.\nExtract the repeated payload conversion into one local helper that accepts v1 messages, v2 messages,\nand `[]byte`, using `protoadapt` for conversion and retaining the current logging behavior for\nfailures. [01_codec_and_binarylog.md](01_codec_and_binarylog.md) supplies the results and a concrete\nsimplification.",
+      "file": "internal/binarylog/method_logger.go",
+      "line_start": 31,
+      "line_end": 31
+    },
+    {
+      "report_path": "summary.md",
+      "title": "Unwrap status details before returning them to callers",
+      "quote": "In `internal/status/status.go:158–163`, `Details` appends the direct result of `Any.UnmarshalNew`,\nalthough `WithDetails` explicitly continues to accept `protoadapt.MessageV1`. For a registered\nlegacy message, `WithDetails` succeeds but `Details()[0]` is now `*impl.messageIfaceWrapper` rather\nthan the original concrete message type; callers' type switches stop recognizing the detail, and\ndirect type assertions can panic. The old `ptypes.DynamicAny` path performed the conversion back to\nv1. Append `protoadapt.MessageV1Of(detail)` after a successful decode so the compatibility wrapper\nstays inside the status implementation. Add a registered legacy-only round-trip case and avoid using\ndirect v2 assertions to verify fixtures that are declared as v1 messages. The concrete-type\nreproduction fails at head and passes with the base implementation; [02_status.md](02_status.md)\nexplains the adapter symmetry and testing gap.",
+      "file": "internal/status/status.go",
+      "line_start": 158,
+      "line_end": 163
+    },
+    {
+      "report_path": "summary.md",
+      "title": "Keep duration overflow rejection at both configuration boundaries",
+      "quote": "In `balancer/rls/config.go:310` and `xds/internal/xdsclient/transport/loadreport.go:173–177`,\nreplacing `ptypes.Duration` with `CheckValid` plus `AsDuration` removes rejection of values that are\nvalid protobuf durations but exceed Go's `time.Duration` range. A duration of 315576000000 seconds\nnow becomes 2562047h47m16.854775807s with no error; the base rejects it. RLS can consequently accept\nan unrepresentable lookup timeout, and LRS can accept an interval that effectively stops periodic\nreporting for centuries. Keep protobuf validity and Go representability as one checked conversion\ncontract, with nil-as-unset handled only by the RLS caller. A small conversion helper can validate,\nconvert, and compare `durationpb.New(converted)` with the original seconds and nanos to detect\nsaturation without hand-maintained integer-bound arithmetic. Positive and negative overflow\nreproduce in RLS, and positive overflow reproduces in LRS; all pass against the base\nimplementations. [03_durations_and_lrs.md](03_durations_and_lrs.md) gives the evidence and worked\nconversion.",
+      "file": "balancer/rls/config.go",
+      "line_start": 310,
+      "line_end": 310
+    },
+    {
+      "report_path": "summary.md",
+      "title": "Return the LRS duration validation error",
+      "quote": "In `xds/internal/xdsclient/transport/loadreport.go:174–175`, the condition discards the error\nreturned by `rInterval.CheckValid()` and formats the earlier `stream.Recv()` error instead. That\nearlier error is necessarily nil on this path, so an interval with out-of-range nanos returns\n`invalid load_reporting_interval: <nil>` and loses the reason the server response was rejected. Bind\nthe validation error in the conditional, or format the error returned by the checked duration\nconversion proposed above. This preserves the diagnostic boundary and removes reliance on an\nunrelated variable. The invalid-nanos reproduction fails at head and passes against the base\nimplementation; [03_durations_and_lrs.md](03_durations_and_lrs.md) records the exact result.",
+      "file": "xds/internal/xdsclient/transport/loadreport.go",
+      "line_start": 174,
+      "line_end": 175
+    }
+  ],
+  "questions": [
+    {
+      "report_path": "summary.md",
+      "quote": "In `test/tools/go.mod:7`, why does switching `protoc-gen-go` also downgrade `golang.org/x/tools`\nfrom v0.17.0 to v0.14.0? Please identify a requirement for the downgrade or retain the base version.\nThis is a scope question, not a demonstrated defect;\n[04_pretty_and_migration.md](04_pretty_and_migration.md) records the manifest evidence and\nverification limit.",
+      "file": "test/tools/go.mod",
+      "line_start": 7,
+      "line_end": 7
+    }
+  ]
+}

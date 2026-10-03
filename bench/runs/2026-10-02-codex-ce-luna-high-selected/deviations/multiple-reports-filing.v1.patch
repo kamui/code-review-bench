@@ -1,0 +1,57 @@
+diff --git a/bench/tools/file_attempt.py b/bench/tools/file_attempt.py
+index 7ef3c141..58cf1de6 100644
+--- a/bench/tools/file_attempt.py
++++ b/bench/tools/file_attempt.py
+@@ -315,8 +315,10 @@ def codex_skill_observed(paths: list) -> tuple:
+     return sorted(models), sorted(efforts), sorted(sandboxes), requests
+ 
+ 
+-def codex_skill_report(attempt_dir: str, native_file: str = "review.json") -> tuple:
+-    """Return the unique CE ``review.json`` and its artifact-root metadata."""
++def codex_skill_report(attempt_dir: str, native_file: str = "review.json", stopped: bool = False) -> tuple:
++    """Return the unique CE ``review.json`` and its artifact-root metadata.
++
++    A stopped attempt with several reports has no native payload: the runner already stopped it for that."""
+     index_path = Path(attempt_dir, "native-artifacts.json")
+     if not index_path.is_file():
+         return None, None, None
+@@ -344,7 +346,7 @@ def codex_skill_report(attempt_dir: str, native_file: str = "review.json") -> tu
+             raise FileError(f"native artifact changed since indexing: {relative}")
+     matches = [row for row in rows if Path(row["path"]).name == native_file]
+     if len(matches) != 1:
+-        if not matches:
++        if not matches or stopped:
+             return None, root, None
+         raise FileError(f"expected one native {native_file} in {index_path}, found {len(matches)}")
+     relative = Path(matches[0]["path"])
+@@ -519,7 +521,7 @@ def file_attempt(args) -> tuple:
+         normalizer = skill_config.get("normalizer", {})
+         native_file = normalizer.get("native_file") or (
+             "finding-index.json" if normalizer.get("kind") == "thermo" else "review.json")
+-        native_path, native_root, native_relative = codex_skill_report(attempt_dir, native_file)
++        native_path, native_root, native_relative = codex_skill_report(attempt_dir, native_file, stopped)
+     if not native_path or not os.path.exists(native_path):
+         if not stopped:
+             raise FileError(f"native output {native_path} is missing")
+@@ -784,6 +786,21 @@ def self_test() -> int:
+         assert observed[3] == [{"thread": root_rollout.name, "timestamp": None, "model": "gpt-6-luna",
+                                 "input_tokens": 3, "cached_input_tokens": 0, "cache_write_input_tokens": 0,
+                                 "output_tokens": 2, "reasoning_output_tokens": 0}], observed[3]
++        twice = temp / "twice"
++        rows = []
++        for name in ("first", "second"):
++            report = twice / "reports" / name / "review.json"
++            report.parent.mkdir(parents=True)
++            report.write_text(name, encoding="utf-8")
++            rows.append({"path": f"{name}/review.json", "bytes": len(name), "sha256": sha256_file(report)})
++        (twice / "native-artifacts.json").write_text(json.dumps({"root": str(twice / "reports"), "files": rows}), encoding="utf-8")
++        assert codex_skill_report(str(twice), stopped=True) == (None, (twice / "reports").resolve(), None)
++        try:
++            codex_skill_report(str(twice))
++        except FileError as error:
++            assert "expected one native review.json" in str(error) and "found 2" in str(error), str(error)
++        else:
++            raise AssertionError("two native reports in a completed attempt: not refused")
+         repo = temp / "clone"
+         subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+         ident = ["-c", "user.name=t", "-c", "user.email=t@example.com"]

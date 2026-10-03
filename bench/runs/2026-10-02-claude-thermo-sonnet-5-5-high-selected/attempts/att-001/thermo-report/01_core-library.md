@@ -1,0 +1,21 @@
+# Detail 01: core library (internal/pretty, internal/status, internal/binarylog, encoding)
+
+Scope: `git diff main...review-head` over `internal/pretty/pretty.go`, `internal/status/status.go`, `internal/binarylog/*`, `encoding/proto/proto.go`, `internal/transport/*`. The diff is 68 files, +165/-174; no file is near 1000 lines, so the size rule is not triggered. Verification status: static reading of the diff and the surrounding files; no tests were run.
+
+## Finding A: `pretty.ToJSON` now has two near-identical marshalling branches and still depends on golang/protobuf
+
+In `internal/pretty/pretty.go` (lines 37-62) the `protov1.Message` case was rewritten from `jsonpb.Marshaler` to `protojson.MarshalOptions{Indent: jsonIndent}` fed with `protov1.MessageV2(ee)`. The `protov2.Message` case right below it builds `protojson.MarshalOptions{Multiline: true, Indent: jsonIndent}`, calls `Marshal`, and has the same error fallback and the same comment. The migration turned two genuinely different code paths (jsonpb vs protojson) into two copies of the same logic that differ only by one option and an adapter call. The v1 branch still imports `github.com/golang/protobuf/proto`, so the file that was supposed to be the migration's poster child keeps the legacy dependency alive.
+
+Code-judo proposal: collapse the switch into one path. Every generated v2 message also satisfies the v1 interface, so the `protov1.Message` case catches nearly everything and the `protov2.Message` case is effectively dead. Replace the pair with a single conversion at the top, for example `protoadapt.MessageV2Of` applied to anything implementing `protoadapt.MessageV1`, or testing `protov2.Message` first and then falling back to the adapter. Then there is one `protojson.MarshalOptions` value, one error fallback, one comment, and the `protov1` import disappears. The two branches also now disagree on `Multiline`; `Indent` being non-empty implies multi-line output in protojson, so the difference is accidental, which is exactly the sort of divergence a single path removes.
+
+A secondary point: `jsonpb` output was stable, while `protojson` deliberately injects random whitespace. Anything that compared `pretty.ToJSON` output exactly would now be flaky; nothing in the diff checks for that, and the author should state that no consumer relies on the byte format.
+
+## Finding B: `status.WithDetails` leaks the adapter type through a public alias and tests grow casts
+
+`internal/status/status.go:134` changes `WithDetails(details ...proto.Message)` to `...protoadapt.MessageV1`, and `status.Status` is a type alias for it (`status/status.go:45`), so this is a public signature change. It is source compatible only because `protoadapt.MessageV1` is an alias of the same interface that `golang/protobuf`'s `proto.Message` aliases. That is true but accidental, and nothing documents it. Inside, each detail is converted with `protoadapt.MessageV2Of` and then `anypb.New`.
+
+In `status/status_test.go:359` the comparison became `proto.Equal(details[i].(protoreflect.ProtoMessage), tc.details[i].(protoreflect.ProtoMessage))`. The test table is typed `[]protoadapt.MessageV1` only because `WithDetails` demands it, and then each element is cast back to a v2 type to compare. A cast on both sides is a sign the boundary is wrong. Typing the table as `[]proto.Message` and calling `WithDetails(protoadapt.MessageV1Of(m)...)`, or comparing via `protoadapt.MessageV2Of`, removes the casts. Likewise `status_test.go:412` replaces `errors.New("message type url \"\" is invalid")` with `protoimpl.X.NewError("invalid empty type URL")`. `protoimpl.X` is the documented-as-unstable generated-code support surface; a test should not couple to it. `errors.Is`-style matching or comparing against `err.Error()` of a real `anypb.UnmarshalNew` failure would be sturdier.
+
+## Observations that are fine
+
+`internal/binarylog/method_logger.go` switching `ptypes.TimestampProto(time.Now())` to `timestamppb.Now()` and `ptypes.DurationProto` to `durationpb.New` is a clean deletion of an ignored error. `any.UnmarshalNew()` in `Status.Details` replacing `ptypes.DynamicAny` removes a wrapper type and is a good simplification. The remaining import swaps in `encoding/proto`, `internal/transport`, `interop`, and `internal/testutils` are mechanical.

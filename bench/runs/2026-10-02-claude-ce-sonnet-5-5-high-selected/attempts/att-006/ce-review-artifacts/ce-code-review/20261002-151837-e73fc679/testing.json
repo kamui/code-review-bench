@@ -1,0 +1,47 @@
+{
+  "reviewer": "testing",
+  "findings": [
+    {
+      "title": "Codec v1-only message compatibility change has no test",
+      "severity": "P1",
+      "file": "encoding/proto/proto.go",
+      "line": 42,
+      "why_it_matters": "The stated intent is to keep working for users whose messages are v1-only generated types. The codec now asserts `v.(proto.Message)` against google.golang.org/protobuf/proto.Message (requires ProtoReflect), so a v1-only message that implemented the old golang/protobuf Message (Reset/String/ProtoMessage) now fails with 'message is %T, want proto.Message'. The only codec tests (TestBasicProtoCodecMarshalAndUnmarshal, TestConcurrentUsage, benchmarks) use the v2-generated pb.Buffer, so nothing detects this regression or proves the compatibility claim. Adding a test with a v1-only message type (and fixing the codec to wrap via protoadapt.MessageV2Of/protoimpl.X.ProtoMessageV2Of) would pin the contract.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In encoding/proto/proto_test.go add a table case that marshals/unmarshals a hand-written v1-only message (struct with Reset/String/ProtoMessage and protobuf struct tags) through codec{}, and have the codec fall back to protoadapt.MessageV2Of for non-v2 messages. Assumption: v1-only support is meant to be preserved for the codec as the intent states.",
+      "confidence": 75,
+      "evidence": [
+        "encoding/proto/proto.go:42 -- vv, ok := v.(proto.Message)   (proto is now google.golang.org/protobuf/proto)",
+        "encoding/proto/proto_test.go:31-36 -- p := &pb.Buffer{}; marshalledBytes, err := codec.Marshal(p)  (v2-generated type only)",
+        "git diff 5051eeae..HEAD --stat -- encoding/proto shows only the import swap in proto.go and an import change in proto_benchmark_test.go; no test added"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Invalid load_reporting_interval error path untested and logs <nil> cause",
+      "severity": "P2",
+      "file": "xds/internal/xdsclient/transport/loadreport.go",
+      "line": 174,
+      "why_it_matters": "The rewritten branch checks `rInterval.CheckValid() != nil` but formats the unrelated `err` variable (which is nil after a successful stream.Recv()), so a bad or missing load_reporting_interval from the management server yields 'invalid load_reporting_interval: <nil>' with no reason. The only test in this package (TestReportLoad) sends a valid 50ms interval, so the changed error path is never exercised and the lost diagnostic was not caught.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Capture the error: `if err := rInterval.CheckValid(); err != nil { return nil, 0, fmt.Errorf(\"invalid load_reporting_interval: %v\", err) }`, and add a transport/loadreport_test.go case where the first LoadStatsResponse has a nil or out-of-range LoadReportingInterval and assert ReportLoad's error text contains the validation reason.",
+      "confidence": 75,
+      "evidence": [
+        "xds/internal/xdsclient/transport/loadreport.go:174-175 -- if rInterval.CheckValid() != nil {\\n return nil, 0, fmt.Errorf(\"invalid load_reporting_interval: %v\", err)",
+        "xds/internal/xdsclient/transport/loadreport_test.go:94 -- LoadReportingInterval: &durationpb.Duration{Nanos: 50000000}, // 50ms (only interval value used in tests)"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "internal/pretty has no test file; ToJSON's v1 branch moved from jsonpb to protojson.MarshalOptions{Indent} (and protov1.MessageV2 conversion), changing formatting/failure behavior for v1 messages with no test pinning it (logging only, so low impact).",
+    "Most of the diff (about 60 files) is import swaps in tests; I did not run the suite, so compile/behavior of the rewritten tests (e.g. status_test Details comparison via protoreflect.ProtoMessage assertion, protoimpl.X.NewError expected error string) was verified only by reading."
+  ],
+  "testing_gaps": [
+    "No test exercises Status.WithDetails/Details with a v1-only message (non-ProtoReflect type) even though WithDetails now takes protoadapt.MessageV1 specifically to support them; status_test and handler_server_test use v2-generated errdetails types only."
+  ]
+}
