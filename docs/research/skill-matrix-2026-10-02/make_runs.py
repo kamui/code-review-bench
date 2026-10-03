@@ -110,7 +110,7 @@ LATER = [
     {"id": "claude-builtin-fable-selected", "template": "2026-09-29-claude-fable-high", "cohort": "selected",
      "arms": ["claude-builtin-fable-high"], "attempt_usd": None,
      "what": "Added on the user's instruction to run the Fable 5.1 built-in after every other bench, if Claude plan "
-             "usage remains."},
+             "usage remains. On 2026-10-03 the user asked for it to run, reporting \"8% on my claude usage\"."},
 ]
 for skill, template in (("ce", "2026-09-29-codex-ce-luna-high"), ("thermo", "2026-09-29-codex-thermo-high")):
     for name, model in (("sol61", "gpt-6.1-sol"), ("astra", "gpt-6-astra")):
@@ -141,7 +141,8 @@ def main():
         for arm_id in spec["arms"]:
             arm = read(BENCH / "arms" / f"{arm_id}.json")
             pinned = next((entry for entry in template["arms"] if entry["id"] == arm_id), template["arms"][0])
-            entry = {"id": arm_id, "arm_file_sha256": sha(BENCH / "arms" / f"{arm_id}.json"),
+            entry = {"id": arm_id, "billing_mode": "subscription",
+                     "arm_file_sha256": sha(BENCH / "arms" / f"{arm_id}.json"),
                      "resolved_skill_tree": pinned["resolved_skill_tree"],
                      "expected_cli_version": pinned["expected_cli_version"],
                      "expected_prompt_hashes": arm["adapter"].get("expected_prompt_variants", [])}
