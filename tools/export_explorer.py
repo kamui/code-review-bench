@@ -101,13 +101,15 @@ def export_attempt(run, facts, archives, stage, grade=None, billing_correction=N
     for index, item in enumerate(normalized.get("items", [])):
         claims = [{"id": c["id"], "quote": c["anchor"]["quote"], "assignment": c["outcome"], "canonical_claim_id": c["canonical_id"],
                    "notes": c["reason"], "evidence": [e["path"] for e in c["evidence"]],
-                   "fix_sufficiency": sufficiency.get(c["family_id"], "unassessed")}
+                   "fix_sufficiency": sufficiency.get(c["family_id"], "unassessed"), "group": c["duplicate_group"]}
                   for c in (grade["claims"] if grade else []) if c["anchor"]["item_id"] == f"item-{index}"]
+        groups = {c.pop("group") for c in claims} - {None}
         items.append({"id": f"item-{index}", "claim": item.get("claim") or "Untitled finding",
                       "consequence": item.get("consequence") or "", "file": item.get("file") or "",
                       "line": item.get("line_start"), "proposedFix": item.get("proposed_fix"),
                       "assignment": ", ".join(sorted({c["assignment"] for c in claims})) or "unassessed",
-                      "duplicateGroup": None, "fixSufficiency": "unassessed",
+                      "duplicateGroup": next(iter(groups)) if len(groups) == 1 else None,
+                      "fixSufficiency": ", ".join(sorted({c["fix_sufficiency"] for c in claims})) or "unassessed",
                       "notes": grade["reason"] if claims else "Current judgment is unavailable.", "claims": claims})
     archive = archives.get(record_path.relative_to(ROOT).as_posix())
     archive_url = evidence(ROOT / archive["path"], stage) if archive and archive["status"] == "verified" else None
@@ -271,7 +273,7 @@ def publish(stage):
                 os.replace(PUBLIC / name, previous / name)
             replaced.append(name)
             os.replace(stage / name, PUBLIC / name)
-    except OSError:
+    except BaseException:
         for name in replaced:
             shutil.rmtree(PUBLIC / name, ignore_errors=True)
             if (previous / name).exists():

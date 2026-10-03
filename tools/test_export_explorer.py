@@ -63,6 +63,7 @@ class ExportTest(unittest.TestCase):
             detail = current.read_json(root / 'public/data/attempts/run/att-001.json')
             self.assertEqual(detail['adjudication'], {'state': 'assessed'})
             self.assertEqual(detail['items'][0]['assignment'], 'eligible')
+            self.assertEqual(detail['items'][0]['fixSufficiency'], 'absent')
             self.assertEqual(detail['items'][0]['claims'][0]['quote'], 'A write is lost.')
 
     def test_failed_export_keeps_the_previous_complete_files(self):
@@ -78,15 +79,20 @@ class ExportTest(unittest.TestCase):
                     self.build_fixture(root)
             replace, moves = exporter.os.replace, []
 
-            def fail_last_move(source, destination):
-                moves.append(destination)
-                if len(moves) == 4:
-                    raise OSError('disk full')
-                replace(source, destination)
+            def stop_last_move(error):
+                def move(source, destination):
+                    moves.append(destination)
+                    if len(moves) == 4:
+                        raise error
+                    replace(source, destination)
+                return move
 
-            with patch.object(exporter.os, 'replace', side_effect=fail_last_move):
-                with self.assertRaisesRegex(OSError, 'disk full'):
-                    self.build_fixture(root)
+            for error in (OSError('disk full'), KeyboardInterrupt()):
+                moves.clear()
+                with patch.object(exporter.os, 'replace', side_effect=stop_last_move(error)):
+                    with self.assertRaises(type(error)):
+                        self.build_fixture(root)
+                self.assertEqual({path.relative_to(root): path.read_bytes() for path in (root / 'public').rglob('*') if path.is_file()}, published)
             self.assertEqual({path.relative_to(root): path.read_bytes() for path in (root / 'public').rglob('*') if path.is_file()}, published)
             self.assertFalse((root / '.cache/explorer-export').exists())
             self.assertEqual(self.build_fixture(root)['evidence']['coverage']['assessedReviews'], 1)
