@@ -243,6 +243,29 @@ class CurrentGrading(unittest.TestCase):
             self.check()
         self.assertEqual(grade["families"][0]["sufficiency"], "absent")
 
+    def test_aliased_claim_review_path_is_rejected(self):
+        self.check()
+        review = self.documents["claim"]["claims"][0]["links"][0]["review"]
+        review["path"] = review["path"].replace("att-001/", "att-001/./")
+        with self.assertRaisesRegex(current.Inconsistent, "claim review path is not canonical"):
+            self.check()
+
+    def test_aliased_claim_item_id_is_rejected(self):
+        self.check()
+        self.documents["claim"]["claims"][0]["links"][0]["item_id"] = "item-00"
+        with self.assertRaisesRegex(current.Inconsistent, "claim source item id is not canonical"):
+            self.check()
+
+    def test_aliased_grade_anchor_item_id_is_rejected(self):
+        grade = assessed_grade(self.selected, self.documents, self.root)
+        self.check()
+        grade["state"] = "unassessed"
+        grade["claims"][0].update(canonical_id=None, outcome="unresolved", family_id=None)
+        grade["claims"][0]["anchor"]["item_id"] = "item-00"
+        grade["families"][0].update(outcome="unresolved", claim_ids=[], sufficiency="unassessed")
+        with self.assertRaisesRegex(current.Inconsistent, "claim source item id is not canonical"):
+            self.check()
+
     def test_impact_unknown_is_valid_but_approval_needs_boundary_and_independent_check(self):
         self.check()
         family = self.documents["reference"]["targets"][0]["families"][0]
