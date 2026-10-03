@@ -5,8 +5,8 @@ Usage::
 
     python3 docs/research/skill-matrix-2026-10-02/freeze.py <commit>
 
-It freezes every unfrozen 2026-10-02 run. The commit must contain each such run's manifest, inputs
-and arm files exactly as they are on disk.
+It freezes every unfrozen run of the matrix, dated 2026-10-02 or 2026-10-03. The commit must contain
+each such run's manifest, inputs and arm files exactly as they are on disk.
 """
 
 import json
@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[3]
 def main():
     commit = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", sys.argv[1] + "^{commit}"], text=True).strip()
     now = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-    for path in sorted((ROOT / "bench/runs").glob("2026-10-02-*/manifest.json")):
+    for path in sorted((ROOT / "bench/runs").glob("2026-10-0[23]-*/manifest.json")):
         manifest = json.loads(path.read_text(encoding="utf-8"))
         if manifest.get("frozen_at"):
             continue
