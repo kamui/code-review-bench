@@ -43,6 +43,10 @@ def resolve(ref, root=ROOT):
 
 
 def source_item(link, target, root=ROOT):
+    if "mapping" not in link:
+        import current_grading
+        cohort, item = current_grading.source_item(link, target, root)
+        return cohort, item, {"assignment": "ungraded"}
     normalized_path = resolve(link["review"], root)
     parts = normalized_path.relative_to(root.resolve()).parts
     if (len(parts) != 6 or parts[:2] != ("bench", "runs") or parts[3:] != (
@@ -166,6 +170,12 @@ def load_registry(path=DEFAULT_REGISTRY, root=ROOT):
     if problems:
         raise ValueError("claim registry: " + "; ".join(problems))
     return registry["cases"], load_cases(registry["cases"], root)
+
+
+def load_current_registry(root=ROOT):
+    import current_grading
+    _selected, documents = current_grading.load_current(root)
+    return documents["claim"]["claims"], documents["adjudication"]["decisions"]
 
 
 def inventory(target, pattern=None, root=ROOT):
