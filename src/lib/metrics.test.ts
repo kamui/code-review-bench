@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { datasetSchema, detailSchema } from './data'
 import { build, family, review, scorecardFixture, setup, task } from './fixture'
 import { conditionDifferences, datasetStatus, detectionLabel, duration, heroCounts, money, perReview, reasonCounts, share, summarize } from './metrics'
-import { leaderboard, pairwise, scorecard } from './scoring'
+import { leaderboard, matched, pairwise, scorecard } from './scoring'
 
 const imported = datasetSchema.parse(JSON.parse(await readFile('public/data/benchmark.json', 'utf8')))
 const standard = imported.configurations.filter(configuration => !configuration.experimental)
@@ -12,7 +12,8 @@ const board = leaderboard(imported, { selected: standard.map(configuration => co
   candidateTaskIds: imported.tasks.map(task => task.id), concern: null })
 const summaries = standard.flatMap(configuration => {
   const card = board.cards.find(item => item.configurationId === configuration.id)
-  return card ? [summarize(configuration, card, { band: 'all', estimator: 'equalPr' })] : []
+  const refuted = matched(imported, standard.map(item => item.id), board.selection, 'refuted').rows.find(row => row.configurationId === configuration.id)
+  return card && refuted ? [summarize(configuration, card, { band: 'all', estimator: 'equalPr' }, refuted.equalPr)] : []
 })
 
 describe('formatting', () => {
@@ -33,6 +34,7 @@ describe('scorecard display', () => {
   const fixture = scorecardFixture()
   const everything = { taskIds: fixture.tasks.map(item => item.id), concern: null }
   const card = (id: string, selection = everything) => scorecard(fixture, id, selection)
+  const own = (id: string, selection = everything) => card(id, selection).reliability.outcomes.refuted.perAdmittedReview
   const configuration = (id: string) => {
     const found = fixture.configurations.find(item => item.id === id)
     if (!found) throw new Error(`Missing fixture configuration ${id}`)
@@ -40,15 +42,30 @@ describe('scorecard display', () => {
   }
 
   test('plots only the selected band and average and never substitutes another', () => {
-    const serious = summarize(configuration('steady'), card('steady'), { band: 'serious', estimator: 'equalProblem' })
+    const serious = summarize(configuration('steady'), card('steady'), { band: 'serious', estimator: 'equalProblem' }, own('steady'))
     expect(serious).toMatchObject({ detection: 100, reasons: { detection: null } })
     expect(detectionLabel({ band: 'serious', estimator: 'equalProblem' })).toBe('Serious detection, problems weighted equally')
     const unlabelled = { taskIds: ['docs'], concern: null }
-    const empty = summarize(configuration('steady'), card('steady', unlabelled), { band: 'serious', estimator: 'equalProblem' })
+    const empty = summarize(configuration('steady'), card('steady', unlabelled), { band: 'serious', estimator: 'equalProblem' }, own('steady', unlabelled))
     expect(empty).toMatchObject({ detection: null, range: null, reasons: { detection: 'No references in this band.' } })
-    expect(summarize(configuration('steady'), card('steady', unlabelled), { band: 'unknown', estimator: 'equalProblem' }).detection).toBe(50)
-    expect(summarize(configuration('selective'), card('selective'), { band: 'serious', estimator: 'equalProblem' }).detection).toBeCloseTo(100 / 9)
-    expect(summarize(configuration('selective'), card('selective'), { band: 'serious', estimator: 'equalPr' }).detection).toBeCloseTo(100 / 12)
+    expect(summarize(configuration('steady'), card('steady', unlabelled), { band: 'unknown', estimator: 'equalProblem' }, own('steady', unlabelled)).detection).toBe(50)
+    expect(summarize(configuration('selective'), card('selective'), { band: 'serious', estimator: 'equalProblem' }, own('selective')).detection).toBeCloseTo(100 / 9)
+    expect(summarize(configuration('selective'), card('selective'), { band: 'serious', estimator: 'equalPr' }, own('selective')).detection).toBeCloseTo(100 / 12)
+  })
+
+  test('the plotted refuted rate is matched on commonly admitted PRs, not the rate over all admitted reviews of a setup', () => {
+    const pair = matched(fixture, ['steady', 'selective'], everything, 'refuted')
+    expect(pair.included).toEqual(fixture.tasks.map(item => item.id))
+    const [, selective] = pair.rows
+    if (!selective) throw new Error('Missing matched row')
+    const plotted = summarize(configuration('selective'), card('selective'), { band: 'serious', estimator: 'equalProblem' }, selective.equalPr)
+    expect(plotted.refuted).toBeCloseTo(2 / 6)
+    expect(plotted.admitted).toBe(16)
+    expect(perReview(own('selective')).text).toBe('0.13')
+    const withSilent = matched(fixture, ['steady', 'silent'], everything, 'refuted')
+    expect(withSilent.included).toEqual([])
+    expect(summarize(configuration('steady'), card('steady'), { band: 'serious', estimator: 'equalProblem' }, withSilent.rows[0]?.equalPr ?? own('steady')))
+      .toMatchObject({ refuted: null, reasons: { refuted: 'No PR is commonly admitted and sufficiently assessed.' } })
   })
 
   test('unavailable values carry their reason and are counted, never shown as zero', () => {

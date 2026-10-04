@@ -386,12 +386,11 @@ export function leaderboard(dataset: Dataset, options: { selected: string[]; can
   return { selection, cards: dataset.configurations.map(configuration => scorecard(dataset, configuration.id, selection)) }
 }
 
-export function meanTaskRecall(cards: Scorecard[], taskId: string, band: Band): Measure {
-  const values = cards.flatMap(card => {
-    const measure = card.tasks.find(row => row.taskId === taskId)?.bands[band].recall
-    return measure?.kind === 'available' ? [measure.value] : []
-  })
-  return values.length ? available(mean(values)) : unavailable('No selected setup has a final recall for this PR.')
+export function meanTaskRecall(cards: Scorecard[], taskId: string, band: Band) {
+  const measures = cards.map((card): Measure => card.tasks.find(row => row.taskId === taskId)?.bands[band].recall ?? unavailable('No trials on this PR in the comparison.'))
+  const values = measures.flatMap(measure => measure.kind === 'available' ? [measure.value] : [])
+  return { mean: values.length ? available(mean(values)) : unavailable('No selected setup has a final recall for this PR.'),
+    included: values.length, selected: cards.length, withheld: measures.flatMap(measure => measure.kind === 'unavailable' ? [measure.reason] : []) }
 }
 
 export function orderingConflicts(cards: Scorecard[], band: Band) {
