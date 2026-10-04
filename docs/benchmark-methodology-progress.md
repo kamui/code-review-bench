@@ -4,7 +4,7 @@ This preserves the original five recommendations from the initial arena response
 
 | # | Original recommendation | Status |
 | --- | --- | --- |
-| 1 | Adjudicate recurring claims consistently across runs. | Shared claim and maintainer shadow workflows implemented. Saved rulings are pinned and enforced at claim level in v2. Rubric-v2 site publication is implemented for PR review. Wider reference audit and delegation remain pending. |
+| 1 | Adjudicate recurring claims consistently across runs. | Shared claim and maintainer shadow workflows implemented. Saved rulings are pinned and enforced at claim level in v2. Rubric-v2 site publication is implemented for PR review. Every current family now has an approved eligibility decision, and [delegation policy v1](adr/0006-settle-eligibility-by-delegation-on-heavy-evidence.md) is adopted for eligibility. The maintainer audit of rejected and unresolved review items remains pending. |
 | 2 | Make the finding threshold operational. | Obligation-based rule implemented in rubric v2 and grading validation. Testing boundary calibrated with GraphQL and approved Bokeh/tRPC advisory cases. Architecture and maintenance need positive examples. |
 | 3 | Measure reading burden alongside false findings. | Claim-level outcomes, mixed findings and duplicates implemented in grading and reporting. The site uses the new claim-level breakdowns; earlier item categories remain archived. |
 | 4 | Show how dependent the ranking is on individual PRs. | Explorer reporting implemented and checked against saved results. Shows per-PR results, individual repetitions and whole-PR omission comparisons without treating repetitions as new PRs. |
