@@ -57,7 +57,8 @@ export function summarize(configuration: Configuration, card: Scorecard, view: D
 
 /** Effort, client version and repetition are properties of a setup, so they add no method or model. */
 export function heroCounts(dataset: Dataset) {
-  return { tasks: dataset.tasks.length, problems: dataset.tasks.flatMap(task => task.families).length,
+  const families = dataset.tasks.flatMap(task => task.families)
+  return { tasks: dataset.tasks.length, problems: families.length, awaitingEligibility: families.filter(family => family.eligibility !== 'approved').length,
     methods: new Set(dataset.configurations.map(configuration => configuration.method)).size,
     models: new Set(dataset.configurations.flatMap(configuration => configuration.models)).size }
 }
