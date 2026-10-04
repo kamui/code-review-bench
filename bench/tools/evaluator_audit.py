@@ -250,8 +250,11 @@ def compare(args):
     rows = []
     for unit in sample["units"]:
         outcome, detail = second_outcome(unit, reviews[((unit["run"], unit["target"]), unit["attempt"])])
+        agreement = outcome == unit["first"]["outcome"] and (
+            unit["unit"] == "family-review"
+            or all(claim["assessment"] == unit["first"]["assessment"] for claim in detail["claims"]))
         rows.append({"id": unit["id"], "strata": unit["strata"], "first": unit["first"],
-                     "second": {"outcome": outcome, **detail}, "agreement": outcome == unit["first"]["outcome"]})
+                     "second": {"outcome": outcome, **detail}, "agreement": agreement})
     strata = []
     for stratum in sample["strata"]:
         members = [row for row in rows if stratum["id"] in row["strata"]]

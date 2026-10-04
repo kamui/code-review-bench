@@ -73,18 +73,18 @@ class Audit(Grade):
         write_json(self.root / f"{name}.json", {"assessor": name, "method": "Read the workspace.", "completed_at": "2026-01-02T00:00:00Z"})
         return ["--work", str(work), "--key", str(key), "--assessor", str(self.root / f"{name}.json")]
 
-    def graded(self):
-        done = grade("map", "--root", str(self.root), *self.assessed(self.work, self.key, "first"))
+    def graded(self, third="refuted"):
+        done = grade("map", "--root", str(self.root), *self.assessed(self.work, self.key, "first", third=third))
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
 
-    def drawn(self):
-        self.graded()
+    def drawn(self, third="refuted"):
+        self.graded(third)
         done = self.audit("draw")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         return json.loads((self.round / "sample.json").read_text())
 
-    def compared(self, **second):
-        self.drawn()
+    def compared(self, first_third="refuted", **second):
+        self.drawn(first_third)
         saved = [(self.current / name).read_bytes() for name in ("grades.json", "candidates.json")]
         done = self.audit("second", *self.assessed(self.root / "work-2", self.root / "keys/key-2.json", "second", **second))
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -137,6 +137,48 @@ class Audit(Grade):
         row = next(row for row in comparison["units"] if row["id"] == f"{UNIT}#c3")
         self.assertEqual((row["second"]["outcome"], row["agreement"]), ("unmatched", False))
         self.assertEqual([c["id"] for c in row["second"]["claims"]], ["c3", "c4"])
+
+    def eligibility_disagreement(self, field, value):
+        outcome = "unresolved" if field == "support" else "refuted"
+        second = claim("c3", "Lock order is new", outcome)
+        second["assessment"][field] = value
+        comparison = self.compared(first_third=outcome, third_claims=[second])
+        row = next(row for row in comparison["units"] if row["id"] == f"{UNIT}#c3")
+        self.assertEqual((row["first"]["outcome"], row["second"]["outcome"]), (outcome, outcome))
+        self.assertFalse(row["agreement"])
+        name = "unresolved-claim" if outcome == "unresolved" else "refuted"
+        stratum = next(stratum for stratum in comparison["strata"] if stratum["id"] == name)
+        self.assertEqual(stratum["agreements"], 0)
+        write_json(self.root / "reconciliation.json", {"reconciler": "fixture", "decisions": []})
+        done = self.audit("conclude", "--reconciliation", str(self.root / "reconciliation.json"))
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("a disagreement without a reconciliation", done.stdout)
+        self.assertFalse((self.round / "conclusion.json").exists())
+        self.assertEqual(self.reconcile("first-error").returncode, 1)
+        conclusion = json.loads((self.round / "conclusion.json").read_text())
+        self.assertEqual(next(stratum for stratum in conclusion["strata"] if stratum["id"] == name)["confirmed_errors"], 1)
+        self.assertEqual(json.loads((self.current / "audits.json").read_text())["state"], "unassessed")
+
+    def test_support_disagreement_requires_reconciliation(self):
+        self.eligibility_disagreement("support", "unsupported")
+
+    def test_attribution_disagreement_requires_reconciliation(self):
+        self.eligibility_disagreement("attribution", "pre-existing")
+
+    def test_reachability_disagreement_requires_reconciliation(self):
+        self.eligibility_disagreement("reachability", "unreachable")
+
+    def test_materiality_disagreement_requires_reconciliation(self):
+        self.eligibility_disagreement("materiality", "below-threshold")
+
+    def test_every_matching_claim_must_agree_on_eligibility(self):
+        agreeing = claim("c3", "Lock order", "refuted")
+        differing = claim("c4", "order is new", "refuted")
+        differing["assessment"]["attribution"] = "pre-existing"
+        comparison = self.compared(third_claims=[agreeing, differing])
+        row = next(row for row in comparison["units"] if row["id"] == f"{UNIT}#c3")
+        self.assertEqual(row["second"]["outcome"], "refuted")
+        self.assertFalse(row["agreement"])
 
     def test_a_recovery_the_second_assessor_denies_is_a_disagreement_in_both_its_strata(self):
         comparison = self.compared(first="refuted")
