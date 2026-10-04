@@ -8,6 +8,7 @@ export type Reading = { text: string; reason: string | null }
 export const bandLabels: Record<Band, string> = { serious: 'Serious', 'other-material': 'Other material', unknown: 'Unknown impact', all: 'All references' }
 export const estimatorLabels: Record<Estimator, string> = { equalProblem: 'problems weighted equally', equalPr: 'PRs weighted equally' }
 export const detectionLabel = (view: DetectionView) => `${bandLabels[view.band]} detection, ${estimatorLabels[view.estimator]}`
+export const lowerFirst = (label: string) => label.charAt(0).toLowerCase() + label.slice(1)
 
 export const measured = <T>(measure: Measure<T>): T | null => measure.kind === 'available' ? measure.value : null
 export const scaled = (fraction: number | null): number | null => fraction === null ? null : fraction * 100

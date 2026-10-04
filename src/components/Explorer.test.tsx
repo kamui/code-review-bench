@@ -121,6 +121,6 @@ describe('chart', () => {
 
   test('the frontier view names the two measures it compares', () => {
     expect(chart(fixture, { band: 'all', estimator: 'equalPr' }, 'tradeoff'))
-      .toContain('Frontier of all references detection, prs weighted equally against cost per scheduled trial')
+      .toContain('Frontier of all references detection, PRs weighted equally against cost per scheduled trial')
   })
 })
