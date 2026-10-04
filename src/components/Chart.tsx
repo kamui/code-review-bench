@@ -4,7 +4,7 @@ import { useElementSize } from '@mantine/hooks'
 import { ArrowUpLeft } from 'lucide-react'
 import { groupPaths, linearScale, logScale, paretoFrontier, placeLabels, position, segmentObstacles, ticks } from '../lib/chart'
 import type { Scale } from '../lib/chart'
-import { compact, detectionLabel, duration, money, percent, reasonCounts } from '../lib/metrics'
+import { compact, detectionLabel, duration, lowerFirst, money, percent, reasonCounts } from '../lib/metrics'
 import type { Axis, DetectionView, Summary } from '../lib/metrics'
 import type { Configuration } from '../lib/data'
 import { skillReleaseLabel } from '../lib/data'
@@ -59,7 +59,7 @@ const scoreTicks = [0, 25, 50, 75, 100]
 export function Chart({ summaries, detection, matching, axis, view, showAllLabels, onSelect }: {
   summaries: Summary[]; detection: DetectionView; matching: { included: number; excluded: number }; axis: Axis; view: ChartView; showAllLabels: boolean; onSelect: (id: string) => void
 }) {
-  const measure = detectionLabel(detection), dimensions = `${measure.toLowerCase()} against ${axisLabels[axis].toLowerCase()}`
+  const measure = detectionLabel(detection), dimensions = `${lowerFirst(measure)} against ${lowerFirst(axisLabels[axis])}`
   const [hovered, setHovered] = useState<{ id: string; left: number; top: number } | null>(null)
   const points: Point[] = summaries.filter(summary => summary.detection !== null).map(summary => ({
     summary, range: summary.range, metric: metricOf(summary, axis),
@@ -91,12 +91,12 @@ export function Chart({ summaries, detection, matching, axis, view, showAllLabel
           : <Models points={points} measure={measure} axis={axis} onSelect={onSelect} interactions={interactions} />}
     {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={measure} axis={axis} left={hovered.left} top={hovered.top} />}
     {points.length > 0 && <div className="plot-caption">
-      {view === 'setups' && <span><span className="whisker-key" aria-hidden="true" />Rows are ordered by {measure.toLowerCase()}. The whisker spans this average with any one whole PR left out: sensitivity to these PRs, not a confidence interval.</span>}
-      {view === 'skills' && <span><span className="skill-key" aria-hidden="true" />Each line joins one review method across the models it ran on, from lowest to highest {axisLabels[axis].toLowerCase()}. Hover or focus a point to follow its method.</span>}
+      {view === 'setups' && <span><span className="whisker-key" aria-hidden="true" />Rows are ordered by {lowerFirst(measure)}. The whisker spans this average with any one whole PR left out: sensitivity to these PRs, not a confidence interval.</span>}
+      {view === 'skills' && <span><span className="skill-key" aria-hidden="true" />Each line joins one review method across the models it ran on, from lowest to highest {lowerFirst(axisLabels[axis])}. Hover or focus a point to follow its method.</span>}
       {view === 'tradeoff' && <span><span className="frontier-key" aria-hidden="true" />Frontier of {dimensions}: no other selected setup is higher on the first at a lower value of the second. It says nothing about any other measure.</span>}
-      {view === 'models' && <span>Each row is one model. Marks show {measure.toLowerCase()} for each review method that ran on it.</span>}
-      {withheld.length > 0 && <span>Not plotted, {measure.toLowerCase()} unavailable: {withheld.map(row => `${row.reason} (${setups(row.count)})`).join(' ')}</span>}
-      {view !== 'models' && unplotted.length > 0 && <span>No {axisLabels[axis].toLowerCase()} for {unplotted.map(point => `${point.summary.configuration.short} (${point.summary.reasons[axis]})`).join('; ')}.</span>}
+      {view === 'models' && <span>Each row is one model. Marks show {lowerFirst(measure)} for each review method that ran on it.</span>}
+      {withheld.length > 0 && <span>Not plotted, {lowerFirst(measure)} unavailable: {withheld.map(row => `${row.reason} (${setups(row.count)})`).join(' ')}</span>}
+      {view !== 'models' && unplotted.length > 0 && <span>No {lowerFirst(axisLabels[axis])} for {unplotted.map(point => `${point.summary.configuration.short} (${point.summary.reasons[axis]})`).join('; ')}.</span>}
       {axis === 'refuted' && <span>Refuted claims are compared on the {matching.included} of {matching.included + matching.excluded} selected PRs where every selected setup has admitted, assessed reviews, with PRs weighted equally. A setup that admitted only some trials of a matched PR is measured on the reviews it delivered; the tooltip gives its admitted trials.</span>}
       {axis === 'time' && <span>Completed trials only. Includes replacement attempts; excludes gaps between attempts, provisioning, and grading.</span>}
       {axis === 'cost' && points.some(point => point.summary.configuration.billing === 'list-price-equivalent') && <span>* Subscription usage valued at token list prices, not a bill or quota measurement.</span>}
@@ -110,7 +110,7 @@ function SetupRows({ points, measure, axis, scale, frontier, onSelect, interacti
   points: Point[]; measure: string; axis: Axis; scale: Scale; frontier: Set<string>; onSelect: (id: string) => void; interactions: Interactions
 }) {
   const metricTicks = ticks(scale)
-  return <div role="list" aria-label={`Setups ordered by ${measure.toLowerCase()}, with ${axisLabels[axis].toLowerCase()}`}>
+  return <div role="list" aria-label={`Setups ordered by ${lowerFirst(measure)}, with ${lowerFirst(axisLabels[axis])}`}>
     <div className="rank-head" aria-hidden="true">
       <span>Review setup</span>
       <span className="rank-axis"><span className="rank-axis-title">{measure}</span>
@@ -239,7 +239,7 @@ function Scatter({ mode, points, dimensions, axis, scale, frontier, showAllLabel
           className={mode === 'skills' || frontier.has(label.id) ? 'point-label' : 'point-label secondary'}>{labelText(point.summary.configuration)}</text>
       })}
     </svg>}
-    <span className="better-hint" style={{ left: plot.left + 10, top: plot.top + 8 }}><ArrowUpLeft size={13} aria-hidden="true" />Higher detection, lower {axisLabels[axis].toLowerCase()}</span>
+    <span className="better-hint" style={{ left: plot.left + 10, top: plot.top + 8 }}><ArrowUpLeft size={13} aria-hidden="true" />Higher detection, lower {lowerFirst(axisLabels[axis])}</span>
   </div>
 }
 
