@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Group, Paper, Select, Stack, Switch, Table, Tabs, Text, Title } from '@mantine/core'
 import type { Configuration, Dataset } from '../lib/data'
-import { bandLabels, compact, conditionDifferences, detectionLabel, duration, estimatorLabels, measured, money, percent, perReview, points, reading, scaled, share } from '../lib/metrics'
+import { bandLabels, compact, conditionDifferences, detectionLabel, duration, estimatorLabels, lowerFirst, measured, money, percent, perReview, points, reading, scaled, share } from '../lib/metrics'
 import type { DetectionView, Reading } from '../lib/metrics'
 import { bands, candidates as pendingFamilies, conditionalMetrics, estimators, matched, orderingConflicts, pairwise, pendingCandidates, recommend, referenceCoverage } from '../lib/scoring'
 import type { ConditionalMetric, Estimator, Scorecard, Selection } from '../lib/scoring'
@@ -220,7 +220,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
             {differences.length ? <ul className="reason-list">{differences.map(difference => <li key={difference.name}>{difference.name}: {difference.values.map(row => `${row.value} (${row.configuration.short})`).join(' against ')}</li>)}</ul>
               : <Text size="sm">The recorded client, effort, permissions and billing basis match.</Text>}
             <Text size="xs" c="dimmed" className="footnote">A difference between two setups includes these conditions; it does not isolate the review method or the model.</Text></div>
-          <Text size="sm">A minus B in {detectionLabel(detection).toLowerCase()}: <Value cell={reading(comparison.full[estimator].delta, value => signed(value * 100))} />.
+          <Text size="sm">A minus B in {lowerFirst(detectionLabel(detection))}: <Value cell={reading(comparison.full[estimator].delta, value => signed(value * 100))} />.
             With {estimatorLabels[estimator === 'equalPr' ? 'equalProblem' : 'equalPr']}: <Value cell={reading(comparison.full[estimator === 'equalPr' ? 'equalProblem' : 'equalPr'].delta, value => signed(value * 100))} />.
             {' '}Across {comparison.rows.length} shared PRs with {bandLabels[band].toLowerCase()} references, A is higher on {comparison.wins}, tied on {comparison.ties} and lower on {comparison.losses}; {comparison.pending} have no final comparison.</Text>
           {comparison.aggregationSensitive.kind === 'available' && comparison.aggregationSensitive.value && <Text size="sm">The two averages order these setups differently, so this comparison depends on the average chosen.</Text>}
