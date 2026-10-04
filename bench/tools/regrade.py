@@ -101,7 +101,7 @@ def ledger(directory, active=()):
 
 
 def desired(items):
-    return min(Decimal(4), max(Decimal(2), Decimal("0.5") + Decimal(items) * Decimal("0.05")))
+    return min(Decimal(6), max(Decimal(3), Decimal("1.5") + Decimal(items) * Decimal("0.06")))
 
 
 def allowance(cap, used, items):
