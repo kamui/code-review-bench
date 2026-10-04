@@ -111,7 +111,7 @@ describe('current ungraded preview', () => {
     expect(imported.evidence.coverage).toMatchObject({ complete: false, assessedReviews: 0, requiredReviews: 690 })
     expect(imported.configurations).toHaveLength(17)
     expect(imported.attempts).toHaveLength(746)
-    expect(heroCounts(imported)).toMatchObject({ tasks: 16, problems: 31, awaitingEligibility: 0 })
+    expect(heroCounts(imported)).toMatchObject({ tasks: 16, problems: 32, awaitingEligibility: 0 })
     expect(imported.attempts.every(attempt => attempt.assessment === null)).toBe(true)
     const summary = summaries[0]
     if (!summary) throw new Error('Missing preview configuration')
