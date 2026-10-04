@@ -437,11 +437,11 @@ class Controller(unittest.TestCase):
                                  {entry["path"]: entry["sha256"] for entry in receipt["files"]})
 
     def test_reservations_fit_the_cap_when_batches_finish_out_of_order(self):
-        cohort = Cohort(self.root, 7)
+        cohort = Cohort(self.root, 10)
         cohort.outcomes["pr-1"] = {"until": lambda: cohort.mapped("pr-2").exists()}
         self.assertEqual(cohort.run(workers=3), 0)
         self.assertEqual(cohort.peak, 2)
-        self.assertLessEqual(max(cohort.exposures), 7)
+        self.assertLessEqual(max(cohort.exposures), 10)
         status = cohort.status()
         self.assertEqual((status["state"], status["spentUpperUsd"], status["reservedUsd"]), ("mapped", 2.5, 0.0))
 
@@ -456,7 +456,7 @@ class Controller(unittest.TestCase):
                          {"pr-1": "dispatch-failed", "pr-2": "dispatch-failed", "pr-3": "mapped",
                           "pr-4": "pending", "pr-5": "pending"})
         status = cohort.status()
-        self.assertEqual((status["state"], status["spentUpperUsd"], status["reservedUsd"]), ("failed", 1.75, 2.0))
+        self.assertEqual((status["state"], status["spentUpperUsd"], status["reservedUsd"]), ("failed", 1.75, 3.0))
 
         cohort.outcomes = {}
         self.assertEqual(cohort.run(workers=3), 1)
@@ -468,7 +468,7 @@ class Controller(unittest.TestCase):
         self.assertEqual(sorted(cohort.launched), ["pr-1", "pr-1", "pr-2", "pr-2", "pr-3", "pr-4", "pr-5"])
         status = cohort.status()
         self.assertEqual((status["state"], status["spentUpperUsd"], status["reservedUsd"], status["outstandingReservations"]),
-                         ("mapped", 3.75, 2.0, 1))
+                         ("mapped", 3.75, 3.0, 1))
         self.assertLessEqual(max(cohort.exposures), 20)
 
     def test_restart_after_a_crash_settles_receipts_without_launching_them_again(self):
@@ -484,22 +484,22 @@ class Controller(unittest.TestCase):
         self.assertEqual({target: row["state"] for target, row in cohort.rows().items()},
                          {"pr-1": "mapped", "pr-2": "unsettled", "pr-3": "mapped", "pr-4": "pending", "pr-5": "pending"})
         status = cohort.status()
-        self.assertEqual((status["spentUpperUsd"], status["reservedUsd"]), (1.0, 2.0))
+        self.assertEqual((status["spentUpperUsd"], status["reservedUsd"]), (1.0, 3.0))
 
         cohort.replace("pr-2")
         self.assertEqual(cohort.run(workers=3), 0)
         self.assertEqual(sorted(cohort.launched), ["pr-1", "pr-2", "pr-2", "pr-3", "pr-4", "pr-5"])
         status = cohort.status()
-        self.assertEqual((status["state"], status["spentUpperUsd"], status["reservedUsd"]), ("mapped", 2.5, 2.0))
+        self.assertEqual((status["state"], status["spentUpperUsd"], status["reservedUsd"]), ("mapped", 2.5, 3.0))
         self.assertEqual(cohort.rows()["pr-2"]["workspace"].rsplit("/", 1)[1], "attempt-2")
         self.assertLessEqual(max(cohort.exposures), 12)
 
     def test_a_batch_waits_for_its_full_allowance_while_another_reservation_is_outstanding(self):
-        cohort = Cohort(self.root, 5.5)
+        cohort = Cohort(self.root, 7)
         self.assertEqual(cohort.run(workers=3), 0)
         self.assertEqual(cohort.peak, 1)
         reservations = cohort.directory.glob("batches/*/*/attempt-1/reservation.json")
-        self.assertEqual([regrade.read(path)["maxBudgetUsd"] for path in reservations], [2.0] * 5)
+        self.assertEqual([regrade.read(path)["maxBudgetUsd"] for path in reservations], [3.0] * 5)
 
     def test_exhausted_cap_stops_before_reserving_another_batch(self):
         cohort = Cohort(self.root, 3)
@@ -781,6 +781,10 @@ class RegradingBudget(unittest.TestCase):
                     self.assertLessEqual(regrade.money(used) + amount + 1, 30)
         self.assertIsNone(regrade.allowance(30, 29, 1))
         self.assertIsNone(regrade.allowance(30, 30, 100))
+
+    def test_allowance_covers_the_sessions_that_exceeded_the_earlier_one(self):
+        self.assertEqual([regrade.desired(items) for items in (0, 25, 30, 60, 500)], [3, 3, Decimal("3.3"), Decimal("5.1"), 6])
+        self.assertGreater(regrade.desired(30), regrade.money("2.070437") * Decimal("1.5"))
 
     def test_prior_budget_failure_gets_a_larger_replacement_allowance(self):
         self.assertGreater(regrade.allowance(33, 3.706681, 28), regrade.money("1.350928"))
