@@ -33,14 +33,16 @@ export type Summary = {
   refuted: number | null
   time: { median: number; mean: number; q1: number; q3: number; reviews: number; tasks: number } | null
   reasons: Record<'detection' | Axis, string | null>
+  admitted: number
   completed: number
   trials: number
   tasks: number
 }
 
-export function summarize(configuration: Configuration, card: Scorecard, view: DetectionView): Summary {
+/** `matchedRefuted` is the setup's rate on the PRs every compared setup admitted, so the plotted reliability axis compares like with like. */
+export function summarize(configuration: Configuration, card: Scorecard, view: DetectionView, matchedRefuted: Measure): Summary {
   const recall = card.detection[view.band], range = measured(recall.omissions[view.estimator]), time = measured(card.time.summary)
-  const refuted = card.reliability.outcomes.refuted.perAdmittedReview
+  const refuted = matchedRefuted
   return {
     configuration, card, detection: points(recall[view.estimator]),
     range: range && { low: range.low * 100, high: range.high * 100 },
@@ -48,7 +50,7 @@ export function summarize(configuration: Configuration, card: Scorecard, view: D
     time: time && { ...time, reviews: card.time.completed, tasks: card.time.tasks },
     reasons: { detection: reasonOf(recall[view.estimator]), cost: reasonOf(card.cost.perTrial), tokens: reasonOf(card.tokens.perTrial),
       refuted: reasonOf(refuted), time: reasonOf(card.time.summary) },
-    completed: card.delivery.complete, trials: card.delivery.scheduled, tasks: card.coverage.ran,
+    admitted: card.delivery.admitted, completed: card.delivery.complete, trials: card.delivery.scheduled, tasks: card.coverage.ran,
   }
 }
 

@@ -5,9 +5,9 @@ import { useMediaQuery } from '@mantine/hooks'
 import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpDown, ArrowUpRight, Check, ChevronDown, CodeXml, Database, Info, Moon, Search, Sun, X } from 'lucide-react'
 import { fetchDataset, skillReleaseLabel } from '../lib/data'
 import type { Configuration, Dataset, Task } from '../lib/data'
-import { bandLabels, compact, conditionDifferences, datasetStatus, detectionLabel, estimatorLabels, heroCounts, measured, money, perReview, reading, share, summarize } from '../lib/metrics'
+import { bandLabels, compact, conditionDifferences, datasetStatus, detectionLabel, estimatorLabels, heroCounts, measured, money, percent, perReview, reading, reasonCounts, share, summarize } from '../lib/metrics'
 import type { Axis, Reading } from '../lib/metrics'
-import { bands, estimators, leaderboard, meanTaskRecall, pendingCandidates, referenceCoverage } from '../lib/scoring'
+import { bands, estimators, leaderboard, matched, meanTaskRecall, pendingCandidates, referenceCoverage } from '../lib/scoring'
 import { Chart, Mark } from './Chart'
 import type { ChartView } from './Chart'
 import { EvidenceDrawer } from './EvidenceDrawer'
@@ -72,9 +72,11 @@ export function Dashboard({ dataset, now = new Date() }: { dataset: Dataset; now
     [dataset, activeIds.join(), candidates.map(task => task.id).join(), findingConcern])
   const sharedIds = new Set(board.selection.taskIds)
   const shared = dataset.tasks.filter(task => sharedIds.has(task.id))
+  const matchedRefuted = useMemo(() => matched(dataset, activeIds, board.selection, 'refuted'), [dataset, activeIds.join(), board])
   const comparisonSummaries = dataset.configurations.flatMap(configuration => {
     const card = board.cards.find(item => item.configurationId === configuration.id)
-    return card ? [summarize(configuration, card, detection)] : []
+    return card ? [summarize(configuration, card, detection, matchedRefuted.rows.find(row => row.configurationId === configuration.id)?.equalPr
+      ?? { kind: 'unavailable', reason: 'Not among the selected setups.' })] : []
   })
   const summaries = comparisonSummaries.filter(row => activeIds.includes(row.configuration.id))
     .sort((left, right) => (right.detection ?? -1) - (left.detection ?? -1))
@@ -86,7 +88,7 @@ export function Dashboard({ dataset, now = new Date() }: { dataset: Dataset; now
       tokens: reading(row.card.tokens.perTrial, compact), refuted: perReview(row.card.reliability.outcomes.refuted.perAdmittedReview) }
     return { ...row, cells, order: { setup: row.configuration.short, equalProblem: measured(recall.equalProblem), equalPr: measured(recall.equalPr),
       seriousCaught: measured(row.card.seriousCaught.equalPr), repeatedMisses: measured(row.card.seriousMisses.repeated), cost: row.cost, tokens: row.tokens,
-      refuted: row.refuted, completed: row.completed } }
+      refuted: measured(row.card.reliability.outcomes.refuted.perAdmittedReview), completed: row.completed } }
   }).sort((left, right) => {
     const a = left.order[sort.column], b = right.order[sort.column]
     if (a === null) return b === null ? 0 : 1
@@ -180,7 +182,7 @@ export function Dashboard({ dataset, now = new Date() }: { dataset: Dataset; now
               {activeFilters.length > 0 && <a className="filter-link" href="#tasks">Edit filters</a>}
               {chartView === 'tradeoff' && <Switch className="label-switch" checked={showAllLabels} onChange={event => setShowAllLabels(event.currentTarget.checked)} label="Label every point" size="xs" />}
             </div>
-            <Chart summaries={summaries} detection={detection} axis={axis} view={chartView} showAllLabels={showAllLabels} onSelect={id => setInspection({ kind: 'configuration', id })} />
+            <Chart summaries={summaries} detection={detection} matching={{ included: matchedRefuted.included.length, excluded: matchedRefuted.excluded.length }} axis={axis} view={chartView} showAllLabels={showAllLabels} onSelect={id => setInspection({ kind: 'configuration', id })} />
           </div>
           <aside className="configuration-list" aria-label="Review methods"><Group justify="space-between" mb="lg"><Text fw={650} size="sm">Review methods</Text><Text size="xs" c="dimmed">{editions.filter(edition => editionIds(edition).some(id => selected.includes(id))).length} selected</Text></Group>
             <div className="skill-switch"><Switch checked={includeExperiments} onChange={event => toggleExperiments(event.currentTarget.checked)} label="Include skill experiments" size="xs" /></div>
@@ -257,7 +259,7 @@ export function Dashboard({ dataset, now = new Date() }: { dataset: Dataset; now
               return <Table.Tr key={task.id}><Table.Td><button className="text-button task-name" onClick={() => setInspection({ kind: 'task', id: task.id })}>{task.repo}<span>#{task.pr}</span></button><Text size="xs" c="dimmed" mt={4} maw={340}>{task.shape}</Text></Table.Td>
                 <Table.Td><Group gap={5} maw={220}>{[...task.profile.technologies, ...task.profile.changeKinds].map(label => <Badge key={label} color="gray" variant="light" size="sm">{label}</Badge>)}</Group></Table.Td>
                 <Table.Td>{task.families.length ? <Text size="sm">{task.families.length} {task.families.length === 1 ? 'problem' : 'problems'}</Text> : <Badge color="gray" variant="light" size="sm">{controlLabels[task.control]}</Badge>}</Table.Td>
-                <Table.Td><DetectionBar value={share(meanTaskRecall(board.cards.filter(card => activeIds.includes(card.configurationId)), task.id, band))} /></Table.Td><Table.Td>{sharedIds.has(task.id) ? <span className="included-label"><Check size={14} aria-hidden="true" /> Included</span>
+                <Table.Td><DetectionBar result={meanTaskRecall(board.cards.filter(card => activeIds.includes(card.configurationId)), task.id, band)} /></Table.Td><Table.Td>{sharedIds.has(task.id) ? <span className="included-label"><Check size={14} aria-hidden="true" /> Included</span>
                   : <Tooltip label="At least one selected setup has no result for this PR"><Text size="xs" c="dimmed" className="missing-label">Missing results</Text></Tooltip>}</Table.Td>
                 <Table.Td><ActionIcon aria-label={`Inspect ${task.repo} PR ${task.pr}`} variant="subtle" color="gray" onClick={() => setInspection({ kind: 'task', id: task.id })}><ArrowUpRight size={18} /></ActionIcon></Table.Td></Table.Tr>
             })}</Table.Tbody></Table></Table.ScrollContainer>
@@ -281,9 +283,12 @@ export function Dashboard({ dataset, now = new Date() }: { dataset: Dataset; now
   </>
 }
 
-function DetectionBar({ value }: { value: Reading }) {
-  if (value.reason !== null) return <Text size="sm" c="dimmed" component="span"><Value cell={value} /></Text>
-  return <span className="detection-bar"><span>{value.text}</span><span className="detection-track" aria-hidden="true"><span style={{ width: value.text }} /></span></span>
+function DetectionBar({ result }: { result: ReturnType<typeof meanTaskRecall> }) {
+  const withheld = reasonCounts(result.withheld).map(row => `${row.reason} (${plural(row.count, 'setup')})`).join(' ')
+  if (result.mean.kind === 'unavailable') return <Text size="sm" c="dimmed" component="span"><Value cell={{ text: 'Unavailable', reason: withheld || result.mean.reason }} /></Text>
+  const value = percent(result.mean.value * 100)
+  return <span className="detection-cell"><span className="detection-bar"><span>{value}</span><span className="detection-track" aria-hidden="true"><span style={{ width: value }} /></span></span>
+    <Text size="xs" c="dimmed" component="span">Mean of {result.included} of {plural(result.selected, 'selected setup')}{withheld && `. Not included: ${withheld}`}</Text></span>
 }
 
 const concerns = ['Security', 'Performance', 'Scalability', 'Architecture', 'Reliability', 'Maintainability', 'Functional', 'Testing']

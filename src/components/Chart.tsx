@@ -28,7 +28,7 @@ export function Mark({ configuration, size = 12 }: { configuration: Pick<Configu
 }
 
 export const axisLabels: Record<Axis, string> = {
-  cost: 'Cost per scheduled trial', tokens: 'Output tokens per scheduled trial', refuted: 'Refuted claims per admitted review', time: 'Median completed-trial time',
+  cost: 'Cost per scheduled trial', tokens: 'Output tokens per scheduled trial', refuted: 'Refuted claims per admitted review on matched PRs', time: 'Median completed-trial time',
 }
 const setups = (count: number) => `${count} ${count === 1 ? 'setup' : 'setups'}`
 
@@ -56,8 +56,8 @@ const scaleFor = (axis: Axis, values: number[]): Scale => axis === 'refuted' ? l
 const fraction = (scale: Scale, value: number) => position(scale, value, 0, 100)
 const scoreTicks = [0, 25, 50, 75, 100]
 
-export function Chart({ summaries, detection, axis, view, showAllLabels, onSelect }: {
-  summaries: Summary[]; detection: DetectionView; axis: Axis; view: ChartView; showAllLabels: boolean; onSelect: (id: string) => void
+export function Chart({ summaries, detection, matching, axis, view, showAllLabels, onSelect }: {
+  summaries: Summary[]; detection: DetectionView; matching: { included: number; excluded: number }; axis: Axis; view: ChartView; showAllLabels: boolean; onSelect: (id: string) => void
 }) {
   const measure = detectionLabel(detection), dimensions = `${measure.toLowerCase()} against ${axisLabels[axis].toLowerCase()}`
   const [hovered, setHovered] = useState<{ id: string; left: number; top: number } | null>(null)
@@ -97,6 +97,7 @@ export function Chart({ summaries, detection, axis, view, showAllLabels, onSelec
       {view === 'models' && <span>Each row is one model. Marks show {measure.toLowerCase()} for each review method that ran on it.</span>}
       {withheld.length > 0 && <span>Not plotted, {measure.toLowerCase()} unavailable: {withheld.map(row => `${row.reason} (${setups(row.count)})`).join(' ')}</span>}
       {view !== 'models' && unplotted.length > 0 && <span>No {axisLabels[axis].toLowerCase()} for {unplotted.map(point => `${point.summary.configuration.short} (${point.summary.reasons[axis]})`).join('; ')}.</span>}
+      {axis === 'refuted' && <span>Refuted claims are compared on the {matching.included} of {matching.included + matching.excluded} selected PRs where every selected setup has admitted, assessed reviews, with PRs weighted equally. A setup that admitted only some trials of a matched PR is measured on the reviews it delivered; the tooltip gives its admitted trials.</span>}
       {axis === 'time' && <span>Completed trials only. Includes replacement attempts; excludes gaps between attempts, provisioning, and grading.</span>}
       {axis === 'cost' && points.some(point => point.summary.configuration.billing === 'list-price-equivalent') && <span>* Subscription usage valued at token list prices, not a bill or quota measurement.</span>}
     </div>}
@@ -133,7 +134,7 @@ function SetupRows({ points, measure, axis, scale, frontier, onSelect, interacti
               <span className="rank-dot" style={{ left: `${score}%` }}><Mark configuration={configuration} /></span></span></span>
           <span className="rank-cell"><span className="rank-value">{formatMetric(axis, metric, configuration)}</span>
             <span className="rank-track">{metricTicks.map(tick => <span key={tick} className="rank-grid" style={{ left: `${fraction(scale, tick)}%` }} />)}
-              {metric === null ? <span className="rank-missing">not recorded</span>
+              {metric === null ? <span className="rank-missing">unavailable</span>
                 : <span className="rank-dot" style={{ left: `${fraction(scale, metric)}%` }}><Mark configuration={configuration} /></span>}</span></span>
         </button>
       </div>
@@ -294,7 +295,7 @@ function Tooltip({ point, measure, axis, left, top }: { point: Point; measure: s
     <span key="score">{measure}: <b>{percent(summary.detection)}</b>{range && ` (${percent(range.low)} to ${percent(range.high)} leaving one PR out; sensitivity, not a confidence interval)`}</span>,
     <span key="metric">{axisLabels[axis]}: <b>{formatMetric(axis, point.metric, summary.configuration)}</b></span>,
     axis === 'time' && summary.time && <span key="time">Mean {duration(summary.time.mean)} · middle 50% {duration(summary.time.q1)} to {duration(summary.time.q3)} · {summary.time.reviews} timed trials</span>,
-    <span key="count">{summary.tasks} PRs · {summary.completed} of {summary.trials} scheduled trials completed</span>,
+    <span key="count">{summary.tasks} PRs · {summary.admitted} of {summary.trials} scheduled trials admitted, {summary.completed} complete</span>,
   ]
   return <div className="chart-tip" role="presentation" style={{ left, top }}><strong>{summary.configuration.label}</strong>{lines}</div>
 }

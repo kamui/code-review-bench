@@ -51,7 +51,7 @@ The kernel in `src/lib/scoring.ts` computes every measure across reviews; see [s
 
 ## Explorer
 
-- The chart plots one explicitly selected impact band and average against cost, output tokens, refuted claims or time, and names that selection in its labels. An unavailable selection shows its reasons and counts; no other band or average is substituted.
+- The chart plots one explicitly selected impact band and average against cost, output tokens, refuted claims or time, and names that selection in its labels. Its refuted-claims axis uses the rate matched on commonly admitted PRs. An unavailable selection shows its reasons and counts; no other band or average is substituted.
 - Lines connect configurations of the same review method and curated edition across models. They show the review family, not a frontier. The frontier view names the two measures it compares.
 - The results table shows both averages of the selected band, starts in name order and sorts only by a chosen column.
 - Scorecard tabs cover detection, delivery, claim reliability, remedies, controls, advice benefit, cost and time, pending candidates and a two-setup comparison. A whole-PR omission range is sensitivity to the selected PRs, not a confidence interval.
