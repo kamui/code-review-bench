@@ -203,8 +203,13 @@ function seriousCaught(ran: Cell[], rows: FamilyRow[], gap: string | null) {
 function seriousMisses(rows: FamilyRow[], gap: string | null) {
   const serious = rows.filter(row => row.impact === 'serious')
   const undetermined = sum(serious.map(row => row.unresolved + row.ungraded + row.pending))
-  const families = serious.filter(row => row.missed + row.unadmitted > 0).map(row => ({ taskId: row.taskId, familyId: row.familyId,
-    scheduled: row.scheduled, caught: row.caught, notCaught: row.missed + row.unadmitted }))
+  const families = serious.flatMap(row => {
+    const notCaught = row.missed + row.unadmitted, undetermined = row.unresolved + row.ungraded + row.pending
+    if (!notCaught && !undetermined) return []
+    const repeated: Measure<boolean> = notCaught > 1 ? available(true)
+      : undetermined ? unavailable(`${plural(undetermined, 'serious outcome is', 'serious outcomes are')} undetermined.`) : available(false)
+    return [{ taskId: row.taskId, familyId: row.familyId, scheduled: row.scheduled, caught: row.caught, notCaught, undetermined, repeated }]
+  })
   return { families, repeated: gated(gap, !serious.length ? unavailable('No reference is labelled serious.')
     : undetermined ? unavailable(`${plural(undetermined, 'serious outcome is', 'serious outcomes are')} undetermined.`)
       : available(families.filter(row => row.notCaught > 1).length)) }
