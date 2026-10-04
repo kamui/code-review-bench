@@ -106,13 +106,15 @@ describe('scorecard display', () => {
   })
 })
 
-describe('current ungraded preview', () => {
+describe('current partly graded preview', () => {
   test('preserves saved delivery and usage without inventing judgment values', () => {
-    expect(imported.evidence.coverage).toMatchObject({ complete: false, assessedReviews: 0, requiredReviews: 690 })
+    const coverage = imported.evidence.coverage
+    expect(coverage).toMatchObject({ complete: false, requiredReviews: 690 })
+    expect(coverage.assessedReviews).toBeLessThan(coverage.requiredReviews)
     expect(imported.configurations).toHaveLength(17)
     expect(imported.attempts).toHaveLength(746)
-    expect(heroCounts(imported)).toMatchObject({ tasks: 16, problems: 31, awaitingEligibility: 0 })
-    expect(imported.attempts.every(attempt => attempt.assessment === null)).toBe(true)
+    expect(heroCounts(imported)).toMatchObject({ tasks: 16, problems: 32, awaitingEligibility: 0 })
+    expect(imported.attempts.filter(attempt => attempt.admitted && attempt.assessment?.state === 'assessed')).toHaveLength(coverage.assessedReviews)
     const summary = summaries[0]
     if (!summary) throw new Error('Missing preview configuration')
     expect(summary.detection).toBeNull()
