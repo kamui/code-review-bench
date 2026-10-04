@@ -79,12 +79,12 @@ describe('scorecard display', () => {
   })
 
   test('hero counts cover the whole export and ignore effort, client and repetition variations', () => {
-    expect(heroCounts(fixture)).toEqual({ tasks: 6, problems: 10, methods: 2, models: 4 })
+    expect(heroCounts(fixture)).toEqual({ tasks: 6, problems: 10, awaitingEligibility: 1, methods: 2, models: 4 })
     const subject = task('pr', [family('f')])
     const cells = { a: [[subject, [review(subject, []), review(subject, [])]]], b: [[subject, [review(subject, [])]]], c: [[subject, [review(subject, [])]]] } satisfies Parameters<typeof build>[1]
     const varied = build([subject], cells, { experimental: ['c'], configurations: { a: { method: 'codex', models: ['m1'], reasoningEffort: 'high', version: 'codex-cli 1' },
       b: { method: 'codex', models: ['m1'], reasoningEffort: 'medium', version: 'codex-cli 2' }, c: { method: 'review-code', builtin: false, models: ['m2'] } } })
-    expect(heroCounts(varied)).toEqual({ tasks: 1, problems: 1, methods: 2, models: 2 })
+    expect(heroCounts(varied)).toEqual({ tasks: 1, problems: 1, awaitingEligibility: 0, methods: 2, models: 2 })
   })
 
   test('a preview with missing assessments or no audit is never labelled the completed dataset', () => {
@@ -109,10 +109,9 @@ describe('scorecard display', () => {
 describe('current ungraded preview', () => {
   test('preserves saved delivery and usage without inventing judgment values', () => {
     expect(imported.evidence.coverage).toMatchObject({ complete: false, assessedReviews: 0, requiredReviews: 690 })
-    expect(imported.tasks).toHaveLength(16)
     expect(imported.configurations).toHaveLength(17)
     expect(imported.attempts).toHaveLength(746)
-    expect(imported.tasks.flatMap(task => task.families)).toHaveLength(31)
+    expect(heroCounts(imported)).toMatchObject({ tasks: 16, problems: 31, awaitingEligibility: 0 })
     expect(imported.attempts.every(attempt => attempt.assessment === null)).toBe(true)
     const summary = summaries[0]
     if (!summary) throw new Error('Missing preview configuration')
