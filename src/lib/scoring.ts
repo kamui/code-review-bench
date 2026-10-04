@@ -200,6 +200,21 @@ function seriousCaught(ran: Cell[], rows: FamilyRow[], gap: string | null) {
       : rates.kind === 'unavailable' ? rates : available(mean(rates.value))) }
 }
 
+function seriousMisses(rows: FamilyRow[], gap: string | null) {
+  const serious = rows.filter(row => row.impact === 'serious')
+  const undetermined = sum(serious.map(row => row.unresolved + row.ungraded + row.pending))
+  const families = serious.flatMap(row => {
+    const notCaught = row.missed + row.unadmitted, undetermined = row.unresolved + row.ungraded + row.pending
+    if (!notCaught && !undetermined) return []
+    const repeated: Measure<boolean> = notCaught > 1 ? available(true)
+      : undetermined ? unavailable(`${plural(undetermined, 'serious outcome is', 'serious outcomes are')} undetermined.`) : available(false)
+    return [{ taskId: row.taskId, familyId: row.familyId, scheduled: row.scheduled, caught: row.caught, notCaught, undetermined, repeated }]
+  })
+  return { families, repeated: gated(gap, !serious.length ? unavailable('No reference is labelled serious.')
+    : undetermined ? unavailable(`${plural(undetermined, 'serious outcome is', 'serious outcomes are')} undetermined.`)
+      : available(families.filter(row => row.notCaught > 1).length)) }
+}
+
 function taskRows(ran: Cell[], rows: FamilyRow[]) {
   return ran.map(cell => ({
     taskId: cell.task.id,
@@ -331,18 +346,36 @@ export function scorecard(dataset: Dataset, configurationId: string, selection: 
   const { ran, missing } = cells(dataset, configurationId, selection.taskIds)
   const gap = missing.length ? `Ran ${ran.length} of ${selection.taskIds.length} selected PRs.` : null
   const rows = ran.flatMap(cell => familyRows(cell, selection.concern))
-  const pendingCandidates = ran.flatMap(cell => candidates(cell.task, selection.concern).map(family => ({ taskId: cell.task.id, familyId: family.id })))
+  const pendingCandidates: { taskId: string; id: string; kind: 'family' | 'novel' }[] = [
+    ...ran.flatMap(cell => candidates(cell.task, selection.concern).map(family => ({ taskId: cell.task.id, id: family.id, kind: 'family' as const }))),
+    ...dataset.candidates.filter(candidate => ran.some(cell => cell.task.id === candidate.taskId))
+      .map(candidate => ({ taskId: candidate.taskId, id: candidate.id, kind: 'novel' as const }))]
   return {
     configurationId, coverage: { ran: ran.length, selected: selection.taskIds.length, missing },
     delivery: delivery(ran),
     detection: byBand(band => recall(ran, rows, band, gap)),
-    seriousCaught: seriousCaught(ran, rows, gap), families: rows, tasks: taskRows(ran, rows),
+    seriousCaught: seriousCaught(ran, rows, gap), seriousMisses: seriousMisses(rows, gap), families: rows, tasks: taskRows(ran, rows),
     reliability: reliability(ran, gap), remedies: remedies(ran, gap), controls: controls(ran, gap), advice: advice(ran),
     cost: usage(ran, gap, attempt => attempt.cost), tokens: usage(ran, gap, attempt => attempt.outputTokens), time: timing(ran, gap),
     limits: { unknownImpact: rows.filter(row => row.impact === 'unknown').length, pendingCandidates, auditComplete: dataset.evidence.audit.state === 'assessed' },
   }
 }
 export type Scorecard = ReturnType<typeof scorecard>
+
+export function referenceCoverage(dataset: Dataset, selection: Selection) {
+  const tasks = dataset.tasks.filter(task => selection.taskIds.includes(task.id))
+  const approved = tasks.flatMap(task => references(task, selection.concern))
+  const controls = (status: Task['control']) => tasks.filter(task => task.control === status).map(task => task.id)
+  return { bands: byBand(band => approved.filter(family => band === 'all' || family.impact === band).length),
+    pendingFamilies: tasks.flatMap(task => candidates(task, selection.concern)).length,
+    controls: { audited: controls('audited-clean'), provisional: controls('provisional'), unaudited: controls('unaudited') } }
+}
+
+const dayMilliseconds = 86_400_000
+export function pendingCandidates(dataset: Dataset, taskIds: string[], now: Date) {
+  return dataset.candidates.filter(candidate => taskIds.includes(candidate.taskId)).map(candidate => ({ ...candidate,
+    ageDays: Math.max(0, Math.floor((now.getTime() - Date.parse(candidate.recordedAt)) / dayMilliseconds)) }))
+}
 
 export function comparisonTasks(dataset: Dataset, selected: string[], candidateTaskIds: string[]) {
   const baseline = dataset.configurations.filter(configuration => !configuration.experimental).map(configuration => configuration.id)
@@ -358,12 +391,11 @@ export function leaderboard(dataset: Dataset, options: { selected: string[]; can
   return { selection, cards: dataset.configurations.map(configuration => scorecard(dataset, configuration.id, selection)) }
 }
 
-export function meanTaskRecall(cards: Scorecard[], taskId: string, band: Band): Measure {
-  const values = cards.flatMap(card => {
-    const measure = card.tasks.find(row => row.taskId === taskId)?.bands[band].recall
-    return measure?.kind === 'available' ? [measure.value] : []
-  })
-  return values.length ? available(mean(values)) : unavailable('No selected setup has a final recall for this PR.')
+export function meanTaskRecall(cards: Scorecard[], taskId: string, band: Band) {
+  const measures = cards.map((card): Measure => card.tasks.find(row => row.taskId === taskId)?.bands[band].recall ?? unavailable('No trials on this PR in the comparison.'))
+  const values = measures.flatMap(measure => measure.kind === 'available' ? [measure.value] : [])
+  return { mean: values.length ? available(mean(values)) : unavailable('No selected setup has a final recall for this PR.'),
+    included: values.length, selected: cards.length, withheld: measures.flatMap(measure => measure.kind === 'unavailable' ? [measure.reason] : []) }
 }
 
 export function orderingConflicts(cards: Scorecard[], band: Band) {
@@ -445,9 +477,11 @@ export function matched(dataset: Dataset, configurationIds: string[], selection:
 type Recommendation = { kind: 'supported' | 'provisional'; prefer: string | null; reasons: string[] } | { kind: 'none'; reasons: string[] }
 
 function evidenceLimits(a: Scorecard, b: Scorecard) {
-  const pending = new Set([a, b].flatMap(card => card.limits.pendingCandidates.map(candidate => candidate.familyId))).size
+  const pending = (kind: 'family' | 'novel') => new Set([a, b].flatMap(card => card.limits.pendingCandidates.filter(candidate => candidate.kind === kind)
+    .map(candidate => candidate.id))).size
   return [a.limits.auditComplete ? [] : ['The evaluator audit is not complete.'],
-    pending ? [`${plural(pending, 'candidate family awaits', 'candidate families await')} an eligibility ruling.`] : [],
+    pending('family') ? [`${plural(pending('family'), 'candidate family awaits', 'candidate families await')} an eligibility ruling.`] : [],
+    pending('novel') ? [`${plural(pending('novel'), 'novel candidate awaits', 'novel candidates await')} an eligibility ruling.`] : [],
     [a, b].flatMap(card => card.coverage.missing.length ? [`${card.configurationId} ran ${card.coverage.ran} of ${card.coverage.selected} selected PRs.`] : [])].flat()
 }
 

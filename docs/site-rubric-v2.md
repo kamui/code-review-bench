@@ -1,5 +1,7 @@
 # Rubric-v2 site release
 
+Superseded. The site now shows only the [current v1 scorecard](current-grading.md#explorer-scorecard) and loads no rubric-v2 grade or score. This page is kept as the record of the earlier release decision.
+
 The site must use the new rubric-v2 grades and scores exclusively. Preserve earlier grades, results, frozen reviewer inputs and raw reviews for archival use. Remove historical scoring controls, old scoreboard links and fallback paths from the site and its exporter.
 
 Pin each result's mapping versions and the current reference versions. Keep reviewer manifests unchanged. Retain task comparability checks; regrading does not make different reference versions comparable. New, unresolved claims remain unresolved until their saved ruling exists.
