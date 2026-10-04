@@ -117,7 +117,7 @@ describe('current ungraded preview', () => {
     const summary = summaries[0]
     if (!summary) throw new Error('Missing preview configuration')
     expect(summary.detection).toBeNull()
-    expect(summary.reasons.detection).toBe('No references in this band.')
+    expect(summary.reasons.detection).toMatch(/^\d+ admitted reviews await assessment\.$/)
     expect(summary.refuted).toBeNull()
     expect(summary.completed).toBeGreaterThan(0)
     expect(summary.cost).not.toBeNull()
