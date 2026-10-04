@@ -12,6 +12,8 @@ The plan, its seed, the sample sizes and the tolerances are the ones ``audits.js
 (``docs/evaluator-audit.md``). Every record of a round lands under ``<current>/audit/<seed>/`` and is written
 once; a fresh sample after a failed stratum takes a new recorded seed and so a new directory. From the draw to
 the conclusion ``grades.json`` must stay the file the sample pins: a batch graded again in between is refused.
+Each operation holds the record lock that ``grade.py map`` and ``invalidate`` take, so no grade is replaced
+between that check and the write that follows it.
 
 ``draw`` needs a current grade for every selected batch. It builds each stratum's population from
 ``grades.json`` and the approved impact bands, orders the units by the SHA-256 of ``<seed>:<stratum>:<unit id>``
@@ -333,7 +335,8 @@ def main():
     if absent:
         parser.error(f"{args.operation} needs " + ", ".join(f"--{name}" for name in absent))
     try:
-        problems = {"draw": draw, "second": second, "compare": compare, "conclude": conclude}[args.operation](args)
+        with current_grading.record_lock(args.root):
+            problems = {"draw": draw, "second": second, "compare": compare, "conclude": conclude}[args.operation](args)
     except Inconsistent as error:
         problems = str(error).splitlines()
     except FileExistsError as error:

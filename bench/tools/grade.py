@@ -62,6 +62,7 @@ Exit codes: 0 done; 1 the inputs are inconsistent or a check failed, one line pe
 from __future__ import annotations
 
 import argparse
+import contextlib
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -1060,8 +1061,10 @@ def main() -> int:
         parser.error("--run and --step go together")
     handler = {"prepare": prepare, "preflight": preflight, "dispatch": dispatch, "validate": validate,
                "map": map_verdicts, "invalidate": invalidate}[args.command]
+    lock = current_grading.record_lock(args.root) if args.command in ("map", "invalidate") else contextlib.nullcontext()
     try:
-        problems = handler(args)
+        with lock:
+            problems = handler(args)
     except Inconsistent as error:
         print(str(error))
         return 1

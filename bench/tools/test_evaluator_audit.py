@@ -13,9 +13,11 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS))
+import current_grading as current  # noqa: E402
 from test_current_grading import approved  # noqa: E402
 from test_grade import RUN, TARGET, Grade, claim, grade, remedy, reviewed, write_json  # noqa: E402
 import unittest  # noqa: E402
@@ -193,6 +195,29 @@ class Audit(Grade):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertTrue((self.round / "conclusion.json").exists())
         self.assertTrue((self.current / "audit/fixture-2/sample.json").exists())
+
+    def test_no_grade_is_replaced_while_an_audit_operation_holds_the_record(self):
+        self.compared(third="advisory")
+        write_json(self.root / "reconciliation.json", {"reconciler": "fixture", "decisions": [
+            {"unit": f"{UNIT}#c3", "finding": "first-correct", "reason": "Read main.go.", "evidence": ["main.go"]}]})
+        regrade = self.assessed(self.root / "work-3", self.root / "keys/key-3.json", "first", "advisory")
+        grades = (self.current / "grades.json").read_bytes()
+        run = lambda *command: subprocess.Popen([sys.executable, *command, "--root", str(self.root)],  # noqa: E731
+                                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        with current.record_lock(self.root):
+            mapping = run(str(TOOLS / "grade.py"), "map", *regrade)
+            concluding = run(str(TOOL), "conclude", "--reconciliation", str(self.root / "reconciliation.json"))
+            time.sleep(1.5)
+            self.assertEqual((mapping.poll(), concluding.poll()), (None, None))
+            self.assertEqual((self.current / "grades.json").read_bytes(), grades)
+        mapped, concluded = mapping.communicate()[0], concluding.communicate()[0]
+        self.assertEqual(mapping.returncode, 0, mapped)
+        state = json.loads((self.current / "audits.json").read_text())["state"]
+        if concluding.returncode:
+            self.assertIn("grades.json changed since the sample was drawn", concluded)
+            self.assertEqual(state, "unassessed")
+        else:
+            self.assertEqual(state, "assessed")
 
     def test_every_disagreement_needs_a_reconciliation(self):
         self.compared(third="advisory")
