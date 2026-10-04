@@ -121,11 +121,15 @@ describe('current ungraded preview', () => {
     expect(summary.refuted).toBeNull()
     expect(summary.completed).toBeGreaterThan(0)
     expect(summary.cost).not.toBeNull()
-    for (const band of ['all', 'serious', 'other-material', 'unknown'] as const) {
+    for (const band of ['all', 'unknown'] as const) {
       expect(summary.card.detection[band].equalPr).toEqual({ kind: 'unavailable', reason: expect.stringMatching(/^\d+ admitted reviews await assessment\.$/) })
     }
+    for (const band of ['serious', 'other-material'] as const) {
+      expect(summary.card.detection[band].equalPr).toEqual({ kind: 'unavailable', reason: 'No references in this band.' })
+    }
     expect(summary.card.controls.cleanFraction).toEqual({ kind: 'unavailable', reason: expect.stringMatching(/^\d+ admitted control reviews await assessment\.$/) })
-    expect(summary.card.limits).toMatchObject({ pendingCandidates: [], auditComplete: false })
+    expect(summary.card.limits.pendingCandidates.length).toBeGreaterThan(0)
+    expect(summary.card.limits.auditComplete).toBe(false)
     const comparison = pairwise(summary.card, summary.card, 'all')
     expect(comparison.rows.length).toBeGreaterThan(0)
     expect(comparison.rows.every(row => row.delta.kind === 'unavailable')).toBe(true)

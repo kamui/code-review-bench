@@ -100,6 +100,15 @@ class CalibrationTest(unittest.TestCase):
         self.save(queue=False)
         self.assert_problem("GT-t1: needs exactly one impact decision, approved or proposed; found 0")
 
+    def test_impact_decision_pins_its_boundary_and_names_a_current_family(self):
+        self.decision["boundary"] = None
+        self.save(queue=False)
+        self.assert_problem("AD-GT-t1-impact: an impact decision pins the boundary it was assessed under")
+        self.decision["boundary"] = current.pin_file(self.boundary, self.root)
+        self.documents["adjudication"]["decisions"].append({**self.decision, "id": "AD-GT-gone-impact", "subject": "GT-gone"})
+        self.save(queue=False)
+        self.assert_problem("GT-gone: impact decision names no current family")
+
     def test_serious_proposal_needs_an_independent_inspection_and_keeps_disagreement(self):
         self.decision["outcome"] = "serious"
         self.save()
@@ -182,7 +191,11 @@ class CalibrationTest(unittest.TestCase):
         row = self.queue()["controls"][0]
         self.assertEqual((row["status"], row["needs"], row["decision"]["status"]), ("unaudited", ["control ruling"], "proposed"))
         self.assertEqual([m["state"] for m in self.queue()["measures"] if m["measure"] == "clean-control rate"], ["blocked"])
-        decision["independent_checks"] = []
+        decision.update(status="approved", authority="human", receipt=current.pin_file(self.boundary, self.root),
+                        receipt_scope="Serious means")
+        self.save_control(queue=False)
+        self.assert_problem("t-example: control status differs from approved AD-t-example-control")
+        decision.update(status="proposed", authority="automation", receipt=None, receipt_scope=None, independent_checks=[])
         self.save_control(queue=False)
         self.assert_problem("records its audit evidence and an independent audit")
         self.documents["adjudication"]["decisions"].clear()
@@ -213,6 +226,14 @@ class CalibrationTest(unittest.TestCase):
         self.assertEqual(self.run_tool("check").returncode, 0)
         self.assertEqual(self.queue()["audit"]["needs"], ["human-selected tolerances"])
 
+    def test_audit_without_a_plan_is_refused_by_every_operation(self):
+        self.documents["audit"] = {"state": "unassessed", "evidence": []}
+        self.save(queue=False)
+        for operation in ("check", "queue"):
+            result = self.run_tool(operation)
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("current audit: ", result.stdout)
+
     def test_assessed_audit_needs_selected_plan_and_evidence(self):
         self.documents["audit"]["state"] = "assessed"
         self.save(queue=False)
@@ -236,6 +257,9 @@ class CalibrationTest(unittest.TestCase):
             self.assertNotIn(hidden, text)
         self.assertEqual(json.loads(key.read_text(encoding="utf-8"))["GT-t1"]["E1"], self.family["evidence"][0])
         self.assertEqual(self.run_tool("cards", "--out", str(out), "--key", str(self.root / "other.json")).returncode, 1)
+        inside = self.run_tool("cards", "--out", str(self.root / "fresh"), "--key", str(self.root / "fresh/key.json"))
+        self.assertEqual((inside.returncode, inside.stdout.strip()), (1, "keep the key outside the card directory"))
+        self.assertFalse((self.root / "fresh").exists())
 
     def test_blinded_cards_refuse_a_reviewer_identity(self):
         self.card["consequence"] = "The example arm found a lost write."

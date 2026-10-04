@@ -32,7 +32,7 @@ python3 bench/tools/calibration.py queue --out bench/grading/current/decision-qu
 
 A family without an approved decision stays `unknown` with its reason. A proposal is never read as a label, and `unknown` is never read as low impact. Eligibility can be approved while impact is unknown.
 
-The boundary's S1 to S4 rule, its anchors by domain and its gaps are in the boundary file. Testing, documentation and architecture or maintenance have no serious positive in the current references.
+The boundary's S1 to S4 rule, its anchors by domain and its gaps are in the boundary file. Version 1 is a proposal: no band is approved under it yet. Testing, documentation and architecture or maintenance have no serious positive in the current references.
 
 ## Group families
 
