@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from contextlib import contextmanager
+import fcntl
 import hashlib
 import json
 from pathlib import Path
@@ -602,6 +604,17 @@ def load_current(root=ROOT, current=CURRENT, grades=True):
     verify_pins(documents["audit"], root)
     validate_documents(documents, selected, root, grades)
     return selected, documents
+
+
+@contextmanager
+def record_lock(root=ROOT):
+    """Hold the current record for one writer. A grade replaced while an audit concludes would escape the
+    audit's check that the grades are still the ones its sample was drawn from."""
+    path = Path(root).resolve() / ".cache/current-record.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
 
 
 def control_state(reference, candidates):
