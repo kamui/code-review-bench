@@ -94,6 +94,12 @@ describe('scorecard page on the fixture', () => {
   test('derives the hero counts from the whole export, experiments included', () => {
     expect(rendered).toContain('PR tasks 6 provisional problems 10 review methods 2 models tested 4')
   })
+
+  test('calls approved references known problems while reviews are ungraded and the audit is open', () => {
+    const subject = task('pr', [family('f')])
+    const ungraded = build([subject], { a: [[subject, [review(subject, null)]]] }, { audit: 'unassessed', coverage: { requiredReviews: 1, complete: false, reason: 'Ungraded.' } })
+    expect(page(ungraded)).toContain('PR tasks 1 known problems 1 review methods 1 models tested 1')
+  })
 })
 
 describe('chart', () => {
