@@ -1,10 +1,13 @@
 import json
+import os
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 import tomllib
 
-from clean_context import configure_codex, prepare
+from clean_context import configure_codex, neutral_directory, prepare
 
 
 class CleanContext(unittest.TestCase):
@@ -62,6 +65,17 @@ class CleanContext(unittest.TestCase):
             link.symlink_to(attempt, target_is_directory=True)
             with self.assertRaises(ValueError):
                 prepare(link)
+
+    def test_neutral_directory_is_fresh_and_outside_every_repository(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(os.path.realpath(temporary))
+            with patch.object(tempfile, "tempdir", str(root)):
+                directory = neutral_directory()
+                self.assertEqual((directory.parent, list(directory.iterdir())), (root, []))
+                subprocess.run(["git", "init", "-q", str(root)], check=True)
+                with self.assertRaisesRegex(ValueError, f"inside the git repository {root}; set TMPDIR"):
+                    neutral_directory()
+                self.assertEqual(list(root.glob("client-*")), [directory])
 
 
 if __name__ == "__main__":

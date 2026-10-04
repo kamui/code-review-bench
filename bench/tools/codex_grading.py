@@ -101,6 +101,11 @@ def probe(evidence_dir: Path | None = None) -> dict:
         skill.write_text("---\nname: probe\ndescription: SKILL-CODEX-GRADING-PROBE-MARKER\n---\n")
         (work / "clone").mkdir()
         (work / "clone/test.txt").write_text("focused inspection")
+        git = ["git", "-C", str(root), "-c", "user.name=probe", "-c", "user.email=probe@example.invalid"]
+        for arguments in (["init", "-q", "-b", "BRANCH-CODEX-GIT-PROBE-MARKER"],
+                          ["commit", "-q", "--allow-empty", "-m", "SUBJECT-CODEX-GIT-PROBE-MARKER"]):
+            subprocess.run(git + arguments, check=True, capture_output=True)
+        (root / "UNTRACKED-CODEX-GIT-PROBE-MARKER").write_text("")
         grading_policy.probe(work)
         validator = work / "validator"
         (validator / "tools").mkdir(parents=True)
@@ -181,6 +186,7 @@ def probe(evidence_dir: Path | None = None) -> dict:
             require(request.get("model") == MODEL, "client requested an unexpected model")
         context = json.dumps(requests)
         require("CODEX-GRADING-PROBE-MARKER" not in context, "ambient context was loaded")
+        require("CODEX-GIT-PROBE-MARKER" not in context, "the enclosing repository's git state was sent to the model")
         require("### Available skills\n- " not in context, "ambient skills were loaded")
         rollouts = list((home / ".codex/sessions").rglob("rollout-*.jsonl"))
         require(len(rollouts) == 1, "client did not save exactly one fresh grading session")
