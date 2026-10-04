@@ -93,11 +93,12 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
         <Text size="xs" c="dimmed" className="footnote">Observed counts are outcomes determined so far and are not a final rate. The admitted-only figure excludes failed trials, so it describes delivered reviews rather than the setup. The left-out range shows sensitivity to these PRs, not a confidence interval.</Text>
         <Title order={4}>Serious references not caught</Title>
         {misses.length ? <Table.ScrollContainer minWidth={700}><Table aria-label="Serious references not caught" className="data-table">
-          <Table.Thead><Table.Tr><Table.Th scope="col">Setup</Table.Th><Table.Th scope="col">PR</Table.Th><Table.Th scope="col">Serious reference</Table.Th><Table.Th scope="col">Not caught / scheduled trials</Table.Th><Table.Th scope="col">Repeated</Table.Th></Table.Tr></Table.Thead>
+          <Table.Thead><Table.Tr><Table.Th scope="col">Setup</Table.Th><Table.Th scope="col">PR</Table.Th><Table.Th scope="col">Serious reference</Table.Th><Table.Th scope="col">Observed not caught / scheduled trials</Table.Th><Table.Th scope="col">Repeated</Table.Th></Table.Tr></Table.Thead>
           <Table.Tbody>{misses.map(miss => <Table.Tr key={`${miss.configuration.id}/${miss.familyId}`}><Table.Th scope="row">{miss.configuration.short}</Table.Th>
             <Table.Td><button className="text-button" onClick={() => onInspect({ kind: 'task', id: miss.taskId })}>{name(miss.taskId)}</button></Table.Td>
             <Table.Td>{task(miss.taskId)?.families.find(family => family.id === miss.familyId)?.title ?? miss.familyId}</Table.Td>
-            <Table.Td>{miss.notCaught} / {miss.scheduled}</Table.Td><Table.Td>{miss.notCaught > 1 ? 'Yes' : 'No'}</Table.Td></Table.Tr>)}</Table.Tbody>
+            <Table.Td>{miss.notCaught} / {miss.scheduled}{miss.undetermined > 0 && ` (${miss.undetermined} undetermined)`}</Table.Td>
+            <Table.Td><Value cell={reading(miss.repeated, repeated => repeated ? 'Yes' : 'No')} /></Table.Td></Table.Tr>)}</Table.Tbody>
         </Table></Table.ScrollContainer>
           : <Text size="sm" c="dimmed">{coverage.bands.serious ? 'No determined miss of a serious reference for the selected setups.' : 'No reference on the selected PRs is labelled serious, so serious misses cannot be listed.'}</Text>}
       </Stack></Tabs.Panel>
@@ -143,7 +144,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
       </Stack></Tabs.Panel>
 
       <Tabs.Panel value="remedies" pt="md"><Stack>
-        <Text size="sm" className="footnote">Sufficiency asks whether a recommendation resolves the problem it addresses; safety asks, independently, whether applying it does harm. A recommendation without a safety assessment is unassessed, never safe. Unsafe recommendations per admitted review is a lower bound, because unassessed ones could add to it.</Text>
+        <Text size="sm" className="footnote">Sufficiency asks whether a recommendation resolves the problem it addresses; safety asks, independently, whether applying it does harm. A recommendation without a safety assessment is unassessed, never safe. Only when admission is final and no trial is pending are unsafe recommendations per admitted review a lower bound, because unassessed ones could add to it. Pending cohorts show observed counts and assessed exposure without a final-cohort bound.</Text>
         <DataTable label="Remedy sufficiency and safety" rows={rows} rowKey={key} minWidth={1250} columns={[setup,
           { label: 'Inventoried / admitted reviews', value: row => `${row.card.remedies.inventoried} / ${row.card.remedies.admitted}` },
           { label: 'Recommendations', value: row => String(row.card.remedies.recommendations) }, { label: 'Assessed safe', value: row => String(row.card.remedies.safe) },

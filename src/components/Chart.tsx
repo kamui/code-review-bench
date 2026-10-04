@@ -96,7 +96,7 @@ export function Chart({ summaries, detection, matching, axis, view, showAllLabel
       {view === 'tradeoff' && <span><span className="frontier-key" aria-hidden="true" />Frontier of {dimensions}: no other selected setup is higher on the first at a lower value of the second. It says nothing about any other measure.</span>}
       {view === 'models' && <span>Each row is one model. Marks show {lowerFirst(measure)} for each review method that ran on it.</span>}
       {withheld.length > 0 && <span>Not plotted, {lowerFirst(measure)} unavailable: {withheld.map(row => `${row.reason} (${setups(row.count)})`).join(' ')}</span>}
-      {view !== 'models' && unplotted.length > 0 && <span>No {lowerFirst(axisLabels[axis])} for {unplotted.map(point => `${point.summary.configuration.short} (${point.summary.reasons[axis]})`).join('; ')}.</span>}
+      {unplotted.length > 0 && <span>No {lowerFirst(axisLabels[axis])} for {unplotted.map(point => `${point.summary.configuration.short} (${point.summary.reasons[axis]})`).join('; ')}.</span>}
       {axis === 'refuted' && <span>Refuted claims are compared on the {matching.included} of {matching.included + matching.excluded} selected PRs where every selected setup has admitted, assessed reviews, with PRs weighted equally. A setup that admitted only some trials of a matched PR is measured on the reviews it delivered; the tooltip gives its admitted trials.</span>}
       {axis === 'time' && <span>Completed trials only. Includes replacement attempts; excludes gaps between attempts, provisioning, and grading.</span>}
       {axis === 'cost' && points.some(point => point.summary.configuration.billing === 'list-price-equivalent') && <span>* Subscription usage valued at token list prices, not a bill or quota measurement.</span>}
@@ -293,7 +293,7 @@ function Tooltip({ point, measure, axis, left, top }: { point: Point; measure: s
   const lines: ReactNode[] = [
     !summary.configuration.builtin && <span key="skill">Skill: {skillReleaseLabel([summary.configuration])}</span>,
     <span key="score">{measure}: <b>{percent(summary.detection)}</b>{range && ` (${percent(range.low)} to ${percent(range.high)} leaving one PR out; sensitivity, not a confidence interval)`}</span>,
-    <span key="metric">{axisLabels[axis]}: <b>{formatMetric(axis, point.metric, summary.configuration)}</b></span>,
+    <span key="metric">{axisLabels[axis]}: <b>{formatMetric(axis, point.metric, summary.configuration)}</b>{point.metric === null && ` ${summary.reasons[axis]}`}</span>,
     axis === 'time' && summary.time && <span key="time">Mean {duration(summary.time.mean)} · middle 50% {duration(summary.time.q1)} to {duration(summary.time.q3)} · {summary.time.reviews} timed trials</span>,
     <span key="count">{summary.tasks} PRs · {summary.admitted} of {summary.trials} scheduled trials admitted, {summary.completed} complete</span>,
   ]
