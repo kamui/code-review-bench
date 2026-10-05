@@ -1,0 +1,568 @@
+diff --git a/go.mod b/go.mod
+index d87907da3855..80f755087ca0 100644
+--- a/go.mod
++++ b/go.mod
+@@ -7,6 +7,7 @@ require (
+ 	github.com/cncf/xds/go v0.0.0-20240905190251-b4127c9b8d78
+ 	github.com/envoyproxy/go-control-plane v0.13.1
+ 	github.com/golang/glog v1.2.2
++	github.com/golang/protobuf v1.5.4
+ 	github.com/google/go-cmp v0.6.0
+ 	github.com/google/uuid v1.6.0
+ 	golang.org/x/net v0.30.0
+diff --git a/go.sum b/go.sum
+index c62416214d25..8ed7162313b9 100644
+--- a/go.sum
++++ b/go.sum
+@@ -16,6 +16,8 @@ github.com/envoyproxy/protoc-gen-validate v1.1.0 h1:tntQDh69XqOCOZsDz0lVJQez/2L6
+ github.com/envoyproxy/protoc-gen-validate v1.1.0/go.mod h1:sXRDRVmzEbkM7CVcM06s9shE/m23dg3wzjl0UWqJ2q4=
+ github.com/golang/glog v1.2.2 h1:1+mZ9upx1Dh6FmUTFR1naJ77miKiXgALjWOZ3NVFPmY=
+ github.com/golang/glog v1.2.2/go.mod h1:6AhwSGph0fcJtXVM/PEHPqZlFeoLxhs7/t5UDAwmO+w=
++github.com/golang/protobuf v1.5.4 h1:i7eJL8qZTpSEXOPTxNKhASYpMn+8e5Q6AdndVa1dWek=
++github.com/golang/protobuf v1.5.4/go.mod h1:lnTiLA8Wa4RWRcIUkrtSVa5nRhsEGBg48fD6rSs7xps=
+ github.com/google/go-cmp v0.6.0 h1:ofyhxvXcZhMsU5ulbFiLKl/XBFqE1GSq7atu8tAmTRI=
+ github.com/google/go-cmp v0.6.0/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
+ github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
+diff --git a/internal/status/status.go b/internal/status/status.go
+index 757925381fe7..1186f1e9a9ad 100644
+--- a/internal/status/status.go
++++ b/internal/status/status.go
+@@ -149,6 +149,8 @@ func (s *Status) WithDetails(details ...protoadapt.MessageV1) (*Status, error) {
+ 
+ // Details returns a slice of details messages attached to the status.
+ // If a detail cannot be decoded, the error is returned in place of the detail.
++// If the detail can be decoded, the proto message returned is of the same
++// type that was given to WithDetails().
+ func (s *Status) Details() []any {
+ 	if s == nil || s.s == nil {
+ 		return nil
+@@ -160,7 +162,38 @@ func (s *Status) Details() []any {
+ 			details = append(details, err)
+ 			continue
+ 		}
+-		details = append(details, detail)
++		// The call to MessageV1Of is required to unwrap the proto message if
++		// it implemented only the MessageV1 API. The proto message would have
++		// been wrapped in a V2 wrapper in Status.WithDetails. V2 messages are
++		// added to a global registry used by any.UnmarshalNew().
++		// MessageV1Of has the following behaviour:
++		// 1. If the given message is a wrapped MessageV1, it returns the
++		//   unwrapped value.
++		// 2. If the given message already implements MessageV1, it returns it
++		//   as is.
++		// 3. Else, it wraps the MessageV2 in a MessageV1 wrapper.
++		//
++		// Since the Status.WithDetails() API only accepts MessageV1, calling
++		// MessageV1Of ensures we return the same type that was given to
++		// WithDetails:
++		// * If the give type implemented only MessageV1, the unwrapping from
++		//   point 1 above will restore the type.
++		// * If the given type implemented both MessageV1 and MessageV2, point 2
++		//   above will ensure no wrapping is performed.
++		// * If the given type implemented only MessageV2 and was wrapped using
++		//   MessageV1Of before passing to WithDetails(), it would be unwrapped
++		//   in WithDetails by calling MessageV2Of(). Point 3 above will ensure
++		//   that the type is wrapped in a MessageV1 wrapper again before
++		//   returning. Note that protoc-gen-go doesn't generate code which
++		//   implements ONLY MessageV2 at the time of writing.
++		//
++		// NOTE: Status details can also be added using the FromProto method.
++		// This could theoretically allow passing a Detail message that only
++		// implements the V2 API. In such a case the message will be wrapped in
++		// a MessageV1 wrapper when fetched using Details().
++		// Since protoc-gen-go generates only code that implements both V1 and
++		// V2 APIs for backward compatibility, this is not a concern.
++		details = append(details, protoadapt.MessageV1Of(detail))
+ 	}
+ 	return details
+ }
+diff --git a/interop/xds/go.sum b/interop/xds/go.sum
+index ef695b391a3d..16f77351e6eb 100644
+--- a/interop/xds/go.sum
++++ b/interop/xds/go.sum
+@@ -23,6 +23,8 @@ github.com/go-logr/logr v1.4.2 h1:6pFjapn8bFcIbiKo3XT4j/BhANplGihG6tvd+8rYgrY=
+ github.com/go-logr/logr v1.4.2/go.mod h1:9T104GzyrTigFIr8wt5mBrctHMim0Nb2HLGrmQ40KvY=
+ github.com/go-logr/stdr v1.2.2 h1:hSWxHoqTgW2S2qGc0LTAI563KZ5YKYRhT3MFKZMbjag=
+ github.com/go-logr/stdr v1.2.2/go.mod h1:mMo/vtBO5dYbehREoey6XUKy/eSumjCCveDpRre4VKE=
++github.com/golang/protobuf v1.5.4 h1:i7eJL8qZTpSEXOPTxNKhASYpMn+8e5Q6AdndVa1dWek=
++github.com/golang/protobuf v1.5.4/go.mod h1:lnTiLA8Wa4RWRcIUkrtSVa5nRhsEGBg48fD6rSs7xps=
+ github.com/google/go-cmp v0.6.0 h1:ofyhxvXcZhMsU5ulbFiLKl/XBFqE1GSq7atu8tAmTRI=
+ github.com/google/go-cmp v0.6.0/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
+ github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
+diff --git a/reflection/test/go.mod b/reflection/test/go.mod
+deleted file mode 100644
+index 7382e0e9842e..000000000000
+--- a/reflection/test/go.mod
++++ /dev/null
+@@ -1,18 +0,0 @@
+-module google.golang.org/grpc/reflection/test
+-
+-go 1.22.7
+-
+-replace google.golang.org/grpc => ../../
+-
+-require (
+-	github.com/golang/protobuf v1.5.4
+-	google.golang.org/grpc v1.67.1
+-	google.golang.org/protobuf v1.35.1
+-)
+-
+-require (
+-	golang.org/x/net v0.30.0 // indirect
+-	golang.org/x/sys v0.26.0 // indirect
+-	golang.org/x/text v0.19.0 // indirect
+-	google.golang.org/genproto/googleapis/rpc v0.0.0-20241015192408-796eee8c2d53 // indirect
+-)
+diff --git a/reflection/test/go.sum b/reflection/test/go.sum
+deleted file mode 100644
+index c1616371c89e..000000000000
+--- a/reflection/test/go.sum
++++ /dev/null
+@@ -1,14 +0,0 @@
+-github.com/golang/protobuf v1.5.4 h1:i7eJL8qZTpSEXOPTxNKhASYpMn+8e5Q6AdndVa1dWek=
+-github.com/golang/protobuf v1.5.4/go.mod h1:lnTiLA8Wa4RWRcIUkrtSVa5nRhsEGBg48fD6rSs7xps=
+-github.com/google/go-cmp v0.6.0 h1:ofyhxvXcZhMsU5ulbFiLKl/XBFqE1GSq7atu8tAmTRI=
+-github.com/google/go-cmp v0.6.0/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
+-golang.org/x/net v0.30.0 h1:AcW1SDZMkb8IpzCdQUaIq2sP4sZ4zw+55h6ynffypl4=
+-golang.org/x/net v0.30.0/go.mod h1:2wGyMJ5iFasEhkwi13ChkO/t1ECNC4X4eBKkVFyYFlU=
+-golang.org/x/sys v0.26.0 h1:KHjCJyddX0LoSTb3J+vWpupP9p0oznkqVk/IfjymZbo=
+-golang.org/x/sys v0.26.0/go.mod h1:/VUhepiaJMQUp4+oa/7Zr1D23ma6VTLIYjOOTFZPUcA=
+-golang.org/x/text v0.19.0 h1:kTxAhCbGbxhK0IwgSKiMO5awPoDQ0RpfiVYBfK860YM=
+-golang.org/x/text v0.19.0/go.mod h1:BuEKDfySbSR4drPmRPG/7iBdf8hvFMuRexcpahXilzY=
+-google.golang.org/genproto/googleapis/rpc v0.0.0-20241015192408-796eee8c2d53 h1:X58yt85/IXCx0Y3ZwN6sEIKZzQtDEYaBWrDvErdXrRE=
+-google.golang.org/genproto/googleapis/rpc v0.0.0-20241015192408-796eee8c2d53/go.mod h1:GX3210XPVPUjJbTUbvwI8f2IpZDMZuPJWDzDuebbviI=
+-google.golang.org/protobuf v1.35.1 h1:m3LfL6/Ca+fqnjnlqQXNpFPABW1UD7mjh8KO2mKFytA=
+-google.golang.org/protobuf v1.35.1/go.mod h1:9fA7Ob0pmnwhb644+1+CVWFRbNajQ6iRojtC/QF5bRE=
+diff --git a/reflection/test/serverreflection_test.go b/reflection/test/serverreflection_test.go
+index 29698c604a14..0a436f2aa8e8 100644
+--- a/reflection/test/serverreflection_test.go
++++ b/reflection/test/serverreflection_test.go
+@@ -43,7 +43,7 @@ import (
+ 	v1reflectionpb "google.golang.org/grpc/reflection/grpc_reflection_v1"
+ 	v1alphareflectiongrpc "google.golang.org/grpc/reflection/grpc_reflection_v1alpha"
+ 	pb "google.golang.org/grpc/reflection/grpc_testing"
+-	pbv3 "google.golang.org/grpc/reflection/test/grpc_testing_not_regenerate"
++	pbv3 "google.golang.org/grpc/testdata/grpc_testing_not_regenerated"
+ )
+ 
+ var (
+diff --git a/scripts/regenerate.sh b/scripts/regenerate.sh
+index 282774b1d1de..55fa279daf30 100755
+--- a/scripts/regenerate.sh
++++ b/scripts/regenerate.sh
+@@ -26,9 +26,9 @@ export PATH="${GOBIN}:${PATH}"
+ mkdir -p "${GOBIN}"
+ 
+ echo "removing existing generated files..."
+-# grpc_testing_not_regenerate/*.pb.go is not re-generated,
+-# see grpc_testing_not_regenerate/README.md for details.
+-find . -name '*.pb.go' | grep -v 'grpc_testing_not_regenerate' | xargs rm -f || true
++# grpc_testing_not_regenerated/*.pb.go is not re-generated,
++# see grpc_testing_not_regenerated/README.md for details.
++find . -name '*.pb.go' | grep -v 'grpc_testing_not_regenerated' | xargs rm -f || true
+ 
+ echo "Executing: go install google.golang.org/protobuf/cmd/protoc-gen-go..."
+ (cd test/tools && go install google.golang.org/protobuf/cmd/protoc-gen-go)
+@@ -124,8 +124,8 @@ done
+ mkdir -p "${WORKDIR}/out/google.golang.org/grpc/internal/proto/grpc_lookup_v1"
+ mv "${WORKDIR}"/out/google.golang.org/grpc/lookup/grpc_lookup_v1/* "${WORKDIR}/out/google.golang.org/grpc/internal/proto/grpc_lookup_v1"
+ 
+-# grpc_testing_not_regenerate/*.pb.go are not re-generated,
+-# see grpc_testing_not_regenerate/README.md for details.
+-rm "${WORKDIR}"/out/google.golang.org/grpc/reflection/test/grpc_testing_not_regenerate/*.pb.go
++# grpc_testing_not_regenerated/*.pb.go are not re-generated,
++# see grpc_testing_not_regenerated/README.md for details.
++rm "${WORKDIR}"/out/google.golang.org/grpc/testdata/grpc_testing_not_regenerated/*.pb.go
+ 
+ cp -R "${WORKDIR}"/out/google.golang.org/grpc/* .
+diff --git a/scripts/vet.sh b/scripts/vet.sh
+index 1d9991a55834..0d2b8b8f42ba 100755
+--- a/scripts/vet.sh
++++ b/scripts/vet.sh
+@@ -59,13 +59,13 @@ git grep 'func [A-Z]' -- "*_test.go" | not grep -v 'func Test\|Benchmark\|Exampl
+ git grep -l 'time.After(' -- "*.go" | not grep -v '_test.go\|test_utils\|testutils'
+ 
+ # - Do not use "interface{}"; use "any" instead.
+-git grep -l 'interface{}' -- "*.go" 2>&1 | not grep -v '\.pb\.go\|protoc-gen-go-grpc\|grpc_testing_not_regenerate'
++git grep -l 'interface{}' -- "*.go" 2>&1 | not grep -v '\.pb\.go\|protoc-gen-go-grpc\|grpc_testing_not_regenerated'
+ 
+ # - Do not call grpclog directly. Use grpclog.Component instead.
+ git grep -l -e 'grpclog.I' --or -e 'grpclog.W' --or -e 'grpclog.E' --or -e 'grpclog.F' --or -e 'grpclog.V' -- "*.go" | not grep -v '^grpclog/component.go\|^internal/grpctest/tlogger_test.go\|^internal/grpclog/prefix_logger.go'
+ 
+ # - Ensure that the deprecated protobuf dependency is not used.
+-not git grep "\"github.com/golang/protobuf/*" -- "*.go" ':(exclude)reflection/test/grpc_testing_not_regenerate/*'
++not git grep "\"github.com/golang/protobuf/*" -- "*.go" ':(exclude)testdata/grpc_testing_not_regenerated/*'
+ 
+ # - Ensure all usages of grpc_testing package are renamed when importing.
+ not git grep "\(import \|^\s*\)\"google.golang.org/grpc/interop/grpc_testing" -- "*.go"
+@@ -112,7 +112,7 @@ for MOD_FILE in $(find . -name 'go.mod'); do
+   noret_grep -v "(ST1000)" "${SC_OUT}" | noret_grep -v "(SA1019)" | noret_grep -v "(ST1003)" | noret_grep -v "(ST1019)\|\(other import of\)" | not grep -v "(SA4000)"
+ 
+   # Exclude underscore checks for generated code.
+-  noret_grep "(ST1003)" "${SC_OUT}" | not grep -v '\(.pb.go:\)\|\(code_string_test.go:\)\|\(grpc_testing_not_regenerate\)'
++  noret_grep "(ST1003)" "${SC_OUT}" | not grep -v '\(.pb.go:\)\|\(code_string_test.go:\)\|\(grpc_testing_not_regenerated\)'
+ 
+   # Error for duplicate imports not including grpc protos.
+   noret_grep "(ST1019)\|\(other import of\)" "${SC_OUT}" | not grep -Fv 'XXXXX PleaseIgnoreUnused
+@@ -149,7 +149,7 @@ XXXXX PleaseIgnoreUnused'
+ XXXXX Protobuf related deprecation errors:
+ "github.com/golang/protobuf
+ .pb.go:
+-grpc_testing_not_regenerate
++grpc_testing_not_regenerated
+ : ptypes.
+ proto.RegisterType
+ XXXXX gRPC internal usage deprecation errors:
+@@ -191,7 +191,7 @@ done
+ # Error for violation of enabled lint rules in config excluding generated code.
+ revive \
+   -set_exit_status=1 \
+-  -exclude "reflection/test/grpc_testing_not_regenerate/" \
++  -exclude "testdata/grpc_testing_not_regenerated/" \
+   -exclude "**/*.pb.go" \
+   -formatter plain \
+   -config "$(dirname "$0")/revive.toml" \
+diff --git a/security/advancedtls/examples/go.sum b/security/advancedtls/examples/go.sum
+index d43932726ef0..9102af782ca0 100644
+--- a/security/advancedtls/examples/go.sum
++++ b/security/advancedtls/examples/go.sum
+@@ -1,3 +1,5 @@
++github.com/golang/protobuf v1.5.4 h1:i7eJL8qZTpSEXOPTxNKhASYpMn+8e5Q6AdndVa1dWek=
++github.com/golang/protobuf v1.5.4/go.mod h1:lnTiLA8Wa4RWRcIUkrtSVa5nRhsEGBg48fD6rSs7xps=
+ github.com/google/go-cmp v0.6.0 h1:ofyhxvXcZhMsU5ulbFiLKl/XBFqE1GSq7atu8tAmTRI=
+ github.com/google/go-cmp v0.6.0/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
+ golang.org/x/crypto v0.28.0 h1:GBDwsMXVQi34v5CCYUm2jkJvu4cbtru2U4TN2PSyQnw=
+diff --git a/security/advancedtls/go.sum b/security/advancedtls/go.sum
+index d43932726ef0..9102af782ca0 100644
+--- a/security/advancedtls/go.sum
++++ b/security/advancedtls/go.sum
+@@ -1,3 +1,5 @@
++github.com/golang/protobuf v1.5.4 h1:i7eJL8qZTpSEXOPTxNKhASYpMn+8e5Q6AdndVa1dWek=
++github.com/golang/protobuf v1.5.4/go.mod h1:lnTiLA8Wa4RWRcIUkrtSVa5nRhsEGBg48fD6rSs7xps=
+ github.com/google/go-cmp v0.6.0 h1:ofyhxvXcZhMsU5ulbFiLKl/XBFqE1GSq7atu8tAmTRI=
+ github.com/google/go-cmp v0.6.0/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
+ golang.org/x/crypto v0.28.0 h1:GBDwsMXVQi34v5CCYUm2jkJvu4cbtru2U4TN2PSyQnw=
+diff --git a/stats/opencensus/go.sum b/stats/opencensus/go.sum
+index d382006665f0..f545f284c333 100644
+--- a/stats/opencensus/go.sum
++++ b/stats/opencensus/go.sum
+@@ -859,6 +859,8 @@ github.com/golang/protobuf v1.5.0/go.mod h1:FsONVRAS9T7sI+LIUmWTfcYkHO4aIWwzhcaS
+ github.com/golang/protobuf v1.5.1/go.mod h1:DopwsBzvsk0Fs44TXzsVbJyPhcCPeIwnvohx4u74HPM=
+ github.com/golang/protobuf v1.5.2/go.mod h1:XVQd3VNwM+JqD3oG2Ue2ip4fOMUkwXdXDdiuN0vRsmY=
+ github.com/golang/protobuf v1.5.3/go.mod h1:XVQd3VNwM+JqD3oG2Ue2ip4fOMUkwXdXDdiuN0vRsmY=
++github.com/golang/protobuf v1.5.4 h1:i7eJL8qZTpSEXOPTxNKhASYpMn+8e5Q6AdndVa1dWek=
++github.com/golang/protobuf v1.5.4/go.mod h1:lnTiLA8Wa4RWRcIUkrtSVa5nRhsEGBg48fD6rSs7xps=
+ github.com/golang/snappy v0.0.3/go.mod h1:/XxbfmMg8lxefKM7IXC3fBNl/7bRcc72aCRzEWrmP2Q=
+ github.com/golang/snappy v0.0.4/go.mod h1:/XxbfmMg8lxefKM7IXC3fBNl/7bRcc72aCRzEWrmP2Q=
+ github.com/google/btree v0.0.0-20180813153112-4030bb1f1f0c/go.mod h1:lNA+9X1NB3Zf8V7Ke586lFgjr2dZNuvo3lPJSGZ5JPQ=
+diff --git a/stats/opentelemetry/go.sum b/stats/opentelemetry/go.sum
+index 14411e4f49c3..b2d047c8cb0f 100644
+--- a/stats/opentelemetry/go.sum
++++ b/stats/opentelemetry/go.sum
+@@ -21,6 +21,8 @@ github.com/go-logr/logr v1.4.2 h1:6pFjapn8bFcIbiKo3XT4j/BhANplGihG6tvd+8rYgrY=
+ github.com/go-logr/logr v1.4.2/go.mod h1:9T104GzyrTigFIr8wt5mBrctHMim0Nb2HLGrmQ40KvY=
+ github.com/go-logr/stdr v1.2.2 h1:hSWxHoqTgW2S2qGc0LTAI563KZ5YKYRhT3MFKZMbjag=
+ github.com/go-logr/stdr v1.2.2/go.mod h1:mMo/vtBO5dYbehREoey6XUKy/eSumjCCveDpRre4VKE=
++github.com/golang/protobuf v1.5.4 h1:i7eJL8qZTpSEXOPTxNKhASYpMn+8e5Q6AdndVa1dWek=
++github.com/golang/protobuf v1.5.4/go.mod h1:lnTiLA8Wa4RWRcIUkrtSVa5nRhsEGBg48fD6rSs7xps=
+ github.com/google/go-cmp v0.6.0 h1:ofyhxvXcZhMsU5ulbFiLKl/XBFqE1GSq7atu8tAmTRI=
+ github.com/google/go-cmp v0.6.0/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
+ github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
+diff --git a/status/status_ext_test.go b/status/status_ext_test.go
+index 659d10d0deb0..118f678924e3 100644
+--- a/status/status_ext_test.go
++++ b/status/status_ext_test.go
+@@ -21,6 +21,7 @@ package status_test
+ import (
+ 	"context"
+ 	"errors"
++	"reflect"
+ 	"strings"
+ 	"testing"
+ 	"time"
+@@ -35,8 +36,10 @@ import (
+ 	"google.golang.org/grpc/status"
+ 	"google.golang.org/protobuf/proto"
+ 	"google.golang.org/protobuf/protoadapt"
++	"google.golang.org/protobuf/testing/protocmp"
+ 
+ 	testpb "google.golang.org/grpc/interop/grpc_testing"
++	tpb "google.golang.org/grpc/testdata/grpc_testing_not_regenerated"
+ )
+ 
+ const defaultTestTimeout = 10 * time.Second
+@@ -203,3 +206,56 @@ func (s) TestStatusDetails(t *testing.T) {
+ 		})
+ 	}
+ }
++
++// TestStatus_ErrorDetailsMessageV1 verifies backward compatibility of the
++// status.Details() method when using protobuf code generated with only the
++// MessageV1 API implementation.
++func (s) TestStatus_ErrorDetailsMessageV1(t *testing.T) {
++	details := []protoadapt.MessageV1{
++		&tpb.SimpleMessage{Data: "abc"},
++	}
++	s, err := status.New(codes.Aborted, "").WithDetails(details...)
++	if err != nil {
++		t.Fatalf("(%v).WithDetails(%+v) failed: %v", s, details, err)
++	}
++	gotDetails := s.Details()
++	for i, msg := range gotDetails {
++		if got, want := reflect.TypeOf(msg), reflect.TypeOf(details[i]); got != want {
++			t.Errorf("reflect.Typeof(%v) = %v, want = %v", msg, got, want)
++		}
++		if _, ok := msg.(protoadapt.MessageV1); !ok {
++			t.Errorf("(%v).Details() returned message that doesn't implement protoadapt.MessageV1: %v", s, msg)
++		}
++		if diff := cmp.Diff(msg, details[i], protocmp.Transform()); diff != "" {
++			t.Errorf("(%v).Details got unexpected output, diff (-got +want):\n%s", s, diff)
++		}
++	}
++}
++
++// TestStatus_ErrorDetailsMessageV1AndV2 verifies that status.Details() method
++// returns the same message types when using protobuf code generated with both the
++// MessageV1 and MessageV2 API implementations.
++func (s) TestStatus_ErrorDetailsMessageV1AndV2(t *testing.T) {
++	details := []protoadapt.MessageV1{
++		&testpb.Empty{},
++	}
++	s, err := status.New(codes.Aborted, "").WithDetails(details...)
++	if err != nil {
++		t.Fatalf("(%v).WithDetails(%+v) failed: %v", s, details, err)
++	}
++	gotDetails := s.Details()
++	for i, msg := range gotDetails {
++		if got, want := reflect.TypeOf(msg), reflect.TypeOf(details[i]); got != want {
++			t.Errorf("reflect.Typeof(%v) = %v, want = %v", msg, got, want)
++		}
++		if _, ok := msg.(protoadapt.MessageV1); !ok {
++			t.Errorf("(%v).Details() returned message that doesn't implement protoadapt.MessageV1: %v", s, msg)
++		}
++		if _, ok := msg.(protoadapt.MessageV2); !ok {
++			t.Errorf("(%v).Details() returned message that doesn't implement protoadapt.MessageV2: %v", s, msg)
++		}
++		if diff := cmp.Diff(msg, details[i], protocmp.Transform()); diff != "" {
++			t.Errorf("(%v).Details got unexpected output, diff (-got +want):\n%s", s, diff)
++		}
++	}
++}
+diff --git a/reflection/test/grpc_testing_not_regenerate/README.md b/testdata/grpc_testing_not_regenerated/README.md
+similarity index 69%
+rename from reflection/test/grpc_testing_not_regenerate/README.md
+rename to testdata/grpc_testing_not_regenerated/README.md
+index 34e164662fa6..8ff72f054bff 100644
+--- a/reflection/test/grpc_testing_not_regenerate/README.md
++++ b/testdata/grpc_testing_not_regenerated/README.md
+@@ -6,3 +6,7 @@ with `"context"`.
+ 
+ `dynamic.go` was generated with a newer protoc and manually edited to remove
+ everything except the descriptor bytes var, which is renamed and exported.
++
++`simple_message_v1.go` was generated using protoc-gen-go v1.3.5 which doesn't
++support the MesssageV2 API. As a result the generated code implements only the
++old MessageV1 API.
+diff --git a/reflection/test/grpc_testing_not_regenerate/dynamic.go b/testdata/grpc_testing_not_regenerated/dynamic.go
+similarity index 98%
+rename from reflection/test/grpc_testing_not_regenerate/dynamic.go
+rename to testdata/grpc_testing_not_regenerated/dynamic.go
+index 35e4f02478b2..e75dbea73f8d 100644
+--- a/reflection/test/grpc_testing_not_regenerate/dynamic.go
++++ b/testdata/grpc_testing_not_regenerated/dynamic.go
+@@ -15,7 +15,7 @@
+  *
+  */
+ 
+-package grpc_testing_not_regenerate
++package grpc_testing_not_regenerated
+ 
+ // FileDynamicProtoRawDesc is the descriptor for dynamic.proto, see README.md.
+ var FileDynamicProtoRawDesc = []byte{
+diff --git a/reflection/test/grpc_testing_not_regenerate/dynamic.proto b/testdata/grpc_testing_not_regenerated/dynamic.proto
+similarity index 91%
+rename from reflection/test/grpc_testing_not_regenerate/dynamic.proto
+rename to testdata/grpc_testing_not_regenerated/dynamic.proto
+index 6b6b0a72a589..72e491563446 100644
+--- a/reflection/test/grpc_testing_not_regenerate/dynamic.proto
++++ b/testdata/grpc_testing_not_regenerated/dynamic.proto
+@@ -17,10 +17,10 @@
+ 
+ syntax = "proto3";
+ 
+-option go_package = "google.golang.org/grpc/reflection/test/grpc_testing_not_regenerate";
+-
+ package grpc.testing;
+ 
++option go_package = "google.golang.org/grpc/testdata/grpc_testing_not_regenerated";
++
+ message DynamicRes {}
+ 
+ message DynamicReq {}
+diff --git a/testdata/grpc_testing_not_regenerated/simple.proto b/testdata/grpc_testing_not_regenerated/simple.proto
+new file mode 100644
+index 000000000000..c8b13c779eb1
+--- /dev/null
++++ b/testdata/grpc_testing_not_regenerated/simple.proto
+@@ -0,0 +1,27 @@
++/*
++ * Copyright 2024 gRPC authors.
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ *
++ */
++
++syntax = "proto3";
++
++package grpc.testdata.grpc_testing_not_regenerated;
++
++option go_package = "google.golang.org/grpc/testdata/grpc_testing_not_regenerated";
++
++// SimpleMessage is used to hold string data.
++message SimpleMessage {
++  string data = 1;
++}
+diff --git a/testdata/grpc_testing_not_regenerated/simple_message_v1.go b/testdata/grpc_testing_not_regenerated/simple_message_v1.go
+new file mode 100644
+index 000000000000..7bf9ee2b8892
+--- /dev/null
++++ b/testdata/grpc_testing_not_regenerated/simple_message_v1.go
+@@ -0,0 +1,83 @@
++// Code generated by protoc-gen-go. DO NOT EDIT.
++// source: simple.proto
++
++package grpc_testing_not_regenerated
++
++import (
++	fmt "fmt"
++	math "math"
++
++	proto "github.com/golang/protobuf/proto"
++)
++
++// Reference imports to suppress errors if they are not otherwise used.
++var _ = proto.Marshal
++var _ = fmt.Errorf
++var _ = math.Inf
++
++// This is a compile-time assertion to ensure that this generated file
++// is compatible with the proto package it is being compiled against.
++// A compilation error at this line likely means your copy of the
++// proto package needs to be updated.
++const _ = proto.ProtoPackageIsVersion3 // please upgrade the proto package
++
++// SimpleMessage is used to hold string data.
++type SimpleMessage struct {
++	Data                 string   `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
++	XXX_NoUnkeyedLiteral struct{} `json:"-"`
++	XXX_unrecognized     []byte   `json:"-"`
++	XXX_sizecache        int32    `json:"-"`
++}
++
++func (m *SimpleMessage) Reset()         { *m = SimpleMessage{} }
++func (m *SimpleMessage) String() string { return proto.CompactTextString(m) }
++func (*SimpleMessage) ProtoMessage()    {}
++func (*SimpleMessage) Descriptor() ([]byte, []int) {
++	return fileDescriptor_5ffd045dd4d042c1, []int{0}
++}
++
++func (m *SimpleMessage) XXX_Unmarshal(b []byte) error {
++	return xxx_messageInfo_SimpleMessage.Unmarshal(m, b)
++}
++func (m *SimpleMessage) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
++	return xxx_messageInfo_SimpleMessage.Marshal(b, m, deterministic)
++}
++func (m *SimpleMessage) XXX_Merge(src proto.Message) {
++	xxx_messageInfo_SimpleMessage.Merge(m, src)
++}
++func (m *SimpleMessage) XXX_Size() int {
++	return xxx_messageInfo_SimpleMessage.Size(m)
++}
++func (m *SimpleMessage) XXX_DiscardUnknown() {
++	xxx_messageInfo_SimpleMessage.DiscardUnknown(m)
++}
++
++var xxx_messageInfo_SimpleMessage proto.InternalMessageInfo
++
++func (m *SimpleMessage) GetData() string {
++	if m != nil {
++		return m.Data
++	}
++	return ""
++}
++
++func init() {
++	proto.RegisterType((*SimpleMessage)(nil), "grpc.testdata.grpc_testing_not_regenerated.SimpleMessage")
++}
++
++func init() {
++	proto.RegisterFile("simple.proto", fileDescriptor_5ffd045dd4d042c1)
++}
++
++var fileDescriptor_5ffd045dd4d042c1 = []byte{
++	// 142 bytes of a gzipped FileDescriptorProto
++	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xe2, 0xe2, 0x29, 0xce, 0xcc, 0x2d,
++	0xc8, 0x49, 0xd5, 0x2b, 0x28, 0xca, 0x2f, 0xc9, 0x17, 0xd2, 0x4a, 0x2f, 0x2a, 0x48, 0xd6, 0x2b,
++	0x49, 0x2d, 0x2e, 0x49, 0x49, 0x2c, 0x49, 0xd4, 0x03, 0xf1, 0xe2, 0x41, 0xbc, 0xcc, 0xbc, 0xf4,
++	0xf8, 0xbc, 0xfc, 0x92, 0xf8, 0xa2, 0xd4, 0xf4, 0xd4, 0xbc, 0xd4, 0xa2, 0xc4, 0x92, 0xd4, 0x14,
++	0x25, 0x65, 0x2e, 0xde, 0x60, 0xb0, 0x5e, 0xdf, 0xd4, 0xe2, 0xe2, 0xc4, 0xf4, 0x54, 0x21, 0x21,
++	0x2e, 0x16, 0x90, 0x2e, 0x09, 0x46, 0x05, 0x46, 0x0d, 0xce, 0x20, 0x30, 0xdb, 0xc9, 0x2e, 0xca,
++	0x26, 0x3d, 0x3f, 0x3f, 0x3d, 0x27, 0x55, 0x2f, 0x3d, 0x3f, 0x27, 0x31, 0x2f, 0x5d, 0x2f, 0xbf,
++	0x28, 0x5d, 0x1f, 0x64, 0xac, 0x3e, 0xcc, 0x12, 0x7d, 0x7c, 0x96, 0x24, 0xb1, 0x81, 0xdd, 0x65,
++	0x0c, 0x08, 0x00, 0x00, 0xff, 0xff, 0x2c, 0x80, 0xd6, 0x07, 0xa7, 0x00, 0x00, 0x00,
++}
+diff --git a/reflection/test/grpc_testing_not_regenerate/testv3.go b/testdata/grpc_testing_not_regenerated/testv3.go
+similarity index 99%
+rename from reflection/test/grpc_testing_not_regenerate/testv3.go
+rename to testdata/grpc_testing_not_regenerated/testv3.go
+index 8a690963ec10..7c55c9adb093 100644
+--- a/reflection/test/grpc_testing_not_regenerate/testv3.go
++++ b/testdata/grpc_testing_not_regenerated/testv3.go
+@@ -20,7 +20,7 @@
+ // DO NOT EDIT!
+ 
+ /*
+-Package grpc_testing_not_regenerate is a generated protocol buffer package.
++Package grpc_testing_not_regenerated is a generated protocol buffer package.
+ 
+ It is generated from these files:
+ 
+@@ -31,7 +31,7 @@ It has these top-level messages:
+ 	SearchResponseV3
+ 	SearchRequestV3
+ */
+-package grpc_testing_not_regenerate
++package grpc_testing_not_regenerated
+ 
+ import (
+ 	context "context"
+diff --git a/reflection/test/grpc_testing_not_regenerate/testv3.proto b/testdata/grpc_testing_not_regenerated/testv3.proto
+similarity index 93%
+rename from reflection/test/grpc_testing_not_regenerate/testv3.proto
+rename to testdata/grpc_testing_not_regenerated/testv3.proto
+index 9902ad67964b..c8eee856b5cb 100644
+--- a/reflection/test/grpc_testing_not_regenerate/testv3.proto
++++ b/testdata/grpc_testing_not_regenerated/testv3.proto
+@@ -17,10 +17,10 @@
+ 
+ syntax = "proto3";
+ 
+-option go_package = "google.golang.org/grpc/reflection/test/grpc_testing_not_regenerate";
+-
+ package grpc.testingv3;
+ 
++option go_package = "google.golang.org/grpc/testdata/grpc_testing_not_regenerated";
++
+ message SearchResponseV3 {
+   message Result {
+     string url = 1;

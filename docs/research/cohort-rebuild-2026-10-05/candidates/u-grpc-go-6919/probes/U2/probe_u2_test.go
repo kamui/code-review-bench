@@ -1,0 +1,122 @@
+package zzprobeu2
+
+import (
+	"fmt"
+	"testing"
+
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/encoding"
+	_ "google.golang.org/grpc/encoding/proto"
+	v3 "google.golang.org/grpc/reflection/grpc_testing_not_regenerate"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/protoadapt"
+)
+
+// unregisteredV1 is a hand-written message in the old (V1-only) style that is
+// never registered with any protobuf registry.
+type unregisteredV1 struct {
+	Query string `protobuf:"bytes,1,opt,name=query" json:"query,omitempty"`
+}
+
+func (m *unregisteredV1) Reset()         { *m = unregisteredV1{} }
+func (m *unregisteredV1) String() string { return "unregisteredV1:" + m.Query }
+func (*unregisteredV1) ProtoMessage()    {}
+
+func describe(label string, details []any) {
+	for i, d := range details {
+		_, isErr := d.(error)
+		_, isOrig := d.(*v3.SearchRequestV3)
+		_, isOld := d.(interface {
+			Reset()
+			String() string
+			ProtoMessage()
+		})
+		fmt.Printf("%s detail[%d]: Go type %T | is error=%v | is *SearchRequestV3=%v | has old-style methods (Reset/String/ProtoMessage)=%v | value=%v\n", label, i, d, isErr, isOrig, isOld, d)
+	}
+}
+
+func TestU2LegacyDetailRoundTrip(t *testing.T) {
+	in := &v3.SearchRequestV3{Query: "hello"}
+	st, err := status.New(codes.InvalidArgument, "bad input").WithDetails(in)
+	fmt.Printf("1 WithDetails(V1-only *SearchRequestV3): status-is-nil=%v err=%v\n", st == nil, err)
+	if st == nil {
+		return
+	}
+	fmt.Printf("1 stored type URL: %s\n", st.Proto().Details[0].TypeUrl)
+	describe("2 Details()", st.Details())
+
+	// What a typical caller does: type switch on the concrete type.
+	found := false
+	for _, d := range st.Details() {
+		switch d := d.(type) {
+		case *v3.SearchRequestV3:
+			found = true
+			fmt.Printf("3 caller type switch matched *SearchRequestV3, Query=%q\n", d.Query)
+		case error:
+			fmt.Printf("3 caller type switch got an error: %v\n", d)
+		}
+	}
+	if !found {
+		fmt.Printf("3 caller type switch did NOT match *SearchRequestV3\n")
+	}
+
+	// An unchecked assertion, as in d.(*pb.Thing).
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Printf("4 unchecked assertion d.(*SearchRequestV3) panicked: %v\n", r)
+			}
+		}()
+		d := st.Details()[0].(*v3.SearchRequestV3)
+		fmt.Printf("4 unchecked assertion d.(*SearchRequestV3) succeeded, Query=%q\n", d.Query)
+	}()
+
+	// The way out for a caller who knows about the wrapper: convert it back.
+	if w, ok := st.Details()[0].(protoadapt.MessageV2); ok {
+		back := protoadapt.MessageV1Of(w)
+		orig, isOrig := back.(*v3.SearchRequestV3)
+		fmt.Printf("10 protoadapt.MessageV1Of(detail): Go type %T | is *SearchRequestV3=%v | Query=%q\n", back, isOrig, orig.GetQuery())
+	} else {
+		fmt.Printf("10 detail does not implement the new message interface; no conversion needed or possible\n")
+	}
+
+	// Same detail after a trip over the wire form of the status (as a client would get it).
+	st2 := status.FromProto(st.Proto())
+	describe("5 Details() after FromProto", st2.Details())
+}
+
+func TestU2ModernDetailRoundTrip(t *testing.T) {
+	st, err := status.New(codes.InvalidArgument, "bad input").WithDetails(&errdetails.ErrorInfo{Reason: "r"})
+	fmt.Printf("6 WithDetails(current-generator *ErrorInfo): err=%v\n", err)
+	if st != nil {
+		for i, d := range st.Details() {
+			_, ok := d.(*errdetails.ErrorInfo)
+			fmt.Printf("6 detail[%d]: Go type %T | is *ErrorInfo=%v\n", i, d, ok)
+		}
+	}
+}
+
+func TestU2UnregisteredLegacyDetail(t *testing.T) {
+	st, err := status.New(codes.InvalidArgument, "bad input").WithDetails(&unregisteredV1{Query: "hello"})
+	fmt.Printf("7 WithDetails(unregistered V1-only message): status-is-nil=%v err=%v\n", st == nil, err)
+	if st == nil {
+		return
+	}
+	fmt.Printf("7 stored type URL: %s\n", st.Proto().Details[0].TypeUrl)
+	for i, d := range st.Details() {
+		_, isErr := d.(error)
+		fmt.Printf("8 detail[%d]: Go type %T | is error=%v | value=%v\n", i, d, isErr, d)
+	}
+}
+
+// Context only: the already-known codec problem with the same fixture (reference bug GT-u2).
+func TestU2ContextCodecLegacyMessage(t *testing.T) {
+	c := encoding.GetCodec("proto")
+	if c == nil {
+		fmt.Printf("9 (context) encoding.GetCodec(\"proto\") returns nil at this version (the codec moved to a newer interface); not checked here\n")
+		return
+	}
+	b, err := c.Marshal(&v3.SearchRequestV3{Query: "hello"})
+	fmt.Printf("9 (context) codec.Marshal(V1-only *SearchRequestV3): len=%d err=%v\n", len(b), err)
+}
