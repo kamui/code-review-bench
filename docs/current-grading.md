@@ -79,7 +79,7 @@ The grader writes `verdicts.json`. Each original item gets one or more claims wi
 `map` refuses a batch whose inputs changed since preparation, a changed prepared file, verdicts that fail validation and a disputed equivalence link. A link is intake evidence: when an item's wording does not identify its canonical claim, the grader records a dispute, and the link is corrected before the batch is prepared again. `map` then derives each family's recovery from the claims alone:
 
 - `caught` needs an admitted review, an approved family and an eligible claim. Any number of claims or repeated comments recover a family once.
-- `missed` needs an approved family, every original item accounted for and no unresolved claim that could concern the family.
+- `missed` needs an approved family, every original item accounted for and no unresolved claim that names the family. An unresolved claim that names no family, such as a novel candidate, does not hold a recovery open.
 - Everything else is `unresolved`, including a family whose eligibility awaits a ruling.
 
 Fix sufficiency follows the distinct recommendations and never changes recovery. A recommendation's safety stays `unassessed` until an independent check confirms what the assessor proposed; pass those checks with `--safety-checks`. A sufficient recommendation confirmed unsafe keeps its recovery and records the harm.
