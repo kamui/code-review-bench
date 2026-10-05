@@ -1,0 +1,85 @@
+diff --git a/src/request.test.ts b/src/request.test.ts
+index e32f0f8776..c1542419b0 100644
+--- a/src/request.test.ts
++++ b/src/request.test.ts
+@@ -377,6 +377,58 @@ describe('Body methods with caching', () => {
+     expect(async () => await req.blob()).not.toThrow()
+   })
+ 
++  describe('formData() after another representation has been cached', () => {
++    const urlencoded = 'application/x-www-form-urlencoded'
++    const body = 'foo=bar&baz=qux'
++
++    for (const first of ['text', 'arrayBuffer', 'bytes', 'blob'] as const) {
++      test(`req.formData() after req.${first}()`, async () => {
++        const req = new HonoRequest(
++          new Request('http://localhost', {
++            method: 'POST',
++            headers: { 'Content-Type': urlencoded },
++            body,
++          })
++        )
++        await req[first]()
++        const formData = await req.formData()
++        expect(formData.get('foo')).toBe('bar')
++        expect(formData.get('baz')).toBe('qux')
++      })
++    }
++
++    test('req.formData() after req.text() for multipart/form-data', async () => {
++      const boundary = '----hono-test-boundary'
++      const multipart =
++        `--${boundary}\r\n` +
++        'Content-Disposition: form-data; name="foo"\r\n\r\n' +
++        'bar\r\n' +
++        `--${boundary}--\r\n`
++      const req = new HonoRequest(
++        new Request('http://localhost', {
++          method: 'POST',
++          headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
++          body: multipart,
++        })
++      )
++      await req.text()
++      expect((await req.formData()).get('foo')).toBe('bar')
++    })
++
++    test('the cached representation is still returned unchanged', async () => {
++      const req = new HonoRequest(
++        new Request('http://localhost', {
++          method: 'POST',
++          headers: { 'Content-Type': urlencoded },
++          body,
++        })
++      )
++      expect(await req.text()).toBe(body)
++      expect(await req.text()).toBe(body)
++      expect(await req.arrayBuffer()).toEqual(new TextEncoder().encode(body).buffer)
++    })
++  })
++
+   describe('req.parseBody()', async () => {
+     it('should parse form data', async () => {
+       const data = new FormData()
+diff --git a/src/request.ts b/src/request.ts
+index 45d48801ae..a06ba5c279 100644
+--- a/src/request.ts
++++ b/src/request.ts
+@@ -227,7 +227,16 @@ export class HonoRequest<P extends string = '/', I extends Input['out'] = {}> {
+         if (anyCachedKey === 'json') {
+           body = JSON.stringify(body)
+         }
+-        return new Response(body)[key]()
++        // Rebuilding the body through a bare `Response` loses the request's media
++        // type, so a representation that needs it (e.g. `formData()`) can no longer
++        // be produced even though the bytes are still available. Carry the original
++        // `Content-Type` over, except for `FormData`, where `Response` must generate
++        // a fresh multipart boundary of its own.
++        const contentType =
++          anyCachedKey === 'formData' ? undefined : raw.headers.get('content-type')
++        return new Response(body, {
++          headers: contentType ? { 'Content-Type': contentType } : undefined,
++        })[key]()
+       })
+     }
+ 

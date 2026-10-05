@@ -1,0 +1,1076 @@
+diff --git a/weed/filer/empty_folder_cleanup/empty_folder_cleaner.go b/weed/filer/empty_folder_cleanup/empty_folder_cleaner.go
+index 82213fce815..9bcd2a3cc70 100644
+--- a/weed/filer/empty_folder_cleanup/empty_folder_cleaner.go
++++ b/weed/filer/empty_folder_cleanup/empty_folder_cleaner.go
+@@ -2,6 +2,8 @@ package empty_folder_cleanup
+ 
+ import (
+ 	"context"
++	"os"
++	"sort"
+ 	"strings"
+ 	"sync"
+ 	"time"
+@@ -20,14 +22,39 @@ const (
+ 	DefaultQueueMaxSize   = 1000
+ 	DefaultQueueMaxAge    = 2 * time.Minute
+ 	DefaultProcessorSleep = 30 * time.Second // How often to check queue
++	DefaultMaxDeletedKept = 10000            // Deleted folders remembered for the restore check
++	// How long a deleted folder is kept so that a create event arriving for it can
++	// still put it back. It bounds how far behind the event stream may run, not how
++	// long the race window is.
++	DefaultObservationWindow = 2 * time.Minute
+ )
+ 
++// DirectoryAttributes is what a restored directory needs to come back as it was.
++type DirectoryAttributes struct {
++	Mode       os.FileMode
++	Uid        uint32
++	Gid        uint32
++	UserName   string
++	GroupNames []string
++}
++
++// deletedFolder is a folder under observation for entries that landed while it was
++// being deleted. writtenTo is set by the create event for such an entry.
++type deletedFolder struct {
++	path      string
++	attrs     DirectoryAttributes
++	deletedAt time.Time
++	writtenTo bool
++}
++
+ // FilerOperations defines the filer operations needed by EmptyFolderCleaner
+ type FilerOperations interface {
+ 	CountDirectoryEntries(ctx context.Context, dirPath util.FullPath, limit int) (count int, err error)
+ 	DeleteEntryMetaAndData(ctx context.Context, p util.FullPath, isRecursive, ignoreRecursiveError, shouldDeleteChunks, isFromOtherCluster bool, signatures []int32, ifNotModifiedAfter int64) error
+ 	GetEntryAttributes(ctx context.Context, p util.FullPath) (attributes map[string][]byte, err error)
+ 	IsDirectoryKeyObject(ctx context.Context, p util.FullPath) (bool, error)
++	DirectoryAttributes(ctx context.Context, p util.FullPath) (DirectoryAttributes, error)
++	EnsureDirectoryEntry(ctx context.Context, p util.FullPath, attrs DirectoryAttributes) error
+ }
+ 
+ // folderState tracks the state of a folder for empty folder cleanup
+@@ -56,6 +83,11 @@ type EmptyFolderCleaner struct {
+ 	folderCounts          map[string]*folderState              // Rough count cache
+ 	bucketCleanupPolicies map[string]*bucketCleanupPolicyState // bucket path -> cleanup policy cache
+ 
++	// Folders deleted recently, kept so that a create event arriving for one of them
++	// can put it back
++	deleted        map[string]*deletedFolder
++	deletedDropped int
++
+ 	// Cleanup queue (thread-safe, has its own lock)
+ 	cleanupQueue *CleanupQueue
+ 
+@@ -83,6 +115,7 @@ func NewEmptyFolderCleaner(filer FilerOperations, lockRing *lock_manager.LockRin
+ 		host:                  host,
+ 		folderCounts:          make(map[string]*folderState),
+ 		bucketCleanupPolicies: make(map[string]*bucketCleanupPolicyState),
++		deleted:               make(map[string]*deletedFolder),
+ 		cleanupQueue:          NewCleanupQueue(DefaultQueueMaxSize, cleanupDelay),
+ 		maxCountCheck:         DefaultMaxCountCheck,
+ 		cacheExpiry:           DefaultCacheExpiry,
+@@ -194,6 +227,14 @@ func (efc *EmptyFolderCleaner) OnCreateEvent(directory string, entryName string,
+ 		state.lastAddTime = time.Now()
+ 	}
+ 
++	// An entry landing in a folder we just deleted is the race this cleaner cannot
++	// exclude: the folder was empty when checked and is gone now, so the entry has
++	// nothing holding it. The event says so outright, which beats going back to look.
++	if folder, found := efc.deleted[directory]; found {
++		folder.writtenTo = true
++		glog.V(2).Infof("EmptyFolderCleaner: %s was written to while being deleted, restoring it", directory)
++	}
++
+ 	// Remove from cleanup queue (cancel pending cleanup)
+ 	if efc.cleanupQueue.Remove(directory) {
+ 		glog.V(3).Infof("EmptyFolderCleaner: cancelled cleanup for %s due to new entry", directory)
+@@ -217,6 +258,8 @@ func (efc *EmptyFolderCleaner) cleanupProcessor() {
+ 
+ // processCleanupQueue processes items from the cleanup queue
+ func (efc *EmptyFolderCleaner) processCleanupQueue() {
++	efc.restoreFoldersWrittenDuringDelete()
++
+ 	if efc.cleanupQueue.Len() == 0 {
+ 		return
+ 	}
+@@ -242,6 +285,127 @@ func (efc *EmptyFolderCleaner) processCleanupQueue() {
+ 	}
+ }
+ 
++// restoreFoldersWrittenDuringDelete puts back folders that received an entry between
++// the emptiness check and the delete, which leaves that entry with no directory
++// holding it: reachable by its own path, but absent from any listing.
++//
++// A folder stays under observation for DefaultRestoreCheckWindow rather than being
++// checked once. A writer looks up the parent before inserting the child, so a check
++// can land in that gap and see nothing; ticks also coalesce when a pass runs long, so
++// "next pass" is not a delay at all. Re-checking for a bounded wall-clock window
++// covers both. This narrows the exposure rather than closing it - only making the
++// emptiness check and the delete atomic would do that.
++func (efc *EmptyFolderCleaner) restoreFoldersWrittenDuringDelete() {
++	efc.mu.Lock()
++	dropped := efc.deletedDropped
++	efc.deletedDropped = 0
++	var restore []*deletedFolder
++	for path, folder := range efc.deleted {
++		// The window applies whatever the folder's state is. Checking writtenTo first
++		// would keep a folder whose restore keeps failing forever, re-counting it on
++		// every pass.
++		if time.Since(folder.deletedAt) >= DefaultObservationWindow {
++			delete(efc.deleted, path)
++			continue
++		}
++		if folder.writtenTo {
++			restore = append(restore, folder)
++			delete(efc.deleted, path)
++		}
++	}
++	// A cascade takes ancestors along with the folder. Rebuild those from what they
++	// were too: leaving them to the descendant's restore would mint them from the
++	// descendant's own attributes, handing back access the ancestor did not grant.
++	for i := 0; i < len(restore); i++ {
++		ancestor, _ := util.FullPath(restore[i].path).DirAndName()
++		for ancestor != "" && ancestor != "/" {
++			if folder, found := efc.deleted[ancestor]; found {
++				restore = append(restore, folder)
++				delete(efc.deleted, ancestor)
++			}
++			ancestor, _ = util.FullPath(ancestor).DirAndName()
++		}
++	}
++	efc.mu.Unlock()
++
++	if dropped > 0 {
++		glog.V(1).Infof("EmptyFolderCleaner: %d deleted folders left unobserved, past the %d kept", dropped, DefaultMaxDeletedKept)
++	}
++	if len(restore) == 0 {
++		return
++	}
++
++	// Restore shallowest first, so a folder taken by the parent cascade is rebuilt
++	// with its own attributes before anything below it needs it as a parent.
++	sort.Slice(restore, func(i, j int) bool {
++		return strings.Count(restore[i].path, "/") < strings.Count(restore[j].path, "/")
++	})
++
++	ctx := context.Background()
++	var retry []*deletedFolder
++	for i, folder := range restore {
++		if !efc.IsEnabled() {
++			retry = append(retry, restore[i:]...)
++			break
++		}
++		// An event named this folder, but the entry may have been removed again since,
++		// in which case there is nothing to hold and it can stay gone. Ancestors pulled
++		// in above carry no event and are rebuilt regardless, since the folder below
++		// them needs them.
++		if folder.writtenTo {
++			count, err := efc.countItems(ctx, folder.path)
++			if err != nil {
++				glog.V(2).Infof("EmptyFolderCleaner: cannot count %s before restoring it: %v", folder.path, err)
++				retry = append(retry, folder)
++				continue
++			}
++			if count == 0 {
++				continue
++			}
++		}
++		glog.V(1).Infof("EmptyFolderCleaner: restoring %s, written to while it was being deleted", folder.path)
++		if err := efc.filer.EnsureDirectoryEntry(ctx, util.FullPath(folder.path), folder.attrs); err != nil {
++			glog.V(2).Infof("EmptyFolderCleaner: failed to restore %s: %v", folder.path, err)
++			retry = append(retry, folder)
++		}
++	}
++
++	if len(retry) == 0 {
++		return
++	}
++	efc.mu.Lock()
++	for _, folder := range retry {
++		if _, found := efc.deleted[folder.path]; !found {
++			efc.makeRoomForDeletedLocked()
++		}
++		efc.deleted[folder.path] = folder
++	}
++	efc.mu.Unlock()
++}
++
++// makeRoomForDeletedLocked drops the oldest of a small sample when the set is full.
++// The newest folders are the ones whose race is still live, so they must not be the
++// ones given up; sampling keeps this cheap under heavy deletion rates.
++func (efc *EmptyFolderCleaner) makeRoomForDeletedLocked() {
++	if len(efc.deleted) < DefaultMaxDeletedKept {
++		return
++	}
++	const sampleSize = 32
++	oldestPath, seen := "", 0
++	for path, folder := range efc.deleted {
++		if oldestPath == "" || folder.deletedAt.Before(efc.deleted[oldestPath].deletedAt) {
++			oldestPath = path
++		}
++		if seen++; seen >= sampleSize {
++			break
++		}
++	}
++	if oldestPath != "" {
++		delete(efc.deleted, oldestPath)
++		efc.deletedDropped++
++	}
++}
++
+ // executeCleanup performs the actual cleanup of an empty folder
+ func (efc *EmptyFolderCleaner) executeCleanup(folder string, triggeredBy string) {
+ 	// The bucket-shared .uploads staging tree holds in-progress multipart uploads.
+@@ -324,7 +488,25 @@ func (efc *EmptyFolderCleaner) executeCleanup(folder string, triggeredBy string)
+ 		return
+ 	}
+ 
+-	// Delete the empty folder
++	// Read what it would take to put this folder back before removing it; without
++	// that a restore would have to invent attributes for it.
++	attrs, err := efc.filer.DirectoryAttributes(ctx, util.FullPath(folder))
++	if err != nil {
++		glog.V(2).Infof("EmptyFolderCleaner: cannot read %s before deleting it: %v", folder, err)
++		return
++	}
++
++	// Observe it before the delete rather than after. A delete can fail partway and
++	// still leave the folder gone - the redis stores remove the folder before their
++	// parent-list member - so a failure return is not proof that it is still there.
++	efc.mu.Lock()
++	if efc.deleted == nil {
++		efc.deleted = make(map[string]*deletedFolder)
++	}
++	efc.makeRoomForDeletedLocked()
++	efc.deleted[folder] = &deletedFolder{path: folder, attrs: attrs, deletedAt: time.Now()}
++	efc.mu.Unlock()
++
+ 	glog.Infof("EmptyFolderCleaner: deleting empty folder %s (triggered by %s)", folder, triggeredBy)
+ 	if err := efc.deleteFolder(ctx, folder); err != nil {
+ 		glog.V(2).Infof("EmptyFolderCleaner: failed to delete empty folder %s (triggered by %s): %v", folder, triggeredBy, err)
+@@ -539,6 +721,7 @@ func (efc *EmptyFolderCleaner) Stop() {
+ 	efc.cleanupQueue.Clear()
+ 	efc.folderCounts = make(map[string]*folderState) // Clear cache on stop
+ 	efc.bucketCleanupPolicies = make(map[string]*bucketCleanupPolicyState)
++	efc.deleted, efc.deletedDropped = make(map[string]*deletedFolder), 0
+ }
+ 
+ // GetPendingCleanupCount returns the number of pending cleanup tasks (for testing)
+diff --git a/weed/filer/empty_folder_cleanup/empty_folder_cleaner_test.go b/weed/filer/empty_folder_cleanup/empty_folder_cleaner_test.go
+index 58e6d50e7fc..798b4ca661d 100644
+--- a/weed/filer/empty_folder_cleanup/empty_folder_cleaner_test.go
++++ b/weed/filer/empty_folder_cleanup/empty_folder_cleaner_test.go
+@@ -2,6 +2,7 @@ package empty_folder_cleanup
+ 
+ import (
+ 	"context"
++	"errors"
+ 	"testing"
+ 	"time"
+ 
+@@ -16,6 +17,22 @@ type mockFilerOps struct {
+ 	deleteFn      func(path util.FullPath) error
+ 	attrsFn       func(path util.FullPath) (map[string][]byte, error)
+ 	isDirKeyObjFn func(path util.FullPath) (bool, error)
++	ensureDirFn   func(path util.FullPath, attrs DirectoryAttributes) error
++	dirAttrsFn    func(path util.FullPath) (DirectoryAttributes, error)
++}
++
++func (m *mockFilerOps) EnsureDirectoryEntry(_ context.Context, p util.FullPath, attrs DirectoryAttributes) error {
++	if m.ensureDirFn == nil {
++		return nil
++	}
++	return m.ensureDirFn(p, attrs)
++}
++
++func (m *mockFilerOps) DirectoryAttributes(_ context.Context, p util.FullPath) (DirectoryAttributes, error) {
++	if m.dirAttrsFn == nil {
++		return DirectoryAttributes{Mode: 0755}, nil
++	}
++	return m.dirAttrsFn(p)
+ }
+ 
+ func (m *mockFilerOps) CountDirectoryEntries(_ context.Context, dirPath util.FullPath, _ int) (int, error) {
+@@ -200,6 +217,222 @@ func TestEmptyFolderCleaner_executeCleanup_skipsMultipartUploads(t *testing.T) {
+ 	}
+ }
+ 
++func TestEmptyFolderCleaner_restoreFoldersWrittenDuringDelete(t *testing.T) {
++	lockRing := lock_manager.NewLockRing(5 * time.Second)
++	lockRing.SetSnapshot([]pb.ServerAddress{"filer1:8888"}, 0)
++
++	newCleaner := func(mock *mockFilerOps) *EmptyFolderCleaner {
++		return &EmptyFolderCleaner{
++			filer:                 mock,
++			lockRing:              lockRing,
++			host:                  "filer1:8888",
++			bucketPath:            "/buckets",
++			enabled:               true,
++			maxCountCheck:         DefaultMaxCountCheck,
++			cacheExpiry:           DefaultCacheExpiry,
++			folderCounts:          make(map[string]*folderState),
++			bucketCleanupPolicies: make(map[string]*bucketCleanupPolicyState),
++			deleted:               make(map[string]*deletedFolder),
++			cleanupQueue:          NewCleanupQueue(1000, 10*time.Minute),
++			stopCh:                make(chan struct{}),
++		}
++	}
++
++	const folder = "/buckets/mybucket/folder"
++
++	t.Run("a create event for the deleted folder puts it back", func(t *testing.T) {
++		var restored []string
++		mock := &mockFilerOps{
++			countFn:     func(util.FullPath) (int, error) { return 0, nil },
++			ensureDirFn: func(p util.FullPath, _ DirectoryAttributes) error { restored = append(restored, string(p)); return nil },
++		}
++
++		cleaner := newCleaner(mock)
++		cleaner.executeCleanup(folder, "file.txt")
++
++		// nothing has been written to it, so it is only observed
++		cleaner.processCleanupQueue()
++		if len(restored) != 0 {
++			t.Fatalf("a folder nothing was written to should not be restored, got %v", restored)
++		}
++		if len(cleaner.deleted) != 1 {
++			t.Fatalf("folder should still be observed, got %d", len(cleaner.deleted))
++		}
++
++		// the write that raced the delete arrives as a create event
++		mock.countFn = func(util.FullPath) (int, error) { return 1, nil }
++		cleaner.OnCreateEvent(folder, "obj", false)
++		cleaner.processCleanupQueue()
++		if len(restored) != 1 || restored[0] != folder {
++			t.Fatalf("a folder written to while being deleted should be restored, got %v", restored)
++		}
++		if len(cleaner.deleted) != 0 {
++			t.Fatalf("a restored folder should stop being observed, got %d", len(cleaner.deleted))
++		}
++	})
++
++	t.Run("a create event elsewhere is ignored", func(t *testing.T) {
++		var restored []string
++		mock := &mockFilerOps{
++			countFn:     func(util.FullPath) (int, error) { return 0, nil },
++			ensureDirFn: func(p util.FullPath, _ DirectoryAttributes) error { restored = append(restored, string(p)); return nil },
++		}
++
++		cleaner := newCleaner(mock)
++		cleaner.executeCleanup(folder, "file.txt")
++		cleaner.OnCreateEvent("/buckets/mybucket/other", "obj", false)
++		cleaner.processCleanupQueue()
++		if len(restored) != 0 {
++			t.Fatalf("only the folder written to should be restored, got %v", restored)
++		}
++	})
++
++	t.Run("an entry that went away again is not restored", func(t *testing.T) {
++		var restored []string
++		mock := &mockFilerOps{
++			countFn:     func(util.FullPath) (int, error) { return 0, nil },
++			ensureDirFn: func(p util.FullPath, _ DirectoryAttributes) error { restored = append(restored, string(p)); return nil },
++		}
++
++		cleaner := newCleaner(mock)
++		cleaner.executeCleanup(folder, "file.txt")
++		cleaner.OnCreateEvent(folder, "obj", false)
++		cleaner.processCleanupQueue()
++		if len(restored) != 0 {
++			t.Fatalf("an empty folder should not be restored, got %v", restored)
++		}
++	})
++
++	t.Run("observation expires", func(t *testing.T) {
++		mock := &mockFilerOps{countFn: func(util.FullPath) (int, error) { return 0, nil }}
++
++		cleaner := newCleaner(mock)
++		cleaner.executeCleanup(folder, "file.txt")
++		cleaner.processCleanupQueue()
++		if len(cleaner.deleted) != 1 {
++			t.Fatalf("folder should still be observed inside the window, got %d", len(cleaner.deleted))
++		}
++
++		cleaner.deleted[folder].deletedAt = time.Now().Add(-DefaultObservationWindow - time.Second)
++		cleaner.processCleanupQueue()
++		if len(cleaner.deleted) != 0 {
++			t.Fatalf("folder should stop being observed once the window has passed, got %d", len(cleaner.deleted))
++		}
++	})
++
++	t.Run("a failed restore is retried", func(t *testing.T) {
++		attempts := 0
++		mock := &mockFilerOps{
++			countFn: func(util.FullPath) (int, error) { return 1, nil },
++			ensureDirFn: func(p util.FullPath, _ DirectoryAttributes) error {
++				attempts++
++				if attempts == 1 {
++					return errors.New("store unavailable")
++				}
++				return nil
++			},
++		}
++
++		cleaner := newCleaner(mock)
++		// deleted while empty, then written to
++		mock.countFn = func(util.FullPath) (int, error) { return 0, nil }
++		cleaner.executeCleanup(folder, "file.txt")
++		mock.countFn = func(util.FullPath) (int, error) { return 1, nil }
++		cleaner.OnCreateEvent(folder, "obj", false)
++
++		cleaner.processCleanupQueue()
++		if len(cleaner.deleted) != 1 {
++			t.Fatalf("a folder whose restore failed should be kept, got %d", len(cleaner.deleted))
++		}
++
++		cleaner.processCleanupQueue()
++		if attempts != 2 {
++			t.Fatalf("a failed restore should be retried, got %d attempts", attempts)
++		}
++		if len(cleaner.deleted) != 0 {
++			t.Fatalf("a restored folder should stop being observed, got %d", len(cleaner.deleted))
++		}
++	})
++
++	t.Run("a folder whose restore keeps failing stops being observed", func(t *testing.T) {
++		mock := &mockFilerOps{
++			countFn:     func(util.FullPath) (int, error) { return 0, nil },
++			ensureDirFn: func(util.FullPath, DirectoryAttributes) error { return errors.New("store unavailable") },
++		}
++
++		cleaner := newCleaner(mock)
++		cleaner.executeCleanup(folder, "file.txt")
++		mock.countFn = func(util.FullPath) (int, error) { return 1, nil }
++		cleaner.OnCreateEvent(folder, "obj", false)
++
++		cleaner.processCleanupQueue()
++		if len(cleaner.deleted) != 1 {
++			t.Fatalf("a folder whose restore failed should be kept, got %d", len(cleaner.deleted))
++		}
++
++		// otherwise it would be retried on every pass for the rest of the process
++		cleaner.deleted[folder].deletedAt = time.Now().Add(-DefaultObservationWindow - time.Second)
++		cleaner.processCleanupQueue()
++		if len(cleaner.deleted) != 0 {
++			t.Fatalf("the window should apply to a failing folder too, got %d", len(cleaner.deleted))
++		}
++	})
++
++	t.Run("an ancestor taken by the cascade is restored with its own attributes", func(t *testing.T) {
++		const ancestor = "/buckets/mybucket/data"
++		const nested = ancestor + "/abc"
++
++		restored := map[string]DirectoryAttributes{}
++		var order []string
++		mock := &mockFilerOps{
++			countFn: func(util.FullPath) (int, error) { return 0, nil },
++			dirAttrsFn: func(p util.FullPath) (DirectoryAttributes, error) {
++				if string(p) == ancestor {
++					return DirectoryAttributes{Mode: 0700, Uid: 4242}, nil
++				}
++				return DirectoryAttributes{Mode: 0755, Uid: 7}, nil
++			},
++			ensureDirFn: func(p util.FullPath, attrs DirectoryAttributes) error {
++				restored[string(p)] = attrs
++				order = append(order, string(p))
++				return nil
++			},
++		}
++
++		cleaner := newCleaner(mock)
++		// the cascade takes the nested folder and then its parent
++		cleaner.executeCleanup(nested, "file.txt")
++		cleaner.executeCleanup(ancestor, "abc")
++
++		// only the nested folder is written to
++		mock.countFn = func(util.FullPath) (int, error) { return 1, nil }
++		cleaner.OnCreateEvent(nested, "obj", false)
++		cleaner.processCleanupQueue()
++
++		if len(order) != 2 || order[0] != ancestor {
++			t.Fatalf("the ancestor should be rebuilt first, got %v", order)
++		}
++		if got := restored[ancestor]; got.Mode != 0700 || got.Uid != 4242 {
++			t.Errorf("ancestor should keep its own attributes, got mode %o uid %d", got.Mode, got.Uid)
++		}
++	})
++
++	t.Run("a delete that reports failure is still observed", func(t *testing.T) {
++		// the redis stores drop the folder before its parent-list member, so a failure
++		// return is not proof that the folder survived
++		mock := &mockFilerOps{
++			countFn:  func(util.FullPath) (int, error) { return 0, nil },
++			deleteFn: func(util.FullPath) error { return errors.New("partial delete") },
++		}
++
++		cleaner := newCleaner(mock)
++		cleaner.executeCleanup(folder, "file.txt")
++		if len(cleaner.deleted) != 1 {
++			t.Fatalf("a failed delete should still leave the folder observed, got %d", len(cleaner.deleted))
++		}
++	})
++}
++
+ func Test_autoRemoveEmptyFoldersEnabled(t *testing.T) {
+ 	tests := []struct {
+ 		name      string
+diff --git a/weed/filer/filer.go b/weed/filer/filer.go
+index bd349af6707..6730ae7635a 100644
+--- a/weed/filer/filer.go
++++ b/weed/filer/filer.go
+@@ -373,6 +373,65 @@ func (f *Filer) ensureParentDirectoryEntry(ctx context.Context, entry *Entry, di
+ 	return nil
+ }
+ 
++// DirectoryAttributes reads what a directory would need to be recreated as it is.
++func (f *Filer) DirectoryAttributes(ctx context.Context, dirPath util.FullPath) (attrs empty_folder_cleanup.DirectoryAttributes, err error) {
++	entry, err := f.FindEntry(ctx, dirPath)
++	if err != nil {
++		return attrs, err
++	}
++	if entry == nil {
++		return attrs, filer_pb.ErrNotFound
++	}
++	return empty_folder_cleanup.DirectoryAttributes{
++		// everything but the type bits: Perm() alone would drop setgid, setuid and
++		// sticky, quietly changing group inheritance and delete semantics
++		Mode:       entry.Mode & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky),
++		Uid:        entry.Uid,
++		Gid:        entry.Gid,
++		UserName:   entry.UserName,
++		GroupNames: entry.GroupNames,
++	}, nil
++}
++
++// EnsureDirectoryEntry recreates dirPath, and any missing ancestor, for entries that
++// outlived the directory holding them. dirPath comes back with the attributes it was
++// deleted with, so a restore cannot hand back a directory more permissive than the one
++// it replaces. It is a no-op when dirPath is already there.
++func (f *Filer) EnsureDirectoryEntry(ctx context.Context, dirPath util.FullPath, attrs empty_folder_cleanup.DirectoryAttributes) error {
++	existing, err := f.FindEntry(ctx, dirPath)
++	if err != nil && !errors.Is(err, filer_pb.ErrNotFound) {
++		return err
++	}
++	if existing != nil {
++		return nil
++	}
++
++	holder := &Entry{FullPath: dirPath, Attr: Attr{
++		Mode: attrs.Mode, Uid: attrs.Uid, Gid: attrs.Gid,
++		UserName: attrs.UserName, GroupNames: attrs.GroupNames,
++	}}
++	dirParts := strings.Split(string(dirPath), "/")
++	if err := f.ensureParentDirectoryEntry(ctx, holder, dirParts, len(dirParts)-1, false); err != nil {
++		return err
++	}
++
++	now := time.Now()
++	dirEntry := &Entry{FullPath: dirPath, Attr: Attr{
++		Mtime: now, Crtime: now,
++		Mode:     os.ModeDir | attrs.Mode,
++		Uid:      attrs.Uid,
++		Gid:      attrs.Gid,
++		UserName: attrs.UserName, GroupNames: attrs.GroupNames,
++	}}
++	f.ensureEntryInode(dirEntry)
++	if err := f.Store.InsertEntry(ctx, dirEntry); err != nil {
++		return fmt.Errorf("restore directory %s: %v", dirPath, err)
++	}
++	f.NotifyUpdateEvent(ctx, nil, dirEntry, false, false, nil)
++
++	return nil
++}
++
+ func (f *Filer) UpdateEntry(ctx context.Context, oldEntry, entry *Entry) (err error) {
+ 	if oldEntry != nil {
+ 		entry.Attr.Crtime = oldEntry.Attr.Crtime
+diff --git a/weed/filer/leveldb2/empty_folder_race_test.go b/weed/filer/leveldb2/empty_folder_race_test.go
+index 431b0c9082f..5fa7996437a 100644
+--- a/weed/filer/leveldb2/empty_folder_race_test.go
++++ b/weed/filer/leveldb2/empty_folder_race_test.go
+@@ -76,3 +76,121 @@ func TestNonRecursiveFolderDeleteKeepsRacingChild(t *testing.T) {
+ 		t.Errorf("folder entry should still be removed, got %v", err)
+ 	}
+ }
++
++// TestEnsureDirectoryEntryRestoresRacingParent covers the leftover of the same
++// race: the entry survives the folder delete but its directory does not, so the
++// entry drops out of listings until the directory is put back.
++func TestEnsureDirectoryEntryRestoresRacingParent(t *testing.T) {
++	testFiler := filer.NewFiler(pb.ServerDiscovery{}, nil, "", "", "", "", "", 255, nil)
++	store := &LevelDB2Store{}
++	if err := store.initialize(t.TempDir(), 2); err != nil {
++		t.Fatal(err)
++	}
++	hooked := &listHookStore{FilerStore: store}
++	testFiler.SetStore(hooked)
++
++	ctx := filer.WithSuppressedMetadataEvents(context.Background())
++	parent := util.FullPath("/buckets/testbucket/data")
++	dir := parent.Child("abc")
++	child := dir.Child("obj")
++
++	dirEntry := &filer.Entry{FullPath: dir, Attr: filer.Attr{Mode: os.ModeDir | 0755}}
++	if err := testFiler.CreateEntry(ctx, dirEntry, nil, false, false, nil, false, testFiler.MaxFilenameLength); err != nil {
++		t.Fatalf("create folder: %v", err)
++	}
++
++	// the cleaner reads these before deleting, so a restore does not have to guess
++	attrs, err := testFiler.DirectoryAttributes(ctx, dir)
++	if err != nil {
++		t.Fatalf("read folder attributes: %v", err)
++	}
++
++	hooked.hook = func() {
++		entry := &filer.Entry{FullPath: child, Attr: filer.Attr{Mode: 0640}}
++		if err := testFiler.CreateEntry(ctx, entry, nil, false, false, nil, false, testFiler.MaxFilenameLength); err != nil {
++			t.Errorf("create entry racing the folder delete: %v", err)
++		}
++	}
++
++	if err := testFiler.DeleteEntryMetaAndData(ctx, dir, false, false, false, false, nil, 0); err != nil {
++		t.Fatalf("delete empty folder: %v", err)
++	}
++
++	if names := listNames(ctx, t, testFiler, parent); len(names) != 0 {
++		t.Fatalf("folder should be gone from its parent before the restore, got %v", names)
++	}
++
++	if err := testFiler.EnsureDirectoryEntry(ctx, dir, attrs); err != nil {
++		t.Fatalf("restore folder: %v", err)
++	}
++
++	restored, err := testFiler.FindEntry(ctx, dir)
++	if err != nil {
++		t.Fatalf("find restored folder: %v", err)
++	}
++	if !restored.IsDirectory() {
++		t.Errorf("restored %s is not a directory", dir)
++	}
++	if names := listNames(ctx, t, testFiler, parent); len(names) != 1 || names[0] != "abc" {
++		t.Errorf("restored folder should be listed under its parent, got %v", names)
++	}
++}
++
++// TestEnsureDirectoryEntryRestoresExactAttributes checks that a restored directory
++// comes back exactly as it was. Guessing from an ancestor, or forcing traversal bits,
++// would hand back a directory that grants access the original one denied.
++func TestEnsureDirectoryEntryRestoresExactAttributes(t *testing.T) {
++	testFiler := filer.NewFiler(pb.ServerDiscovery{}, nil, "", "", "", "", "", 255, nil)
++	store := &LevelDB2Store{}
++	if err := store.initialize(t.TempDir(), 2); err != nil {
++		t.Fatal(err)
++	}
++	testFiler.SetStore(store)
++
++	ctx := filer.WithSuppressedMetadataEvents(context.Background())
++	// a private directory under a world-traversable parent
++	dir := util.FullPath("/buckets/testbucket/data").Child("private")
++	dirEntry := &filer.Entry{FullPath: dir, Attr: filer.Attr{Mode: os.ModeDir | 0700, Uid: 4242, Gid: 4343}}
++	if err := testFiler.CreateEntry(ctx, dirEntry, nil, false, false, nil, false, testFiler.MaxFilenameLength); err != nil {
++		t.Fatalf("create folder: %v", err)
++	}
++
++	attrs, err := testFiler.DirectoryAttributes(ctx, dir)
++	if err != nil {
++		t.Fatalf("read folder attributes: %v", err)
++	}
++	if err := testFiler.DeleteEntryMetaAndData(ctx, dir, false, false, false, false, nil, 0); err != nil {
++		t.Fatalf("delete folder: %v", err)
++	}
++
++	if err := testFiler.EnsureDirectoryEntry(ctx, dir, attrs); err != nil {
++		t.Fatalf("restore folder: %v", err)
++	}
++
++	restored, err := testFiler.FindEntry(ctx, dir)
++	if err != nil {
++		t.Fatalf("find restored folder: %v", err)
++	}
++	if !restored.IsDirectory() {
++		t.Errorf("restored %s is not a directory", dir)
++	}
++	if restored.Mode.Perm() != 0700 {
++		t.Errorf("restored folder should keep mode 0700, got %o", restored.Mode.Perm())
++	}
++	if restored.Uid != 4242 || restored.Gid != 4343 {
++		t.Errorf("restored folder should keep its owner, got uid=%d gid=%d", restored.Uid, restored.Gid)
++	}
++}
++
++func listNames(ctx context.Context, t *testing.T, f *filer.Filer, dir util.FullPath) []string {
++	t.Helper()
++	entries, _, err := f.ListDirectoryEntries(ctx, dir, "", false, 100, "", "", "")
++	if err != nil {
++		t.Fatalf("list %s: %v", dir, err)
++	}
++	var names []string
++	for _, entry := range entries {
++		names = append(names, entry.Name())
++	}
++	return names
++}
+diff --git a/weed/filer/redis/universal_redis_store.go b/weed/filer/redis/universal_redis_store.go
+index 7ed5d38779d..bec4294af7b 100644
+--- a/weed/filer/redis/universal_redis_store.go
++++ b/weed/filer/redis/universal_redis_store.go
+@@ -116,7 +116,8 @@ func (store *UniversalRedisStore) DeleteEntry(ctx context.Context, fullpath util
+ 
+ func (store *UniversalRedisStore) DeleteFolderChildren(ctx context.Context, fullpath util.FullPath) (err error) {
+ 
+-	members, err := store.Client.SMembers(ctx, genDirectoryListKey(string(fullpath))).Result()
++	dirListKey := genDirectoryListKey(string(fullpath))
++	members, err := store.Client.SMembers(ctx, dirListKey).Result()
+ 	if err != nil {
+ 		return fmt.Errorf("delete folder %s : %v", fullpath, err)
+ 	}
+@@ -131,6 +132,10 @@ func (store *UniversalRedisStore) DeleteFolderChildren(ctx context.Context, full
+ 		store.Client.Del(ctx, genDirectoryListKey(string(path)))
+ 	}
+ 
++	if _, err = store.Client.Del(ctx, dirListKey).Result(); err != nil {
++		return fmt.Errorf("delete folder %s list: %v", fullpath, err)
++	}
++
+ 	return nil
+ }
+ 
+diff --git a/weed/filer/redis/universal_redis_store_test.go b/weed/filer/redis/universal_redis_store_test.go
+index 99ed8e579a4..7f5f7d98d98 100644
+--- a/weed/filer/redis/universal_redis_store_test.go
++++ b/weed/filer/redis/universal_redis_store_test.go
+@@ -153,3 +153,29 @@ func TestRemoveOrphanedDirectoryListMemberKeepsDirectoryWithChildren(t *testing.
+ 		t.Fatalf("child value key exists=%d err=%v, want it kept", exists, err)
+ 	}
+ }
++
++func TestDeleteFolderChildrenRemovesTheListing(t *testing.T) {
++	store, dir := newTestStore(t)
++	ctx := context.Background()
++
++	insertTestEntry(t, store, dir.Child("obj"))
++
++	// The directory entry going away must not take the listing with it; nothing
++	// else records that the child is under this directory.
++	if err := store.DeleteEntry(ctx, dir); err != nil {
++		t.Fatalf("DeleteEntry %s: %v", dir, err)
++	}
++	if names := listNames(t, store, dir); len(names) != 1 || names[0] != "obj" {
++		t.Errorf("child should still be listed after the directory entry is deleted, got %v", names)
++	}
++
++	// Deleting the children takes the listing with them, rather than leaving it behind.
++	if err := store.DeleteFolderChildren(ctx, dir); err != nil {
++		t.Fatalf("DeleteFolderChildren %s: %v", dir, err)
++	}
++	if n, err := store.Client.Exists(ctx, genDirectoryListKey(string(dir))).Result(); err != nil {
++		t.Fatalf("exists %s: %v", dir, err)
++	} else if n != 0 {
++		t.Errorf("listing key should be removed with the children, still present")
++	}
++}
+diff --git a/weed/filer/redis2/universal_redis_store.go b/weed/filer/redis2/universal_redis_store.go
+index e74d5fc4c9f..13204955836 100644
+--- a/weed/filer/redis2/universal_redis_store.go
++++ b/weed/filer/redis2/universal_redis_store.go
+@@ -118,11 +118,10 @@ func (store *UniversalRedis2Store) FindEntry(ctx context.Context, fullpath util.
+ 
+ func (store *UniversalRedis2Store) DeleteEntry(ctx context.Context, fullpath util.FullPath) (err error) {
+ 
+-	_, err = store.Client.Del(ctx, store.getKey(genDirectoryListKey(string(fullpath)))).Result()
+-	if err != nil {
+-		return fmt.Errorf("delete dir list %s : %v", fullpath, err)
+-	}
+-
++	// The child listing is dropped by DeleteFolderChildren, together with the
++	// children it describes. Dropping it here would also discard an entry that
++	// arrived after the caller judged this directory empty, and nothing else
++	// records that the entry is there.
+ 	_, err = store.Client.Del(ctx, store.getKey(string(fullpath))).Result()
+ 	if err != nil {
+ 		return fmt.Errorf("delete %s : %v", fullpath, err)
+@@ -148,7 +147,8 @@ func (store *UniversalRedis2Store) DeleteFolderChildren(ctx context.Context, ful
+ 		return nil
+ 	}
+ 
+-	members, err := store.Client.ZRangeByLex(ctx, store.getKey(genDirectoryListKey(string(fullpath))), &redis.ZRangeBy{
++	dirListKey := store.getKey(genDirectoryListKey(string(fullpath)))
++	members, err := store.Client.ZRangeByLex(ctx, dirListKey, &redis.ZRangeBy{
+ 		Min: "-",
+ 		Max: "+",
+ 	}).Result()
+@@ -166,6 +166,10 @@ func (store *UniversalRedis2Store) DeleteFolderChildren(ctx context.Context, ful
+ 		store.Client.Del(ctx, store.getKey(genDirectoryListKey(string(path))))
+ 	}
+ 
++	if _, err = store.Client.Del(ctx, dirListKey).Result(); err != nil {
++		return fmt.Errorf("DeleteFolderChildren %s list: %v", fullpath, err)
++	}
++
+ 	return nil
+ }
+ 
+diff --git a/weed/filer/redis2/universal_redis_store_test.go b/weed/filer/redis2/universal_redis_store_test.go
+index c2dfc47d86c..1558538dad7 100644
+--- a/weed/filer/redis2/universal_redis_store_test.go
++++ b/weed/filer/redis2/universal_redis_store_test.go
+@@ -299,3 +299,33 @@ func TestDeleteIfUnchangedScriptOnlyDeletesSameBytes(t *testing.T) {
+ 		t.Fatalf("deleted=%d err=%v, want -1 on a missing key", deleted, err)
+ 	}
+ }
++
++func TestDeleteEntryKeepsChildListing(t *testing.T) {
++	store, dir := newTestStore(t, "")
++	ctx := context.Background()
++
++	insertTestEntry(t, store, dir.Child("obj"), 0)
++
++	// The listing is the only record that the child sits under this directory, so
++	// removing the directory entry must leave it alone. An entry that arrived after
++	// the caller judged the directory empty would otherwise become unreachable.
++	if err := store.DeleteEntry(ctx, dir); err != nil {
++		t.Fatalf("DeleteEntry %s: %v", dir, err)
++	}
++	if names := listNames(t, store, dir); len(names) != 1 || names[0] != "obj" {
++		t.Errorf("child should still be listed after the directory entry is deleted, got %v", names)
++	}
++
++	// DeleteFolderChildren owns that cleanup, and takes the listing with it
++	if err := store.DeleteFolderChildren(ctx, dir); err != nil {
++		t.Fatalf("DeleteFolderChildren %s: %v", dir, err)
++	}
++	if names := listNames(t, store, dir); len(names) != 0 {
++		t.Errorf("listing should be empty once the children are deleted, got %v", names)
++	}
++	if n, err := store.Client.Exists(ctx, store.getKey(genDirectoryListKey(string(dir)))).Result(); err != nil {
++		t.Fatalf("exists %s: %v", dir, err)
++	} else if n != 0 {
++		t.Errorf("listing key should be removed with the children, still present")
++	}
++}
+diff --git a/weed/filer/redis3/ItemList.go b/weed/filer/redis3/ItemList.go
+index 7a700f43543..5da73509695 100644
+--- a/weed/filer/redis3/ItemList.go
++++ b/weed/filer/redis3/ItemList.go
+@@ -342,6 +342,10 @@ func (nl *ItemList) ListNames(startFrom string, visitNamesFn func(name string) b
+ 	return nil
+ }
+ 
++func (nl *ItemList) IsEmpty() bool {
++	return nl.skipList.StartLevels[0] == nil
++}
++
+ func (nl *ItemList) RemoteAllListElement() error {
+ 
+ 	t := nl.skipList
+diff --git a/weed/filer/redis3/kv_directory_children.go b/weed/filer/redis3/kv_directory_children.go
+index 281b011952c..e1b080b4126 100644
+--- a/weed/filer/redis3/kv_directory_children.go
++++ b/weed/filer/redis3/kv_directory_children.go
+@@ -70,9 +70,21 @@ func removeChild(ctx context.Context, redisStore *UniversalRedis3Store, key stri
+ 		return err
+ 	}
+ 	if !nameList.HasChanges() {
++		// Nothing to remove. If the list is empty anyway, its header outlived the
++		// removal of the last name - a delete that failed here before - so take it
++		// now rather than leaving the key behind for good.
++		if nameList.IsEmpty() {
++			return client.Del(ctx, key).Err()
++		}
+ 		return nil
+ 	}
+ 
++	// An emptied list reads the same as no list at all, and keeping the header would
++	// leave a key behind for every directory that is emptied.
++	if nameList.IsEmpty() {
++		return client.Del(ctx, key).Err()
++	}
++
+ 	if err := client.Set(ctx, key, nameList.ToBytes(), 0).Err(); err != nil {
+ 		return err
+ 	}
+diff --git a/weed/filer/redis3/universal_redis_store.go b/weed/filer/redis3/universal_redis_store.go
+index 84cd4290833..abaf7e698fe 100644
+--- a/weed/filer/redis3/universal_redis_store.go
++++ b/weed/filer/redis3/universal_redis_store.go
+@@ -95,11 +95,10 @@ func (store *UniversalRedis3Store) FindEntry(ctx context.Context, fullpath util.
+ 
+ func (store *UniversalRedis3Store) DeleteEntry(ctx context.Context, fullpath util.FullPath) (err error) {
+ 
+-	_, err = store.Client.Del(ctx, genDirectoryListKey(string(fullpath))).Result()
+-	if err != nil {
+-		return fmt.Errorf("delete dir list %s : %v", fullpath, err)
+-	}
+-
++	// The child listing is dropped by DeleteFolderChildren, together with the
++	// children it describes. Dropping it here would also discard an entry that
++	// arrived after the caller judged this directory empty, and nothing else
++	// records that the entry is there.
+ 	_, err = store.Client.Del(ctx, string(fullpath)).Result()
+ 	if err != nil {
+ 		return fmt.Errorf("delete %s : %v", fullpath, err)
+@@ -118,7 +117,8 @@ func (store *UniversalRedis3Store) DeleteEntry(ctx context.Context, fullpath uti
+ 
+ func (store *UniversalRedis3Store) DeleteFolderChildren(ctx context.Context, fullpath util.FullPath) (err error) {
+ 
+-	return removeChildren(ctx, store, genDirectoryListKey(string(fullpath)), func(name string) error {
++	dirListKey := genDirectoryListKey(string(fullpath))
++	if err = removeChildren(ctx, store, dirListKey, func(name string) error {
+ 		path := util.NewFullPath(string(fullpath), name)
+ 		_, err = store.Client.Del(ctx, string(path)).Result()
+ 		if err != nil {
+@@ -127,8 +127,16 @@ func (store *UniversalRedis3Store) DeleteFolderChildren(ctx context.Context, ful
+ 		// not efficient, but need to remove if it is a directory
+ 		store.Client.Del(ctx, genDirectoryListKey(string(path)))
+ 		return nil
+-	})
++	}); err != nil {
++		return err
++	}
++
++	// removeChildren clears the skip list nodes but leaves the list itself behind
++	if _, err = store.Client.Del(ctx, dirListKey).Result(); err != nil {
++		return fmt.Errorf("DeleteFolderChildren %s list: %v", fullpath, err)
++	}
+ 
++	return nil
+ }
+ 
+ func (store *UniversalRedis3Store) ListDirectoryPrefixedEntries(ctx context.Context, dirPath util.FullPath, startFileName string, includeStartFile bool, limit int64, prefix string, eachEntryFunc filer.ListEachEntryFunc) (lastFileName string, err error) {
+diff --git a/weed/filer/redis3/universal_redis_store_test.go b/weed/filer/redis3/universal_redis_store_test.go
+new file mode 100644
+index 00000000000..895fc260994
+--- /dev/null
++++ b/weed/filer/redis3/universal_redis_store_test.go
+@@ -0,0 +1,129 @@
++package redis3
++
++import (
++	"context"
++	"fmt"
++	"os"
++	"testing"
++	"time"
++
++	"github.com/go-redsync/redsync/v4"
++	goredis "github.com/go-redsync/redsync/v4/redis/goredis/v9"
++	"github.com/redis/go-redis/v9"
++
++	"github.com/seaweedfs/seaweedfs/weed/filer"
++	"github.com/seaweedfs/seaweedfs/weed/util"
++)
++
++func newTestStore(t *testing.T) (*UniversalRedis3Store, util.FullPath) {
++	t.Helper()
++
++	if os.Getenv("RUN_REDIS_TESTS") != "1" {
++		t.Skip("redis3 tests are disabled. Start a redis-server and set RUN_REDIS_TESTS=1 to enable, REDIS_ADDR defaults to 127.0.0.1:6379.")
++	}
++
++	addr := os.Getenv("REDIS_ADDR")
++	if addr == "" {
++		addr = "127.0.0.1:6379"
++	}
++
++	ctx := context.Background()
++	client := redis.NewClient(&redis.Options{Addr: addr})
++	t.Cleanup(func() {
++		if err := client.Close(); err != nil {
++			t.Errorf("close redis client: %v", err)
++		}
++	})
++	if err := client.Ping(ctx).Err(); err != nil {
++		t.Fatalf("connect to redis at %s: %v", addr, err)
++	}
++
++	store := &UniversalRedis3Store{Client: client, redsync: redsync.New(goredis.NewPool(client))}
++
++	dir := util.FullPath(fmt.Sprintf("/redis3_test_%d", time.Now().UnixNano()))
++	t.Cleanup(func() {
++		if err := store.DeleteFolderChildren(ctx, dir); err != nil {
++			t.Errorf("cleanup %s children: %v", dir, err)
++		}
++		if err := store.DeleteEntry(ctx, dir); err != nil {
++			t.Errorf("cleanup %s: %v", dir, err)
++		}
++	})
++
++	return store, dir
++}
++
++func listNames(t *testing.T, store *UniversalRedis3Store, dir util.FullPath) []string {
++	t.Helper()
++
++	names := []string{}
++	if _, err := store.ListDirectoryEntries(context.Background(), dir, "", true, 100, func(entry *filer.Entry) (bool, error) {
++		names = append(names, entry.Name())
++		return true, nil
++	}); err != nil {
++		t.Fatalf("list %s: %v", dir, err)
++	}
++	return names
++}
++
++func TestDeleteEntryKeepsChildListing(t *testing.T) {
++	store, dir := newTestStore(t)
++	ctx := context.Background()
++
++	now := time.Now()
++	child := dir.Child("obj")
++	if err := store.InsertEntry(ctx, &filer.Entry{
++		FullPath: child,
++		Attr:     filer.Attr{Crtime: now, Mtime: now, Mode: 0644},
++	}); err != nil {
++		t.Fatalf("InsertEntry %s: %v", child, err)
++	}
++
++	// The listing is the only record that the child sits under this directory, so
++	// removing the directory entry must leave it alone. An entry that arrived after
++	// the caller judged the directory empty would otherwise become unreachable.
++	if err := store.DeleteEntry(ctx, dir); err != nil {
++		t.Fatalf("DeleteEntry %s: %v", dir, err)
++	}
++	if names := listNames(t, store, dir); len(names) != 1 || names[0] != "obj" {
++		t.Errorf("child should still be listed after the directory entry is deleted, got %v", names)
++	}
++
++	// DeleteFolderChildren owns that cleanup, and takes the listing with it
++	if err := store.DeleteFolderChildren(ctx, dir); err != nil {
++		t.Fatalf("DeleteFolderChildren %s: %v", dir, err)
++	}
++	if names := listNames(t, store, dir); len(names) != 0 {
++		t.Errorf("listing should be empty once the children are deleted, got %v", names)
++	}
++	if n, err := store.Client.Exists(ctx, genDirectoryListKey(string(dir))).Result(); err != nil {
++		t.Fatalf("exists %s: %v", dir, err)
++	} else if n != 0 {
++		t.Errorf("listing key should be removed with the children, still present")
++	}
++}
++
++func TestRemovingTheLastChildDropsTheListing(t *testing.T) {
++	store, dir := newTestStore(t)
++	ctx := context.Background()
++
++	now := time.Now()
++	child := dir.Child("obj")
++	if err := store.InsertEntry(ctx, &filer.Entry{
++		FullPath: child,
++		Attr:     filer.Attr{Crtime: now, Mtime: now, Mode: 0644},
++	}); err != nil {
++		t.Fatalf("InsertEntry %s: %v", child, err)
++	}
++
++	// An emptied listing must not leave its header behind: cleanup deletes such a
++	// folder without touching the listing, so the key would never be collected.
++	if err := store.DeleteEntry(ctx, child); err != nil {
++		t.Fatalf("DeleteEntry %s: %v", child, err)
++	}
++	if n, err := store.Client.Exists(ctx, genDirectoryListKey(string(dir))).Result(); err != nil {
++		t.Fatalf("exists %s: %v", dir, err)
++	} else if n != 0 {
++		t.Errorf("listing key should be gone once the last child is removed, still present")
++	}
++}
