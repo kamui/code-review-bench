@@ -105,9 +105,10 @@ class ClaimRules(unittest.TestCase):
         pending = {"id": "GT-t1", "eligibility": {"state": "pending"}}
         self.assertEqual(claim_grading.family_recovery(pending, claims, True)[:2], ("unresolved", ["c1", "c2"]))
         self.assertEqual(claim_grading.family_recovery(pending, claims[2:], True)[:2], ("unresolved", []))
-        for unknown in (None, "GT-t1"):
-            open_claim = [{"id": "c4", "family_id": unknown, "outcome": "unresolved"}]
-            self.assertEqual(claim_grading.family_recovery(family, open_claim, True)[:2], ("unresolved", ["c4"]))
+        open_claim = [{"id": "c4", "family_id": "GT-t1", "outcome": "unresolved"}]
+        self.assertEqual(claim_grading.family_recovery(family, open_claim, True)[:2], ("unresolved", ["c4"]))
+        novel = [{"id": "c6", "family_id": None, "outcome": "unresolved"}]
+        self.assertEqual(claim_grading.family_recovery(family, novel, True)[:2], ("missed", []))
         other = [{"id": "c5", "family_id": "GT-t2", "outcome": "unresolved"}]
         self.assertEqual(claim_grading.family_recovery(family, other, True)[0], "missed")
 

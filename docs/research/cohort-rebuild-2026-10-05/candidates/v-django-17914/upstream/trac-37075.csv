@@ -1,0 +1,88 @@
+﻿id,summary,reporter,owner,description,type,status,component,version,severity,resolution,keywords,cc,stage,has_patch,needs_docs,needs_tests,needs_better_patch,easy,ui_ux
+37075,"`OPTIONS[""pool""][""check""]` cannot be set: the PostgreSQL backend always passes `check=` to `psycopg_pool.ConnectionPool`, then unpacks `**pool_options` on top, raising `TypeError`.",Raoni Timo de Castro Cambiaghi,Raoni Timo de Castro Cambiaghi,"== Reproduction ==
+
+`django/db/backends/postgresql/base.py` (5.2.13) constructs the pool like this — see [https://github.com/django/django/blob/5.2.13/django/db/backends/postgresql/base.py#L209-L215 base.py L209-L215]:
+
+{{{
+#!python
+enable_checks = self.settings_dict[""CONN_HEALTH_CHECKS""]
+pool = ConnectionPool(
+    kwargs=connect_kwargs,
+    open=False,
+    configure=self._configure_connection,
+    check=ConnectionPool.check_connection if enable_checks else None,
+    **pool_options,
+)
+}}}
+
+If a user puts a `""check""` key in `OPTIONS[""pool""]` to inject a custom validation callable — which is the documented way to extend `psycopg_pool.ConnectionPool`'s liveness probe — the call collides at first cursor open:
+
+{{{
+TypeError: psycopg_pool.pool.ConnectionPool() got multiple values for keyword argument 'check'
+}}}
+
+`CONN_HEALTH_CHECKS` does not gate this. With `True`, Django passes `check=ConnectionPool.check_connection`; with `False`, Django passes `check=None`. Either way the keyword is set, so any `check` in `pool_options` collides.
+
+Minimal `settings.py`:
+
+{{{
+#!python
+def my_check(conn):
+    conn.execute(""SELECT 1"").fetchone()
+
+DATABASES = {
+    ""default"": {
+        ""ENGINE"": ""django.db.backends.postgresql"",
+        ""NAME"": ""..."",
+        ""USER"": ""..."",
+        ""PASSWORD"": ""..."",
+        ""HOST"": ""..."",
+        ""PORT"": ""5432"",
+        ""CONN_HEALTH_CHECKS"": False,  # also fails with True
+        ""OPTIONS"": {
+            ""pool"": {
+                ""min_size"": 4,
+                ""max_size"": 20,
+                ""check"": my_check,
+            },
+        },
+    }
+}
+}}}
+
+== Expected behaviour ==
+
+A `""check""` callable provided in `OPTIONS[""pool""]` should win over Django's default. The documented contract for `OPTIONS[""pool""]` is that the dict is forwarded to `psycopg_pool.ConnectionPool`, and `check` is a public, documented `ConnectionPool.__init__` parameter — see [https://www.psycopg.org/psycopg3/docs/api/pool.html#psycopg_pool.ConnectionPool psycopg pool docs].
+
+== Use case / motivation ==
+
+The driving use case is '''AWS Aurora !PostgreSQL writer-flip handling'''. After a planned or unplanned writer failover, existing TCP connections survive but are now bound to a host that has become read-only. The default liveness probe (`SELECT 1`) does not detect this — the connection is ""alive"" but any subsequent `INSERT`/`UPDATE` fails with `cannot execute X in a read-only transaction`. AWS's [https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/AuroraPostgreSQL.BestPractices.FastFailover.html Fast failover with Aurora PostgreSQL guide] recommends chaining a `pg_is_in_recovery()` check into pool validation — exactly what `psycopg_pool`'s `check` callable parameter exists for. Django 5.x makes this impossible without subclassing `DatabaseWrapper` and overriding `pool`.
+
+== Proposed fix ==
+
+Use `setdefault` so `OPTIONS[""pool""][""check""]`, when present, takes precedence:
+
+{{{
+#!python
+enable_checks = self.settings_dict[""CONN_HEALTH_CHECKS""]
+pool_options.setdefault(
+    ""check"", ConnectionPool.check_connection if enable_checks else None
+)
+pool = ConnectionPool(
+    kwargs=connect_kwargs,
+    open=False,
+    configure=self._configure_connection,
+    **pool_options,
+)
+}}}
+
+This is fully backwards-compatible: users not setting `OPTIONS[""pool""][""check""]` get exactly today's behaviour. Users who do set it get their callable. No new public surface — `OPTIONS[""pool""]` is already documented as forwarding to `ConnectionPool`.
+
+The same shape would make future custom callables (`configure`, `reset`) overridable too, though that's out of scope here — `configure` in particular needs more thought because Django chains its own connection configuration.
+
+== Versions affected ==
+
+ * Django 5.0 onward (where pool support landed)
+ * Confirmed on Django 5.2.13 with psycopg 3.3.3 / psycopg-pool 3.3.0
+
+Happy to put up the patch + a regression test (assert that `OPTIONS[""pool""][""check""]` is the actual callable used, with both `CONN_HEALTH_CHECKS` values) if the maintainers agree this is the right shape.",Cleanup/optimization,closed,"Database layer (models, ORM)",5.2,Normal,fixed,postgresql psycopg pool,Raoni Timo de Castro Cambiaghi,Ready for checkin,1,0,0,0,0,0

@@ -567,15 +567,18 @@ class CurrentGrading(unittest.TestCase):
         grade["families"][0]["outcome"] = "unresolved"
         self.check()
 
-    def test_unresolved_claim_with_unknown_family_blocks_a_miss(self):
+    def test_unresolved_claim_blocks_a_miss_only_of_the_family_it_names(self):
         grade = assessed_grade(self.selected, self.documents, self.root)
-        self.documents["claim"]["claims"][0].update(adjudication=None, family_id=None)
-        grade["claims"][0].update(outcome="unresolved", family_id=None)
+        family = grade["families"][0]["family_id"]
+        self.documents["claim"]["claims"][0].update(adjudication=None, family_id=family)
+        grade["claims"][0].update(outcome="unresolved", family_id=family)
         grade["families"][0].update(outcome="missed", claim_ids=[], sufficiency="unassessed")
         self.seal()
         with self.assertRaisesRegex(current.Inconsistent, "unresolved family recovery cannot be missed"):
             self.check()
-        grade["families"][0]["outcome"] = "unresolved"
+        self.documents["claim"]["claims"][0]["family_id"] = None
+        grade["claims"][0]["family_id"] = None
+        self.seal()
         self.check()
 
     def test_fully_accounted_refuted_review_can_establish_a_miss(self):

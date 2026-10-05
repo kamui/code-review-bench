@@ -1,0 +1,249 @@
+diff --git a/packages/server/src/core/internals/utils.ts b/packages/server/src/core/internals/utils.ts
+index b1226f2d3b7..202bfe155ae 100644
+--- a/packages/server/src/core/internals/utils.ts
++++ b/packages/server/src/core/internals/utils.ts
+@@ -4,14 +4,12 @@ import { ProcedureParams } from '../procedure';
+ /**
+  * @internal
+  * Overwrite properties in `TType` with properties in `TWith`
+- * Only overwrites properties when both types are objects
+- * Otherwise it will overwrite the entire TType with TWith,
+- * unless TWith is never.
++ * Only overwrites properties when the type to be overwritten
++ * is an object. Otherwise it will just use the type from `TWith`.
+  */
+-export type Overwrite<TType, TWith> = TType extends object
+-  ? TWith extends object
+-    ? // Both TType and TWith are objects: overwrite key-by-key
+-      {
++export type Overwrite<TType, TWith> = TWith extends any
++  ? TType extends object
++    ? {
+         [K in  // Exclude index signature from keys
+           | keyof WithoutIndexSignature<TType>
+           | keyof WithoutIndexSignature<TWith>]: K extends keyof TWith
+@@ -24,15 +22,7 @@ export type Overwrite<TType, TWith> = TType extends object
+         : number extends keyof TWith
+         ? { [key: number]: TWith[number] }
+         : object)
+-    : TWith extends any
+-    ? // TWith is not an object but some non-never type, so fully overwrite TType
+-      TWith
+-    : never
+-  : TType extends any
+-  ? TWith extends any
+-    ? // Same as above: just overwrite TType with TWith
+-      TWith
+-    : TType
++    : TWith
+   : never;
+ 
+ /**
+diff --git a/packages/server/src/types.ts b/packages/server/src/types.ts
+index eeb97684123..8b4cbe4e782 100644
+--- a/packages/server/src/types.ts
++++ b/packages/server/src/types.ts
+@@ -123,7 +123,7 @@ export type DeepPartial<TObject> = TObject extends object
+  * type information about the keys and only the index signature will remain.
+  * @internal
+  */
+-export type WithoutIndexSignature<TObj extends object> = {
++export type WithoutIndexSignature<TObj> = {
+   [K in keyof TObj as string extends K
+     ? never
+     : number extends K
+diff --git a/packages/tests/package.json b/packages/tests/package.json
+index 15b4b81940a..9438057ea10 100644
+--- a/packages/tests/package.json
++++ b/packages/tests/package.json
+@@ -14,7 +14,8 @@
+     "test-watch:vitest": "vitest",
+     "test-watch:tsc": "tsc --noEmit --pretty --watch",
+     "test-ci": "concurrently \"CI=true vitest --coverage\" npm:test-run:tsc",
+-    "test-ui": "vitest --ui"
++    "test-ui": "vitest --ui",
++    "ts-watch": "tsc --watch"
+   },
+   "dependencies": {
+     "@cloudflare/workers-types": "^4.0.0",
+diff --git a/packages/tests/server/regression/issue-5034-input-with-index-signature.test.ts b/packages/tests/server/regression/issue-5034-input-with-index-signature.test.ts
+index a65dbf847a0..0c16da61aad 100644
+--- a/packages/tests/server/regression/issue-5034-input-with-index-signature.test.ts
++++ b/packages/tests/server/regression/issue-5034-input-with-index-signature.test.ts
+@@ -1,4 +1,10 @@
+-import { inferRouterInputs, inferRouterOutputs, initTRPC } from '@trpc/server';
++import {
++  inferRouterInputs,
++  inferRouterOutputs,
++  initTRPC,
++  Overwrite,
++  Simplify,
++} from '@trpc/server';
+ import * as z from 'zod';
+ 
+ export function hardcodedExample() {
+@@ -8,6 +14,7 @@ export function hardcodedExample() {
+ }
+ 
+ const t = initTRPC.create();
++const symbol = Symbol('symbol');
+ const appRouter = t.router({
+   inputWithIndexSignature: t.procedure
+     .input(hardcodedExample())
+@@ -21,6 +28,22 @@ const appRouter = t.router({
+     .query(({ input }) => {
+       return input;
+     }),
++  middlewareWithSymbolKey: t.procedure
++    .use((opts) =>
++      opts.next({
++        ctx: {
++          foo: 'bar',
++          [symbol]: true,
++        } as const,
++      }),
++    )
++    .query((opts) => {
++      expectTypeOf(opts.ctx).toMatchTypeOf<{
++        foo: 'bar';
++        [symbol]: true;
++      }>();
++      return opts.ctx;
++    }),
+ });
+ type AppRouter = typeof appRouter;
+ 
+@@ -60,4 +83,44 @@ describe('inferRouterInputs/inferRouterOutputs', () => {
+     expectTypeOf<Input>().toEqualTypeOf<{ name: string }>();
+     expectTypeOf<Output>().toEqualTypeOf<{ name: string }>();
+   });
++
++  test('middleware with symbol key', async () => {
++    type Input = AppRouterInputs['middlewareWithSymbolKey'];
++    type Output = AppRouterOutputs['middlewareWithSymbolKey'];
++
++    expectTypeOf<Output>().toEqualTypeOf<{
++      foo: 'bar';
++      // symbol is stripped as part of SerializeObject
++    }>();
++  });
++
++  test('Overwrite util', () => {
++    type A = {
++      a: string;
++    };
++    type B = {
++      b: string;
++      [symbol]: true;
++    };
++    type C = {
++      a: number;
++      c: string;
++    };
++
++    type AB = Overwrite<A, B>;
++    type ABC = Overwrite<AB, C>;
++
++    expectTypeOf<AB>().toEqualTypeOf<{
++      a: string;
++      b: string;
++      [symbol]: true;
++    }>();
++
++    expectTypeOf<ABC>().toEqualTypeOf<{
++      a: number;
++      b: string;
++      c: string;
++      [symbol]: true;
++    }>();
++  });
+ });
+diff --git a/packages/tests/server/regression/issue-5037-context-inference.test.ts b/packages/tests/server/regression/issue-5037-context-inference.test.ts
+new file mode 100644
+index 00000000000..0b56e0c6bc8
+--- /dev/null
++++ b/packages/tests/server/regression/issue-5037-context-inference.test.ts
+@@ -0,0 +1,69 @@
++import { inferRouterOutputs, initTRPC } from '@trpc/server';
++import { z } from 'zod';
++
++/**
++ * See @sentry/node trpc middleware:
++ * https://github.com/getsentry/sentry-javascript/blob/6d424571e3cd5e99991b711f4e23d773e321e294/packages/node/src/handlers.ts#L328
++ */
++interface TrpcMiddlewareArguments<T> {
++  path: string;
++  type: string;
++  next: () => T;
++  rawInput: unknown;
++}
++
++/**
++ * See @sentry/node trpc middleware:
++ * https://github.com/getsentry/sentry-javascript/blob/6d424571e3cd5e99991b711f4e23d773e321e294/packages/node/src/handlers.ts#L328
++ */
++function sentryTrpcMiddleware(_options: any) {
++  return function <T>({
++    path,
++    type,
++    next,
++    rawInput,
++  }: TrpcMiddlewareArguments<T>): T {
++    path;
++    type;
++    next;
++    rawInput;
++
++    // This function is effectively what @sentry/node does to provide its trpc middleware.
++    return null as any as T;
++  };
++}
++
++type Context = {
++  some: 'prop';
++};
++
++describe('context inference w/ middlewares', () => {
++  test('a base procedure using a generically constructed middleware should be extensible using another middleware', async () => {
++    const t = initTRPC.context<Context>().create();
++
++    const baseMiddleware = t.middleware(sentryTrpcMiddleware({ foo: 'bar' }));
++
++    const someMiddleware = t.middleware(async (opts) => {
++      return opts.next({
++        ctx: {
++          object: {
++            a: 'b',
++          },
++        },
++      });
++    });
++
++    const baseProcedure = t.procedure.use(baseMiddleware);
++    const bazQuxProcedure = baseProcedure.use(someMiddleware);
++
++    const appRouter = t.router({
++      foo: bazQuxProcedure.input(z.string()).query(({ ctx }) => ctx),
++    });
++    type Output = inferRouterOutputs<typeof appRouter>['foo'];
++
++    expectTypeOf<Output>().toEqualTypeOf<{
++      object: { a: string };
++      some: 'prop';
++    }>();
++  });
++});
+diff --git a/tsconfig.build.json b/tsconfig.build.json
+index 90ec27366fb..40b9b5fd3c6 100644
+--- a/tsconfig.build.json
++++ b/tsconfig.build.json
+@@ -14,7 +14,8 @@
+     "noUncheckedIndexedAccess": true,
+     "moduleResolution": "node",
+     "jsx": "react",
+-    "esModuleInterop": true
++    "esModuleInterop": true,
++    "skipLibCheck": true
+   },
+   "exclude": ["test", "**/*.test.ts", "**/*.test.tsx"]
+ }
