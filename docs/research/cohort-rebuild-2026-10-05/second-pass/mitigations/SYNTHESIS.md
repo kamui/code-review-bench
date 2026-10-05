@@ -13,11 +13,11 @@ After the review of the nine the user asked for action on three lessons ([P10](.
 
 | Finding | Built | From |
 | --- | --- | --- |
-| The check passed `searched: ["x"]` and a "problem" over "no promise found" | [`bench/tools/ruling_dossier.py`](../../../../bench/tools/ruling_dossier.py): six named searches, each a query, a saved response, hits and read counts; the recommendation must follow from promise and delivery | Candidate 1's prototype |
+| The check passed `searched: ["x"]` and a "problem" over "no promise found" | [`bench/tools/ruling_dossier.py`](../../../../../bench/tools/ruling_dossier.py): six named searches, each a query, a saved response, hits and read counts; the recommendation must follow from promise and delivery | Candidate 1's prototype |
 | "Null means did not look" came back as a free `none` | A place is `checked`, `not-applicable` with a reason, or `blocked`; a blocked search cannot support "not promised" | Candidate 2, the judge |
 | `duplicate` was exempt, though a duplicate that widens a family is exactly the pyOpenSSL case | A duplicate still needs its promise | Candidate 2, the judge |
 | Old dossiers would be rewritten, losing the first recommendation | `refresh.json` and a supplement are laid over the first summary, which stays as written | Candidate 2, the judge |
-| Nothing recorded each party's first answer | [`bench/tools/ruling_record.py`](../../../../bench/tools/ruling_record.py): a before-record written and committed before the user is asked, and an after-record that pins it | Candidate 1's prototype; the pin and `exposure` from candidate 2 |
+| Nothing recorded each party's first answer | [`bench/tools/ruling_record.py`](../../../../../bench/tools/ruling_record.py): a before-record written and committed before the user is asked, and an after-record that pins it | Candidate 1's prototype; the pin and `exposure` from candidate 2 |
 | The cases that stay with the user were five sentences to remember | Computed from the record: assessors disagree, the recommendation differs from theirs, a named gap or conflict, no earlier ruling of that shape, a clause from one ruling or from the ruling in question or never tested, a change to a saved ruling | Candidate 1; "recommender against the assessors" from both |
 | A recovery question with agreeing assessors printed "no recorded reason" | The kind of decision is a reason: recovery, grouping, band and control are the user's under ADR-0006 | Candidate 2 |
 | A precedent decided under the old reading does not look like a changed ruling | A nearest ruling whose reading is `earlier` and that was not shown again is a reason | The judge |
@@ -25,8 +25,8 @@ After the review of the nine the user asked for action on three lessons ([P10](.
 | Which rulings a clause came from was known only by reading | [`terms/two-questions.v4.clauses.json`](../terms/two-questions.v4.clauses.json): 32 clauses, `from` apart from `tested_on` | Candidate 1; the split from candidate 2 |
 | Nothing fails when a record is never written | A test: every second-pass ruling from the eleventh on has its before-record, and every saved record is sound | The judge |
 | The surprise record said match or miss, not which way | A surprise against the first recommendation says whether it was more lenient or stricter | The judge |
-| The rule overstated several rulings | [`terms/two-questions.v4.md`](../terms/two-questions.v4.md) and the section in [`docs/finding-threshold.md`](../../../finding-threshold.md), corrected clause by clause | Candidate 1's text; the cut-off, outside data and "built" from candidate 2 |
-| The asking session was told to "find the promise yourself" | [`docs/claim-adjudication.md`](../../../claim-adjudication.md), "Prepare a ruling": do not ask on a failing directory; write the record before asking; the rule sentence goes in the option | Both |
+| The rule overstated several rulings | [`terms/two-questions.v4.md`](../terms/two-questions.v4.md) and the section in [`docs/finding-threshold.md`](../../../../finding-threshold.md), corrected clause by clause | Candidate 1's text; the cut-off, outside data and "built" from candidate 2 |
+| The asking session was told to "find the promise yourself" | [`docs/claim-adjudication.md`](../../../../claim-adjudication.md), "Prepare a ruling": do not ask on a failing directory; write the record before asking; the rule sentence goes in the option | Both |
 | The diagnosis on file was wrong for one failure | Corrected in the discussion record and the checklist: in the pyOpenSSL case the quotation was in the dossier and was misread | Both noticed; the judge asked for the correction |
 
 Version 4 keeps "the first rule that applies decides". Candidate 2 proposed weighing the clauses together; the ordered rule is the one that was tested, and a conflict between two rules is now recorded and sent to the user.
