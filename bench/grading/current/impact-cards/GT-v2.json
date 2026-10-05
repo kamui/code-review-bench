@@ -7,19 +7,21 @@
     "relation": "introduced",
     "reason": "The new pool is cached per alias and keeps the connection parameters it was created with."
   },
-  "consequence": "When the alias pool exists before test setup switches the database NAME, migrations and tests run against the original database and can alter its data.",
-  "exposure": "Pooling enabled, with the pool created before create_test_db changes NAME, through earlier access or the fallback used when the postgres database is unavailable.",
+  "consequence": "As before, migrations and tests can run on the original database while the wrapper reports the test database; in the run through the fallback every test reported the original database and the original database received the project's table. In addition, forked parallel workers whose settings name their own clone all query the un-cloned test database, tests fail on rows written by another worker, and the test command did not print its summary. With the postgres database unavailable, cloning for --parallel stops with 'source database \"<name>\" is being accessed by other users' and no test runs.",
+  "exposure": "Test runs with the pool enabled in the test settings. The original case needs a pool for the alias before create_test_db, by earlier access or by the fallback used when the login role cannot connect to the postgres database. The worker case needs the fork start method and a query on the alias in the parent between the last clone and the fork; a project without such a query was not affected in the run. The clone case needs the postgres database to be unavailable and --parallel.",
   "controls": "None. The operations succeed against the wrong database.",
   "reversibility": "The register says only that these operations can alter the original data.",
   "workload": null,
   "change_activity": null,
   "grouping": {
     "state": "confirmed",
-    "reason": "Separate from the other pool families."
+    "reason": "One fault: the pool is bound to the alias and not to the database that test setup has selected, and closing the connection does not release it. The three cases are the same lines reached at create_test_db, at worker setup and through the fallback wrapper. It differs from several processes sharing one socket after a fork, which also occurs with the correct database and outside the test runner, and from GT-v1, which concerns role setup when a connection is first acquired."
   },
   "limits": [
-    "No live migration or server ran. The cached parameters and the migration caller were inspected.",
-    "No modification of real data was observed."
+    "Run: manage.py test with and without --parallel 2 on a small project at both commits, with and without the pool, with the postgres database reachable and with a login role that cannot connect to it; a database-tagged system check that queries; a second alias with a post_migrate handler that queries the default alias; the clone statement through the fallback in isolation, counting sessions on the template. PostgreSQL 16, psycopg 3.3.6, psycopg_pool 3.3.3. The final DROP of the test database through the fallback fails with 'cannot drop the currently open database' at both commits, with or without the pool; that behaviour is not part of this problem.",
+    "Not run: a pool initialized by earlier access before create_test_db without the fallback, which the original wording names; the spawn start method; Django's own test suite with pooled settings.",
+    "Read: the diff; create_test_db, setup_worker_connection, _clone_test_db and _nodb_cursor; the pre-merge review thread showing that an earlier revision disabled pooling for the fallback and that this was removed; the same functions on the upstream main branch, unchanged as of 2026-10-03.",
+    "Reported: nothing."
   ],
   "evidence": [
     {
@@ -27,36 +29,88 @@
       "sha256": "8cdefa665caf07bded7f97197cb7a5039b268910149a687190233bbae26cefba"
     },
     {
-      "path": "docs/research/selected-pr-adjudication-2026-09-30/evidence/probes/v-django-17914-base.txt",
-      "sha256": "63e850a9183811f79f8ac6ab0a5e3379e114bf11010cd7db9c71232bbd2576be"
+      "path": "docs/research/cohort-rebuild-2026-10-05/candidates/v-django-17914/dossiers/D1a.md",
+      "sha256": "6ea3d4b1bfd5395e710b799270a44e7e5f45d778c2b0b96a0a0a2da823ae9a49"
     },
     {
-      "path": "docs/research/selected-pr-adjudication-2026-09-30/evidence/probes/v-django-17914-head.txt",
-      "sha256": "c693d0fdb77c9720c24f2af44b01d26f7bcbcbb660e641c28d801b464212e6da"
+      "path": "docs/research/cohort-rebuild-2026-10-05/candidates/v-django-17914/dossiers/D6.md",
+      "sha256": "4f88f99e80bb89fb73788da27861159d73e3ce90851f3bd578ddd8610e1638fc"
     },
     {
-      "path": "docs/research/selected-pr-adjudication-2026-09-30/evidence/v-django-17914/change.diff",
-      "sha256": "8354d24407d4b4d0d8a22298ef41dab01b890c53f2bac489c01bb0d2316a998d"
+      "path": "docs/research/cohort-rebuild-2026-10-05/candidates/v-django-17914/probes/D1/run_parallel.sh",
+      "sha256": "b9c193a77dd29609da4d0d6ea9b088e464a43f61e01eaf9b5927c043048f1636"
     },
     {
-      "path": "docs/research/selected-pr-adjudication-2026-09-30/evidence/v-django-17914/head/django/db/backends/base/creation.py",
-      "sha256": "00540bff1cf8f23633653747977af777fdafff11b224c30435798451c6d1bf8f"
+      "path": "docs/research/cohort-rebuild-2026-10-05/candidates/v-django-17914/probes/D1/run_all.sh",
+      "sha256": "56859ccf169ee06d3f3f319d4ecad8866be11ff3d7c8325dbd626c205528d63a"
     },
     {
-      "path": "docs/research/selected-pr-adjudication-2026-09-30/evidence/v-django-17914/head/django/db/backends/postgresql/base.py",
-      "sha256": "7ce477bc59673b1fcfd4a152d3e1dcf648c86407824f78bd99186c771e063d81"
+      "path": "docs/research/cohort-rebuild-2026-10-05/candidates/v-django-17914/probes/D1/project/settings.py",
+      "sha256": "fdf94b148043a5c1a8ebdc154ce9b00c95d77c004157fef0e5707ac46ab8d0fc"
     },
     {
-      "path": "docs/research/selected-pr-adjudication-2026-09-30/evidence/v-django-17914/head/django/db/backends/postgresql/creation.py",
+      "path": "docs/research/cohort-rebuild-2026-10-05/candidates/v-django-17914/probes/D1/project/t/apps.py",
+      "sha256": "572598447b0894d0d6fd76dcfce451147b43b17be90d957e4dfb2590aa7b1dd7"
+    },
+    {
+      "path": "docs/research/cohort-rebuild-2026-10-05/candidates/v-django-17914/probes/D1/project/t/checks.py",
+      "sha256": "6905a0db95e03cf78b5935ae78acfbbe52aa40a2645ad237c775ffc1d2d58cda"
+    },
+    {
+      "path": "docs/research/cohort-rebuild-2026-10-05/candidates/v-django-17914/probes/D1/project/t/tests.py",
+      "sha256": "aa70611cd33684e96613843bf284913a1d86373f622d5c3b528a2e51b7bfec01"
+    },
+    {
+      "path": "docs/research/cohort-rebuild-2026-10-05/candidates/v-django-17914/probes/D1/result-base.txt",
+      "sha256": "b6fdfcb68255c938acdba1a429d0393e5dba21445710e35b916e6a1b02b7b800"
+    },
+    {
+      "path": "docs/research/cohort-rebuild-2026-10-05/candidates/v-django-17914/probes/D1/result-head.txt",
+      "sha256": "3de727545fb11430f701f20a3a4429b6299573cf5d72cc3a0058ce991c63dded"
+    },
+    {
+      "path": "docs/research/cohort-rebuild-2026-10-05/candidates/v-django-17914/probes/D1/environment.txt",
+      "sha256": "c212a0e1353f0484fe1bc2358e4956adfff9e18797338b1b4277576550daf0c0"
+    },
+    {
+      "path": "docs/research/cohort-rebuild-2026-10-05/candidates/v-django-17914/probes/D6/run_fallback.sh",
+      "sha256": "c14a8a842a2609200a460b2be58afadd2197d64de6c7821559a756c21bb44356"
+    },
+    {
+      "path": "docs/research/cohort-rebuild-2026-10-05/candidates/v-django-17914/probes/D6/probe_clone.py",
+      "sha256": "8b607e36d82187c93764bae474ef60c7b8c760f05d0d9834484bd76b8b058fdd"
+    },
+    {
+      "path": "docs/research/cohort-rebuild-2026-10-05/candidates/v-django-17914/probes/D6/result-base.txt",
+      "sha256": "8542dfdc3c408f05a8b6b6d58698d73fa10c99f9f5cf458aa7f37beb38dcb469"
+    },
+    {
+      "path": "docs/research/cohort-rebuild-2026-10-05/candidates/v-django-17914/probes/D6/result-head.txt",
+      "sha256": "7472258c70a39def68e5e71eefb4be3ce5c08038498cad8dd9d39527fcb58ccb"
+    },
+    {
+      "path": "docs/research/cohort-rebuild-2026-10-05/candidates/v-django-17914/probes/D6/environment.txt",
+      "sha256": "274c64680fbccbfc545460d1475e8934dab9d625ad9c207e986c530c1a575447"
+    },
+    {
+      "path": "docs/research/cohort-rebuild-2026-10-05/candidates/v-django-17914/upstream/pr-17914-review-comments.json",
+      "sha256": "57c83647608cb02691504e22150fa22851ea20cc89c36b5d58b863dfb2ef637c"
+    },
+    {
+      "path": "docs/research/cohort-rebuild-2026-10-05/candidates/v-django-17914/upstream/pr-17594-review-comments.json",
+      "sha256": "b7e4c577a0b1bbd6b3cae5aa146fe6b460b837e05d7794b66d1a493a68cc3553"
+    },
+    {
+      "path": "docs/research/cohort-rebuild-2026-10-05/candidates/v-django-17914/upstream/main--django_db_backends_postgresql_base.py",
+      "sha256": "6bed565f8e0a9b969cd3fb973ef8c5c14a0eb0c4151c77f99ae3f0faf5226fa6"
+    },
+    {
+      "path": "docs/research/cohort-rebuild-2026-10-05/candidates/v-django-17914/upstream/main--django_db_backends_postgresql_creation.py",
       "sha256": "a59602ceaf3dde370c77c8e19d41f6b2e05a382f4bae44eda419fd81da6ac536"
     },
     {
-      "path": "docs/research/selected-pr-adjudication-2026-09-30/evidence/probes/django-pool-probe.py",
-      "sha256": "f641eed42a21c812d670b5cfc65ea80550f7b06a9fa099c853ca1f38c7755e95"
-    },
-    {
-      "path": "docs/research/selected-pr-triage-arena-2026-09-30/candidates/sol/v-django-17914-head-rerun.txt",
-      "sha256": "c693d0fdb77c9720c24f2af44b01d26f7bcbcbb660e641c28d801b464212e6da"
+      "path": "docs/research/cohort-rebuild-2026-10-05/candidates/v-django-17914/upstream/main--django_db_backends_base_creation.py",
+      "sha256": "2697faf70ca7c3e99811e9fb68748a96b0f0fcb27ed32046a83ff8c5a4b98531"
     }
   ]
 }

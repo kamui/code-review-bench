@@ -1,0 +1,402 @@
+---
+title: Vercel Primitives
+product: vercel
+url: /docs/build-output-api/primitives
+canonical_url: "https://vercel.com/docs/build-output-api/primitives"
+last_updated: 2025-03-04
+type: reference
+prerequisites:
+  - /docs/build-output-api
+related:
+  - /docs/cdn
+  - /docs/build-output-api/configuration
+  - /docs/skew-protection
+  - /docs/environment-variables/system-environment-variables
+  - /docs/functions
+summary: Learn about the Vercel platform primitives and how they work together to create a Vercel Deployment.
+install_vercel_plugin: npx plugins add vercel/vercel-plugin
+---
+
+# Vercel Primitives
+
+The following directories, code files, and configuration files represent all Vercel platform primitives.
+These primitives are the "building blocks" that make up a Vercel Deployment.
+
+
+<!-- docsgraph:related -->
+## Related pages
+
+> **For AI agents:** Follow these links to understand how this page connects to the rest of the Vercel ecosystem. For the full cross-link map (inbound, outbound, prerequisites, and semantic neighbors), see the .graph.md link below.
+
+- [Optimized CDN caching and deploying of immutable static assets](https://vercel.com/changelog/optimized-cdn-caching-and-deploying-of-immutable-static-assets?from=related&source_path=%2Fdocs%2Fbuild-output-api%2Fprimitives&source_site=vercel-docs&relationship=related)
+- [Next.js 16.3 support on Vercel](https://vercel.com/blog/vercel-supports-next-js-16-3?from=related&source_path=%2Fdocs%2Fbuild-output-api%2Fprimitives&source_site=vercel-docs&relationship=related)
+- [Build your own web framework](https://vercel.com/blog/build-your-own-web-framework?from=related&source_path=%2Fdocs%2Fbuild-output-api%2Fprimitives&source_site=vercel-docs&relationship=related)
+- [Programmatic Configuration with vercel.ts](https://vercel.com/docs/project-configuration/vercel-ts?from=related&source_path=%2Fdocs%2Fbuild-output-api%2Fprimitives&source_site=vercel-docs&relationship=related) — Define your Vercel configuration in vercel.ts with @vercel/config for type-safe routing and build settings.
+- [Features](https://vercel.com/docs/build-output-api/features?from=related&source_path=%2Fdocs%2Fbuild-output-api%2Fprimitives&source_site=vercel-docs&relationship=related) — Learn how to implement common Vercel platform features through the Build Output API.
+- [Advanced Configuration](https://vercel.com/docs/functions/configuring-functions/advanced-configuration?from=related&source_path=%2Fdocs%2Fbuild-output-api%2Fprimitives&source_site=vercel-docs&relationship=related) — Learn how to add utility files to the /api directory, and bundle Vercel Functions.
+- [Static Configuration with vercel.json](https://vercel.com/docs/project-configuration/vercel-json?from=related&source_path=%2Fdocs%2Fbuild-output-api%2Fprimitives&source_site=vercel-docs&relationship=related) — Learn how to use vercel.json to configure and override the default behavior of Vercel from within your project.
+- [SvelteKit on Vercel](https://vercel.com/docs/frameworks/full-stack/sveltekit?from=related&source_path=%2Fdocs%2Fbuild-output-api%2Fprimitives&source_site=vercel-docs&relationship=related) — Deploy SvelteKit applications to Vercel and configure the adapter, rendering, streaming, ISR, analytics, and Routing Mid
+
+Full cross-link map for this page: [/docs/build-output-api/primitives.graph.md](/docs/build-output-api/primitives.graph.md?from=related&source_path=%2Fdocs%2Fbuild-output-api%2Fprimitives&source_site=vercel-docs&relationship=graph)
+<!-- /docsgraph:related -->
+
+Files outside of these directories are ignored and will not be served to visitors.
+
+## Static files
+
+**Static Files Directory**: `.vercel/output/static`
+
+<br />
+
+[`vercel/examples/build-output-api/static-files`](https://github.com/vercel/examples/tree/main/build-output-api/static-files)
+
+<br />
+
+Static files that are *publicly accessible* from the Deployment URL should be placed in the `.vercel/output/static` directory.
+
+These files are served with the [Vercel Edge CDN](/docs/cdn).
+
+Files placed within this directory will be made available at the root (`/`) of the Deployment URL and neither their contents, nor their file name or extension will be modified in any way. Sub directories within `static` are also retained in the URL, and are appended before the file name.
+
+### Configuration
+
+There is no standalone configuration file that relates to static files.
+
+However, certain properties of static files (such as the `Content-Type` response header) can be modified by utilizing the [`overrides` property of the `config.json` file](/docs/build-output-api/configuration#overrides).
+
+### Directory structure for static files
+
+The following example shows static files placed into the `.vercel/output/static` directory:
+
+<br />
+
+<br />
+
+- `.vercel/`
+  - `output/`
+    - `static/`
+      - `images/`
+        - `avatar.png`
+      - `favicon.png`
+      - `client-side-bundle.js`
+      - `robots.txt`
+
+### Immutable static files
+
+**Immutable Static Files Directory**: `.vercel/output/static/_vercel/immutable/`
+
+Regular static files are scoped to a particular deployment (see also [Skew Protection](/docs/skew-protection)), but with immutable static files, you can have files that are shared across deployments by omitting the `?dpl` query parameter from the URL, which improves cross-deployment request caching.
+For example a request like `/_vercel/immutable/chunks/031du1f_9y2qz.js` will continue to be routed to the same file even if the latest deployment does not contain that file anymore (and would thus have resulted in a 404 because of Skew Protection).
+
+These files must be content-addressed by their filepath and newer deployments must never overwrite an existing file with a different content.
+
+One difference between regular static files and immutable static files is that immutable static files are always served with the routing config of the latest deployment, even if the file is being requested from a previous deployment.
+
+The `VERCEL_HASH_SALT` ([system environment variable](/docs/environment-variables/system-environment-variables)) should be factored into the hashes to provide a way to rotate the file names.
+
+<br />
+
+**Immutable Static Files Manifest**: `.vercel/output/immutable.json`
+
+In addition to the files in `.vercel/output/static`, you have to emit a manifest `.vercel/output/immutable.json` that contains a mapping of all immutable static files and their full content hashes (because the filename might only contain a truncated hash):
+
+```jsonc
+{
+  "version": 1,
+  "hashes": {
+    "/_vercel/immutable/chunks/031du1f_9y2qz.js": "031du1f_9y2qzq-eul6pnkg4f",
+    ...
+  }
+}
+```
+
+The deployment will fail if a hash collision was detected (i.e. a file already exists but with a different content hash). In this unlikely event, `VERCEL_HASH_SALT` can be rotated to generate a different filename to unblock the deployment.
+
+Note that it's entirely valid to just specify the filename as the full content hash in the manifest, if you feel comfortable with the entropy already contained in the filename.
+
+## Functions
+
+**Functions Directory**: `.vercel/output/functions`
+
+<br />
+
+[`vercel/examples/build-output-api/serverless-functions`](https://github.com/vercel/examples/tree/main/build-output-api/serverless-functions)
+
+<br />
+
+A [Vercel Function](/docs/functions) is represented on the file system as
+a directory with a `.func` suffix on the name, contained within the `.vercel/output/functions` directory.
+
+Conceptually, you can think of this `.func` directory as a filesystem mount for a Vercel Function:
+the files below the `.func` directory are included (recursively) and files above the `.func` directory are not included.
+Private files may safely be placed within this directory
+because they will not be directly accessible to end-users. However, they can be referenced by code
+that will be executed by the Vercel Function.
+
+A `.func` directory may be a symlink to another `.func` directory in cases where you want to have more than one path point to the same underlying Vercel Function.
+
+A configuration file named `.vc-config.json` **must** be included within the `.func` directory,
+which contains information about how Vercel should construct the Vercel Function.
+
+The `.func` suffix on the directory name is *not included* as part of the URL path of Vercel Function on the Deployment.
+For example, a directory located at `.vercel/output/functions/api/posts.func` will be accessible at the URL path `/api/posts` of the Deployment.
+
+### Serverless function configuration
+
+**Functions Config File**: `.vercel/output/functions/<name>.func/.vc-config.json`
+
+<br />
+
+The `.vc-config.json` configuration file contains information related to how the Vercel Function will be created by Vercel.
+
+#### Base config
+
+```ts
+type ServerlessFunctionConfig = {
+  handler: string;
+  runtime: string;
+  memory?: number;
+  maxDuration?: number;
+  environment?: Record<string, string>;
+  regions?: string[];
+  supportsWrapper?: boolean;
+  supportsResponseStreaming?: boolean;
+};
+```
+
+| Key                           | [Type](/docs/rest-api#types) | Required | Description                                                                                                                                               |
+| ----------------------------- | ----------------------------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **runtime**                   | [String](/docs/rest-api#types)       | Yes      | Specifies which "runtime" will be used to execute the Vercel Function. See [Runtimes](/docs/functions/runtimes) for more information.                     |
+| **handler**                   | [String](/docs/rest-api#types)       | Yes      | Indicates the initial file where code will be executed for the Vercel Function.                                                                           |
+| **memory**                    | [Integer](/docs/rest-api#types)      | No       | Amount of memory (RAM in MB) that will be allocated to the Vercel Function. See [memory size limits](/docs/functions/limitations#memory-size-limits) for more information. |
+| **architecture**              | [String](/docs/rest-api#types)       | No       | Specifies the instruction set "architecture" the Vercel Function supports. Either `x86_64` or `arm64`. The default value is `x86_64`.                     |
+| **maxDuration**               | [Integer](/docs/rest-api#types)      | No       | Maximum duration (in seconds) that will be allowed for the Vercel Function. See [max duration](/docs/functions/limitations#max-duration) for more information. |
+| **environment**               | [Map](/docs/rest-api#types)          | No       | Map of additional environment variables that will be available to the Vercel Function, in addition to the env vars specified in the Project Settings.     |
+| **regions**                   | [String\[\]](/docs/rest-api#types)     | No       | List of Vercel Regions where the Vercel Function will be deployed to.                                                                                     |
+| **supportsWrapper**           | [Boolean](/docs/rest-api#types)      | No       | True if a custom runtime has support for Lambda runtime wrappers.                                                                                         |
+| **supportsResponseStreaming** | [Boolean](/docs/rest-api#types)      | No       | When true, the Vercel Function will stream the response to the client.                                                                                    |
+
+#### Node.js config
+
+This extends the [Base Config](#base-config) for Node.js Functions.
+
+```ts
+type NodejsServerlessFunctionConfig = ServerlessFunctionConfig & {
+  launcherType: 'Nodejs';
+  shouldAddHelpers?: boolean; // default: false
+  shouldAddSourcemapSupport?: boolean; // default: false
+};
+```
+
+| Key                           | [Type](/docs/rest-api#types) | Required | Description                                                                                                                                    |
+| ----------------------------- | ----------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| **launcherType**              | "Nodejs"                                                                | Yes      | Specifies which launcher to use. Currently only "Nodejs" is supported.                                                                         |
+| **shouldAddHelpers**          | [Boolean](/docs/rest-api#types)      | No       | Enables request and response helpers methods.                                                                                                  |
+| **shouldAddSourcemapSupport** | [Boolean](/docs/rest-api#types)      | No       | Enables source map support for stack traces at runtime.                                                                                        |
+| **awsLambdaHandler**          | [String](/docs/rest-api#types)       | No       | [AWS Handler Value](https://docs.aws.amazon.com/lambda/latest/dg/nodejs-handler.html) for when the serverless function uses AWS Lambda syntax. |
+
+#### Node.js config example
+
+This is what the `.vc-config.json` configuration file could look like in a real scenario:
+
+```json
+{
+  "runtime": "nodejs22.x",
+  "handler": "serve.js",
+  "maxDuration": 3,
+  "launcherType": "Nodejs",
+  "shouldAddHelpers": true,
+  "shouldAddSourcemapSupport": true
+}
+```
+
+### Directory structure for Functions
+
+The following example shows a directory structure where the Vercel Function will be accessible at the `/serverless` URL path of the Deployment:
+
+- `.vercel/`
+  - `output/`
+    - `functions/`
+      - `serverless.func/`
+        - `node_modules/`
+          - `.../`
+        - `.vc-config.json`
+        - `serve.js`
+        - `data.sqlite`
+
+<br />
+
+<br />
+
+## Functions with Edge Runtime
+
+**Functions with Edge Runtime Directory**: `.vercel/output/functions`
+
+<br />
+
+[`vercel/examples/build-output-api/edge-functions`](https://github.com/vercel/examples/tree/main/build-output-api/edge-functions)
+
+<br />
+
+A [Function with Edge Runtime](/docs/functions) is represented on the file system as
+a directory with a `.func` suffix on the name, contained within the `.vercel/output/functions` directory.
+
+The `.func` directory requires at least one JavaScript or TypeScript source file which will serve as the `entrypoint` of the function. Additional source files may also be included in the `.func` directory. All imported source files will be *bundled* at build time.
+
+WebAssembly (Wasm) files may also be placed in this directory for a Function with Edge Runtime to import.
+See [Using a WebAssembly file](/docs/functions/runtimes/wasm) for more information.
+
+A configuration file named `.vc-config.json` **must** be included within the `.func` directory, which contains information about how Vercel should configure the Function with Edge Runtime.
+
+The `.func` suffix is *not included* in the URL path. For example, a directory located at `.vercel/output/functions/api/edge.func` will be accessible at the URL path `/api/edge` of the Deployment.
+
+### Supported content types
+
+Functions with Edge Runtime will bundle an `entrypoint` and all supported source files that are imported by that `entrypoint`. The following list includes all supported content types by their common file extensions.
+
+- `.js`
+- `.json`
+- `.wasm`
+
+### Function with Edge Runtime configuration
+
+**Function with Edge Runtime Config File**: `.vercel/output/functions/<name>.func/.vc-config.json`
+
+<br />
+
+The `.vc-config.json` configuration file contains information related to how the Function with Edge Runtime will be created by Vercel.
+
+```ts
+type EdgeFunctionConfig = {
+  runtime: 'edge';
+  entrypoint: string;
+  envVarsInUse?: string[];
+  regions?: 'all' | string | string[];
+};
+```
+
+| Key              | [Type](/docs/rest-api#types) | Required | Description                                                                                                                                                                        |
+| ---------------- | ----------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **runtime**      | ["edge"](/docs/rest-api#types)       | Yes      | The `runtime: "edge"` property is required to indicate that this directory represents a Function with Edge Runtime.                                                               |
+| **entrypoint**   | [String](/docs/rest-api#types)       | Yes      | Indicates the initial file where code will be executed for the Function with Edge Runtime.                                                                                         |
+| **envVarsInUse** | [String\[\]](/docs/rest-api#types)     | No       | List of environment variable names that will be available for the Function with Edge Runtime to utilize.                                                                           |
+| **regions**      | [String\[\]](/docs/rest-api#types)     | No       | List of regions or a specific region that the edge function will be available in, defaults to `all`. [View available regions](/docs/regions#region-list). |
+
+#### Function with Edge Runtime config example
+
+This is what the `.vc-config.json` configuration file could look like in a real scenario:
+
+```json
+{
+  "runtime": "edge",
+  "entrypoint": "index.js",
+  "envVarsInUse": ["DATABASE_API_KEY"]
+}
+```
+
+### Directory structure for Functions with Edge Runtime
+
+The following example shows a directory structure where the Function with Edge Runtime will be accessible at the `/edge` URL path of the Deployment:
+
+- `.vercel/`
+  - `output/`
+    - `functions/`
+      - `edge.func/`
+        - `.vc-config.json`
+        - `index.js`
+
+## Prerender Functions
+
+**Prerender Functions Directory**: `.vercel/output/functions`
+
+<br />
+
+[`vercel/examples/build-output-api/prerender-functions`](https://github.com/vercel/examples/tree/main/build-output-api/prerender-functions)
+
+<br />
+
+A Prerender asset is a Vercel Function that will be cached by the Vercel CDN
+in the same way as a static file. This concept is also known as [Incremental Static Regeneration](/docs/incremental-static-regeneration).
+
+On the file system, a Prerender is represented in the same way as a Vercel Function,
+with an additional configuration file that describes the cache invalidation rules for the Prerender asset.
+
+An optional "fallback" static file can also be specified, which will be served when there is no cached version available.
+
+### Prerender configuration file
+
+**Prerender Config File**: `.vercel/output/functions/<name>.prerender-config.json`
+
+<br />
+
+The `<name>.prerender-config.json` configuration file contains information related to how the Prerender Function will be created by Vercel.
+
+```ts
+type PrerenderFunctionConfig = {
+  expiration: number | false;
+  group?: number;
+  bypassToken?: string;
+  fallback?: string;
+  allowQuery?: string[];
+  passQuery?: boolean;
+  initialHeaders?: Record<string, string>;
+  initialStatus?: number;
+  exposeErrBody?: boolean;
+};
+```
+
+| Key                | [Type](/docs/rest-api#types)                 | Required | Description                                                                                                                                                                                          |
+| ------------------ | --------------------------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **expiration**     | [Integer | false](/docs/rest-api#types)         | Yes      | Expiration time (in seconds) before the cached asset will be re-generated by invoking the Vercel Function. Setting the value to `false` means it will never expire.                                  |
+| **group**          | [Integer](/docs/rest-api#types)                      | No       | Option group number of the asset. Prerender assets with the same group number will all be re-validated at the same time.                                                                             |
+| **bypassToken**    | [String](/docs/draft-mode)                                     | No       | Random token assigned to the `__prerender_bypass` cookie when [Draft Mode](/docs/draft-mode) is enabled so requests can safely bypass the CDN cache                                                    |
+| **fallback**       | [String](/docs/rest-api#types)                       | No       | Name of the optional fallback file relative to the configuration file.                                                                                                                               |
+| **allowQuery**     | [String\[\]](/docs/rest-api#types)                     | No       | List of query string parameter names that will be cached independently. If an empty array, query values are not considered for caching. If undefined each unique query value is cached independently |
+| **passQuery**      | [Boolean](/docs/rest-api#types)                      | No       | When true, the query string will be present on the `request` argument passed to the invoked function. The `allowQuery` filter still applies.                                                         |
+| **initialHeaders** | [Record\<string, string>](/docs/rest-api#types) | No       | Initial headers to be included with the prerendered response that was generated at build time.                                                                                                       |
+| **initialStatus**  | [Integer](/docs/rest-api#types)                      | No       | Initial HTTP status code to be included with the prerendered response that was generated at build time. (default 200)                                                                                |
+| **exposeErrBody**  | [Boolean](/docs/rest-api#types)                      | No       | When true, expose the response body regardless of status code including error status codes. (default false)                                                                                          |
+
+#### Fallback static file
+
+**Prerender Fallback Static File**: `.vercel/output/functions/<name>.prerender-fallback.<ext>`
+
+<br />
+
+A Prerender asset may also include a static "fallback" version that is generated at build-time.
+The fallback file will be served by Vercel while there is not yet a cached version that was generated during runtime.
+
+When the fallback file is served, the Vercel Function will also be invoked "out-of-band" to
+re-generate a new version of the asset that will be cached and served for future HTTP requests.
+
+#### Prerender config example
+
+This is what an `example.prerender-config.json` file could look like in a real scenario:
+
+```json
+{
+  "expiration": 60,
+  "group": 1,
+  "bypassToken": "03326da8bea31b919fa3a31c85747ddc",
+  "fallback": "example.prerender-fallback.html",
+  "allowQuery": ["id"]
+}
+```
+
+### Directory structure for Prerender Functions
+
+The following example shows a directory structure where the Prerender will be accessible at the `/blog` URL path of the Deployment:
+
+- `.vercel/`
+  - `output/`
+    - `functions/`
+      - `blog.func/`
+        - `.vc-config.json`
+        - `index.js`
+      - `blog.prerender-config.json`
+      - `blog.prerender-fallback.html`
+
+
+---
+
+[View full sitemap](/docs/sitemap)
