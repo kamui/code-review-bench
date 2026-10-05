@@ -40,3 +40,7 @@ Asked whether to add "the owner's latest statement before the merge governs", th
 The session asked which side is "safest": send it to the user (its recommendation), lean to not promised, or lean to promised. The user answered: "2. Lean to 'not promised'. If the documentation does not specify, and a owner is not sure if they support that, and the code doesn't seem to strongly indicate it's a supported public behavior, then it's not promised."
 
 That is clause P1c, with the user's sentence quoted in it. The session's reading of its reach, told to the user: it covers an owner who is unsure or owners who differ; where no owner said anything, a practice with shown users still counts under P8a, as ruled for the renamed completion file and for key logging. Open: P1b's wording and P2c.
+
+**P2c, answered.** Asked whether a linked ticket and the review discussion count as places a change can be announced, the user answered: "2. Yes, if the linked ticket is accessible to the reviewer. although this is not as strong evidence as an announcement in the PR or documentation/code." P2c and the definition of "announced" now say so. The review discussion was not addressed and stays the session's reading.
+
+**P1b, asked again.** The user: "this is still confusing, can you give me the reworded rule entirely again? i think what reads as confusing is 'name', when a project documents a name? Name for what? That reads as confusing".
