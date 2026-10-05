@@ -85,7 +85,7 @@ In the second pass of issue #30 a recommendation went to the user five times on 
 - the recommendation would change a saved ruling;
 - a search could not be made.
 
-This list is the recording session's proposal at the user's request. It adds cases that go to the user and removes none, so it is used meanwhile; it limits a delegation only when the user adopts it as part of one.
+The user accepted this list on 2026-10-05 as how questions are prepared ([decision P11](research/cohort-rebuild-2026-10-05/second-pass/rulings/P11-rule-text.md)). It limits a delegation only when the user adopts it as part of one.
 
 **Put the rule sentence in the option.** When a ruling will set or change a clause, the option the user can choose states the sentence that will be written. A clause written afterwards from an answer that gave no ground is the session's inference. When the user rules against a recorded answer, keep the answer, record the user's ground or that none was given, and propose any change to the rule separately. A pattern becomes a rule only when the user accepts its text, and an accepted clause is untested until assessors apply it blind to cases it was not written from.
 
