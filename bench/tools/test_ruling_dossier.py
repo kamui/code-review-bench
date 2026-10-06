@@ -61,15 +61,20 @@ class RulingDossierTest(unittest.TestCase):
         entry = {**self.changed(made_by="none", source=None, searched=searched), "delivered": None, "recommendation": "suggestion"}
         self.assertEqual(self.faults(entry, "## Promised?\n"), ["N1: a blocked search cannot support `none`; finish it or recommend unproven"])
 
-    def test_practice_needs_the_programs(self):
-        self.assertIn("N1: a promise by practice needs the programs found in searched.public-code", self.faults(self.changed(made_by="practice")))
+    def test_relied_on_needs_the_programs(self):
+        searched = copy.deepcopy(PROMISE["searched"])
+        entry = {**self.changed(made_by="none", source=None, searched=searched), "delivered": None, "recommendation": "relied-on"}
+        self.assertEqual(self.faults(entry, "## Promised?\n"), ["N1: `relied-on` needs the programs found in searched.public-code"])
+        searched["public-code"]["found"] = "32 files assign it, the Datadog agent since 2021"
+        self.assertEqual(self.faults(entry, "## Promised?\n"), [])
+        self.assertIn("promise.made_by must be one of", self.faults(self.changed(made_by="practice"))[0])
 
     def test_the_recommendation_follows_from_promise_and_delivery(self):
         searched = copy.deepcopy(PROMISE["searched"])
         none = {**self.changed(made_by="none", source=None, searched=searched), "delivered": None}
-        self.assertIn("the recommendation must be `suggestion`", self.faults(none, "## Promised?\n")[0])
+        self.assertIn("is one of suggestion, relied-on", self.faults(none, "## Promised?\n")[0])
         self.assertEqual(self.faults({**ENTRY, "recommendation": "duplicate"}), [])
-        self.assertIn("the recommendation must be `minor-defect`", self.faults({**ENTRY, "delivered": "yes"})[0])
+        self.assertIn("is one of minor-defect, duplicate", self.faults({**ENTRY, "delivered": "yes"})[0])
 
     def test_a_refuted_claim_needs_no_promise_and_a_recovery_question_is_not_checked(self):
         self.assertEqual(self.faults({"group": "N1", "kind": "candidate", "recommendation": "refuted"}, ""), [])
