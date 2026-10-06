@@ -147,3 +147,9 @@ Everything else above the second question is kept: each remaining rule either qu
 - `docs/finding-threshold.md` no longer repeats the rule for an undocumented use. It summarises the two questions and points to version 5.
 
 Still owed under decision P11: the three first-round rules that turn on harm, each reworded sentence to be shown to the user before it is written. Version 5 has not been shown to the user as a whole until the message that follows this entry.
+
+**Version 5 shown.** The session posted version 5 in full with a list of what the last pass changed. The user answered: "ok keep going".
+
+**The three older rules, one at a time.**
+
+*Unusual input.* The session showed the rule as it stood, the two places it disagreed with the two questions ("a practice users demonstrably follow" made a problem; "nothing shows users producing it" made advice, against the `cancel()` ruling), and this wording: "How rare an input is does not decide. A regression reachable only through unusual input is a problem when the input is promised and the outcome is not delivered. An input is promised when it is documented, when the change says it handles it, or when the code is deliberately built to accept it. Whether anyone is shown sending it does not decide. When nothing promises the input and people are shown depending on it, it is 'relied on, not promised' and goes to the user. Invalid input is not promised." Options: use it; use it and show GT-u5 again under it; change something. The user answered: "1". Written into `docs/finding-threshold.md`. GT-w1 and GT-u5 keep their rulings and GT-u5 was not shown again.
