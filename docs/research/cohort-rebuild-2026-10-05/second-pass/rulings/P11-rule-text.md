@@ -104,3 +104,5 @@ The session counted what re-cutting would remove (eight selected tasks have reco
 Owed after the reading: a pass over everything above the second question asking whether each part needs to be specified, and a plain-words pass over the whole document.
 
 **D3 dropped.** The session said it had not been applying the plain-words skill and would from then on. It showed D3 ("Partly delivered is not delivered") and said the word "complete" in the question already covers it. Options: drop it; keep it; change something. The user answered: "1."
+
+**Renumbering owed.** While D4 was open the user wrote: "FYI, I want to renumber everything in this doc when we are done with it. We dropped some things so the number gaps are odd." Owed once the reading ends, in this order: the pass asking of each part above the second question whether it needs to be specified; the plain-words pass; then renumbering, with the clause table, the record files and the tools' tests updated to the new identifiers.
