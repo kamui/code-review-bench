@@ -121,8 +121,16 @@ class ContractTwoTest(unittest.TestCase):
         self.refused("candidate", lambda record: record["answers"][1].update(short_of_high=["gap"]),
                      "assessor-1: high confidence names 1 condition(s) in `short_of_high`; high has none, medium one, low two or more",
                      "assessor-1: `short_of_high` names `gap` exactly when `rule_gap` says what it is")
-        self.refused("candidate", lambda record: record["answers"][1].update(nearest=[]),
-                     "assessor-1: `nearest` is empty, so `short_of_high` must name `no-precedent`")
+
+    def test_high_confidence_needs_a_nearest_ruling_made_under_the_current_reading(self):
+        fault = "assessor-1: `nearest` names no ruling made under the current reading, so `short_of_high` must name `no-precedent`"
+        self.refused("candidate", lambda record: record["answers"][1].update(nearest=[]), fault)
+        self.refused("candidate", lambda record: record["answers"][1].update(nearest=["second-05", "second-pass 2", "P1"]), fault)
+        self.refused("candidate", lambda record: record["answers"][1].update(nearest=["ruling 30"]), "assessor-1: ruling 30 is not a ruling in the index")
+        record = sound("candidate")
+        record["answers"][1].update(nearest=["second-pass 5", "S10"])
+        record["answers"][2].update(nearest=["second-05"], confidence="medium", short_of_high=["no-precedent"], would_settle=False)
+        self.assertEqual(ruling_record.faults(record), [])
 
     def test_would_settle_that_differs_from_high_is_refused(self):
         fault = "assessor-1: `would_settle` must be true at high confidence and false below it"
@@ -139,8 +147,9 @@ class ContractTwoTest(unittest.TestCase):
                      "assessor-1: needs `confidence`; only a reconstructed record may leave it null, when nobody recorded it")
 
     def test_a_rule_that_pins_the_rubric_edited_in_place_is_refused(self):
-        self.refused("recovery", lambda record: record.update(rule=pin("bench/rubric/scoring.md")),
-                     "`rule` must pin a versioned file or the copy the round saved under docs/research, never a file that is edited in place")
+        fault = "`rule` must pin a versioned file or the copy the round saved under docs/research, never a file that is edited in place"
+        self.refused("recovery", lambda record: record.update(rule=pin("bench/rubric/scoring.md")), fault)
+        self.refused("recovery", lambda record: record.update(rule=pin("docs/research/../../bench/rubric/scoring.md")), fault)
 
     def test_each_kind_needs_its_blind_answers_from_another_family(self):
         self.refused("band", lambda record: record["answers"].pop(), "the record needs one blind answer from another model family than the recommender's")
@@ -166,8 +175,9 @@ class ContractTwoTest(unittest.TestCase):
         self.refused("band", lambda record: record["case"].update(sha256="0" * 64),
                      "`case` must pin the neutral file every blind party read, by path and sha256, with `written_by` and `precedents`, "
                      "the pinned sheet of earlier rulings or null")
-        self.refused("recovery", lambda record: record["answers"][2].update(brief=pin("docs/ruling-dossier-brief.md")),
-                     "assessor-2: `brief` must pin the copy of the brief this answer was given, by path and sha256; a blind answer needs one")
+        for path in ("docs/ruling-dossier-brief.md", "docs/research/../ruling-dossier-brief.md"):
+            self.refused("recovery", lambda record: record["answers"][2].update(brief=pin(path)),
+                         "assessor-2: `brief` must pin the copy of the brief this answer was given, by path and sha256; a blind answer needs one")
 
     def test_a_record_decides_one_thing(self):
         fault = "`group` must name the one thing decided; a question that holds several decisions gets one record for each"

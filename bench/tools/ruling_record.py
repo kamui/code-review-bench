@@ -76,8 +76,9 @@ def pinned(pin, root):
     return bool(path) and path.is_file() and digest(path) == pin.get("sha256")
 
 
-def kept(pin):
-    return pin["path"].startswith("docs/research/") or bool(re.search(r"\.v\d+\.", Path(pin["path"]).name))
+def kept(pin, root):
+    path = (root / pin["path"]).resolve()
+    return (root / "docs/research").resolve() in path.parents or bool(re.search(r"\.v\d+\.", path.name))
 
 
 def dossier_faults(record, root):
@@ -107,7 +108,7 @@ def party_faults(record, rulings, blind_needed):
     return found
 
 
-def confidence_faults(answer):
+def confidence_faults(answer, rulings):
     """docs/adjudication-record.md, "Confidence": high leaves no condition short, medium one, low two or more."""
     by, level, short, settle = (answer[field] for field in ("by", "confidence", "short_of_high", "would_settle"))
     found = []
@@ -119,14 +120,15 @@ def confidence_faults(answer):
         if level in LEVELS and min(len(short), 2) != LEVELS.index(level):
             found.append(f"{by}: {level} confidence names {len(short)} condition(s) in `short_of_high`; high has none, medium one, low two or more")
         found += [f"{by}: `short_of_high` names `{name}` exactly when `{field}` says what it is" for field, name in STATED if bool(answer[field]) != (name in short)]
-        if not answer["nearest"] and "no-precedent" not in short:
-            found.append(f"{by}: `nearest` is empty, so `short_of_high` must name `no-precedent`")
+        nearest = [canonical(name, rulings) for name in answer["nearest"]]
+        if "no-precedent" not in short and all(name and rulings[name]["reading"] != "current" for name in nearest):
+            found.append(f"{by}: `nearest` names no ruling made under the current reading, so `short_of_high` must name `no-precedent`")
     if settle is not None and level in LEVELS and settle is not (level == "high"):
         found.append(f"{by}: `would_settle` must be true at high confidence and false below it")
     return found
 
 
-def answer_faults(record, answer, root):
+def answer_faults(record, answer, rulings, root):
     by, kind, reconstructed = answer["by"], record["kind"], record["reconstructed"]
     found = [f"{by}: needs `{field}`; only a reconstructed record may leave it null, when nobody recorded it"
              for field in UNRECORDED if answer[field] is None and not reconstructed]
@@ -139,9 +141,9 @@ def answer_faults(record, answer, root):
         found.append(f"{by}: a recovery answer needs `facts`: {' and '.join(FACTS)}, each yes, no or cannot-tell")
     if answer["written"] not in WRITTEN or (not reconstructed and answer["written"] != "before-question"):
         found.append(f"{by}: `written` must be one of {', '.join(WRITTEN)}, and before-question in a record that is not reconstructed")
-    if (answer["blind"] or answer["brief"]) and not (pinned(answer["brief"], root) and kept(answer["brief"])):
+    if (answer["blind"] or answer["brief"]) and not (pinned(answer["brief"], root) and kept(answer["brief"], root)):
         found.append(f"{by}: `brief` must pin the copy of the brief this answer was given, by path and sha256; a blind answer needs one")
-    return found + confidence_faults(answer)
+    return found + confidence_faults(answer, rulings)
 
 
 def second_faults(record, root):
@@ -154,7 +156,7 @@ def second_faults(record, root):
         return ["`group` must name the one thing decided; a question that holds several decisions gets one record for each"]
     if not pinned(record["rule"], root):
         found.append("`rule` must pin the rule text the answers applied, by path and sha256")
-    elif not kept(record["rule"]):
+    elif not kept(record["rule"], root):
         found.append("`rule` must pin a versioned file or the copy the round saved under docs/research, never a file that is edited in place")
     case = record["case"]
     if not pinned(case, root) or not case.get("written_by") or "precedents" not in case or (case["precedents"] is not None and not pinned(case["precedents"], root)):
@@ -169,7 +171,7 @@ def second_faults(record, root):
         if missing:
             found.append(f"{answer.get('by', 'an answer')}: needs {', '.join(missing)}")
             continue
-        found += answer_faults(record, answer, root) + name_faults(answer, clauses, rulings)
+        found += answer_faults(record, answer, rulings, root) + name_faults(answer, clauses, rulings)
     parties, blind_needed = [answer.get("by") for answer in record["answers"]], KIND[record["kind"]]["blind"]
     if len(set(parties)) != len(parties):
         found.append("each party answers once; a `by` name is repeated")

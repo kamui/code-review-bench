@@ -124,6 +124,6 @@ The tool refuses an answer that does not follow the definition:
 - `short_of_high` is empty for high, names one condition for medium, and names two or more for low.
 - `would_settle` is true for high and false for medium and low.
 - `short_of_high` names `gap` exactly when `rule_gap` has its sentence, and names `conflict` exactly when `conflict` has its sentence.
-- An answer with no `nearest` ruling names `no-precedent`.
+- An answer names `no-precedent` when `nearest` is empty or holds no ruling that the index marks as made under the current reading.
 
 "High" is the agent's own claim. The test of that claim is a count: for each kind of decision and each setup, how many high answers were the user's decision. A setup is the model, its effort, the brief, the rule, the case file and the sheet of earlier rulings.
