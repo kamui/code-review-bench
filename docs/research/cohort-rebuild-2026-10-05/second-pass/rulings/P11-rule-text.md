@@ -1,4 +1,4 @@
-# Second pass, decision P11: the wording of the rule (partly answered)
+# Second pass, decision P11: the wording of the rule
 
 Put to the user on 2026-10-05.
 
