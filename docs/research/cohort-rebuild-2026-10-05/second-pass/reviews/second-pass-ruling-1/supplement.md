@@ -20,3 +20,15 @@ Fetched 2026-10-05 (`search-inject-after-import.json`): a GitHub code search for
 Two of the four call it as `requests.packages.urllib3.contrib.pyopenssl.inject_into_urllib3()`, a spelling that can only run after requests is imported, and cite urllib3's security documentation. A search for that exact spelling returns 55 Python files.
 
 Limits: two of the four guard the call with `if sys.version_info[0] == 2`, and requests at the head does not run on Python 2, so those two cannot be affected by this change. The files were not dated or run. The search shows the order is a real habit, mostly from the years when pyOpenSSL was the way to get SNI; it does not show how many programs still depend on it.
+
+## Does requests expose pyOpenSSL to its users? (added during the reading of rule 4)
+
+Added on 2026-10-05 after the user said, of the rule that a dependency's documentation counts: "I would think the documentation would have to state that it uses a dependency. If a repo uses dependencies, that does not always follow that the documentation form it;s dependency is a promise, unless the repo exposes the dependency to the user or encourages the user to access that dependency". The review of this ruling had named urllib3's function as "a public, documented urllib3 function" and had not asked whether requests exposes it. Read at the pinned head `4089f3dc`:
+
+- `src/requests/__init__.py`, lines 127 to 129: requests itself calls `pyopenssl.inject_into_urllib3()` at import when Python has no `ssl` module or no SNI.
+- `HISTORY.md`, release 2.25.1 (2020): "pyOpenSSL TLS implementation is now only used if Python either doesn't have an `ssl` module or doesn't support SNI. Previously pyOpenSSL was unconditionally used if available. This applies even if pyOpenSSL is installed via the `requests[security]` extra".
+- `HISTORY.md`, release 2.26.0 (2021), under Deprecations: "The `requests[security]` extra has been converted to a no-op install. PyOpenSSL is no longer the recommended secure option for Requests."
+- `docs/user/advanced.rst`: the documentation has users import urllib3 directly (`from urllib3.poolmanager import PoolManager` in the Transport Adapter example, `from urllib3.util import Retry`) and says a parameter "gets passed-through to `urllib3`".
+- The documentation at the head does not mention `inject_into_urllib3()`.
+
+Reading: requests exposes urllib3 to its users in its own documentation, offered pyOpenSSL as a backend through an install extra until 2021, still switches it on in its own code, and has called it "no longer the recommended secure option", which is a recommendation and not a withdrawal. Under the user's condition the dependency's instructions count here.
