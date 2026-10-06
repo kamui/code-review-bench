@@ -110,7 +110,7 @@ def claim_problems(token, review, sources, snapshot, disputed, naming):
             if not quoted(claim["quote"], sources[int(key) - 1]):
                 problems.append(f"{where} claim {index}: quote is not verbatim inside one field of the source item")
             canonical = claim["canonical_claim_id"]
-            if canonical is None and any((token, int(key), match) not in disputed for match in equivalent):
+            if not v2 and canonical is None and any((token, int(key), match) not in disputed for match in equivalent):
                 problems.append(f"{where} claim {index}: an equivalent item carries only its linked canonical claims; "
                                 "record a link dispute when it asserts something else")
             if canonical is not None and canonical not in linked:
