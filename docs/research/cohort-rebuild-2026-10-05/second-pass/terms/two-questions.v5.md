@@ -122,7 +122,7 @@ Input is invalid when the specification or the declared type rules it out.
 
 Read the general documentation of the thing in question, such as a handbook, and not only the page for one component. In first-round 21 the deciding sentence was in Base UI's handbook, which says `cancel()` "stops the component from changing its internal state". The field's own page did not have it.
 
-- **4a. Documented means promised.** This holds when the use is rare, and when the documentation recommends another way, as long as it still shows how to do it.
+- **4a. Documented means promised.** This holds when the use is rare, when nobody is shown using it, and when the documentation recommends another way, as long as it still shows how to do it.
   - *Example:* Django documents running with autocommit off. That is not the default, and a failure in that mode is still a problem (first-round 39).
   - "Here is how, though we recommend something else" is still promised. "This is private" or "do not do this" is Promised 1.
 
