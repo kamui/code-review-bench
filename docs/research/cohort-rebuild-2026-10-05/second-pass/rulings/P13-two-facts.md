@@ -12,4 +12,6 @@ Decision: for each review comment linked to a known problem, the graders record 
 
 The session's answer to the user's question: three facts are stored (what goes wrong, why, and the fix with its safety check). Whether a comment "made a case" is not stored as a fourth judgment. It follows from the first two: a comment that says what goes wrong and why has made the full case.
 
-Question B, on settling rulings 12, 13, 14 and 16 from the test, was not answered in that message.
+The session then gave two options for "made a case": "1. Keep 'made a case' derived from the first two facts (my recommendation).", "2. Store it as a fourth judgment. I would draft its test and check it on the same 15 comments before you adopt it." It said a stored fourth judgment could capture a comment that says what goes wrong and why and buries both under false claims, at the cost of a judgment graders will often disagree on. The user answered: "1". "Made a case" stays derived.
+
+Question B as shown: "The four rulings where both assessors agree and the test gives a clear answer. Rulings 12, 13 and 14 would be 'no credit, why only'. Ruling 16 would be 'no credit, neither'. On ruling 12 this goes against my first answer, which was credit." Options: "1. Settle all four that way now, each with its own record (my recommendation).", "2. Go through them one at a time." The user answered: "B1 after we settle my last question", and the question was then settled as above. Rulings 12, 13, 14 and 16 are recorded in their own files.
