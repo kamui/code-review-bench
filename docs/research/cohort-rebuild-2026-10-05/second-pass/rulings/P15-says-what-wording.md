@@ -1,6 +1,6 @@
 # Second pass, decision P15: "says what goes wrong?" in plainer words
 
-Asked 2026-10-06, with ruling 25. The user wrote of the sentence adopted in decision P13, "A statement that a part is missing or broken, with no stated result for a person or a program using the software, is not a statement of what goes wrong": "Well that rule I adopted probably need to be rewritten to be more understandably clear.", and then: "we should /unslop that rule and see if it becomes more understandably simplified."
+Asked 2026-10-06, with rulings 25 and 26. The user wrote of the sentence adopted in decision P13, "A statement that a part is missing or broken, with no stated result for a person or a program using the software, is not a statement of what goes wrong": "Well that rule I adopted probably need to be rewritten to be more understandably clear.", and then: "we should /unslop that rule and see if it becomes more understandably simplified."
 
 The session showed the old sentence and a rewrite of the first fact:
 
