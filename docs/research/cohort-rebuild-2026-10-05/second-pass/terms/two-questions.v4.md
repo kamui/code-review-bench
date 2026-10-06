@@ -22,11 +22,14 @@ A review comment says something about a pull request. These rules sort a comment
 
 - **B2. The fault belongs to this review.** A fault is in the review if the change introduces it, worsens it, makes it reachable, makes it show sooner or more clearly, or a reviewer could detect it from the lines the change touches or in the thing it says it fixes. An older fault the change does none of that to is outside review scope.
 
-- **B3. Judge on what a reviewer could know at review time.**
-  - Later evidence may confirm that a weak point visible in the diff really fails, that a practice already existed, or what the authors intended.
-  - It may not create a promise or withdraw one.
-  - Code reasoning or a run can establish a failure without a later incident. A weak point with neither stays unproven.
-  - *Open:* the user put the cut-off as "sometime before the PR merge I think". A case that turns on the exact cut-off is the user's.
+- **B3. Answer the two questions from what a reviewer could have known before the merge.**
+  - That is: the diff, the code and documentation at that commit, what running them shows, and anything already published.
+  - **Later evidence is never the reason for an answer.** Later evidence means reports, fixes, reverts and anything maintainers said afterwards. It has two uses:
+    - *To check our own ruling.* If it agrees with a ruling made from earlier facts, we can be more confident. If it disagrees, we look again at the earlier record. It overturns nothing by itself.
+    - *To date things.* It can show that a weakness visible in the diff really does fail in practice, or that a use already existed before the merge.
+  - *Example:* the Astro change read a path value without checking it, which was visible in the diff. The incident six months later confirmed that the weakness fails (first-round 16).
+  - *Example:* grpc-go's release note came a month after the merge. It neither ended the promise nor changed the ruling (first-round 8).
+  - *Open:* the exact cut-off, under discussion with the user.
 
 - **B4. A milder effect of the same fault as an existing problem** is put to the user as part of that problem, which the user may widen. Grouping stays with the user.
   - *Examples:* a second `parseBody()` joined GT-p1 (second-pass 10); pyOpenSSL joined GT-i6 (second-pass 1); a missed listing joined GT-s4 (first-round 13).
