@@ -197,9 +197,6 @@ Rules, in order.
   - **A test's protection.** If a test can no longer catch what it exists to catch, that is not delivered. A test that merely could be added is not this.
     - *Example:* a changed graphql-js test can no longer fail for its own reason (GT-k1).
 
-- **D5. Never delivered before is still not delivered.** "No worse than before" is band evidence.
-  - *Example:* a branded string failed to compile after middleware before the change too (second-pass 6).
-
 - **D6. What the software reports about its own state must be true and on time.** An error or mark shown when the rules the code or documentation states say it should not be is not delivered.
   - *Example:* a field that reports itself unchanged and shows a "required" error at once (first-round 22).
 
