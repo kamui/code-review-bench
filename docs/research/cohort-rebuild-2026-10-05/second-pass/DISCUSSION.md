@@ -256,7 +256,7 @@ On six labels where a blind inspector differed, the user kept each one. On the A
 
 On when to merge and regrade: "i want to merge this PR #62 after we finalize the rubric change, but before we start regrading."
 
-On two comments that name a missing part ([ruling 25](rulings/25-django-17914-two-comments.md)): a removal named without what fails is "only part of the problem"; a comment that names the requirement, the version, the call that needs it and the missing documentation gets credit, "it's not as direct.. but it does mention that that the version should be documented".
+On two comments that name a missing part ([rulings 25 and 26](rulings/25-django-17914-comment-A.md)): a removal named without what fails is "only part of the problem"; a comment that names the requirement, the version, the call that needs it and the missing documentation gets credit, "it's not as direct.. but it does mention that that the version should be documented".
 
 On the rubric's wording, while reading it ([decision P16](rulings/P16-rubric-text.md)): "Before I read it, is it unslopped?"; "this sentence is hard to read, i dont even understand it"; "That would mean a claim cannot only just be the 'what', is that true?"; "The 'in the code' I don't think is right. Yes in the code is ideal, but sometimes the problem is not in code".
 
@@ -266,7 +266,9 @@ On the rubric's wording, while reading it ([decision P16](rulings/P16-rubric-tex
 - **An independent review of the filing found eight faults the recorder had missed**, among them decisions still citing an earlier receipt and claim wording wider than its evidence. The filing is checked by a session of another model family before it is used.
 - **Fixing what a grader records fixed more than renaming labels.** The audit's two graders gave the same label on about 45 of 100 sampled comments that were not credited problems. In the trial of the draft rubric, with ordered questions, the two facts and a shared list of claims, they agreed on 388 of 422 labels and 392 of 397 known-problem results.
 - **Unaided graders reached the user's credit rulings on 14 of 15 comments.** The one difference was a ruling made before the two facts, which the user kept. Its comment became the rubric's example that no failing example is needed.
-- **The recommender's misses now run both ways.** On ruling 25 it advised no credit for a comment the user credited. Its earlier misses in this pass were too generous, and this one was too strict.
+- **The recommender's misses now run both ways.** On ruling 26 it advised no credit for a comment the user credited. Its earlier misses in this pass were too generous, and this one was too strict.
+- **Two blind assessors agreeing at high confidence were wrong on ruling 26.** Both said no credit and both would have settled it. They applied a sentence the user then asked to have rewritten, so agreement between assessors shows that a rule is read one way, not that the rule says what the user means.
+- **Ruling 25 was asked without its record of first answers.** A test caught it afterwards. The record was written late and says so.
 - **A plain-words pass has to be a separate step.** Twice the text went to the user after being written "with the rules in mind", and twice the user asked whether it had been passed. Each separate pass then changed dozens of lines. Four sentences the user could not parse had survived the first pass.
 - **The user corrects rules by asking what a sentence excludes.** "A claim cannot only just be the what?" and "in the code?" each found a rule that said more than was meant.
 - **A grader does not repeat itself exactly.** In the retest the first grader changed its own answer on three of 137 claims with nothing changed for them.
