@@ -1,0 +1,406 @@
+base src/request.ts
+208:    *   const body = await c.req.parseBody()
+209:    * })
+210:    * ```
+211:    */
+212:   async parseBody<Options extends Partial<ParseBodyOptions>, T extends BodyData<Options>>(
+213:     options?: Options
+214:   ): Promise<T>
+215:   async parseBody<T extends BodyData>(options?: Partial<ParseBodyOptions>): Promise<T>
+216:   async parseBody(options?: Partial<ParseBodyOptions>) {
+217:     return parseBody(this, options)
+218:   }
+219: 
+220:   #cachedBody = (key: keyof Body) => {
+221:     const { bodyCache, raw } = this
+222:     const cachedBody = bodyCache[key]
+223: 
+224:     if (cachedBody) {
+225:       return cachedBody
+226:     }
+227: 
+228:     const anyCachedKey = Object.keys(bodyCache)[0]
+229:     if (anyCachedKey) {
+230:       return (bodyCache[anyCachedKey as keyof Body] as Promise<BodyInit>).then((body) => {
+231:         if (anyCachedKey === 'json') {
+232:           body = JSON.stringify(body)
+233:         }
+234:         return new Response(body)[key]()
+235:       })
+236:     }
+237: 
+238:     return (bodyCache[key] = raw[key]())
+239:   }
+240: 
+241:   /**
+
+base src/utils/body.ts
+98:   const { all = false, dot = false } = options
+99: 
+100:   const headers = request instanceof HonoRequest ? request.raw.headers : request.headers
+101:   const contentType = headers.get('Content-Type')
+102: 
+103:   if (
+104:     contentType?.startsWith('multipart/form-data') ||
+105:     contentType?.startsWith('application/x-www-form-urlencoded')
+106:   ) {
+107:     return parseFormData(request, { all, dot })
+108:   }
+109: 
+110:   return {}
+111: }
+112: 
+113: /**
+114:  * Parses form data from a request.
+115:  *
+116:  * @template T - The type of the parsed body data.
+117:  * @param {HonoRequest | Request} request - The request object containing form data.
+118:  * @param {ParseBodyOptions} options - Options for parsing the form data.
+119:  * @returns {Promise<T>} The parsed body data.
+120:  */
+121: async function parseFormData<T extends BodyData>(
+122:   request: HonoRequest | Request,
+123:   options: ParseBodyOptions
+124: ): Promise<T> {
+125:   const formData = await (request as Request).formData()
+126: 
+127:   if (formData) {
+128:     return convertFormDataToBodyData<T>(formData, options)
+129:   }
+130: 
+131:   return {} as T
+132: }
+133: 
+134: /**
+135:  * Converts form data to body data based on the provided options.
+136:  *
+137:  * @template T - The type of the parsed body data.
+138:  * @param {FormData} formData - The form data to convert.
+139:  * @param {ParseBodyOptions} options - Options for parsing the form data.
+140:  * @returns {T} The converted body data.
+141:  */
+142: function convertFormDataToBodyData<T extends BodyData = BodyData>(
+143:   formData: FormData,
+144:   options: ParseBodyOptions
+145: ): T {
+
+base src/validator/validator.ts
+107:           !contentType ||
+108:           !(multipartRegex.test(contentType) || urlencodedRegex.test(contentType))
+109:         ) {
+110:           break
+111:         }
+112: 
+113:         let formData: FormData
+114: 
+115:         if (c.req.bodyCache.formData) {
+116:           formData = await c.req.bodyCache.formData
+117:         } else {
+118:           try {
+119:             const arrayBuffer = await c.req.arrayBuffer()
+120:             formData = await bufferToFormData(arrayBuffer, contentType)
+121:             c.req.bodyCache.formData = formData
+122:           } catch (e) {
+123:             let message = 'Malformed FormData request.'
+124:             message += e instanceof Error ? ` ${e.message}` : ` ${String(e)}`
+125:             throw new HTTPException(400, { message })
+126:           }
+127:         }
+128: 
+129:         const form: BodyData<{ all: true }> = Object.create(null)
+130:         formData.forEach((value, key) => {
+131:           if (key.endsWith('[]')) {
+132:             ;((form[key] ??= []) as unknown[]).push(value)
+133:           } else if (Array.isArray(form[key])) {
+134:             ;(form[key] as unknown[]).push(value)
+135:           } else if (Object.hasOwn(form, key)) {
+136:             form[key] = [form[key] as string | File, value]
+137:           } else {
+138:             form[key] = value
+139:           }
+
+base src/middleware/method-override/index.ts
+62:     if (c.req.method === 'GET') {
+63:       return await next()
+64:     }
+65: 
+66:     const app = options.app
+67:     // Method override by form
+68:     if (!(options.header || options.query)) {
+69:       const contentType = c.req.header('content-type')
+70:       const methodFormName = options.form || DEFAULT_METHOD_FORM_NAME
+71:       const clonedRequest = c.req.raw.clone()
+72:       const newRequest = clonedRequest.clone()
+73:       // Content-Type is `multipart/form-data`
+74:       if (contentType?.startsWith('multipart/form-data')) {
+75:         const form = await clonedRequest.formData()
+76:         const method = form.get(methodFormName)
+77:         if (method) {
+78:           const newForm = await newRequest.formData()
+79:           newForm.delete(methodFormName)
+80:           const newHeaders = new Headers(clonedRequest.headers)
+81:           newHeaders.delete('content-type')
+82:           newHeaders.delete('content-length')
+83:           const request = new Request(c.req.url, {
+84:             body: newForm,
+85:             headers: newHeaders,
+86:             method: method as string,
+87:           })
+88:           return app.fetch(request, c.env, getExecutionCtx(c))
+89:         }
+90:       }
+91:       // Content-Type is `application/x-www-form-urlencoded`
+92:       if (contentType?.startsWith('application/x-www-form-urlencoded')) {
+93:         const params = await parseBody<Record<string, string>>(clonedRequest)
+94:         const method = params[methodFormName]
+95:         if (method) {
+96:           delete params[methodFormName]
+97:           const newParams = new URLSearchParams(params)
+98:           const request = new Request(newRequest, {
+99:             body: newParams,
+100:             method: method as string,
+101:           })
+102:           return app.fetch(request, c.env, getExecutionCtx(c))
+103:         }
+104:       }
+
+head src/request.ts
+208:    *   const body = await c.req.parseBody()
+209:    * })
+210:    * ```
+211:    */
+212:   async parseBody<Options extends Partial<ParseBodyOptions>, T extends BodyData<Options>>(
+213:     options?: Options
+214:   ): Promise<T>
+215:   async parseBody<T extends BodyData>(options?: Partial<ParseBodyOptions>): Promise<T>
+216:   async parseBody(options?: Partial<ParseBodyOptions>) {
+217:     return parseBody(this, options)
+218:   }
+219: 
+220:   #cachedBody = (key: keyof Body) => {
+221:     const { bodyCache, raw } = this
+222:     const cachedBody = bodyCache[key]
+223: 
+224:     if (cachedBody) {
+225:       return cachedBody
+226:     }
+227: 
+228:     const anyCachedKey = Object.keys(bodyCache)[0]
+229:     if (anyCachedKey) {
+230:       return (bodyCache[anyCachedKey as keyof Body] as Promise<BodyInit>).then((body) => {
+231:         if (anyCachedKey === 'json') {
+232:           body = JSON.stringify(body)
+233:         }
+234:         return new Response(body)[key]()
+235:       })
+236:     }
+237: 
+238:     return (bodyCache[key] = raw[key]())
+239:   }
+240: 
+241:   /**
+
+head src/utils/body.ts
+98: ) => {
+99:   const { all = false, dot = false } = options
+100: 
+101:   const headers = request instanceof HonoRequest ? request.raw.headers : request.headers
+102:   const contentType = headers.get('Content-Type')
+103: 
+104:   const mediaType = contentType?.split(';')[0].trim().toLowerCase()
+105: 
+106:   if (mediaType === 'multipart/form-data' || mediaType === 'application/x-www-form-urlencoded') {
+107:     return parseFormData(request, { all, dot })
+108:   }
+109: 
+110:   return {}
+111: }
+112: 
+113: /**
+114:  * Parses form data from a request.
+115:  *
+116:  * @template T - The type of the parsed body data.
+117:  * @param {HonoRequest | Request} request - The request object containing form data.
+118:  * @param {ParseBodyOptions} options - Options for parsing the form data.
+119:  * @returns {Promise<T>} The parsed body data.
+120:  */
+121: async function parseFormData<T extends BodyData>(
+122:   request: HonoRequest | Request,
+123:   options: ParseBodyOptions
+124: ): Promise<T> {
+125:   const headers = request instanceof HonoRequest ? request.raw.headers : request.headers
+126:   const arrayBuffer = await (request as Request).arrayBuffer()
+127:   const formDataPromise = bufferToFormData(arrayBuffer, headers.get('Content-Type') || '')
+128:   if (request instanceof HonoRequest) {
+129:     // Cache so that a later `c.req.formData()` reuses the already-consumed body
+130:     request.bodyCache.formData = formDataPromise as unknown as FormData
+131:   }
+132:   const formData = await formDataPromise
+133: 
+134:   if (formData) {
+135:     return convertFormDataToBodyData<T>(formData, options)
+136:   }
+137: 
+138:   return {} as T
+139: }
+140: 
+141: /**
+142:  * Converts form data to body data based on the provided options.
+143:  *
+144:  * @template T - The type of the parsed body data.
+145:  * @param {FormData} formData - The form data to convert.
+
+head src/validator/validator.ts
+107:           !contentType ||
+108:           !(multipartRegex.test(contentType) || urlencodedRegex.test(contentType))
+109:         ) {
+110:           break
+111:         }
+112: 
+113:         let formData: FormData
+114: 
+115:         if (c.req.bodyCache.formData) {
+116:           formData = await c.req.bodyCache.formData
+117:         } else {
+118:           try {
+119:             const arrayBuffer = await c.req.arrayBuffer()
+120:             formData = await bufferToFormData(arrayBuffer, contentType)
+121:             c.req.bodyCache.formData = formData
+122:           } catch (e) {
+123:             let message = 'Malformed FormData request.'
+124:             message += e instanceof Error ? ` ${e.message}` : ` ${String(e)}`
+125:             throw new HTTPException(400, { message })
+126:           }
+127:         }
+128: 
+129:         const form: BodyData<{ all: true }> = Object.create(null)
+130:         formData.forEach((value, key) => {
+131:           if (key.endsWith('[]')) {
+132:             ;((form[key] ??= []) as unknown[]).push(value)
+133:           } else if (Array.isArray(form[key])) {
+134:             ;(form[key] as unknown[]).push(value)
+135:           } else if (Object.hasOwn(form, key)) {
+136:             form[key] = [form[key] as string | File, value]
+137:           } else {
+138:             form[key] = value
+139:           }
+
+head src/middleware/method-override/index.ts
+62:     if (c.req.method === 'GET') {
+63:       return await next()
+64:     }
+65: 
+66:     const app = options.app
+67:     // Method override by form
+68:     if (!(options.header || options.query)) {
+69:       const contentType = c.req.header('content-type')
+70:       const methodFormName = options.form || DEFAULT_METHOD_FORM_NAME
+71:       const clonedRequest = c.req.raw.clone()
+72:       const newRequest = clonedRequest.clone()
+73:       // Content-Type is `multipart/form-data`
+74:       if (contentType?.startsWith('multipart/form-data')) {
+75:         const form = await clonedRequest.formData()
+76:         const method = form.get(methodFormName)
+77:         if (method) {
+78:           const newForm = await newRequest.formData()
+79:           newForm.delete(methodFormName)
+80:           const newHeaders = new Headers(clonedRequest.headers)
+81:           newHeaders.delete('content-type')
+82:           newHeaders.delete('content-length')
+83:           const request = new Request(c.req.url, {
+84:             body: newForm,
+85:             headers: newHeaders,
+86:             method: method as string,
+87:           })
+88:           return app.fetch(request, c.env, getExecutionCtx(c))
+89:         }
+90:       }
+91:       // Content-Type is `application/x-www-form-urlencoded`
+92:       if (contentType?.startsWith('application/x-www-form-urlencoded')) {
+93:         const params = await parseBody<Record<string, string>>(clonedRequest)
+94:         const method = params[methodFormName]
+95:         if (method) {
+96:           delete params[methodFormName]
+97:           const newParams = new URLSearchParams(params)
+98:           const request = new Request(newRequest, {
+99:             body: newParams,
+100:             method: method as string,
+101:           })
+102:           return app.fetch(request, c.env, getExecutionCtx(c))
+103:         }
+104:       }
+
+All non-test source callers at head
+<scratch>/source/src/validator/validator.ts:115:        if (c.req.bodyCache.formData) {
+<scratch>/source/src/validator/validator.ts:116:          formData = await c.req.bodyCache.formData
+<scratch>/source/src/validator/validator.ts:121:            c.req.bodyCache.formData = formData
+<scratch>/source/src/utils/buffer.ts:116:  return response.formData()
+<scratch>/source/src/middleware/method-override/index.ts:75:        const form = await clonedRequest.formData()
+<scratch>/source/src/middleware/method-override/index.ts:78:          const newForm = await newRequest.formData()
+<scratch>/source/src/middleware/body-limit/index.ts:41: *     const body = await c.req.parseBody()
+
+
+Changed files
+src/utils/body.test.ts
+src/utils/body.ts
+src/utils/buffer.test.ts
+src/utils/buffer.ts
+src/validator/validator.test.ts
+src/validator/validator.ts
+
+
+v4.12.29 parseFormData
+ */
+async function parseFormData<T extends BodyData>(
+  request: HonoRequest | Request,
+  options: ParseBodyOptions
+): Promise<T> {
+  const headers = isRawRequest(request) ? request.headers : request.raw.headers
+  const arrayBuffer = await (request as Request).arrayBuffer()
+  const formDataPromise = bufferToFormData(arrayBuffer, headers.get('Content-Type') || '')
+  if (!isRawRequest(request)) {
+    // Cache so that a later `c.req.formData()` reuses the already-consumed body
+    request.bodyCache.formData = formDataPromise as unknown as FormData
+  }
+  const formData = await formDataPromise
+
+  if (formData) {
+    return convertFormDataToBodyData<T>(formData, options)
+  }
+
+  return {} as T
+}
+
+/**
+ * Converts form data to body data based on the provided options.
+ *
+ * @template T - The type of the parsed body data.
+ * @param {FormData} formData - The form data to convert.
+
+v4.12.30 parseFormData
+ */
+async function parseFormData<T extends BodyData>(
+  request: HonoRequest | Request,
+  options: ParseBodyOptions
+): Promise<T> {
+  const headers = isRawRequest(request) ? request.headers : request.raw.headers
+  const arrayBuffer = await (request as Request).arrayBuffer()
+  const formDataPromise = bufferToFormData(arrayBuffer, headers.get('Content-Type') || '')
+  if (!isRawRequest(request)) {
+    // Cache so that a later `c.req.formData()` reuses the already-consumed body
+    request.bodyCache.formData = formDataPromise as unknown as FormData
+  }
+  const formData = await formDataPromise
+
+  if (formData) {
+    return convertFormDataToBodyData<T>(formData, options)
+  }
+
+  return {} as T
+}
+
+/**
+ * Converts form data to body data based on the provided options.
+ *
+ * @template T - The type of the parsed body data.
+ * @param {FormData} formData - The form data to convert.

@@ -1,0 +1,41 @@
+﻿id,summary,reporter,owner,description,type,status,component,version,severity,resolution,keywords,cc,stage,has_patch,needs_docs,needs_tests,needs_better_patch,easy,ui_ux
+36957,Django psycopg connection pool + fork(),Anna,Dhruvan Gnanadhandayuthapani,"Django's PostgreSQL backend stores `psycopg_pool.ConnectionPool` objects in a class-level dict (`DatabaseWrapper._connection_pools`). When gunicorn (or any pre-forking server) forks worker processes, all children inherit references to the same pool objects — and crucially, the same underlying TCP sockets to PostgreSQL. Multiple workers then read/write the same socket concurrently, corrupting the PostgreSQL wire protocol.
+
+
+**Root cause**
+
+{{{
+# django/db/backends/postgresql/base.py
+class DatabaseWrapper(BaseDatabaseWrapper):
+    _connection_pools = {}   # class-level dict — survives fork()
+
+    @property
+    def pool(self):
+        if self.alias not in self._connection_pools:
+            pool = ConnectionPool(...)
+            self._connection_pools.setdefault(self.alias, pool)
+        return self._connection_pools[self.alias]
+}}}
+
+**Workaround**
+
+{{{
+# gunicorn.conf.py
+def post_fork(server, worker):
+    from django.db.backends.postgresql.base import DatabaseWrapper
+    DatabaseWrapper._connection_pools.clear()
+}}}
+
+**Suggested fix**
+Use `os.register_at_fork(after_in_child=...)` to clear `_connection_pools` in child processes, or check `os.getpid()` in the `pool` property and recreate when it differs from the creating process.
+
+**Tested with**
+Django 6.0.2
+psycopg 3.2.x – 3.3.2
+psycopg-pool 3.2.x – 3.3.0
+gunicorn 25.x (--worker-class asgi)
+Python 3.12 – 3.14
+
+The minimal reproducible example project is in the attachments
+
+",Bug,closed,Uncategorized,6.0,Normal,duplicate,,,Unreviewed,1,0,0,0,0,0
