@@ -64,7 +64,7 @@ def pinned_matches_v2(claim, pinned):
         return claim["outcome"] == "problem" and any(
             e["family"] == pinned["family"] and e["says_what"] == "yes" for e in claim["known_problems"])
     outcomes = {"advisory": ("minor-defect", "suggestion"), "inconsequential": ("minor-defect", "suggestion"),
-                "scope-excluded": ("not-this-change",), "refuted": ("refuted",), "unsupported": ("unproven",),
+                "scope-excluded": ("outside-this-change",), "refuted": ("refuted",), "unsupported": ("unproven",),
                 "unresolved": ("unresolved",)}
     return claim["outcome"] in outcomes[pinned["outcome"]]
 
