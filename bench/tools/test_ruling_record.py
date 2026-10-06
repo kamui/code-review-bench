@@ -3,6 +3,7 @@ import copy
 import json
 from pathlib import Path
 import re
+import tempfile
 import unittest
 
 import ruling_record
@@ -10,7 +11,6 @@ import ruling_record
 ROOT = Path(__file__).resolve().parents[2]
 RESEARCH = ROOT / "docs/research"
 REVIEW_9 = RESEARCH / "cohort-rebuild-2026-10-05/second-pass/rulings/S9-ruling-30-R2a.before.json"
-OPEN_DOSSIER = "docs/research/cohort-rebuild-2026-10-05/second-pass/candidates/r-base-ui-5460"
 
 
 class RulingRecordTest(unittest.TestCase):
@@ -39,11 +39,13 @@ class RulingRecordTest(unittest.TestCase):
                                                              "recommender: ruling 30 is not a ruling in the index"])
 
     def test_a_new_candidate_cannot_be_recorded_on_a_refused_dossier(self):
-        self.record.update(reconstructed=False, group="N1", dossier=OPEN_DOSSIER,
-                           rule={"path": self.record["rule"]["path"], "sha256": ruling_record.digest(ROOT / self.record["rule"]["path"])})
-        self.assertIn("the dossier is refused: N1: needs `promise`", ruling_record.faults(self.record)[0])
-        self.record["rule"]["sha256"] = "0" * 64
-        self.assertIn("`rule` must pin the rule text", ruling_record.faults(self.record)[0])
+        with tempfile.TemporaryDirectory() as dossier:
+            Path(dossier, "summary.json").write_text(json.dumps([{"group": "N1", "kind": "candidate", "recommendation": "problem"}]), encoding="utf-8")
+            self.record.update(reconstructed=False, group="N1", dossier=dossier,
+                               rule={"path": self.record["rule"]["path"], "sha256": ruling_record.digest(ROOT / self.record["rule"]["path"])})
+            self.assertIn("the dossier is refused: N1: needs `promise`", ruling_record.faults(self.record)[0])
+            self.record["rule"]["sha256"] = "0" * 64
+            self.assertIn("`rule` must pin the rule text", ruling_record.faults(self.record)[0])
 
     def test_a_recovery_question_and_an_unruled_shape_are_reasons(self):
         self.record.update(kind="recovery", reviews=None)
