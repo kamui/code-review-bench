@@ -47,8 +47,9 @@ class RulingRecordTest(unittest.TestCase):
 
     def test_a_recovery_question_and_an_unruled_shape_are_reasons(self):
         self.record.update(kind="recovery", reviews=None)
-        self.record["answers"][1].update(nearest=[])
+        self.record["answers"][1].update(nearest=[], outcome="cannot-tell")
         stays = ruling_record.reasons(self.record)
+        self.assertIn("assessor-1 could not tell", stays)
         self.assertIn("a recovery decision is the user's under ADR-0006", stays)
         self.assertIn("assessor-1 found no earlier ruling of this shape", stays)
 
