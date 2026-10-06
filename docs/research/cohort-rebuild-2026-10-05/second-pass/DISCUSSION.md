@@ -248,6 +248,29 @@ On the six known cards Sol matched the user on three and Astra on four, and ever
 - **The recommender is not independent of the assessors on candidates.** They read the same case files, written by one agent.
 - **Record first answers for labels too.** The label rulings have the recommender's answer saved before the inspection ([`impact/recommender.json`](impact/recommender.json)) but no `.before.json` in the ruling format.
 
+## 2026-10-06, after the last ruling: label checks, the rubric and its trial
+
+### The user's statements
+
+On six labels where a blind inspector differed, the user kept each one. On the Astro unchecked path value: "you can't seem to exploit this to do any real harm, it impacts a specific url right? Seems like a problem but not serious".
+
+On when to merge and regrade: "i want to merge this PR #62 after we finalize the rubric change, but before we start regrading."
+
+On two comments that name a missing part ([ruling 25](rulings/25-django-17914-two-comments.md)): a removal named without what fails is "only part of the problem"; a comment that names the requirement, the version, the call that needs it and the missing documentation gets credit, "it's not as direct.. but it does mention that that the version should be documented".
+
+On the rubric's wording, while reading it ([decision P16](rulings/P16-rubric-text.md)): "Before I read it, is it unslopped?"; "this sentence is hard to read, i dont even understand it"; "That would mean a claim cannot only just be the 'what', is that true?"; "The 'in the code' I don't think is right. Yes in the code is ideal, but sometimes the problem is not in code".
+
+### What was learned
+
+- **A blind "serious" label predicts little.** Over 17 labels the two inspectors matched the user on 7 and 10. Fifteen of the seventeen differences were an inspector's serious against the user's other-material.
+- **An independent review of the filing found eight faults the recorder had missed**, among them decisions still citing an earlier receipt and claim wording wider than its evidence. The filing is checked by a session of another model family before it is used.
+- **Fixing what a grader records fixed more than renaming labels.** The audit's two graders gave the same label on about 45 of 100 sampled comments that were not credited problems. In the trial of the draft rubric, with ordered questions, the two facts and a shared list of claims, they agreed on 388 of 422 labels and 392 of 397 known-problem results.
+- **Unaided graders reached the user's credit rulings on 14 of 15 comments.** The one difference was a ruling made before the two facts, which the user kept. Its comment became the rubric's example that no failing example is needed.
+- **The recommender was wrong again on the generous side's opposite.** On ruling 25 it recommended no credit for a comment the user credited. Its misses in this pass now run both ways.
+- **A plain-words pass has to be a separate step.** Twice the text went to the user after being written "with the rules in mind", and twice the user asked whether it had been passed. Each separate pass then changed dozens of lines. Four sentences the user could not parse had survived the first pass.
+- **The user corrects rules by asking what a sentence excludes.** "A claim cannot only just be the what?" and "in the code?" each found a rule that said more than was meant.
+- **A grader does not repeat itself exactly.** In the retest the first grader changed its own answer on three of 137 claims with nothing changed for them.
+
 ## Decided: the buckets
 
 "Advice" covers a real defect with a trivial consequence (ruling 9), a real breakage in unsupported use (ruling 2) and a suggestion where nothing is wrong. The structure was decided in [P8](rulings/P8-buckets.md) and the names in [P9](rulings/P9-names.md): a problem is "Promised: yes, Delivered: no", a minor defect is "Promised: yes, Delivered: yes", and a suggestion or observation is "Promised: no", of kind improvement or outside supported use.
