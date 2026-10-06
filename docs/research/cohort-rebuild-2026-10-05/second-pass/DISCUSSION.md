@@ -139,6 +139,16 @@ After the nine the user asked for action on three of them ([P10](rulings/P10-und
 
 The user then asked how to improve what had been built. Two proposals and a judge found the first check only tested that a form was filled, and that it passed all five recorded failures ([`mitigations/SYNTHESIS.md`](mitigations/SYNTHESIS.md)). What replaced it: a check that each of six searches is a query, a saved response and counts; a record of every party's first answer, written before the user is asked and never edited; the cases that stay with the user computed from that record; one name for each ruling and a table of which rulings each clause came from; and the rule narrowed to what the rulings support, as version 4. The wording of the rule is open as [P11](rulings/P11-rule-text.md).
 
+### Reading the rule with the user
+
+The user read the rule one clause at a time ([P11](rulings/P11-rule-text.md)) and changed more than its wording.
+
+- **"Promised" is read strictly.** A habit is not a promise. Practice became evidence that a use is ordinary, "it used to work" stopped being a source, and a new kind, *relied on, not promised*, holds what real users depend on without a promise. Only the user can put one of those on the answer key.
+- **A dependency's documentation counts only for the features the project itself points to.** Key logging, ruled a problem that afternoon, became relied on and not promised.
+- **An agent that cannot tell says so and never defaults.**
+- **The deciding fact came out during the ruling again, twice.** For pyOpenSSL: what requests itself says about the backend. For the `KSH_ARRAYS` case: how common the option is, that zsh's completion system switches it off while completing, and that another tool's script works under it. The second set reversed the recorder's recommendation within the hour. The dossier brief now asks for those three things whenever the trigger is a platform setting.
+- **Two rulings made that day were changed by rules set later that day** (key logging; and pyOpenSSL kept, on new evidence). A ruling is only as stable as the rule it was made under, which is why each clause now names the rulings it came from.
+
 ## Open: the buckets
 
 "Advice" covers a real defect with a trivial consequence (ruling 9), a real breakage in unsupported use (ruling 2) and a suggestion where nothing is wrong. The structure was decided in [P8](rulings/P8-buckets.md) and the names in [P9](rulings/P9-names.md): a problem is "Promised: yes, Delivered: no", a minor defect is "Promised: yes, Delivered: yes", and a suggestion or observation is "Promised: no", of kind improvement or outside supported use.

@@ -4,7 +4,7 @@ Version 3 corrected against the rulings each clause cites, 2026-10-05, after two
 
 - The user set the structure (P8), the names (P9) and the rulings.
 - **The sentences are the recording session's wording** unless a clause quotes the user or is marked *shown*, which means the user chose an option that stated the sentence.
-- The user is reading it rule by rule as decision P11. Read so far: rules 1, 2, 3, 4, 5, 6 and 8. [`../rulings/P11-rule-text.md`](../rulings/P11-rule-text.md) records each answer.
+- The user is reading it rule by rule as decision P11. Read so far: rules 1 to 8. [`../rulings/P11-rule-text.md`](../rulings/P11-rule-text.md) records each answer.
 - It has not been tested blind. Version 2 scored 37 of 43 against a pass mark of 39; versions 3 and 4 only added and narrowed clauses.
 - [`two-questions.v4.clauses.json`](two-questions.v4.clauses.json) lists the rulings each clause was written from.
 - Once read, the text is frozen while the 13 rulings open on 2026-10-05 are asked, so that they test it.
@@ -38,12 +38,13 @@ A review comment says something about a pull request. These rules sort a comment
 
 Ask it about the exact operation that goes wrong, not the feature as a whole, and note who owns that operation: the project or a dependency.
 
-A promise is made in four ways. Name each one you rely on, and the evidence against it.
+A promise is made in three ways. Name each one you rely on, and the evidence against it.
 
 - **Written.** The project's documentation describes or offers the use. Read the general documentation of an interface, such as a handbook, and not only the page for one component. In first-round 21 the sentence that decided the ruling was in Base UI's handbook (`cancel()` "stops the component from changing its internal state") and not on the field's page. What a general statement promises for one component is judged like any other documentation; there is no separate rule for it (the user, 2026-10-05).
 - **Announced.** This change says so, where a reviewer could read it before the merge: its description, a code comment stating purpose, the documentation and tests it adds, or a ticket it links that the reviewer can open (weaker evidence than the rest).
 - **Built.** Code, a test or a type deliberately supports the behaviour in question. Being callable or assignable is not enough.
-- **Established.** It worked before the change in ordinary or documented use.
+
+**How a promised use behaved before the change is part of the promise** (rule 7). "It used to work" is not by itself a way a promise is made.
 
 **Practice is evidence, not a source.** "Promised" is read strictly: a habit is not a promise. Programs shown doing something can show that a use of a documented feature is ordinary. They cannot create a promise where the owner gave none (the user, 2026-10-05).
 
@@ -135,14 +136,17 @@ Even when no documentation mentions it.
   - Being merely callable or assignable is not enough. The certificate path is a plain variable anyone can assign to; nothing was built to make assigning it work (first-round 30).
   - A valid setting of the platform a feature is written for is not a sign by itself. The user removed it on 2026-10-05: the project did not write or point to that setting, as with a dependency's feature under P4b. A user with such a setting can still be inside a promise the project makes in its own words; see P5.
 
-### 7. Established counts
+### 7. For a promised use, how it behaved before is part of the promise
 
-- **P7a. What worked before in ordinary or documented use is promised** unless rule 2 ended it.
-  - *Example:* clearing a required field from code left it without an error before the change (first-round 22).
+- **P7a. Behaviour nobody wrote down still counts, for a use that is otherwise promised.** If the documentation, the change or the code supports a use, a change that makes it behave worse breaks the promise, even though no document described that behaviour. "It used to work", for a use that nothing supports, is not a promise; that is *relied on, not promised* (P9b).
+  - *Example:* a required field is a documented Base UI feature. Before the change, clearing it from code left it without an error; after it, the field shows "required" at once. A problem (first-round 22).
+  - *Example:* grpc-go accepted message pointers and rejected a nil one with an error. That rejection was nowhere in the documentation, and the change silently removed it. A problem (first-round 8).
 
-- **P7b. More memory or time that was not an intended tradeoff and could have been mitigated or prevented is likely a departure from what was established.**
-  - *Example:* Hono uploads need 40 to 60 percent more peak memory after a fix that did not need it on every runtime (first-round 5).
-  - *Note:* "likely" is the user's word, and where the line sits is the user's.
+- **P7b. A cost counts too.**
+  - *The user's words:* "performance degradation that was not an intended tradeoff and can be potentially mitigated or prevented is likely a problem."
+  - *Example, a problem:* Hono's documented upload path needs 40 to 60 percent more peak memory after a fix that did not need it on every runtime (first-round 5).
+  - *Example, not a fault:* a grpc-go cleanup that now waits a few microseconds for a lock (first-round 19).
+  - *Open:* where the line sits between those two is the user's. An agent that meets a cost in between says so.
 
 ### 8. A different way of using something documented
 
