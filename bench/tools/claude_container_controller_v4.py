@@ -38,6 +38,8 @@ def execute(command, output, timeout=260):
 def cleanup(args, name, output):
     inspected = legacy.run([args.podman, "inspect", name], timeout=15)
     if inspected.returncode:
+        absent = legacy.run([args.podman, "container", "exists", name], timeout=15)
+        legacy.require(absent.returncode == 1, "owned container absence could not be established after inspect failed")
         return {"already_absent": True}
     (output / "container-inspect.json").write_text(inspected.stdout)
     if json.loads(inspected.stdout)[0]["State"]["Running"]:
