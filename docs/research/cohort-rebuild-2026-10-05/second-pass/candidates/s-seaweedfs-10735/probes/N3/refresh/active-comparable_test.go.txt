@@ -1,0 +1,74 @@
+package redis
+
+import (
+	"context"
+	"fmt"
+	"github.com/redis/go-redis/v9"
+	"github.com/seaweedfs/seaweedfs/weed/filer"
+	"os"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestEvictedUpdateProbe(t *testing.T) {
+	ctx := context.Background()
+	c := redis.NewClient(&redis.Options{Addr: os.Getenv("PROBE_REDIS_ADDR")})
+	defer c.Close()
+	must := func(e error) {
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	for _, prefix := range []string{""} {
+		must(c.ConfigSet(ctx, "maxmemory", "0").Err())
+		must(c.FlushDB(ctx).Err())
+		must(c.ConfigSet(ctx, "maxmemory-policy", "volatile-ttl").Err())
+		s := &UniversalRedisStore{Client: c, }
+		e := &filer.Entry{FullPath: "/d/f", Attr: filer.Attr{Crtime: time.Now(), TtlSec: 3600}, Content: []byte(strings.Repeat("x", 2*1024*1024))}
+		must(s.InsertEntry(ctx, e))
+		pending, err := s.FindEntry(ctx, "/d/f")
+		must(err)
+		fmt.Printf("prefix=%q before-eviction value-exists=%d index=%v ttl=%s\n", prefix, c.Exists(ctx, prefix+"/d/f").Val(), c.SMembers(ctx, prefix+"/d\x00").Val(), c.TTL(ctx, prefix+"/d/f").Val())
+		info, err := c.Info(ctx, "memory").Result()
+		must(err)
+		var used int64
+		for _, line := range strings.Split(info, "\n") {
+			if strings.HasPrefix(line, "used_memory:") {
+				used, err = strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(line, "used_memory:")), 10, 64)
+				must(err)
+			}
+		}
+		must(c.ConfigSet(ctx, "maxmemory", strconv.FormatInt(used-512*1024, 10)).Err())
+		pressureErr := c.Set(ctx, "pressure", "x", 0).Err()
+		fmt.Printf("pressure-write-error=%v\n", pressureErr)
+		fmt.Printf("active-memory-limit=%v\n", c.ConfigGet(ctx, "maxmemory").Val())
+		fmt.Printf("after-eviction value-exists=%d index=%v\n", c.Exists(ctx, prefix+"/d/f").Val(), c.SMembers(ctx, prefix+"/d\x00").Val())
+		if c.Exists(ctx, prefix+"/d/f").Val() != 0 {
+			t.Fatal("Redis did not evict the value")
+		}
+		stats, err := c.Info(ctx, "stats").Result()
+		must(err)
+		for _, line := range strings.Split(stats, "\n") {
+			if strings.HasPrefix(line, "evicted_keys:") {
+				fmt.Println(strings.TrimSpace(line))
+			}
+		}
+		list := func() []string {
+			var names []string
+			_, err := s.ListDirectoryEntries(ctx, "/d", "", false, 100, func(e *filer.Entry) (bool, error) { names = append(names, e.Name()); return true, nil })
+			must(err)
+			return names
+		}
+		fmt.Printf("listing-during-absence=%v index=%v\n", list(), c.SMembers(ctx, prefix+"/d\x00").Val())
+		pending.TtlSec = 0
+		pending.Content = []byte("updated")
+		must(s.UpdateEntry(ctx, pending))
+		live, err := s.FindEntry(ctx, "/d/f")
+		must(err)
+		fmt.Printf("update-error=nil direct-read=%q subsequent-list=%v\n", live.Content, list())
+		must(s.DeleteFolderChildren(ctx, "/d"))
+		fmt.Printf("delete-children-error=nil value-left=%d\n", c.Exists(ctx, prefix+"/d/f").Val())
+	}
+}
