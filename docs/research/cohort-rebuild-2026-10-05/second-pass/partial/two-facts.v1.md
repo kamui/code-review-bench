@@ -1,6 +1,6 @@
 # Two facts about a finding, version 1
 
-A draft for the user, synthesized on 2026-10-06 from two proposals, a judge's verdict and the user's own direction ([`SYNTHESIS.md`](SYNTHESIS.md)). It is not adopted.
+Synthesized on 2026-10-06 from two proposals, a judge's verdict and the user's own direction ([`SYNTHESIS.md`](SYNTHESIS.md)). The user adopted it as drafted the same day ([decision P13](../rulings/P13-two-facts.md)). It takes effect in the rubric at the planned relabel.
 
 For one review comment and one known problem, record two facts. Record each as yes, no or cannot tell. Scoring is decided apart from these facts.
 
