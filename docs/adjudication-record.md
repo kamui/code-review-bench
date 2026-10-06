@@ -20,7 +20,7 @@ Six kinds of decision get a record.
 - An answer of `duplicate` or `same-family` names the known problem it means.
 - A `recovery` answer also gives the two facts the user adopted in [decision P13](research/cohort-rebuild-2026-10-05/second-pass/rulings/P13-two-facts.md): whether the comment says what goes wrong, and whether it says why.
 - `not-applicable` is the outcome of a label when the user rules that the thing is not a problem.
-- In a reconciliation the reconciler's call is the only first answer. It is entered as the recommender's, and the case file holds both graders' assessments.
+- In a reconciliation the reconciler's call is the only first answer. It is entered as the recommender's, the tool refuses a second answer, and the case file holds both graders' assessments.
 - The records for `band`, `control` and `reconciliation` hold checks their workflows already make. Recording them adds no paid step.
 
 **One record per decision.** A question that holds several decisions gets one pair of files for each, named `<ruling>.<group>.before.json` and `<ruling>.<group>.after.json`. `ruling` names the question. `group` names the one thing decided: a candidate, a comment or a known problem. A question that asks "is it a problem" and "which label" is two records, one `candidate` and one `band`.
@@ -66,7 +66,7 @@ When `clauses` is null the tool gives the reason "no rule of this kind has been 
 
 | Field | What it holds |
 | --- | --- |
-| `by` | `recommender` for the session that asks the user. A record has exactly one. Any other name for another party, such as `assessor-1`. |
+| `by` | `recommender` for the session that asks the user. A record has exactly one. Any other name for another party, such as `assessor-1`. Each party answers once, so no name repeats. |
 | `model`, `family`, `effort` | The model, its model family and the reasoning effort it ran at. |
 | `blind` | `true` when the party answered without the recommendation, the dossier's recommendation, any saved outcome or another party's answer. |
 | `exposure` | What else the party had seen, or `none`. |

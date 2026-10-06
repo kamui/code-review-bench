@@ -34,7 +34,7 @@ KIND = {
     "control": {"outcomes": ("audited-clean", "provisional", "known-problems"), "blind": 1},
     "reconciliation": {"outcomes": ("first-error", "first-correct", "undetermined"), "blind": 0},
 }
-BLIND_ANSWERS = ("any blind answer to come", "one blind answer", "two blind answers")
+BLIND_ANSWERS = {1: "one blind answer", 2: "two blind answers"}
 NAMES_A_PROBLEM = ("duplicate", "same-family")
 COULD_NOT_TELL = ("unproven", "cannot-tell", "unknown", "undetermined")
 FACTS = ("says_what", "says_why")
@@ -100,7 +100,7 @@ def party_faults(record, rulings, blind_needed):
         return ["the record needs one answer by `recommender`, written before the user is asked"]
     found = []
     blind = [answer for answer in record["answers"] if answer["blind"]]
-    if len(blind) < blind_needed or any(answer["family"] == recommenders[0]["family"] for answer in blind):
+    if blind_needed and (len(blind) < blind_needed or any(answer["family"] == recommenders[0]["family"] for answer in blind)):
         found.append(f"the record needs {BLIND_ANSWERS[blind_needed]} from another model family than the recommender's")
     if record["reviews"] and (not canonical(record["reviews"].get("ruling"), rulings) or "saved_outcome" not in record["reviews"]):
         found.append("`reviews` needs the saved ruling, by its name in the index, and its `saved_outcome`")
@@ -170,7 +170,12 @@ def second_faults(record, root):
             found.append(f"{answer.get('by', 'an answer')}: needs {', '.join(missing)}")
             continue
         found += answer_faults(record, answer, root) + name_faults(answer, clauses, rulings)
-    return found or party_faults(record, rulings, KIND[record["kind"]]["blind"])
+    parties, blind_needed = [answer.get("by") for answer in record["answers"]], KIND[record["kind"]]["blind"]
+    if len(set(parties)) != len(parties):
+        found.append("each party answers once; a `by` name is repeated")
+    if not blind_needed and len(parties) != 1:
+        found.append(f"a {record['kind']} record holds one first answer, the recommender's")
+    return found or party_faults(record, rulings, blind_needed)
 
 
 def faults(record, root=ROOT):
