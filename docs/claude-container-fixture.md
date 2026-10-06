@@ -2,7 +2,49 @@
 
 This is the dummy-only feasibility gate for [#36](https://github.com/kamui/code-review-bench/issues/36), part of [#35](https://github.com/kamui/code-review-bench/issues/35). It exercises the native Claude client and its default tool catalog. It does not dispatch a benchmark, use a subscription or admit a production review arm.
 
-This partial delivery supplies the fixture, preserves its observed results and fixes ambient settings hooks. The v3 follow-up moves native file approvals into directory-scoped rules and adds hook-free controls. Issue #36 remains open, and downstream admission stays blocked pending independent review of the revised policy and its native permission-check/open contract.
+The separately versioned v4 fixture adds bounded execution from preparation onward, other-UID protected data, an immutable Git command boundary, and independent layer controls. The historical v1–v3 recipes and evidence remain unchanged. Fixture success supplies evidence for #36; downstream production admission and the broader resource/recovery work in #44 remain separate.
+
+## V4 bounded fixture
+
+```sh
+python3 bench/tools/claude_container_probe_v4.py run \
+  --output /tmp/claude-container-v4-new \
+  --claude /absolute/path/to/claude-2.1.289 \
+  --claude-version 2.1.289 \
+  --claude-sha256 a186b99e4a9c88366cd49df2f7dad56c61fc306ef0140b19ee64b7c42a8d1348 \
+  --oci-runtime /absolute/path/to/crun-1.30.1 \
+  --oci-runtime-sha256 86d1e6a0e76945975d3aebfab39cbc6a26eea15f1c3fc66b6776d19e5dc346a0
+```
+
+Run from a session with delegated CPU, memory and process controllers. Both preparation and the native client check effective `cpu.max=200000 100000`, `memory.max=1073741824` and `pids.max=256`. The container has private namespaces, no network, a read-only root, zero bounding capabilities and `NoNewPrivs=1`. Engine execution has a deadline; temporary filesystems, shared memory, logs and native output have size limits. The controller stops and removes only its owned containers and retains output, inspection, hashes and cleanup results.
+
+Synthetic Git seed initialization, cloning and repository-dependent preparation execute in bounded containers before the client starts. Seed initialization uses a fresh home and disables system Git configuration. The repository script receives only PATH, HOME and LANG (Python can add LC_CTYPE), probes a present host-file canary, and scans accessible process environments for a synthetic inherited credential. Neither ambient input is supplied to the container. Its source, observations and effective limits are retained.
+
+The protected directory and its files belong to another mapped UID in the immutable image. The native client's UID cannot read or chmod them, including through symlinks, irrespective of scoped native approvals. Dropped capabilities and the read-only mount prevent taking ownership or changing the protection. All four work roots remain writable. The attempt metadata and authoritative settings are read-only; explicit writable runtime exceptions are the temporary directory, fresh client state, and fixed output files. Runtime tools/libraries, the synthetic seed, and nonsensitive client support paths remain readable as required. No host home, credential store, engine socket, or benchmark checkout is mounted.
+
+Native Bash uses the pinned client's inner filesystem, process, credential and network sandbox. Native Git and worktree operations can execute without Bash, so an immutable `/usr/bin/git` wrapper starts the real Git inside an additional bubblewrap boundary with private PID/network namespaces, a hidden broker and home, closed inherited descriptors, zero capabilities, a read-only root, and the four writable work roots. It retains only Git repository-location variables after resolving them under those roots; provider credentials and executable-search overrides are absent. Git's recursive update-ref/reset calls need those variables to initialize faithful worktrees. When the Bash sandbox has already hidden the home, the wrapper leaves that absent path alone.
+
+The default model-visible catalog is compared with a fresh host baseline for the same pinned client and translated settings. The baseline executes Read only and supplies no host-mode admission. Native Read, Write, Edit, Grep, Glob, NotebookEdit, Bash, EnterWorktree, ExitWorktree and Agent worktree isolation execute. The fixture validates worktree HEADs and actual child writes, rather than accepting tool acknowledgments. Workflow remains visible and is refused under `dontAsk`; bare deny rules were rejected because they remove these tools from the catalog. Native filesystem/search routes consume fixed arguments, and scheduled/worker prompts use the same tool permissions; the fixture introduces no repository command hook outside the tested Bash and Git boundaries.
+
+| Profiles | Attribution |
+| --- | --- |
+| `native`, `inner-control` | Disable only the inner sandbox: the inner-only file, broker TCP/Unix and sibling environment become reachable, while other-UID protected data and immutable settings remain denied. |
+| `git-control` | Remove only the Git wrapper from the inner-off fixture: an actual repository fsmonitor callback reaches both brokers with copied dummy placeholders. The wrapped callback executes and cannot reach either. |
+| `native-policy-control` | Bare native file approvals read the present home/symlink/notebook canaries; guarded native calls refuse them. |
+| `file-guard`, `file-control` | With native approvals widened and the inner sandbox off, other-UID reads fail. Substitute a readable protected directory and both direct/symlink reads succeed; its read-only mount still rejects Write/chmod. |
+| `root-guard`, `root-control` | With the inner sandbox off, a world-writable image canary rejects writes on the read-only root and accepts them only in a throwaway writable-root control. |
+| `network-guard`, `network-control` | With the inner sandbox off, network-none cannot reach a present dummy host endpoint. A private rootless slirp network with host-loopback access reaches that endpoint. This weaker profile is never an admission mode. |
+| `unavailable`, `cancel`, `deadline` | Missing bubblewrap refuses before provider access. Controller cancellation and engine timeout stop an actually started native Bash call and preserve its output. |
+
+The broker controls include direct TCP/Unix, copied dummy authentication, an inherited socket and `/proc` access to it, and a sibling process environment. A trusted client descriptor control and actual native provider requests succeed. Repository settings that try to widen the policy are excluded with `--setting-sources ""`. Native mutation is denied. Inner Bash can write a private shadow at the hidden policy pathname; that shadow does not change the client's actual settings or subsequent permissions. With the inner sandbox off, a shell write reaches the real read-only policy mount and fails. The client checks authoritative settings equality after execution.
+
+Whole-client Landlock is a separate failed optional profile. Kernel ABI 3 accepts the ruleset, but its filesystem restrictions prevent the native inner bubblewrap from establishing UID maps/mounts. A separately weakened diagnostic gets past UID mapping and then fails the mount operation. These failures are compatibility evidence, not successful confinement, and do not alter the v4 inner policy.
+
+The slirp control uses Podman's documented [`allow_host_loopback=true` option](https://docs.podman.io/en/v3.4.1/markdown/podman-run.1.html). An earlier host-network diagnostic exposed the host cgroup mount and failed resource verification; it is retained and excluded from the passing matrix.
+
+The [v4 manifest](../bench/fixtures/2026-10-06-linux-claude-container-v4/manifest.json) retains development failures and the separately failed Landlock profile. [Attempt 013](../bench/fixtures/2026-10-06-linux-claude-container-v4/attempt-013-receipt.json) passes all fourteen profiles, with confined seed/preparation, unchanged seed content, actual kernel limits, and verified container/image removal. Its recipe/controller hashes match the delivered sources. The [Git identity](../bench/fixtures/2026-10-06-linux-claude-container-v4/git-identity.json) identifies the real Git inside the immutable image separately from its wrapper. Archives retain exact native/provider requests, settings, worktree metadata, cancellation output and engine inspections; every stored artifact was verified against its original hash.
+
+## Historical v1–v3 fixture
 
 Run it on Linux as an unprivileged user with rootless Podman, Git, Python 3, Bash, ripgrep, bubblewrap, socat and a native Claude binary. The fixture builds a throwaway local image from those binaries and their libraries. It copies the system Python standard library, not site packages or a host toolchain directory. It records every copied executable/library hash, the rootfs archive hash, local image identity, kernel, OCI runtime, seccomp profile, settings and session IDs. It downloads nothing and refuses a Claude version or binary hash mismatch.
 
@@ -45,7 +87,7 @@ Four additional profiles isolate native file enforcement. Host and container `na
 
 A final answer, a client exit code of zero or an unexecuted shell request cannot pass. The gate checks provider-captured tool results and the actual scratch files. Container inspection, raw requests, stdout/stderr, settings and namespace/status observations remain in the attempt directory before disposable containers and images are removed.
 
-## Remaining admission requirement
+## Historical v3 admission requirement
 
 The [native permissions documentation](https://code.claude.com/docs/en/permissions#symlinks) describes a recheck against the permission-approved file location when Read, Write and Edit open it. V1 and v2 depended on an earlier root check in the hook, followed by bare native approvals. Their evidence did not establish that the native recheck preserved the hook's approved location after a concurrent pathname replacement.
 
@@ -71,7 +113,7 @@ The passing host is WSL2 Linux `6.6.87.2-microsoft-standard-WSL2`, Podman `3.4.4
 
 The separate [v3 manifest](../bench/fixtures/2026-10-04-linux-claude-container-v3/manifest.json) preserves attempts 012 through 015 and development diagnostics, with 617 hash-verified archived artifacts. Attempts 012 and 013 failed before completion. Attempt 014 passed the scoped-policy matrix. [Attempt 015](../bench/fixtures/2026-10-04-linux-claude-container-v3/attempt-015-receipt.json) passed all nine profiles with the final controller, including validation of the child catalog and explicit attribution of the policy-independent symlink mutation denials. Its recipe hash matches the current controller. Both passing attempts retained an unchanged seed; their five containers and imported image were independently verified absent after cleanup. All traffic stayed within the fake provider, with zero paid calls. V1 and v2 evidence is unchanged.
 
-This host lacks delegated cgroups. Its passing invocation explicitly used:
+The October 4 historical invocation lacked delegated cgroups and explicitly used:
 
 ```sh
   --cgroups-disabled --oci-runtime /tmp/issue-36-crun-1.30.1/crun
@@ -80,6 +122,32 @@ This host lacks delegated cgroups. Its passing invocation explicitly used:
 That compatibility mode leaves namespace, capability, seccomp, read-only-root and privilege controls intact. It records that resource admission is not established. The default fixture requests CPU, memory and PID limits and refuses when the host cannot provide them. There is no automatic fallback or privileged or blanket-unconfined mode. Resource admission and laptop concurrency remain [#44](https://github.com/kamui/code-review-bench/issues/44); this profile is not evidence for that gate.
 
 The seccomp profile is copied from Podman's installed default and hashed before execution. The passing profile requires no custom seccomp allowance for the native inner sandbox. Linux still shares the host kernel, so this result does not establish protection against kernel compromise or support for other clients, methods or platforms.
+
+## Resource prerequisite probe
+
+`bench/tools/claude_container_resources.py` checks an existing immutable fixture image without starting Claude or a provider. Run it from the intended delegated user session. It requests the fixture's CPU, memory and process limits, reads `cpu.max`, `memory.max` and `pids.max` inside the container, and refuses absent, unlimited or mismatched values. Requested engine settings alone cannot pass. The receipt explicitly keeps `issue36_complete` false; resource success would still leave the native-client acceptance matrix and independent review pending.
+
+```sh
+python3 bench/tools/claude_container_resources.py \
+  --output /tmp/claude-resource-probe-new \
+  --image sha256:IMMUTABLE_FIXTURE_IMAGE_ID \
+  --oci-runtime /tmp/issue-36-crun-1.30.1/crun \
+  --oci-runtime-sha256 86d1e6a0e76945975d3aebfab39cbc6a26eea15f1c3fc66b6776d19e5dc346a0
+```
+
+The probe uses no bind mounts or network, retains commands, engine inspection and stdout/stderr, and removes only its own container after inspection. It preserves failed output directories. An engine deadline bounds execution to 30 seconds; the controller waits up to 45 seconds and stops an owned running container before removal. `/tmp`, `/run`, `/var/tmp`, shared memory and engine logs have explicit size limits. The v3 native fixture and its archived recipe hashes remain unchanged.
+
+On the WSL host checked on October 6, a detached `systemd-run --user` service reached the delegated memory and process controllers. A separate partial probe observed `memory.max=1073741824` and `pids.max=256`, with `cpu.max` absent. Requesting `Delegate=cpu memory pids` and `CPUQuota=200%` on a user service did not supply the missing ancestor CPU controller. The full capped launch failed in crun before executing the image's command.
+
+The system manager owns the ancestors above `user@1000.service`, as described in the installed [systemd 249 resource-control documentation](https://github.com/systemd/systemd/blob/v249/man/systemd.resource-control.xml). The stock unit has `Delegate=pids memory`. On this version, delegation setters apply only when creating transient units, so `set-property` cannot change delegation on this existing service. CPU accounting was already enabled and did not enable the CPU controller.
+
+For this host, whose service CPU weight was unset and whose quota was unlimited, the targeted runtime activation to try in an authenticated host terminal is:
+
+```sh
+sudo systemctl set-property --runtime user@1000.service CPUWeight=100
+```
+
+This selects the documented default CPU weight and requests the CPU controller through a setter supported for running units. It changes no CPU quota or persistent configuration and needs no user-manager restart. Noninteractive authorization and passwordless sudo were refused; the user ran the command in an authenticated terminal. CPU then appeared in every system-owned ancestor. Enabling `+cpu` in the user-owned `user@1000.service` and `app.slice` subtrees allowed the bounded probe to run. It observed `cpu.max=200000 100000`, `memory.max=1073741824` and `pids.max=256` inside the container, then verified removal. These observations establish this host's prerequisite only. Inspect the actual ancestry and effective values on another host; do not use cgroups-disabled execution to satisfy this prerequisite.
 
 ## Inspect evidence and regression tests
 
