@@ -14,7 +14,7 @@ import json
 import sys
 from pathlib import Path
 
-WAYS = ("written", "announced", "built", "established")
+WAYS = ("written", "announced", "built")
 CLASSES = ("public", "private", "deprecated", "removed", "other-purpose", "unstated")
 FIELDS = ("made_by", "whose_interface", "classification", "source", "searched")
 PLACES = ("project-docs", "owner-docs", "change", "maintainers", "public-code", "documented-way")
