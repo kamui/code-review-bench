@@ -47,8 +47,7 @@ def main():
     for entry in plan:
         for identifier in entry["candidates"] if entry["claim"] else []:
             for anchor in candidates[identifier]["anchors"]:
-                claims = [other["claim"] for other in plan if identifier in other["candidates"] and other["claim"]]
-                if not any((anchor["review"]["path"], anchor["item_id"], claim) in matched for claim in claims):
+                if (anchor["review"]["path"], anchor["item_id"], entry["claim"]) not in matched:
                     links.append({"claim": entry["claim"], "target": entry["target"], "review": anchor["review"],
                                   "attempt_id": Path(anchor["review"]["path"]).parent.name, "item_id": anchor["item_id"],
                                   "relation": "related", "reason": "A grader flagged this comment as raising the claim and the "
