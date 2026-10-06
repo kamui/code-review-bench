@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compare the two graders of the rubric trial and write `comparison.json`.
 
-    python3 docs/research/cohort-rebuild-2026-10-05/trial/compare.py
+    python3 docs/research/cohort-rebuild-2026-10-05/trial/compare.py [BATCHES RESULTS OUT]
 
 It reads `results/<run>/<target>/{first,second}/`. The second grader labelled the first grader's list of claims, so
 claims pair by review, item and position. It reports label agreement, agreement on each answer both reached, the
@@ -37,8 +37,8 @@ def facts(review, item, family):
             for fact in ("says_what", "says_why")}
 
 
-def main():
-    batches = load(HERE / "batches.json")["batches"]
+def main(batches_file="batches.json", results="results", out="comparison.json"):
+    batches = load(HERE / batches_file)["batches"]
     references = {r["target"]: r["families"] for r in load(ROOT / ".local/trial/current/references.json")["targets"]}
     admitted = {a["id"]: a["admission"]["state"] == "admitted"
                 for a in load(ROOT / ".local/trial/current/inventory.json")["attempts"]}
@@ -47,7 +47,7 @@ def main():
     fact_pairs = {"says_what": Counter(), "says_why": Counter()}
     usage = {"first": [], "second": []}
     for batch in batches:
-        base = HERE / "results" / Path(batch["run"]).name / batch["target"]
+        base = HERE / results / Path(batch["run"]).name / batch["target"]
         if not (base / "second/verdicts.json").exists():
             continue
         first, second = (by_attempt(base / stage, Path(batch["run"]).name) for stage in ("first", "second"))
@@ -90,11 +90,11 @@ def main():
         return {"agree": sum(n for (a, b), n in counter.items() if a == b), "total": sum(counter.values()),
                 "pairs": [{"first": a, "second": b, "count": n} for (a, b), n in sorted(counter.items(), key=lambda kv: -kv[1])]}
 
-    comparison = {"batches": sum(1 for b in batches if (HERE / "results" / Path(b["run"]).name / b["target"] / "second/verdicts.json").exists()),
+    comparison = {"batches": sum(1 for b in batches if (HERE / results / Path(b["run"]).name / b["target"] / "second/verdicts.json").exists()),
                   "reviews": len(reviews), "labels": table(labels), "labels_without_saved_ruling": table(free), "answers": {name: table(counter) for name, counter in answers.items()},
                   "facts": {name: table(counter) for name, counter in fact_pairs.items()}, "known_problem_results": table(results),
                   "ruled_comments": ruled, "label_differences": pairs, "usage": usage}
-    (HERE / "comparison.json").write_text(json.dumps(comparison, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    (HERE / out).write_text(json.dumps(comparison, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     for name in ("labels", "labels_without_saved_ruling", "known_problem_results"):
         print(name, comparison[name]["agree"], "of", comparison[name]["total"])
     for name, value in {**comparison["answers"], **comparison["facts"]}.items():
@@ -105,4 +105,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main(*sys.argv[1:])

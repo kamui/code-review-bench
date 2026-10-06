@@ -206,7 +206,7 @@ class ClaimRulesV2(unittest.TestCase):
         return [
             {"true": "no", "this_change": None, "promised": None, "outcome": "refuted", "kind": None},
             {"true": "not-shown", "this_change": None, "promised": None, "outcome": "unproven", "kind": None},
-            {"this_change": "no", "promised": None, "outcome": "not-this-change", "kind": None},
+            {"this_change": "no", "promised": None, "outcome": "outside-this-change", "kind": None},
             {}, {"kind": "outside-supported-use"},
             {"promised": "yes", "promise_source": ["written", "built"], "delivered": "yes",
              "outcome": "minor-defect", "kind": None},

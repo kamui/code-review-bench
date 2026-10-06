@@ -155,7 +155,7 @@ def verdict_problems_v2(claim, families):
     elif claim["true"] == "yes":
         reached.add("this_change")
         if claim["this_change"] == "no":
-            expected = "not-this-change"
+            expected = "outside-this-change"
         elif claim["this_change"] == "yes":
             reached.add("promised")
             if claim["promised"] == "no":
