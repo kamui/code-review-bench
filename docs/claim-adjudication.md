@@ -82,6 +82,7 @@ In the second pass of issue #30 a recommendation went to the user five times on 
 - any party could not tell, names a gap in the rule, or finds two rules that point different ways. An agent that cannot tell says so and never picks a side by default;
 - any party finds no earlier ruling of the case's shape, or the nearest one was decided under an earlier reading and not shown again;
 - a clause applied was written from one ruling, from the ruling in question, or has never been applied blind to a case it was not written from;
+- any party finds the use relied on and not promised: only the user can put such a case on the answer key, as an exception;
 - the recommendation would change a saved ruling;
 - a search could not be made.
 

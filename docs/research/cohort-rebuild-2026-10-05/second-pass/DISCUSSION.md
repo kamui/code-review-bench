@@ -148,7 +148,7 @@ Until then each advice ruling records which kind it is:
 | Ruling | Kind |
 | --- | --- |
 | 1 | Real behaviour change, unsupported order, no loss shown |
-| 2 | Real breakage, unsupported use |
+| 2 | Relied on, not promised (real breakage, unsupported use, programs shown depending on it) |
 | 3 | Real behaviour change, unsupported order, diagnostic only |
 | 9 | Real defect, trivial consequence |
 
