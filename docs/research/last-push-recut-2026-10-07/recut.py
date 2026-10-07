@@ -139,7 +139,7 @@ def recut(mirrors: Path, work: Path) -> dict:
             packet, receipt = restate(target, pinned, push)
         receipt = {"target": task["id"], "pinned_cutoff": target["cutoff"], **receipt}
         if push:
-            receipt["push_event"] = push["event"]
+            receipt["push_evidence"] = push["evidence"]
         receipt_raw = (json.dumps(receipt, indent=2, ensure_ascii=False) + "\n").encode()
         packet_path, receipt_path = f"bench/targets/{task['id']}/packet.v2.md", f"{here}/receipts/{task['id']}.json"
         files[packet_path], files[receipt_path] = packet, receipt_raw

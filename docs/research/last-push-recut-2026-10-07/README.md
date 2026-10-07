@@ -16,19 +16,19 @@ Counting by creation time, as the issue did, eight tasks lose records. Reading e
 
 ## Where each push time comes from
 
-A commit date is not a push time, so none is used. Eleven instants come from GitHub directly. Five come from GitHub's own push event, read from the public events archive, because each of those heads arrived by a fast-forward push that leaves no event on the pull request and its check suites are archived. [`push-times.v1.json`](push-times.v1.json) holds those five events.
+A commit date is not a push time, so none is used. Ten instants come from GitHub directly. Five come from GitHub's own push event, read from the public events archive, because each of those heads arrived by a fast-forward push that leaves no event on the pull request and its check suites are archived. One, for `k-graphql-js-1582`, is an inference, explained below the table. [`push-times.v1.json`](push-times.v1.json) holds the five events and the grounds for the inference.
 
 | Task | Pinned cut-off | Cut-off at the last push | Source |
 | --- | --- | --- | --- |
 | `i-requests-6667` | 2024-05-15T20:07:26Z, the merge | 2024-05-15T09:56:42Z | Push event 38393009997 in the events archive |
 | `j-trpc-5017` | 2023-11-10T10:08:08Z, the merge | 2023-11-09T22:08:09Z | Force-push event on the pull request |
-| `k-graphql-js-1582` | 2018-11-21T14:33:19Z, the merge | 2018-11-21T14:25:49Z | The pull request's opening, made with this commit |
+| `k-graphql-js-1582` | 2018-11-21T14:33:19Z, the merge | 2018-11-21T14:25:49Z | The pull request's opening, by inference. No dated push survives |
 | `l-bokeh-9232` | 2019-10-03T15:51:00Z, 62 s before the merge | 2019-10-03T04:32:25Z | Push event 10548161321 in the events archive |
 | `m-grpc-go-7390` | 2024-07-09T20:27:27Z, the merge | 2024-07-09T06:40:48Z | Push event 39978365160 in the events archive |
 | `n-ripgrep-2957` | 2024-12-31T13:23:13Z, the merge | 2024-12-31T13:09:16Z | Push event 45178300417 in the events archive |
-| `o-astro-16079` | 2026-03-25T16:40:00Z, the merge | 2026-03-25T12:02:19Z | The pull request's opening, made with this commit |
-| `p-hono-5067` | 2026-07-01T09:42:27Z, the merge | 2026-07-01T09:39:48Z | The pull request's opening, made with this commit |
-| `q-soba-195` | 2026-07-30T07:53:54Z, the merge | 2026-07-28T21:06:09Z | The pull request's opening, made with this commit |
+| `o-astro-16079` | 2026-03-25T16:40:00Z, the merge | 2026-03-25T12:02:24Z | First check suite on the head commit, 5 s after the opening |
+| `p-hono-5067` | 2026-07-01T09:42:27Z, the merge | 2026-07-01T09:39:48Z | The pull request's opening. The first check suite on the head is 50 s older |
+| `q-soba-195` | 2026-07-30T07:53:54Z, the merge | 2026-07-28T21:06:09Z | The pull request's opening. The first check suite on the head has the same second |
 | `r-base-ui-5460` | 2026-08-13T11:23:20Z, the merge | 2026-08-10T13:33:57Z | Force-push event on the pull request |
 | `s-seaweedfs-10735` | 2026-08-13T17:53:33Z, the merge | 2026-08-13T14:12:47Z | First check suite on the head commit, 15 s after its commit time |
 | `u-grpc-go-6919` | 2024-01-26T02:20:36Z, the head's commit time | 2024-01-26T02:20:49Z | Push event 35136899807 in the events archive |
@@ -37,7 +37,9 @@ A commit date is not a push time, so none is used. Eleven instants come from Git
 | `x-kubernetes-141463` | 2026-09-09T20:30:36Z, the merge | 2026-09-09T13:25:49Z | Force-push event on the pull request |
 | `y-django-16631` | 2023-03-08T09:48:04Z, the head's commit time | 2023-03-08T09:48:51Z | Force-push event on the pull request |
 
-The four openings rest on what GitHub records, not on the commit count alone. Each pull request has one commit, its timeline has no force-push and no change of base, and the commit's parent is the merge commit of an earlier pull request merged into the same base branch before the opening. A pull request cannot be opened with a commit its base already holds, so it was opened with this one.
+`k-graphql-js-1582` is the one task without a dated push. GitHub has archived its check suites, and the events archive's hour file holds the pull request's closing but no push and no opening. The cut-off is the opening, on these grounds: the pull request lists one commit, made 56 seconds before the opening; its timeline has no force-push; the commit's parent had been on `master` since the day before; and the first record on the commit is a review 67 seconds after the opening. None of that dates the push, and a pull request that lists one commit was not necessarily opened with it. The push lies between the commit and that review, so the stated instant is at most 67 seconds early. No record falls in that window, so the packet's content does not depend on where in it the push fell.
+
+On `o-astro-16079` the head was committed 16 minutes before the pull request was opened, and GitHub does not say when it was pushed. The first check suite, 5 seconds after the opening, is the earliest dated record of the head. No record falls in those 5 seconds.
 
 Two checks on the archive source. On `n-ripgrep-2957` GitHub's signature record says it verified the head commit at 13:09:17Z, one second after the push event. On `x-kubernetes-141463` the signature record and the force-push event carry the same second.
 
