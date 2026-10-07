@@ -51,7 +51,13 @@ def scratch_records():
 
 
 def retokened(verdicts, tokens, key):
-    """The saved verdicts under the blind tokens of the new preparation."""
+    """The saved verdicts under the blind tokens of the new preparation, with the second fact under its current name."""
+    for review in verdicts["reviews"].values():
+        for item in review["items"].values():
+            for entry in (e for claim in item.get("claims", []) for e in claim["known_problems"]):
+                # Verdicts saved before the second fact was renamed call it says_why.
+                if "says_why" in entry:
+                    entry["identifies_cause"] = entry.pop("says_why")
     new = {review["attempt_id"]: review["token"] for review in key["reviews"]}
     renamed = {old: new[attempt] for old, attempt in tokens.items()}
     return {"reviews": {renamed[token]: review for token, review in verdicts["reviews"].items()},
