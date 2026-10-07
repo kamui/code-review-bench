@@ -22,7 +22,7 @@ import grading_policy
 
 MODEL = "gpt-6-luna"
 TOOL_NAMES = {"mcp__grading__" + name for name in
-              ("inspect", "run", "write_scratch", "write_verdicts", "validate")}
+              ("inspect", "run", "write_scratch", "write_verdicts", "edit_verdicts", "validate")}
 RESOURCE_TOOLS = {"list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"}
 AUX_TOOL_NAMES = RESOURCE_TOOLS
 MODEL_CATALOG = Path(__file__).resolve().parents[1] / "harness/codex-grading-models.v1.json"
@@ -123,6 +123,7 @@ def probe(evidence_dir: Path | None = None) -> dict:
                      ("write_scratch", {"path": "clone-work/probe.txt", "text": "scratch probe"}),
                      ("write_verdicts", {"text": json.dumps({"reviews": {"blind-probe": {"items": {}, "recommendations": [], "remedy_inventory": {
                          "state": "complete", "reason": "The review has no items."}}}, "new_candidates": [], "link_disputes": []})}),
+                     ("edit_verdicts", {"edits": [{"old": "The review has no items.", "new": "The review holds no items."}]}),
                      ("validate", {}),
                      ("list_mcp_resources", {"server": "grading"}),
                      ("list_mcp_resource_templates", {"server": "grading"}),
@@ -210,7 +211,7 @@ def probe(evidence_dir: Path | None = None) -> dict:
                 and all(row["status"] == "completed" for row in audit), "grading policy audit did not confirm all tools")
         require("focused inspection" in context, "inspection did not complete")
         require((work / "clone-work/probe.txt").read_text() == "scratch probe", "scratch writer failed")
-        require((work / "verdicts.json").is_file(), "verdict writer failed")
+        require("The review holds no items." in (work / "verdicts.json").read_text(), "verdict writer or editor failed")
         receipt = {"client": "codex", "cli_version": version.stdout.strip(), "tools": sorted(TOOL_NAMES),
                    "native_helpers": sorted(RESOURCE_TOOLS),
                    "native_resource_helpers_confined": True, "catalog_cli_version": MODEL_CATALOG_VERSION,

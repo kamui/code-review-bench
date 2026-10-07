@@ -10,7 +10,7 @@ class ClientProbe(unittest.TestCase):
         self.assertTrue(receipt["inspection_completed"])
         self.assertTrue(receipt["all_tools_completed"])
         self.assertEqual(receipt["paid_calls"], 0)
-        print("installed client exposes only five grading MCP tools; all five tool exercises succeeded; ambient markers absent")
+        print("installed client exposes only six grading MCP tools; all six tool exercises succeeded; ambient markers absent")
 
 
 if __name__ == "__main__":
