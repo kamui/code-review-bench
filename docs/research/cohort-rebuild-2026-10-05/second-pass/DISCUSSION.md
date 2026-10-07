@@ -311,7 +311,7 @@ On a comment whose stated harm belongs to another matter: "the one thing that ma
 
 On the rubric's wording: "I do think maybe I should reword the word 'manifest' that I said to use earlier for the ruling. It seems the agents latched on to this and I'm not sure the outcome was good."
 
-On whether a comment says why when it faults the right line for another reason: "Yes it counts, a single issue can cause multiple downstream problems", and then, of that sentence, "I should not have used the word manifested in my last message."
+On whether a comment says why when it faults the right line for another reason: "Yes it counts, a single issue can cause multiple downstream problems shown up in the same way as a known problem, or maybe even downstream of a known problem, OR maybe even a completely different unknown problem." The user first wrote "manifested" where this says "shown up", then wrote "I should not have used the word manifested in my last message" and gave the sentence again.
 
 Before any answer was recorded: "Talk it through with me before recording an answer."
 

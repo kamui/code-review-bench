@@ -32,7 +32,11 @@ For the second fact the session reported that both blind assessors answered no f
 
 > Yes it counts, a single issue can cause multiple downstream problems manifested in the same way as a known problem, or maybe even downstream of a known problem, OR maybe even a completely different unknown problem.
 
-While the answer was being recorded the user added: "I should not have used the word manifested in my last message." The quotation above is kept as written. The session's reading of it without that word: one fault can cause several problems, which may be the known problem itself, a problem that follows from the known problem, or a different problem nobody has listed.
+While the answer was being recorded the user added: "I should not have used the word manifested in my last message.", and gave the sentence again:
+
+> Yes it counts, a single issue can cause multiple downstream problems shown up in the same way as a known problem, or maybe even downstream of a known problem, OR maybe even a completely different unknown problem.
+
+The first quotation is kept as written. The second is the user's ground.
 
 ## Rulings 27 and 28
 
