@@ -2,7 +2,7 @@
 """File the rulings of the second pass in the current records.
 
 Run from the repository root. It reads `plan.v1.json`, the records under `../impact/records/`, both blinded label
-inspections, `intake.v1.json` and the saved ruling files, and writes the fifth ruling receipt, the new and widened
+inspections, the `intake.v*.json` files and the saved ruling files, and writes the fifth ruling receipt, the new and widened
 causal families with their impact cards, the claims, the decisions that close the pending candidates, and
 `credits.json`, the rulings on whether one comment gets credit for a known problem. Running it again changes
 nothing."""
@@ -98,8 +98,9 @@ class Filing:
         return " and ".join(entry["groups"])
 
     def dossiers(self, entry):
-        """The dossiers a ruling without a record rests on: each group's dossier and supplement in the second pass."""
-        folder = SECOND / "candidates" / entry["target"] / "dossiers"
+        """The dossiers a ruling without a record rests on: each group's dossier and supplement in the second pass.
+        An entry names its folder in `dossiers` when a later ruling's dossiers are not under the target's own."""
+        folder = SECOND / "candidates" / entry.get("dossiers", entry["target"]) / "dossiers"
         files = [path for group in entry["groups"] for path in (folder / f"{group}.md", folder / f"{group}-supplement.md")]
         if entry["kind"] == "narrowed":
             files = [FIRST / "candidates" / entry["target"] / "dossiers" / f"{group}.md" for group in entry["groups"]]
@@ -270,7 +271,7 @@ class Filing:
                 scope, list({pin["path"]: pin for pin in evidence}.values()))
 
     def claims(self):
-        intake = load(HERE / "intake.v1.json")
+        intake = {"links": [link for path in sorted(HERE.glob("intake.v*.json")) for link in load(path)["links"]]}
         rows, known = self.documents["claims"]["claims"], claim_tools.identities([], ROOT)
         by_id = {row["id"]: row for row in rows}
         for entry in self.entries:
