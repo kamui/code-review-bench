@@ -36,11 +36,12 @@ source, every omitted record and every text restored to the cutoff.
 The cutoff defaults to the last push: the instant the reviewed head became the pull request's head.
 A review triggered by that push sees the final code and nothing said about it yet. The instant
 comes from the forge, in this order: the force-push event that made the commit the head; the
-pull request's opening, when its only commit was never force-pushed; the first check suite on the
-head commit. A push that precedes the opening gives the opening. A commit date is not a push time
-and is never used. When the forge establishes none of these (a fast-forward push whose check suites
-it has archived), the build is refused: give the instant with ``--pushed-at`` and where it comes
-from with ``--pushed-at-source``, for example a push event from the public events archive.
+pull request's opening, when the forge shows it was opened with that commit (see
+``opened_with_its_head``); the first check suite on the head commit. A push that precedes the
+opening gives the opening. A commit date is not a push time and never sets the cutoff. When the
+forge establishes none of these (a fast-forward push whose check suites it has archived), the build
+is refused: give the instant with ``--pushed-at`` and where it comes from with
+``--pushed-at-source``, for example a push event from the public events archive.
 ``--cutoff`` sets any other instant, such as the merge instant the first cohort used.
 
 Every cutoff is a timezone-aware instant.
@@ -105,8 +106,9 @@ query($owner:String!,$name:String!,$number:Int!){
       baseRepository{ url }
       commits(first:100){ totalCount nodes{ commit{ oid committedDate message
         author{ name user{login} } } } }
-      headCommit: commits(last:1){ nodes{ commit{ oid checkSuites(first:100){ totalCount nodes{ createdAt } } } } }
-      timelineItems(first:250,itemTypes:[HEAD_REF_FORCE_PUSHED_EVENT,RENAMED_TITLE_EVENT]){ pageInfo{ hasNextPage } nodes{ __typename
+      headCommit: commits(last:1){ nodes{ commit{ oid checkSuites(first:100){ totalCount nodes{ createdAt } }
+        parents(first:2){ totalCount nodes{ oid associatedPullRequests(first:10){ nodes{ mergedAt baseRefName mergeCommit{oid} } } } } } } }
+      timelineItems(first:250,itemTypes:[HEAD_REF_FORCE_PUSHED_EVENT,BASE_REF_FORCE_PUSHED_EVENT,BASE_REF_CHANGED_EVENT,RENAMED_TITLE_EVENT]){ pageInfo{ hasNextPage } nodes{ __typename
         ... on HeadRefForcePushedEvent{ createdAt afterCommit{oid} }
         ... on RenamedTitleEvent{ createdAt previousTitle } } }
       files(first:100){ nodes{ path additions deletions changeType } }
@@ -238,24 +240,52 @@ def event_instant(event, what: str) -> datetime:
         raise InputError(f"{what}: createdAt missing or malformed ({exc})") from exc
 
 
+def opened_with_its_head(P, commit, opened: datetime) -> bool:
+    """Whether the forge shows that the pull request was opened with the head it has now.
+
+    With no force-push and no change of base on the timeline, a push after the opening can only have
+    added commits, so the head at the opening is the present head or one of its ancestors. A pull
+    request cannot be opened with a commit its base already holds. When the present head is the only
+    commit and its one parent is the merge commit of a pull request merged into the same base branch
+    before the opening, every ancestor was already on the base, which leaves the present head.
+    """
+    parents = commit.get("parents") or {}
+    rewritten = any(timeline(P, kind) for kind in ("HeadRefForcePushedEvent", "BaseRefForcePushedEvent", "BaseRefChangedEvent"))
+    if rewritten or (P.get("commits") or {}).get("totalCount") != 1 or parents.get("totalCount") != 1:
+        return False
+    parent = parents["nodes"][0]
+    for merged in (parent.get("associatedPullRequests") or {}).get("nodes") or []:
+        if (merged.get("mergeCommit") or {}).get("oid") != parent.get("oid") or merged.get("baseRefName") != P.get("baseRefName"):
+            continue
+        try:
+            if parse_instant(merged.get("mergedAt")) <= opened:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 def last_push(P, head: str, pushed_at, pushed_source):
     """When the reviewed head became the pull request's head: the instant, what it is, and its source."""
     opened = event_instant(P, "pull request")
     if pushed_at is not None:
         when, source = pushed_at, pushed_source
     else:
+        commits = (P.get("headCommit") or {}).get("nodes") or [{}]
+        commit = commits[0].get("commit") or {}
+        if commit.get("oid") != head:
+            commit = {}
         forced = [event_instant(event, "force-push event") for event in timeline(P, "HeadRefForcePushedEvent")
                   if (event.get("afterCommit") or {}).get("oid") == head]
         if forced:
             when, source = max(forced), "the force-push event that made this commit the head"
-        elif (P.get("commits") or {}).get("totalCount") == 1:
-            return opened, OPENING, "the pull request was opened with its only commit, which was never force-pushed"
+        elif opened_with_its_head(P, commit, opened):
+            return opened, OPENING, ("the pull request was opened with its only commit: no force-push or change of base "
+                                     "followed, and the commit's parent was merged into the base before the opening")
         else:
-            commits = (P.get("headCommit") or {}).get("nodes") or [{}]
-            commit = commits[0].get("commit") or {}
             checked = commit.get("checkSuites") or {}
             suites = checked.get("nodes") or []
-            if commit.get("oid") != head or not suites or checked.get("totalCount") != len(suites):
+            if not suites or checked.get("totalCount") != len(suites):
                 raise InputError("cannot establish the last push: the forge holds no force-push event for the head and no "
                                  "complete list of its check suites; give --pushed-at with --pushed-at-source, or --cutoff")
             when = min(event_instant(suite, "check suite") for suite in suites)

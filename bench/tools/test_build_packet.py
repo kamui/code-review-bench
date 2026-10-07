@@ -175,6 +175,15 @@ class BuildPacketTests(unittest.TestCase):
         self.pull()["headCommit"] = {"nodes": [{"commit": {"oid": self.head, "checkSuites": {
             "totalCount": len(instants), "nodes": [{"createdAt": instant} for instant in instants]}}}]}
 
+    def open_with_the_only_commit(self, merged_at: str = "2026-03-06T09:00:00Z") -> dict:
+        """One commit whose parent an earlier pull request merged into main; returns that parent."""
+        parent = {"oid": "9" * 40, "associatedPullRequests": {"nodes": [
+            {"mergedAt": merged_at, "baseRefName": "main", "mergeCommit": {"oid": "9" * 40}}]}}
+        self.check_the_head()
+        self.pull()["headCommit"]["nodes"][0]["commit"]["parents"] = {"totalCount": 1, "nodes": [parent]}
+        self.pull()["commits"]["totalCount"] = 1
+        return parent
+
     def save_edits(self, **histories: list) -> None:
         """Save the edit histories of the named nodes: each a list of (editedAt, text) revisions."""
         self.save_replay(edits={"data": {"nodes": [
@@ -197,9 +206,9 @@ class BuildPacketTests(unittest.TestCase):
         self.assertIn("Bounded in the follow-up commit.", packet)
         self.assertNotIn("| APPROVED |", packet)
 
-    def test_a_single_commit_never_force_pushed_cuts_at_the_opening(self) -> None:
-        self.date_the_timeline(self.force_push("2026-03-08T12:00:00Z", "0" * 40))
-        self.pull()["commits"]["totalCount"] = 1
+    def test_a_pull_request_opened_with_its_only_commit_cuts_at_the_opening(self) -> None:
+        self.date_the_timeline()
+        self.open_with_the_only_commit()
         result = self.run_cli(cutoff=None)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(f"cutoff {OPENED};", result.stdout)
@@ -207,6 +216,44 @@ class BuildPacketTests(unittest.TestCase):
         packet = self.out.read_text(encoding="utf-8")
         self.assertIn(f"frozen cutoff `{OPENED}` (the pull request's opening)", packet)
         self.assertNotIn("Opening for review; the ceiling is configurable.", packet)
+
+    def test_one_listed_commit_does_not_show_the_head_was_there_at_the_opening(self) -> None:
+        def another_branch(parent: dict) -> None:
+            parent["associatedPullRequests"]["nodes"][0]["baseRefName"] = "release"
+
+        def not_the_merge_commit(parent: dict) -> None:
+            parent["associatedPullRequests"]["nodes"][0]["mergeCommit"]["oid"] = "8" * 40
+
+        def never_merged(parent: dict) -> None:
+            parent["associatedPullRequests"]["nodes"] = []
+
+        cases = {
+            "force-pushed to an earlier head, then fast-forwarded": (lambda parent: None, [self.force_push(oid="0" * 40)]),
+            "base changed": (lambda parent: None, [{"__typename": "BaseRefChangedEvent"}]),
+            "base force-pushed": (lambda parent: None, [{"__typename": "BaseRefForcePushedEvent"}]),
+            "parent merged into another branch": (another_branch, []),
+            "parent is not that pull request's merge commit": (not_the_merge_commit, []),
+            "parent never merged by a pull request": (never_merged, []),
+        }
+        for label, (change, events) in cases.items():
+            with self.subTest(case=label):
+                self.date_the_timeline(*events)
+                change(self.open_with_the_only_commit())
+                result = self.run_cli(cutoff=None)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn("cannot establish the last push", result.stderr)
+        with self.subTest(case="parent merged after the opening"):
+            self.date_the_timeline()
+            self.open_with_the_only_commit(merged_at="2026-03-07T07:30:01Z")
+            self.assertEqual(self.run_cli(cutoff=None).returncode, 2)
+        with self.subTest(case="a later check suite dates the fast-forward"):
+            self.date_the_timeline(self.force_push(oid="0" * 40))
+            self.open_with_the_only_commit()
+            self.pull()["headCommit"]["nodes"][0]["commit"]["checkSuites"] = {"totalCount": 1, "nodes": [{"createdAt": PUSHED}]}
+            result = self.run_cli(cutoff=None)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn(f"cutoff {PUSHED};", result.stdout)
+            self.assertIn("cutoff source: the first check suite on the head commit", result.stdout)
 
     def test_a_fast_forward_push_cuts_at_the_first_check_suite_on_the_head(self) -> None:
         self.date_the_timeline()
