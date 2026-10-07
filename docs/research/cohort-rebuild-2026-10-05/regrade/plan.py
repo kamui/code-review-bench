@@ -14,7 +14,7 @@ With ``--cap`` it writes ``source-plan``, ``execution-plan`` and ``authorization
 ``--cap`` is the ceiling the user approved for the whole regrade at list price, split between the queues by their
 allowance sums. ``--receipt`` is a saved JSON record of that approval with exactly ``speaker``, ``text`` and
 ``context``, and each authorization carries it. Outputs are exclusive: a later version is a new set of files and new
-queue directories.
+queue directories. Each share is rounded down to the cent, so the shares never add up to more than the ceiling.
 
 A queue holds the batches that share one cache-replacement manifest, because ``regrade.py`` passes a single manifest
 to every preparation: ``selected`` targets use the selected-task manifest, ``rebuilt`` targets the original-task
@@ -24,7 +24,7 @@ when its first run starts.
 """
 
 import argparse
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 import hashlib
 import json
 from pathlib import Path
@@ -115,7 +115,7 @@ def main():
         for kind, value in (("source-plan", part), ("execution-plan", execution)):
             with names[kind].open("x", encoding="utf-8") as handle:
                 handle.write(json.dumps(value, indent=2) + "\n")
-        share = (args.cap * sums[name] / sum(sums.values())).quantize(Decimal("0.01"))
+        share = (args.cap * sums[name] / sum(sums.values())).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
         authorization = {
             "schemaVersion": 1,
             "scope": "Issue 30: grade the selected cohort's saved reviews once under the next rubric; no review reruns",
