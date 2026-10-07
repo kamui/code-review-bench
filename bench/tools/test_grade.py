@@ -158,7 +158,7 @@ def claim_v2(identifier="c1", quote="Races on close", **fields):
 
 
 def known_problem(family="GT-t1", what="yes", why="no"):
-    return {"family": family, "says_what": what, "says_why": why, "reason": "The quoted words establish these facts."}
+    return {"family": family, "says_what": what, "identifies_cause": why, "reason": "The quoted words establish these facts."}
 
 
 def reviewed_v2(*items, recommendations=()):
@@ -715,7 +715,7 @@ class MapV2(PrepareV2):
         review = current.pin_file(self.run_dir / "attempts/att-001/normalized.json", self.root)
         self.cohort.documents["credit"]["rulings"] = [{
             "id": "CR-1", "target": TARGET, "revision": self.cohort.revision, "family_id": family, "review": review,
-            "attempt_id": "att-001", "item_id": item, "says_what": what, "says_why": why,
+            "attempt_id": "att-001", "item_id": item, "says_what": what, "identifies_cause": why,
             "reason": "The user ruled on this comment.", "receipt": self.cohort.evidence, "receipt_scope": "The pull request."}]
         self.cohort.save()
 
@@ -738,9 +738,9 @@ class MapV2(PrepareV2):
         self.assertEqual(first["claims"][0]["answers"], {"true": "yes", "this_change": None, "promised": None,
                                                         "promise_source": [], "delivered": None})
         self.assertEqual(first["claims"][0]["known_problems"], [
-            {"family_id": "GT-t1", "says_what": "yes", "says_why": "no", "reason": "The quoted words establish these facts."}])
+            {"family_id": "GT-t1", "says_what": "yes", "identifies_cause": "no", "reason": "The quoted words establish these facts."}])
         self.assertEqual(first["not_findings"], [{"item_id": "item-1", "note": "This item makes no claim."}])
-        self.assertEqual({f["family_id"]: (f["outcome"], f["claim_ids"], f["sufficiency"], f["why_only"]) for f in first["families"]},
+        self.assertEqual({f["family_id"]: (f["outcome"], f["claim_ids"], f["sufficiency"], f["cause_only"]) for f in first["families"]},
                          {"GT-t1": ("caught", ["c1"], "sufficient", False), "GT-t2": ("missed", [], "unassessed", True)})
         excluded = {f["family_id"]: f["outcome"] for f in self.review("att-002")["families"]}
         self.assertEqual(excluded, {"GT-t1": "unresolved", "GT-t2": "missed"})
@@ -748,10 +748,10 @@ class MapV2(PrepareV2):
         self.assertFalse((self.work / "clone").exists())
 
         saved = self.grades()
-        saved["batches"][0]["reviews"][0]["families"][1]["why_only"] = False
+        saved["batches"][0]["reviews"][0]["families"][1]["cause_only"] = False
         write_json(self.root / "bench/grading/current/grades.json", saved)
         self.assertIn("saved recovery differs from the one its claims and recommendations give", self.check().stdout)
-        saved["batches"][0]["reviews"][0]["families"][1]["why_only"] = True
+        saved["batches"][0]["reviews"][0]["families"][1]["cause_only"] = True
         saved["batches"][0]["reviews"][0]["not_findings"] = []
         write_json(self.root / "bench/grading/current/grades.json", saved)
         self.assertIn("every original item holds claims or is recorded as not a finding", self.check().stdout)
@@ -765,12 +765,12 @@ class MapV2(PrepareV2):
         token = self.token["att-001"]
         self.assertIn(f"{token} item 1, GT-t1: says what goes wrong, no; identifies the cause as a fault, yes.", (self.work / "claims.md").read_text())
         snapshot = json.loads((self.work / "validator/inputs.json").read_text())
-        self.assertEqual(snapshot["credits"], {token: {"1": [{"family": "GT-t1", "says_what": "no", "says_why": "yes"}]}})
+        self.assertEqual(snapshot["credits"], {token: {"1": [{"family": "GT-t1", "says_what": "no", "identifies_cause": "yes"}]}})
         rest = ([], [claim_v2("c3", "Lock order is new")])
         for first, violation in ((self.problem(), "the user ruled says_what 'no' for GT-t1 on this comment"),
-                                 (claim_v2(), "the user ruled says_why 'yes' for GT-t1 on this comment"),
+                                 (claim_v2(), "the user ruled identifies_cause 'yes' for GT-t1 on this comment"),
                                  (claim_v2(known_problems=[known_problem(what="no", why="no")]),
-                                  "the user ruled says_why 'yes' for GT-t1 on this comment")):
+                                  "the user ruled identifies_cause 'yes' for GT-t1 on this comment")):
             done = self.map(self.graded(reviewed_v2([first], *rest, recommendations=[self.fix()])))
             self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
             self.assertIn(f"{token} item 1: {violation}", done.stdout)
@@ -780,7 +780,7 @@ class MapV2(PrepareV2):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(self.check().returncode, 0, self.check().stdout)
         family = next(f for f in self.review()["families"] if f["family_id"] == "GT-t1")
-        self.assertEqual((family["outcome"], family["why_only"]), ("missed", True))
+        self.assertEqual((family["outcome"], family["cause_only"]), ("missed", True))
 
         self.rule("no", None)
         self.start()

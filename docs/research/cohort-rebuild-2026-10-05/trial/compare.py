@@ -27,6 +27,12 @@ def load(path):
 def by_attempt(directory, run):
     """{attempt id: review verdicts} of one saved stage."""
     tokens, verdicts = load(directory / "tokens.json"), load(directory / "verdicts.json")
+    for review in verdicts["reviews"].values():
+        for item in review["items"].values():
+            for entry in (e for claim in item.get("claims", []) for e in claim["known_problems"]):
+                # Verdicts saved before the second fact was renamed call it says_why.
+                if "says_why" in entry:
+                    entry["identifies_cause"] = entry.pop("says_why")
     return {f"{run}/{tokens[token]}": review for token, review in verdicts["reviews"].items()}
 
 
@@ -34,7 +40,7 @@ def facts(review, item, family):
     """One item's facts for one known problem, over its claims: yes when a claim says yes, else cannot-tell, else no."""
     entries = [e for claim in review["items"][str(item)]["claims"] for e in claim["known_problems"] if e["family"] == family]
     return {fact: next((value for value in ("yes", "cannot-tell") if any(e[fact] == value for e in entries)), "no")
-            for fact in ("says_what", "says_why")}
+            for fact in ("says_what", "identifies_cause")}
 
 
 def main(batches_file="batches.json", saved="results", out="comparison.json"):
@@ -44,7 +50,7 @@ def main(batches_file="batches.json", saved="results", out="comparison.json"):
                 for a in load(ROOT / ".local/trial/current/inventory.json")["attempts"]}
     labels, answers, results, pairs, reviews = Counter(), {name: Counter() for name in ANSWERS}, Counter(), [], {}
     free = Counter()
-    fact_pairs = {"says_what": Counter(), "says_why": Counter()}
+    fact_pairs = {"says_what": Counter(), "identifies_cause": Counter()}
     usage = {"first": [], "second": []}
     for batch in batches:
         base = HERE / saved / Path(batch["run"]).name / batch["target"]
@@ -101,7 +107,7 @@ def main(batches_file="batches.json", saved="results", out="comparison.json"):
         print(name, value["agree"], "of", value["total"])
     for row in ruled:
         print(row["group"], row["target"], row["family"], "ruled", row["says_what"], row["says_why"],
-              "| first", row["first"]["says_what"], row["first"]["says_why"], "| second", row["second"]["says_what"], row["second"]["says_why"])
+              "| first", row["first"]["says_what"], row["first"]["identifies_cause"], "| second", row["second"]["says_what"], row["second"]["identifies_cause"])
 
 
 if __name__ == "__main__":

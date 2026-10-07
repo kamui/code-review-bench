@@ -358,7 +358,7 @@ class Filing:
                 "revision": self.references[recovery["target"]]["revision"], "family_id": recovery["family"],
                 "review": current.pin_file(ROOT / "bench/runs" / run / "attempts" / attempt / "normalized.json", ROOT),
                 "attempt_id": attempt, "item_id": f"item-{recovery['item'] - 1}", "says_what": "yes" if what else "no",
-                "says_why": {True: "yes", False: "no", None: None}[recovery.get("why")],
+                "identifies_cause": {True: "yes", False: "no", None: None}[recovery.get("why")],
                 "reason": f"{upper(named(recovery))}: the user ruled that this comment {verb} credit for {recovery['family']}.",
                 "receipt": self.receipt_pin, "receipt_scope": self.recovery_scope(recovery)})
         document = {"schema_version": 1, "rulings": sorted(rows, key=lambda row: row["id"])}
