@@ -1,0 +1,274 @@
+import * as React from 'react';
+import { Field } from '@base-ui/react/field';
+
+/**
+ * How a control whose visible part is not an `<input>` takes part in a form.
+ *
+ * Base UI's `Form` validates, focuses and collects only the controls registered
+ * with a `Field`, and the one public way to register is `Field.Control`, which
+ * is an `<input>` holding a string. A picker's trigger is a button and a file
+ * picker's is a drop zone, so on their own they were invisible to a `PlForm`:
+ * missing from its values, never blocking a submit, and never showing the error
+ * it had for their `name`.
+ *
+ * `FormControl` is that input, kept off screen. It holds the value as a string,
+ * so `required` is the browser's own check, and it hands the focus a form moves
+ * to it on to the control a reader actually uses. What a string cannot carry —
+ * the two ends of a range, several selections, a list of files — is reported to
+ * the `PlForm` around it through `useFormReport`, and `PlForm` lays those over
+ * the values Base UI collected.
+ */
+
+/** Values reported to a `PlForm` by name, read when the form is submitted. */
+export type FormReport = Map<string, () => unknown>;
+
+export const FormReportContext = /* @__PURE__ */ React.createContext<FormReport | null>(null);
+
+/**
+ * Reports `read()` as the value of `name` to the `PlForm` around the caller,
+ * for as long as `enabled` holds. Outside a `PlForm` it does nothing.
+ */
+export function useFormReport(name: string | undefined, read: () => unknown, enabled = true) {
+  const report = React.useContext(FormReportContext);
+  const latest = React.useRef(read);
+
+  React.useEffect(() => {
+    latest.current = read;
+  });
+
+  React.useEffect(() => {
+    if (!report || !name || !enabled) {
+      return undefined;
+    }
+
+    const entry = () => latest.current();
+
+    report.set(name, entry);
+
+    return () => {
+      if (report.get(name) === entry) {
+        report.delete(name);
+      }
+    };
+  }, [report, name, enabled]);
+}
+
+/**
+ * Whether a `PlFieldset` around the caller is disabled, the nearest one or any
+ * further out.
+ *
+ * Base UI hands a disabled fieldset to every `Field` inside it through a
+ * context of its own, and the browser disables a native control inside a
+ * `<fieldset disabled>`. Neither reaches the look, which a shell draws from its
+ * own `disabled`, nor a control that is neither in a `Field` nor native, such
+ * as a slider's track or a segmented button's segments. `PlFieldset` hands the
+ * answer Base UI gives its fields down through this as well, and a control
+ * counts it in wherever it reads its own `disabled`.
+ */
+export const FieldsetDisabledContext = /* @__PURE__ */ React.createContext(false);
+
+/**
+ * Whether a surface around the caller is already drawn at a disabled control's
+ * fade, the half opacity and the drained colour of `disabledClasses`.
+ *
+ * A control disabled together with that surface draws the look of a disabled
+ * control without the fade, which would draw it at a quarter. A disabled
+ * `multiple` `PlCombobox` hands it to its chips, and a `PlChip` disabled
+ * anywhere else still fades on its own. The Flutter build hands the same answer
+ * down through `PlassFadedScope`.
+ */
+export const FadedContext = /* @__PURE__ */ React.createContext(false);
+
+/**
+ * A control's `disabled`, with a disabled `PlFieldset` around it counted in, so
+ * a control in one draws itself exactly as it would with `disabled` of its own.
+ */
+export function useDisabled(disabled: boolean | undefined): boolean {
+  return React.useContext(FieldsetDisabledContext) || disabled === true;
+}
+
+/** The two attributes a caller names a control with. */
+export interface ControlNaming {
+  'aria-label'?: string;
+  'aria-labelledby'?: string;
+}
+
+/**
+ * A caller's `aria-label` and `aria-labelledby`, for the control a field's
+ * other props are carried past.
+ *
+ * A labelled field spreads what it does not know onto the stack around it, and
+ * a `<div>` with no role is named by neither: a select in a toolbar, with no
+ * room for a `label`, had no way to name its trigger.
+ *
+ * Base UI merges a caller's props over its own, and its own `aria-labelledby`
+ * points at the visible label, which would outrank an `aria-label`. So an
+ * `aria-label` given without an `aria-labelledby` comes with that key holding
+ * `undefined`, which takes Base UI's away and leaves the `aria-label` as the
+ * name in the label's place, as an `aria-label` outranks a `<label>` on a
+ * native control. A caller's `aria-labelledby` outranks both. With neither,
+ * neither key is there, and the label goes on naming the control.
+ */
+export function controlNaming(
+  label: string | undefined,
+  labelledBy: string | undefined
+): ControlNaming {
+  return {
+    ...(label === undefined ? null : { 'aria-label': label }),
+    ...(labelledBy === undefined && !label ? null : { 'aria-labelledby': labelledBy })
+  };
+}
+
+/**
+ * The `aria-labelledby` that names a control by a caller's `aria-label`, and
+ * the hidden words it points at, for a Base UI part `controlNaming` cannot
+ * reach.
+ *
+ * A checkbox, a switch, a radio, and the group around a slider's thumbs or a
+ * code's slots read `aria-labelledby` themselves and fall back to the visible
+ * label for anything but a reference of the caller's, `undefined` included. So
+ * an `aria-label` given without an `aria-labelledby` is written into a hidden
+ * node as well, and the part is pointed at that, which leaves the `aria-label`
+ * as the name in the label's place. A caller's `aria-labelledby` comes back as
+ * it was, and with neither there is no reference and no node.
+ */
+export function useLabelReference(
+  label: string | undefined,
+  labelledBy: string | undefined
+): { labelledBy: string | undefined; node: React.ReactNode } {
+  const id = React.useId();
+
+  if (labelledBy !== undefined || !label) {
+    return { labelledBy, node: null };
+  }
+
+  return {
+    labelledBy: id,
+    // `hidden`, so the words are read as the name they make and never as text
+    // of their own.
+    node: (
+      <span id={id} hidden>
+        {label}
+      </span>
+    )
+  };
+}
+
+/** Every `<fieldset>` around `element`, nearest first. */
+function fieldsetsAround(element: Element): HTMLFieldSetElement[] {
+  const fieldsets: HTMLFieldSetElement[] = [];
+
+  for (
+    let fieldset = element.parentElement?.closest('fieldset');
+    fieldset;
+    fieldset = fieldset.parentElement?.closest('fieldset')
+  ) {
+    fieldsets.push(fieldset);
+  }
+
+  return fieldsets;
+}
+
+/**
+ * Whether `element` is inside a disabled `<fieldset>`, re-rendering when a
+ * fieldset around it turns `disabled` on or off.
+ *
+ * The browser disables a native control inside one by itself. A control drawn
+ * as elements with a `tabIndex` is not a form control, so the fieldset never
+ * reaches it and it has to ask. The answer is the platform's: a disabled
+ * fieldset reaches everything inside it except what is in its first `<legend>`.
+ */
+export function useFieldsetDisabled(element: Element | null): boolean {
+  const subscribe = React.useCallback(
+    (onChange: () => void) => {
+      if (!element) {
+        return () => {};
+      }
+
+      const observer = new MutationObserver(onChange);
+
+      fieldsetsAround(element).forEach((fieldset) =>
+        observer.observe(fieldset, { attributes: true, attributeFilter: ['disabled'] })
+      );
+
+      return () => observer.disconnect();
+    },
+    [element]
+  );
+
+  const snapshot = () =>
+    element !== null &&
+    fieldsetsAround(element).some(
+      (fieldset) =>
+        fieldset.disabled && !fieldset.querySelector(':scope > legend')?.contains(element)
+    );
+
+  return React.useSyncExternalStore(subscribe, snapshot, () => false);
+}
+
+/**
+ * Tells a `FormControl` the reader has left the control it stands behind, so a
+ * form that validates on blur checks it then. The input never has the focus
+ * itself, so the event it would have had is sent to it.
+ */
+export function leaveFormControl(input: HTMLInputElement | null) {
+  input?.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+}
+
+/** Off screen but not `display: none`, which would bar it from validation. */
+const offScreenClasses =
+  'pointer-events-none absolute size-px overflow-hidden opacity-0 [clip-path:inset(50%)]';
+
+export interface FormControlProps {
+  /** The name the value submits under, and the key a form's `errors` use. */
+  name?: string;
+  /**
+   * The value as a form submits it: one string, or one entry per row. An empty
+   * string, a list with an empty entry and an empty list are no value, which is
+   * what `required` checks.
+   */
+  value: string | readonly string[];
+  required: boolean;
+  disabled: boolean;
+  /** The element a reader uses, which takes the focus a form moves here. */
+  standIn: () => HTMLElement | null | undefined;
+}
+
+/**
+ * The input a `Field` registers for a control that is not one. Renders inside a
+ * `Field.Root`.
+ */
+export const FormControl = /* @__PURE__ */ React.forwardRef<HTMLInputElement, FormControlProps>(
+  function FormControl({ name, value, required, disabled, standIn }, ref) {
+    const list = Array.isArray(value);
+    const filled = list ? value.length > 0 && value.every((entry) => entry !== '') : value !== '';
+
+    useFormReport(name, () => [...value], list && !disabled);
+
+    return (
+      <>
+        <Field.Control
+          ref={ref}
+          name={name}
+          value={list ? (filled ? value.join('\n') : '') : value}
+          required={required}
+          disabled={disabled}
+          tabIndex={-1}
+          aria-hidden="true"
+          autoComplete="off"
+          className={offScreenClasses}
+          onFocus={() => standIn()?.focus()}
+          // A list submits one row per entry below, so the input that decides
+          // its validity must not submit a row of its own.
+          render={list ? (props) => <input {...props} name={undefined} /> : undefined}
+        />
+
+        {list && name
+          ? value.map((entry, index) => (
+              <input key={index} type="hidden" name={name} value={entry} disabled={disabled} />
+            ))
+          : null}
+      </>
+    );
+  }
+);
