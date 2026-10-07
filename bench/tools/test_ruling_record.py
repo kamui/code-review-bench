@@ -271,6 +271,39 @@ class AfterContractTwoTest(unittest.TestCase):
         self.refused("band", {"asked": 2, "miss": miss, "lesson": {"says": "Show the whole comment."}},
                      "`lesson` must be null, or hold `says`, one sentence, and `goes_to`, the file that was changed")
 
+    def test_changing_the_known_problem_is_a_miss(self):
+        miss = {"cause": "slip", "note": "The recommender named the wrong known problem."}
+        lesson = {"says": "Check the problem identity.", "goes_to": "docs/adjudication-record.md"}
+        for decision_type, outcome in (("grouping", "same-family"), ("candidate", "duplicate")):
+            with self.subTest(decision_type):
+                record = sound(decision_type)
+                record["answers"][0].update(outcome=outcome, same_fault_as="GT-r2")
+                with tempfile.TemporaryDirectory() as directory:
+                    path, after = decided(record, directory)
+                    self.assertEqual(ruling_record.after_faults(record, after, path), [])
+                    after["same_fault_as"] = "GT-r3"
+                    self.assertEqual(ruling_record.after_faults(record, after, path),
+                                     ["`miss` must name its cause: the recommender's first answer was not the decision, or the user was asked more than once"])
+                    after.update(miss=miss, lesson=lesson)
+                    self.assertEqual(ruling_record.after_faults(record, after, path), [])
+
+    def test_a_legacy_after_record_cannot_bypass_the_settlement_contract(self):
+        legacy = ruling_record.load(str(REVIEW_9).replace(".before.", ".after."))
+        for contract in (None, 1):
+            with self.subTest(contract):
+                after = {**legacy, "settled_by": "agents", "asked": 0}
+                if contract is not None:
+                    after["contract"] = contract
+                record = ruling_record.load(REVIEW_9)
+                faults = ruling_record.after_faults(record, after, REVIEW_9)
+                self.assertTrue(any("`settled_by` is `agents`" in fault for fault in faults), faults)
+        with tempfile.TemporaryDirectory() as directory:
+            record = sound("candidate")
+            path, after = decided(record, directory)
+            after = {**legacy, "ruling": record["ruling"], "before": after["before"]}
+            self.assertEqual(ruling_record.after_faults(record, after, path),
+                             ["a contract 1 after-record belongs to a contract 1 before-record"])
+
     def test_a_contract_2_after_record_needs_its_fields_and_a_contract_2_before_record(self):
         with tempfile.TemporaryDirectory() as directory:
             record = sound("band")
@@ -330,6 +363,16 @@ class RoundTest(unittest.TestCase):
         (self.directory / "30-base-ui-5460-Q5.N3.after.json").unlink()
         self.assertEqual(ruling_record.round_faults(self.directory), ["30-base-ui-5460-Q5.N3.before.json has no after-record, and the round is closed"])
         self.sheet(closed=False)
+        self.assertEqual(ruling_record.round_faults(self.directory), [])
+
+    def test_a_closed_round_checks_before_records_without_a_ruling_file(self):
+        path, after = decided(sound("band"), self.directory)
+        self.assertEqual(ruling_record.round_faults(self.directory),
+                         ["third-01.before.json has no after-record, and the round is closed"])
+        self.sheet(closed=False)
+        self.assertEqual(ruling_record.round_faults(self.directory), [])
+        self.sheet(closed=True)
+        path.with_name("third-01.after.json").write_text(json.dumps(after), encoding="utf-8")
         self.assertEqual(ruling_record.round_faults(self.directory), [])
 
     def test_the_round_file_holds_its_fields(self):

@@ -308,7 +308,10 @@ def second_after_faults(record, after, root):
     if after["outcome"] in NAMES_A_PROBLEM and not (isinstance(after.get("same_fault_as"), str) and after["same_fault_as"].strip()):
         found.append(f"`{after['outcome']}` needs `same_fault_as`, the problem it names")
     miss, lesson = after["miss"], after["lesson"]
-    owed = recommender(record)["outcome"] != after["outcome"] or asked > 1
+    first = recommender(record)
+    owed = (first["outcome"] != after["outcome"] or asked > 1
+            or (after["outcome"] in NAMES_A_PROBLEM and after.get("same_fault_as")
+                and first.get("same_fault_as") != after["same_fault_as"]))
     if miss is not None and not (isinstance(miss, dict) and miss.get("cause") in CAUSES and isinstance(miss.get("note"), str) and miss["note"].strip()):
         found.append(f"`miss` must be null, or hold `cause`, one of {', '.join(CAUSES)}, and `note`, one sentence on what happened")
     elif owed and miss is None:
@@ -335,6 +338,11 @@ def after_faults(record, after, before_path, root=ROOT):
         found.append("`before` must pin the before-record as it was when the user was asked; that file is never edited")
     if after["outcome"] not in outcomes(record):
         found.append(f"outcome must be one of {', '.join(outcomes(record))}")
+    if contract == 1:
+        if record.get("contract", 1) != 1:
+            found.append("a contract 1 after-record belongs to a contract 1 before-record")
+        if after.get("settled_by") == "agents" and route(record, root):
+            found.append(f"`settled_by` is `agents`, and the decision is the user's: {'; '.join(route(record, root))}")
     return found + second_after_faults(record, after, root) if contract == 2 else found
 
 
@@ -353,9 +361,9 @@ def round_faults(directory):
         records = sorted([*directory.glob(f"{ruling.stem}.before.json"), *directory.glob(f"{ruling.stem}.*.before.json")])
         if not records and not any(fnmatch.fnmatchcase(ruling.name, pattern) for pattern in sheet["no_record"]):
             found.append(f"{ruling.name} has no before-record, and `no_record` gives no reason")
-        if sheet["closed"]:
-            found += [f"{before.name} has no after-record, and the round is closed" for before in records
-                      if not Path(str(before).replace(".before.", ".after.")).is_file()]
+    if sheet["closed"]:
+        found += [f"{before.name} has no after-record, and the round is closed" for before in sorted(directory.glob("*.before.json"))
+                  if not before.with_name(before.name.removesuffix(".before.json") + ".after.json").is_file()]
     return found
 
 
