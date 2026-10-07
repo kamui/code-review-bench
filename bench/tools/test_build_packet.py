@@ -382,6 +382,8 @@ class BuildPacketTests(unittest.TestCase):
             ("marked ready after the cutoff", [ready("2026-03-10T11:59:00Z")], "true", "['draft flag']"),
             ("converted and marked ready after the cutoff",
              [ready("2026-03-10T11:59:00Z"), converted("2026-03-09T09:00:00Z")], "false", "[]"),
+            ("converted and marked ready in the same second",
+             [converted("2026-03-09T09:00:00Z"), ready("2026-03-09T09:00:00Z")], "false", "[]"),
             ("changed only before the cutoff", [], "false", "[]"),
         ]:
             with self.subTest(label):

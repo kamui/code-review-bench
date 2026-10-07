@@ -238,13 +238,13 @@ class UnavailableInput(Exception):
     """Required historical content is not established. Exit code 1."""
 
 
-def timeline(P, kind) -> list:
-    """The pull request's timeline events of one kind, from a capture that holds all of them."""
+def timeline(P, *kinds) -> list:
+    """The pull request's timeline events of the given kinds, in its order, from a capture that holds all of them."""
     items = P.get("timelineItems")
     if not isinstance(items, dict) or not isinstance(items.get("nodes"), list) \
             or (items.get("pageInfo") or {}).get("hasNextPage") is not False:
         raise InputError("the pull request's timeline is missing or truncated in the forge response")
-    return [event for event in items["nodes"] if event.get("__typename") == kind]
+    return [event for event in items["nodes"] if event.get("__typename") in kinds]
 
 
 def event_instant(event, what: str) -> datetime:
@@ -305,7 +305,7 @@ def draft_at(P, cutoff: datetime):
     if "timelineItems" not in P:
         return draft, False
     changes = sorted(((event_instant(event, "draft event"), event["__typename"] == "ConvertToDraftEvent")
-                      for kind in ("ReadyForReviewEvent", "ConvertToDraftEvent") for event in timeline(P, kind)),
+                      for event in timeline(P, "ReadyForReviewEvent", "ConvertToDraftEvent")),
                      key=lambda change: change[0])
     later = [made_draft for when, made_draft in changes if when > cutoff]
     for made_draft in reversed(later):
