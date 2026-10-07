@@ -60,7 +60,7 @@ Read the claim the way a careful author would.
 
 **Question 3. Promised?** Use the rules. Say how the promise is made: written, announced or built.
 
-- If the answer is no, the claim is a **suggestion or observation**. Say its kind: an improvement, or outside supported use. Section 3 adds one more kind, the cause of a known problem.
+- If the answer is no, the claim is a **suggestion or observation**. Say its kind: an improvement, or outside supported use.
 - If something stops working and people are shown depending on it, the kind is "relied on, not promised". Only the user settles that kind. Record the claim as unresolved and name it as a candidate. When `claims.md` already holds a ruling on that use, follow the ruling.
 - If you cannot tell, the claim is unresolved.
 
