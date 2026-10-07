@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import export_explorer as exporter
 import current_grading as current
-from test_current_grading import approved, assessed_grade, fixture, save_current, write
+from test_current_grading import approved, assessed_grade, fixture, save_current, seal, write
 
 
 class ExportTest(unittest.TestCase):
@@ -81,6 +81,26 @@ class ExportTest(unittest.TestCase):
             self.assertEqual(detail['items'][0]['assignment'], 'eligible')
             self.assertEqual(detail['items'][0]['fixSufficiency'], 'absent')
             self.assertEqual(detail['items'][0]['claims'][0]['quote'], 'A write is lost.')
+
+    def test_a_batch_saved_under_verdict_contract_v2_is_refused(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            selected, documents = fixture(root)
+            documents['reference']['targets'][0]['families'] = []
+            documents['reference']['targets'][0]['control']['status'] = 'unaudited'
+            documents['claim']['claims'] = []
+            review = {'attempt_id': 'att-001', 'state': 'assessed', 'reason': 'No comment is a finding', 'claims': [],
+                      'not_findings': [{'item_id': 'item-0', 'note': 'States no defect'}], 'families': [], 'recommendations': [],
+                      'remedy_inventory': {'state': 'complete', 'reason': 'No recommendation in this example', 'anchors': []},
+                      'advice': []}
+            batch = {'run': 'runs/run', 'target': 't-example', 'reviews': [review], 'verdicts': 'current-verdicts/v2'}
+            documents['grade']['batches'] = [batch]
+            seal(root, batch, current.grading_fingerprint({'run': batch['run'], 'target': batch['target']}, selected, documents,
+                                                          documents['policy'], root))
+            save_current(root, selected, documents)
+            with self.assertRaisesRegex(current.Inconsistent, 'runs/run t-example: .*current-verdicts/v2'):
+                self.build_fixture(root)
+            self.assertFalse((root / 'public/data').exists())
 
     def test_pending_candidates_are_exported_and_keep_an_audited_control_provisional(self):
         with TemporaryDirectory() as directory:
