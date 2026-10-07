@@ -252,6 +252,18 @@ def execute(work, policy, args, protected=()):
     return {"exit_code": result.returncode, "stdout": result.stdout[-30000:], "stderr": result.stderr[-10000:]}
 
 
+def save_verdicts(work, text):
+    """Replace verdicts.json in one step, so a write that fails leaves the saved file as it was."""
+    path, temporary = work / "verdicts.json", work / "verdicts.json.tmp"
+    if path.is_symlink():
+        raise Denied("verdicts cannot be a symlink")
+    data = text.encode("utf-8")
+    temporary.unlink(missing_ok=True)
+    with temporary.open("xb") as handle:
+        handle.write(data)
+    os.replace(temporary, path)
+
+
 def call(work, policy, name, args, protected=()):
     if name == "inspect":
         path = confined(work, args["path"])
@@ -270,10 +282,7 @@ def call(work, policy, name, args, protected=()):
     if name == "write_verdicts":
         text = args["text"]
         json.loads(text)
-        path = work / "verdicts.json"
-        if path.is_symlink():
-            raise Denied("verdicts cannot be a symlink")
-        path.write_text(text, encoding="utf-8")
+        save_verdicts(work, text)
         return "saved verdicts.json; validate before exit"
     if name == "edit_verdicts":
         path = work / "verdicts.json"
@@ -296,9 +305,9 @@ def call(work, policy, name, args, protected=()):
             text = text.replace(edit["old"], edit["new"])
         try:
             json.loads(text)
+            save_verdicts(work, text)
         except ValueError:
-            raise Denied("the edits leave verdicts.json unparseable; nothing was saved") from None
-        path.write_text(text, encoding="utf-8")
+            raise Denied("the edits leave verdicts.json unparseable or not UTF-8 text; nothing was saved") from None
         return f"applied {len(edits)} edit(s) to verdicts.json; validate before exit"
     if name == "validate":
         result = subprocess.run(sandbox(work, [sys.executable, str(work / "validator/tools/grading_validation.py"),
