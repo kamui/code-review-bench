@@ -16,6 +16,7 @@ PUBLIC = ROOT / "public"
 BASE_PATH = os.environ.get("BASE_PATH", "/").rstrip("/")
 sys.path.insert(0, str(BENCH / "tools"))
 import current_grading
+import grading_validation
 import skill_provenance
 
 
@@ -176,6 +177,10 @@ def write_export(stage, selected, documents):
     for claim in documents["claim"]["claims"]:
         if claim["family_id"] is not None:
             manifestations.setdefault(claim["family_id"], []).append(claim["id"])
+    for batch in documents["grade"]["batches"]:
+        if batch.get("verdicts") == grading_validation.CONTRACT_V2:
+            raise current_grading.Inconsistent(f"{batch['run']} {batch['target']}: the export does not read grades saved "
+                                               f"under {grading_validation.CONTRACT_V2} yet")
     grades = {Path(b["run"]).name + "/" + r["attempt_id"]: (r, b["assessor"]) for b in documents["grade"]["batches"] for r in b["reviews"]}
     decisions = {d["id"]: d for d in documents["adjudication"]["decisions"]}
     rulings = {c["id"]: ruling(decisions, c["adjudication"], stage) for c in documents["claim"]["claims"]}

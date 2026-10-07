@@ -39,7 +39,7 @@ class CodexGradingTest(unittest.TestCase):
             server = config["mcp_servers"]["grading"]
             self.assertTrue(server["required"])
             self.assertEqual(server["default_tools_approval_mode"], "approve")
-            self.assertEqual(set(server["enabled_tools"]), {"inspect", "run", "validate", "write_scratch", "write_verdicts"})
+            self.assertEqual(set(server["enabled_tools"]), {"inspect", "run", "validate", "write_scratch", "write_verdicts", "edit_verdicts"})
             self.assertEqual(server["args"][-2:], ["--protected", str(key)])
             self.assertEqual(config["projects"][str(work)]["trust_level"], "untrusted")
             self.assertEqual(Path(config["model_catalog_json"]).read_bytes(), codex_grading.MODEL_CATALOG.read_bytes())
@@ -73,7 +73,7 @@ class CodexGradingTest(unittest.TestCase):
             self.assertFalse(receipt["budget_enforced"])
             self.assertEqual(receipt["paid_calls"], 0)
             requests = json.loads((evidence / "requests.json").read_text())
-            self.assertEqual(len(requests), 9)
+            self.assertEqual(len(requests), 10)
             outputs = {item["call_id"]: item["output"] for item in requests[-1]["input"]
                        if item.get("type") == "function_call_output"}
             self.assertIn("-32601", outputs["probe-read_mcp_resource"])
@@ -85,7 +85,7 @@ class CodexGradingTest(unittest.TestCase):
             self.assertEqual(result["audit_violations"], [])
             self.assertEqual(result["models_observed"], [codex_grading.MODEL])
             self.assertEqual(result["subagents"], 0)
-            self.assertEqual(result["usage"]["requests"], 9)
+            self.assertEqual(result["usage"]["requests"], 10)
 
 
 if __name__ == "__main__":
