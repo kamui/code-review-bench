@@ -138,14 +138,11 @@ def verdict_problems_v2(claim, families):
         return problems
     says_what = any(e["says_what"] == "yes" for e in known)
     uncertain = any(e["says_what"] == "cannot-tell" for e in known)
-    why_only = not says_what and not uncertain and any(e["says_why"] == "yes" for e in known)
     reached, expected, candidate_required = {"true"}, None, False
     if says_what:
         expected = "problem"
         if claim["true"] != "yes":
             problems.append("says_what yes requires true yes")
-    elif why_only and claim["true"] == "yes":
-        expected = "suggestion"
     elif claim["true"] == "no":
         expected = "refuted"
     elif claim["true"] == "not-shown":
@@ -189,10 +186,7 @@ def verdict_problems_v2(claim, families):
     relied_on = (claim["true"] == "yes" and claim["this_change"] == "yes" and claim["promised"] == "no"
                 and claim["outcome"] == "unresolved" and claim["kind"] == "relied-on")
     if claim["outcome"] == "suggestion":
-        if why_only:
-            if claim["kind"] != "known-cause":
-                problems.append("a claim that says why and not what for a known problem has kind known-cause")
-        elif claim["kind"] not in ("improvement", "outside-supported-use") and not (
+        if claim["kind"] not in ("improvement", "outside-supported-use") and not (
                 claim["kind"] == "relied-on" and claim["canonical_claim_id"] is not None):
             problems.append("suggestion needs kind improvement or outside-supported-use, or relied-on under a saved ruling")
     elif claim["kind"] is not None and not relied_on:
