@@ -6,9 +6,9 @@ This page defines the record. [Prepare a ruling](claim-adjudication.md#prepare-a
 
 ## What is recorded
 
-Six kinds of decision get a record.
+Six decision types get a record.
 
-| Kind | The decision | Outcomes | Rule the answers pin | Blind answers needed |
+| Decision type | The decision | Outcomes | Rule the answers pin | Blind answers needed |
 | --- | --- | --- | --- | --- |
 | `candidate` | Is what a review comment describes a problem for the answer key? | `problem`, `minor-defect`, `suggestion`, `relied-on`, `duplicate`, `refuted`, `unproven`, `outside-scope`, `cannot-tell` | the two questions | two assessors |
 | `recovery` | Does a comment get credit for a known problem? | `recovers`, `does-not-recover`, `cannot-tell` | the rubric's section on credit | two assessors |
@@ -25,7 +25,7 @@ Six kinds of decision get a record.
 
 **One record per decision.** A question that holds several decisions gets one pair of files for each, named `<ruling>.<group>.before.json` and `<ruling>.<group>.after.json`. `ruling` names the question. `group` names the one thing decided: a candidate, a comment or a known problem. A question that asks "is it a problem" and "which label" is two records, one `candidate` and one `band`.
 
-A saved ruling shown to the user again is a record of the same kind whose `reviews` names the ruling and its saved outcome.
+A saved ruling shown to the user again is a record of the same decision type whose `reviews` names the ruling and its saved outcome.
 
 Decisions on the text of a rule (the `P` files) and audit decisions on how to proceed keep their ruling files and get no record. They are how the user accepts a lesson, and the options of one cannot be compared with the options of another.
 
@@ -46,21 +46,21 @@ A record with `"contract": 2` follows this page. The eighteen pairs saved in the
 | --- | --- |
 | `contract` | `2`. |
 | `ruling` | The name of the question, such as `second-11`. |
-| `kind` | One of the six kinds. |
+| `decision_type` | One of the six decision types. The 23 records saved before 2026-10-07 hold this field as `kind`. The after-record pins those files, so they stay as they are and the tool reads either name. A new record holds `decision_type`. |
 | `target` | The pull request, as the round names it, such as `v-django-17914`. |
 | `group` | The one thing decided. For a new candidate it is one candidate of the dossier. |
 | `reconstructed` | `false` when the file was written before the question. `true` when it was built afterwards from saved files. |
 | `dossier` | The directory the facts come from, or null. A new candidate needs one that passes `ruling_dossier.py`. |
 | `case` | The neutral file every blind party read: `path`, `sha256`, `written_by` (the model that wrote it) and `precedents`. The user is shown at least what this file holds. `precedents` pins the sheet of the user's earlier rulings that was given with the case, or is null when none was given. |
 | `rule` | The rule text the answers applied, by `path` and `sha256`. |
-| `clauses` | The table that says which rulings each rule was written from, or null for a kind that has no such table. |
+| `clauses` | The table that says which rulings each rule was written from, or null for a decision type that has no such table. |
 | `rulings` | The ruling index, which gives each ruling one name. |
 | `reviews` | Null, or the saved ruling being shown again, by its name in the index, with its `saved_outcome`. |
 | `answers` | Each party's first answer. |
 
 `rule` pins a versioned file or the copy the round saved under `docs/research/`. It never pins a file that is edited in place. `bench/rubric/scoring.md` is replaced when the next rubric takes effect, and a record that pinned it would then fail its check.
 
-When `clauses` is null the tool gives the reason "no rule of this kind has been tested blind".
+When `clauses` is null the tool gives the reason "no rule of this decision type has been tested blind".
 
 ### Each answer
 
@@ -72,7 +72,7 @@ When `clauses` is null the tool gives the reason "no rule of this kind has been 
 | `exposure` | What else the party had seen, or `none`. |
 | `brief` | The round's copy of the brief the party was given, by `path` and `sha256`. A blind answer needs one. It is null for a party that had none, such as the recommender. |
 | `written` | `before-question`, `after-answer` or `unknown`. Only an answer written before the question counts as a first answer. |
-| `outcome` | One of the kind's outcomes. |
+| `outcome` | One of the decision type's outcomes. |
 | `same_fault_as` | The known problem meant, for `duplicate` and `same-family`. |
 | `facts` | For a `recovery` answer: `says_what` and `says_why`, each `yes`, `no` or `cannot-tell`. |
 | `clauses` | The rules that decided the answer. When the record has a table of rules, these are names in it. |
@@ -90,7 +90,7 @@ A record that is not reconstructed holds only answers written before the questio
 
 ## Confidence
 
-There is one definition, for every party and every kind of decision.
+There is one definition, for every party and every decision type.
 
 **High** means "I would settle this without the user." It needs all six of these:
 
@@ -126,4 +126,4 @@ The tool refuses an answer that does not follow the definition:
 - `short_of_high` names `gap` exactly when `rule_gap` has its sentence, and names `conflict` exactly when `conflict` has its sentence.
 - An answer names `no-precedent` when `nearest` is empty or holds no ruling that the index marks as made under the current reading.
 
-"High" is the agent's own claim. The test of that claim is a count: for each kind of decision and each setup, how many high answers were the user's decision. A setup is the model, its effort, the brief, the rule, the case file and the sheet of earlier rulings.
+"High" is the agent's own claim. The test of that claim is a count: for each decision type and each setup, how many high answers were the user's decision. A setup is the model, its effort, the brief, the rule, the case file and the sheet of earlier rulings.

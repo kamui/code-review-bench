@@ -25,24 +25,24 @@ def pin(path):
     return {"path": path, "sha256": ruling_record.digest(ROOT / path)}
 
 
-def sound(kind):
-    """A record of this kind, written before its question, in which every party is sure of the kind's first outcome."""
+def sound(decision_type):
+    """A record of this decision type, written before its question, in which every party is sure of the type's first outcome."""
     answer = {"model": "gpt-6.1-sol", "effort": "high", "family": "gpt", "blind": True, "exposure": "none",
-              "brief": pin(SECOND + "assessors/prompt-candidates.md"), "written": "before-question", "outcome": ruling_record.KIND[kind]["outcomes"][0],
-              "clauses": ["before-4"] if kind == "candidate" else [], "conflict": None, "nearest": ["second-04"], "confidence": "high",
-              "short_of_high": [], "would_settle": True, "rule_gap": None, "reason": "The case file settles it.", **EXTRA.get(kind, {})}
-    blind = [{**answer, "by": f"assessor-{number}"} for number in range(1, ruling_record.KIND[kind]["blind"] + 1)]
-    return {"contract": 2, "ruling": "third-01", "kind": kind, "target": "r-base-ui-5460", "group": "N1", "reconstructed": False,
-            "dossier": SECOND + "candidates/r-base-ui-5460" if kind == "candidate" else None,
+              "brief": pin(SECOND + "assessors/prompt-candidates.md"), "written": "before-question", "outcome": ruling_record.DECISION_TYPES[decision_type]["outcomes"][0],
+              "clauses": ["before-4"] if decision_type == "candidate" else [], "conflict": None, "nearest": ["second-04"], "confidence": "high",
+              "short_of_high": [], "would_settle": True, "rule_gap": None, "reason": "The case file settles it.", **EXTRA.get(decision_type, {})}
+    blind = [{**answer, "by": f"assessor-{number}"} for number in range(1, ruling_record.DECISION_TYPES[decision_type]["blind"] + 1)]
+    return {"contract": 2, "ruling": "third-01", "decision_type": decision_type, "target": "r-base-ui-5460", "group": "N1", "reconstructed": False,
+            "dossier": SECOND + "candidates/r-base-ui-5460" if decision_type == "candidate" else None,
             "case": {**pin(SECOND + "assessors/cases/r-base-ui-5460-N1.md"), "written_by": "gpt-6-astra", "precedents": None},
-            "rule": pin(RULES[kind]), "clauses": SECOND + "terms/two-questions.v6.clauses.json" if kind == "candidate" else None,
+            "rule": pin(RULES[decision_type]), "clauses": SECOND + "terms/two-questions.v6.clauses.json" if decision_type == "candidate" else None,
             "rulings": SECOND + "terms/rulings.index.json", "reviews": None,
             "answers": [{**answer, "by": "recommender", "model": "claude-opus-5-5", "family": "claude", "blind": False, "brief": None}, *blind]}
 
 
 class RulingRecordTest(unittest.TestCase):
     def setUp(self):
-        self.record = ruling_record.load(REVIEW_9)
+        self.record = ruling_record.before(REVIEW_9)
         self.after = ruling_record.load(str(REVIEW_9).replace(".before.", ".after."))
 
     def test_review_9_is_kept_for_the_user_and_recorded_as_a_surprise(self):
@@ -75,7 +75,7 @@ class RulingRecordTest(unittest.TestCase):
             self.assertIn("`rule` must pin the rule text", ruling_record.faults(self.record)[0])
 
     def test_a_recovery_question_and_an_unruled_shape_are_reasons(self):
-        self.record.update(kind="recovery", reviews=None)
+        self.record.update(decision_type="recovery", reviews=None)
         self.record["answers"][1].update(nearest=[], outcome="cannot-tell")
         stays = ruling_record.reasons(self.record)
         self.assertIn("assessor-1 could not tell", stays)
@@ -96,15 +96,15 @@ class RulingRecordTest(unittest.TestCase):
 
 
 class ContractTwoTest(unittest.TestCase):
-    def refused(self, kind, change, *expected):
-        record = sound(kind)
+    def refused(self, decision_type, change, *expected):
+        record = sound(decision_type)
         change(record)
         self.assertEqual(ruling_record.faults(record), list(expected))
 
-    def test_a_sound_record_of_each_kind_passes(self):
-        for kind in ruling_record.KIND:
-            with self.subTest(kind):
-                self.assertEqual(ruling_record.faults(sound(kind)), [])
+    def test_a_sound_record_of_each_decision_type_passes(self):
+        for decision_type in ruling_record.DECISION_TYPES:
+            with self.subTest(decision_type):
+                self.assertEqual(ruling_record.faults(sound(decision_type)), [])
 
     def test_a_label_record_with_a_candidate_outcome_is_refused(self):
         self.refused("band", lambda record: record["answers"][1].update(outcome="problem"),
@@ -191,21 +191,25 @@ class ContractTwoTest(unittest.TestCase):
         run = subprocess.run([sys.executable, ruling_record.__file__, LABEL_1], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(run.returncode, 0, run.stdout)
         for reason in ("a band decision is the user's under ADR-0006", "the recommendation differs from a blind assessor's answer",
-                       "no rule of this kind has been tested blind"):
+                       "no rule of this decision type has been tested blind"):
             self.assertIn(f"- {reason}\n", run.stdout)
 
-    def test_a_reconciler_call_is_not_the_users_by_kind(self):
-        self.assertEqual(ruling_record.reasons(sound("reconciliation")), ["no rule of this kind has been tested blind"])
+    def test_a_reconciler_call_is_not_the_users_by_decision_type(self):
+        self.assertEqual(ruling_record.reasons(sound("reconciliation")), ["no rule of this decision type has been tested blind"])
 
 
 class SavedRecordsTest(unittest.TestCase):
     def test_every_saved_record_is_sound(self):
         for path in sorted(RESEARCH.rglob("rulings/*.before.json")):
-            record = ruling_record.load(path)
+            record = ruling_record.before(path)
             self.assertEqual(ruling_record.faults(record), [], path)
             after = Path(str(path).replace(".before.", ".after."))
             if after.exists():
                 self.assertEqual(ruling_record.after_faults(record, ruling_record.load(after), path), [], after)
+
+    def test_only_the_records_saved_before_the_rename_hold_kind(self):
+        held = [path for path in RESEARCH.rglob("rulings/*.before.json") if "kind" in ruling_record.load(path)]
+        self.assertEqual(len(held), 23)
 
     def test_every_second_pass_ruling_from_the_eleventh_has_its_record(self):
         rulings = RESEARCH / "cohort-rebuild-2026-10-05/second-pass/rulings"

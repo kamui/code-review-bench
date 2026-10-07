@@ -10,7 +10,7 @@ keeps for the user are computed here from what each party answered, so nobody ha
 saved ruling file stays the authority; these records are the index for learning which answers could be trusted.
 
 A record with `"contract": 2` is checked as docs/adjudication-record.md describes: one record per decision, of any
-kind in KIND. A record without `contract` is contract 1, the saved records of the second pass, checked as before."""
+decision type in DECISION_TYPES. A record without `contract` is contract 1, the saved records of the second pass, checked as before."""
 import hashlib
 import json
 import re
@@ -20,13 +20,13 @@ from pathlib import Path
 import ruling_dossier
 
 ROOT = Path(__file__).resolve().parents[2]
-KINDS = ("candidate", "recovery", "grouping", "band", "control")
+CONTRACT_1_TYPES = ("candidate", "recovery", "grouping", "band", "control")
 RANK = {"suggestion": 0, "relied-on": 0, "minor-defect": 1, "problem": 2}
 OUTCOMES = (*RANK, "refuted", "unproven", "outside-scope", "duplicate", "recovers", "does-not-recover", "cannot-tell")
-BEFORE = ("ruling", "kind", "group", "reconstructed", "dossier", "rule", "clauses", "rulings", "reviews", "answers")
+BEFORE = ("ruling", "decision_type", "group", "reconstructed", "dossier", "rule", "clauses", "rulings", "reviews", "answers")
 ANSWER = ("by", "model", "family", "blind", "exposure", "outcome", "clauses", "conflict", "nearest", "confidence", "would_settle", "rule_gap", "reason")
 AFTER = ("ruling", "before", "asked", "outcome", "by_default", "ground", "rule_sentence_shown")
-KIND = {
+DECISION_TYPES = {
     "candidate": {"outcomes": (*RANK, "refuted", "unproven", "outside-scope", "duplicate", "cannot-tell"), "blind": 2},
     "recovery": {"outcomes": ("recovers", "does-not-recover", "cannot-tell"), "blind": 2},
     "grouping": {"outcomes": ("same-family", "separate", "cannot-tell"), "blind": 2},
@@ -51,6 +51,15 @@ def load(path):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def before(path):
+    """A before-record from disk. The records saved before the field was renamed hold it as `kind`; an after-record
+    pins each of them by sha256, so they keep their bytes."""
+    record = load(path)
+    if "kind" in record:
+        record["decision_type"] = record.pop("kind")
+    return record
+
+
 def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
@@ -68,7 +77,7 @@ def recommender(record):
 
 
 def outcomes(record):
-    return KIND[record["kind"]]["outcomes"] if record.get("contract") == 2 else OUTCOMES
+    return DECISION_TYPES[record["decision_type"]]["outcomes"] if record.get("contract") == 2 else OUTCOMES
 
 
 def pinned(pin, root):
@@ -82,7 +91,7 @@ def kept(pin, root):
 
 
 def dossier_faults(record, root):
-    if record["kind"] != "candidate" or record["reconstructed"]:
+    if record["decision_type"] != "candidate" or record["reconstructed"]:
         return []
     if not record["dossier"]:
         return ["a candidate's record needs `dossier`, the directory its facts come from"]
@@ -129,15 +138,15 @@ def confidence_faults(answer, rulings):
 
 
 def answer_faults(record, answer, rulings, root):
-    by, kind, reconstructed = answer["by"], record["kind"], record["reconstructed"]
+    by, decision_type, reconstructed = answer["by"], record["decision_type"], record["reconstructed"]
     found = [f"{by}: needs `{field}`; only a reconstructed record may leave it null, when nobody recorded it"
              for field in UNRECORDED if answer[field] is None and not reconstructed]
-    if answer["outcome"] not in KIND[kind]["outcomes"]:
-        found.append(f"{by}: a {kind} outcome must be one of {', '.join(KIND[kind]['outcomes'])}")
+    if answer["outcome"] not in DECISION_TYPES[decision_type]["outcomes"]:
+        found.append(f"{by}: a {decision_type} outcome must be one of {', '.join(DECISION_TYPES[decision_type]['outcomes'])}")
     if answer["outcome"] in NAMES_A_PROBLEM and not answer.get("same_fault_as"):
         found.append(f"{by}: `{answer['outcome']}` needs `same_fault_as`, the problem it names")
     facts = answer.get("facts")
-    if kind == "recovery" and not (reconstructed and facts is None) and (not isinstance(facts, dict) or any(facts.get(fact) not in ("yes", "no", "cannot-tell") for fact in FACTS)):
+    if decision_type == "recovery" and not (reconstructed and facts is None) and (not isinstance(facts, dict) or any(facts.get(fact) not in ("yes", "no", "cannot-tell") for fact in FACTS)):
         found.append(f"{by}: a recovery answer needs `facts`: {' and '.join(FACTS)}, each yes, no or cannot-tell")
     if answer["written"] not in WRITTEN or (not reconstructed and answer["written"] != "before-question"):
         found.append(f"{by}: `written` must be one of {', '.join(WRITTEN)}, and before-question in a record that is not reconstructed")
@@ -148,8 +157,8 @@ def answer_faults(record, answer, rulings, root):
 
 def second_faults(record, root):
     found = [f"the record needs `{field}`" for field in BEFORE_2 if field not in record]
-    if not found and record["kind"] not in KIND:
-        found.append(f"kind must be one of {', '.join(KIND)}")
+    if not found and record["decision_type"] not in DECISION_TYPES:
+        found.append(f"decision_type must be one of {', '.join(DECISION_TYPES)}")
     if found:
         return found
     if not isinstance(record["group"], str) or not record["group"]:
@@ -163,7 +172,7 @@ def second_faults(record, root):
         found.append("`case` must pin the neutral file every blind party read, by path and sha256, with `written_by` and `precedents`, the pinned sheet of earlier rulings or null")
     clauses, rulings = tables(record, root)
     found += dossier_faults(record, root)
-    if record["kind"] == "candidate" and not record["reconstructed"] and record["dossier"] and all(
+    if record["decision_type"] == "candidate" and not record["reconstructed"] and record["dossier"] and all(
             entry["group"] != record["group"] for entry in ruling_dossier.entries(root / record["dossier"])):
         found.append("`group` must be one candidate of the dossier, as its summary.json names it")
     for answer in record["answers"]:
@@ -172,11 +181,11 @@ def second_faults(record, root):
             found.append(f"{answer.get('by', 'an answer')}: needs {', '.join(missing)}")
             continue
         found += answer_faults(record, answer, rulings, root) + name_faults(answer, clauses, rulings)
-    parties, blind_needed = [answer.get("by") for answer in record["answers"]], KIND[record["kind"]]["blind"]
+    parties, blind_needed = [answer.get("by") for answer in record["answers"]], DECISION_TYPES[record["decision_type"]]["blind"]
     if len(set(parties)) != len(parties):
         found.append("each party answers once; a `by` name is repeated")
     if not blind_needed and len(parties) != 1:
-        found.append(f"a {record['kind']} record holds one first answer, the recommender's")
+        found.append(f"a {record['decision_type']} record holds one first answer, the recommender's")
     return found or party_faults(record, rulings, blind_needed)
 
 
@@ -187,8 +196,8 @@ def faults(record, root=ROOT):
     found = [f"the record needs `{field}`" for field in BEFORE if field not in record]
     if found:
         return found
-    if record["kind"] not in KINDS:
-        found.append(f"kind must be one of {', '.join(KINDS)}")
+    if record["decision_type"] not in CONTRACT_1_TYPES:
+        found.append(f"decision_type must be one of {', '.join(CONTRACT_1_TYPES)}")
     rule = root / record["rule"]["path"]
     if not rule.is_file() or (not record["reconstructed"] and digest(rule) != record["rule"]["sha256"]):
         found.append("`rule` must pin the rule text the answers applied, by path and sha256")
@@ -213,8 +222,8 @@ def reasons(record, root=ROOT):
     answers, first = record["answers"], recommender(record)
     blind = [answer for answer in answers if answer["blind"]]
     found = []
-    if record["kind"] not in ("candidate", "reconciliation"):
-        found.append(f"a {record['kind']} decision is the user's under ADR-0006")
+    if record["decision_type"] not in ("candidate", "reconciliation"):
+        found.append(f"a {record['decision_type']} decision is the user's under ADR-0006")
     if len({answer["outcome"] for answer in blind}) > 1:
         found.append("the blind assessors disagree with each other")
     if any(answer["outcome"] != first["outcome"] for answer in blind):
@@ -229,7 +238,7 @@ def reasons(record, root=ROOT):
               if rulings[name]["reading"] == "earlier" and not rulings[name].get("rule")]
     reviewed = canonical(record["reviews"]["ruling"], rulings) if record["reviews"] else None
     if clauses is None:
-        found.append("no rule of this kind has been tested blind")
+        found.append("no rule of this decision type has been tested blind")
     for clause in sorted({clause for answer in answers for clause in answer["clauses"]} if clauses else ()):
         source = clauses[clause]
         if reviewed in source["from"]:
@@ -240,7 +249,7 @@ def reasons(record, root=ROOT):
             found.append(f"clause {clause} has not been applied blind to a case it was not written from")
     if record["reviews"] and first["outcome"] != record["reviews"]["saved_outcome"]:
         found.append("the recommendation would change a saved ruling")
-    if record["kind"] == "candidate" and record["dossier"]:
+    if record["decision_type"] == "candidate" and record["dossier"]:
         places = [place for entry in ruling_dossier.entries(root / record["dossier"]) if entry["group"] == record["group"]
                   for place in ruling_dossier.blocked(entry)]
         found += [f"the search of {place} could not be made" for place in places]
@@ -280,7 +289,7 @@ def surprises(record, after, root=ROOT):
 
 
 if __name__ == "__main__":
-    record = load(sys.argv[1])
+    record = before(sys.argv[1])
     problems = faults(record)
     after = load(sys.argv[2]) if len(sys.argv) > 2 else None
     if after and not problems:
