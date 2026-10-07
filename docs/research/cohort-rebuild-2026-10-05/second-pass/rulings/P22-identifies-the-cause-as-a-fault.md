@@ -65,4 +65,4 @@ The review of pull request 75 raised the opening sentence of section 3, which th
 
 The user answered, of this and the corrected sentence of decision P23: "both accepted. Yes rename says_why too." Section 3 opens with the sentence above.
 
-The second part of the answer is about the name of the field. In the adjudication record's tool, its tests, `docs/adjudication-record.md`, `docs/blind-assessor-brief.md` and the twenty saved records that held it, the fact `says_why` is renamed `identifies_cause`, with each after-record's pin replaced. Briefs and answers saved by earlier sessions keep the old name, as they were written.
+The second part of the answer is about the name of the field. The session renamed the fact `says_why` to `identifies_cause` in the adjudication record's tool, its tests, `docs/adjudication-record.md`, `docs/blind-assessor-brief.md` and the twenty saved records that held it. It replaced the pin of each renamed before-record. Briefs and answers that earlier sessions saved keep the old name.

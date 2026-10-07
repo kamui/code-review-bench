@@ -33,7 +33,7 @@ Decisions on the text of a rule (the `P` files) and audit decisions on how to pr
 
 A decision has two files beside its ruling file.
 
-- `<ruling>.before.json` holds every party's first answer. The session that asks writes and commits it before it asks the user. Nobody edits it afterwards. The exceptions are two renames of 2026-10-07, each made in one commit with each after-record's pin replaced and nothing else touched. The field `decision_type` was called `kind`, and the 23 records saved by then had the name changed. The fact `identifies_cause` was called `says_why`, and the five before-records and fifteen after-records that held it had the name changed.
+- `<ruling>.before.json` holds every party's first answer. The session that asks writes and commits it before it asks the user. Nobody edits it afterwards. The exceptions are two renames of 2026-10-07. Each changed one name in one commit, replaced the pin of every renamed before-record and touched nothing else. The first renamed the field `kind` to `decision_type` in the 23 records saved by then. The second renamed the fact `says_why` to `identifies_cause` in the five before-records and fifteen after-records that held it.
 - `<ruling>.after.json` holds the decision and pins the first file. The session writes it once the decision is made.
 
 Run `python3 bench/tools/ruling_record.py route <ruling>.before.json` before asking. The tool refuses a record that does not follow this page. For a record it accepts, it prints whether the user is asked, why, and the question to show them. See [Routing](#routing).
