@@ -42,7 +42,7 @@ def sound(decision_type):
 
 class RulingRecordTest(unittest.TestCase):
     def setUp(self):
-        self.record = ruling_record.before(REVIEW_9)
+        self.record = ruling_record.load(REVIEW_9)
         self.after = ruling_record.load(str(REVIEW_9).replace(".before.", ".after."))
 
     def test_review_9_is_kept_for_the_user_and_recorded_as_a_surprise(self):
@@ -201,15 +201,11 @@ class ContractTwoTest(unittest.TestCase):
 class SavedRecordsTest(unittest.TestCase):
     def test_every_saved_record_is_sound(self):
         for path in sorted(RESEARCH.rglob("rulings/*.before.json")):
-            record = ruling_record.before(path)
+            record = ruling_record.load(path)
             self.assertEqual(ruling_record.faults(record), [], path)
             after = Path(str(path).replace(".before.", ".after."))
             if after.exists():
                 self.assertEqual(ruling_record.after_faults(record, ruling_record.load(after), path), [], after)
-
-    def test_only_the_records_saved_before_the_rename_hold_kind(self):
-        held = [path for path in RESEARCH.rglob("rulings/*.before.json") if "kind" in ruling_record.load(path)]
-        self.assertEqual(len(held), 23)
 
     def test_every_second_pass_ruling_from_the_eleventh_has_its_record(self):
         rulings = RESEARCH / "cohort-rebuild-2026-10-05/second-pass/rulings"

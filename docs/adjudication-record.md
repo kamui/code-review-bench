@@ -33,7 +33,7 @@ Decisions on the text of a rule (the `P` files) and audit decisions on how to pr
 
 A decision has two files beside its ruling file.
 
-- `<ruling>.before.json` holds every party's first answer. The session that asks writes and commits it before it asks the user. Nobody edits it afterwards.
+- `<ruling>.before.json` holds every party's first answer. The session that asks writes and commits it before it asks the user. Nobody edits it afterwards. The one exception is the rename of 2026-10-07: this field was called `kind`, and the 23 records saved by then had the name changed in one commit, with each after-record's pin replaced and nothing else touched.
 - `<ruling>.after.json` holds the user's decision and pins the first file. The session writes it once the user has answered.
 
 Run `python3 bench/tools/ruling_record.py <ruling>.before.json` before asking. The tool refuses a record that does not follow this page. For a record it accepts, it prints why the decision stays with the user.
@@ -46,7 +46,7 @@ A record with `"contract": 2` follows this page. The eighteen pairs saved in the
 | --- | --- |
 | `contract` | `2`. |
 | `ruling` | The name of the question, such as `second-11`. |
-| `decision_type` | One of the six decision types. The 23 records saved before 2026-10-07 hold this field as `kind`. The after-record pins those files, so they stay as they are and the tool reads either name. A new record holds `decision_type`. |
+| `decision_type` | One of the six decision types. |
 | `target` | The pull request, as the round names it, such as `v-django-17914`. |
 | `group` | The one thing decided. For a new candidate it is one candidate of the dossier. |
 | `reconstructed` | `false` when the file was written before the question. `true` when it was built afterwards from saved files. |

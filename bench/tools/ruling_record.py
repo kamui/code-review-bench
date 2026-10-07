@@ -51,15 +51,6 @@ def load(path):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def before(path):
-    """A before-record from disk. The records saved before the field was renamed hold it as `kind`; an after-record
-    pins each of them by sha256, so they keep their bytes."""
-    record = load(path)
-    if "kind" in record:
-        record["decision_type"] = record.pop("kind")
-    return record
-
-
 def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
@@ -289,7 +280,7 @@ def surprises(record, after, root=ROOT):
 
 
 if __name__ == "__main__":
-    record = before(sys.argv[1])
+    record = load(sys.argv[1])
     problems = faults(record)
     after = load(sys.argv[2]) if len(sys.argv) > 2 else None
     if after and not problems:
