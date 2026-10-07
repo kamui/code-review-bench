@@ -242,6 +242,27 @@ class BuildPacketTests(unittest.TestCase):
                 self.assertIn("--pushed-at", result.stderr)
                 self.assertFalse(self.out.exists())
 
+    def test_a_head_that_returned_after_a_rollback_is_not_dated_by_its_first_arrival(self) -> None:
+        rollback = self.force_push("2026-03-09T08:00:00Z", self.merge_base)
+        for first_arrival in ([self.force_push()], []):
+            with self.subTest(first_arrival=first_arrival):
+                self.date_the_timeline(*first_arrival, rollback)
+                self.check_the_head("2026-03-09T07:05:01Z")
+                result = self.run_cli(cutoff=None)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn("cannot establish the last push", result.stderr)
+                self.assertIn("2026-03-09T08:00:00Z moved the pull request to another commit", result.stderr)
+                self.assertIn("--pushed-at", result.stderr)
+                self.assertFalse(self.out.exists())
+
+    def test_a_fast_forward_after_a_force_push_elsewhere_cuts_at_its_first_check_suite(self) -> None:
+        self.date_the_timeline(self.force_push("2026-03-09T07:02:00Z", self.merge_base))
+        self.check_the_head(PUSHED)
+        result = self.run_cli(cutoff=None)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"cutoff {PUSHED};", result.stdout)
+        self.assertIn("cutoff source: the first check suite on the head commit", result.stdout)
+
     def test_check_suites_on_another_commit_or_a_first_page_of_them_do_not_date_the_head(self) -> None:
         self.date_the_timeline()
         for change in ({"oid": "0" * 40}, {"checkSuites": {"totalCount": 101, "nodes": [{"createdAt": PUSHED}]}}):
