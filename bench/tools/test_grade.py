@@ -158,7 +158,7 @@ def claim_v2(identifier="c1", quote="Races on close", **fields):
 
 
 def known_problem(family="GT-t1", what="yes", why="no"):
-    return {"family": family, "says_what": what, "says_why": why, "reason": "The quoted words establish these facts."}
+    return {"family": family, "says_what": what, "identifies_cause": why, "reason": "The quoted words establish these facts."}
 
 
 def reviewed_v2(*items, recommendations=()):

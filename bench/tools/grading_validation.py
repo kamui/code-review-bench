@@ -123,7 +123,7 @@ def claim_problems(token, review, sources, snapshot, disputed, naming):
                     problems.append(f"{where} claim {index}: canonical outcome or family disagrees with the pinned "
                                     "decision; record a link dispute when the wording does not identify that claim")
             if claim["duplicate_group"]:
-                facts = (tuple(sorted((e["family"], e["says_what"], e["says_why"]) for e in claim["known_problems"]))
+                facts = (tuple(sorted((e["family"], e["says_what"], e["identifies_cause"]) for e in claim["known_problems"]))
                          if v2 else claim["family"])
                 signature = (claim["outcome"], canonical, facts)
                 if groups.setdefault(claim["duplicate_group"], signature) != signature:
@@ -171,7 +171,7 @@ def remedy_problems(token, review, sources, claims, *, v2=False):
             problems.append(f"{where}: a repeated remedy is one recommendation with all of its original anchors")
         groups.add(group)
         families = ({e["family"] for c in addressed for e in claims[c]["known_problems"]
-                     if "yes" in (e["says_what"], e["says_why"])} if v2 else
+                     if "yes" in (e["says_what"], e["identifies_cause"])} if v2 else
                     {claims[c]["family"] for c in addressed} - {None})
         sufficiency = recommendation["sufficiency"]
         if not (isinstance(sufficiency, list) and all(
