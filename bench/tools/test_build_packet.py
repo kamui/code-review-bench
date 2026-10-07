@@ -370,6 +370,44 @@ class BuildPacketTests(unittest.TestCase):
         self.assertIn('— "Bound the retry loop" |', self.out.read_text(encoding="utf-8"))
         self.assertIn('— "Bound it" |', self.build_ok())
 
+    def test_the_draft_flag_reads_as_it_stood_at_the_cutoff(self) -> None:
+        def ready(when: str) -> dict:
+            return {"__typename": "ReadyForReviewEvent", "createdAt": when}
+
+        def converted(when: str) -> dict:
+            return {"__typename": "ConvertToDraftEvent", "createdAt": when}
+
+        before = [converted("2026-03-08T08:00:00Z"), ready("2026-03-08T09:00:00Z")]
+        for label, events, flag, restored in [
+            ("marked ready after the cutoff", [ready("2026-03-10T11:59:00Z")], "true", "['draft flag']"),
+            ("converted and marked ready after the cutoff",
+             [ready("2026-03-10T11:59:00Z"), converted("2026-03-09T09:00:00Z")], "false", "[]"),
+            ("changed only before the cutoff", [], "false", "[]"),
+        ]:
+            with self.subTest(label):
+                self.date_the_timeline(*before, self.force_push(), *events)
+                record_path = self.directory / "record.json"
+                result = self.run_cli("--record", str(record_path), cutoff=None)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(f"text restored to the cutoff: {restored}", result.stdout)
+                self.assertIn(f"| `isDraft` | `{flag}` |", self.out.read_text(encoding="utf-8"))
+                self.assertIs(json.loads(record_path.read_text(encoding="utf-8"))["draft_as_of_cutoff"],
+                              True if restored != "[]" else None)
+                self.assertIn("| `isDraft` | `false` |", self.build_ok())
+        self.pull()["isDraft"] = True
+        self.date_the_timeline(self.force_push(), converted("2026-03-09T09:00:00Z"))
+        self.assertIn("| `isDraft` | `false` |", self.build_ok(cutoff=None))
+
+    def test_draft_events_that_do_not_lead_to_the_reported_flag_refuse_the_packet(self) -> None:
+        for kinds in (["ConvertToDraftEvent"], ["ReadyForReviewEvent", "ReadyForReviewEvent"]):
+            with self.subTest(kinds=kinds):
+                self.date_the_timeline(self.force_push(), *(
+                    {"__typename": kind, "createdAt": f"2026-03-10T1{index}:00:00Z"} for index, kind in enumerate(kinds)))
+                result = self.run_cli(cutoff=None)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn("does not establish the flag at the cutoff", result.stderr)
+                self.assertFalse(self.out.exists())
+
     def test_the_record_states_the_source_and_every_omission_and_restoration(self) -> None:
         comment = self.pull()["comments"]["nodes"][0]
         comment["id"], comment["lastEditedAt"] = "IC_1", "2026-03-10T11:00:00Z"
@@ -379,11 +417,12 @@ class BuildPacketTests(unittest.TestCase):
         result = self.run_cli("--record", str(record_path), cutoff=None)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         record = json.loads(record_path.read_text(encoding="utf-8"))
-        self.assertEqual({key: record[key] for key in ["cutoff", "cutoff_is", "cutoff_source", "omitted", "title_as_of_cutoff"]}, {
+        self.assertEqual({key: record[key] for key in ["cutoff", "cutoff_is", "cutoff_source", "omitted", "title_as_of_cutoff",
+                                                       "draft_as_of_cutoff"]}, {
             "cutoff": PUSHED, "cutoff_is": "the last push",
             "cutoff_source": "the force-push event that made this commit the head",
             "omitted": {"reviews": 2, "thread_comments": 2, "conversation": 1, "issue_comments": 1},
-            "title_as_of_cutoff": None})
+            "title_as_of_cutoff": None, "draft_as_of_cutoff": None})
         self.assertIn({"kind": "reviews", "published": "2026-03-09T15:30:00Z", "author": "alice"}, record["omitted_records"])
         self.assertIn({"kind": "thread_comments", "published": "2026-03-11T09:00:00Z", "author": "dana",
                        "review_submitted": "2026-03-12T08:00:00Z"}, record["omitted_records"])

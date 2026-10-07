@@ -18,7 +18,7 @@ policy (branch layout, execution allowance, what is unavailable) separately.
 | Diff | 2 files, +197 / −26, 1 commits |
 | `state` | `MERGED` |
 | `merged` | **`true`** (merged 2026-08-13T11:23:20Z) |
-| `isDraft` | `false` |
+| `isDraft` | `true` |
 | Originating issue(s) | none — the PR body carries no closing reference |
 
 ## 2. Changed-file manifest (verified against the pinned SHAs from the mirror)
