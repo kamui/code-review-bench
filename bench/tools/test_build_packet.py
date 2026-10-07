@@ -408,6 +408,26 @@ class BuildPacketTests(unittest.TestCase):
                 self.assertIn("does not establish the flag at the cutoff", result.stderr)
                 self.assertFalse(self.out.exists())
 
+    def test_a_restored_body_that_closes_other_issues_refuses_the_packet(self) -> None:
+        pull = self.pull()
+        pull["id"], pull["lastEditedAt"] = "PR_1", "2026-03-10T11:00:00Z"
+        self.date_the_timeline(self.force_push())
+        for label, now, then in [
+            ("the keyword was added later", "Closes #3900.", "Relates to #3900."),
+            ("another issue was closed at the cutoff", "Fixes #3900.", "Fixes #3900 and resolves other/spec#12."),
+            ("the keyword was dropped later", "See #3900.", "closes: https://github.com/Example/retry/issues/3900"),
+        ]:
+            with self.subTest(label):
+                pull["body"] = now
+                self.save_edits(PR_1=[("2026-03-10T11:00:00Z", now), (OPENED, then)])
+                self.assert_unavailable(self.run_cli(save=False, cutoff=None), "originating issues",
+                                        "the references at the cutoff are not established")
+        pull["body"] = "Closes #3900."
+        self.save_edits(PR_1=[("2026-03-10T11:00:00Z", pull["body"]), (OPENED, "Draft.\n\nfixed example/retry#3900")])
+        packet = self.build_ok(save=False, cutoff=None)
+        self.assertIn("fixed example/retry#3900", packet)
+        self.assertIn("(closing reference in the PR body)", packet)
+
     def test_the_record_states_the_source_and_every_omission_and_restoration(self) -> None:
         comment = self.pull()["comments"]["nodes"][0]
         comment["id"], comment["lastEditedAt"] = "IC_1", "2026-03-10T11:00:00Z"
