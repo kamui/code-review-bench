@@ -56,7 +56,7 @@ import transcript_usage  # noqa: E402
 
 PREPARED_INPUTS = ("reviews/", "claims.md", "register.json", "rubric.md", "packet.md", "prompt.md", "validator/",
                    "evidence/")
-VERDICT_TOOLS = ("mcp__grading__write_verdicts", "mcp__grading__validate")
+VERDICT_TOOLS = ("mcp__grading__write_verdicts", "mcp__grading__edit_verdicts", "mcp__grading__validate")
 CATEGORIES = ("source", "source+inputs", "unlabelled", "inputs", "verdicts", "none")
 TOKEN_FIELDS = ("input", "cache_write_5m", "cache_write_1h", "cache_write_unknown", "cache_read", "output", "thinking")
 

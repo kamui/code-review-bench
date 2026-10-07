@@ -74,6 +74,7 @@ def fixture(root):
                   "control": {"status": "known-problems", "reason": "Provisional known problem", "adjudication": None, "evidence": [source]}}]},
                  "adjudication": {"schema_version": 1, "decisions": []}, "claim": {"schema_version": 1, "claims": [claim]},
                  "grade": {"schema_version": 1, "batches": []}, "candidate": {"schema_version": 1, "candidates": []},
+                 "credit": {"schema_version": 1, "rulings": []},
                  "audit": {"state": "unassessed", "evidence": []}}
     policy = write(root, "bench/grading/current/validation-policy.json", {"contract": "fixture/v1", "recovery": "Supported attributable material claim"})
     documents["policy"] = current.pin_file(policy, root)
@@ -225,6 +226,13 @@ class CurrentGrading(unittest.TestCase):
         self.check()
         self.documents["reference"]["targets"][0]["families"][0]["mechanism"] = "Different causal mechanism"
         with self.assertRaisesRegex(current.Inconsistent, "grade fingerprint is stale"):
+            self.check()
+
+    def test_a_batch_without_the_policys_verdict_contract_mark_is_refused(self):
+        policy = write(self.root, "bench/grading/current/validation-policy.json", {"contract": "fixture/v1", "verdicts": "current-verdicts/v2"})
+        self.documents["policy"] = current.pin_file(policy, self.root)
+        assessed_grade(self.selected, self.documents, self.root)
+        with self.assertRaisesRegex(current.Inconsistent, "not marked with the validation policy's verdict contract current-verdicts/v2"):
             self.check()
 
     def test_receipt_scope_must_be_in_saved_ruling(self):
