@@ -763,7 +763,7 @@ class MapV2(PrepareV2):
         self.assertNotEqual(before, self.cohort.fingerprint())
         self.start()
         token = self.token["att-001"]
-        self.assertIn(f"{token} item 1, GT-t1: says what goes wrong, no; says why, yes.", (self.work / "claims.md").read_text())
+        self.assertIn(f"{token} item 1, GT-t1: says what goes wrong, no; identifies the cause as a fault, yes.", (self.work / "claims.md").read_text())
         snapshot = json.loads((self.work / "validator/inputs.json").read_text())
         self.assertEqual(snapshot["credits"], {token: {"1": [{"family": "GT-t1", "says_what": "no", "says_why": "yes"}]}})
         rest = ([], [claim_v2("c3", "Lock order is new")])
@@ -784,7 +784,7 @@ class MapV2(PrepareV2):
 
         self.rule("no", None)
         self.start()
-        self.assertIn("says why, not ruled.", (self.work / "claims.md").read_text())
+        self.assertIn("identifies the cause as a fault, not ruled.", (self.work / "claims.md").read_text())
         done = self.map(self.graded(reviewed_v2([claim_v2(known_problems=[known_problem(what="no", why="no")])], *rest,
                                                 recommendations=[self.fix()])))
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)

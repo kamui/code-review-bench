@@ -141,7 +141,7 @@ class Filing:
         facts = ""
         if "what" in recovery:
             why = {True: "yes", False: "no", None: "the user did not rule on it"}[recovery["why"]]
-            facts = f" Says what goes wrong: {'yes' if recovery['what'] else 'no'}. Says why: {why}."
+            facts = f" Says what goes wrong: {'yes' if recovery['what'] else 'no'}. Identifies the cause as a fault: {why}."
         verb = "gets" if recovery["credit"] else "does not get"
         return f"Recorded: the comment of {recovery['group']} on {recovery['target']} {verb} credit for {recovery['family']}.{facts}"
 
@@ -345,7 +345,7 @@ class Filing:
 
     def credits(self):
         """The rulings on one comment, which a grader of that comment must follow. A ruling made before the two
-        facts were recorded gives "says what" by its credit and leaves "says why" unruled."""
+        facts were recorded gives "says what goes wrong" by its credit and leaves the second fact unruled."""
         rows = []
         for recovery in self.recoveries:
             run, attempt = recovery["attempt"].split("/")

@@ -282,7 +282,7 @@ def prepare(args, loaded=None) -> list:
                 credits.setdefault(token, {}).setdefault(number, []).append(
                     {"family": ruling["family_id"], "says_what": ruling["says_what"], "says_why": ruling["says_why"]})
                 claim_text += (f"\n{token} item {number}, {ruling['family_id']}: says what goes wrong, {ruling['says_what']}; "
-                               f"says why, {ruling['says_why'] or 'not ruled'}.\n")
+                               f"identifies the cause as a fault, {ruling['says_why'] or 'not ruled'}.\n")
         if getattr(args, "claim_evidence", None):
             evidence = claims.grading_evidence(applicable, decisions, claims.load_extracts(args.claim_evidence), root)
             if evidence:
