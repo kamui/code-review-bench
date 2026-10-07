@@ -339,8 +339,6 @@ def after_faults(record, after, before_path, root=ROOT):
     if after["outcome"] not in outcomes(record):
         found.append(f"outcome must be one of {', '.join(outcomes(record))}")
     if contract == 1:
-        if record.get("contract", 1) != 1:
-            found.append("a contract 1 after-record belongs to a contract 1 before-record")
         if after.get("settled_by") == "agents" and route(record, root):
             found.append(f"`settled_by` is `agents`, and the decision is the user's: {'; '.join(route(record, root))}")
     return found + second_after_faults(record, after, root) if contract == 2 else found

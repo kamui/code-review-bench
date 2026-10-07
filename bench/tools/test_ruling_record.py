@@ -301,8 +301,14 @@ class AfterContractTwoTest(unittest.TestCase):
             record = sound("candidate")
             path, after = decided(record, directory)
             after = {**legacy, "ruling": record["ruling"], "before": after["before"]}
-            self.assertEqual(ruling_record.after_faults(record, after, path),
-                             ["a contract 1 after-record belongs to a contract 1 before-record"])
+            self.assertEqual(ruling_record.after_faults(record, after, path), [])
+            for contract in (None, 1):
+                with self.subTest(before_contract=2, after_contract=contract):
+                    after.update(settled_by="agents", asked=0)
+                    if contract is not None:
+                        after["contract"] = contract
+                    self.assertEqual(ruling_record.after_faults(record, after, path),
+                                     ["`settled_by` is `agents`, and the decision is the user's: no policy is adopted, so agents settle nothing beyond ADR-0006"])
 
     def test_a_contract_2_after_record_needs_its_fields_and_a_contract_2_before_record(self):
         with tempfile.TemporaryDirectory() as directory:
