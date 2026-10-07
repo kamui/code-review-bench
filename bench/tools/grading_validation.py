@@ -134,6 +134,10 @@ def claim_problems(token, review, sources, snapshot, disputed, naming):
             if (token, int(key), canonical) not in disputed and not any(
                     isinstance(c, dict) and c.get("canonical_claim_id") == canonical for c in item["claims"]):
                 problems.append(f"{where}: equivalent item needs its canonical claim {canonical}")
+        if v2 and all(isinstance(c, dict) and c.get("id") in claims for c in item["claims"]):
+            for ruling in snapshot.get("credits", {}).get(token, {}).get(key, []):
+                entries = [e for c in item["claims"] for e in c["known_problems"] if e["family"] == ruling["family"]]
+                problems.extend(f"{where}: {p}" for p in claim_grading.credit_problems(entries, ruling))
     return problems, claims
 
 

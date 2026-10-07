@@ -74,6 +74,7 @@ def fixture(root):
                   "control": {"status": "known-problems", "reason": "Provisional known problem", "adjudication": None, "evidence": [source]}}]},
                  "adjudication": {"schema_version": 1, "decisions": []}, "claim": {"schema_version": 1, "claims": [claim]},
                  "grade": {"schema_version": 1, "batches": []}, "candidate": {"schema_version": 1, "candidates": []},
+                 "credit": {"schema_version": 1, "rulings": []},
                  "audit": {"state": "unassessed", "evidence": []}}
     policy = write(root, "bench/grading/current/validation-policy.json", {"contract": "fixture/v1", "recovery": "Supported attributable material claim"})
     documents["policy"] = current.pin_file(policy, root)
