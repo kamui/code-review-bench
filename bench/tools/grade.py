@@ -280,9 +280,9 @@ def prepare(args, loaded=None) -> list:
             for ruling in sorted(ruled, key=lambda r: (by_path[r["review"]["path"]], int(r["item_id"].removeprefix("item-")), r["family_id"])):
                 token, number = by_path[ruling["review"]["path"]], str(int(ruling["item_id"].removeprefix("item-")) + 1)
                 credits.setdefault(token, {}).setdefault(number, []).append(
-                    {"family": ruling["family_id"], "says_what": ruling["says_what"], "says_why": ruling["says_why"]})
+                    {"family": ruling["family_id"], "says_what": ruling["says_what"], "identifies_cause": ruling["identifies_cause"]})
                 claim_text += (f"\n{token} item {number}, {ruling['family_id']}: says what goes wrong, {ruling['says_what']}; "
-                               f"identifies the cause as a fault, {ruling['says_why'] or 'not ruled'}.\n")
+                               f"identifies the cause as a fault, {ruling['identifies_cause'] or 'not ruled'}.\n")
         if getattr(args, "claim_evidence", None):
             evidence = claims.grading_evidence(applicable, decisions, claims.load_extracts(args.claim_evidence), root)
             if evidence:
@@ -966,7 +966,7 @@ def graded_v2(entry: dict, verdict: dict, facts: dict, families: list, evidence:
     assessed = [{"id": c["id"], "anchor": anchor(number, c["quote"]), "canonical_id": c["canonical_claim_id"],
                  "outcome": c["outcome"], "kind": c["kind"],
                  "answers": {field: c[field] for field in ("true", "this_change", "promised", "promise_source", "delivered")},
-                 "known_problems": [{"family_id": e["family"], "says_what": e["says_what"], "says_why": e["says_why"],
+                 "known_problems": [{"family_id": e["family"], "says_what": e["says_what"], "identifies_cause": e["identifies_cause"],
                                      "reason": e["reason"]} for e in c["known_problems"]],
                  "open": c["open"], "candidate_id": candidates[c["candidate"]]["id"] if c["candidate"] else None,
                  "duplicate_group": c["duplicate_group"], "reason": c["notes"], "evidence": evidence}
@@ -984,12 +984,12 @@ def graded_v2(entry: dict, verdict: dict, facts: dict, families: list, evidence:
     anchors = {current_grading.digest(a): a for r in recommendations for a in r["anchors"]}
     recoveries = []
     for family in families:
-        outcome, claim_ids, reason, why_only = claim_grading.family_recovery_v2(family, claims,
+        outcome, claim_ids, reason, cause_only = claim_grading.family_recovery_v2(family, claims,
                                                                              facts["admission"]["state"] == "admitted")
         remedies = [s["outcome"] for r in recommendations for s in r["sufficiency"] if s["family_id"] == family["id"]]
         recoveries.append({"family_id": family["id"], "outcome": outcome, "claim_ids": claim_ids,
                            "sufficiency": claim_grading.family_sufficiency(outcome, remedies, complete), "reason": reason,
-                           "why_only": why_only})
+                           "cause_only": cause_only})
     return {"attempt_id": entry["attempt_id"], "state": "assessed" if complete else "unassessed",
             "reason": ("Every original item, known problem and corrective request was assessed." if complete else
                        "The remedy inventory is incomplete: " + verdict["remedy_inventory"]["reason"]),
