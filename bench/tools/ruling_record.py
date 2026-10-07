@@ -2,6 +2,7 @@
 """Check a ruling's record and say why the ruling stays with the user.
 
     python3 bench/tools/ruling_record.py BEFORE.json [AFTER.json]
+    python3 bench/tools/ruling_record.py route BEFORE.json
 
 `<ruling>.before.json` sits beside the ruling file and is written and committed before the user is asked: every
 party's first answer, the rule they applied and the dossier the facts come from. `<ruling>.after.json` is written
@@ -10,7 +11,10 @@ keeps for the user are computed here from what each party answered, so nobody ha
 saved ruling file stays the authority; these records are the index for learning which answers could be trusted.
 
 A record with `"contract": 2` is checked as docs/adjudication-record.md describes: one record per decision, of any
-decision type in DECISION_TYPES. A record without `contract` is contract 1, the saved records of the second pass, checked as before."""
+decision type in DECISION_TYPES. A record without `contract` is contract 1, the saved records of the second pass, checked as before.
+
+`route` prints whether the user is asked, why, and the question they are shown: the case file and every first answer."""
+import fnmatch
 import hashlib
 import json
 import re
@@ -45,6 +49,11 @@ WRITTEN = ("before-question", "after-answer", "unknown")
 BEFORE_2 = (*BEFORE, "target", "case")
 ANSWER_2 = (*ANSWER, "effort", "brief", "written", "short_of_high")
 UNRECORDED = ("effort", "confidence", "short_of_high", "would_settle")
+AFTER_2 = ("contract", "ruling", "before", "settled_by", "policy", "asked", "outcome", "by_default", "ground", "miss", "lesson")
+SETTLED_BY = ("owner", "agents")
+CAUSES = ("fact-not-fetched", "fact-misread", "not-shown", "precedent-not-shown", "term-unclear", "rule-gap", "rule-changed-later",
+          "owner-weighs-differently", "slip")
+ROUND = ("round", "opened", "closed", "no_record")
 
 
 def load(path):
@@ -79,6 +88,10 @@ def pinned(pin, root):
 def kept(pin, root):
     path = (root / pin["path"]).resolve()
     return (root / "docs/research").resolve() in path.parents or bool(re.search(r"\.v\d+\.", path.name))
+
+
+def two_facts(facts):
+    return isinstance(facts, dict) and all(facts.get(fact) in ("yes", "no", "cannot-tell") for fact in FACTS)
 
 
 def dossier_faults(record, root):
@@ -137,7 +150,7 @@ def answer_faults(record, answer, rulings, root):
     if answer["outcome"] in NAMES_A_PROBLEM and not answer.get("same_fault_as"):
         found.append(f"{by}: `{answer['outcome']}` needs `same_fault_as`, the problem it names")
     facts = answer.get("facts")
-    if decision_type == "recovery" and not (reconstructed and facts is None) and (not isinstance(facts, dict) or any(facts.get(fact) not in ("yes", "no", "cannot-tell") for fact in FACTS)):
+    if decision_type == "recovery" and not (reconstructed and facts is None) and not two_facts(facts):
         found.append(f"{by}: a recovery answer needs `facts`: {' and '.join(FACTS)}, each yes, no or cannot-tell")
     if answer["written"] not in WRITTEN or (not reconstructed and answer["written"] != "before-question"):
         found.append(f"{by}: `written` must be one of {', '.join(WRITTEN)}, and before-question in a record that is not reconstructed")
@@ -247,14 +260,100 @@ def reasons(record, root=ROOT):
     return found
 
 
-def after_faults(record, after, before_path):
-    found = [f"the after-record needs `{field}`" for field in AFTER if field not in after]
+def route(record, root=ROOT):
+    """Why the user is asked. An empty list would let agents settle the decision, and no adopted policy does that yet."""
+    return ["no policy is adopted, so agents settle nothing beyond ADR-0006", *reasons(record, root)]
+
+
+def cell(text):
+    return " ".join(str(text).split()).replace("|", "\\|")
+
+
+def pick(answer):
+    facts = answer.get("facts")
+    return (answer["outcome"] + (f" of {answer['same_fault_as']}" if answer.get("same_fault_as") else "")
+            + (f" (says what: {facts['says_what']}, says why: {facts['says_why']})" if facts else ""))
+
+
+def question(record, root=ROOT):
+    """What the user is shown: the whole case file every blind party read, then every party's first answer."""
+    rows = [f"| {cell(answer['by'])} | {cell(pick(answer))} | {answer['confidence'] or 'not recorded'}"
+            f"{' (' + ', '.join(answer['short_of_high']) + ')' if answer['short_of_high'] else ''} | {cell(answer['reason'])} |"
+            for answer in record["answers"]]
+    return "\n".join([f"The case, {record['case']['path']}:", "", (root / record["case"]["path"]).read_text(encoding="utf-8").strip(), "",
+                      "First answers:", "", "| Party | Pick | Confidence | Reason |", "| --- | --- | --- | --- |", *rows])
+
+
+def second_after_faults(record, after, root):
+    """docs/adjudication-record.md, "The after-record"."""
+    if record.get("contract") != 2:
+        return ["a contract 2 after-record belongs to a contract 2 before-record"]
+    found = []
+    by_agents = after["settled_by"] == "agents"
+    if after["settled_by"] not in SETTLED_BY:
+        found.append(f"`settled_by` must be one of {', '.join(SETTLED_BY)}")
+    elif by_agents and route(record, root):
+        found.append(f"`settled_by` is `agents`, and the decision is the user's: {'; '.join(route(record, root))}")
+    if after["policy"] is not None and not pinned(after["policy"], root):
+        found.append("`policy` must be null, or pin the policy the decision was made under, by path and sha256")
+    asked = after["asked"]
+    if type(asked) is not int or asked < (0 if by_agents else 1):
+        return [*found, "`asked` must count the times the user was asked: at least 1 when the user settled it"]
+    if type(after["by_default"]) is not bool:
+        found.append("`by_default` must be true or false")
+    if after["ground"] is not None and not (isinstance(after["ground"], str) and after["ground"].strip()):
+        found.append("`ground` must be the user's own words, or null when they gave none")
+    if record["decision_type"] == "recovery" and not two_facts(after.get("facts")):
+        found.append(f"a recovery decision needs `facts`: {' and '.join(FACTS)}, each yes, no or cannot-tell")
+    miss, lesson = after["miss"], after["lesson"]
+    owed = recommender(record)["outcome"] != after["outcome"] or asked > 1
+    if miss is not None and not (isinstance(miss, dict) and miss.get("cause") in CAUSES and isinstance(miss.get("note"), str) and miss["note"].strip()):
+        found.append(f"`miss` must be null, or hold `cause`, one of {', '.join(CAUSES)}, and `note`, one sentence on what happened")
+    elif owed and miss is None:
+        found.append("`miss` must name its cause: the recommender's first answer was not the decision, or the user was asked more than once")
+    elif miss and not owed:
+        found.append("`miss` must be null: the recommender's first answer was the decision and the user was asked once")
+    if lesson is not None and not (isinstance(lesson, dict) and all(isinstance(lesson.get(field), str) and lesson[field].strip() for field in ("says", "goes_to"))):
+        found.append("`lesson` must be null, or hold `says`, one sentence, and `goes_to`, the file that was changed")
+    elif lesson and miss is None:
+        found.append("`lesson` needs a `miss`: it says what the miss changed")
+    elif lesson and not (root / lesson["goes_to"].split("#")[0]).is_file():
+        found.append("`lesson.goes_to` must name a file in the repository, the one that was changed")
+    return found
+
+
+def after_faults(record, after, before_path, root=ROOT):
+    contract = after.get("contract", 1)
+    if contract not in (1, 2):
+        return ["`contract` must be 1 or 2; a record without it is contract 1"]
+    found = [f"the after-record needs `{field}`" for field in (AFTER, AFTER_2)[contract - 1] if field not in after]
     if found:
         return found
     if after["ruling"] != record["ruling"] or after["before"].get("sha256") != digest(before_path):
         found.append("`before` must pin the before-record as it was when the user was asked; that file is never edited")
     if after["outcome"] not in outcomes(record):
         found.append(f"outcome must be one of {', '.join(outcomes(record))}")
+    return found + second_after_faults(record, after, root) if contract == 2 else found
+
+
+def round_faults(directory):
+    """docs/adjudication-record.md, "The round file": every ruling file of a round has its record, or the reason it has none."""
+    directory = Path(directory)
+    sheet = load(directory / "round.json")
+    found = [f"round.json needs `{field}`" for field in ROUND if field not in sheet]
+    if found:
+        return found
+    if not (isinstance(sheet["round"], str) and sheet["round"]) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(sheet["opened"])) or type(sheet["closed"]) is not bool:
+        found.append("round.json needs `round`, its name, `opened`, a date as YYYY-MM-DD, and `closed`, true or false")
+    if not isinstance(sheet["no_record"], dict) or not all(isinstance(reason, str) and reason.strip() for reason in sheet["no_record"].values()):
+        return [*found, "`no_record` must give, for each ruling file without a record, its name or a pattern of names and the reason"]
+    for ruling in sorted(directory.glob("*.md")):
+        records = sorted([*directory.glob(f"{ruling.stem}.before.json"), *directory.glob(f"{ruling.stem}.*.before.json")])
+        if not records and not any(fnmatch.fnmatchcase(ruling.name, pattern) for pattern in sheet["no_record"]):
+            found.append(f"{ruling.name} has no before-record, and `no_record` gives no reason")
+        if sheet["closed"]:
+            found += [f"{before.name} has no after-record, and the round is closed" for before in records
+                      if not Path(str(before).replace(".before.", ".after.")).is_file()]
     return found
 
 
@@ -280,14 +379,21 @@ def surprises(record, after, root=ROOT):
 
 
 if __name__ == "__main__":
-    record = load(sys.argv[1])
+    routed = sys.argv[1] == "route"
+    before_path, *after_path = sys.argv[2:3] if routed else sys.argv[1:3]
+    record = load(before_path)
     problems = faults(record)
-    after = load(sys.argv[2]) if len(sys.argv) > 2 else None
+    if routed and not problems and record.get("contract") != 2:
+        problems = ["`route` needs a contract 2 record, which pins the case file the user is shown"]
+    after = load(after_path[0]) if after_path else None
     if after and not problems:
-        problems = after_faults(record, after, sys.argv[1])
+        problems = after_faults(record, after, before_path)
     if problems:
         print("\n".join(problems))
         raise SystemExit(1)
+    if routed:
+        print("ASK\n" + "\n".join(f"- {reason}" for reason in route(record)) + "\n\n" + question(record))
+        raise SystemExit(0)
     stays = reasons(record)
     print("Stays with the user:" if stays else "No recorded reason keeps this with the user. Delegation still needs a policy the user adopted.")
     print("\n".join(f"- {reason}" for reason in stays))
