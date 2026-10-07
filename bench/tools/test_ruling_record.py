@@ -3,6 +3,7 @@ import copy
 import json
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -14,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 RESEARCH = ROOT / "docs/research"
 REVIEW_9 = RESEARCH / "cohort-rebuild-2026-10-05/second-pass/rulings/S9-ruling-30-R2a.before.json"
 SECOND = "docs/research/cohort-rebuild-2026-10-05/second-pass/"
+SECOND_RULINGS = ROOT / SECOND / "rulings"
 LABEL_1 = Path(__file__).with_name("test_ruling_record_fixture.json")
 RULES = {"candidate": SECOND + "terms/two-questions.v6.md", "recovery": SECOND + "assessors/rule-recovery.md",
          "grouping": SECOND + "terms/two-questions.v6.md", "band": "docs/research/impact-boundary-2026-10-04/impact-boundary.v4.md",
@@ -38,6 +40,16 @@ def sound(decision_type):
             "rule": pin(RULES[decision_type]), "clauses": SECOND + "terms/two-questions.v6.clauses.json" if decision_type == "candidate" else None,
             "rulings": SECOND + "terms/rulings.index.json", "reviews": None,
             "answers": [{**answer, "by": "recommender", "model": "claude-opus-5-5", "family": "claude", "blind": False, "brief": None}, *blind]}
+
+
+def decided(record, directory, **changes):
+    """The record saved in `directory`, and a sound after-record in which the user took the recommender's answer when first asked."""
+    path = Path(directory, "third-01.before.json")
+    path.write_text(json.dumps(record), encoding="utf-8")
+    after = {"contract": 2, "ruling": record["ruling"], "before": {"path": str(path), "sha256": ruling_record.digest(path)}, "settled_by": "owner",
+             "policy": None, "asked": 1, "outcome": record["answers"][0]["outcome"], "by_default": False, "ground": None, "miss": None, "lesson": None,
+             **{field: record["answers"][0][field] for field in ("facts", "same_fault_as") if field in record["answers"][0]}}
+    return path, {**after, **changes}
 
 
 class RulingRecordTest(unittest.TestCase):
@@ -198,6 +210,186 @@ class ContractTwoTest(unittest.TestCase):
         self.assertEqual(ruling_record.reasons(sound("reconciliation")), ["no rule of this decision type has been tested blind"])
 
 
+class AfterContractTwoTest(unittest.TestCase):
+    def refused(self, decision_type, changes, *expected):
+        with tempfile.TemporaryDirectory() as directory:
+            record = sound(decision_type)
+            path, after = decided(record, directory, **changes)
+            self.assertEqual(ruling_record.after_faults(record, after, path), list(expected))
+
+    def test_a_sound_after_record_of_each_decision_type_passes(self):
+        for decision_type in ruling_record.DECISION_TYPES:
+            with self.subTest(decision_type):
+                self.refused(decision_type, {})
+
+    def test_agents_settle_nothing_while_no_policy_is_adopted(self):
+        self.refused("candidate", {"settled_by": "agents", "asked": 0, "policy": pin(RULES["candidate"])},
+                     "`settled_by` is `agents`, and the decision is the user's: no policy is adopted, so agents settle nothing beyond ADR-0006")
+        self.refused("band", {"settled_by": "reviewer"}, "`settled_by` must be one of owner, agents")
+
+    def test_the_policy_is_null_or_pinned(self):
+        self.refused("band", {"policy": pin(RULES["band"])})
+        self.refused("band", {"policy": {"path": RULES["band"], "sha256": "0" * 64}},
+                     "`policy` must be null, or pin the policy the decision was made under, by path and sha256")
+
+    def test_the_user_was_asked_at_least_once(self):
+        for asked in (0, "1", True):
+            self.refused("band", {"asked": asked}, "`asked` must count the times the user was asked: at least 1 when the user settled it")
+
+    def test_the_users_answer_holds_its_plain_fields(self):
+        self.refused("band", {"by_default": "no", "ground": " "}, "`by_default` must be true or false",
+                     "`ground` must be the user's own words, or null when they gave none")
+        self.refused("recovery", {"facts": {"says_what": "yes"}}, "a recovery decision needs `facts`: says_what and says_why, each yes, no or cannot-tell")
+        self.refused("band", {"outcome": "problem", "miss": {"cause": "slip", "note": "The recommender picked the wrong label."}},
+                     "outcome must be one of serious, other-material, unknown, not-applicable")
+
+    def test_a_decision_that_names_a_known_problem_says_which(self):
+        self.refused("grouping", {"same_fault_as": None}, "`same-family` needs `same_fault_as`, the problem it names")
+        self.refused("candidate", {"outcome": "duplicate", "miss": {"cause": "slip", "note": "The recommender missed the known problem."}},
+                     "`duplicate` needs `same_fault_as`, the problem it names")
+        self.refused("candidate", {"outcome": "duplicate", "same_fault_as": "GT-r2", "miss": {"cause": "slip", "note": "The recommender missed the known problem."}})
+
+    def test_a_miss_is_named_exactly_when_the_recommender_missed_or_the_user_was_asked_again(self):
+        miss = {"cause": "fact-not-fetched", "note": "The case file did not say whose interface the setting was."}
+        owed = "`miss` must name its cause: the recommender's first answer was not the decision, or the user was asked more than once"
+        self.refused("band", {"outcome": "other-material"}, owed)
+        self.refused("band", {"asked": 2}, owed)
+        self.refused("band", {"outcome": "other-material", "miss": miss})
+        self.refused("band", {"asked": 2, "miss": miss})
+        self.refused("band", {"miss": miss}, "`miss` must be null: the recommender's first answer was the decision and the user was asked once")
+        for wrong in ({"cause": "bad-luck", "note": "It happened."}, {"cause": "slip", "note": ""}, "slip"):
+            self.refused("band", {"asked": 2, "miss": wrong}, f"`miss` must be null, or hold `cause`, one of {', '.join(ruling_record.CAUSES)}, "
+                                                              "and `note`, one sentence on what happened")
+
+    def test_a_lesson_follows_a_miss_and_names_the_file_that_changed(self):
+        miss = {"cause": "not-shown", "note": "The question left out the comment's second paragraph."}
+        lesson = {"says": "Show the whole comment.", "goes_to": "docs/claim-adjudication.md#prepare-a-ruling"}
+        self.refused("band", {"asked": 2, "miss": miss, "lesson": lesson})
+        self.refused("band", {"lesson": lesson}, "`lesson` needs a `miss`: it says what the miss changed")
+        self.refused("band", {"asked": 2, "miss": miss, "lesson": {**lesson, "goes_to": "docs/no-such-page.md"}},
+                     "`lesson.goes_to` must name a file in the repository, the one that was changed")
+        self.refused("band", {"asked": 2, "miss": miss, "lesson": {"says": "Show the whole comment."}},
+                     "`lesson` must be null, or hold `says`, one sentence, and `goes_to`, the file that was changed")
+
+    def test_changing_the_known_problem_is_a_miss(self):
+        miss = {"cause": "slip", "note": "The recommender named the wrong known problem."}
+        lesson = {"says": "Check the problem identity.", "goes_to": "docs/adjudication-record.md"}
+        for decision_type, outcome in (("grouping", "same-family"), ("candidate", "duplicate")):
+            with self.subTest(decision_type):
+                record = sound(decision_type)
+                record["answers"][0].update(outcome=outcome, same_fault_as="GT-r2")
+                with tempfile.TemporaryDirectory() as directory:
+                    path, after = decided(record, directory)
+                    self.assertEqual(ruling_record.after_faults(record, after, path), [])
+                    after["same_fault_as"] = "GT-r3"
+                    self.assertEqual(ruling_record.after_faults(record, after, path),
+                                     ["`miss` must name its cause: the recommender's first answer was not the decision, or the user was asked more than once"])
+                    after.update(miss=miss, lesson=lesson)
+                    self.assertEqual(ruling_record.after_faults(record, after, path), [])
+
+    def test_a_legacy_after_record_cannot_bypass_the_settlement_contract(self):
+        legacy = ruling_record.load(str(REVIEW_9).replace(".before.", ".after."))
+        for contract in (None, 1):
+            with self.subTest(contract):
+                after = {**legacy, "settled_by": "agents", "asked": 0}
+                if contract is not None:
+                    after["contract"] = contract
+                record = ruling_record.load(REVIEW_9)
+                faults = ruling_record.after_faults(record, after, REVIEW_9)
+                self.assertTrue(any("`settled_by` is `agents`" in fault for fault in faults), faults)
+        with tempfile.TemporaryDirectory() as directory:
+            record = sound("candidate")
+            path, after = decided(record, directory)
+            after = {**legacy, "ruling": record["ruling"], "before": after["before"]}
+            self.assertEqual(ruling_record.after_faults(record, after, path), [])
+            for contract in (None, 1):
+                with self.subTest(before_contract=2, after_contract=contract):
+                    after.update(settled_by="agents", asked=0)
+                    if contract is not None:
+                        after["contract"] = contract
+                    self.assertEqual(ruling_record.after_faults(record, after, path),
+                                     ["`settled_by` is `agents`, and the decision is the user's: no policy is adopted, so agents settle nothing beyond ADR-0006"])
+
+    def test_a_contract_2_after_record_needs_its_fields_and_a_contract_2_before_record(self):
+        with tempfile.TemporaryDirectory() as directory:
+            record = sound("band")
+            path, after = decided(record, directory)
+            self.assertEqual(ruling_record.after_faults(record, {**after, "contract": 3}, path), ["`contract` must be 1 or 2; a record without it is contract 1"])
+            del after["miss"], after["settled_by"]
+            self.assertEqual(ruling_record.after_faults(record, after, path), ["the after-record needs `settled_by`", "the after-record needs `miss`"])
+        record, after = ruling_record.load(REVIEW_9), ruling_record.load(str(REVIEW_9).replace(".before.", ".after."))
+        after.update(contract=2, settled_by="owner", policy=None, miss=None, lesson=None)
+        self.assertEqual(ruling_record.after_faults(record, after, REVIEW_9), ["a contract 2 after-record belongs to a contract 2 before-record"])
+
+
+class RouteTest(unittest.TestCase):
+    def route(self, path):
+        return subprocess.run([sys.executable, ruling_record.__file__, "route", path], capture_output=True, text=True, encoding="utf-8")
+
+    def test_the_user_is_asked_and_shown_the_whole_case_and_every_first_answer(self):
+        record = ruling_record.load(LABEL_1)
+        run = self.route(LABEL_1)
+        self.assertEqual(run.returncode, 0, run.stdout)
+        self.assertTrue(run.stdout.startswith("ASK\n- no policy is adopted, so agents settle nothing beyond ADR-0006\n- a band decision is the user's under ADR-0006\n"))
+        self.assertIn((ROOT / record["case"]["path"]).read_text(encoding="utf-8").strip(), run.stdout)
+        self.assertIn("| Party | Pick | Confidence | Reason |\n| --- | --- | --- | --- |\n| recommender | other-material | low | ", run.stdout)
+        self.assertEqual(run.stdout.count("\n| inspector-"), 2)
+
+    def test_a_pick_names_the_problem_it_means_and_the_two_facts(self):
+        record = sound("recovery")
+        record["answers"][1].update(confidence="medium", short_of_high=["fact-reported"], would_settle=False, reason="Line one\nand | two.")
+        self.assertIn("| assessor-1 | recovers (says what: yes, says why: no) | medium (fact-reported) | Line one and \\| two. |",
+                      ruling_record.question(record))
+        self.assertIn("| recommender | same-family of GT-r2 | high | ", ruling_record.question(sound("grouping")))
+
+    def test_a_contract_1_record_has_no_case_file_to_show(self):
+        run = self.route(REVIEW_9)
+        self.assertEqual((run.returncode, run.stdout), (1, "`route` needs a contract 2 record, which pins the case file the user is shown\n"))
+
+
+class RoundTest(unittest.TestCase):
+    def setUp(self):
+        self.directory = Path(self.enterContext(tempfile.TemporaryDirectory()), "rulings")
+        shutil.copytree(SECOND_RULINGS, self.directory)
+
+    def sheet(self, **changes):
+        sheet = {**ruling_record.load(self.directory / "round.json"), **changes}
+        (self.directory / "round.json").write_text(json.dumps(sheet), encoding="utf-8")
+
+    def test_a_ruling_without_its_record_or_a_reason_is_refused(self):
+        self.assertEqual(ruling_record.round_faults(self.directory), [])
+        (self.directory / "11-grpc-go-Q1.before.json").unlink()
+        (self.directory / "31-new-question.md").write_text("# Ruling 31\n", encoding="utf-8")
+        self.assertEqual(ruling_record.round_faults(self.directory), ["11-grpc-go-Q1.md has no before-record, and `no_record` gives no reason",
+                                                                     "31-new-question.md has no before-record, and `no_record` gives no reason"])
+        self.sheet(no_record={"*.md": "a copy made for a test"})
+        self.assertEqual(ruling_record.round_faults(self.directory), [])
+
+    def test_a_closed_round_holds_every_answer(self):
+        (self.directory / "30-base-ui-5460-Q5.N3.after.json").unlink()
+        self.assertEqual(ruling_record.round_faults(self.directory), ["30-base-ui-5460-Q5.N3.before.json has no after-record, and the round is closed"])
+        self.sheet(closed=False)
+        self.assertEqual(ruling_record.round_faults(self.directory), [])
+
+    def test_a_closed_round_checks_before_records_without_a_ruling_file(self):
+        path, after = decided(sound("band"), self.directory)
+        self.assertEqual(ruling_record.round_faults(self.directory),
+                         ["third-01.before.json has no after-record, and the round is closed"])
+        self.sheet(closed=False)
+        self.assertEqual(ruling_record.round_faults(self.directory), [])
+        self.sheet(closed=True)
+        path.with_name("third-01.after.json").write_text(json.dumps(after), encoding="utf-8")
+        self.assertEqual(ruling_record.round_faults(self.directory), [])
+
+    def test_the_round_file_holds_its_fields(self):
+        self.sheet(opened="5 October", no_record={"P*.md": ""})
+        self.assertEqual(ruling_record.round_faults(self.directory),
+                         ["round.json needs `round`, its name, `opened`, a date as YYYY-MM-DD, and `closed`, true or false",
+                          "`no_record` must give, for each ruling file without a record, its name or a pattern of names and the reason"])
+        (self.directory / "round.json").write_text("{}", encoding="utf-8")
+        self.assertEqual(ruling_record.round_faults(self.directory), [f"round.json needs `{field}`" for field in ruling_record.ROUND])
+
+
 class SavedRecordsTest(unittest.TestCase):
     def test_every_saved_record_is_sound(self):
         for path in sorted(RESEARCH.rglob("rulings/*.before.json")):
@@ -207,10 +399,12 @@ class SavedRecordsTest(unittest.TestCase):
             if after.exists():
                 self.assertEqual(ruling_record.after_faults(record, ruling_record.load(after), path), [], after)
 
-    def test_every_second_pass_ruling_from_the_eleventh_has_its_record(self):
-        rulings = RESEARCH / "cohort-rebuild-2026-10-05/second-pass/rulings"
-        late = [path for path in rulings.glob("[0-9][0-9]-*.md") if int(path.name[:2]) >= 11]
-        self.assertEqual([path.name for path in late if not path.with_suffix(".before.json").exists()], [])
+    def test_every_round_that_holds_a_record_is_whole(self):
+        rounds = sorted({path.parent for path in RESEARCH.rglob("rulings/*.before.json")})
+        self.assertIn(SECOND_RULINGS, rounds)
+        for directory in rounds:
+            self.assertTrue((directory / "round.json").is_file(), f"{directory} holds records and no round.json")
+            self.assertEqual(ruling_record.round_faults(directory), [], directory)
 
 
 if __name__ == "__main__":
