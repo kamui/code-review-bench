@@ -224,48 +224,49 @@ def pinned_client(expected_cli_version):
 
 
 def installed_client(name):
-    """(executable, version) of the client on PATH. Links are resolved, so a later update that repoints the
-    installed link leaves this executable where it is."""
+    """The executable of the client on PATH, with links resolved."""
     found = shutil.which(name)
     if not found:
         raise ValueError(f"no {name} client is installed")
-    executable = Path(found).resolve()
+    return Path(found).resolve()
+
+
+def client_version(executable):
     result = subprocess.run([str(executable), "--version"], capture_output=True, text=True, timeout=15)
     match = re.search(r"\d+\.\d+\.\d+", result.stdout)
     if result.returncode or not match:
         raise ValueError(f"cannot read the version of {executable}")
-    return executable, match.group(0)
+    return match.group(0)
 
 
 def pin_client(directory, grader, expected=None):
-    """(version, PATH) of the client this queue grades with. The first run of a queue pins the client installed
-    then, and every later run keeps that executable, so an update during or between runs changes no batch's
-    client. ``expected`` or ``grader.cliVersion`` must name the pinned version when given."""
+    """(version, PATH) of the client this queue grades with. The first run of a queue copies the client
+    installed then into the queue directory, and every run executes that copy, so an update of the installed
+    client during or between runs changes no batch's client. ``expected`` or ``grader.cliVersion`` must name
+    the pinned version when given."""
     name = "codex" if grader["model"].startswith("gpt-") else "claude"
-    record = directory / "client.json"
+    record, copy = directory / "client.json", directory / "client-bin" / name
     if record.exists():
         pinned = read(record)
-        executable = Path(pinned["executable"])
-        if not executable.is_file() or digest(executable) != pinned["sha256"]:
-            raise ValueError(f"the queue's pinned {name} {pinned['version']} is no longer at {executable}; reinstall "
-                             f"that version, or remove {record} to pin the installed client for the batches left")
     else:
-        executable, version = installed_client(name)
-        pinned = {"client": name, "version": version, "executable": str(executable), "sha256": digest(executable),
+        source = installed_client(name)
+        copy.parent.mkdir(exist_ok=True)
+        staged = copy.with_name(name + ".copying")
+        shutil.copyfile(source, staged)
+        staged.chmod(0o555)
+        staged.replace(copy)
+        pinned = {"client": name, "version": client_version(copy), "source": str(source), "sha256": digest(copy),
                   "pinnedAt": datetime.now(timezone.utc).isoformat(timespec="seconds")}
         with record.open("x") as handle:
             json.dump(pinned, handle, indent=2)
             handle.write("\n")
+    if copy.is_symlink() or not copy.is_file() or digest(copy) != pinned["sha256"]:
+        raise ValueError(f"the queue's copy of {name} {pinned['version']} at {copy} is missing or changed; restore it, "
+                         f"or remove {record} to pin the installed client for the batches left")
     wanted = expected or grader.get("cliVersion")
     if wanted and wanted != pinned["version"]:
         raise ValueError(f"the queue's pinned {name} is {pinned['version']}, not the requested {wanted}")
-    shim = directory / "client-bin"
-    shim.mkdir(exist_ok=True)
-    link = shim / name
-    if not link.is_symlink() or link.resolve() != executable:
-        link.unlink(missing_ok=True)
-        link.symlink_to(executable)
-    return pinned["version"], os.pathsep.join([str(shim), os.environ.get("PATH", "")])
+    return pinned["version"], os.pathsep.join([str(copy.parent), os.environ.get("PATH", "")])
 
 
 def dispatch_timeout(grader):

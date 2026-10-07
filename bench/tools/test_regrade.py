@@ -80,7 +80,8 @@ class Cohort:
     def run(self, workers=1, limit=None, expected=None):
         with patch.object(regrade, "ROOT", self.root), patch.object(regrade, "invoke", self.invoke), \
                 patch.object(regrade, "input_fingerprints", self.fingerprints), \
-                patch.object(regrade, "installed_client", self.installed_client):
+                patch.object(regrade, "installed_client", self.installed_client), \
+                patch.object(regrade, "client_version", lambda executable: Path(executable).read_text()):
             return regrade.execute(self.root / "authorization.json", self.directory, limit, expected, workers=workers)
 
     def installed_client(self, name):
@@ -88,7 +89,7 @@ class Cohort:
         executable = self.root / "installed" / version / name
         executable.parent.mkdir(parents=True, exist_ok=True)
         executable.write_text(version)
-        return executable, version
+        return executable
 
     def mapped(self, target):
         return self.root / "mapped" / f"{target}.json"
@@ -343,9 +344,12 @@ class Controller(unittest.TestCase):
         self.assertEqual(cohort.run(), 0)
         self.assertEqual({options["--expected-cli-version"] for options in cohort.dispatches}, {"2.1.292"})
         self.assertEqual([invocation["cliVersion"] for invocation in cohort.status()["invocations"]], ["2.1.292"] * 2)
-        link = cohort.directory / "client-bin/claude"
-        self.assertEqual(link.resolve(), Path(pinned["executable"]))
-        self.assertEqual({path.split(":")[0] for path in cohort.paths}, {str(link.parent)})
+        copy = cohort.directory / "client-bin/claude"
+        self.assertFalse(copy.is_symlink())
+        self.assertEqual((copy.read_text(), regrade.digest(copy)), ("2.1.292", pinned["sha256"]))
+        Path(pinned["source"]).write_text("replaced in place by an update")
+        self.assertEqual(cohort.run(), 0)
+        self.assertEqual({path.split(":")[0] for path in cohort.paths}, {str(copy.parent)})
         self.assertEqual(len(cohort.launched), 3)
 
     def test_a_missing_pinned_client_or_another_requested_version_stops_before_dispatch(self):
@@ -353,8 +357,13 @@ class Controller(unittest.TestCase):
         self.assertEqual(cohort.run(limit=1), 0)
         with self.assertRaisesRegex(ValueError, "pinned claude is 9.9.9, not the requested 9.9.8"):
             cohort.run(expected="9.9.8")
-        Path(regrade.read(cohort.directory / "client.json")["executable"]).write_text("replaced in place")
-        with self.assertRaisesRegex(ValueError, "pinned claude 9.9.9 is no longer at"):
+        copy = cohort.directory / "client-bin/claude"
+        copy.chmod(0o755)
+        copy.write_text("changed")
+        with self.assertRaisesRegex(ValueError, "copy of claude 9.9.9 at .* is missing or changed"):
+            cohort.run()
+        copy.unlink()
+        with self.assertRaisesRegex(ValueError, "copy of claude 9.9.9 at .* is missing or changed"):
             cohort.run()
         self.assertEqual(len(cohort.launched), 1)
 
