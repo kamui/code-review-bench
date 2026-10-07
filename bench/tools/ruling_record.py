@@ -305,6 +305,8 @@ def second_after_faults(record, after, root):
         found.append("`ground` must be the user's own words, or null when they gave none")
     if record["decision_type"] == "recovery" and not two_facts(after.get("facts")):
         found.append(f"a recovery decision needs `facts`: {' and '.join(FACTS)}, each yes, no or cannot-tell")
+    if after["outcome"] in NAMES_A_PROBLEM and not (isinstance(after.get("same_fault_as"), str) and after["same_fault_as"].strip()):
+        found.append(f"`{after['outcome']}` needs `same_fault_as`, the problem it names")
     miss, lesson = after["miss"], after["lesson"]
     owed = recommender(record)["outcome"] != after["outcome"] or asked > 1
     if miss is not None and not (isinstance(miss, dict) and miss.get("cause") in CAUSES and isinstance(miss.get("note"), str) and miss["note"].strip()):

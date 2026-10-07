@@ -101,6 +101,7 @@ A record that is not reconstructed holds only answers written before the questio
 | `policy` | Null, or the policy the decision was made under, by `path` and `sha256`. |
 | `asked` | How many times the user was asked before the decision was settled. It is at least 1 when the user decided. |
 | `outcome` | One of the decision type's outcomes. |
+| `same_fault_as` | The known problem meant, when the outcome is `duplicate` or `same-family`. |
 | `facts` | For a `recovery` decision: `says_what` and `says_why`, as decided. |
 | `by_default` | `true` when the user decided by default because nobody could tell. |
 | `ground` | The user's reason in their own words, or null when they gave none. Nobody writes one for them. |
