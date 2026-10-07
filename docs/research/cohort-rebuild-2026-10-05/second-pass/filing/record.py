@@ -140,7 +140,8 @@ class Filing:
     def recovery_scope(self, recovery):
         facts = ""
         if "what" in recovery:
-            facts = (f" Says what goes wrong: {'yes' if recovery['what'] else 'no'}. Says why: {'yes' if recovery['why'] else 'no'}.")
+            why = {True: "yes", False: "no", None: "the user did not rule on it"}[recovery["why"]]
+            facts = f" Says what goes wrong: {'yes' if recovery['what'] else 'no'}. Says why: {why}."
         verb = "gets" if recovery["credit"] else "does not get"
         return f"Recorded: the comment of {recovery['group']} on {recovery['target']} {verb} credit for {recovery['family']}.{facts}"
 
