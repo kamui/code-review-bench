@@ -639,10 +639,15 @@ def validate_review_v2(review, attempt, reference, documents, canonical_claims, 
     require(set(review) == V2_REVIEW, f"{where}: not a current-verdicts/v2 review")
     claims, verdicts, groups = unique(review["claims"], "id", where), {}, {}
     decisions = {d["id"]: d for d in documents["adjudication"]["decisions"]}
+    candidates = {c["id"]: c for c in documents["candidate"]["candidates"]}
     for claim in claims.values():
         require(set(claim) == V2_CLAIM, f"{claim['id']}: not a current-verdicts/v2 claim")
         anchor = claim["anchor"]
         validate_anchor(anchor, pin, target, root)
+        if claim["candidate_id"] is not None:
+            candidate = candidates.get(claim["candidate_id"])
+            require(candidate is not None and candidate["target"] == target and anchor in candidate["anchors"],
+                    f"{claim['id']}: names a candidate that is not on record for this wording")
         require(claim["evidence"], "claim assessment needs evidence or an explicit unresolved limitation")
         verdict = verdicts[claim["id"]] = verdict_claim(claim)
         problems = claim_grading.verdict_problems_v2(verdict, family_ids)

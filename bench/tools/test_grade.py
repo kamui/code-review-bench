@@ -818,6 +818,11 @@ class MapV2(PrepareV2):
         self.assertNotIn("confidence", records[0])
         self.assertEqual([a["quote"] for a in records[0]["anchors"]], ["Lock order is new"])
         self.assertEqual([c["candidate_id"] for c in self.review()["claims"]], [None, records[0]["id"]])
+        register = self.root / "bench/grading/current/candidates.json"
+        for change in ({"anchors": [dict(records[0]["anchors"][0], quote="Lock order")]}, None):
+            with self.subTest(change=change):
+                write_json(register, {"schema_version": 1, "candidates": [dict(records[0], **change)] if change else []})
+                self.assertIn("c3: names a candidate that is not on record for this wording", self.check().stdout)
 
 
 class PrepareEmptyReference(Grade):
