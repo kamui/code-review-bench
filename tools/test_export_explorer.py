@@ -89,6 +89,8 @@ class ExportTest(unittest.TestCase):
             documents['reference']['targets'][0]['families'] = []
             documents['reference']['targets'][0]['control']['status'] = 'unaudited'
             documents['claim']['claims'] = []
+            policy = write(root, 'bench/grading/current/validation-policy.json', {'contract': 'fixture/v1', 'verdicts': 'current-verdicts/v2'})
+            documents['policy'] = current.pin_file(policy, root)
             review = {'attempt_id': 'att-001', 'state': 'assessed', 'reason': 'No comment is a finding', 'claims': [],
                       'not_findings': [{'item_id': 'item-0', 'note': 'States no defect'}], 'families': [], 'recommendations': [],
                       'remedy_inventory': {'state': 'complete', 'reason': 'No recommendation in this example', 'anchors': []},

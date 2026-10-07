@@ -487,6 +487,7 @@ def validate_grades(documents, selected, references, canonical_claims, root):
     cells = {c["id"]: c for c in selected["cells"]}
     equivalent_items = {(link["review"]["path"], link["item_id"]): claim["id"]
                         for claim in canonical_claims.values() for link in claim["links"] if link["relation"] == "equivalent"}
+    contract = read_json(resolve_pin(documents["policy"], root)).get("verdicts", grading_validation.CONTRACT)
     seen = set()
     for batch in documents["grade"]["batches"]:
         key = (batch["run"], batch["target"])
@@ -494,6 +495,8 @@ def validate_grades(documents, selected, references, canonical_claims, root):
         seen.add(key)
         expected = grading_fingerprint({"run": key[0], "target": key[1]}, selected, documents, documents["policy"], root)
         require(expected == batch["input_fingerprint"], f"{key}: grade fingerprint is stale")
+        require(batch.get("verdicts", grading_validation.CONTRACT) == contract,
+                f"{key}: batch is not marked with the validation policy's verdict contract {contract}")
         receipt = read_json(resolve_pin(batch["assessor"]["receipt"], root))
         require((receipt["input_fingerprint"], receipt["verdicts_sha256"], receipt["provenance"]["kind"]) ==
                 (batch["input_fingerprint"], batch["assessor"]["verdicts"]["sha256"], batch["assessor"]["kind"]),

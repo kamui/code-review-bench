@@ -228,6 +228,13 @@ class CurrentGrading(unittest.TestCase):
         with self.assertRaisesRegex(current.Inconsistent, "grade fingerprint is stale"):
             self.check()
 
+    def test_a_batch_without_the_policys_verdict_contract_mark_is_refused(self):
+        policy = write(self.root, "bench/grading/current/validation-policy.json", {"contract": "fixture/v1", "verdicts": "current-verdicts/v2"})
+        self.documents["policy"] = current.pin_file(policy, self.root)
+        assessed_grade(self.selected, self.documents, self.root)
+        with self.assertRaisesRegex(current.Inconsistent, "not marked with the validation policy's verdict contract current-verdicts/v2"):
+            self.check()
+
     def test_receipt_scope_must_be_in_saved_ruling(self):
         assessed_grade(self.selected, self.documents, self.root)
         self.documents["adjudication"]["decisions"][0]["receipt_scope"] = "Approval absent from the receipt"
