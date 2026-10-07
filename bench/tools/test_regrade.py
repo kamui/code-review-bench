@@ -46,6 +46,7 @@ class Cohort:
         self.outcomes, self.preflights, self.preflight_code, self.map_crashes = {}, [], 0, False
         self.dispatches = []
         self.commands = []
+        self.installed, self.paths = None, []
         self.directory.mkdir(parents=True)
         (root / "bench/tools").mkdir(parents=True)
         shutil.copy(regrade.__file__, root / regrade.CONTROLLER)
@@ -76,10 +77,18 @@ class Cohort:
                                   executionPlan=pin(self.root, "execution.json", self.execution))
         (self.root / "authorization.json").write_text(json.dumps(self.authorization))
 
-    def run(self, workers=1, limit=None):
+    def run(self, workers=1, limit=None, expected=None):
         with patch.object(regrade, "ROOT", self.root), patch.object(regrade, "invoke", self.invoke), \
-                patch.object(regrade, "input_fingerprints", self.fingerprints):
-            return regrade.execute(self.root / "authorization.json", self.directory, limit, workers=workers)
+                patch.object(regrade, "input_fingerprints", self.fingerprints), \
+                patch.object(regrade, "installed_client", self.installed_client):
+            return regrade.execute(self.root / "authorization.json", self.directory, limit, expected, workers=workers)
+
+    def installed_client(self, name):
+        version = self.installed or self.authorization["grader"].get("cliVersion", "9.9.9")
+        executable = self.root / "installed" / version / name
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        executable.write_text(version)
+        return executable, version
 
     def mapped(self, target):
         return self.root / "mapped" / f"{target}.json"
@@ -93,9 +102,10 @@ class Cohort:
     def replace(self, target):
         (self.directory / "batches" / Path(RUN).name / target / "attempt-2").mkdir()
 
-    def invoke(self, args, log):
+    def invoke(self, args, log, path=None):
         log.open("x").close()
         self.commands.append(args)
+        self.paths.append(path)
         options, arguments = {}, iter(args[1:])
         for name in arguments:
             options[name] = True if name == "--allow-unbounded-codex" else next(arguments)
@@ -189,10 +199,10 @@ class SavedCohort(Cohort):
     def fingerprints(self, batches, current=()):
         return INPUT_FINGERPRINTS(batches, current)
 
-    def invoke(self, args, log):
+    def invoke(self, args, log, path=None):
         if args[0] == "prepare":
             return self.real([*args, "--provision", self.root / "provision_stub.py"], log)
-        return self.real(args, log) if args[0] == "map" else super().invoke(args, log)
+        return self.real(args, log) if args[0] == "map" else super().invoke(args, log, path)
 
     def name(self, key):
         return Path(key).parents[2].name
@@ -320,6 +330,33 @@ class Controller(unittest.TestCase):
                     cohort.run()
                 self.assertEqual(cohort.launched, [])
                 self.assertEqual(list(cohort.directory.glob("batches/*/*/attempt-*/reservation.json")), [])
+
+    def test_a_queue_keeps_the_client_installed_at_its_first_run(self):
+        cohort = Cohort(self.root, 100, jobs=3)
+        del cohort.authorization["grader"]["cliVersion"]
+        cohort.authorize()
+        cohort.installed = "2.1.292"
+        self.assertEqual(cohort.run(limit=1), 0)
+        pinned = regrade.read(cohort.directory / "client.json")
+        self.assertEqual((pinned["client"], pinned["version"]), ("claude", "2.1.292"))
+        cohort.installed = "2.1.300"
+        self.assertEqual(cohort.run(), 0)
+        self.assertEqual({options["--expected-cli-version"] for options in cohort.dispatches}, {"2.1.292"})
+        self.assertEqual([invocation["cliVersion"] for invocation in cohort.status()["invocations"]], ["2.1.292"] * 2)
+        link = cohort.directory / "client-bin/claude"
+        self.assertEqual(link.resolve(), Path(pinned["executable"]))
+        self.assertEqual({path.split(":")[0] for path in cohort.paths}, {str(link.parent)})
+        self.assertEqual(len(cohort.launched), 3)
+
+    def test_a_missing_pinned_client_or_another_requested_version_stops_before_dispatch(self):
+        cohort = Cohort(self.root, 100, jobs=2)
+        self.assertEqual(cohort.run(limit=1), 0)
+        with self.assertRaisesRegex(ValueError, "pinned claude is 9.9.9, not the requested 9.9.8"):
+            cohort.run(expected="9.9.8")
+        Path(regrade.read(cohort.directory / "client.json")["executable"]).write_text("replaced in place")
+        with self.assertRaisesRegex(ValueError, "pinned claude 9.9.9 is no longer at"):
+            cohort.run()
+        self.assertEqual(len(cohort.launched), 1)
 
     def test_workers_bound_concurrent_dispatches_and_each_batch_runs_once(self):
         cohort = Cohort(self.root, 100)
