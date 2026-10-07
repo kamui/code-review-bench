@@ -49,6 +49,8 @@ The user's grounds, as given: a comment that states a behaviour and no problem t
 
 On the second fact for comment C the user ruled against both blind assessors, who answered no at medium confidence and would have settled it. The line under "Says why?" in the rubric, "The cause of a neighbouring problem does not count", does not say what happens when one line is the cause of both problems. Decision P19 (`P19-one-cause-several-problems.md`) adds a sentence for it.
 
+This note dates from 2026-10-06, after decision P20 (`P20-cause-only-claims-are-still-sorted.md`). That decision, made later the same day, dropped the kind "cause of a known problem" from the next rubric. Under it the fact "says why: yes" records comment C's tie to GT-r4, and a claim that questions 2 to 4 make a suggestion gets its kind from question 3. The ruling, its two facts and the records stand as written.
+
 ## The record of first answers
 
 `27-base-ui-5460-comment-C.before.json` and `28-base-ui-5460-comment-D.before.json` were written and committed before the user was asked. The recommender's answers were saved before the assessors ran (`assessors/ruling-27/recommender.json`). The assessors read the case files and the rule under `assessors/ruling-27/`.
