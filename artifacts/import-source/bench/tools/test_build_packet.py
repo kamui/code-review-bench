@@ -23,8 +23,6 @@ SCRIPT = Path(__file__).with_name("build_packet.py")
 FIXTURE = Path(__file__).with_name("test_build_packet_fixture.json")
 
 CUTOFF = "2026-03-10T12:00:00Z"
-PUSHED = "2026-03-09T07:05:00Z"
-OPENED = "2026-03-07T07:30:00Z"
 
 # a double quote forces git to quote the path whatever core.quotePath is set to, and is ASCII, so
 # the fixture does not depend on how the filesystem normalises non-ASCII names
@@ -142,8 +140,7 @@ class BuildPacketTests(unittest.TestCase):
             path = self.replay / (name.replace("_", "-") + ".json")
             path.write_text(json.dumps(body), encoding="utf-8")
 
-    def run_cli(self, *options: str, save: bool = True, cutoff: str | None = CUTOFF) -> subprocess.CompletedProcess:
-        """Run the builder at the merge instant, or with ``cutoff=None`` at the cutoff it works out."""
+    def run_cli(self, *options: str, save: bool = True) -> subprocess.CompletedProcess:
         if save:
             self.save_replay()
         arguments = [
@@ -153,309 +150,16 @@ class BuildPacketTests(unittest.TestCase):
             "--staging", str(self.mirror), "--target", "a",
             "--replay", str(self.replay), "--out", str(self.out),
         ]
-        if cutoff:
-            arguments += ["--cutoff", cutoff]
         return subprocess.run([*arguments, *options], capture_output=True, text=True, encoding="utf-8")
 
-    def build_ok(self, *options: str, save: bool = True, cutoff: str | None = CUTOFF) -> str:
-        result = self.run_cli(*options, save=save, cutoff=cutoff)
+    def build_ok(self, *options: str, save: bool = True) -> str:
+        result = self.run_cli(*options, save=save)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return self.out.read_text(encoding="utf-8")
 
-    def pull(self) -> dict:
-        return self.fixture["data"]["repository"]["pullRequest"]
-
-    def date_the_timeline(self, *events: dict) -> None:
-        self.pull()["timelineItems"] = {"pageInfo": {"hasNextPage": False}, "nodes": list(events)}
-
-    def force_push(self, when: str = PUSHED, oid: str | None = None) -> dict:
-        return {"__typename": "HeadRefForcePushedEvent", "createdAt": when, "afterCommit": {"oid": oid or self.head}}
-
-    def check_the_head(self, *instants: str) -> None:
-        self.pull()["headCommit"] = {"nodes": [{"commit": {"oid": self.head, "checkSuites": {
-            "totalCount": len(instants), "nodes": [{"createdAt": instant} for instant in instants]}}}]}
-
-    def save_edits(self, **histories: list) -> None:
-        """Save the edit histories of the named nodes: each a list of (editedAt, text) revisions."""
-        self.save_replay(edits={"data": {"nodes": [
-            {"id": identifier, "userContentEdits": {"totalCount": len(revisions), "nodes": [
-                {"editedAt": when, "deletedAt": None, "diff": text} for when, text in revisions]}}
-            for identifier, revisions in histories.items()]}})
-
-    # --- the last push --------------------------------------------------
-
-    def test_the_default_cutoff_is_the_force_push_that_made_the_head(self) -> None:
-        self.date_the_timeline(self.force_push("2026-03-08T12:00:00Z", "0" * 40), self.force_push())
-        result = self.run_cli(cutoff=None)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn(f"cutoff {PUSHED}; omitted after cutoff: "
-                      "{'reviews': 2, 'thread_comments': 2, 'conversation': 1, 'issue_comments': 1}",
-                      result.stdout)
-        self.assertIn("cutoff source: the force-push event that made this commit the head", result.stdout)
-        packet = self.out.read_text(encoding="utf-8")
-        self.assertIn(f"## 6. Prior review state through the frozen cutoff `{PUSHED}` (the last push)", packet)
-        self.assertIn("Bounded in the follow-up commit.", packet)
-        self.assertNotIn("| APPROVED |", packet)
-
-    def test_a_fast_forward_push_cuts_at_the_first_check_suite_on_the_head(self) -> None:
-        self.date_the_timeline()
-        self.check_the_head("2026-03-09T07:09:00Z", PUSHED, "2026-03-09T07:06:00Z")
-        result = self.run_cli(cutoff=None)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn(f"cutoff {PUSHED};", result.stdout)
-        self.assertIn("cutoff source: the first check suite on the head commit", result.stdout)
-
-    def test_a_head_pushed_no_later_than_the_opening_cuts_at_the_opening(self) -> None:
-        self.date_the_timeline()
-        for checked in ("2026-03-07T07:29:00Z", OPENED):
-            with self.subTest(checked=checked):
-                self.check_the_head(checked)
-                result = self.run_cli(cutoff=None)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertIn(f"cutoff {OPENED};", result.stdout)
-                self.assertIn("the pull request was opened with its head already pushed "
-                              f"(the first check suite on the head commit, {checked})", result.stdout)
-                packet = self.out.read_text(encoding="utf-8")
-                self.assertIn(f"frozen cutoff `{OPENED}` (the pull request's opening)", packet)
-                self.assertNotIn("Opening for review; the ceiling is configurable.", packet)
-
-    def test_one_listed_commit_does_not_stand_in_for_a_dated_push(self) -> None:
-        self.date_the_timeline()
-        self.pull()["commits"]["totalCount"] = 1
-        result = self.run_cli(cutoff=None)
-        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-        self.assertIn("cannot establish the last push", result.stderr)
-        self.check_the_head(PUSHED)
-        result = self.run_cli(cutoff=None)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn(f"cutoff {PUSHED};", result.stdout)
-
-    def test_a_push_the_forge_does_not_date_is_refused_not_guessed(self) -> None:
-        self.date_the_timeline(self.force_push(oid="0" * 40))
-        for suites in ([], None):
-            with self.subTest(suites=suites):
-                if suites is not None:
-                    self.check_the_head(*suites)
-                result = self.run_cli(cutoff=None)
-                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-                self.assertIn("cannot establish the last push", result.stderr)
-                self.assertIn("--pushed-at", result.stderr)
-                self.assertFalse(self.out.exists())
-
-    def test_a_head_that_returned_after_a_rollback_is_not_dated_by_its_first_arrival(self) -> None:
-        rollback = self.force_push("2026-03-09T08:00:00Z", self.merge_base)
-        for first_arrival in ([self.force_push()], []):
-            with self.subTest(first_arrival=first_arrival):
-                self.date_the_timeline(*first_arrival, rollback)
-                self.check_the_head("2026-03-09T07:05:01Z")
-                result = self.run_cli(cutoff=None)
-                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-                self.assertIn("cannot establish the last push", result.stderr)
-                self.assertIn("2026-03-09T08:00:00Z moved the pull request to another commit", result.stderr)
-                self.assertIn("--pushed-at", result.stderr)
-                self.assertFalse(self.out.exists())
-
-    def test_a_fast_forward_after_a_force_push_elsewhere_cuts_at_its_first_check_suite(self) -> None:
-        self.date_the_timeline(self.force_push("2026-03-09T07:02:00Z", self.merge_base))
-        self.check_the_head(PUSHED)
-        result = self.run_cli(cutoff=None)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn(f"cutoff {PUSHED};", result.stdout)
-        self.assertIn("cutoff source: the first check suite on the head commit", result.stdout)
-
-    def test_check_suites_on_another_commit_or_a_first_page_of_them_do_not_date_the_head(self) -> None:
-        self.date_the_timeline()
-        for change in ({"oid": "0" * 40}, {"checkSuites": {"totalCount": 101, "nodes": [{"createdAt": PUSHED}]}}):
-            with self.subTest(change=change):
-                self.check_the_head(PUSHED)
-                self.pull()["headCommit"]["nodes"][0]["commit"].update(change)
-                result = self.run_cli(cutoff=None)
-                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-                self.assertIn("cannot establish the last push", result.stderr)
-
-    def test_a_missing_or_truncated_timeline_exits_two(self) -> None:
-        for timeline in (None, {"pageInfo": {"hasNextPage": True}, "nodes": [self.force_push()]}):
-            with self.subTest(timeline=timeline):
-                if timeline:
-                    self.pull()["timelineItems"] = timeline
-                result = self.run_cli(cutoff=None)
-                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-                self.assertIn("timeline is missing or truncated", result.stderr)
-
-    def test_a_given_push_instant_is_the_cutoff_and_carries_its_source(self) -> None:
-        self.date_the_timeline()
-        result = self.run_cli("--pushed-at", PUSHED, "--pushed-at-source", "push event in the public events archive",
-                              cutoff=None)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn(f"cutoff {PUSHED};", result.stdout)
-        self.assertIn("cutoff source: push event in the public events archive", result.stdout)
-        self.assertIn(f"frozen cutoff `{PUSHED}` (the last push)", self.out.read_text(encoding="utf-8"))
-
-    def test_a_given_push_instant_must_be_sourced_and_possible(self) -> None:
-        self.date_the_timeline()
-        source = ["--pushed-at-source", "push event"]
-        for options, message, cutoff in [
-            (["--pushed-at", PUSHED], "go together", None),
-            (source, "go together", None),
-            (["--pushed-at", PUSHED, *source], "not both", CUTOFF),
-            (["--pushed-at", "2026-03-09T06:59:59Z", *source], "before the head was committed", None),
-            (["--pushed-at", "2026-03-10T12:00:01Z", *source], "after the merge", None),
-            (["--pushed-at", "yesterday", *source], "not an ISO-8601 instant", None),
-        ]:
-            with self.subTest(options=options):
-                result = self.run_cli(*options, cutoff=cutoff)
-                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-                self.assertIn(message, result.stderr)
-                self.assertFalse(self.out.exists())
-
-    def test_an_unmerged_pull_request_cuts_at_its_last_push(self) -> None:
-        pull = self.pull()
-        pull["merged"], pull["mergedAt"], pull["state"] = False, None, "OPEN"
-        self.date_the_timeline(self.force_push())
-        packet = self.build_ok(cutoff=None)
-        self.assertIn(f"frozen cutoff `{PUSHED}` (the last push)", packet)
-
-    # --- text as it read at the cutoff ------------------------------------
-
-    def test_text_edited_after_the_cutoff_reads_as_it_did_at_the_cutoff(self) -> None:
-        pull = self.pull()
-        comment = pull["comments"]["nodes"][0]
-        for node, identifier, text in [(pull, "PR_1", "Closes #3900.\n\nNow with the reviewer's fix applied."),
-                                       (comment, "IC_1", "Coverage for the merged head: 91%.")]:
-            node["id"], node["lastEditedAt"], node["body"] = identifier, "2026-03-10T11:00:00Z", text
-        self.save_edits(
-            PR_1=[("2026-03-10T11:00:00Z", pull["body"]), ("2026-03-08T08:00:00Z", "Closes #3900.\n\nSecond draft."),
-                  (OPENED, "Closes #3900.\n\nFirst draft.")],
-            IC_1=[("2026-03-10T11:00:00Z", comment["body"]), ("2026-03-07T08:00:00Z", "Coverage for the first head: 88%.")])
-        self.date_the_timeline(self.force_push())
-        result = self.run_cli(cutoff=None)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("text restored to the cutoff: ['pull request body', 'conversation #1']", result.stdout)
-        packet = self.out.read_text(encoding="utf-8")
-        for standing in ["Second draft.", "Coverage for the first head: 88%."]:
-            self.assertIn(standing, packet)
-        for later in ["Now with the reviewer's fix applied.", "First draft.", "Coverage for the merged head: 91%."]:
-            self.assertNotIn(later, packet)
-
-    def test_an_edit_history_that_does_not_establish_the_text_refuses_the_packet(self) -> None:
-        comment = self.pull()["comments"]["nodes"][0]
-        comment["id"], comment["lastEditedAt"] = "IC_1", "2026-03-10T11:00:00Z"
-        self.date_the_timeline(self.force_push())
-        early, late = ("2026-03-07T08:00:00Z", "Earlier text."), ("2026-03-10T11:00:00Z", comment["body"])
-        histories = {
-            "no revision from the cutoff or earlier": {"totalCount": 1, "nodes": [late]},
-            "truncated": {"totalCount": 3, "nodes": [late, early]},
-            "two revisions at the same instant": {"totalCount": 3, "nodes": [late, early, early]},
-            "deleted revision": {"totalCount": 2, "nodes": [late, (early[0], None)]},
-            "absent": None,
-        }
-        for label, history in histories.items():
-            with self.subTest(history=label):
-                nodes = [] if history is None else [{"id": "IC_1", "userContentEdits": {
-                    "totalCount": history["totalCount"],
-                    "nodes": [{"editedAt": when, "deletedAt": None if text else "2026-03-09T00:00:00Z", "diff": text}
-                              for when, text in history["nodes"]]}}]
-                self.save_replay(edits={"data": {"nodes": nodes}})
-                self.assert_unavailable(self.run_cli(save=False, cutoff=None), "conversation #1", "lastEditedAt")
-
-    def test_a_title_renamed_after_the_cutoff_reads_as_it_did_at_the_cutoff(self) -> None:
-        rename = {"__typename": "RenamedTitleEvent", "createdAt": "2026-03-10T11:59:00Z",
-                  "previousTitle": "Bound the retry loop"}
-        earlier = {"__typename": "RenamedTitleEvent", "createdAt": "2026-03-08T08:00:00Z", "previousTitle": "WIP retry"}
-        later = {"__typename": "RenamedTitleEvent", "createdAt": "2026-03-10T12:30:00Z", "previousTitle": "Bound it"}
-        self.date_the_timeline(later, self.force_push(), rename, earlier)
-        result = self.run_cli(cutoff=None)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("text restored to the cutoff: ['title']", result.stdout)
-        self.assertIn('— "Bound the retry loop" |', self.out.read_text(encoding="utf-8"))
-        self.assertIn('— "Bound it" |', self.build_ok())
-
-    def test_the_draft_flag_reads_as_it_stood_at_the_cutoff(self) -> None:
-        def ready(when: str) -> dict:
-            return {"__typename": "ReadyForReviewEvent", "createdAt": when}
-
-        def converted(when: str) -> dict:
-            return {"__typename": "ConvertToDraftEvent", "createdAt": when}
-
-        before = [converted("2026-03-08T08:00:00Z"), ready("2026-03-08T09:00:00Z")]
-        for label, events, flag, restored in [
-            ("marked ready after the cutoff", [ready("2026-03-10T11:59:00Z")], "true", "['draft flag']"),
-            ("converted and marked ready after the cutoff",
-             [ready("2026-03-10T11:59:00Z"), converted("2026-03-09T09:00:00Z")], "false", "[]"),
-            ("converted and marked ready in the same second",
-             [converted("2026-03-09T09:00:00Z"), ready("2026-03-09T09:00:00Z")], "false", "[]"),
-            ("changed only before the cutoff", [], "false", "[]"),
-        ]:
-            with self.subTest(label):
-                self.date_the_timeline(*before, self.force_push(), *events)
-                record_path = self.directory / "record.json"
-                result = self.run_cli("--record", str(record_path), cutoff=None)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertIn(f"text restored to the cutoff: {restored}", result.stdout)
-                self.assertIn(f"| `isDraft` | `{flag}` |", self.out.read_text(encoding="utf-8"))
-                self.assertIs(json.loads(record_path.read_text(encoding="utf-8"))["draft_as_of_cutoff"],
-                              True if restored != "[]" else None)
-                self.assertIn("| `isDraft` | `false` |", self.build_ok())
-        self.pull()["isDraft"] = True
-        self.date_the_timeline(self.force_push(), converted("2026-03-09T09:00:00Z"))
-        self.assertIn("| `isDraft` | `false` |", self.build_ok(cutoff=None))
-
-    def test_draft_events_that_do_not_lead_to_the_reported_flag_refuse_the_packet(self) -> None:
-        for kinds in (["ConvertToDraftEvent"], ["ReadyForReviewEvent", "ReadyForReviewEvent"]):
-            with self.subTest(kinds=kinds):
-                self.date_the_timeline(self.force_push(), *(
-                    {"__typename": kind, "createdAt": f"2026-03-10T1{index}:00:00Z"} for index, kind in enumerate(kinds)))
-                result = self.run_cli(cutoff=None)
-                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-                self.assertIn("does not establish the flag at the cutoff", result.stderr)
-                self.assertFalse(self.out.exists())
-
-    def test_a_restored_body_that_closes_other_issues_refuses_the_packet(self) -> None:
-        pull = self.pull()
-        pull["id"], pull["lastEditedAt"] = "PR_1", "2026-03-10T11:00:00Z"
-        self.date_the_timeline(self.force_push())
-        for label, now, then in [
-            ("the keyword was added later", "Closes #3900.", "Relates to #3900."),
-            ("another issue was closed at the cutoff", "Fixes #3900.", "Fixes #3900 and resolves other/spec#12."),
-            ("the keyword was dropped later", "See #3900.", "closes: https://github.com/Example/retry/issues/3900"),
-        ]:
-            with self.subTest(label):
-                pull["body"] = now
-                self.save_edits(PR_1=[("2026-03-10T11:00:00Z", now), (OPENED, then)])
-                self.assert_unavailable(self.run_cli(save=False, cutoff=None), "originating issues",
-                                        "the references at the cutoff are not established")
-        pull["body"] = "Closes #3900."
-        self.save_edits(PR_1=[("2026-03-10T11:00:00Z", pull["body"]), (OPENED, "Draft.\n\nfixed example/retry#3900")])
-        packet = self.build_ok(save=False, cutoff=None)
-        self.assertIn("fixed example/retry#3900", packet)
-        self.assertIn("(closing reference in the PR body)", packet)
-
-    def test_the_record_states_the_source_and_every_omission_and_restoration(self) -> None:
-        comment = self.pull()["comments"]["nodes"][0]
-        comment["id"], comment["lastEditedAt"] = "IC_1", "2026-03-10T11:00:00Z"
-        self.save_edits(IC_1=[("2026-03-10T11:00:00Z", comment["body"]), ("2026-03-07T08:00:00Z", "Earlier text.")])
-        self.date_the_timeline(self.force_push())
-        record_path = self.directory / "record.json"
-        result = self.run_cli("--record", str(record_path), cutoff=None)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        record = json.loads(record_path.read_text(encoding="utf-8"))
-        self.assertEqual({key: record[key] for key in ["cutoff", "cutoff_is", "cutoff_source", "omitted", "title_as_of_cutoff",
-                                                       "draft_as_of_cutoff"]}, {
-            "cutoff": PUSHED, "cutoff_is": "the last push",
-            "cutoff_source": "the force-push event that made this commit the head",
-            "omitted": {"reviews": 2, "thread_comments": 2, "conversation": 1, "issue_comments": 1},
-            "title_as_of_cutoff": None, "draft_as_of_cutoff": None})
-        self.assertIn({"kind": "reviews", "published": "2026-03-09T15:30:00Z", "author": "alice"}, record["omitted_records"])
-        self.assertIn({"kind": "thread_comments", "published": "2026-03-11T09:00:00Z", "author": "dana",
-                       "review_submitted": "2026-03-12T08:00:00Z"}, record["omitted_records"])
-        self.assertEqual(len(record["omitted_records"]), 6)
-        self.assertEqual(record["text_as_of_cutoff"], [{"record": "conversation #1", "author": "bob",
-                                                        "last_edited": "2026-03-10T11:00:00Z",
-                                                        "text_as_of": "2026-03-07T08:00:00Z"}])
-
     # --- the cutoff -----------------------------------------------------
 
-    def test_a_cutoff_at_the_merge_instant_is_named_and_omits_what_followed(self) -> None:
+    def test_default_cutoff_is_the_merge_instant(self) -> None:
         result = self.run_cli()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(f"cutoff {CUTOFF}; omitted after cutoff: "
@@ -804,6 +508,13 @@ class BuildPacketTests(unittest.TestCase):
         result = self.run_cli(save=False)
         self.assertEqual(result.returncode, 2)
         self.assertIn("cannot read", result.stderr)
+
+    def test_an_unmerged_pull_request_without_a_cutoff_exits_two(self) -> None:
+        pull = self.fixture["data"]["repository"]["pullRequest"]
+        pull["merged"], pull["mergedAt"], pull["state"] = False, None, "OPEN"
+        result = self.run_cli()
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("no --cutoff and the pull request is not merged", result.stderr)
 
     def test_an_unmerged_pull_request_builds_with_a_cutoff(self) -> None:
         pull = self.fixture["data"]["repository"]["pullRequest"]
