@@ -19,6 +19,7 @@ import shutil
 import stat
 import subprocess
 import native_artifacts
+import evidence_store
 
 class Refused(ValueError):
     pass
@@ -85,6 +86,11 @@ def prune(attempt: Path, workspace: Path, *, apply: bool = False) -> dict:
         for item in entries:
             if (root / item["attempt"]).resolve() == (attempt / "attempt.json").resolve() and item.get("status") == "verified":
                 source = root / item["path"]
+    if not source.is_file() and source.is_relative_to(root):
+        try:
+            source = evidence_store.resolve(root, source.relative_to(root).as_posix(), archive['sha256'])
+        except evidence_store.EvidenceError as error:
+            raise Refused(str(error)) from error
     if hashlib.sha256(source.read_bytes()).hexdigest() != archive["sha256"]:
         raise Refused("saved transcript archive checksum differs")
     observed = record.get("observed", {})

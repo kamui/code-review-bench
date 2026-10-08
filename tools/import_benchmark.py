@@ -6,9 +6,12 @@ import io
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'bench/tools'))
+import evidence_store
 REVISION = "6457c79f955c2d6740fe730689a16af6f3aefacb"
 MANIFEST = ROOT / "bench/import-manifest.json"
 
@@ -32,7 +35,12 @@ def verify():
     for entry in manifest["files"] + manifest["transcripts"]:
         if entry.get("status") == "missing":
             continue
-        path = ROOT / entry.get("preserved_path", entry["path"])
+        logical = entry.get("preserved_path", entry["path"])
+        try:
+            path = evidence_store.resolve(ROOT, logical, entry['sha256'])
+        except evidence_store.EvidenceError:
+            errors.append(logical)
+            continue
         if not path.is_file() or digest(path.read_bytes()) != entry["sha256"]:
             errors.append(entry["path"])
     if errors:
