@@ -67,19 +67,20 @@ def active_users(workspace):
 
 
 def accounting_dependencies(workspace, roots):
-    blockers = []
+    reservations = set()
     for root in roots:
         if not root.is_dir():
             raise store.EvidenceError(f'accounting root missing: {root}')
+        reservations.update(root.glob('batches/*/*/attempt-*/reservation.json'))
         for directory, dirs, files in os.walk(root, followlinks=False):
             dirs[:] = [name for name in dirs if name not in {'.git', 'node_modules', 'clone', 'clone-cache'}]
-            if 'reservation.json' not in files:
-                continue
-            attempt = Path(directory)
-            work = (attempt / 'work').resolve()
-            if not (work.is_relative_to(workspace) or workspace.is_relative_to(work)):
-                continue
-            blockers.append(str(attempt / 'reservation.json'))
+            if 'reservation.json' in files:
+                reservations.add(Path(directory) / 'reservation.json')
+    blockers = []
+    for reservation in sorted(reservations):
+        work = (reservation.parent / 'work').resolve()
+        if work.is_relative_to(workspace) or workspace.is_relative_to(work):
+            blockers.append(str(reservation))
     return blockers
 
 

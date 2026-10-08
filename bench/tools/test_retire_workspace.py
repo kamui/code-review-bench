@@ -156,6 +156,28 @@ class RetirementTest(unittest.TestCase):
         self.assertEqual(regrade.ledger(self.queue), before)
         self.assertFalse((self.base / 'receipt.json').exists())
 
+    def test_symlinks_at_each_ledger_path_component_cannot_bypass_accounting(self):
+        for component in ('queue', 'batches', 'run', 'target', 'attempt-1'):
+            with self.subTest(component=component):
+                queue = self.base / ('queue-' + component)
+                attempt = queue / 'batches/run/target/attempt-1'
+                attempt.mkdir(parents=True)
+                (attempt / 'work').symlink_to(self.work, target_is_directory=True)
+                store.write_new(attempt / 'reservation.json', {'maxBudgetUsd': 6})
+                parts = ('batches', 'run', 'target', 'attempt-1')
+                linked = queue if component == 'queue' else queue.joinpath(*parts[:parts.index(component)+1])
+                moved = self.base / ('linked-' + component)
+                linked.rename(moved)
+                linked.symlink_to(moved, target_is_directory=True)
+                self.plan['accounting_roots'] = [str(queue)]
+                self.save_plan()
+                before = regrade.ledger(queue)
+                self.assertEqual(before, (regrade.Decimal('2.5'), []))
+                with self.assertRaisesRegex(store.EvidenceError, 'workspace-dependent accounting'):
+                    self.run_retirement(apply=True)
+                self.assertTrue((self.work / 'dispatch.json').exists())
+                self.assertEqual(regrade.ledger(queue), before)
+
     def test_unknown_symlink_and_modified_worktree_are_not_capture_shortcuts(self):
         current = inventory.inventory(self.work, hash_all=True)
         manifest = store.read(self.repo / self.manifest_name)
