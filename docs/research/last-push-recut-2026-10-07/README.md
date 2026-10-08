@@ -127,7 +127,7 @@ Two limits remain, and the pinned packets share them. GitHub does not date a thr
 
 ## Plan for the new reviews
 
-The owner settled what this plan covers on 2026-10-07. Dispatch still waits for the owner's approval of the frozen queue and its usage, and nothing here starts one. [`review-plan.v1.json`](review-plan.v1.json) holds the numbers, which [`plan.py`](plan.py) derives from the saved runs.
+The owner settled what this plan covers on 2026-10-07 and approved its queue and a usage ceiling on 2026-10-08. Dispatch waits for the conditions of that approval, and nothing here starts one. [`review-plan.v1.json`](review-plan.v1.json) holds the numbers, which [`plan.py`](plan.py) derives from the saved runs.
 
 ### Setups
 
@@ -228,11 +228,19 @@ The owner answered the four open points in one message: "do 1 and 2, accept the 
 2. The client versions are accepted as they differ. The saved runs pinned claude-code 2.1.282 and 2.1.284 and codex-cli 0.156.1 to 0.159.2, and the new reviews run on the clients installed when their runs are frozen. A built-in review's prompt belongs to the client version, so a built-in setup will hold two client versions: the older one on the six kept tasks and the newer one on the ten rerun tasks. Each run records its client version, and the comparison has to say so.
 3. All sixteen roster lines run. The three setups that are off the roster stay out.
 
+### Queue and ceiling approved by the owner on 2026-10-08
+
+The owner was asked at 03:20 UTC: "The queue is 776 reviews: 410 replace saved reviews on ten tasks (230 Claude Code, 180 Codex) and 366 fill the 16 roster lines with no benchmark (222 Claude Code, 144 Codex). Estimate at list-price equivalent: Claude $610 to $750, Codex $40 to $55, at least four five-hour Claude windows. Approve it with a ceiling?"
+
+The owner chose "Approve, $900 and $80", which the question described this way: "Approved with a stop at $900 on Claude and $80 on Codex, list-price equivalent. Dispatch starts once the runs are frozen and every setup's probe passes, without asking again, unless the frozen queue differs from these 776 reviews. I stop and report if either ceiling is reached."
+
+The approval covers these 776 reviews and no others. A frozen queue that differs from them goes back to the owner before any review starts.
+
 ### Still to do before a run is frozen
 
 1. The runners read `packet.md` by name. They need a way to take a task's re-cut packet from [`packet-replacements.v1.json`](packet-replacements.v1.json) and to pin it in the run.
 2. A setup probe for each setup in the plan, as the planning rules require. No probe was run for this record.
-3. The owner's approval of the frozen queue and its usage.
+3. A check that the frozen queue is the 776 reviews the owner approved, with the ceiling of $900 on Claude and $80 on Codex set for the dispatch.
 
 Grading the new reviews comes after them and is not sized here. The issue's comment counts what does not carry over for the eight decided tasks: four rulings on single comments of `i-requests-6667` and 301 comment-to-claim links. `r` and `s` would add their own links.
 
