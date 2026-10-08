@@ -13,6 +13,7 @@ from unittest.mock import patch
 import evidence_inventory as inventory
 import evidence_store as store
 import retire_workspace as retire
+import regrade
 from test_evidence_store import FakeGitHub
 
 
@@ -140,7 +141,20 @@ class RetirementTest(unittest.TestCase):
         (self.work / 'dispatch.json').unlink()
         self.assertEqual(retire.accounting_dependencies(self.work, [self.queue]), [str(attempt / 'reservation.json')])
         store.write_new(self.work / 'dispatch.json', {'usage': {'high': 2}})
-        self.assertEqual(retire.accounting_dependencies(self.work, [self.queue]), [])
+        self.assertEqual(retire.accounting_dependencies(self.work, [self.queue]), [str(attempt / 'reservation.json')])
+
+    def test_priced_ledger_dependency_blocks_removal_and_preserves_settled_charge(self):
+        attempt = self.queue / 'batches/run/target/attempt-1'
+        attempt.mkdir(parents=True)
+        (attempt / 'work').symlink_to(self.work, target_is_directory=True)
+        store.write_new(attempt / 'reservation.json', {'maxBudgetUsd': 6})
+        before = regrade.ledger(self.queue)
+        self.assertEqual(before, (regrade.Decimal('2.5'), []))
+        with self.assertRaisesRegex(store.EvidenceError, 'workspace-dependent accounting'):
+            self.run_retirement(apply=True)
+        self.assertTrue((self.work / 'dispatch.json').exists())
+        self.assertEqual(regrade.ledger(self.queue), before)
+        self.assertFalse((self.base / 'receipt.json').exists())
 
     def test_unknown_symlink_and_modified_worktree_are_not_capture_shortcuts(self):
         current = inventory.inventory(self.work, hash_all=True)

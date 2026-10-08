@@ -79,10 +79,7 @@ def accounting_dependencies(workspace, roots):
             work = (attempt / 'work').resolve()
             if not (work.is_relative_to(workspace) or workspace.is_relative_to(work)):
                 continue
-            dispatch = work / 'dispatch.json'
-            record = store.read(dispatch) if dispatch.is_file() else None
-            if not record or record.get('usage', {}).get('high') is None:
-                blockers.append(str(attempt / 'reservation.json'))
+            blockers.append(str(attempt / 'reservation.json'))
     return blockers
 
 
