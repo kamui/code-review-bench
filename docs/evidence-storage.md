@@ -98,6 +98,8 @@ Treat original dependency archives as `kind: "reproducibility"`, one shared cont
 
 A rebuilt archive is not automatically equivalent to the original. Use the [versioned cache-replacement protocol](grading-readiness.md) when an original cannot be preserved. Do not change frozen receipts or promise that cache deletion costs only download time.
 
+The [completion inventory](research/evidence-completion-2026-10-08/README.md) records the 15 existing versioned replacements, their frozen target hashes and build-receipt manifests. Its publication status and restoration receipts distinguish prepared packages from shared assets.
+
 ## Retire a closed workspace
 
 `prune_workspace.py` keeps its existing valid-only rule and removes only verified unchanged clones/caches. Prefer it before inventory/capture. The separate `retire_workspace.py` can retire an entire closed workspace, including a failed attempt, under a stricter capture contract. It never treats archive presence as investigation closure.
@@ -144,5 +146,13 @@ Dry runs write a receipt without deleting files. Apply writes a removal-started 
 Repository maintainers own the release assets and recovery copies. Do not expire or delete assets while a published observation references them. Periodically run `verify` and retain a second copy of the exact packages outside the execution machine. GitHub IDs and hashes detect loss/replacement; they cannot recover deleted bytes.
 
 If an asset is lost, recover its exact bytes from the retained copy, publish under a new versioned release/manifest and record the incident and replacement mapping. Keep the old manifest and failure history. If no copy exists, report evidence unavailable; do not substitute a rerun. No automatic retention job, release deletion, production migration or host retirement is performed by this tooling change. Those are reviewable rollout operations, with a successful review, failed/replacement pair and grading batch verified from a real fresh checkout before bulk migration.
+
+The original local capture, pilot and Git fallback packages have exact copies in the separate `evidence-recovery-2026-10-08-v1` release. The small [recovery index](../bench/evidence/recovery/2026-10-08-v1.json) pins their new asset identities and reuses the original manifests, including every member hash and permission. To recover one source package set, use:
+
+```sh
+python3 bench/tools/recover_evidence.py --source local-capture-2026-10-08-v1
+```
+
+Use `--path <logical-member>` for selective retrieval and `--offline` for a verified local cache. The other source names are `local-pilot-2026-10-08-v1` and `local-git-fallbacks-2026-10-08-v1`. This recovery release shares the repository and GitHub account with the originals. It covers individual asset or release loss; an independently administered copy is still needed to cover repository, account or provider loss. The [recovery exercise](research/evidence-completion-2026-10-08/recovery-verification.json) downloaded and checked every member while deliberately refusing the original releases.
 
 The [2026-10-08 local publication](research/evidence-migration-2026-10-08/README.md) records the first production release, original-path restoration, cold-consumer checks and remaining migration blockers.
