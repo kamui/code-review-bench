@@ -15,7 +15,7 @@ python3 docs/research/evidence-migration-2026-10-08/restore-local.py \
   bench-runs '<run>/<attempt>/timing.json' /tmp/restored-timing.json
 ```
 
-The helper fetches the root's mapping, resolves the stored object or pinned Git copy, verifies its original hash and size, and creates a new output file with the original permissions. It refuses an existing output, a withheld path or an unsafe output link. Git references use commit `92aa9400`; a shallow checkout may need that commit fetched when the current tree no longer contains the referenced file.
+The helper fetches the root's mapping, resolves the stored object or pinned Git copy, verifies its original hash and size, and creates a new output file with the original permissions. It refuses an existing output, a withheld path or an unsafe output link. Git references retain commit `92aa9400` as historical provenance. When the current tree lacks those bytes, the helper fetches the matching hash from the `local-git-fallbacks-2026-10-08-v1` manifest. Restoration no longer needs that old commit, including after a history rewrite.
 
 Selective retrieval materializes only the requested object, but the first network fetch downloads its containing 211.4 MiB package. The ignored cache amortizes later retrieval. The repository's normal `evidence_store.py fetch`, `verify` and `--offline` behavior applies. The manifest itself adds about 7.3 MiB of plain JSON to Git; the payload stays in the release.
 

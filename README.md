@@ -8,14 +8,14 @@ The default selection includes built-in Claude Code and Codex reviews, `ce-code-
 
 ## Run locally
 
-Install [Bun](https://bun.sh/) and Python 3.11 or later:
+Install [Bun](https://bun.sh/), Python 3.11 or later, and [GitHub CLI](https://cli.github.com/). Authenticate with `gh auth login` for release downloads:
 
 ```sh
 bun install --frozen-lockfile
 bun run dev
 ```
 
-Open Vite's printed URL, usually `http://localhost:3000`. Vite chooses another port if needed. Exploring saved results requires no model credentials or skills checkout. The app does not launch reviews or edit adjudications.
+Open Vite's printed URL, usually `http://localhost:3000`. Vite chooses another port if needed. Exploring saved results requires no model credentials or skills checkout. The app does not launch reviews or edit adjudications. The first run retrieves about 350 MiB of verified release assets and restores about 542 MiB of evidence. Later runs reuse those files.
 
 The app uses React, TypeScript, TanStack Start, and Mantine. `src/components/Chart.tsx` draws charts. `src/lib/scoring.ts` selects comparable tasks and computes every measure for the app and command-line scorecard.
 
@@ -66,7 +66,7 @@ The import pins [skills PR #413](https://github.com/kamui/skills/pull/413) at `6
 | `bench/targets/` | Frozen PR identities, review packets, and versioned reference registers |
 | `bench/runs/` | Attempts, usage, grading mappings, results, and earlier experiments |
 | `bench/arms/`, `bench/harness/`, `bench/rates.json` | Configurations, client prompts, and dated rates |
-| `artifacts/transcripts/` | Raw transcript archives |
+| `artifacts/transcripts/` | Raw transcript archives materialized from release storage |
 | `bench/import-manifest.json` | Source identities, checksums, and archive verification status |
 | `bench/profiles.json` | Proposed task and finding labels |
 | `bench/tools/`, `tools/` | Runners, grading, import verification, exports, and scorecard tools |
@@ -74,7 +74,7 @@ The import pins [skills PR #413](https://github.com/kamui/skills/pull/413) at `6
 
 All 2,775 imported files retain their original bytes, with originals of changed tools in `artifacts/import-source/`. All 288 transcript references have archives; 279 match their original hashes. Nine superseded audit records refer to archives overwritten upstream. The manifest records expected and available hashes. Neither primary run is affected. Downloads include only verified archives.
 
-The app exposes 746 attempts. Additional experiments and superseded records remain saved. The current scorecard excludes earlier grading mappings and results. Generated `public/data/` and `public/evidence/` files are ignored and rebuilt from evidence. The [storage contract](docs/evidence-storage.md) covers shared archives, offline retrieval, cleanup, and recovery.
+The app exposes 746 attempts. Additional experiments and superseded records remain saved. The current scorecard excludes earlier grading mappings and results. Generated `public/data/` and `public/evidence/` files are ignored and rebuilt from evidence. Small source records, decisions, indexes and manifests remain in Git. Archives, run stdout logs and upstream research JSON snapshots live in verified GitHub release assets. `bun run evidence:fetch` restores their original paths; development, build and verification commands run it automatically. Run it explicitly before direct Python consumers. The [storage contract](docs/evidence-storage.md) covers selective fetching, offline retrieval, cleanup and recovery; the [relocation receipt](docs/research/repository-storage-2026-10-08/README.md) records the selection.
 
 Imported `bench/README.md` and research documents are historical snapshots. Use this README for current setup. To repeat the import with the original checkout and external archives:
 
