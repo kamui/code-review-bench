@@ -7,7 +7,6 @@ import gzip
 import hashlib
 import json
 from pathlib import Path
-import subprocess
 import sys
 
 ROOT = Path.cwd()
@@ -37,7 +36,7 @@ if reference.get('git_commit'):
     if local.is_file() and not local.is_symlink() and store.digest(local) == row['sha256']:
         data = local.read_bytes()
     else:
-        data = subprocess.check_output(['git', 'show', f"{reference['git_commit']}:{reference['path']}"])
+        data = store.resolve(ROOT, 'artifacts/local-capture/git-objects/' + row['sha256'], row['sha256']).read_bytes()
 else:
     data = store.resolve(ROOT, reference['path'], row['sha256']).read_bytes()
 if len(data) != row['bytes'] or hashlib.sha256(data).hexdigest() != row['sha256']:

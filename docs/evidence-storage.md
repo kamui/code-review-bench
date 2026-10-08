@@ -4,7 +4,7 @@ Keep the evidence needed to inspect a published observation for as long as the r
 
 ## Evidence contract v1
 
-Small records stay in Git. Larger payloads live as immutable, content-addressed assets on this repository's GitHub Releases; their manifests stay in `bench/evidence/manifests/`. A clone discovers every package there, including its canonical repository. Forks use that repository, not their own releases. Existing tracked archives continue to work.
+Small records stay in Git. Larger payloads live as immutable, content-addressed assets on this repository's GitHub Releases; their manifests stay in `bench/evidence/manifests/`. A clone discovers every package there, including its canonical repository. Forks use that repository, not their own releases. Historical tracked archives continue to work; the [repository payload migration](research/repository-storage-2026-10-08/README.md) moves their current copies to release storage.
 
 | Category | Preserve |
 | --- | --- |
@@ -75,7 +75,7 @@ Commit and push the manifest, restoration receipt, mappings and small records. O
 
 ## Retrieve from another checkout
 
-Install Python 3.11+ and GitHub CLI; authenticate `gh` if required by the repository's visibility. Inspect `bench/evidence/manifests/*.json`, then select a logical path or omit `--path` to fetch the whole manifest:
+Install Python 3.11+ and GitHub CLI, then authenticate `gh` for API downloads. `bun run evidence:fetch` retrieves the repository payload manifest before direct Python consumer commands. Development, build and verification package commands do this automatically. Inspect `bench/evidence/manifests/*.json`, then select a logical path or omit `--path` to fetch the whole manifest:
 
 ```sh
 python3 bench/tools/evidence_store.py fetch --manifest bench/evidence/manifests/example-v1.json \
@@ -88,7 +88,7 @@ Downloads enter ignored `.cache/evidence/`. The tool verifies archive and member
 
 The collector, import verifier, explorer evidence exporter and review cleanup resolver fetch missing mapped files through these manifests. Explorer publishes its existing evidence links after materialization. For native artifacts, fetch the indexed archive first, then use `native_artifacts.py verify` and `restore` as usual. Grading archives retain their existing `evidence.json` hashes. The cold-consumer test exercises successful, failed/replacement and grading fixtures after removing their originating storage, including executable native scratch restoration.
 
-After a verified migration, remove large tracked payloads through an ordinary reviewed commit and add precise ignore entries for their materialized paths. Keep their mappings/manifests. This reduces future checkout size, not old Git history; no history rewrite or LFS migration is part of this workflow. The implementation PR itself does not remove today's tracked archives.
+After a verified migration, remove large tracked payloads through an ordinary reviewed commit and add precise ignore entries for their materialized paths. Keep their mappings/manifests. This reduces future checkout size, not old Git history; no history rewrite or LFS migration is part of this workflow. The repository payload migration follows this procedure for the current archives, run stdout logs and upstream research snapshots.
 
 The `.cache/evidence` directory can be removed when no fetch/consumer is using it. Doing so loses offline retrieval for unmaterialized files. Keep a separately retained copy of published packages for disaster recovery.
 
