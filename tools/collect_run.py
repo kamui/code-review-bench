@@ -5,11 +5,16 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'bench/tools'))
+import evidence_store
 
 
 def collect(run):
+    stored_paths = {m['path'] for _, manifest in evidence_store.manifests(ROOT)
+                    for package in manifest['packages'] for m in package['members']}
     entries = []
     for path in sorted((run / 'attempts').glob('*/attempt.json')):
         record = json.loads(path.read_text())
@@ -17,7 +22,9 @@ def collect(run):
         if not archive:
             continue
         destination = ROOT / 'artifacts/transcripts' / run.name / f'{path.parent.name}.tar.gz'
-        source = destination if destination.is_file() else Path(archive['path']).expanduser()
+        logical = destination.relative_to(ROOT).as_posix()
+        source = destination if destination.is_file() else (
+            evidence_store.resolve(ROOT, logical, archive['sha256']) if logical in stored_paths else Path(archive['path']).expanduser())
         digest = hashlib.sha256(source.read_bytes()).hexdigest()
         if digest != archive['sha256']:
             raise ValueError(f'Transcript checksum mismatch: {path}')
