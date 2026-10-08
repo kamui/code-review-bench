@@ -79,7 +79,13 @@ class PacketReplacementTests(unittest.TestCase):
                     entry["group"] = groups[LOST_NONE if entry["target"] == LOST_A_RECORD else LOST_A_RECORD]
         self.edit_json(str(RECORD / "decisions.v1.json"), swap)
         self.assert_reported(f"{LOST_A_RECORD}: lost a record but is not recorded as decided, re-cut and run again")
-        self.assert_reported(f"{LOST_NONE}: lost no record but is recorded as decided")
+
+    def test_a_task_whose_decision_is_not_the_owners_is_reported(self) -> None:
+        def undecide(decisions: dict) -> None:
+            group = next(entry["group"] for entry in decisions["tasks"] if entry["target"] == LOST_NONE)
+            next(entry for entry in decisions["groups"] if entry["id"] == group).update(status="proposed", decision=None)
+        self.edit_json(str(RECORD / "decisions.v1.json"), undecide)
+        self.assert_reported(f"{LOST_NONE}: lost no record and has no decision the owner made")
 
     def test_a_task_without_a_decision_is_reported(self) -> None:
         self.edit_json(str(RECORD / "decisions.v1.json"), lambda decisions: decisions["tasks"].pop())
