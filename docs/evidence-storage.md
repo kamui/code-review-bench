@@ -117,7 +117,7 @@ Plan fields:
 | Field | Meaning |
 | --- | --- |
 | `schema_version`, `kind` | `1`; `review`, `grading` or `worktree` |
-| `workspace` | Absolute candidate path on the originating host |
+| `workspace` | Canonical absolute candidate path on the originating host, without aliases or `..` |
 | `manifest`, `inventory`, `restoration_receipt` | Repository-relative published records |
 | `capture_prefix` | Logical member prefix for the workspace's captured files |
 | `investigation`, `closure_reason`, `closed_by` | `closed`, the saved reason and responsible maintainer |

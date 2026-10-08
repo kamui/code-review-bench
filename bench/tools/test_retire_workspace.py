@@ -185,8 +185,11 @@ class RetirementTest(unittest.TestCase):
         intermediate.symlink_to(self.work / '..' / persistent.name)
         parent_alias = self.base / 'parent-alias'
         parent_alias.symlink_to(self.base, target_is_directory=True)
+        prefix = self.base / 'prefix'
+        prefix.mkdir()
         targets = [self.work / 'dispatch.json', self.work / '..' / persistent.name, intermediate,
-                   parent_alias / self.work.name / 'dispatch.json']
+                   parent_alias / self.work.name / 'dispatch.json',
+                   prefix / '..' / self.work.name / '..' / persistent.name]
         for index, target in enumerate(targets):
             with self.subTest(target=target):
                 queue = self.base / f'receipt-queue-{index}'
@@ -202,6 +205,32 @@ class RetirementTest(unittest.TestCase):
                     self.run_retirement(apply=True)
                 self.assertTrue(self.work.exists())
                 self.assertEqual(regrade.ledger(queue), before)
+
+    def test_noncanonical_workspace_root_is_refused_before_removal(self):
+        pivot = self.base / 'pivot'
+        pivot.mkdir()
+        alias = pivot / '..' / self.work.name
+        self.plan['workspace'] = str(alias)
+        snapshot = store.read(self.repo / self.inventory_name)
+        snapshot['root'] = str(alias)
+        (self.repo / self.inventory_name).write_text(json.dumps(snapshot))
+        self.save_plan()
+        with self.assertRaisesRegex(store.EvidenceError, 'workspace path must be canonical'):
+            self.run_retirement(apply=True)
+        self.assertTrue(self.work.exists())
+        with self.assertRaisesRegex(store.EvidenceError, 'root must be canonical'):
+            inventory.inventory(alias, hash_all=True)
+
+    def test_receipt_destination_cannot_alias_the_workspace(self):
+        pivot = self.base / 'pivot'
+        pivot.mkdir()
+        for receipt in (pivot / '..' / self.work.name / 'retirement.json',
+                        pivot / '..' / self.work.name / '..' / 'retirement.json'):
+            with self.subTest(receipt=receipt), patch.object(retire, 'active_users', return_value=[]):
+                with self.assertRaisesRegex(store.EvidenceError, 'outside the workspace'):
+                    retire.retire(self.repo, self.plan_name, 'a'*40, 'main', receipt, True, self.remote)
+        self.assertTrue(self.work.exists())
+        self.assertFalse((self.work / 'retirement.json').exists())
 
     def test_zero_charge_evidence_file_is_a_dependency_even_with_an_external_work_directory(self):
         attempt = self.queue / 'batches/run/target/attempt-1'

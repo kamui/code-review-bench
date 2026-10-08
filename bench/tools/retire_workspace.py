@@ -75,9 +75,9 @@ def path_depends_on(path, workspace):
         seen.add(path)
         if len(seen) > 256:
             raise store.EvidenceError('accounting path has too many link dependencies')
-        if path.is_relative_to(workspace) or path.resolve().is_relative_to(workspace):
-            return True
         for parent in (path, *path.parents):
+            if parent.is_relative_to(workspace) or parent.resolve().is_relative_to(workspace):
+                return True
             if parent.is_symlink():
                 target = parent.readlink()
                 pending.append(target if target.is_absolute() else parent.parent / target)
@@ -167,6 +167,8 @@ def eligibility(root, plan_name, commit, branch, remote):
             if store.digest(path) != ref['sha256']:
                 raise store.EvidenceError(f'closure evidence changed: {ref["path"]}')
     workspace = Path(plan['workspace']).absolute()
+    if workspace != workspace.resolve():
+        raise store.EvidenceError('workspace path must be canonical; capture its inventory again without aliases or parent traversals')
     if (workspace == root or root.is_relative_to(workspace) or workspace == Path.home()
             or len(workspace.parts) < 4 or any(p.is_symlink() for p in (workspace, *workspace.parents))):
         raise store.EvidenceError('unsafe workspace root')
@@ -214,10 +216,11 @@ def eligibility(root, plan_name, commit, branch, remote):
 
 
 def retire(root, plan_name, commit, branch, receipt_path, apply=False, remote=None):
-    root, receipt_path = Path(root).resolve(), Path(receipt_path).absolute()
+    requested_receipt = Path(receipt_path).absolute()
+    root, receipt_path = Path(root).resolve(), requested_receipt.resolve()
     plan, workspace, manifest, snapshot = eligibility(root, plan_name, commit, branch, remote or store.GitHub())
-    if receipt_path.is_relative_to(workspace) or receipt_path.exists():
-        raise store.EvidenceError('receipt must be a new path outside the workspace')
+    if path_depends_on(requested_receipt, workspace) or receipt_path.exists():
+        raise store.EvidenceError('receipt must be a new path outside the workspace and must not traverse it')
     result = {'schema_version': 1, 'workspace': str(workspace), 'shared_commit': commit,
               'plan_sha256': store.digest(store.confined(root, plan_name)), 'applied': False,
               'packages': [p['sha256'] for p in manifest['packages']], 'blocked_paths': [],

@@ -75,6 +75,8 @@ def classification(name, indexed, blob):
 
 def inventory(root, hash_all=False):
     root = Path(root).absolute()
+    if root != root.resolve():
+        raise store.EvidenceError(f'root must be canonical, without aliases or parent traversals: {root}')
     if any(path.is_symlink() for path in (root, *root.parents)) or not root.is_dir():
         raise store.EvidenceError(f'root must be an existing directory without symlink ancestors: {root}')
     indexed, head = tracked(root)
