@@ -18,14 +18,19 @@ sys.path.insert(0, str(BENCH / "tools"))
 import current_grading
 import grading_validation
 import skill_provenance
+import evidence_store
 
 
 def read(path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def evidence(path, stage):
+def evidence(path, stage, sha256=None):
     relative = path.relative_to(ROOT)
+    if not path.is_file():
+        path = evidence_store.resolve(ROOT, relative.as_posix(), sha256)
+    elif sha256 is not None and evidence_store.digest(path) != sha256:
+        raise evidence_store.EvidenceError(f'changed evidence: {relative}')
     destination = stage / "evidence" / relative
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(path, destination)
@@ -135,7 +140,7 @@ def export_attempt(run, facts, archives, stage, grade=None, billing_correction=N
                       "fixSufficiency": ", ".join(sorted({c["fix_sufficiency"] for c in claims})) or "unassessed",
                       "notes": grade["reason"] if claims else "Current judgment is unavailable.", "claims": claims})
     archive = archives.get(record_path.relative_to(ROOT).as_posix())
-    archive_url = evidence(ROOT / archive["path"], stage) if archive and archive["status"] == "verified" else None
+    archive_url = evidence(ROOT / archive["path"], stage, archive['sha256']) if archive and archive["status"] == "verified" else None
     stop_path = directory / "stop.json"
     identifier = facts["id"]
     detail = {"id": identifier, "items": items, "record": record,
