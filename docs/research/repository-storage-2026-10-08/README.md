@@ -26,7 +26,7 @@ The [recovery manifest](../../../bench/evidence/manifests/history-recovery-2026-
 
 ## Local retirement
 
-The complete inventory and closure plan under `retirement/` identify one redundant linked worktree, `t3code-356b9051`. Its 35,213 entries contain no unique untracked or ignored files; its commits are reachable from merged `main`. The inventory totals 907,976,704 allocated bytes. This is a candidate size, not measured reclaimed space. Retirement must wait until these records are published and the existing tool repeats remote, accounting, inventory and activity checks.
+The complete inventory and closure plan under `retirement/` identify one redundant linked worktree, `t3code-356b9051`. Its 35,213 entries contain no unique untracked or ignored files; its commits are reachable from merged `main`. The inventory totals 907,976,704 allocated bytes. This is a candidate size, not measured reclaimed space. The [candidate restoration receipt](retirement/t3code-356b9051-restoration.json) verifies all 35,212 payload files and their permissions from the GitHub-derived history backup, without reading the original workspace. Retirement must wait until these records are published and the existing tool repeats remote, accounting, inventory and activity checks.
 
 All 18 remaining run clone/cache candidates were refused: 17 belong to failed or invalid attempts and one has no filed attempt. Three other clean worktrees retain uncaptured Python bytecode. Other worktrees and the original dependency cache retain the blockers documented in the [first migration](../evidence-migration-2026-10-08/README.md). Publication alone does not authorize their removal or settle the outstanding reservation.
 
