@@ -2,7 +2,7 @@
 import gzip,json,collections,sys
 from pathlib import Path
 INVENTORIES=Path(sys.argv[1]);BASE=Path(sys.argv[2]);BASE.mkdir(exist_ok=False)
-rows=[];summary=[];identities={};exclusions=collections.Counter()
+rows=[];summary=[];identities={}
 for ip in sorted(INVENTORIES.glob('*.json.gz')):
  with gzip.open(ip,'rt') as f: inv=json.load(f)
  root=Path(inv['root']);counts=collections.Counter();sizes=collections.Counter()
@@ -13,7 +13,7 @@ for ip in sorted(INVENTORIES.glob('*.json.gz')):
   elif e['class']=='tracked-identical': reason='tracked-copy'
   elif any(p.endswith('.git') for p in parts): reason='source-mirror-held-locally'
   elif parts[:2] == ('.local','finish-it-7'): reason='separately-inventoried-worktree'
-  elif Path(e['path']).name=='claude' and e['bytes']>10000000: reason='installed-client-binary' 
+  elif Path(e['path']).name=='claude' and e['bytes']>10000000: reason='installed-client-binary'
   elif e['class']=='rebuildable': reason='generated-or-git'
   elif any(p in ('clone','clone-cache','mirrors','node_modules','.venv','venv') for p in parts):reason='source-or-dependencies-held-locally'
   elif len(parts)>=2 and parts[0]=='public' and parts[1] in ('evidence','data'):reason='generated-explorer-copy'

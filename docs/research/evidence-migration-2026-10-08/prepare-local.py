@@ -7,7 +7,6 @@ Run in the repository whose current tracked-file inventory is supplied.
 import collections
 import gzip
 import hashlib
-import io
 import json
 from pathlib import Path
 import re
