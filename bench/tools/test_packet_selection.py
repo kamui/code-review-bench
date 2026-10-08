@@ -213,7 +213,7 @@ class PacketSelectionTests(unittest.TestCase):
         self.repin()
         self.assertEqual(self.select(), self.original)
 
-    def prepare_skill(self, kind):
+    def prepare_skill(self, kind, invocation='Review {PACKET}\n'):
         self.arm['kind'] = kind
         self.write(self.arm_path, self.arm)
         entry = self.manifest['arms'][0]
@@ -224,7 +224,7 @@ class PacketSelectionTests(unittest.TestCase):
         tree, files = skill.skill_tree_hash(inputs / 'skill')
         entry['resolved_skill_tree'] = tree
         self.write(inputs / 'skill-pin.json', {'tree_hash': tree, 'files': files, 'skill_id': 'fixture'})
-        (inputs / 'invocation.md').write_text('Review {PACKET}\n', encoding='utf-8')
+        (inputs / 'invocation.md').write_text(invocation, encoding='utf-8')
         (inputs / 'shared-policy.md').write_text('Policy\n', encoding='utf-8')
         self.write(inputs / 'runner.json', {'artifact_root': 'report'})
         self.write(inputs / 'input-pin.json', {'files': [
@@ -233,23 +233,39 @@ class PacketSelectionTests(unittest.TestCase):
         self.freeze()
         attempt = self.work / kind
         clone = attempt / 'clone'
-        clone.mkdir(parents=True)
+        clone.mkdir(parents=True, exist_ok=True)
         return argparse.Namespace(run=str(self.run), attempt_dir=str(attempt), clone=str(clone),
                                   packet=str(self.packet), arm=str(self.arm_path), target='t1')
 
-    def test_both_skill_runners_use_recut_and_reject_original(self):
+    def skill_prompt(self, args, kind):
+        def git(clone, *command):
+            return self.target_doc['merge_base'] if command == ('rev-parse', 'main') else self.target_doc['head']
+        with patch.object(skill, 'git', side_effect=git):
+            return skill.prepare_attempt(args, kind)['attempt_input'].read_bytes().decode('utf-8')
+
+    def test_skill_prompt_with_recut_differs_from_saved_prompt_only_in_packet_text(self):
+        pinned = copy.deepcopy(self.manifest)
+        for kind in ('codex-skill', 'claude-skill'):
+            for invocation in ('Review {PACKET}\n', 'The review task section above holds the packet.\n'):
+                with self.subTest(kind=kind, invocation=invocation):
+                    self.manifest = copy.deepcopy(pinned)
+                    recut = self.skill_prompt(self.prepare_skill(kind, invocation), kind)
+                    del self.manifest['packet_replacements']
+                    self.manifest['cohort'][0]['packet_sha256'] = self.target_doc['packet_sha256']
+                    args = self.prepare_skill(kind, invocation)
+                    args.packet = str(self.original)
+                    before, after = self.skill_prompt(args, kind).split('# Original packet')
+                    self.assertEqual(recut, before + '# Re-cut packet' + after)
+                    if '{PACKET}' not in invocation:
+                        self.assertTrue(recut.startswith('Policy\n\n## Review task\n\n# Re-cut packet\n\n'))
+
+    def test_both_skill_runners_reject_original_packet_for_recut_run(self):
         for kind in ('codex-skill', 'claude-skill'):
             with self.subTest(kind=kind):
                 args = self.prepare_skill(kind)
-                def git(clone, *command):
-                    return self.target_doc['merge_base'] if command == ('rev-parse', 'main') else self.target_doc['head']
-                with patch.object(skill, 'git', side_effect=git):
-                    result = skill.prepare_attempt(args, kind)
-                    self.assertTrue(result['attempt_input'].read_bytes().startswith(self.packet.read_bytes()))
-                    self.assertEqual(result['attempt_input'].read_bytes().count(b'# Re-cut packet'), 1)
-                    args.packet = str(self.original)
-                    with self.assertRaisesRegex(skill.RunnerError, 'PR packet differs'):
-                        skill.prepare_attempt(args, kind)
+                args.packet = str(self.original)
+                with self.assertRaisesRegex(skill.RunnerError, 'PR packet differs'):
+                    self.skill_prompt(args, kind)
 
     def test_dispatch_passes_recut_to_each_skill_runner(self):
         for kind in ('codex-skill', 'claude-skill'):
