@@ -168,6 +168,19 @@ class PacketSelectionTests(unittest.TestCase):
                     self.manifest[key][0]['packet_sha256'] = '0' * 64
                 self.assert_refused_before_claim('differs from freeze_commit')
 
+    def test_removing_frozen_pin_refuses_original_packet_before_claim(self):
+        del self.manifest['packet_replacements']
+        self.manifest['cohort'][0]['packet_sha256'] = self.target_doc['packet_sha256']
+        self.assert_refused_before_claim('differs from freeze_commit')
+
+    def test_legacy_run_without_readable_freeze_remains_supported(self):
+        del self.manifest['packet_replacements']
+        self.manifest['cohort'][0]['packet_sha256'] = self.target_doc['packet_sha256']
+        for freeze in (None, '0' * 40):
+            with self.subTest(freeze=freeze):
+                self.manifest['freeze_commit'] = freeze
+                self.assertEqual(self.select(), self.original)
+
     def test_duplicate_replacement_is_refused(self):
         self.replacement_doc['targets'] *= 2
         self.repin()
@@ -183,7 +196,7 @@ class PacketSelectionTests(unittest.TestCase):
     def test_legacy_prompt_hash_and_environment_override(self):
         del self.manifest['packet_replacements']
         self.manifest['cohort'][0]['packet_sha256'] = self.target_doc['packet_sha256']
-        self.write(self.run / 'manifest.json', self.manifest)
+        self.freeze()
         with patch.dict('os.environ', {'BENCH_PACKET_REPLACEMENTS': str(self.replacements)}):
             self.assertEqual(self.select(), self.original)
         clone = Path('/fixture/clone')

@@ -26,6 +26,19 @@ def repository_path(root: Path, name: str) -> Path:
     return path
 
 
+def frozen_manifest(run_dir: Path, manifest: dict, root: Path) -> dict | None:
+    freeze = manifest.get("freeze_commit")
+    if not freeze:
+        return None
+    try:
+        relative = run_dir.resolve().relative_to(root.resolve()) / "manifest.json"
+    except ValueError:
+        return None
+    frozen = subprocess.run(["git", "-C", str(root), "show", f"{freeze}:{relative.as_posix()}"],
+                            capture_output=True, text=True, encoding="utf-8")
+    return json.loads(frozen.stdout) if frozen.returncode == 0 else None
+
+
 def select(run_dir: Path, manifest: dict, target_dir: Path, root: Path) -> Path:
     target_path = target_dir / "target.json"
     target = json.loads(target_path.read_bytes())
@@ -39,19 +52,15 @@ def select(run_dir: Path, manifest: dict, target_dir: Path, root: Path) -> Path:
     if target["diff_manifest_sha256"] != entry["diff_manifest_sha256"]:
         raise ValueError(f"{target['id']}: target.json and the cohort disagree on the diff identity")
     selected = original
-    if "packet_replacements" in manifest:
-        pin = manifest["packet_replacements"]
-        freeze = manifest.get("freeze_commit")
-        if not freeze or not manifest.get("frozen_at"):
+    frozen = frozen_manifest(run_dir, manifest, root)
+    if "packet_replacements" in manifest or (frozen is not None and "packet_replacements" in frozen):
+        pin = manifest.get("packet_replacements")
+        if not manifest.get("freeze_commit") or not manifest.get("frozen_at"):
             raise ValueError("packet replacements require a frozen run")
-        relative = run_dir.resolve().relative_to(root.resolve()) / "manifest.json"
-        frozen = subprocess.run(["git", "-C", str(root), "show", f"{freeze}:{relative.as_posix()}"],
-                                capture_output=True, text=True, encoding="utf-8")
-        if frozen.returncode:
+        if frozen is None:
             raise ValueError("cannot read the run manifest at freeze_commit")
-        frozen_manifest = json.loads(frozen.stdout)
-        frozen_entries = [row for row in frozen_manifest["cohort"] if row["target"] == target["id"]]
-        if frozen_manifest.get("packet_replacements") != pin or frozen_entries != entries:
+        frozen_entries = [row for row in frozen["cohort"] if row["target"] == target["id"]]
+        if frozen.get("packet_replacements") != pin or frozen_entries != entries:
             raise ValueError("packet replacement pin or cohort entry differs from freeze_commit")
         replacement_path = repository_path(root, pin["path"])
         if digest(replacement_path) != pin["sha256"]:
