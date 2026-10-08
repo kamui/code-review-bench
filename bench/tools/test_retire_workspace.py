@@ -178,6 +178,53 @@ class RetirementTest(unittest.TestCase):
                 self.assertTrue((self.work / 'dispatch.json').exists())
                 self.assertEqual(regrade.ledger(queue), before)
 
+    def test_external_dispatch_links_preserve_the_priced_ledger(self):
+        persistent = self.base / 'persistent-dispatch.json'
+        persistent.write_bytes((self.work / 'dispatch.json').read_bytes())
+        intermediate = self.base / 'receipt-link'
+        intermediate.symlink_to(self.work / '..' / persistent.name)
+        parent_alias = self.base / 'parent-alias'
+        parent_alias.symlink_to(self.base, target_is_directory=True)
+        targets = [self.work / 'dispatch.json', self.work / '..' / persistent.name, intermediate,
+                   parent_alias / self.work.name / 'dispatch.json']
+        for index, target in enumerate(targets):
+            with self.subTest(target=target):
+                queue = self.base / f'receipt-queue-{index}'
+                attempt = queue / 'batches/run/target/attempt-1'
+                (attempt / 'work').mkdir(parents=True)
+                (attempt / 'work/dispatch.json').symlink_to(target)
+                store.write_new(attempt / 'reservation.json', {'maxBudgetUsd': 6})
+                self.plan['accounting_roots'] = [str(queue)]
+                self.save_plan()
+                before = regrade.ledger(queue)
+                self.assertEqual(before, (regrade.Decimal('2.5'), []))
+                with self.assertRaisesRegex(store.EvidenceError, 'workspace-dependent accounting'):
+                    self.run_retirement(apply=True)
+                self.assertTrue(self.work.exists())
+                self.assertEqual(regrade.ledger(queue), before)
+
+    def test_zero_charge_evidence_file_is_a_dependency_even_with_an_external_work_directory(self):
+        attempt = self.queue / 'batches/run/target/attempt-1'
+        (attempt / 'work').mkdir(parents=True)
+        store.write_new(attempt / 'reservation.json', {'maxBudgetUsd': 6})
+        evidence = self.work / 'stderr.log'
+        resolution = {'chargeUpperUsd': 0, 'evidence': [{'path': str(evidence), 'sha256': store.digest(evidence)}]}
+        store.write_new(attempt / 'budget-resolution.json', resolution)
+        before = regrade.ledger(self.queue)
+        self.assertEqual(before, (regrade.Decimal(0), []))
+        with self.assertRaisesRegex(store.EvidenceError, 'workspace-dependent accounting'):
+            self.run_retirement(apply=True)
+        self.assertEqual(regrade.ledger(self.queue), before)
+        resolution['evidence'][0]['path'] = 'relative-to-another-controller-checkout.log'
+        (attempt / 'budget-resolution.json').write_text(json.dumps(resolution))
+        with self.assertRaisesRegex(store.EvidenceError, 'original controller checkout'):
+            self.run_retirement(apply=True)
+
+    def test_accounting_path_checks_do_not_confuse_unrelated_paths(self):
+        self.assertFalse(retire.path_depends_on(self.base / 'work-other/file', self.work))
+        self.assertFalse(retire.path_depends_on(self.queue / 'dispatch.json', self.work))
+        self.assertTrue(retire.path_depends_on(self.work / 'dispatch.json', self.work))
+
     def test_unknown_symlink_and_modified_worktree_are_not_capture_shortcuts(self):
         current = inventory.inventory(self.work, hash_all=True)
         manifest = store.read(self.repo / self.manifest_name)

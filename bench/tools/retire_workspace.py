@@ -66,6 +66,24 @@ def active_users(workspace):
     return sorted(set(active))
 
 
+def path_depends_on(path, workspace):
+    pending, seen = [Path(path).absolute()], set()
+    while pending:
+        path = pending.pop()
+        if path in seen:
+            continue
+        seen.add(path)
+        if len(seen) > 256:
+            raise store.EvidenceError('accounting path has too many link dependencies')
+        if path.is_relative_to(workspace) or path.resolve().is_relative_to(workspace):
+            return True
+        for parent in (path, *path.parents):
+            if parent.is_symlink():
+                target = parent.readlink()
+                pending.append(target if target.is_absolute() else parent.parent / target)
+    return False
+
+
 def accounting_dependencies(workspace, roots):
     reservations = set()
     for root in roots:
@@ -78,8 +96,16 @@ def accounting_dependencies(workspace, roots):
                 reservations.add(Path(directory) / 'reservation.json')
     blockers = []
     for reservation in sorted(reservations):
-        work = (reservation.parent / 'work').resolve()
-        if work.is_relative_to(workspace) or workspace.is_relative_to(work):
+        work = reservation.parent / 'work'
+        resolution = reservation.parent / 'budget-resolution.json'
+        inputs = [reservation, work, work / 'dispatch.json', work / 'home', resolution]
+        if resolution.is_file():
+            for ref in store.read(resolution)['evidence']:
+                path = Path(ref['path'])
+                if not path.is_absolute():
+                    raise store.EvidenceError(f'relative accounting proof needs its original controller checkout: {resolution}')
+                inputs.append(path)
+        if workspace.is_relative_to(work.resolve()) or any(path_depends_on(path, workspace) for path in inputs):
             blockers.append(str(reservation))
     return blockers
 
