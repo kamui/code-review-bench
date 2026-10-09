@@ -48,6 +48,13 @@ def take(key: str):
     return value
 
 
+def survive(attempt: Path | None) -> None:
+    """Leave a reviewer child in a session of its own: it outlives the runner and keeps the launch's environment."""
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)"], cwd=attempt, start_new_session=True,
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    (plan_root() / "survivor.pid").write_text(str(child.pid), encoding="utf-8")
+
+
 def crash(point: str, attempt: Path | None = None) -> None:
     """Kill the controller and this runner at one point of a dispatch, as losing the host's session would."""
     path = plan_root() / "plan.json"
@@ -56,10 +63,7 @@ def crash(point: str, attempt: Path | None = None) -> None:
         return
     take("kill")
     if take("survivor"):
-        # A reviewer child in a session of its own: it outlives the runner and keeps the launch's environment.
-        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)"], cwd=attempt, start_new_session=True,
-                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        (plan_root() / "survivor.pid").write_text(str(child.pid), encoding="utf-8")
+        survive(attempt)
     (plan_root() / "crashed.pid").write_text(str(os.getpid()), encoding="utf-8")
     if os.environ.get("FAKE_CONTROLLER") == str(os.getppid()):
         os.kill(os.getppid(), signal.SIGKILL)
@@ -82,6 +86,8 @@ def review(argv: list) -> subprocess.CompletedProcess:
     (subagents / "agent-a1.jsonl").write_text(fixtures.claude_transcript("tool_use"), encoding="utf-8")
     (attempt / "stdout.jsonl").write_text(fixtures.lines({"type": "system"}), encoding="utf-8")
     crash("during_review", attempt)
+    if take("survivor"):
+        survive(attempt)
     if take("hold"):
         while not (plan_root() / "release").exists():
             time.sleep(0.02)
@@ -442,6 +448,34 @@ class UncertainExecution(QueueFixture):
             self.assertEqual(review_queue.main(["status", "--queue", str(self.queue)]), 0)
         return out.getvalue()
 
+    def test_a_reviewer_child_that_outlives_its_filed_review_blocks_the_next_launch(self):
+        self.plan(survivor=True)
+        with patch.object(os, "kill") as kill, patch.object(os, "killpg") as killpg:
+            for action in ("run", "recover", "run"):
+                self.assert_blocked(self.command(action), "launch-0001 of 2026-01-01-interrupted ended, and its processes are running")
+        self.assertEqual((kill.call_count, killpg.call_count), (0, 0))
+        survivor = int((self.root / "survivor.pid").read_text(encoding="utf-8"))
+        self.assertEqual(review_queue.stat_of(survivor)["state"] in "ZX", False)
+        state = self.run_state()
+        self.assertEqual((state.attempt_ids(), state.filed["att-001"]["disposition"], self.reviews()),
+                         (["att-001"], "valid completed", ["att-001"]))
+        self.end(survivor)
+        code, events, err = self.command("run")
+        self.assertEqual((code, [event["launched"] for event in events if "launched" in event]), (0, ["launch-0002"]), (events, err))
+        self.assertEqual(self.launch_records()[0]["observation"]["status"], "absent")
+        self.assert_complete(["att-001", "att-002"], ["att-001", "att-002"])
+
+    def test_a_failed_review_is_not_replaced_while_its_reviewer_child_is_alive(self):
+        self.plan(survivor=True, stop_next="reviewer exit 1: Selected model is at capacity")
+        self.assert_blocked(self.command("run"), "save a diagnosis before the queue goes on")
+        self.diagnose("att-001", "harness-stop")
+        self.assert_blocked(self.command("replace", "--run", RUN_ID, "--attempt", "att-001"), "ended, and its processes are running")
+        self.assertEqual((self.run_state().attempt_ids(), self.reviews()), (["att-001"], ["att-001"]))
+        self.end(int((self.root / "survivor.pid").read_text(encoding="utf-8")))
+        code, events, err = self.command("replace", "--run", RUN_ID, "--attempt", "att-001")
+        self.assertEqual((code, events[-1]["disposition"]), (0, "valid completed"), (events, err))
+        self.assertEqual(self.run_state().filed["att-002"]["predecessor"], "att-001")
+
     def test_a_claim_whose_launch_record_is_missing_is_never_filed_by_the_queue(self):
         self.crashed("during_review")
         (self.state / "launches/launch-0001.json").unlink()
@@ -733,7 +767,9 @@ class LaunchGates(QueueFixture):
     def test_meters_that_report_no_window_for_a_pinned_client_start_no_launch(self):
         silent = {"both windows null": {"claude": {"five_hour": None, "seven_day": None}},
                   "no client reading": {},
-                  "a window without a number": {"claude": {"five_hour": {"resets_at": "2026-01-01T05:00:00Z"}}}}
+                  "a window without a number": {"claude": {"five_hour": {"resets_at": "2026-01-01T05:00:00Z"}}},
+                  "a truth value for a number": {"claude": {"five_hour": {"utilization": True}, "seven_day": None}},
+                  "a number that is not finite": {"claude": {"five_hour": {"utilization": float("nan")}, "seven_day": None}}}
         for name, reading in silent.items():
             with self.subTest(reading=name):
                 (self.root / "meters.json").write_text(json.dumps({"at": "2026-01-01T00:00:00Z", **reading}), encoding="utf-8")

@@ -41,11 +41,15 @@ records each time, never from its own notes. Before every launch:
   dispatch ended, ``--file --interrupted`` otherwise, with the observation saved under
   ``recoveries/``. Processes still running, or a process table this controller cannot read for that
   launch, block the queue. ``recover`` does this settlement and stops; ``run`` does it and goes on.
+- A launch that ended must have left no process behind; the runner's return does not show that.
+  Its processes are looked for in the same way until one observation finds none, which is saved in
+  the launch record. Processes still running, or a launch this controller cannot see into, block
+  the queue, also when the attempt is filed.
 - A filed valid attempt whose clone or cache remains is pruned; a refusal blocks the queue.
 - A filed attempt that is not valid and has no successor blocks the queue until the run's
   ``deviations/`` holds a diagnosis for it (see below).
-- The subscription meters must have been read within the hour, report a usage window for every
-  pinned client, and be under the quota stop.
+- The subscription meters must have been read within the hour, report a usage window with a
+  finite number for every pinned client, and be under the quota stop.
 - No filed attempt of any run may have used more than was reserved for it without a reconciling
   charge line.
 - The client's spend over all its runs, counting failed attempts, charge lines such as probes,
@@ -96,6 +100,7 @@ import contextlib
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -557,11 +562,12 @@ def meters(queue: Queue, env: dict) -> dict:
 
 
 def used(usage: dict) -> dict:
-    """The percentages each client's usage windows report; a window that reports none is left out."""
+    """The percentages each client's usage windows report; a window that reports no finite number is left out."""
     limits = (usage.get("codex") or {}).get("rateLimits") or {}
     windows = {"claude": [(window or {}).get("utilization") for window in (usage.get("claude") or {}).values()],
                "codex": [(limits.get(key) or {}).get("usedPercent") for key in ("primary", "secondary")]}
-    return {client: [percent for percent in percents if isinstance(percent, (int, float))] for client, percents in windows.items()}
+    return {client: [percent for percent in percents if type(percent) in (int, float) and math.isfinite(percent)]
+            for client, percents in windows.items()}
 
 
 def read_meters(queue: Queue, env: dict) -> dict:
@@ -732,9 +738,11 @@ def assess(queue: Queue, env: dict, *, act: bool) -> tuple:
         else:
             blocked.append(f"{record['launch_id']} of {run.id} was never recorded as ended; its processes are gone, so "
                            "recover or run closes it")
+    unfiled = set()
     for run in runs.values():
         for attempt_id in run.in_flight():
             record = launch_for(records, run, attempt_id)
+            unfiled.add(record and record["launch_id"])
             seen = observe(record and record["process"], run.work / attempt_id)
             if seen["status"] != "absent":
                 blocked.append(f"{run.id}/{attempt_id} is claimed and not filed, and its processes are {seen['status']}: "
@@ -747,6 +755,16 @@ def assess(queue: Queue, env: dict, *, act: bool) -> tuple:
                     emit(queue, {"recovered": None, "run": run.id, "attempt": attempt_id, "outcome": outcome})
             else:
                 blocked.append(f"{run.id}/{attempt_id} is claimed and not filed; its processes are gone, so recover or run settles it")
+    for record in records:
+        if record["state"] != "ended" or "observation" in record or record["launch_id"] in unfiled:
+            continue
+        run = runs[record["run_id"]]
+        seen = observe(record["process"], run.work / record["attempt_id"] if record["attempt_id"] else None)
+        if seen["status"] != "absent":
+            blocked.append(f"{record['launch_id']} of {run.id} ended, and its processes are {seen['status']}: {seen['reason']}")
+        elif act:
+            record["observation"] = seen
+            write(queue.state / "launches" / f"{record['launch_id']}.json", record)
     failed = []
     if blocked:
         return blocked, failed, list(runs.values())
