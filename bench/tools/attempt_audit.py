@@ -89,10 +89,12 @@ SHELL = r"(?:ba|z|da|k)?sh"
 # The file a heredoc's command writes: a redirection target, or ``tee``'s operand.
 WRITTEN = re.compile(r">>?\s*['\"]?([^\s;&|<>'\"]+)|\btee\s+(?:-\S+\s+)*['\"]?([^\s;&|<>'\"]+)")
 # The file a shell in command position is run on or takes as its input, or that ``source`` or ``.``
-# reads. An option with ``c`` takes a script instead, and ``-o`` takes a name.
+# reads, within one command. An option with ``c`` takes a script instead, and ``-o`` takes a name.
+BLANK = r"(?:[ \t]|\\\n)+"
 SCRIPT = re.compile(
-    COMMAND + r"(?:(?:[\w./-]*/)?" + SHELL + r"|source|\.)\s+"
-    r"(?:[-+](?![A-Za-z]*c)[A-Za-z]*o\s+[\w-]+\s+|[-+](?![A-Za-z]*c)\S+\s+)*(?:<\s*)?['\"]?(?P<file>(?!-)[^\s;&|<>'\"()]+)")
+    COMMAND + r"(?:(?:[\w./-]*/)?" + SHELL + r"|source|\.)" + BLANK +
+    r"(?:[-+](?![A-Za-z]*c)[A-Za-z]*o" + BLANK + r"[\w-]+" + BLANK + r"|[-+](?![A-Za-z]*c)[^\s;&|]+" + BLANK + r")*"
+    r"(?:<[ \t]*)?['\"]?(?P<file>(?!-)[^\s;&|<>'\"()]+)")
 # A heredoc: its header line (group 1), then the body, which may be empty, up to the delimiter line or the end.
 HEREDOC = re.compile(r"^([^\n]*<<-?\s*(['\"]?)(\w+)\2[^\n]*)(?:\n.*?)??(?:\n[ \t]*\3[ \t]*(?=\n|\Z)|\Z)", re.M | re.S)
 BUILTIN_HEADER = re.compile(r"^`(high effort|medium effort|low effort|minimal prompt)[^`]*`$", re.M)
