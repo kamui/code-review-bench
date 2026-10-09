@@ -19,9 +19,11 @@
 #               Omitted = harness default (low variant).
 #
 # Writes under <attempt-dir>: home/ (fresh HOME; its credential copy is deleted at exit), tmp/ (TMPDIR), timing.json, stdout.*, stderr.txt, tree-before.txt,
-# tree-after.txt, dispatch.txt (the exact command and versions), audit.json, payload.json (claude arms), normalized.json.
+# tree-after.txt, dispatch.txt (the exact command and versions), native-return.json, audit.json, payload.json (claude arms),
+# normalized.json.
 #
-# Timing semantics: timing.json gets root_dispatched_at before the CLI starts; after a zero exit the wrapper runs the
+# Timing semantics: timing.json gets root_dispatched_at before the CLI starts; native-return.json gets the CLI's exit code
+# and return instant as soon as it returns, before the audit and the normalizer run; after a zero exit the wrapper runs the
 # read audit (claude arms, which also extracts payload.json) and the normalizer, which stamps payload_validated_at on a
 # parsed or empty result; only then is completed_at written. Any other outcome writes stop.json with stopped_at and
 # the reason and leaves completed_at null. Metering is left to the caller:
@@ -165,6 +167,8 @@ $(cat "$PACKET")"
     ;;
   *) echo "unknown arm: $ARM" >&2; exit 2;;
 esac
+printf '{"returned_at": "%s", "exit_code": %s}\n' "$(stamp)" "$RC" > "$DIR/native-return.json.partial"
+mv "$DIR/native-return.json.partial" "$DIR/native-return.json"
 TOOLS=$(cd "$(dirname "$0")" && pwd)
 stop() { printf '{"stopped_at": "%s", "exit_code": %s, "reason": "%s"}\n' "$(stamp)" "$RC" "$1" > "$DIR/stop.json"; echo "stopped: $1" >> "$DIR/dispatch.txt"; }
 if [ "$RC" -ne 0 ]; then
