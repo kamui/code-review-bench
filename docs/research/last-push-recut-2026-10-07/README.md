@@ -288,7 +288,7 @@ CE, thermo, review-code and the missing-roster reviews remain deferred by the ow
 
 The 184 transcript archives of these runs and their probes, 14,257,802 bytes, are in a public [release](https://github.com/kamui/code-review-bench/releases/tag/evidence-last-push-transcripts-2026-10-09-v1) of `kamui/code-review-bench` as one 14,060,799-byte package. The owner asked for this publication on 2026-10-09, before the squash merge. The [manifest](../../../bench/evidence/manifests/last-push-transcripts-2026-10-09-v1.json) keeps each archive's path, size, hash and mode. The [restoration receipt](../../../bench/evidence/receipts/last-push-transcripts-2026-10-09-v1-restoration.json) records a download and restoration from the release.
 
-Git tracks the archives up to commit `297edaaf`, which the release tag names, and not after it. At that commit every archive matched its Git blob, GitHub's public tree and the hash in its attempt record. A scan of the 368 session files inside the archives found no credential. [`relocate_transcripts.py`](relocate_transcripts.py) reproduces the selection and the checks made before untracking.
+Git tracks the archives up to commit `297edaaf`, on the head of pull request #88, and not after it. The release tag names the merge commit `a526b620` on `main`, so a default clone does not download the archives. At that commit every archive matched its Git blob, GitHub's public tree and the hash in its attempt record. A scan of the 368 session files inside the archives found no credential. [`relocate_transcripts.py`](relocate_transcripts.py) reproduces the selection and the checks made before untracking.
 
 ```sh
 python3 bench/tools/evidence_store.py fetch --manifest bench/evidence/manifests/last-push-transcripts-2026-10-09-v1.json
