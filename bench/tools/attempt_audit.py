@@ -93,8 +93,8 @@ WRITTEN = re.compile(r">>?\s*['\"]?([^\s;&|<>'\"]+)|\btee\s+(?:-\S+\s+)*['\"]?([
 SCRIPT = re.compile(
     COMMAND + r"(?:(?:[\w./-]*/)?" + SHELL + r"|source|\.)\s+"
     r"(?:[-+](?![A-Za-z]*c)[A-Za-z]*o\s+[\w-]+\s+|[-+](?![A-Za-z]*c)\S+\s+)*(?:<\s*)?['\"]?(?P<file>(?!-)[^\s;&|<>'\"()]+)")
-# A heredoc: its header line (group 1), then the body up to the delimiter line or the end.
-HEREDOC = re.compile(r"^([^\n]*<<-?\s*(['\"]?)(\w+)\2[^\n]*)\n.*?(?:\n[ \t]*\3[ \t]*(?=\n|\Z)|\Z)", re.M | re.S)
+# A heredoc: its header line (group 1), then the body, which may be empty, up to the delimiter line or the end.
+HEREDOC = re.compile(r"^([^\n]*<<-?\s*(['\"]?)(\w+)\2[^\n]*)(?:\n.*?)??(?:\n[ \t]*\3[ \t]*(?=\n|\Z)|\Z)", re.M | re.S)
 BUILTIN_HEADER = re.compile(r"^`(high effort|medium effort|low effort|minimal prompt)[^`]*`$", re.M)
 CODEX_RUBRIC = "You are acting as a reviewer for a proposed code change"
 DIFF_CMD = re.compile(r"git\s+diff\s+[^;&|\n]*")
