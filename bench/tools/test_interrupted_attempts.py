@@ -587,6 +587,37 @@ class InterruptionFiling(Fixture):
         self.assertEqual(done.returncode, 1, done.stderr)
         self.assertIn("the dispatch ended", done.stdout)
 
+    def test_a_claim_whose_reviewer_never_started_is_released_on_verified_absence_only(self):
+        attempt = self.work / "att-001"
+        attempt.mkdir(parents=True)
+        (attempt / "cell.json").write_text(json.dumps({"cell": {"target": "t-fixture", "arm": "arm-claude", "replicate": 1},
+                                                       "reserved_usd": 5.0, "predecessor": None}), encoding="utf-8")
+        self.assertEqual(self.run_state().spend()["in_flight_reserved"], 5.0)
+        for name, evidence, needle in (("still running", self.evidence(status="running"), "status is 'running', not 'absent'"),
+                                       ("another attempt", self.evidence("att-009"), "not " + RUN_ID + "/att-001"),
+                                       ("no observation", self.root / "no-such-evidence.json", "no readable process-stop evidence")):
+            with self.subTest(evidence=name):
+                done = self.runner("--release", "att-001", "--interrupted", str(evidence))
+                self.assertEqual(done.returncode, 1, done.stderr)
+                self.assertIn(needle, done.stdout)
+                self.assertTrue((attempt / "cell.json").is_file())
+        done = self.runner("--release", "att-001", "--interrupted", str(self.evidence()))
+        self.assertEqual((done.returncode, json.loads(done.stdout)), (0, {"attempt_id": "att-001", "released": True}), done.stderr)
+        state = self.run_state()
+        self.assertEqual((attempt.exists(), state.attempt_ids(), state.spend()["in_flight_reserved"]), (False, [], 0.0))
+
+    def test_a_claim_whose_reviewer_started_or_that_is_filed_is_never_released(self):
+        started = self.interrupted()
+        refused = self.runner("--release", "att-001", "--interrupted", str(self.evidence()))
+        self.assertEqual(refused.returncode, 1, refused.stderr)
+        self.assertIn("a reviewer was started, so the attempt is filed, not released", refused.stdout)
+        filed = self.runner("--file", "att-001", "--interrupted", str(self.evidence()), "--reason", "host restarted")
+        self.assertEqual(filed.returncode, 0, filed.stdout + filed.stderr)
+        refused = self.runner("--release", "att-001", "--interrupted", str(self.evidence()))
+        self.assertEqual(refused.returncode, 1, refused.stderr)
+        self.assertIn("a filed attempt is never released", refused.stdout)
+        self.assertTrue((started / "clone").is_dir())
+
     def test_interruption_after_the_native_return_keeps_the_known_exit_and_usage(self):
         attempt = self.attempt()
         (attempt / "dispatch.txt").write_text("claude 9.9.9 (Claude Code)\nmodel=m-1 effort=high\n", encoding="utf-8")
