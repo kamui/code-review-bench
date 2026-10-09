@@ -70,11 +70,13 @@ API request id for Claude, one per ``token_count`` event for Codex. The total is
 the capture is proven complete: the native return is recorded and every stream shows its own end
 (Claude: ``stdout.jsonl`` ends with the session's ``result`` record and each transcript ends with the
 model's ``end_turn`` reply or the CLI's API-error notice, with no request after it; Codex: each
-rollout's last event is ``task_complete``). An audit violation, a failed normalization or a
-non-zero exit does not change that. Otherwise ``metering_status`` is ``incomplete``, ``priced_total_usd`` and the upper bound are
+rollout's last event is ``task_complete``), and every stream the capture names is in it: the
+transcripts and sessions the skill runner listed in ``skill-attempt.json``, a Claude subagent that
+``stdout.jsonl`` or a transcript reports, and a Codex thread that a rollout names. An audit violation,
+a failed normalization or a non-zero exit does not change that. Otherwise ``metering_status`` is ``incomplete``, ``priced_total_usd`` and the upper bound are
 null, the lower bound is the cost of the captured requests (null when none was captured, because a
-missing log proves no zero; a request saved in two transcripts or rollouts is priced once), and a note
-names what is missing. When the meter cannot read a
+missing log proves no zero; a request saved in two transcripts or rollouts is priced once, and no
+part of a request is priced beyond the whole it recorded), and a note names what is missing. When the meter cannot read a
 capture at all (a rollout cut mid-line, a missing root thread), the lower bound prices each
 request the filer could read once: the request rows of the metered Claude transcripts, or the
 Codex ``token_usage_record`` lines by response id, since ``token_count`` events repeat a response's
@@ -262,7 +264,10 @@ def api_errors_only(path: str) -> bool:
                                  for record in records)
 
 
-def claude_observed(paths: list) -> tuple:
+def claude_observed(paths: list, unnamed: bool = False) -> tuple:
+    """Return (models, efforts, request rows), one row per API request id.
+
+    ``unnamed`` also keeps a billed line that carries no request id, once however many transcripts hold it."""
     models, efforts = set(), set()
     requests = {}
     order = []
@@ -278,10 +283,12 @@ def claude_observed(paths: list) -> tuple:
                 efforts.add(record["effort"])
             usage = message.get("usage")
             rid = record.get("requestId")
+            if usage and not rid and unnamed:
+                rid = json.dumps(message, sort_keys=True)
             if not usage or not rid:
                 continue
             cc = usage.get("cache_creation") or {}
-            row = {"request_id": rid, "transcript": os.path.basename(path), "model": message.get("model"),
+            row = {"request_id": record.get("requestId"), "transcript": os.path.basename(path), "model": message.get("model"),
                    "effort": record.get("effort"), "first_seen": record.get("timestamp"), "last_seen": record.get("timestamp"),
                    "input_tokens": usage.get("input_tokens", 0),
                    "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0),
@@ -478,33 +485,47 @@ def codex_responses(paths: list) -> list:
     """The usage of each billed response in the readable rollout lines, one per response id.
 
     A ``token_count`` event repeats the usage of the response before it, so those events cannot be summed.
-    A response saved in two rollouts is still one response; a record without an id is told apart only
-    within its rollout, by its ordinal."""
+    A response saved in two rollouts is still one response. A record without an id is told apart by its
+    thread and ordinal, as ``codex_usage.py`` reads one rollout per thread, so a second copy of a thread's
+    rollout adds nothing."""
     usages = {}
     for path in paths:
+        thread = None
         for record in jsonl(path):
             payload = record.get("payload") or {}
-            if record.get("type") == "token_usage_record" and isinstance(payload.get("usage"), dict):
-                usages[payload.get("response_id") or (path, record.get("ordinal"))] = payload["usage"]
+            if record.get("type") == "session_meta" and thread is None:
+                thread = payload.get("id") or payload.get("session_id")
+            elif record.get("type") == "token_usage_record" and isinstance(payload.get("usage"), dict):
+                key = payload.get("response_id") or (payload.get("thread_id") or thread or path, record.get("ordinal"))
+                usages[key] = payload["usage"]
     return list(usages.values())
 
 
 def captured_minimum(harness: str, captured: list, rate: dict) -> float:
     """A floor on the cost of the captured requests, for when the meter cannot read the whole stream.
 
-    ``captured`` holds each billed request once: Claude request rows, or Codex response usages. A
-    cache write of unknown lifetime is priced at the cheaper tier, so the figure never overstates."""
+    ``captured`` holds each billed request once: Claude request rows, or Codex response usages. The
+    figure never overstates. A request's recorded whole is authoritative, as it is for the meters: the
+    Claude cache-write total, of which a split that is missing, short or larger than the total leaves
+    the rest priced at the cheaper tier; and the Codex prompt, which is priced at its cheapest rate when
+    the cached and cache-write parts exceed it."""
     total = 0.0
     for row in captured:
         if harness == "codex":
+            prompt = row.get("input_tokens") or 0
             cached, written = row.get("cached_input_tokens") or 0, row.get("cache_write_input_tokens") or 0
-            total += max((row.get("input_tokens") or 0) - cached - written, 0) * rate["input"]
-            total += cached * rate["cache_read"] + written * rate["cache_write_5m"]
+            if cached + written > prompt:
+                total += prompt * min(rate["input"], rate["cache_read"], rate["cache_write_5m"])
+            else:
+                total += (prompt - cached - written) * rate["input"] + cached * rate["cache_read"] + written * rate["cache_write_5m"]
         else:
-            short, long = row.get("cache_write_5m"), row.get("cache_write_1h")
+            written = row.get("cache_creation_input_tokens") or 0
+            short, long = row.get("cache_write_5m") or 0, row.get("cache_write_1h") or 0
+            if short + long > written:
+                short = long = 0
             total += (row.get("input_tokens") or 0) * rate["input"] + (row.get("cache_read_input_tokens") or 0) * rate["cache_read"]
-            total += (short * rate["cache_write_5m"] + long * rate["cache_write_1h"] if short is not None and long is not None
-                      else (row.get("cache_creation_input_tokens") or 0) * min(rate["cache_write_5m"], rate["cache_write_1h"]))
+            total += short * rate["cache_write_5m"] + long * rate["cache_write_1h"]
+            total += (written - short - long) * min(rate["cache_write_5m"], rate["cache_write_1h"])
         total += (row.get("output_tokens") or 0) * rate["output"]
     return round(total / 1e6, 6)
 
@@ -518,11 +539,30 @@ def capture_gaps(harness: str, attempt_dir: str, returned: bool, transcript_path
     ``silent`` transcript may hold requests and no reply at all: the built-in's root, which carries
     the command and bills nothing. Codex: the last event of every rollout is ``task_complete``.
     These are the shapes of the saved attempts that ran to their end.
+
+    A stream that the capture names and does not hold billed requests no saved line shows, so it is a
+    gap as well: a transcript or session the skill runner listed in ``skill-attempt.json``; a Claude
+    subagent that ``stdout.jsonl`` reports started or a transcript reports returned, and the root of a
+    subagent's session; a Codex thread that a rollout names as its parent, as its subagent or as the
+    thread of one of its records.
     """
     gaps = [] if returned else ["no native return was recorded"]
     if not transcript_paths:
         gaps.append("no transcript was captured")
+    held, expected = set(), {}
+
+    def expect(stream, source: str) -> None:
+        if stream and isinstance(stream, str):
+            expected.setdefault(stream, source)
+
+    listing = os.path.join(attempt_dir, "skill-attempt.json")
+    listed = read_json(listing) if os.path.exists(listing) else {}
+    contexts = [context for context in listed.get("contexts") or [] if isinstance(context, dict)]
     if harness == "claude-code":
+        projects = os.path.join(attempt_dir, "home", ".claude", "projects")
+        for context in contexts:
+            expect(context.get("transcript"), "skill-attempt.json")
+        expect(listed.get("root_session_id") and f"{listed['root_session_id']}.jsonl", "skill-attempt.json")
         stream = os.path.join(attempt_dir, "stdout.jsonl")
         lines = Path(stream).read_text(encoding="utf-8", errors="replace").splitlines() if os.path.exists(stream) else []
         try:
@@ -531,12 +571,26 @@ def capture_gaps(harness: str, attempt_dir: str, returned: bool, transcript_path
             ended = False
         if not ended:
             gaps.append("stdout.jsonl does not end with the session's result record")
+        for record in jsonl(stream) if lines else ():
+            if record.get("subtype") == "task_started" and record.get("task_type") == "local_agent" and record.get("task_id"):
+                expect(f"agent-{record['task_id']}.jsonl", "stdout.jsonl")
+    else:
+        for row in [*contexts, *(row for row in listed.get("session_lineage") or [] if isinstance(row, dict))]:
+            expect(row.get("session_id"), "skill-attempt.json")
+        expect(listed.get("root_session_id"), "skill-attempt.json")
     for path in transcript_paths:
         name, unreadable = os.path.basename(path), []
         records = list(jsonl(path, unreadable))
         if unreadable:
             gaps.append(f"{name} has an unreadable line")
         if harness == "claude-code":
+            held.update((name, os.path.relpath(path, projects)))
+            if os.path.basename(os.path.dirname(path)) == "subagents":
+                expect(os.path.basename(os.path.dirname(os.path.dirname(path))) + ".jsonl", name)
+            for record in records:
+                returned_agent = record.get("toolUseResult")
+                if isinstance(returned_agent, dict) and returned_agent.get("agentId"):
+                    expect(f"agent-{returned_agent['agentId']}.jsonl", name)
             turns = [record for record in records if record.get("type") in ("user", "assistant")]
             last = turns[-1] if turns else {}
             message = last.get("message") or {}
@@ -546,9 +600,19 @@ def capture_gaps(harness: str, attempt_dir: str, returned: bool, transcript_path
             if not ended and not command_only:
                 gaps.append(f"{name} ends without end_turn")
         else:
+            meta = next((record.get("payload") or {} for record in records if record.get("type") == "session_meta"), {})
+            held.add(meta.get("id") or meta.get("session_id"))
+            expect(meta.get("parent_thread_id"), name)
+            for record in records:
+                payload = record.get("payload") or {}
+                item = payload.get("item")
+                if record.get("type") != "session_meta":
+                    for thread in (payload.get("thread_id"), payload.get("session_id"), isinstance(item, dict) and item.get("agent_thread_id")):
+                        expect(thread, name)
             events = [(record.get("payload") or {}).get("type") for record in records if record.get("type") == "event_msg"]
             if events[-1:] != ["task_complete"]:
                 gaps.append(f"{name} does not end with task_complete")
+    gaps.extend(f"{stream} is named by {source} but was not captured" for stream, source in expected.items() if stream not in held)
     return gaps
 
 
@@ -792,7 +856,7 @@ def file_attempt(args) -> tuple:
     if harness == "codex":
         captured = codex_responses(transcript_paths)
     else:
-        captured = claude_observed(meter_paths)[2]
+        captured = claude_observed(meter_paths, unnamed=True)[2]
     priced = low = high = None
     status = "complete"
     rate = rate_for(rates, models[0]) if len(models) == 1 else None

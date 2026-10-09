@@ -327,9 +327,85 @@ class UnprovenUsage(Fixture):
         codex = self.attempt("att-002", "codex")
         (codex / "home/.codex/sessions/2026/01/01/rollout-child.jsonl").write_text(
             rollout("child", "root").replace("child-r1", "root-r1"), encoding="utf-8")
-        for attempt, harness, floor in ((claude, "claude", CAPTURED), (codex, "codex", CODEX_ROLLOUT)):
-            with self.subTest(harness=harness):
+        copied = self.attempt("att-003", "codex")
+        sessions = copied / "home/.codex/sessions/2026/01/01"
+        unnamed = [json.loads(line) for line in (sessions / "rollout-root.jsonl").read_text(encoding="utf-8").splitlines()]
+        unnamed[2] = {"type": "token_usage_record", "ordinal": 12, "payload": {"usage": unnamed[2]["payload"]["usage"]}}
+        for name in ("rollout-root.jsonl", "rollout-root-again.jsonl"):
+            (sessions / name).write_text(lines(*unnamed), encoding="utf-8")
+        with (sessions / "rollout-child.jsonl").open("a", encoding="utf-8") as handle:
+            handle.write('{"type": "event_msg", "payl')
+        nameless = self.attempt("att-004")
+        (nameless / "stdout.jsonl").unlink()
+        answer = {key: value for key, value in reply("r1", "end_turn").items() if key != "requestId"}
+        for name in ("agent-a1.jsonl", "agent-a2.jsonl"):
+            (nameless / "home/.claude/projects/p/s1/subagents" / name).write_text(
+                lines({"type": "user", "message": {"content": f"Review target: `main`\n\n{PROMPT}\n"}}, answer), encoding="utf-8")
+        for name, attempt, harness, floor in (("claude request", claude, "claude", CAPTURED), ("codex response", codex, "codex", CODEX_ROLLOUT),
+                                              ("codex thread without response ids", copied, "codex", CODEX_CAPTURED),
+                                              ("claude line without a request id", nameless, "claude", CAPTURED)):
+            with self.subTest(saved_twice=name):
                 self.assert_unknown_total(self.filed(attempt, harness), floor)
+
+    def test_floor_prices_no_more_than_the_whole_a_request_recorded(self):
+        cases = []
+        for name, split, written in (("cache split larger than the total", (100, 100), 100 * 2.5),
+                                     ("cache split short of the total", (0, 40), 40 * 4.0 + 60 * 2.5)):
+            attempt = self.attempt(f"att-00{len(cases) + 1}")
+            answer = reply("r1", "end_turn")
+            answer["message"]["usage"]["cache_creation"] = {"ephemeral_5m_input_tokens": split[0], "ephemeral_1h_input_tokens": split[1]}
+            subagents = attempt / "home/.claude/projects/p/s1/subagents"
+            (subagents / "agent-a1.jsonl").write_text(lines({"type": "user", "message": {"content": f"Review target: `main`\n\n{PROMPT}\n"}},
+                                                            answer), encoding="utf-8")
+            (subagents / "agent-a2.jsonl").write_text("", encoding="utf-8")
+            cases.append((name, attempt, "claude", round((10 * 2 + written + 1000 * 0.2 + 50 * 10) / 1e6, 6)))
+        codex = self.attempt("att-003", "codex")
+        (codex / "home/.codex/sessions/2026/01/01/rollout-child.jsonl").write_text(
+            rollout("child", "root", input_tokens=100) + '{"type": "event_msg", "payl', encoding="utf-8")
+        cases.append(("cached part larger than the prompt", codex, "codex", round(CODEX_ROLLOUT + (100 * 0.2 + 50 * 10) / 1e6, 6)))
+        for name, attempt, harness, floor in cases:
+            with self.subTest(request=name):
+                self.assert_unknown_total(self.filed(attempt, harness), floor)
+
+    def test_stream_the_capture_names_but_does_not_hold_leaves_the_total_unknown(self):
+        def claude(change):
+            attempt = self.attempt(f"att-00{len(list(self.work.glob('att-*'))) + 1}")
+            change(attempt, attempt / "home/.claude/projects/p")
+            return attempt, "claude", CAPTURED
+
+        def codex(change):
+            attempt = self.attempt(f"att-00{len(list(self.work.glob('att-*'))) + 1}", "codex")
+            change(attempt, attempt / "home/.codex/sessions/2026/01/01")
+            return attempt, "codex", CODEX_CAPTURED
+
+        listed = lambda **inventory: lambda attempt, _: (attempt / "skill-attempt.json").write_text(json.dumps(inventory), encoding="utf-8")  # noqa: E731
+        activity = {"type": "event_msg", "payload": {"type": "item_completed", "item": {"type": "SubAgentActivity", "agent_thread_id": "lost"}}}
+        cases = {
+            "agent-a2.jsonl is named by stdout.jsonl": claude(lambda attempt, _: (attempt / "stdout.jsonl").write_text(lines(
+                {"type": "system", "subtype": "task_started", "task_type": "local_agent", "task_id": "a2"},
+                {"type": "system", "subtype": "task_started", "task_type": "local_bash", "task_id": "b1"},
+                {"type": "result", "subtype": "success"}), encoding="utf-8")),
+            "agent-a2.jsonl is named by agent-a1.jsonl": claude(lambda _, project: (project / "s1/subagents/agent-a1.jsonl").write_text(
+                claude_transcript("tool_use") + lines({"type": "user", "toolUseResult": {"agentId": "a2"}, "message": {"content": "done"}},
+                                                            reply("r1", "end_turn")), encoding="utf-8")),
+            "agent-a2.jsonl is named by skill-attempt.json": claude(listed(contexts=[
+                {"transcript": "p/s1/subagents/agent-a1.jsonl"}, {"transcript": "p/s1/subagents/agent-a2.jsonl"}])),
+            "s1.jsonl is named by agent-a1.jsonl": claude(lambda _, project: (project / "s1.jsonl").unlink()),
+            "gone is named by rollout-grandchild.jsonl": codex(lambda _, sessions: (sessions / "rollout-grandchild.jsonl").write_text(
+                rollout("grandchild", "gone", "task_complete"), encoding="utf-8")),
+            "lost is named by rollout-root.jsonl": codex(lambda _, sessions: (sessions / "rollout-root.jsonl").write_text(
+                rollout("root", None) + lines(activity, {"type": "event_msg", "payload": {"type": "task_complete"}}), encoding="utf-8")),
+            "lost is named by skill-attempt.json": codex(listed(session_lineage=[{"session_id": "root"}, {"session_id": "lost"}])),
+        }
+        for gap, (attempt, harness, floor) in cases.items():
+            with self.subTest(gap=gap):
+                with self.assertRaisesRegex(run_cell.InputError, "workspace cleanup failed: usage is incomplete"):
+                    run_cell.file(self.run_state(), attempt.name)
+                record = self.run_state().filed[attempt.name]
+                self.assertEqual(record["disposition"], "valid completed")
+                self.assert_unknown_total(record, floor)
+                self.assertTrue(any(f"{gap} but was not captured" in note for note in record["notes"]), record["notes"])
+                self.assertTrue((attempt / "clone").is_dir())
 
     def test_transcript_cut_mid_line_is_filed_with_what_it_captured(self):
         attempt = self.attempt()
