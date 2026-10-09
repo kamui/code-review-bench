@@ -557,8 +557,7 @@ def close_interruption(run: Run, attempt_id: str, evidence_path: str, reason: st
         evidence = json.loads(Path(evidence_path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         raise Refused(f"{attempt_id}: no readable process-stop evidence: {error}") from error
-    outputs = [path for path in (*directory.glob("std*"), *(directory / "home").rglob("*")) if path.is_file()]
-    last_output = max((path.stat().st_mtime for path in outputs), default=None)
+    last_output = file_attempt.last_output(directory)
     problems = file_attempt.process_stop_problems(evidence, run.id, attempt_id, last_output)
     if problems:
         raise Refused(f"{attempt_id}: the process-stop evidence is unverified: {'; '.join(problems)}")

@@ -33,7 +33,8 @@ RUBRIC_HASH = hashlib.sha256(RUBRIC.encode("utf-8")).hexdigest()
 RATE = {"model": "m-1", "as_of": "2026-01-01", "input": 2.0, "output": 10.0, "cache_read": 0.2,
         "cache_write_5m": 2.5, "cache_write_1h": 4.0, "billing": "api-dollars"}
 CAPTURED = round((10 * 2 + 100 * 2.5 + 1000 * 0.2 + 50 * 10) / 1e6, 6)
-CODEX_CAPTURED = round(2 * (600 * 2 + 400 * 0.2 + 50 * 10) / 1e6, 6)
+CODEX_ROLLOUT = round((600 * 2 + 400 * 0.2 + 50 * 10) / 1e6, 6)
+CODEX_CAPTURED = 2 * CODEX_ROLLOUT
 ARMS = {"claude": {"id": "arm-claude", "kind": "claude-builtin", "model": "m-1", "effort": "high",
                    "adapter": {"expected_prompt_variants": [PROMPT_HASH]}},
         "codex": {"id": "arm-codex", "kind": "codex", "model": "m-1", "effort": "high",
@@ -57,11 +58,11 @@ def claude_transcript(stop_reason: str | None = "end_turn") -> str:
                  reply("r1", stop_reason))
 
 
-def rollout(thread: str, parent: str | None, *events: str) -> str:
+def rollout(thread: str, parent: str | None, *events: str, input_tokens: int = 1000) -> str:
     meta = {"id": thread, "base_instructions": {"text": RUBRIC}}
     if parent:
         meta["parent_thread_id"] = parent
-    usage = {"input_tokens": 1000, "cached_input_tokens": 400, "cache_write_input_tokens": 0, "output_tokens": 50,
+    usage = {"input_tokens": input_tokens, "cached_input_tokens": 400, "cache_write_input_tokens": 0, "output_tokens": 50,
              "reasoning_output_tokens": 0}
     return lines({"type": "session_meta", "payload": meta},
                  {"type": "turn_context", "payload": {"model": "m-1", "effort": "high", "sandbox_policy": {"type": "workspace-write"}}},
@@ -268,6 +269,34 @@ class UnprovenUsage(Fixture):
         self.assert_unknown_total(record, CAPTURED)
         self.assertTrue(any("agent-a1.jsonl has an unreadable line" in note for note in record["notes"]), record["notes"])
 
+    def test_capture_the_meter_cannot_read_keeps_the_floor_of_its_readable_requests(self):
+        claude = self.attempt("att-001")
+        (claude / "stdout.jsonl").unlink()
+        (claude / "home/.claude/projects/p/s1/subagents/agent-a2.jsonl").write_text(
+            lines({"type": "user", "message": {"content": "never answered"}}), encoding="utf-8")
+        codex = self.attempt("att-002", "codex")
+        (codex / "home/.codex/sessions/2026/01/01/rollout-child.jsonl").write_text(
+            rollout("child", "root", input_tokens=4_000_400) + '{"type": "event_msg", "payl', encoding="utf-8")
+        over = round((4_000_000 * 2 + 400 * 0.2 + 50 * 10) / 1e6, 6)
+        for attempt, harness, floor in ((claude, "claude", CAPTURED), (codex, "codex", over)):
+            with self.subTest(harness=harness):
+                record = self.filed(attempt, harness)
+                self.assert_unknown_total(record, floor)
+                self.assertTrue(any(note.startswith("usage not priced: the meter could not read the capture") for note in record["notes"]),
+                                record["notes"])
+        state = self.run_state()
+        self.assertEqual((state.over_reservation(), state.spend()["attempts"]), (["att-002"], round(5.0 + over, 4)))
+
+    def test_missing_root_rollout_keeps_the_child_requests(self):
+        attempt = self.attempt(harness="codex", exit_code=1)
+        self.stop(attempt, 1, "reviewer exit 1")
+        (attempt / "home/.codex/sessions/2026/01/01/rollout-root.jsonl").unlink()
+        record = self.filed(attempt, "codex")
+        self.assertEqual((record["disposition"], record["observed"]["models"]), ("stopped: reviewer exit 1", ["m-1"]))
+        self.assert_unknown_total(record, CODEX_ROLLOUT)
+        requests = (self.run_dir / "attempts/att-001/usage-requests.jsonl").read_text(encoding="utf-8").splitlines()
+        self.assertEqual([json.loads(line)["thread"] for line in requests], ["rollout-child.jsonl"])
+
     def test_missing_transcripts_never_price_zero(self):
         for harness, home in (("claude", "home/.claude/projects"), ("codex", "home/.codex/sessions")):
             with self.subTest(harness=harness):
@@ -301,6 +330,22 @@ class InterruptionFiling(Fixture):
         done = self.filer(attempt)
         self.assertEqual(done.returncode, 2, done.stdout)
         self.assertIn("status is 'unknown'", done.stderr)
+
+    def test_filer_refuses_a_stop_observation_older_than_the_saved_output(self):
+        attempt = self.interrupted()
+        sidecar = {"reason": "host restarted", "last_output_at": None,
+                   "process_stop": json.loads(self.evidence(observed_at="2026-01-01T00:30:00Z").read_text(encoding="utf-8"))}
+        (attempt / "interruption.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        done = self.filer(attempt)
+        self.assertEqual(done.returncode, 2, done.stdout)
+        self.assertIn("observed_at precedes the attempt's last output", done.stderr)
+        run_cell.close_interruption(self.run_state(), "att-001", str(self.evidence()), "host restarted")
+        later = time.time() + 60
+        os.utime(attempt / "stdout.jsonl", (later, later))
+        done = self.filer(attempt)
+        self.assertEqual(done.returncode, 2, done.stdout)
+        self.assertIn("observed_at precedes the attempt's last output", done.stderr)
+        self.assertFalse((self.run_dir / "attempts/att-001").exists())
 
     def test_absent_or_unverified_process_evidence_is_refused(self):
         attempt = self.interrupted()
