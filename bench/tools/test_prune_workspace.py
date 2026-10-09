@@ -66,6 +66,22 @@ class CleanupTest(unittest.TestCase):
             prune_workspace.prune(self.attempt, self.workspace, apply=True)
         self.assertTrue((self.workspace / 'clone-cache').exists())
 
+    def test_fixture_cleanup_uses_explicit_target_and_checks_identity(self):
+        target = self.root / 'bench/runs/toy/fixture'
+        target.parent.mkdir(parents=True)
+        (self.root / 'bench/targets/task').rename(target)
+        definition = json.loads((target / 'target.json').read_text())
+        definition['id'] = 'other-task'
+        (target / 'target.json').write_text(json.dumps(definition))
+        with self.assertRaisesRegex(prune_workspace.Refused, 'target identity'):
+            prune_workspace.prune(self.attempt, self.workspace, apply=True, target_dir=target)
+        self.assertTrue((self.workspace / 'clone').exists())
+        definition['id'] = 'task'
+        (target / 'target.json').write_text(json.dumps(definition))
+        receipt = prune_workspace.prune(self.attempt, self.workspace, apply=True, target_dir=target)
+        self.assertTrue(receipt['applied'])
+        self.assertFalse((self.workspace / 'clone').exists())
+
     def test_corrupt_native_scratch_archive_prevents_cleanup(self):
         native = self.workspace / 'reports'
         scratch = native / 'scratch'
