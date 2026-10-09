@@ -501,6 +501,33 @@ class UncertainExecution(QueueFixture):
         self.assertEqual((code, events[-1]["settled"]), (0, True), (events, err))
         self.assertEqual(list(self.run_state().filed), ["att-001"])
 
+    def record_boot(self, boot_id: str | None) -> None:
+        path = self.state / "launches/launch-0001.json"
+        record = json.loads(path.read_text(encoding="utf-8"))
+        record["process"]["boot_id"] = boot_id
+        path.write_text(json.dumps(record), encoding="utf-8")
+
+    def test_a_claim_whose_launch_recorded_no_boot_is_not_filed_while_its_reviewer_child_lives(self):
+        self.crashed("during_review", survivor=True)
+        for boot_id in (None, ""):
+            self.record_boot(boot_id)
+            with self.subTest(boot_id=boot_id):
+                for action in ("recover", "run"):
+                    self.assert_blocked(self.command(action), "its processes are unknown: the launch record names no boot")
+                state = self.run_state()
+                self.assertEqual((state.in_flight(), state.filed, state.spend()["in_flight_reserved"], self.reviews()),
+                                 (["att-001"], {}, 5.0, ["att-001"]))
+                self.assertTrue((state.work / "att-001/home/.claude/.credentials.json").is_file())
+
+    def test_an_ended_launch_that_recorded_no_boot_blocks_the_next_launch(self):
+        self.plan(survivor=True)
+        self.assert_blocked(self.command("run"), "launch-0001 of 2026-01-01-interrupted ended, and its processes are running")
+        self.record_boot(None)
+        for action in ("recover", "run"):
+            self.assert_blocked(self.command(action), "ended, and its processes are unknown: the launch record names no boot")
+        self.assertEqual((self.run_state().attempt_ids(), self.reviews()), (["att-001"], ["att-001"]))
+        self.assertNotIn("observation", self.launch_records()[0])
+
     def test_a_reused_pid_is_another_process_and_is_left_alone(self):
         self.crashed("during_review")
         stranger = subprocess.Popen(["sleep", "300"], start_new_session=True)
@@ -574,6 +601,18 @@ class ProcessObservation(unittest.TestCase):
         seen = review_queue.observe(evidence)
         self.assertEqual(seen["status"], "absent")
         self.assertIn("no process outlives the boot it started in", seen["verified_by"])
+
+    def test_a_boot_id_that_was_never_read_is_unknown_and_not_a_reboot(self):
+        wrapper, evidence = self.launched(["sleep", "300"])
+        self.addCleanup(wrapper.kill)
+        unnamed = {key: value for key, value in evidence.items() if key != "boot_id"}
+        for record in ({**evidence, "boot_id": None}, {**evidence, "boot_id": ""}, unnamed):
+            with self.subTest(boot_id=record.get("boot_id", "not recorded")):
+                seen = review_queue.observe(record)
+                self.assertEqual((seen["status"], seen.get("reason", "").split(",")[0]), ("unknown", "the launch record names no boot"))
+        with patch.object(review_queue, "identity", return_value={**review_queue.identity(), "boot_id": ""}):
+            seen = review_queue.observe(evidence)
+        self.assertEqual((seen["status"], seen.get("reason")), ("unknown", "this host exposes no process table to read"))
 
     def test_no_record_and_no_process_table_are_unknown(self):
         self.assertEqual(review_queue.observe(None)["status"], "unknown")

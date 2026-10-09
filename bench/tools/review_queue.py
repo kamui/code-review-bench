@@ -71,9 +71,9 @@ command, the attempts that existed, a marker placed in the child's environment, 
 boot, the PID namespace and the user. The child's PID, start time and session are added when it
 starts. An observation reports ``running``, ``absent`` or ``unknown``:
 
-- ``unknown`` when there is no launch record, the record is from another host, PID namespace or
-  user, or a process of this user cannot be inspected. A free lock, a stale heartbeat, a missing
-  PID or a zombie wrapper is never read as absence.
+- ``unknown`` when there is no launch record, the record names no boot or is from another host,
+  PID namespace or user, or a process of this user cannot be inspected. A free lock, a stale
+  heartbeat, a missing PID or a zombie wrapper is never read as absence.
 - ``absent`` when the host has rebooted since the launch, or two readings of the process table
   find no live process that carries the marker, names the attempt directory in its environment,
   command or working directory, belongs to the launch's session, or descends from one that does.
@@ -408,11 +408,13 @@ def observe(evidence: dict | None, attempt_dir: Path | None = None) -> dict:
 
     if evidence is None:
         return unknown("no launch record names this claim, so nothing says where its processes ran")
-    if here["boot_id"] is None or here["pid_namespace"] is None:
+    if not here["boot_id"] or here["pid_namespace"] is None:
         return unknown("this host exposes no process table to read")
     if (evidence.get("host"), evidence.get("machine_id_sha256")) != (here["host"], here["machine_id_sha256"]):
         return unknown(f"the launch ran on host {evidence.get('host')}; observe it there")
-    if evidence.get("boot_id") != here["boot_id"]:
+    if not evidence.get("boot_id"):
+        return unknown("the launch record names no boot, so nothing says whether the host has restarted since")
+    if evidence["boot_id"] != here["boot_id"]:
         return {**seen, "status": "absent", "processes": [],
                 "verified_by": f"review_queue.py on {here['host']}: the boot id is {here['boot_id']}, not the {evidence.get('boot_id')} "
                                "the launch ran under, and no process outlives the boot it started in"}
