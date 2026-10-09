@@ -74,8 +74,10 @@ message is ``end_turn`` or the CLI's API-error notice; Codex: each rollout's las
 that. Otherwise ``metering_status`` is ``incomplete``, ``priced_total_usd`` and the upper bound are
 null, the lower bound is the cost of the captured requests (null when none was captured, because a
 missing log proves no zero), and a note names what is missing. When the meter cannot read a
-capture at all (a rollout cut mid-line, a missing root thread), the lower bound prices the request
-rows the filer could read. The transcripts are archived
+capture at all (a rollout cut mid-line, a missing root thread), the lower bound prices each
+request the filer could read once: the request rows of the metered Claude transcripts, or the
+Codex ``token_usage_record`` lines by response id, since ``token_count`` events repeat a response's
+usage. The transcripts are archived
 to ``<archive-root>/<run>/<attempt>.tar.gz`` (default ``~/.t3/bench-cache/transcripts``, outside
 the repository, because the built-in's proprietary prompt is in them), hashed, and restored into
 a scratch directory to check every member's bytes.
@@ -465,12 +467,26 @@ def rate_for(rates: dict, model: str) -> dict:
     return sorted(matches, key=lambda r: r["as_of"])[-1]
 
 
-def captured_minimum(harness: str, requests: list, rate: dict) -> float:
-    """A floor on the cost of the captured request rows, for when the meter cannot read the whole stream.
+def codex_responses(paths: list) -> list:
+    """The usage of each billed response in the readable rollout lines, one per response as ``codex_usage.py`` keys them.
 
-    A cache write of unknown lifetime is priced at the cheaper tier, so the figure never overstates."""
+    A ``token_count`` event repeats the usage of the response before it, so those events cannot be summed."""
+    usages = {}
+    for path in paths:
+        for record in jsonl(path):
+            payload = record.get("payload") or {}
+            if record.get("type") == "token_usage_record" and isinstance(payload.get("usage"), dict):
+                usages[path, payload.get("response_id") or f"ordinal-{record.get('ordinal')}"] = payload["usage"]
+    return list(usages.values())
+
+
+def captured_minimum(harness: str, captured: list, rate: dict) -> float:
+    """A floor on the cost of the captured requests, for when the meter cannot read the whole stream.
+
+    ``captured`` holds each billed request once: Claude request rows, or Codex response usages. A
+    cache write of unknown lifetime is priced at the cheaper tier, so the figure never overstates."""
     total = 0.0
-    for row in requests:
+    for row in captured:
         if harness == "codex":
             cached, written = row.get("cached_input_tokens") or 0, row.get("cache_write_input_tokens") or 0
             total += max((row.get("input_tokens") or 0) - cached - written, 0) * rate["input"]
@@ -642,6 +658,8 @@ def file_attempt(args) -> tuple:
     native_return = read_json(os.path.join(attempt_dir, "native-return.json")) if os.path.exists(os.path.join(attempt_dir, "native-return.json")) else None
     interruption_path = os.path.join(attempt_dir, "interruption.json")
     interruption = read_json(interruption_path) if os.path.exists(interruption_path) else None
+    if interruption is not None and not isinstance(interruption, dict):
+        raise FileError(f"{interruption_path} is not a JSON object")
     if interruption is not None:
         # Output written after the closeout recorded its newest one means a writer outlived the observation.
         try:
@@ -753,6 +771,11 @@ def file_attempt(args) -> tuple:
     # Usage. A total is priced only when the capture is proven complete; otherwise the captured
     # requests price a minimum and the total stays unknown.
     gaps = capture_gaps(harness, attempt_dir, exit_code is not None, transcript_paths)
+    if harness == "codex":
+        captured = codex_responses(transcript_paths)
+    else:
+        metered = {os.path.basename(path) for path in meter_paths}
+        captured = [row for row in requests if row["transcript"] in metered]
     priced = low = high = None
     status = "complete"
     rate = rate_for(rates, models[0]) if len(models) == 1 else None
@@ -789,14 +812,12 @@ def file_attempt(args) -> tuple:
     if unmetered:
         status = "incomplete"
         notes.append(f"usage not priced: {unmetered}")
-        if rate and requests:
-            low = captured_minimum(harness, requests, rate)
-            notes.append("the lower bound prices the captured request rows")
+        if rate and captured:
+            low = captured_minimum(harness, captured, rate)
+            notes.append("the lower bound prices each captured request once")
     if gaps:
         status = "incomplete"
-        priced = high = None
-        if not requests:
-            low = None
+        priced, low, high = None, low or None, None
         notes.append("usage total unknown, the capture is not proven complete: " + "; ".join(gaps))
 
     # Diff ranges.
