@@ -48,7 +48,8 @@ class CodexDispatchTest(unittest.TestCase):
                 "    raise SystemExit(0)\n"
                 "with open(os.environ['CODEX_ARGV_CAPTURE'], 'w', encoding='utf-8') as f:\n"
                 "    json.dump({'argv': sys.argv[1:], 'home': os.environ.get('HOME'),\n"
-                "               'codex_home': os.environ.get('CODEX_HOME'), 'path': os.environ['PATH']}, f)\n"
+                "               'codex_home': os.environ.get('CODEX_HOME'), 'path': os.environ['PATH'],\n"
+                "               'tmpdir': os.environ.get('TMPDIR')}, f)\n"
                 "raise SystemExit(23)\n",
                 encoding="utf-8",
             )
@@ -102,6 +103,7 @@ class CodexDispatchTest(unittest.TestCase):
                     self.assertEqual(receipt["argv"], expected_argv)
                     self.assertEqual(receipt["home"], str(attempt / "home"))
                     self.assertEqual(receipt["codex_home"], str(attempt / "home" / ".codex"))
+                    self.assertEqual(receipt["tmpdir"], str(attempt / "tmp"))
                     self.assertEqual(receipt["path"].split(os.pathsep)[0], str(runtime_bin))
                     self.assertFalse((attempt / "home" / ".codex" / "auth.json").exists())
                     self.assertIn('trust_level = "untrusted"', (attempt / "home" / ".codex" / "config.toml").read_text())

@@ -700,6 +700,18 @@ class SerialOwnership(QueueFixture):
         self.assertFalse(scratch.exists())
         self.assertEqual(self.reviews(), ["att-001"])
 
+    def test_a_client_pin_that_differs_from_the_one_a_run_froze_is_refused_before_any_launch(self):
+        pin = self.spec["clients"]["claude"]
+        frozen = self.run_dir / "clients.frozen.json"
+        for change in ({"version": "9.9.10 (Claude Code)"}, {"sha256": "0" * 64}, {"path": str(self.root / "another-claude")}):
+            with self.subTest(change=change):
+                frozen.write_text(json.dumps({"claude": {**pin, **change}}), encoding="utf-8")
+                self.assert_blocked(self.command("run"), "the queue's claude pin differs from the run's clients.frozen.json")
+        self.assertEqual(self.reviews(), [])
+        frozen.write_text(json.dumps({"claude": pin}), encoding="utf-8")
+        code, events, err = self.command("run", "--count", "1")
+        self.assertEqual((code, self.reviews()), (0, ["att-001"]), (events, err))
+
     def test_runner_files_that_differ_from_the_freeze_commit_are_refused(self):
         repo = self.root / "repo"
         (repo / "bench/tools").mkdir(parents=True)
