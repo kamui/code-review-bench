@@ -35,6 +35,7 @@ class ClaudeDispatchTest(unittest.TestCase):
                 return subprocess.run([str(ROOT / 'bench/tools/dispatch.sh'), 'claude-builtin', str(root / name), str(clone), 'main', str(packet), 'claude-fable-5-1', 'high'], env=env, capture_output=True, text=True)
             result = invoke('valid')
             self.assertEqual(result.returncode, 23, result.stderr)
+            self.assertEqual(json.loads((root / 'valid/native-return.json').read_text())['exit_code'], 23)
             recorded = json.loads(capture.read_text())
             self.assertIn('--safe-mode', recorded['args'])
             self.assertEqual(recorded['args'][recorded['args'].index('--model') + 1], 'claude-fable-5-1')
