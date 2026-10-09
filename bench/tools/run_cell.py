@@ -88,6 +88,9 @@ left in the attempt's home, writes ``interruption.json`` (the reason, that newes
 ``last_output_at`` and the observation) and files the attempt as stopped, without adding an exit
 line. An attempt that is already filed is returned as filed.
 
+One filer holds an attempt's directory at a time. A filer that waited while another filed the
+attempt returns that record.
+
 Exit codes: 0 filed (or the status or dry run printed); 1 refused: the manifest is not frozen or
 not valid, a pin drifted, the cell is not eligible, or a cap does not fit, with the reason on
 stdout; 2 an input is missing or a helper failed, named on stderr.
@@ -431,6 +434,24 @@ def locked(work: Path):
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
+@contextlib.contextmanager
+def filing(directory: Path):
+    """Hold an attempt's directory for one filer: overlapping filers would rewrite the same evidence files and archive.
+
+    Yields whether another filer held the directory first."""
+    descriptor = os.open(directory, os.O_RDONLY)
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            waited = False
+        except BlockingIOError:
+            waited = True
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield waited
+    finally:
+        os.close(descriptor)
+
+
 def tool(argv: list, env=None) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", env=env)
@@ -549,7 +570,7 @@ def dispatch(run: Run, attempt_id: str, claim: dict) -> None:
 def close_interruption(run: Run, attempt_id: str, evidence_path: str, reason: str) -> None:
     """Record an observed interruption in the attempt directory, so the attempt is filed without a made-up exit."""
     directory = run.work / attempt_id
-    if not reason:
+    if not (reason or "").strip():
         raise Refused("--interrupted needs --reason")
     if not (directory / "timing.json").is_file():
         raise Refused(f"{attempt_id}: no reviewer was started, so there is no attempt to file")
@@ -575,6 +596,22 @@ def file(run: Run, attempt_id: str, interrupted: str | None = None, reason: str 
     claim = run.claimed.get(attempt_id)
     if claim is None:
         raise InputError(f"no claimed attempt {attempt_id} under {run.work}")
+    filed = run.dir / "attempts" / attempt_id
+    with filing(directory) as waited:
+        if (interrupted or waited) and (filed / "attempt.json").is_file():
+            record = read_json(filed / "attempt.json")
+        else:
+            record = file_claimed(run, attempt_id, claim, interrupted, reason)
+        if record["disposition"] == "valid completed":
+            try:
+                prune_workspace.prune(filed, directory, apply=True, target_dir=run.target_dir(claim["cell"]["target"]))
+            except (prune_workspace.Refused, OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
+                raise InputError(f"{attempt_id}: evidence filed, but workspace cleanup failed: {error}") from error
+        return record
+
+
+def file_claimed(run: Run, attempt_id: str, claim: dict, interrupted: str | None, reason: str | None) -> dict:
+    directory = run.work / attempt_id
     dispatched = directory / "dispatch.txt"
     ended = dispatched.is_file() and re.search(r"^exit=-?\d+$", dispatched.read_text(encoding="utf-8"), re.M)
     if interrupted:
@@ -586,9 +623,8 @@ def file(run: Run, attempt_id: str, interrupted: str | None = None, reason: str 
     cell = claim["cell"]
     entry = run.arm_entry(cell["arm"])
     arm = read_json(run.arm_file(cell["arm"]))
-    target_dir = run.target_dir(cell["target"])
     argv = [sys.executable, str(TOOLS / "file_attempt.py"), "--attempt-dir", str(directory),
-            "--clone", str(directory / "clone"), "--target", str(target_dir),
+            "--clone", str(directory / "clone"), "--target", str(run.target_dir(cell["target"])),
             "--arm", str(run.arm_file(cell["arm"])), "--run-id", run.id, "--attempt-id", attempt_id,
             "--replicate", str(cell["replicate"]), "--out", str(run.dir / "attempts" / attempt_id),
             "--expect-cli-version", entry["expected_cli_version"],
@@ -614,13 +650,7 @@ def file(run: Run, attempt_id: str, interrupted: str | None = None, reason: str 
     done = tool(argv)
     if done.returncode != 0:
         raise InputError(f"file_attempt.py exit {done.returncode}: {done.stdout.strip()} {done.stderr.strip()}")
-    record = read_json(run.dir / "attempts" / attempt_id / "attempt.json")
-    if record["disposition"] == "valid completed":
-        try:
-            prune_workspace.prune(run.dir / "attempts" / attempt_id, directory, apply=True, target_dir=target_dir)
-        except (prune_workspace.Refused, OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
-            raise InputError(f"{attempt_id}: evidence filed, but workspace cleanup failed: {error}") from error
-    return record
+    return read_json(run.dir / "attempts" / attempt_id / "attempt.json")
 
 
 def check_dispatch_rates(run: Run, cell: dict) -> tuple[dict, dict]:

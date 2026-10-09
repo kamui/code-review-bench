@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
+import fcntl
 import hashlib
 import io
 import json
@@ -16,6 +17,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -184,6 +186,27 @@ class Fixture(unittest.TestCase):
             code = run_cell.main()
         return subprocess.CompletedProcess(argv, code, out.getvalue(), err.getvalue())
 
+    def waiting_filer(self, attempt: Path, first, *args: str) -> subprocess.CompletedProcess:
+        """``run_cell.py --file`` started while another filer holds the attempt; ``first`` is that filer's work."""
+        holder = os.open(attempt, os.O_RDONLY)
+        self.addCleanup(os.close, holder)
+        fcntl.flock(holder, fcntl.LOCK_EX)
+        flock, waiting, done = fcntl.flock, threading.Event(), []
+
+        def announce(descriptor, operation):
+            if not operation & fcntl.LOCK_NB:
+                waiting.set()
+            flock(descriptor, operation)
+
+        with patch.object(run_cell.fcntl, "flock", announce):
+            waiter = threading.Thread(target=lambda: done.append(self.runner("--file", attempt.name, *args)))
+            waiter.start()
+            self.assertTrue(waiting.wait(30), "the second filer never asked for the attempt directory")
+            first()
+            flock(holder, fcntl.LOCK_UN)
+            waiter.join(30)
+        return done[0]
+
     def run_state(self) -> run_cell.Run:
         return run_cell.Run(self.run_dir, self.work)
 
@@ -287,11 +310,26 @@ class UnprovenUsage(Fixture):
                 self.assertTrue((attempt / "clone").is_dir())
         self.assertEqual(self.run_state().spend()["attempts"], 10.0)
 
+    def test_child_transcript_holding_no_turn_leaves_the_total_unknown(self):
+        for name, child in (("empty", ""), ("queued request", lines({"type": "queue-operation", "operation": "enqueue"}))):
+            with self.subTest(child=name):
+                attempt = self.attempt(f"att-00{len(list(self.work.glob('att-*'))) + 1}")
+                (attempt / "home/.claude/projects/p/s1/subagents/agent-a2.jsonl").write_text(child, encoding="utf-8")
+                record = self.filed(attempt)
+                self.assert_unknown_total(record, CAPTURED)
+                self.assertTrue(any("agent-a2.jsonl ends without end_turn" in note for note in record["notes"]), record["notes"])
+
     def test_request_saved_in_two_transcripts_is_priced_once_in_the_floor(self):
-        attempt = self.attempt()
-        (attempt / "stdout.jsonl").unlink()
-        (attempt / "home/.claude/projects/p/s1/subagents/agent-a2.jsonl").write_text(claude_transcript(), encoding="utf-8")
-        self.assert_unknown_total(self.filed(attempt), CAPTURED)
+        claude = self.attempt("att-001")
+        (claude / "stdout.jsonl").unlink()
+        for copy in ("home/.claude/projects/p/s1.jsonl", "home/.claude/projects/p/s1/subagents/agent-a2.jsonl"):
+            (claude / copy).write_text(claude_transcript(), encoding="utf-8")
+        codex = self.attempt("att-002", "codex")
+        (codex / "home/.codex/sessions/2026/01/01/rollout-child.jsonl").write_text(
+            rollout("child", "root").replace("child-r1", "root-r1"), encoding="utf-8")
+        for attempt, harness, floor in ((claude, "claude", CAPTURED), (codex, "codex", CODEX_ROLLOUT)):
+            with self.subTest(harness=harness):
+                self.assert_unknown_total(self.filed(attempt, harness), floor)
 
     def test_transcript_cut_mid_line_is_filed_with_what_it_captured(self):
         attempt = self.attempt()
@@ -384,6 +422,16 @@ class InterruptionFiling(Fixture):
         self.assertIn("observed_at precedes the attempt's last output", done.stderr)
         self.assertFalse((self.run_dir / "attempts/att-001").exists())
 
+    def test_filer_refuses_an_interruption_record_for_a_dispatch_that_ended(self):
+        attempt = self.interrupted()
+        run_cell.close_interruption(self.run_state(), "att-001", str(self.evidence()), "host restarted")
+        with (attempt / "dispatch.txt").open("a", encoding="utf-8") as handle:
+            handle.write("exit=0\n")
+        done = self.filer(attempt)
+        self.assertEqual(done.returncode, 2, done.stdout)
+        self.assertIn("the dispatch ended", done.stderr)
+        self.assertFalse((self.run_dir / "attempts/att-001").exists())
+
     def test_absent_or_unverified_process_evidence_is_refused(self):
         attempt = self.interrupted()
         cases = {"absent": str(self.root / "no-such-evidence.json"),
@@ -403,8 +451,10 @@ class InterruptionFiling(Fixture):
                 self.assertFalse((self.run_dir / "attempts/att-001").exists())
                 self.assertFalse((attempt / "interruption.json").exists())
                 self.assertTrue((attempt / "home/.claude/.credentials.json").exists())
-        done = self.runner("--file", "att-001", "--interrupted", str(self.evidence()))
-        self.assertEqual((done.returncode, done.stdout.strip()), (1, "refused: --interrupted needs --reason"))
+        for reason in ((), ("--reason", " ")):
+            done = self.runner("--file", "att-001", "--interrupted", str(self.evidence()), *reason)
+            self.assertEqual((done.returncode, done.stdout.strip()), (1, "refused: --interrupted needs --reason"))
+            self.assertFalse((attempt / "interruption.json").exists())
 
     def test_interruption_is_filed_with_exit_and_stop_time_unknown(self):
         attempt = self.interrupted()
@@ -440,6 +490,20 @@ class InterruptionFiling(Fixture):
         again = self.runner("--file", "att-001", "--interrupted", str(self.root / "no-such-evidence.json"), "--reason", "another reason")
         self.assertEqual((again.returncode, json.loads(again.stdout)), (0, json.loads(first.stdout)), again.stderr)
         self.assertEqual((record.read_bytes(), record.stat().st_mtime_ns), before)
+
+    def test_a_filer_that_waited_for_another_returns_the_record_it_filed(self):
+        attempt = self.interrupted()
+        filed = self.run_dir / "attempts/att-001"
+
+        def first():
+            filed.mkdir(parents=True)
+            (filed / "attempt.json").write_text(json.dumps({"disposition": "stopped: filed first", "usage": {"priced_total_usd": None}}),
+                                                encoding="utf-8")
+
+        done = self.waiting_filer(attempt, first, "--interrupted", str(self.evidence()), "--reason", "host restarted")
+        self.assertEqual((done.returncode, json.loads(done.stdout)["disposition"]), (0, "stopped: filed first"), done.stderr)
+        self.assertFalse((attempt / "interruption.json").exists())
+        self.assertTrue((attempt / "home/.claude/.credentials.json").exists())
 
     def test_an_ended_dispatch_is_not_filed_as_an_interruption(self):
         self.attempt()
@@ -624,6 +688,20 @@ class FixtureCleanup(Fixture):
         self.assertTrue(receipt["applied"])
         self.assertFalse((attempt / "clone").exists())
         self.assertTrue((attempt / "home").is_dir())
+
+    def test_a_filer_that_waited_keeps_the_first_record_and_prunes(self):
+        attempt = self.attempt()
+        record, first = self.run_dir / "attempts/att-001/attempt.json", []
+
+        def file_first():
+            self.filed(attempt)
+            first.append((record.read_bytes(), record.stat().st_mtime_ns))
+
+        done = self.waiting_filer(attempt, file_first)
+        self.assertEqual((done.returncode, json.loads(done.stdout)["disposition"]), (0, "valid completed"), done.stderr)
+        self.assertEqual((record.read_bytes(), record.stat().st_mtime_ns), first[0])
+        self.assertTrue(json.loads((attempt / "workspace-pruned.json").read_text(encoding="utf-8"))["applied"])
+        self.assertFalse((attempt / "clone").exists())
 
     def test_fixture_that_no_longer_matches_its_target_remains(self):
         attempt = self.attempt()

@@ -38,8 +38,8 @@ A dispatch that never ended has no ``exit=N`` line and is filed only with an ``i
 which ``run_cell.py --file <attempt> --interrupted`` writes: the reason and the process-stop
 observation (``run_id``, ``attempt_id``, ``observed_at``, ``status: absent`` and ``verified_by``),
 with the time of the attempt's last output. The record is refused when the observation is older
-than that time or than the newest file now among the attempt's ``std*`` streams and its home. No
-exit line is added. The exit code stays unknown
+than that time or than the newest file now among the attempt's ``std*`` streams and its home, or
+when ``dispatch.txt`` holds an ``exit=N`` line after all. No exit line is added. The exit code stays unknown
 unless ``native-return.json`` recorded it, ``tree_identity_after`` is ``not recorded`` when the
 wrapper never wrote it, and ``stopped_at`` is the recorded return instant or null.
 
@@ -73,7 +73,7 @@ model's ``end_turn`` reply or the CLI's API-error notice, with no request after 
 rollout's last event is ``task_complete``). An audit violation, a failed normalization or a
 non-zero exit does not change that. Otherwise ``metering_status`` is ``incomplete``, ``priced_total_usd`` and the upper bound are
 null, the lower bound is the cost of the captured requests (null when none was captured, because a
-missing log proves no zero; a Claude request saved in two transcripts is priced once), and a note
+missing log proves no zero; a request saved in two transcripts or rollouts is priced once), and a note
 names what is missing. When the meter cannot read a
 capture at all (a rollout cut mid-line, a missing root thread), the lower bound prices each
 request the filer could read once: the request rows of the metered Claude transcripts, or the
@@ -475,15 +475,17 @@ def rate_for(rates: dict, model: str) -> dict:
 
 
 def codex_responses(paths: list) -> list:
-    """The usage of each billed response in the readable rollout lines, one per response as ``codex_usage.py`` keys them.
+    """The usage of each billed response in the readable rollout lines, one per response id.
 
-    A ``token_count`` event repeats the usage of the response before it, so those events cannot be summed."""
+    A ``token_count`` event repeats the usage of the response before it, so those events cannot be summed.
+    A response saved in two rollouts is still one response; a record without an id is told apart only
+    within its rollout, by its ordinal."""
     usages = {}
     for path in paths:
         for record in jsonl(path):
             payload = record.get("payload") or {}
             if record.get("type") == "token_usage_record" and isinstance(payload.get("usage"), dict):
-                usages[path, payload.get("response_id") or f"ordinal-{record.get('ordinal')}"] = payload["usage"]
+                usages[payload.get("response_id") or (path, record.get("ordinal"))] = payload["usage"]
     return list(usages.values())
 
 
@@ -541,7 +543,7 @@ def capture_gaps(harness: str, attempt_dir: str, returned: bool, transcript_path
             ended = last.get("type") == "assistant" and (last.get("isApiErrorMessage") or message.get("model") == "<synthetic>"
                                                          or message.get("stop_reason") == "end_turn")
             command_only = path in silent and all(turn["type"] == "user" for turn in turns)
-            if turns and not ended and not command_only:
+            if not ended and not command_only:
                 gaps.append(f"{name} ends without end_turn")
         else:
             events = [(record.get("payload") or {}).get("type") for record in records if record.get("type") == "event_msg"]
@@ -673,6 +675,9 @@ def file_attempt(args) -> tuple:
     if interruption is not None and not isinstance(interruption, dict):
         raise FileError(f"{interruption_path} is not a JSON object")
     if interruption is not None:
+        if exit_code is not None:
+            raise FileError(f"{attempt_dir}/dispatch.txt has an exit= line, so the dispatch ended; the interruption "
+                            f"recorded in {interruption_path} contradicts it")
         # Output written after the closeout recorded its newest one means a writer outlived the observation.
         try:
             recorded = datetime.fromisoformat(str(interruption.get("last_output_at")).replace("Z", "+00:00")).timestamp()
@@ -787,8 +792,7 @@ def file_attempt(args) -> tuple:
     if harness == "codex":
         captured = codex_responses(transcript_paths)
     else:
-        metered = {os.path.basename(path) for path in meter_paths}
-        captured = [row for row in requests if row["transcript"] in metered]
+        captured = claude_observed(meter_paths)[2]
     priced = low = high = None
     status = "complete"
     rate = rate_for(rates, models[0]) if len(models) == 1 else None

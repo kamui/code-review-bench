@@ -23,7 +23,7 @@
 # normalized.json.
 #
 # Timing semantics: timing.json gets root_dispatched_at before the CLI starts; native-return.json gets the CLI's exit code
-# and return instant as soon as it returns, before anything reads its output; after a zero exit the wrapper runs the
+# and return instant as soon as it returns, before the audit and the normalizer run; after a zero exit the wrapper runs the
 # read audit (claude arms, which also extracts payload.json) and the normalizer, which stamps payload_validated_at on a
 # parsed or empty result; only then is completed_at written. Any other outcome writes stop.json with stopped_at and
 # the reason and leaves completed_at null. Metering is left to the caller:
