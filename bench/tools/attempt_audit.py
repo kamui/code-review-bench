@@ -72,9 +72,10 @@ import review_isolation  # noqa: E402
 SHELL_SCRIPT = r"\b(?:ba|z|da|k)?sh\s+(?:[^\s;&|]+\s+)*?-[A-Za-z]*c[A-Za-z]*\s+"
 VALUE = r"(?:\$\([^()]*\)|[^\s;&|()])*"
 ASSIGNMENT = re.compile(r"([A-Za-z_]\w*)=(" + VALUE + ")")
+COMMAND = (r"(?:^|[;&|(){}\n`]|\$\(|" + SHELL_SCRIPT + r"['\"]|\b(?:do|then|else|exec|xargs|env|nohup|time|command|sudo)\s)"
+           r"\s*(?P<assign>(?:[A-Za-z_]\w*=" + VALUE + r"\s+)*)(?:timeout\s+(?:-\S+\s+)*\S+\s+)?")
 NETWORK = re.compile(
-    r"(?:^|[;&|(){}\n`]|\$\(|" + SHELL_SCRIPT + r"['\"]|\b(?:do|then|else|exec|xargs|env|nohup|time|command|sudo)\s)"
-    r"\s*(?P<assign>(?:[A-Za-z_]\w*=" + VALUE + r"\s+)*)(?:timeout\s+(?:-\S+\s+)*\S+\s+)?"
+    COMMAND +
     r"(?:(?P<tool>curl|wget|gh|ssh|scp|pip3?|npm|pnpm|yarn|cargo|go)\s+(?P<sub>[^\s;&|()'\"]*)"
     r"|git\s+(?P<git>fetch|pull|push|clone|ls-remote|remote\s+add)\b)")
 EXPORTS = re.compile(r"\bexport\s+((?:[A-Za-z_]\w*=" + VALUE + r"[ \t]*)+)"
@@ -87,11 +88,11 @@ FETCHING = {"npm": {"install", "i", "add", "ci", "update", "upgrade", "up", "dlx
 SHELL = r"(?:ba|z|da|k)?sh"
 # The file a heredoc's command writes: a redirection target, or ``tee``'s operand.
 WRITTEN = re.compile(r">>?\s*['\"]?([^\s;&|<>'\"]+)|\btee\s+(?:-\S+\s+)*['\"]?([^\s;&|<>'\"]+)")
-# The file a shell in command position is run on or takes as its input, or that ``source`` or ``.`` reads.
+# The file a shell in command position is run on or takes as its input, or that ``source`` or ``.``
+# reads. An option with ``c`` takes a script instead, and ``-o`` takes a name.
 SCRIPT = re.compile(
-    r"(?:^|[;&|(){}\n`]|\$\(|\b(?:do|then|else|exec|xargs|env|nohup|time|command|sudo)\s)"
-    r"\s*(?:[A-Za-z_]\w*=" + VALUE + r"\s+)*(?:timeout\s+(?:-\S+\s+)*\S+\s+)?"
-    r"(?:(?:[\w./-]*/)?" + SHELL + r"|source|\.)\s+(?:[-+]\S+\s+)*(?:<\s*)?['\"]?([^\s;&|<>'\"()]+)")
+    COMMAND + r"(?:(?:[\w./-]*/)?" + SHELL + r"|source|\.)\s+"
+    r"(?:[-+](?![A-Za-z]*c)[A-Za-z]*o\s+[\w-]+\s+|[-+](?![A-Za-z]*c)\S+\s+)*(?:<\s*)?['\"]?(?P<file>(?!-)[^\s;&|<>'\"()]+)")
 # A heredoc: its header line (group 1), then the body up to the delimiter line or the end.
 HEREDOC = re.compile(r"^([^\n]*<<-?\s*(['\"]?)(\w+)\2[^\n]*)\n.*?(?:\n[ \t]*\3[ \t]*(?=\n|\Z)|\Z)", re.M | re.S)
 BUILTIN_HEADER = re.compile(r"^`(high effort|medium effort|low effort|minimal prompt)[^`]*`$", re.M)
@@ -125,30 +126,48 @@ def without_written_data(cmd: str) -> str:
     return HEREDOC.sub(drop, cmd)
 
 
-def runs_written(header: str, later: str) -> bool:
-    """Whether ``later`` runs a shell on, or sources, the file the heredoc command in ``header``
-    writes. Names are compared by their last segment, and a variable or glob in the shell's operand
-    stands for any text (``zsh -f $f.txt``)."""
-    written = {os.path.basename(target or operand) for target, operand in WRITTEN.findall(header)}
-    for operand in SCRIPT.findall(later):
-        name = ".*".join(re.escape(part) for part in re.split(r"\$\{?\w+\}?|[*?]", os.path.basename(operand)))
-        if any(re.fullmatch(name, candidate) for candidate in written):
-            return True
-    return False
+def runs(text: str) -> list:
+    """Where ``text`` runs a shell on a file or sources one, and the file. Quoted text is no command."""
+    return [(m.start("file"), text[m.start("file"):m.end("file")]) for m in SCRIPT.finditer(unquoted(text))]
+
+
+def same_file(written: str, operand: str) -> bool:
+    """Whether a shell's operand can name the file a heredoc was written to: the path segments they
+    both end in agree, a variable or glob in one standing for any text in the other."""
+    def loose(segment: str) -> str:
+        return ".*".join(re.escape(part) for part in re.split(r"\$\{?\w+\}?|[*?]", segment))
+
+    def agree(a: str, b: str) -> bool:
+        return a == b or bool(re.fullmatch(loose(a), b) or re.fullmatch(loose(b), a))
+    left, right = ([segment for segment in path.split("/") if segment not in ("", ".")] for path in (written, operand))
+    return bool(left and right) and all(agree(a, b) for a, b in zip(reversed(left), reversed(right)))
 
 
 def commands_only(cmd: str) -> str:
     """``cmd`` with each heredoc body dropped, since a body is data, not commands, unless a shell
-    reads it: its header names a shell, or a later command runs a shell on the file it was written
-    to, whatever that file is called. A later body counts as commands there only when its own
-    header names a shell, so a report that quotes a shell command runs nothing."""
-    def named(m) -> bool:
-        return bool(re.search(r"\b" + SHELL + r"\b", m.group(1)))
-
-    def reads(m) -> bool:
-        later = HEREDOC.sub(lambda body: body.group(0) if named(body) else body.group(1), cmd[m.end():])
-        return named(m) or runs_written(m.group(1), later)
-    return HEREDOC.sub(lambda m: m.group(0) if reads(m) else m.group(1), cmd)
+    reads it: its header names a shell, or the body is written to a file that a later command, or a
+    body a shell reads later, runs a shell on or sources, whatever the file is called. Quoted text
+    and the bodies no shell reads run nothing."""
+    docs = list(HEREDOC.finditer(cmd))
+    opened = [m.start() + m.group(1).index("<<") for m in docs]
+    outside = list(cmd)
+    for m in docs:
+        outside[m.end(1):m.end()] = " " * (m.end() - m.end(1))
+    direct = runs("".join(outside))
+    # Where each body a shell reads is run: a body is run again each time its file is.
+    ran = {i: opened[i] for i, m in enumerate(docs) if re.search(r"\b" + SHELL + r"\b", m.group(1))}
+    settled = False
+    while not settled:
+        settled = True
+        for i, m in enumerate(docs):
+            written = [target or operand for target, operand in WRITTEN.findall(m.group(1))]
+            at = [where for where, file in direct if any(same_file(path, file) for path in written)]
+            at += [ran[j] for j in list(ran) if j != i and any(
+                same_file(path, file) for _, file in runs(cmd[docs[j].end(1):docs[j].end()]) for path in written)]
+            if max(at, default=-1) > max(opened[i], ran.get(i, -1)):
+                ran[i], settled = max(at), False
+    read = {docs[i].start() for i in ran}
+    return HEREDOC.sub(lambda m: m.group(0) if m.start() in read else m.group(1), cmd)
 
 
 def unquoted(cmd: str, scripts: list = None) -> str:
