@@ -703,12 +703,39 @@ class SerialOwnership(QueueFixture):
     def test_a_client_pin_that_differs_from_the_one_a_run_froze_is_refused_before_any_launch(self):
         pin = self.spec["clients"]["claude"]
         frozen = self.run_dir / "clients.frozen.json"
-        for change in ({"version": "9.9.10 (Claude Code)"}, {"sha256": "0" * 64}, {"path": str(self.root / "another-claude")}):
+        for change in ({"version": "9.9.10 (Claude Code)"}, {"sha256": "0" * 64}, {"path": str(self.root / "another-claude")},
+                       {"companions": {"claude-host": "0" * 64}}):
             with self.subTest(change=change):
                 frozen.write_text(json.dumps({"claude": {**pin, **change}}), encoding="utf-8")
                 self.assert_blocked(self.command("run"), "the queue's claude pin differs from the run's clients.frozen.json")
         self.assertEqual(self.reviews(), [])
         frozen.write_text(json.dumps({"claude": pin}), encoding="utf-8")
+        code, events, err = self.command("run", "--count", "1")
+        self.assertEqual((code, self.reviews()), (0, ["att-001"]), (events, err))
+
+    def test_a_changed_or_missing_companion_file_of_a_pinned_client_is_refused_before_any_launch(self):
+        # The layout of a copied Codex CLI: a host program beside the executable and a tool under a sibling directory.
+        client, host, tool = (self.root / "pinned" / name for name in ("bin/claude", "bin/claude-host", "path/rg"))
+        content = {client: "#!/bin/sh\n", host: "host\n", tool: "rg\n"}
+        for path, text in content.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+        pin = {"path": str(client), "sha256": run_cell.sha256_file(client), "version": "9.9.9 (Claude Code)",
+               "companions": {"claude-host": run_cell.sha256_file(host), "../path/rg": run_cell.sha256_file(tool)}}
+        self.queue.write_text(json.dumps({**self.spec, "clients": {"claude": pin}}), encoding="utf-8")
+        changes = {
+            "the claude companion file claude-host no longer hashes to its pin": lambda: host.write_text("another host\n", encoding="utf-8"),
+            "the claude companion file ../path/rg no longer hashes to its pin": lambda: tool.write_text("another rg\n", encoding="utf-8"),
+            "the pinned claude companion file ../path/rg cannot be read": tool.unlink,
+        }
+        for needle, change in changes.items():
+            with self.subTest(change=needle):
+                change()
+                self.assert_blocked(self.command("run"), needle)
+                for path in (host, tool):
+                    path.write_text(content[path], encoding="utf-8")
+        self.assertEqual(self.reviews(), [])
+        host.with_name("unlisted").write_text("a file the pin does not list\n", encoding="utf-8")
         code, events, err = self.command("run", "--count", "1")
         self.assertEqual((code, self.reviews()), (0, ["att-001"]), (events, err))
 
