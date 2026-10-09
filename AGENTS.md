@@ -6,7 +6,7 @@ Reviewer sessions use an empty harness: only the selected skill, pinned task, an
 
 Keep frozen runs and raw evidence immutable. Record runner changes as versioned deviations; preserve invalid attempts and include replacement usage. Ask for additional approval when a required action is blocked rather than cancelling the run.
 
-Before pushing benchmark or grading work, run `bun run verify:import`. It fails when an imported file changed, for example a client registry that a run pinned to a new client version. To keep an intended edit, run the `--preserve` command the failure prints and commit the preserved original with the edit.
+Before pushing benchmark or grading work, run `bun run verify:import`. It fails when an imported file changed, for example a client registry that a run pinned to a new client version. To keep an intended edit, run the `--preserve` command the failure prints and commit the files it writes with the edit.
 
 The roster, [`bench/roster.json`](bench/roster.json), records the models that benchmarks currently run against by default, by client, each with its efforts. Run `python3 bench/tools/roster.py` before planning a benchmark and fix any violation it reports. A new benchmark covers every roster model whose client can run the method. When asked to fill in missing benchmarks, plan the lines the command marks `missing`. Copy model identifiers and efforts from its output. The roster is only a default. Benchmark other models or clients when the user asks, and change the roster only when the user asks.
 
