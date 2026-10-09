@@ -21,8 +21,9 @@ ceiling of each client and the environment the runner needs::
      "quota_stop_percent": 95}
 
 ``work_root`` (default ``~/.t3/bench-runs``) and ``state_dir`` (default
-``~/.t3/bench-queues/<queue_id>``) may be set too. ``{repo}`` and ``~`` are expanded in paths and
-environment values. Every run uses one client.
+``~/.t3/bench-queues/<queue_id>``) may be set too. ``{repo}`` is expanded in paths and environment values,
+and ``~`` in paths. ``environment`` may not name a client executable, its hash or its version.
+Every run uses one client.
 
 ``run_cell.py`` keeps the claims, the caps, the filing, the replacement rules and the cleanup. This
 tool decides only whether a launch may start, and it reads progress from the claims and the filed
@@ -43,7 +44,10 @@ records each time, never from its own notes. Before every launch:
 - A filed valid attempt whose clone or cache remains is pruned; a refusal blocks the queue.
 - A filed attempt that is not valid and has no successor blocks the queue until the run's
   ``deviations/`` holds a diagnosis for it (see below).
-- The subscription meters must have been read within the hour and be under the quota stop.
+- The subscription meters must have been read within the hour, report a usage window for every
+  pinned client, and be under the quota stop.
+- No filed attempt of any run may have used more than was reserved for it without a reconciling
+  charge line.
 - The client's spend over all its runs, counting failed attempts, charge lines such as probes,
   unknown totals at their reservation and attempts in flight, plus this attempt's bound, must fit
   the client's ceiling.
@@ -52,10 +56,11 @@ A diagnosis is a JSON file in ``<run>/deviations/`` with ``predecessor`` (the at
 and ``cause``. ``harness-invalid``, ``harness-stop`` and ``transient-capacity`` are replaced by
 ``replace``, which runs ``run_cell.py --replace`` on the same frozen run, so the model, effort,
 policy, caps and budget are the run's own and the reviewer starts in a fresh home.
-``transient-capacity`` needs a valid completed attempt of the same arm; without one it is a
-first-call rejection, and like ``setup-rejection`` it stops the arm: the queue skips that run.
-``skill-timeout`` is kept as the cell's result and never replaced. A valid attempt is never
-replaced.
+``transient-capacity`` needs a call that succeeded first: a model response captured in the failed
+attempt, or a valid completed attempt of the same arm. Without one it is a first-call rejection, and
+like ``setup-rejection`` it stops the arm: the queue skips that arm's remaining cells and goes on
+with the others. ``skill-timeout`` is kept as the cell's result and never replaced. A valid attempt
+is never replaced.
 
 Process evidence. Each launch is recorded in ``launches/`` before it starts: the queue, the run, the
 command, the attempts that existed, a marker placed in the child's environment, and the host, its
@@ -125,6 +130,7 @@ SCAN_GAP_SECONDS = 0.2
 REPLACED = {"harness-invalid": False, "harness-stop": True, "transient-capacity": True}
 CAUSES = {*REPLACED, "setup-rejection", "skill-timeout"}
 ENDED = re.compile(r"^exit=-?\d+$", re.M)
+PINNED_NAME = re.compile(rf"BENCH_(CLAUDE|CODEX)(_SHA256|_VERSION)?|{MARKER}")
 
 
 class Blocked(Exception):
@@ -169,6 +175,9 @@ class Queue:
             raise run_cell.InputError(f"{self.path} is not a queue file: {error!r}") from error
         if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", str(self.id)) or not self.run_dirs:
             raise run_cell.InputError(f"{self.path}: queue_id is lowercase letters, digits and hyphens, and runs is not empty")
+        reserved = sorted(name for name in self.environment if PINNED_NAME.fullmatch(name))
+        if reserved:
+            raise run_cell.InputError(f"{self.path}: environment may not set {', '.join(reserved)}; clients are pinned under clients")
 
     def runs(self) -> list:
         return [run_cell.Run(directory, self.work_root / directory.name) for directory in self.run_dirs]
@@ -547,10 +556,21 @@ def meters(queue: Queue, env: dict) -> dict:
     return usage
 
 
+def used(usage: dict) -> dict:
+    """The percentages each client's usage windows report; a window that reports none is left out."""
+    limits = (usage.get("codex") or {}).get("rateLimits") or {}
+    windows = {"claude": [(window or {}).get("utilization") for window in (usage.get("claude") or {}).values()],
+               "codex": [(limits.get(key) or {}).get("usedPercent") for key in ("primary", "secondary")]}
+    return {client: [percent for percent in percents if isinstance(percent, (int, float))] for client, percents in windows.items()}
+
+
 def read_meters(queue: Queue, env: dict) -> dict:
+    """A reading that says how much of each pinned client's quota is used, or no launch."""
     try:
         usage = meters(queue, env)
-        quota_stop(usage, queue.quota_stop)
+        silent = [client for client in queue.clients if not used(usage)[client]]
+        if silent:
+            raise ValueError(f"no usage window was reported for {', '.join(silent)}")
         return usage
     except (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.SubprocessError) as error:
         raise Blocked(f"the subscription meters could not be read, and no launch starts on a reading older than "
@@ -558,17 +578,13 @@ def read_meters(queue: Queue, env: dict) -> dict:
 
 
 def quota_stop(usage: dict, threshold: float) -> str | None:
-    for window in (usage.get("claude") or {}).values():
-        if window and window["utilization"] >= threshold:
-            return "Claude usage reached the quota stop"
-    codex = usage.get("codex")
-    if codex is not None:
-        if not codex["ordinaryUsageAllowed"]:
-            return "ChatGPT ordinary usage is unavailable"
-        for key in ("primary", "secondary"):
-            window = (codex["rateLimits"] or {}).get(key)
-            if window and window["usedPercent"] >= threshold:
-                return "ChatGPT usage reached the quota stop"
+    percents = used(usage)
+    if any(percent >= threshold for percent in percents["claude"]):
+        return "Claude usage reached the quota stop"
+    if usage.get("codex") is not None and not usage["codex"].get("ordinaryUsageAllowed"):
+        return "ChatGPT ordinary usage is unavailable"
+    if any(percent >= threshold for percent in percents["codex"]):
+        return "ChatGPT usage reached the quota stop"
     return None
 
 
@@ -625,24 +641,44 @@ def diagnosis(run: run_cell.Run, attempt_id: str) -> dict | None:
     return found[0] if found else None
 
 
+def answered(run: run_cell.Run, attempt_id: str) -> bool:
+    """Whether the filed attempt captured a model response: the client and the model had worked before it stopped."""
+    requests = run.dir / "attempts" / attempt_id / "usage-requests.jsonl"
+    return requests.is_file() and any(line.strip() for line in requests.read_text(encoding="utf-8").splitlines())
+
+
 def verdict(run: run_cell.Run, attempt_id: str) -> tuple:
     """What a failed attempt with no successor means for the queue: ``kept``, ``stops-arm``, ``replace`` or ``undiagnosed``."""
     record, found = run.filed[attempt_id], diagnosis(run, attempt_id)
     if found is None:
         return "undiagnosed", f"{record['disposition']!r} has no diagnosis in deviations/"
     arm = record["cell"]["arm"]
-    proven = any(row["cell"]["arm"] == arm and row["disposition"] == "valid completed" for row in run.filed.values())
+    proven = answered(run, attempt_id) or any(
+        row["cell"]["arm"] == arm and row["disposition"] == "valid completed" for row in run.filed.values())
     if found["cause"] == "skill-timeout":
         return "kept", "a skill timeout is the cell's result, not a rerun opportunity"
     if found["cause"] == "setup-rejection" or (found["cause"] == "transient-capacity" and not proven):
-        return "stops-arm", f"{arm} was rejected before any of its reviews completed validly, so the arm stops"
+        return "stops-arm", f"{arm} was rejected before any call of it succeeded, so the arm stops"
     return "replace", f"diagnosed as {found['cause']}; replace it before the queue goes on"
 
 
 def failures(run: run_cell.Run) -> list:
+    """The failed attempts with no successor, each with its verdict."""
     replaced = {record.get("predecessor") for record in (*run.filed.values(), *run.claimed.values())}
-    return [(attempt_id, *verdict(run, attempt_id)) for attempt_id, record in run.filed.items()
-            if record["disposition"] != "valid completed" and attempt_id not in replaced]
+    rows = []
+    for attempt_id, record in run.filed.items():
+        if record["disposition"] != "valid completed" and attempt_id not in replaced:
+            kind, detail = verdict(run, attempt_id)
+            rows.append({"run": run.id, "attempt": attempt_id, "arm": record["cell"]["arm"],
+                         "disposition": record["disposition"], "verdict": kind, "detail": detail})
+    return rows
+
+
+def next_cell(run: run_cell.Run, stopped: dict) -> str | None:
+    """The first cell of the sealed order with no attempt whose arm has not stopped."""
+    attempted = {run.cell_of(attempt_id) for attempt_id in run.attempt_ids()}
+    return next((key for key in run.manifest["sealed_order"]
+                 if key not in attempted and run_cell.parse_key(key)["arm"] not in stopped.get(run.id, {})), None)
 
 
 def cell(queue: Queue, run: run_cell.Run, env: dict, *argv: str) -> subprocess.CompletedProcess:
@@ -676,8 +712,8 @@ def settle(queue: Queue, run: run_cell.Run, attempt_id: str, seen: dict, env: di
 def assess(queue: Queue, env: dict, *, act: bool) -> tuple:
     """What stands between the queue and a new launch. With ``act``, settle what verified absence allows first.
 
-    Returns the reasons no dispatch may start, the failed attempts with no successor that are not kept as results
-    (run, attempt, verdict, detail), and the runs as they now are."""
+    Returns the reasons no dispatch may start, the failed attempts with no successor that are not kept as results,
+    and the runs as they now are."""
     blocked, records = [], launches(queue)
     runs = {run.id: run for run in queue.runs()}
     for record in records:
@@ -724,14 +760,21 @@ def assess(queue: Queue, env: dict, *, act: bool) -> tuple:
                     run_cell.prune(run, attempt_id, run.filed[attempt_id]["cell"]["target"])
             except run_cell.InputError as error:
                 blocked.append(f"{run.id}: cleanup incomplete: {error}")
-        failed += [(run.id, attempt_id, kind, detail) for attempt_id, kind, detail in failures(run) if kind != "kept"]
+        over = run.over_reservation()
+        if over:
+            blocked.append(f"{run.id}: {', '.join(over)} used more than was reserved; nothing in the queue launches until "
+                           "charges.jsonl carries a line with \"reconciles\" naming each")
+        failed += [row for row in failures(run) if row["verdict"] != "kept"]
     return blocked, failed, current
 
 
 def standing(failed: list) -> tuple:
-    """Split the failures into the reasons the queue waits and the runs whose arm stopped."""
-    waits = [f"{run_id}/{attempt_id}: {detail}" for run_id, attempt_id, kind, detail in failed if kind != "stops-arm"]
-    stopped = {run_id: f"{attempt_id}: {detail}" for run_id, attempt_id, kind, detail in failed if kind == "stops-arm"}
+    """Split the failures into the reasons the queue waits and the arms that stopped, by run."""
+    waits = [f"{row['run']}/{row['attempt']}: {row['detail']}" for row in failed if row["verdict"] != "stops-arm"]
+    stopped = {}
+    for row in failed:
+        if row["verdict"] == "stops-arm":
+            stopped.setdefault(row["run"], {})[row["arm"]] = f"{row['attempt']}: {row['detail']}"
     return waits, stopped
 
 
@@ -791,7 +834,7 @@ def run_queue(session: Session, count: int | None) -> int:
         waits, stopped = standing(failed)
         if blocked or waits:
             raise Blocked(*blocked, *waits)
-        pending = [run for run in runs if run.id not in stopped and run_cell.status(run)["next_cell"]]
+        pending = [run for run in runs if next_cell(run, stopped)]
         if not pending:
             emit(queue, {"completed": True, "stopped_arms": stopped, "status": [run_cell.status(run) for run in runs]})
             return 0
@@ -802,8 +845,9 @@ def run_queue(session: Session, count: int | None) -> int:
         # Every run files one valid review before any run goes on to its second.
         run = next((run for run in pending if not any(row["disposition"] == "valid completed" for row in run.filed.values())),
                    pending[0])
-        fits(queue, runs, run, run_cell.parse_key(run_cell.status(run)["next_cell"])["arm"])
-        _, _, filed = launch(session, run, "next", "--next", "--quota", quota_note(session))
+        key = next_cell(run, stopped)
+        fits(queue, runs, run, run_cell.parse_key(key)["arm"])
+        _, _, filed = launch(session, run, "next", "--cell", key, "--quota", quota_note(session))
         launched += 1
         if filed["disposition"] != "valid completed":
             raise Blocked(f"{run.id}: the review filed as {filed['disposition']!r}; save a diagnosis before the queue goes on")
@@ -851,8 +895,7 @@ def report(queue: Queue, moment: float) -> dict:
         row = run_cell.status(run)
         row["cleanup_incomplete"] = unpruned(run)
         try:
-            row["unresolved_failures"] = [{"attempt": attempt_id, "disposition": run.filed[attempt_id]["disposition"],
-                                           "verdict": kind, "detail": detail} for attempt_id, kind, detail in failures(run)]
+            row["unresolved_failures"] = failures(run)
         except Blocked as error:
             row["unresolved_failures"] = error.reasons
         rows.append(row)
@@ -920,8 +963,9 @@ def check(queue: Queue) -> int:
         blocked += waits
         if not blocked:
             for run in runs:
-                if run.id not in stopped and run_cell.status(run)["next_cell"]:
-                    done = cell(queue, run, env, "--next", "--dry-run")
+                key = next_cell(run, stopped)
+                if key:
+                    done = cell(queue, run, env, "--cell", key, "--dry-run")
                     if done.returncode:
                         blocked.append(f"{run.id}: {(done.stdout + done.stderr).strip()[-600:]}")
         usage = read_meters(queue, env)
