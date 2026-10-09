@@ -198,6 +198,12 @@ class CompleteUsage(Fixture):
         usage = record["usage"]
         self.assertEqual((usage["metering_status"], usage["priced_total_usd"]), ("complete", total), record["notes"])
 
+    def test_builtin_root_holding_only_its_command_is_complete(self):
+        attempt = self.attempt()
+        (attempt / "home/.claude/projects/p/s1.jsonl").write_text(
+            lines({"type": "user", "message": {"content": "/code-review main...review-head high"}}), encoding="utf-8")
+        self.assert_complete(self.filed(attempt), CAPTURED)
+
     def test_audit_invalid_completion_keeps_its_complete_usage(self):
         attempt = self.attempt()
         (attempt / "audit.json").write_text(json.dumps({"violations": ["read outside the clone: /etc/hosts"],
@@ -262,6 +268,24 @@ class UnprovenUsage(Fixture):
                 self.assertEqual(record["disposition"], "valid completed")
                 self.assert_unknown_total(record, minimum)
                 self.assertTrue(any(gap in note for note in record["notes"]), record["notes"])
+
+    def test_request_after_the_last_saved_reply_leaves_the_total_unknown(self):
+        resumed = self.attempt("att-001")
+        (resumed / "home/.claude/projects/p/s1/subagents/agent-a1.jsonl").write_text(
+            claude_transcript() + lines({"type": "user", "message": {"content": "Continue the review"}}), encoding="utf-8")
+        started = self.attempt("att-002")
+        (started / "home/.claude/projects/p/s1/subagents/agent-a2.jsonl").write_text(
+            lines({"type": "user", "message": {"content": "Review the rest"}}), encoding="utf-8")
+        for attempt, child in ((resumed, "agent-a1.jsonl"), (started, "agent-a2.jsonl")):
+            with self.subTest(child=child):
+                with self.assertRaisesRegex(run_cell.InputError, "workspace cleanup failed: usage is incomplete"):
+                    run_cell.file(self.run_state(), attempt.name)
+                record = self.run_state().filed[attempt.name]
+                self.assertEqual(record["disposition"], "valid completed")
+                self.assert_unknown_total(record, CAPTURED)
+                self.assertTrue(any(f"{child} ends without end_turn" in note for note in record["notes"]), record["notes"])
+                self.assertTrue((attempt / "clone").is_dir())
+        self.assertEqual(self.run_state().spend()["attempts"], 10.0)
 
     def test_transcript_cut_mid_line_is_filed_with_what_it_captured(self):
         attempt = self.attempt()
@@ -566,6 +590,22 @@ class Accounting(Fixture):
         (directory / "attempt.json").unlink()
         state = self.run_state()
         self.assertEqual((state.filed, state.in_flight()), ({}, ["att-001"]))
+
+    def test_overlapping_publishers_each_leave_a_whole_record(self):
+        record = self.root / "attempt.json"
+        fsync, seen = os.fsync, []
+
+        def overlap(descriptor):
+            if not seen:
+                seen.append("staged")
+                file_attempt.publish(record, "second\n")
+                seen.append(record.read_text(encoding="utf-8"))
+            fsync(descriptor)
+
+        with patch.object(file_attempt.os, "fsync", overlap):
+            file_attempt.publish(record, "first\n")
+        self.assertEqual((seen[1], record.read_text(encoding="utf-8")), ("second\n", "first\n"))
+        self.assertEqual(list(self.root.glob("attempt.json.*")), [])
 
 
 class FixtureCleanup(Fixture):

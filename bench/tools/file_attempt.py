@@ -68,10 +68,10 @@ Usage is priced from ``bench/rates.json`` by the observed model, with ``transcri
 or ``codex_usage.py`` (Codex). Per-request records go to ``usage-requests.jsonl``: one line per
 API request id for Claude, one per ``token_count`` event for Codex. The total is priced only when
 the capture is proven complete: the native return is recorded and every stream shows its own end
-(Claude: ``stdout.jsonl`` ends with the session's ``result`` record and each transcript's last model
-message is ``end_turn`` or the CLI's API-error notice; Codex: each rollout's last event is
-``task_complete``). An audit violation, a failed normalization or a non-zero exit does not change
-that. Otherwise ``metering_status`` is ``incomplete``, ``priced_total_usd`` and the upper bound are
+(Claude: ``stdout.jsonl`` ends with the session's ``result`` record and each transcript ends with the
+model's ``end_turn`` reply or the CLI's API-error notice, with no request after it; Codex: each
+rollout's last event is ``task_complete``). An audit violation, a failed normalization or a
+non-zero exit does not change that. Otherwise ``metering_status`` is ``incomplete``, ``priced_total_usd`` and the upper bound are
 null, the lower bound is the cost of the captured requests (null when none was captured, because a
 missing log proves no zero), and a note names what is missing. When the meter cannot read a
 capture at all (a rollout cut mid-line, a missing root thread), the lower bound prices each
@@ -116,6 +116,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import uuid
 
 HERE = Path(__file__).resolve().parent
 BENCH = HERE.parent
@@ -195,13 +196,18 @@ def jsonl(path, unreadable: list = None):
 
 
 def publish(path, text: str) -> None:
-    """Replace ``path`` in one step, so a reader never finds a partly written record."""
-    partial = f"{path}.partial"
-    with open(partial, "w", encoding="utf-8") as handle:
-        handle.write(text)
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(partial, path)
+    """Replace ``path`` in one step, so a reader never finds a partly written record.
+
+    Each call stages in a file of its own, so overlapping publishers of one path cannot write through each other."""
+    partial = f"{path}.{uuid.uuid4().hex}.partial"
+    try:
+        with open(partial, "x", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(partial, path)
+    finally:
+        Path(partial).unlink(missing_ok=True)
 
 
 def last_output(attempt_dir) -> float:
@@ -500,13 +506,15 @@ def captured_minimum(harness: str, captured: list, rate: dict) -> float:
     return round(total / 1e6, 6)
 
 
-def capture_gaps(harness: str, attempt_dir: str, returned: bool, transcript_paths: list) -> list:
+def capture_gaps(harness: str, attempt_dir: str, returned: bool, transcript_paths: list, silent: tuple = ()) -> list:
     """Why the saved streams do not prove that every billed request was captured; empty when they do.
 
     A native return says nothing about the children, so each stream must show its own end. Claude:
-    ``stdout.jsonl`` ends with the session's ``result`` record, and the last model message of every
-    transcript is ``end_turn`` or the CLI's own API-error notice. Codex: the last event of every
-    rollout is ``task_complete``. These are the shapes of the saved attempts that ran to their end.
+    ``stdout.jsonl`` ends with the session's ``result`` record, and every transcript ends with the
+    model's ``end_turn`` reply or the CLI's own API-error notice, with no request after it. A
+    ``silent`` transcript may hold requests and no reply at all: the built-in's root, which carries
+    the command and bills nothing. Codex: the last event of every rollout is ``task_complete``.
+    These are the shapes of the saved attempts that ran to their end.
     """
     gaps = [] if returned else ["no native return was recorded"]
     if not transcript_paths:
@@ -526,10 +534,13 @@ def capture_gaps(harness: str, attempt_dir: str, returned: bool, transcript_path
         if unreadable:
             gaps.append(f"{name} has an unreadable line")
         if harness == "claude-code":
-            replies = [record for record in records if record.get("type") == "assistant"]
-            message = (replies[-1].get("message") or {}) if replies else {}
-            if replies and not (replies[-1].get("isApiErrorMessage") or message.get("model") == "<synthetic>"
-                                or message.get("stop_reason") == "end_turn"):
+            turns = [record for record in records if record.get("type") in ("user", "assistant")]
+            last = turns[-1] if turns else {}
+            message = last.get("message") or {}
+            ended = last.get("type") == "assistant" and (last.get("isApiErrorMessage") or message.get("model") == "<synthetic>"
+                                                         or message.get("stop_reason") == "end_turn")
+            command_only = path in silent and all(turn["type"] == "user" for turn in turns)
+            if turns and not ended and not command_only:
                 gaps.append(f"{name} ends without end_turn")
         else:
             events = [(record.get("payload") or {}).get("type") for record in records if record.get("type") == "event_msg"]
@@ -770,7 +781,8 @@ def file_attempt(args) -> tuple:
 
     # Usage. A total is priced only when the capture is proven complete; otherwise the captured
     # requests price a minimum and the total stays unknown.
-    gaps = capture_gaps(harness, attempt_dir, exit_code is not None, transcript_paths)
+    gaps = capture_gaps(harness, attempt_dir, exit_code is not None, transcript_paths,
+                        roots if kind == "claude-builtin" else ())
     if harness == "codex":
         captured = codex_responses(transcript_paths)
     else:
