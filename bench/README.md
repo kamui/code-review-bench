@@ -262,12 +262,13 @@ time and command of the runner and a marker in its environment. After a restart,
 table shows none: `--release` when no reviewer started, `--file` when the dispatch ended, and
 `--file --interrupted` otherwise, with the observation saved under `recoveries/`. Running
 processes block the queue, and so does a launch the controller cannot see into: another host,
-PID namespace or user, a missing launch record or one that names no boot, or a process it
-cannot inspect. Observe such a launch where it ran, or file the claim with
-`run_cell.py --file --interrupted` and an observation of your own. A free lock, a stale
-heartbeat, a missing PID and a zombie wrapper are never read as absence, and the tool never
-signals a process. A filed valid attempt whose clone remains is pruned on restart; a filed
-record is never rewritten.
+PID namespace or user, a missing launch record, or a process it cannot inspect. Observe such a
+launch where it ran, or file the claim with `run_cell.py --file --interrupted` and an
+observation of your own. A launch record that names no boot is unknown wherever it is observed,
+and no command clears it: filing its claim leaves the record blocking the queue. A free lock, a
+stale heartbeat, a missing PID and a zombie wrapper are never read as absence, and the tool
+never signals a process. A filed valid attempt whose clone remains is pruned on restart; a
+filed record is never rewritten.
 
 The runner's return is not read as absence either. Before the next launch the queue looks for
 the processes of each launch that ended. A reviewer process that outlived its runner, or an
