@@ -84,6 +84,14 @@ EXPORTS = re.compile(r"\bexport\s+((?:[A-Za-z_]\w*=" + VALUE + r"[ \t]*)+)"
 FETCHING = {"npm": {"install", "i", "add", "ci", "update", "upgrade", "up", "dlx", "exec", "x", "fetch", "publish",
                     "view", "info", "outdated", "audit", "create", "init"},
             "pip": {"install", "download"}}
+SHELL = r"(?:ba|z|da|k)?sh"
+# The file a heredoc's command writes: a redirection target, or ``tee``'s operand.
+WRITTEN = re.compile(r">>?\s*['\"]?([^\s;&|<>'\"]+)|\btee\s+(?:-\S+\s+)*['\"]?([^\s;&|<>'\"]+)")
+# The file a shell in command position is run on or takes as its input, or that ``source`` or ``.`` reads.
+SCRIPT = re.compile(
+    r"(?:^|[;&|(){}\n`]|\$\(|\b(?:do|then|else|exec|xargs|env|nohup|time|command|sudo)\s)"
+    r"\s*(?:[A-Za-z_]\w*=" + VALUE + r"\s+)*(?:timeout\s+(?:-\S+\s+)*\S+\s+)?"
+    r"(?:(?:[\w./-]*/)?" + SHELL + r"|source|\.)\s+(?:[-+]\S+\s+)*(?:<\s*)?['\"]?([^\s;&|<>'\"()]+)")
 # A heredoc: its header line (group 1), then the body up to the delimiter line or the end.
 HEREDOC = re.compile(r"^([^\n]*<<-?\s*(['\"]?)(\w+)\2[^\n]*)\n.*?(?:\n[ \t]*\3[ \t]*(?=\n|\Z)|\Z)", re.M | re.S)
 BUILTIN_HEADER = re.compile(r"^`(high effort|medium effort|low effort|minimal prompt)[^`]*`$", re.M)
@@ -117,10 +125,30 @@ def without_written_data(cmd: str) -> str:
     return HEREDOC.sub(drop, cmd)
 
 
+def runs_written(header: str, later: str) -> bool:
+    """Whether ``later`` runs a shell on, or sources, the file the heredoc command in ``header``
+    writes. Names are compared by their last segment, and a variable or glob in the shell's operand
+    stands for any text (``zsh -f $f.txt``)."""
+    written = {os.path.basename(target or operand) for target, operand in WRITTEN.findall(header)}
+    for operand in SCRIPT.findall(later):
+        name = ".*".join(re.escape(part) for part in re.split(r"\$\{?\w+\}?|[*?]", os.path.basename(operand)))
+        if any(re.fullmatch(name, candidate) for candidate in written):
+            return True
+    return False
+
+
 def commands_only(cmd: str) -> str:
     """``cmd`` with each heredoc body dropped, since a body is data, not commands, unless a shell
-    reads it."""
-    return HEREDOC.sub(lambda m: m.group(0) if re.search(r"\b(?:ba|z|da|k)?sh\b", m.group(1)) else m.group(1), cmd)
+    reads it: its header names a shell, or a later command runs a shell on the file it was written
+    to, whatever that file is called. A later body counts as commands there only when its own
+    header names a shell, so a report that quotes a shell command runs nothing."""
+    def named(m) -> bool:
+        return bool(re.search(r"\b" + SHELL + r"\b", m.group(1)))
+
+    def reads(m) -> bool:
+        later = HEREDOC.sub(lambda body: body.group(0) if named(body) else body.group(1), cmd[m.end():])
+        return named(m) or runs_written(m.group(1), later)
+    return HEREDOC.sub(lambda m: m.group(0) if reads(m) else m.group(1), cmd)
 
 
 def unquoted(cmd: str, scripts: list = None) -> str:

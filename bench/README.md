@@ -259,7 +259,9 @@ cannot replace a pinned client.
 A client pin may list `companions`, the files a client installs beside its executable, such as
 Codex CLI's `codex-code-mode-host` and `../codex-path/rg`. Each entry maps a path relative to the
 executable's directory to the file's SHA-256. A listed file that is missing or changed stops the
-queue as a changed executable does. A file the pin does not list is not checked.
+queue as a changed executable does. A file the pin does not list is not checked. `dispatch.sh`
+checks the list again just before a built-in reviewer starts. The skill runners take their client
+from the run's frozen `inputs/runner.json` and check no companions.
 
 Each launch is recorded before it starts, with the host, boot, PID namespace, user, PID, start
 time and command of the runner and a marker in its environment. After a restart, `run` and
