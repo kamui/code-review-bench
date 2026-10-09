@@ -53,9 +53,9 @@ def reply(request: str, stop_reason: str | None) -> dict:
                                   "output_tokens": 50}}}
 
 
-def claude_transcript(stop_reason: str | None = "end_turn") -> str:
+def claude_transcript(stop_reason: str | None = "end_turn", request: str = "r1") -> str:
     return lines({"type": "user", "message": {"content": f"Review target: `main...review-head high`\n\n{PROMPT}\n"}},
-                 reply("r1", stop_reason))
+                 reply(request, stop_reason))
 
 
 def rollout(thread: str, parent: str | None, *events: str, input_tokens: int = 1000, snapshots: int = 1) -> str:
@@ -257,7 +257,7 @@ class UnprovenUsage(Fixture):
 
     def test_missing_child_terminal_evidence_leaves_the_total_unknown(self):
         claude = self.attempt("att-001")
-        (claude / "home/.claude/projects/p/s1/subagents/agent-a2.jsonl").write_text(claude_transcript("tool_use"), encoding="utf-8")
+        (claude / "home/.claude/projects/p/s1/subagents/agent-a2.jsonl").write_text(claude_transcript("tool_use", "r2"), encoding="utf-8")
         codex = self.attempt("att-002", "codex")
         (codex / "home/.codex/sessions/2026/01/01/rollout-child.jsonl").write_text(rollout("child", "root", "turn_aborted"), encoding="utf-8")
         for attempt, harness, minimum, gap in (
@@ -286,6 +286,12 @@ class UnprovenUsage(Fixture):
                 self.assertTrue(any(f"{child} ends without end_turn" in note for note in record["notes"]), record["notes"])
                 self.assertTrue((attempt / "clone").is_dir())
         self.assertEqual(self.run_state().spend()["attempts"], 10.0)
+
+    def test_request_saved_in_two_transcripts_is_priced_once_in_the_floor(self):
+        attempt = self.attempt()
+        (attempt / "stdout.jsonl").unlink()
+        (attempt / "home/.claude/projects/p/s1/subagents/agent-a2.jsonl").write_text(claude_transcript(), encoding="utf-8")
+        self.assert_unknown_total(self.filed(attempt), CAPTURED)
 
     def test_transcript_cut_mid_line_is_filed_with_what_it_captured(self):
         attempt = self.attempt()

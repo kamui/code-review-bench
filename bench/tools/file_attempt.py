@@ -73,7 +73,8 @@ model's ``end_turn`` reply or the CLI's API-error notice, with no request after 
 rollout's last event is ``task_complete``). An audit violation, a failed normalization or a
 non-zero exit does not change that. Otherwise ``metering_status`` is ``incomplete``, ``priced_total_usd`` and the upper bound are
 null, the lower bound is the cost of the captured requests (null when none was captured, because a
-missing log proves no zero), and a note names what is missing. When the meter cannot read a
+missing log proves no zero; a Claude request saved in two transcripts is priced once), and a note
+names what is missing. When the meter cannot read a
 capture at all (a rollout cut mid-line, a missing root thread), the lower bound prices each
 request the filer could read once: the request rows of the metered Claude transcripts, or the
 Codex ``token_usage_record`` lines by response id, since ``token_count`` events repeat a response's
@@ -829,6 +830,9 @@ def file_attempt(args) -> tuple:
             notes.append("the lower bound prices each captured request once")
     if gaps:
         status = "incomplete"
+        if low and captured:
+            # The meter sums each stream on its own; a request saved in two streams is still one request.
+            low = min(low, captured_minimum(harness, captured, rate))
         priced, low, high = None, low or None, None
         notes.append("usage total unknown, the capture is not proven complete: " + "; ".join(gaps))
 
