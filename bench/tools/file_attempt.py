@@ -83,7 +83,8 @@ Codex ``token_usage_record`` lines by response id, since ``token_count`` events 
 usage. The transcripts are archived
 to ``<archive-root>/<run>/<attempt>.tar.gz`` (default ``~/.t3/bench-cache/transcripts``, outside
 the repository, because the built-in's proprietary prompt is in them), hashed, and restored into
-a scratch directory to check every member's bytes.
+a scratch directory to check every member's bytes. An archive root inside the checkout that holds
+``--out`` is recorded by its repository path, which another checkout can resolve.
 
 Account billing comes from ``--billing-mode``, independently of the price table. Subscription
 usage is a list-price equivalent; API usage is labeled api-dollars. ``--legacy-rate-billing``
@@ -635,7 +636,19 @@ def ranges_ok(clone: str, commands: list, merge_base: str, head: str) -> tuple:
     return checked, failures
 
 
-def archive_transcripts(paths: list, attempt_dir: str, dest: str) -> dict:
+def recorded_archive_path(dest: str, out: str) -> str:
+    """The path the record names: relative to the checkout that holds both the record and the archive,
+    so it survives a move of that checkout; home-relative otherwise."""
+    parts = Path(out).parts
+    for index in range(len(parts) - 2, 0, -1):
+        if parts[index:index + 2] == ("bench", "runs") and Path(dest).is_relative_to(Path(*parts[:index])):
+            return Path(dest).relative_to(Path(*parts[:index])).as_posix()
+    home = os.path.expanduser("~")
+    return dest.replace(home, "~", 1) if dest.startswith(home) else dest
+
+
+def archive_transcripts(paths: list, attempt_dir: str, dest: str, out: str) -> dict:
+    dest = os.path.abspath(dest)
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     with tarfile.open(dest, "w:gz") as tar:
         for path in sorted(set(paths)):
@@ -653,8 +666,7 @@ def archive_transcripts(paths: list, attempt_dir: str, dest: str) -> dict:
                     ok = False
             if len(members) != len(set(paths)):
                 ok = False
-    home = os.path.expanduser("~")
-    return {"path": dest.replace(home, "~", 1) if dest.startswith(home) else dest, "sha256": sha256_file(dest),
+    return {"path": recorded_archive_path(dest, out), "sha256": sha256_file(dest),
             "restoration_check": "passed" if ok else "failed"}
 
 
@@ -1014,7 +1026,7 @@ def file_attempt(args) -> tuple:
         for row in requests:
             handle.write(json.dumps(row) + "\n")
     archive = archive_transcripts(transcript_paths, attempt_dir,
-                                  os.path.join(os.path.expanduser(args.archive_root), args.run_id, args.attempt_id + ".tar.gz"))
+                                  os.path.join(os.path.expanduser(args.archive_root), args.run_id, args.attempt_id + ".tar.gz"), out)
 
     arm_complete = None
     if normalized.get("parse_status") == "unresolved":
@@ -1192,6 +1204,17 @@ def self_test() -> int:
         assert done.returncode == 2 and not (temp / "billing-missing").exists(), done
         assert rec["transcript_archive"]["restoration_check"] == "passed"
         assert (temp / "archive" / "2026-01-01-test" / "att-001.tar.gz").is_file()
+        outside = str(temp / "archive" / "2026-01-01-test" / "att-001.tar.gz").replace(os.path.expanduser("~"), "~", 1)
+        assert rec["transcript_archive"]["path"] == outside, rec["transcript_archive"]
+        checkout = temp / "checkout"
+        done = run("checkout/bench/runs/2026-01-01-test/attempts/att-002")
+        assert done.returncode == 0, done
+        assert read_json(checkout / "bench/runs/2026-01-01-test/attempts/att-002/attempt.json")["transcript_archive"]["path"] == outside
+        done = run("checkout/bench/runs/2026-01-01-test/attempts/att-001", "--archive-root", str(checkout / "artifacts/transcripts"))
+        assert done.returncode == 0, done
+        filed = read_json(checkout / "bench/runs/2026-01-01-test/attempts/att-001/attempt.json")["transcript_archive"]
+        assert filed["path"] == "artifacts/transcripts/2026-01-01-test/att-001.tar.gz", filed
+        assert sha256_file(str(checkout / filed["path"])) == filed["sha256"], filed
         assert (temp / "o1" / "usage-requests.jsonl").read_text(encoding="utf-8").count("\n") == 1
         for name in ("dispatch.txt", "timing.json", "audit.json", "normalized.json", "payload.json"):
             assert (temp / "o1" / name).is_file(), name

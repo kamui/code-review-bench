@@ -19,6 +19,10 @@ Use `file_attempt.py`, `regrade.py:archive_attempt`, `native_artifacts.py` and `
 
 Do not change frozen `attempt.json` paths, hashes or dispositions to migrate storage. Add mappings instead. Historical missing evidence stays missing; a mismatch retains both expected and available hashes. A replacement run cannot supply the original observation's missing evidence.
 
+A record can name its transcript archive by a home-relative or absolute path, which only the originating checkout resolves. `tools/collect_run.py --run bench/runs/<run>` maps each attempt and probe record of a run in `bench/runs/<run>/transcripts.json`: the record, the archive's repository path, the frozen hash and `verified`. The repository path is the one the record holds, or the one it names under `artifacts/transcripts/` in its originating checkout. When neither the checkout nor release storage has that path and release storage holds exactly one archive with the frozen hash, the collector maps the record to the stored path. A record that names any other path gets `artifacts/transcripts/<run>/`, and the collector copies the archive there. The collector reads the archive from this checkout or from release storage and refuses a missing one or a changed hash. `file_attempt.py` records an archive filed inside the checkout that holds the record by its repository path, so a new record resolves in any checkout. The [2026-10-10 inventory](research/portable-evidence-2026-10-10/README.md) lists the references mapped this way.
+
+When no copy holds a record's archive, `--missing <record>` writes its entry with the frozen hash and status `missing`. Later collections keep that entry until the archive verifies. The collector refuses every other archive it cannot verify, and consumers read `verified` entries only.
+
 `bench/schema/evidence-storage.schema.json` defines the storage manifest. The tool validates it before publication or retrieval, then checks additional constraints: unique paths/identities, safe relative paths, ordinary files, permission bits and package limits. `subjects` names the covered attempts/batches; each package indexes its members and pins release/asset IDs, size and SHA-256. `publication.verified_at` records a successful remote download and restoration, not merely an upload response.
 
 ## Inventory before migration
@@ -38,6 +42,8 @@ Inventory each worktree separately so its index can distinguish tracked copies f
 Inspect records for active attempts, unresolved accounting, missing/mismatched exports and ongoing investigations. Save that assessment alongside the inventory. Inventory covers only the supplied roots; enumerate every controlling queue, including ignored `.local` queues in other worktrees. The [initial host census](research/evidence-storage-2026-10-08.md) records rollout gaps.
 
 ## Package, publish and verify
+
+Before publishing, write four facts in the batch's record: the exact destination (repository and release tag, or site), its visibility, the categories of the table above that the selection covers, and the owner's authorization with its date. An earlier authorization still applies when it names the same destination, visibility and categories. Sending evidence to an external service and publishing it on public GitHub are separate scopes, and authorization for one does not cover the other.
 
 Create a selection outside frozen runs. `source` is a local regular file; `path` is the portable destination under `bench/`, `artifacts/` or `docs/`. Select evidence by subject rather than uploading an entire home or worktree.
 
@@ -91,6 +97,16 @@ The collector, import verifier, explorer evidence exporter and review cleanup re
 After a verified migration, remove large tracked payloads through an ordinary reviewed commit and add precise ignore entries for their materialized paths. Keep their mappings/manifests. This reduces future checkout size, not old Git history; no history rewrite or LFS migration is part of this workflow. The repository payload migration follows this procedure for the current archives, run stdout logs and upstream research snapshots.
 
 The `.cache/evidence` directory can be removed when no fetch/consumer is using it. Doing so loses offline retrieval for unmaterialized files. Keep a separately retained copy of published packages for disaster recovery.
+
+## Frozen definition commits
+
+Packet selection reads a run's manifest at its `freeze_commit`, so that commit must stay retrievable from a ref the canonical repository keeps: a branch, a tag or a pull request head. A squash merge leaves the commit off `main`. GitHub then keeps it under `refs/pull/<number>/head` after the branch is deleted, and a default clone does not fetch that ref:
+
+```sh
+git fetch origin pull/<number>/head
+```
+
+One retained ref is enough, so a commit that a merge commit or a pull request head keeps needs no tag. Keep the head branch until [`freeze_commits.py`](research/portable-evidence-2026-10-10/freeze_commits.py) lists another ref for the commit. A pre-rewrite commit that must not return to the forge is kept in a [recovery bundle](research/repository-storage-2026-10-08/README.md) instead. The [saved record](research/portable-evidence-2026-10-10/freeze-commits.v1.json) names the forge ref or bundle ref that keeps each run's freeze commit.
 
 ## Dependency archives
 
