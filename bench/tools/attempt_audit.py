@@ -139,11 +139,20 @@ def runs(text: str) -> list:
 def same_file(written: str, operand: str) -> bool:
     """Whether a shell's operand can name the file a heredoc was written to: the path segments they
     both end in agree, a variable or glob in one standing for any text in the other."""
-    def loose(segment: str) -> str:
-        return ".*".join(re.escape(part) for part in re.split(r"(?:\$\{?\w+\}?|[*?])+", segment))
+    def fits(pattern: str, name: str) -> bool:
+        parts = re.split(r"(?:\$\{?\w+\}?|[*?])+", pattern)
+        if len(parts) == 1 or len(name) < len(parts[0]) + len(parts[-1]):
+            return False
+        at, end = len(parts[0]), len(name) - len(parts[-1])
+        for part in parts[1:-1]:
+            at = name.find(part, at, end)
+            if at < 0:
+                return False
+            at += len(part)
+        return name.startswith(parts[0]) and name.endswith(parts[-1])
 
     def agree(a: str, b: str) -> bool:
-        return a == b or bool(re.fullmatch(loose(a), b) or re.fullmatch(loose(b), a))
+        return a == b or fits(a, b) or fits(b, a)
     left, right = ([segment for segment in path.split("/") if segment not in ("", ".")] for path in (written, operand))
     return bool(left and right) and all(agree(a, b) for a, b in zip(reversed(left), reversed(right)))
 
@@ -154,8 +163,8 @@ def run_scripts(cmd: str) -> list:
     it is written to a file that a later command, or a body a shell reads later, runs a shell on or
     sources. Each is read apart from the rest of the call, after the commands before its run, so its
     quotes, exports and ``cd`` stay its own, also when the call's own shell sources it. Those
-    commands are read as the call's own pass reads them, and end before a quote or ``-c`` script
-    that is still open where the script is run."""
+    commands are read as the call's own pass reads them. Where the script is run inside a quote or
+    ``-c`` script that is still open, the commands in it count and the quote does not."""
     docs = list(HEREDOC.finditer(cmd))
     opened = [m.start() + m.group(1).index("<<") for m in docs]
     named = [bool(re.search(r"\b" + SHELL + r"\b", m.group(1))) for m in docs]
@@ -167,9 +176,13 @@ def run_scripts(cmd: str) -> list:
         return "".join(text)
 
     def before(run: int) -> str:
-        text, unclosed = blanked([m for i, m in enumerate(docs) if not named[i]])[:run], []
-        unquoted(text, unclosed=unclosed)
-        return text[:unclosed[0]] if unclosed else text
+        text = blanked([m for i, m in enumerate(docs) if not named[i]])[:run]
+        while True:
+            unclosed = []
+            masked = unquoted(text, unclosed=unclosed)
+            if not unclosed:
+                return text
+            text = text[:unclosed[0]] + " " + masked[unclosed[0] + 1:]
     direct = runs(blanked(docs))
     # Where each body a shell reads is run, as its file's and its command's position: a body runs again each time its file does.
     ran = {i: (opened[i], opened[i]) for i in range(len(docs)) if named[i]}
