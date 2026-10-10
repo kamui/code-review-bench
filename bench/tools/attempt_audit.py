@@ -73,8 +73,10 @@ import review_isolation  # noqa: E402
 
 # A tool counts only in command position: at the start, after a separator, a ``do``/``then``/``if``-style
 # keyword, a ``!`` or a wrapper such as ``env``/``xargs``/``timeout -k 1 N``, or opening a shell's ``-c``
-# script, past any ``NAME=value`` assignments.
-SHELL_SCRIPT = r"\b(?:ba|z|da|k)?sh\s+(?:[^\s;&|]+\s+)*?-[A-Za-z]*c[A-Za-z]*\s+"
+# script, past any ``NAME=value`` assignments. A shell and its ``-c`` stand on one line: a shell word on an
+# earlier line opens no script on a later one.
+BLANK = r"(?:[ \t]|\\\n)+"
+SHELL_SCRIPT = r"\b(?:ba|z|da|k)?sh" + BLANK + r"(?:[^\s;&|]+" + BLANK + r")*?-[A-Za-z]*c[A-Za-z]*" + BLANK
 VALUE = r"(?:\$\([^()]*\)|[^\s;&|()])*"
 ASSIGNMENT = re.compile(r"([A-Za-z_]\w*)=(" + VALUE + ")")
 COMMAND = (r"(?:^|[;&|(){}\n`]|\$\(|" + SHELL_SCRIPT + r"['\"]"
@@ -97,7 +99,6 @@ SHELL = r"(?:ba|z|da|k)?sh"
 WRITTEN = re.compile(r">>?\s*['\"]?([^\s;&|<>'\"]+)|\btee\s+(?:-\S+\s+)*['\"]?([^\s;&|<>'\"]+)")
 # The file a shell in command position is run on or takes as its input, or that ``source`` or ``.``
 # reads, within one command. An option with ``c`` takes a script instead, and ``-o`` takes a name.
-BLANK = r"(?:[ \t]|\\\n)+"
 OPTION = r"[-+](?![A-Za-z]*c)[A-Za-z]*o" + BLANK + r"(?!-)[\w-]+|[-+](?![A-Za-z]*c)[^\s;&|]*"
 SCRIPT = re.compile(
     COMMAND + r"(?:(?:[\w./-]*/)?" + SHELL + r"|(?P<sourced>source|\.))" + BLANK + r"(?:(?:" + OPTION + r")" + BLANK + r")*"
@@ -114,9 +115,11 @@ OPENER = re.compile(r"<<(-)?[ \t]*(['\"]?)(\w+)\2")
 Heredoc = collections.namedtuple("Heredoc", "opener start end header quoted body")
 # A script a call wrote by heredoc: the files it was written to, and its body.
 Script = collections.namedtuple("Script", "written body")
-# The runs of scripts that themselves run a script which one call is followed through; past them
-# a script is read with its own heredocs in place and the scripts it runs are not followed.
-SCRIPT_RUNS = 64
+# The characters one call's script runs may add up to, each run counting its script and the commands
+# before it, so the audit's time stays in proportion to the call. Past them each script is read
+# once more, with no commands before it and its own heredocs in place, and the scripts it runs are
+# not followed.
+SCRIPT_TEXT = 1_000_000
 BUILTIN_HEADER = re.compile(r"^`(high effort|medium effort|low effort|minimal prompt)[^`]*`$", re.M)
 CODEX_RUBRIC = "You are acting as a reviewer for a proposed code change"
 DIFF_CMD = re.compile(r"git\s+diff\s+[^;&|\n]*")
@@ -138,18 +141,22 @@ JS_TOOLS = re.compile(r"\btools\b(?!/)(\.apply_patch\b)?")
 CODEX_WORKDIR = re.compile(r'(?:workdir|cwd|working_directory)"?\s*:\s*"((?:[^"\\]|\\.)*)"')
 
 
+ARITHMETIC = re.compile(r"(?:\$|(?<![^\s;&|!]))\(\(|\$\[")
+
+
 def arithmetic(line: str) -> bool:
-    """Whether ``line`` ends inside ``((...))``: neither parenthesis of an earlier ``((`` has closed."""
-    at = line.find("((")
-    while at >= 0:
-        depth = 0
-        for end in range(at, len(line)):
-            depth += (line[end] == "(") - (line[end] == ")")
-            if end > at and depth < 2:
+    """Whether ``line`` ends inside shell arithmetic: a ``$((`` or a ``((`` that starts a word, with
+    neither of its parentheses closed, or a ``$[`` whose bracket has not closed. A ``((`` inside a
+    word, as in ``f((x``, is none."""
+    for m in ARITHMETIC.finditer(line):
+        opens, closes, floor = ("[", "]", 1) if m.group(0) == "$[" else ("(", ")", 2)
+        depth = floor
+        for c in line[m.end():]:
+            depth += (c == opens) - (c == closes)
+            if depth < floor:
                 break
         else:
             return True
-        at = line.find("((", end)
     return False
 
 
@@ -199,11 +206,12 @@ def runs(text: str) -> list:
         stop = re.compile(r"(?<!\\)\n|[;&|)`]|(?<=\s)#").search(masked, m.end())
         end = min([stop.start() if stop else len(masked)] + [b for a, b in scripts if a < m.start() < b])
         words, operands = masked[m.end():end].replace("\\\n", " ").split(), 0
+        options = words[:words.index("--")] if "--" in words else words
         for at, word in enumerate(words):
             named = at and re.fullmatch(r"[-+](?!-)[A-Za-z]*o", words[at - 1]) or at and REDIRECTION.fullmatch(words[at - 1])
-            operands += not (word[0] in "-+" or REDIRECTION.match(word) or named)
-        if any(re.match(r"[-+](?!-)[A-Za-z]*c", word) for word in words) or operands and not any(
-                re.match(r"[-+](?!-)[A-Za-z]*s", word) for word in words):
+            operands += not (word[0] in "-+" and at < len(options) or word == "--" or REDIRECTION.match(word) or named)
+        if any(re.match(r"[-+](?!-)[A-Za-z]*c", word) for word in options) or operands and not any(
+                re.match(r"[-+](?!-)[A-Za-z]*s", word) for word in options):
             continue
         # The pipeline starts on the line its first command is on; a line ending in ``|`` or ``\`` goes on.
         start = m.start()
@@ -259,7 +267,7 @@ def unfolded(cmd: str) -> tuple:
     its exports and ``cd`` go on to the commands after it. Where a script is run inside a quote or
     ``-c`` script that is still open, the commands in it count and the quote does not. A file run by
     its path is no shell script when its first line names another interpreter."""
-    scripts, left = [], [SCRIPT_RUNS]
+    scripts, left, flat = [], [SCRIPT_TEXT], set()
 
     def unfold(text: str, prefix: str, known: list, running: tuple) -> tuple:
         docs = heredocs(text)
@@ -268,12 +276,15 @@ def unfolded(cmd: str) -> tuple:
         done, last, known, mine = [], 0, list(known), len(known)
 
         def read(at: int, script: Script) -> str:
+            if left[0] <= 0:
+                if script not in flat:
+                    flat.add(script)
+                    scripts.append(("", script.body, script.body))
+                return script.body
             before = closed(prefix + "".join(done) + own[last:at])
-            commands, count = script.body, len(scripts)
-            if left[0] > 0:
-                commands, written = unfold(script.body, before + "\n", known, running + (script,))
-                known.extend(written)
-                left[0] -= len(scripts) > count
+            left[0] -= len(before) + len(script.body)
+            commands, written = unfold(script.body, before + "\n", known, running + (script,))
+            known.extend(written)
             scripts.append((before, script.body, commands))
             return commands
         for at, _, event in sorted(events, key=lambda event: event[:2]):
@@ -298,14 +309,17 @@ def unfolded(cmd: str) -> tuple:
 
 def unquoted(cmd: str, scripts: list = None, unclosed: list = None, docs: list = None) -> str:
     """``cmd`` with quoted text masked, since a quoted pattern or message is data (``rg "a|go b"``),
-    except a script handed to a shell's ``-c`` and a ``$(...)`` inside double quotes, which run.
+    except a script handed to a shell's ``-c`` and a ``$(...)`` inside double quotes, which run. A
+    ``-c`` script that closes is masked in turn, as its own shell reads it; one whose own quote stays
+    open is left whole.
     Every character keeps its position, so a match in the result indexes the original. Each
     script's ``(start, end)`` span is appended to ``scripts`` when given, and the start of a quote
     or script still open at the end to ``unclosed``. The text of a ``#`` comment is blanked, up to
     the end of its line or of the backticks it stands in, so a quote character or a tool's name in
     it counts for nothing. Each heredoc opened outside quoted text is appended to ``docs`` when given, and its
     body is passed over: a ``<<`` inside quoted text or ``((...))`` is a shift, and ``<<<`` a
-    here-string. A body starts on the line after its opener and ends at its delimiter line; an empty
+    here-string, and so is a ``<<`` inside ``${...}`` or ``$[...]``. Arithmetic that goes on over a
+    line break is not followed. A body starts on the line after its opener and ends at its delimiter line; an empty
     body ends where the shell ends it, at the bare delimiter on the next line, after tabs under
     ``<<-``. A body opened inside a ``-c`` script ends with that script."""
     out, i, quote, script, depth, opened = [], 0, None, None, 0, 0
@@ -335,7 +349,7 @@ def unquoted(cmd: str, scripts: list = None, unclosed: list = None, docs: list =
         if comment and not (ticks and c == "`"):
             out.append(" "); i += 1; continue
         comment = False
-        if docs is not None and live and cmd.startswith("<<", i) and cmd[i - 1:i] != "<" and cmd[i + 2:i + 3] != "<":
+        if docs is not None and live and not braces and cmd.startswith("<<", i) and cmd[i - 1:i] != "<" and cmd[i + 2:i + 3] != "<":
             line = cmd.rfind("\n", 0, i) + 1
             m = OPENER.match(cmd, i)
             if m and not arithmetic("".join(out)[line:]):
@@ -345,6 +359,13 @@ def unquoted(cmd: str, scripts: list = None, unclosed: list = None, docs: list =
             if c == "\\" and script == '"':
                 out.append(cmd[i:i + 2]); i += 2; continue
             if c == script:
+                # The script is read as its shell reads it: its own quoted text and comments are data too.
+                inner, open_inside = cmd[opened + 1:i], []
+                if script == '"':
+                    inner = re.sub(r'\\(["\\$`])', r" \1", inner)
+                inner = unquoted(inner, unclosed=open_inside, docs=[])
+                if not open_inside:
+                    out = ["".join(out)[:opened + 1], inner]
                 script, pending = None, [doc for doc in pending if not doc[3]]
                 if scripts is not None:
                     scripts.append((opened, i))
