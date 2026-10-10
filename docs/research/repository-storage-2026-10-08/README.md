@@ -24,6 +24,8 @@ The additional [Git fallback manifest](../../../bench/evidence/manifests/local-g
 
 The [recovery manifest](../../../bench/evidence/manifests/history-recovery-2026-10-08-v1.json) preserves a complete Git bundle of the pre-rewrite shared branches and tags. Its publication receipt verifies remote package and bundle bytes. Fetch its single member to a disposable directory and run `git clone PATH_TO_BUNDLE recovered-repository` to inspect that history without adding it back to normal clones. A branch deleted after this backup remains in the bundle for recovery only; it must not be recreated on GitHub.
 
+A [second recovery manifest](../../../bench/evidence/manifests/history-recovery-2026-10-10-v1.json) preserves the nine pre-rewrite commits of `refs/recovery/issue-9-selected-cohort-2026-10-02` that the first bundle does not hold. They include `d27a8c24`, the `freeze_commit` of `2026-09-30-selected-prs-review-only`. Its bundle holds only those commits and requires commit `6906541d` from the first: clone the first bundle, then run `git fetch PATH_TO_SECOND_BUNDLE 'refs/recovery/*:refs/recovery/*'` in that clone. The same limit applies: the ref is for recovery only and must not be pushed to GitHub.
+
 ## Local retirement
 
 The complete inventory and closure plan under `retirement/` identify one redundant linked worktree, `t3code-356b9051`. Its 35,213 entries contained no unique untracked or ignored files; its commits were reachable from merged `main`. The [candidate restoration receipt](retirement/t3code-356b9051-restoration.json) verified all 35,212 payload files and their permissions from the GitHub-derived history backup, without reading the original workspace.
