@@ -6,36 +6,36 @@ Part of [issue 94](https://github.com/kamui/code-review-bench/issues/94). This r
 
 Every filed attempt and probe names its transcript archive in `transcript_archive.path`. [`references.py`](references.py) reads all 1,199 of them and writes [`archive-references.v1.json`](archive-references.v1.json).
 
-Before this change, 205 records named the archive by a home-relative path that only the originating checkout resolves, and had no mapping. The collector now maps 200 of them in their run's `transcripts.json`. No attempt record changed.
+Before this change, 205 records named the archive by a home-relative path that only the originating checkout resolves, and had no mapping. The collector now maps 204 of them in their run's `transcripts.json`. No attempt record changed.
 
 | Records | Runs | Mapping |
 | --- | --- | --- |
 | 176 attempts, 8 probes | the seven `2026-10-08-last-push-*` runs | new `transcripts.json` in each run |
 | 15 attempts | `2026-09-29-codex-astra-high-writable`, `2026-10-02-claude-ce-opus-5-5-high-selected`, `2026-10-02-codex-ce-sol61-high-selected`, `2026-10-03-codex-ce-sol61-high-selected` | new `transcripts.json` in each run |
 | 1 probe | `2026-09-29-codex-builtin` | one entry added to its `transcripts.json` |
+| 2 probes | `2026-09-30-selected-prs-review-only` | two entries added, at the path each record names inside its checkout |
+| 2 probes | `2026-09-29-codex-sol-high` | two entries added, at the path release storage holds |
 
 The new file of `2026-09-29-codex-astra-high-writable` also lists one probe whose record already held a repository path.
 
-After the change the inventory counts 1,169 mapped records whose archive is in release storage under the frozen hash, 9 mapped records with the hash mismatch the import already recorded, 16 records that hold a repository path and need no mapping, and 5 unresolved records. The five are probes of earlier runs, and this change leaves them as they are.
+The two `2026-09-29-codex-sol-high` probe records name the transcript cache. Release storage holds their bytes under `artifacts/transcripts/2026-09-29-codex-sol-high-probes/`, which no record names, so the collector maps each record to the one stored archive with its frozen hash.
 
-| Record | State |
-| --- | --- |
-| `2026-09-30-selected-prs-review-only` probes `att-001`, `att-002` | Release storage holds both archives at the path each record names inside its checkout. Two saved records pin the run's `transcripts.json` by hash, so it gains no entry. |
-| `2026-09-29-codex-sol-high` probes `att-002`, `att-003` | The records name the transcript cache. Release storage holds both archives under `artifacts/transcripts/2026-09-29-codex-sol-high-probes/`, which no record names. |
-| `2026-09-29-codex-sol61-high-clean` probe `att-002` | No stored archive has this hash. The path the record names now holds the archive of attempt `att-002`. |
+The owner chose on 2026-10-10 to map these four probes. That choice edits the `transcripts.json` of `2026-09-30-selected-prs-review-only`, which two saved records pin at its earlier hash `71df8281`: [`protected-inputs.v1.json`](../selected-pr-triage-arena-2026-09-30/protected-inputs.v1.json) and [`recovered-files.v1.json`](../grading-evidence-selected-2026-10-02/recovered-files.v1.json). Both records keep that hash, and the 45 earlier entries keep their bytes. The verifiers of both records already failed on `main` before this change, the first on `bench/claims/registry.json` and the second on `claims.reconciliation`, a function that no longer exists. The second now stops earlier, on this file's hash, and it also expects 45 entries where the file now has 47. That cohort's README still warns against running the collector there. The warning describes the collector before this change, and a saved record pins the README too, so it stays.
 
-The collector now reads probes, so it stops on the last three records: `Transcript archive unavailable` for the two `2026-09-29-codex-sol-high` probes and `Transcript checksum mismatch` for the `2026-09-29-codex-sol61-high-clean` probe. Before this change it skipped every probe. The mapping files of those two runs keep their bytes, and collecting either run again needs a decision on these probes first.
+After the change the inventory counts 1,173 mapped records whose archive is in release storage under the frozen hash, 9 mapped records with the hash mismatch the import already recorded, 16 records that hold a repository path and need no mapping, and 1 unresolved record.
+
+The unresolved record is probe `att-002` of `2026-09-29-codex-sol61-high-clean`. No stored archive has its hash, and the path the record names now holds the archive of attempt `att-002`. The collector now reads probes, so it stops on this record with `Transcript checksum mismatch`. Before this change it skipped every probe. The run's mapping file keeps its bytes, and collecting the run again needs a decision on this probe first.
 
 `file_attempt.py` now records an archive filed inside the checkout by its repository path, so a new record needs no mapping to resolve in another checkout.
 
-None of the twelve collected runs is in the published selection. `bun run data` writes the same 747 data files and 2,286 evidence files, byte for byte, with and without this change.
+The published selection takes attempts of `2026-09-30-selected-prs-review-only`, whose 45 entries are unchanged, and none of the other thirteen collected runs. `bun run data` writes the same 747 data files and 2,286 evidence files, byte for byte, with and without this change.
 
 ## Cold restoration
 
-[`verify-cold.py`](verify-cold.py) ran in a new single-branch clone from GitHub at `/tmp/issue94/cold-parent/fresh`, with this branch's commits fetched from the local checkout. Bubblewrap hid `/home/jack/.t3` and `/home/jack/development`, which hold the dispatch checkout, the worktrees, the run workspaces and the transcript cache. The clone started with no evidence cache and no archive. The [receipt](../../../bench/evidence/receipts/portable-mappings-2026-10-10-consumers.json) records the run at `f0d45495`.
+[`verify-cold.py`](verify-cold.py) ran in a new single-branch clone of `main` from GitHub at `/tmp/issue94/cold3/fresh`, with this branch's commits fetched from the local checkout. Bubblewrap hid `/home/jack/.t3` and `/home/jack/development`, which hold the dispatch checkout, the worktrees, the run workspaces and the transcript cache. The clone started with no evidence cache and no archive. The [receipt](../../../bench/evidence/receipts/portable-mappings-2026-10-10-consumers.json) records the run at `85197b9a`.
 
-- None of the 227 origin paths the records name existed.
-- The collector rebuilt all twelve mapping files from release storage, 228 entries, and Git showed no change to any of them. Each archive matched the hash in its attempt record.
+- None of the 281 origin paths the records name existed.
+- The collector rebuilt all fourteen mapping files from release storage, 282 entries, and Git showed no change to any of them. Each archive matched the hash in its attempt record.
 - The explorer's evidence export restored and copied five archives: a valid review, a failed predecessor, its replacement, the interrupted attempt with unknown usage, and a probe.
 - The deviation records of the last-push runs pin 13 diagnostic files that Git tracks. All 13 matched.
 - A changed archive stopped the collector with `Transcript checksum mismatch` and the store with `changed evidence`. With the cached package moved away, offline retrieval stopped with `archive unavailable offline`.
