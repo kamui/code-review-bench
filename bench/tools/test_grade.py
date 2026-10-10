@@ -1289,9 +1289,23 @@ class PrepareRecut(Mapped):
         self.assertIn("replacement packet differs from replacement manifest", done.stdout)
         self.assertEqual(self.grades()["batches"], [])
 
-    def test_a_selection_changed_after_preparation_changes_the_fingerprint_and_stops_mapping(self):
+    def test_a_selection_changed_after_preparation_changes_the_fingerprint_and_stops_dispatch_and_mapping(self):
+        import argparse
+        import grade as module
+        from unittest.mock import patch
         self.select("packet.v3.md", "# Packet\n\nThe pull request at another cut.\n")
         self.assertNotEqual(self.cohort.fingerprint(), self.key_doc["input_fingerprint"])
+        self.assertEqual(module.check_prepared(self.work, self.key_doc), [])
+        for model, budget in ((MODEL, 5), ("gpt-6.1-sol", None)):
+            with self.subTest(model=model):
+                args = argparse.Namespace(work=str(self.work), key=str(self.key), model=model, max_budget_usd=budget,
+                                          expected_cli_version="9.9.9", allow_unbounded_codex=True)
+                with patch.object(module, "client_preflight", return_value="9.9.9"), \
+                        patch.object(module.grading_policy, "probe") as probe:
+                    with self.assertRaisesRegex(module.Inconsistent, "the batch's inputs changed since preparation"):
+                        module.dispatch(args)
+                probe.assert_not_called()
+                self.assertFalse((self.work / "home").exists())
         done = self.map(self.verdicts())
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertIn("the batch's inputs changed since preparation", done.stdout)
@@ -1511,6 +1525,24 @@ class Dispatch(Grade):
             self.assertIn(f"client start directory names {marker!r}", done.stdout)
             self.assertEqual(list(parent.iterdir()), [])
             self.assertFalse((self.work / "home").exists())
+
+    def test_inputs_changed_after_preparation_are_refused_before_the_session(self):
+        self.cohort.approve_family("GT-t1")
+        done = self.dispatch()
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("the batch's inputs changed since preparation", done.stdout)
+        self.assertIn("prepare it again", done.stdout)
+        self.assertFalse((self.work / "home").exists() or (self.work / "dispatch.json").exists())
+        self.assertEqual(len((self.run_dir / "charges.jsonl").read_text(encoding="utf-8").splitlines()), 1)
+
+    def test_a_key_that_names_no_current_record_is_refused(self):
+        key = json.loads(self.key.read_text(encoding="utf-8"))
+        del key["current_record"]
+        self.key.write_text(json.dumps(key), encoding="utf-8")
+        done = self.dispatch()
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("the key names no current record", done.stdout)
+        self.assertFalse((self.work / "home").exists())
 
     def test_clean_session_records_and_charges(self):
         done = self.dispatch()
