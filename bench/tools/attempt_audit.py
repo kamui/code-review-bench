@@ -149,13 +149,17 @@ ARITHMETIC = re.compile(r"(?:\$|(?<![^\s;&|!]))\(\(|\$\[")
 
 def matches(pattern, text: str):
     """Every match of ``pattern`` in ``text``, one that starts inside an earlier match included: a
-    ``$(...)`` in the value of an assignment before a command is a command position of its own."""
-    at = 0
+    ``$(...)`` in the value of an assignment before a command is a command position of its own. A
+    match that ends where an earlier one did is that command again, short of its assignments, and
+    is left out."""
+    at, ends = 0, set()
     while True:
         m = pattern.search(text, at)
         if not m:
             return
-        yield m
+        if m.end() not in ends:
+            ends.add(m.end())
+            yield m
         at = m.start() + 1
 
 
@@ -183,14 +187,10 @@ def heredocs(cmd: str) -> list:
 
 
 def without_bodies(cmd: str, docs: list) -> str:
-    """``cmd`` with the body of each of ``docs`` blanked, every other character keeping its position.
-    The line break that ends the header stays. Under an unquoted delimiter the shell runs each
-    ``$(...)`` and backtick pair of the body as it writes it, so those stay too."""
+    """``cmd`` with the body of each of ``docs`` blanked, every other character keeping its position."""
     text = list(cmd)
     for doc in docs:
-        body = cmd[doc.start:doc.end]
-        kept = [(0, 0, 0, 1)] + ([] if doc.quoted else substitutions(body))
-        text[doc.start:doc.end] = "".join(c if any(a <= at < b for a, _, _, b in kept) else " " for at, c in enumerate(body))
+        text[doc.start:doc.end] = " " * (doc.end - doc.start)
     return "".join(text)
 
 
@@ -210,7 +210,7 @@ def runs(text: str) -> list:
     name ends, the names the file may go by, and how it is run. A shell is run on it or takes it as
     input (``shell``), ``source`` or ``.`` reads it (``source``), the command word is its path
     (``direct``), or an earlier command of the pipeline that a bare shell ends names it (``pipe`` when
-    that is ``cat`` alone, else ``filter``).
+    ``cat`` alone feeds the shell, else ``filter``).
     Quoted text is no command."""
     scripts = []
     masked = unquoted(text, scripts)
@@ -244,7 +244,7 @@ def runs(text: str) -> list:
             if start < 0 or masked[:start].rstrip(" \t")[-1:] not in ("|", "\\"):
                 break
         words = [re.sub(r"['\"]", "", word) for word in re.split(r"[\s()<>{};&|]+", text[start + 1:m.start()])]
-        whole = re.fullmatch(r"\s*cat(?:\s+[^\s|;&]+)+\s*", masked[start + 1:m.start()])
+        whole = re.search(r"(?:^|[;&(){}\n`'\"]|\$\()\s*cat(?:[ \t]+[^\s|;&(){}`'\"]+)+[ \t]*$", masked[start + 1:m.start()])
         found.append((m.start(), end, [word for word in words if word], "pipe" if whole else "filter"))
     return [(at, end, list(names), how) for at, end, names, how in dict.fromkeys((at, end, tuple(names), how) for at, end, names, how in found)]
 
@@ -292,7 +292,7 @@ def unfolded(cmd: str) -> tuple:
     its exports and ``cd`` go on to the commands after it. Where a script is run inside a quote or
     ``-c`` script that is still open, the commands in it count and the quote does not. A file run by
     its path is no shell script when its first line names another interpreter."""
-    scripts, left = [], [SCRIPT_TEXT]
+    scripts, left, stale = [], [SCRIPT_TEXT], set()
 
     def unfold(text: str, prefix: str, known: list, running: tuple) -> tuple:
         docs = heredocs(text)
@@ -312,9 +312,18 @@ def unfolded(cmd: str) -> tuple:
             return commands
         for at, _, event in sorted(events, key=lambda event: event[:2]):
             if isinstance(event, Heredoc):
-                # Under an unquoted delimiter the file gets the body with one backslash taken off ``$``, a backtick and ``\``.
+                # Under an unquoted delimiter the shell runs each ``$(...)`` and backtick pair of the body as it writes
+                # it, each a command line of its own, and the file gets the body with one backslash taken off ``$``,
+                # a backtick and ``\``.
+                for _, start, end, _ in [] if event.quoted else substitutions(event.body):
+                    read(at, Script((), event.body[start:end]))
                 body = event.body if event.quoted else re.sub(r"\\([$`\\])", r"\1", event.body)
                 script = Script(tuple(target or operand for target, operand in WRITTEN.findall(event.header)), body)
+                if not re.search(r">>|\btee\s+(?:-\S+\s+)*-\S*a", event.header):
+                    # Written anew, the file may no longer hold what an earlier heredoc put there: that script is still
+                    # read where it is run, but no longer in place where it is sourced.
+                    stale.update(earlier for earlier in known if set(earlier.written) & set(script.written) - {"/dev/null"})
+                stale.discard(script)
                 known.append(script)
                 if re.search(r"\b" + SHELL + r"\b", event.header):
                     read(at, script)
@@ -328,7 +337,10 @@ def unfolded(cmd: str) -> tuple:
                 if how == "filter" and commands != script.body:
                     # What reaches the shell may be the script less some of its lines, so a heredoc body in it may become a command.
                     scripts.append((scripts[-1][0], script.body, script.body))
-                if how == "source" and end >= last and closed(own[last:end]) == own[last:end]:
+                # Inside a ``-c`` script or substitution still open, the script is read in place only when
+                # nothing in it could close that quote.
+                if how == "source" and script not in stale and end >= last and (
+                        closed(own[last:end]) == own[last:end] or not re.search(r"[\\'\"`()]", commands)):
                     done.append(own[last:end] + ";\n" + closed(commands) + "\n;")
                     last = end
         return "".join(done) + own[last:], known[mine:]
@@ -342,6 +354,18 @@ def unfolded(cmd: str) -> tuple:
                     bodies.append(doc.body)
                     scripts.append(("", doc.body, without_bodies(doc.body, heredocs(doc.body))))
     return own, scripts
+
+
+def after_c_option(cmd: str, at: int) -> bool:
+    """Whether an option with ``c`` and then blanks stand just before ``at``, read backwards so a long
+    line of quoted words costs no search each."""
+    blank = at
+    while blank and (cmd[blank - 1] in " \t" or cmd[blank - 2:blank] == "\\\n"):
+        blank -= 1 if cmd[blank - 1] in " \t" else 2
+    option = blank
+    while option and cmd[option - 1].isascii() and cmd[option - 1].isalpha():
+        option -= 1
+    return blank < at and cmd[option - 1:option] == "-" and "c" in cmd[option:blank]
 
 
 def substitutions(text: str) -> list:
@@ -450,7 +474,14 @@ def unquoted(cmd: str, scripts: list = None, unclosed: list = None, docs: list =
             if c == "\\":
                 out.append(cmd[i:i + 2]); i += 2; continue
             if c in "'\"":
-                if re.search(SHELL_SCRIPT + "$", cmd[:i]):
+                # A shell and its ``-c`` stand on one line, so only that line is searched, and only when an
+                # option with ``c`` stands just before the quote.
+                line = i
+                while True:
+                    line = cmd.rfind("\n", 0, line)
+                    if line < 0 or cmd[line - 1:line] != "\\":
+                        break
+                if after_c_option(cmd, i) and re.search(SHELL_SCRIPT + "$", cmd[line + 1:i]):
                     script, opened = c, i
                 else:
                     quote, opened = c, i
@@ -496,15 +527,20 @@ def go_env(text: str, masked: str, scripts: list, m) -> dict:
     """The environment a ``go`` match runs with: variables exported earlier and not unset since,
     then the match's own prefix assignments, which reach that one command only. ``masked`` is
     ``unquoted(text)``, so an ``export`` inside quoted text does not count; values come from ``text``.
-    An ``export`` inside a ``-c`` script reaches only a ``go`` inside that script (``scripts``)."""
-    env = {}
-    here = [(a, b) for a, b in scripts if a < m.start() < b]
+    An ``export`` inside a ``-c`` script reaches only a ``go`` inside that script (``scripts``), and
+    one inside ``(...)`` or ``$(...)`` only a ``go`` inside those parentheses."""
+    env, opened, scripts = {}, [], list(scripts)
+    for at, c in enumerate(masked):
+        if c == "(":
+            opened.append(at)
+        elif c == ")" and opened:
+            scripts.append((opened.pop(), at))
 
     def values(start, end):
         for a in ASSIGNMENT.finditer(masked, start, end):
             yield a.group(1), text[a.start(2):a.end(2)].strip("'\"")
     for e in EXPORTS.finditer(masked, 0, m.start()):
-        if any(a < e.start() < b for a, b in scripts) and not any(a < e.start() < b for a, b in here):
+        if any(a < e.start() < b and not a < m.start() < b for a, b in scripts):
             continue
         if e.group(1):
             env.update(values(e.start(1), e.end(1)))
