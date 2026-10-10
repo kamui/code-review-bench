@@ -629,17 +629,22 @@ class ProcessObservation(unittest.TestCase):
         (proc / "self/ns").mkdir(parents=True)
         os.symlink("pid:[7]", proc / "self/ns/pid")
 
-        def process(pid: int, parent: int, environ: bytes | None, state: str = "S", thread_of: int | None = None) -> None:
-            entry = proc / str(pid) if thread_of is None else proc / str(thread_of) / "task" / str(pid)
-            shutil.rmtree(entry, ignore_errors=True)
-            entry.mkdir(parents=True)
-            (entry / "stat").write_text(f"{pid} (a b) {state} {parent} {pid} {pid} " + "0 " * 15 + f"{pid * 10} 0\n", encoding="utf-8")
-            (entry / "cmdline").write_bytes(b"reviewer\0--flag\0")
-            os.symlink("/", entry / "cwd")
-            if environ is None:
-                (entry / "environ").mkdir()
-            else:
-                (entry / "environ").write_bytes(environ)
+        def process(pid: int, parent: int, environ: bytes | None, state: str = "S", thread_of: int | None = None,
+                    cwd: str = "/") -> None:
+            """A process and its first thread, or with ``thread_of`` one more thread of that process."""
+            thread = proc / str(thread_of or pid) / "task" / str(pid)
+            shutil.rmtree(thread if thread_of else proc / str(pid), ignore_errors=True)
+            for entry in [thread] if thread_of else [proc / str(pid), thread]:
+                entry.mkdir(parents=True)
+                (entry / "stat").write_text(f"{pid} (a b) {state} {parent} {pid} {pid} " + "0 " * 15 + f"{pid * 10} 0\n",
+                                            encoding="utf-8")
+                (entry / "cmdline").write_bytes(b"reviewer\0--flag\0")
+                if state != "Z":
+                    os.symlink(cwd, entry / "cwd")
+                if environ is None:
+                    (entry / "environ").mkdir()
+                else:
+                    (entry / "environ").write_bytes(environ)
 
         self.enterContext(patch.object(review_queue, "PROC", proc))
         return proc, process, {**review_queue.identity(), "marker": "m1", "pid": 50, "start_ticks": 500, "session": 50}
@@ -688,7 +693,6 @@ class ProcessObservation(unittest.TestCase):
         process(50, 1, None, state="Z")
         seen = review_queue.observe(evidence)
         self.assertEqual((seen["status"], seen["wrapper"]), ("absent", "a zombie"))
-        process(50, 1, None, state="Z", thread_of=50)
         process(51, 1, None, thread_of=50)
         seen = review_queue.observe(evidence)
         self.assertEqual((seen["status"], seen["wrapper"], [(row["pid"], row["state"]) for row in seen["processes"]]),
@@ -705,6 +709,19 @@ class ProcessObservation(unittest.TestCase):
                 if status == "unknown":
                     self.assertIn("a b (pid 70, state S, started ", seen["reason"])
                     self.assertIn(str(proc / "70/task/71/environ"), seen["reason"])
+
+    def test_a_process_is_the_launch_s_when_any_of_its_threads_works_in_the_attempt_directory(self):
+        _, process, evidence = self.table()
+        attempt = Path("/work/att-001")
+        for what, state in {"still runs": "S", "has ended": "Z"}.items():
+            with self.subTest(the_first_thread=what):
+                process(70, 1, b"HOME=/x\0", state=state)
+                process(71, 1, b"HOME=/x\0", thread_of=70)
+                process(72, 1, b"HOME=/x\0", thread_of=70, cwd=str(attempt))
+                seen = review_queue.observe(evidence, attempt)
+                self.assertEqual((seen["status"], [row["pid"] for row in seen["processes"]]), ("running", [70]), seen)
+                process(72, 1, b"HOME=/x\0", thread_of=70)
+                self.assertEqual(review_queue.observe(evidence, attempt)["status"], "absent")
 
 
 # --- one controller, pinned ---------------------------------------------------------------------

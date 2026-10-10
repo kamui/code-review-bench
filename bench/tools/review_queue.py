@@ -91,7 +91,8 @@ starts. An observation reports ``running``, ``absent`` or ``unknown``:
   that does. A recorded PID now held by a process with another start time is that other process,
   and a process older than the launch is not the launch's. A process whose first thread has ended
   is alive while another of its threads runs, though Linux shows it as a zombie, and it is judged
-  by that thread's environment, command and working directory.
+  by that thread's environment and command. A thread can have a working directory of its own, so
+  the working directory of every thread is read.
 - ``running`` otherwise, with the processes listed.
 
 A process of this user that is not older than the launch, is not a zombie, and refuses a read of
@@ -416,6 +417,17 @@ def started_at(start_ticks: int) -> str:
     return (datetime.now(timezone.utc) - timedelta(seconds=age)).isoformat(timespec="milliseconds")
 
 
+def working_directories(entry: Path) -> list:
+    """The working directory of each thread of a process that has not ended: a thread can have one of its own."""
+    found = []
+    for thread in (entry / "task").iterdir():
+        try:
+            found.append(os.fsencode(os.readlink(thread / "cwd")))
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+    return found
+
+
 def scan(evidence: dict, attempt_dir: Path | None) -> tuple:
     """One reading of the process table: the processes that belong to the launch, and those that could not be inspected."""
     needles = [os.fsencode(text) for text in (evidence.get("marker") and f"{MARKER}={evidence['marker']}",
@@ -444,7 +456,7 @@ def scan(evidence: dict, attempt_dir: Path | None) -> tuple:
             inspected = entry / "task" / str(stat["thread"]) if "thread" in stat else entry
             try:
                 held = b"\0".join([(inspected / "environ").read_bytes(), (inspected / "cmdline").read_bytes(),
-                                   os.fsencode(os.readlink(inspected / "cwd"))])
+                                   *working_directories(entry)])
             except (FileNotFoundError, ProcessLookupError):
                 continue
             except OSError as error:
