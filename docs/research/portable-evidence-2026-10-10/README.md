@@ -34,7 +34,7 @@ The published selection takes attempts of `2026-09-30-selected-prs-review-only`,
 
 ## Cold restoration
 
-[`verify-cold.py`](verify-cold.py) ran in a new single-branch clone of `main` from GitHub at `/tmp/issue94/cold4/fresh`, with this branch's commits fetched from the local checkout. Bubblewrap hid `/home/jack/.t3` and `/home/jack/development`, which hold the dispatch checkout, the worktrees, the run workspaces and the transcript cache. The clone started with no evidence cache and no archive. The [receipt](../../../bench/evidence/receipts/portable-mappings-2026-10-10-consumers.json) records the run at `ba2e8234`.
+[`verify-cold.py`](verify-cold.py) ran in a new single-branch clone of `main` from GitHub at `/tmp/issue94/cold5/fresh`, with this branch's commits fetched from the local checkout. Bubblewrap hid `/home/jack/.t3` and `/home/jack/development`, which hold the dispatch checkout, the worktrees, the run workspaces and the transcript cache. The clone started with no evidence cache and no archive. The [receipt](../../../bench/evidence/receipts/portable-mappings-2026-10-10-consumers.json) records the run at `3eb06aa6`.
 
 - None of the 318 origin paths the records name existed.
 - The collector rebuilt all fifteen mapping files from release storage, 319 entries, and Git showed no change to any of them. Each of the 318 archives matched the hash in its attempt record, and the one missing entry stayed missing.
