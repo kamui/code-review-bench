@@ -205,6 +205,36 @@ class ColdConsumersTest(unittest.TestCase):
             self.assertEqual((cold / 'bench/runs/example/transcripts.json').read_bytes(), mapping)
             self.assertFalse((cold / 'artifacts').exists())
 
+    def test_archive_stored_under_a_path_no_record_names_is_mapped_by_its_hash(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root, remote_path = base / 'checkout', base / 'remote'
+            remote_path.mkdir()
+            payloads = {'artifacts/transcripts/example-probes/att-009.tar.gz': b'stored once',
+                        'artifacts/transcripts/other/first.tar.gz': b'stored twice',
+                        'artifacts/transcripts/other/second.tar.gz': b'stored twice'}
+            for index, data in enumerate(payloads.values()):
+                (base / str(index)).write_bytes(data)
+            store.pack({'repository': 'owner/canonical', 'tag': 'evidence-fixture', 'subjects': ['example'], 'files': [
+                {'source': str(base / str(index)), 'path': name, 'kind': 'evidence'} for index, name in enumerate(payloads)]}, base / 'packed')
+            remote = FakeGitHub(remote_path)
+            store.publish(base / 'packed/manifest.json', root / 'bench/evidence/manifests/fixture.json', remote)
+            run = root / 'bench/runs/example'
+
+            def record(name, data):
+                store.write_new(run / name / 'attempt.json', {'transcript_archive': {
+                    'path': '~/gone/cache/example-probe/att-001.tar.gz', 'sha256': store.digest(base / str(list(payloads.values()).index(data)))}})
+
+            record('probes/att-001', b'stored once')
+            with patch.object(store, 'GitHub', return_value=remote), patch.object(collect_run, 'ROOT', root):
+                collect_run.collect(run)
+                entry, = store.read(run / 'transcripts.json')
+                self.assertEqual(entry['path'], 'artifacts/transcripts/example-probes/att-009.tar.gz')
+                self.assertEqual((root / entry['path']).read_bytes(), b'stored once')
+                record('attempts/att-001', b'stored twice')
+                with self.assertRaisesRegex(ValueError, 'Transcript archive unavailable: artifacts/transcripts/example/att-001.tar.gz'):
+                    collect_run.collect(run)
+
 
 if __name__ == '__main__':
     unittest.main()

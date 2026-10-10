@@ -31,8 +31,12 @@ def logical_path(run, record, recorded):
 
 
 def collect(run):
-    stored_paths = {m['path'] for _, manifest in evidence_store.manifests(ROOT)
-                    for package in manifest['packages'] for m in package['members']}
+    stored = {}
+    for _, manifest in evidence_store.manifests(ROOT):
+        for package in manifest['packages']:
+            for member in package['members']:
+                stored.setdefault(member['sha256'], set()).add(member['path'])
+    stored_paths = set().union(*stored.values())
     entries = []
     for path in sorted(record for layer in ('attempts', 'probes') for record in (run / layer).glob('*/attempt.json')):
         record = json.loads(path.read_text())
@@ -40,6 +44,9 @@ def collect(run):
         if not archive:
             continue
         logical = logical_path(run, path, archive['path'])
+        same_bytes = stored.get(archive['sha256'], set())
+        if not (ROOT / logical).is_file() and logical not in stored_paths and len(same_bytes) == 1:
+            logical, = same_bytes
         destination = ROOT / logical
         source = destination if destination.is_file() else (
             evidence_store.resolve(ROOT, logical, archive['sha256']) if logical in stored_paths else ROOT / Path(archive['path']).expanduser())
