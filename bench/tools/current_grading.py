@@ -3,7 +3,8 @@
 
 Usage: python3 bench/tools/current_grading.py {inventory,check,status} [--root DIR]
        inventory [--out PATH]; check/status [--current DIR]
-Inputs: selected cohort registry, frozen manifests, attempt records and pinned evidence.
+Inputs: selected cohort registry, frozen manifests, attempt records and pinned evidence. A selected run that
+froze ``packet_replacements`` needs its ``freeze_commit`` in the clone.
 Exit codes: 0 success; 1 inconsistent evidence; 2 unreadable input.
 """
 
@@ -21,6 +22,7 @@ import sys
 import check_manifest
 import claim_grading
 import grading_validation
+import packet_selection
 
 ROOT = Path(__file__).resolve().parents[2]
 BENCH = ROOT / "bench"
@@ -186,6 +188,16 @@ def attempt_facts(path, record, root):
                            "reason": "Filed output and reported coverage." if admitted else record["disposition"]}}
 
 
+def selected_packet(run_dir, manifest, directory, root, where):
+    """The pin of the packet a frozen run gave its reviewers, after ``packet_selection.select`` verified it."""
+    try:
+        return pin_file(packet_selection.select(run_dir, manifest, directory, root), root)
+    except OSError as error:
+        raise InputError(f"{where}: packet selection: {error}") from error
+    except (ValueError, KeyError, TypeError) as error:
+        raise Inconsistent(f"{where}: packet selection: {error}") from error
+
+
 def inventory(root=ROOT):
     root = Path(root).resolve()
     registry = read_json(root / "bench/scoreboard.current.json")
@@ -196,15 +208,15 @@ def inventory(root=ROOT):
     for suite in registry["suites"]:
         require(set(suite["tasks"]) <= tasks.keys(), f"{suite['id']}: unknown suite task")
         require(set(suite["configurations"]) <= configurations.keys(), f"{suite['id']}: unknown suite configuration")
-    task_inputs = []
+    directories, originals, packets = {}, {}, {}
     for task in tasks.values():
-        directory = local_path("bench/targets/" + task["id"], root)
+        directory = directories[task["id"]] = local_path("bench/targets/" + task["id"], root)
         target = read_json(directory / "target.json")
         require(target["id"] == task["id"], f"{task['id']}: target identity differs")
-        require(all(target[k] == v for k, v in task["revision"].items()), f"{task['id']}: target revision differs")
-        packet = pin_file(directory / "packet.md", root)
-        require(packet["sha256"] == task["revision"]["packet_sha256"], f"{task['id']}: packet bytes changed")
-        task_inputs.append({**task, "target": pin_file(directory / "target.json", root), "packet": packet})
+        require(all(target[k] == v for k, v in task["revision"].items() if k != "packet_sha256"),
+                f"{task['id']}: target revision differs")
+        originals[task["id"]] = pin_file(directory / "packet.md", root)
+        require(originals[task["id"]]["sha256"] == target["packet_sha256"], f"{task['id']}: packet bytes changed")
     manifests, attempt_records, source_inputs, cells, attempts = {}, {}, {}, {}, {}
     placements, batches = {}, set()
     for source in registry["sources"]:
@@ -248,8 +260,17 @@ def inventory(root=ROOT):
                 continue
             target = planned["target"]
             require(target in cohort, f"{key}/{target}: scheduled target not in cohort")
-            require(all(cohort[target][field] == tasks[target]["revision"][field]
-                        for field in ("packet_sha256", "diff_manifest_sha256")), f"{key}/{target}: packet or diff differs")
+            revision = tasks[target]["revision"]
+            require(cohort[target]["diff_manifest_sha256"] == revision["diff_manifest_sha256"], f"{key}/{target}: diff differs")
+            require(cohort[target]["packet_sha256"] == revision["packet_sha256"],
+                    f"{key}/{target}: packet differs: the run's reviews read {cohort[target]['packet_sha256'][:12]} and the "
+                    f"task revision pins {revision['packet_sha256'][:12]}; reviews of differently cut packets cannot share "
+                    "a task revision")
+            if target not in {c[0] for c in scheduled}:
+                packet = selected_packet(run_dir, manifest, directories[target], root, f"{key}/{target}")
+                first, earlier = packets.setdefault(target, (packet, key))
+                require(packet == first, f"{key}/{target}: packet differs: selects {packet['path']} while {earlier} "
+                                         f"selects {first['path']}")
             cell_key = (target, arm, planned["replicate"])
             require(cell_key not in scheduled, f"{key}: repeated scheduled cell {cell_key}")
             scheduled.add(cell_key)
@@ -277,6 +298,12 @@ def inventory(root=ROOT):
                 require((cell["target"], arm, cell["replicate"]) in scheduled, f"{key}: attempt outside scheduled cells")
     require(set(placements) == {(c, t) for s in registry["suites"] for c in s["configurations"] for t in s["tasks"]
                                if (c, t) in placements}, "source placement is outside suite selections")
+    task_inputs = []
+    for task in tasks.values():
+        packet, _earlier = packets.get(task["id"], (originals[task["id"]], None))
+        require(packet["sha256"] == task["revision"]["packet_sha256"],
+                f"{task['id']}: no selected source verifies the packet of the task revision")
+        task_inputs.append({**task, "target": pin_file(directories[task["id"]] / "target.json", root), "packet": packet})
     counts = {"tasks": len(tasks), "configurations": len(configurations), "source_pairs": len(source_inputs),
               "runs": len(manifests), "selected_cells": len(cells), "selected_attempts": len(attempts), "batches": len(batches),
               "excluded_attempts": sum(len(v) for v in attempt_records.values()) - len(attempts)}
