@@ -93,7 +93,7 @@ WRITTEN = re.compile(r">>?\s*['\"]?([^\s;&|<>'\"]+)|\btee\s+(?:-\S+\s+)*['\"]?([
 BLANK = r"(?:[ \t]|\\\n)+"
 SCRIPT = re.compile(
     COMMAND + r"(?:(?:[\w./-]*/)?" + SHELL + r"|source|\.)" + BLANK +
-    r"(?:[-+](?![A-Za-z]*c)[A-Za-z]*o" + BLANK + r"[\w-]+" + BLANK + r"|[-+](?![A-Za-z]*c)[^\s;&|]+" + BLANK + r")*"
+    r"(?:[-+](?![A-Za-z]*c)[A-Za-z]*o" + BLANK + r"(?!-)[\w-]+" + BLANK + r"|[-+](?![A-Za-z]*c)[^\s;&|]+" + BLANK + r")*"
     r"(?:<[ \t]*)?['\"]?(?P<file>(?!-)[^\s;&|<>'\"()]+)")
 # A heredoc: its header line (group 1), then the body up to the delimiter line or the end. An empty body ends
 # where the shell ends it, at the bare delimiter on the next line, after tabs under ``<<-``.
@@ -140,7 +140,7 @@ def same_file(written: str, operand: str) -> bool:
     """Whether a shell's operand can name the file a heredoc was written to: the path segments they
     both end in agree, a variable or glob in one standing for any text in the other."""
     def loose(segment: str) -> str:
-        return ".*".join(re.escape(part) for part in re.split(r"\$\{?\w+\}?|[*?]", segment))
+        return ".*".join(re.escape(part) for part in re.split(r"(?:\$\{?\w+\}?|[*?])+", segment))
 
     def agree(a: str, b: str) -> bool:
         return a == b or bool(re.fullmatch(loose(a), b) or re.fullmatch(loose(b), a))
@@ -153,16 +153,24 @@ def run_scripts(cmd: str) -> list:
     each, the commands outside every heredoc body up to its run, and its body. A body counts when
     it is written to a file that a later command, or a body a shell reads later, runs a shell on or
     sources. Each is read apart from the rest of the call, after the commands before its run, so its
-    quotes, exports and ``cd`` stay its own, also when the call's own shell sources it."""
+    quotes, exports and ``cd`` stay its own, also when the call's own shell sources it. Those
+    commands are read as the call's own pass reads them, and end before a quote or ``-c`` script
+    that is still open where the script is run."""
     docs = list(HEREDOC.finditer(cmd))
     opened = [m.start() + m.group(1).index("<<") for m in docs]
     named = [bool(re.search(r"\b" + SHELL + r"\b", m.group(1))) for m in docs]
     bodies = [re.sub(r"\n[ \t]*" + m.group(4) + r"[ \t]*\Z", "", cmd[m.end(1):m.end()]) for m in docs]
-    outside = list(cmd)
-    for m in docs:
-        outside[m.end(1):m.end()] = " " * (m.end() - m.end(1))
-    outside = "".join(outside)
-    direct = runs(outside)
+    def blanked(bodies_of: list) -> str:
+        text = list(cmd)
+        for m in bodies_of:
+            text[m.end(1):m.end()] = " " * (m.end() - m.end(1))
+        return "".join(text)
+
+    def before(run: int) -> str:
+        text, unclosed = blanked([m for i, m in enumerate(docs) if not named[i]])[:run], []
+        unquoted(text, unclosed=unclosed)
+        return text[:unclosed[0]] if unclosed else text
+    direct = runs(blanked(docs))
     # Where each body a shell reads is run, as its file's and its command's position: a body runs again each time its file does.
     ran = {i: (opened[i], opened[i]) for i in range(len(docs)) if named[i]}
     settled = False
@@ -174,7 +182,7 @@ def run_scripts(cmd: str) -> list:
             at += [ran[j] for j in list(ran) if j != i and any(same_file(path, file) for _, _, file in runs(bodies[j]) for path in written)]
             if at and max(at)[0] > max(opened[i], ran.get(i, (-1, -1))[0]):
                 ran[i], settled = max(at), False
-    return [(outside[:ran[i][1]], bodies[i]) for i in sorted(ran) if not named[i]]
+    return [(before(ran[i][1]), bodies[i]) for i in sorted(ran) if not named[i]]
 
 
 def commands_only(cmd: str) -> str:
@@ -183,11 +191,12 @@ def commands_only(cmd: str) -> str:
     return HEREDOC.sub(lambda m: m.group(0) if re.search(r"\b(?:ba|z|da|k)?sh\b", m.group(1)) else m.group(1), cmd)
 
 
-def unquoted(cmd: str, scripts: list = None) -> str:
+def unquoted(cmd: str, scripts: list = None, unclosed: list = None) -> str:
     """``cmd`` with quoted text masked, since a quoted pattern or message is data (``rg "a|go b"``),
     except a script handed to a shell's ``-c`` and a ``$(...)`` inside double quotes, which run.
     Every character keeps its position, so a match in the result indexes the original. Each
-    script's ``(start, end)`` span is appended to ``scripts`` when given."""
+    script's ``(start, end)`` span is appended to ``scripts`` when given, and the start of a quote
+    or script still open at the end to ``unclosed``."""
     out, i, quote, script, depth, opened = [], 0, None, None, 0, 0
     while i < len(cmd):
         c = cmd[i]
@@ -206,7 +215,7 @@ def unquoted(cmd: str, scripts: list = None) -> str:
                 if re.search(SHELL_SCRIPT + "$", cmd[:i]):
                     script, opened = c, i
                 else:
-                    quote = c
+                    quote, opened = c, i
             out.append(c)
         elif c == quote and depth == 0 and not (quote == '"' and cmd[i - 1] == "\\"):
             quote = None
@@ -220,6 +229,8 @@ def unquoted(cmd: str, scripts: list = None) -> str:
         else:
             out.append("_")
         i += 1
+    if unclosed is not None and (script or quote):
+        unclosed.append(opened)
     return "".join(out)
 
 

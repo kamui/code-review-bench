@@ -22,7 +22,8 @@ ceiling of each client and the environment the runner needs::
 
 ``work_root`` (default ``~/.t3/bench-runs``) and ``state_dir`` (default
 ``~/.t3/bench-queues/<queue_id>``) may be set too. ``{repo}`` is expanded in paths and environment values,
-and ``~`` in paths. ``environment`` may not name a client executable, its hash or its version.
+and ``~`` in paths. ``environment`` may not name a client executable, its hash, its version or its
+companion list.
 Every run uses one client.
 
 A client pin may also list ``companions``, the files a client installs beside its executable, each
