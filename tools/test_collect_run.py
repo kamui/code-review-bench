@@ -32,3 +32,39 @@ class CollectRunTest(unittest.TestCase):
                 archive.write_bytes(b'changed')
                 with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
                     collect_run.collect(run)
+
+    def test_archives_keep_the_repository_path_their_record_names_and_probes_are_collected(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            run = root / 'bench/runs/test'
+            cache = root / 'cache/test-probe/att-002.tar.gz'
+            cache.parent.mkdir(parents=True)
+            cache.write_bytes(b'probe filed outside any checkout')
+            filed = {'attempts/att-001': ('~/gone/checkout/artifacts/transcripts/test/att-001.tar.gz', 'artifacts/transcripts/test/att-001.tar.gz'),
+                     'attempts/att-002': ('artifacts/transcripts/reviews/test/att-002.tar.gz', 'artifacts/transcripts/reviews/test/att-002.tar.gz'),
+                     'probes/att-001': ('/gone/checkout/artifacts/transcripts/test-probe/att-001.tar.gz', 'artifacts/transcripts/test-probe/att-001.tar.gz'),
+                     'probes/att-002': (str(cache), 'artifacts/transcripts/test/probes/att-002.tar.gz')}
+            for name, (recorded, logical) in filed.items():
+                archive = cache if recorded == str(cache) else root / logical
+                archive.parent.mkdir(parents=True, exist_ok=True)
+                archive.write_bytes(archive.read_bytes() if archive == cache else name.encode())
+                (run / name).mkdir(parents=True)
+                (run / name / 'attempt.json').write_text(json.dumps({'transcript_archive': {
+                    'path': recorded, 'sha256': hashlib.sha256(archive.read_bytes()).hexdigest()}}))
+            with patch.object(collect_run, 'ROOT', root):
+                collect_run.collect(run)
+                entries = json.loads((run / 'transcripts.json').read_text())
+                self.assertEqual({entry['attempt']: entry['path'] for entry in entries},
+                                 {f'bench/runs/test/{name}/attempt.json': logical for name, (_, logical) in filed.items()})
+                self.assertEqual((root / 'artifacts/transcripts/test/probes/att-002.tar.gz').read_bytes(), cache.read_bytes())
+                (root / 'artifacts/transcripts/test/att-001.tar.gz').unlink()
+                with self.assertRaisesRegex(ValueError, 'Transcript archive unavailable: artifacts/transcripts/test/att-001.tar.gz'):
+                    collect_run.collect(run)
+            record = run / 'attempts/att-001/attempt.json'
+            record.write_text(json.dumps({'transcript_archive': {'path': '/gone/artifacts/transcripts/../../escape.tar.gz', 'sha256': ''}}))
+            with patch.object(collect_run, 'ROOT', root), self.assertRaisesRegex(ValueError, 'unsafe evidence path'):
+                collect_run.collect(run)
+
+
+if __name__ == '__main__':
+    unittest.main()
