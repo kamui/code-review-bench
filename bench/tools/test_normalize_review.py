@@ -94,6 +94,37 @@ class NormalizeReviewCli(unittest.TestCase):
         self.assertEqual(doc["items"][0]["claim"], "Looks fine to me overall.")
         self.assertIsNone(self.stamped())
 
+    def test_builtin_fenced_json_with_an_unescaped_quote_is_unresolved_and_kept_whole(self):
+        # 2026-10-08-last-push-claude-fable att-012: a finding quotes `inspect('"')` without escaping the double quote.
+        def fenced(quote: str) -> str:
+            return ('[\n  {\n    "file": "src/a.js",\n    "line": 58,\n    "summary": "The test no longer reaches its branch.",\n'
+                    '    "failure_scenario": "A broken fallback still passes."\n  },\n'
+                    '  {\n    "file": "src/b.js",\n    "line": 20,\n    "summary": "The suppression covers the whole next line.",\n'
+                    f'    "failure_scenario": "A type error in the `inspect(\'{quote}\')` call is hidden."\n  }}\n]')
+
+        def normalize(array: str) -> subprocess.CompletedProcess:
+            payload = self.write("payload.json", {"final_text": f"## Review\n\n```json\n{array}\n```", "report_findings": []})
+            saved = payload.read_bytes()
+            done = self.run_cli("--arm", "claude-builtin", "--payload", str(payload), "--out", str(self.out),
+                                "--timing", str(self.timing))
+            self.assertEqual(payload.read_bytes(), saved)
+            return done
+        done = normalize(fenced('"'))
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        doc = self.normalized()
+        self.assertEqual((doc["parse_status"], doc["native_verdict"], doc["verdict_source"]), ("unresolved", None, "final_text json"))
+        self.assertEqual([item["claim"] for item in doc["items"]], [fenced('"')])
+        self.assertEqual(len(doc["parse_notes"]), 1)
+        self.assertIn("fenced JSON did not parse", doc["parse_notes"][0])
+        self.assertIsNone(self.stamped())
+        done = normalize(fenced('\\"'))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        doc = self.normalized()
+        self.assertEqual((doc["parse_status"], doc["native_verdict"]), ("parsed", "findings"))
+        self.assertEqual([(item["file"], item["line_start"]) for item in doc["items"]], [("src/a.js", 58), ("src/b.js", 20)])
+        self.assertEqual(doc["items"][1]["consequence"], "A type error in the `inspect('\"')` call is hidden.")
+        self.assertIsNotNone(self.stamped())
+
     def test_builtin_report_findings_calls_from_several_workers_are_all_kept(self):
         payload = self.write("payload.json", {"final_text": "done", "report_findings": [
             {"findings": [{"file": "a.py", "line": 1, "summary": "one", "failure_scenario": "f1", "verdict": "CONFIRMED"}]},

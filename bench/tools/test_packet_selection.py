@@ -125,6 +125,18 @@ class PacketSelectionTests(unittest.TestCase):
         prices.assert_not_called()
         tool.assert_not_called()
 
+    def test_changed_arm_file_refuses_before_claim(self):
+        self.write(self.arm_path, {**self.arm, 'effort': 'low'})
+        self.assert_refused_before_claim('arm file test.json no longer hashes to the frozen arm_file_sha256')
+
+    def test_invalid_manifest_arm_refuses_before_claim(self):
+        frozen = copy.deepcopy(self.manifest)
+        for change in ({'billing_mode': 'plan'}, {'arm_file_sha256': 'unpinned'}, {'model': 'another-model'}):
+            with self.subTest(change=change):
+                self.manifest = copy.deepcopy(frozen)
+                self.manifest['arms'][0].update(change)
+                self.assert_refused_before_claim('the manifest does not validate')
+
     def test_changed_target_refuses_before_claim(self):
         self.target_doc['head'] = 'c' * 40
         self.write(self.target / 'target.json', self.target_doc)
