@@ -294,7 +294,7 @@ Git tracks the archives up to commit `297edaaf`, on the head of pull request #88
 python3 bench/tools/evidence_store.py fetch --manifest bench/evidence/manifests/last-push-transcripts-2026-10-09-v1.json
 ```
 
-`bun run evidence:fetch` leaves this manifest out, because no repository check reads these archives. Each attempt record still names its archive by the path in the dispatch checkout. Mapping those paths is part of #94.
+`bun run evidence:fetch` leaves this manifest out, because no repository check reads these archives. Each attempt record still names its archive by the path in the dispatch checkout. Each run's `transcripts.json` maps the record to the archive's repository path; see [portable evidence](../portable-evidence-2026-10-10/README.md).
 
 ### Selection staged for grading
 
