@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """List the refs that keep each run's freeze commit retrievable from the two forge repositories.
 
-Usage: freeze_commits.py --git-dir DIR [--bundle FILE] [--check]. DIR is a scratch bare repository
+Usage: freeze_commits.py --git-dir DIR [--bundle FILE]... [--check]. DIR is a scratch bare repository
 outside any checkout; a missing one is created and filled with every branch, tag and pull request
-head of both repositories. FILE is the member of the history-recovery manifest, already fetched.
+head of both repositories. Each FILE is the already fetched member of a history-recovery manifest,
+in the manifests' order, because a later bundle builds on an earlier one.
 Exit 0: the record was written, or --check reproduced it; 1: the saved record differs.
 """
 import argparse
@@ -13,7 +14,6 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[3]
 RECORD = Path(__file__).with_name('freeze-commits.v1.json')
-BUNDLE = 'artifacts/recovery/shared-before-rewrite-2026-10-08.bundle'
 KINDS = {'heads': 'branches', 'tags': 'tags', 'pull': 'pull_requests'}
 
 
@@ -33,18 +33,18 @@ def git(directory, *args, check=True):
     return done
 
 
-def fetch(directory, bundle):
+def fetch(directory, bundles):
     if not directory.exists():
         subprocess.run(['git', 'init', '-q', '--bare', str(directory)], check=True)
         for name in repositories():
             git(directory, 'fetch', '-q', f'https://github.com/{name}.git', *(
                 f'+refs/{source}:refs/forge/{name}/{kind}/*' for source, kind in
                 (('heads/*', 'heads'), ('tags/*', 'tags'), ('pull/*/head', 'pull'))))
-    if bundle:
+    for bundle in bundles:
         git(directory, 'fetch', '-q', str(bundle), '+refs/*:refs/bundle/*')
 
 
-def retained(directory, bundle):
+def retained(directory, bundles):
     commits = {}
     for path in sorted((ROOT / 'bench/runs').glob('*/manifest.json')):
         commit = read(path).get('freeze_commit')
@@ -65,23 +65,24 @@ def retained(directory, bundle):
             if any(found.values()):
                 row['refs'][name] = {'branches': sorted(found['branches']), 'tags': sorted(found['tags']),
                                      'lowest_pull_request': found['pull_requests']}
-        if bundle:
-            row['bundle'] = sorted(ref.removeprefix('refs/bundle/') for ref in refs if ref.startswith('refs/bundle/heads/'))[:1] or None
+        row['bundle'] = sorted(ref.removeprefix('refs/bundle/') for ref in refs
+                               if ref.startswith('refs/bundle/') and not ref.startswith('refs/bundle/tags/'))[:1] or None
         row['manifests_at_commit'] = sum(
             not git(directory, 'cat-file', '-e', f'{commit}:bench/runs/{run}/manifest.json', check=False).returncode
             for run in runs) if present else 0
         rows.append(row)
-    return {'schema_version': 1, 'repositories': repositories(), 'bundle': BUNDLE if bundle else None,
+    return {'schema_version': 1, 'repositories': repositories(), 'bundles': [bundle.name for bundle in bundles],
             'runs_without_freeze_commit': sorted(path.parent.name for path in (ROOT / 'bench/runs').glob('*/manifest.json')
                                                  if not read(path).get('freeze_commit')),
             'commits': rows,
-            'without_forge_ref': [row['commit'] for row in rows if not row['refs']]}
+            'without_forge_ref': [row['commit'] for row in rows if not row['refs']],
+            'without_any_ref': [row['commit'] for row in rows if not row['refs'] and not row['bundle']]}
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--git-dir', type=Path, required=True)
-    parser.add_argument('--bundle', type=Path)
+    parser.add_argument('--bundle', type=Path, action='append', default=[])
     parser.add_argument('--check', action='store_true')
     args = parser.parse_args()
     if args.git_dir.resolve().is_relative_to(ROOT):

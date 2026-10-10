@@ -40,7 +40,9 @@ def inventory():
         recorded = PurePosixPath(archive['path'])
         portable = not recorded.is_absolute() and recorded.parts[0] != '~'
         source, entry = mappings.get(record, (None, None))
-        if entry and entry['status'] != 'verified':
+        if entry and entry['status'] == 'missing':
+            state = 'recorded as missing'
+        elif entry and entry['status'] != 'verified':
             state = 'mapped with a recorded hash mismatch'
         elif entry:
             state = 'mapped' if entry['path'] in stored.get(archive['sha256'], ()) else 'mapped to a path outside release storage'
