@@ -1204,9 +1204,12 @@ def self_test() -> int:
         assert done.returncode == 2 and not (temp / "billing-missing").exists(), done
         assert rec["transcript_archive"]["restoration_check"] == "passed"
         assert (temp / "archive" / "2026-01-01-test" / "att-001.tar.gz").is_file()
-        assert rec["transcript_archive"]["path"] == str(temp / "archive" / "2026-01-01-test" / "att-001.tar.gz").replace(
-            os.path.expanduser("~"), "~", 1), rec["transcript_archive"]
+        outside = str(temp / "archive" / "2026-01-01-test" / "att-001.tar.gz").replace(os.path.expanduser("~"), "~", 1)
+        assert rec["transcript_archive"]["path"] == outside, rec["transcript_archive"]
         checkout = temp / "checkout"
+        done = run("checkout/bench/runs/2026-01-01-test/attempts/att-002")
+        assert done.returncode == 0, done
+        assert read_json(checkout / "bench/runs/2026-01-01-test/attempts/att-002/attempt.json")["transcript_archive"]["path"] == outside
         done = run("checkout/bench/runs/2026-01-01-test/attempts/att-001", "--archive-root", str(checkout / "artifacts/transcripts"))
         assert done.returncode == 0, done
         filed = read_json(checkout / "bench/runs/2026-01-01-test/attempts/att-001/attempt.json")["transcript_archive"]
