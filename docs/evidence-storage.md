@@ -106,7 +106,7 @@ Packet selection reads a run's manifest at its `freeze_commit`, so that commit m
 git fetch origin pull/<number>/head
 ```
 
-One retained ref is enough, so a commit that a merge commit or a pull request head keeps needs no tag. Keep the head branch until [`freeze_commits.py`](research/portable-evidence-2026-10-10/freeze_commits.py) lists another ref for the commit. A pre-rewrite commit that must not return to the forge is kept in a [recovery bundle](research/repository-storage-2026-10-08/README.md) instead. The [saved record](research/portable-evidence-2026-10-10/freeze-commits.v1.json) names the ref for each run and the two commits that neither a forge ref nor a bundle keeps.
+One retained ref is enough, so a commit that a merge commit or a pull request head keeps needs no tag. Keep the head branch until [`freeze_commits.py`](research/portable-evidence-2026-10-10/freeze_commits.py) lists another ref for the commit. A pre-rewrite commit that must not return to the forge is kept in a [recovery bundle](research/repository-storage-2026-10-08/README.md) instead. The [saved record](research/portable-evidence-2026-10-10/freeze-commits.v1.json) names the forge ref or bundle ref that keeps each run's freeze commit.
 
 ## Dependency archives
 

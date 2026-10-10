@@ -1,6 +1,6 @@
 # Portable evidence and publication scope, 2026-10-10
 
-Part of [issue 94](https://github.com/kamui/code-review-bench/issues/94). This record checks that a checkout at another path can restore the saved evidence of a run, and that each run's freeze commit is still retrievable. It publishes one Git tag and retires no storage.
+Part of [issue 94](https://github.com/kamui/code-review-bench/issues/94). This record checks that a checkout at another path can restore the saved evidence of a run, and that each run's freeze commit is still retrievable. It publishes one Git tag and two small Git bundles, and retires no storage.
 
 ## Archive references
 
@@ -47,7 +47,7 @@ The published selection takes attempts of `2026-09-30-selected-prs-review-only`,
 
 ## Freeze commits
 
-[`freeze_commits.py`](freeze_commits.py) fetched every branch, tag and pull request head of `kamui/code-review-bench` and `kamui/skills`, and the Git bundles of the two history-recovery manifests, [2026-10-08](../../../bench/evidence/manifests/history-recovery-2026-10-08-v1.json) and [2026-10-10](../../../bench/evidence/manifests/history-recovery-2026-10-10-v1.json). [`freeze-commits.v1.json`](freeze-commits.v1.json) records which refs contain each freeze commit. 53 runs name 26 freeze commits, and `2026-09-24-toy` names none.
+[`freeze_commits.py`](freeze_commits.py) fetched every branch, tag and pull request head of `kamui/code-review-bench` and `kamui/skills`, and the four Git bundles of the three history-recovery manifests: [2026-10-08](../../../bench/evidence/manifests/history-recovery-2026-10-08-v1.json), [2026-10-10](../../../bench/evidence/manifests/history-recovery-2026-10-10-v1.json) and [freeze commits](../../../bench/evidence/manifests/history-recovery-freeze-commits-2026-10-10-v1.json). [`freeze-commits.v1.json`](freeze-commits.v1.json) records which refs contain each freeze commit. 53 runs name 26 freeze commits, and `2026-09-24-toy` names none. Every one of the 26 is now under a forge ref or a bundle ref.
 
 | Freeze commits | Runs | Kept by |
 | --- | --- | --- |
@@ -55,27 +55,34 @@ The published selection takes attempts of `2026-09-30-selected-prs-review-only`,
 | 13 | 31 | pull request heads of `kamui/code-review-bench`, and `main` in the first recovery bundle |
 | 9 | 11 | pull request heads of `kamui/skills` |
 | 1 (`d27a8c24`) | `2026-09-30-selected-prs-review-only` | `refs/recovery/issue-9-selected-cohort-2026-10-02` in the second recovery bundle |
-| 2 | 3 | no forge ref and no bundle ref |
+| 1 (`d19fee72`) | `2026-10-03-codex-ce-sol61-high`, `2026-10-03-codex-ce-sol61-high-selected` | `refs/recovery/freeze-2026-10-03-codex-ce-sol61-high` in a bundle of the third manifest |
+| 1 (`61b659b3`) | `2026-09-26-x382-destroyed-tests` | `refs/recovery/freeze-2026-09-26-x382-destroyed-tests` in a bundle of the third manifest |
 
 The squash merge of pull request #88 left `149bdbd8` off `main`, and the head branch `t3code/resume-issue-60-replacement-runs` no longer exists on the forge. The release tag `evidence-last-push-transcripts-2026-10-09-v1` names the merge commit `a526b620`, which does not contain `149bdbd8`. At the owner's request on 2026-10-10 the tag `freeze-last-push-2026-10-08` now names `149bdbd8` in the public repository. The cold run fetched the commit once from the tag and once from the pull request head, so nothing depends on the local copy of the branch. No other freeze commit is on a branch or under a tag of either repository.
 
-`d27a8c24` has no forge ref, and the forge API returns no such commit. The second recovery bundle, published with pull request #101, keeps it. In a clone of the first bundle with the second fetched into it, the commit resolves and holds the run's manifest. The bundle refs are for recovery only and are not pushed to GitHub.
+Three commits have no forge ref and are kept by bundles. The bundle refs are for recovery only and are not pushed to GitHub. The [repository storage record](../repository-storage-2026-10-08/README.md) gives the restore steps.
 
-Two commits have neither a forge ref nor a bundle ref:
+- `d27a8c24`. The forge API returns no such commit. The second recovery bundle, published with pull request #101, keeps it. In a clone of the first bundle with the second fetched into it, the commit resolves and holds the run's manifest.
+- `d19fee72`. The forge API still returns the commit, but no ref keeps it, so GitHub can collect it. `~/development/code-review-bench.old` held it on `t3code/ce-sol61-serial`. Its bundle was built from that clone and holds the commit and its parent. Downloaded from the release and fetched into a clone of the first bundle, the commit resolves and holds both runs' manifests.
+- `61b659b3`. The run's manifest records that the commit was never pushed, and `~/development/skills` held it as an unreachable object. Its bundle holds that one commit. A default clone of `kamui/skills` refuses the bundle, because the parent `f297f308` is only under `refs/pull/397/head`. With that head fetched, the bundle restores the commit, and its manifest is blob `733cfcaa`, the blob the run's manifest names.
 
-- `d19fee72`, `2026-10-03-codex-ce-sol61-high` and `2026-10-03-codex-ce-sol61-high-selected`. The forge API still returns the commit, but no ref keeps it, so GitHub can collect it. `~/development/code-review-bench.old` holds it on `t3code/ce-sol61-serial`.
-- `61b659b3`, `2026-09-26-x382-destroyed-tests`. The run's manifest records that the commit was never pushed. `~/development/skills` holds it as an unreachable object.
-
-Neither run froze `packet_replacements`, so packet selection does not need these two commits today. Keeping them needs a third recovery bundle or a push from those local clones, which is the owner's decision. Of the 53 run manifests, 40 exist in the tree of their freeze commit.
+Of the 53 run manifests, 43 exist in the tree of their freeze commit.
 
 ## Publication scope
 
-This change sends nothing to a release, a site or an external service. It published one Git ref, recorded here as the contract asks:
+This change published one Git tag and one package of two Git bundles, recorded here as the contract asks. It sent nothing to a site or an external service. The tag:
 
 - Destination: tag `freeze-last-push-2026-10-08` on commit `149bdbd8` in `kamui/code-review-bench`.
 - Visibility: public. The commit and its history were already public under `refs/pull/88/head`.
 - Categories: inputs (the frozen definitions of the seven last-push runs).
 - Authorization: the owner asked for the tag on 2026-10-10.
+
+The two bundles, recorded before the upload:
+
+- Destination: release `evidence-repository-payloads-2026-10-08-v1` of `kamui/code-review-bench`, the release that holds the two earlier recovery bundles.
+- Visibility: public.
+- Categories: inputs (three commits that hold frozen run definitions). Of their 107 files, 101 equal tracked files byte for byte, one is already a member of a release package, and five are earlier versions of tracked records: three run manifests, one run README and `bench/tools/codex_skill_runner.py`. A credential-pattern search of every file, patch and commit message matched nothing. The commits carry the author address that the first recovery bundle and the pull request heads already publish.
+- Authorization: asked on 2026-10-10 whether to publish recovery bundles for `d19fee72` and `61b659b3` the way pull request #101 did for `d27a8c24`, the owner chose "Publish both".
 
 The last-push transcripts were published on 2026-10-09, and the [re-cut record](../last-push-recut-2026-10-07/README.md#transcript-archives-moved-to-release-storage-on-2026-10-09) holds the four facts the [storage contract](../../evidence-storage.md#package-publish-and-verify) now asks for:
 
@@ -100,10 +107,10 @@ Cleanup and retirement keep their separate rules. `prune_workspace.py` removes t
 
 ```sh
 python3 docs/research/portable-evidence-2026-10-10/references.py --check
-python3 docs/research/portable-evidence-2026-10-10/freeze_commits.py --git-dir /tmp/freeze-refs.git --bundle <first> --bundle <second> --check
+python3 docs/research/portable-evidence-2026-10-10/freeze_commits.py --git-dir /tmp/freeze-refs.git --bundle <first> --bundle <second> --bundle <third> --bundle <fourth> --check
 python3 docs/research/portable-evidence-2026-10-10/verify-cold.py /tmp/portable-receipt.json
 ```
 
-The first is offline. The second downloads about 430 MB of Git objects into the scratch repository, which grows to about 800 MB once it loads the bundle. Pass `--bundle` twice, first `artifacts/recovery/shared-before-rewrite-2026-10-08.bundle` and then `artifacts/recovery/issue-9-selected-cohort-2026-10-02.bundle`, each fetched from its history-recovery manifest into a directory outside this checkout, about 400 MB together. The third runs from the root of a clean new clone, downloads about 380 MB of evidence packages and writes a new receipt.
+The first is offline. The second downloads about 430 MB of Git objects into the scratch repository, which grows to about 800 MB once it loads the bundles. Pass the four bundles in this order, each fetched from its history-recovery manifest into a directory outside this checkout, about 400 MB together: `shared-before-rewrite-2026-10-08.bundle`, `issue-9-selected-cohort-2026-10-02.bundle`, `freeze-2026-10-03-codex-ce-sol61-high.bundle`, `freeze-2026-09-26-x382-destroyed-tests.bundle`. The third runs from the root of a clean new clone, downloads about 380 MB of evidence packages and writes a new receipt.
 
 Code: `tools/collect_run.py`, `bench/tools/file_attempt.py` (`recorded_archive_path`), `tools/test_collect_run.py` and `tools/test_evidence_consumers.py`.
