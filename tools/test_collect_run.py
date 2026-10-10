@@ -68,6 +68,40 @@ class CollectRunTest(unittest.TestCase):
             with patch.object(collect_run, 'ROOT', root), self.assertRaisesRegex(ValueError, 'unsafe evidence path'):
                 collect_run.collect(run)
 
+    def test_a_lost_archive_is_recorded_as_missing_only_when_named(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            run = root / 'bench/runs/test'
+            held = root / 'artifacts/transcripts/test/att-001.tar.gz'
+            held.parent.mkdir(parents=True)
+            held.write_bytes(b'archive of another record')
+            lost = hashlib.sha256(b'overwritten archive').hexdigest()
+            for name, recorded in (('attempts/att-001', '~/gone/checkout/artifacts/transcripts/test/att-001.tar.gz'),
+                                   ('probes/att-001', '~/gone/cache/att-001.tar.gz')):
+                (run / name).mkdir(parents=True)
+                (run / name / 'attempt.json').write_text(json.dumps({'transcript_archive': {'path': recorded, 'sha256': lost}}))
+            with patch.object(collect_run, 'ROOT', root):
+                with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
+                    collect_run.collect(run)
+                with self.assertRaisesRegex(ValueError, 'Transcript archive unavailable'):
+                    collect_run.collect(run, ['attempts/att-001'])
+                with self.assertRaisesRegex(ValueError, 'No such record to mark missing'):
+                    collect_run.collect(run, ['attempts/att-001', 'probes/att-001', 'probes/att-009'])
+                self.assertFalse((run / 'transcripts.json').exists())
+                collect_run.collect(run, ['attempts/att-001', 'probes/att-001'])
+                saved = (run / 'transcripts.json').read_bytes()
+                self.assertEqual(json.loads(saved), [
+                    {'attempt': 'bench/runs/test/attempts/att-001/attempt.json', 'path': 'artifacts/transcripts/test/att-001.tar.gz',
+                     'sha256': lost, 'status': 'missing'},
+                    {'attempt': 'bench/runs/test/probes/att-001/attempt.json', 'path': 'artifacts/transcripts/test/probes/att-001.tar.gz',
+                     'sha256': lost, 'status': 'missing'}])
+                collect_run.collect(run)
+                self.assertEqual((run / 'transcripts.json').read_bytes(), saved)
+                self.assertEqual(held.read_bytes(), b'archive of another record')
+                held.write_bytes(b'overwritten archive')
+                collect_run.collect(run)
+                self.assertEqual([entry['status'] for entry in json.loads((run / 'transcripts.json').read_text())], ['verified', 'missing'])
+
 
 if __name__ == '__main__':
     unittest.main()

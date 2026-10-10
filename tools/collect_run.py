@@ -30,42 +30,61 @@ def logical_path(run, record, recorded):
     return (ARCHIVES / run.name / ('' if layer == 'attempts' else layer) / f'{record.parent.name}.tar.gz').as_posix()
 
 
-def collect(run):
+def verified_path(run, path, archive, stored, stored_paths):
+    """Verify the record's archive, place it at its repository path and return that path."""
+    logical = logical_path(run, path, archive['path'])
+    same_bytes = stored.get(archive['sha256'], set())
+    if not (ROOT / logical).is_file() and logical not in stored_paths and len(same_bytes) == 1:
+        logical, = same_bytes
+    destination = ROOT / logical
+    source = destination if destination.is_file() else (
+        evidence_store.resolve(ROOT, logical, archive['sha256']) if logical in stored_paths else ROOT / Path(archive['path']).expanduser())
+    if not source.is_file():
+        raise ValueError(f'Transcript archive unavailable: {logical} for {path}')
+    if hashlib.sha256(source.read_bytes()).hexdigest() != archive['sha256']:
+        raise ValueError(f'Transcript checksum mismatch: {path}')
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if source.resolve() != destination.resolve():
+        shutil.copyfile(source, destination)
+    return logical
+
+
+def collect(run, missing=()):
     stored = {}
     for _, manifest in evidence_store.manifests(ROOT):
         for package in manifest['packages']:
             for member in package['members']:
                 stored.setdefault(member['sha256'], set()).add(member['path'])
     stored_paths = set().union(*stored.values())
+    records = sorted(record for layer in ('attempts', 'probes') for record in (run / layer).glob('*/attempt.json'))
+    mapping = run / 'transcripts.json'
+    lost = {run / name / 'attempt.json' for name in missing}
+    if mapping.is_file():
+        lost |= {ROOT / entry['attempt'] for entry in json.loads(mapping.read_text()) if entry['status'] == 'missing'}
+    if not lost <= set(records):
+        raise ValueError(f'No such record to mark missing: {sorted(map(str, lost - set(records)))}')
     entries = []
-    for path in sorted(record for layer in ('attempts', 'probes') for record in (run / layer).glob('*/attempt.json')):
-        record = json.loads(path.read_text())
-        archive = record.get('transcript_archive')
+    for path in records:
+        archive = json.loads(path.read_text()).get('transcript_archive')
         if not archive:
             continue
-        logical = logical_path(run, path, archive['path'])
-        same_bytes = stored.get(archive['sha256'], set())
-        if not (ROOT / logical).is_file() and logical not in stored_paths and len(same_bytes) == 1:
-            logical, = same_bytes
-        destination = ROOT / logical
-        source = destination if destination.is_file() else (
-            evidence_store.resolve(ROOT, logical, archive['sha256']) if logical in stored_paths else ROOT / Path(archive['path']).expanduser())
-        if not source.is_file():
-            raise ValueError(f'Transcript archive unavailable: {logical} for {path}')
-        digest = hashlib.sha256(source.read_bytes()).hexdigest()
-        if digest != archive['sha256']:
-            raise ValueError(f'Transcript checksum mismatch: {path}')
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        if source.resolve() != destination.resolve():
-            shutil.copyfile(source, destination)
-        entries.append({'attempt': path.relative_to(ROOT).as_posix(), 'path': logical,
-                        'sha256': digest, 'status': 'verified'})
-    (run / 'transcripts.json').write_text(json.dumps(entries, indent=2) + '\n')
-    print(f'Collected {len(entries)} verified transcripts for {run.name}')
+        entry = {'attempt': path.relative_to(ROOT).as_posix(), 'sha256': archive['sha256']}
+        try:
+            entries.append({**entry, 'path': verified_path(run, path, archive, stored, stored_paths), 'status': 'verified'})
+        except ValueError:
+            if path not in lost:
+                raise
+            entries.append({**entry, 'path': logical_path(run, path, archive['path']), 'status': 'missing'})
+    mapping.write_text(json.dumps([{key: entry[key] for key in ('attempt', 'path', 'sha256', 'status')} for entry in entries], indent=2) + '\n')
+    verified = sum(entry['status'] == 'verified' for entry in entries)
+    print(f'Collected {verified} verified transcripts for {run.name}' + (f'; {len(entries) - verified} recorded as missing' if verified < len(entries) else ''))
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run', type=Path, required=True)
+    parser.add_argument('--missing', action='append', default=[], metavar='RECORD',
+                        help='a record directory of the run, such as probes/att-002, whose archive no copy holds; '
+                             'its entry keeps the frozen hash with status missing')
     args = parser.parse_args()
-    collect(args.run.resolve())
+    collect(args.run.resolve(), args.missing)
