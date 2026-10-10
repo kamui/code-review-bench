@@ -221,16 +221,20 @@ class ColdConsumersTest(unittest.TestCase):
             store.publish(base / 'packed/manifest.json', root / 'bench/evidence/manifests/fixture.json', remote)
             run = root / 'bench/runs/example'
 
-            def record(name, data):
+            def record(name, data, recorded='~/gone/cache/example-probe/att-001.tar.gz'):
                 store.write_new(run / name / 'attempt.json', {'transcript_archive': {
-                    'path': '~/gone/cache/example-probe/att-001.tar.gz', 'sha256': store.digest(base / str(list(payloads.values()).index(data)))}})
+                    'path': recorded, 'sha256': store.digest(base / str(list(payloads.values()).index(data)))}})
 
             record('probes/att-001', b'stored once')
+            held = 'artifacts/transcripts/held/att-002.tar.gz'
+            (root / held).parent.mkdir(parents=True)
+            (root / held).write_bytes(b'stored once')
+            record('probes/att-002', b'stored once', '/gone/checkout/' + held)
             with patch.object(store, 'GitHub', return_value=remote), patch.object(collect_run, 'ROOT', root):
                 collect_run.collect(run)
-                entry, = store.read(run / 'transcripts.json')
-                self.assertEqual(entry['path'], 'artifacts/transcripts/example-probes/att-009.tar.gz')
-                self.assertEqual((root / entry['path']).read_bytes(), b'stored once')
+                self.assertEqual([entry['path'] for entry in store.read(run / 'transcripts.json')],
+                                 ['artifacts/transcripts/example-probes/att-009.tar.gz', held])
+                self.assertEqual((root / 'artifacts/transcripts/example-probes/att-009.tar.gz').read_bytes(), b'stored once')
                 record('attempts/att-001', b'stored twice')
                 with self.assertRaisesRegex(ValueError, 'Transcript archive unavailable: artifacts/transcripts/example/att-001.tar.gz'):
                     collect_run.collect(run)
