@@ -6,6 +6,7 @@ from contextlib import redirect_stdout
 import io
 import json
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -452,9 +453,23 @@ class CurrentInventory(unittest.TestCase):
             rows = claims.inventory("t-example", None, root)
             self.assertEqual([(r["attempt_id"], r["item_id"], r["links"]) for r in rows],
                              [("att-001", "item-0", [{"claim": "CL-t1", "relation": "equivalent"}])])
-            self.assertEqual(set(rows[0]), {"review", "attempt_id", "item_id", "links", "item"})
+            self.assertEqual(set(rows[0]), {"review", "attempt_id", "item_id", "admitted", "links", "item"})
             self.assertEqual(claims.inventory("t-example", "no such wording", root), [])
             self.assertEqual(claims.inventory("t-other", None, root), [])
+
+    def test_an_item_of_a_failed_attempt_is_listed_as_not_admitted(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            fixture(root)
+            attempts = root / "bench/runs/run/attempts"
+            shutil.copytree(attempts / "att-001", attempts / "att-002")
+            record = current.read_json(attempts / "att-002/attempt.json")
+            record.update(attempt_id="att-002", cell={**record["cell"], "replicate": 2},
+                          disposition="harness-invalid: read audit: 1 violation(s)")
+            (attempts / "att-002/attempt.json").write_text(json.dumps(record), encoding="utf-8")
+            rows = claims.review_items(current.inventory(root), [], "t-example", root=root)
+            self.assertEqual([(r["attempt_id"], r["admitted"], r["links"]) for r in rows],
+                             [("att-001", True, []), ("att-002", False, [])])
 
 
 class GradingIntegration(unittest.TestCase):
