@@ -38,25 +38,28 @@ class CollectRunTest(unittest.TestCase):
             root = Path(directory)
             run = root / 'bench/runs/test'
             cache = root / 'cache/test-probe/att-002.tar.gz'
-            cache.parent.mkdir(parents=True)
-            cache.write_bytes(b'probe filed outside any checkout')
             filed = {'attempts/att-001': ('~/gone/checkout/artifacts/transcripts/test/att-001.tar.gz', 'artifacts/transcripts/test/att-001.tar.gz'),
                      'attempts/att-002': ('artifacts/transcripts/reviews/test/att-002.tar.gz', 'artifacts/transcripts/reviews/test/att-002.tar.gz'),
+                     'attempts/att-003': ('artifacts/custom-transcripts/test/att-003.tar.gz', 'artifacts/custom-transcripts/test/att-003.tar.gz'),
+                     'attempts/att-004': ('local-archive/test/att-004.tar.gz', 'artifacts/transcripts/test/att-004.tar.gz'),
                      'probes/att-001': ('/gone/checkout/artifacts/transcripts/test-probe/att-001.tar.gz', 'artifacts/transcripts/test-probe/att-001.tar.gz'),
                      'probes/att-002': (str(cache), 'artifacts/transcripts/test/probes/att-002.tar.gz')}
+            copied = {'attempts/att-004': root / 'local-archive/test/att-004.tar.gz', 'probes/att-002': cache}
             for name, (recorded, logical) in filed.items():
-                archive = cache if recorded == str(cache) else root / logical
+                archive = copied.get(name, root / logical)
                 archive.parent.mkdir(parents=True, exist_ok=True)
-                archive.write_bytes(archive.read_bytes() if archive == cache else name.encode())
+                archive.write_bytes(name.encode())
                 (run / name).mkdir(parents=True)
                 (run / name / 'attempt.json').write_text(json.dumps({'transcript_archive': {
-                    'path': recorded, 'sha256': hashlib.sha256(archive.read_bytes()).hexdigest()}}))
+                    'path': recorded, 'sha256': hashlib.sha256(name.encode()).hexdigest()}}))
+            self.assertNotEqual(Path.cwd(), root)
             with patch.object(collect_run, 'ROOT', root):
                 collect_run.collect(run)
                 entries = json.loads((run / 'transcripts.json').read_text())
                 self.assertEqual({entry['attempt']: entry['path'] for entry in entries},
                                  {f'bench/runs/test/{name}/attempt.json': logical for name, (_, logical) in filed.items()})
-                self.assertEqual((root / 'artifacts/transcripts/test/probes/att-002.tar.gz').read_bytes(), cache.read_bytes())
+                for name, source in copied.items():
+                    self.assertEqual((root / filed[name][1]).read_bytes(), source.read_bytes())
                 (root / 'artifacts/transcripts/test/att-001.tar.gz').unlink()
                 with self.assertRaisesRegex(ValueError, 'Transcript archive unavailable: artifacts/transcripts/test/att-001.tar.gz'):
                     collect_run.collect(run)

@@ -15,8 +15,14 @@ ARCHIVES = PurePosixPath('artifacts/transcripts')
 
 
 def logical_path(run, record, recorded):
-    """The archive's repository path: the one its record names inside any checkout, else the collector's own."""
-    parts = PurePosixPath(recorded).parts
+    """The archive's repository path: the one its record holds or names inside any checkout, else the collector's own."""
+    path = PurePosixPath(recorded)
+    if not path.is_absolute() and path.parts[0] != '~':
+        try:
+            return evidence_store.logical_path(recorded).as_posix()
+        except evidence_store.EvidenceError:
+            pass
+    parts = path.parts
     for start in range(len(parts) - len(ARCHIVES.parts), -1, -1):
         if parts[start:start + len(ARCHIVES.parts)] == ARCHIVES.parts:
             return evidence_store.logical_path(PurePosixPath(*parts[start:]).as_posix()).as_posix()
@@ -36,7 +42,7 @@ def collect(run):
         logical = logical_path(run, path, archive['path'])
         destination = ROOT / logical
         source = destination if destination.is_file() else (
-            evidence_store.resolve(ROOT, logical, archive['sha256']) if logical in stored_paths else Path(archive['path']).expanduser())
+            evidence_store.resolve(ROOT, logical, archive['sha256']) if logical in stored_paths else ROOT / Path(archive['path']).expanduser())
         if not source.is_file():
             raise ValueError(f'Transcript archive unavailable: {logical} for {path}')
         digest = hashlib.sha256(source.read_bytes()).hexdigest()
