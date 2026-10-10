@@ -300,7 +300,7 @@ python3 bench/tools/evidence_store.py fetch --manifest bench/evidence/manifests/
 
 Part of [issue 93](https://github.com/kamui/code-review-bench/issues/93). The grading inventory now resolves each task's packet with `packet_selection.select()`, as [selected inputs](../../current-grading.md#selected-inputs) describes, so the new reviews can be selected. The published selection is unchanged: `bench/scoreboard.current.json`, the current records and every `target.json` keep their bytes, and [`verify.py`](verify.py) still passes on them.
 
-[`stage_edition.py`](stage_edition.py) writes the selection that takes the new reviews into a second checkout and nowhere else. It refuses this checkout.
+[`stage_edition.py`](stage_edition.py) writes the selection that takes the new reviews into a second checkout and nowhere else. It refuses this checkout, and a second checkout that reaches its registry or inventory through a symbolic link. It puts a new file in place of each of the two, so a second checkout made of hard links to this one leaves this checkout's files as they were.
 
 ```sh
 git fetch origin pull/88/head:last-push-freeze

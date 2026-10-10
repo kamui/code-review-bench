@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 import shutil
 import tempfile
@@ -141,6 +142,30 @@ class StagedSelectionTests(unittest.TestCase):
         with patch.object(stage_edition, "staged_registry", side_effect=AssertionError("staging began")):
             with self.assertRaisesRegex(ValueError, "stage into a second checkout"):
                 stage_edition.stage(ROOT / "bench/..")
+
+    def test_staging_through_a_symbolic_link_to_the_published_files_is_refused(self) -> None:
+        for linked in ["bench", stage_edition.REGISTRY, "bench/grading/current", stage_edition.INVENTORY]:
+            with self.subTest(linked=linked), tempfile.TemporaryDirectory() as root:
+                (Path(root) / linked).parent.mkdir(parents=True, exist_ok=True)
+                (Path(root) / linked).symlink_to(ROOT / linked)
+                with patch.object(stage_edition, "staged_registry", side_effect=AssertionError("staging began")):
+                    with self.assertRaisesRegex(ValueError, "through a symbolic link"):
+                        stage_edition.stage(Path(root))
+
+    def test_staging_replaces_a_hard_link_and_leaves_the_file_it_shared(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, shared = Path(temporary) / "staging", Path(temporary) / "published"
+            for name in (stage_edition.REGISTRY, stage_edition.INVENTORY):
+                for path in (shared / name, root / name):
+                    path.parent.mkdir(parents=True)
+                (shared / name).write_text("published", encoding="utf-8")
+                os.link(shared / name, root / name)
+            with patch.object(stage_edition.current_grading, "inventory", return_value={"tasks": []}):
+                with self.assertRaises(FileNotFoundError, msg="the root has no current records, so staging stops after both writes"):
+                    stage_edition.stage(root)
+            for name in (stage_edition.REGISTRY, stage_edition.INVENTORY):
+                self.assertEqual((shared / name).read_text(encoding="utf-8"), "published", name)
+                self.assertNotEqual((root / name).read_text(encoding="utf-8"), "published", name)
 
 
 if __name__ == "__main__":
