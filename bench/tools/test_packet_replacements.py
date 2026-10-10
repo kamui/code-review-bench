@@ -143,11 +143,13 @@ class StagedSelectionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "stage into a second checkout"):
                 stage_edition.stage(ROOT / "bench/..")
 
-    def test_staging_through_a_symbolic_link_to_the_published_files_is_refused(self) -> None:
-        for linked in ["bench", stage_edition.REGISTRY, "bench/grading/current", stage_edition.INVENTORY]:
-            with self.subTest(linked=linked), tempfile.TemporaryDirectory() as root:
+    def test_staging_through_a_symbolic_link_is_refused(self) -> None:
+        links = [(linked, target) for linked in ["bench", stage_edition.REGISTRY, "bench/grading/current", stage_edition.INVENTORY]
+                 for target in ("the published checkout", "itself")]
+        for linked, target in links:
+            with self.subTest(linked=linked, target=target), tempfile.TemporaryDirectory() as root:
                 (Path(root) / linked).parent.mkdir(parents=True, exist_ok=True)
-                (Path(root) / linked).symlink_to(ROOT / linked)
+                (Path(root) / linked).symlink_to(ROOT / linked if target == "the published checkout" else Path(linked).name)
                 with patch.object(stage_edition, "staged_registry", side_effect=AssertionError("staging began")):
                     with self.assertRaisesRegex(ValueError, "through a symbolic link"):
                         stage_edition.stage(Path(root))

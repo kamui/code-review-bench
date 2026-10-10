@@ -130,7 +130,7 @@ def stage(root: Path) -> tuple:
     if root == ROOT:
         raise ValueError("this checkout holds the published selection; stage into a second checkout with --root")
     for name in (REGISTRY, INVENTORY):
-        if (root / name).resolve() != root / name:
+        if any(path.is_symlink() for path in (root / name, *(root / name).parents) if root in path.parents):
             raise ValueError(f"--root reaches {name} through a symbolic link; stage into a checkout that holds its own files")
     registry, decided, deferred = staged_registry()
     replace_text(root / REGISTRY, text(registry, 2))
