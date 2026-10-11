@@ -1,0 +1,76 @@
+Date of the runs: 2026-10-11, about 20:20 to 21:00 UTC
+OS: Linux 6.6.87.2-microsoft-standard-WSL2 x86_64
+node: v24.21.0 for the probe driver (check.cjs); v18.16.0 inside the monorepo checkout (chosen by the checkout's .nvmrc "^18.17" through mise; the project asks for 18.17 or later)
+bun: 1.3.10 (installs the probe compilers, runs runtime/runtime.ts)
+pnpm: 8.5.1, the project's pinned version, taken from the task's cached corepack directory (monorepo install only)
+git: 2.34.1
+gh: 2.100.0 (read-only API calls, see ../fetch-upstream.sh)
+python3: 3.14.7 (table.py, compare-saved.py)
+
+Compilers and libraries for the probes, installed with bun into <scratch>/env:
+  typescript 5.1.3    the version pnpm-lock.yaml pins for packages/server and packages/tests at both commits
+  zod 3.20.2          pinned in pnpm-lock.yaml
+  @types/node 18.16.16 pinned in pnpm-lock.yaml
+Second and third compilers, used for base and head only: typescript 5.2.2 (<scratch>/env-ts522) and typescript 5.9.3 (<scratch>/env-ts59).
+
+Source under test: packages/server/src of trpc/trpc, read directly, not built.
+  base     2abb2d5cd19740be37272dac6ad7fdd36244ae54  the commit before the change; server source identical to tag v10.43.2 (diff -r, run)
+  head     7dc04a7e94654dfad6ef1289dfe01a0a206fff3b  the head of pull request 5017; server source identical to tag v10.43.3 (diff -r, run)
+  v10.43.4 0fa6e7f1233be1638306dc1d24d887ec4f42251d  server source identical to de8589879a461dc107402cd2fb1b06919a6c1c69, the merge of #5039 (diff -r, run)
+  v10.43.6 edceb5e4c35c67dadec600a4a8db66112c87ade8  server source identical to 2a53644b1efe7cfe9d33483ca53ee1aa9bfe7ce2, the merge of #5057 (diff -r, run)
+  v10.45.2 936db6dd2598337758e29c843ff66984ed54faaf  a late release of version 10
+  main     796700d8653b3832409fff997e6f5789519b9ea7  the default branch as fetched on 2026-10-11, @trpc/server 11.21.0
+base and head come from the local mirror <mirrors>/j-trpc-5017.git. The tags and main were fetched into the scratch clone with
+  git fetch --depth 1 https://github.com/trpc/trpc.git tag v10.43.2 tag v10.43.3 tag v10.43.4 tag v10.43.5 tag v10.43.6 tag v10.45.2
+  git fetch --depth 1 https://github.com/trpc/trpc.git de8589879a461dc107402cd2fb1b06919a6c1c69 2a53644b1efe7cfe9d33483ca53ee1aa9bfe7ce2
+  git fetch --depth 1 https://github.com/trpc/trpc.git main
+Each tree is "git archive <revision> packages/server/src" unpacked into <scratch>/trees/<name>.
+
+Patched variants: a copy of the head tree with one patch from patches/ applied: fix-generic, fix-nullish, fix-both, fix-keep-object, revert-second-gate, revert-first-gate, fix-primitive-check, later-fix-shape.
+Each patch touches packages/server/src only. No test file is changed.
+
+Compiler options (set in ../check.cjs; taken from the repository's tsconfig.build.json, tsconfig.json and packages/tests/tsconfig.json):
+strict, noUncheckedIndexedAccess, noImplicitReturns, noFallthroughCasesInSwitch, module esnext, moduleResolution node,
+target es2020, lib es2020 + dom + dom.iterable, esModuleInterop, skipLibCheck, noEmit, types [node],
+paths @trpc/server -> <tree>/packages/server/src. One compiler program per probe file. Every diagnostic is printed.
+"compiles" means no diagnostic anywhere, in the probe or in the library source it pulls in.
+For main only: lib esnext and target esnext (PROBE_LIB=esnext) with typescript 5.9.3, because that source needs newer library types.
+
+Scratch layout the scripts expect:
+  <scratch>/tools/check.cjs, run-pair.sh, project-tests.sh, table.py   (saved here as ../check.cjs and so on)
+  <scratch>/probes/J13/*.ts                                            (this directory's probe files)
+  <scratch>/trees/<name>/packages/server/src, <scratch>/variants/J13/<name>/packages/server/src
+  <scratch>/node_modules -> env/node_modules
+  <scratch>/results/J13/                                               (saved here as results/)
+
+Commands:
+  tools/run-pair.sh J13 base=trees/base head=trees/head <variant>=variants/J13/<variant> ... v10.43.4=trees/v10.43.4 v10.43.6=trees/v10.43.6 v10.45.2=trees/v10.45.2
+      -> results/result-<name>.txt, one per tree
+  python3 tools/table.py results/J13 <names>   -> results/table.json
+  PROBE_TS=<scratch>/env-ts522/node_modules/typescript SUFFIX=-ts522 tools/run-pair.sh J13 base=trees/base head=trees/head
+  PROBE_TS=<scratch>/env-ts59/node_modules/typescript  SUFFIX=-ts59  tools/run-pair.sh J13 base=trees/base head=trees/head
+  PROBE_LIB=esnext PROBE_TS=<scratch>/env-ts59/node_modules/typescript SUFFIX=-ts59-esnext tools/run-pair.sh J13 main-11.21.0=trees/main
+  bun probes/J13/runtime/runtime.ts trees/base   and   trees/head     -> results/runtime-<name>.txt
+The whole matrix was run twice. The two sets of result files were byte-identical (diff -r, run).
+
+The project's own type check (results/project-tests-<name>.txt):
+  A git worktree of the scratch clone at the head, <scratch>/mono. Dependencies installed offline from the task's cached store
+  (~/.t3/bench-cache/archives/j-trpc-5017.tar.gz, unpacked into the scratch) with
+      node <cache>/corepack/v1/pnpm/8.5.1/bin/pnpm.cjs install --frozen-lockfile --offline --store-dir <cache>/pnpm-store
+  For each variant, tools/project-tests.sh replaces <scratch>/mono/packages/server/src with the variant's and runs
+      cd packages/tests && ./node_modules/.bin/tsc --noEmit --pretty false -p tsconfig.json      (TypeScript 5.1.3)
+  This is the "type-check" smoke check of bench/targets/j-trpc-5017/target.json. The vitest runtime suite was not run.
+  "base-source" is the base's server source under the head's tests: the pull request's source change reverted, its new test kept.
+
+Saved probes of 2026-10-05, run again unchanged against the base and head trees (saved-probes-rerun/):
+  node <probe>-check.cjs <probe>-probe.ts with a "clone" link to the tree, for N1 and N2 of
+      docs/research/cohort-rebuild-2026-10-05/second-pass/candidates/j-trpc-5017/probes/
+  node print-types.cjs <tree> T2.ts for T2 of docs/research/cohort-rebuild-2026-10-05/candidates/j-trpc-5017/probes/
+  ../compare-saved.py compares each rerun's diagnostics with the saved result file. See saved-probes-rerun/comparison.txt.
+
+Paths under the scratch directory are written as <scratch> in every saved result. Where the compiler itself cut a path short
+inside a long message, the stub is written as <scratch-path-cut>.
+
+Not run: the full monorepo build, the packaged distribution, an editor, the HTTP transport, Node 18.17 or later for the runtime
+calls (bun ran the source directly), and the vitest suite. One run with strictNullChecks off was discarded: the library's own
+source has three errors of its own in that mode at both commits, so nothing can be compared.
