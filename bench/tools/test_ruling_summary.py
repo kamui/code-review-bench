@@ -115,6 +115,27 @@ class SummaryTest(unittest.TestCase):
         self.assertEqual(sum(entry["blind_high_matches"] for entry in baseline.values()), 6)
         self.assertEqual(sum(entry["unanimous_matches"] for entry in baseline.values()), 5)
 
+    def test_an_open_earlier_reversal_resets_before_any_later_closed_match(self):
+        prior = [pair(number, f"pr-{number % 4}") for number in range(1, 16)]
+        prior[0]["before"]["ruling"] = "second-26"
+        reversal = pair(16, decision="does-not-recover", round_name="open-review")
+        reversal.update(opened="2026-10-02", closed=False)
+        reversal["before"].update(ruling="second-26", group="Q1", reviews={"ruling": "second-26", "saved_outcome": "recovers"})
+        reversal["before"]["answers"][1]["confidence"] = "medium"
+        later = pair(17, round_name="closed-next")
+        later["opened"] = "2026-10-03"
+        current = pair(18, round_name="current")
+        current["opened"] = "2026-10-04"
+        without_later = ruling_summary.earned([*prior, reversal, current], "recovery", ROOT, "current")
+        with_later = ruling_summary.earned([*prior, reversal, later, current], "recovery", ROOT, "current")
+        self.assertEqual((without_later["count"], without_later["level"]), (0, 0))
+        self.assertEqual((with_later["count"], with_later["level"]), (1, 0))
+        self.assertEqual(without_later["resets"][0]["path"], reversal["path"])
+        self.assertEqual(with_later["resets"][0]["path"], reversal["path"])
+        open_match = pair(19, round_name="open-review")
+        open_match.update(opened="2026-10-02", closed=False)
+        self.assertEqual(ruling_summary.earned([*prior, open_match, current], "recovery", ROOT, "current")["count"], 15)
+
     def test_digest_sample_and_audit_calls_are_selected_by_hash(self):
         prior = [pair(number, f"pr-{number % 5}") for number in range(1, 31)]
         settled = [pair(number, round_name="second") for number in range(31, 37)]

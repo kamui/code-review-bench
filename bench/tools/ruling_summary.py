@@ -109,7 +109,7 @@ def earned(pairs, decision_type, root, before_round=None):
         before = pair["before"]
         if before["decision_type"] != decision_type or not pair["after"]:
             continue
-        if before_round and (not pair["closed"] or (pair["opened"], natural(pair["path"])) >= cutoff):
+        if before_round and (pair["opened"], natural(pair["path"])) >= cutoff:
             continue
         if any(not agrees(prior["after"], final_decisions(prior, pairs[:position + 1], root)) for prior in counted):
             count, targets, counted = 0, set(), []
@@ -123,9 +123,10 @@ def earned(pairs, decision_type, root, before_round=None):
         models = setup
         if consensus(pair, root):
             if agrees(record.recommender(before), [pair["after"]]):
-                count += 1
-                targets.add(before["target"])
-                counted.append(pair)
+                if not before_round or pair["closed"]:
+                    count += 1
+                    targets.add(before["target"])
+                    counted.append(pair)
             else:
                 count, targets, counted = 0, set(), []
                 resets.append({"path": pair["path"], "reason": "agreed answer was not the decision"})
