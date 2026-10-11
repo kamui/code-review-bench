@@ -83,14 +83,29 @@ boot, the PID namespace and the user. The child's PID, start time and session ar
 starts. An observation reports ``running``, ``absent`` or ``unknown``:
 
 - ``unknown`` when there is no launch record, the record names no boot or is from another host,
-  PID namespace or user, or a process of this user cannot be inspected. A free lock, a stale
-  heartbeat, a missing PID or a zombie wrapper is never read as absence.
+  PID namespace or user, or a process of this user stays uninspectable, as described below. A free
+  lock, a stale heartbeat, a missing PID or a zombie wrapper is never read as absence.
 - ``absent`` when the host has rebooted since the launch, or two readings of the process table
-  find no live process that carries the marker, names the attempt directory in its environment,
-  command or working directory, belongs to the launch's session, or descends from one that does.
-  A recorded PID now held by a process with another start time is that other process, and a
-  process older than the launch is not the launch's.
+  in a row find no live process that carries the marker, names the attempt directory in its
+  environment, command or working directory, belongs to the launch's session, or descends from one
+  that does. A recorded PID now held by a process with another start time is that other process,
+  and a process older than the launch is not the launch's.
 - ``running`` otherwise, with the processes listed.
+
+A process of this user that is not older than the launch, is not a zombie, and refuses a read of
+its environment, command or working directory is tied to the launch by its start time alone. The
+decision is that it still blocks the launch: the marker is in the environment that cannot be read,
+so nothing shows that the process is not a reviewer child that left the launch's session and lost
+its parent. Two kinds are known. An exiting process has given up its address space and is not yet a
+zombie, and the kernel gives its ``environ`` to root from then on. Measured on Linux 6.6, that
+lasted about a millisecond for a small process, up to 22 ms on a busy host, and about 0.1 s for each
+GiB a large one held. A process that is not dumpable, such as systemd's ``(sd-pam)``, refuses for as
+long as it lives. An observation therefore reads the table again every ``SCAN_GAP_SECONDS`` until
+two readings in a row have no such process. One such reading is not enough: while the table is being
+read, a process can fork and exit, and that reading then lists neither the parent nor the child. A
+process that becomes a zombie or disappears no longer blocks. Once ``UNREADABLE_WAIT_SECONDS`` have
+passed, a reading that still has such a process leaves the launch ``unknown``, and the reason names
+each one's command name, PID, state and start time, and the error its read raised.
 
 This tool never signals a process.
 
@@ -123,7 +138,7 @@ import tempfile
 import time
 import urllib.request
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 TOOLS = Path(__file__).resolve().parent
 REPO = TOOLS.parents[1]
@@ -142,6 +157,7 @@ QUOTA_MAX_AGE_SECONDS = 3600
 HEARTBEAT_SECONDS = 60
 POLL_SECONDS = 5
 SCAN_GAP_SECONDS = 0.2
+UNREADABLE_WAIT_SECONDS = 5
 # cause -> whether run_cell.py is told the harness stopped the predecessor
 REPLACED = {"harness-invalid": False, "harness-stop": True, "transient-capacity": True}
 CAUSES = {*REPLACED, "setup-rejection", "skill-timeout"}
@@ -350,10 +366,12 @@ def identity() -> dict:
 
 def stat_of(pid: int) -> dict | None:
     try:
-        fields = (PROC / str(pid) / "stat").read_text(encoding="utf-8", errors="replace").rsplit(")", 1)[1].split()
+        name, rest = (PROC / str(pid) / "stat").read_text(encoding="utf-8", errors="replace").rsplit(")", 1)
     except (FileNotFoundError, ProcessLookupError):
         return None
-    return {"pid": pid, "state": fields[0], "ppid": int(fields[1]), "session": int(fields[3]), "start_ticks": int(fields[19])}
+    fields = rest.split()
+    return {"pid": pid, "name": name.split("(", 1)[1], "state": fields[0], "ppid": int(fields[1]), "session": int(fields[3]),
+            "start_ticks": int(fields[19])}
 
 
 def command_of(pid: int) -> list:
@@ -366,6 +384,11 @@ def command_of(pid: int) -> list:
 def started(pid: int) -> dict:
     """What identifies a process this controller started, for a reader that may find the PID reused."""
     return {"pid": pid, "start_ticks": (stat_of(pid) or {}).get("start_ticks")}
+
+
+def started_at(start_ticks: int) -> str:
+    age = time.clock_gettime(time.CLOCK_BOOTTIME) - start_ticks / os.sysconf("SC_CLK_TCK")
+    return (datetime.now(timezone.utc) - timedelta(seconds=age)).isoformat(timespec="milliseconds")
 
 
 def scan(evidence: dict, attempt_dir: Path | None) -> tuple:
@@ -398,11 +421,11 @@ def scan(evidence: dict, attempt_dir: Path | None) -> tuple:
                                    os.fsencode(os.readlink(entry / "cwd"))])
             except (FileNotFoundError, ProcessLookupError):
                 continue
-            except OSError:
+            except OSError as error:
                 # Another user's process cannot be read and is not this launch's; an unreadable one of ours might be.
                 try:
                     if os.getuid() in (0, entry.stat().st_uid):
-                        unreadable.append(pid)
+                        unreadable.append({**stat, "error": f"{type(error).__name__}: {error}"})
                 except OSError:
                     pass
                 continue
@@ -452,22 +475,30 @@ def observe(evidence: dict | None, attempt_dir: Path | None = None) -> dict:
         return unknown(f"the launch ran in PID namespace {evidence.get('pid_namespace')}, which this process cannot see into")
     if here["uid"] not in (0, evidence.get("uid")):
         return unknown(f"the launch ran as uid {evidence.get('uid')}, whose processes uid {here['uid']} cannot inspect")
-    found, unreadable, wrapper = scan(evidence, attempt_dir)
-    if not unreadable and not any(row["state"] not in "ZX" for row in found):
-        # A process that forks and exits between two directory reads is missed by one reading, not by two.
-        time.sleep(SCAN_GAP_SECONDS)
+    began, readings, clean = time.monotonic(), 0, 0
+    while True:
         found, unreadable, wrapper = scan(evidence, attempt_dir)
+        readings += 1
+        alive = [row["pid"] for row in found if row["state"] not in "ZX"]
+        waited = time.monotonic() - began
+        clean = 0 if unreadable else clean + 1
+        # A process that forks and exits between two directory reads is missed by one reading, not by two in a row.
+        if alive or clean == 2 or (unreadable and waited >= UNREADABLE_WAIT_SECONDS):
+            break
+        time.sleep(SCAN_GAP_SECONDS)
     seen.update(processes=found, wrapper=wrapper)
-    alive = [row["pid"] for row in found if row["state"] not in "ZX"]
     if alive:
         return {**seen, "status": "running", "reason": f"live processes of the launch: {alive}"}
     if unreadable:
-        return unknown(f"processes {unreadable} of this user could not be inspected")
+        named = "; ".join(f"{row['name']} (pid {row['pid']}, state {row['state']}, started {started_at(row['start_ticks'])}): "
+                          f"{row['error']}" for row in unreadable)
+        return unknown(f"reading {readings} of the process table, {waited:.1f} s after the first, could not inspect processes of "
+                       f"this user: {named}")
     return {**seen, "status": "absent",
             "verified_by": f"review_queue.py read the process table of {here['host']} (boot {here['boot_id']}, PID namespace "
-                           f"{here['pid_namespace']}) twice as uid {here['uid']}: no live process carried the launch marker, named "
-                           f"the attempt directory, belonged to session {evidence.get('session')}, or descended from one that did; "
-                           f"the recorded PID {evidence.get('pid')} was {wrapper}"}
+                           f"{here['pid_namespace']}) {readings} times as uid {here['uid']}: no live process carried the launch "
+                           f"marker, named the attempt directory, belonged to session {evidence.get('session')}, or descended from "
+                           f"one that did; the recorded PID {evidence.get('pid')} was {wrapper}"}
 
 
 # --- records ------------------------------------------------------------------------------------

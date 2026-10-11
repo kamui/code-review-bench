@@ -269,7 +269,9 @@ time and command of the runner and a marker in its environment. After a restart,
 table shows none: `--release` when no reviewer started, `--file` when the dispatch ended, and
 `--file --interrupted` otherwise, with the observation saved under `recoveries/`. Running
 processes block the queue, and so does a launch the controller cannot see into: another host,
-PID namespace or user, a missing launch record, or a process it cannot inspect. Observe such a
+PID namespace or user, a missing launch record, or a process of this user, not older than the
+launch, that it still cannot inspect after five seconds of reading the process table again. The
+refusal names that process, its state, its start time and the error. Observe such a
 launch where it ran, or file the claim with `run_cell.py --file --interrupted` and an
 observation of your own. A launch record that names no boot is unknown wherever it is observed,
 and no command clears it: filing its claim leaves the record blocking the queue. A free lock, a
