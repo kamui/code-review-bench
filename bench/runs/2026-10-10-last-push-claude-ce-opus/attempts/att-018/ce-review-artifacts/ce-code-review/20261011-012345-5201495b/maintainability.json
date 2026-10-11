@@ -1,0 +1,32 @@
+{
+  "reviewer": "maintainability",
+  "findings": [
+    {
+      "title": "Extracted createWorkingDir duplicates existing resolveWorkingDir helper",
+      "severity": "P3",
+      "file": "internal/backup.go",
+      "line": 475,
+      "why_it_matters": "The directory that startup creates and the directory each backup run later deletes with os.RemoveAll are computed by two separate copies of the same GIT_WORKING_DIR-or-default rule, so a future change to one copy (trimming, GetEnvOrFile support, a different default name) silently makes soba create one path and clean up another. This refactor lifts the inline copy out of Run() into a new named helper, createWorkingDir, but keeps the copy instead of calling resolveWorkingDir(backupDir), which already lives in the same file and is what runProviderBackups uses. Calling it is a behaviour-identical one-line substitution (both return the env value when non-empty, else filepath.Join(backupDir, workingDIRName)) and leaves a single definition of the rule.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": false,
+      "suggested_fix": "In createWorkingDir (internal/backup.go:473-478) replace the four-line os.Getenv/if/filepath.Join block and its comment with `workingDIR := resolveWorkingDir(backupDIR)`; keep the log line and MkdirAll unchanged. Output is identical for every input, so the log line and created path do not change.",
+      "confidence": 75,
+      "evidence": [
+        "internal/backup.go:475-478 -- workingDIR := os.Getenv(envGitWorkingDir)\n\tif workingDIR == \"\" {\n\t\tworkingDIR = filepath.Join(backupDIR, workingDIRName)\n\t}",
+        "internal/backup.go:140-146 -- func resolveWorkingDir(backupDir string) string {\n\tif w := os.Getenv(envGitWorkingDir); w != \"\" {\n\t\treturn w\n\t}\n\n\treturn filepath.Join(backupDir, workingDIRName)\n}",
+        "internal/backup.go:52,57 -- workingDir := resolveWorkingDir(backupDir) ... defer cleanupWorkingDir(workingDir, backupDir)  (the cleanup side uses the canonical helper; the create side does not)",
+        "provenance: function wrapper createWorkingDir is new in 136a4850 (line 473); the wrapped body lines 474-478 date from 476ed841 and resolveWorkingDir from 6adadb6b (Jon Hadfield 2026-06-24), i.e. the duplication pre-dates this change and the refactor re-housed it in a new helper rather than removing it"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Intent check (\"log output unchanged\"): collectProviderBackupResults now evaluates `bitbucketAPITokenDefined() || bitbucketOAuthDefined()` (internal/backup.go:101) with short-circuit, where the base read all five BitBucket variables unconditionally. GetEnvOrFile logs \"file ... does not exist\" / \"error opening file\" for an unreadable *_FILE path (internal/envfile.go:36-38), so with complete API-token credentials plus a BITBUCKET_USER/KEY/SECRET_FILE pointing at a missing file, that diagnostic line is no longer emitted from each backup run. Narrow misconfiguration-only difference; not verified by execution.",
+    "displayBitBucketStartupConfig now uses strings.EqualFold via the shared logProviderCompareMethod where the base used strings.ToLower(compare) == compareTypeRefs (internal/backup.go:219,282). These differ only for non-ASCII fold characters (e.g. U+017F), so the logged compare method is the same for any realistic value."
+  ],
+  "testing_gaps": [
+    "No offline test asserts the startup-config log lines. displayStartupConfig was rewritten from five inline blocks into label/env-var parameterised helpers (logProviderOrgs, logProviderBackupsToKeep, logProviderCompareMethod, logProviderBackupLFS) that deliberately preserve irregular strings (\"Gitlab backup LFS\" vs \"GitLab ...\", \"Organistations\"); the only execution of this path is via Run() in credential-gated tests that skipped in the baseline run. A table test that sets env vars, swaps `logger` for a buffer and compares output would pin the stated \"log output unchanged\" contract.",
+    "checkProvider's partial-credential path (now checkUserAndPasswordProvider / checkJustTokenProvider) and backupStatusTitle have no direct tests; the only checkProvidersDefined test is TestCheckProvidersFailureWhenNoneDefined (internal/backup_test.go:787), which exercises the zero-provider case only."
+  ]
+}

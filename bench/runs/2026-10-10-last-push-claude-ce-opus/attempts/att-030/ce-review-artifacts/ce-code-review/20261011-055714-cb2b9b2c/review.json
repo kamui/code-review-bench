@@ -1,0 +1,129 @@
+{
+  "status": "complete",
+  "verdict": "Ready with fixes",
+  "scope": {
+    "base": "db5a086d048c5c2d6e51e82bb070d20df04d688d",
+    "branch": "review-head",
+    "head_sha": "6c8fde6642cd428e884cc9c9d88c9aaa189c4bf1",
+    "pr_url": "https://github.com/seaweedfs/seaweedfs/pull/10735",
+    "files_changed": 2
+  },
+  "intent": "Stop the redis2 filer store's per-directory child index (the ZSET at `<dir>\\x00`) from accumulating members whose value key is gone (Redis TTL expiry, eviction, out-of-band DEL, half-failed DeleteEntry): ListDirectoryEntries now removes such a member when FindEntry returns ErrNotFound. The removal must not lose a live entry: a second commit re-adds the member when the value key exists again after the ZREM (concurrent InsertEntry), because the value key and index key live in different cluster slots and cannot be changed atomically. Must not change listing results for live entries, must honor keyPrefix, must not fire on transient Redis errors, and must leave super-large directories unaffected.",
+  "intent_confidence": "explicit",
+  "reviewers": [
+    "correctness",
+    "adversarial"
+  ],
+  "findings": [
+    {
+      "#": 1,
+      "title": "Replica-read cluster: stale not-found permanently drops a live entry from the index",
+      "severity": "P1",
+      "file": "weed/filer/redis2/universal_redis_store.go",
+      "line": 245,
+      "confidence": 75,
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Make the absence decision against the value key's master rather than the client's default read routing. In removeOrphanedDirectoryListMember, when store.Client is a *redis.ClusterClient, resolve cc.MasterForKey(ctx, store.getKey(string(path))) (go-redis v9.21.0 osscluster.go:2481) and run EXISTS on that client; keep store.Client.Exists for the standalone and sentinel clients, which already read from the master. Check once before the ZREM (skip the removal when the master still has the value) and once after it (re-add when the master has it). Assumption: one extra master round trip per orphan is acceptable because each orphan is cleaned once. Smaller alternative: record readOnly || routeByLatency on the store in RedisCluster2Store.initialize and skip orphan removal when replica reads are enabled.",
+      "first_evidence": "weed/filer/redis2/universal_redis_store.go:245 -- exists, err := store.Client.Exists(ctx, store.getKey(string(path))).Result()",
+      "why_it_matters": "On a redis_cluster2 filer with useReadOnly or routeByLatency enabled (both off by default), a file that was just created can vanish from directory listings permanently while its metadata is still stored: path lookups keep working, but LIST, S3 listing and recursive delete no longer see it, and only a new InsertEntry on that path restores it (UpdateEntry never re-adds the member). Before this change a lagging replica only made one listing skip the entry; now the listing issues ZREM on the index master and confirms absence with EXISTS, which go-redis routes to a replica just like the GET that produced the false not-found, so the re-add guard from the second commit agrees with the stale read. Checking the value key on its master makes the guard see what the insert actually wrote, which is the property that commit relies on.",
+      "evidence": [
+        "weed/filer/redis2/universal_redis_store.go:245 -- exists, err := store.Client.Exists(ctx, store.getKey(string(path))).Result()",
+        "weed/filer/redis2/universal_redis_store.go:238 -- if err := store.Client.ZRem(ctx, dirListKey, fileName).Err(); err != nil { : the member is removed on the master before the absence re-check.",
+        "weed/filer/redis2/universal_redis_store.go:246-248 -- if err == nil && exists == 0 { return } : a zero from EXISTS leaves the member removed.",
+        "weed/filer/redis2/universal_redis_store.go:99-101 -- data, err := store.Client.Get(...); if err == redis.Nil { return nil, filer_pb.ErrNotFound } : the not-found that triggers the cleanup is itself a read-only command subject to replica routing.",
+        "weed/filer/redis2/redis_cluster_store.go:53-54 -- ReadOnly: readOnly, RouteByLatency: routeByLatency (config keys useReadOnly / routeByLatency at lines 40-41, default false at 27-28); weed/command/scaffold/filer.toml:287-290 documents both options for [redis_cluster2].",
+        "go-redis v9.21.0 osscluster.go:205-207 -- RouteByLatency forces opt.ReadOnly = true; osscluster.go:2399-2405 -- with ReadOnly, read-only commands go to slotReadOnlyNode, all others to slotMasterNode; osscluster.go:935-947 -- slotSlaveNode returns the replica of a one-replica shard, so GET and EXISTS for the same key reach the same replica.",
+        "Scenario (create then list): InsertEntry SETs /dir/f on the value shard's master and ZAddNX on the index shard's master (universal_redis_store.go:58,68). A listing reads the member, GET /dir/f reaches the value shard's replica before the SET has replicated and returns nil; ZREM removes the member on the index master; EXISTS reaches the same lagging replica, returns 0, and the function returns. The value and index keys are in different slots and replicate independently, so a visible member does not imply a caught-up value replica.",
+        "Scenario (the race commit 2 targets): the value is genuinely missing, a concurrent InsertEntry SETs it on the master and its ZAddNX is a no-op because the member is still present, the lister's ZREM removes the member, and the lister's EXISTS reaches the replica before the SET has replicated and returns 0 -- a live value with no index member.",
+        "weed/filer/filer.go:277 and weed/filer/redis2/universal_redis_store.go:92-95 -- an existing entry is rewritten through UpdateEntry, which only calls doInsertEntry and never touches the directory index, so later writes to the path do not repair the loss.",
+        "Base behaviour for the same stale read was a skipped entry in one listing with no mutation (the not-found branch only set err = nil and continued), so the destructive outcome is introduced by this diff."
+      ],
+      "reviewers": [
+        "correctness",
+        "adversarial"
+      ],
+      "independent_reviewers": [
+        "adversarial"
+      ]
+    }
+  ],
+  "actionable_findings": [
+    {
+      "#": 1,
+      "title": "Replica-read cluster: stale not-found permanently drops a live entry from the index",
+      "severity": "P1",
+      "file": "weed/filer/redis2/universal_redis_store.go",
+      "line": 245,
+      "confidence": 75,
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Make the absence decision against the value key's master rather than the client's default read routing. In removeOrphanedDirectoryListMember, when store.Client is a *redis.ClusterClient, resolve cc.MasterForKey(ctx, store.getKey(string(path))) (go-redis v9.21.0 osscluster.go:2481) and run EXISTS on that client; keep store.Client.Exists for the standalone and sentinel clients, which already read from the master. Check once before the ZREM (skip the removal when the master still has the value) and once after it (re-add when the master has it). Assumption: one extra master round trip per orphan is acceptable because each orphan is cleaned once. Smaller alternative: record readOnly || routeByLatency on the store in RedisCluster2Store.initialize and skip orphan removal when replica reads are enabled.",
+      "first_evidence": "weed/filer/redis2/universal_redis_store.go:245 -- exists, err := store.Client.Exists(ctx, store.getKey(string(path))).Result()",
+      "why_it_matters": "On a redis_cluster2 filer with useReadOnly or routeByLatency enabled (both off by default), a file that was just created can vanish from directory listings permanently while its metadata is still stored: path lookups keep working, but LIST, S3 listing and recursive delete no longer see it, and only a new InsertEntry on that path restores it (UpdateEntry never re-adds the member). Before this change a lagging replica only made one listing skip the entry; now the listing issues ZREM on the index master and confirms absence with EXISTS, which go-redis routes to a replica just like the GET that produced the false not-found, so the re-add guard from the second commit agrees with the stale read. Checking the value key on its master makes the guard see what the insert actually wrote, which is the property that commit relies on.",
+      "evidence": [
+        "weed/filer/redis2/universal_redis_store.go:245 -- exists, err := store.Client.Exists(ctx, store.getKey(string(path))).Result()",
+        "weed/filer/redis2/universal_redis_store.go:238 -- if err := store.Client.ZRem(ctx, dirListKey, fileName).Err(); err != nil { : the member is removed on the master before the absence re-check.",
+        "weed/filer/redis2/universal_redis_store.go:246-248 -- if err == nil && exists == 0 { return } : a zero from EXISTS leaves the member removed.",
+        "weed/filer/redis2/universal_redis_store.go:99-101 -- data, err := store.Client.Get(...); if err == redis.Nil { return nil, filer_pb.ErrNotFound } : the not-found that triggers the cleanup is itself a read-only command subject to replica routing.",
+        "weed/filer/redis2/redis_cluster_store.go:53-54 -- ReadOnly: readOnly, RouteByLatency: routeByLatency (config keys useReadOnly / routeByLatency at lines 40-41, default false at 27-28); weed/command/scaffold/filer.toml:287-290 documents both options for [redis_cluster2].",
+        "go-redis v9.21.0 osscluster.go:205-207 -- RouteByLatency forces opt.ReadOnly = true; osscluster.go:2399-2405 -- with ReadOnly, read-only commands go to slotReadOnlyNode, all others to slotMasterNode; osscluster.go:935-947 -- slotSlaveNode returns the replica of a one-replica shard, so GET and EXISTS for the same key reach the same replica.",
+        "Scenario (create then list): InsertEntry SETs /dir/f on the value shard's master and ZAddNX on the index shard's master (universal_redis_store.go:58,68). A listing reads the member, GET /dir/f reaches the value shard's replica before the SET has replicated and returns nil; ZREM removes the member on the index master; EXISTS reaches the same lagging replica, returns 0, and the function returns. The value and index keys are in different slots and replicate independently, so a visible member does not imply a caught-up value replica.",
+        "Scenario (the race commit 2 targets): the value is genuinely missing, a concurrent InsertEntry SETs it on the master and its ZAddNX is a no-op because the member is still present, the lister's ZREM removes the member, and the lister's EXISTS reaches the replica before the SET has replicated and returns 0 -- a live value with no index member.",
+        "weed/filer/filer.go:277 and weed/filer/redis2/universal_redis_store.go:92-95 -- an existing entry is rewritten through UpdateEntry, which only calls doInsertEntry and never touches the directory index, so later writes to the path do not repair the loss.",
+        "Base behaviour for the same stale read was a skipped entry in one listing with no mutation (the not-found branch only set err = nil and continued), so the destructive outcome is introduced by this diff."
+      ],
+      "reviewers": [
+        "correctness",
+        "adversarial"
+      ],
+      "independent_reviewers": [
+        "adversarial"
+      ]
+    }
+  ],
+  "triage_groups": [],
+  "pre_existing_findings": [],
+  "requirements_completeness": null,
+  "learnings": [],
+  "agent_native_gaps": [],
+  "deployment_notes": [],
+  "residual_risks": [
+    "Master-only reads (redis2, redis2_sentinel, redis_cluster2 with both replica-read options off): the ZREM / EXISTS / ZAddNX sequence was traced against the interleavings of a concurrent InsertEntry and DeleteEntry by both reads and no ordering leaves a live value without a member; the worst case is a re-added member whose value was deleted in between, which the next listing removes.",
+    "The re-add guard protects InsertEntry only. An UpdateEntry (SET without ZAddNX, universal_redis_store.go:92-95) whose SET lands after the EXISTS re-check at line 245 recreates the value with no index member. It needs the value to vanish (Redis TTL, eviction, out-of-band DEL) between the filer's lookup and its update while a listing runs in that gap; on the base the orphaned member stayed and the entry reappeared. Narrow, not reproduced.",
+    "If the connection or context fails after the ZREM at line 238, the EXISTS error path falls through to a ZAddNX on the same client and context, which also fails; the member stays removed. This only matters when an insert recreated the value in that same window.",
+    "Unchanged logical-expiry branch (universal_redis_store.go:216-217) still issues DEL on the value key and ZREM with no re-check, so an entry re-created at the same path between FindEntry and that DEL loses its new value, and with replica reads a stale expired value triggers the same DEL on the master. Pre-existing; reported by the adversarial read.",
+    "The PR body still describes the first commit (a one-line ZREM with the result discarded); the head adds removeOrphanedDirectoryListMember with a re-check and re-add. The commit message of 6c8fde664 is the accurate description."
+  ],
+  "testing_gaps": [
+    "All four new test cases skip unless RUN_REDIS_TESTS=1, and nothing else in the repository (including .github/workflows) sets that variable, so `go test ./weed/filer/redis2` reports ok with no case executed (confirmed in this run: PASS with 4 SKIP). A regression in the orphan cleanup or the re-add guard would not fail any default run.",
+    "The tests build the store on a single-node redis.NewClient, so redis_cluster2 with replica-routed reads (useReadOnly / routeByLatency) is never exercised.",
+    "TestRemoveOrphanedDirectoryListMemberKeepsRecreatedEntry covers only the sequential state where the value already exists before the ZREM; no test interleaves an insert with the cleanup."
+  ],
+  "coverage": {
+    "depth": "focused",
+    "path": "Focused path: an in-context correctness read plus one independent adversarial read. No other reviewer agents were dispatched and no validator ran.",
+    "depth_reason": "No full-spine floor (17 executable non-test lines, size_band small, no hard-block or silent-pass class). The change is a non-atomic index repair under contention, which fails silently away from the change site, and it is not on an auth, money, or public-contract boundary.",
+    "adversarial_lens": "Local in-process adversarial reviewer (separately dispatched context, same model family as the correctness read, claude-opus-5-5 at high effort). The cross-model peer did not run because the invocation prohibits any other model or provider; agreement between the two reads is corroboration, not cross-model confirmation, and no confidence promotion was applied.",
+    "scope_mode": "base: (local checkout at the reviewed head, working tree clean, no untracked files)",
+    "criteria_files": "None govern the change: no CODING_STANDARDS.md, CLAUDE.md, or AGENTS.md exists in the reviewed tree.",
+    "compound_packs": "None declared; none applied.",
+    "plan": "No plan found (no plan: argument, no plan path in the PR body, no docs/plans directory); requirements_completeness is null.",
+    "not_assessed": [
+      "learnings",
+      "agent_native_gaps",
+      "deployment_notes",
+      "pre_existing_findings",
+      "triage_groups"
+    ],
+    "verification_run": "go vet ./weed/filer/redis2 clean; go test -count=1 -v ./weed/filer/redis2 PASS with all four live-Redis cases skipped (no Redis server available). The finding rests on source reading of the store and go-redis v9.21.0 routing, not on a reproduced run.",
+    "finding_1_note": "P1 found by both reads. It applies only to redis_cluster2 with useReadOnly or routeByLatency enabled (default off); requires_verification is true because any fix needs a cluster-with-replica test.",
+    "pr_state": "The packet records the pull request as already merged; the review ran on the explicit base: range, so the merged-PR skip rule did not apply. Findings are follow-up work."
+  },
+  "artifact_path": "/home/jack/.t3/bench-runs/2026-10-10-last-push-claude-ce-opus/att-030/clone-work/ce-review-artifacts/ce-code-review/20261011-055714-cb2b9b2c",
+  "run_id": "20261011-055714-cb2b9b2c"
+}

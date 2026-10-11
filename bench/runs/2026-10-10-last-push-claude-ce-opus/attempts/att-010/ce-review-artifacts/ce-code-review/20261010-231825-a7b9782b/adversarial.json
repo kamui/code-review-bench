@@ -1,0 +1,36 @@
+{
+  "reviewer": "adversarial",
+  "findings": [
+    {
+      "title": "Lagging cluster replica read permanently drops live entry from index",
+      "severity": "P1",
+      "file": "weed/filer/redis2/universal_redis_store.go",
+      "line": 245,
+      "why_it_matters": "On a redis_cluster2 filer with useReadOnly or routeByLatency enabled, a file that was just created can vanish from directory listings for good while its metadata and data still exist: it stays readable by exact path but is no longer listed, and a later recursive delete of the parent will skip it. Before this change a stale replica read only skipped the entry for that one listing; now the listing acts on it with a ZREM that goes to the master, and the safety re-check (EXISTS) is itself a read-only command routed to the same lagging replica, so it confirms the stale answer and the member is never restored. Running the confirmation against the slot master (go-redis ClusterClient.MasterForKey), or skipping the cleanup when replica reads are enabled, keeps the destructive decision off stale data.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Make the absence check authoritative before the member is left removed: in removeOrphanedDirectoryListMember, when store.Client is a *redis.ClusterClient, run the EXISTS through client.MasterForKey(ctx, valueKey) (present in go-redis v9.21.0, osscluster.go:2481) instead of store.Client.Exists, and restore the member with ZAddNX unless the master reports 0. Simpler alternative if a type switch is unwanted: record `readOnly || routeByLatency` on UniversalRedis2Store in RedisCluster2Store.initialize and skip the orphan cleanup entirely (keep the old skip-and-continue behaviour) when replica reads are enabled. Assumption: single-node and sentinel stores read from the master only, so they need no change.",
+      "confidence": 75,
+      "evidence": [
+        "weed/filer/redis2/universal_redis_store.go:245 -- exists, err := store.Client.Exists(ctx, store.getKey(string(path))).Result()",
+        "weed/filer/redis2/universal_redis_store.go:238 -- if err := store.Client.ZRem(ctx, dirListKey, fileName).Err(); err != nil {   (write command: always routed to the slot master)",
+        "weed/filer/redis2/universal_redis_store.go:99-101 -- data, err := store.Client.Get(ctx, store.getKey(string(fullpath))).Result(); if err == redis.Nil { return nil, filer_pb.ErrNotFound }   (the trigger: a nil GET is treated as proof the value is gone)",
+        "weed/filer/redis2/redis_cluster_store.go:53-54 -- ReadOnly: readOnly, RouteByLatency: routeByLatency,   (populated from the useReadOnly / routeByLatency config keys at :40-41; filer.toml scaffold documents routeByLatency for [redis_cluster2])",
+        "go-redis v9.21.0 osscluster.go:2399-2403 -- if c.opt.ReadOnly { cmdInfo := c.cmdInfo(ctx, cmdName); if cmdInfo != nil && cmdInfo.ReadOnly { return c.slotReadOnlyNode(state, slot) } }   and osscluster.go:205-207 -- RouteByLatency/RouteRandomly force opt.ReadOnly = true. GET, EXISTS and ZRANGEBYLEX carry the server's readonly flag, so all three are served by replicas; ZREM/ZADD/SET go to masters.",
+        "Scenario: (1) InsertEntry does SET /dir/f on the master of slot A, then ZADDNX /dir\\x00 f on the master of slot B; per the second commit message these keys hash to different slots, so normally different shards with independently lagging replicas. (2) A concurrent or immediately following listing reads ZRANGEBYLEX from shard B's replica, which already has the member. (3) FindEntry's GET /dir/f goes to shard A's replica, which has not applied the SET yet (async replication, or a replica whose link to its master is stalled while it keeps serving stale data) -> redis.Nil -> ErrNotFound. (4) removeOrphanedDirectoryListMember sends ZREM to shard B's master: the member is really gone. (5) EXISTS /dir/f is read-only, so it is routed by the same rule to the same lagging replica (slotSlaveNode returns the single replica of a 2-node shard; slotClosestNode is stable per slot) -> 0 -> return without ZAddNX. (6) The SET reaches the replica moments later; the value is live on every node and the member is absent everywhere. Nothing re-adds it: UpdateEntry (universal_redis_store.go:92-95) only rewrites the value.",
+        "Blast radius while a replica is stalled: every listing that touches a child whose value key lives on the stalled shard and was created after the stall point removes that child's member, one per listed name, so the damage scales with listing traffic rather than being a single lost race. At the base commit the same stale read hit `err = nil; continue` and healed on the next listing."
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Single-master race the restore step does not close: Filer.CreateEntry overwriting an existing TTL entry reads oldEntry (weed/filer/filer.go:242), Redis expires the value, a listing then runs ZREM + EXISTS(0) and returns, and only afterwards does the overwrite land through UpdateEntry (filer.go:277 -> universal_redis_store.go:92-95), which SETs the value without re-adding the member. The window is the FindEntry-to-UpdateEntry gap straddling the expiry instant, and Filer.UpdateEntry keeps the old Crtime (filer.go:378) so the resurrected entry is already logically expired; impact looks small but the result is a value with no index member, which the intent says must not happen.",
+    "A context cancelled between the ZREM and the EXISTS makes EXISTS fail, falls through to ZAddNX on the same dead context, and leaves the member removed without the confirmation ever having run; only harmful when it coincides with a concurrent insert of the same name.",
+    "Replica-routing claim rests on Redis flagging GET/EXISTS/ZRANGEBYLEX as readonly in COMMAND output (go-redis derives cmdInfo.ReadOnly from the server at runtime); verified from go-redis source and Redis semantics, not by running a cluster."
+  ],
+  "testing_gaps": [
+    "All three new tests skip unless RUN_REDIS_TESTS=1, and nothing in the repository (workflows, Makefiles, scripts) sets that variable, so the orphan cleanup, the keyPrefix case and the restore step have no coverage that actually executes in CI; a regression in any of them stays green.",
+    "TestRemoveOrphanedDirectoryListMemberKeepsRecreatedEntry only proves the restore when the value is visible to the same node that served the ZREM. No test covers redis_cluster2 with useReadOnly/routeByLatency, where the GET and EXISTS that decide the removal are served by replicas."
+  ]
+}

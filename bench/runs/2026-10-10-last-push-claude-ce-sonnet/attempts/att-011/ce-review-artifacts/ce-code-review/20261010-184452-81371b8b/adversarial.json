@@ -1,0 +1,68 @@
+{
+  "reviewer": "adversarial",
+  "findings": [
+    {
+      "title": "Client cert loaded into process-wide shared SSLContext leaks across sessions and hosts",
+      "severity": "P1",
+      "file": "src/requests/adapters.py",
+      "line": 95,
+      "why_it_matters": "With verify=True, every pool now shares one module-level SSLContext. urllib3 calls context.load_cert_chain(certfile, keyfile) on the supplied context whenever a connection has cert_file set, and a context cannot unload a chain. After one request with cert=(a.pem, a.key), the global context permanently holds that client identity. Later verified requests from any Session, adapter, or thread, including ones with no cert and ones to other hosts, can present that certificate in a TLS handshake when a server asks for one. A later cert=(b.pem, b.key) adds another chain to the same context, so OpenSSL picks a certificate by server preference and the request may authenticate as the wrong identity. Before this change each pool built its own context, so the cert was scoped to the pool. Concurrent load_cert_chain calls on one shared context also race. The fix is to stop sharing the context when client certs are in play.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Only attach the shared preloaded context when client_cert is None; when a client cert is given with verify=True, fall back to the old path (no shared context, set ca_certs from the default bundle) or build a per-pool context copy. Assumption: client-cert use is rare enough that losing the optimization there is acceptable. Add a test that a cert request does not alter the shared context used by a later cert-less request.",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:95 -- pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context",
+        "urllib3/util/ssl_.py:429-433 -- if certfile: ... context.load_cert_chain(certfile, keyfile) (applied to the caller-supplied ssl_context)",
+        "urllib3/connection.py:1042 -- context.verify_mode = resolve_cert_reqs(cert_reqs) (the shared context is also mutated on every connect)",
+        "Scratch check: two requests, one with cert=(/c.pem,/k.pem) and one without, to different hosts got the same conn_kw['ssl_context'] object (print was True)."
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "verify=True silently overrides user-supplied ssl_context from custom adapters",
+      "severity": "P2",
+      "file": "src/requests/adapters.py",
+      "line": 95,
+      "why_it_matters": "A widely used recipe is a custom HTTPAdapter whose init_poolmanager passes ssl_context=ctx to set ciphers, minimum TLS version, or legacy renegotiation flags. Per-request pool_kwargs override the manager's connection_pool_kw (PoolManager._merge_pool_kwargs), so on every default verify=True request the adapter's context is replaced by the module-global one. The custom TLS policy is silently dropped and connections can use settings the user meant to forbid, or fail against servers that need the custom context. Before this change, requests only set ca_certs on the connection and the user's context stayed in effect.",
+      "autofix_class": "manual",
+      "owner": "human",
+      "requires_verification": true,
+      "suggested_fix": "In HTTPAdapter, only inject the preloaded context when the adapter's poolmanager.connection_pool_kw (and proxy kwargs) has no ssl_context. Otherwise leave it alone and keep the old ca_certs behaviour so the user's context gets the default bundle loaded. Assumption: preserving user contexts matters more than the optimization in that case.",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:95 -- pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context",
+        "urllib3/poolmanager.py:400-409 -- _merge_pool_kwargs: base_pool_kwargs[key] = value (override wins)",
+        "Scratch check: subclass of HTTPAdapter passing ssl_context=ctx in init_poolmanager; _get_connection(req, True).conn_kw['ssl_context'] is ctx returned False (custom context not honored)."
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "import requests now fails if the default CA bundle is unreadable",
+      "severity": "P2",
+      "file": "src/requests/adapters.py",
+      "line": 75,
+      "why_it_matters": "The default bundle is now loaded at module import. If the bundle path is missing or unreadable (a stripped container, a distro certifi that points at a removed system file, or a zip extraction failure), `import requests` raises at import time. Previously this surfaced as an OSError on the first HTTPS verify=True request, so HTTP-only and verify=False users kept working. The removed cert_verify check no longer reports the 'Could not find a suitable TLS CA certificate bundle' message for the default bundle. Every process also pays the load cost at import, even if it never makes an HTTPS call.",
+      "autofix_class": "manual",
+      "owner": "human",
+      "requires_verification": true,
+      "suggested_fix": "Build the context lazily on first use (functools.lru_cache or a locked module-level getter) and keep the 'Could not find a suitable TLS CA certificate bundle' OSError when the load fails, so the failure stays at request time.",
+      "confidence": 50,
+      "evidence": [
+        "src/requests/adapters.py:75-78 -- _preloaded_ssl_context = create_urllib3_context(); _preloaded_ssl_context.load_verify_locations(extract_zipped_paths(DEFAULT_CA_BUNDLE_PATH))",
+        "Removed: if not cert_loc or not os.path.exists(cert_loc): raise OSError(\"Could not find a suitable TLS CA certificate bundle ...\")"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Subclasses that override cert_verify or inspect conn.ca_certs for verify=True no longer see a CA path set on the connection; I did not audit third-party adapters.",
+    "The shared context is mutated on every connect (verify_mode, set_alpn_protocols, and check_hostname=False when assert_hostname or pyOpenSSL applies). That is concurrent mutation without a lock. I did not construct an observable failure for it.",
+    "The shared context is built at import time and is inherited by forked workers. Only the same-process concurrent path was reviewed."
+  ],
+  "testing_gaps": [
+    "No test checks that a client cert used with verify=True does not leak into the shared context for later cert-less requests.",
+    "No test covers a user-supplied ssl_context in a custom adapter combined with verify=True."
+  ]
+}

@@ -1,0 +1,132 @@
+{
+  "status": "complete",
+  "findings": [
+    {
+      "#": 1,
+      "autofix_class": "gated_auto",
+      "confidence": 100,
+      "evidence": [
+        "weed/filer/redis2/universal_redis_store.go:246 -- if err == nil && exists == 0 {",
+        "weed/filer/redis2/universal_redis_store.go:94 -- return store.doInsertEntry(ctx, entry)",
+        "weed/filer/redis2/universal_redis_store.go:247 -- return",
+        "weed/filer/redis2/universal_redis_store.go:250 -- store.Client.ZAddNX(ctx, dirListKey, redis.Z{Score: 0, Member: fileName})"
+      ],
+      "file": "weed/filer/redis2/universal_redis_store.go",
+      "first_evidence": "weed/filer/redis2/universal_redis_store.go:246 -- if err == nil && exists == 0 {",
+      "independent_reviewers": [
+        "correctness",
+        "adversarial"
+      ],
+      "line": 246,
+      "owner": "downstream-resolver",
+      "pre_existing": false,
+      "requires_verification": true,
+      "reviewers": [
+        "correctness",
+        "adversarial"
+      ],
+      "severity": "P2",
+      "suggested_fix": "Ensure UpdateEntry restores its parent directory ZSET membership after writing, with the same super-large-directory handling as InsertEntry, or coordinate cleanup and update atomically.",
+      "title": "Concurrent UpdateEntry can leave a recreated entry unindexed",
+      "why_it_matters": "A directory has a stale member and no value. Listing reads the member, FindEntry returns ErrNotFound, and cleanup removes it; Exists observes no value and returns. A concurrent UpdateEntry then writes the value through doInsertEntry without adding the directory member. Future directory listings omit the live value until another operation restores membership."
+    },
+    {
+      "#": 2,
+      "autofix_class": "gated_auto",
+      "confidence": 75,
+      "evidence": [
+        "weed/filer/redis2/universal_redis_store.go:238 -- if err := store.Client.ZRem(ctx, dirListKey, fileName).Err(); err != nil {",
+        "weed/filer/redis2/universal_redis_store.go:245 -- exists, err := store.Client.Exists(ctx, store.getKey(string(path))).Result()"
+      ],
+      "file": "weed/filer/redis2/universal_redis_store.go",
+      "first_evidence": "weed/filer/redis2/universal_redis_store.go:238 -- if err := store.Client.ZRem(ctx, dirListKey, fileName).Err(); err != nil {",
+      "independent_reviewers": [
+        "performance"
+      ],
+      "line": 238,
+      "owner": "downstream-resolver",
+      "pre_existing": false,
+      "requires_verification": true,
+      "reviewers": [
+        "performance"
+      ],
+      "severity": "P2",
+      "suggested_fix": "Pipeline the ordered ZREM and EXISTS commands, then issue ZADDNX only when the existence check requires restoration; preserve recreation handling.",
+      "title": "Orphan cleanup adds sequential Redis round trips",
+      "why_it_matters": "Every missing value now incurs a ZREM followed by an EXISTS before the listing advances, adding two sequential Redis round trips per orphan on the first cleanup page. Directories with many expired entries can therefore have a substantially slower cleanup listing, even though later listings benefit from the smaller index. Consider reducing the per-orphan latency while preserving the recreation check."
+    },
+    {
+      "#": 3,
+      "autofix_class": "gated_auto",
+      "confidence": 75,
+      "evidence": [
+        "weed/filer/redis2/universal_redis_store.go:250 -- store.Client.ZAddNX(ctx, dirListKey, redis.Z{Score: 0, Member: fileName})"
+      ],
+      "file": "weed/filer/redis2/universal_redis_store.go",
+      "first_evidence": "weed/filer/redis2/universal_redis_store.go:250 -- store.Client.ZAddNX(ctx, dirListKey, redis.Z{Score: 0, Member: fileName})",
+      "independent_reviewers": [
+        "reliability"
+      ],
+      "line": 250,
+      "owner": "downstream-resolver",
+      "pre_existing": false,
+      "requires_verification": true,
+      "reviewers": [
+        "reliability"
+      ],
+      "severity": "P2",
+      "suggested_fix": "Check the ZAddNX result and return or retry the repair failure through the listing path, preserving the store's error contract.",
+      "title": "Failed reindexing is silently ignored",
+      "why_it_matters": "If cleanup removed the member, then observes a recreated value, but the following ZAddNX fails, the helper discards the error and listing still succeeds. The live value can remain absent from the index and therefore invisible to later listings. Handle or expose the reindex failure so the caller can retry or report incomplete listing state."
+    }
+  ],
+  "pre_existing_findings": [],
+  "residual_risks": [],
+  "testing_gaps": [
+    "No test covers UpdateEntry racing with orphan cleanup after cleanup has removed the member and observed the value as absent.",
+    "No test injects a Redis command failure during orphan repair, especially ZAddNX failing after a recreated value is observed."
+  ],
+  "learnings": [],
+  "agent_native_gaps": [],
+  "deployment_notes": [],
+  "triage_groups": [
+    {
+      "title": "Preserve directory index membership",
+      "findings": [
+        1,
+        3
+      ],
+      "context": "Concurrent recreation and a failed repair can both leave a live value absent from the directory index.",
+      "preferred_resolution": "Handle UpdateEntry membership and propagate or retry failed ZAddNX repair.",
+      "why": "Both findings can make later listings omit a live entry, though they require separate fixes."
+    },
+    {
+      "title": "Limit orphan cleanup latency",
+      "findings": [
+        2
+      ],
+      "context": "Each missing member adds sequential Redis commands during listing.",
+      "preferred_resolution": "Reduce per-orphan round trips while preserving the recreation check.",
+      "why": "This is a separate listing-latency concern."
+    }
+  ],
+  "suppressed_by_confidence": {},
+  "suppressed_findings_discarded": 0,
+  "malformed_findings": 0,
+  "malformed_returns": 0,
+  "first_evidence_backfilled": 0,
+  "mode_aware_demotion_count": 0,
+  "coverage": [
+    "No plan was discovered, so settled-decision suppression was not evaluated.",
+    "No applicable project criteria files were present; scoped standards review was not run.",
+    "Cross-model peer review was not run under the single-model constraint; the in-process adversarial reviewer ran.",
+    "No tests were executed; the review remained report-only.",
+    "Stage 5 retained 3 primary findings, 0 pre-existing findings, and 0 soft-bucket demotions; helper suppressed-by-confidence count is 0 and malformed finding/return counts are 0.",
+    "first_evidence_backfilled: 0; no 75/100 finding was demoted for missing first_evidence.",
+    "Stage 5b selected 3 findings for one validator batch; 0 findings qualified for the cross-model quote-anchored shortcut. Verdict collection is pending."
+  ],
+  "peer": {
+    "outcome": "not-run",
+    "coverage": "Cross-model adversarial pass not run: the task explicitly requires one model/provider (gpt-6-luna at high); the in-process adversarial reviewer ran."
+  }
+}
