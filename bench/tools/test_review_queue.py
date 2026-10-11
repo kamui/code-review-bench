@@ -663,6 +663,13 @@ class ProcessObservation(unittest.TestCase):
         seen = review_queue.observe(evidence)
         self.assertEqual((seen["status"], [row["pid"] for row in seen["processes"]]), ("running", [80, 81]))
 
+    def test_an_uninspectable_process_of_another_user_does_not_block_the_launch(self):
+        _, process, evidence = self.table()
+        process(70, 1, None)
+        other = os.getuid() + 1
+        with patch.object(review_queue.os, "getuid", return_value=other):
+            self.assertEqual(review_queue.observe({**evidence, "uid": other})["status"], "absent")
+
     def test_a_process_that_is_uninspectable_in_one_reading_is_judged_by_the_readings_after_it(self):
         proc, process, evidence = self.table()
         marked = f"HOME=/x\0{review_queue.MARKER}=m1\0".encode()
