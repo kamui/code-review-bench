@@ -241,4 +241,4 @@ The sheet omits the ruling named by `--exclude`, its aliases and any review of i
 
 Give that saved sheet to every party with the neutral case. Pin it in `case.precedents`, and pin the same path and hash in every answer's `precedents`. The tool refuses a missing, different or altered sheet pin. Existing records with no sheet stay valid; nobody backfills what an earlier party did not read.
 
-Second-pass ruling 5 was [confirmed under the current reading](research/issue-59-confirmations-2026-10-11/rulings/05-requests-Q2.md). Ruling 8 still needs the user's confirmation or a new ruling. This tooling does not invent a reason for either decision. Ruling 8's confirmation, policy adoption and the first live round remain separate work.
+Second-pass [ruling 5](research/issue-59-confirmations-2026-10-11/rulings/05-requests-Q2.md) and [ruling 8](research/issue-59-confirmations-2026-10-11/rulings/08-trpc-Q1.md) were confirmed under the current reading. Both retain no credit and record that the comment identifies the cause as a fault. Their confirmations settle the remaining rulings in step 2 of issue #59. Policy adoption and the first live round remain separate work.
