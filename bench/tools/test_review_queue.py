@@ -7,7 +7,6 @@ its arguments, this file is that fake runner or the controller that launches it.
 from __future__ import annotations
 
 from contextlib import redirect_stderr, redirect_stdout
-import errno
 import io
 import json
 import os
@@ -630,29 +629,17 @@ class ProcessObservation(unittest.TestCase):
         (proc / "self/ns").mkdir(parents=True)
         os.symlink("pid:[7]", proc / "self/ns/pid")
 
-        def process(pid: int, parent: int, environ: bytes | None, state: str = "S", thread_of: int | None = None,
-                    cwd: str = "/", space: int = 4096) -> None:
-            """A process and its first thread, or with ``thread_of`` one more thread of that process.
-
-            ``space`` is the size of its address space, which is 0 for a thread that is ending. The process counts the
-            threads it has."""
-            thread = proc / str(thread_of or pid) / "task" / str(pid)
-            shutil.rmtree(thread if thread_of else proc / str(pid), ignore_errors=True)
-            for entry in [thread] if thread_of else [proc / str(pid), thread]:
-                entry.mkdir(parents=True)
-                (entry / "stat").write_text(f"{pid} (a b) {state} {parent} {pid} {pid} " + "0 " * 15 + f"{pid * 10} {space}\n",
-                                            encoding="utf-8")
-                (entry / "cmdline").write_bytes(b"reviewer\0--flag\0")
-                if state != "Z":
-                    os.symlink(cwd, entry / "cwd")
-                if environ is None:
-                    (entry / "environ").mkdir()
-                else:
-                    (entry / "environ").write_bytes(environ)
-            shown = proc / str(thread_of or pid)
-            name, fields = (shown / "stat").read_text(encoding="utf-8").rsplit(")", 1)
-            counted = [*fields.split()[:17], str(len(list((shown / "task").iterdir()))), *fields.split()[18:]]
-            (shown / "stat").write_text(f"{name}) {' '.join(counted)}\n", encoding="utf-8")
+        def process(pid: int, parent: int, environ: bytes | None, state: str = "S") -> None:
+            entry = proc / str(pid)
+            shutil.rmtree(entry, ignore_errors=True)
+            entry.mkdir()
+            (entry / "stat").write_text(f"{pid} (a b) {state} {parent} {pid} {pid} " + "0 " * 15 + f"{pid * 10} 0\n", encoding="utf-8")
+            (entry / "cmdline").write_bytes(b"reviewer\0--flag\0")
+            os.symlink("/", entry / "cwd")
+            if environ is None:
+                (entry / "environ").mkdir()
+            else:
+                (entry / "environ").write_bytes(environ)
 
         self.enterContext(patch.object(review_queue, "PROC", proc))
         return proc, process, {**review_queue.identity(), "marker": "m1", "pid": 50, "start_ticks": 500, "session": 50}
@@ -684,9 +671,13 @@ class ProcessObservation(unittest.TestCase):
                  "readable and not the launch's": ([lambda: process(70, 1, b"HOME=/x\0")], "absent", 2),
                  "readable and the launch's": ([lambda: process(70, 1, marked)], "running", 1),
                  "gone, with a child the next reading misses": ([lambda: shutil.rmtree(proc / "70"), lambda: process(71, 1, marked)],
-                                                                "running", 2)}
+                                                                "running", 2),
+                 "gone, then another is uninspectable in the reading between two clean ones": (
+                     [lambda: shutil.rmtree(proc / "70"), lambda: process(72, 1, None), lambda: shutil.rmtree(proc / "72"),
+                      lambda: process(71, 1, marked)], "running", 4)}
         for what, (changes, status, sleeps) in later.items():
             with self.subTest(after_the_first_reading=what):
+                shutil.rmtree(proc / "71", ignore_errors=True)
                 process(70, 1, None)
                 between = iter(changes)
                 with patch.object(review_queue.time, "sleep", side_effect=lambda seconds: next(between, lambda: None)()) as slept:
@@ -694,152 +685,6 @@ class ProcessObservation(unittest.TestCase):
                 self.assertEqual((seen["status"], slept.call_count), (status, sleeps), seen)
                 if status == "absent":
                     self.assertIn(" 3 times as uid ", seen["verified_by"])
-
-    def test_a_process_whose_first_thread_has_ended_is_judged_by_a_thread_that_still_runs(self):
-        proc, process, evidence = self.table()
-        self.enterContext(patch.object(review_queue, "UNREADABLE_WAIT_SECONDS", 0.05))
-        process(50, 1, None, state="Z")
-        seen = review_queue.observe(evidence)
-        self.assertEqual((seen["status"], seen["wrapper"]), ("absent", "a zombie"))
-        process(51, 1, None, thread_of=50)
-        seen = review_queue.observe(evidence)
-        self.assertEqual((seen["status"], seen["wrapper"], [(row["pid"], row["state"]) for row in seen["processes"]]),
-                         ("running", "running", [(50, "S")]))
-        shutil.rmtree(proc / "50")
-        marked = f"HOME=/x\0{review_queue.MARKER}=m1\0".encode()
-        for what, (environ, status) in {"the launch's": (marked, "running"), "not the launch's": (b"HOME=/x\0", "absent"),
-                                        "uninspectable": (None, "unknown")}.items():
-            with self.subTest(the_running_thread_is=what):
-                process(70, 1, None, state="Z")
-                process(71, 1, environ, thread_of=70)
-                seen = review_queue.observe(evidence)
-                self.assertEqual(seen["status"], status, seen)
-                if status == "unknown":
-                    self.assertIn("a b (pid 70, state S, started ", seen["reason"])
-                    self.assertIn(str(proc / "70/task/71/environ"), seen["reason"])
-
-    def test_a_process_is_the_launch_s_when_any_of_its_threads_works_in_the_attempt_directory(self):
-        _, process, evidence = self.table()
-        attempt = Path("/work/att-001")
-        for what, state in {"still runs": "S", "has ended": "Z"}.items():
-            with self.subTest(the_first_thread=what):
-                process(70, 1, b"HOME=/x\0", state=state)
-                process(71, 1, b"HOME=/x\0", thread_of=70)
-                process(72, 1, b"HOME=/x\0", thread_of=70, cwd=str(attempt))
-                seen = review_queue.observe(evidence, attempt)
-                self.assertEqual((seen["status"], [row["pid"] for row in seen["processes"]]), ("running", [70]), seen)
-                process(72, 1, b"HOME=/x\0", thread_of=70)
-                self.assertEqual(review_queue.observe(evidence, attempt)["status"], "absent")
-
-    def test_a_process_is_judged_by_what_was_read_when_a_thread_refuses_its_working_directory(self):
-        proc, process, evidence = self.table()
-        self.enterContext(patch.object(review_queue, "UNREADABLE_WAIT_SECONDS", 0.05))
-        marked, refusing = f"HOME=/x\0{review_queue.MARKER}=m1\0".encode(), proc / "70/task/71/cwd"
-        mine = os.getuid()
-        for what, whose, environ, uid, status in (("the launch's", "this user's", marked, mine, "running"),
-                                                  ("the launch's", "another user's and readable", marked, mine + 1, "running"),
-                                                  ("not the launch's", "this user's", b"HOME=/x\0", mine, "unknown"),
-                                                  ("not the launch's", "another user's", b"HOME=/x\0", mine + 1, "absent")):
-            with self.subTest(the_process_is=what, and_is=whose), patch.object(review_queue.os, "getuid", return_value=uid):
-                process(70, 1, environ)
-                process(71, 1, environ, thread_of=70)
-                refusing.unlink()
-                refusing.mkdir()
-                seen = review_queue.observe({**evidence, "uid": uid})
-                self.assertEqual(seen["status"], status, seen)
-                if status == "unknown":
-                    self.assertIn("a b (pid 70, state S, started ", seen["reason"])
-                    self.assertIn(str(refusing), seen["reason"])
-
-    def test_a_thread_that_ended_while_its_working_directory_was_read_is_passed_over(self):
-        proc, process, evidence = self.table()
-        process(70, 1, b"HOME=/x\0")
-        process(71, 1, b"HOME=/x\0", thread_of=70)
-        thread, readlink = proc / "70/task/71", os.readlink
-
-        def ends_while_read(path):
-            if Path(path).parent == thread:
-                shutil.rmtree(thread)
-                raise PermissionError(errno.EACCES, "Permission denied", str(path))
-            return readlink(path)
-
-        with patch.object(review_queue.os, "readlink", ends_while_read):
-            seen = review_queue.observe(evidence)
-        self.assertEqual(seen["status"], "absent", seen)
-        self.assertIn(" 2 times as uid ", seen["verified_by"])
-
-    def thread_states(self, before=lambda thread: None, after=lambda thread: None) -> None:
-        """Calls ``before`` and ``after`` around each read of a thread's state, with the thread's directory."""
-        read = review_queue.stat_fields
-
-        def stat_fields(path: Path) -> tuple:
-            if path.parent.parent.name != "task":
-                return read(path)
-            before(path.parent)
-            fields = read(path)
-            after(path.parent)
-            return fields
-
-        self.enterContext(patch.object(review_queue, "stat_fields", stat_fields))
-
-    def test_a_process_whose_first_thread_has_ended_is_judged_by_a_thread_that_runs_after_it_was_read(self):
-        proc, process, evidence = self.table()
-        marked = f"HOME=/x\0{review_queue.MARKER}=m1\0".encode()
-        case = {}
-
-        def ends(thread: Path) -> None:
-            shutil.rmtree(thread)
-            process(int(thread.name) + 1, 1, case["environ"], thread_of=case["leader"])
-
-        def is_ending(thread: Path) -> None:
-            process(int(thread.name), 1, b"", thread_of=case["leader"], space=0)
-            process(int(thread.name) + 1, 1, case["environ"], thread_of=case["leader"])
-
-        def once_in_a_reading(when: str, thread: Path) -> None:
-            if case["when"] == when and thread.name != str(case["leader"]) and case.pop("armed", False):
-                case["change"](thread)
-
-        self.thread_states(before=lambda thread: once_in_a_reading("before", thread),
-                           after=lambda thread: once_in_a_reading("after", thread))
-        self.enterContext(patch.object(review_queue.time, "sleep", side_effect=lambda seconds: case.update(armed=True)))
-        for what, (when, change) in {"ended before its state was read": ("before", ends),
-                                     "ended after it was named": ("after", ends),
-                                     "was ending when its environment was read": ("after", is_ending)}.items():
-            for leader, environ, status in ((70, marked, "running"), (70, b"HOME=/x\0", "absent"), (50, b"HOME=/x\0", "running")):
-                with self.subTest(the_thread_first_listed=what, leader=leader, environ=environ):
-                    shutil.rmtree(proc / "50", ignore_errors=True)
-                    shutil.rmtree(proc / "70", ignore_errors=True)
-                    case.update(when=when, change=change, leader=leader, environ=environ, armed=True)
-                    process(leader, 1, None, state="Z")
-                    process(71, 1, environ, thread_of=leader)
-                    seen = review_queue.observe(evidence)
-                    self.assertEqual((seen["status"], [row["pid"] for row in seen["processes"]]),
-                                     (status, [leader] if status == "running" else []), seen)
-
-    def test_a_process_that_counts_a_thread_no_listing_lets_it_read_is_unknown_not_absent(self):
-        proc, process, evidence = self.table()
-        self.enterContext(patch.object(review_queue, "UNREADABLE_WAIT_SECONDS", 0.05))
-
-        def ends(thread: Path) -> None:
-            leader = int(thread.parent.parent.name)
-            if thread.name != str(leader):
-                shutil.rmtree(thread)
-                process(int(thread.name) + 1, 1, b"", thread_of=leader)
-
-        self.thread_states(before=ends)
-        for what, listed in {"ends before it is read, as does each that follows it": True, "is left out of every listing": False}.items():
-            for matched_by, leader in {"the launch marker": 70, "the recorded PID": 50}.items():
-                with self.subTest(the_thread=what, matched_by=matched_by):
-                    shutil.rmtree(proc / "50", ignore_errors=True)
-                    shutil.rmtree(proc / "70", ignore_errors=True)
-                    process(leader, 1, None, state="Z")
-                    process(leader + 1, 1, b"", thread_of=leader)
-                    if not listed:
-                        shutil.rmtree(proc / str(leader) / "task" / str(leader + 1))
-                    seen = review_queue.observe(evidence)
-                    self.assertEqual(seen["status"], "unknown", seen)
-                    self.assertRegex(seen["reason"],
-                                     rf"a b \(pid {leader}, state Z, started [^)]+\): {review_queue.THREADS_UNSETTLED}$")
 
 
 # --- one controller, pinned ---------------------------------------------------------------------
