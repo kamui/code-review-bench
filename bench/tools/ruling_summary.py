@@ -147,8 +147,8 @@ def level(count, targets):
 
 
 def earned(pairs, decision_type, root, before_round=None, closed_rounds=None):
-    count, targets, models, resets, counted = 0, set(), None, [], []
-    settled = []
+    count, targets, models, resets = 0, set(), None, []
+    watched = []
     cutoff = next((position for position, pair in enumerate(pairs) if pair["round"] == before_round), None)
     for position, pair in enumerate(pairs):
         before = pair["before"]
@@ -156,9 +156,10 @@ def earned(pairs, decision_type, root, before_round=None, closed_rounds=None):
             continue
         if before_round and position >= cutoff:
             continue
-        if any(not agrees(prior["after"], final_decisions(prior, pairs[:position + 1], root)) for prior in [*counted, *settled]):
-            count, targets, counted = 0, set(), []
-            settled = []
+        changed = [prior for prior in watched if not agrees(prior["after"], final_decisions(prior, pairs[:position + 1], root))]
+        if changed:
+            count, targets = 0, set()
+            watched = [prior for prior in watched if prior not in changed]
             resets.append({"path": pair["path"], "reason": "counted or settled decision changed"})
         if not eligible(pair):
             continue
@@ -166,21 +167,21 @@ def earned(pairs, decision_type, root, before_round=None, closed_rounds=None):
 
         setup = model_setup(before)
         if models is not None and setup != models:
-            count, targets, counted = 0, set(), []
+            count, targets = 0, set()
             resets.append({"path": pair["path"], "reason": "model changed"})
         models = setup
         if not pair["after"]:
             continue
         if pair["after"].get("settled_by") == "agents":
-            settled.append(pair)
+            watched.append(pair)
         if consensus(pair, root):
             if agrees(record.recommender(before), [pair["after"]]):
                 if pair["after"].get("settled_by", "owner") == "owner" and (not before_round or (pair["round"] in closed_rounds if closed_rounds is not None else pair["closed"])):
                     count += 1
                     targets.add(before["target"])
-                    counted.append(pair)
+                    watched.append(pair)
             else:
-                count, targets, counted = 0, set(), []
+                count, targets = 0, set()
                 resets.append({"path": pair["path"], "reason": "agreed answer was not the decision"})
     return {"count": count, "pull_requests": sorted(targets), "level": level(count, targets), "resets": resets}
 

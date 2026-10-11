@@ -50,7 +50,7 @@ An equivalent match also asserts that the item identifies the canonical problem 
 
 ## Prepare a ruling
 
-Follow these five steps and retain the [evidence and one-at-a-time requirements](ruling-preparation-evidence.md). [Policy v2](adr/0007-settle-adjudications-on-earned-confidence.md) is proposed, not adopted; routing continues to ask until the owner adopts it and the decision type earns its threshold.
+Follow these five steps and retain the [evidence and one-at-a-time requirements](ruling-preparation-evidence.md). [Policy v2](adr/0007-settle-adjudications-on-earned-confidence.md) is adopted. Live routing starts after the policy PR passes final review and merges; settlement also requires the decision type to earn its threshold.
 
 1. **Prepare.** Write the neutral case file, build the sheet of earlier owner rulings with `ruling_record.py precedents`, and give the blind assessors the case, rule and sheet. Add the recommender's first answer and commit `<ruling>.before.json`. For a new policy round, first commit its [opening snapshot](adjudication-record.md#round-opening-and-policy-v2).
 2. **Route.** Run `ruling_record.py route <ruling>.before.json`. It prints SETTLE or ASK with reasons. ASK includes the case facts and every party's pick, confidence and reason.

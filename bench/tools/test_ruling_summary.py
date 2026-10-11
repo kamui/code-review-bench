@@ -47,7 +47,7 @@ class SummaryTest(unittest.TestCase):
         self.assertEqual(summary["earned"]["level"], 0)
         self.assertEqual(summary["misses"], {"fact-not-fetched": 2})
         self.assertEqual(summary["lessons"][1], {"path": pairs[6]["path"], "cause_returned_after": pairs[3]["path"]})
-        self.assertEqual(summary["ask_reasons"]["no policy is adopted, so agents settle nothing beyond ADR-0006"], 8)
+        self.assertEqual(summary["ask_reasons"]["the before-record must pin its round's immutable opening snapshot"], 8)
 
     def test_contract_one_and_reconstructed_answers_do_not_earn_trust(self):
         pairs = [pair(1), pair(2), pair(3)]

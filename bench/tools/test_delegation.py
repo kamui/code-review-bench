@@ -208,6 +208,47 @@ class PolicyTest(unittest.TestCase):
         next_before, _, next_path = self.add(16, round_name='second', day='02', closed=False, pending=True)
         self.assertEqual(self.route(next_before, next_path)['level'], 0)
 
+    def test_distinct_later_reversals_reset_rebuilt_trust_and_block_credit_filing(self):
+        self.ready()
+        settlements = []
+        for number, ruling in ((15, 'second-26'), (16, 'second-27')):
+            before, after, path = self.add(number, round_name='second', day='02', agents=True)
+            before['ruling'] = after['ruling'] = ruling
+            self.save(before, after, path)
+            settlements.append((before, after, path))
+
+        def reverse(number, original, round_name, day):
+            before, after, path = self.add(number, round_name=round_name, day=day, closed=round_name != 'fourth')
+            before.update(reviews={'ruling': original['ruling'], 'saved_outcome': 'recovers'}, group=original['group'])
+            before['answers'][1].update(confidence='medium', short_of_high=['fact-reported'], would_settle=False)
+            after.update(outcome='does-not-recover', miss={'cause': 'owner-weighs-differently', 'note': 'Owner reversed the settlement.'})
+            self.save(before, after, path)
+
+        reverse(17, settlements[0][0], 'third', '03')
+        for number in range(18, 33):
+            self.add(number, round_name='third', day='03')
+        before, after, path = self.add(34, round_name='fourth', day='04', closed=False, pending=True)
+        self.assertEqual(self.route(before, path), {'level': 1, 'reasons': []})
+        reverse(33, settlements[1][0], 'fourth', '04')
+        self.assertEqual(self.route(before, path)['level'], 0)
+        self.assertIn('reset', ' '.join(self.route(before, path)['reasons']))
+        pairs = summary.records(self.root)
+        earned = summary.earned(pairs, 'recovery', self.root)
+        self.assertEqual(earned['count'], 0)
+        self.assertEqual(len(earned['resets']), 2)
+        for old_before, old_after, old_path in settlements:
+            self.assertEqual(record.after_faults(old_before, old_after, old_path, self.root), [])
+        decision = {'target': before['target'], 'revision': {'head': 'fixture'}, 'review': {'path': 'review', 'sha256': 'fixture'},
+                    'attempt_id': 'att-1', 'item_id': 'item-1', 'family_id': 'GT-1', 'says_what': 'yes', 'identifies_cause': 'no',
+                    'settled_by': 'agents', 'receipt': self.policy['receipt'], 'receipt_scope': self.policy['adoption_scope'],
+                    'reason': 'The agents settled under policy v2.'}
+        before['filing'] = {key: decision[key] for key in ('revision', 'review', 'attempt_id', 'item_id', 'family_id')}
+        after.update(settled_by='agents', policy=self.pin(self.root / delegation.POLICY), asked=0)
+        self.save(before, after, path)
+        decision['settlement'] = self.pin(path.with_name(path.name.replace('.before.', '.after.')))
+        with self.assertRaisesRegex(ValueError, 'agents cannot settle: .*reset'):
+            delegation.filing_faults(decision, 'recovery', self.root)
+
     def test_problem_and_reserved_types_stay_with_owner(self):
         for kind in ('candidate', 'band', 'grouping', 'control', 'reconciliation'):
             before, _, path = self.add(100, kind, kind, '03', closed=False, pending=True)

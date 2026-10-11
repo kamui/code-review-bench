@@ -235,9 +235,9 @@ class AfterContractTwoTest(unittest.TestCase):
             with self.subTest(decision_type):
                 self.refused(decision_type, {})
 
-    def test_agents_settle_nothing_while_no_policy_is_adopted(self):
+    def test_agents_must_pin_the_adopted_policy(self):
         self.refused("candidate", {"settled_by": "agents", "asked": 0, "policy": pin(RULES["candidate"])},
-                     "`settled_by` is `agents`, and the decision is the user's: no policy is adopted, so agents settle nothing beyond ADR-0006")
+                     "agent settlement must pin the policy v2 in force")
         self.refused("band", {"settled_by": "reviewer"}, "`settled_by` must be one of owner, agents")
 
     def test_the_policy_is_null_or_pinned(self):
@@ -309,7 +309,7 @@ class AfterContractTwoTest(unittest.TestCase):
                     after["contract"] = contract
                 record = ruling_record.load(REVIEW_9)
                 faults = ruling_record.after_faults(record, after, REVIEW_9)
-                self.assertTrue(any("`settled_by` is `agents`" in fault for fault in faults), faults)
+                self.assertIn("agent settlement needs contract 2 before and after records", faults)
         with tempfile.TemporaryDirectory() as directory:
             record = sound("candidate")
             path, after = decided(record, directory)
@@ -321,7 +321,7 @@ class AfterContractTwoTest(unittest.TestCase):
                     if contract is not None:
                         after["contract"] = contract
                     self.assertEqual(ruling_record.after_faults(record, after, path),
-                                     ["`settled_by` is `agents`, and the decision is the user's: no policy is adopted, so agents settle nothing beyond ADR-0006"])
+                                     ["agent settlement needs contract 2 before and after records"])
 
     def test_a_contract_2_after_record_needs_its_fields_and_a_contract_2_before_record(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -343,7 +343,7 @@ class RouteTest(unittest.TestCase):
         record = ruling_record.load(LABEL_1)
         run = self.route(LABEL_1)
         self.assertEqual(run.returncode, 0, run.stdout)
-        self.assertTrue(run.stdout.startswith("ASK\n- no policy is adopted, so agents settle nothing beyond ADR-0006\n- a band decision is the user's under ADR-0006\n"))
+        self.assertTrue(run.stdout.startswith("ASK\n- band stays on its existing owner or reconciler route\n"))
         self.assertIn((ROOT / record["case"]["path"]).read_text(encoding="utf-8").strip(), run.stdout)
         self.assertIn("| Party | Pick | Confidence | Reason |\n| --- | --- | --- | --- |\n| recommender | other-material | low | ", run.stdout)
         self.assertEqual(run.stdout.count("\n| inspector-"), 2)
