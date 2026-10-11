@@ -8,7 +8,14 @@ This meets [#103's remaining criterion](https://github.com/kamui/code-review-ben
 
 ## Failed attempt and shared evidence
 
-The initial full-suite attempt reported five failures and eight errors from missing pinned evidence, while all 58 queue tests passed. `bun run evidence:fetch` restored those inputs. The 42 ruling-record tests and six claims integration tests then passed before the replacement campaign started. Source and client stayed unchanged. The [publication plan](publication-plan.json) preserves that replacement lineage and identifies the immutable raw evidence package for publication.
+The initial full-suite attempt reported five failures and eight errors from missing pinned evidence, while all 58 queue tests passed. `bun run evidence:fetch` restored those inputs. The 42 ruling-record tests and six claims integration tests then passed before the replacement campaign started. Source and client stayed unchanged. The [publication plan](publication-plan.json) preserves that replacement lineage and identifies the immutable raw evidence package. The [shared manifest](../../../bench/evidence/manifests/review-queue-busy-host-2026-10-11-v1.json) pins all 34 files and the public release asset. The [cold restoration receipt](../../../bench/evidence/receipts/review-queue-busy-host-2026-10-11-v1-restoration.json) records a separate remote download, hash verification and restoration into an empty temporary directory.
+
+Retrieve the original logs and workload records from another checkout:
+
+```sh
+python3 bench/tools/evidence_store.py fetch --manifest bench/evidence/manifests/review-queue-busy-host-2026-10-11-v1.json
+python3 docs/research/review-queue-busy-host-2026-10-11/verify.py artifacts/test-campaigns/review-queue-busy-host-2026-10-11/results-v2 --out /tmp/restored-integrity.json
+```
 
 ## Repeat the checks
 
