@@ -264,18 +264,44 @@ checks the list again just before a built-in reviewer starts. The skill runners 
 from the run's frozen `inputs/runner.json` and check no companions.
 
 Each launch is recorded before it starts, with the host, boot, PID namespace, user, PID, start
-time and command of the runner and a marker in its environment. After a restart, `run` and
+time and command of the runner and a marker in its environment. `run` and `recover` match the
+marker saved as `queue_launch_marker` in the claim to that launch, regardless
+of wall-clock changes. Runners frozen before this field was added leave claims without it.
+Such a claim matches only an ended launch that explicitly names its attempt. An unfinished
+legacy launch remains unknown; observe its processes and release or file the claim through
+`run_cell.py` with your own interruption evidence before queue recovery. Keep the frozen runner
+and claim unchanged.
+
+After a restart, `run` and
 `recover` look for that launch's processes. They settle an unfiled claim only when the process
 table shows none: `--release` when no reviewer started, `--file` when the dispatch ended, and
 `--file --interrupted` otherwise, with the observation saved under `recoveries/`. Running
 processes block the queue, and so does a launch the controller cannot see into: another host,
-PID namespace or user, a missing launch record, or a process it cannot inspect. Observe such a
+PID namespace or user, a missing launch record, or a process of this user, not older than the
+launch, that it still cannot inspect after five seconds of reading the process table again. The
+refusal names that process, its state, its start time and the error. Observe such a
 launch where it ran, or file the claim with `run_cell.py --file --interrupted` and an
 observation of your own. A launch record that names no boot is unknown wherever it is observed,
 and no command clears it: filing its claim leaves the record blocking the queue. A free lock, a
 stale heartbeat, a missing PID and a zombie wrapper are never read as absence, and the tool
 never signals a process. A filed valid attempt whose clone remains is pruned on restart; a
 filed record is never rewritten.
+
+The [decision on #107](https://github.com/kamui/code-review-bench/issues/107#issuecomment-6107142539)
+applies #103's no-false-absence criterion to processes the controller cannot inspect, rather
+than to the whole check. All three cases in #107 are accepted limits. When only the launch
+marker or attempt directory could tie a process to the launch, the check can report `absent`
+while that process is alive:
+
+- The first thread has ended while another runs. `/proc/PID/stat` can show state Z, so the
+  check skips it as a zombie.
+- Only another thread's own working directory is in the attempt directory, after
+  `unshare(CLONE_FS)`. The check reads only the first thread's working directory.
+- A single-threaded process is between images during `exec`. `environ` and `cmdline` can
+  read empty without an error, exposing neither the marker nor the attempt directory.
+
+Thread scanning and protection across exec are outside the requirement. The three open
+defects in #107's discarded threaded scanner fall away with those cases left out.
 
 The runner's return is not read as absence either. Before the next launch the queue looks for
 the processes of each launch that ended. A reviewer process that outlived its runner, or an

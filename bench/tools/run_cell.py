@@ -731,6 +731,8 @@ def claim_and_run(run_dir: Path, work: Path, args) -> dict:
                       "quota": args.quota or "unknown",
                       "attempts_before": len(run.attempt_ids()), "in_flight_before": run.in_flight(),
                       "target_dir": str(target_dir)})
+        if os.environ.get("BENCH_QUEUE_LAUNCH"):
+            claim["queue_launch_marker"] = os.environ["BENCH_QUEUE_LAUNCH"]
         if args.dry_run:
             return claim
         report, snapshot = check_dispatch_rates(run, claim["cell"])
