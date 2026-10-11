@@ -26,13 +26,51 @@ def records(root=record.ROOT):
         after_path = path.with_name(path.name.replace(".before.json", ".after.json"))
         after = record.load(after_path) if after_path.is_file() else None
         if after_path.is_file() and not problems:
-            problems += record.after_faults(before, after, path, root)
+            problems += record.after_faults(before, after, path, root, check_settlement=False)
         if problems:
             raise ValueError(f"{path}: {'; '.join(problems)}")
         sheet = record.load(round_path)
         pairs.append({"before": before, "after": after, "path": str(path.relative_to(root)),
-                      "hash": record.digest(path), "round": sheet["round"], "opened": sheet["opened"], "closed": sheet["closed"]})
-    return sorted(pairs, key=lambda pair: (pair["opened"], natural(pair["path"])))
+                      "hash": record.digest(path), "round": sheet["round"], "opened": sheet["opened"], "closed": sheet["closed"], "opening": sheet.get("opening")})
+    pairs.sort(key=lambda pair: (pair["opened"], natural(pair["path"])))
+    rounds = {}
+    for pair in pairs:
+        group = rounds.setdefault(pair["round"], [])
+        if group and Path(group[0]["path"]).parent != Path(pair["path"]).parent:
+            raise ValueError(f"duplicate round name: {pair['round']}")
+        group.append(pair)
+    ordered, visiting, finished = [], set(), set()
+
+    def visit(name):
+        if name in finished or name not in rounds:
+            return
+        if name in visiting:
+            raise ValueError("round openings contain a cycle")
+        visiting.add(name)
+        group = rounds[name]
+        pin = group[0]["opening"]
+        if pin:
+            if not record.pinned(pin, root):
+                raise ValueError("round opening pin changed")
+            for prior in record.load(root / pin["path"])["closed_rounds"]:
+                if not record.pinned(prior, root):
+                    raise ValueError("closed round pin changed")
+                visit(record.load(root / prior["path"])["round"])
+        ordered.extend(sorted(group, key=lambda pair: natural(pair["path"])))
+        visiting.remove(name)
+        finished.add(name)
+
+    for name in rounds:
+        visit(name)
+    pairs = ordered
+    for position, pair in enumerate(pairs):
+        if pair["after"]:
+            import delegation
+
+            problems = delegation.settlement_faults(pair["before"], pair["after"], root, root / pair["path"], pairs[:position + 1])
+            if problems:
+                raise ValueError(f"{pair['path']}: {'; '.join(problems)}")
+    return pairs
 
 
 def index(pair, root):
@@ -51,7 +89,7 @@ def successors(pair, pairs, root):
         before = later["before"]
         reviewed = before.get("reviews")
         if (later is pair or not reviewed or not later["after"]
-                or (later["opened"], natural(later["path"])) <= (pair["opened"], natural(pair["path"]))):
+                or pairs.index(later) <= pairs.index(pair)):
             continue
         if (before["decision_type"] == pair["before"]["decision_type"]
                 and record.canonical(reviewed["ruling"], index(later, root)) == name
@@ -69,13 +107,16 @@ def final_decisions(pair, pairs, root):
 
 
 def outcome(answer):
-    return answer["outcome"], answer.get("same_fault_as") if answer["outcome"] in record.NAMES_A_PROBLEM else None
+    return (answer["outcome"], answer.get("same_fault_as") if answer["outcome"] in record.NAMES_A_PROBLEM else None,
+            tuple(sorted(answer.get("facts", {}).items())))
 
 
 def agrees(answer, decisions):
     return bool(decisions) and all(answer["outcome"] == decision["outcome"]
                                    and (not answer.get("same_fault_as") or not decision.get("same_fault_as")
-                                        or answer["same_fault_as"] == decision["same_fault_as"]) for decision in decisions)
+                                        or answer["same_fault_as"] == decision["same_fault_as"])
+                                   and (not answer.get("facts") or not decision.get("facts") or answer["facts"] == decision["facts"])
+                                   for decision in decisions)
 
 
 def independent(answer, pair, root):
@@ -105,37 +146,42 @@ def level(count, targets):
     return 2 if count >= 30 and len(targets) >= 5 else 1 if count >= 15 and len(targets) >= 4 else 0
 
 
-def earned(pairs, decision_type, root, before_round=None):
+def earned(pairs, decision_type, root, before_round=None, closed_rounds=None):
     count, targets, models, resets, counted = 0, set(), None, [], []
-    cutoff = next(((pair["opened"], natural(pair["path"])) for pair in pairs if pair["round"] == before_round), None)
+    settled = []
+    cutoff = next((position for position, pair in enumerate(pairs) if pair["round"] == before_round), None)
     for position, pair in enumerate(pairs):
         before = pair["before"]
-        if before["decision_type"] != decision_type or not pair["after"]:
+        if before["decision_type"] != decision_type:
             continue
-        if before_round and (pair["opened"], natural(pair["path"])) >= cutoff:
+        if before_round and position >= cutoff:
             continue
-        if any(not agrees(prior["after"], final_decisions(prior, pairs[:position + 1], root)) for prior in counted):
+        if any(not agrees(prior["after"], final_decisions(prior, pairs[:position + 1], root)) for prior in [*counted, *settled]):
             count, targets, counted = 0, set(), []
-            resets.append({"path": pair["path"], "reason": "counted decision changed"})
+            settled = []
+            resets.append({"path": pair["path"], "reason": "counted or settled decision changed"})
         if not eligible(pair):
             continue
-        setup = tuple(sorted((answer["by"], answer["model"]) for answer in before["answers"]))
+        from delegation import setup as model_setup
+
+        setup = model_setup(before)
         if models is not None and setup != models:
             count, targets, counted = 0, set(), []
             resets.append({"path": pair["path"], "reason": "model changed"})
         models = setup
+        if not pair["after"]:
+            continue
+        if pair["after"].get("settled_by") == "agents":
+            settled.append(pair)
         if consensus(pair, root):
             if agrees(record.recommender(before), [pair["after"]]):
-                if not before_round or pair["closed"]:
+                if pair["after"].get("settled_by", "owner") == "owner" and (not before_round or (pair["round"] in closed_rounds if closed_rounds is not None else pair["closed"])):
                     count += 1
                     targets.add(before["target"])
                     counted.append(pair)
             else:
                 count, targets, counted = 0, set(), []
                 resets.append({"path": pair["path"], "reason": "agreed answer was not the decision"})
-        elif pair["after"].get("settled_by") == "agents" and not agrees(pair["after"], final_decisions(pair, pairs, root)):
-            count, targets, counted = 0, set(), []
-            resets.append({"path": pair["path"], "reason": "settled decision changed"})
     return {"count": count, "pull_requests": sorted(targets), "level": level(count, targets), "resets": resets}
 
 
@@ -143,7 +189,10 @@ def summarize(pairs, root=record.ROOT, round_name=None):
     if round_name and not any(pair["round"] == round_name for pair in pairs):
         raise ValueError(f"unknown round: {round_name}")
     selected = [pair for pair in pairs if not round_name or pair["round"] == round_name]
-    result = {"policy": "not adopted; counts and levels grant no authority", "round": round_name,
+    import delegation
+
+    adopted = delegation.policy(root)
+    result = {"policy": "policy v2 adopted" if adopted else "not adopted; counts and levels grant no authority", "round": round_name,
               "baseline": {}, "contract_2": {}, "earlier_reading_citations": {}, "pending": [pair["path"] for pair in selected if not pair["after"]]}
     citations = Counter()
     for pair in selected:
@@ -187,7 +236,7 @@ def summarize(pairs, root=record.ROOT, round_name=None):
                 blind_high += bool(high and agrees(blind[0], decisions))
                 unanimous += bool(high and agrees(blind[0], decisions) and agrees(record.recommender(before), decisions))
                 if after["asked"]:
-                    asks.update(record.route(before, root))
+                    asks.update(record.route(before, root, pairs=pairs[:pairs.index(pair) + 1], before_path=root / pair["path"]))
                 miss = after.get("miss")
                 if miss:
                     misses[miss["cause"]] += 1
@@ -206,7 +255,9 @@ def summarize(pairs, root=record.ROOT, round_name=None):
                      "digest": settled}
             if contract == 2:
                 entry["earned"] = earned(pairs, decision_type, root)
-                entry["round_level"] = earned(pairs, decision_type, root, round_name)["level"] if round_name else None
+                opening_pair = next((pair for pair in selected if pair["before"]["decision_type"] == decision_type), None)
+                closed = delegation.opening_rounds(opening_pair, pairs, root) if adopted and round_name and opening_pair.get("opening") else None
+                entry["round_level"] = earned(pairs, decision_type, root, round_name, closed_rounds=closed)["level"] if round_name else None
                 reset_in_round = any(reset["path"] in {pair["path"] for pair in group} for reset in entry["earned"]["resets"])
                 entry["effective_round_level"] = 0 if reset_in_round else entry["round_level"]
                 for number, item in enumerate(sorted(settled, key=lambda item: item["hash"])):

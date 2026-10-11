@@ -21,6 +21,7 @@ import sys
 
 import check_manifest
 import claim_grading
+import delegation
 import grading_validation
 import packet_selection
 
@@ -366,6 +367,8 @@ def validate_documents(documents, selected, root=ROOT, grades=True):
     decisions = unique(documents["adjudication"]["decisions"], "id", "current adjudications")
     families = {}
     for decision in decisions.values():
+        settlement_faults = delegation.filing_faults(decision, "candidate", root)
+        require(not settlement_faults, f"{decision['id']}: {'; '.join(settlement_faults)}")
         outcomes = {"eligibility": {"eligible", "refuted", "unsupported", "advisory", "inconsequential", "scope-excluded", "unresolved"},
                     "impact": {"serious", "other-material", "unknown"},
                     "control": {"audited-clean", "provisional", "unaudited", "known-problems"},
@@ -397,6 +400,7 @@ def validate_documents(documents, selected, root=ROOT, grades=True):
             if eligibility["state"] == "approved":
                 d = applicable_decision(eligibility["adjudication"], decisions, target, reference["revision"], identifier, "eligibility")
                 require(d["status"] == "approved" and d["outcome"] == "eligible", f"{identifier}: unapproved family")
+                require(d.get("settled_by") != "agents", f"{identifier}: adding a problem stays with the owner")
             elif eligibility["adjudication"] is not None:
                 d = applicable_decision(eligibility["adjudication"], decisions, target, reference["revision"], identifier, "eligibility")
                 require(d["status"] != "approved", f"{identifier}: pending family contradicts approved decision")
@@ -414,6 +418,11 @@ def validate_documents(documents, selected, root=ROOT, grades=True):
             require(d["status"] == "approved" and d["outcome"] == "audited-clean", f"{target}: control audit not approved")
         else:
             require(control["adjudication"] is None, f"{target}: provisional control cannot claim audit approval")
+    for decision in decisions.values():
+        if decision.get("settled_by") == "agents" and decision["outcome"] == "eligible":
+            settlement = read_json(resolve_pin(decision["settlement"], root))
+            require(families.get(settlement.get("same_fault_as")) == decision["target"],
+                    f"{decision['id']}: a duplicate must name an existing problem on this target")
     claims = unique(documents["claim"]["claims"], "id", "current claims")
     equivalent = {}
     for claim in claims.values():
@@ -425,6 +434,9 @@ def validate_documents(documents, selected, root=ROOT, grades=True):
         if claim["adjudication"] is not None:
             d = applicable_decision(claim["adjudication"], decisions, target, claim["revision"], claim["id"], "eligibility")
             require((d["outcome"] == "eligible") == (claim["family_id"] is not None), f"{claim['id']}: claim decision contradicts family")
+            if d.get("settled_by") == "agents" and d["outcome"] == "eligible":
+                settlement = read_json(resolve_pin(d["settlement"], root))
+                require(claim["family_id"] == settlement["same_fault_as"], f"{claim['id']}: duplicate names another problem")
         seen = set()
         for link in claim["links"]:
             cohort, _item = source_item(link, target, root)
@@ -448,6 +460,8 @@ def validate_documents(documents, selected, root=ROOT, grades=True):
                     f"{candidate['id']}: only an approved saved human ruling resolves a candidate")
     seen = set()
     for ruling in unique(documents["credit"]["rulings"], "id", "current credit rulings").values():
+        settlement_faults = delegation.filing_faults(ruling, "recovery", root)
+        require(not settlement_faults, f"{ruling['id']}: {'; '.join(settlement_faults)}")
         target = ruling["target"]
         require(target in tasks and ruling["revision"] == tasks[target]["revision"], f"{ruling['id']}: credit ruling revision differs")
         require(families.get(ruling["family_id"]) == target, f"{ruling['id']}: unknown known problem")
