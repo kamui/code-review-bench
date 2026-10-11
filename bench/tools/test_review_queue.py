@@ -11,6 +11,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import subprocess
@@ -369,7 +370,7 @@ class KilledDispatch(QueueFixture):
         self.assertTrue(record["disposition"].startswith("stopped: the controller stopped and the dispatch never returned"))
         closed = json.loads((self.run_dir / "attempts/att-001/interruption.json").read_text(encoding="utf-8"))
         self.assertEqual(closed["process_stop"]["status"], "absent")
-        self.assertIn("twice", closed["process_stop"]["verified_by"])
+        self.assertRegex(closed["process_stop"]["verified_by"], r" read the process table of .+ \d+ times as uid ")
         self.assertNotIn("exit=", (self.work / "att-001/dispatch.txt").read_text(encoding="utf-8"))
         self.assertFalse((self.work / "att-001/home/.claude/.credentials.json").exists())
         self.assertTrue((self.work / "att-001/clone").is_dir())
@@ -620,35 +621,77 @@ class ProcessObservation(unittest.TestCase):
             evidence = {**review_queue.identity(), "boot_id": "b", "pid_namespace": "n", "pid": 1, "start_ticks": 1}
             self.assertEqual(review_queue.observe(evidence)["reason"], "this host exposes no process table to read")
 
-    def test_a_process_of_this_user_that_cannot_be_inspected_is_unknown_not_absent(self):
-        temp = self.enterContext(fixtures.tempfile.TemporaryDirectory())
-        proc = Path(temp)
+    def table(self) -> tuple:
+        """A process table in a directory: the directory, what puts a process in it, and a launch recorded there."""
+        proc = Path(self.enterContext(fixtures.tempfile.TemporaryDirectory()))
         (proc / "sys/kernel/random").mkdir(parents=True)
         (proc / "sys/kernel/random/boot_id").write_text("boot\n", encoding="utf-8")
         (proc / "self/ns").mkdir(parents=True)
         os.symlink("pid:[7]", proc / "self/ns/pid")
 
-        def process(pid: int, parent: int, environ: bytes | None) -> None:
-            (proc / str(pid)).mkdir()
-            (proc / str(pid) / "stat").write_text(f"{pid} (a b) S {parent} {pid} {pid} " + "0 " * 15 + f"{pid * 10} 0\n", encoding="utf-8")
-            (proc / str(pid) / "cmdline").write_bytes(b"reviewer\0--flag\0")
-            os.symlink("/", proc / str(pid) / "cwd")
+        def process(pid: int, parent: int, environ: bytes | None, state: str = "S") -> None:
+            entry = proc / str(pid)
+            shutil.rmtree(entry, ignore_errors=True)
+            entry.mkdir()
+            (entry / "stat").write_text(f"{pid} (a b) {state} {parent} {pid} {pid} " + "0 " * 15 + f"{pid * 10} 0\n", encoding="utf-8")
+            (entry / "cmdline").write_bytes(b"reviewer\0--flag\0")
+            os.symlink("/", entry / "cwd")
             if environ is None:
-                (proc / str(pid) / "environ").mkdir()
+                (entry / "environ").mkdir()
             else:
-                (proc / str(pid) / "environ").write_bytes(environ)
+                (entry / "environ").write_bytes(environ)
 
-        with patch.object(review_queue, "PROC", proc):
-            evidence = {**review_queue.identity(), "marker": "m1", "pid": 50, "start_ticks": 500, "session": 50}
-            process(60, 1, b"HOME=/x\0")
-            self.assertEqual(review_queue.observe(evidence)["status"], "absent")
-            process(70, 1, None)
-            seen = review_queue.observe(evidence)
-            self.assertEqual((seen["status"], seen["reason"]), ("unknown", "processes [70] of this user could not be inspected"))
-            process(80, 1, f"HOME=/x\0{review_queue.MARKER}=m1\0".encode())
-            process(81, 80, b"")
-            seen = review_queue.observe(evidence)
-            self.assertEqual((seen["status"], [row["pid"] for row in seen["processes"]]), ("running", [80, 81]))
+        self.enterContext(patch.object(review_queue, "PROC", proc))
+        return proc, process, {**review_queue.identity(), "marker": "m1", "pid": 50, "start_ticks": 500, "session": 50}
+
+    def test_a_process_of_this_user_that_stays_uninspectable_is_unknown_not_absent(self):
+        proc, process, evidence = self.table()
+        self.enterContext(patch.object(review_queue, "UNREADABLE_WAIT_SECONDS", 0.05))
+        process(60, 1, b"HOME=/x\0")
+        self.assertEqual(review_queue.observe(evidence)["status"], "absent")
+        process(70, 1, None)
+        seen = review_queue.observe(evidence)
+        self.assertEqual(seen["status"], "unknown")
+        named = re.fullmatch(r"reading (\d+) of the process table, 0\.\d s after the first, could not inspect processes of this user: "
+                             r"a b \(pid 70, state S, started \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}\+00:00\): "
+                             r"IsADirectoryError: \[Errno 21\] Is a directory: '(.+)'", seen["reason"])
+        self.assertTrue(named, seen["reason"])
+        self.assertGreater(int(named[1]), 1)
+        self.assertEqual(named[2], str(proc / "70/environ"))
+        process(80, 1, f"HOME=/x\0{review_queue.MARKER}=m1\0".encode())
+        process(81, 80, b"")
+        seen = review_queue.observe(evidence)
+        self.assertEqual((seen["status"], [row["pid"] for row in seen["processes"]]), ("running", [80, 81]))
+
+    def test_an_uninspectable_process_of_another_user_does_not_block_the_launch(self):
+        _, process, evidence = self.table()
+        process(70, 1, None)
+        other = os.getuid() + 1
+        with patch.object(review_queue.os, "getuid", return_value=other):
+            self.assertEqual(review_queue.observe({**evidence, "uid": other})["status"], "absent")
+
+    def test_a_process_that_is_uninspectable_in_one_reading_is_judged_by_the_readings_after_it(self):
+        proc, process, evidence = self.table()
+        marked = f"HOME=/x\0{review_queue.MARKER}=m1\0".encode()
+        later = {"a zombie": ([lambda: process(70, 1, None, state="Z")], "absent", 2),
+                 "gone": ([lambda: shutil.rmtree(proc / "70")], "absent", 2),
+                 "readable and not the launch's": ([lambda: process(70, 1, b"HOME=/x\0")], "absent", 2),
+                 "readable and the launch's": ([lambda: process(70, 1, marked)], "running", 1),
+                 "gone, with a child the next reading misses": ([lambda: shutil.rmtree(proc / "70"), lambda: process(71, 1, marked)],
+                                                                "running", 2),
+                 "gone, then another is uninspectable in the reading between two clean ones": (
+                     [lambda: shutil.rmtree(proc / "70"), lambda: process(72, 1, None), lambda: shutil.rmtree(proc / "72"),
+                      lambda: process(71, 1, marked)], "running", 4)}
+        for what, (changes, status, sleeps) in later.items():
+            with self.subTest(after_the_first_reading=what):
+                shutil.rmtree(proc / "71", ignore_errors=True)
+                process(70, 1, None)
+                between = iter(changes)
+                with patch.object(review_queue.time, "sleep", side_effect=lambda seconds: next(between, lambda: None)()) as slept:
+                    seen = review_queue.observe(evidence)
+                self.assertEqual((seen["status"], slept.call_count), (status, sleeps), seen)
+                if status == "absent":
+                    self.assertIn(" 3 times as uid ", seen["verified_by"])
 
 
 # --- one controller, pinned ---------------------------------------------------------------------
