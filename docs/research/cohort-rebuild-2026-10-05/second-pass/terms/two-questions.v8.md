@@ -7,8 +7,8 @@ These rules sort what a review comment says about a pull request, once its facts
 - Version 5 was the fixed text while the rulings open on 2026-10-05 were asked (second-pass rulings 17 to 24 for candidate problems). Two blind assessors applied it before the user answered and matched the user on all six. Version 6 is version 5 with two lines those rulings set, each marked below. The records of those rulings pin version 5, which stays unchanged.
 - Version 7 is version 6 with three changes, each marked below. Rule Before 3 names the last push as the cut-off, for [issue 60](https://github.com/kamui/code-review-bench/issues/60). Second-pass rulings 29 and 30 each set one line, which the user saw in the option that carried the outcome. Records made under version 6 pin that file, which stays unchanged.
 - The user read the three changes of version 7 on 2026-10-11 and accepted them as written ([decision P25](../rulings/P25-the-cut-off-is-the-last-push.md)).
-- Version 8 is version 7 with the changes of 2026-10-11, each marked below. The user ruled on each in a question that stated the new sentence: one event that can go wrong at two places ([decision P26](../rulings/P26-one-event-at-two-places.md)), the description at the cut-off ([decision P27](../rulings/P27-the-description-at-the-cut-off-is-what-the-change-says.md)), and how "outside supported use" and "relied on, not promised" are told apart ([decision P28](../rulings/P28-two-kinds-told-apart-by-what-the-owners-said.md)). The examples under those sentences are the recording session's. Records made under version 7 pin that file, which stays unchanged.
-- **Version 8 is proposed. It is not in force until the user has read it.** Version 7 is in force.
+- Version 8 is version 7 with the changes of 2026-10-11, each marked below. The user ruled on each in a question that stated a sentence, which decision P29 then reworded: one event that can go wrong at two places ([decision P26](../rulings/P26-one-event-at-two-places.md)), the description at the cut-off ([decision P27](../rulings/P27-the-description-at-the-cut-off-is-what-the-change-says.md)), and how "outside supported use" and "relied on, not promised" are told apart ([decision P28](../rulings/P28-two-kinds-told-apart-by-what-the-owners-said.md)). The examples under those sentences are the recording session's. Records made under version 7 pin that file, which stays unchanged.
+- The user read version 8 on 2026-10-11, had its six new sentences reworded in a plain-words pass, saw each before and after, and accepted the reworded text ([decision P29](../rulings/P29-version-8-of-the-two-questions.md)). Version 8 is in force.
 - [`two-questions.v8.clauses.json`](two-questions.v8.clauses.json) lists the rulings behind each rule and the name each rule had in version 4. A rule's name there is its heading in lower case, such as `promised-1a` or `delivered-2`.
 - "The user" is the person who rules on these cases. Outside quotations, the people who use the software under review are called "people".
 
@@ -43,9 +43,9 @@ If the change does none of these to an older fault, the fault is outside the rev
 - The task packet states the cut-off and shows the pull request as it read then. [The re-cut record](../../../last-push-recut-2026-10-07/README.md) gives each task's push time and the source of that time.
 - Six tasks keep the reviews made from their earlier packets: `j-trpc-5017`, `u-grpc-go-6919`, `v-django-17914`, `w-graphql-js-3457`, `x-kubernetes-141463` and `y-django-16631`. Those packets hold no review record from after the last push. On `j-trpc-5017` a deployment bot's status table reads as it did at the merge. Rulings on these tasks use the last push as well.
 - A ruling made under an earlier version used the task's recorded cut-off. Before carrying such a ruling to a re-cut task, check that none of its reasons comes from between the last push and that cut-off.
-- The description as it read at the cut-off is what the change says, even when it was written for an earlier revision. A fix it names and the code lacks belongs to the review, and a later correction confirms the mismatch and does not withdraw it (added by decision P27).
+- The description as it stood at the cut-off counts as what the change says, even if the author wrote it for an earlier revision. If it names a fix that the code does not contain, the missing fix belongs to the review. A correction made after the cut-off confirms the mismatch. It does not take the claim back (added by decision P27).
   - *Example:* Base UI's description at the last push listed a fix for a focus mark that sticks on a disabled field. The push had replaced the code that fixed it, and the author rewrote the description 24 seconds later. The missing fix is a problem (last-push 6).
-  - A description sentence the code contradicts, where the person still gets the promised outcome, is a minor defect. *Example:* the same description said the change does not clear a server error for a value set from code, and named a guard that does not exist (last-push 6).
+  - If the code contradicts a sentence in the description and the person still gets the promised outcome, that sentence is a minor defect. *Example:* the same description said the change does not clear a server error for a value set from code, and named a guard that does not exist (last-push 6).
 - **Later evidence is never the reason for an answer.** Later evidence means reports, fixes, reverts and anything maintainers said after the cut-off. It has two uses:
   - To check a ruling already made from earlier facts. If it agrees, be more confident. If it disagrees, read the earlier record again. It overturns nothing by itself.
   - To confirm a fact from before the cut-off. It can confirm that a weakness visible in the diff does fail in practice, or that people were already doing something by then.
@@ -59,9 +59,9 @@ A comment may describe another symptom of a fault that is already a reference pr
 - Two symptoms are the same fault when all three hold: the same lines cause both, one fix in the project cures both, and one sentence about the cause is true of both.
 - The agent shows the user the three answers. The user decides whether it is part of the existing problem, a separate problem, or not a problem. Grouping is always the user's.
 - When it is part of the existing problem, the user widens that problem's wording and the answer key does not grow. A review that mentions only the new symptom gets credit for the existing problem.
-- When one event can go wrong at either of two places in the code a change adds, depending only on timing, and leaves the same result, the two places are one fault, and the three tests are read for that code as a whole (added by decision P26).
+- Sometimes one event can fail at either of two places in code that a change adds. If only timing decides which place fails, and the result is the same, the two places are one fault. Apply the three tests to that added code as a whole (added by decision P26).
   - *Example:* SeaweedFS's cleanup removes a name and then puts it back if the file exists again. A Redis fault after the removal loses the name through the unchecked put-back, or through the early return on a removal that ran and was reported as failed, depending on whether the removal's reply arrives. Both are GT-s3 (first-round 12, last-push 1).
-- Answer the three tests by running where that is possible: the smallest fix for each place alone and for both, against every failing case.
+- Answer the three tests by running the code where you can. Apply the smallest fix for each place alone, then both fixes together, and run every failing case against each.
 - *Joined:*
   - Hono, a second `parseBody()` with GT-p1: "`parseBody()` ignores the form the request already remembers" (second-pass 10).
   - requests, pyOpenSSL with GT-i6: "a TLS implementation switched on after import cannot reach the context built at import" (second-pass 1).
@@ -203,10 +203,10 @@ Finish the search for a promise first. Then say which of three kinds it is.
 | Kind | Does something stop working? | What had the owners said? | Example |
 | --- | --- | --- | --- |
 | **8a. Improvement** | No | Not asked | A cleanup that now waits a few microseconds for a lock (first-round 19) |
-| **8a. Outside supported use** | Yes | That the use is unsupported, in words or in the documentation; or nothing, and nobody is shown doing it | A request that sends the Content-Type header twice (first-round 4); the cipher setting (second-pass 2); the certificate path (first-round 30) |
-| **8b. Relied on, not promised** | Yes | Nothing, and someone is shown doing it | Key logging turned on after import (second-pass 3) |
+| **8a. Outside supported use** | Yes | They said or documented that the use is unsupported. Or they said nothing, and no evidence shows anyone doing it. | A request that sends the Content-Type header twice (first-round 4); the cipher setting (second-pass 2); the certificate path (first-round 30) |
+| **8b. Relied on, not promised** | Yes | They said nothing, and the evidence shows someone doing it. | Key logging turned on after import (second-pass 3) |
 
-When the owners said or documented that a use is unsupported, it is outside supported use, however many do it. Relied on, not promised is for a use the owners never spoke about that someone is shown doing (added by decision P28).
+If the owners said or documented that a use is unsupported, it is outside supported use, however many people do it. "Relied on, not promised" applies only when the owners never said either way and the evidence shows someone doing it (added by decision P28).
 
 For "relied on, not promised":
 

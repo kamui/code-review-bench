@@ -1,6 +1,6 @@
 # Second pass, decision P27: the description at the cut-off is what the change says
 
-Put to the user on 2026-10-11 and answered the same day. The line is accepted for the next version of the two questions. Version 7 stays in force until the user has read that version.
+Put to the user on 2026-10-11 and answered the same day. The line is in version 8 of the two questions, which is in force, in the wording below under "As it reads in version 8".
 
 ## Where it comes from
 
@@ -24,3 +24,9 @@ It bears on rule Before 2 ("the thing the change says it fixes"), rule Before 3 
 - The line is written from this one ruling. It is untested until assessors apply it blind to a case it was not written from.
 - It says nothing about a description that is silent. It covers what the description says.
 - Whether a description's account of an internal mechanism is a promise was not asked by itself. The user ruled the one case, a minor defect.
+
+## As it reads in version 8
+
+Before accepting version 8 the user asked for a plain-words pass over its new sentences and saw each before and after ([decision P29](P29-version-8-of-the-two-questions.md)). The sentence above is the one the user chose in the option. The text in force is:
+
+> The description as it stood at the cut-off counts as what the change says, even if the author wrote it for an earlier revision. If it names a fix that the code does not contain, the missing fix belongs to the review. A correction made after the cut-off confirms the mismatch. It does not take the claim back.
