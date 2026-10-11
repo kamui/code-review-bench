@@ -5,6 +5,8 @@ Review attempt: --attempt ATTEMPT --workspace WORKSPACE. Grading workspace: --gr
 --target TARGET_DIR --receipt RECEIPT, the saved assessment receipt of the verdicts WORK holds: a
 session whose dispatch.json records a clean, priced exit, or a local or manual assessor.
 Default: print a dry-run JSON receipt. --apply removes only clone and clone-cache.
+A review attempt whose usage total is unknown is refused until a line of its run's charges.jsonl
+carries "reconciles" naming it: a person has then accounted for it.
 Exit 0: verified or nothing left; 1: refused; 2: input or filesystem error.
 """
 from __future__ import annotations
@@ -45,6 +47,14 @@ def unchanged(clone: Path, head: str) -> bool:
     return git(clone, "rev-parse", "HEAD") == head and not git(clone, "status", "--porcelain", "--untracked-files=all")
 
 
+def reconciled(run: Path) -> set:
+    """The attempts a line of the run's ``charges.jsonl`` reconciles."""
+    charges = run / "charges.jsonl"
+    if not charges.is_file():
+        return set()
+    return {json.loads(line).get("reconciles") for line in charges.read_text(encoding="utf-8").splitlines() if line.strip()}
+
+
 def prune(attempt: Path, workspace: Path, *, apply: bool = False, target_dir: Path | None = None) -> dict:
     root = attempt.parents[4]
     record = read(attempt / "attempt.json")
@@ -66,8 +76,9 @@ def prune(attempt: Path, workspace: Path, *, apply: bool = False, target_dir: Pa
         raise Refused("clone or cache is a symlink")
     if not any(path.exists() for path in candidates) and receipt_path.is_file():
         return read(receipt_path)
-    if record.get("usage", {}).get("metering_status") != "complete":
-        raise Refused("usage is incomplete")
+    accounted = record.get("usage", {}).get("metering_status") == "complete"
+    if not accounted and record["attempt_id"] not in reconciled(attempt.parents[1]):
+        raise Refused("usage is incomplete and no charges.jsonl line reconciles the attempt")
     for name in ("normalized.json", "usage-requests.jsonl"):
         if not (attempt / name).is_file():
             raise Refused(f"portable evidence missing: {name}")
@@ -108,6 +119,8 @@ def prune(attempt: Path, workspace: Path, *, apply: bool = False, target_dir: Pa
                "paths": [str(path) for path in selected], "applied": apply,
                "at": datetime.now(timezone.utc).isoformat(),
                "retained": ["clone-work", "home", "raw outputs", "usage", "grades", "reports"]}
+    if not accounted:
+        receipt["usage"] = "total unknown; reconciled in charges.jsonl"
     if apply:
         for path in selected:
             remove(path)

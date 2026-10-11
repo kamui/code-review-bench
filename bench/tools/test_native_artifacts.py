@@ -121,6 +121,30 @@ class NativeArtifactsTest(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(artifacts.ArtifactError):
                 artifacts.relative_path(name)
 
+    def test_loose_filing_takes_only_indexed_files_and_follows_no_link(self):
+        root = self.base / "loose"
+        (root / "probes").mkdir(parents=True)
+        (root / "summary.md").write_text("report")
+        (root / "probes/run.log").write_text("log")
+        index = self.base / "loose-index.json"
+        index.write_text(json.dumps({"root": str(root), "files": [
+            {"path": p.relative_to(root).as_posix(), "bytes": p.stat().st_size, "sha256": artifacts.digest(p)}
+            for p in sorted(root.rglob("*")) if p.is_file()]}))
+        dependencies = self.base / "dependencies"
+        dependencies.mkdir()
+        (dependencies / "package.js").write_text("not evidence")
+        (dependencies / "broken").symlink_to(dependencies / "absent")
+        (root / "probes/node_modules").symlink_to(dependencies, target_is_directory=True)
+        (root / "probes/unlisted.txt").write_text("written after the index")
+        out = self.base / "loose-filed"
+        self.assertIsNone(artifacts.file_artifacts(root, index, out, "finding-index.json"))
+        filed = sorted(p.relative_to(out).as_posix() for p in out.rglob("*") if not p.is_dir())
+        self.assertEqual(filed, ["loose/probes/run.log", "loose/summary.md", artifacts.INDEX])
+        self.assertEqual(artifacts.unindexed(root, index), ["probes/node_modules", "probes/unlisted.txt"])
+        (root / "summary.md").write_text("changed after the index")
+        with self.assertRaisesRegex(artifacts.ArtifactError, "differs from index"):
+            artifacts.file_artifacts(root, index, self.base / "loose-refiled", "finding-index.json")
+
     def test_existing_loose_filing_keeps_its_layout(self):
         self.out.mkdir()
         (self.out / "attempt.json").write_text("{}")

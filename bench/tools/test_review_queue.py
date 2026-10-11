@@ -922,6 +922,29 @@ class LaunchGates(QueueFixture):
             with self.assertRaisesRegex(review_queue.Blocked, "could not be read, and no launch starts on a reading older than 3600 s"):
                 session.quota()
 
+    def test_a_renewed_sign_in_is_seen_without_waiting_for_the_next_hourly_reading(self):
+        clock, expires = [1_000_000.0], [1_000_000.0 + review_queue.SIGN_IN_MARGIN_SECONDS + 600]
+        readings = []
+
+        def meters(queue, env):
+            readings.append(clock[0])
+            return {"at": review_queue.stamp(clock[0]), "claude": {"five_hour": {"utilization": 10}},
+                    "claude_sign_in_expires_at": expires[0] * 1000}
+
+        with patch.object(review_queue, "meters", meters), redirect_stdout(io.StringIO()):
+            session = review_queue.Session(review_queue.Queue(self.queue), "run", lambda: clock[0], time.sleep)
+            self.assertIsNone(session.quota())
+            clock[0] += 900
+            self.assertIn("sign-in expires", session.quota())
+            self.assertEqual(len(readings), 2)
+            expires[0] += 8 * 3600
+            clock[0] += 60
+            self.assertIsNone(session.quota())
+            self.assertEqual(len(readings), 3)
+            clock[0] += 60
+            self.assertIsNone(session.quota())
+            self.assertEqual(len(readings), 3)
+
     def test_probe_charges_failures_and_unknown_reservations_count_against_the_client_ceiling(self):
         self.queue.write_text(json.dumps({**self.spec, "ceilings_usd": {"claude": 11.0}}), encoding="utf-8")
         (self.run_dir / "charges.jsonl").write_text(json.dumps({"at": "2026-01-01", "step": "setup probe", "usd": 1.5}) + "\n", encoding="utf-8")
@@ -1209,6 +1232,17 @@ class Pins(unittest.TestCase):
         self.assertEqual(review_queue.quota_stop({"codex": {**codex, "ordinaryUsageAllowed": False}}, 95), "ChatGPT ordinary usage is unavailable")
         codex["rateLimits"]["primary"]["usedPercent"] = 95
         self.assertEqual(review_queue.quota_stop({"codex": codex}, 95), "ChatGPT usage reached the quota stop")
+
+    def test_a_claude_sign_in_about_to_expire_stops_the_queue(self):
+        claude = {"claude": {"five_hour": {"utilization": 10}, "seven_day": {"utilization": 10}}}
+        now = 1_800_000_000.0
+        margin = review_queue.SIGN_IN_MARGIN_SECONDS
+        self.assertIsNone(review_queue.quota_stop(claude, 95, now))
+        self.assertIsNone(review_queue.quota_stop({**claude, "claude_sign_in_expires_at": (now + margin + 1) * 1000}, 95, now))
+        for left in (margin - 1, 0, -3600):
+            with self.subTest(left=left):
+                self.assertIn("sign-in expires", review_queue.quota_stop({**claude, "claude_sign_in_expires_at": (now + left) * 1000}, 95, now))
+        self.assertIsNone(review_queue.quota_stop({**claude, "claude_sign_in_expires_at": None}, 95, now))
 
 
 if __name__ == "__main__":
