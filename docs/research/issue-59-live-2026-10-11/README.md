@@ -14,7 +14,7 @@ The [withdrawal receipt](reconciliation/withdrawal.json) pins the source commit,
 | r7 | Rejected-keystroke claim stays a suggestion; no credit for GT-r5, facts no/no | [Ruling 30](reconciliation/05-base-ui-ruling-30.md) |
 | s4 | GT-s3 stays one serious problem covering both sites | [Ruling 12](reconciliation/01-seaweedfs-ruling-12.md) |
 
-The owner chose "Stands as saved (Recommended)" for GT-r8 at 21:01:33 UTC, before this round's opening commit at 21:19:44 UTC. The duplicate question in this session is withdrawn. No answer is needed here. These existing decisions must not be counted again as new decisions, confidence matches or a qualifying live round for issue #59. Integration and publication belong to the existing source branch.
+The owner chose "Stands as saved (Recommended)" for GT-r8 at 21:01:33 UTC, before this round's opening commit at 21:19:44 UTC. The duplicate question in this session is withdrawn. No answer is needed here. These existing decisions must not be counted again as new decisions, confidence matches or a qualifying live round for issue #59. Integration and publication belong to [draft PR #124](https://github.com/kamui/code-review-bench/pull/124), on the existing source branch. Its scope confirms all six carry groups above. It also contains additional rulings and proposed rule version 8; version 8 is not yet in force. The current answer-key changes, impact cards and re-cut revision filing remain unfinished there. Continue that work in #124 instead of opening another implementation here.
 
 ## Preserved preparation and accounting
 
