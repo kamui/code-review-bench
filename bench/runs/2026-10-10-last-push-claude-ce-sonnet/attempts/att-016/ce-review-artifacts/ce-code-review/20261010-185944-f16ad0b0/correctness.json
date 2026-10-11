@@ -1,0 +1,33 @@
+{
+  "reviewer": "correctness",
+  "findings": [
+    {
+      "title": "Spoofable x-vercel-isr header re-enables unauthenticated path override on all functions",
+      "severity": "P0",
+      "file": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+      "line": 24,
+      "why_it_matters": "The ISR branch trusts a plain request header (`x-vercel-isr: 1`) plus the `x_astro_path` query param, with no secret. If the Vercel edge does not strip or overwrite a client-supplied `x-vercel-isr` (nothing in this repo establishes that it does), a client can request `/_render?x_astro_path=/private` with that header and get a different route rendered than the one the edge middleware authorized, which is the hole #15959 closed. The same bundle is deployed as `_render` and `_isr` (built `_render.func` contains the branch), and the branch is unconditional: it is active on non-ISR deployments and on the `_render` function in ISR deployments, where no ISR rewrite ever occurs. Restrict the fallback to the ISR function and/or add a real trust signal.",
+      "autofix_class": "manual",
+      "owner": "human",
+      "requires_verification": true,
+      "suggested_fix": "Do not rely on a bare client-controllable header. Assumption: Vercel does not guarantee stripping of x-vercel-isr on external requests. Either (a) bake an `isr` boolean into virtual:astro-vercel:config only for the `_isr` function build, so `_render` never honors the query param (e.g. `else if (isrEnabledForThisFunction && request.headers.get('x-vercel-isr') === '1')`), and/or (b) add a build-time ISR secret via prerender-config/route `headers` or the route `dest` rewrite and compare it as is done for middlewareSecret. Add tests to path-override-security.test.js: `_render` with `x-vercel-isr: 1` + `x_astro_path` must ignore the param, and `_isr` must honor it. If Vercel documents x-vercel-isr as platform-owned and always overwritten on ingress, cite it in a comment and downgrade this.",
+      "confidence": 50,
+      "evidence": [
+        "packages/integrations/vercel/src/serverless/entrypoint.ts:24 -- } else if(request.headers.get('x-vercel-isr') === '1') {",
+        "packages/integrations/vercel/src/serverless/entrypoint.ts:25 -- realPath = url.searchParams.get(ASTRO_PATH_PARAM);",
+        "packages/integrations/vercel/src/index.ts:57 -- export const NODE_PATH = '_render'; (same entrypoint bundled for _render and _isr via buildServerlessFolder/buildISRFolder)",
+        "packages/integrations/vercel/test/fixtures/serverless-with-dynamic-routes/.vercel/output/functions/_render.func/.../entrypoint_wUbrzUqu.mjs:13997 -- built non-ISR _render function also contains the x-vercel-isr branch",
+        "No occurrence of 'x-vercel-isr' elsewhere in repo sources (grep); nothing in this repo shows the platform sets or strips it",
+        "git show 335a20416 -- prior fix required hasValidMiddlewareSecret for any path override; test path-override-security.test.js covers only requests without the x-vercel-isr header"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Assumes Vercel does not strip/overwrite a client-supplied x-vercel-isr header and that x-vercel-isr: 1 is actually set on ISR invocations; neither could be verified offline (the PR notes only a manual e2e).",
+    "On the _isr path, the rewrite ignores edge middleware (ISR routes dest to ISR_PATH, not MIDDLEWARE_PATH), so any attacker able to make the ISR function render an arbitrary x_astro_path (cache-key poisoning via allowQuery) reaches routes without middleware; this is pre-#15959 behavior but not mitigated by the new gate."
+  ],
+  "testing_gaps": [
+    "No test exercises the new x-vercel-isr branch: neither that _isr honors x_astro_path with x-vercel-isr: 1, nor that _render (and _isr without the header) still ignores it. path-override-security.test.js should gain both cases so the #15959 guarantee is pinned."
+  ]
+}

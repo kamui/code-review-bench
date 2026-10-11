@@ -1,0 +1,56 @@
+{
+  "reviewer": "correctness",
+  "findings": [
+    {
+      "title": "x-vercel-isr header gate re-opens untrusted path override",
+      "severity": "P1",
+      "file": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+      "line": 24,
+      "why_it_matters": "Any request that carries `x-vercel-isr: 1` can again choose which route the function renders via `?x_astro_path=`, which is the override #15959 restricted to callers holding the middleware secret. `_render` and `_isr` are built from this same entrypoint, so the non-ISR function honors it too: in-process, `_render` given `/api/public?x_astro_path=/api/private` plus that header returns `{\"id\":\"private\"}` (and `/_render?x_astro_path=/api/private` does the same), while the existing hardening test passes only because it never sends the header. Separately, the `_isr` function renders any route named in the param, including ones `isr.exclude` routes to `_render`/`_middleware` (`/_isr?x_astro_path=/two` and `/api/x` both return 200). The gate is a plain request header, not a secret; whether Vercel strips a client-supplied `x-vercel-isr` or blocks direct `/_isr` access is platform behaviour that cannot be confirmed from this repo, so the hardening now rests on that unverified assumption. Scoping the override to the ISR function's own path and to ISR-eligible routes removes the dependency.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Do not treat the header as the trust boundary. Minimal default: in the else branch require the function's own path as well, e.g. `else if (url.pathname === '/_isr' && request.headers.get('x-vercel-isr') === '1')`, so `_render` never honors `x_astro_path` (assumption: the ISR function sees pathname `/_isr`, per the ISR_PATH comment at src/index.ts:60-63 that ISR functions are not passed the original path; confirm on a deployment). To close the excluded-route case, pass the expanded `isr.exclude` patterns through `virtual:astro-vercel:config` and ignore the override (fall through to 404) when the overridden path matches one. Add cases to test/path-override-security.test.js asserting `_render` still returns `public` when `x-vercel-isr: 1` and `x_astro_path` are both present, and that `_isr` refuses an excluded route.",
+      "confidence": 75,
+      "evidence": [
+        "packages/integrations/vercel/src/serverless/entrypoint.ts:24-25 -- } else if(request.headers.get('x-vercel-isr') === '1') { realPath = url.searchParams.get(ASTRO_PATH_PARAM);",
+        "packages/integrations/vercel/src/index.ts:703-704 -- async buildISRFolder(entry: URL, functionName: string, isr: VercelISRConfig, root: URL) { await this.buildServerlessFolder(entry, functionName, root);  (same entrypoint is built into both _render and _isr)",
+        "packages/integrations/vercel/test/path-override-security.test.js:33 -- new Request('https://example.com/api/public?x_astro_path=/api/private'),  (no x-vercel-isr header, so the new branch is never exercised by the hardening test)",
+        "In-process probe against the built fixtures at the reviewed head (scratch/correctness/probe.mjs): _render `/api/public?x_astro_path=/api/private` => {\"id\":\"public\"}; same request with header `x-vercel-isr: 1` => {\"id\":\"private\"}; `/_render?x_astro_path=/api/private` with the header => {\"id\":\"private\"}",
+        "Same probe, isr fixture (exclude: ['/two', '/excluded/[dynamic]', '/excluded/[...rest]', /^\\/api/]): _isr `/_isr?x_astro_path=/two` with header => 200 '<h1>Two</h1>'; `/_isr?x_astro_path=/api/x` with header => 200 'OK x'",
+        "packages/integrations/vercel/test/fixtures/isr/.vercel/output/config.json -- first route is { \"handle\": \"filesystem\" } and excluded routes use dest \"_render\"; packages/integrations/vercel/src/index.ts:465 -- const dest = _middlewareEntryPoint ? MIDDLEWARE_PATH : NODE_PATH;  (excluded routes are meant to go through the edge middleware when one exists)",
+        "provenance: 335a20416 Matthew Phillips 2026-03-19 - Require trusted secret for path overrides (#15959)",
+        "Assumption (not verifiable offline): Vercel does not strip a client-supplied x-vercel-isr header and/or serves /_isr and /_render directly via the filesystem handler."
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Path-override rebuild throws on requests with a body",
+      "severity": "P2",
+      "file": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+      "line": 32,
+      "why_it_matters": "A POST (or any body-carrying request) that takes the override branch crashes with `TypeError: RequestInit: duplex option is required when sending a body` instead of reaching the route, so the caller gets a platform 500. The secret-gated branch never sees a body because the edge middleware's fetch to `/_render` forwards neither method nor body, which leaves the ISR branch this diff re-enables as the only way a body can arrive here. It is reachable on Vercel only if the platform forwards non-GET requests for an ISR-routed path (form posts, API endpoints on an `isr: true` site) to the `_isr` function with the header set, which cannot be confirmed from this repo. Passing `duplex: 'half'` when a body is present lets the rebuilt Request be constructed.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "When rebuilding the request, add the duplex option for body-carrying requests: `request = new Request(url.toString(), { method: request.method, headers: request.headers, body: request.body, ...(request.body ? { duplex: 'half' } : {}) } as RequestInit);` and add a test that POSTs to the built `_isr` handler with `x-vercel-isr: 1` and `x_astro_path` set.",
+      "confidence": 50,
+      "evidence": [
+        "packages/integrations/vercel/src/serverless/entrypoint.ts:29-33 -- request = new Request(url.toString(), { method: request.method, headers: request.headers, body: request.body, });",
+        "In-process probe against the built isr fixture (scratch/correctness/probe2.mjs): POST `/_isr?x_astro_path=/api/x` with body 'hi' and header `x-vercel-isr: 1` => TypeError: RequestInit: duplex option is required when sending a body. at new Request (undici) at Object.fetch (dist/server/chunks/entrypoint_*.mjs)",
+        "packages/integrations/vercel/src/serverless/middleware.ts:129-136 -- fetch(new URL('/_render', request.url), { headers: {...} })  (no method/body forwarded, so only the ISR branch can carry a body into the rebuild)",
+        "provenance: 736216b2c4 Florian Lefebvre 2026-02-09 - feat: convert netlify and vercel adapters to new API (#15413); lines unchanged by this diff, made reachable again for ISR by the new else-if branch"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "ISR now depends on Vercel sending `x-vercel-isr: 1` on every invocation of the prerender function: in-process, `_isr` given `/_isr?x_astro_path=/one` without the header still returns the 404 page. The PR's manual check covers a normal page request; background revalidation and bypassToken on-demand revalidation were not shown to carry the header and cannot be checked offline. The header name is a string literal with no source in this repo documenting it.",
+    "Platform reachability for the path-override finding is unverified: whether Vercel strips or overwrites a client-supplied `x-vercel-isr` header, and whether `/_isr` and `/_render` are directly addressable by clients, could not be grounded in the clone.",
+    "The rewritten request keeps `x_astro_path` in its query string, so pages served through ISR see that param in `Astro.url.searchParams`; this matches the pre-#15959 behaviour and was not treated as a finding."
+  ],
+  "testing_gaps": [
+    "No test invokes the built `_isr` handler with `x-vercel-isr: 1` and `?x_astro_path=/one` and asserts the page renders; test/isr.test.js only checks generated config, which is why the #15959 regression shipped unnoticed and why this fix is unguarded.",
+    "test/path-override-security.test.js has no case sending `x-vercel-isr: 1` together with `x_astro_path` to `_render`; the two existing cases pass at the reviewed head while that request returns the private route."
+  ]
+}

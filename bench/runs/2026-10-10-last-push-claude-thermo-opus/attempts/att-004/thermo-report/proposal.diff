@@ -1,0 +1,133 @@
+--- a/clientconn.go
++++ b/clientconn.go
+@@ -918,8 +918,12 @@
+ 		ac.mu.Unlock()
+ 		return nil
+ 	}
++	attempt, ok := ac.startConnectingLocked()
++	ac.mu.Unlock()
+ 
+-	ac.resetTransportAndUnlock()
++	if ok {
++		ac.resetTransport(attempt)
++	}
+ 	return nil
+ }
+ 
+@@ -980,12 +984,8 @@
+ 	ac.cancel()
+ 	ac.ctx, ac.cancel = context.WithCancel(ac.cc.ctx)
+ 
+-	// We have to defer here because GracefulClose => onClose, which requires
+-	// locking ac.mu.
+-	if ac.transport != nil {
+-		defer ac.transport.GracefulClose()
+-		ac.transport = nil
+-	}
++	curTr := ac.transport
++	ac.transport = nil
+ 
+ 	if len(addrs) == 0 {
+ 		ac.updateConnectivityState(connectivity.Idle, nil)
+@@ -993,7 +993,17 @@
+ 
+ 	// Since we were connecting/connected, we should start a new connection
+ 	// attempt.
+-	go ac.resetTransportAndUnlock()
++	attempt, ok := ac.startConnectingLocked()
++	ac.mu.Unlock()
++
++	if ok {
++		go ac.resetTransport(attempt)
++	}
++	// We have to release the lock before the call to GracefulClose because it
++	// calls onClose(), which requires locking ac.mu.
++	if curTr != nil {
++		curTr.GracefulClose()
++	}
+ }
+ 
+ // getServerName determines the serverName to be used in the connection
+@@ -1228,17 +1238,26 @@
+ 	}
+ }
+ 
+-// resetTransportAndUnlock unconditionally connects the addrConn.
++// connectAttempt is the addrConn state that a single connection attempt runs
++// with. It is captured by startConnectingLocked.
++type connectAttempt struct {
++	ctx        context.Context
++	addrs      []resolver.Address
++	backoffFor time.Duration
++	deadline   time.Time
++}
++
++// startConnectingLocked moves the addrConn to CONNECTING and captures the
++// state the connection attempt will run with. Doing both under the caller's
++// critical section is what keeps two attempts from running in parallel. It
++// returns false, and changes nothing, if the addrConn was torn down.
+ //
+-// ac.mu must be held by the caller, and this function will guarantee it is released.
+-func (ac *addrConn) resetTransportAndUnlock() {
+-	acCtx := ac.ctx
+-	if acCtx.Err() != nil {
+-		ac.mu.Unlock()
+-		return
++// Caller must hold ac.mu.
++func (ac *addrConn) startConnectingLocked() (connectAttempt, bool) {
++	if ac.ctx.Err() != nil {
++		return connectAttempt{}, false
+ 	}
+ 
+-	addrs := ac.addrs
+ 	backoffFor := ac.dopts.bs.Backoff(ac.backoffIdx)
+ 	// This will be the duration that dial gets to finish.
+ 	dialDuration := minConnectTimeout
+@@ -1250,18 +1269,29 @@
+ 		// Give dial more time as we keep failing to connect.
+ 		dialDuration = backoffFor
+ 	}
+-	// We can potentially spend all the time trying the first address, and
+-	// if the server accepts the connection and then hangs, the following
+-	// addresses will never be tried.
+-	//
+-	// The spec doesn't mention what should be done for multiple addresses.
+-	// https://github.com/grpc/grpc/blob/master/doc/connection-backoff.md#proposed-backoff-algorithm
+-	connectDeadline := time.Now().Add(dialDuration)
+ 
+ 	ac.updateConnectivityState(connectivity.Connecting, nil)
+-	ac.mu.Unlock()
++	return connectAttempt{
++		ctx:        ac.ctx,
++		addrs:      ac.addrs,
++		backoffFor: backoffFor,
++		// We can potentially spend all the time trying the first address, and
++		// if the server accepts the connection and then hangs, the following
++		// addresses will never be tried.
++		//
++		// The spec doesn't mention what should be done for multiple addresses.
++		// https://github.com/grpc/grpc/blob/master/doc/connection-backoff.md#proposed-backoff-algorithm
++		deadline: time.Now().Add(dialDuration),
++	}, true
++}
+ 
+-	if err := ac.tryAllAddrs(acCtx, addrs, connectDeadline); err != nil {
++// resetTransport runs a connection attempt started by startConnectingLocked,
++// and backs off before returning the addrConn to IDLE if the attempt fails.
++//
++// Caller must not hold ac.mu.
++func (ac *addrConn) resetTransport(a connectAttempt) {
++	acCtx := a.ctx
++	if err := ac.tryAllAddrs(acCtx, a.addrs, a.deadline); err != nil {
+ 		ac.cc.resolveNow(resolver.ResolveNowOptions{})
+ 		ac.mu.Lock()
+ 		if acCtx.Err() != nil {
+@@ -1277,7 +1307,7 @@
+ 		b := ac.resetBackoff
+ 		ac.mu.Unlock()
+ 
+-		timer := time.NewTimer(backoffFor)
++		timer := time.NewTimer(a.backoffFor)
+ 		select {
+ 		case <-timer.C:
+ 			ac.mu.Lock()

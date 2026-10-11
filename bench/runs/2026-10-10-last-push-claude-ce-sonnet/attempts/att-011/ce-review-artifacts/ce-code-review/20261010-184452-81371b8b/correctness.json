@@ -1,0 +1,49 @@
+{
+  "reviewer": "correctness",
+  "findings": [
+    {
+      "title": "verify=True overrides user-supplied ssl_context from custom adapters",
+      "severity": "P1",
+      "file": "src/requests/adapters.py",
+      "line": 95,
+      "why_it_matters": "Adapters that pass their own ssl_context through init_poolmanager (the documented/common way to customise ciphers, min TLS version, extra CAs) are silently ignored for every default verify=True request. urllib3's _merge_pool_kwargs lets per-request pool_kwargs override connection_pool_kw, so the module-level context replaces the user's, weakening or changing the TLS policy they configured with no error. Only set the preloaded context when the adapter has not configured its own ssl_context.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Do not inject _preloaded_ssl_context when the adapter already has an ssl_context in poolmanager.connection_pool_kw (pass that info into _urllib3_request_context, or apply the default in HTTPAdapter.init_poolmanager/proxy_manager_for via setdefault('ssl_context', ...) instead of per-request pool_kwargs). Add a test with a subclass adapter passing ssl_context.",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:95 -- pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context",
+        "urllib3/poolmanager.py:_merge_pool_kwargs -- base_pool_kwargs[key] = value (override wins over connection_pool_kw)",
+        "Repro (scratch-correctness/t.py): adapter subclass setting ssl_context=custom in init_poolmanager; a._get_connection(req, True).conn_kw['ssl_context'] is custom -> False"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Client cert chain loaded into shared module-level SSLContext",
+      "severity": "P1",
+      "file": "src/requests/adapters.py",
+      "line": 95,
+      "why_it_matters": "With verify=True and cert=..., urllib3 calls context.load_cert_chain(cert_file, key_file) on the ssl_context it was given, which is now the single process-wide _preloaded_ssl_context shared by every verify=True pool. A client certificate used for one host is then attached to the shared context and can be presented to other hosts (including requests made without cert=) that request client auth, and concurrent requests with different certs race on the same context. Previously each pool had its own context, so this isolation held.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Only use the shared preloaded context when client_cert is None; when a client cert is given, fall back to a per-pool context (e.g. omit ssl_context and let urllib3 build one, or use a copy of the preloaded context per cert) so load_cert_chain never mutates the shared object.",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:95 -- pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context  (set regardless of client_cert, which is handled below via pool_kwargs[\"cert_file\"])",
+        "urllib3/util/ssl_.py:431 -- context.load_cert_chain(certfile, keyfile) executed on the passed-in ssl_context in ssl_wrap_socket",
+        "Repro: a._get_connection(req, True, cert=('c.pem','k.pem')) and a._get_connection(req, True) return different pools whose conn_kw['ssl_context'] are the same object"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "The module-level load_verify_locations(extract_zipped_paths(DEFAULT_CA_BUNDLE_PATH)) runs at import of requests.adapters: a missing/unreadable bundle (e.g. stripped certifi, distro-patched path) now makes `import requests` raise instead of raising OSError lazily on first verified request, and verify=False-only users pay the bundle load cost at import.",
+    "urllib3 mutates the shared context per connection (verify_mode, check_hostname=False when assert_hostname/assert_fingerprint is configured via custom pool kwargs), which can leak between pools sharing _preloaded_ssl_context."
+  ],
+  "testing_gaps": [
+    "No test covers a custom HTTPAdapter passing ssl_context via init_poolmanager with verify=True.",
+    "No test covers cert=(cert,key) with verify=True asserting the shared preloaded context is not mutated or reused."
+  ]
+}
