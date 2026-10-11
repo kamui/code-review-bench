@@ -14,6 +14,7 @@ A record with `"contract": 2` is checked as docs/adjudication-record.md describe
 decision type in DECISION_TYPES. A record without `contract` is contract 1, the saved records of the second pass, checked as before.
 
 `route` prints whether the user is asked, why, and the question they are shown: the case file and every first answer."""
+import argparse
 import fnmatch
 import hashlib
 import json
@@ -156,6 +157,10 @@ def answer_faults(record, answer, rulings, root):
         found.append(f"{by}: `written` must be one of {', '.join(WRITTEN)}, and before-question in a record that is not reconstructed")
     if (answer["blind"] or answer["brief"]) and not (pinned(answer["brief"], root) and kept(answer["brief"], root)):
         found.append(f"{by}: `brief` must pin the copy of the brief this answer was given, by path and sha256; a blind answer needs one")
+    sheet = record["case"].get("precedents")
+    if sheet is not None or answer.get("precedents") is not None:
+        if answer.get("precedents") != sheet or not pinned(answer.get("precedents"), root):
+            found.append(f"{by}: `precedents` must pin the same sheet as `case.precedents`, the one this answer read")
     return found + confidence_faults(answer, rulings)
 
 
@@ -387,6 +392,33 @@ def surprises(record, after, root=ROOT):
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] in ("summary", "precedents"):
+        import ruling_summary
+
+        parser = argparse.ArgumentParser(description=__doc__)
+        commands = parser.add_subparsers(dest="command", required=True)
+        summary = commands.add_parser("summary")
+        summary.add_argument("--round")
+        summary.add_argument("--json", action="store_true")
+        precedents = commands.add_parser("precedents")
+        precedents.add_argument("--type", choices=DECISION_TYPES, required=True)
+        precedents.add_argument("--exclude", required=True)
+        precedents.add_argument("--out", type=Path, required=True)
+        args = parser.parse_args()
+        try:
+            pairs = ruling_summary.records()
+            if args.command == "summary":
+                result = ruling_summary.summarize(pairs, round_name=args.round)
+                print(json.dumps(result, indent=2, ensure_ascii=False) if args.json else ruling_summary.render(result))
+            else:
+                sheet = ruling_summary.precedents(pairs, args.type, args.exclude)
+                if args.out.exists():
+                    raise ValueError(f"refusing to replace {args.out}; save a new sheet")
+                with args.out.open("x", encoding="utf-8") as output:
+                    output.write(sheet)
+        except (ValueError, OSError, KeyError) as error:
+            parser.exit(1, f"{error}\n")
+        raise SystemExit(0)
     routed = sys.argv[1] == "route"
     before_path, *after_path = sys.argv[2:3] if routed else sys.argv[1:3]
     record = load(before_path)
