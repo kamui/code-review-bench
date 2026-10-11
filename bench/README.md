@@ -287,6 +287,22 @@ stale heartbeat, a missing PID and a zombie wrapper are never read as absence, a
 never signals a process. A filed valid attempt whose clone remains is pruned on restart; a
 filed record is never rewritten.
 
+The [decision on #107](https://github.com/kamui/code-review-bench/issues/107#issuecomment-6107142539)
+applies #103's no-false-absence criterion to processes the controller cannot inspect, rather
+than to the whole check. All three cases in #107 are accepted limits. When only the launch
+marker or attempt directory could tie a process to the launch, the check can report `absent`
+while that process is alive:
+
+- The first thread has ended while another runs. `/proc/PID/stat` can show state Z, so the
+  check skips it as a zombie.
+- Only another thread's own working directory is in the attempt directory, after
+  `unshare(CLONE_FS)`. The check reads only the first thread's working directory.
+- A single-threaded process is between images during `exec`. `environ` and `cmdline` can
+  read empty without an error, exposing neither the marker nor the attempt directory.
+
+Thread scanning and protection across exec are outside the requirement. The three open
+defects in #107's discarded threaded scanner fall away with those cases left out.
+
 The runner's return is not read as absence either. Before the next launch the queue looks for
 the processes of each launch that ended. A reviewer process that outlived its runner, or an
 ended launch the controller cannot see into, blocks the queue, also when the attempt is filed.
