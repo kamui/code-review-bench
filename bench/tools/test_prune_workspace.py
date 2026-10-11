@@ -110,6 +110,22 @@ class CleanupTest(unittest.TestCase):
             prune_workspace.prune(self.attempt, self.workspace, apply=True)
         self.assertTrue((self.workspace / 'clone').exists())
 
+    def test_unknown_usage_is_retained_until_a_charge_line_reconciles_it(self):
+        self.record['usage'] = {'metering_status': 'incomplete', 'priced_total_usd': None}
+        self.save()
+        charges = self.attempt.parents[1] / 'charges.jsonl'
+        charges.write_text(json.dumps({'at': 'now', 'step': 'another attempt', 'usd': 0, 'reconciles': 'att-002'}) + '\n')
+        with self.assertRaisesRegex(prune_workspace.Refused, 'usage is incomplete'):
+            prune_workspace.prune(self.attempt, self.workspace, apply=True)
+        self.assertTrue((self.workspace / 'clone').exists())
+        with charges.open('a') as handle:
+            handle.write(json.dumps({'at': 'now', 'step': 'unknown usage accepted', 'usd': 0, 'reconciles': 'att-001'}) + '\n')
+        receipt = prune_workspace.prune(self.attempt, self.workspace, apply=True)
+        self.assertTrue(receipt['applied'])
+        self.assertEqual(receipt['usage'], 'total unknown; reconciled in charges.jsonl')
+        self.assertFalse((self.workspace / 'clone').exists())
+        self.assertEqual((self.workspace / 'home/keep').read_text(), 'home')
+
     def test_modified_clone_is_retained(self):
         (self.workspace / 'clone/new.txt').write_text('diagnostic evidence')
         with self.assertRaises(prune_workspace.Refused):
