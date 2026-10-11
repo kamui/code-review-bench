@@ -1,0 +1,35 @@
+{
+  "reviewer": "correctness",
+  "findings": [
+    {
+      "title": "parseBody after c.req.formData() re-serializes cached FormData and fails or returns garbage",
+      "severity": "P1",
+      "file": "src/utils/body.ts",
+      "line": 126,
+      "why_it_matters": "If anything called c.req.formData() before c.req.parseBody() (middleware, or a handler calling both), parseBody now returns the wrong data. Previously parseFormData called request.formData(), which returned the cached FormData. Now it calls request.arrayBuffer(); HonoRequest.#cachedBody sees only bodyCache.formData and rebuilds bytes via new Response(formData).arrayBuffer(). That always emits multipart with a fresh undici boundary, which does not match the original Content-Type. Multipart requests throw 'TypeError: Failed to parse body as FormData.' and urlencoded requests silently return one garbage key containing the multipart text. Reproduced with a bundled script against the clone. Reusing an existing bodyCache.formData in parseFormData avoids the re-serialization and keeps the old behavior.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In parseFormData, when request is a HonoRequest and request.bodyCache.formData is already set, await it and skip arrayBuffer()/bufferToFormData (same shortcut validator.ts uses at lines 115-116). Only fall back to arrayBuffer + bufferToFormData otherwise. Add a regression test for `await c.req.formData(); await c.req.parseBody()` with both multipart and urlencoded bodies.",
+      "confidence": 75,
+      "evidence": [
+        "src/utils/body.ts:126 -- const arrayBuffer = await (request as Request).arrayBuffer()",
+        "src/request.ts:228-235 -- const anyCachedKey = Object.keys(bodyCache)[0]; if (anyCachedKey) { return (bodyCache[anyCachedKey]).then((body) => { ...; return new Response(body)[key]() }) }",
+        "Repro (bundled with esbuild, run in node): app.post('/p', async c => { await c.req.formData(); return c.req.parseBody() }) -> multipart: {\"err\":\"TypeError: Failed to parse body as FormData.\"}; urlencoded: {\"------formdata-undici-...\\r\\nContent-Disposition: form-data; name\":\"\\\"a\\\"\\r\\n\\r\\n1...\"}",
+        "Base behavior: src/utils/body.ts at HEAD~1 -- const formData = await (request as Request).formData() (HonoRequest.formData() returns bodyCache.formData when present)",
+        "Contrast: validator('form') -> parseBody and parseBody -> formData both work, because the validator caches arrayBuffer first and parseBody caches arrayBuffer first, so the arrayBuffer cache entry is hit"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Content-Type matching is now inconsistent between parseBody and validator: parseBody accepts 'application/x-www-form-urlencoded ; charset=utf-8' (whitespace before ';' is trimmed), while the validator regexes still require ';' directly after the media type. The validator gap predates this change, but the PR now leaves the two paths disagreeing on some mixed-case or spaced headers.",
+    "parseBody no longer calls request.formData() on raw Request or Request-like objects, so any caller that passes a Request-like object or mock implementing only formData() (the removed vi.spyOn test pattern) would now fail. Not verified against external consumers.",
+    "parseBody now buffers the full body via arrayBuffer() and then parses it, so raw-Request callers hold an extra in-memory copy for large multipart uploads. Performance-reviewer territory, not verified."
+  ],
+  "testing_gaps": [
+    "No test covers calling c.req.formData() (or another path that populates bodyCache.formData first) before c.req.parseBody(); this is the scenario that regressed.",
+    "No test covers multipart/form-data without a boundary, or a quoted boundary, through parseBody. I verified that both reject with 'Failed to parse body as FormData', as they did before the change.",
+    "No test covers cloneRawRequest or later c.req.text()/arrayBuffer() calls after parseBody. I checked these manually and they work, since arrayBuffer is now the first cache key."
+  ]
+}

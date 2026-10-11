@@ -1,0 +1,57 @@
+{
+  "reviewer": "adversarial",
+  "findings": [
+    {
+      "title": "Clearing a required controlled field after submit now shows a valueMissing error",
+      "severity": "P2",
+      "file": "packages/react/src/field/control/FieldControl.tsx",
+      "line": 114,
+      "why_it_matters": "useValueChanged now runs validation.change() for every programmatic change of the controlled value. After a submit attempt, shouldValidateOnChange() is true for validationMode 'onSubmit'. markedDirtyRef is already true because the user typed earlier. The common pattern of resetting a controlled input to '' after a successful submit (chat, comment, or todo box) then runs commit('') against the `required` input. That produces valueMissing, so the field goes data-invalid and Field.Error shows 'Required' right after the user successfully submitted. Before this change, controlled value changes did not reach validation, so this error never appeared. Checkbox and Switch behave the same way, but there a reset to unchecked rarely trips a required error.",
+      "autofix_class": "manual",
+      "owner": "human",
+      "requires_verification": true,
+      "suggested_fix": "Decide deliberately whether programmatic changes should validate. Options: skip validation.change() for programmatic changes when the new value is '' and the field is not being validated on change; or reset markedDirtyRef and the submit-attempt state when the value returns to the baseline (setDirty(false)); or document that consumers must remount or key Field.Root to reset. At minimum add a test for 'clear controlled required value after submit'.",
+      "confidence": 75,
+      "evidence": [
+        "packages/react/src/field/control/FieldControl.tsx:114:    validation.change(serializedValue);",
+        "Scratch repro (jsdom): Form + Field.Root name=msg + Field.Control required value={v} onValueChange={setV}; type 'hello', submit, onFormSubmit calls setV(''). Result: data-invalid is set, Field.Error match=valueMissing is shown, and data-dirty is cleared.",
+        "Path: setV('') -> serializedValue '' -> useValueChanged -> setDirty(false) (markedDirtyRef stays true) -> validation.change('') -> shouldValidateOnChange() true (submitAttemptedRef) -> commit('') -> getState: valueMissing && markedDirtyRef.current -> invalid."
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "PR claims a data-focused latch fix on unmount/disable, but the diff contains none",
+      "severity": "P3",
+      "file": "packages/react/src/field/control/FieldControl.tsx",
+      "line": 161,
+      "why_it_matters": "The description says the change fixes data-focused latching when the control unmounts or is disabled while focused. The committed diff has no such handling. focused is only cleared in onBlur, and no effect or cleanup calls setFocused(false). Scratch repro: focus a Field.Control, then unmount it, or set disabled on it. Field.Root keeps data-focused (jsdom shows true before and after in both cases). Styling keyed on [data-focused] on the Field.Root, such as a focus ring on the wrapper, stays stuck. The bug was already there before this change, but the description says it is fixed.",
+      "autofix_class": "manual",
+      "owner": "human",
+      "requires_verification": true,
+      "suggested_fix": "Either remove the claim from the PR description or add the fix. For example, add a layout-effect cleanup in FieldControl that calls setFocused(false) when the control unmounts or `disabled` becomes true while it is the active element, and add a test for it.",
+      "confidence": 75,
+      "evidence": [
+        "packages/react/src/field/control/FieldControl.tsx:161:        onBlur(event) {",
+        "packages/react/src/field/control/FieldControl.tsx:163:          setFocused(false);",
+        "git diff 30b8ea200 -- FieldControl.tsx: no hunk adds setFocused(false) on unmount or disable. Only onChange, the filled effect, and the value sync were touched.",
+        "Scratch repro: focus the input, then rerender with the control removed (or disabled). data-focused remains on Field.Root."
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Controlled mode no longer honors event.nativeEvent.defaultPrevented. The old onChange skipped clearErrors and validation for a prevented input event (the react#9023 workaround). Now a prevented event whose value the consumer accepts still validates and clears Form server errors through the prop echo. Scratch repro: a controlled field with a prevented input event gave validate calls=1 and the server error cleared. The uncontrolled path and its existing test are unchanged. Consistent with the 'sync from prop' design, but it is a behavior change.",
+    "Controlled value that is disabled while loading: initial baseline capture happens only when the control registers as enabled (enabled=false calls registerFieldControl(source, undefined)). A controlled Field.Root disabled with '' -> 'Alice' while disabled becomes data-dirty through useValueChanged, then the baseline is captured as 'Alice' when it is enabled. data-dirty stays latched even though value == baseline (scratch repro: dirty true after enable). It clears only after the user edits and returns to the value.",
+    "Async-loaded or reset controlled values (react-hook-form reset, fetch-then-populate) now mark the field dirty, set markedDirtyRef (enabling valueMissing display), run validation, and clear Form server errors on first population. Sibling controls behave the same, which answers the open question about clearErrors. It is a visible behavior change for existing Field.Control consumers and could use a changelog or docs note.",
+    "Registration value is now String(value), so Form-submit and actionsRef.validate commits call validate(value) with '5' where they previously received the number 5 for controlled non-string values. onChange validation already passed strings (scratch repro: validate args [['5',{n:'5'}]]). This is consistent, but it is a silent contract change for consumers with typeof checks.",
+    "The PR body mentions a processedValueRef double-validation guard that is not in the diff. No double validation was found: the controlled onChange returns early and validation runs once through the prop echo, and the 'validates once' test passes. A rejected controlled value leaves field state untouched (scratch: validate calls=0, DOM reverts). The risk is only that the description misleads maintainers.",
+    "details.cancel() in controlled mode is a no-op for field state. Validation depends solely on whether the consumer's state changes, so a consumer that calls cancel() and still sets state gets dirty, filled, and validation anyway."
+  ],
+  "testing_gaps": [
+    "No test for programmatically clearing a controlled `required` value after a submit attempt (the valueMissing-after-reset scenario above).",
+    "No test for a controlled value that changes while the control is disabled, then is enabled (baseline capture vs dirty).",
+    "No test that a rejected controlled change (consumer does not update state) leaves dirty, filled, and validity untouched.",
+    "No test for controlled mode with a prevented native input event, to pin the intended behavior.",
+    "No test for unmount or disable while focused (data-focused), despite the PR description claiming a fix."
+  ]
+}

@@ -1,0 +1,279 @@
+{
+  "run_id": "20261011-012345-5201495b",
+  "run_dir": "/home/jack/.t3/bench-runs/2026-10-10-last-push-claude-ce-opus/att-018/clone-work/ce-review-artifacts/ce-code-review/20261011-012345-5201495b",
+  "stage": "merge (Stage 5 steps 1-7, Stage 5b steps 1-3)",
+  "scope": {
+    "mode": "standalone",
+    "base": "c77f548cbd340d2e744da7c6d92a54372b4b900b",
+    "head_sha": "136a4850df9aec8cf8813b27ba1533d4a17bc642",
+    "branch": "review-head",
+    "tree_is_reviewed_head": true
+  },
+  "findings": [
+    {
+      "#": 1,
+      "title": "Refactored Run/backup dispatch path unexecuted without live credentials",
+      "severity": "P2",
+      "file": "internal/backup.go",
+      "line": 97,
+      "confidence": 75,
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Add an offline Run()-level test next to TestGithubRepositoryBackupWithMockAPI in internal/github_mock_test.go that reuses newGitFixtureServer and newGitHubMockAPI: back up/restore the environment (backupEnvironmentVariables/restoreEnvironmentVariables), call unsetEnvVarsExcept([]string{envPath}), explicitly unset GIT_BACKUP_INTERVAL and GIT_BACKUP_CRON (TestGetBackupInterval leaves GIT_BACKUP_INTERVAL set, and a non-zero value would block in waitForShutdown) plus the notification variables, then set GIT_BACKUP_DIR=t.TempDir(), GITHUB_TOKEN=mock-token, GITHUB_APIURL=<mock api URL>; call Run() and assert NoError, exactly one bundle under <backupDir>/github.com/mockuser/<name> for each repo, and that <backupDir>/.working has been removed. Assumption: GitHub() keeps honouring GITHUB_APIURL (internal/github.go:33), which the scratch prototype confirmed.",
+      "first_evidence": "internal/backup.go:97 -- func collectProviderBackupResults(backupDir string) []ProviderBackupResults {",
+      "why_it_matters": "A green test run says nothing about the largest part of this refactor unless provider credentials are present: every test that drives Run() to success skips without a live token, so the new collectProviderBackupResults, createWorkingDir, scheduleBackups and runProviderBackups code is never executed (0% statement coverage at the reviewed head). A wrong env-var/provider pairing in the new dispatch table, a dropped working-directory step, or an early return in Run would ship with the suite passing. The repo already owns offline fixtures (newGitFixtureServer/newGitHubMockAPI) but TestGithubRepositoryBackupWithMockAPI calls githosts directly and bypasses Run(); routing a sibling test through Run() covers the refactored one-shot path deterministically, and a prototype of exactly that passed offline in about 5s in a scratch copy.",
+      "evidence": [
+        "internal/backup.go:97 -- func collectProviderBackupResults(backupDir string) []ProviderBackupResults {",
+        "internal/github_mock_test.go:138 -- result := githubHost.Backup()  (the only deterministic backup test calls githosts directly; it never enters Run(), runProviderBackups or GitHub())",
+        "Coverage of the reviewed head (scratch copy of 136a4850, `go test ./internal/ -count=1 -coverprofile`, no credentials): collectProviderBackupResults 0.0%, runProviderBackups 0.0%, createWorkingDir 0.0%, scheduleBackups 0.0%, runScheduledJob 0.0%, execProviderBackups 0.0%, validateStartupConfig 46.7% (success return at backup.go:470 uncovered), Run 64.3% (backup.go:417-421 uncovered)",
+        "internal/backup_test.go:552-553 -- if os.Getenv(envGitLabToken) == \"\" { t.Skipf(...) }  (same guard pattern on every test that reaches a successful Run(); the only Run() calls that execute offline are the two early-error tests at backup_test.go:243 and :819)",
+        "Scratch prototype (TestScratchRunOneShotWithMockGitHub: Run() against the existing mock GraphQL API and git fixture server) passed offline and raised collectProviderBackupResults to 87.5%, createWorkingDir to 85.7%, runProviderBackups to 72.7%, scheduleBackups to 58.3%",
+        "No workflow under .github/workflows runs `go test` (grep count 0); the Makefile `test` target is the only runner, so there is no credentialed CI run compensating for the skips"
+      ],
+      "reviewers": [
+        "testing"
+      ],
+      "independent_reviewers": [
+        "testing"
+      ]
+    },
+    {
+      "#": 2,
+      "title": "Extracted createWorkingDir duplicates existing resolveWorkingDir helper",
+      "severity": "P3",
+      "file": "internal/backup.go",
+      "line": 475,
+      "confidence": 75,
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": false,
+      "pre_existing": false,
+      "suggested_fix": "In createWorkingDir (internal/backup.go:473-478) replace the four-line os.Getenv/if/filepath.Join block and its comment with `workingDIR := resolveWorkingDir(backupDIR)`; keep the log line and MkdirAll unchanged. Output is identical for every input, so the log line and created path do not change.",
+      "first_evidence": "internal/backup.go:475-478 -- workingDIR := os.Getenv(envGitWorkingDir)\n\tif workingDIR == \"\" {\n\t\tworkingDIR = filepath.Join(backupDIR, workingDIRName)\n\t}",
+      "why_it_matters": "The directory that startup creates and the directory each backup run later deletes with os.RemoveAll are computed by two separate copies of the same GIT_WORKING_DIR-or-default rule, so a future change to one copy (trimming, GetEnvOrFile support, a different default name) silently makes soba create one path and clean up another. This refactor lifts the inline copy out of Run() into a new named helper, createWorkingDir, but keeps the copy instead of calling resolveWorkingDir(backupDir), which already lives in the same file and is what runProviderBackups uses. Calling it is a behaviour-identical one-line substitution (both return the env value when non-empty, else filepath.Join(backupDir, workingDIRName)) and leaves a single definition of the rule.",
+      "evidence": [
+        "internal/backup.go:475-478 -- workingDIR := os.Getenv(envGitWorkingDir)\n\tif workingDIR == \"\" {\n\t\tworkingDIR = filepath.Join(backupDIR, workingDIRName)\n\t}",
+        "internal/backup.go:140-146 -- func resolveWorkingDir(backupDir string) string {\n\tif w := os.Getenv(envGitWorkingDir); w != \"\" {\n\t\treturn w\n\t}\n\n\treturn filepath.Join(backupDir, workingDIRName)\n}",
+        "internal/backup.go:52,57 -- workingDir := resolveWorkingDir(backupDir) ... defer cleanupWorkingDir(workingDir, backupDir)  (the cleanup side uses the canonical helper; the create side does not)",
+        "provenance: function wrapper createWorkingDir is new in 136a4850 (line 473); the wrapped body lines 474-478 date from 476ed841 and resolveWorkingDir from 6adadb6b (Jon Hadfield 2026-06-24), i.e. the duplication pre-dates this change and the refactor re-housed it in a new helper rather than removing it"
+      ],
+      "reviewers": [
+        "maintainability"
+      ],
+      "independent_reviewers": [
+        "maintainability"
+      ]
+    }
+  ],
+  "pre_existing_findings": [],
+  "soft_buckets": {
+    "residual_risks": [
+      {
+        "text": "The PR's \"log output unchanged\" claim holds except for two narrow, log-only differences, both verified against base c77f548; neither changes which providers run or what is backed up, and neither needs a fix. (1) internal/backup.go:101 `bitbucketAPITokenDefined() || bitbucketOAuthDefined()` short-circuits, where the base read all five BitBucket variables on every backup run. With complete BitBucket API-token credentials plus a BITBUCKET_USER_FILE, BITBUCKET_KEY_FILE or BITBUCKET_SECRET_FILE that points at an unreadable file, GetEnvOrFile's `file ... does not exist` / `error opening file` line (internal/envfile.go:35-39) is now logged once per backup run (from Bitbucket(), internal/bitbucket.go:19-21) instead of twice; it still appears at startup via checkProvidersDefined. (2) internal/backup.go:219 logs the BitBucket compare method through the shared strings.EqualFold check where the base used strings.ToLower(compare) == \"refs\", so a BITBUCKET_COMPARE value that matches only under Unicode simple folding (for example \"ref\" + U+017F) is now logged as `refs` instead of `clone`; ASCII values are unaffected.",
+        "reviewers": [
+          "correctness",
+          "testing",
+          "maintainability",
+          "reliability",
+          "adversarial"
+        ],
+        "basis": "(1) established by reading, not executed; (2) observed in the adversarial reviewer's randomized differential run (40,000 environment configurations, base vs head) as the only output difference",
+        "response": "informational"
+      },
+      {
+        "text": "Two restructured runtime paths were verified by reading only, because they need provider credentials or block on a signal: the scheduled path (GIT_BACKUP_INTERVAL / GIT_BACKUP_CRON -> scheduleBackups -> runScheduledJob, internal/backup.go:491-541) and the non-GitHub entries of the provider dispatch in collectProviderBackupResults (internal/backup.go:97-123). By inspection the provider order (BitBucket, Gitea, GitHub, GitLab, Azure DevOps, Sourcehut) and predicates match the base, runScheduledJob assigns the package-level `job` without shadowing, and the job options keep their original order. The rewritten assertion helpers of TestGiteaOrgsRepositoryBackup (assertGiteaOrgTwoOnlyBackedUp, assertGiteaAllOrgsBackedUp, dirHasEntryWithPrefix) compiled but never ran, since that test skips without Gitea credentials; their equivalence to the removed inline assertions also rests on reading.",
+        "reviewers": [
+          "correctness",
+          "testing",
+          "reliability",
+          "adversarial"
+        ],
+        "basis": "reviewer inspection; `go test ./internal/ -count=1` at the reviewed head skips every credentialed test",
+        "response": "informational"
+      }
+    ],
+    "testing_gaps": [
+      {
+        "text": "Startup configuration log output: no repository test asserts any line written by displayStartupConfig or its new label-parameterised helpers (logProviderOrgs, logProviderBackupsToKeep, logProviderCompareMethod, logProviderBackupLFS; internal/backup.go:188-300), including the deliberately preserved `Gitlab backup LFS` and `Organistations` spellings. Equivalence with the base was shown only out of tree, by the reviewers' scratch differential runs (byte-identical output over 6,000 to 40,000 random environments). A table test that swaps the package-level `logger` for a buffer and sets provider variables with t.Setenv would pin the PR's \"log output unchanged\" contract.",
+        "reviewers": [
+          "correctness",
+          "testing",
+          "maintainability",
+          "reliability",
+          "adversarial"
+        ]
+      },
+      {
+        "text": "Scheduled mode: no test drives Run() with GIT_BACKUP_INTERVAL or GIT_BACKUP_CRON, so the interval and cron branches of scheduleBackups (internal/backup.go:501-515) and runScheduledJob (internal/backup.go:525-541) never execute. Nothing verifies that the package-level `job` is still assigned through the new helper, which execProviderBackups (internal/backup.go:35) relies on to avoid os.Exit(1) after a failed backup in daemon mode and runProviderBackups (internal/backup.go:87) uses for the next-run banner.",
+        "reviewers": [
+          "correctness",
+          "testing",
+          "reliability",
+          "adversarial"
+        ]
+      },
+      {
+        "text": "Provider credential validation: the error branches moved into checkJustTokenProvider (blank token, internal/backup.go:357-359) and checkUserAndPasswordProvider (partially configured provider, internal/backup.go:381-386) are not executed by the suite; only the `no providers defined` outcome is asserted (internal/backup_test.go:787-801).",
+        "reviewers": [
+          "testing",
+          "maintainability",
+          "reliability"
+        ]
+      },
+      {
+        "text": "Notification titles: the new backupStatusTitle switch (internal/notify.go:31-39), which now supplies the title for the Telegram, ntfy and Slack messages (notify.go:104, 191, 216), has no test and no test file references it. There is no current regression: the three title literals are byte-identical to the base and the switch matches the three removed copies. A four-row table test (for example TestBackupStatusTitle in a new internal/notify_test.go) asserting (1,0) -> succeeded, (3,2) -> completed with errors, (0,2) -> failed and (0,0) -> failed against literal strings would pin it.",
+        "reviewers": [
+          "testing",
+          "correctness",
+          "maintainability",
+          "reliability"
+        ],
+        "demoted_from_finding": 3
+      }
+    ],
+    "demoted_findings": [
+      {
+        "#": 3,
+        "title": "New backupStatusTitle switch has no test",
+        "severity": "P3",
+        "file": "internal/notify.go",
+        "line": 31,
+        "confidence": 75,
+        "autofix_class": "gated_auto",
+        "owner": "downstream-resolver",
+        "requires_verification": true,
+        "pre_existing": false,
+        "suggested_fix": "Add a table-driven test (e.g. TestBackupStatusTitle in a new internal/notify_test.go) asserting backupStatusTitle(1,0)==titleBackupsSucceeded text, (3,2)==the 'completed with errors' text, (0,2)==the 'failed' text and (0,0)==the 'failed' text, comparing against literal expected strings rather than the title constants so the test does not mirror the code under test. An equivalent prototype passed in a scratch copy.",
+        "first_evidence": "internal/notify.go:31 -- func backupStatusTitle(succeeded, failed int) string {",
+        "why_it_matters": "The headline of every Slack, ntfy and Telegram notification now comes from one new three-branch function that no test executes, so a reordered or mis-edited case (for example a total failure reported under the 'succeeded' title, or the zero-succeeded/zero-failed case falling into the wrong branch) would reach all three channels at once with the suite green. Before this change the three copies could only drift individually; now a single untested switch owns the contract. It is a pure function of two ints, so a four-row table test pins it completely.",
+        "evidence": [
+          "internal/notify.go:31 -- func backupStatusTitle(succeeded, failed int) string {",
+          "Coverage of the reviewed head (scratch copy, no credentials): internal/notify.go:31 backupStatusTitle 0.0%; all four blocks notify.go:31-38 have hit count 0",
+          "Text search of internal/*_test.go for backupStatusTitle, titleBackups and 'soba backups' returns no matches; callers are notify.go:104 (Telegram), :191 (ntfy Title header), :216 (Slack)",
+          "Byte comparison of the three title literals between base c77f548 and head 136a485 (including the leading U+FE0F variation selectors) shows them identical, so there is no current regression; the gap is the missing guard"
+        ],
+        "reviewers": [
+          "testing"
+        ],
+        "independent_reviewers": [
+          "testing"
+        ],
+        "demoted_to": "testing_gaps",
+        "demotion_reason": "Testing-only absence-of-coverage P3 from a single reviewer, with no violated contract and no current defect: the reviewer's own evidence shows the titles and the switch are byte-identical to the base. A missing test for a three-branch pure function is not material enough to be the primary coverage finding for internal/notify.go; the concrete test is kept as a testing gap."
+      }
+    ]
+  },
+  "actionable_queue": [
+    1,
+    2
+  ],
+  "report_only": [],
+  "triage_groups": [],
+  "triage_groups_note": "grouping:auto; none built because the two primary findings are unrelated (test coverage of the refactored Run path, and a duplicated working-directory rule), so each group would hold one finding",
+  "learnings": [],
+  "agent_native_gaps": [],
+  "deployment_notes": [],
+  "fold_in": {
+    "peer_selected": true,
+    "outcome": "in-process-fallback",
+    "artifact": null,
+    "coverage": "adversarial lens: in-process fallback (cross-model peer not run: the caller prohibited external and other-model review for this run -- single-model configuration)",
+    "note": "No peer artifact to fold. The in-process adversarial return is in raw-returns.json as reviewer `adversarial`; it carried no findings and no independence_verified record, so no confidence promotion applied."
+  },
+  "mechanics": {
+    "helper_passes": 1,
+    "helper_input": "/home/jack/.t3/bench-runs/2026-10-10-last-push-claude-ce-opus/att-018/clone-work/ce-review-artifacts/ce-code-review/20261011-012345-5201495b/helper-input-pass1.json",
+    "helper_input_note": "raw-returns.json with each artifact's evidence array attached to its compact finding; raw-returns.json itself is unmodified and the helper output on it is identical apart from the evidence arrays",
+    "helper_output": "/home/jack/.t3/bench-runs/2026-10-10-last-push-claude-ce-opus/att-018/clone-work/ce-review-artifacts/ce-code-review/20261011-012345-5201495b/mechanical-findings.json",
+    "candidates_in": 3,
+    "malformed_returns": 0,
+    "malformed_findings": 0,
+    "suppressed_by_confidence": {},
+    "suppressed_findings_remaining": 0,
+    "first_evidence_backfilled": 0,
+    "first_evidence_demoted": 0,
+    "semantic_merges": 0,
+    "settlement_discards": 0,
+    "pre_existing_reclassified": 0,
+    "soft_bucket_demotions": 1,
+    "malformed_dropped_at_hydration": 0
+  },
+  "synthesis_decisions": {
+    "note": "Internal record of Stage 5 judgment. Claims listed under not_admitted are rejected and must not be rendered as residual risks, testing gaps or findings.",
+    "per_finding": {
+      "1": "Kept primary as the one umbrella coverage finding for internal/backup.go. The lack of tests is material: every restructured runtime function on the one-shot path is at 0% offline, no workflow runs the tests, and the repository already has the offline fixtures the proposed test reuses. Verified at the head: collectProviderBackupResults is at backup.go:97, github_mock_test.go:138 calls githubHost.Backup() directly, the only offline Run() calls are the early-error tests at backup_test.go:243 and :819, and GitHub() reads GITHUB_APIURL at github.go:33. The other four reviewers reported the same unexecuted path as testing gaps; that is same-model agreement and raises no confidence. Route unchanged: gated_auto / downstream-resolver.",
+      "2": "Kept primary. Verified at the head: createWorkingDir (backup.go:473-486) recomputes the GIT_WORKING_DIR-or-default rule that resolveWorkingDir (backup.go:140-146) already defines and runProviderBackups uses for cleanup (backup.go:52, 57); the two are equivalent for every input, so the substitution is behaviour-identical. The duplicated lines predate this change, but the change created the new helper that houses the copy, so it is not routed as pre-existing. Concrete maintenance benefit, no runtime defect: P3 stands. Route unchanged: gated_auto / downstream-resolver.",
+      "3": "Moved to testing gaps (see soft_buckets.demoted_findings)."
+    },
+    "not_admitted_count": 3,
+    "not_admitted": [
+      "log.Lshortfile line-number prefix changes on moved log statements: inherent to any edit of the file, no consequence",
+      "checkProvidersDefined internal count now always 1 when both BitBucket methods are complete: not observable, only count == 0 is read",
+      "reviewers' descriptions of their own scratch differential harnesses: verification context, carried in the evidence and testing-gap text rather than as risks"
+    ]
+  },
+  "coverage": {
+    "stage5_sentences": [
+      "merge mechanics: 5 reviewer returns produced 3 candidate findings (testing 2, maintainability 1; correctness, reliability and adversarial returned none); 0 malformed returns, 0 malformed findings, 0 exact duplicates, 0 semantic merges, 0 pre-existing",
+      "suppressed by confidence: 0 (none at anchor 50, none at anchor 25)",
+      "quote-the-line check: 0 findings demoted for missing first_evidence; first_evidence_backfilled: 0",
+      "soft-bucket demotion: 1 finding moved out of the primary set into testing gaps (helper #3, P3, testing: the untested backupStatusTitle switch in internal/notify.go; no defect and no violated contract, and the missing test for a three-branch pure function is not material on its own); 2 primary findings remain (#1 P2, #2 P3)",
+      "settled decisions: not evaluated (no plan was discovered)",
+      "detail hydration: every retained finding has why_it_matters and evidence from its reviewer artifact; 0 dropped as malformed",
+      "source check: the cited lines of both primary findings and of each retained residual risk and testing gap were re-read at the reviewed head 136a4850; one reviewer line citation was corrected (the BitBucket short-circuit is at internal/backup.go:101)",
+      "residual risks and testing gaps: 14 reviewer residual-risk notes and 10 testing-gap notes were deduplicated and admitted under the finding rules into 2 residual risks and 4 testing gaps (one of the 4 is the demoted finding)",
+      "triage groups: none built (the two primary findings are unrelated concerns, so any group would hold a single finding)",
+      "removable surface: ~4 lines / 0 files across finding #2",
+      "adversarial lens: in-process fallback (cross-model peer not run: the caller prohibited external and other-model review for this run -- single-model configuration)",
+      "validator shortcut: 0 findings skipped (no finding has cross-model corroboration; the adversarial lens ran in-process on the same model, which never licenses the shortcut)",
+      "validator batch: 2 findings selected (#1, #2) in one batch; no P0/P1 in the primary set; verdicts pending at the end of the merge stage"
+    ],
+    "dispatch_coverage_notes": [
+      "depth: full (helper floor: size_band large, 493 executable non-test changed lines; 617 changed lines total)",
+      "scope: base: review of the current checkout (standalone); working tree is the reviewed head 136a4850; no untracked files",
+      "project standards: not run (no applicable standards files)",
+      "learnings: not run (no docs/solutions corpus and no declared Compound Packs); agent-native, security, performance, api-contract, data-migration, previous-comments: not selected (surface absent from the diff; no forge metadata was fetched and the packet records no prior review comments)",
+      "adversarial lens: in-process fallback (cross-model peer not run: the caller prohibited external and other-model review for this run -- single-model configuration)",
+      "fast pass: the orchestrator's first read found no candidates",
+      "test execution: `go test ./internal/ -count=1` ran once at the reviewed head, offline -> ok (5.2s); tests that need provider credentials skipped, so the live backup tests (including the restructured TestGiteaOrgsRepositoryBackup) did not execute. Reviewers ran differential experiments only in scratch copies under the work directory.",
+      "docker/Dockerfile reviewed by reading only: Docker is unavailable, so the image was not built",
+      "plan: none found (no plan: argument, no plan path in the PR body, no docs/plans directory); requirements completeness not assessed",
+      "PR state: the task packet records the pull request as already merged; the review was requested explicitly on the pinned range via base:, so the merged-PR skip rule (which applies to PR-number/URL targets) did not apply"
+    ],
+    "peer_coverage_verbatim": "adversarial lens: in-process fallback (cross-model peer not run: the caller prohibited external and other-model review for this run -- single-model configuration)",
+    "failed_reviewers": [],
+    "bound_exceeded": [],
+    "suppressed_by_anchor": {
+      "50": 0,
+      "25": 0
+    },
+    "demotion_count": 1,
+    "first_evidence_backfilled": 0,
+    "first_evidence_demoted": 0,
+    "settlement_suppression": "not evaluated (no plan discovered)",
+    "removable_surface": "~4 lines / 0 files across finding #2",
+    "intent_confidence": "explicit"
+  },
+  "validation": {
+    "shortcut_skipped": 0,
+    "shortcut_basis": "none: the shortcut needs first_evidence plus an ordinary reviewer and an adversarial-<provider> peer with independence_verified:true; no cross-model peer ran",
+    "selected": [
+      1,
+      2
+    ],
+    "selected_count": 2,
+    "batch_file": "/home/jack/.t3/bench-runs/2026-10-10-last-push-claude-ce-opus/att-018/clone-work/ce-review-artifacts/ce-code-review/20261011-012345-5201495b/validator-input.json",
+    "normal_cap": 8,
+    "cap_expanded": false
+  },
+  "counts": {
+    "primary": 2,
+    "pre_existing": 0,
+    "actionable": 2,
+    "residual_risks": 2,
+    "testing_gaps": 4,
+    "selected_for_validation": 2
+  }
+}

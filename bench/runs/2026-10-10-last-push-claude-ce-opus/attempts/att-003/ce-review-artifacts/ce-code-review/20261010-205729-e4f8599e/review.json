@@ -1,0 +1,139 @@
+{
+  "status": "complete",
+  "verdict": "Not ready",
+  "scope": {
+    "base": "ccb4bcb4c2b841d89b0e88303a97bf4604a5795f",
+    "branch": "review-head",
+    "head_sha": "36549bca3a63d581f7b68d08054a7813c1e6a499",
+    "pr_url": "https://github.com/bokeh/bokeh/pull/9232",
+    "files_changed": 2
+  },
+  "intent": "Fix the bokehjs DatePicker showing the day before the selected date for users in UTC+ timezones (issue #9129) by shifting the incoming Date by the browser's timezone offset in DatePickerView._unlocal_date, so the user-specified date is recreated regardless of the local timezone. Also adds the first Selenium integration tests for the widget. It must not regress other timezones or the value / min_date / max_date supplied from Python.",
+  "intent_confidence": "explicit",
+  "reviewers": ["correctness", "adversarial"],
+  "findings": [
+    {
+      "#": 1,
+      "title": "UTC- browsers show Python-supplied dates one day early",
+      "severity": "P1",
+      "file": "bokehjs/src/lib/models/widgets/date_picker.ts",
+      "line": 83,
+      "confidence": 100,
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Stop applying one conversion to both encodings of the model value. Pass the raw model value to the helper and branch on its type: for a number (Python-serialized epoch ms of the calendar date at UTC midnight) use `const d = new Date(v); return new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())` (equivalent to the pre-change toISOString path); for a string written by _on_select's toDateString() use `const d = new Date(v); return new Date(d.getFullYear(), d.getMonth(), d.getDate())` (it already parses as local midnight). Drop the getTimezoneOffset/setTime lines. Assumption: strings on the model are toDateString-style and parse as local time; an ISO 'YYYY-MM-DD' string set from JS parses as UTC and should take the UTC branch. A scratch Node run of this shape returned Sep 20 / Sep 1 / Sep 16 for 1568937600000 / 1567296000000 / 'Mon Sep 16 2019' under UTC, Europe/Paris, Pacific/Kiritimati, America/Los_Angeles and Pacific/Pago_Pago.",
+      "first_evidence": "bokehjs/src/lib/models/widgets/date_picker.ts:83 -- date.setTime(date.getTime() - timeOffsetInMS)",
+      "why_it_matters": "A user in any negative-UTC-offset timezone (all of the Americas) who opens DatePicker(value=date(2019, 9, 20), min_date=date(2019, 9, 1), max_date=date(2019, 9, 30)) now sees Sep 19 preselected, can pick Aug 31, and cannot pick Sep 30; before this change those users saw the right dates. The model value has two encodings: epoch ms of UTC midnight when it comes from Python, and a local-midnight toDateString() string after a pick. The offset shift is right only for the string, so the change moves the off-by-one from UTC+ after a pick to UTC- on every Python-supplied value instead of removing it. Branching on the encoding (UTC fields for numbers, local fields for strings) is correct in every timezone.",
+      "evidence": [
+        "bokehjs/src/lib/models/widgets/date_picker.ts:83 -- date.setTime(date.getTime() - timeOffsetInMS)",
+        "bokehjs/src/lib/models/widgets/date_picker.ts:82 -- const timeOffsetInMS = date.getTimezoneOffset() * 60000 (getTimezoneOffset() is positive for UTC- zones, so line 83 moves the instant backwards across UTC midnight)",
+        "Callers: date_picker.ts:68 `defaultDate: this._unlocal_date(new Date(this.model.value))`, :70 minDate, :71 maxDate -- all three Python-supplied values pass through the changed function, and connect_signals (:54) re-renders on every model change, so a server callback assigning dp.value hits it again.",
+        "Python side: bokeh/util/serialization.py:184 `return (dt.datetime(*obj.timetuple()[:6]) - DT_EPOCH).total_seconds() * 1000` (and :179 for datetime), DT_EPOCH = dt.datetime.utcfromtimestamp(0) at :83, reached from bokeh/core/json_encoder.py:185-186. date(2019, 9, 20) is sent as 1568937600000 = 2019-09-20T00:00:00Z.",
+        "Scratch Node run by the orchestrator (copies of the old and new function bodies, TZ set per run): 1568937600000 -> old=Fri Sep 20 / new=Thu Sep 19 under America/Los_Angeles, America/New_York and America/Sao_Paulo; old and new both Fri Sep 20 under UTC, Europe/Paris, Asia/Kolkata and Pacific/Auckland.",
+        "Same run, the case the PR does fix: 'Mon Sep 16 2019' (what _on_select stores at date_picker.ts:95) -> old=Sun Sep 15 / new=Mon Sep 16 under Europe/Paris, Asia/Kolkata and Pacific/Auckland; unchanged and correct in the UTC- zones.",
+        "Adversarial reviewer's scratch run: min_date 1567296000000 old=Sun Sep 01 / new=Sat Aug 31 and max_date 1569801600000 old=Mon Sep 30 / new=Sun Sep 29 in UTC- zones; a Python datetime with a time of day also regresses for UTC+ users (datetime(2019,9,20,22,30) old=Fri Sep 20 / new=Sat Sep 21 in Europe/Paris).",
+        "date_picker.ts:81 -- the new comment claims the result is 'agnostic to their local systems's timezone', which the runs above contradict."
+      ],
+      "reviewers": ["correctness", "adversarial"],
+      "independent_reviewers": ["adversarial"]
+    },
+    {
+      "#": 2,
+      "title": "New Selenium tests cannot detect the bug or the regression",
+      "severity": "P2",
+      "file": "tests/integration/widgets/test_datepicker.py",
+      "line": 68,
+      "confidence": 75,
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Before the first click in test_js_on_change_executes (and in test_basic), assert the initial display: `assert page.driver.find_element_by_css_selector('.foo input').get_attribute('value') == 'Fri Sep 20 2019'`. Then exercise non-zero offsets: either launch the headless Chrome driver with a TZ environment variable for one UTC+ and one UTC- zone (assumption: Chrome on the CI image takes its zone from TZ at launch, not verifiable offline), or add a bokehjs unit test that feeds 1568937600000 and 'Mon Sep 16 2019' through the conversion under TZ=Europe/Paris and TZ=America/Los_Angeles and expects Sep 20 / Sep 16. Replace max_date=datetime.utcnow() with a fixed date so the fixture is not clock-dependent.",
+      "first_evidence": "tests/integration/widgets/test_datepicker.py:68 -- assert el.get_attribute('value') == 'Mon Sep 16 2019'",
+      "why_it_matters": "The three new tests are the only verification of this timezone fix, yet with a zero browser offset the changed lines are a no-op, so the tests pass with or without the fix on a UTC runner. They also stay green in every timezone while UTC- users see the initial date one day early, because no assertion reads the input before the click and nothing pins the browser timezone. Asserting the pre-click field value and running the conversion under one UTC+ and one UTC- zone would make the tests fail for both the original bug and the regression in finding 1.",
+      "evidence": [
+        "tests/integration/widgets/test_datepicker.py:68 -- assert el.get_attribute('value') == 'Mon Sep 16 2019'",
+        "tests/integration/widgets/test_datepicker.py:65 `assert results['value'] == 'Mon Sep 16 2019'` and :95-98 are the only other value assertions; all come after clicking button[data-pika-day=\"16\"], and none reads the field while it still shows the Python-supplied value=datetime(2019, 9, 20) (:43, :53, :78).",
+        "tests/integration/widgets/test_datepicker.py:96 `assert d0.timetuple()[:3] == (2019, 9, 20)` checks `old` as held by the Python model in the server callback; it never passes through _unlocal_date.",
+        "Scratch Node run, TZ=UTC: old and new function bodies return the same date for the epoch-ms value and for 'Mon Sep 16 2019', so the assertions at :65/:68 also hold on the base commit there.",
+        "Scratch Node run, TZ=America/Los_Angeles: the new function returns Mon Sep 16 for 'Mon Sep 16 2019' (assertions hold) while returning Thu Sep 19 for the initial 1568937600000; no assertion observes it.",
+        "No timezone pinning found in the harness: bokeh/_testing/plugins/selenium.py builds Chrome options with only --headless, --no-sandbox and --window-size, and a search of .travis.yml, scripts/ci, tests/integration/conftest.py and bokeh/_testing for TZ/timezone settings found none. Which zone CI runs in was not confirmed from the repo."
+      ],
+      "reviewers": ["correctness", "adversarial"],
+      "independent_reviewers": ["adversarial"]
+    }
+  ],
+  "actionable_findings": [
+    {
+      "#": 1,
+      "title": "UTC- browsers show Python-supplied dates one day early",
+      "severity": "P1",
+      "file": "bokehjs/src/lib/models/widgets/date_picker.ts",
+      "line": 83,
+      "confidence": 100,
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Stop applying one conversion to both encodings of the model value. Pass the raw model value to the helper and branch on its type: for a number (Python-serialized epoch ms of the calendar date at UTC midnight) use `const d = new Date(v); return new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())` (equivalent to the pre-change toISOString path); for a string written by _on_select's toDateString() use `const d = new Date(v); return new Date(d.getFullYear(), d.getMonth(), d.getDate())` (it already parses as local midnight). Drop the getTimezoneOffset/setTime lines. Assumption: strings on the model are toDateString-style and parse as local time; an ISO 'YYYY-MM-DD' string set from JS parses as UTC and should take the UTC branch. A scratch Node run of this shape returned Sep 20 / Sep 1 / Sep 16 for 1568937600000 / 1567296000000 / 'Mon Sep 16 2019' under UTC, Europe/Paris, Pacific/Kiritimati, America/Los_Angeles and Pacific/Pago_Pago.",
+      "first_evidence": "bokehjs/src/lib/models/widgets/date_picker.ts:83 -- date.setTime(date.getTime() - timeOffsetInMS)",
+      "why_it_matters": "A user in any negative-UTC-offset timezone (all of the Americas) who opens DatePicker(value=date(2019, 9, 20), min_date=date(2019, 9, 1), max_date=date(2019, 9, 30)) now sees Sep 19 preselected, can pick Aug 31, and cannot pick Sep 30; before this change those users saw the right dates. The model value has two encodings: epoch ms of UTC midnight when it comes from Python, and a local-midnight toDateString() string after a pick. The offset shift is right only for the string, so the change moves the off-by-one from UTC+ after a pick to UTC- on every Python-supplied value instead of removing it. Branching on the encoding (UTC fields for numbers, local fields for strings) is correct in every timezone.",
+      "reviewers": ["correctness", "adversarial"],
+      "independent_reviewers": ["adversarial"]
+    },
+    {
+      "#": 2,
+      "title": "New Selenium tests cannot detect the bug or the regression",
+      "severity": "P2",
+      "file": "tests/integration/widgets/test_datepicker.py",
+      "line": 68,
+      "confidence": 75,
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Before the first click in test_js_on_change_executes (and in test_basic), assert the initial display: `assert page.driver.find_element_by_css_selector('.foo input').get_attribute('value') == 'Fri Sep 20 2019'`. Then exercise non-zero offsets: either launch the headless Chrome driver with a TZ environment variable for one UTC+ and one UTC- zone (assumption: Chrome on the CI image takes its zone from TZ at launch, not verifiable offline), or add a bokehjs unit test that feeds 1568937600000 and 'Mon Sep 16 2019' through the conversion under TZ=Europe/Paris and TZ=America/Los_Angeles and expects Sep 20 / Sep 16. Replace max_date=datetime.utcnow() with a fixed date so the fixture is not clock-dependent.",
+      "first_evidence": "tests/integration/widgets/test_datepicker.py:68 -- assert el.get_attribute('value') == 'Mon Sep 16 2019'",
+      "why_it_matters": "The three new tests are the only verification of this timezone fix, yet with a zero browser offset the changed lines are a no-op, so the tests pass with or without the fix on a UTC runner. They also stay green in every timezone while UTC- users see the initial date one day early, because no assertion reads the input before the click and nothing pins the browser timezone. Asserting the pre-click field value and running the conversion under one UTC+ and one UTC- zone would make the tests fail for both the original bug and the regression in finding 1.",
+      "reviewers": ["correctness", "adversarial"],
+      "independent_reviewers": ["adversarial"]
+    }
+  ],
+  "triage_groups": [],
+  "pre_existing_findings": [],
+  "requirements_completeness": null,
+  "learnings": [],
+  "agent_native_gaps": [],
+  "deployment_notes": [],
+  "residual_risks": [
+    "adversarial: Pikaday's source is not installed in this environment (bokehjs/package.json:88 pins a git fork), so its handling of defaultDate / setDefaultDate / minDate / maxDate was not read. If its constructor fires onSelect when applying a default date, the day-early value would be written back to the model and, in a server app, to Python without any user action; not verified either way.",
+    "adversarial: Python does not re-check a picked value against min_date / max_date (bokeh/models/widgets/inputs.py declares three independent Date properties), so with min_date shifted a day early for UTC- browsers a server callback can receive a date below the configured minimum. Whether downstream app code relies on that bound is outside the reviewed tree.",
+    "correctness: the timezone behaviour was established by reading the source and running scratch Node replicas of the old and new function bodies, not by running the widget in a browser; the project build, the Selenium suite and a browser were unavailable, so the three new tests were not executed."
+  ],
+  "testing_gaps": [
+    "No test reads the initially displayed date (the Python-supplied value rendered through the changed function), in any timezone.",
+    "No test runs the conversion under a non-zero browser offset, so neither the original UTC+ bug nor the UTC- regression can fail the suite.",
+    "No test covers a value pushed from Python after first render (server callback assigning dp.value = date(...)): the client receives epoch ms again and re-renders through the changed function.",
+    "No test checks that min_date / max_date bound the selectable days (the day before min_date disabled, max_date itself selectable); the changed function shifts both bounds for UTC- browsers."
+  ],
+  "coverage": {
+    "depth": "focused",
+    "path": "Focused path: the correctness read ran in the orchestrating context plus one independent adversarial read; no other reviewer agents were dispatched and no validator ran.",
+    "depth_reason": "8 executable non-test changed lines, no floor set; a wrong version of this date conversion fails silently (a wrong day shown in some browser timezones, no error at the change site) and is not on an auth, money, or public-contract boundary.",
+    "adversarial_lens": "Local in-process adversarial reviewer (fallback), a separately dispatched context on the same model family. The cross-model pass was not started because the caller's single-model configuration prohibits an external or other-model reviewer for this run. Agreement between the two reads is same-family corroboration, not cross-model, and raised no confidence.",
+    "scope_mode": "base: on the current checkout (reviewed range ccb4bcb4c2b841d89b0e88303a97bf4604a5795f..36549bca3a63d581f7b68d08054a7813c1e6a499, working tree clean, no untracked files).",
+    "criteria_files": "None govern the change: no CODING_STANDARDS.md, CLAUDE.md, or AGENTS.md exists in the reviewed tree, so no instruction-file fallback applied.",
+    "compound_packs": "Declared Compound Packs were not applied (none declared).",
+    "plan": "No plan found (no plan: argument, no plan path in the PR body, no docs/plans directory); requirements_completeness is null.",
+    "not_assessed": ["learnings", "agent-native gaps", "deployment notes", "pre-existing findings", "triage groups"],
+    "execution": "Scratch Node (v24) replicas of the old and new _unlocal_date bodies were run outside the clone under several TZ values. The project build, npm install, the Selenium integration suite and a browser were unavailable; Pikaday's source was not available to read.",
+    "notes": [
+      "The upstream pull request is recorded as merged; the review ran on the supplied base: range, where the closed/merged skip rule does not apply.",
+      "CI's browser timezone was not confirmed from the repository."
+    ]
+  },
+  "artifact_path": "/home/jack/.t3/bench-runs/2026-10-10-last-push-claude-ce-opus/att-003/clone-work/ce-review-artifacts/ce-code-review/20261010-205729-e4f8599e",
+  "run_id": "20261010-205729-e4f8599e"
+}

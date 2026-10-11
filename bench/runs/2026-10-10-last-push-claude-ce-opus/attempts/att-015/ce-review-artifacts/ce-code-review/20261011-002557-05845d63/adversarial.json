@@ -1,0 +1,73 @@
+{
+  "reviewer": "adversarial",
+  "findings": [
+    {
+      "title": "Sourcing before compinit errors and never registers completion",
+      "severity": "P2",
+      "file": "crates/core/flags/complete/rg.zsh",
+      "line": 441,
+      "why_it_matters": "A user who follows the new FAQ instruction but whose .zshrc reaches the `source <(rg --generate complete-zsh)` line before `compinit` has run gets `_rg:341: command not found: _arguments` on every shell start, and `rg <TAB>` never completes rg options for that session (compinit later does not pick up the already-defined `_rg`). The guard treats 'compdef is not defined' as 'run the completion function now', which is only right for ci/test-complete; for a real user it is the same confusing failure the PR set out to remove, and the FAQ does not say the line must come after compinit. Keying the run-now branch on being inside a completion widget or on `_RG_COMPLETE_LIST_ARGS`, and printing a clear message when compdef is missing, removes the cryptic error; the FAQ should state the ordering requirement.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Replace the guard at rg.zsh:441-445 with: `if (( $+compstate )) || [[ $_RG_COMPLETE_LIST_ARGS == (1|t*|y*) ]]; then _rg \"$@\"; elif (( ! $+functions[compdef] )); then print -ru2 -- \"rg: zsh completions must be sourced after compinit has run\"; else compdef _rg rg; fi`, and add to the FAQ's sourcing paragraph that the line must come after `compinit` in .zshrc. Checked in scratch on zsh 5.8.1 only: this guard kept fpath autoload, source-after-compinit, and the ci/test-complete list-args mode (341 specs, with or without compdef defined) working, turned source-before-compinit into the clear message, and also fixed the renamed-fpath-file case. Assumption: `$+compstate` behaves the same on the older zsh versions the script still supports; not checked. The message only explains the failure; completion still requires sourcing after compinit.",
+      "confidence": 75,
+      "evidence": [
+        "crates/core/flags/complete/rg.zsh:441 -- if [[ $funcstack[1] == _rg ]] || (( ! $+functions[compdef] )); then",
+        "crates/core/flags/complete/rg.zsh:442 -- _rg \"$@\"  (taken whenever compdef is undefined, i.e. any source before compinit)",
+        "FAQ.md:131-136 -- 'Or if you'd prefer to load and generate completions at the same time, you can add the following to your `$HOME/.zshrc` file:' followed by the source line, with no mention of compinit ordering",
+        "Observed (zsh 5.8.1, `zsh -f`, template with !ENCODINGS! filled in by hand): `source <(cat gen.zsh)` before compinit printed `_rg:341: command not found: _arguments`, source returned 1, `_comps[rg]` unset.",
+        "Observed (real interactive zsh driven through zpty, fpath without any packaged _rg): source then compinit, then `rg --generate=complete-zs<TAB>` twice -> line stayed `--generate=complete-zs` both times, `_comps[rg]` unset. Same steps with compinit first -> completed to `complete-zsh` both times.",
+        "Related coupling on the same line: with compdef defined, `( _RG_COMPLETE_LIST_ARGS=1 source rg.zsh )` (the ci/test-complete get_comp_args call) printed 0 option specs instead of 341, because the compdef branch is taken instead of `_rg`."
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Completion file not named _rg: first TAB silently does nothing",
+      "severity": "P3",
+      "file": "crates/core/flags/complete/rg.zsh",
+      "line": 441,
+      "why_it_matters": "If the generated script is installed on fpath under any name other than `_rg` (it carries `#compdef rg`, so compinit binds it regardless of file name), the first `rg <TAB>` in every new shell produces no rg completions; only the second TAB works. Before this change that install worked on the first TAB. The guard recognises the autoload case only by the function being literally named `_rg`, so a differently named autoload function falls into the `compdef _rg rg` branch and returns without completing. This is a narrow case: every installer in the repo (FAQ, release workflow, Debian packaging) writes the file as `_rg`.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Decide 'run the completion now' by completion context rather than by function name, e.g. `if (( $+compstate )) || [[ $_RG_COMPLETE_LIST_ARGS == (1|t*|y*) ]]; then _rg \"$@\"; ...` (same replacement guard as the compinit-ordering finding). In scratch on zsh 5.8.1 this completed on the first and second TAB for a file installed as `_ripgrep`. Note `$zsh_eval_context[-1] == loadautofunc` is not a sufficient substitute: it was true only on the first call, so the second TAB then failed instead.",
+      "confidence": 50,
+      "evidence": [
+        "crates/core/flags/complete/rg.zsh:441 -- if [[ $funcstack[1] == _rg ]] || (( ! $+functions[compdef] )); then",
+        "crates/core/flags/complete/rg.zsh:1 -- #compdef rg  (compinit binds whatever the file is called to the rg command)",
+        "Observed (interactive zsh 5.8.1 via zpty): head version installed as fpath/_ripgrep + compinit; `rg --generate=complete-zs<TAB>` -> first attempt left `--generate=complete-zs`, second attempt completed to `complete-zsh`; `_comps[rg]` changed from _ripgrep to _rg in between.",
+        "Observed: base version (79cbe89, last line `_rg \"$@\"`) installed the same way completed to `complete-zsh` on both attempts.",
+        "provenance: 7c2a7b0 Max Coplan 2024-12-30 - feat(completion): support sourcing zsh completion dynamically"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "FAQ .zshrc snippet includes a shell prompt and fails verbatim",
+      "severity": "P3",
+      "file": "FAQ.md",
+      "line": 135,
+      "why_it_matters": "The FAQ says to add the following line to `$HOME/.zshrc` and then shows it with a leading `$ ` prompt. Pasted as written, zsh reports `command not found: $` at startup and the completions are never loaded. The `fpath=(...)` snippet a few lines above, which is also meant for .zshrc, correctly has no prompt; dropping the prompt here makes the two file snippets consistent and copy-pasteable.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": false,
+      "suggested_fix": "Change FAQ.md:135 from `$ source <(rg --generate complete-zsh)` to `source <(rg --generate complete-zsh)`, matching the prompt-less `fpath=($HOME/.zsh-complete $fpath)` snippet at FAQ.md:128.",
+      "confidence": 75,
+      "evidence": [
+        "FAQ.md:135 -- $ source <(rg --generate complete-zsh)",
+        "FAQ.md:131-132 -- Or if you'd prefer to load and generate completions at the same time, you can add the following to your `$HOME/.zshrc` file:",
+        "FAQ.md:128 -- fpath=($HOME/.zsh-complete $fpath)  (the sibling .zshrc snippet has no prompt)",
+        "Observed (zsh 5.8.1): a script containing the line verbatim after compinit printed `command not found: $`, exit status 127, and `_comps[rg]` was not set by it."
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "ci/test-complete now depends on compdef being undefined in the zsh that runs it: with compdef defined, `( _RG_COMPLETE_LIST_ARGS=1 source rg.zsh )` printed 0 specs in scratch, which would hit the script's 'Failed to get comp_args' exit. That only happens if a zshenv loads compinit for non-interactive shells; I found no evidence the project's CI does that.",
+    "All behaviour was observed on zsh 5.8.1 only, against the template with the !ENCODINGS! placeholder filled in by hand (real `rg --generate complete-zsh` output was unavailable). The script still carries a compatibility path for zsh older than 5.4 (rg.zsh:38-41, 352-354); the new guard's `$funcstack` / `$+functions[compdef]` behaviour on those versions was not checked.",
+    "ksh_autoload-style loading of the fpath file was not exercised (compinit autoloads with -z, so this is outside the normal path)."
+  ],
+  "testing_gaps": [
+    "No in-repo test exercises either real-use branch of the new guard: ci/test-complete only sources the file with _RG_COMPLETE_LIST_ARGS=1 and no completion system, which reaches `_rg \"$@\"` through the compdef-undefined arm. The `compdef _rg rg` arm (source after compinit) and the `$funcstack[1] == _rg` arm (fpath autoload) are untested, so a regression in either install method would not fail CI."
+  ]
+}

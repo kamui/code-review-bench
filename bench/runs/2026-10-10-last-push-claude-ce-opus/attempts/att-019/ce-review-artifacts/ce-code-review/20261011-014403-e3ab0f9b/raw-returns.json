@@ -1,0 +1,432 @@
+[
+ {
+  "reviewer": "correctness",
+  "findings": [
+   {
+    "title": "Clearing a controlled field after submit raises a required error",
+    "severity": "P1",
+    "file": "packages/react/src/field/control/FieldControl.tsx",
+    "line": 114,
+    "confidence": 75,
+    "autofix_class": "manual",
+    "owner": "human",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "Distinguish user-originated from programmatic changes (a ref set in onChange, i.e. the `processedValueRef` the PR body describes) and, for programmatic changes, use the revalidate-only path `validation.commit(serializedValue, true)` instead of `validation.change(serializedValue)`: it clears a resolved error and returns early when the field is not currently invalid (useFieldValidation.ts:169-172), so a reset cannot raise a new error. Assumption: a value set from code should resolve stale errors but not surface new ones. This needs the `commit` type in UseFieldValidationReturnValue widened to accept `revalidate`, and the new test 'syncs state and validates when the controlled value changes programmatically' re-scoped, so the maintainer should confirm the intended semantics (sibling controls share the same behavior).",
+    "first_evidence": "packages/react/src/field/control/FieldControl.tsx:114 -- validation.change(serializedValue);  (inside the useValueChanged(serializedValue, ...) callback at :105, which fires for every controlled value change including programmatic ones)"
+   },
+   {
+    "title": "Controlled change handler bails out; described two-path guard absent",
+    "severity": "P2",
+    "file": "packages/react/src/field/control/FieldControl.tsx",
+    "line": 144,
+    "confidence": 75,
+    "autofix_class": "manual",
+    "owner": "downstream-resolver",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "Implement the design the PR body describes: keep the synchronous handling in onChange for controlled inputs too (setDirty/setFilled, then clearErrors + validation.change gated by `!event.nativeEvent.defaultPrevented && !details.isCanceled`), record `processedValueRef.current = inputValue`, and in the useValueChanged callback return early (and reset the ref) when `serializedValue === processedValueRef.current`, so only programmatic changes and consumer rewrites sync from the prop. If the prop-only design is kept deliberately (per the comment at :142-143), at minimum exempt inputs whose value attribute is not the edited state (checkbox/radio) from the early return, extend the render-count test to validationMode=\"onChange\", and correct the PR description.",
+    "first_evidence": "packages/react/src/field/control/FieldControl.tsx:144-146 -- if (isControlled) {\n            return;\n          }"
+   },
+   {
+    "title": "Dirty latches when value arrives while control is disabled",
+    "severity": "P2",
+    "file": "packages/react/src/field/control/FieldControl.tsx",
+    "line": 111,
+    "confidence": 75,
+    "autofix_class": "gated_auto",
+    "owner": "downstream-resolver",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "In the useValueChanged callback only compute dirty once a baseline exists: `if (validityData.initialValue != null) { setDirty(serializedValue !== validityData.initialValue); }` (a controlled control always captures a string baseline, so `null` means nothing was captured because the control was not registered). Assumption: a value set before the control first registers is the baseline, not an edit. Add a test that loads a value while `disabled` and asserts the root has no `data-dirty` after enabling.",
+    "first_evidence": "packages/react/src/field/control/FieldControl.tsx:111 -- setDirty(serializedValue !== (validityData.initialValue ?? ''));"
+   },
+   {
+    "title": "Promised data-focused unlatch on disable/unmount is not implemented",
+    "severity": "P2",
+    "file": "packages/react/src/field/control/FieldControl.tsx",
+    "line": 163,
+    "confidence": 100,
+    "autofix_class": "manual",
+    "owner": "downstream-resolver",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "Either drop the claim from the PR description, or implement it in FieldControl: `useIsoLayoutEffect(() => { if (disabled) { setFocused(false); } }, [disabled, setFocused]);` plus an unmount cleanup `useIsoLayoutEffect(() => () => setFocused(false), [setFocused]);` declared before the existing autoFocus effect so a strict-mode remount re-applies autofocus focus state, with tests for both paths.",
+    "first_evidence": "packages/react/src/field/control/FieldControl.tsx:161-163 -- onBlur(event) {\n          setTouched(true);\n          setFocused(false);  (the only `setFocused(false)` in the file; the other call sites are `setFocused(true)` at :121 and :159)"
+   },
+   {
+    "title": "data-filled stays set when a control remounts with empty value",
+    "severity": "P3",
+    "file": "packages/react/src/field/control/FieldControl.tsx",
+    "line": 100,
+    "confidence": 75,
+    "autofix_class": "gated_auto",
+    "owner": "downstream-resolver",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "Make the mount effect write the real state instead of only latching true, following SwitchRoot.tsx:99-103: `const input = validation.inputRef.current; if (input) { setFilled(Boolean(input.value)); }`. The existing tests 'sets filled state on mount when the control is prefilled' and 'does not set filled state on mount for an empty controlled value' still hold; add a remount-with-empty-value test.",
+    "first_evidence": "packages/react/src/field/control/FieldControl.tsx:99-103 -- useIsoLayoutEffect(() => {\n    if (validation.inputRef.current?.value) {\n      setFilled(true);\n    }\n  }, [validation.inputRef, setFilled]);"
+   },
+   {
+    "title": "Programmatic change clears Form errors, contradicting the PR body",
+    "severity": "P3",
+    "file": "packages/react/src/field/control/FieldControl.tsx",
+    "line": 110,
+    "confidence": 100,
+    "autofix_class": "manual",
+    "owner": "human",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "Resolve the open question explicitly. If the sibling-aligned behavior is wanted, keep line 110, correct the PR description, and add a test that a programmatic value change removes the Form error; if not, move `clearErrors(name)` out of the useValueChanged callback so only user-originated changes clear it (requires the user/programmatic distinction from the `processedValueRef` design).",
+    "first_evidence": "packages/react/src/field/control/FieldControl.tsx:110 -- clearErrors(name);  (first statement of the useValueChanged(serializedValue, ...) callback at :105-115, which runs for programmatic changes)"
+   }
+  ],
+  "residual_risks": [
+   "Custom `validate` argument type changed for non-string controlled values: registering the serialized value means the submit / `actionsRef.validate()` path now passes a string where it used to pass the raw prop (scratch-confirmed: `value={5}` + Form submit calls validate with string '5' at head, number 5 at base). Validators doing strict type or identity checks on the submit path would change outcome; coercing comparisons are unaffected.",
+   "Only FieldControl.test.tsx was run at the reviewed head. FieldRoot.test.tsx, Form and Input tests that exercise a controlled Field.Control (e.g. 'keeps the original baseline when a controlled control remounts', 'changes [data-filled] when the value is changed externally') were traced by reading only, not executed.",
+   "All scratch confirmations ran in jsdom with fireEvent; focus/blur behavior on disable or unmount and constraint-validation messages were not checked in a real browser.",
+   "Validation now also runs for controlled value changes made while the control is disabled (the sync is not gated on `disabled`); the resulting validityData is hidden while disabled but would surface on enable in validationMode=\"onChange\". Not exercised."
+  ],
+  "testing_gaps": [
+   "No test covers the PR body's claim that a pending async validator for the old value cannot publish after a programmatic value change.",
+   "No test covers the array-valued controlled case the PR body names for the dirty fix; only the numeric case is tested.",
+   "No test covers a controlled `details.cancel()`: the new cancel test is uncontrolled only, and for a controlled input cancel has no effect on internal handling if the consumer still applies the value (scratch: validate still called once)."
+  ]
+ },
+ {
+  "reviewer": "project-standards",
+  "findings": [],
+  "residual_risks": [
+   "Criteria source was AGENTS.md only (CLAUDE.md is an include of it; no CODING_STANDARDS.md). Every applicable section was checked against the two changed files and no written rule is mechanically violated: 'Code guidelines' (no window.setTimeout/requestAnimationFrame, no React.useCallback or React.useLayoutEffect added; FieldControl.tsx:99 and :119 use useIsoLayoutEffect, :120 keeps activeElement(ownerDocument(...))), 'Linting, typechecking, and formatting' (no casts added; the exported FieldControlProps interface and its JSDoc at FieldControl.tsx:187-195 are unchanged, so the 'run pnpm docs:api' rule is not triggered), 'Testing' (no flushMicrotasks after render, no waitFor, Vitest-only matchers, tests colocated in FieldControl.test.tsx), 'Commit guidelines' (subject '[field] Sync controlled value changes with field state' matches '[scope] Imperative summary'), 'Errors' (no Error constructors touched). eslint, prettier and tsc were not run in this review (read-only clone, no installs), so the 'Ensure your changes pass linting / are formatted' rules are unverified here and left to CI.",
+   "PR body and code disagree in three places; no AGENTS.md rule governs PR descriptions, so these are recorded here rather than as standards findings. (1) The body's open question says the PR does not call clearErrors on a controlled value change, but FieldControl.tsx:110 calls `clearErrors(name);` inside the useValueChanged callback, so a programmatic change now clears a Form server error. (2) The body says 'A control that unmounts or becomes disabled while focused no longer latches data-focused', but the reviewed head has no such code: setFocused is only called at FieldControl.tsx:121, :159 and :163, as before. (3) The body describes a `processedValueRef` echo guard; `git grep processedValueRef` at head returns nothing, and the code instead returns early from onChange when controlled (FieldControl.tsx:144-146), which also skips the `event.nativeEvent.defaultPrevented` and `details.isCanceled` checks on the controlled path."
+  ],
+  "testing_gaps": [
+   "AGENTS.md 'Testing': 'If you made changes to the source code, ensure you verify your changes by running tests (see above), and writing new tests where applicable.' The new controlled-sync branch calls `clearErrors(name)` (FieldControl.tsx:110) and no test asserts it: the only server-error test in FieldControl.test.tsx (line 203, 'does not clear errors or validate when change is prevented') renders an uncontrolled control. A test with `<Form errors={...}>` plus a controlled Field.Control whose value is set from a button would pin whichever answer the PR's open question settles on.",
+   "Same AGENTS.md rule: the `details.cancel()` test (FieldControl.test.tsx:189) and the prevented-change test (line 203) both use an uncontrolled control. In controlled mode onChange returns at FieldControl.tsx:144-146 before the `defaultPrevented` / `isCanceled` check at line 153, so a controlled consumer that calls `details.cancel()` (or whose input event is default-prevented) and still updates `value` is untested."
+  ]
+ },
+ {
+  "reviewer": "testing",
+  "findings": [
+   {
+    "title": "Controlled path skips prevented/canceled guards; only uncontrolled is tested",
+    "severity": "P2",
+    "file": "packages/react/src/field/control/FieldControl.tsx",
+    "line": 144,
+    "confidence": 75,
+    "autofix_class": "manual",
+    "owner": "downstream-resolver",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "Make the prevented and canceled tests table-driven over uncontrolled and controlled (`value`/`onValueChange={setValue}`), keeping the Form `errors` object stable outside the re-rendering component (an inline `errors={{...}}` in a parent that re-renders resets Form errors and masks the result). To make the controlled rows pass, carry the guard into the sync: record in `onChange` that the change was `defaultPrevented || details.isCanceled` (a ref) and have the `useValueChanged` callback consume it to skip `clearErrors(name)` and `validation.change(...)`. Assumption: the uncontrolled contract pinned by the existing test is also the intended controlled contract.",
+    "first_evidence": "packages/react/src/field/control/FieldControl.tsx:144-146 -- `if (isControlled) { return; }` runs before packages/react/src/field/control/FieldControl.tsx:153 -- `if (!event.nativeEvent.defaultPrevented && !details.isCanceled) {`"
+   },
+   {
+    "title": "Render-count test skips the mode where controlled renders doubled",
+    "severity": "P2",
+    "file": "packages/react/src/field/control/FieldControl.test.tsx",
+    "line": 79,
+    "confidence": 75,
+    "autofix_class": "manual",
+    "owner": "downstream-resolver",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "Parametrize the test over `{}` and `{ validationMode: 'onChange', validate: () => null }` on Field.Root and also assert the first-keystroke count instead of discarding it. The onChange row fails at HEAD (4 renders for 2 keystrokes), so it needs a production change: handle user-initiated changes inside `onChange` so setDirty/setFilled/validation state batch with the consumer's setState, and let the prop sync skip a value the handler already processed (the `processedValueRef` design the PR body describes but the diff does not contain). Assumption: the 'no extra renders' intent covers validating fields, not only the default mode.",
+    "first_evidence": "packages/react/src/field/control/FieldControl.test.tsx:78-79 -- `// The controlled echo must not schedule a second render per keystroke.` / `expect(renderCountRef.current).toBe(settledRenderCount + 2);`"
+   },
+   {
+    "title": "Programmatic change clears Form errors: untested and contradicts PR body",
+    "severity": "P2",
+    "file": "packages/react/src/field/control/FieldControl.tsx",
+    "line": 110,
+    "confidence": 75,
+    "autofix_class": "manual",
+    "owner": "downstream-resolver",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "Decide the open question in the code's favor (it matches NumberFieldInput.tsx:101-102 and the other sibling controls) and pin it: add a FieldControl test with `<Form errors={ERRORS}>` (object defined outside the component), a named controlled `Field.Control`, and a button that calls `setValue('external')`, asserting the 'Server error' text is gone afterwards; then correct the PR description. If the description is the real intent instead, drop `clearErrors(name)` from the `useValueChanged` callback for non-user changes and assert the error stays.",
+    "first_evidence": "packages/react/src/field/control/FieldControl.tsx:110 -- `clearErrors(name);` (inside the useValueChanged callback at :105)"
+   },
+   {
+    "title": "Promised data-focused latch fix has no code and no test",
+    "severity": "P2",
+    "file": "packages/react/src/field/control/FieldControl.tsx",
+    "line": 158,
+    "confidence": 75,
+    "autofix_class": "manual",
+    "owner": "downstream-resolver",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "Either remove the claim from the PR description, or implement it and pin it: in FieldControl add a layout effect that calls `setFocused(false)` when `disabled` becomes true and in its cleanup on unmount, and add two tests that focus the control, then unmount it / toggle `disabled`, and assert the root no longer has `data-focused`. Assumption: the field should stop reporting focus in both paths, as the PR body says.",
+    "first_evidence": "packages/react/src/field/control/FieldControl.tsx:158-160 -- `onFocus() { setFocused(true); },` is only undone by packages/react/src/field/control/FieldControl.tsx:161-163 -- `onBlur(event) { setTouched(true); setFocused(false);`; the file has no unmount or disabled reset"
+   },
+   {
+    "title": "Rejected or rewritten controlled value contract is unpinned",
+    "severity": "P3",
+    "file": "packages/react/src/field/control/FieldControl.tsx",
+    "line": 142,
+    "confidence": 75,
+    "autofix_class": "gated_auto",
+    "owner": "downstream-resolver",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "Add two tests to FieldControl.test.tsx under `validationMode=\"onChange\"`: (1) `<Field.Control value=\"\" onValueChange={() => {}} />`, fire a change to 'a', assert `validate` was not called and the root has neither `data-dirty` nor `data-filled`; (2) `onValueChange={(next) => setValue(next.toUpperCase())}`, fire a change to 'a', assert `validate` was called once with 'A'. Also assert the argument (`'a'`) in 'validates once when a controlled value is changed by the user'.",
+    "first_evidence": "packages/react/src/field/control/FieldControl.tsx:142-146 -- `// Controlled values sync from the `value` prop instead, so that a value the consumer` / `// rejects or rewrites never reaches the field state.` / `if (isControlled) { return; }`"
+   }
+  ],
+  "residual_risks": [
+   "The PR description does not match the diff in three places (no `processedValueRef` exists; `clearErrors(name)` is called on controlled changes although the body says it is not; the data-focused unmount/disabled fix is absent), so the body is an unreliable statement of intent for this commit; the commit may be incomplete or the description stale.",
+   "Scratch evidence used plain @testing-library/react in jsdom with non-strict rendering, not the repo's createRenderer or the browser (chromium) test project; render counts under StrictMode and in a real browser were not measured.",
+   "Base comparisons ran a scratch copy of FieldControl.tsx from 30b8ea200 with relative imports rewritten to absolute paths, against HEAD's other modules; this is faithful only because the diff changes no other production file.",
+   "Coverage-absence claims (no controlled Field.Control test inside a Form with errors, no focus-latch test) rest on git grep over packages/react/src/**/*.test.tsx: callsite completeness is grep-only."
+  ],
+  "testing_gaps": [
+   "No test for the headline 'resolved error stayed visible' scenario outside validationMode=\"onChange\": a controlled field showing a custom error after blur whose value is then fixed from code. A scratch run shows HEAD clears the error and data-invalid, but 'syncs state and validates when the controlled value changes programmatically' only asserts data-filled, data-dirty and the validate call in onChange mode.",
+   "No test for the claimed stale async validator fix: blur starts an async validator for the old value, the value is changed from code, then the promise resolves with an error. A scratch run shows HEAD drops the stale error while the base commit publishes it; nothing in the suite would fail if that regressed.",
+   "The canceled-change test asserts only that `validate` is not called. The other half of the same guard (the Form error is kept) is not asserted, and a scratch run shows a canceled uncontrolled change still sets data-dirty and data-filled, which no test pins either way against the PR's 'stops the internal handling' wording.",
+   "Mount-time filled state for a non-empty controlled value (`value=\"foo\"`) lost its dedicated branch (`hasExternalValue && valueProp !== ''`) and now depends on the DOM value at layout-effect time; the new mount tests cover `defaultValue=\"foo\"` and `value=\"\"` only."
+  ]
+ },
+ {
+  "reviewer": "api-contract",
+  "findings": [
+   {
+    "title": "Hyrum's Law: code-cleared required input now shows an error",
+    "severity": "P2",
+    "file": "packages/react/src/field/control/FieldControl.tsx",
+    "line": 114,
+    "confidence": 75,
+    "autofix_class": "manual",
+    "owner": "human",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "Decide and pin the behavior. Default proposal (assumption: clearing a form after a successful submit must not raise errors): record user-originated changes in a ref inside `onChange` before the `isControlled` early return (the `processedValueRef` the PR body describes), and in the `useValueChanged` callback keep `clearErrors` + `validation.change(serializedValue)` only when the ref matches `serializedValue`; for code-driven changes update dirty/filled and only re-validate a field that is currently invalid (the existing `revalidate` branch of `commit` in useFieldValidation.ts), so a resolved error clears but a reset never raises a new one. This requires updating the PR's test 'syncs state and validates when the controlled value changes programmatically'. If full validation on code-driven changes is the intended contract, keep the code, add a test for the submit-then-clear flow, and state the change in the PR description and release notes.",
+    "first_evidence": "packages/react/src/field/control/FieldControl.tsx:114 -- validation.change(serializedValue);"
+   },
+   {
+    "title": "Code-driven value change clears Form errors; PR body says otherwise",
+    "severity": "P2",
+    "file": "packages/react/src/field/control/FieldControl.tsx",
+    "line": 110,
+    "confidence": 75,
+    "autofix_class": "manual",
+    "owner": "human",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "If clearing is intended (it matches the forms handbook and the sibling controls): rewrite the PR body's design paragraph and 'Open question' to describe the shipped code (controlled changes sync only from the `value` prop; code-driven changes clear `Form` errors) and add a test rendering `<Form errors={stableErrors}>` with a controlled Field.Control that asserts the error is removed after a code-driven value change. If it is not intended: set a ref in `onChange` before the `isControlled` early return and call `clearErrors(name)` in the `useValueChanged` callback only when that ref equals `serializedValue`.",
+    "first_evidence": "packages/react/src/field/control/FieldControl.tsx:110 -- clearErrors(name);"
+   },
+   {
+    "title": "PR claims data-focused latch fix that the diff omits",
+    "severity": "P2",
+    "file": "packages/react/src/field/control/FieldControl.tsx",
+    "line": 163,
+    "confidence": 75,
+    "autofix_class": "gated_auto",
+    "owner": "downstream-resolver",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "Either remove the bullet from the PR description, or implement it in FieldControl: track focus in a ref set in `onFocus`/`onBlur`, and add layout effects that call `setFocused(false)` when `disabled` becomes true while that ref is set and in an unmount cleanup (`useIsoLayoutEffect(() => () => { if (focusedRef.current) setFocused(false); }, [setFocused])`), with tests for both paths. Assumption: the fix is still wanted in this PR.",
+    "first_evidence": "packages/react/src/field/control/FieldControl.tsx:163 -- setFocused(false);"
+   }
+  ],
+  "residual_risks": [
+   "Registered value type change reaches consumers on the submit path only: for a non-string controlled value (`value={5}`), `Field.Root validate` on form submit / `actionsRef.validate()` and `Field.Validity`'s `value` and `initialValue` are now the string '5' instead of the number 5 (scratch run: base 'number:5', head 'string:5'). Change/blur validation already passed the DOM string, and `Form onFormSubmit` values are unaffected because the control's `getValue` override (DOM value) wins in useFieldControlRegistration.getValueForForm. A `validate` that strictly type-checks for a number on submit would change result.",
+   "Controls whose `value` prop is a static attribute rather than the live value lose all change handling: `<Field.Control type=\"checkbox\" value=\"yes\">` (same for radio) is treated as controlled, so the new early return at FieldControl.tsx:144-146 skips `clearErrors` and `validation.change`, and the prop never changes to trigger `useValueChanged`. Scratch run with a Form server error and `validationMode=\"onChange\"`: base validate 1 call and error cleared on toggle; head validate 0 calls and 'Server error' still shown. No in-repo docs or tests use Field.Control/Input this way, so prevalence is unknown.",
+   "`details.cancel()` semantics are partial: in uncontrolled mode the DOM text, `data-dirty` and `data-filled` still update while validation and error clearing are skipped (scratch run: validate 0 calls, dirty and filled set, input value 'a', 'Server error' still shown), so a field can keep a stale error for new text; in controlled mode `cancel()` has no effect when the consumer still commits the value (validate still called once). Existing consumers that already call `details.cancel()` (previously a no-op) lose on-change validation and server-error clearing.",
+   "A controlled value changed from code while the control is disabled now invokes the consumer's `validate` and marks the field dirty (scratch run: base 0 calls / not dirty, head 1 call / dirty); visible validity stays suppressed while disabled.",
+   "Consumer coverage: only in-repo consumers were checked (the `Input` wrapper, the react-hook-form and TanStack Form handbook demos, existing Field/Form tests). External consumers of the published package are not visible."
+  ],
+  "testing_gaps": [
+   "The new test 'renders once per keystroke for controlled input changes' only covers the default validation mode before any submit. Scratch run with `validationMode=\"onChange\"` and a controlled value: two keystrokes cost 2 control renders on the base revision and 4 on head, because validation now runs in a layout effect after the value render instead of in the batched change handler. This contradicts the stated goal of not adding renders for controlled inputs and is not pinned by any test.",
+   "'does not validate when the change is canceled' covers only an uncontrolled control and only asserts that `validate` is not called; nothing pins dirty/filled/Form-error state after `details.cancel()` or the controlled-mode behavior where `cancel()` is ignored if the consumer still sets the value.",
+   "No test covers a non-string controlled value on the submit path (the value handed to `validate` and exposed by `Field.Validity`), which is where the serialized registration is observable to consumers."
+  ]
+ },
+ {
+  "reviewer": "adversarial",
+  "findings": [
+   {
+    "title": "Clearing controlled required inputs after submit flags them invalid",
+    "severity": "P2",
+    "file": "packages/react/src/field/control/FieldControl.tsx",
+    "line": 114,
+    "confidence": 75,
+    "autofix_class": "manual",
+    "owner": "human",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "Distinguish user-driven from programmatic value changes (for example record the value handled in `onChange` in a ref, the `processedValueRef` the PR body describes) and, for a programmatic change, only revalidate when the field is currently invalid instead of calling the full `validation.change(serializedValue)`; keep `setDirty`/`setFilled` as they are. Assumption: maintainers do not want a reset to raise a fresh required error. If the sibling-control behavior is intended for text inputs too, add a test that pins the post-submit clear case and document it.",
+    "first_evidence": "packages/react/src/field/control/FieldControl.tsx:114 -- validation.change(serializedValue);"
+   },
+   {
+    "title": "Promised focus-latch fix for disabled or unmounted control is absent",
+    "severity": "P2",
+    "file": "packages/react/src/field/control/FieldControl.tsx",
+    "line": 163,
+    "confidence": 100,
+    "autofix_class": "manual",
+    "owner": "downstream-resolver",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "Either remove the claim from the PR description, or add the fix in FieldControl: a layout effect `if (disabled) { setFocused(false); }` keyed on `disabled`, and a layout-effect cleanup `() => setFocused(false)` for unmount, with tests for both paths (focus, then disable; focus, then unmount the control inside a persistent Field.Root).",
+    "first_evidence": "packages/react/src/field/control/FieldControl.tsx:163 -- setFocused(false);"
+   },
+   {
+    "title": "Controlled keystrokes render twice when validating on change",
+    "severity": "P3",
+    "file": "packages/react/src/field/control/FieldControl.tsx",
+    "line": 144,
+    "confidence": 75,
+    "autofix_class": "advisory",
+    "owner": "human",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "Either accept the second render (sibling controls behave the same) and add a render-count test under `validationMode=\"onChange\"` that pins the real number while softening the claim, or handle user keystrokes inside `onChange` so the validity update batches with the consumer's `setValue`, and skip the matching prop echo with a processed-value ref as the PR body describes.",
+    "first_evidence": "packages/react/src/field/control/FieldControl.tsx:144 -- if (isControlled) {"
+   },
+   {
+    "title": "Programmatic change clears Form errors, contradicting the PR description",
+    "severity": "P3",
+    "file": "packages/react/src/field/control/FieldControl.tsx",
+    "line": 110,
+    "confidence": 100,
+    "autofix_class": "advisory",
+    "owner": "human",
+    "requires_verification": false,
+    "pre_existing": false,
+    "suggested_fix": "Update the PR description to match the code (programmatic changes do call `clearErrors(name)`; there is no `processedValueRef`, the controlled change handler returns early), and add a test that pins whichever decision is kept: a Form `errors` entry is cleared (or kept) when the controlled value changes without a user event.",
+    "first_evidence": "packages/react/src/field/control/FieldControl.tsx:110 -- clearErrors(name);"
+   }
+  ],
+  "residual_risks": [
+   "Filled state latches when a controlled control is remounted empty inside a persistent Field.Root (regression, confirmed by scratch run): `<Field.Root><Field.Control key={step} value={values[step]} /></Field.Root>` going from 'filled' to '' keeps `data-filled` at HEAD, while the base cleared it. The mount effect at FieldControl.tsx:99-103 only ever calls `setFilled(true)`; the removed `else if (hasExternalValue && valueProp === '') setFilled(false)` branch handled this, and `useValueChanged` does not fire on mount. Restoring that branch for `serializedValue === ''` would fix it.",
+   "Controlled values populated after mount (edit forms that start at '' and set fetched data) now mark the field dirty and, in onChange mode, validate without any user interaction, because the dirty baseline is captured once at first registration (useFieldControlRegistration.ts captureInitialValue). This matches the sibling controls and the new test asserts it, but it is a visible behavior change for existing controlled inputs.",
+   "Custom `validate` callbacks now receive the serialized string at submit and from `actionsRef.validate()` for controlled non-string values (registration value is `serializedValue`, read by getRegistrationValue in useFieldControlRegistration.ts). Before, submit passed the raw number or array while change passed the DOM string. The new behavior is consistent, but validators that relied on the raw type at submit change behavior.",
+   "A server error delivered in the same commit as a controlled value change survives only because of effect ordering: the control's `clearErrors(name)` updater is queued before Form's `setErrors(externalErrors)` (Form.tsx:76-78). Confirmed surviving in a scratch run at HEAD, but nothing pins that ordering.",
+   "`value={null}` is treated as controlled by the change handler (`valueProp !== undefined`) but skipped by the sync callback (`serializedValue === undefined`), so such a field gets no state sync from either path. Types and React both reject null values, so this was not pursued further."
+  ],
+  "testing_gaps": [
+   "No test for the post-submit flow: a controlled required control cleared from code after a successful Form submit (default onSubmit mode).",
+   "No test for a server error and a controlled value arriving in the same commit, where the error must remain visible.",
+   "The array half of the dirty-baseline claim is untested; only a numeric controlled value is covered.",
+   "No test for the case the early return is justified by: a consumer that rejects or rewrites the typed value in `onValueChange`, asserting that dirty, filled and validation follow the accepted value.",
+   "No test that a pending debounced or async validation for the old value is dropped when the controlled value changes from code, which the PR body claims."
+  ]
+ },
+ {
+  "reviewer": "julik-frontend-races",
+  "findings": [
+   {
+    "title": "Reset after submit marks required controlled fields invalid",
+    "severity": "P1",
+    "file": "packages/react/src/field/control/FieldControl.tsx",
+    "line": 105,
+    "confidence": 75,
+    "autofix_class": "manual",
+    "owner": "downstream-resolver",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "Distinguish the user echo from a programmatic change (the `processedValueRef` the PR body describes but the code does not contain: set it in `onChange`, compare and clear it in the `useValueChanged` callback). For a programmatic change that returns the field to its baseline (`serializedValue === (validityData.initialValue ?? '')`), do not call `validation.change`; publish a neutral validity instead (via `setValidityData` from the field context, keeping `initialValue`) so no fresh `valueMissing` error is raised. Assumption: a programmatic return to the initial value is a reset, not an edit. Add a test: Form + required controlled control, type, submit, `setValue('')` in `onFormSubmit`, expect no `data-invalid`.",
+    "first_evidence": "packages/react/src/field/control/FieldControl.tsx:105-114 -- useValueChanged(serializedValue, () => { ... setDirty(serializedValue !== (validityData.initialValue ?? '')); setFilled(serializedValue !== ''); validation.change(serializedValue); });"
+   },
+   {
+    "title": "Blur validation result lost when value is rewritten on blur",
+    "severity": "P2",
+    "file": "packages/react/src/field/control/FieldControl.tsx",
+    "line": 114,
+    "confidence": 75,
+    "autofix_class": "manual",
+    "owner": "downstream-resolver",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "Do not send programmatic changes down the optimistic revalidate path. Split the two sources as the PR body describes (handle the keystroke in `onChange`, record it in a `processedValueRef`, skip that echo in the `useValueChanged` callback); for a real programmatic change outside validate-on-change mode, re-run the boundary validation on the new value when the field is already touched (`validationMode === 'onBlur' && fieldState.touched` -> `validation.commit(serializedValue)`), otherwise keep `validation.change`. Assumption: a value rewritten after blur should be validated as the blurred value. A dozen lines and one ref; no library needed. Add sync and async tests for blur + rewrite-on-blur.",
+    "first_evidence": "packages/react/src/field/control/FieldControl.tsx:114 `validation.change(serializedValue);` (layout effect, runs after the re-render) races packages/react/src/field/control/FieldControl.tsx:166 `validation.commit(event.currentTarget.value);` (blur handler, same event)"
+   },
+   {
+    "title": "Controlled keystrokes render twice whenever validation publishes",
+    "severity": "P2",
+    "file": "packages/react/src/field/control/FieldControl.tsx",
+    "line": 144,
+    "confidence": 75,
+    "autofix_class": "manual",
+    "owner": "downstream-resolver",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "Handle the user's keystroke in `onChange` for controlled inputs too, so `setDirty`/`setFilled`/`clearErrors`/`validation.change` batch with the consumer's `setValue` in the same event (one render), and store the handled string in `processedValueRef`; in the `useValueChanged` callback return early when `serializedValue === processedValueRef.current` and clear the ref. To keep the 'rejected or rewritten value never sticks' property, resync from the prop in the same callback / a follow-up layout effect when the prop does not echo the processed value. Assumption: one extra render is acceptable only on reject/rewrite. Also extend the render-count test to `validationMode=\"onChange\"`; if two renders are accepted instead, rename the test and drop the comment at FieldControl.test.tsx:78.",
+    "first_evidence": "packages/react/src/field/control/FieldControl.tsx:144-146 -- if (isControlled) { return; } -- all controlled syncing is deferred to the layout effect at :105-115 (`validation.change(serializedValue);`)"
+   },
+   {
+    "title": "Promised data-focused unmount/disable fix is not in the diff",
+    "severity": "P2",
+    "file": "packages/react/src/field/control/FieldControl.tsx",
+    "line": 158,
+    "confidence": 100,
+    "autofix_class": "gated_auto",
+    "owner": "downstream-resolver",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "Track ownership in a ref and clear on the two exit paths: `const focusedRef = React.useRef(false)` set true in `onFocus` and in the autoFocus effect, false in `onBlur`; then `useIsoLayoutEffect(() => { if (disabled && focusedRef.current) { focusedRef.current = false; setFocused(false); } }, [disabled, setFocused]);` and `useIsoLayoutEffect(() => () => { if (focusedRef.current) { focusedRef.current = false; setFocused(false); } }, [setFocused]);`. The ref keeps one control from clearing focus that belongs to another control in the same Field.Root. Add tests for both paths. If the fix was dropped on purpose, remove the claim from the PR body.",
+    "first_evidence": "packages/react/src/field/control/FieldControl.tsx:158-163 -- onFocus() { setFocused(true); }, onBlur(event) { setTouched(true); setFocused(false); -- the only place focus is cleared; no effect cleanup and no `disabled` dependency anywhere in the file"
+   },
+   {
+    "title": "Programmatic change clears server errors, contradicting the PR body",
+    "severity": "P2",
+    "file": "packages/react/src/field/control/FieldControl.tsx",
+    "line": 110,
+    "confidence": 100,
+    "autofix_class": "manual",
+    "owner": "human",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "Decide the open question against what the code actually does. Default proposal: keep `clearErrors(name)` for user edits only by handling the keystroke in `onChange` (with the `processedValueRef` echo guard the PR body describes) and, in the prop-sync callback, clear errors only if the answer to the open question is 'align with Switch/OTP' (SwitchRoot.tsx:106, OTPFieldRoot.tsx:200 do clear). Either way correct the PR description and add a test with `<Form errors>` held in state plus a programmatic `setValue`, covering both the same-commit and the later-commit ordering.",
+    "first_evidence": "packages/react/src/field/control/FieldControl.tsx:110 -- clearErrors(name); (inside the `useValueChanged(serializedValue, ...)` callback at :105, which runs for programmatic and user-driven prop changes alike)"
+   }
+  ],
+  "residual_risks": [
+   "The PR body describes an implementation the head commit does not contain in three places (a `processedValueRef` echo guard, the data-focused unmount/disable fix, and 'does not call clearErrors'). The head replaces the guard with an early return for controlled inputs in onChange. Confirm 14d39e5d1 is the intended revision; three of the findings above share the missing user-echo vs programmatic-change distinction as their root cause.",
+   "A programmatic value change on a disabled Field.Control now runs the custom `validate` and marks Field.Root dirty and invalid (scratch case H, validationMode='onChange': HEAD {validateCalls:['x'], rootInvalid:true, rootDirty:true}; BASE {validateCalls:[], rootInvalid:false}). A disabled control is unregistered (useRegisterFieldControl enabled = !disabled), so its dirty baseline is never captured and falls back to ''. Sibling controls have no disabled guard in their useValueChanged callbacks either, so this may be accepted behaviour, but it is new for inputs (for example 'same as billing' forms that copy values into disabled inputs).",
+   "Any programmatic prefill of a controlled input after mount (data loaded asynchronously into state) now marks the field dirty and latches markedDirtyRef, as the new test at FieldControl.test.tsx:142 intends; apps that used data-dirty to detect user edits will see it set by data loading.",
+   "Not reached: real-browser focus/blur behaviour on disable and removal (only jsdom was run), the React 17 path, and concurrent-rendering cases where the consumer defers the controlled value update."
+  ],
+  "testing_gaps": [
+   "No test for the PR's claim that a pending async validator for the old value no longer publishes after a programmatic change. A scratch run confirms it holds in onBlur mode (HEAD drops the stale result, BASE shows it), but nothing in FieldControl.test.tsx pins it.",
+   "No test that a controlled change the consumer rejects (onValueChange does not update `value`) leaves dirty, filled and validity untouched, which is the stated reason for the early return at FieldControl.tsx:142-146.",
+   "The programmatic-sync test covers only validationMode='onChange'; there is no coverage of a programmatic change in onBlur mode or in the default onSubmit mode before and after a submit attempt, which is where the blur-rewrite and reset-after-submit behaviours above appear.",
+   "`details.cancel()` is tested only for an uncontrolled control and only for `validate`; in controlled mode a canceled change whose value the consumer still commits is validated through the prop path (scratch case G: validate called with 'a' on both HEAD and BASE)."
+  ]
+ },
+ {
+  "reviewer": "fast-pass",
+  "findings": [
+   {
+    "title": "PR body describes behavior the diff does not contain",
+    "severity": "P3",
+    "file": "packages/react/src/field/control/FieldControl.tsx",
+    "line": 110,
+    "confidence": 50,
+    "autofix_class": "advisory",
+    "owner": "human",
+    "requires_verification": false,
+    "pre_existing": false,
+    "suggested_fix": null,
+    "first_evidence": "packages/react/src/field/control/FieldControl.tsx:110 -- clearErrors(name);  (the body says this PR does not clear errors on a value change; it also names a processedValueRef guard and a data-focused unlatch fix that appear nowhere in the diff)"
+   },
+   {
+    "title": "Field now registers the serialized string instead of the raw value",
+    "severity": "P3",
+    "file": "packages/react/src/field/control/FieldControl.tsx",
+    "line": 93,
+    "confidence": 50,
+    "autofix_class": "advisory",
+    "owner": "human",
+    "requires_verification": false,
+    "pre_existing": false,
+    "suggested_fix": null,
+    "first_evidence": "packages/react/src/field/control/FieldControl.tsx:93 -- serializedValue,  (argument to useRegisterFieldControl; consumers of the registered value were not traced in the fast pass)"
+   }
+  ],
+  "residual_risks": [],
+  "testing_gaps": []
+ }
+]

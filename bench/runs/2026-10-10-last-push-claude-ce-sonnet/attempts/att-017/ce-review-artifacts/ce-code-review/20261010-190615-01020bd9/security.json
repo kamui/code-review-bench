@@ -1,0 +1,34 @@
+{
+  "reviewer": "security",
+  "findings": [
+    {
+      "title": "parseBody after c.req.formData() re-serializes body and mis-parses or throws",
+      "severity": "P2",
+      "file": "src/utils/body.ts",
+      "line": 143,
+      "why_it_matters": "If any earlier code calls c.req.formData() (so bodyCache.formData is the only cached entry) and a later handler calls c.req.parseBody(), parseBody now fails or returns garbage, where the old code reused the cached FormData. parseFormData now calls request.arrayBuffer(), and HonoRequest#cachedBody serves it via `new Response(cachedFormData).arrayBuffer()`. That re-encodes the form as multipart with a fresh random boundary. bufferToFormData then parses those bytes with the ORIGINAL Content-Type: for multipart the boundary no longer matches, so it throws 'Failed to parse body as FormData'; for application/x-www-form-urlencoded it yields one bogus key containing the raw multipart text. This is not a validation bypass. It is a differential between what an earlier consumer (formData) and parseBody see for the same request. Preferring the cached FormData in parseFormData avoids it.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In parseFormData, for HonoRequest, reuse the cache before buffering: `if (request instanceof HonoRequest && request.bodyCache.formData) formData = await request.bodyCache.formData; else { buffer via arrayBuffer() + bufferToFormData and cache }`. This mirrors the existing check in src/validator/validator.ts lines 115-116. Alternatively keep `await request.formData()` and normalize only the gating check. Add a regression test: `await c.req.formData(); await c.req.parseBody()` for both multipart and urlencoded.",
+      "confidence": 75,
+      "evidence": [
+        "src/utils/body.ts:143 -- const arrayBuffer = await (request as Request).arrayBuffer()",
+        "src/request.ts:228-235 -- const anyCachedKey = Object.keys(bodyCache)[0]; if (anyCachedKey) { return bodyCache[anyCachedKey].then((body) => { ... return new Response(body)[key]() }) }",
+        "Node 24 simulation (tmp/sec/t.mjs): new Response(parsedFormData).arrayBuffer() re-parsed with the original multipart Content-Type throws 'Failed to parse body as FormData'; with application/x-www-form-urlencoded it returns a single key holding the raw '------formdata-undici-...' multipart text.",
+        "Previous behavior: `const formData = await (request as Request).formData()` went through #cachedBody('formData') and hit the cache directly."
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Regex review found no ReDoS or anchoring regression: the /i flag only widens the character classes, the repeated groups `(;\\s*[a-zA-Z0-9\\-]+\\=([^;]+))*` are unambiguous and linear, and the patterns stay anchored with ^...$. The header is also bounded by server header limits.",
+    "No validator guard bypass found: the json and form regex guards gate only whether a value is extracted, and c.req.json() / bufferToFormData parse the same bytes regardless of media-type case. bufferToFormData lowercases only the segment before the first ';', so boundary case and quoted boundary values are preserved.",
+    "Body size and memory: parseFormData now holds the raw ArrayBuffer (bodyCache.arrayBuffer) plus the parsed FormData for HonoRequest, roughly 2x body per request. The old formData() path already buffered the whole body and body-limit wraps the stream upstream, so enforcement is unchanged. This is a minor constant-factor increase and not reported as a finding.",
+    "parseBody gating is now stricter than before (exact media-type equality instead of startsWith), so odd types like 'multipart/form-data-x' are no longer parsed. This is fail-closed and not a security concern."
+  ],
+  "testing_gaps": [
+    "No test covers `await c.req.formData()` (or another middleware that populates only bodyCache.formData) followed by `c.req.parseBody()` for multipart and urlencoded. That is the path where the new arrayBuffer-based parseFormData regresses.",
+    "The body.test.ts 'should not update file object properties' test no longer mocks formData(). It now relies on real FormData parsing, so the HonoRequest cache interplay (bodyCache.formData assignment) has no direct test."
+  ]
+}

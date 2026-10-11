@@ -1,0 +1,62 @@
+{
+  "reviewer": "maintainability",
+  "findings": [
+    {
+      "title": "createWorkingDir re-inlines existing resolveWorkingDir logic",
+      "severity": "P2",
+      "file": "internal/backup.go",
+      "line": 475,
+      "why_it_matters": "The working-directory default (GIT_WORKING_DIR, else <backupDir>/.working) now lives in two places: resolveWorkingDir, used by runProviderBackups for cleanup, and the new createWorkingDir, used by Run for creation. If the default or override rule changes in one, the directory created and the directory cleaned up silently diverge, and cleanupWorkingDir's safety check would then refuse or miss the real directory. The diff extracts this block into a new helper but does not reuse the canonical function already in the same file.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": false,
+      "suggested_fix": "In createWorkingDir replace the os.Getenv/if/filepath.Join block with `workingDIR := resolveWorkingDir(backupDIR)`. Behaviour is identical.",
+      "confidence": 75,
+      "evidence": [
+        "internal/backup.go:475-478 -- workingDIR := os.Getenv(envGitWorkingDir); if workingDIR == \"\" { workingDIR = filepath.Join(backupDIR, workingDIRName) }",
+        "internal/backup.go:140-145 -- func resolveWorkingDir(backupDir string) string { if w := os.Getenv(envGitWorkingDir); w != \"\" { return w }; return filepath.Join(backupDir, workingDIRName) }"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "New bitbucket*Defined helpers leave a third copy of the predicates in Bitbucket()",
+      "severity": "P2",
+      "file": "internal/bitbucket.go",
+      "line": 24,
+      "why_it_matters": "The refactor extracts the API-token and OAuth2 completeness checks into bitbucketAPITokenDefined and bitbucketOAuthDefined, and uses them in collectProviderBackupResults and checkProvidersDefined. Bitbucket() in bitbucket.go keeps its own inline copy of the same two conditions. A future change to what counts as a complete Bitbucket credential set, such as a new env var, must now be made in three places, and the scheduler gate and the provider's own check can disagree.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In Bitbucket() replace the five GetEnvOrFile lookups for the completeness check with `apiTokenComplete := bitbucketAPITokenDefined()` and `oauth2Complete := bitbucketOAuthDefined()`. If the token values are still needed afterwards for the auth config, read only those. Move the two helpers next to Bitbucket() in bitbucket.go.",
+      "confidence": 75,
+      "evidence": [
+        "internal/bitbucket.go:24-25 -- apiTokenComplete := emailExists && bbEmail != \"\" && tokenExists && bbAPIToken != \"\"; oauth2Complete := userExists && bbUser != \"\" && keyExists && bbKey != \"\" && secretExists && bbSecret != \"\"",
+        "internal/backup.go:134-147 -- new bitbucketAPITokenDefined() / bitbucketOAuthDefined() with the same conditions"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "No-op quoted-glob apk cache rm now carried into the merged RUN layer",
+      "severity": "P3",
+      "file": "docker/Dockerfile",
+      "line": 11,
+      "why_it_matters": "`rm -f \"/var/cache/apk/*\"` quotes the glob, so it deletes nothing, and `apk add --no-cache` writes no cache anyway. The merge rewrites this exact RUN statement, so it is a good moment to drop the dead command instead of carrying it into the combined layer. It gives the false impression that the layer is being cleaned.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": false,
+      "suggested_fix": "Delete the trailing `&& rm -f \"/var/cache/apk/*\"` line. `--no-cache` already avoids the cache.",
+      "confidence": 75,
+      "evidence": [
+        "docker/Dockerfile:11 -- && apk add --update --no-cache bash ca-certificates curl git git-lfs grep jq \\",
+        "docker/Dockerfile:12 -- && rm -f \"/var/cache/apk/*\""
+      ],
+      "pre_existing": true
+    }
+  ],
+  "residual_risks": [
+    "Behaviour is not strictly unchanged in checkProvidersDefined: the Bitbucket API-token flag is now computed once before the map loop. Previously it was set only when the API-token map entry was visited, so with Go's random map order and both credential sets complete, count could be 1 or 2. It is now deterministically 1. This is arguably a fix, but the 'pure refactor' claim does not hold and no test pins it.",
+    "logProviderBackupLFS(\"Gitlab\", ...) preserves the original lowercase-l log text, while the neighbouring GitLab calls use \"GitLab\". Now that a label parameter is passed explicitly, the inconsistency is visible at the call site. Fixing it would change log output, which the intent says is unchanged, so it is left as a deliberate follow-up.",
+    "displayBitBucketStartupConfig gates on envBitBucketEmail and stores it in a variable named bbUser (carried over unchanged). OAuth2-only users get no startup config, even though collectProviderBackupResults treats them as configured. Pre-existing, but the new bitbucketOAuthDefined helper would make a fix easy."
+  ],
+  "testing_gaps": []
+}

@@ -1,0 +1,31 @@
+{
+  "reviewer": "adversarial",
+  "findings": [
+    {
+      "title": "Spoofable x-vercel-isr header re-enables query-param path override on every function",
+      "severity": "P0",
+      "file": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+      "line": 24,
+      "why_it_matters": "The ISR branch trusts a plain request header with no secret, and the same entrypoint bundle backs _render, _isr, and non-ISR builds. If a client can deliver x-vercel-isr: 1 to the function (the repo never sets or verifies this header, and Vercel's stripping of client-sent x-vercel-* headers cannot be confirmed here), then GET /api/public?x_astro_path=/api/private with that header on _render or a non-ISR deploy rewrites the path to a different route again. That is the unauthenticated override that #15959 closed, and it bypasses any path-keyed access control in front of the function. Restricting the branch to the ISR function build removes the exposure on _render and non-ISR deploys even if the header turns out to be spoofable on _isr.",
+      "autofix_class": "manual",
+      "owner": "human",
+      "requires_verification": true,
+      "suggested_fix": "Add an `isr` boolean to the virtual:astro-vercel:config module (createConfigPlugin in src/index.ts), and have the ISR entry build (buildISRFolder for '_isr') set it; only evaluate the x-vercel-isr/x_astro_path branch when that flag is true, so _render and non-ISR builds never honor the query param. Also confirm with Vercel that x-vercel-isr is injected platform-side and stripped from client requests; if not, pair it with a trusted signal (e.g. a secret bypassToken-style check) instead. Assumption: x-vercel-isr is set by the platform on prerender-function invocations.",
+      "confidence": 50,
+      "evidence": [
+        "packages/integrations/vercel/src/serverless/entrypoint.ts:24 -- } else if(request.headers.get('x-vercel-isr') === '1') {  (followed by realPath = url.searchParams.get(ASTRO_PATH_PARAM);)",
+        "packages/integrations/vercel/src/index.ts:451-474 -- ISR builds still call buildServerlessFolder(entryFile, NODE_PATH, ...) and buildISRFolder(entryFile, '_isr', ...) with the same entryFile, so _render carries the same branch; the non-ISR path also uses it",
+        "x-vercel-isr is referenced nowhere else in the repo (grep), so nothing ties it to the ISR function or authenticates it",
+        "packages/integrations/vercel/test/path-override-security.test.js -- the existing spoof tests send neither x-vercel-isr, so the new branch is unexercised"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Assumes Vercel sets x-vercel-isr on ISR prerender-function invocations and strips or overwrites it on client requests; not verifiable offline, and the fix has only been checked manually against a test project.",
+    "Direct client requests to /_isr?x_astro_path=... or /_render are reachable via Vercel's filesystem handler; whether x-vercel-isr can be client-supplied there is the crux of the P0 concern."
+  ],
+  "testing_gaps": [
+    "No test covers the new ISR branch: neither that x-vercel-isr: 1 plus x_astro_path rewrites on the _isr function, nor that x_astro_path stays ignored on _render and non-ISR builds when x-vercel-isr: 1 is sent. Adding the positive and negative cases next to test/path-override-security.test.js would catch a future regression of either #15959 or this fix."
+  ]
+}

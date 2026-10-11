@@ -1,0 +1,37 @@
+{
+  "findings": [
+    {
+      "report_path": "summary.md",
+      "title": "F1. A single module-level SSLContext is shared and mutated by every verified connection",
+      "quote": "At `adapters.py:75-78` the PR builds `_preloaded_ssl_context` once, and at `adapters.py:94-95` hands that same object to urllib3 as `pool_kwargs[\"ssl_context\"]` for every `verify=True` request, regardless of host, pool, or client certificate. urllib3 does not treat a caller-supplied context as read-only. In `urllib3/connection.py` (`_ssl_wrap_socket_and_match_hostname`) it writes `context.verify_mode` on every connection and may clear `check_hostname`. In `urllib3/util/ssl_.py` (`ssl_wrap_socket`) it calls `context.load_cert_chain(certfile, keyfile)` whenever the connection has a `cert_file`, and `set_alpn_protocols` on every wrap. `_urllib3_request_context` still sets `cert_file` and `key_file` in the same `pool_kwargs` whenever the caller passes `cert=...`. So a request with `verify=True, cert=(\"a.pem\", \"a.key\")` loads client credentials A into the one global context. Every later `verify=True` connection in the process, to any host and through any session, shares that context and can present certificate A during the TLS handshake. Pools are keyed by `cert_file`, but the context is not partitioned the same way, so the pool keying gives no protection. This is a cross-tenant credential-leak shape that did not exist when each pool built its own context. The reviewer comment on the PR about \"people modifying it\" was handled only by renaming the variable to a leading underscore, which does nothing about mutation by the library itself. The remedy is to share only the expensive, immutable part. Either build a fresh context per distinct pool key and cache it (an `lru_cache` keyed on the settings that matter), or skip the shared context when `cert` is set so that path keeps the old per-pool behavior. A copy-on-use approach is not available because `SSLContext` has no clone. Verification status: confirmed by reading urllib3 2.8.0 source; not reproduced with a live handshake because network is unavailable.",
+      "file": "src/requests/adapters.py",
+      "line_start": 75,
+      "line_end": 95
+    },
+    {
+      "report_path": "summary.md",
+      "title": "F2. Eager context construction at import time adds a side effect and a new failure mode",
+      "quote": "`adapters.py:75-78` runs `create_urllib3_context()` and `load_verify_locations(extract_zipped_paths(DEFAULT_CA_BUNDLE_PATH))` as module-level statements. Every `import requests` now pays the cost the PR is trying to remove from the request path, including programs that only use `verify=False`, plain HTTP, or their own CA bundle. `extract_zipped_paths` can also write to the temp directory at import for zipped installs. Failure behavior changed too. Previously a missing default bundle raised a catchable `OSError(\"Could not find a suitable TLS CA certificate bundle\")` at request time from `cert_verify`. The PR deletes that check for the `verify=True` path, so a missing or unreadable bundle now surfaces as an exception during `import requests`, or as a bare `ssl` error with no requests-specific message. The remedy is to build the context lazily on first use through a small cached function, for example `@functools.lru_cache(maxsize=None) def _default_ssl_context()`, called from `_urllib3_request_context`. That keeps `import requests` free of file and OpenSSL work, moves failures back to request time where they can be wrapped in the previous `OSError` message, and removes the module-level mutable global that F1 depends on. This is the cheapest code-judo move in the PR.",
+      "file": "src/requests/adapters.py",
+      "line_start": 75,
+      "line_end": 78
+    },
+    {
+      "report_path": "summary.md",
+      "title": "F3. The verify-path decoding now lives in two layers, and `cert_verify` is left half-dead",
+      "quote": "`_urllib3_request_context` (`adapters.py:94-101`) and `HTTPAdapter.cert_verify` (`adapters.py:297-317`) now both branch on \"is verify a path, and is it a directory\", and both assign `ca_certs` or `ca_cert_dir`, one onto `pool_kwargs` and one onto the connection. The second copy is redundant: the connection comes from a pool that was already created with those arguments, so `conn.ca_certs` and `conn.ca_cert_dir` are already set. The PR author says as much in the description and then does not act on it. What remains in `cert_verify` is a branch whose only real job is the `os.path.exists` check, wrapped in a comment block that explains what the code deliberately does not do, plus an `if verify is not True` test with the comment \"`verify` must be a str with a path then\", which is an unchecked type assumption and not a contract. Any truthy non-bool, non-str `verify` falls into it and is treated as a path, and the two functions disagree about it (`_urllib3_request_context` ignores such values, `cert_verify` would try `os.path.exists` on them). The directory check also runs twice per request. The simplification is to make `_urllib3_request_context` the only place that interprets `verify`, with one small helper that returns the `ca_certs` or `ca_cert_dir` kwargs after validating existence. Reduce `cert_verify` to setting `cert_reqs`, the none-case reset, and the client-cert handling, and leave a docstring note that CA selection moved. That removes one of the two copies of the branch and makes the bundle error raise from one place.",
+      "file": "src/requests/adapters.py",
+      "line_start": 94,
+      "line_end": 317
+    },
+    {
+      "report_path": "summary.md",
+      "title": "F4. Behavior change on an existing, subclassable hook with no tests",
+      "quote": "`cert_verify` is documented as an extension point for adapter subclasses. Its observable effect on the connection changed: for `verify=True` it no longer sets `conn.ca_certs`, and the existence check for the default bundle is gone. Third-party adapters that read those attributes after calling `super().cert_verify()` see a different state. The PR adds no tests: nothing asserts that `verify=True` skips `load_verify_locations`, that a directory `verify` selects `ca_cert_dir`, that a bad path still raises `OSError`, or that `verify=True` with a client cert does not contaminate other connections. The author said on the PR that they could not find a way to inspect the context, but a test can patch `SSLContext.load_verify_locations` with a counter, or inspect `pool.conn_kw[\"ssl_context\"]` on the pool returned by `adapter._get_connection`. Add those tests before merge, and include the F1 case.",
+      "file": "src/requests/adapters.py",
+      "line_start": 285,
+      "line_end": 317
+    }
+  ],
+  "questions": []
+}

@@ -1,0 +1,75 @@
+{
+  "reviewer": "testing",
+  "findings": [
+    {
+      "title": "No test for formData() then parseBody(); it now breaks",
+      "severity": "P1",
+      "file": "src/utils/body.ts",
+      "line": 126,
+      "why_it_matters": "An app whose middleware reads `c.req.formData()` and whose handler then calls `c.req.parseBody()` now gets a 500 for multipart bodies and a single garbage key holding the re-serialized multipart text for urlencoded bodies; before this commit both returned `{foo: 'bar'}`. The rewritten `parseFormData` always goes through `request.arrayBuffer()`, which for an already-cached FormData re-serializes it with a fresh boundary that no longer matches the original Content-Type header. No test exercises this order (src/request.test.ts only covers parseBody() first, and passes 38/38 at head), so the regression ships green. Reusing `bodyCache.formData` when present, as validator.ts:115-116 already does, restores the old behavior, and a formData()->parseBody() test pins it.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In parseFormData (src/utils/body.ts), short-circuit on the cache before reading the buffer, mirroring validator.ts:115-116: `if (request instanceof HonoRequest && request.bodyCache.formData) { return convertFormDataToBodyData<T>(await request.bodyCache.formData, options) }`. Add two cases to the `req.parseBody()` describe in src/request.test.ts: build a HonoRequest with (a) a FormData body and (b) a URLSearchParams body, `await req.formData()`, then `expect(await req.parseBody()).toEqual({ foo: 'bar' })`.",
+      "confidence": 100,
+      "evidence": [
+        "src/utils/body.ts:126 -- const arrayBuffer = await (request as Request).arrayBuffer()",
+        "src/request.ts:228-234 -- `const anyCachedKey = Object.keys(bodyCache)[0]` ... `return new Response(body)[key]()`: with only `formData` cached, arrayBuffer() re-serializes the FormData as multipart with a new boundary",
+        "src/utils/body.ts:127 -- const formDataPromise = bufferToFormData(arrayBuffer, headers.get('Content-Type') || '')  (original header, old boundary / urlencoded type)",
+        "Scratch probe (head vs merge-base 97287029 body.ts, Node 24): `new HonoRequest(multipartReq); await r.formData(); await r.parseBody()` -> HEAD: TypeError 'Failed to parse body as FormData.' (cause: no boundary found in multipart body); BASE: {\"foo\":\"bar\"}",
+        "Scratch probe, urlencoded body, same order -> HEAD: {\"------formdata-undici-079291707723\\r\\nContent-Disposition: form-data; name\":\"\\\"foo\\\"\\r\\n\\r\\nbar\\r\\n------formdata-undici-079291707723--\\r\\n\"}; BASE: {\"foo\":\"bar\"}",
+        "Scratch probe, end to end: `app.use(async (c, next) => { await c.req.formData(); await next() }); app.post('/', async (c) => c.json(await c.req.parseBody()))` -> HEAD multipart: status 500; HEAD urlencoded: status 200 with the garbage key above",
+        "src/request.test.ts:367-382 -- the only form-body parseBody() test calls parseBody() first; `vitest --run --project main src/request.test.ts` at head: 38 passed",
+        "src/validator/validator.ts:115-116 -- `if (c.req.bodyCache.formData) { formData = await c.req.bodyCache.formData` (existing guard the new code path lacks)"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Mixed-case multipart tests pass without the production change",
+      "severity": "P2",
+      "file": "src/utils/buffer.test.ts",
+      "line": 120,
+      "why_it_matters": "The riskiest part of this commit, the `bufferToFormData` media-type normalization and the `parseFormData` rewrite from `request.formData()` to arrayBuffer plus re-parse, can be deleted and every new test still passes, so nothing would flag it breaking or being removed. Node's fetch already matches the media type case-insensitively: the new buffer test passes against the merge-base `bufferToFormData`, and the new body.test.ts cases pass against a variant that changes only the media-type gate and keeps `request.formData()`. That same unneeded rewrite is what introduces the formData()->parseBody() regression. The boundary-case assertion does guard against lowercasing the whole header, which is worth keeping.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Default proposal (assumes no supported runtime rejects mixed-case media types in Request/Response.formData(), which could not be checked here because only Node was available): revert parseFormData to `const formData = await (request as Request).formData()` and drop the `.replace(/^[^;]+/, ...)` in bufferToFormData, keeping only the mediaType gate in parseBody and the `/i` regex flags, since those are the changes the new tests actually require. If a runtime does need the normalization, keep it and add a test that fails without it, e.g. in src/utils/buffer.test.ts spy on `globalThis.Response` and assert it receives `'multipart/form-data; boundary=sampleBoundary'`, or add a case to the affected runtime-tests suite.",
+      "confidence": 75,
+      "evidence": [
+        "src/utils/buffer.test.ts:120 -- it('Should parse mixed-case multipart/form-data media type while keeping the boundary', async () => {",
+        "src/utils/buffer.ts:113 -- 'Content-Type': contentType.replace(/^[^;]+/, (mediaType) => mediaType.toLowerCase()),",
+        "Scratch probe (Node 24): merge-base bufferToFormData(buf, 'Multipart/Form-Data; boundary=sampleBoundary').get('test') -> \"Hello\" (same as head); native `new Response(buf, { headers: { 'Content-Type': 'Multipart/Form-Data; boundary=sampleBoundary' } }).formData()` -> \"Hello\"",
+        "Scratch probe: merge-base body.ts with only the gate replaced by `mediaType === ...` (still `request.formData()`) returns {\"message\":\"hello\"} for both new body.test.ts inputs (src/utils/body.test.ts:45 and :56), for Request and HonoRequest",
+        "src/validator/validator.test.ts:309 -- the mixed-case multipart validator test reaches bufferToFormData too, but base bufferToFormData already parses that input, so only the `/i` flag on multipartRegex is required for it to pass"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "New bodyCache.formData write in parseBody is untested",
+      "severity": "P2",
+      "file": "src/utils/body.ts",
+      "line": 130,
+      "why_it_matters": "After `c.req.parseBody()` on a form request, a later `c.req.formData()` works only because of this new cache write; without it the first cached key is `arrayBuffer` and formData() throws a TypeError about the Content-Type. No test calls formData() after parseBody() on a form body, and the existing validator `/cached` test passes either way because the validator falls back to re-parsing the buffer, so removing or breaking this line would go unnoticed. The neighbouring assertions in the request test are `expect(async () => ...).not.toThrow()`, which cannot fail.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In src/request.test.ts 'req.parseBody() > should parse form data', after `await req.parseBody()` add `expect((await req.formData()).get('foo')).toBe('bar')`, and add the same check for a URLSearchParams body. If the parseFormData rewrite is reverted per the other finding, this branch disappears and the test still pins the contract.",
+      "confidence": 75,
+      "evidence": [
+        "src/utils/body.ts:130 -- request.bodyCache.formData = formDataPromise as unknown as FormData",
+        "Scratch probe (head): `await r.parseBody(); (await r.formData()).get('foo')` -> \"bar\" with bodyCache keys [\"arrayBuffer\",\"formData\"]; after `delete r.bodyCache.formData` the same call -> TypeError 'Content-Type was not one of \"multipart/form-data\" or \"application/x-www-form-urlencoded\".'",
+        "src/request.test.ts:377-381 -- `expect((await req.parseBody())['foo']).toBe('bar')` followed only by `expect(async () => await req.text()).not.toThrow()` style checks for text/arrayBuffer/bytes/blob; formData() is never called after parseBody() on a form body",
+        "src/validator/validator.test.ts:1171-1187 -- `/cached` route (parseBody then validator('form')) passes without the cache write: validator.ts:117-121 falls back to `c.req.arrayBuffer()` + bufferToFormData"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Runtime coverage: only Node (vitest `main` project) could be exercised. Whether any supported runtime (Bun, Deno, workerd, Fastly, Lambda) rejects mixed-case media types in Request/Response.formData(), which is the only justification for src/utils/buffer.ts:113 and the parseFormData rewrite, is unverified; those runtime suites were unavailable.",
+    "Suite coverage at head: beyond the three changed test files (prior run) only src/request.test.ts was run (38 passed). Other parseBody consumers such as src/middleware/method-override and src/hono.test.ts were not executed against the rewritten parseFormData."
+  ],
+  "testing_gaps": [
+    "parseBody media-type gate changed from startsWith to exact match with no test pinning the edges: probe shows `application/x-www-form-urlencoded-foo` and a comma-joined `application/x-www-form-urlencoded, text/plain` now return {} where the merge-base threw a TypeError, and the `split(';')[0].trim()` path with parameters on a mixed-case urlencoded type (e.g. `Application/X-WWW-Form-Urlencoded ; charset=UTF-8`) is covered only through the validator, not through parseBody.",
+    "Body-cache behavior after parseBody changed with no test: `c.req.text()` after `c.req.parseBody()` on multipart now returns the original bytes (merge-base returned a re-serialized body with a new boundary), `text()` then `parseBody()` now succeeds (merge-base threw), and `cloneRawRequest` after `parseBody()` now yields a parseable request (merge-base threw 'Failed to parse body as FormData'). src/request.test.ts:378-381 would need real value assertions instead of `expect(async () => ...).not.toThrow()` to pin any of these."
+  ]
+}

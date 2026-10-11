@@ -1,0 +1,98 @@
+{
+  "reviewer": "testing",
+  "findings": [
+    {
+      "title": "Render-count test misses the onChange-validation mode that regressed",
+      "severity": "P2",
+      "file": "packages/react/src/field/control/FieldControl.test.tsx",
+      "line": 79,
+      "why_it_matters": "A controlled Field.Control with validationMode=\"onChange\" now renders twice per keystroke instead of once, which the stated intent forbids (\"must not add renders per keystroke\"). The new guard test passes anyway because it renders a bare <Field.Root> in the default onSubmit mode, where validation.change returns early and publishes nothing. In onChange mode the controlled sync runs in a layout effect after the consumer's render, so setValidityData schedules a second render; before this change it ran in the event handler and batched with the consumer's setState. Adding an onChange-mode case makes the test fail on the current code and pins the requirement.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Add a second case to 'renders once per keystroke for controlled input changes' that renders <Field.Root validationMode=\"onChange\" validate={() => null}> and keeps the settledRenderCount + 2 assertion. It fails on the current code (4 renders for two keystrokes). To make it pass, handle user-driven changes in onChange again (setDirty, setFilled, clearErrors, validation.change batched with the consumer's setState) and record the handled string in a ref so the useValueChanged callback skips an identical echo and only syncs values that differ (programmatic or rewritten) - the processedValueRef guard the PR body describes but the diff does not contain. Assumption: validating a value the consumer later rejects is acceptable, as it was before this change.",
+      "confidence": 75,
+      "evidence": [
+        "packages/react/src/field/control/FieldControl.test.tsx:79 -- expect(renderCountRef.current).toBe(settledRenderCount + 2);",
+        "packages/react/src/field/control/FieldControl.test.tsx:53 -- <Field.Root>   (no validationMode, no validate: default onSubmit mode)",
+        "packages/react/src/field/control/FieldControl.tsx:114 -- validation.change(serializedValue);   (inside the useValueChanged layout effect, lines 105-115)",
+        "packages/react/src/field/root/useFieldValidation.ts:169-172 -- if (revalidate) { if (state.valid !== false || !element) { return; }   (the early return that makes the default-mode test a no-op for validation)",
+        "Scratch probe (jsdom, non-strict, render-prop counter, two keystrokes after the first): HEAD controlled + validationMode=onChange = 4 renders; merge-base FieldControl.tsx in the same harness = 2 renders; HEAD controlled default mode = 2; HEAD uncontrolled onChange = 2.",
+        "PR body: \"`processedValueRef` records the value the change handler just handled, so the prop echo does not validate the same keystroke twice.\" -- no processedValueRef exists in FieldControl.tsx at the reviewed head."
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Controlled inputs bypass prevented/canceled guard; only uncontrolled tested",
+      "severity": "P2",
+      "file": "packages/react/src/field/control/FieldControl.tsx",
+      "line": 144,
+      "why_it_matters": "For a controlled Field.Control, a change whose native input event was prevented now clears the Form's server error and runs validate, where before this change it did neither. The controlled branch returns before the defaultPrevented / details.isCanceled check, and the prop echo then clears errors and validates unconditionally. Both guard tests ('does not validate when the change is canceled', 'does not clear errors or validate when change is prevented') use uncontrolled controls, so the regression and the controlled half of the new cancel() contract are unasserted.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Carry the guard into the controlled path: in onChange, before the `if (isControlled) return`, store `event.nativeEvent.defaultPrevented || details.isCanceled` in a ref; in the useValueChanged callback still call setDirty/setFilled but skip clearErrors(name) and validation.change when that ref is set, then reset it (also reset it at the start of every onChange so a rejected change cannot suppress a later programmatic one). Add controlled variants of the tests at FieldControl.test.tsx:189 and :203 (value + onValueChange={setValue}, stable `errors` object hoisted out of the component) asserting validate is not called and 'Server error' stays in the document.",
+      "confidence": 75,
+      "evidence": [
+        "packages/react/src/field/control/FieldControl.tsx:144 -- if (isControlled) {",
+        "packages/react/src/field/control/FieldControl.tsx:153 -- if (!event.nativeEvent.defaultPrevented && !details.isCanceled) {   (unreachable for controlled inputs)",
+        "packages/react/src/field/control/FieldControl.tsx:110-114 -- clearErrors(name); ... validation.change(serializedValue);   (unconditional in the controlled sync)",
+        "packages/react/src/field/control/FieldControl.test.tsx:194 -- <Field.Control onValueChange={(value, details) => details.cancel()} />   (uncontrolled)",
+        "packages/react/src/field/control/FieldControl.test.tsx:210 -- <Field.Control onValueChange={handleValueChange} />   (uncontrolled)",
+        "Scratch probe, controlled Field.Control in <Form errors> with validationMode=onChange, input event preventDefault()ed in capture: HEAD validate calls = 1 and 'Server error' removed; merge-base FieldControl.tsx = 0 calls and error still shown.",
+        "Scratch probe, controlled + details.cancel() while the consumer still applies the value: validate called once and server error cleared at HEAD (same at merge-base), so cancel() does not stop internal handling on the controlled path."
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Controlled clearErrors path is untested and contradicts PR description",
+      "severity": "P2",
+      "file": "packages/react/src/field/control/FieldControl.tsx",
+      "line": 110,
+      "why_it_matters": "A programmatic value change now removes a Form server error from an Input, but the PR body says this PR does not do that and leaves it as an open question, so reviewers and release notes describe the opposite of what ships. No test asserts it either way. The same line is now the only thing clearing server errors when a user types into a controlled input, and no test in the repo renders a controlled Field.Control or Input inside a Form with errors, so deleting or gating it would break that silently.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Assuming the shipped behavior is intended (it matches Switch, Checkbox, Select and the other siblings), add two tests in FieldControl.test.tsx using a hoisted, stable `errors` object in <Form errors={ERRORS}> with <Field.Root name=\"message\">, <Field.Control value={value} onValueChange={setValue} /> and <Field.Error />: (1) fireEvent.change removes 'Server error'; (2) a button calling setValue('external') removes 'Server error'. Then correct the PR description's Open question. If the description is the intended behavior instead, only call clearErrors(name) for user-initiated changes and assert in test (2) that the error stays.",
+      "confidence": 75,
+      "evidence": [
+        "packages/react/src/field/control/FieldControl.tsx:110 -- clearErrors(name);",
+        "PR body, Open question: \"The sibling controls also call `clearErrors(name)` when their value changes. This PR does not, so a programmatic change clears a server error on a Switch but not on an Input.\"",
+        "packages/react/src/field/control/FieldControl.test.tsx:159-166 -- the only programmatic-change test renders no <Form> and asserts data-filled, data-dirty and the validate call only.",
+        "Multiline search for <(Field.Control|Input) ... (value|onValueChange)= across packages/react/src/**/*.test.tsx matches only FieldControl.test.tsx and FieldRoot.test.tsx:1636, :1755; none sits inside a <Form errors>. Form.test.tsx and Input.test.tsx contain no `value={` or `onValueChange`.",
+        "Scratch probe, controlled Field.Control in <Form errors={ERRORS}>, button sets the value: HEAD 'Server error' removed; merge-base FieldControl.tsx 'Server error' still shown. Controlled typing removes it in both."
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Promised data-focused latch fix has no code and no test",
+      "severity": "P2",
+      "file": "packages/react/src/field/control/FieldControl.tsx",
+      "line": 159,
+      "why_it_matters": "A Field whose control is disabled or unmounted while focused still keeps data-focused on Field.Root indefinitely, exactly as before this change, although the PR description lists that as fixed. The diff touches nothing in the focus handling and adds no focus test, so the description would send a changelog entry out for a fix that does not exist. Either the change is missing from the push or the claim is stale.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Either remove the 'no longer latches data-focused' bullet from the PR description, or implement it: add a layout effect in FieldControl that calls setFocused(false) when `disabled` becomes true and in its cleanup on unmount, plus two tests that focus the control, then disable it / unmount it, and assert the Field.Root no longer has data-focused. Assumption: the description reflects the intended scope.",
+      "confidence": 75,
+      "evidence": [
+        "packages/react/src/field/control/FieldControl.tsx:159 -- setFocused(true);   (onFocus; the only setFocused(false) is in onBlur at line 163, and the autoFocus effect at 119-123 is unchanged apart from being moved)",
+        "PR body: \"A control that unmounts or becomes disabled while focused no longer latches `data-focused`, since no blur fires in that path.\"",
+        "Scratch probe: focus the control, then set disabled -> Field.Root still has data-focused; focus then unmount the control -> Field.Root still has data-focused. Identical at HEAD and with the merge-base FieldControl.tsx.",
+        "full.diff contains no change to onFocus/onBlur and no test mentioning data-focused other than the pre-existing skipped-in-jsdom autoFocus SSR test."
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "The claim that no test covers a controlled Field.Control/Input inside a Form with errors rests on text search (multiline grep over packages/react/src/**/*.test.tsx), not on running a mutation against the full suite.",
+    "Scratch probes ran in jsdom with @testing-library/react in non-strict mode; render counts were not measured under StrictMode or in a real browser. The merge-base comparison used a copy of the HEAD src tree with only FieldControl.tsx replaced by its merge-base version (the diff changes only that file and its test).",
+    "The PR description is stale against the code in three places (processedValueRef guard, clearErrors on programmatic change, data-focused latch), so other statements in it should not be taken as a description of what the diff does."
+  ],
+  "testing_gaps": [
+    "Stale async validator: with validationMode=\"onBlur\" and a pending async validate for the old value, a programmatic clear no longer lets the old result publish (scratch probe: error shown at merge-base, not at HEAD). The PR body names this fix but no test pins it.",
+    "Resolved error on programmatic change: the only programmatic-change test goes '' -> 'external' on a valid field. Nothing asserts that an already-invalid controlled field (e.g. required or a custom validate error) drops aria-invalid / Field.Error when the value is fixed from code, which is the headline scenario in the PR body.",
+    "Array-valued controlled value: the PR body claims dirty now clears for arrays; a scratch probe confirms it (stayed dirty at merge-base), but only the numeric case has a test.",
+    "The cancel test asserts only that validate is not called. A canceled uncontrolled change still sets data-dirty and data-filled and leaves the Form error in place (scratch probe); none of that is asserted, so what 'details.cancel() stops the internal handling' actually covers is unpinned."
+  ]
+}

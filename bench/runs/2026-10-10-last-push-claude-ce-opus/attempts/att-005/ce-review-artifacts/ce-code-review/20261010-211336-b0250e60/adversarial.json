@@ -1,0 +1,32 @@
+{
+  "reviewer": "adversarial",
+  "findings": [
+    {
+      "title": "Documented .zshrc line errors on every startup if placed before compinit",
+      "severity": "P2",
+      "file": "FAQ.md",
+      "line": 135,
+      "why_it_matters": "A user who follows the new FAQ text and puts the line in .zshrc above their `compinit` call (or above the framework line that runs it) gets `_rg:341: command not found: _arguments` on every shell start, and rg completion is never registered, even after compinit runs later. The script treats 'compdef is not defined' as 'run the completion function now', which is right for ci/test-complete but wrong for an early .zshrc source, and the FAQ never states the ordering requirement. The same block also carries a `$ ` prompt prefix although the text says to add it to a file; pasted literally it fails with `command not found: $`. Stating 'after compinit' and dropping the prompt prefix (as the fpath block just above already does) removes both traps.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": false,
+      "suggested_fix": "In FAQ.md, change the block to a bare `source <(rg --generate complete-zsh)` (no `$ ` prefix, matching the `fpath=(...)` block above it) and say it must come after the completion system is initialised, e.g. 'add the following to your `$HOME/.zshrc` file, after `compinit` has been called'. Optional hardening in rg.zsh, assuming ci/test-complete keeps setting _RG_COMPLETE_LIST_ARGS: take the `_rg \"$@\"` branch only when `$funcstack[1] == _rg` or `_RG_COMPLETE_LIST_ARGS` is set, and otherwise print a one-line 'rg: zsh completion requires compinit to be run first' to stderr when compdef is missing.",
+      "confidence": 75,
+      "evidence": [
+        "FAQ.md:131-135 -- Or if you'd prefer to load and generate completions at the same time, you can / add the following to your `$HOME/.zshrc` file: / ```zsh / $ source <(rg --generate complete-zsh)",
+        "crates/core/flags/complete/rg.zsh:441-442 -- if [[ $funcstack[1] == _rg ]] || (( ! $+functions[compdef] )); then / _rg \"$@\"",
+        "Reproduced in scratch (zsh 5.8.1, zsh -f, fake rg emitting the reviewed rg.zsh): `source <(rg --generate complete-zsh)` with no compinit prints `_rg:341: command not found: _arguments`, returns 1; running compinit afterwards leaves `_comps[rg]` unset when no `_rg` is on fpath, so completion silently falls back to default.",
+        "Control: the same source line after `compinit` registers `_comps[rg]=_rg` and `rg --generate=complete-zs<TAB>` completes to `complete-zsh` through a pty, so the failure is purely an ordering one.",
+        "Scratch: a file containing the literal FAQ line `$ source <(...)` fails with `command not found: $` (rc 127); the neighbouring fpath block at FAQ.md:128 has no prompt prefix."
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Sourcing a saved copy by its bare name from its own directory (`cd ~/.zsh-complete && source _rg`) makes `$funcstack[1]` equal `_rg`, so the script takes the autoload branch and prints the original `_arguments:comparguments:325: can only be called from completion function` error (reproduced in scratch with compinit loaded). Narrow: `source ./_rg`, an absolute path, and `source <(...)` all take the compdef branch correctly. `$zsh_eval_context[-1] == loadautofunc` would distinguish a real autoload but is not available on the oldest zsh versions the script still caters for.",
+    "ci/test-complete now depends on `compdef` being undefined in the shell that runs it: with compinit loaded before the script body (e.g. from a developer's ~/.zshenv) the source call registers the function instead of printing the specs, and the script exits 1 with 'Failed to get comp_args' (reproduced in scratch). This fails closed, not green, so it is a diagnosability note only."
+  ],
+  "testing_gaps": [
+    "ci/test-complete exercises only the `(( ! $+functions[compdef] ))` branch of the new dispatch. Neither the `compdef _rg rg` branch (the feature this change adds) nor the `$funcstack[1] == _rg` autoload branch (the path used by the release archive, deb and brew installs) is run by any automated check; both were confirmed working here only by hand through a zsh pty (source after compinit, and autoload from fpath, each completing `rg --generate=complete-zs<TAB>` and `rg --type=<TAB>`)."
+  ]
+}

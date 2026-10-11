@@ -1,0 +1,76 @@
+package grpc
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"google.golang.org/grpc/balancer"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/internal/balancer/stub"
+)
+
+// TestSubConn_ConcurrentConnectDialsOnce verifies that many concurrent calls
+// to SubConn.Connect on an IDLE SubConn start exactly one connection attempt.
+func (s) TestSubConn_ConcurrentConnectDialsOnce(t *testing.T) {
+	const rounds, connects = 300, 64
+
+	bf := stub.BalancerFuncs{
+		UpdateClientConnState: func(bd *stub.BalancerData, ccs balancer.ClientConnState) error {
+			if bd.Data != nil {
+				return nil
+			}
+			sc, err := bd.ClientConn.NewSubConn(ccs.ResolverState.Addresses, balancer.NewSubConnOptions{
+				StateListener: func(balancer.SubConnState) {},
+			})
+			if err != nil {
+				return err
+			}
+			bd.Data = sc
+			for i := 0; i < connects; i++ {
+				sc.Connect()
+			}
+			return nil
+		},
+	}
+	stub.Register(t.Name(), bf)
+	svcCfg := fmt.Sprintf(`{ "loadBalancingConfig": [{%q: {}}] }`, t.Name())
+
+	extra := 0
+	for r := 0; r < rounds; r++ {
+		var dials atomic.Int32
+		dialed := make(chan struct{}, connects)
+		done := make(chan struct{})
+		dialer := func(ctx context.Context, _ string) (net.Conn, error) {
+			dials.Add(1)
+			dialed <- struct{}{}
+			select {
+			case <-ctx.Done():
+			case <-done:
+			}
+			return nil, fmt.Errorf("dialer exiting")
+		}
+		cc, err := Dial("passthrough:///fake", WithTransportCredentials(insecure.NewCredentials()), WithDefaultServiceConfig(svcCfg), WithContextDialer(dialer))
+		if err != nil {
+			t.Fatal("Error dialing:", err)
+		}
+		select {
+		case <-dialed:
+		case <-time.After(defaultTestTimeout):
+			t.Fatal("Timed out waiting for the first dial")
+		}
+		// Give the other connect goroutines time to (incorrectly) dial.
+		time.Sleep(2 * time.Millisecond)
+		if n := dials.Load(); n != 1 {
+			extra++
+		}
+		close(done)
+		cc.Close()
+	}
+	if extra != 0 {
+		t.Fatalf("%d of %d rounds started more than one connection attempt for a single IDLE SubConn", extra, rounds)
+	}
+}

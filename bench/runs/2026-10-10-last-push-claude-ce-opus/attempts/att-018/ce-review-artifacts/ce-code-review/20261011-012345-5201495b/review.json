@@ -1,0 +1,180 @@
+{
+  "status": "complete",
+  "verdict": "Ready with fixes",
+  "scope": {
+    "base": "c77f548cbd340d2e744da7c6d92a54372b4b900b",
+    "branch": "review-head",
+    "head_sha": "136a4850df9aec8cf8813b27ba1533d4a17bc642",
+    "pr_url": null,
+    "files_changed": 4
+  },
+  "intent": "Behaviour-preserving refactor to clear 13 SonarQube findings: the high-complexity functions in internal/backup.go (runProviderBackups, displayStartupConfig, checkProvider, Run, checkProvidersDefined) are split into helpers, the three copies of the backup-status notification title move behind backupStatusTitle in internal/notify.go, a duplicate GitLab test is deleted, TestGiteaOrgsRepositoryBackup gets assertion helpers, and docker/Dockerfile is tidied. The stated contract is that runtime behaviour and log output are unchanged, so any observable difference from the base counts as a regression.",
+  "intent_confidence": "explicit",
+  "reviewers": [
+    "correctness",
+    "testing",
+    "maintainability",
+    "reliability",
+    "adversarial"
+  ],
+  "findings": [
+    {
+      "#": 1,
+      "title": "Refactored Run/backup dispatch path unexecuted without live credentials",
+      "severity": "P2",
+      "file": "internal/backup.go",
+      "line": 97,
+      "confidence": 75,
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Add an offline Run()-level test next to TestGithubRepositoryBackupWithMockAPI in internal/github_mock_test.go that reuses newGitFixtureServer and newGitHubMockAPI: back up/restore the environment (backupEnvironmentVariables/restoreEnvironmentVariables), call unsetEnvVarsExcept([]string{envPath}), explicitly unset GIT_BACKUP_INTERVAL and GIT_BACKUP_CRON (TestGetBackupInterval leaves GIT_BACKUP_INTERVAL set, and a non-zero value would block in waitForShutdown) plus the notification variables, then set GIT_BACKUP_DIR=t.TempDir(), GITHUB_TOKEN=mock-token, GITHUB_APIURL=<mock api URL>; call Run() and assert NoError, exactly one bundle under <backupDir>/github.com/mockuser/<name> for each repo, and that <backupDir>/.working has been removed. Assumption: GitHub() keeps honouring GITHUB_APIURL (internal/github.go:33), which the scratch prototype confirmed.",
+      "first_evidence": "internal/backup.go:97 -- func collectProviderBackupResults(backupDir string) []ProviderBackupResults {",
+      "why_it_matters": "A green test run says nothing about the largest part of this refactor unless provider credentials are present: every test that drives Run() to success skips without a live token, so the new collectProviderBackupResults, createWorkingDir, scheduleBackups and runProviderBackups code is never executed (0% statement coverage at the reviewed head). A wrong env-var/provider pairing in the new dispatch table, a dropped working-directory step, or an early return in Run would ship with the suite passing. The repo already owns offline fixtures (newGitFixtureServer/newGitHubMockAPI) but TestGithubRepositoryBackupWithMockAPI calls githosts directly and bypasses Run(); routing a sibling test through Run() covers the refactored one-shot path deterministically, and a prototype of exactly that passed offline in about 5s in a scratch copy.",
+      "evidence": [
+        "internal/backup.go:97 -- func collectProviderBackupResults(backupDir string) []ProviderBackupResults {",
+        "internal/github_mock_test.go:138 -- result := githubHost.Backup()  (the only deterministic backup test calls githosts directly; it never enters Run(), runProviderBackups or GitHub())",
+        "Coverage of the reviewed head (scratch copy of 136a4850, `go test ./internal/ -count=1 -coverprofile`, no credentials): collectProviderBackupResults 0.0%, runProviderBackups 0.0%, createWorkingDir 0.0%, scheduleBackups 0.0%, runScheduledJob 0.0%, execProviderBackups 0.0%, validateStartupConfig 46.7% (success return at backup.go:470 uncovered), Run 64.3% (backup.go:417-421 uncovered)",
+        "internal/backup_test.go:552-553 -- if os.Getenv(envGitLabToken) == \"\" { t.Skipf(...) }  (same guard pattern on every test that reaches a successful Run(); the only Run() calls that execute offline are the two early-error tests at backup_test.go:243 and :819)",
+        "Scratch prototype (TestScratchRunOneShotWithMockGitHub: Run() against the existing mock GraphQL API and git fixture server) passed offline and raised collectProviderBackupResults to 87.5%, createWorkingDir to 85.7%, runProviderBackups to 72.7%, scheduleBackups to 58.3%",
+        "No workflow under .github/workflows runs `go test` (grep count 0); the Makefile `test` target is the only runner, so there is no credentialed CI run compensating for the skips"
+      ],
+      "reviewers": [
+        "testing"
+      ],
+      "independent_reviewers": [
+        "testing"
+      ]
+    }
+  ],
+  "actionable_findings": [
+    {
+      "#": 1,
+      "title": "Refactored Run/backup dispatch path unexecuted without live credentials",
+      "severity": "P2",
+      "file": "internal/backup.go",
+      "line": 97,
+      "confidence": 75,
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Add an offline Run()-level test next to TestGithubRepositoryBackupWithMockAPI in internal/github_mock_test.go that reuses newGitFixtureServer and newGitHubMockAPI: back up/restore the environment (backupEnvironmentVariables/restoreEnvironmentVariables), call unsetEnvVarsExcept([]string{envPath}), explicitly unset GIT_BACKUP_INTERVAL and GIT_BACKUP_CRON (TestGetBackupInterval leaves GIT_BACKUP_INTERVAL set, and a non-zero value would block in waitForShutdown) plus the notification variables, then set GIT_BACKUP_DIR=t.TempDir(), GITHUB_TOKEN=mock-token, GITHUB_APIURL=<mock api URL>; call Run() and assert NoError, exactly one bundle under <backupDir>/github.com/mockuser/<name> for each repo, and that <backupDir>/.working has been removed. Assumption: GitHub() keeps honouring GITHUB_APIURL (internal/github.go:33), which the scratch prototype confirmed.",
+      "first_evidence": "internal/backup.go:97 -- func collectProviderBackupResults(backupDir string) []ProviderBackupResults {",
+      "why_it_matters": "A green test run says nothing about the largest part of this refactor unless provider credentials are present: every test that drives Run() to success skips without a live token, so the new collectProviderBackupResults, createWorkingDir, scheduleBackups and runProviderBackups code is never executed (0% statement coverage at the reviewed head). A wrong env-var/provider pairing in the new dispatch table, a dropped working-directory step, or an early return in Run would ship with the suite passing. The repo already owns offline fixtures (newGitFixtureServer/newGitHubMockAPI) but TestGithubRepositoryBackupWithMockAPI calls githosts directly and bypasses Run(); routing a sibling test through Run() covers the refactored one-shot path deterministically, and a prototype of exactly that passed offline in about 5s in a scratch copy.",
+      "evidence": [
+        "internal/backup.go:97 -- func collectProviderBackupResults(backupDir string) []ProviderBackupResults {",
+        "internal/github_mock_test.go:138 -- result := githubHost.Backup()  (the only deterministic backup test calls githosts directly; it never enters Run(), runProviderBackups or GitHub())",
+        "Coverage of the reviewed head (scratch copy of 136a4850, `go test ./internal/ -count=1 -coverprofile`, no credentials): collectProviderBackupResults 0.0%, runProviderBackups 0.0%, createWorkingDir 0.0%, scheduleBackups 0.0%, runScheduledJob 0.0%, execProviderBackups 0.0%, validateStartupConfig 46.7% (success return at backup.go:470 uncovered), Run 64.3% (backup.go:417-421 uncovered)",
+        "internal/backup_test.go:552-553 -- if os.Getenv(envGitLabToken) == \"\" { t.Skipf(...) }  (same guard pattern on every test that reaches a successful Run(); the only Run() calls that execute offline are the two early-error tests at backup_test.go:243 and :819)",
+        "Scratch prototype (TestScratchRunOneShotWithMockGitHub: Run() against the existing mock GraphQL API and git fixture server) passed offline and raised collectProviderBackupResults to 87.5%, createWorkingDir to 85.7%, runProviderBackups to 72.7%, scheduleBackups to 58.3%",
+        "No workflow under .github/workflows runs `go test` (grep count 0); the Makefile `test` target is the only runner, so there is no credentialed CI run compensating for the skips"
+      ],
+      "reviewers": [
+        "testing"
+      ],
+      "independent_reviewers": [
+        "testing"
+      ]
+    }
+  ],
+  "triage_groups": [],
+  "pre_existing_findings": [],
+  "requirements_completeness": null,
+  "learnings": [],
+  "agent_native_gaps": [],
+  "deployment_notes": [],
+  "residual_risks": [
+    "Informational, no fix needed: the claim that log output is unchanged holds except for two narrow, log-only differences from base c77f548. Neither changes which providers run or what is backed up. (1) internal/backup.go:101 evaluates `bitbucketAPITokenDefined() || bitbucketOAuthDefined()`, which stops at the first true result; the base read all five BitBucket variables on every backup run. With complete BitBucket API-token credentials plus a BITBUCKET_USER_FILE, BITBUCKET_KEY_FILE or BITBUCKET_SECRET_FILE that points at an unreadable file, the `file ... does not exist` / `error opening file` line from GetEnvOrFile (internal/envfile.go:35-39) is logged once per backup run (from Bitbucket(), internal/bitbucket.go:19-21) instead of twice; it still appears at startup. Established by reading, not executed. (2) internal/backup.go:219 now logs the BitBucket compare method through the shared strings.EqualFold check, where the base used strings.ToLower(compare) == \"refs\". A BITBUCKET_COMPARE value that matches only under Unicode simple folding (for example \"ref\" followed by U+017F) is logged as `refs` instead of `clone`; ASCII values are unaffected. This was the only output difference in the adversarial reviewer's randomized base-vs-head run over 40,000 environment configurations. Noted by correctness, testing, maintainability, reliability and adversarial (one model, so agreement adds no confidence).",
+    "Informational: two restructured runtime paths were checked by reading only, because they need provider credentials or block on a signal. They are the scheduled path (GIT_BACKUP_INTERVAL / GIT_BACKUP_CRON -> scheduleBackups -> runScheduledJob, internal/backup.go:491-541) and the non-GitHub entries of the provider dispatch in collectProviderBackupResults (internal/backup.go:97-123). By inspection the provider order (BitBucket, Gitea, GitHub, GitLab, Azure DevOps, Sourcehut) and predicates match the base, runScheduledJob assigns the package-level `job` without shadowing it (internal/backup.go:528), and the job options keep their original order. The new assertion helpers of TestGiteaOrgsRepositoryBackup (dirHasEntryWithPrefix, assertGiteaOrgTwoOnlyBackedUp, assertGiteaAllOrgsBackedUp; internal/backup_test.go:641, 651, 665) compiled but never ran, since that test skips without Gitea credentials; their equivalence to the removed inline assertions also rests on reading. Noted by correctness, testing, reliability and adversarial."
+  ],
+  "testing_gaps": [
+    "Startup configuration log output: no test asserts any line written by displayStartupConfig (internal/backup.go:190) or its new label-parameterised helpers logProviderOrgs (:203), logProviderBackupsToKeep (:210), logProviderCompareMethod (:217) and logProviderBackupLFS (:227), including the deliberately preserved `Organistations` spelling (:205). Equivalence with the base was shown only outside the repository, by the reviewers' scratch differential runs (byte-identical output over 6,000 to 40,000 random environments). A table test that swaps the package-level `logger` for a buffer and sets provider variables with t.Setenv would pin the \"log output unchanged\" contract.",
+    "Scheduled mode: no test drives Run() with GIT_BACKUP_INTERVAL or GIT_BACKUP_CRON, so the interval and cron branches of scheduleBackups (internal/backup.go:501-515) and runScheduledJob (internal/backup.go:525-541) never execute. Nothing verifies that the package-level `job` is still assigned through the new helper; execProviderBackups (internal/backup.go:35) relies on it to avoid os.Exit(1) after a failed backup in daemon mode, and runProviderBackups (internal/backup.go:87) uses it for the next-run banner.",
+    "Provider credential validation: the error branches moved into checkJustTokenProvider (blank token, internal/backup.go:357-359) and checkUserAndPasswordProvider (partially configured provider, internal/backup.go:381-386) are not executed by the suite; only the `no providers defined` outcome is asserted (internal/backup_test.go:787-801).",
+    "Notification titles: the new backupStatusTitle switch (internal/notify.go:31-39), which supplies the title for the Telegram, ntfy and Slack messages (internal/notify.go:104, 191, 216), has no test. There is no current regression: the three title literals are byte-identical to the base and the switch matches the three removed copies. A four-row table test (for example TestBackupStatusTitle in a new internal/notify_test.go) asserting (1,0) -> succeeded, (3,2) -> completed with errors, (0,2) -> failed and (0,0) -> failed against literal strings would pin it. This was candidate #3 (P3, testing), moved here before validation."
+  ],
+  "coverage": {
+    "depth": "full",
+    "mode": "agent report-only",
+    "verdict_reasoning": "No behavioural regression was found in the refactor: five reviewers and their base-vs-head differential runs found the provider dispatch, startup validation, scheduling and notification titles equivalent to base c77f548, apart from two narrow log-only differences recorded under residual_risks. There is no P0 or P1. The one open finding is #1 (P2, confirmed by the validator): every restructured function on the backup path is unexecuted when the suite runs without provider credentials, and no workflow runs the tests with credentials, so the green run at the reviewed head (`go test ./internal/ -count=1` -> ok) does not exercise this change. The fix is one offline Run()-level test built on fixtures the repository already has.",
+    "fix_order": "#1 only: add the offline Run() test in internal/github_mock_test.go. Nothing else is queued.",
+    "validation": {
+      "batch": "one batch of 2 selected findings (#1, #2); verdicts landed inside the wait bound (validator-outcome.json: outcome `verdicts`); every entry matched its input # and was well formed",
+      "selected": 2,
+      "confirmed": 1,
+      "rejected": 1,
+      "unresolved": 0,
+      "malformed": 0,
+      "failed": 0,
+      "shortcut_skipped": 0,
+      "shortcut_basis": "none: no finding has cross-model corroboration, and the in-process adversarial lens ran on the same model, which never licenses the shortcut",
+      "protected_subject_classification": "The report leaf classified both findings before reading the verdicts: #1 (missing test coverage) and #2 (duplicated helper logic with no behaviour difference at the reviewed head) fall under none of the eight protected subjects. The validator also returned null for both. No reclassification was made.",
+      "protected_subject_reclassifications": [],
+      "degraded_p0_p1": [],
+      "per_finding": [
+        {
+          "#": 1,
+          "status": "confirmed",
+          "protected_subject": null,
+          "outcome": "retained with its severity (P2), confidence (75) and route (gated_auto -> downstream-resolver) unchanged",
+          "reason": "Precondition is a test run without provider credentials, which is the only run this repo has (no workflow under .github/workflows invokes go test or make; Makefile:14 notes the test target needs credentials for all providers), and incidence was measured: a scratch copy of 136a4850 under go1.26.5 with `go test ./internal/ -count=1 -coverprofile` passed with no credentials and reported 0.0% for collectProviderBackupResults (backup.go:97), runProviderBackups, execProviderBackups, createWorkingDir, scheduleBackups and runScheduledJob, 46.7% for validateStartupConfig and 64.3% for Run with backup.go:417-421 unexecuted, while every test reaching a successful Run() is behind a t.Skip credential guard, no *_test.go references any of the new helpers, and internal/github_mock_test.go calls githubHost.Backup() directly, so the new tokenProviders dispatch table added by this diff is never executed by the suite (the reviewer's Run()-level prototype was not re-run here)."
+        },
+        {
+          "#": 2,
+          "status": "rejected",
+          "protected_subject": null,
+          "outcome": "dropped from the primary findings; not carried into residual risks or testing gaps",
+          "title": "Extracted createWorkingDir duplicates existing resolveWorkingDir helper",
+          "severity": "P3",
+          "file": "internal/backup.go",
+          "line": 475,
+          "reason": "The duplication predates the diff and is unchanged by it: base c77f548 already has resolveWorkingDir at internal/backup.go:129 (6adadb6b) alongside the inline `workingDIR := os.Getenv(envGitWorkingDir)` block at internal/backup.go:421 (476ed841), and 136a4850 only wraps those same lines verbatim in createWorkingDir (blame attributes backup.go:474-478 to 476ed841, only the func line 473 to 136a4850), so the diff neither introduces nor worsens the two-copies condition and the finding's pre_existing:false is contradicted by its own provenance; the create/cleanup path divergence it warns of is a hypothetical future edit, not a behaviour present at the reviewed head, where both copies return identical values.",
+          "report_leaf_check": "Read-only inspection agrees with the rejection: base c77f548 has resolveWorkingDir at internal/backup.go:129 and the inline working-directory block at internal/backup.go:421, and blame at the reviewed head attributes internal/backup.go:474-478 to 476ed841 and only the func line 473 to 136a4850."
+        }
+      ]
+    },
+    "merge": {
+      "candidates": "5 reviewer returns produced 3 candidate findings (testing 2, maintainability 1; correctness, reliability and adversarial returned none); 0 malformed returns, 0 malformed findings, 0 exact duplicates, 0 semantic merges, 0 pre-existing",
+      "suppressed_by_anchor": {
+        "50": 0,
+        "25": 0
+      },
+      "first_evidence_backfilled": 0,
+      "first_evidence_demoted": 0,
+      "demotion_count": 1,
+      "demotions": "1 candidate left the primary set before validation: #3 (P3, testing), the untested backupStatusTitle switch in internal/notify.go, kept as a testing gap because it shows no defect and no violated contract",
+      "not_admitted_claims": 3,
+      "settlement_suppression": "not evaluated (no plan was discovered)",
+      "final_counts": {
+        "primary": 1,
+        "actionable": 1,
+        "pre_existing": 0,
+        "residual_risks": 2,
+        "testing_gaps": 4
+      }
+    },
+    "triage_groups": "none: one primary finding remains after validation (grouping:auto)",
+    "cross_model": "adversarial lens: in-process fallback (cross-model peer not run: the caller prohibited external and other-model review for this run -- single-model configuration)",
+    "failed_reviewers": [],
+    "bound_exceeded": [],
+    "intent_confidence": "explicit",
+    "pr_context": "scope.pr_url is null because scope was resolved from base: alone and no forge call was made; the caller's task packet names https://github.com/jonhadfield/soba/pull/195 as untrusted context only",
+    "apply": "not run: mode:agent is report-only and local apply was not authorized; the clone was only read",
+    "notes": [
+      "depth: full (helper floor: size_band large, 493 executable non-test changed lines; 617 changed lines total)",
+      "scope: base: review of the current checkout (standalone); working tree is the reviewed head 136a4850; no untracked files",
+      "project standards: not run (no applicable standards files)",
+      "learnings: not run (no docs/solutions corpus and no declared Compound Packs); agent-native, security, performance, api-contract, data-migration, previous-comments: not selected (surface absent from the diff; no forge metadata was fetched and the packet records no prior review comments)",
+      "adversarial lens: in-process fallback (cross-model peer not run: the caller prohibited external and other-model review for this run -- single-model configuration)",
+      "fast pass: the orchestrator's first read found no candidates",
+      "test execution: `go test ./internal/ -count=1` ran once at the reviewed head, offline -> ok (5.2s); tests that need provider credentials skipped, so the live backup tests (including the restructured TestGiteaOrgsRepositoryBackup) did not execute. Reviewers ran differential experiments only in scratch copies under the work directory.",
+      "docker/Dockerfile reviewed by reading only: Docker is unavailable, so the image was not built",
+      "plan: none found (no plan: argument, no plan path in the PR body, no docs/plans directory); requirements completeness not assessed",
+      "PR state: the task packet records the pull request as already merged; the review was requested explicitly on the pinned range via base:, so the merged-PR skip rule (which applies to PR-number/URL targets) did not apply"
+    ]
+  },
+  "artifact_path": "/home/jack/.t3/bench-runs/2026-10-10-last-push-claude-ce-opus/att-018/clone-work/ce-review-artifacts/ce-code-review/20261011-012345-5201495b",
+  "run_id": "20261011-012345-5201495b"
+}

@@ -1,0 +1,37 @@
+{
+ "findings": [
+  {
+   "report_path": "summary.md",
+   "title": "1. The repair after the destructive write fails silently.",
+   "quote": "**1. The repair after the destructive write fails silently.** In `weed/filer/redis2/universal_redis_store.go:237-250` the helper removes the member, checks whether the value came back, and re-adds the member with a `ZAddNX` whose result is discarded. If that final write fails (timeout, failover), a live entry stays permanently absent from listings, `UpdateEntry` will not re-add it, and nothing is logged \u2014 the very outcome commit 2 was written to prevent. For the duration of the remove-then-restore window concurrent listings also omit a live entry. The guard `err == nil && exists == 0` additionally makes an `EXISTS` error fall through to a resurrect, which is a safe direction but implicit. The remedy is to log or surface a failed repair and express the three outcomes (removed, restored, repair failed) explicitly; if cluster slots prevent a Lua script, say so in a comment and keep the compensation observable. See detail file, Finding 1.",
+   "file": "weed/filer/redis2/universal_redis_store.go",
+   "line_start": 237,
+   "line_end": 250
+  },
+  {
+   "report_path": "summary.md",
+   "title": "2. The loop now has two different eviction policies.",
+   "quote": "**2. The loop now has two different eviction policies.** In `ListDirectoryEntries`, the not-found branch (line 208) calls the guarded helper, while the expiry branch at lines 214-218 still does an unconditional `Del` plus `ZRem`. The PR body presents the new code as mirroring the expiry branch, but after commit 2 it no longer does, and the race the author fixed is still present next door \u2014 worse there, since that branch also deletes the value a concurrent insert may have just recreated. This is the missed code-judo move: one `evictStaleChild(ctx, dirPath, fileName, deleteValue)` used by both branches would delete the duplicated `ZRem`, put the race policy in one place, and leave the loop reading as \"not found -> evict; expired -> evict and delete; otherwise emit\". See detail file, Finding 2.",
+   "file": "weed/filer/redis2/universal_redis_store.go",
+   "line_start": 205,
+   "line_end": 220
+  },
+  {
+   "report_path": "summary.md",
+   "title": "3. The helper's three parameters encode two facts.",
+   "quote": "**3. The helper's three parameters encode two facts.** `removeOrphanedDirectoryListMember(ctx, dirListKey, path, fileName)` receives an already-prefixed list key, a full path, and the file name, and independently re-prefixes the path for the value key. The keyPrefix hazard the PR body worries about therefore becomes a calling convention rather than something the helper owns, and the test has to hand-build the same triple. Taking `(ctx, dirPath, fileName)` and deriving both keys inside \u2014 next to `InsertEntry` and `DeleteEntry`, the other writers of this index \u2014 removes the opportunity to get it wrong. See detail file, Finding 3.",
+   "file": "weed/filer/redis2/universal_redis_store.go",
+   "line_start": 237,
+   "line_end": 251
+  },
+  {
+   "report_path": "summary.md",
+   "title": "4. The new tests never run in CI and leave the repair paths uncovered.",
+   "quote": "**4. The new tests never run in CI and leave the repair paths uncovered.** All four test cases skip unless `RUN_REDIS_TESTS=1`; I executed the package and saw every one skip. The recreated-entry test calls the helper with the value already present, so it covers the restore branch only; the no-restore branch, ZREM error, EXISTS error, and failed re-add have no coverage. The file also adds generic package-level helper names (`newTestStore`, `insertTestEntry`, `listNames`, `indexMembers`) to package `redis2`. Separating the outcome decision from the Redis calls, or faking the three calls, would let the logic be unit-tested without a server. See detail file, Finding 4.",
+   "file": "weed/filer/redis2/universal_redis_store_test.go",
+   "line_start": 16,
+   "line_end": 143
+  }
+ ],
+ "questions": []
+}

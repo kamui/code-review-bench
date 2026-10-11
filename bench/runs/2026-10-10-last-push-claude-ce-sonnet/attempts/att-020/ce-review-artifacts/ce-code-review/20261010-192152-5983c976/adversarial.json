@@ -1,0 +1,50 @@
+{
+  "reviewer": "adversarial",
+  "findings": [
+    {
+      "title": "Value change while disabled marks field dirty against a baseline equal to that value",
+      "severity": "P2",
+      "file": "packages/react/src/field/control/FieldControl.tsx",
+      "line": 111,
+      "why_it_matters": "A controlled Field.Control that is disabled while loading and then enabled with loaded data (the common `disabled={loading} value={data}` pattern) ends up with data-dirty set even though the user never edited it and the value equals the field's dirty baseline. The value-change effect compares against `validityData.initialValue`, which is still null (baseline is captured lazily on first enabled registration and applied through async setState), so it computes `'John' !== ''` => dirty. The dirty flag stays stuck until the user edits away and back. Previously controlled prop changes never touched dirty, so this is newly introduced.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Skip the dirty/validation sync when the control has not yet captured its baseline (e.g. only run the effect body when the control is registered/enabled, or compare against the registration-captured baseline via a ref set synchronously in captureInitialValue). Assumption: a value change that occurs before the baseline exists should be treated as the baseline, not as an edit.",
+      "confidence": 75,
+      "evidence": [
+        "packages/react/src/field/control/FieldControl.tsx:111 -- setDirty(serializedValue !== (validityData.initialValue ?? ''));",
+        "useFieldControlRegistration.ts:92-100 -- baseline captured only on first non-undefined registration (disabled controls register undefined), applied via setValidityData (async state), so validityData.initialValue is null when the effect runs.",
+        "Scratch repro (Field.Control disabled={loading} value={value}; click sets value 'John' and loading=false in one update): root has data-dirty immediately after load; after typing 'Johnx' then 'John' dirty clears, proving baseline was 'John' all along."
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "PR-claimed focus-latch fix and processedValueRef guard are absent from the diff",
+      "severity": "P2",
+      "file": "packages/react/src/field/control/FieldControl.tsx",
+      "line": 158,
+      "why_it_matters": "The PR description says a control that unmounts or becomes disabled while focused no longer latches data-focused, and that cancel() in onValueChange stops internal handling. The diff has no focus-cleanup logic (onFocus/onBlur are the only setFocused callers besides autoFocus), so a control that is disabled while focused (no blur fires) still leaves Field.Root data-focused set. cancel() only stops internal handling for uncontrolled controls; the controlled path returns early and the prop-driven effect still validates if the consumer then applies the value (scratch test: onValueChange={(v,d)=>{d.cancel(); setValue(v)}} with validationMode=onChange still calls validate('a')). The processedValueRef mechanism is replaced by the early return, so the description does not match the implementation.",
+      "autofix_class": "manual",
+      "owner": "human",
+      "requires_verification": true,
+      "suggested_fix": "Either add the described cleanup (setFocused(false) in an effect/cleanup when the control disabled-changes or unmounts while focused) or drop those claims from the PR description; document that details.cancel() on a controlled control only suppresses internal handling when the consumer also withholds the value update.",
+      "confidence": 75,
+      "evidence": [
+        "packages/react/src/field/control/FieldControl.tsx:158-160 -- onFocus() { setFocused(true); }  (only focus setter besides onBlur and the autoFocus effect; no unmount/disabled cleanup in the diff)",
+        "PR body: \"control that unmounts or becomes disabled while focused no longer latches data-focused\" and \"processedValueRef records the value the change handler just handled\" -- neither appears in full.diff",
+        "packages/react/src/field/control/FieldControl.tsx:144-146 -- if (isControlled) { return; } precedes the isCanceled check at line 153"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Programmatic value changes now call clearErrors(name): a consumer that normalizes/trims the value after a server-error response (or resets it) will silently drop Form server errors for that field; sibling controls behave the same (PR's own open question), so this is consistent but unconfirmed as desired.",
+    "validate and Form submit now receive the String()-serialized controlled value (registration.value is serialized) instead of the raw number/other value; consumers whose validate relied on the raw type at submit time will see a type change.",
+    "Async-loaded controlled data (value starts '' then becomes 'John') now reads dirty and, with validationMode=onChange, runs validate on load because the baseline is the first registered value; consistent with Select/Switch but a behavior change for Field.Control."
+  ],
+  "testing_gaps": [
+    "No test for a controlled Field.Control that is disabled when its value changes (baseline/dirty interaction with lazy initial-value capture).",
+    "No test for focus latching when a focused control becomes disabled or unmounts, despite the PR claiming a fix."
+  ]
+}

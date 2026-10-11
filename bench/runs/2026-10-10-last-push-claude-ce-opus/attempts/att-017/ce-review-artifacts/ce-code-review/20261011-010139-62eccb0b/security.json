@@ -1,0 +1,37 @@
+{
+  "reviewer": "security",
+  "findings": [
+    {
+      "title": "parseBody after c.req.formData() re-parses re-serialized body (CWE-436 parameter smuggling)",
+      "severity": "P1",
+      "file": "src/utils/body.ts",
+      "line": 126,
+      "why_it_matters": "When anything calls `c.req.formData()` before `c.req.parseBody()`, a client can make the two disagree about which fields were sent: posting urlencoded `message=hi%26role%3Dadmin%26z%3D` shows a middleware one field (`message`) while the handler's `parseBody()` returns `role: 'admin'`, so a formData-based field check or allowlist is bypassed. Legitimate requests on the same path break too: urlencoded bodies come back as multipart-boundary garbage keys and multipart bodies throw `TypeError: Failed to parse body as FormData` (500). The cause is that `parseFormData` now always calls `request.arrayBuffer()`, and with only `formData` cached `HonoRequest#cachedBody` rebuilds the bytes via `new Response(formData)` (multipart, new boundary, raw unescaped values) which is then parsed under the original Content-Type. Before this commit the cached FormData was returned as-is. Reusing `bodyCache.formData` when present, as `validator()` already does at validator.ts:115-116, removes the re-serialization round trip.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In `parseFormData` (src/utils/body.ts), short-circuit on an existing cached FormData before touching `arrayBuffer()`, mirroring validator.ts:115-116: `if (request instanceof HonoRequest && request.bodyCache.formData) { return convertFormDataToBodyData<T>(await request.bodyCache.formData, options) }`, and only fall through to the `arrayBuffer()` + `bufferToFormData()` path otherwise. Alternative (assumes the buffer path is not otherwise needed): restore `const formData = await (request as Request).formData()`, since native `formData()` already matches the media type case-insensitively and the `parseBody` guard change alone satisfies the issue. Add tests for `await req.formData(); await req.parseBody()` with urlencoded and multipart bodies.",
+      "confidence": 75,
+      "evidence": [
+        "src/utils/body.ts:126-127 -- `const arrayBuffer = await (request as Request).arrayBuffer()` / `const formDataPromise = bufferToFormData(arrayBuffer, headers.get('Content-Type') || '')`",
+        "src/request.ts:228-234 -- `const anyCachedKey = Object.keys(bodyCache)[0]` ... `return new Response(body)[key]()` : with only `formData` cached, `arrayBuffer()` returns a fresh multipart serialization of the FormData (new boundary, values written raw), not the original request bytes.",
+        "Pre-change code (9728702 src/utils/body.ts:125) -- `const formData = await (request as Request).formData()` returned the cached FormData unchanged.",
+        "Scratch run at head (node v24, tmp/scratch-security/probe.ts): Hono app with a middleware `const fd = await c.req.formData(); if (fd.has('role')) return c.text('forbidden field', 403)` and a handler returning `(await c.req.parseBody()).role`; POST urlencoded body `message=hi%26role%3Dadmin%26z%3D` => status 200, role \"admin\", body keys [\"------formdata-undici-030526888514\\r\\nContent-Disposition: form-data; name\", \"role\", \"z\"]. The middleware saw only [[\"message\",\"hi&role=admin&z=\"]].",
+        "Same sequence against the pre-change parseBody (tmp/scratch-security/probe-base.ts, base body.ts with head request.ts): urlencoded => {\"message\":\"hi&role=admin&z=\"}; multipart => {\"message\":\"hello\"}.",
+        "Scratch run at head, multipart `await req.formData(); await req.parseBody()` => THROW `TypeError: Failed to parse body as FormData.` cause `TypeError: no boundary found in multipart body`; plain urlencoded `message=hello&b=2` => single garbage key `------formdata-undici-...\\r\\nContent-Disposition: form-data; name`.",
+        "src/validator/validator.ts:115-116 -- `if (c.req.bodyCache.formData) { formData = await c.req.bodyCache.formData` : existing in-repo pattern that reuses the cached FormData instead of re-deriving it.",
+        "Not affected (verified by scratch run): `text()` -> `parseBody()` and `parseBody()` -> `formData()` both return correct fields at head; `validator('form')` -> `parseBody()` is safe because `arrayBuffer` is cached first."
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "parseBody's new media-type check uses JS `.trim()`, which strips non-HTTP whitespace such as U+00A0, so its accept set is wider than the csrf middleware regex (`/^\\b(application\\/x-www-form-urlencoded|multipart\\/form-data|text\\/plain)\\b/i`) and wider than the runtime's own MIME parser. Verified on Node: `Content-Type: \\xa0application/x-www-form-urlencoded` skips the csrf origin check and then `parseBody()` throws `TypeError: Content-Type was not one of ...` (500) where the pre-change code returned `{}`. Not a CSRF bypass on Node, and browsers cannot send that value cross-origin without a preflight; behaviour on Bun/Deno/workerd FormData parsers was not testable here.",
+    "parseBody on a HonoRequest now buffers the whole body as an ArrayBuffer and keeps it in `bodyCache.arrayBuffer` alongside the parsed FormData (scratch run: bodyCache keys `[\"arrayBuffer\",\"formData\"]`), so each form/multipart upload retains roughly twice the body size for the request lifetime compared with the previous `request.formData()` path. Matters for large uploads on routes without `bodyLimit`.",
+    "Mixed-case form media types are now parsed by `parseBody`/`validator`, but `methodOverride` still gates on lower-case `contentType?.startsWith(...)` (src/middleware/method-override/index.ts:74,92), so `_method` in an `Application/X-WWW-Form-Urlencoded` body is delivered to the handler as an ordinary field instead of overriding the method. No exploit traced; inconsistency only."
+  ],
+  "testing_gaps": [
+    "No test covers `c.req.formData()` followed by `c.req.parseBody()` on the same HonoRequest (urlencoded and multipart); this is the sequence that regressed. src/request.test.ts only covers `parseBody()` followed by other body readers.",
+    "No test covers a middleware reading the body through one accessor and the handler through `parseBody()` asserting both see the same field set (e.g. a urlencoded value containing encoded `&`/`=`)."
+  ]
+}

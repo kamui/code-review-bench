@@ -1,0 +1,3 @@
+# 03 docker/Dockerfile
+
+Evidence: the diff merges `addgroup/adduser` and `apk add` into one `RUN`, sorts the packages, and quotes the download URL. The URL quoting is a real improvement. The merge saves a layer but couples user creation with package installation purely for the Sonar rule. The retained `rm -f "/var/cache/apk/*"` has its glob inside quotes, so the shell never expands it and the command deletes nothing. It is also redundant with `--no-cache`. The PR touched exactly this line and left the dead command. Proposal: delete the `rm`. Verification: static reading only, since Docker is unavailable in this environment.

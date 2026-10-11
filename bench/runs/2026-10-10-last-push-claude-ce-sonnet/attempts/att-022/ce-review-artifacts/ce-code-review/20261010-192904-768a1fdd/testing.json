@@ -1,0 +1,87 @@
+{
+  "reviewer": "testing",
+  "findings": [
+    {
+      "title": "Core verify=True preloaded-context path has no test at all",
+      "severity": "P2",
+      "file": "src/requests/adapters.py",
+      "line": 95,
+      "why_it_matters": "The PR's central behavior (verify=True hands urllib3 a shared preloaded context and cert_verify no longer sets ca_certs/ca_cert_dir) is not exercised by any test. Existing TLS tests use verify=False or verify=<path> (tests/test_requests.py:925, 2892, 2923), and test_env_cert_bundles only checks merge_environment_settings output. A regression that silently drops verification, or that reintroduces load_verify_locations per connection, would pass the suite. A test should check that verify=True builds pool_kwargs with the preloaded ssl_context, that cert_verify leaves ca_certs/ca_cert_dir untouched, and that an untrusted-CA server still raises SSLError.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Add unit tests: (1) _urllib3_request_context(prepared_https_request, True, None)[1]['ssl_context'] is adapters._preloaded_ssl_context and 'ca_certs' not in pool_kwargs; (2) HTTPAdapter().cert_verify(conn, 'https://x', True, None) with a Mock conn leaves ca_certs/ca_cert_dir unset and sets cert_reqs == 'CERT_REQUIRED'; (3) a TLSServer test (expired/self-signed cert) with verify=True asserting requests.exceptions.SSLError so verification is shown to be live with the shared context.",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:95 -- pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context",
+        "git diff --stat: only src/requests/adapters.py changed; no test files added or modified",
+        "tests/test_requests.py grep for _preloaded|ssl_context|ca_cert_dir|_urllib3_request_context returns no hits"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "verify=True combined with client cert mutates shared context; untested",
+      "severity": "P1",
+      "file": "src/requests/adapters.py",
+      "line": 95,
+      "why_it_matters": "urllib3 does not copy a user-supplied ssl_context: connection._ssl_wrap_socket_and_match_hostname sets context.verify_mode on it, and ssl_wrap_socket calls context.load_cert_chain(certfile, keyfile) on it. With the module-level singleton, a request using verify=True plus cert=(a, b) loads that client cert chain into the context that every other verify=True session and thread shares. A different Session or thread can then present that client identity to servers when none was configured, and concurrent load_cert_chain/verify_mode writes race. Nothing in the suite covers verify=True together with cert. test_different_connection_pool_for_mtls_settings only uses verify=False for the successful call, and its second call (verify=True with cert) already loads the client cert into the shared singleton for the rest of the test process.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Only pass the shared context when no client cert is given (verify is True and client_cert is None); otherwise fall back to the per-connection ca_certs path or build a per-pool context. Add a test that makes a verify=True request with cert=... and then a verify=True request without cert to the same optional-mTLS TLSServer, and asserts the second connection presents no client certificate.",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:95 -- pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context",
+        "urllib3/util/ssl_.py:431 -- context.load_cert_chain(certfile, keyfile)",
+        "urllib3/connection.py:1042 -- context.verify_mode = resolve_cert_reqs(cert_reqs)",
+        "src/requests/adapters.py:75 -- _preloaded_ssl_context = create_urllib3_context()  (module-level singleton)"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "New import-time CA bundle load changes failure mode, untested",
+      "severity": "P2",
+      "file": "src/requests/adapters.py",
+      "line": 76,
+      "why_it_matters": "The default bundle is now loaded when requests.adapters is imported. If the certifi bundle is absent or unreadable (stripped or frozen installs, patched certifi), `import requests` raises at import time, even for programs that only use verify=False or http://. Before, the same condition produced the explicit OSError(\"Could not find a suitable TLS CA certificate bundle\") at request time, and only for verifying HTTPS requests. The old check for a missing default bundle was deleted from cert_verify, and no test covers either the new import-time failure or the removal.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Build the preloaded context lazily on first verify=True use (e.g. a functools.lru_cache'd helper), or wrap the import-time load in try/except and fall back to the old ca_certs path. Add a test that patches DEFAULT_CA_BUNDLE_PATH to a nonexistent path and asserts the intended behavior (import succeeds; the first verifying request raises the OSError or SSLError).",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:76 -- _preloaded_ssl_context.load_verify_locations(extract_zipped_paths(DEFAULT_CA_BUNDLE_PATH))",
+        "diff removed: if not cert_loc or not os.path.exists(cert_loc): raise OSError(\"Could not find a suitable TLS CA certificate bundle ...\") for the default bundle case"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "New verify=<directory> branch in request context is untested",
+      "severity": "P3",
+      "file": "src/requests/adapters.py",
+      "line": 97,
+      "why_it_matters": "The diff adds an isdir split in _urllib3_request_context so a directory verify goes to pool_kwargs['ca_cert_dir'] instead of ca_certs. Before, a directory was passed as ca_certs to the pool and only corrected in cert_verify. No test passes a directory for verify, so a regression sending the directory as ca_certs (which fails at load_verify_locations) would go unnoticed. The cert_verify dir/file split at line 314 is also uncovered.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Add a parametrized test of _urllib3_request_context with verify=<tmp file> expecting ca_certs, verify=<tmp dir> expecting ca_cert_dir, and verify=False expecting cert_reqs CERT_NONE and no ssl_context. Add a cert_verify test with a mock conn for the file and dir cases.",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:97 -- if not os.path.isdir(verify):",
+        "src/requests/adapters.py:314 -- if not os.path.isdir(cert_loc):",
+        "tests/test_requests.py grep: no test passes a directory path as verify"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Concurrency benefit (the PR's goal) has no benchmark or regression guard; nothing detects load_verify_locations being called per connection again.",
+    "Proxy path (proxy_manager_for with verify=True): not inspected whether urllib3 applies the shared ssl_context to the proxy or the tunnel target, and no test covers it.",
+    "Known fixture failures (test_pyopenssl_redirect, ..._verify_bundle_unexpired_cert; tests/certs/valid/ca is absent from the checkout) reduce the repo's existing TLS verify coverage, so verify=True regressions are less likely to be caught locally."
+  ],
+  "testing_gaps": [
+    "No test combines verify=True with a real TLS handshake against an untrusted server to prove verification is still enforced with the shared context.",
+    "No test checks that verify=False still yields CERT_NONE with the shared context untouched (e.g. a verify=True request followed by verify=False to the same host, where the shared context's verify_mode and check_hostname must not leak into the verify=False connection).",
+    "No test covers a verify=True request through a proxy (HTTPS tunnel), where urllib3 handles ssl_context differently."
+  ]
+}

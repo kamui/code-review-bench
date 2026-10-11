@@ -1,0 +1,32 @@
+{
+  "reviewer": "security",
+  "findings": [
+    {
+      "title": "Shared module-level SSLContext receives client certs via load_cert_chain (CWE-284/CWE-200)",
+      "severity": "P1",
+      "file": "src/requests/adapters.py",
+      "line": 95,
+      "why_it_matters": "A client certificate and key supplied for one request (cert=...) with verify=True are loaded into the single process-wide _preloaded_ssl_context. Every later verify=True connection in the process, including requests with no cert, to other hosts, or from other Sessions or adapters, then offers that same client identity to any server that asks for one. In multi-tenant or multi-credential programs, a request made on behalf of tenant B can authenticate with tenant A's certificate, and concurrent connects race on load_cert_chain. Before this change each pool built its own context, so the cert was scoped to its pool. Not sharing the context when a client cert is present restores that isolation.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Only attach the shared context when no client cert is in play: `elif verify is True: if client_cert is None: pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context else: pool_kwargs[\"ca_certs\"] = extract_zipped_paths(DEFAULT_CA_BUNDLE_PATH)` (the old per-pool behavior, so load_cert_chain happens on a pool-private context). Alternative: build and cache a separate preloaded context per (cert_file, key_file). Assumption: client-cert users accept the per-pool load_verify_locations cost.",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:95 -- pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context",
+        "src/requests/adapters.py:102-109 -- client_cert is still placed in pool_kwargs as cert_file/key_file alongside the shared ssl_context (no exclusion)",
+        "urllib3 2.8.0 util/ssl_.py:430-433 (ssl_wrap_socket) -- `if certfile: ... context.load_cert_chain(certfile, keyfile)` runs on the caller-supplied ssl_context, mutating it",
+        "urllib3 2.8.0 connection.py:1040-1042 -- `context = ssl_context` then `context.verify_mode = resolve_cert_reqs(cert_reqs)`: the passed-in context is used and mutated directly, not copied",
+        "src/requests/adapters.py:41-43 (new) -- _preloaded_ssl_context is a single module-level object shared by all pools"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Not exercised end to end: the cert-leak path was traced through urllib3 2.8.0 source (ssl_wrap_socket/_ssl_wrap_socket_and_match_hostname), not reproduced against a live mTLS server (no network in the review environment).",
+    "Other urllib3 versions' handling of a caller-supplied ssl_context together with certfile was not checked; the older 1.26.x code path also calls load_cert_chain on the supplied context."
+  ],
+  "testing_gaps": [
+    "No test asserts that a client cert supplied for one verify=True request is not visible on the shared context used by a later request without a cert (e.g. check that pool_kwargs for cert=None and cert=(crt,key) do not share the same SSLContext object)."
+  ]
+}

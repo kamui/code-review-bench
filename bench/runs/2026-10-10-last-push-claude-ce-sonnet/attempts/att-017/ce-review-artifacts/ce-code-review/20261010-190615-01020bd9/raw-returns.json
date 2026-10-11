@@ -1,0 +1,154 @@
+[
+ {
+  "reviewer": "correctness",
+  "findings": [
+   {
+    "title": "parseBody after c.req.formData() re-serializes cached FormData and fails or returns garbage",
+    "severity": "P1",
+    "file": "src/utils/body.ts",
+    "line": 126,
+    "confidence": 75,
+    "autofix_class": "gated_auto",
+    "owner": "downstream-resolver",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "In parseFormData, when request is a HonoRequest and request.bodyCache.formData is already set, await it and skip arrayBuffer()/bufferToFormData (same shortcut validator.ts uses at lines 115-116). Only fall back to arrayBuffer + bufferToFormData otherwise. Add a regression test for `await c.req.formData(); await c.req.parseBody()` with both multipart and urlencoded bodies.",
+    "first_evidence": "src/utils/body.ts:126 -- const arrayBuffer = await (request as Request).arrayBuffer()"
+   }
+  ],
+  "residual_risks": [
+   "Content-Type matching is now inconsistent between parseBody and validator: parseBody accepts 'application/x-www-form-urlencoded ; charset=utf-8' (whitespace before ';' is trimmed), while the validator regexes still require ';' directly after the media type. The validator gap predates this change, but the PR now leaves the two paths disagreeing on some mixed-case or spaced headers.",
+   "parseBody no longer calls request.formData() on raw Request or Request-like objects, so any caller that passes a Request-like object or mock implementing only formData() (the removed vi.spyOn test pattern) would now fail. Not verified against external consumers.",
+   "parseBody now buffers the full body via arrayBuffer() and then parses it, so raw-Request callers hold an extra in-memory copy for large multipart uploads. Performance-reviewer territory, not verified."
+  ],
+  "testing_gaps": [
+   "No test covers calling c.req.formData() (or another path that populates bodyCache.formData first) before c.req.parseBody(); this is the scenario that regressed.",
+   "No test covers multipart/form-data without a boundary, or a quoted boundary, through parseBody. I verified that both reject with 'Failed to parse body as FormData', as they did before the change.",
+   "No test covers cloneRawRequest or later c.req.text()/arrayBuffer() calls after parseBody. I checked these manually and they work, since arrayBuffer is now the first cache key."
+  ]
+ },
+ {
+  "reviewer": "testing",
+  "findings": [
+   {
+    "title": "c.req.formData() then c.req.parseBody() now corrupts or throws; no test covers it",
+    "severity": "P2",
+    "file": "src/utils/body.ts",
+    "line": 126,
+    "confidence": 75,
+    "autofix_class": "manual",
+    "owner": "downstream-resolver",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "In parseFormData, when request is a HonoRequest and request.bodyCache.formData is already set, await it and skip the arrayBuffer() path (the validator already does this at validator.ts:115). Add request.test.ts cases: (a) `await req.formData(); expect(await req.parseBody()).toEqual({foo:'bar'})` for both multipart and urlencoded bodies; (b) the same via app.request with a middleware that calls c.req.formData() before a handler that calls c.req.parseBody().",
+    "first_evidence": "src/utils/body.ts:126 -- const arrayBuffer = await (request as Request).arrayBuffer()"
+   },
+   {
+    "title": "bodyCache.formData assignment in parseFormData is untested; removing it keeps all suites green",
+    "severity": "P2",
+    "file": "src/utils/body.ts",
+    "line": 130,
+    "confidence": 75,
+    "autofix_class": "gated_auto",
+    "owner": "downstream-resolver",
+    "requires_verification": false,
+    "pre_existing": false,
+    "suggested_fix": "Add to src/request.test.ts under describe('req.parseBody()'): build a HonoRequest with FormData, `await req.parseBody()`, then `expect((await req.formData()).get('foo')).toBe('bar')` and `expect(Object.keys(req.bodyCache)).toContain('formData')`. Also add a repeated-parseBody case (`await req.parseBody(); expect((await req.parseBody()).foo).toBe('bar')`) and a mixed-case Content-Type case through HonoRequest / c.req.parseBody().",
+    "first_evidence": "src/utils/body.ts:130 -- request.bodyCache.formData = formDataPromise as unknown as FormData"
+   },
+   {
+    "title": "buffer.ts media-type normalization is not exercised by any failing-without-fix test",
+    "severity": "P3",
+    "file": "src/utils/buffer.test.ts",
+    "line": 120,
+    "confidence": 75,
+    "autofix_class": "advisory",
+    "owner": "human",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "Confirm whether any target runtime (Bun, Deno, workerd) fails on a mixed-case multipart media type without the buffer.ts normalization. If so, add a runtime-tests case for it. If not, drop the `.replace(...toLowerCase())` in bufferToFormData, since the regex /i and the parseBody mediaType check already carry the fix, and keep the boundary-case test as a regression guard.",
+    "first_evidence": "src/utils/buffer.test.ts:120 -- it('Should parse mixed-case multipart/form-data media type while keeping the boundary', async () => {"
+   }
+  ],
+  "residual_risks": [
+   "parseBody no longer matches `startsWith` but an exact media-type token (e.g. `multipart/form-data-x` or a missing/blank type is now rejected). This is likely intended, but no test pins the stricter matching.",
+   "parseFormData now buffers the entire body via arrayBuffer() before parsing, instead of letting Request.formData() stream it. No test covers large bodies or the body-limit middleware interaction (not run)."
+  ],
+  "testing_gaps": [
+   "No test for parseBody on a malformed form body (e.g. multipart with a missing boundary) asserting the rejected error, now that parsing goes through bufferToFormData instead of request.formData().",
+   "No test calls c.req.parseBody() with a mixed-case Content-Type through app.request, which would exercise the HonoRequest path with the bodyCache write; the new body.test.ts cases use a raw Request.",
+   "Repeated parseBody() calls on one HonoRequest, and text()/json() before parseBody(), have no test; the second parse now depends on the arrayBuffer cache (the text-then-parseBody case works in a probe).",
+   "The 'should not update file object properties' rewrite now uses real FormData and a real round trip; it still passes and exercises the same dot-notation guard. It no longer pins the exact callback sequence of the old mock, which is acceptable."
+  ]
+ },
+ {
+  "reviewer": "security",
+  "findings": [
+   {
+    "title": "parseBody after c.req.formData() re-serializes body and mis-parses or throws",
+    "severity": "P2",
+    "file": "src/utils/body.ts",
+    "line": 143,
+    "confidence": 75,
+    "autofix_class": "gated_auto",
+    "owner": "downstream-resolver",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "In parseFormData, for HonoRequest, reuse the cache before buffering: `if (request instanceof HonoRequest && request.bodyCache.formData) formData = await request.bodyCache.formData; else { buffer via arrayBuffer() + bufferToFormData and cache }`. This mirrors the existing check in src/validator/validator.ts lines 115-116. Alternatively keep `await request.formData()` and normalize only the gating check. Add a regression test: `await c.req.formData(); await c.req.parseBody()` for both multipart and urlencoded.",
+    "first_evidence": "src/utils/body.ts:143 -- const arrayBuffer = await (request as Request).arrayBuffer()"
+   }
+  ],
+  "residual_risks": [
+   "Regex review found no ReDoS or anchoring regression: the /i flag only widens the character classes, the repeated groups `(;\\s*[a-zA-Z0-9\\-]+\\=([^;]+))*` are unambiguous and linear, and the patterns stay anchored with ^...$. The header is also bounded by server header limits.",
+   "No validator guard bypass found: the json and form regex guards gate only whether a value is extracted, and c.req.json() / bufferToFormData parse the same bytes regardless of media-type case. bufferToFormData lowercases only the segment before the first ';', so boundary case and quoted boundary values are preserved.",
+   "Body size and memory: parseFormData now holds the raw ArrayBuffer (bodyCache.arrayBuffer) plus the parsed FormData for HonoRequest, roughly 2x body per request. The old formData() path already buffered the whole body and body-limit wraps the stream upstream, so enforcement is unchanged. This is a minor constant-factor increase and not reported as a finding.",
+   "parseBody gating is now stricter than before (exact media-type equality instead of startsWith), so odd types like 'multipart/form-data-x' are no longer parsed. This is fail-closed and not a security concern."
+  ],
+  "testing_gaps": [
+   "No test covers `await c.req.formData()` (or another middleware that populates only bodyCache.formData) followed by `c.req.parseBody()` for multipart and urlencoded. That is the path where the new arrayBuffer-based parseFormData regresses.",
+   "The body.test.ts 'should not update file object properties' test no longer mocks formData(). It now relies on real FormData parsing, so the HonoRequest cache interplay (bodyCache.formData assignment) has no direct test."
+  ]
+ },
+ {
+  "reviewer": "adversarial",
+  "findings": [
+   {
+    "title": "methodOverride still matches Content-Type case-sensitively, so mixed-case forms skip override",
+    "severity": "P2",
+    "file": "src/middleware/method-override/index.ts",
+    "line": 74,
+    "confidence": 75,
+    "autofix_class": "gated_auto",
+    "owner": "downstream-resolver",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "In methodOverride, compute `const mediaType = contentType?.split(';')[0].trim().toLowerCase()` and compare `mediaType === 'multipart/form-data'` / `=== 'application/x-www-form-urlencoded'` instead of `contentType?.startsWith(...)` at lines 74 and 92; add mixed-case tests. Assumption: maintainers want method-override covered by this issue; otherwise track as a follow-up.",
+    "first_evidence": "src/middleware/method-override/index.ts:74 -- if (contentType?.startsWith('multipart/form-data')) {"
+   },
+   {
+    "title": "parseBody after c.req.text() now silently corrupts binary multipart uploads instead of throwing",
+    "severity": "P2",
+    "file": "src/utils/body.ts",
+    "line": 125,
+    "confidence": 75,
+    "autofix_class": "advisory",
+    "owner": "human",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "Accept the behavior and document that reading the body as text before parseBody() is unsupported for binary multipart. Alternatively, in #cachedBody refuse to derive 'arrayBuffer'/'blob' from a cached 'text' result (or have parseFormData throw if only bodyCache.text exists), so lossy re-encoding is never silent. Assumption: loud failure is preferred over silent corruption.",
+    "first_evidence": "src/utils/body.ts:125 -- const arrayBuffer = await (request as Request).arrayBuffer()"
+   }
+  ],
+  "residual_risks": [
+   "parseBody no longer uses native request.formData(); it buffers via arrayBuffer() and `new Response(buf, {headers}).formData()`. Node 24 (undici) behaves identically on the cases tried (malformed multipart, urlencoded with charset, upper-case Boundary= param). Bun, Deno and Workers were not exercised, so any runtime-specific divergence in Response.formData() with a synthetic header is unverified.",
+   "Comma-joined duplicate Content-Type values such as `application/x-www-form-urlencoded, application/x-www-form-urlencoded` were parsed by base (startsWith matched) and natively, but the new `split(';')[0]` equality check now returns {} silently. Verified on Node 24. Low practical likelihood.",
+   "parseBody() and validator() still disagree on edge headers: parseBody trims whitespace before `;` and accepts any parameters, while validator's regexes require no whitespace before `;` and only a `boundary=` parameter for multipart. A header like ' APPLICATION/x-www-form-urlencoded ; charset=utf-8' parses in parseBody but is skipped by validator('form'). This is pre-existing and not widened by the diff.",
+   "A failed parse in parseBody leaves a rejected promise in request.bodyCache.formData, so a later validator('form') would rethrow the raw TypeError (500) instead of the HTTPException 400. Base cached a rejected promise the same way through #cachedBody, so this is not a regression."
+  ],
+  "testing_gaps": [
+   "No test covers parseBody after c.req.text()/c.req.json() has populated bodyCache, so the change in behavior (throw to silent success or corruption) is unpinned.",
+   "No test covers parseBody followed by c.req.formData() or validator('form') on the same request to confirm the new bodyCache.formData assignment is reused. The one explicit consumer of the new cache assignment is untested.",
+   "The 'should not update file object properties' test dropped its vi.spyOn(req, 'formData') mock in favor of a real FormData. This is fine, but nothing now asserts that parseBody works for a subclass or mock Request whose arrayBuffer() and formData() diverge."
+  ]
+ }
+]

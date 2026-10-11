@@ -1,0 +1,30 @@
+{
+  "reviewer": "maintainability",
+  "findings": [
+    {
+      "title": "New createWorkingDir re-implements existing resolveWorkingDir",
+      "severity": "P3",
+      "file": "internal/backup.go",
+      "line": 475,
+      "why_it_matters": "The directory that startup creates and the directory each backup run uses and then deletes are computed by two separate copies of the same rule (GIT_WORKING_DIR if set, else <backupDir>/.working). If one copy is later changed (for example to honour a _FILE variant or to trim the value) startup will create one directory while runs clone into and clean up another. The refactor lifted the startup copy out of Run into its own helper, createWorkingDir, but left the inline rule instead of calling resolveWorkingDir, which sits 330 lines above and is already used by runProviderBackups; calling it makes the two paths agree by construction and removes four lines with no behaviour change.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": false,
+      "suggested_fix": "In createWorkingDir (internal/backup.go:473-478) replace the comment, the os.Getenv(envGitWorkingDir) read and the empty-string fallback with `workingDIR := resolveWorkingDir(backupDIR)`. resolveWorkingDir (internal/backup.go:140-146) returns exactly the same value for every input, so the log line and MkdirAll call that follow are unaffected.",
+      "confidence": 75,
+      "evidence": [
+        "internal/backup.go:473-478 -- func createWorkingDir(backupDIR string) error {\n\t// Check if GIT_WORKING_DIR is set, otherwise use default\n\tworkingDIR := os.Getenv(envGitWorkingDir)\n\tif workingDIR == \"\" {\n\t\tworkingDIR = filepath.Join(backupDIR, workingDIRName)\n\t}",
+        "internal/backup.go:140-146 -- func resolveWorkingDir(backupDir string) string {\n\tif w := os.Getenv(envGitWorkingDir); w != \"\" {\n\t\treturn w\n\t}\n\n\treturn filepath.Join(backupDir, workingDIRName)\n}",
+        "internal/backup.go:52 -- workingDir := resolveWorkingDir(backupDir)  (the per-run path that is used and then removed by cleanupWorkingDir)",
+        "provenance: the inline rule predates this diff (476ed84 Jon Hadfield 2025-09-14 - allow user to override working directory) and resolveWorkingDir was added later (6adadb6 Jon Hadfield 2026-06-24 - Harden backup runner, env-file reads, and notification clients (#175)); this diff adds the `func createWorkingDir` wrapper around the old copy (body lines are unchanged context in the diff), so the finding is secondary-tier, not introduced duplication."
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Narrow log-output drift against the 'log output unchanged' intent: collectProviderBackupResults (internal/backup.go:101) now evaluates `bitbucketAPITokenDefined() || bitbucketOAuthDefined()` with short-circuiting, whereas the base read all five BitBucket variables eagerly. GetEnvOrFile (internal/envfile.go:34-41) logs when a *_FILE path cannot be opened, so with complete API-token credentials plus a stale BITBUCKET_USER_FILE/KEY_FILE/SECRET_FILE the per-run 'file ... does not exist' lines are no longer emitted. Not verified by execution; reasoned from source only."
+  ],
+  "testing_gaps": [
+    "No test asserts the startup-config log lines. The refactor turned literal log strings into label arguments passed to shared helpers (logProviderOrgs, logProviderBackupsToKeep, logProviderCompareMethod, logProviderBackupLFS), including the deliberately preserved 'Gitlab backup LFS: true' casing at internal/backup.go:273 next to 'GitLab' on the two lines above it; a captured-logger test over displayStartupConfig would pin the 'output unchanged' claim and stop a later label normalisation from silently changing output."
+  ]
+}

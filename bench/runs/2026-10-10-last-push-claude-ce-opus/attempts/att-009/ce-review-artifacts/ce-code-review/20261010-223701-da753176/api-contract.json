@@ -1,0 +1,73 @@
+{
+  "reviewer": "api-contract",
+  "findings": [
+    {
+      "title": "Hyrum's Law: clearing required controlled input now raises error",
+      "severity": "P1",
+      "file": "packages/react/src/field/control/FieldControl.tsx",
+      "line": 114,
+      "why_it_matters": "An app that empties a required controlled Field.Control/Input from code now gets the field marked invalid: after a successful submit that clears the input (chat box, add-item form), or after a reset button in validationMode=\"onChange\", the control shows aria-invalid=\"true\", data-invalid and the valueMissing Field.Error. On the base commit the same flows leave the field clean. The new prop-sync path runs a full validation for every prop change, and the field's 'user has interacted' latch (markedDirtyRef) is set by submit and by any earlier keystroke and never reset, so the suppression of valueMissing on untouched fields no longer applies. This is a behavior change in a published 1.x component (@base-ui/react 1.7.0) that the PR description does not announce; letting code-originated values resolve existing errors without raising new ones keeps the stale-state fix while preserving the old observable behavior.",
+      "autofix_class": "manual",
+      "owner": "human",
+      "requires_verification": true,
+      "suggested_fix": "Distinguish user edits from code-originated value changes. Record the value handled by the DOM change handler in a ref (onChange: lastUserValueRef.current = inputValue). In the useValueChanged callback keep clearErrors/setDirty/setFilled for every change, but call the full validation.change(serializedValue) only when serializedValue === lastUserValueRef.current; for a value that came from code, revalidate only (the commit(value, true) path that validation.change already takes when not validating on change, which clears a resolved error and returns early when the field is currently valid). Assumption named: a value set from code should be able to resolve an error but not surface a new 'required' error. If full validation on programmatic change is the intended policy (sibling parity with Checkbox/OTP/Select), keep the code, add a test that pins submit-then-clear on a required control, and call the change out in the changelog.",
+      "confidence": 75,
+      "evidence": [
+        "packages/react/src/field/control/FieldControl.tsx:114 -- validation.change(serializedValue);",
+        "packages/react/src/internals/field-register-control/useFieldControlRegistration.ts:54 -- markedDirtyRef.current = true;  (set on every form submit / actionsRef.validate, never reset)",
+        "packages/react/src/field/root/useFieldValidation.ts:225 -- if (hasOnlyValueMissingError && !markedDirtyRef.current) {  (the only guard that keeps valueMissing from marking a field invalid)",
+        "packages/react/src/field/root/FieldRoot.tsx:90 -- (validationMode === 'onSubmit' && submitAttemptedRef.current),  (default mode validates on change after the first submit, so the clear after submit is a full validation)",
+        "Runtime proof, scratch test clone-work/scratch/api-contract/contract.test.tsx (14 passed), comparing HEAD Field.Control with a copy of main's FieldControl.tsx rendered in the same Field.Root. S1 (Form default mode, required controlled input, onFormSubmit clears the value): HEAD ariaInvalid=\"true\", rootInvalid=true, requiredShown=true; BASE ariaInvalid=null, rootInvalid=false, requiredShown=false. S2 (validationMode=\"onChange\", type then reset button sets ''): HEAD {ariaInvalid:\"true\", rootInvalid:true, rootDirty:false, requiredShown:true}; BASE {ariaInvalid:null, rootInvalid:false, rootDirty:true, requiredShown:false}."
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "PR description contradicts the shipped clearErrors and focus behavior",
+      "severity": "P2",
+      "file": "packages/react/src/field/control/FieldControl.tsx",
+      "line": 110,
+      "why_it_matters": "Anyone writing the changelog or deciding the PR's open question from its description will document behavior that does not ship. The body says this PR does not call clearErrors on a value change set from code, but it does: a Form server error on a controlled Field.Control/Input disappears as soon as the app changes the value programmatically, where the base commit kept it. The body also lists a fix for data-focused latching when a focused control unmounts or is disabled, and a processedValueRef guard; neither is in the diff, and the latch still reproduces. Aligning the description (or the code) with reality matters because clearing server errors is an observable Form contract change for consumers.",
+      "autofix_class": "manual",
+      "owner": "human",
+      "requires_verification": true,
+      "suggested_fix": "Decide the open question explicitly and make text and code agree. Default proposal (sibling parity with Checkbox/OTP/Combobox, which all call clearErrors(name) inside useValueChanged): keep line 110, rewrite the PR body and changelog entry to say that a programmatic value change now clears the field's Form error, and add a test for it. Remove the data-focused and processedValueRef claims from the description, or implement the focus fix in this PR (for example a layout-effect cleanup in FieldControl that calls setFocused(false) when the control unmounts or becomes disabled while focused) with a test.",
+      "confidence": 100,
+      "evidence": [
+        "packages/react/src/field/control/FieldControl.tsx:110 -- clearErrors(name);  (inside the useValueChanged(serializedValue, ...) callback that runs for values set from code)",
+        "PR body, Open question: \"The sibling controls also call `clearErrors(name)` when their value changes. This PR does not, so a programmatic change clears a server error on a Switch but not on an Input.\"",
+        "PR body: \"A control that unmounts or becomes disabled while focused no longer latches `data-focused`\" and \"`processedValueRef` records the value the change handler just handled\" -- `git diff main HEAD -- packages/react/src/field/control/FieldControl.tsx` contains no processedValueRef and its only focus-related lines are the unchanged autoFocus effect moved lower in the file.",
+        "Runtime proof, scratch test clone-work/scratch/api-contract/contract.test.tsx. S4 (Form errors={stable object}, controlled value later changed by a button): HEAD serverErrorShown=false, BASE serverErrorShown=true. S5 (focused control unmounted without a blur): HEAD rootFocused=true, BASE rootFocused=true (latch unchanged)."
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Hyrum's Law: validate() gets a string for numeric controlled values",
+      "severity": "P3",
+      "file": "packages/react/src/field/control/FieldControl.tsx",
+      "line": 93,
+      "why_it_matters": "A consumer's Field.Root validate callback used to receive the raw controlled prop (the number 5 for value={5}) when validation was triggered by form submit or actionsRef.validate(); it now receives the string \"5\". Field.Validity's value and initialValue change type the same way. A validator with a strict numeric check (typeof value === 'number', value === 0, Number.isInteger(value)) silently changes its result on submit. The impact is narrow because change, blur and Enter always passed the DOM string, so the new behavior is the more consistent one; it still deserves a pinned test and a changelog line rather than arriving unannounced.",
+      "autofix_class": "advisory",
+      "owner": "human",
+      "requires_verification": false,
+      "suggested_fix": "Keep the serialized registration (it makes every validate() trigger pass a string) and document it: add a test asserting validate receives '5' on submit for value={5} and note the change in the changelog. If the previous argument type must be preserved instead, register the raw `value` as before and serialize only at the comparison sites, e.g. setDirty(inputValue !== String(validityData.initialValue ?? '')).",
+      "confidence": 50,
+      "evidence": [
+        "packages/react/src/field/control/FieldControl.tsx:93 -- serializedValue,  (third argument of useRegisterFieldControl; was `value` on main)",
+        "packages/react/src/internals/field-register-control/useFieldControlRegistration.ts:61 -- commit(getRegistrationValue(registration));  (submit / actionsRef.validate pass the registered value to the consumer's validate)",
+        "packages/react/src/field/root/FieldRoot.tsx:280-285 -- validate?: ((value: unknown, formValues: Form.Values) => ...)  (declared type is unknown, so the change is invisible to TypeScript)",
+        "Runtime proof, scratch test clone-work/scratch/api-contract/contract.test.tsx S3 (Form + Field.Root validate spy + controlled value={5}, submit): HEAD {argType:\"string\", arg:\"5\", initialValueType:\"string\", validityValueType:\"string\"}; BASE {argType:\"number\", arg:5, initialValueType:\"number\", validityValueType:\"number\"}."
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "details.cancel() is narrower than the PR body's \"stops the internal handling\": in an uncontrolled control a canceled change still sets data-dirty and data-filled (only clearErrors and validation are skipped), and in a controlled control cancel is never consulted, so a consumer that calls cancel() but still stores the value gets one validation exactly as on main (scratch S6: HEAD validateCalls=0, dirty=true, filled=true; S7: HEAD and BASE validateCalls=1).",
+    "In controlled mode the change handler now returns at `if (isControlled) { return; }` (FieldControl.tsx:144) before the `!event.nativeEvent.defaultPrevented` guard, so a prevented input event whose consumer still stores the value will clear Form errors and validate through the prop-sync path. The existing 'does not clear errors or validate when change is prevented' test only covers the uncontrolled control; this path was read from source, not run.",
+    "Callsite completeness: text search only. The single in-repo renderer of Field.Control is packages/react/src/input/Input.tsx (a pass-through), so every finding applies to Input as well; external consumers of the published package cannot be enumerated."
+  ],
+  "testing_gaps": [
+    "No test empties a required controlled Field.Control from code (after a successful Form submit, or via a reset in validationMode=\"onChange\"), so the newly raised valueMissing error is neither pinned as intended nor guarded against.",
+    "No test covers a Form `errors` entry on a controlled Field.Control whose value is then changed from code; the PR's own open question about clearErrors is unpinned in either direction.",
+    "No test asserts what validate() receives on form submit for a non-string controlled value (value={5}); the new dirty test only checks data-dirty."
+  ]
+}
