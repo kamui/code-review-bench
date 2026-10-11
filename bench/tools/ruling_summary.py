@@ -202,9 +202,10 @@ def summarize(pairs, root=record.ROOT, round_name=None):
     result["earlier_reading_citations"] = dict(citations.most_common())
     for contract, section in ((1, "baseline"), (2, "contract_2")):
         for decision_type in record.DECISION_TYPES:
-            group = [pair for pair in selected if pair["before"].get("contract", 1) == contract
-                     and pair["before"]["decision_type"] == decision_type and pair["after"]]
-            if not group:
+            selected_pairs = [pair for pair in selected if pair["before"].get("contract", 1) == contract
+                              and pair["before"]["decision_type"] == decision_type]
+            group = [pair for pair in selected_pairs if pair["after"]]
+            if not selected_pairs:
                 continue
             parties, asks, misses, lessons, settled = {}, Counter(), Counter(), [], []
             blind_high = unanimous = 0
@@ -258,7 +259,7 @@ def summarize(pairs, root=record.ROOT, round_name=None):
                 opening_pair = next((pair for pair in selected if pair["before"]["decision_type"] == decision_type), None)
                 closed = delegation.opening_rounds(opening_pair, pairs, root) if adopted and round_name and opening_pair.get("opening") else None
                 entry["round_level"] = earned(pairs, decision_type, root, round_name, closed_rounds=closed)["level"] if round_name else None
-                reset_in_round = any(reset["path"] in {pair["path"] for pair in group} for reset in entry["earned"]["resets"])
+                reset_in_round = any(reset["path"] in {pair["path"] for pair in selected_pairs} for reset in entry["earned"]["resets"])
                 entry["effective_round_level"] = 0 if reset_in_round else entry["round_level"]
                 for number, item in enumerate(sorted(settled, key=lambda item: item["hash"])):
                     item["sampled"] = entry["effective_round_level"] == 2 and number % 5 == 0
@@ -285,6 +286,10 @@ def render(result):
                 trust = entry["earned"]
                 lines += [f"Count since the last miss or model change: {trust['count']} on {len(trust['pull_requests'])} pull requests; "
                           f"level {trust['level']}. Round opening level: {entry['round_level'] if entry['round_level'] is not None else 'no round selected'}."]
+                if entry["effective_round_level"] is not None:
+                    lines += [f"Effective round level: {entry['effective_round_level']}."]
+                    if entry["effective_round_level"] == 0 and entry["digest"]:
+                        lines += ["Read every settled decision in this round's digest."]
             lines += ["", "Reasons for asking:", *[f"- {reason}: {count}" for reason, count in entry["ask_reasons"].items()],
                       "", "Misses by cause:", *([f"- {cause}: {count}" for cause, count in entry["misses"].items()] or ["- none"])]
             lines += ["", "Lessons:", *[f"- {lesson['path']}: " + (f"cause returned after {lesson['cause_returned_after']}" if "cause_returned_after" in lesson

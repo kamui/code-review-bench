@@ -101,6 +101,22 @@ class PolicyTest(unittest.TestCase):
         third, _, third_path = self.add(16, round_name='third', day='03', closed=False, pending=True)
         self.assertEqual(self.route(third, third_path), {'level': 1, 'reasons': []})
 
+    def test_exactly_fifteen_matches_on_four_pull_requests_settle(self):
+        before, _, path = self.ready()
+        for item in (self.root / 'docs/research/first/rulings').glob('*.before.json'):
+            value = record.load(item)
+            value['target'] = f'pr-{int(item.name[:3]) % 4}'
+            self.save(value, record.load(item.with_name(item.name.replace('.before.', '.after.'))), item)
+        self.assertEqual(self.route(before, path), {'level': 1, 'reasons': []})
+
+    def test_reasking_with_unchanged_answer_records_a_miss_without_resetting_trust(self):
+        before, after, path = self.ready()
+        after.update(asked=2, miss={'cause': 'fact-not-fetched', 'note': 'The second question supplied the missing fact.'})
+        self.save(before, after, path)
+        next_before, _, next_path = self.add(16, round_name='second', day='02', closed=False, pending=True)
+        self.assertEqual(summary.earned(summary.records(self.root), 'recovery', self.root)['count'], 16)
+        self.assertEqual(self.route(next_before, next_path), {'level': 1, 'reasons': []})
+
     def test_level_two_requires_thirty_owner_matches_on_five_pull_requests(self):
         before, _, path = self.ready(30)
         self.assertEqual(self.route(before, path), {'level': 2, 'reasons': []})

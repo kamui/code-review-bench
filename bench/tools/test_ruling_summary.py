@@ -136,6 +136,24 @@ class SummaryTest(unittest.TestCase):
         open_match.update(opened="2026-10-02", closed=False)
         self.assertEqual(ruling_summary.earned([*prior, open_match, current], "recovery", ROOT, "current")["count"], 15)
 
+    def test_pending_model_change_removes_sampling_and_reports_full_digest(self):
+        prior = [pair(number, f"pr-{number % 5}") for number in range(1, 31)]
+        settled = [pair(number, round_name="second") for number in range(31, 37)]
+        for item in settled:
+            item["opened"] = "2026-10-02"
+            item["after"].update(settled_by="agents", asked=0)
+        pending = pair(37, round_name="second")
+        pending.update(opened="2026-10-02", after=None)
+        pending["before"]["answers"][1]["model"] = "replacement"
+        result = ruling_summary.summarize([*prior, *settled, pending], round_name="second")
+        entry = result["contract_2"]["recovery"]
+        self.assertEqual((entry["earned"]["count"], entry["effective_round_level"]), (0, 0))
+        self.assertEqual(len(entry["digest"]), 6)
+        self.assertFalse(any(item["sampled"] for item in entry["digest"]))
+        self.assertIn("Read every settled decision in this round's digest.", ruling_summary.render(result))
+        pending_only = ruling_summary.summarize([*prior, pending], round_name="second")["contract_2"]["recovery"]
+        self.assertEqual((pending_only["decisions"], pending_only["effective_round_level"]), (0, 0))
+
     def test_digest_sample_and_audit_calls_are_selected_by_hash(self):
         prior = [pair(number, f"pr-{number % 5}") for number in range(1, 31)]
         settled = [pair(number, round_name="second") for number in range(31, 37)]
