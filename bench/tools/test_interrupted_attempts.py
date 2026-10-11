@@ -835,6 +835,13 @@ class FixtureCleanup(Fixture):
         with self.assertRaisesRegex(run_cell.InputError, "workspace cleanup failed: usage is incomplete"):
             run_cell.file(self.run_state(), "att-003")
         self.assertTrue((unknown / "clone").is_dir())
+        (self.run_dir / "charges.jsonl").write_text(json.dumps({
+            "at": "2026-01-02", "step": "unknown usage of att-003 accepted at its reservation", "usd": 0, "reconciles": "att-003"}) + "\n", encoding="utf-8")
+        state = self.run_state()
+        self.assertEqual(state.filed["att-003"]["disposition"], "valid completed")
+        self.assertTrue(run_cell.prune(state, "att-003", "t-fixture")["applied"])
+        self.assertFalse((unknown / "clone").exists())
+        self.assertGreaterEqual(self.run_state().spend()["attempts"], 5.0)
 
 
 if __name__ == "__main__":

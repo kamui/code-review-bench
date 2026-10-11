@@ -61,6 +61,8 @@ records each time, never from its own notes. Before every launch:
   ``deviations/`` holds a diagnosis for it (see below).
 - The subscription meters must have been read within the hour, report a usage window with a
   finite number for every pinned client, and be under the quota stop.
+- The stored Claude sign-in must have more than half an hour left: a reviewer started on an
+  expired one stops before its first request, and nothing renews it while no person is signed in.
 - No filed attempt of any run may have used more than was reserved for it without a reconciling
   charge line.
 - The client's spend over all its runs, counting failed attempts, charge lines such as probes,
@@ -170,6 +172,7 @@ CLIENT_OF = {"claude-builtin": "claude", "claude-skill": "claude", "review-code"
 MEMORY_FILESYSTEMS = {"tmpfs", "ramfs", "devtmpfs"}
 SNAPSHOT_SECONDS = 1800
 QUOTA_MAX_AGE_SECONDS = 3600
+SIGN_IN_MARGIN_SECONDS = 1800
 HEARTBEAT_SECONDS = 60
 POLL_SECONDS = 5
 SCAN_GAP_SECONDS = 0.2
@@ -582,14 +585,16 @@ class Session:
             emit(self.queue, {"status_failed": repr(error)})
 
     def quota(self) -> str | None:
-        """The reason the meters stop the queue, from a reading no older than an hour."""
+        """The reason the meters stop the queue, from a reading no older than an hour. A sign-in that an
+        earlier reading shows about to expire is read again, since a person may have renewed it."""
         moment = self.clock()
-        if self.usage is None or moment - self.usage_read > QUOTA_MAX_AGE_SECONDS:
+        if (self.usage is None or moment - self.usage_read > QUOTA_MAX_AGE_SECONDS
+                or self.usage_read != moment and sign_in_expiring(self.usage, moment)):
             self.usage = read_meters(self.queue, self.env)
             self.usage_read = moment
             write(self.queue.state / "meters.json", self.usage)
             emit(self.queue, {"meters": self.usage})
-        return quota_stop(self.usage, self.queue.quota_stop)
+        return quota_stop(self.usage, self.queue.quota_stop, moment)
 
 
 # --- quota and spend ----------------------------------------------------------------------------
@@ -605,6 +610,7 @@ def meters(queue: Queue, env: dict) -> dict:
         with urllib.request.urlopen(request, timeout=30) as response:
             reading = json.load(response)
         usage["claude"] = {key: reading.get(key) for key in ("five_hour", "seven_day")}
+        usage["claude_sign_in_expires_at"] = credentials["claudeAiOauth"].get("expiresAt")
     if "codex" in queue.clients:
         server = subprocess.Popen([queue.clients["codex"]["path"], "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   stderr=subprocess.DEVNULL, text=True, bufsize=1, env=env)
@@ -662,10 +668,17 @@ def read_meters(queue: Queue, env: dict) -> dict:
                       f"{QUOTA_MAX_AGE_SECONDS} s: {error}") from error
 
 
-def quota_stop(usage: dict, threshold: float) -> str | None:
+def sign_in_expiring(usage: dict, moment: float) -> bool:
+    expires = usage.get("claude_sign_in_expires_at")
+    return type(expires) in (int, float) and expires / 1000 - moment < SIGN_IN_MARGIN_SECONDS
+
+
+def quota_stop(usage: dict, threshold: float, moment: float | None = None) -> str | None:
     percents = used(usage)
     if any(percent >= threshold for percent in percents["claude"]):
         return "Claude usage reached the quota stop"
+    if sign_in_expiring(usage, time.time() if moment is None else moment):
+        return "the stored Claude sign-in expires within half an hour; renew it while no review runs"
     if usage.get("codex") is not None and not usage["codex"].get("ordinaryUsageAllowed"):
         return "ChatGPT ordinary usage is unavailable"
     if any(percent >= threshold for percent in percents["codex"]):

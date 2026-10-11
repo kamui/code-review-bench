@@ -8,6 +8,7 @@ Usage: native_artifacts.py verify ATTEMPT
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import tempfile
@@ -48,6 +49,19 @@ def indexed_files(index):
             raise ArtifactError(f"duplicate indexed artifact: {name}")
         files[name] = row
     return files
+
+
+def unindexed(root, index):
+    """Entries under ``root`` that the index does not list, such as a link a review left there. No link is followed."""
+    root, files = Path(root), indexed_files(Path(index))
+    extra = []
+    for current, directories, names in os.walk(root):
+        for name in (*directories, *names):
+            path = Path(current) / name
+            relative = path.relative_to(root).as_posix()
+            if path.is_symlink() or not path.is_dir() and relative not in files:
+                extra.append(relative)
+    return sorted(extra)
 
 
 def check_file(path, row):
@@ -107,7 +121,10 @@ def verify(directory, pin=None):
 
 
 def file_artifacts(root, index, out, native_relative=None):
-    """File a new native tree, leaving existing filed attempts on their original layout."""
+    """File a new native tree, leaving existing filed attempts on their original layout.
+
+    A tree with no scratch files is filed loose, and only the files its index lists: a link a review
+    left in its report folder is not followed. ``unindexed`` names what is left out."""
     root, index, out = Path(root), Path(index), Path(out)
     files = indexed_files(index)
     archived = sorted(name for name in files if "scratch" in Path(name).parts[:-1] and name != native_relative)
@@ -120,7 +137,10 @@ def file_artifacts(root, index, out, native_relative=None):
             raise ArtifactError("refusing to change an existing native artifact filing")
         return pin
     if not archived or record_path.exists():
-        shutil.copytree(root, out / root.name, dirs_exist_ok=True)
+        for name, row in files.items():
+            check_file(root / name, row)
+            (out / root.name / name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(root / name, out / root.name / name)
         shutil.copy2(index, out / INDEX)
         return None
     if root.is_symlink():

@@ -409,13 +409,16 @@ def codex_skill_observed(paths: list) -> tuple:
 def codex_skill_report(attempt_dir: str, native_file: str = "review.json", stopped: bool = False) -> tuple:
     """Return the unique CE ``review.json`` and its artifact-root metadata.
 
-    A stopped attempt with several reports has no native payload: the runner already stopped it for that."""
+    A stopped attempt with several reports has no native payload: the runner already stopped it for that.
+    Neither has one that stopped before the skill made its report folder, which the runner indexes as empty."""
     index_path = Path(attempt_dir, "native-artifacts.json")
     if not index_path.is_file():
         return None, None, None
     index = read_json(index_path)
     root = Path(index.get("root", "")).resolve()
     if not root.is_dir():
+        if stopped and index.get("files") == []:
+            return None, None, None
         raise FileError(f"native artifact root is missing: {root}")
     attempt = Path(attempt_dir).resolve()
     if not root.is_relative_to(attempt):
@@ -1015,8 +1018,11 @@ def file_attempt(args) -> tuple:
         try:
             artifact_storage = native_artifacts.file_artifacts(
                 native_root, Path(attempt_dir) / "native-artifacts.json", Path(out), native_relative)
+            left_out = native_artifacts.unindexed(native_root, Path(attempt_dir) / "native-artifacts.json")
         except (native_artifacts.ArtifactError, OSError, ValueError, KeyError) as error:
             raise FileError(f"native artifact storage: {error}") from error
+        if left_out:
+            notes.append("report folder entries not filed, since the runner's index does not list them: " + ", ".join(left_out))
         if os.path.exists(os.path.join(attempt_dir, "skill-attempt.json")):
             shutil.copy2(os.path.join(attempt_dir, "skill-attempt.json"), os.path.join(out, "skill-attempt.json"))
         if native_path:
@@ -1104,6 +1110,18 @@ def self_test() -> int:
         assert observed[3] == [{"thread": root_rollout.name, "timestamp": None, "model": "gpt-6-luna",
                                 "input_tokens": 3, "cached_input_tokens": 0, "cache_write_input_tokens": 0,
                                 "output_tokens": 2, "reasoning_output_tokens": 0}], observed[3]
+        early = temp / "early"
+        early.mkdir()
+        (early / "native-artifacts.json").write_text(json.dumps({"root": str(early / "reports"), "files": []}), encoding="utf-8")
+        assert codex_skill_report(str(early), stopped=True) == (None, None, None)
+        for index in ({"root": str(early / "reports"), "files": []}, {"root": str(early / "reports"), "files": [{"path": "review.json"}]}):
+            (early / "native-artifacts.json").write_text(json.dumps(index), encoding="utf-8")
+            try:
+                codex_skill_report(str(early), stopped=bool(index["files"]))
+            except FileError as error:
+                assert "native artifact root is missing" in str(error), str(error)
+            else:
+                raise AssertionError("a missing report folder was filed without a stop, or with indexed files")
         twice = temp / "twice"
         rows = []
         for name in ("first", "second"):
