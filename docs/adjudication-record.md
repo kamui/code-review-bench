@@ -1,6 +1,6 @@
 # The adjudication record
 
-An agent recommends and the user decides. Every such decision gets a record, so that later agents can learn from how the earlier answers went. The goal, in issue [#59](https://github.com/kamui/code-review-bench/issues/59), is that agents make most of these decisions once the record shows that the user can trust their confidence. Until the user adopts a wider policy, agents settle nothing beyond what [ADR-0006](adr/0006-settle-eligibility-by-delegation-on-heavy-evidence.md) allows.
+An agent recommends and the user decides. Every such decision gets a record, so that later agents can learn from how the earlier answers went. The goal, in issue [#59](https://github.com/kamui/code-review-bench/issues/59), is that agents make most of these decisions once the record shows that the user can trust their confidence. The user adopted [policy v2](adr/0007-settle-adjudications-on-earned-confidence.md); live routing starts after the policy PR passes final review and merges. Its earned-confidence gate determines which candidate and credit decisions agents may settle. [ADR-0006](adr/0006-settle-eligibility-by-delegation-on-heavy-evidence.md) retains its existing authority.
 
 This page defines the record. [Prepare a ruling](claim-adjudication.md#prepare-a-ruling) says how to prepare a question and ask it. The saved ruling file and the receipts under `bench/grading/rulings/` stay the authority. The record is an index for learning and changes no grade.
 
@@ -62,7 +62,7 @@ A record with `"contract": 2` follows this page. A record without `contract` is 
 
 `rule` pins a versioned file or the copy the round saved under `docs/research/`. It never pins a file that is edited in place. `bench/rubric/scoring.md` is replaced when the next rubric takes effect, and a record that pinned it would then fail its check.
 
-When `clauses` is null the tool gives the reason "no rule of this decision type has been tested blind".
+Without an adopted policy v2, a null `clauses` gives the reason "no rule of this decision type has been tested blind". Policy v2 tests earned confidence across decisions instead of imposing this separate clause gate.
 
 ### Each answer
 
@@ -109,7 +109,7 @@ A record that is not reconstructed holds only answers written before the questio
 | `miss` | Null, or `cause` and `note`. See "A miss" below. |
 | `lesson` | Null, or `says` and `goes_to`. See "A lesson" below. |
 
-The user has adopted no policy yet, so the tool refuses an after-record whose `settled_by` is `agents`.
+The tool accepts an after-record whose `settled_by` is `agents` only when the adopted policy authorizes that decision at its recorded position in history.
 
 **A miss.** `miss` is null when the recommender's first answer was the decision and the user was asked once. Otherwise it names one cause and says in one sentence what happened.
 
@@ -171,7 +171,7 @@ The tool refuses an answer that does not follow the definition:
 
 `python3 bench/tools/ruling_record.py route <ruling>.before.json` prints `ASK` or `SETTLE`, then the reasons.
 
-The user has adopted no policy, so it prints `ASK` for every record. The first reason says so. The others are the reasons that keep a decision with the user under [ADR-0006](adr/0006-settle-eligibility-by-delegation-on-heavy-evidence.md), which [Prepare a ruling](claim-adjudication.md#prepare-a-ruling) lists.
+The shared policy gate prints `ASK` with the reasons that keep the decision with the user, or `SETTLE` with its earned level. The current candidate and recovery counts remain below level 1, so both types still require the owner.
 
 After the reasons it prints the question to show the user:
 
@@ -215,15 +215,15 @@ The summary separates contract 1, the historical baseline, from contract 2. For 
 
 It also prints misses by cause, lessons and a repeated cause after an earlier record saved its fix. That flag points to both records. It relies on the lesson recorded at the time, and does not claim to prove the fix's effectiveness. Contract 1 has no cause or lesson fields, so the tool does not invent them.
 
-The count includes only contract 2 records that were written before the question, not reconstructed records. Both blind assessors must agree at high confidence and the recommender must give that outcome at medium or high confidence. A match increments the count; a miss resets it. Changing any party's model resets it too. A later review that changes a counted decision resets the count when that review occurs. The pull-request count is the number of distinct `target` values among the matches since the reset.
+The count includes only contract 2 records that were written before the question, not reconstructed records. Both blind assessors must agree at high confidence and the recommender must give that outcome at medium or high confidence. An explicit owner match increments the count; an agent settlement alone does not. A miss resets it. Changing any party's model resets it too. A later review that changes a counted decision resets the count when that review occurs. The pull-request count is the number of distinct `target` values among the matches since the reset.
 
-Level 1 needs 15 matches on four pull requests. Level 2 needs 30 on five. With `--round`, the opening level uses only closed rounds before that round; decisions in the round cannot raise its opening level. A saved reversal in an earlier round resets the opening count at once, even if that earlier round is still open. An agreeing decision in an open earlier round adds no opening credit. The current count covers all saved records, even when the displayed decisions are restricted to one round. It shows progress for the next round. A miss within the selected round drops its effective level to zero at once, and its settled decisions are listed in full. Records are ordered by the round's `opened` date, then the natural order of their saved paths. Round names and ruling file names must preserve the order when dates are the same.
+Level 1 needs 15 matches on four pull requests. Level 2 needs 30 on five. With `--round`, the opening level uses only closed rounds before that round; decisions in the round cannot raise its opening level. A saved reversal in an earlier round resets the opening count at once, even if that earlier round is still open. An agreeing decision in an open earlier round adds no opening credit. The current count covers all saved records, even when the displayed decisions are restricted to one round. It shows progress for the next round. A miss within the selected round drops its effective level to zero at once, and its settled decisions are listed in full. New rounds follow their opening snapshot dependencies. Historical rounds without snapshots use the round's `opened` date and natural path order. Within a round, ruling file names must preserve decision order.
 
-These are informational counts. The user has adopted no wider delegation policy, and neither a count nor a level grants authority to settle a decision. Policy adoption is step 3 of [issue #59](https://github.com/kamui/code-review-bench/issues/59).
+A count or level alone grants no authority. The adopted policy requires its full gate and an immutable round-opening snapshot. The [adoption receipt](../bench/grading/rulings/delegation.v2.md) completes step 3 of [issue #59](https://github.com/kamui/code-review-bench/issues/59); the qualifying live round remains outstanding.
 
 ### The digest
 
-The summary lists every decision marked as settled by agents, with its ruling, group, outcome and record path. At a round opening level of 2, it orders these by their before-record hashes and marks every fifth entry, starting with the first, as the sample. A reconciliation summary similarly identifies up to five calls by hash for the audit round. Sampling is reproducible and adds no new assessment call. No decisions can be settled under the proposed policy until the user adopts it.
+The summary lists every decision marked as settled by agents, with its ruling, group, outcome and record path. At a round opening level of 2, it orders these by their before-record hashes and marks every fifth entry, starting with the first, as the sample. A reconciliation summary similarly identifies up to five calls by hash for the audit round. Sampling is reproducible and adds no new assessment call. Live routing begins only after the policy PR passes final review and merges.
 
 The historical figures in the [plan](https://github.com/kamui/code-review-bench/issues/59#issuecomment-6030247734) describe rulings 11 through 24, fourteen contract 1 records written before their questions. That cohort has 11 matching recommendations, six matching pairs of confident blind answers, and five where the recommender also matched. The full inventory has grown since that snapshot. The command reports the records it finds, rather than keeping those old totals as expectations for the full inventory.
 
@@ -241,4 +241,20 @@ The sheet omits the ruling named by `--exclude`, its aliases and any review of i
 
 Give that saved sheet to every party with the neutral case. Pin it in `case.precedents`, and pin the same path and hash in every answer's `precedents`. The tool refuses a missing, different or altered sheet pin. Existing records with no sheet stay valid; nobody backfills what an earlier party did not read.
 
-Second-pass [ruling 5](research/issue-59-confirmations-2026-10-11/rulings/05-requests-Q2.md) and [ruling 8](research/issue-59-confirmations-2026-10-11/rulings/08-trpc-Q1.md) were confirmed under the current reading. Both retain no credit and record that the comment identifies the cause as a fault. Their confirmations settle the remaining rulings in step 2 of issue #59. Policy adoption and the first live round remain separate work.
+Second-pass [ruling 5](research/issue-59-confirmations-2026-10-11/rulings/05-requests-Q2.md) and [ruling 8](research/issue-59-confirmations-2026-10-11/rulings/08-trpc-Q1.md) were confirmed under the current reading. Both retain no credit and record that the comment identifies the cause as a fault. Their confirmations settle the remaining rulings in step 2 of issue #59. The later [policy adoption](../bench/grading/rulings/delegation.v2.md) leaves the first qualifying live round outstanding.
+
+## Round opening and policy v2
+
+[ADR-0007](adr/0007-settle-adjudications-on-earned-confidence.md) and `bench/grading/delegation.v2.json` record the adopted policy. The policy pins the [owner's verbatim receipt](../bench/grading/rulings/delegation.v2.md). Live routing starts only after final review and merge of the policy PR. `route BEFORE.json [--policy FILE]` reads the policy and prints `SETTLE level 1`, `SETTLE level 2`, or `ASK` and its reasons. The receipt names the exact adopted revision and hashes. Adoption does not backfill records or settle a live case.
+
+Before the first answers in a new round, save an immutable `opening.json` beside its rulings directory. It holds `round`, the `source_commit` inspected at opening, and `closed_rounds`, a list of path/SHA-256 pins to the already-closed rounds' `round.json` files. Include all earlier closed rounds. Commit this snapshot before preparing answers. Set `round.json.opening` and every new before-record's `round_opening` to its pin. Keep a closed round immutable; later reviews belong to a new round. The opening snapshot preserves historical closed-round evidence without rewriting old records or inventing closure times. The tool checks the pins; the commit history establishes when the snapshot was saved, just as it establishes that first answers preceded the question.
+
+Only the rounds pinned at opening can raise that round's level. A trust miss or model replacement lowers authority at once for the rest of the round, including a changed model in a pending before-record. A trust miss means the owner changes a qualifying agreed answer or reverses a counted or agent-settled decision. The after-record also logs preparation and re-asking misses; unchanged final answers after re-asking alone do not reset trust. A later reversal does not invalidate a settlement that was allowed when it happened. Validation reads each settlement against the earlier history, without recursively loading the same record. The summary lists all settlements after a reset rather than reducing them to a sample.
+
+Only explicit owner decisions count toward trust. An agent settlement and silence after a digest add no match. A fresh owner confirmation can count through its own record. The complete credit decision includes both `says_what` and `identifies_cause`; disagreement or cannot-tell on either goes to the owner, and a changed fact is a miss even if the outcome word stays the same.
+
+## Filing a policy v2 settlement
+
+Keep the existing candidate and credit formats. Add `settled_by: "agents"` and `settlement`, a path/SHA-256 pin to the after-record. The after-record pins the policy in force and the before-record, has `asked: 0`, `ground: null`, and records the agreed answer without alteration. Its policy adoption receipt is the current decision's `receipt`; `receipt_scope` is the exact `adoption_scope`. The reason says agents settled under policy v2. Existing owner and ADR-0006 records need no new fields.
+
+Before asking or routing, bind the filing identity in the before-record's `filing` object. For candidates it contains `revision` and `subject`. For credit it contains `revision`, `review`, `attempt_id`, `item_id` and `family_id`, copied exactly from the intended current record. Candidate outcomes map as follows: suggestion to advisory, minor-defect to inconsequential, refuted to refuted, outside-scope to scope-excluded, and duplicate to eligible for an existing problem. No v2 settlement can approve a new family. Credit copies both agreed facts. `current_grading.py` validates these bindings and calls the same policy route as record validation before a filing is accepted; grading preparation and mapping use that validation too.
