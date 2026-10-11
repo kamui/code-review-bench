@@ -85,11 +85,11 @@ starts. An observation reports ``running``, ``absent`` or ``unknown``:
 - ``unknown`` when there is no launch record, the record names no boot or is from another host,
   PID namespace or user, or a process of this user stays uninspectable, as described below. A free
   lock, a stale heartbeat, a missing PID or a zombie wrapper is never read as absence.
-- ``absent`` when the host has rebooted since the launch, or two readings of the process table
-  in a row find no live process that carries the marker, names the attempt directory in its
-  environment, command or working directory, belongs to the launch's session, or descends from one
-  that does. A recorded PID now held by a process with another start time is that other process,
-  and a process older than the launch is not the launch's.
+- ``absent``, subject to the accepted limits below, when the host has rebooted since the launch,
+  or two readings of the process table in a row find no live process that carries the marker,
+  names the attempt directory in its environment, command or working directory, belongs to the
+  launch's session, or descends from one that does. A recorded PID now held by a process with
+  another start time is that other process, and a process older than the launch is not the launch's.
 - ``running`` otherwise, with the processes listed.
 
 A process of this user that is not older than the launch, is not a zombie, and refuses a read of
@@ -106,6 +106,22 @@ read, a process can fork and exit, and that reading then lists neither the paren
 process that becomes a zombie or disappears no longer blocks. Once ``UNREADABLE_WAIT_SECONDS`` have
 passed, a reading that still has such a process leaves the launch ``unknown``, and the reason names
 each one's command name, PID, state and start time, and the error its read raised.
+
+Accepted limits. The decision on #107 applies #103's no-false-absence criterion to processes
+that cannot be inspected, not to every process-table reading:
+https://github.com/kamui/code-review-bench/issues/107#issuecomment-6107142539
+All three cases in #107 are outside that guarantee. When only the marker or attempt directory
+could tie a process to the launch, this check can report ``absent`` while that process is alive:
+
+- Its first thread has ended while another runs. ``/proc/PID/stat`` can show state Z, so the
+  check skips it as a zombie.
+- Only another thread's own working directory is in the attempt directory, after
+  ``unshare(CLONE_FS)``. The check reads only the first thread's working directory.
+- A single-threaded process is between images during ``exec``. ``environ`` and ``cmdline``
+  can read empty without an error, so they expose neither the marker nor the attempt directory.
+
+Thread scanning and protection across exec are not required by that decision. The three open
+defects in #107's discarded threaded scanner fall away with those cases left out.
 
 This tool never signals a process.
 
