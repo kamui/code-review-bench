@@ -136,13 +136,26 @@ class ContractTwoTest(unittest.TestCase):
 
     def test_high_confidence_needs_a_nearest_ruling_made_under_the_current_reading(self):
         fault = "assessor-1: `nearest` names no ruling made under the current reading, so `short_of_high` must name `no-precedent`"
-        self.refused("candidate", lambda record: record["answers"][1].update(nearest=[]), fault)
-        self.refused("candidate", lambda record: record["answers"][1].update(nearest=["second-05", "second-pass 2", "P1"]), fault)
-        self.refused("candidate", lambda record: record["answers"][1].update(nearest=["ruling 30"]), "assessor-1: ruling 30 is not a ruling in the index")
-        record = sound("candidate")
-        record["answers"][1].update(nearest=["second-pass 5", "S10"])
-        record["answers"][2].update(nearest=["second-05"], confidence="medium", short_of_high=["no-precedent"], would_settle=False)
-        self.assertEqual(ruling_record.faults(record), [])
+        index = ruling_record.load(ROOT / SECOND / "terms/rulings.index.json")
+        for name in ("second-05", "second-02", "P1"):
+            index["rulings"][name]["reading"] = "earlier"
+        current = ruling_record.canonical("S10", index["rulings"])
+        index["rulings"][current]["reading"] = "current"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "rulings.index.json")
+            path.write_text(json.dumps(index), encoding="utf-8")
+            for nearest, expected in (([], fault), (["second-05", "second-pass 2", "P1"], fault),
+                                      (["ruling 30"], "assessor-1: ruling 30 is not a ruling in the index")):
+                with self.subTest(nearest=nearest):
+                    record = sound("candidate")
+                    record["rulings"] = str(path)
+                    record["answers"][1].update(nearest=nearest)
+                    self.assertEqual(ruling_record.faults(record), [expected])
+            record = sound("candidate")
+            record["rulings"] = str(path)
+            record["answers"][1].update(nearest=["second-pass 5", "S10"])
+            record["answers"][2].update(nearest=["second-05"], confidence="medium", short_of_high=["no-precedent"], would_settle=False)
+            self.assertEqual(ruling_record.faults(record), [])
 
     def test_would_settle_that_differs_from_high_is_refused(self):
         fault = "assessor-1: `would_settle` must be true at high confidence and false below it"
