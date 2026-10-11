@@ -1,6 +1,6 @@
 # Second pass, decision P28: "outside supported use" and "relied on, not promised" are told apart by what the owners said
 
-Put to the user on 2026-10-11 and answered the same day. The line is accepted for the next version of the two questions. Version 7 stays in force until the user has read that version.
+Put to the user on 2026-10-11 and answered the same day. The line is in version 8 of the two questions, which is in force, in the wording below under "As it reads in version 8".
 
 ## Where it comes from
 
@@ -29,3 +29,9 @@ It replaces the column "Is anyone shown depending on it?" as the test between th
 - The cipher setting (second-pass ruling 2) is a suggestion of the kind outside supported use. The certificate path (first-round ruling 30) stays outside supported use, as the user's second look says.
 - For an owner who never spoke, "is someone shown doing it" is still what a search finds. That decides only whether a case is flagged for the user, who rules on every flagged case.
 - The next version of the two questions carries the line and the corrected table, and the user reads that version before it is in force.
+
+## As it reads in version 8
+
+Before accepting version 8 the user asked for a plain-words pass over its new sentences and saw each before and after ([decision P29](P29-version-8-of-the-two-questions.md)). The sentence above is the one the user chose in the option. The text in force is:
+
+> If the owners said or documented that a use is unsupported, it is outside supported use, however many people do it. "Relied on, not promised" applies only when the owners never said either way and the evidence shows someone doing it.
