@@ -12,17 +12,20 @@ def natural(value):
 
 def records(root=record.ROOT):
     pairs = []
-    for path in sorted((root / "docs/research").rglob("*.before.json")):
+    research = root / "docs/research"
+    for round_path in sorted(research.rglob("round.json")):
+        problems = record.round_faults(round_path.parent)
+        if problems:
+            raise ValueError(f"{round_path}: {'; '.join(problems)}")
+    for path in sorted(research.rglob("*.before.json")):
         before = record.load(path)
         problems = record.faults(before, root)
         round_path = path.parent / "round.json"
         if not round_path.is_file():
             problems.append("no round.json")
-        else:
-            problems += record.round_faults(path.parent)
         after_path = path.with_name(path.name.replace(".before.json", ".after.json"))
         after = record.load(after_path) if after_path.is_file() else None
-        if after and not problems:
+        if after_path.is_file() and not problems:
             problems += record.after_faults(before, after, path, root)
         if problems:
             raise ValueError(f"{path}: {'; '.join(problems)}")

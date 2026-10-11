@@ -9,7 +9,7 @@ import unittest
 
 import ruling_record
 import ruling_summary
-from test_ruling_record import ROOT, sound
+from test_ruling_record import ROOT, decided, sound
 
 
 def pair(number, target="pr-1", confidence="high", decision="recovers", round_name="first"):
@@ -150,6 +150,68 @@ class SummaryTest(unittest.TestCase):
             item["before"]["decision_type"] = "reconciliation"
         calls = ruling_summary.summarize(audit)["contract_2"]["reconciliation"]["audit_calls"]
         self.assertEqual(calls, [item["path"] for item in audit[:5]])
+
+
+class InventoryTest(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.directory = self.root / "docs/research/test/rulings"
+        self.directory.mkdir(parents=True)
+        self.sheet = {"round": "test", "opened": "2026-10-01", "closed": True, "no_record": {}}
+        self.save_sheet()
+
+    def save_sheet(self):
+        (self.directory / "round.json").write_text(json.dumps(self.sheet), encoding="utf-8")
+
+    def save_record(self):
+        before = sound("recovery")
+        paths = {before["rule"]["path"], before["case"]["path"], before["rulings"],
+                 *(answer["brief"]["path"] for answer in before["answers"] if answer["brief"])}
+        for name in paths:
+            destination = self.root / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes((ROOT / name).read_bytes())
+        path, after = decided(before, self.directory)
+        path.with_name("third-01.after.json").write_text(json.dumps(after), encoding="utf-8")
+        return path
+
+    def test_round_without_any_before_records_is_rejected(self):
+        (self.directory / "unrecorded.md").write_text("# A saved ruling\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "unrecorded.md has no before-record"):
+            ruling_summary.records(self.root)
+
+    def test_round_without_records_can_exempt_its_rulings(self):
+        (self.directory / "unrecorded.md").write_text("# A rule decision\n", encoding="utf-8")
+        self.sheet["no_record"] = {"unrecorded.md": "a decision on rule text"}
+        self.save_sheet()
+        self.assertEqual(ruling_summary.records(self.root), [])
+
+    def test_malformed_round_without_records_is_rejected(self):
+        (self.directory / "round.json").write_text("{}", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "round.json needs `round`"):
+            ruling_summary.records(self.root)
+
+    def test_empty_existing_after_record_is_rejected(self):
+        path = self.save_record()
+        self.assertEqual(len(ruling_summary.records(self.root)), 1)
+        path.with_name("third-01.after.json").write_text("{}", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "the after-record needs `ruling`"):
+            ruling_summary.records(self.root)
+
+    def test_before_record_without_round_is_rejected(self):
+        self.save_record()
+        (self.directory / "round.json").unlink()
+        with self.assertRaisesRegex(ValueError, "no round.json"):
+            ruling_summary.records(self.root)
+
+    def test_absent_after_record_in_open_round_is_pending(self):
+        path = self.save_record()
+        self.sheet["closed"] = False
+        self.save_sheet()
+        path.with_name("third-01.after.json").unlink()
+        pairs = ruling_summary.records(self.root)
+        self.assertIsNone(pairs[0]["after"])
+        self.assertEqual(ruling_summary.summarize(pairs, self.root)["pending"], [str(path.relative_to(self.root))])
 
 
 class PrecedentsTest(unittest.TestCase):
