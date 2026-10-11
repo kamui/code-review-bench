@@ -265,9 +265,10 @@ def reasons(record, root=ROOT):
     return found
 
 
-def route(record, root=ROOT):
-    """Why the user is asked. An empty list would let agents settle the decision, and no adopted policy does that yet."""
-    return ["no policy is adopted, so agents settle nothing beyond ADR-0006", *reasons(record, root)]
+def route(record, root=ROOT, **context):
+    import delegation
+
+    return delegation.route(record, root, **context)["reasons"]
 
 
 def cell(text):
@@ -297,8 +298,6 @@ def second_after_faults(record, after, root):
     by_agents = after["settled_by"] == "agents"
     if after["settled_by"] not in SETTLED_BY:
         found.append(f"`settled_by` must be one of {', '.join(SETTLED_BY)}")
-    elif by_agents and route(record, root):
-        found.append(f"`settled_by` is `agents`, and the decision is the user's: {'; '.join(route(record, root))}")
     if after["policy"] is not None and not pinned(after["policy"], root):
         found.append("`policy` must be null, or pin the policy the decision was made under, by path and sha256")
     asked = after["asked"]
@@ -315,6 +314,7 @@ def second_after_faults(record, after, root):
     miss, lesson = after["miss"], after["lesson"]
     first = recommender(record)
     owed = (first["outcome"] != after["outcome"] or asked > 1
+            or (record["decision_type"] == "recovery" and two_facts(after.get("facts")) and first.get("facts") != after.get("facts"))
             or (after["outcome"] in NAMES_A_PROBLEM and after.get("same_fault_as")
                 and first.get("same_fault_as") != after["same_fault_as"]))
     if miss is not None and not (isinstance(miss, dict) and miss.get("cause") in CAUSES and isinstance(miss.get("note"), str) and miss["note"].strip()):
@@ -332,7 +332,7 @@ def second_after_faults(record, after, root):
     return found
 
 
-def after_faults(record, after, before_path, root=ROOT):
+def after_faults(record, after, before_path, root=ROOT, *, check_settlement=True, pairs=None):
     contract = after.get("contract", 1)
     if contract not in (1, 2):
         return ["`contract` must be 1 or 2; a record without it is contract 1"]
@@ -343,9 +343,10 @@ def after_faults(record, after, before_path, root=ROOT):
         found.append("`before` must pin the before-record as it was when the user was asked; that file is never edited")
     if after["outcome"] not in outcomes(record):
         found.append(f"outcome must be one of {', '.join(outcomes(record))}")
-    if contract == 1:
-        if after.get("settled_by") == "agents" and route(record, root):
-            found.append(f"`settled_by` is `agents`, and the decision is the user's: {'; '.join(route(record, root))}")
+    if check_settlement:
+        import delegation
+
+        found += delegation.settlement_faults(record, after, root, before_path, pairs)
     return found + second_after_faults(record, after, root) if contract == 2 else found
 
 
@@ -419,21 +420,39 @@ if __name__ == "__main__":
         except (ValueError, OSError, KeyError) as error:
             parser.exit(1, f"{error}\n")
         raise SystemExit(0)
-    routed = sys.argv[1] == "route"
-    before_path, *after_path = sys.argv[2:3] if routed else sys.argv[1:3]
+    if len(sys.argv) > 1 and sys.argv[1] == "route":
+        import delegation
+
+        parser = argparse.ArgumentParser(description=__doc__)
+        parser.add_argument("command")
+        parser.add_argument("before", type=Path)
+        parser.add_argument("--policy", default=delegation.POLICY)
+        args = parser.parse_args()
+        try:
+            before = load(args.before)
+            problems = faults(before)
+            if before.get("contract") != 2:
+                problems.append("`route` needs a contract 2 record, which pins the case file the user is shown")
+            if problems:
+                print("\n".join(problems))
+                raise SystemExit(1)
+            result = delegation.route(before, policy_path=args.policy, before_path=args.before)
+            if result["reasons"]:
+                print("ASK\n" + "\n".join(f"- {reason}" for reason in result["reasons"]) + "\n\n" + question(before))
+            else:
+                print(f"SETTLE level {result['level']}")
+        except (ValueError, OSError, KeyError) as error:
+            parser.exit(1, f"{error}\n")
+        raise SystemExit(0)
+    before_path, *after_path = sys.argv[1:3]
     record = load(before_path)
     problems = faults(record)
-    if routed and not problems and record.get("contract") != 2:
-        problems = ["`route` needs a contract 2 record, which pins the case file the user is shown"]
     after = load(after_path[0]) if after_path else None
     if after and not problems:
         problems = after_faults(record, after, before_path)
     if problems:
         print("\n".join(problems))
         raise SystemExit(1)
-    if routed:
-        print("ASK\n" + "\n".join(f"- {reason}" for reason in route(record)) + "\n\n" + question(record))
-        raise SystemExit(0)
     stays = reasons(record)
     print("Stays with the user:" if stays else "No recorded reason keeps this with the user. Delegation still needs a policy the user adopted.")
     print("\n".join(f"- {reason}" for reason in stays))

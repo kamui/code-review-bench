@@ -278,6 +278,20 @@ class CurrentGrading(unittest.TestCase):
         with self.assertRaisesRegex(current.Inconsistent, "not marked with the validation policy's verdict contract current-verdicts/v2"):
             self.check()
 
+    def test_agent_marked_candidate_and_credit_filings_require_the_shared_settlement_gate(self):
+        decision = approved(self.documents, self.root, "candidate-fixture", outcome="advisory")
+        decision["settled_by"] = "agents"
+        with self.assertRaisesRegex(current.Inconsistent, "pinned after-record"):
+            self.check()
+        self.documents["adjudication"]["decisions"].remove(decision)
+        ruling = {"id": "CR-1", "target": "t-example", "revision": decision["revision"], "family_id": "GT-t1",
+                  "review": decision["receipt"], "attempt_id": "att-001", "item_id": "item-0", "says_what": "yes",
+                  "identifies_cause": "no", "reason": "Agents settled this.", "receipt": decision["receipt"],
+                  "receipt_scope": decision["receipt_scope"], "settled_by": "agents"}
+        self.documents["credit"]["rulings"].append(ruling)
+        with self.assertRaisesRegex(current.Inconsistent, "pinned after-record"):
+            self.check()
+
     def test_receipt_scope_must_be_in_saved_ruling(self):
         assessed_grade(self.selected, self.documents, self.root)
         self.documents["adjudication"]["decisions"][0]["receipt_scope"] = "Approval absent from the receipt"
