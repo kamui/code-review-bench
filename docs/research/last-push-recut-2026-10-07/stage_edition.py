@@ -12,7 +12,8 @@ It also refuses a STAGING that reaches its registry or inventory through a symbo
 new file in place of each, so a STAGING made of hard links leaves this checkout's files as they were.
 
 The staged registry is this checkout's ``bench/scoreboard.current.json`` with three changes, which
-follow ``decisions.v1.json`` and the runs ``replacement_runs.py`` defined:
+follow ``decisions.v1.json`` and the runs ``replacement_runs.py`` and ``skill_replacement_runs.py``
+defined:
 
 - each task decided "re-cut and run again" pins its ``packet.v2.md`` hash;
 - each last-push run takes those tasks from the saved source it replaces, under that source's
@@ -21,9 +22,10 @@ follow ``decisions.v1.json`` and the runs ``replacement_runs.py`` defined:
   record lists each such configuration and task as deferred.
 
 The command writes that registry and the inventory ``current_grading.py`` derives from it into
-STAGING. It then writes two files into this record: ``staged-review-items.v1.jsonl``, the rows of
-``claims.py inventory`` for every re-cut task, and ``staged-edition.v1.json``, which pins the staged
-selection and counts the saved records that still name the earlier task revision. Those records are
+STAGING. It then writes two files into this record: ``staged-review-items.v2.jsonl``, the rows of
+``claims.py inventory`` for every re-cut task, and ``staged-edition.v2.json``, which pins the staged
+selection and counts the saved records that still name the earlier task revision. The ``v1`` files
+are the selection staged before the CE and thermo runs existed; this command no longer writes them. Those records are
 not edited. Until they are reconciled, ``current_grading.py check --root STAGING`` fails and nothing
 can be prepared for grading.
 
@@ -51,7 +53,7 @@ import claims  # noqa: E402
 import current_grading  # noqa: E402
 
 RERUN = "re-cut and run again"
-ITEMS, RECEIPT = "staged-review-items.v1.jsonl", "staged-edition.v1.json"
+ITEMS, RECEIPT = "staged-review-items.v2.jsonl", "staged-edition.v2.json"
 REGISTRY, INVENTORY = "bench/scoreboard.current.json", "bench/grading/current/inventory.json"
 CURRENT = Path("bench/grading/current")
 RECORDS = {"references": "targets", "adjudications": "decisions", "claims": "claims", "candidates": "candidates", "credits": "rulings"}
@@ -65,11 +67,20 @@ def text(value, indent: int) -> str:
     return json.dumps(value, indent=indent) + "\n"
 
 
-def replacement_runs() -> list:
-    spec = importlib.util.spec_from_file_location("replacement_runs", HERE / "replacement_runs.py")
+def specs(script: str) -> list:
+    spec = importlib.util.spec_from_file_location(script, HERE / f"{script}.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return [("runs/2026-10-08-last-push-" + name, ("runs/" + source, arm)) for name, source, arm, _replicates, _cap in module.SPECS]
+    return module.SPECS
+
+
+def replacement_runs() -> list:
+    """Each last-push run with the saved source it replaces: the built-in runs, then the CE and thermo runs."""
+    built_in = [("runs/2026-10-08-last-push-" + name, ("runs/" + source, arm))
+                for name, source, arm, _replicates, _cap in specs("replacement_runs")]
+    skill = [("runs/2026-10-10-last-push-" + name, ("runs/" + source, arm))
+             for name, source, _inputs, arm, _cap in specs("skill_replacement_runs")]
+    return built_in + skill
 
 
 def staged_registry() -> tuple:
@@ -149,14 +160,15 @@ def stage(root: Path) -> tuple:
     reviews = [attempt["admission"]["state"] == "admitted" for attempt in selected["attempts"]
                if attempt["review"] and cells[attempt["cell"]] in {task["id"] for task in recut}]
     record = {
-        "schema_version": 1, "version": 1,
+        "schema_version": 1, "version": 2,
         "note": "The selection stage_edition.py writes into a staging checkout, and what it leaves for claim intake. "
                 "A deferred entry is a configuration and its tasks that stay out of the staged selection: only reviews "
                 "of the merge-cut packet exist for them. `pending_reconciliation` counts the rows of the staging "
                 "checkout's `current_records` that name the earlier revision of a re-cut task; none is edited here, and "
                 "grading cannot be prepared while `readiness.state` is blocked.",
         "inputs": [current_grading.pin_file(path, ROOT) for path in (
-            ROOT / REGISTRY, HERE / "decisions.v1.json", HERE / "packet-replacements.v1.json", HERE / "replacement_runs.py")],
+            ROOT / REGISTRY, HERE / "decisions.v1.json", HERE / "packet-replacements.v1.json", HERE / "replacement_runs.py",
+            HERE / "skill_replacement_runs.py")],
         "staged": {"registry_sha256": hashlib.sha256(text(registry, 2).encode()).hexdigest(),
                    "inventory_sha256": hashlib.sha256(text(selected, 2).encode()).hexdigest(), "counts": selected["counts"]},
         "tasks": [{"target": task["id"], "decision": decided[task["id"]], "packet": task["packet"]} for task in selected["tasks"]],
