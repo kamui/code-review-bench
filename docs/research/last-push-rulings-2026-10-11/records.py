@@ -26,7 +26,7 @@ def pin(path):
 
 def answer(party, source, case, exposure, brief, overrides):
     found = next(entry for entry in json.loads((ROOT / source).read_text(encoding="utf-8")) if entry["case"] == case)
-    fields = {key: value for key, value in found.items() if key not in ("case", "promised", "promised_by", "delivered", "against")}
+    fields = {key: value for key, value in found.items() if key not in ("case", "promised", "promised_by", "delivered", "against", "sub_kind", "tests")}
     fields.setdefault("clauses", [])
     base = dict(PARTIES[party])
     base.setdefault("by", party)
