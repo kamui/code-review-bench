@@ -572,6 +572,7 @@ class AttemptAudit(unittest.TestCase):
                     "GOCACHE=$(mktemp -d) go test ./src/",
                     f"export {offline}\nGOPROXY=https://proxy.golang.org\ngo test ./src/",
                     f"export {offline}\ngo build ./src/\ntimeout -k 5;unset GOPROXY; go test ./src/",
+                    f"export {offline}\ntimeout -k 5 5;GOPROXY=https://proxy.golang.org go test ./src/",
                     # An unset between an offline `go` and a later one in a `-c` script still counts.
                     f"export {offline}\nV=$(sh ./version.sh) go build ./src/\nunset GOPROXY\nbash -c 'go test ./src/'"):
             with self.subTest(cmd=cmd):

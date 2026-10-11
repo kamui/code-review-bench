@@ -100,7 +100,7 @@ ASSIGNMENT = re.compile(r"([A-Za-z_]\w*)=(" + VALUE + ")")
 COMMAND = (r"(?:^|[;&|(){}\n`]|\$\(|" + SHELL_SCRIPT + r"['\"]"
            r"|\b(?:if|elif|while|until|do|then|else|exec|xargs|env|nohup|time|command|sudo)\s|(?<![^\s;&|(){}`'\"])!\s)"
            r"\s*(?P<assign>(?:[A-Za-z_]\w*=" + VALUE + r"\s+)*)"
-           r"(?:timeout\s+(?:(?:-[A-Za-z]*[ks]|--kill-after|--signal)\s+(?!-)[^\s;&|]+\s+|-\S+\s+)*\S+\s+)?")
+           r"(?:timeout\s+(?:(?:-[A-Za-z]*[ks]|--kill-after|--signal)\s+(?!-)[^\s;&|]+\s+|-\S+\s+)*[^\s;&|]+\s+)?")
 NETWORK = re.compile(
     COMMAND +
     r"(?:(?P<tool>curl|wget|gh|ssh|scp|pip3?|npm|pnpm|yarn|cargo|go)(?=\s)(?:[ \t]+(?P<sub>[^\s;&|()'\"`]*))?"
