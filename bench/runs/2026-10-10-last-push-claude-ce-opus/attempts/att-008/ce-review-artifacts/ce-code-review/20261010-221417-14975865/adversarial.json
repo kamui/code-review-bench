@@ -1,0 +1,35 @@
+{
+  "reviewer": "adversarial",
+  "findings": [
+    {
+      "title": "Short-circuit skips Bitbucket OAuth secret reads, dropping a warning line",
+      "severity": "P3",
+      "file": "internal/backup.go",
+      "line": 101,
+      "why_it_matters": "An operator who has Bitbucket API-token auth fully configured and also a stale BITBUCKET_USER_FILE / BITBUCKET_KEY_FILE / BITBUCKET_SECRET_FILE pointing at a missing or unreadable file now sees one fewer 'file ... does not exist' line per backup run than on the base. The base read all five Bitbucket variables unconditionally at the top of each run; the new `bitbucketAPITokenDefined() || bitbucketOAuthDefined()` stops after the first operand, and GetEnvOrFile is what emits that log line. The impact is cosmetic (Bitbucket() re-reads the same variables and still logs each warning once), but it is a verifiable departure from the PR's stated 'log output unchanged' guarantee; evaluating both helpers before the `||` restores the base's read pattern exactly.",
+      "autofix_class": "advisory",
+      "owner": "human",
+      "requires_verification": false,
+      "suggested_fix": "Evaluate both predicates before combining them so every Bitbucket variable is still read once per run, as on the base: `apiToken, oauth := bitbucketAPITokenDefined(), bitbucketOAuthDefined(); if apiToken || oauth { results = append(results, *Bitbucket(backupDir)) }`. Alternatively accept the drift and soften the PR's 'log output unchanged' wording.",
+      "confidence": 50,
+      "evidence": [
+        "internal/backup.go:101 -- if bitbucketAPITokenDefined() || bitbucketOAuthDefined() {",
+        "base c77f548 internal/backup.go:50-54 -- bbEmail, emailExists := GetEnvOrFile(envBitBucketEmail) ... bbSecret, secretExists := GetEnvOrFile(envBitBucketSecret) (all five read unconditionally before the apiTokenComplete || oauth2Complete test)",
+        "internal/envfile.go:35-36 -- if os.IsNotExist(err) { logger.Printf(\"file %s does not exist\", filePath) (GetEnvOrFile logs as a side effect whenever <VAR>_FILE is set but unreadable)",
+        "internal/bitbucket.go:19-21 -- bbUser, userExists := GetEnvOrFile(envBitBucketUser) ... (Bitbucket() re-reads the OAuth variables, so each warning still appears once per run; only the duplicate from the collector is lost)",
+        "Scenario: BITBUCKET_EMAIL=x, BITBUCKET_API_TOKEN=y, BITBUCKET_USER unset, BITBUCKET_USER_FILE=/run/secrets/missing. Base: 'file /run/secrets/missing does not exist' logged twice per backup run (collector + Bitbucket()). Head: logged once (Bitbucket() only)."
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "docker/Dockerfile could not be built in this review (Docker unavailable), and the repository only builds it in .github/workflows/release.yml and the Makefile docker target, so the merged RUN / reordered apk package list is first exercised at release time. Read-through shows the package set is unchanged (bash ca-certificates curl git git-lfs grep jq) and the quoted URL expands identically.",
+    "The scheduled paths of the refactored Run() (scheduleBackups -> runScheduledJob with GIT_BACKUP_INTERVAL or GIT_BACKUP_CRON) block on waitForShutdown and have no test; equivalence with the base (job global assignment, option ordering, 'failed to create job' wrap) was confirmed by reading only.",
+    "checkProvidersDefined previously set bitbucketAPITokenComplete inside a range over the enabledProviderAuth map, so with both Bitbucket auth methods complete the count was 1 or 2 depending on map iteration order; the head precomputes it and always yields 1. Only `count == 0` is observable, so no behaviour change results, but this is a silent semantic change inside a refactor billed as behaviour-preserving."
+  ],
+  "testing_gaps": [
+    "No test asserts the startup log lines produced by displayStartupConfig and its new per-provider helpers (grep of internal/*_test.go finds no reference to 'compare method', 'Organistations', or the helpers), so the PR's central 'log output is unchanged' claim, including the preserved 'Gitlab backup LFS' / 'Organistations' spellings and the BitBucket ToLower->EqualFold switch, rests on manual comparison. A table test capturing logger output per provider env set would pin it.",
+    "backupStatusTitle and the three title constants (which carry leading U+FE0F variation selectors that must stay byte-identical) have no direct test; byte equality with the base literals was confirmed here by hex comparison only.",
+    "All 15 live-provider tests, including the refactored TestGiteaOrgsRepositoryBackup and its new assertion helpers, skip without credentials, so the reworked test and collectProviderBackupResults were compiled but never executed in this review."
+  ]
+}

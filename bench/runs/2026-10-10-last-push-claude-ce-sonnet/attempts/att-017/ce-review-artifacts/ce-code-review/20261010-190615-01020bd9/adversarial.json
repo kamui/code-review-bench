@@ -1,0 +1,54 @@
+{
+  "reviewer": "adversarial",
+  "findings": [
+    {
+      "title": "methodOverride still matches Content-Type case-sensitively, so mixed-case forms skip override",
+      "severity": "P2",
+      "file": "src/middleware/method-override/index.ts",
+      "line": 74,
+      "why_it_matters": "A form POST with `Content-Type: Application/X-WWW-Form-Urlencoded` (or `Multipart/Form-Data`) and `_method=PUT` is not overridden by methodOverride, so the POST handler runs instead of PUT. This is the same bug class as honojs/hono#5060 (case-sensitive media-type matching) and sits in the same src tree, but the fix did not touch it. Reproduced: the lowercase header yields PUT, the mixed-case header yields POST, for both urlencoded and multipart. Normalizing the media type the same way parseBody now does closes the gap.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In methodOverride, compute `const mediaType = contentType?.split(';')[0].trim().toLowerCase()` and compare `mediaType === 'multipart/form-data'` / `=== 'application/x-www-form-urlencoded'` instead of `contentType?.startsWith(...)` at lines 74 and 92; add mixed-case tests. Assumption: maintainers want method-override covered by this issue; otherwise track as a follow-up.",
+      "confidence": 75,
+      "evidence": [
+        "src/middleware/method-override/index.ts:74 -- if (contentType?.startsWith('multipart/form-data')) {",
+        "src/middleware/method-override/index.ts:92 -- if (contentType?.startsWith('application/x-www-form-urlencoded')) {",
+        "Scratch run (tmp/t1.ts) against the reviewed head: methodOverride application/x-www-form-urlencoded -> PUT; Application/X-WWW-Form-Urlencoded -> POST; multipart/form-data -> PUT; Multipart/Form-Data -> POST",
+        "Native Request.formData() accepts the mixed-case urlencoded header (verified), so only the startsWith guard blocks it"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "parseBody after c.req.text() now silently corrupts binary multipart uploads instead of throwing",
+      "severity": "P2",
+      "file": "src/utils/body.ts",
+      "line": 125,
+      "why_it_matters": "If earlier middleware or a handler has called c.req.text() (for example a logging or signature middleware), parseBody() used to fail loudly with a TypeError. It now succeeds but returns file parts whose bytes were decoded as UTF-8 and re-encoded, replacing invalid sequences with U+FFFD. A 5-byte upload [ff fe 80 00 81] came back as 13 bytes of replacement characters, with no error. The cause is that parseFormData now calls request.arrayBuffer(), and #cachedBody rebuilds an ArrayBuffer from the cached text. Base code called request.formData(), which rebuilt via `new Response(text).formData()` and threw because the content-type was text/plain. This is a silent loud-to-wrong change for uploads. validator('form') already behaves this way, so the code is now consistent with it, but the failure mode is new for parseBody.",
+      "autofix_class": "advisory",
+      "owner": "human",
+      "requires_verification": true,
+      "suggested_fix": "Accept the behavior and document that reading the body as text before parseBody() is unsupported for binary multipart. Alternatively, in #cachedBody refuse to derive 'arrayBuffer'/'blob' from a cached 'text' result (or have parseFormData throw if only bodyCache.text exists), so lossy re-encoding is never silent. Assumption: loud failure is preferred over silent corruption.",
+      "confidence": 75,
+      "evidence": [
+        "src/utils/body.ts:125 -- const arrayBuffer = await (request as Request).arrayBuffer()",
+        "src/request.ts:230-234 -- return (bodyCache[anyCachedKey]).then((body) => { ... return new Response(body)[key]() })",
+        "Scratch run on reviewed head: text() then parseBody() on multipart with bytes [255,254,128,0,129] -> {\"size\":13,\"bytes\":[239,191,189,239,191,189,239,191,189,0,239,191,189]}",
+        "Same scratch run on base 97287029: {\"err\":\"TypeError: Content-Type was not one of \\\"multipart/form-data\\\" or \\\"application/x-www-form-urlencoded\\\".\"}"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "parseBody no longer uses native request.formData(); it buffers via arrayBuffer() and `new Response(buf, {headers}).formData()`. Node 24 (undici) behaves identically on the cases tried (malformed multipart, urlencoded with charset, upper-case Boundary= param). Bun, Deno and Workers were not exercised, so any runtime-specific divergence in Response.formData() with a synthetic header is unverified.",
+    "Comma-joined duplicate Content-Type values such as `application/x-www-form-urlencoded, application/x-www-form-urlencoded` were parsed by base (startsWith matched) and natively, but the new `split(';')[0]` equality check now returns {} silently. Verified on Node 24. Low practical likelihood.",
+    "parseBody() and validator() still disagree on edge headers: parseBody trims whitespace before `;` and accepts any parameters, while validator's regexes require no whitespace before `;` and only a `boundary=` parameter for multipart. A header like ' APPLICATION/x-www-form-urlencoded ; charset=utf-8' parses in parseBody but is skipped by validator('form'). This is pre-existing and not widened by the diff.",
+    "A failed parse in parseBody leaves a rejected promise in request.bodyCache.formData, so a later validator('form') would rethrow the raw TypeError (500) instead of the HTTPException 400. Base cached a rejected promise the same way through #cachedBody, so this is not a regression."
+  ],
+  "testing_gaps": [
+    "No test covers parseBody after c.req.text()/c.req.json() has populated bodyCache, so the change in behavior (throw to silent success or corruption) is unpinned.",
+    "No test covers parseBody followed by c.req.formData() or validator('form') on the same request to confirm the new bodyCache.formData assignment is reused. The one explicit consumer of the new cache assignment is untested.",
+    "The 'should not update file object properties' test dropped its vi.spyOn(req, 'formData') mock in favor of a real FormData. This is fine, but nothing now asserts that parseBody works for a subclass or mock Request whose arrayBuffer() and formData() diverge."
+  ]
+}

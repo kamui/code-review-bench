@@ -1,0 +1,123 @@
+[
+ {
+  "reviewer": "correctness",
+  "findings": [
+   {
+    "title": "Spoofable x-vercel-isr header re-enables unauthenticated path override on all functions",
+    "severity": "P0",
+    "file": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+    "line": 24,
+    "confidence": 50,
+    "autofix_class": "manual",
+    "owner": "human",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "Do not rely on a bare client-controllable header. Assumption: Vercel does not guarantee stripping of x-vercel-isr on external requests. Either (a) bake an `isr` boolean into virtual:astro-vercel:config only for the `_isr` function build, so `_render` never honors the query param (e.g. `else if (isrEnabledForThisFunction && request.headers.get('x-vercel-isr') === '1')`), and/or (b) add a build-time ISR secret via prerender-config/route `headers` or the route `dest` rewrite and compare it as is done for middlewareSecret. Add tests to path-override-security.test.js: `_render` with `x-vercel-isr: 1` + `x_astro_path` must ignore the param, and `_isr` must honor it. If Vercel documents x-vercel-isr as platform-owned and always overwritten on ingress, cite it in a comment and downgrade this.",
+    "first_evidence": "packages/integrations/vercel/src/serverless/entrypoint.ts:24 -- } else if(request.headers.get('x-vercel-isr') === '1') {"
+   }
+  ],
+  "residual_risks": [
+   "Assumes Vercel does not strip/overwrite a client-supplied x-vercel-isr header and that x-vercel-isr: 1 is actually set on ISR invocations; neither could be verified offline (the PR notes only a manual e2e).",
+   "On the _isr path, the rewrite ignores edge middleware (ISR routes dest to ISR_PATH, not MIDDLEWARE_PATH), so any attacker able to make the ISR function render an arbitrary x_astro_path (cache-key poisoning via allowQuery) reaches routes without middleware; this is pre-#15959 behavior but not mitigated by the new gate."
+  ],
+  "testing_gaps": [
+   "No test exercises the new x-vercel-isr branch: neither that _isr honors x_astro_path with x-vercel-isr: 1, nor that _render (and _isr without the header) still ignores it. path-override-security.test.js should gain both cases so the #15959 guarantee is pinned."
+  ]
+ },
+ {
+  "reviewer": "security",
+  "findings": [
+   {
+    "title": "Path override re-opened via client-suppliable x-vercel-isr header on every function (CWE-290, A01)",
+    "severity": "P0",
+    "file": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+    "line": 24,
+    "confidence": 50,
+    "autofix_class": "manual",
+    "owner": "human",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "Narrow the trust. (1) Pass an `isr` boolean through `virtual:astro-vercel:config` (vite-plugin-config.ts) and only honor the query param when ISR is enabled for this build. (2) Prefer scoping it to the ISR function itself, for example by building `_isr` with its own entrypoint or flag so `_render` never honors the param. (3) If a platform-set secret exists for ISR invocations (Vercel's bypassToken or an ISR-specific secret like the one removed in #15959's 'remove ISR secret plumbing'), compare against that instead of the bare `x-vercel-isr` header. Assumption: Vercel does not guarantee stripping of client-sent `x-vercel-isr`; if it does, (1) alone is a cheap reduction of exposure.",
+    "first_evidence": "packages/integrations/vercel/src/serverless/entrypoint.ts:24 -- } else if(request.headers.get('x-vercel-isr') === '1') {"
+   }
+  ],
+  "residual_risks": [
+   "The change depends on Vercel's unverified behavior: that `x-vercel-isr: 1` is set only by the platform on ISR invocations and stripped or overwritten on external requests. This was not verifiable offline (no network access), so the finding is anchored at 50.",
+   "The `x-vercel-isr` header name is not defined anywhere in the repo and is not mentioned in the existing 'isn't documented by vercel anywhere' ISR comment in src/index.ts, so a platform change would silently re-break ISR with a 404."
+  ],
+  "testing_gaps": [
+   "No test for the new branch: nothing asserts that a request with x-vercel-isr: 1 and ?x_astro_path=... rewrites the path, and nothing asserts that the param is still ignored without the header or on a non-ISR build. Both could be added to test/path-override-security.test.js using the loadFunctionModule helper there.",
+   "No test asserts that `_render` (as opposed to `_isr`) ignores x-vercel-isr: 1 plus x_astro_path."
+  ]
+ },
+ {
+  "reviewer": "adversarial",
+  "findings": [
+   {
+    "title": "Spoofable x-vercel-isr header re-enables query-param path override on every function",
+    "severity": "P0",
+    "file": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+    "line": 24,
+    "confidence": 50,
+    "autofix_class": "manual",
+    "owner": "human",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "Add an `isr` boolean to the virtual:astro-vercel:config module (createConfigPlugin in src/index.ts), and have the ISR entry build (buildISRFolder for '_isr') set it; only evaluate the x-vercel-isr/x_astro_path branch when that flag is true, so _render and non-ISR builds never honor the query param. Also confirm with Vercel that x-vercel-isr is injected platform-side and stripped from client requests; if not, pair it with a trusted signal (e.g. a secret bypassToken-style check) instead. Assumption: x-vercel-isr is set by the platform on prerender-function invocations.",
+    "first_evidence": "packages/integrations/vercel/src/serverless/entrypoint.ts:24 -- } else if(request.headers.get('x-vercel-isr') === '1') {  (followed by realPath = url.searchParams.get(ASTRO_PATH_PARAM);)"
+   }
+  ],
+  "residual_risks": [
+   "Assumes Vercel sets x-vercel-isr on ISR prerender-function invocations and strips or overwrites it on client requests; not verifiable offline, and the fix has only been checked manually against a test project.",
+   "Direct client requests to /_isr?x_astro_path=... or /_render are reachable via Vercel's filesystem handler; whether x-vercel-isr can be client-supplied there is the crux of the P0 concern."
+  ],
+  "testing_gaps": [
+   "No test covers the new ISR branch: neither that x-vercel-isr: 1 plus x_astro_path rewrites on the _isr function, nor that x_astro_path stays ignored on _render and non-ISR builds when x-vercel-isr: 1 is sent. Adding the positive and negative cases next to test/path-override-security.test.js would catch a future regression of either #15959 or this fix."
+  ]
+ },
+ {
+  "reviewer": "testing",
+  "findings": [
+   {
+    "title": "New x-vercel-isr path-rewrite branch has no test",
+    "severity": "P2",
+    "file": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+    "line": 24,
+    "confidence": 75,
+    "autofix_class": "gated_auto",
+    "owner": "downstream-resolver",
+    "requires_verification": true,
+    "pre_existing": false,
+    "suggested_fix": "Extend packages/integrations/vercel/test/path-override-security.test.js (reusing loadFunctionModule and the dynamic-routes fixture) with: (1) positive: Request('https://example.com/_isr?x_astro_path=/api/private', {headers: {'x-vercel-isr': '1'}}) returns the /api/private body (or build the isr fixture and load the _isr function); (2) negative: same URL without the header, and with 'x-vercel-isr': '0', still resolves the real URL path; (3) valid middleware secret still takes precedence over the ISR param. Assumption: the dynamic-routes fixture needs ISR enabled or the test targets the isr fixture's _isr function.",
+    "first_evidence": "packages/integrations/vercel/src/serverless/entrypoint.ts:24 -- } else if(request.headers.get('x-vercel-isr') === '1') {"
+   }
+  ],
+  "residual_risks": [
+   "The new gate is solely request.headers.get('x-vercel-isr') === '1', which the entrypoint does not authenticate; whether an external client can spoof it on the _render function depends on Vercel platform header stripping, which could not be verified here. No test pins the assumption."
+  ],
+  "testing_gaps": [
+   "No test covers precedence when both a valid middleware secret and x-vercel-isr: 1 are present.",
+   "No test checks that an x-vercel-isr value other than '1' (e.g. 'true', '0') is rejected."
+  ]
+ },
+ {
+  "reviewer": "project-standards",
+  "findings": [
+   {
+    "title": "New realPath block fails Biome formatting required by AGENTS.md",
+    "severity": "P3",
+    "file": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+    "line": 39,
+    "confidence": 100,
+    "autofix_class": "gated_auto",
+    "owner": "downstream-resolver",
+    "requires_verification": false,
+    "pre_existing": false,
+    "suggested_fix": "Run `pnpm format` (or `biome format --write`) on the file: `if (hasValidMiddlewareSecret) {`, `realPath = request.headers.get(ASTRO_PATH_HEADER);`, `} else if (request.headers.get('x-vercel-isr') === '1') {`.",
+    "first_evidence": "packages/integrations/vercel/src/serverless/entrypoint.ts:39 -- \t\tif(hasValidMiddlewareSecret) {"
+   }
+  ],
+  "residual_risks": [],
+  "testing_gaps": []
+ }
+]

@@ -1,0 +1,126 @@
+{
+  "reviewer": "correctness",
+  "findings": [
+    {
+      "title": "Preloaded context overrides adapter-supplied ssl_context and ssl_version",
+      "severity": "P1",
+      "file": "src/requests/adapters.py",
+      "line": 95,
+      "why_it_matters": "Any HTTPAdapter subclass that configures TLS through init_poolmanager (a custom ssl_context for ciphers, minimum TLS version, a private CA, an in-context client certificate, or the ssl_version example in docs/user/advanced.rst) silently loses that configuration on every default verify=True request: the request-level pool_kwargs now always carry ssl_context=_preloaded_ssl_context, and urllib3 merges request-level kwargs over the PoolManager's own, so the user's context is replaced and ssl_version/ssl_minimum_version/ssl_maximum_version are ignored because they are only read when no context is supplied. Before this change only cert_reqs was sent per request, so the adapter's context was used and the default bundle was loaded into it via conn.ca_certs. Skipping the injection when the pool manager already has TLS configuration, and keeping the old ca_certs path for that case, restores the previous behavior.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Pass the selected pool manager (self.poolmanager or the proxy manager) into _urllib3_request_context and only set pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context when its connection_pool_kw has no ssl_context, ssl_version, ssl_minimum_version or ssl_maximum_version. In cert_verify, when verify is True and the pool is not using the preloaded context (conn.conn_kw.get(\"ssl_context\") is not _preloaded_ssl_context), fall back to the pre-change behavior: conn.ca_certs = extract_zipped_paths(DEFAULT_CA_BUNDLE_PATH). Add a test with an adapter that passes ssl_context through init_poolmanager and asserts the pool returned for verify=True carries that context.",
+      "confidence": 100,
+      "evidence": [
+        "src/requests/adapters.py:95 -- pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context",
+        "src/requests/adapters.py:94 -- elif verify is True:   (unconditional; no check for user TLS configuration on the pool manager)",
+        "site-packages/urllib3/poolmanager.py:400-409 -- base_pool_kwargs = self.connection_pool_kw.copy() ... for key, value in override.items(): ... base_pool_kwargs[key] = value   (_merge_pool_kwargs: request-level pool_kwargs win over the PoolManager's kwargs)",
+        "src/requests/adapters.py:240-245 -- self.poolmanager = PoolManager(num_pools=connections, maxsize=maxsize, block=block, **pool_kwargs)   (where a subclass's ssl_context lands: connection_pool_kw)",
+        "site-packages/urllib3/connection.py:1031-1040 -- if ssl_context is None: ... context = create_urllib3_context(ssl_version=resolve_ssl_version(ssl_version), ssl_minimum_version=..., ...) else: context = ssl_context   (ssl_version / min / max are only honored when no context is supplied)",
+        "docs/user/advanced.rst:1030-1033 -- def init_poolmanager(self, connections, maxsize, block=False): self.poolmanager = PoolManager(num_pools=connections, maxsize=maxsize, block=block, ssl_version=ssl.PROTOCOL_SSLv3)   (the project's own documented adapter pattern, now ignored for verify=True)",
+        "base 8dd3b26b src/requests/adapters.py _urllib3_request_context -- only pool_kwargs[\"ca_certs\"] (str verify) and pool_kwargs[\"cert_reqs\"] were set, so no ssl_context override existed before this diff"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Client certificates are loaded into the process-wide shared SSLContext",
+      "severity": "P1",
+      "file": "src/requests/adapters.py",
+      "line": 75,
+      "why_it_matters": "After any request made with verify=True and cert=..., that client certificate and key stay loaded in the single module-level context used by every later verified connection in the process, in every Session and to every host. A server that asks for a client certificate will then be sent that identity even though the caller passed no cert, and two callers using different client certificates overwrite each other (last load wins, and load_cert_chain plus wrap are not atomic across threads), so a connection can present the wrong certificate or fail authentication. Before this change urllib3 built a fresh context per connection, so the certificate was scoped to that connection. Not handing out the shared context when a client cert is supplied restores that scoping.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Only use the shared context when no client certificate is involved: change the branch to `elif verify is True and client_cert is None:` and, for the verify=True-with-cert case, restore the old per-connection path in cert_verify (conn.ca_certs = extract_zipped_paths(DEFAULT_CA_BUNDLE_PATH) when the pool is not using _preloaded_ssl_context). Add a test that makes a cert=... request and then a cert-less request from a second Session against a server that requests client certs, asserting no certificate is presented.",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:75 -- _preloaded_ssl_context = create_urllib3_context()   (one context for the whole process; handed out at adapters.py:95 regardless of client_cert)",
+        "src/requests/adapters.py:102-105 -- if client_cert is not None: ... pool_kwargs[\"cert_file\"] = client_cert[0]; pool_kwargs[\"key_file\"] = client_cert[1]   (same pool_kwargs that already carries the shared ssl_context)",
+        "site-packages/urllib3/util/ssl_.py:429-433 -- if certfile: if key_password is None: context.load_cert_chain(certfile, keyfile)   (context is the caller-supplied ssl_context, ssl_.py:407 `context = ssl_context`)",
+        "site-packages/urllib3/connection.py:878-895 -- _ssl_wrap_socket_and_match_hostname(..., cert_file=self.cert_file, key_file=self.key_file, ..., ssl_context=self.ssl_context, ...)   (the pool's cert_file is applied to the pool's ssl_context on every new connection)",
+        "site-packages/urllib3/connection.py:1031-1040 -- pre-change path: ssl_context is None -> context = create_urllib3_context(...) per connection, so load_cert_chain never touched shared state"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "HTTP request through HTTPS proxy raises ValueError on shared context",
+      "severity": "P1",
+      "file": "src/requests/adapters.py",
+      "line": 94,
+      "why_it_matters": "A plain http:// request sent through an https:// proxy with the default verify=True now fails with an uncaught ValueError (\"Cannot set verify_mode to CERT_NONE when check_hostname is enabled\") instead of completing. The shared context is injected for every verify=True request regardless of URL scheme; for an http URL the pool is an HTTPS pool to the proxy that keeps that context, and cert_verify then sets cert_reqs to CERT_NONE on it because the URL is not https, so urllib3 tries to set verify_mode=CERT_NONE on a context whose check_hostname is True. If check_hostname has already been turned off on the shared context (urllib3 does this for any pool using assert_hostname or assert_fingerprint), the assignment instead succeeds and flips the process-wide context to CERT_NONE while other threads are using it. Only injecting the context for https request URLs returns this path to the previous per-connection context.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Gate the injection on the request scheme, which is already computed at adapters.py:89: `elif verify is True and scheme == \"https\":` (keeping cert_reqs as before). This leaves http-over-HTTPS-proxy on the old path where urllib3 builds its own context. Add a test that sends an http:// URL with proxies={\"http\": \"https://...\"} and asserts the pool kwargs carry no shared context / the request does not raise ValueError.",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:94-95 -- elif verify is True: pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context   (no check that the request URL is https)",
+        "src/requests/adapters.py:297 and 318-319 -- if url.lower().startswith(\"https\") and verify: ... else: conn.cert_reqs = \"CERT_NONE\"   (http URL -> CERT_NONE on the pool that holds the shared context)",
+        "site-packages/urllib3/poolmanager.py:635-642 -- if scheme == \"https\": ... return super().connection_from_host(self.proxy.host, self.proxy.port, self.proxy.scheme, pool_kwargs=pool_kwargs)   (http URL + https proxy -> HTTPS pool to the proxy built with the request's pool_kwargs)",
+        "site-packages/urllib3/connection.py:874-875 -- if self.proxy_is_forwarding and self.proxy_config is not None: wrapped_socket = self._connect_tls_proxy(self.host, sock)",
+        "site-packages/urllib3/connection.py:964-965 -- ssl_context = self.ssl_context if self.proxy_is_forwarding else None; cert_reqs = self.cert_reqs",
+        "site-packages/urllib3/connection.py:1042 -- context.verify_mode = resolve_cert_reqs(cert_reqs)   (applied to the shared context)",
+        "site-packages/urllib3/util/ssl_.py:307-314 -- \"safe-guards SSLContext has to prevent an SSLContext with check_hostname=True, verify_mode=NONE/OPTIONAL\" ... context.verify_mode = cert_reqs; context.check_hostname = True   (the preloaded context is created with check_hostname=True)",
+        "site-packages/urllib3/connectionpool.py:817-826 and src/requests/adapters.py:578-605 -- neither except list includes ValueError, so it propagates to the caller unwrapped",
+        "site-packages/urllib3/connection.py:1045-1056 -- assert_fingerprint / assert_hostname -> context.check_hostname = False   (the condition under which the CERT_NONE assignment succeeds on the shared context instead of raising)"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "HTTPS proxy leg no longer verified against the certifi bundle",
+      "severity": "P2",
+      "file": "src/requests/adapters.py",
+      "line": 304,
+      "why_it_matters": "For https:// requests tunnelled through an https:// proxy with verify=True, the TLS handshake with the proxy itself is now verified against the operating system trust store instead of requests' default CA bundle. The proxy leg does not use the pool's ssl_context when tunnelling; it inherits the pool's ca_certs, which cert_verify no longer sets, so urllib3 builds a default context and calls load_default_certs(). On hosts with an empty or missing OpenSSL default store this turns working proxied requests into certificate verification failures, and elsewhere it changes which CAs are trusted for the proxy, contradicting the stated goal that verify=True behaves as before.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Do not take the shared-context path when the selected proxy is https: in _get_connection pass a flag (or the proxy URL) to _urllib3_request_context so ssl_context is omitted for HTTPS proxies, and in cert_verify keep `conn.ca_certs = extract_zipped_paths(DEFAULT_CA_BUNDLE_PATH)` for verify=True whenever the pool is not using _preloaded_ssl_context. Assumption: keeping the slower per-connection load for HTTPS-proxied connections is acceptable; the alternative is to pass the preloaded context as proxy_ssl_context in proxy_manager_for, which also changes verify=False proxy behavior.",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:304 -- if verify is not True:   (conn.ca_certs / conn.ca_cert_dir are now only set inside this block; for verify=True they stay None)",
+        "site-packages/urllib3/connection.py:962-968 -- else: # Otherwise we inherit the pool's cert policies; ssl_context = self.ssl_context if self.proxy_is_forwarding else None; cert_reqs = self.cert_reqs; ca_certs = self.ca_certs; ca_cert_dir = self.ca_cert_dir",
+        "site-packages/urllib3/connection.py:1061-1068 -- if (not ca_certs and not ca_cert_dir and not ca_cert_data and default_ssl_context and hasattr(context, \"load_default_certs\")): context.load_default_certs()",
+        "site-packages/urllib3/connection.py:834-836 -- if self._tunnel_scheme == \"https\": self.sock = sock = self._connect_tls_proxy(self.host, sock)   (tunnelling path for https destination via https proxy)",
+        "base 8dd3b26b src/requests/adapters.py cert_verify -- `if not cert_loc: cert_loc = extract_zipped_paths(DEFAULT_CA_BUNDLE_PATH)` ... `conn.ca_certs = cert_loc`, so the proxy leg previously inherited the certifi path"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "CA bundle now loaded at import; failures break `import requests`",
+      "severity": "P2",
+      "file": "src/requests/adapters.py",
+      "line": 76,
+      "why_it_matters": "Importing requests now builds an SSLContext and reads the default CA bundle as a module-level side effect, so an environment where that fails can no longer import the library at all. A missing or unreadable bundle (for example a frozen application that did not ship certifi's cacert.pem) raises FileNotFoundError/SSLError from `import requests`, and an interpreter without the ssl module raises TypeError from create_urllib3_context, even for programs that only use http://, verify=False, or REQUESTS_CA_BUNDLE. Previously the same condition surfaced only on a verified HTTPS request, as the OSError 'Could not find a suitable TLS CA certificate bundle', and requests/__init__.py explicitly tolerates ssl being unavailable. The zip-packaged case also now writes the extracted bundle to the temp directory at import time. Building the context lazily on first verified HTTPS request keeps the performance gain and returns failures to request time.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Create the context lazily: replace the module-level statements with a helper such as `_get_preloaded_ssl_context()` that builds and caches the context on first call under a threading.Lock, and call it from the verify=True branch of _urllib3_request_context. On failure to load the bundle, raise the previous OSError(\"Could not find a suitable TLS CA certificate bundle, invalid path: ...\") so the error type and timing match the old cert_verify behavior.",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:75-78 -- _preloaded_ssl_context = create_urllib3_context() / _preloaded_ssl_context.load_verify_locations( extract_zipped_paths(DEFAULT_CA_BUNDLE_PATH) )   (module scope, executed on import)",
+        "src/requests/__init__.py:160,174 -- from .api import ... / from .sessions import Session, session   (import requests imports requests.adapters)",
+        "site-packages/urllib3/util/ssl_.py:223-224 -- if SSLContext is None: raise TypeError(\"Can't create an SSLContext object without an ssl module\")",
+        "src/requests/__init__.py:117-124 -- # ... or the 'ssl' library isn't available. try: import ssl except ImportError: ssl = None   (the package is written to import without ssl)",
+        "src/requests/utils.py:273-275 and 288-293 -- extract_zipped_paths returns the path unchanged when it does not exist and is not a zip member, so load_verify_locations receives a nonexistent path",
+        "src/requests/utils.py:296-301 -- tmp = tempfile.gettempdir() ... with atomic_open(extracted_path) as file_handler: file_handler.write(zip_file.read(member))   (now runs at import for zip-packaged certifi)",
+        "base 8dd3b26b src/requests/adapters.py cert_verify -- `if not cert_loc or not os.path.exists(cert_loc): raise OSError(\"Could not find a suitable TLS CA certificate bundle, invalid path: ...\")` was the request-time failure this replaces for verify=True"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Shared context state bleed beyond the reported findings: urllib3 sets context.check_hostname = False on the supplied context for any pool using assert_hostname or assert_fingerprint (urllib3/connection.py:1045-1056). With the process-wide context this persists for all later verified connections. urllib3's own fallback hostname match (connection.py:1098-1119) still runs, so no verification bypass was demonstrated, but hostname checking for the default path silently moves from OpenSSL to urllib3 for the rest of the process.",
+    "The default bundle path is snapshotted at import (adapters.py:75-78). Code that changes requests.adapters.DEFAULT_CA_BUNDLE_PATH, requests.utils.DEFAULT_CA_BUNDLE_PATH or requests.certs.where after import, or a bundle file replaced on disk in a long-running process, no longer affects verify=True; previously the path was re-read on every connection.",
+    "cert_verify is a documented subclassing hook. For verify=True it no longer sets conn.ca_certs, so any external caller that applies cert_verify to a pool not created by _get_connection (for example one from the still-public get_connection at adapters.py:406) gets no CA bundle and urllib3 falls back to the OS trust store. Callsite completeness: in-repo grep only (the single in-repo caller is HTTPAdapter.send at adapters.py:536); third-party callers were not inspectable.",
+    "All urllib3 traces were made against the installed urllib3 2.8.0 only. setup.py declares urllib3>=1.21.1,<3; behavior of ssl_context handling, pool keys and create_urllib3_context in the 1.x range was not inspected.",
+    "Static inspection only, per the execution policy: no finding was reproduced by running code. The ValueError in the HTTP-over-HTTPS-proxy finding relies on CPython's SSLContext.verify_mode guard, corroborated by the urllib3 comment at util/ssl_.py:307-309 rather than by execution."
+  ],
+  "testing_gaps": [
+    "The diff changes one file and adds no tests. No test covers an HTTPAdapter subclass that supplies ssl_context (or ssl_version) through init_poolmanager combined with verify=True, which is the path where the adapter's TLS configuration is now replaced.",
+    "No test checks client-certificate isolation: a request with cert=... followed by a cert-less verify=True request from a different Session should not reuse the first request's certificate.",
+    "No test exercises verify=True through an https:// proxy, for either an http:// destination (forwarding, cert_reqs CERT_NONE on the shared context) or an https:// destination (tunnel, proxy leg CA source).",
+    "No test covers the new verify=<directory> branch in _urllib3_request_context (pool keyed by ca_cert_dir instead of ca_certs), nor that import of requests.adapters succeeds when the default bundle path is missing."
+  ]
+}

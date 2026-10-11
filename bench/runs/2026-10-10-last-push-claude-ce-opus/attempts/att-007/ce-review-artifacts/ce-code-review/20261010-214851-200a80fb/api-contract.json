@@ -1,0 +1,38 @@
+{
+  "reviewer": "api-contract",
+  "findings": [
+    {
+      "title": "parseBody() after c.req.formData() now throws or returns garbage",
+      "severity": "P1",
+      "file": "src/utils/body.ts",
+      "line": 126,
+      "why_it_matters": "An app that reads `await c.req.formData()` (for example in a middleware) and later calls `await c.req.parseBody()` on the same request worked before this PR and now breaks: a multipart request fails with `TypeError: Failed to parse body as FormData` (HTTP 500), and an urlencoded request silently returns one garbage key made of the re-serialized multipart text instead of `{ foo: 'bar' }`. parseFormData no longer asks HonoRequest for the cached FormData; it asks for an ArrayBuffer, which the body cache derives by re-serializing the cached FormData as multipart with a fresh runtime boundary, and then parses those bytes against the original Content-Type header. The stated intent says body reuse through HonoRequest's body cache must not regress. Reusing `request.bodyCache.formData` when it is already present, as validator.ts:115-116 already does, restores the old result while keeping the new arrayBuffer path for the uncached case.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In parseFormData (src/utils/body.ts), short-circuit on the existing cache before touching arrayBuffer(), mirroring validator.ts:115-116: `if (request instanceof HonoRequest && request.bodyCache.formData) { formData = await request.bodyCache.formData } else { /* current arrayBuffer + bufferToFormData + cache assignment */ }`. Add a request.test.ts case for `await req.formData()` followed by `await req.parseBody()` for both multipart and urlencoded bodies. Verified on a scratch copy of the head sources: this restores `{ foo: 'bar' }` for both sequences and keeps the mixed-case and parseBody-then-text/cloneRawRequest results unchanged. Alternative (assumption: every supported runtime parses the media type case-insensitively, confirmed only on Node 24): revert parseFormData to `await (request as Request).formData()` and keep only the new `mediaType` gate in parseBody.",
+      "confidence": 100,
+      "evidence": [
+        "src/utils/body.ts:126 -- const arrayBuffer = await (request as Request).arrayBuffer()",
+        "src/utils/body.ts:127 -- const formDataPromise = bufferToFormData(arrayBuffer, headers.get('Content-Type') || '')",
+        "src/request.ts:228-234 -- const anyCachedKey = Object.keys(bodyCache)[0] ... return new Response(body)[key]()  (with only `formData` cached, arrayBuffer() is produced from `new Response(formData)`, i.e. multipart bytes with a new boundary)",
+        "base (9728702) src/utils/body.ts parseFormData -- const formData = await (request as Request).formData()  (returned the cached FormData directly)",
+        "Executed probe, base vs head sources bundled with esbuild on Node v24.21.0. `new HonoRequest(multipartReq)`; `await req.formData()`; `await req.parseBody()` -> base: {\"foo\":\"bar\"}; head: THROW TypeError: Failed to parse body as FormData (cause: no boundary found in multipart body).",
+        "Same probe with `Content-Type: application/x-www-form-urlencoded`, body `foo=bar` -> base: {\"foo\":\"bar\"}; head: {\"------formdata-undici-028264543900\\r\\nContent-Disposition: form-data; name\":\"\\\"foo\\\"\\r\\n\\r\\nbar\\r\\n------formdata-undici-028264543900--\\r\\n\"}",
+        "Same probe through `new Hono()` with `app.use('*', async (c, next) => { await c.req.formData(); await next() })` and a handler returning `c.json(await c.req.parseBody())` -> base: 200 {\"foo\":\"bar\"}; head: 500 Internal Server Error (multipart), 200 with the garbage key (urlencoded).",
+        "src/validator/validator.ts:115-116 -- if (c.req.bodyCache.formData) { formData = await c.req.bodyCache.formData  (existing in-repo pattern the fix mirrors)",
+        "src/request.test.ts:367-430 -- parseBody() cache tests only cover parseBody() first, then other body methods; no test reads formData() before parseBody(), so the suite stays green"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Narrowed accepted input in parseBody(): the gate changed from `contentType.startsWith(...)` to strict equality on the part before `;` (src/utils/body.ts:104-106). A comma-joined Content-Type, which is what `Headers` yields when a client or proxy sends the header twice (`application/x-www-form-urlencoded, application/x-www-form-urlencoded`), parsed to `{ foo: 'bar' }` on base and returns `{}` on head (executed probe, Node 24). Malformed input, so low priority, but it is a silent empty result rather than an error.",
+    "Hyrum's Law on the plain-`Request` path: parseBody(request) no longer calls `request.formData()`; it calls `request.arrayBuffer()` and re-parses through `new Response(...)` (src/utils/body.ts:126-127). A Request-like object or test double that overrides only `formData()` is now bypassed (probe: base returned the overridden `{custom:'yes'}`, head returned the wire body). The diff itself had to rewrite body.test.ts 'should not update file object properties' because its `vi.spyOn(req, 'formData')` mock stopped being consulted. Callsite completeness for external adapters or polyfilled Request classes: not checkable from this repo.",
+    "Observable body-cache changes after parseBody() on a form request that are improvements but still behavior changes in a patch release: `Object.keys(c.req.bodyCache)` is now `['arrayBuffer','formData']` instead of `['formData']`, so `c.req.text()` after parseBody() returns the original wire body (`foo=bar`) instead of a re-serialized multipart string, and `cloneRawRequest()` after parseBody() now yields a parseable request where base threw. `c.req.text()`/`arrayBuffer()` followed by parseBody() also now succeeds where base threw a TypeError. Verified on Node 24 only; other runtimes (Bun, Deno, workerd) were not exercised."
+  ],
+  "testing_gaps": [
+    "No test covers `await c.req.formData()` followed by `await c.req.parseBody()` on the same HonoRequest (multipart and urlencoded); this is the sequence that regresses and src/request.test.ts:367-430 only exercises parseBody() first.",
+    "No test pins parseBody() after another cached body read (`text()`, `arrayBuffer()`, `blob()`) or after `validator('form')`, so the new arrayBuffer-based path through HonoRequest's body cache has no regression coverage beyond the direct mixed-case cases."
+  ]
+}
