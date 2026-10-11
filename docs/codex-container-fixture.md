@@ -52,9 +52,13 @@ The kernel receipt records Landlock ABI availability and the actual namespace/se
 
 ## Evidence and checks
 
-The [manifest](../bench/fixtures/2026-10-11-linux-codex-container/manifest.json) retains failed development attempts, their diagnostics and replacement lineage, and the source-matching passing matrix. Archives include the exact controller/wrapper, native/provider outputs, clean-context settings, session lineage, repository callbacks, resource observations, and engine inspections. They exclude native binaries and rebuildable rootfs images; the manifest pins their identities and retains original workspace paths. Every selected archive member is verified against its original bytes. No failed or prototype worker row is reused as passing evidence.
+The [manifest](../bench/fixtures/2026-10-11-linux-codex-container/manifest.json) retains failed development attempts, their diagnostics and replacement lineage, and the source-matching passing matrix. [Attempt 020](../bench/fixtures/2026-10-11-linux-codex-container/attempt-020-receipt.json) passes all nine profiles with zero paid calls and verified container/image removal. Archives include the exact controller/wrapper, native/provider outputs, clean-context settings, session lineage, repository callbacks, resource observations, and engine inspections. They exclude native binaries and rebuildable rootfs images; the manifest pins their identities and retains original workspace paths. All 23 archives and their 7,907 selected members match original hashes and modes. No failed or prototype worker row is reused as passing evidence.
+
+The [shared asset manifest](../bench/evidence/manifests/codex-container-2026-10-11-v1.json) pins the immutable release and asset identities. The [cold-restoration receipt](../bench/evidence/receipts/codex-container-2026-10-11-v1-restoration.json) records a remote download into an empty temporary directory and verifies archive bytes and permissions independently of the original workspaces. Restore the payloads before inspecting them:
 
 ```sh
+python3 bench/tools/evidence_store.py fetch \
+  --manifest bench/evidence/manifests/codex-container-2026-10-11-v1.json
 python3 -m unittest discover -s bench/tools -p test_codex_container_probe.py -v
 bun run verify:import
 ```
