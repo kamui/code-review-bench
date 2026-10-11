@@ -517,14 +517,14 @@ def launches(queue: Queue) -> list:
 
 def launch_for(records: list, run: run_cell.Run, attempt_id: str) -> dict | None:
     """The launch whose child made this claim, or None when no record can be tied to it."""
-    claimed_at = run.claimed[attempt_id].get("claimed_at") or ""
+    marker = run.claimed[attempt_id].get("queue_launch_marker")
     for record in reversed(records):
         if record["run_id"] != run.id or record["state"] == "recovered":
             continue
-        if record["state"] == "ended":
-            if record.get("attempt_id") == attempt_id:
+        if marker:
+            if record["process"].get("marker") == marker:
                 return record
-        elif attempt_id not in record["attempts_before"] and record["started_at"] <= claimed_at:
+        elif record["state"] == "ended" and record.get("attempt_id") == attempt_id:
             return record
     return None
 
