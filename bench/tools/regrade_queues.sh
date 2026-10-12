@@ -8,6 +8,8 @@
 # Each controller run gets its own log under LOGS, and LOGS/driver.log gets one line when a queue starts and one
 # when it ends. Set LIMIT=N to map at most N batches of each queue and stop: run again with more WORKERS to
 # raise concurrency on the batches that are left. A rerun resumes every queue from its directory.
+# Exit 4 is not a failure. The queue stopped launching at the plan's quota, and a rerun resumes it once the
+# meters allow.
 #
 # `status` calls no model. It prints each queue's mapped and planned batches, state, list-price spend, sessions
 # in flight, pinned client and the wall time of its runs, then the free space of the queue's filesystem.
@@ -39,6 +41,7 @@ run)
     code=$?
     echo "exit=$code" >> "$log"
     echo "$(date -u +%FT%TZ) end $queue exit=$code" >> "$logs/driver.log"
+    [ $code -eq 4 ] && echo "$(date -u +%FT%TZ) $queue stopped at the plan's quota; run again to resume" >> "$logs/driver.log"
     [ $code -eq 0 ] || exit $code
   done
   echo "$(date -u +%FT%TZ) all queues finished" >> "$logs/driver.log"

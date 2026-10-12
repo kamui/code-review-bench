@@ -1,3 +1,4 @@
+import ast
 from decimal import Decimal
 import fcntl
 import hashlib
@@ -10,17 +11,19 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import uuid
 
 import clean_context
 import methodology
 import regrade
+import subscription_meters
 import test_grade
 from test_grade import MODEL, PROVISION_STUB, SELECTED, claim, item, remedy, review, reviewed
 
 RUN = "runs/cohort"
 INPUT_FINGERPRINTS = regrade.input_fingerprints
+METERS = subscription_meters.meters
 
 
 def pin(root, relative, value=None):
@@ -37,7 +40,8 @@ class Crash(BaseException):
 
 class Cohort:
     """A pinned queue under a temporary repository root. ``grade.py`` is replaced by fakes that record every
-    dispatch, how many ran at once and the committed budget each one started under."""
+    dispatch, how many ran at once and the committed budget each one started under. The provider's meters are
+    replaced by a reading of ``used()`` percent."""
 
     def __init__(self, root, cap, jobs=5):
         self.root, self.cap, self.directory = root, cap, root / ".local/queue"
@@ -47,6 +51,7 @@ class Cohort:
         self.dispatches = []
         self.commands = []
         self.installed, self.paths = None, []
+        self.used, self.sign_in_expires, self.metered = (lambda: 10), None, []
         self.directory.mkdir(parents=True)
         (root / "bench/tools").mkdir(parents=True)
         shutil.copy(regrade.__file__, root / regrade.CONTROLLER)
@@ -80,6 +85,7 @@ class Cohort:
     def run(self, workers=1, limit=None, expected=None):
         with patch.object(regrade, "ROOT", self.root), patch.object(regrade, "invoke", self.invoke), \
                 patch.object(regrade, "input_fingerprints", self.fingerprints), \
+                patch.object(subscription_meters, "meters", self.meters), \
                 patch.object(regrade, "installed_client", self.installed_client), \
                 patch.object(regrade, "client_version", lambda executable: Path(executable).read_text()):
             return regrade.execute(self.root / "authorization.json", self.directory, limit, expected, workers=workers)
@@ -91,8 +97,22 @@ class Cohort:
         executable.write_text(version)
         return executable
 
+    def meters(self, clients, env):
+        """Like the provider, a reading of only the clients asked about, with the sign-in beside Claude's."""
+        self.metered.append(sorted(clients))
+        usage, percent = {"at": "2026-01-01T00:00:00Z"}, self.used()
+        if "claude" in clients:
+            usage.update(claude={"five_hour": {"utilization": percent}, "seven_day": None},
+                         claude_sign_in_expires_at=self.sign_in_expires)
+        if "codex" in clients:
+            usage["codex"] = {"ordinaryUsageAllowed": True, "rateLimits": {"primary": {"usedPercent": percent}}}
+        return usage
+
     def mapped(self, target):
         return self.root / "mapped" / f"{target}.json"
+
+    def prepared(self):
+        return [args[args.index("--target") + 1] for args in self.commands if args[0] == "prepare"]
 
     def status(self):
         return regrade.read(self.directory / "status.json")
@@ -582,6 +602,183 @@ class Controller(unittest.TestCase):
         self.assertEqual((len(cohort.launched), cohort.status()["state"]), (5, "mapped"))
         self.assertEqual(len(cohort.status()["invocations"]), 2)
 
+    def test_a_reading_at_the_quota_stop_before_the_first_launch_dispatches_nothing(self):
+        cohort = Cohort(self.root, 100)
+        cohort.used = lambda: 95
+        self.assertEqual(cohort.run(workers=3), 4)
+        self.assertEqual((cohort.launched, cohort.preflights), ([], []))
+        self.assertEqual(list(cohort.directory.glob("batches/*/*/attempt-*/reservation.json")), [])
+        status = cohort.status()
+        self.assertEqual((status["state"], status["reason"]), ("quota-stopped", "Claude usage reached the quota stop"))
+        self.assertEqual(status["invocations"][-1]["meters"]["claude"]["five_hour"], {"utilization": 95})
+        self.assertEqual({row["state"] for row in status["batches"]}, {"pending"})
+
+    def stopped_mid_queue(self):
+        """Five batches whose reading crosses the stop once three workers have launched."""
+        cohort = Cohort(self.root, 100)
+        cohort.barrier = threading.Barrier(3)
+        cohort.used = lambda: 95 if len(cohort.launched) == 3 else 10
+        with patch.object(regrade, "QUOTA_MAX_AGE_SECONDS", -1):
+            self.assertEqual(cohort.run(workers=3), 4)
+        return cohort
+
+    def test_a_reading_that_crosses_the_stop_mid_queue_settles_the_active_batches_and_launches_nothing_new(self):
+        cohort = self.stopped_mid_queue()
+        self.assertEqual((sorted(cohort.launched), cohort.prepared()), (["pr-1", "pr-2", "pr-3"], ["pr-1", "pr-2", "pr-3"]))
+        self.assertEqual({target: row["state"] for target, row in cohort.rows().items()},
+                         {"pr-1": "mapped", "pr-2": "mapped", "pr-3": "mapped", "pr-4": "pending", "pr-5": "pending"})
+        self.assertEqual(len(list(cohort.directory.glob("batches/*/*/attempt-*/reservation.json"))), 3)
+        status = cohort.status()
+        self.assertEqual((status["state"], status["reason"]), ("quota-stopped", "Claude usage reached the quota stop"))
+        self.assertEqual((status["spentUpperUsd"], status["reservedUsd"], status["outstandingReservations"]), (1.5, 0.0, 0))
+        self.assertEqual(status["invocations"][-1]["meters"]["claude"]["five_hour"], {"utilization": 95})
+
+    def test_a_quota_stopped_queue_resumes_and_finishes_once_the_meters_allow(self):
+        cohort = self.stopped_mid_queue()
+        cohort.used = lambda: 94.9
+        self.assertEqual(cohort.run(workers=3), 0)
+        self.assertEqual(sorted(cohort.launched), [target for _run, target in cohort.jobs])
+        status = cohort.status()
+        self.assertEqual((status["state"], status["spentUpperUsd"], status["reservedUsd"]), ("mapped", 2.5, 0.0))
+        self.assertEqual([run["meters"]["claude"]["five_hour"]["utilization"] for run in status["invocations"]], [95, 94.9])
+
+    def test_a_session_that_fails_while_a_quota_stop_settles_ends_the_run_as_a_failure(self):
+        cohort = Cohort(self.root, 100, jobs=3)
+        cohort.barrier = threading.Barrier(2)
+        cohort.used = lambda: 95 if len(cohort.launched) == 2 else 10
+        cohort.outcomes = {"pr-2": {"code": 1, "until": lambda: cohort.status()["state"] == "quota-stopped"}}
+        with patch.object(regrade, "QUOTA_MAX_AGE_SECONDS", -1):
+            self.assertEqual(cohort.run(workers=2), 1)
+        self.assertEqual({target: row["state"] for target, row in cohort.rows().items()},
+                         {"pr-1": "mapped", "pr-2": "dispatch-failed", "pr-3": "pending"})
+        status = cohort.status()
+        self.assertEqual(status["state"], "failed")
+        self.assertIn("requires investigation", status["reason"])
+
+    def test_an_unreadable_meter_stops_launches(self):
+        unreadable = ((Mock(side_effect=OSError("usage endpoint unavailable")), "usage endpoint unavailable"),
+                      (lambda: None, "no usage window was reported for claude"))
+        for index, (used, detail) in enumerate(unreadable):
+            with self.subTest(detail=detail):
+                cohort = Cohort(self.root / str(index), 100, jobs=1)
+                cohort.used = used
+                self.assertEqual(cohort.run(), 4)
+                self.assertEqual((cohort.launched, cohort.preflights), ([], []))
+                status = cohort.status()
+                self.assertEqual(status["state"], "quota-stopped")
+                self.assertEqual(status["reason"], f"The subscription meters could not be read: {detail}")
+                self.assertNotIn("meters", status["invocations"][-1])
+
+    def test_a_malformed_reading_mid_queue_settles_the_active_batches_and_stops_for_the_quota(self):
+        cohort = Cohort(self.root, 100)
+        cohort.barrier = threading.Barrier(3)
+        reading = cohort.meters
+
+        def malformed(clients, env):
+            usage = reading(clients, env)
+            if len(cohort.launched) == 3:
+                usage["claude"]["five_hour"] = "unavailable"
+            return usage
+
+        cohort.meters = malformed
+        with patch.object(regrade, "QUOTA_MAX_AGE_SECONDS", -1):
+            self.assertEqual(cohort.run(workers=3), 4)
+        self.assertEqual({target: row["state"] for target, row in cohort.rows().items()},
+                         {"pr-1": "mapped", "pr-2": "mapped", "pr-3": "mapped", "pr-4": "pending", "pr-5": "pending"})
+        status = cohort.status()
+        self.assertEqual((status["state"], status["reason"], status["outstandingReservations"]),
+                         ("quota-stopped", "The subscription meters could not be read: the Claude usage window five_hour "
+                                           "is not an object", 0))
+
+    def test_a_missing_stored_sign_in_stops_launches(self):
+        cohort = Cohort(self.root, 100, jobs=1)
+        cohort.meters = METERS
+        with patch.object(Path, "home", return_value=self.root / "home"), \
+                patch.object(subscription_meters.urllib.request, "urlopen", side_effect=AssertionError("the provider was called")):
+            self.assertEqual(cohort.run(), 4)
+        self.assertEqual((cohort.launched, cohort.preflights), ([], []))
+        status = cohort.status()
+        self.assertEqual(status["state"], "quota-stopped")
+        self.assertRegex(status["reason"], r"The subscription meters could not be read: cannot read .*/home/\.claude/"
+                                           r"\.credentials\.json: .*No such file or directory")
+
+    def test_the_reading_is_taken_again_after_preparation_and_before_the_reservation(self):
+        margin = subscription_meters.SIGN_IN_MARGIN_SECONDS
+        late = {"a reading that expired over the stop": (regrade.QUOTA_MAX_AGE_SECONDS + 1, 95, None, "Claude usage reached"),
+                "a sign-in that entered its margin": (120, 10, (1000 + margin + 60) * 1000, "sign-in expires")}
+        for index, (name, (seconds, percent, expires, reason)) in enumerate(late.items()):
+            with self.subTest(name):
+                cohort = Cohort(self.root / str(index), 100, jobs=2)
+                cohort.sign_in_expires = expires
+                clock, prepare = [1000.0], cohort.prepare
+
+                def slow(options):
+                    clock[0] += seconds
+                    cohort.used = lambda: percent
+                    return prepare(options)
+
+                cohort.prepare = slow
+                with patch.object(regrade.time, "time", lambda: clock[0]):
+                    self.assertEqual(cohort.run(), 4)
+                self.assertEqual(cohort.launched, [])
+                self.assertEqual(list(cohort.directory.glob("batches/*/*/attempt-*/reservation.json")), [])
+                status = cohort.status()
+                self.assertEqual(status["state"], "quota-stopped")
+                self.assertIn(reason, status["reason"])
+                self.assertEqual({row["state"] for row in status["batches"]}, {"pending"})
+                cohort.prepare, cohort.used, cohort.sign_in_expires = prepare, (lambda: 10), None
+                self.assertEqual(cohort.run(), 0)
+                self.assertEqual(cohort.launched, ["pr-1", "pr-2"])
+                self.assertEqual(cohort.prepared(), ["pr-1", "pr-2"])
+
+    def test_a_cap_that_funds_no_launch_stops_for_the_budget_without_a_meter_reading_or_a_preflight(self):
+        cohort = Cohort(self.root, 1.5, jobs=1)
+        cohort.used = lambda: 95
+        self.assertEqual(cohort.run(), 3)
+        self.assertEqual((cohort.launched, cohort.preflights, cohort.metered), ([], [], []))
+        self.assertEqual(cohort.status()["state"], "budget-stopped")
+
+    def test_an_expiring_claude_sign_in_stops_a_claude_grader_and_is_not_read_for_a_codex_grader(self):
+        claude, codex = Cohort(self.root / "claude", 100, jobs=1), self.codex_cohort(self.root / "codex", jobs=1)
+        for cohort in (claude, codex):
+            cohort.sign_in_expires = (time.time() + subscription_meters.SIGN_IN_MARGIN_SECONDS - 60) * 1000
+        self.assertEqual(claude.run(), 4)
+        self.assertEqual(claude.launched, [])
+        self.assertEqual(claude.status()["state"], "quota-stopped")
+        self.assertEqual(claude.status()["reason"],
+                         "the stored Claude sign-in expires within half an hour; renew it while no grading session runs")
+        self.assertEqual(codex.run(), 0)
+        self.assertEqual((codex.launched, codex.metered), (["pr-1"], [["codex"]]))
+
+    def test_a_codex_grader_stops_at_its_own_meters(self):
+        cohort = self.codex_cohort(jobs=1)
+        cohort.used = lambda: 95
+        self.assertEqual(cohort.run(), 4)
+        self.assertEqual(cohort.launched, [])
+        self.assertEqual(cohort.status()["reason"], "ChatGPT usage reached the quota stop")
+
+    def test_launches_within_the_reading_age_share_one_meter_reading_and_a_run_that_launches_nothing_takes_none(self):
+        cohort = Cohort(self.root, 100)
+        self.assertEqual(cohort.run(workers=3), 0)
+        self.assertEqual((len(cohort.launched), cohort.metered), (5, [["claude"]]))
+        self.assertEqual(cohort.run(workers=3), 0)
+        self.assertEqual(cohort.metered, [["claude"]])
+
+    def test_the_authorization_sets_the_quota_stop_percentage(self):
+        cohort = Cohort(self.root / "set", 100, jobs=1)
+        cohort.used = lambda: 80
+        cohort.authorization["quotaStopPercent"] = 80
+        cohort.authorize()
+        self.assertEqual(cohort.run(), 4)
+        for index, percent in enumerate((True, 0, -5, 100.5, "95", None, float("nan"))):
+            with self.subTest(percent=percent):
+                cohort = Cohort(self.root / str(index), 100, jobs=1)
+                cohort.authorization["quotaStopPercent"] = percent
+                cohort.authorize()
+                with self.assertRaisesRegex(ValueError, "quotaStopPercent"):
+                    cohort.run()
+                self.assertEqual((cohort.launched, cohort.metered), ([], []))
+
     def test_unpinned_plans_are_refused_before_any_dispatch(self):
         def unordered(cohort):
             cohort.execution["order"].pop()
@@ -731,6 +928,12 @@ class Controller(unittest.TestCase):
 
 
 class RegradingBudget(unittest.TestCase):
+    def test_the_meter_module_imports_only_the_standard_library(self):
+        tree = ast.walk(ast.parse(Path(subscription_meters.__file__).read_text()))
+        imports = [node for node in tree if isinstance(node, (ast.Import, ast.ImportFrom))]
+        named = {name.name if isinstance(node, ast.Import) else node.module for node in imports for name in node.names}
+        self.assertLessEqual({name.split(".")[0] for name in named}, sys.stdlib_module_names)
+
     def test_pinned_timeout_reaches_dispatch(self):
         import grade
         arguments = regrade.dispatch_arguments(Path("work"), Path("key.json"),

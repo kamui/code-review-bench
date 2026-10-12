@@ -144,17 +144,14 @@ import contextlib
 import fcntl
 import hashlib
 import json
-import math
 import os
 from pathlib import Path
 import re
-import select
 import socket
 import subprocess
 import sys
 import tempfile
 import time
-import urllib.request
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -163,6 +160,8 @@ REPO = TOOLS.parents[1]
 sys.path.insert(0, str(TOOLS))
 import file_attempt  # noqa: E402
 import run_cell  # noqa: E402
+import subscription_meters  # noqa: E402
+from subscription_meters import quota_stop, sign_in_expiring  # noqa: E402
 
 RUN_CELL = [sys.executable, str(TOOLS / "run_cell.py")]
 PROC = Path("/proc")
@@ -172,7 +171,6 @@ CLIENT_OF = {"claude-builtin": "claude", "claude-skill": "claude", "review-code"
 MEMORY_FILESYSTEMS = {"tmpfs", "ramfs", "devtmpfs"}
 SNAPSHOT_SECONDS = 1800
 QUOTA_MAX_AGE_SECONDS = 3600
-SIGN_IN_MARGIN_SECONDS = 1800
 HEARTBEAT_SECONDS = 60
 POLL_SECONDS = 5
 SCAN_GAP_SECONDS = 0.2
@@ -599,91 +597,15 @@ class Session:
 
 # --- quota and spend ----------------------------------------------------------------------------
 
-def meters(queue: Queue, env: dict) -> dict:
-    """Each pinned client's subscription meters, read from its provider; no model is called."""
-    usage = {"at": run_cell.now()}
-    if "claude" in queue.clients:
-        credentials = run_cell.read_json(Path.home() / ".claude/.credentials.json")
-        request = urllib.request.Request("https://api.anthropic.com/api/oauth/usage", headers={
-            "Authorization": "Bearer " + credentials["claudeAiOauth"]["accessToken"], "anthropic-beta": "oauth-2025-04-20",
-            "User-Agent": "claude-code/" + queue.clients["claude"]["version"].split()[0]})
-        with urllib.request.urlopen(request, timeout=30) as response:
-            reading = json.load(response)
-        usage["claude"] = {key: reading.get(key) for key in ("five_hour", "seven_day")}
-        usage["claude_sign_in_expires_at"] = credentials["claudeAiOauth"].get("expiresAt")
-    if "codex" in queue.clients:
-        server = subprocess.Popen([queue.clients["codex"]["path"], "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                  stderr=subprocess.DEVNULL, text=True, bufsize=1, env=env)
-        try:
-            def send(row: dict) -> None:
-                server.stdin.write(json.dumps(row) + "\n")
-                server.stdin.flush()
-
-            def receive(identifier: int) -> dict:
-                deadline = time.monotonic() + 30
-                while time.monotonic() < deadline:
-                    if not select.select([server.stdout], [], [], 1)[0]:
-                        continue
-                    line = server.stdout.readline()
-                    if not line:
-                        raise RuntimeError("app-server closed before returning usage")
-                    row = json.loads(line)
-                    if row.get("id") == identifier:
-                        if "error" in row:
-                            raise RuntimeError("app-server could not return usage")
-                        return row["result"]
-                raise TimeoutError("app-server usage timeout")
-
-            send({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "bench-meter", "version": "1.0"}}})
-            receive(1)
-            send({"method": "initialized", "params": {}})
-            send({"id": 2, "method": "account/rateLimits/read", "params": {}})
-            result = receive(2)
-            usage["codex"] = {key: result.get(key) for key in ("ordinaryUsageAllowed", "rateLimits")}
-        finally:
-            server.terminate()
-            server.wait(timeout=10)
-    return usage
-
-
-def used(usage: dict) -> dict:
-    """The percentages each client's usage windows report; a window that reports no finite number is left out."""
-    limits = (usage.get("codex") or {}).get("rateLimits") or {}
-    windows = {"claude": [(window or {}).get("utilization") for window in (usage.get("claude") or {}).values()],
-               "codex": [(limits.get(key) or {}).get("usedPercent") for key in ("primary", "secondary")]}
-    return {client: [percent for percent in percents if type(percent) in (int, float) and math.isfinite(percent)]
-            for client, percents in windows.items()}
-
-
 def read_meters(queue: Queue, env: dict) -> dict:
     """A reading that says how much of each pinned client's quota is used, or no launch."""
     try:
-        usage = meters(queue, env)
-        silent = [client for client in queue.clients if not used(usage)[client]]
-        if silent:
-            raise ValueError(f"no usage window was reported for {', '.join(silent)}")
-        return usage
-    except (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.SubprocessError) as error:
+        return subscription_meters.read_meters(queue.clients, env)
+    except subscription_meters.SignInUnreadable as error:
+        raise run_cell.InputError(str(error)) from error
+    except subscription_meters.Unreadable as error:
         raise Blocked(f"the subscription meters could not be read, and no launch starts on a reading older than "
                       f"{QUOTA_MAX_AGE_SECONDS} s: {error}") from error
-
-
-def sign_in_expiring(usage: dict, moment: float) -> bool:
-    expires = usage.get("claude_sign_in_expires_at")
-    return type(expires) in (int, float) and expires / 1000 - moment < SIGN_IN_MARGIN_SECONDS
-
-
-def quota_stop(usage: dict, threshold: float, moment: float | None = None) -> str | None:
-    percents = used(usage)
-    if any(percent >= threshold for percent in percents["claude"]):
-        return "Claude usage reached the quota stop"
-    if sign_in_expiring(usage, time.time() if moment is None else moment):
-        return "the stored Claude sign-in expires within half an hour; renew it while no review runs"
-    if usage.get("codex") is not None and not usage["codex"].get("ordinaryUsageAllowed"):
-        return "ChatGPT ordinary usage is unavailable"
-    if any(percent >= threshold for percent in percents["codex"]):
-        return "ChatGPT usage reached the quota stop"
-    return None
 
 
 def spend(queue: Queue, runs: list) -> dict:
