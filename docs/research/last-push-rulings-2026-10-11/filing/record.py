@@ -115,14 +115,18 @@ class Filing:
         plan = load(HERE / "plan.v1.json")
         self.entries, self.kinds_plan, self.carried = plan["entries"], plan["kinds"], plan["carried"]
         self.label_plan, self.rewordings_plan, self.narrowed = plan["label_checks"], plan["rewordings"], plan["narrowed_links"]
+        intakes = [load(path) for path in sorted(HERE.glob("intake.v*.json"))]
+        self.links = [link for intake in intakes for link in intake["links"]]
+        self.matched_again = {path for intake in intakes for paths in intake["reviews"].values() for path in paths}
+        self.open()
+
+    def open(self):
+        """Load the current records, the identities a grader must not see and both inspectors' labels."""
         names = ("references", "adjudications", "claims", "candidates", "credits")
         self.documents = {name: load(CURRENT / f"{name}.json") for name in names}
         self.loaded = json.loads(json.dumps(self.documents))
         self.references = {reference["target"]: reference for reference in self.documents["references"]["targets"]}
         self.decisions = self.documents["adjudications"]["decisions"]
-        intakes = [load(path) for path in sorted(HERE.glob("intake.v*.json"))]
-        self.links = [link for intake in intakes for link in intake["links"]]
-        self.matched_again = {path for intake in intakes for paths in intake["reviews"].values() for path in paths}
         self.known = claim_tools.identities([], ROOT)
         self.labels = {}
         for inspector, (_model, name) in INSPECTIONS.items():
@@ -410,6 +414,14 @@ class Filing:
                     others = ", ".join(sorted(other for other, _link in group if other != identifier))
                     link.update(relation="related", reason=f"{link['reason']} Narrowed on {DAY}: the item is also linked to {others}.")
 
+    def narrow_by_hand(self, rows):
+        """Apply the plan's hand corrections, so that filing the matcher's answer again does not restore its relation."""
+        by_id = {row["id"]: row for row in rows}
+        for narrowed in self.narrowed:
+            link = next(link for link in by_id[narrowed["claim"]]["links"] if key(link) == (narrowed["review"], narrowed["item_id"]))
+            if link["relation"] == "equivalent":
+                link.update(relation="related", reason=f"{link['reason']} {narrowed['reason']}")
+
     def claims(self):
         rows = self.documents["claims"]["claims"]
         by_id = {row["id"]: row for row in rows}
@@ -421,11 +433,7 @@ class Filing:
                 self.widened_claim(entry, existing)
             else:
                 put(rows, self.filed_claim(entry, existing))
-        by_id = {row["id"]: row for row in rows}
-        for narrowed in self.narrowed:
-            link = next(link for link in by_id[narrowed["claim"]]["links"] if key(link) == (narrowed["review"], narrowed["item_id"]))
-            if link["relation"] == "equivalent":
-                link.update(relation="related", reason=f"{link['reason']} {narrowed['reason']}")
+        self.narrow_by_hand(rows)
         targets = {entry["target"] for entry in self.entries if entry["claim"]}
         self.narrow([row for row in rows if row["target"] in targets])
 
@@ -493,6 +501,11 @@ class Filing:
                        receipt_scope=self.cited(self.carried_scope(carried)))
         rows.sort(key=lambda row: row["id"])
 
+    def write(self):
+        for name, document in self.documents.items():
+            if document != self.loaded[name]:
+                save(CURRENT / f"{name}.json", document)
+
     def run(self):
         text = self.receipt()
         self.receipt_lines, self.receipt_pin = text.splitlines(), saved(RECEIPT, text)
@@ -503,9 +516,7 @@ class Filing:
         self.label_checks()
         self.rewordings()
         self.credits()
-        for name, document in self.documents.items():
-            if document != self.loaded[name]:
-                save(CURRENT / f"{name}.json", document)
+        self.write()
         for entry in self.entries:
             if entry["kind"] == "joined":
                 (CURRENT / "impact-cards" / f"{entry['joined']}.json").unlink(missing_ok=True)

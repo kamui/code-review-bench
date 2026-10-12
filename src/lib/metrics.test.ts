@@ -108,10 +108,10 @@ describe('scorecard display', () => {
 
 describe('current ungraded preview', () => {
   test('preserves saved delivery and usage without inventing judgment values', () => {
-    expect(imported.evidence.coverage).toMatchObject({ complete: false, assessedReviews: 0, requiredReviews: 690 })
+    expect(imported.evidence.coverage).toMatchObject({ complete: false, assessedReviews: 0, requiredReviews: 604 })
     expect(imported.configurations).toHaveLength(17)
-    expect(imported.attempts).toHaveLength(746)
-    expect(heroCounts(imported)).toMatchObject({ tasks: 16, problems: 66, awaitingEligibility: 0 })
+    expect(imported.attempts).toHaveLength(639)
+    expect(heroCounts(imported)).toMatchObject({ tasks: 16, problems: 67, awaitingEligibility: 0 })
     expect(imported.attempts.every(attempt => attempt.assessment === null)).toBe(true)
     expect(summaries.length).toBeGreaterThan(0)
     for (const summary of summaries) {

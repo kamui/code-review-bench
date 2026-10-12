@@ -11,9 +11,10 @@ STAGING is another checkout of this repository that can read the runs' ``freeze_
 It also refuses a STAGING that reaches its registry or inventory through a symbolic link, and it puts a
 new file in place of each, so a STAGING made of hard links leaves this checkout's files as they were.
 
-The staged registry is this checkout's ``bench/scoreboard.current.json`` with three changes, which
-follow ``decisions.v1.json`` and the runs ``replacement_runs.py`` and ``skill_replacement_runs.py``
-defined:
+The staged registry is ``registry-before-publication.v1.json`` with three changes, which follow
+``decisions.v1.json`` and the runs ``replacement_runs.py`` and ``skill_replacement_runs.py`` defined.
+That file is ``bench/scoreboard.current.json`` as it was published until the staged selection replaced
+it, so staging gives the same selection before and after that publication:
 
 - each task decided "re-cut and run again" pins its ``packet.v2.md`` hash;
 - each last-push run takes those tasks from the saved source it replaces, under that source's
@@ -55,6 +56,7 @@ import current_grading  # noqa: E402
 RERUN = "re-cut and run again"
 ITEMS, RECEIPT = "staged-review-items.v2.jsonl", "staged-edition.v2.json"
 REGISTRY, INVENTORY = "bench/scoreboard.current.json", "bench/grading/current/inventory.json"
+BEFORE = HERE / "registry-before-publication.v1.json"
 CURRENT = Path("bench/grading/current")
 RECORDS = {"references": "targets", "adjudications": "decisions", "claims": "claims", "candidates": "candidates", "credits": "rulings"}
 
@@ -86,7 +88,7 @@ def replacement_runs() -> list:
 def staged_registry() -> tuple:
     """(registry, decided, deferred): the staged selection, each task's decision, and the configurations
     and tasks that stay out because only merge-cut reviews of a re-cut task exist for them."""
-    registry, decisions = read(ROOT / REGISTRY), read(HERE / "decisions.v1.json")
+    registry, decisions = read(BEFORE), read(HERE / "decisions.v1.json")
     groups = {group["id"]: group["decision"] for group in decisions["groups"]}
     decided = {entry["target"]: groups[entry["group"]] for entry in decisions["tasks"]}
     rerun = {target for target, decision in decided.items() if decision == RERUN}
@@ -166,9 +168,10 @@ def stage(root: Path) -> tuple:
                 "of the merge-cut packet exist for them. `pending_reconciliation` counts the rows of the staging "
                 "checkout's `current_records` that name the earlier revision of a re-cut task; none is edited here, and "
                 "grading cannot be prepared while `readiness.state` is blocked.",
-        "inputs": [current_grading.pin_file(path, ROOT) for path in (
-            ROOT / REGISTRY, HERE / "decisions.v1.json", HERE / "packet-replacements.v1.json", HERE / "replacement_runs.py",
-            HERE / "skill_replacement_runs.py")],
+        "inputs": [{"path": REGISTRY, "sha256": current_grading.file_hash(BEFORE)}] + [
+            current_grading.pin_file(path, ROOT) for path in (
+                HERE / "decisions.v1.json", HERE / "packet-replacements.v1.json", HERE / "replacement_runs.py",
+                HERE / "skill_replacement_runs.py")],
         "staged": {"registry_sha256": hashlib.sha256(text(registry, 2).encode()).hexdigest(),
                    "inventory_sha256": hashlib.sha256(text(selected, 2).encode()).hexdigest(), "counts": selected["counts"]},
         "tasks": [{"target": task["id"], "decision": decided[task["id"]], "packet": task["packet"]} for task in selected["tasks"]],
