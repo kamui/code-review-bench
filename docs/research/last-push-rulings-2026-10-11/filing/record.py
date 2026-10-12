@@ -7,9 +7,10 @@ writes the joined, new and widened known problems with their impact cards, the c
 change, the kind of each claim kept off the answer key, and the ruling on one comment's credit that moves to the
 joined problem. The entry, decisions and card of the known problem that is joined into another leave the current
 records for `bench/grading/retired/last-push-rulings.v1.json`. It writes that file and the seventh ruling receipt
-only where none is saved, and stops when a saved one differs from what it would write. Running it again changes
-nothing."""
+only where none is saved, and stops when a saved one differs from what it would write. The files change together:
+when it stops on an error, every file it wrote is put back as it was. Running it again changes nothing."""
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -61,24 +62,57 @@ def load(path):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def save(path, value):
-    Path(path).write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+def dumped(value):
+    return json.dumps(value, indent=2) + "\n"
+
+
+def replace(path, data):
+    """Put new bytes at `path` in one step, so a write that fails leaves the file as it was."""
+    temporary = path.with_name(path.name + ".tmp")
+    try:
+        temporary.write_bytes(data)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+class Generation:
+    """The files one filing writes, which change together. An error raised before the block ends puts each file back
+    as it was and removes each file the block created. A process that is killed gets no such chance."""
+
+    def __init__(self):
+        self.before = {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, kind, _error, _trace):
+        if kind is None:
+            return
+        failed = []
+        for path, data in reversed(self.before.items()):
+            try:
+                path.unlink(missing_ok=True) if data is None else replace(path, data)
+            except OSError as error:
+                failed.append(f"{path}: {error}")
+        if failed:
+            raise SystemExit("the filing stopped and these files could not be put back: " + "; ".join(failed))
+
+    def write(self, path, text):
+        data, earlier = text.encode("utf-8"), path.read_bytes() if path.exists() else None
+        if data != earlier:
+            self.before.setdefault(path, earlier)
+            path.parent.mkdir(exist_ok=True)
+            replace(path, data)
+
+    def remove(self, path):
+        if path.exists():
+            self.before.setdefault(path, path.read_bytes())
+            path.unlink()
 
 
 def demote(text, levels=2):
     return "\n".join("#" * levels + line if line.startswith("#") else line for line in text.strip().splitlines())
-
-
-def saved(path, text):
-    """Pin a file that is written once, writing it first when none is saved. The records that cite a saved receipt
-    pin its bytes, so it never changes. A line it lacks goes into a later receipt."""
-    if not path.exists():
-        path.parent.mkdir(exist_ok=True)
-        path.write_text(text, encoding="utf-8")
-    elif path.read_bytes() != text.encode("utf-8"):
-        raise SystemExit(f"{path.name} is saved and this filing would write it differently. A saved file of this kind "
-                         "does not change, so file the new lines in a later one.")
-    return current.pin_file(path, ROOT)
 
 
 def put(rows, row, field="id"):
@@ -122,6 +156,7 @@ class Filing:
 
     def open(self):
         """Load the current records, the identities a grader must not see and both inspectors' labels."""
+        self.files = Generation()
         names = ("references", "adjudications", "claims", "candidates", "credits")
         self.documents = {name: load(CURRENT / f"{name}.json") for name in names}
         self.loaded = json.loads(json.dumps(self.documents))
@@ -255,8 +290,8 @@ class Filing:
         """Write the record's card. A card that is already filed keeps the evidence it pins."""
         path = CURRENT / "impact-cards" / f"{entry['family']}.json"
         earlier = load(path)["evidence"] if path.exists() else []
-        save(path, {"schema_version": 1, "family": entry["family"], "target": entry["target"], **record["card"],
-                    "evidence": earlier + [pin for pin in evidence if pin not in earlier]})
+        self.files.write(path, dumped({"schema_version": 1, "family": entry["family"], "target": entry["target"], **record["card"],
+                                       "evidence": earlier + [pin for pin in evidence if pin not in earlier]}))
         return current.pin_file(path, ROOT)
 
     def retire(self, entry):
@@ -274,7 +309,7 @@ class Filing:
                 "decisions": [{"from": "bench/grading/current/adjudications.json", "sha256": current.digest(decision),
                                "record": decision} for decision in decisions],
                 "card": {**current.pin_file(card, ROOT), "record": load(card)}}]}
-            saved(RETIRED, json.dumps(document, indent=2) + "\n")
+            self.saved(RETIRED, dumped(document))
             families.remove(family)
             self.decisions[:] = [decision for decision in self.decisions if decision["subject"] != identifier]
         elif not RETIRED.exists() or identifier not in [row["family"]["record"]["id"] for row in load(RETIRED)["retired"]]:
@@ -483,7 +518,7 @@ class Filing:
             path = CURRENT / "impact-cards" / f"{identifier}.json"
             card = load(path)
             card["grouping"]["reason"] = self.reworded(identifier, card["grouping"]["reason"], rewording)
-            save(path, card)
+            self.files.write(path, dumped(card))
             self.find(families[identifier]["impact"]["adjudication"])["evidence"] = [current.pin_file(path, ROOT)]
 
     def credits(self):
@@ -501,25 +536,35 @@ class Filing:
                        receipt_scope=self.cited(self.carried_scope(carried)))
         rows.sort(key=lambda row: row["id"])
 
+    def saved(self, path, text):
+        """Pin a file that is written once, writing it first when none is saved. The records that cite a saved receipt
+        pin its bytes, so it never changes. A line it lacks goes into a later receipt."""
+        if path.exists() and path.read_bytes() != text.encode("utf-8"):
+            raise SystemExit(f"{path.name} is saved and this filing would write it differently. A saved file of this kind "
+                             "does not change, so file the new lines in a later one.")
+        self.files.write(path, text)
+        return current.pin_file(path, ROOT)
+
     def write(self):
         for name, document in self.documents.items():
             if document != self.loaded[name]:
-                save(CURRENT / f"{name}.json", document)
+                self.files.write(CURRENT / f"{name}.json", dumped(document))
 
     def run(self):
-        text = self.receipt()
-        self.receipt_lines, self.receipt_pin = text.splitlines(), saved(RECEIPT, text)
-        self.families()
-        self.candidates()
-        self.claims()
-        self.kinds()
-        self.label_checks()
-        self.rewordings()
-        self.credits()
-        self.write()
-        for entry in self.entries:
-            if entry["kind"] == "joined":
-                (CURRENT / "impact-cards" / f"{entry['joined']}.json").unlink(missing_ok=True)
+        with self.files:
+            text = self.receipt()
+            self.receipt_lines, self.receipt_pin = text.splitlines(), self.saved(RECEIPT, text)
+            self.families()
+            self.candidates()
+            self.claims()
+            self.kinds()
+            self.label_checks()
+            self.rewordings()
+            self.credits()
+            self.write()
+            for entry in self.entries:
+                if entry["kind"] == "joined":
+                    self.files.remove(CURRENT / "impact-cards" / f"{entry['joined']}.json")
 
 
 if __name__ == "__main__":

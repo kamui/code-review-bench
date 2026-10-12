@@ -9,8 +9,9 @@ ten tasks with the hash of the re-cut packet, the links from their claims to the
 known problem and the three claims of ruling 6, and the staged registry with its inventory. The rulings on single
 comments of those tasks, the links to comments of the earlier reviews and the claims left with no comment leave the
 current records for `bench/grading/retired/last-push-recut.v1.json`. It writes that file and the eighth ruling
-receipt only where none is saved, and stops when a saved one differs from what it would write. Running it again
-changes nothing."""
+receipt only where none is saved, and stops when a saved one differs from what it would write. The files change
+together: when it stops on an error, every file it wrote is put back as it was and each file it created is removed.
+Running it again changes nothing."""
 import hashlib
 import json
 import sys
@@ -70,11 +71,6 @@ def sha256(text):
 
 def relative(path):
     return path.relative_to(ROOT).as_posix()
-
-
-def write(path, text):
-    if not path.exists() or path.read_text(encoding="utf-8") != text:
-        path.write_text(text, encoding="utf-8")
 
 
 class Move(record.Filing):
@@ -312,35 +308,31 @@ class Move(record.Filing):
             raise SystemExit(f"the moved records do not validate against the staged selection: {error}")
 
     def publish(self):
-        """Write the staged registry, its inventory and the moved records. The inventory is read from the written
-        registry, so the registry is put back when a hash differs or the records do not validate against it."""
-        staged, path = record.load(RECUT / stage.RECEIPT)["staged"], ROOT / stage.REGISTRY
-        registry, before = stage.text(self.registry, 2), path.read_text(encoding="utf-8")
-        try:
-            write(path, registry)
-            selected = current.inventory(ROOT)
-            inventory = stage.text(selected, 2)
-            if (sha256(registry), sha256(inventory)) != (staged["registry_sha256"], staged["inventory_sha256"]):
-                raise SystemExit(f"the registry or its inventory differs from the hashes in {stage.RECEIPT}")
-            self.validated(selected)
-        except BaseException:
-            write(path, before)
-            raise
-        write(ROOT / stage.INVENTORY, inventory)
+        """Write the staged registry, its inventory and the moved records. The checker reads the registry, the receipt
+        and the card from disk, so those are written first and the records are validated before they are written."""
+        staged, registry = record.load(RECUT / stage.RECEIPT)["staged"], stage.text(self.registry, 2)
+        self.files.write(ROOT / stage.REGISTRY, registry)
+        selected = current.inventory(ROOT)
+        inventory = stage.text(selected, 2)
+        if (sha256(registry), sha256(inventory)) != (staged["registry_sha256"], staged["inventory_sha256"]):
+            raise SystemExit(f"the registry or its inventory differs from the hashes in {stage.RECEIPT}")
+        self.validated(selected)
+        self.files.write(ROOT / stage.INVENTORY, inventory)
         self.write()
 
     def run(self):
-        self.check_links()
-        text = self.retirement()
-        text = self.receipt(json.loads(text), record.saved(RETIRED, text))
-        self.receipt_lines, self.receipt_pin = text.splitlines(), record.saved(RECEIPT, text)
-        self.move()
-        self.retire()
-        self.relink()
-        self.families()
-        self.claims()
-        self.unlinked()
-        self.publish()
+        with self.files:
+            self.check_links()
+            text = self.retirement()
+            text = self.receipt(json.loads(text), self.saved(RETIRED, text))
+            self.receipt_lines, self.receipt_pin = text.splitlines(), self.saved(RECEIPT, text)
+            self.move()
+            self.retire()
+            self.relink()
+            self.families()
+            self.claims()
+            self.unlinked()
+            self.publish()
 
 
 if __name__ == "__main__":
