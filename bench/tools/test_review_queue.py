@@ -26,6 +26,7 @@ import uuid
 import prune_workspace
 import review_queue
 import run_cell
+import subscription_meters
 import test_interrupted_attempts as fixtures
 
 RUN_ID = fixtures.RUN_ID
@@ -33,6 +34,7 @@ CAPTURED = fixtures.CAPTURED
 FAKE = [sys.executable, str(Path(__file__).resolve())]
 # The fixture replaces the freeze-commit comparison; one test exercises the real one.
 RUNTIME_PROBLEM = review_queue.runtime_problem
+METERS = subscription_meters.meters
 
 
 # --- the fake runner and controller, in a process of their own ----------------------------------
@@ -173,9 +175,9 @@ def fake_cell(argv: list) -> int:
 
 def faked() -> dict:
     """What a controller under test replaces: the runner it launches, the meters, and the freeze-commit comparison."""
-    return {"RUN_CELL": [*FAKE, "cell"], "POLL_SECONDS": 0.02, "SCAN_GAP_SECONDS": 0.01,
-            "runtime_problem": lambda run: None,
-            "meters": lambda queue, env: json.loads((plan_root() / "meters.json").read_text(encoding="utf-8"))}
+    return {(review_queue, "RUN_CELL"): [*FAKE, "cell"], (review_queue, "POLL_SECONDS"): 0.02,
+            (review_queue, "SCAN_GAP_SECONDS"): 0.01, (review_queue, "runtime_problem"): lambda run: None,
+            (subscription_meters, "meters"): lambda clients, env: json.loads((plan_root() / "meters.json").read_text(encoding="utf-8"))}
 
 
 def fake_queue(argv: list) -> int:
@@ -188,8 +190,8 @@ def fake_queue(argv: list) -> int:
 
     run_cell.BENCH = plan_root() / "bench"
     review_queue.write = write
-    for name, value in faked().items():
-        setattr(review_queue, name, value)
+    for (module, name), value in faked().items():
+        setattr(module, name, value)
     os.environ["FAKE_CONTROLLER"] = str(os.getpid())
     return review_queue.main(argv)
 
@@ -226,8 +228,8 @@ class QueueFixture(fixtures.Fixture):
         self.meters(10)
         self.enterContext(patch.dict(os.environ, {"FAKE_QUEUE_ROOT": str(self.root)}))
         os.environ.pop("FAKE_CONTROLLER", None)
-        for name, value in faked().items():
-            self.enterContext(patch.object(review_queue, name, value))
+        for (module, name), value in faked().items():
+            self.enterContext(patch.object(module, name, value))
         self.addCleanup(self.reap)
 
     def reap(self) -> None:
@@ -903,13 +905,13 @@ class LaunchGates(QueueFixture):
     def test_no_launch_starts_on_a_meter_reading_older_than_an_hour(self):
         readings, clock = [], [1_000_000.0]
 
-        def meters(queue, env):
+        def meters(clients, env):
             readings.append(clock[0])
             if len(readings) == 3:
                 raise OSError("usage endpoint unavailable")
             return {"at": review_queue.stamp(clock[0]), "claude": {"five_hour": {"utilization": 10}}}
 
-        with patch.object(review_queue, "meters", meters), redirect_stdout(io.StringIO()):
+        with patch.object(subscription_meters, "meters", meters), redirect_stdout(io.StringIO()):
             session = review_queue.Session(review_queue.Queue(self.queue), "run", lambda: clock[0], time.sleep)
             self.assertIsNone(session.quota())
             clock[0] += review_queue.QUOTA_MAX_AGE_SECONDS
@@ -923,15 +925,15 @@ class LaunchGates(QueueFixture):
                 session.quota()
 
     def test_a_renewed_sign_in_is_seen_without_waiting_for_the_next_hourly_reading(self):
-        clock, expires = [1_000_000.0], [1_000_000.0 + review_queue.SIGN_IN_MARGIN_SECONDS + 600]
+        clock, expires = [1_000_000.0], [1_000_000.0 + subscription_meters.SIGN_IN_MARGIN_SECONDS + 600]
         readings = []
 
-        def meters(queue, env):
+        def meters(clients, env):
             readings.append(clock[0])
             return {"at": review_queue.stamp(clock[0]), "claude": {"five_hour": {"utilization": 10}},
                     "claude_sign_in_expires_at": expires[0] * 1000}
 
-        with patch.object(review_queue, "meters", meters), redirect_stdout(io.StringIO()):
+        with patch.object(subscription_meters, "meters", meters), redirect_stdout(io.StringIO()):
             session = review_queue.Session(review_queue.Queue(self.queue), "run", lambda: clock[0], time.sleep)
             self.assertIsNone(session.quota())
             clock[0] += 900
@@ -999,12 +1001,42 @@ class LaunchGates(QueueFixture):
         queue = review_queue.Queue(self.queue)
         queue.clients["codex"] = queue.clients["claude"]
         claude = {"five_hour": {"utilization": 10}}
-        with patch.object(review_queue, "meters", return_value={"claude": claude, "codex": {"ordinaryUsageAllowed": True, "rateLimits": {}}}):
+        with patch.object(subscription_meters, "meters", return_value={"claude": claude, "codex": {"ordinaryUsageAllowed": True, "rateLimits": {}}}):
             with self.assertRaisesRegex(review_queue.Blocked, "no usage window was reported for codex"):
                 review_queue.read_meters(queue, {})
         codex = {"ordinaryUsageAllowed": True, "rateLimits": {"primary": {"usedPercent": 12}, "secondary": None}}
-        with patch.object(review_queue, "meters", return_value={"claude": claude, "codex": codex}):
+        with patch.object(subscription_meters, "meters", return_value={"claude": claude, "codex": codex}):
             self.assertEqual(review_queue.read_meters(queue, {})["codex"], codex)
+
+    def test_a_malformed_meter_reading_starts_no_launch(self):
+        reading = {"at": "2026-01-01T00:00:00Z", "claude": {"five_hour": "soon", "seven_day": None}}
+        (self.root / "meters.json").write_text(json.dumps(reading), encoding="utf-8")
+        self.assert_blocked(self.command("run"), "the Claude usage window five_hour is not an object")
+        self.assertEqual((self.reviews(), self.run_state().attempt_ids()), ([], []))
+        codex = {"ordinaryUsageAllowed": True, "rateLimits": {"primary": {"usedPercent": 12}}}
+        malformed = {"the ChatGPT reading": "unavailable", "the ChatGPT rate limits": {**codex, "rateLimits": "none"},
+                     "the ChatGPT usage window primary": {**codex, "rateLimits": {"primary": "12%"}}}
+        for what, reading in malformed.items():
+            with self.subTest(what=what), patch.object(subscription_meters, "meters", return_value={"codex": reading}):
+                with self.assertRaisesRegex(subscription_meters.Unreadable, f"{what} is not an object"):
+                    subscription_meters.read_meters({"codex": {}}, {})
+
+    def test_a_stored_sign_in_that_cannot_be_read_is_an_input_error(self):
+        stored = self.root / "home/.claude/.credentials.json"
+        stored.parent.mkdir(parents=True)
+        with patch.object(subscription_meters, "meters", METERS), patch.object(Path, "home", return_value=self.root / "home"), \
+                patch.object(subscription_meters.urllib.request, "urlopen", side_effect=AssertionError("the provider was called")):
+            for text, detail in ((None, "[Errno 2] No such file or directory: "), ("{", "Expecting property name")):
+                with self.subTest(stored=text):
+                    if text is not None:
+                        stored.write_text(text, encoding="utf-8")
+                    code, events, err = self.command("run")
+                    self.assertEqual((code, events), (2, []), err)
+                    self.assertTrue(err.startswith(f"review_queue.py: cannot read {stored}: {detail}"), err)
+            stored.write_text("{}", encoding="utf-8")
+            self.assert_blocked(self.command("run"), "the subscription meters could not be read, and no launch starts on a "
+                                                     "reading older than 3600 s: 'claudeAiOauth'")
+        self.assertEqual((self.reviews(), self.run_state().attempt_ids()), ([], []))
 
     def test_the_queue_environment_cannot_replace_a_pinned_client(self):
         for name in ("BENCH_CLAUDE", "BENCH_CLAUDE_SHA256", "BENCH_CODEX_VERSION", "BENCH_CLAUDE_COMPANIONS", review_queue.MARKER):
@@ -1236,7 +1268,7 @@ class Pins(unittest.TestCase):
     def test_a_claude_sign_in_about_to_expire_stops_the_queue(self):
         claude = {"claude": {"five_hour": {"utilization": 10}, "seven_day": {"utilization": 10}}}
         now = 1_800_000_000.0
-        margin = review_queue.SIGN_IN_MARGIN_SECONDS
+        margin = subscription_meters.SIGN_IN_MARGIN_SECONDS
         self.assertIsNone(review_queue.quota_stop(claude, 95, now))
         self.assertIsNone(review_queue.quota_stop({**claude, "claude_sign_in_expires_at": (now + margin + 1) * 1000}, 95, now))
         for left in (margin - 1, 0, -3600):

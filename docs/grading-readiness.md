@@ -118,6 +118,12 @@ The coordinator derives the budget from the queue directory on every decision, s
 
 A new batch is reserved only when settled charges, outstanding reservations, the new reservation and one dollar of headroom for each of those reservations fit `budgetCapUsd`. A batch's reservation is $1.50 plus $0.06 for each saved review comment, at least $3 and at most $6, and it is the session's `--max-budget-usd`. The earlier allowance of $2 to $4 left sessions of the issue 30 rebuild at a median of 62% of it, and one session exceeded it and was lost. The coordinator writes `reservation.json` before it starts the worker. While another reservation is active, a batch waits until its full allowance fits. `status.json` reports `spentUpperUsd`, `reservedUsd` and `outstandingReservations` separately.
 
+### Quota
+
+The dollar cap cannot see the subscription plan's usage windows. Before the preflight, before it prepares a batch and again before it writes the batch's reservation, the coordinator reads the meters of the queue's client through `subscription_meters.py`, which the review queue also uses. A reading calls no model, and the coordinator reuses one for up to five minutes. It stops launching when a usage window is at or over `quotaStopPercent`, an optional authorization field that defaults to 95, when the stored Claude sign-in expires within half an hour, or when it cannot read the meters. A cap that cannot fund the next batch is reported first, as `budget-stopped`, without a reading.
+
+A quota stop is not a failure. Running sessions finish and are mapped, the coordinator reserves nothing further and marks no batch, and the run ends in the state `quota-stopped` with exit 4. `status.json` keeps the reason, and the run's `invocations` entry keeps its last reading as `meters`. The next run resumes once the meters allow, and a batch that was prepared before the stop is dispatched from the workspace it already has. A session that fails while the queue settles still ends the run as a failure.
+
 ### Failures and restarts
 
 A failed preparation, dispatch or mapping, a receipt that needs investigation and an exhausted cap all stop new launches. Sessions that are already running finish, and the coordinator settles and maps the ones that succeeded. Nothing is deleted.
@@ -141,7 +147,7 @@ nohup bench/tools/regrade_queues.sh run <logs> <workers> <authorization.json>=<q
 bench/tools/regrade_queues.sh status <queue-directory> ...
 ```
 
-`run` starts `regrade.py` for each queue in the order given and stops at the first queue that does not finish. Each controller run has its own log under `<logs>`, and `<logs>/driver.log` gets a line when a queue starts and ends. A rerun resumes every queue from its directory. `status` calls no model: it prints each queue's mapped and planned batches, state, spend at list price, sessions in flight, pinned client, wall time and free disk space from the saved files.
+`run` starts `regrade.py` for each queue in the order given and stops at the first queue that does not finish. Each controller run has its own log under `<logs>`, and `<logs>/driver.log` gets a line when a queue starts and ends. A rerun resumes every queue from its directory. Exit 4 means a queue stopped at the plan's quota, and `driver.log` says so; run the same command again once the meters allow. `status` calls no model: it prints each queue's mapped and planned batches, state, spend at list price, sessions in flight, pinned client, wall time and free disk space from the saved files.
 
 To raise concurrency without losing a grade, set `LIMIT=<n>` so each queue maps at most that many batches and stops, read the plan's usage meter, then run again with more workers on the batches left. `regrade.py` records the workers of each run in `status.json`.
 
