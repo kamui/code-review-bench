@@ -50,10 +50,14 @@ def inventory_problems(inventory, reviews):
             continue
         for key in expected:
             item = items[key]
-            if not (shaped(item, {"kind", "quotes"}) and item["kind"] in ("finding", "not-a-finding")
+            fields = {"kind", "quotes", "ids"} if isinstance(item, dict) and "ids" in item else {"kind", "quotes"}
+            if not (shaped(item, fields) and item["kind"] in ("finding", "not-a-finding")
                     and isinstance(item["quotes"], list)
                     and (texts(item["quotes"]) if item["kind"] == "finding" else item["quotes"] == [])):
                 problems.append(f"{token} item {key}: inventory needs kind and matching quotes")
+            elif "ids" in item and not (isinstance(item["ids"], list) and len(item["ids"]) == len(item["quotes"])
+                                        and all(filled(identifier) for identifier in item["ids"])):
+                problems.append(f"{token} item {key}: inventory ids name each quoted claim")
             elif any(not quoted(q, sources[int(key) - 1]) for q in item["quotes"]):
                 problems.append(f"{token} item {key}: inventory quote is not verbatim inside one source field")
     return problems
@@ -89,9 +93,11 @@ def claim_problems(token, review, sources, snapshot, disputed, naming):
                          else not item["claims"] and filled(item["note"]))):
                 problems.append(f"{where}: finding needs claims; not-a-finding needs no claims and a non-empty note")
                 continue
-            if inventory is not None and (item["kind"] != inventory[key]["kind"] or
-                    [c.get("quote") if isinstance(c, dict) else None for c in item["claims"]] != inventory[key]["quotes"]):
+            quotes, ids = ([c.get(field) if isinstance(c, dict) else None for c in item["claims"]] for field in ("quote", "id"))
+            if inventory is not None and (item["kind"] != inventory[key]["kind"] or quotes != inventory[key]["quotes"]):
                 problems.append(f"{where}: kind and claim quotes must match the inventory in order")
+            elif inventory is not None and ids != inventory[key].get("ids", ids):
+                problems.append(f"{where}: claim ids must match the inventory in order")
         elif not shaped(item, {"notes", "claims"}) or not filled(item["notes"]) or not isinstance(item["claims"], list) \
                 or not item["claims"]:
             problems.append(f"{where}: needs non-empty notes and a non-empty claims list")

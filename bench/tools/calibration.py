@@ -17,12 +17,12 @@ import sys
 
 import claims
 import current_grading
+import evaluator_audit
 from current_grading import Inconsistent, InputError, read_json, resolve_pin
 
 CARDS = "impact-cards"
 QUEUE = "decision-queue.json"
-STRATA = {"caught", "missed", "unresolved-credit", "serious", "other-material", "problem", "refuted", "unproven", "suggestion",
-          "minor-defect", "outside-this-change", "unresolved-claim", "control-silence"}
+STRATA = set(evaluator_audit.UNITS)
 CARD_TEXT = ("consequence", "exposure", "controls", "reversibility", "workload", "change_activity")
 
 
