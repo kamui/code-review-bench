@@ -42,6 +42,8 @@ Once the decision is made, run `python3 bench/tools/ruling_record.py <ruling>.be
 
 A record with `"contract": 2` follows this page. A record without `contract` is contract 1. Twenty before-records and all twenty-three after-records saved in the second pass of issue #30 are contract 1. They stay as they were written, and the tool checks them as it did before. A new record is contract 2, before and after. The field lists in the tool are the only definition of the record. This page explains them.
 
+When a saved before-record normalized declared confidence for eligibility, keep the pair immutable and add `declared-answers.v1.json` beside its round records. Each supplement entry pins the before-record and original answer list, and names the party and case. `summary` verifies those pins and uses the original `confidence` and `would_settle` for calibration. Routing and earned trust continue to use the before-record's eligibility values. The supplement grants no authority and changes no saved decision.
+
 ### The before-record
 
 | Field | What it holds |
