@@ -126,6 +126,9 @@ def draw(args):
     plan = documents["audit"]["plan"]
     if plan["sample"]["state"] != "selected":
         raise Inconsistent("the audit sample sizes await the human selection")
+    unbuilt = sorted({stratum["id"] for stratum in plan["strata"]} - {*FAMILY_STRATA.values(), *CLAIM_STRATA.values(), "serious-reference"})
+    if unbuilt:
+        raise Inconsistent("this tool does not build the declared strata yet, so no sample is drawn: " + ", ".join(unbuilt))
     waiting = [f"{batch['run']}/{batch['target']}" for batch in selected["batches"]
                if current_grading.batch_state(batch, selected, documents, root)[1] != "current"]
     if waiting:

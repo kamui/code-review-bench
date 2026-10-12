@@ -226,6 +226,45 @@ class CalibrationTest(unittest.TestCase):
         self.assertEqual(self.run_tool("check").returncode, 0)
         self.assertEqual(self.queue()["audit"]["needs"], ["human-selected tolerances"])
 
+    def test_superseded_round_keeps_its_own_seed_and_its_closure_in_the_receipt(self):
+        receipt = self.root / "audit-receipt.md"
+        receipt.write_text("Decision: the round drawn with seed fixture-round-one is closed as superseded.\n", encoding="utf-8")
+        closed = {"closed_at": "2026-10-12T00:00:00Z", "reason": "A new rubric replaced its labels.", "authority": "human",
+                  "receipt": current.pin_file(receipt, self.root),
+                  "receipt_scope": "Decision: the round drawn with seed fixture-round-one is closed as passed.",
+                  "plan": json.loads(json.dumps(self.documents["audit"]["plan"])), "evidence": []}
+        self.documents["audit"]["superseded"] = [closed]
+        self.save(queue=False)
+        self.assert_problem("audit: the declared plan and each superseded round have their own seed")
+        self.assert_problem("audit: the closure of fixture names the seed of the round it closes")
+        self.assert_problem("audit: the closure of fixture is not in the saved receipt")
+        closed["plan"]["seed"] = "fixture-round-one"
+        closed["receipt_scope"] = "Decision: the round drawn with seed fixture-round-one is closed as superseded."
+        self.save()
+        self.assertEqual(self.run_tool("check").returncode, 0)
+
+    def test_superseded_plan_keeps_its_own_strata_and_selection(self):
+        receipt = self.root / "audit-receipt.md"
+        receipt.write_text("Closed: fixture-round-one. One unit in the old stratum.\n", encoding="utf-8")
+        pin = current.pin_file(receipt, self.root)
+        old = {"declared_at": "2026-10-03T00:00:00Z", "basis": "No grade was saved.", "seed": "fixture-round-one",
+               "selection": "Hash order.", "strata": [stratum("old-label")],
+               "sample": {"state": "selected", "reason": "Saved selection", "authority": "human", "receipt": pin,
+                          "receipt_scope": "One unit in the old stratum.", "sizes": []},
+               "tolerances": pending("limits")}
+        self.documents["audit"]["superseded"] = [{
+            "closed_at": "2026-10-12T00:00:00Z", "reason": "A new rubric replaced its labels.", "authority": "human",
+            "receipt": pin, "receipt_scope": "Closed: fixture-round-one.", "plan": old, "evidence": []}]
+        self.save(queue=False)
+        self.assert_problem("audit superseded fixture-round-one sample: selected values cover every stratum once")
+        old["sample"]["sizes"] = [{"stratum": "old-label", "size": 1}]
+        old["strata"].append(stratum("old-label"))
+        self.save(queue=False)
+        self.assert_problem("audit superseded fixture-round-one: strata must be unique and cover []")
+        old["strata"].pop()
+        self.save()
+        self.assertEqual(self.run_tool("check").returncode, 0)
+
     def test_audit_without_a_plan_is_refused_by_every_operation(self):
         self.documents["audit"] = {"state": "unassessed", "evidence": []}
         self.save(queue=False)
