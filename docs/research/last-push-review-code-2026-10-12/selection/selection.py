@@ -69,7 +69,10 @@ class Selection:
 
     def registry(self):
         """The staged registry with the run that enters placed after the source it replaces, under that source's
-        configuration, without the configurations that leave, and with the plan's text for a configuration."""
+        configuration, without the configurations that leave, and with the plan's text for a configuration. It stops
+        when staging no longer gives the registry the re-cut record pins, which would publish another selection."""
+        if sha256(stage.text(self.before, 2)) != record.load(RECUT / stage.RECEIPT)["staged"]["registry_sha256"]:
+            raise SystemExit(f"stage_edition.py no longer stages the registry {stage.RECEIPT} pins; this change starts from that one")
         replaced = (self.enters["replaces"]["run"], self.enters["replaces"]["arm"])
         tasks = [row["target"] for row in self.manifest["cohort"]]
         waiting = {(row["run"], row["arm"]): row for row in self.deferred}

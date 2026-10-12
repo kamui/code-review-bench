@@ -5,9 +5,9 @@
 
 PACKETS is the directory `packets.py` wrote, now holding each matcher's `matches-N.json`; KEY is its key. The result
 is `intake.v1.json` beside this file. It lists under `reviews` the saved reviews whose comments the packets held. It
-refuses output that does not cover every item of a part exactly once, a match to an unknown claim or label, and a
-repeated match. Run from the repository root. It follows the collector of
-`docs/research/last-push-intake-2026-10-11/`."""
+refuses packets whose parts do not hold every item of the key exactly once, output that does not cover every item of
+a part exactly once, a match to an unknown claim or label, and a repeated match. Run from the repository root. It
+follows the collector of `docs/research/last-push-intake-2026-10-11/`, which does not compare the parts with the key."""
 import json
 import sys
 from pathlib import Path
@@ -25,11 +25,15 @@ def main():
     links, counts, reviews = [], {}, {}
     for target, names in sorted(key.items()):
         seen, reviews[target] = set(), sorted({source["review"]["path"] for source in names["items"].values()})
-        for part in sorted((packets / target).glob("part-*.json")):
-            items = set(json.loads(part.read_text(encoding="utf-8"))["items"])
+        parts = {part: json.loads(part.read_text(encoding="utf-8"))["items"]
+                 for part in sorted((packets / target).glob("part-*.json"))}
+        if sorted(item for held in parts.values() for item in held) != sorted(names["items"]):
+            raise SystemExit(f"{target}: the parts do not hold every item of the key exactly once")
+        for part, held in parts.items():
+            items = set(held)
             result = json.loads((packets / target / part.name.replace("part", "matches")).read_text(encoding="utf-8"))
-            matched = {row["item"] for row in result["matched"]}
-            if matched & set(result["unmatched"]) or matched | set(result["unmatched"]) != items:
+            matched, unmatched = {row["item"] for row in result["matched"]}, result["unmatched"]
+            if matched & set(unmatched) or matched | set(unmatched) != items or len(unmatched) != len(set(unmatched)):
                 raise SystemExit(f"{target} {part.name}: the output does not cover every item once")
             for row in result["matched"]:
                 if row["claim"] not in names["claims"] or row["label"] not in RELATION:

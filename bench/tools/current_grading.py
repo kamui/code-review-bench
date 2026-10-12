@@ -141,7 +141,7 @@ def kept_stops(run_dir):
 
     A diagnosis is a JSON object with ``predecessor``, ``cause`` and ``reason``, read as ``review_queue.py`` reads it:
     a file that is not such an object is passed over. An attempt with two diagnoses, with a cause the queue replaces
-    or with no reason is not kept."""
+    or with no reason is not kept, and neither is one whose cause or reason is not text."""
     found = {}
     for path in sorted((run_dir / "deviations").glob("*.json")):
         try:
@@ -149,9 +149,9 @@ def kept_stops(run_dir):
         except (OSError, ValueError):
             continue
         if isinstance(row, dict) and isinstance(row.get("predecessor"), str) and "cause" in row:
-            found.setdefault(row["predecessor"], []).append(row)
-    return {attempt: rows[0]["cause"] for attempt, rows in found.items()
-            if len(rows) == 1 and rows[0]["cause"] in KEPT_STOP_CAUSES and str(rows[0].get("reason") or "").strip()}
+            found.setdefault(row["predecessor"], []).append((row["cause"], row.get("reason")))
+    return {attempt: cause for attempt, ((cause, reason), *others) in found.items()
+            if not others and isinstance(cause, str) and cause in KEPT_STOP_CAUSES and isinstance(reason, str) and reason.strip()}
 
 
 def trial(records, kept=None):

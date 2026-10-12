@@ -133,6 +133,16 @@ class OneGenerationTests(unittest.TestCase):
             self.run_change()
         self.assertEqual(differing(tree(self.root), edited), [])
 
+    def test_a_staged_registry_other_than_the_pinned_one_stops_the_change_before_any_write(self) -> None:
+        registry, decided, deferred = self.selection.stage.staged_registry()
+        kept = [source for source in registry["sources"]
+                if (source["configuration"], source["tasks"]) != ("codex-ce-luna-high", ["j-trpc-5017"])]
+        self.assertEqual(len(kept), len(registry["sources"]) - 1)
+        with patch.object(self.selection.stage, "staged_registry", return_value=({**registry, "sources": kept}, decided, deferred)):
+            with self.assertRaisesRegex(SystemExit, "no longer stages the registry staged-edition.v2.json pins"):
+                self.run_change()
+        self.assertEqual(differing(tree(self.root), self.before), [])
+
     def test_text_for_a_configuration_that_left_the_selection_is_refused(self) -> None:
         change = self.selection.Selection()
         change.plan["configuration_text"] = {"codex-builtin": {"note": "Left the selection."}}
@@ -213,6 +223,24 @@ class IntakeTests(unittest.TestCase):
         (packets / task / "matches-1.json").write_text(json.dumps({**matches, "unmatched": others[2:]}))
         with self.assertRaisesRegex(SystemExit, "does not cover every item once"):
             self.run_script("collect", packets, self.temp / "key.json", HERE=self.temp)
+
+    def test_the_collector_refuses_parts_that_do_not_hold_every_keyed_item_exactly_once(self) -> None:
+        source = {"review": {"path": "bench/runs/run/attempts/att-001/normalized.json", "sha256": "0" * 64},
+                  "attempt_id": "att-001", "item_id": "item-0"}
+        key = self.temp / "key.json"
+        key.write_text(json.dumps({"t-task": {"claims": {"C1": "CL-t-claim"}, "items": {"I0000": source}}}), encoding="utf-8")
+        cases = {"no part file": {}, "an item the key does not hold": {1: ["I0000", "I9999"]},
+                 "an item in two parts": {1: ["I0000"], 2: ["I0000"]}, "a keyed item left out": {1: []}}
+        for case, parts in cases.items():
+            with self.subTest(case=case):
+                packets = self.temp / case / "t-task"
+                packets.mkdir(parents=True)
+                for number, items in parts.items():
+                    (packets / f"part-{number}.json").write_text(json.dumps({"items": dict.fromkeys(items, {})}), encoding="utf-8")
+                    (packets / f"matches-{number}.json").write_text(json.dumps({"matched": [], "unmatched": items}), encoding="utf-8")
+                with self.assertRaisesRegex(SystemExit, "do not hold every item of the key exactly once"):
+                    self.run_script("collect", packets.parent, key, HERE=self.temp)
+                self.assertFalse((self.temp / "intake.v1.json").exists())
 
     def test_usage_prices_each_session_from_its_last_usage_event(self) -> None:
         logs = self.temp / "logs"
