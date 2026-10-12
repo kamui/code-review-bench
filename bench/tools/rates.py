@@ -30,6 +30,9 @@ SOURCES = {
     "openai": "https://developers.openai.com/api/docs/pricing.md",
     "anthropic": "https://docs.anthropic.com/en/docs/about-claude/pricing.md",
 }
+# Anthropic lists a model priced by prompt length twice, "(for prompts up to N tokens)" and "(for prompts over N
+# tokens)". The catalog holds short-context prices, as it does for OpenAI's long-context columns.
+LONG_PROMPT_ROW = re.compile(r"\(for prompts over [\d,]+ tokens\)")
 
 
 class RateError(ValueError):
@@ -105,6 +108,8 @@ def parse_prices(provider: str, markdown: str, models: list[str]) -> tuple[dict,
     for row in rows:
         name = row[0]
         if provider == "anthropic":
+            if LONG_PROMPT_ROW.search(name):
+                continue
             name = re.sub(r"\s+\(.*", "", name).lower().replace(".", "-").replace(" ", "-")
         if name not in models:
             continue
