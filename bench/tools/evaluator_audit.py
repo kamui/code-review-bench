@@ -29,7 +29,10 @@ approved: one awaiting approval is a unit of no stratum, and the first check req
 ``<seed>:<stratum>:<unit id>`` with ties by unit id, and saves ``sample.json``: the populations, each stratum's
 state (``sampled``, ``whole`` when it holds no more units than its size, or ``empty``), the drawn units with their
 first result, the dataset hash, the per-task and per-configuration counts and the batches a second assessor has to
-grade. A unit drawn in two strata is listed once with both. It refuses a declared stratum or unit kind it does
+grade. The sample also pins each task's known problems with their impact labels and its control status as drawn.
+Every later operation draws again from the pinned grades, the selected attempts and those pinned facts, and
+refuses a sample that differs, so a label, a control status or an approval that changes before the conclusion
+leaves the sample as drawn. A unit drawn in two strata is listed once with both. It refuses a declared stratum or unit kind it does
 not know.
 
 ``claims`` writes the first grader's claim list of one sampled batch for ``grade.py prepare --inventory``: for
@@ -39,7 +42,8 @@ be new and outside the round's directory.
 ``second`` saves a second assessment of one sampled batch from a workspace ``grade.py prepare`` built with that
 claim list and a second assessor graded: a dispatched session other than the one that produced the grade, or
 with ``--assessor`` a person. It checks what ``grade.py map`` checks, replaces no grade and records no candidate,
-and removes the workspace's rebuildable clone.
+and removes the workspace's rebuildable clone. Its receipt records the hashes of the verdicts and of the
+assessment made from them, so a later change to either is refused.
 
 ``compare`` needs a second assessment of every sampled batch. It matches the second answers to the first
 grader's claims by review, item, claim id and exact quote, and refuses when a claim or a review is missing, added,
@@ -133,18 +137,33 @@ def drawn_units(strata):
     return drawn
 
 
+def sample_of(plan, units):
+    """What the plan draws from the graded units: the strata, the drawn units, their counts by task and
+    configuration and the batches that hold them."""
+    strata = strata_of(plan, {stratum["id"]: [identifier for identifier, unit in units.items() if stratum["id"] in unit["strata"]]
+                              for stratum in plan["strata"]})
+    sampled = [{"id": identifier, **{**units[identifier], "strata": names}} for identifier, names in sorted(drawn_units(strata).items())]
+    batches = Counter((unit["run"], unit["target"]) for unit in sampled)
+    return {"strata": strata, "units": sampled,
+            "coverage": {"tasks": dict(sorted(Counter(unit["target"] for unit in sampled).items())),
+                         "configurations": dict(sorted(Counter(unit["configuration"] for unit in sampled).items()))},
+            "batches": [{"run": run, "target": target, "units": count} for (run, target), count in sorted(batches.items())]}
+
+
 def drawn_sample(root, current):
     """(directory, sample) of the declared round. Refused once ``grades.json`` is no longer the file the sample was
-    drawn from, or when the sample is not the draw that its populations, the declared sizes and the seed give."""
+    drawn from, or when the sample is not what the plan draws from those grades, the selected attempts and the task
+    facts the sample pins."""
     directory = audit_dir(root, current)
     sample = read_json(directory / "sample.json")
     if current_grading.file_hash(root / sample["grades"]["path"]) != sample["grades"]["sha256"]:
         raise Inconsistent("grades.json changed since the sample was drawn, so its first assessments are no longer the grades "
                            "on record; correct grades after the conclusion, or draw a fresh sample under a new recorded seed")
     plan = read_json(current_grading.local_path(str(current), root) / "audits.json")["plan"]
-    strata = strata_of(plan, {stratum["id"]: stratum["population"] for stratum in sample["strata"]})
-    if strata != sample["strata"] or drawn_units(strata) != {unit["id"]: unit["strata"] for unit in sample["units"]}:
-        raise Inconsistent("sample.json is not the draw that its populations, the declared sizes and the seed give")
+    units = units_of(current_grading.inventory(root), read_json(root / sample["grades"]["path"])["batches"], sample["tasks"])
+    if any(sample.get(field) != value for field, value in sample_of(plan, units).items()):
+        raise Inconsistent("sample.json is not the draw that the pinned grades, the task facts it pins, the declared sizes and "
+                           "the seed give")
     return directory, sample
 
 
@@ -263,27 +282,34 @@ def check(args):
     return problems
 
 
-def units_of(selected, documents):
-    """Every graded unit with its strata and first result, keyed by unit id."""
+def task_facts(documents):
+    """What the populations take from the references, by task: each known problem with its approved impact label
+    and the control status. A sample pins them, because a label, a control status or an approval may change before
+    the round concludes without changing a grade."""
+    return {reference["target"]: {"control": reference["control"]["status"], "known_problems": {
+        family["id"]: family["impact"]["band"] if family["impact"]["band"] in IMPACT_STRATA else None
+        for family in known_problems(reference)}} for reference in documents["reference"]["targets"]}
+
+
+def units_of(selected, batches, tasks):
+    """Every graded unit of the batches with its strata and first result, keyed by unit id."""
     cells = {cell["id"]: cell for cell in selected["cells"]}
     attempts = {attempt["id"]: attempt for attempt in selected["attempts"]}
-    references = {reference["target"]: reference for reference in documents["reference"]["targets"]}
     found = []
-    for batch in documents["grade"]["batches"]:
-        reference = references[batch["target"]]
+    for batch in batches:
+        task = tasks[batch["target"]]
         for review in batch["reviews"]:
             attempt = f"{Path(batch['run']).name}/{review['attempt_id']}"
             facts = attempts[attempt]
             common = {"run": batch["run"], "target": batch["target"], "attempt": review["attempt_id"],
                       "configuration": cells[facts["cell"]]["configuration"]}
             if facts["admission"]["state"] == "admitted":
-                for family in known_problems(reference):
-                    result, claim_ids = credit(review["claims"], family["id"])
-                    strata = [CREDIT_STRATA[result]] + [label for label in IMPACT_STRATA if family["impact"]["band"] == label]
-                    found.append((f"{attempt}#{family['id']}", {
-                        "unit": "family-review", **common, "subject": family["id"], "strata": strata,
+                for family, label in task["known_problems"].items():
+                    result, claim_ids = credit(review["claims"], family)
+                    found.append((f"{attempt}#{family}", {
+                        "unit": "family-review", **common, "subject": family, "strata": [CREDIT_STRATA[result], *([label] if label else [])],
                         "first": {"result": result, "claim_ids": claim_ids}}))
-                if reference["control"]["status"] == "audited-clean":
+                if task["control"] == "audited-clean":
                     result, claim_ids = control_result(review["claims"])
                     found.append((attempt, {"unit": "control-review", **common, "subject": None, "strata": ["control-silence"],
                                             "first": {"result": result, "claim_ids": claim_ids}}))
@@ -312,23 +338,14 @@ def draw(args):
         return problems + ["the whole-cohort checks failed, so no sample is drawn"]
     directory = current_grading.local_path(str(args.current), root)
     out = audit_dir(root, args.current)
-    units = units_of(selected, documents)
-    strata = strata_of(plan, {stratum["id"]: [identifier for identifier, unit in units.items() if stratum["id"] in unit["strata"]]
-                              for stratum in plan["strata"]})
-    sampled = [{"id": identifier, **{**units[identifier], "strata": names}} for identifier, names in sorted(drawn_units(strata).items())]
-    batches = Counter((unit["run"], unit["target"]) for unit in sampled)
+    tasks = task_facts(documents)
+    sample = sample_of(plan, units_of(selected, documents["grade"]["batches"], tasks))
     save_new(out / "sample.json", {
         "contract": "evaluator-audit-sample/v2", "drawn_at": now(), "seed": plan["seed"],
         "dataset_hash": current_grading.coverage_status(selected, documents)["dataset_hash"],
-        "grades": current_grading.pin_file(directory / "grades.json", root),
-        "known_problems": {reference["target"]: [family["id"] for family in known_problems(reference)]
-                           for reference in documents["reference"]["targets"]},
-        "strata": strata, "units": sampled,
-        "coverage": {"tasks": dict(sorted(Counter(unit["target"] for unit in sampled).items())),
-                     "configurations": dict(sorted(Counter(unit["configuration"] for unit in sampled).items()))},
-        "batches": [{"run": run, "target": target, "units": count} for (run, target), count in sorted(batches.items())]})
-    print(f"drew {len(sampled)} unit(s) in {len(batches)} batch(es): " +
-          ", ".join(f"{s['id']} {len(s['drawn'])}/{len(s['population'])} {s['state']}" for s in strata))
+        "grades": current_grading.pin_file(directory / "grades.json", root), "tasks": tasks, **sample})
+    print(f"drew {len(sample['units'])} unit(s) in {len(sample['batches'])} batch(es): " +
+          ", ".join(f"{s['id']} {len(s['drawn'])}/{len(s['population'])} {s['state']}" for s in sample["strata"]))
     return []
 
 
@@ -352,7 +369,7 @@ def listed_claims(args):
     root, run, out = Path(args.root).resolve(), grade.run_identity(args.run), args.out.resolve()
     directory, sample = drawn_sample(root, args.current)
     first = sampled_grade(sample, root, run, args.target)
-    if out.exists() or directory in (out, *out.parents):
+    if out.exists() or directory.resolve() in (out, *out.parents):
         raise Inconsistent(f"{args.out} exists or is inside the round's directory; a claim list goes to a new file outside "
                            "the round's records")
     save_new(out, claim_list(first))
@@ -393,20 +410,21 @@ def second(args):
     out.mkdir(parents=True)
     try:
         (out / "verdicts.json").write_bytes(raw)
-        receipt = {"contract": "evaluator-audit-second/v2", "run": run, "target": target, "input_fingerprint": fingerprint,
-                   "saved_at": now(), "provenance": provenance, "independent_of": graded_by,
-                   "verdicts_sha256": grade.sha256(raw), "prepared_files": key["prepared_files"], "validator": key["validator"],
-                   "link_disputes": verdicts["link_disputes"], "new_candidates": verdicts["new_candidates"],
-                   "reviews": [{field: review[field] for field in ("token", "attempt_id", "items", "review")}
-                               for review in key["reviews"]]}
-        (out / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
-        evidence = [current_grading.pin_file(out / name, root) for name in ("verdicts.json", "receipt.json")]
+        evidence = [current_grading.pin_file(out / "verdicts.json", root)]
         families = next(r for r in documents["reference"]["targets"] if r["target"] == target)["families"]
         raised = grade.raised_candidates(verdicts, key["reviews"], attempts, next(t for t in selected["tasks"] if t["id"] == target))
         reviews = [grade.graded_v2(entry, verdicts["reviews"][entry["token"]], attempts[entry["attempt_id"]], families, evidence,
                                    {}, [], raised) for entry in sorted(key["reviews"], key=lambda r: r["attempt_id"])]
         (out / "assessment.json").write_text(json.dumps({"run": run, "target": target, "reviews": reviews}, indent=2) + "\n",
                                              encoding="utf-8")
+        receipt = {"contract": "evaluator-audit-second/v2", "run": run, "target": target, "input_fingerprint": fingerprint,
+                   "saved_at": now(), "provenance": provenance, "independent_of": graded_by,
+                   "verdicts_sha256": grade.sha256(raw), "assessment_sha256": current_grading.file_hash(out / "assessment.json"),
+                   "prepared_files": key["prepared_files"], "validator": key["validator"],
+                   "link_disputes": verdicts["link_disputes"], "new_candidates": verdicts["new_candidates"],
+                   "reviews": [{field: review[field] for field in ("token", "attempt_id", "items", "review")}
+                               for review in key["reviews"]]}
+        (out / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
         try:
             prune_workspace.prune_grading(work, read_json(root / "bench/targets" / target / "target.json").get("head"),
                                           receipt, apply=True)
@@ -449,7 +467,7 @@ def reported(sample, reviews, targets):
     """The counts the plan reports without a tolerance, over every review of the sampled batches. "Says what goes
     wrong" is counted for every claim and known problem of its task, an absent entry being "no", and again for the
     pairs where either assessment answers "yes" or "cannot-tell"."""
-    paired = [(claim, next(other for other in after["claims"] if other["id"] == claim["id"]), sample["known_problems"][targets[review]])
+    paired = [(claim, next(other for other in after["claims"] if other["id"] == claim["id"]), sample["tasks"][targets[review]]["known_problems"])
               for review, (before, after) in reviews.items() for claim in before["claims"]]
     grid = [(says_what(a, family), says_what(b, family)) for a, b, known in paired for family in known]
     populations = {stratum["id"]: stratum["population"] for stratum in sample["strata"]}
@@ -474,26 +492,30 @@ def reported(sample, reviews, targets):
 
 def comparison_of(directory, sample, root):
     """(comparison, problems): the sample's units under the latest second assessment of each sampled batch. An
-    assessment whose verdicts or receipt are no longer the files its claims pin is refused."""
+    assessment whose verdicts or reviews are no longer the files its receipt records is a problem, whether or not
+    it holds a claim."""
     graded = {(batch["run"], batch["target"]): batch for batch in read_json(root / sample["grades"]["path"])["batches"]}
     assessments, missing = {}, []
     for batch in sample["batches"]:
         saved = sorted((directory / "second" / Path(batch["run"]).name / batch["target"]).glob("assessment-*/assessment.json"),
                        key=lambda path: int(path.parent.name.split("-")[1]))
-        fingerprint = graded[(batch["run"], batch["target"])]["input_fingerprint"]
-        if saved and read_json(saved[-1].with_name("receipt.json"))["input_fingerprint"] != fingerprint:
-            missing.append(f"{batch['run']}/{batch['target']}: the second assessment graded other inputs than the sampled grade")
-        elif saved:
-            assessments[(batch["run"], batch["target"])] = saved[-1]
-        else:
-            missing.append(f"{batch['run']}/{batch['target']}: no second assessment")
+        where = f"{batch['run']}/{batch['target']}"
+        if not saved:
+            missing.append(f"{where}: no second assessment")
+            continue
+        receipt = read_json(saved[-1].with_name("receipt.json"))
+        changed = [name for name in ("verdicts", "assessment")
+                   if current_grading.file_hash(saved[-1].with_name(f"{name}.json")) != receipt.get(f"{name}_sha256")]
+        if receipt["input_fingerprint"] != graded[(batch["run"], batch["target"])]["input_fingerprint"]:
+            missing.append(f"{where}: the second assessment graded other inputs than the sampled grade")
+        missing += [f"{where}: {name}.json is not the file the second assessment's receipt records" for name in changed]
+        assessments[(batch["run"], batch["target"])] = saved[-1]
     if missing:
         return None, missing
     reviews, targets, invalid = {}, {}, []
     for key, path in assessments.items():
         firsts = {review["attempt_id"]: review for review in graded[key]["reviews"]}
         answered = read_json(path)["reviews"]
-        current_grading.verify_pins(answered, root)
         seconds = {review["attempt_id"]: review for review in answered}
         held = Counter(review["attempt_id"] for review in answered)
         for attempt in sorted(set(firsts) | set(seconds)):
@@ -522,7 +544,8 @@ def comparison_of(directory, sample, root):
                **table([(row["first"]["result"], row["second"]["result"]) for row in rows if stratum["id"] in row["strata"]])}
               for stratum in sample["strata"]]
     return {"contract": "evaluator-audit-comparison/v2", "sample": current_grading.pin_file(directory / "sample.json", root),
-            "second": [current_grading.pin_file(path, root) for _key, path in sorted(assessments.items())],
+            "second": [current_grading.pin_file(path.with_name(name), root) for _key, path in sorted(assessments.items())
+                       for name in ("verdicts.json", "assessment.json", "receipt.json")],
             "strata": strata, "units": rows, "reported": reported(sample, reviews, targets)}, []
 
 
