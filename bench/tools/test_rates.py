@@ -155,6 +155,15 @@ class RatesTests(unittest.TestCase):
         self.assertEqual(parsed["claude-opus-5-5"], {"input": 4, "output": 20, "cache_read": 0.2,
                                                     "cache_write_5m": 5, "cache_write_1h": 8})
 
+    def test_anthropic_model_priced_by_prompt_length_reads_its_short_prompt_row(self):
+        tiered = ANTHROPIC + (
+            "| Claude Haiku 5.5 (for prompts up to 100,000 tokens) | $0.10 / MTok | $0.125 / MTok | $0.20 / MTok | $0.01 / MTok | $0.50 / MTok |\n"
+            "| Claude Haiku 5.5 (for prompts over 100,000 tokens) | $0.50 / MTok | $0.625 / MTok | $1 / MTok | $0.05 / MTok | $2.50 / MTok |\n")
+        parsed, unsupported = rates.parse_prices("anthropic", tiered, ["claude-haiku-5-5"])
+        self.assertEqual(unsupported, {})
+        self.assertEqual(parsed["claude-haiku-5-5"], {"input": 0.1, "output": 0.5, "cache_read": 0.01,
+                                                     "cache_write_5m": 0.125, "cache_write_1h": 0.2})
+
     def test_duplicate_provider_rows_are_refused(self):
         duplicated = ANTHROPIC + ANTHROPIC.splitlines()[-1] + "\n"
         with self.assertRaisesRegex(rates.RateError, "ambiguous"):
