@@ -133,6 +133,12 @@ class OneGenerationTests(unittest.TestCase):
             self.run_change()
         self.assertEqual(differing(tree(self.root), edited), [])
 
+    def test_text_for_a_configuration_that_left_the_selection_is_refused(self) -> None:
+        change = self.selection.Selection()
+        change.plan["configuration_text"] = {"codex-builtin": {"note": "Left the selection."}}
+        with self.assertRaisesRegex(SystemExit, "not in the selection"):
+            change.registry()
+
     def test_a_comment_linked_to_two_claims_is_linked_to_neither_as_equivalent(self) -> None:
         change, selected = self.selection.Selection(), read(ROOT / INVENTORY)
         proposed = next(link for link in change.links if link["claim"] == "CL-i-tls-version-ignored")

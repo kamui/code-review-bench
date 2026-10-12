@@ -69,7 +69,7 @@ class Selection:
 
     def registry(self):
         """The staged registry with the run that enters placed after the source it replaces, under that source's
-        configuration, and without the configurations that leave."""
+        configuration, without the configurations that leave, and with the plan's text for a configuration."""
         replaced = (self.enters["replaces"]["run"], self.enters["replaces"]["arm"])
         tasks = [row["target"] for row in self.manifest["cohort"]]
         waiting = {(row["run"], row["arm"]): row for row in self.deferred}
@@ -85,8 +85,12 @@ class Selection:
             if (source["run"], source["arm"]) == replaced:
                 sources.append({"run": self.enters["run"], "arm": self.manifest["arms"][0]["id"],
                                 "configuration": source["configuration"], "tasks": tasks})
+        text = self.plan["configuration_text"]
+        if not text.keys() <= {source["configuration"] for source in sources}:
+            raise SystemExit("the plan gives text for a configuration that is not in the selection")
         return {**self.before,
-                "configurations": [row for row in self.before["configurations"] if row["id"] not in self.leaves],
+                "configurations": [{**row, **text.get(row["id"], {})} for row in self.before["configurations"]
+                                   if row["id"] not in self.leaves],
                 "sources": sources,
                 "suites": [{**suite, "configurations": [name for name in suite["configurations"] if name not in self.leaves]}
                            for suite in self.before["suites"]]}
