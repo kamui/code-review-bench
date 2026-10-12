@@ -94,10 +94,6 @@ def appended(text, note):
     return text if note in text else text + note
 
 
-def without(pins, pin):
-    return [existing for existing in pins if existing != pin]
-
-
 def upper(text):
     return text[0].upper() + text[1:]
 
@@ -118,7 +114,7 @@ class Filing:
     def __init__(self):
         plan = load(HERE / "plan.v1.json")
         self.entries, self.kinds_plan, self.carried = plan["entries"], plan["kinds"], plan["carried"]
-        self.label_plan, self.rewordings_plan = plan["label_checks"], plan["rewordings"]
+        self.label_plan, self.rewordings_plan, self.narrowed = plan["label_checks"], plan["rewordings"], plan["narrowed_links"]
         names = ("references", "adjudications", "claims", "candidates", "credits")
         self.documents = {name: load(CURRENT / f"{name}.json") for name in names}
         self.loaded = json.loads(json.dumps(self.documents))
@@ -155,6 +151,8 @@ class Filing:
         label, family, claim = self.label(entry), entry["family"], entry["claim"]
         if part == "eligibility":
             return f"Recorded: {label} is known problem {family} of {entry['target']}, eligible."
+        if part == "impact" and entry["kind"] in CHANGED:
+            return f"Recorded: the impact band of {family} stays {entry['band']} for the {entry['kind']} wording."
         if part == "impact":
             return f"Recorded: the impact band of {family} is {entry['band']}."
         if part == "joined":
@@ -177,8 +175,8 @@ class Filing:
                 f"known problem {entry['family']}, changed from advice.")
 
     def passages(self, entry):
-        parts = {"joined": ("joined", "retired"), "new": ("eligibility", "impact"), "promoted": ("eligibility", "impact"),
-                 "widened": ("widened",), "member": ()}[entry["kind"]]
+        parts = {"joined": ("joined", "impact", "retired"), "new": ("eligibility", "impact"),
+                 "promoted": ("eligibility", "impact"), "widened": ("widened", "impact"), "member": ()}[entry["kind"]]
         passages = [self.scope(entry, part) for part in parts] + ([self.scope(entry, "claim")] if entry["claim"] else [])
         return passages + [self.candidate_scope(entry, candidate) for candidate in entry["candidates"]]
 
@@ -225,7 +223,7 @@ class Filing:
         replaces it, its reason, and it gains the pin of the receipt it cited before, so that passage stays
         reachable."""
         decision = self.find(identifier)
-        earlier = without([decision["receipt"]], self.receipt_pin)
+        earlier = [decision["receipt"]] if decision["receipt"]["path"] != self.receipt_pin["path"] else []
         evidence = decision["evidence"] + [pin for pin in added + earlier if pin not in decision["evidence"]]
         decision.update(reason=appended(reason or decision["reason"], note), receipt=self.receipt_pin,
                         receipt_scope=self.cited(scope), evidence=evidence)
@@ -299,10 +297,13 @@ class Filing:
         family.update(text, evidence=family["evidence"] + added,
                       eligibility={**family["eligibility"], "reason": appended(family["eligibility"]["reason"], note)})
         self.repoint(family["eligibility"]["adjudication"], self.scope(entry, entry["kind"]), added + retired, note=note)
-        decision, checks = self.find(family["impact"]["adjudication"]), self.checks(entry["family"], family["impact"]["band"])
-        kept = self.kept(entry, checks)
+        if family["impact"]["band"] != entry["band"]:
+            raise SystemExit(f"{entry['family']}: the plan and the filed label differ")
+        decision, checks = self.find(family["impact"]["adjudication"]), self.checks(entry["family"], entry["band"])
+        kept, card = self.kept(entry, checks), self.card(entry, record, family["evidence"])
         family["impact"] = {**family["impact"], "reason": appended(family["impact"]["reason"], kept)}
-        decision.update(reason=appended(decision["reason"], kept), evidence=[self.card(entry, record, family["evidence"])])
+        decision["evidence"] = [card] + [pin for pin in decision["evidence"] if pin["path"] != card["path"]]
+        self.repoint(decision["id"], self.scope(entry, "impact"), [], note=kept)
         self.checked(decision, checks)
 
     def add(self, entry, record, families, text):
@@ -420,6 +421,11 @@ class Filing:
                 self.widened_claim(entry, existing)
             else:
                 put(rows, self.filed_claim(entry, existing))
+        by_id = {row["id"]: row for row in rows}
+        for narrowed in self.narrowed:
+            link = next(link for link in by_id[narrowed["claim"]]["links"] if key(link) == (narrowed["review"], narrowed["item_id"]))
+            if link["relation"] == "equivalent":
+                link.update(relation="related", reason=f"{link['reason']} {narrowed['reason']}")
         targets = {entry["target"] for entry in self.entries if entry["claim"]}
         self.narrow([row for row in rows if row["target"] in targets])
 
@@ -477,11 +483,9 @@ class Filing:
         rows = self.documents["credits"]["rulings"]
         for carried in self.carried:
             moved = carried["row"].replace(carried["from"], carried["to"], 1)
-            row = next((row for row in rows if row["id"] == carried["row"]), None)
-            if row is None and moved not in [row["id"] for row in rows]:
-                raise SystemExit(f"{carried['row']}: the ruling is saved under neither known problem")
+            row = next((row for row in rows if row["id"] in (carried["row"], moved)), None)
             if row is None:
-                continue
+                raise SystemExit(f"{carried['row']}: the ruling is saved under neither known problem")
             if (row["says_what"] == "yes") != carried["credit"]:
                 raise SystemExit(f"{carried['row']}: the saved ruling and the plan differ on credit")
             note = f" Carried to {carried['to']} on {DAY}, when {carried['from']} was joined into it ({carried['answer']})."
