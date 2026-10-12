@@ -23,7 +23,7 @@ Three of the Base UI claims are not in the current claims yet. The owner ruled o
 
 [`packets.py`](packets.py) and [`collect.py`](collect.py) are the intake's scripts. The one change is that `packets.py` also lists the claims of `proposed-claims.json`. [`prompt.md`](prompt.md) is the intake's prompt byte for byte. One fresh Codex GPT-6.1 Sol session at high reasoning effort read each task's folder and saw nothing else.
 
-The packets, the key that maps the opaque ids back, the matchers' raw output and their logs are outside the repository, in `~/.t3/issue30-intake/2026-10-11-rs/` on the machine that ran this.
+The original packets, opaque-id key, raw outputs and logs are published in the [immutable evidence manifest](../../../../bench/evidence/manifests/last-push-rulings-2026-10-11-v1.json), under `artifacts/research/last-push-rulings-2026-10-11/intake/`. The [execution index](../execution-evidence.v1.json) pins that manifest and connects both matching sessions to their original logs, native transcripts and the saved usage. [Retrieval and verification](../execution-evidence.md) describes the captured evidence and its limits. The local originals remain in `~/.t3/issue30-intake/2026-10-11-rs/`.
 
 ## Limits
 
