@@ -486,22 +486,23 @@ class GradingIntegration(unittest.TestCase):
         return work, claims.read(key_path)
 
     def test_real_batch_blinds_current_matches_and_pins_their_decisions(self):
-        run, target = "2026-09-29-codex-sol-high-writable", "n-ripgrep-2957"
+        run, target = "2026-10-08-last-push-claude-sonnet", "n-ripgrep-2957"
         with tempfile.TemporaryDirectory() as temp:
             work, key = self.prepare(Path(temp), "plain", run, target)
             tokens = {r["attempt_id"]: r["token"] for r in key["reviews"]}
             context = (work / "claims.md").read_text()
-            self.assertIn(f"CL-n-fpath-order equivalent: {tokens['att-006']} item 1", context)
-            self.assertIn(f"CL-n-source-order equivalent: {tokens['att-006']} item 2", context)
+            self.assertIn(f"CL-n-source-order equivalent: {tokens['att-017']} item 1", context)
+            self.assertIn(f"CL-n-source-order equivalent: {tokens['att-017']} item 2", context)
+            self.assertIn(f"CL-n-fpath-order related: {tokens['att-017']} item 5", context)
             self.assertNotIn(run, context)
-            self.assertNotIn("att-006", context)
+            self.assertNotIn("att-017", context)
             self.assertEqual(key["claim_snapshot"]["claims"], ["CL-n-fpath-order", "CL-n-source-order"])
             self.assertNotIn("evidence", key["claim_snapshot"])
             self.assertFalse((work / "evidence").exists())
             inputs = claims.read(work / "validator/inputs.json")
             self.assertEqual(inputs["canonical"], {"CL-n-fpath-order": {"outcome": "eligible", "family": "GT-n2"},
                                                    "CL-n-source-order": {"outcome": "eligible", "family": "GT-n3"}})
-            self.assertEqual(inputs["matches"][tokens["att-006"]], {"1": ["CL-n-fpath-order"], "2": ["CL-n-source-order"]})
+            self.assertEqual(inputs["matches"][tokens["att-017"]], {"1": ["CL-n-source-order"], "2": ["CL-n-source-order"]})
             selected = current.inventory()
             self.assertEqual(sorted(tokens), sorted(grade.check_attempts(claims.ROOT, selected, f"runs/{run}", target, {})[0]))
             references = (work / "references.json").read_text()
@@ -562,7 +563,7 @@ class GradingIntegration(unittest.TestCase):
 
     def test_only_claims_matched_in_the_batch_receive_a_packet(self):
         with tempfile.TemporaryDirectory() as temp:
-            work, key = self.prepare(Path(temp), "enriched", "2026-09-29-codex-luna-high-writable", "n-ripgrep-2957",
+            work, key = self.prepare(Path(temp), "enriched", "2026-10-08-last-push-codex-luna", "n-ripgrep-2957",
                                      claims.DEFAULT_EXTRACTS)
             self.assertEqual(key["claim_snapshot"]["claims"], ["CL-n-source-order"])
             self.assertEqual([packet["claim_id"] for packet in key["claim_snapshot"]["evidence"]["packets"]],
@@ -573,20 +574,21 @@ class GradingIntegration(unittest.TestCase):
     def test_prepare_refuses_a_packet_naming_this_batch(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            attempts = grade.attempts_on(current.inventory(), "runs/2026-09-29-codex-luna-high-writable", "n-ripgrep-2957")
+            attempts = grade.attempts_on(current.inventory(), "runs/2026-10-08-last-push-codex-luna", "n-ripgrep-2957")
             self.assertEqual(len(attempts), 3)
-            packet = {"text": "Raised in att-006", "sources": [], "withheld": []}
+            self.assertIn("att-015", attempts)
+            packet = {"text": "Raised in att-015", "sources": [], "withheld": []}
             with patch.object(claims, "grading_evidence", return_value={"CL-n-source-order": packet}):
-                with self.assertRaisesRegex(grade.Inconsistent, "evidence/CL-n-source-order.md names 'att-006'"):
-                    self.prepare(root, "enriched", "2026-09-29-codex-luna-high-writable", "n-ripgrep-2957", claims.DEFAULT_EXTRACTS)
+                with self.assertRaisesRegex(grade.Inconsistent, "evidence/CL-n-source-order.md names 'att-015'"):
+                    self.prepare(root, "enriched", "2026-10-08-last-push-codex-luna", "n-ripgrep-2957", claims.DEFAULT_EXTRACTS)
             self.assertFalse((root / "enriched-work").exists())
             self.assertFalse((root / "enriched-key.json").exists())
 
     def test_advisory_claim_evidence_does_not_change_its_pinned_outcome(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            plain_work, _plain_key = self.prepare(root, "plain", "2026-09-29-codex-thermo-high", "l-bokeh-9232")
-            work, key = self.prepare(root, "enriched", "2026-09-29-codex-thermo-high", "l-bokeh-9232", claims.DEFAULT_EXTRACTS)
+            plain_work, _plain_key = self.prepare(root, "plain", "2026-10-10-last-push-codex-thermo-sol61", "l-bokeh-9232")
+            work, key = self.prepare(root, "enriched", "2026-10-10-last-push-codex-thermo-sol61", "l-bokeh-9232", claims.DEFAULT_EXTRACTS)
             self.assertIn("Approved outcome: advisory.", (work / "evidence/CL-l-initial-display.md").read_text())
             canonical = claims.read(work / "validator/inputs.json")["canonical"]
             self.assertEqual(canonical, {"CL-l-initial-display": {"outcome": "advisory", "family": None}})
