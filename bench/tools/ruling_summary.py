@@ -10,6 +10,41 @@ def natural(value):
     return tuple((1, int(part)) if part.isdigit() else (0, part) for part in re.split(r"(\d+)", value))
 
 
+def declared_answers(pairs, root):
+    by_path = {pair["path"]: pair for pair in pairs}
+    for supplement in sorted((root / "docs/research").rglob("declared-answers.v1.json")):
+        saved = record.load(supplement)
+        if not isinstance(saved, dict) or saved.get("schema_version") != 1 or not isinstance(saved.get("records"), list):
+            raise ValueError(f"{supplement}: invalid declared-answer supplement")
+        for item in saved["records"]:
+            if not isinstance(item, dict) or not isinstance(item.get("before"), dict) or not isinstance(item.get("answers"), list):
+                raise ValueError(f"{supplement}: invalid declared-answer record")
+            pin = item.get("before", {})
+            pair = by_path.get(pin.get("path"))
+            if pair is None or pin.get("sha256") != pair["hash"] or "declared_answers" in pair:
+                raise ValueError(f"{supplement}: missing, changed or repeated before-record")
+            answers = {answer["by"]: dict(answer) for answer in pair["before"]["answers"]}
+            seen = set()
+            for declaration in item["answers"]:
+                if not isinstance(declaration, dict) or not all(field in declaration for field in ("by", "source", "case")):
+                    raise ValueError(f"{supplement}: invalid declared-answer source")
+                by, source = declaration["by"], declaration["source"]
+                if by not in answers or by in seen or not record.pinned(source, root) or not record.kept(source, root):
+                    raise ValueError(f"{supplement}: missing, changed or repeated answer source")
+                seen.add(by)
+                original = record.load(root / source["path"])
+                if not isinstance(original, list) or not all(isinstance(answer, dict) for answer in original):
+                    raise ValueError(f"{supplement}: declared-answer source must be a list of answers")
+                matches = [answer for answer in original if answer.get("case") == declaration["case"]]
+                if len(matches) != 1:
+                    raise ValueError(f"{supplement}: declared answer must select exactly one case")
+                confidence, settle = matches[0].get("confidence"), matches[0].get("would_settle")
+                if confidence not in record.LEVELS or type(settle) is not bool or settle != (confidence == "high"):
+                    raise ValueError(f"{supplement}: invalid declared confidence or settlement claim")
+                answers[by].update(confidence=confidence, would_settle=settle)
+            pair["declared_answers"] = list(answers.values())
+
+
 def records(root=record.ROOT):
     pairs = []
     research = root / "docs/research"
@@ -70,6 +105,7 @@ def records(root=record.ROOT):
             problems = delegation.settlement_faults(pair["before"], pair["after"], root, root / pair["path"], pairs[:position + 1])
             if problems:
                 raise ValueError(f"{pair['path']}: {'; '.join(problems)}")
+    declared_answers(pairs, root)
     return pairs
 
 
@@ -223,7 +259,8 @@ def summarize(pairs, root=record.ROOT, round_name=None):
             for pair in group:
                 before, after = pair["before"], pair["after"]
                 decisions = final_decisions(pair, pairs, root)
-                for answer in before["answers"]:
+                calibration = pair.get("declared_answers", before["answers"])
+                for answer in calibration:
                     row = parties.setdefault(answer["by"], {}).setdefault(answer["confidence"] or "not recorded",
                                                                          {"answers": 0, "matches": 0, "excluded": 0})
                     row["answers"] += 1
@@ -231,7 +268,7 @@ def summarize(pairs, root=record.ROOT, round_name=None):
                         row["excluded"] += 1
                     elif agrees(answer, decisions):
                         row["matches"] += 1
-                blind = [answer for answer in before["answers"] if answer["blind"]]
+                blind = [answer for answer in calibration if answer["blind"]]
                 high = (len(blind) == 2 and all(answer["confidence"] == "high" and answer["would_settle"]
                                               and independent(answer, pair, root) for answer in blind)
                         and outcome(blind[0]) == outcome(blind[1]))
