@@ -4,7 +4,7 @@ import type { Assessment, Attempt, Candidate, Configuration, Dataset, Family, Ta
 type Claim = Assessment['claims'][number]
 type Remedy = Assessment['recommendations'][number]
 type Advice = Assessment['advice'][number]
-export type Trial = { attempts: Attempt[]; pending?: true }
+export type Trial = { attempts: Attempt[]; pending?: true; reason?: string }
 type Cells = Record<string, [Task, (Attempt | Trial)[]][]>
 
 export const setup = (id: string, experimental = false, overrides: Partial<Configuration> = {}): Configuration => ({ id, label: id, short: id, version: '1',
@@ -51,7 +51,8 @@ export function build(tasks: Task[], cells: Cells, options: { audit?: string; ex
     outcomes: Object.entries(cells).flatMap(([configurationId, rows]) => rows.map(([subject, scheduled]) => ({ configurationId, taskId: subject.id,
       status: 'ran', reason: '', attemptIds: trials(scheduled).flatMap(trial => trial.attempts.map(attempt => attempt.id)),
       trials: trials(scheduled).map((trial, index) => ({ replicate: index + 1, state: trial.pending ? 'pending' : 'resolved',
-        reason: trial.pending ? 'Stopped attempt awaits replacement.' : 'valid completed', attemptIds: trial.attempts.map(attempt => attempt.id),
+        reason: trial.pending ? 'Stopped attempt awaits replacement.' : trial.reason ?? trial.attempts.at(-1)?.disposition ?? 'valid completed',
+        attemptIds: trial.attempts.map(attempt => attempt.id),
         terminal: trial.attempts.at(-1)?.id ?? null })) }))),
     attempts: Object.values(cells).flatMap(rows => rows.flatMap(([, scheduled]) => trials(scheduled).flatMap(trial => trial.attempts))),
     candidates: options.candidates ?? [], import: { files: 0, transcripts: 0, mismatches: 0 } })

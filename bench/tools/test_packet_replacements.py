@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """Check the last-push re-cut record, that its verifier reports a moved packet, pin or decision, that
-the selection it stages never mixes reviews of two cuts of a task, and that this selection is the
-published one.
+the selection it stages never mixes reviews of two cuts of a task, and that its registry is the one
+the record pins. test_review_code_selection.py checks that the published selection follows from it.
 
 Usage: python3 bench/tools/test_packet_replacements.py
 Inputs: the committed record under docs/research/last-push-recut-2026-10-07, the packets it pins
-under bench/targets, the registry, the inventory, the run manifests and the current references. No network.
+under bench/targets, the registry, the run manifests and the current references. No network.
 Exit codes: 0 all checks pass; 1 a test fails.
 """
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -156,11 +157,9 @@ class StagedSelectionTests(unittest.TestCase):
     def test_staging_starts_from_the_registry_the_record_pins(self) -> None:
         self.assertEqual({"path": stage_edition.REGISTRY, "sha256": verify.digest(stage_edition.BEFORE)}, self.record["inputs"][0])
 
-    def test_the_published_selection_is_the_staged_one(self) -> None:
-        self.assertEqual((ROOT / stage_edition.REGISTRY).read_text(encoding="utf-8"), stage_edition.text(self.staged, 2))
-        self.assertEqual({"registry_sha256": verify.digest(ROOT / stage_edition.REGISTRY),
-                          "inventory_sha256": verify.digest(ROOT / stage_edition.INVENTORY)},
-                         {name: self.record["staged"][name] for name in ("registry_sha256", "inventory_sha256")})
+    def test_the_staged_registry_is_the_one_the_record_pins(self) -> None:
+        staged = hashlib.sha256(stage_edition.text(self.staged, 2).encode("utf-8")).hexdigest()
+        self.assertEqual(staged, self.record["staged"]["registry_sha256"])
 
     def test_staging_into_the_published_checkout_is_refused(self) -> None:
         with patch.object(stage_edition, "staged_registry", side_effect=AssertionError("staging began")):

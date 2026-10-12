@@ -282,9 +282,10 @@ The run's freeze commit, `764cd032`, is on this branch only. `fetch_freeze_commi
 
 ## Not done
 
-- The registry, the inventory, the published selection and `stage_edition.py` do not name this run. Once the run enters the selection, the Pages workflow needs a fetch of the new manifest beside the two it has.
 - The default work root still gives a run with a name this long a socket path over the limit. A later run needs a short `work_root` or a fix in the harness.
-- No comment has a claim link, and no review is graded.
+- No review is graded.
+
+The run entered the published selection later on 2026-10-12, and its comments were linked to the current claims then. [The selection record](selection/README.md) says what entered and what left. The inventory holds each of the four kept stops as a resolved trial with no admitted review, as the owner chose on 2026-10-12, so the scorecard counts it as a trial that delivered nothing. The sections above describe the run as it was filed, before that.
 
 To retrieve the published archives in another checkout:
 
