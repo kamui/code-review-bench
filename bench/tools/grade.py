@@ -99,7 +99,7 @@ PLACEHOLDERS = ("{TARGET}", "{FAMILY_IDS}", "{REVIEWS}", "{ALLOWANCE}")
 FAMILY_FIELDS = ("id", "title", "obligation", "trigger", "mechanism")
 QUOTABLE = ("claim", "consequence", "proposed_fix")
 VALIDATOR_TOOLS = ("grading_validation.py", "claim_grading.py", "check_manifest.py")
-SOURCE_PREFIX = re.compile(r"(?<=\]\()/[^)\n]*?/bench-runs/[^/)\n]+/att-\d+/(?=clone(?:-work|-cache)?/)")
+SOURCE_PREFIX = re.compile(r"(?<=\]\()/[^)\n]*?/[^/)\n]+/att-\d+/(?=clone(?:-work|-cache)?/)")
 
 
 def render(doc: dict) -> str:
