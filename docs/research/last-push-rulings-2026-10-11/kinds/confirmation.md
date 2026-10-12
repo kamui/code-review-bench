@@ -25,7 +25,7 @@ The session then showed the cipher setting's background from second-pass ruling 
 
 ## What it settles
 
-Confirmed as proposed, ten claims in seventeen decisions:
+Confirmed as proposed, nine claims in sixteen decisions. The question said ten, out of 14 claims in 25 decisions. Those counts fit only with the load-report interval (`AD-CL-u-lrs-duration-range`) included, which had no proposed kind and was asked as question 3. The nine and the sixteen were counted again from the table below and the decisions when the kinds were filed.
 
 | Task | Decisions | Kind |
 | --- | --- | --- |
@@ -52,7 +52,7 @@ The 25 decisions whose kind a ruling already states need no answer, with one cha
 
 ## How this was asked
 
-The ten confirmed kinds went through the lighter pass the owner chose: one agent's reading, no blind assessor and no before-record. The four low-confidence ones and the load-report interval get the full preparation.
+The nine confirmed kinds went through the lighter pass the owner chose: one agent's reading, no blind assessor and no before-record. The four low-confidence ones and the load-report interval get the full preparation.
 
 ## What followed the same day
 
