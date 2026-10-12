@@ -37,3 +37,10 @@ After the pilot's three grades are inspected, the same command without `LIMIT=1`
 A queue stops launching at 95% of a usage window of the plan, with a sign-in that expires within half an hour, or with meters it cannot read, and ends `quota-stopped` with exit 4. Running the same command again resumes it. A failed batch stops new launches and keeps its attempt; it is diagnosed before anything is graded again.
 
 The grades stay on a working branch until the [audit's](../../../evaluator-audit.md) sample is drawn, so `grades.json` on `main` holds no batch until then.
+
+## Version 2
+
+The first version's `selected` queue stopped on 2026-10-12 at 20:37 UTC with 19 of its 45 batches graded. The grader of `runs/2026-10-02-claude-builtin-fable-selected/w-graphql-js-3457` disputed the equivalence link of one comment to `CL-w-pairwise-print-cost`, and `grade.py map` refuses a disputed link. The link was narrowed to `related` with the grader's ground, as the [claim-adjudication workflow](../../../claim-adjudication.md) prescribes. That changes the batch's inputs, and the controller refuses a batch whose inputs differ from its plan.
+
+Version 2 plans the 177 batches left: 26 in `selected`, 124 in `rebuilt` and 27 in `plain`. Its ceiling is $451.29, what is left of the approved $500 after the $48.70 the first version spent, which counts the attempt whose mapping failed. [`approval.v2.json`](approval.v2.json) records that. The queues of version 2 have their own directories, `.local/regrade/<queue>-v2`, and archive under `bench/regrading/cohort-rebuild-2026-10-05-regrade-<queue>-v2`. The 21 grades of the first version stand.
+
