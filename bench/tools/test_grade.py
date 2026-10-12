@@ -638,7 +638,8 @@ class PrepareV2(Grade):
             cases.append(changed)
         cases.append(dict(valid, unknown={}))
         for change in ({"remove": True}, {"extra": True}, {"kind": "other"}, {"quotes": []},
-                       {"quotes": ["Invented"]}, {"kind": "not-a-finding"}, {"label": "suggestion"}):
+                       {"quotes": ["Invented"]}, {"kind": "not-a-finding"}, {"label": "suggestion"},
+                       {"ids": []}, {"ids": ["c1", "c2"]}, {"ids": [1]}):
             changed = copy.deepcopy(valid)
             if change == {"remove": True}:
                 del changed["att-001"]["1"]

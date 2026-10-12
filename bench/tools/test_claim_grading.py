@@ -466,6 +466,20 @@ class BlindedValidatorV2(unittest.TestCase):
         verdicts["reviews"]["blind-000001"]["items"] = {"2": items["2"], "1": items["1"]}
         self.assertIn("items must follow the inventory order", self.problems(verdicts))
 
+    def test_inventory_fixes_claim_ids_where_it_lists_them(self):
+        self.snapshot["inventory"] = {"blind-000001": {
+            "1": {"kind": "finding", "quotes": ["Races on close", "Hold the lock."], "ids": ["c1", "c7"]},
+            "2": {"kind": "finding", "quotes": ["Races on close again"]}}}
+        verdicts = self.verdicts()
+        claims = verdicts["reviews"]["blind-000001"]["items"]["1"]["claims"]
+        claims.append(claim_v2("c7", "Hold the lock."))
+        self.assertEqual(self.problems(verdicts), "")
+        claims[1]["id"] = "c3"
+        self.assertIn("blind-000001 item 1: claim ids must match the inventory in order", self.problems(verdicts))
+        for ids in (["c1"], ["c1", ""], "c1"):
+            self.snapshot["inventory"]["blind-000001"]["1"]["ids"] = ids
+            self.assertEqual(self.problems(verdicts), "blind-000001 item 1: inventory ids name each quoted claim")
+
 
 class HistoricalProjection(unittest.TestCase):
     def test_mixed_detection_and_refutation_both_survive_scoring(self):
