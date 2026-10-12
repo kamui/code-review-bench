@@ -226,6 +226,21 @@ class CalibrationTest(unittest.TestCase):
         self.assertEqual(self.run_tool("check").returncode, 0)
         self.assertEqual(self.queue()["audit"]["needs"], ["human-selected tolerances"])
 
+    def test_superseded_round_keeps_its_own_seed_and_its_closure_in_the_receipt(self):
+        receipt = self.root / "audit-receipt.md"
+        receipt.write_text("Decision: the first round is closed as superseded.\n", encoding="utf-8")
+        closed = {"closed_at": "2026-10-12T00:00:00Z", "reason": "A new rubric replaced its labels.", "authority": "human",
+                  "receipt": current.pin_file(receipt, self.root), "receipt_scope": "Decision: the first round is closed as passed.",
+                  "plan": json.loads(json.dumps(self.documents["audit"]["plan"])), "evidence": []}
+        self.documents["audit"]["superseded"] = [closed]
+        self.save(queue=False)
+        self.assert_problem("audit: the declared plan and each superseded round have their own seed")
+        self.assert_problem("audit: the closure of fixture is not in the saved receipt")
+        closed["plan"]["seed"] = "fixture-round-one"
+        closed["receipt_scope"] = "Decision: the first round is closed as superseded."
+        self.save()
+        self.assertEqual(self.run_tool("check").returncode, 0)
+
     def test_audit_without_a_plan_is_refused_by_every_operation(self):
         self.documents["audit"] = {"state": "unassessed", "evidence": []}
         self.save(queue=False)

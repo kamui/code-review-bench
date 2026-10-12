@@ -104,6 +104,17 @@ class Audit(Grade):
         self.assertIn("no current grade", done.stdout)
         self.assertFalse((self.current / "audit").exists())
 
+    def test_no_sample_is_drawn_for_strata_the_tool_does_not_build(self):
+        plan = self.cohort.documents["audit"]["plan"]
+        plan["strata"].append({"id": "control-silence", "unit": "control-review", "population": "control-silence"})
+        for entries, field in (("sizes", "size"), ("limits", "max_errors")):
+            plan["sample" if entries == "sizes" else "tolerances"][entries].append({"stratum": "control-silence", field: 1})
+        self.cohort.save()
+        done = self.audit("draw")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("does not build the declared strata yet, so no sample is drawn: control-silence", done.stdout)
+        self.assertFalse((self.current / "audit").exists())
+
     def test_strata_hold_admitted_family_units_and_every_graded_claim_in_seeded_order(self):
         sample = self.drawn()
         strata = {stratum["id"]: stratum for stratum in sample["strata"]}
