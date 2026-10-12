@@ -218,18 +218,18 @@ Two things the plan warned about did not happen. No launch was refused over `/tm
 
 [`transcripts.json`](../../../bench/runs/2026-10-12-last-push-claude-review-code-sonnet/transcripts.json) maps the 31 attempts to their archives under `artifacts/transcripts/2026-10-12-last-push-claude-review-code-sonnet/`. `tools/collect_run.py` wrote it after it matched each archive with the hash in its attempt record. The archives are 4,892,406 bytes together, and Git ignores their paths.
 
-The archives are not in release storage. They exist only in the checkout that ran the queue, so another checkout cannot read the 31 paths yet.
+The archives are published in the [public evidence release](https://github.com/kamui/code-review-bench/releases/tag/evidence-last-push-review-code-transcripts-2026-10-12-v1). The [published manifest](../../../bench/evidence/manifests/last-push-review-code-transcripts-2026-10-12-v1.json) lets another checkout retrieve all 31 original paths. The [restoration receipt](../../../bench/evidence/receipts/last-push-review-code-transcripts-2026-10-12-v1-restoration.json) records a fresh remote download and restoration of every archive.
 
-A package is ready in `~/.t3/evidence-packages/last-push-review-code-transcripts-2026-10-12-v1`, outside the repository. It holds the selection, the unpublished manifest and one asset of 4,866,297 bytes with SHA-256 `e6abe19782a4bfda04e07c933b6fad2292c8063b91d47f2ddc97eebbfee9ff2b`. `evidence_store.py pack` wrote it and uploaded nothing. The manifest is not in `bench/evidence/manifests/`, because every reader of that folder refuses a manifest that has no publication receipt.
+The exact prepared package was published on 2026-10-12. Its one asset is 4,866,297 bytes with SHA-256 `e6abe19782a4bfda04e07c933b6fad2292c8063b91d47f2ddc97eebbfee9ff2b`. Publication preserved all 31 inner archive hashes, including the failed attempts. The frozen run and attempt records are unchanged; their README describes the original filing state before this publication.
 
 | Fact [the storage contract](../../evidence-storage.md#package-publish-and-verify) asks for | Value |
 | --- | --- |
-| Destination | repository `kamui/code-review-bench`, release tag `evidence-last-push-review-code-transcripts-2026-10-12-v1`, which does not exist yet |
+| Destination | repository `kamui/code-review-bench`, release tag `evidence-last-push-review-code-transcripts-2026-10-12-v1` |
 | Visibility | public, as the earlier transcript releases are |
 | Categories | execution: the complete reviewer and worker sessions of the 31 attempts |
-| Authorization | none yet |
+| Authorization | On 2026-10-12, the owner explicitly approved public publication of the exact package to this release, including the recorded account email, organization metadata and preview URL. |
 
-The archives hold 54 session files and nothing else. A scan of them found no credential. Its only token-shaped matches are the Netlify preview link that the `r-base-ui-5460` packet carries, in `att-010`, `att-020` and `att-030`. Every session file holds the account's email address and organization id in the client's own context lines. The five archives of `2026-10-10-last-push-claude-thermo-sonnet` that were checked hold them too, and that run's archives are public.
+The archives hold 54 session files and nothing else. A fresh pre-publication scan verified every frozen hash and found no known credential filename, private key, provider token or bearer value. Its only token-shaped matches are the Netlify preview link that the `r-base-ui-5460` packet carries, in `att-010`, `att-020` and `att-030`. Every session file holds the account's email address and organization id in the client's own context lines. The five archives of `2026-10-10-last-push-claude-thermo-sonnet` that were checked hold them too, and that run's archives are public.
 
 ## Cleanup
 
@@ -282,18 +282,14 @@ The run's freeze commit, `764cd032`, is on this branch only. `fetch_freeze_commi
 
 ## Not done
 
-- The transcript archives are not in release storage. With the owner's word, the three commands below publish the package and write the manifest and the restoration receipt. The comment above the 31 lines in `.gitignore` then needs the manifest's name, as the earlier blocks have.
 - The registry, the inventory, the published selection and `stage_edition.py` do not name this run. Once the run enters the selection, the Pages workflow needs a fetch of the new manifest beside the two it has.
 - The default work root still gives a run with a name this long a socket path over the limit. A later run needs a short `work_root` or a fix in the harness.
 - No comment has a claim link, and no review is graded.
 
+To retrieve the published archives in another checkout:
+
 ```sh
-gh release create evidence-last-push-review-code-transcripts-2026-10-12-v1 --repo kamui/code-review-bench \
-  --title 'Last-push review-code transcript archives, 2026-10-12 v1' --notes 'Immutable benchmark evidence payloads.'
-python3 bench/tools/evidence_store.py publish \
-  --manifest ~/.t3/evidence-packages/last-push-review-code-transcripts-2026-10-12-v1/packed/manifest.json \
-  --out bench/evidence/manifests/last-push-review-code-transcripts-2026-10-12-v1.json
-python3 bench/tools/evidence_store.py verify \
-  --manifest bench/evidence/manifests/last-push-review-code-transcripts-2026-10-12-v1.json \
-  --receipt bench/evidence/receipts/last-push-review-code-transcripts-2026-10-12-v1-restoration.json
+python3 bench/tools/evidence_store.py fetch \
+  --manifest bench/evidence/manifests/last-push-review-code-transcripts-2026-10-12-v1.json
+python3 tools/collect_run.py --run bench/runs/2026-10-12-last-push-claude-review-code-sonnet
 ```
