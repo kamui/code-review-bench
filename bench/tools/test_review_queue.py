@@ -1156,6 +1156,14 @@ class Replacements(QueueFixture):
         self.assertEqual((code, events[-1].get("completed"), events[-1]["stopped_arms"]), (0, True, {}), (events, err))
         self.assertEqual((self.run_state().attempt_ids(), self.reviews()), (["att-001", "att-002"], ["att-001", "att-002"]))
 
+    def test_a_reviewer_that_ended_its_session_without_a_result_is_kept_and_the_queue_goes_on(self):
+        self.stopped_review("the reviewer stopped after a refused command")
+        self.diagnose("att-001", "reviewer-stop")
+        self.assert_blocked(self.command("replace", "--run", RUN_ID, "--attempt", "att-001"), "not a rerun opportunity")
+        code, events, err = self.command("run")
+        self.assertEqual((code, events[-1].get("completed"), events[-1]["stopped_arms"]), (0, True, {}), (events, err))
+        self.assertFalse([record["predecessor"] for record in self.run_state().filed.values() if record["predecessor"]])
+
     def test_a_diagnosis_names_one_known_cause_and_a_reason(self):
         self.stopped_review()
         self.diagnose("att-001", "bad-luck")

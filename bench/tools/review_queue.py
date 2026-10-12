@@ -76,8 +76,8 @@ policy, caps and budget are the run's own and the reviewer starts in a fresh hom
 ``transient-capacity`` needs a call that succeeded first: a model response captured in the failed
 attempt, or a valid completed attempt of the same arm. Without one it is a first-call rejection, and
 like ``setup-rejection`` it stops the arm: the queue skips that arm's remaining cells and goes on
-with the others. ``skill-timeout`` is kept as the cell's result and never replaced. A valid attempt
-is never replaced.
+with the others. ``skill-timeout`` and ``reviewer-stop``, a reviewer that ended its own session
+without a result, are kept as the cell's result and never replaced. A valid attempt is never replaced.
 
 Process evidence. Each launch is recorded in ``launches/`` before it starts: the queue, the run, the
 command, the attempts that existed, a marker placed in the child's environment, and the host, its
@@ -177,7 +177,8 @@ SCAN_GAP_SECONDS = 0.2
 UNREADABLE_WAIT_SECONDS = 5
 # cause -> whether run_cell.py is told the harness stopped the predecessor
 REPLACED = {"harness-invalid": False, "harness-stop": True, "transient-capacity": True}
-CAUSES = {*REPLACED, "setup-rejection", "skill-timeout"}
+KEPT = {"skill-timeout": "a skill timeout", "reviewer-stop": "a reviewer that ended its session without a result"}
+CAUSES = {*REPLACED, *KEPT, "setup-rejection"}
 ENDED = re.compile(r"^exit=-?\d+$", re.M)
 PINNED_NAME = re.compile(rf"BENCH_(CLAUDE|CODEX)(_SHA256|_VERSION|_COMPANIONS)?|{MARKER}")
 
@@ -675,8 +676,8 @@ def verdict(run: run_cell.Run, attempt_id: str) -> tuple:
     arm = record["cell"]["arm"]
     proven = answered(run, attempt_id) or any(
         row["cell"]["arm"] == arm and row["disposition"] == "valid completed" for row in run.filed.values())
-    if found["cause"] == "skill-timeout":
-        return "kept", "a skill timeout is the cell's result, not a rerun opportunity"
+    if found["cause"] in KEPT:
+        return "kept", f"{KEPT[found['cause']]} is the cell's result, not a rerun opportunity"
     if found["cause"] == "setup-rejection" or (found["cause"] == "transient-capacity" and not proven):
         return "stops-arm", f"{arm} was rejected before any call of it succeeded, so the arm stops"
     return "replace", f"diagnosed as {found['cause']}; replace it before the queue goes on"
