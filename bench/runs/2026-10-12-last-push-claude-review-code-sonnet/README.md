@@ -31,7 +31,7 @@ Each has a diagnosis in `deviations/` and keeps its usage and its transcript arc
 - `att-001`, `i` replicate 1. The sandbox could not start because its socket path was too long under the default work root. `att-002` replaced it under the queue's second version, which sets `work_root` to `/home/jack/rq`. See `socket-path-length.v1.json`.
 - `att-016` and `att-026` on `n`, `att-017` on `o`, `att-030` on `r`. The client refused one Bash command and the reviewer ended its own session. Each is kept as its cell's result. See `reviewer-stop.att-0NN.v1.json`.
 
-The four kept files carry the cause `skill-timeout`, the only cause the frozen queue tool keeps. No review ran out of time. They are to be relabelled `reviewer-stop` once the queue tool has that cause.
+The four kept files carry the cause `reviewer-stop`. While the run was live they carried `skill-timeout`, the only cause the frozen queue tool kept, though no review ran out of time. They were relabelled after the run ended, when the tool gained the cause.
 
 ## Usage and evidence
 
