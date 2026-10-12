@@ -76,7 +76,7 @@ function cells(dataset: Dataset, configurationId: string, taskIds: string[]) {
     ran.push({ task, trials: outcome.trials.map(trial => {
       const terminal = attempts.get(trial.terminal ?? '') ?? null
       const state: TrialState = trial.state === 'pending' || !terminal ? 'pending' : terminal.admitted ? 'admitted' : 'unadmitted'
-      return { replicate: trial.replicate, state, reason: state === 'unadmitted' && terminal ? terminal.disposition : trial.reason,
+      return { replicate: trial.replicate, state, reason: trial.reason,
         attempts: trial.attemptIds.flatMap(id => attempts.get(id) ?? []), terminal }
     }) })
   }

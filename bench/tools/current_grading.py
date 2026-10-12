@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parents[2]
 BENCH = ROOT / "bench"
 CURRENT = Path("bench/grading/current")
 KINDS = ("reference", "adjudication", "claim", "grade", "candidate", "credit")
+KEPT_STOP_CAUSES = frozenset({"skill-timeout", "reviewer-stop"})
 V1_CLAIM = {"id", "anchor", "canonical_id", "outcome", "assessment", "family_id", "duplicate_group", "reason", "evidence"}
 V2_CLAIM = {"id", "anchor", "canonical_id", "outcome", "kind", "answers", "known_problems", "open", "candidate_id",
             "duplicate_group", "reason", "evidence"}
@@ -135,8 +136,27 @@ def validate_schema(kind, document):
     require(not problems, f"current {kind}: " + "; ".join(problems))
 
 
-def trial(records):
-    """Resolve a linear replacement chain independently of directory/id ordering."""
+def kept_stops(run_dir):
+    """The attempts of a run that one diagnosis in ``deviations/`` keeps as their cell's result, each with its cause.
+
+    A diagnosis is a JSON object with ``predecessor``, ``cause`` and ``reason``, read as ``review_queue.py`` reads it:
+    a file that is not such an object is passed over. An attempt with two diagnoses, with a cause the queue replaces
+    or with no reason is not kept, and neither is one whose cause or reason is not text."""
+    found = {}
+    for path in sorted((run_dir / "deviations").glob("*.json")):
+        try:
+            row = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(row, dict) and isinstance(row.get("predecessor"), str) and "cause" in row:
+            found.setdefault(row["predecessor"], []).append((row["cause"], row.get("reason")))
+    return {attempt: cause for attempt, ((cause, reason), *others) in found.items()
+            if not others and isinstance(cause, str) and cause in KEPT_STOP_CAUSES and isinstance(reason, str) and reason.strip()}
+
+
+def trial(records, kept=None):
+    """Resolve a linear replacement chain independently of directory/id ordering. ``kept`` gives the cause of each
+    stopped attempt that is kept as its cell's result: as a terminal it resolves the trial without admission."""
     if not records:
         return {"state": "pending", "reason": "No attempt has been dispatched.", "attempts": [], "terminal": None}
     by_id = unique(records, "attempt_id", "replacement chain")
@@ -160,9 +180,11 @@ def trial(records):
         identifier = successors.get(identifier)
     require(len(order) == len(records), "replacement chain contains disconnected attempts or a cycle")
     terminal = by_id[order[-1]]
-    pending = terminal["disposition"].startswith("stopped:")
-    return {"state": "pending" if pending else "resolved",
-            "reason": "Stopped attempt awaits replacement." if pending else terminal["disposition"],
+    stopped = terminal["disposition"].startswith("stopped:")
+    cause = (kept or {}).get(terminal["attempt_id"]) if stopped else None
+    reason = (f"Stopped attempt kept as the cell's result: {cause}." if cause
+              else "Stopped attempt awaits replacement." if stopped else terminal["disposition"])
+    return {"state": "pending" if stopped and not cause else "resolved", "reason": reason,
             "attempts": order, "terminal": terminal["attempt_id"]}
 
 
@@ -218,7 +240,7 @@ def inventory(root=ROOT):
                 f"{task['id']}: target revision differs")
         originals[task["id"]] = pin_file(directory / "packet.md", root)
         require(originals[task["id"]]["sha256"] == target["packet_sha256"], f"{task['id']}: packet bytes changed")
-    manifests, attempt_records, source_inputs, cells, attempts = {}, {}, {}, {}, {}
+    manifests, attempt_records, kept, source_inputs, cells, attempts = {}, {}, {}, {}, {}, {}
     placements, batches = {}, set()
     for source in registry["sources"]:
         run, arm, configuration = source["run"], source["arm"], source["configuration"]
@@ -239,7 +261,7 @@ def inventory(root=ROOT):
                 require(record["attempt_id"] == path.parent.name and record["run_id"] == run_dir.name,
                         f"{path}: attempt identity differs")
                 records.append((path, record))
-            attempt_records[run] = records
+            attempt_records[run], kept[run] = records, kept_stops(run_dir)
         manifest = manifests[run]
         arms = unique(manifest["arms"], "id", run)
         require(arm in arms, f"{run}: selected arm is absent")
@@ -281,7 +303,7 @@ def inventory(root=ROOT):
             placements[placement] = key
             selected = [(p, a) for p, a in attempt_records[run]
                         if (a["cell"]["target"], a["cell"]["arm"], a["cell"]["replicate"]) == cell_key]
-            chain = trial([a for _, a in selected])
+            chain = trial([a for _, a in selected], kept[run])
             prefix = run_dir.name + "/"
             chain["attempts"] = [prefix + identifier for identifier in chain["attempts"]]
             if chain["terminal"] is not None:
