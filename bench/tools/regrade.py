@@ -24,11 +24,15 @@ import time
 import uuid
 
 import current_grading
+import subscription_meters
 
 ROOT = Path(__file__).resolve().parents[2]
 TOOLS = ROOT / "bench/tools"
 CONTROLLER = "bench/tools/regrade.py"
 HEADROOM = Decimal(1)
+QUOTA_STOPPED = "quota-stopped"
+QUOTA_STOP_PERCENT = 95
+QUOTA_MAX_AGE_SECONDS = 300
 FAILURES = (OSError, ValueError, KeyError, InvalidOperation)
 
 
@@ -67,6 +71,13 @@ def authorized_cap(authorization):
     if codex:
         raise ValueError("bounded Codex dispatch requires a verified dollar hard cap")
     return money(cap)
+
+
+def quota_stop_percent(authorization):
+    percent = authorization.get("quotaStopPercent", QUOTA_STOP_PERCENT)
+    if type(percent) not in (int, float) or not 0 < percent <= 100:
+        raise ValueError("quotaStopPercent must be a number above 0 and at most 100")
+    return percent
 
 
 def reserved_total(outstanding):
@@ -239,12 +250,23 @@ def client_version(executable):
     return match.group(0)
 
 
+def client_name(grader):
+    return "codex" if grader["model"].startswith("gpt-") else "claude"
+
+
+def read_meters(directory, grader, version, path):
+    """The subscription meters of the queue's pinned client; no model is called."""
+    name = client_name(grader)
+    pinned = {name: {"path": str(directory / "client-bin" / name), "version": version}}
+    return subscription_meters.read_meters(pinned, {**os.environ, "PATH": path})
+
+
 def pin_client(directory, grader, expected=None):
     """(version, PATH) of the client this queue grades with. The first run of a queue copies the client
     installed then into the queue directory, and every run executes that copy, so an update of the installed
     client during or between runs changes no batch's client. ``expected`` or ``grader.cliVersion`` must name
     the pinned version when given."""
-    name = "codex" if grader["model"].startswith("gpt-") else "claude"
+    name = client_name(grader)
     record, copy = directory / "client.json", directory / "client-bin" / name
     if record.exists():
         pinned = read(record)
@@ -303,6 +325,7 @@ def execute(authorization_path, directory, limit=None, expected_cli_version=None
     if plan.get("contract") != "current-reconciliation/v1":
         raise ValueError("authorization pins a plan of another grading contract; plan the current queue again")
     cap = authorized_cap(authorization)
+    stop_percent = quota_stop_percent(authorization)
     grader = authorization["grader"]
     dispatch_timeout(grader)
     cli_version, client_path = pin_client(directory, grader, expected_cli_version)
@@ -333,7 +356,7 @@ def execute(authorization_path, directory, limit=None, expected_cli_version=None
     rows = [saved.get((row["run"], row["target"]), row) for row in rows]
     invocation = {"startedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"), "workers": workers,
                   "peakActive": 0, "cliVersion": cli_version}
-    active, queue, stopped, completed = {}, [], None, 0
+    active, queue, stopped, completed, read_at = {}, [], None, 0, None
 
     def save(state="running", reason=None):
         if stopped:
@@ -343,9 +366,33 @@ def execute(authorization_path, directory, limit=None, expected_cli_version=None
                     [*previous.get("invocations", []), invocation], active)
 
     def block(state, reason, code):
+        """The first stop stands, except that a quota stop yields to a later failure or exhausted cap."""
         nonlocal stopped
-        stopped = stopped or (state, reason, code)
+        if not stopped or stopped[0] == QUOTA_STOPPED:
+            stopped = (state, reason, code)
         save()
+
+    def quota():
+        """The reason the plan's meters stop new launches, from a reading no older than QUOTA_MAX_AGE_SECONDS.
+        A sign-in that the reading shows about to expire is read again, since a person may have renewed it."""
+        nonlocal read_at
+        moment = time.time()
+        usage = invocation.get("meters")
+        if (usage is None or moment - read_at > QUOTA_MAX_AGE_SECONDS
+                or subscription_meters.sign_in_expiring(usage, moment)):
+            try:
+                usage = invocation["meters"] = read_meters(directory, grader, cli_version, client_path)
+            except subscription_meters.Unreadable as error:
+                return f"The subscription meters could not be read: {error}"
+            read_at = moment
+        return subscription_meters.quota_stop(usage, stop_percent, moment, "grading session")
+
+    def within_quota():
+        reason = quota()
+        if reason:
+            print(f"Stopped at the plan's quota: {reason}", flush=True)
+            block(QUOTA_STOPPED, reason, 4)
+        return not reason
 
     def check_inputs(row):
         if "cacheReplacements" in authorization:
@@ -417,22 +464,35 @@ def execute(authorization_path, directory, limit=None, expected_cli_version=None
             if code:
                 return block("failed", f"Queue preflight failed for {run}", code)
 
+    def quote(row):
+        """What the cap allows the row now: its reservation or None, the settled charges, the outstanding
+        reservations and the row's review comments."""
+        settled, outstanding = ledger(directory, active)
+        items = sum(review["items"] for review in groups[(row["run"], row["target"])])
+        budget = None if cap is None else allowance(cap, settled + sum(outstanding) + HEADROOM * len(outstanding), items)
+        return budget, settled, outstanding, items
+
+    def fundable(budget, settled):
+        """False, with the queue stopped for its budget, when the cap allows a row no reservation."""
+        if cap is None or budget is not None:
+            return True
+        print(f"Stopped at ${settled}: total authorization ${cap}", flush=True)
+        block("budget-stopped", "Insufficient reserved budget for another batch", 3)
+        return False
+
     def launch(row):
-        """True when the row left the queue; False when it waits for an active reservation to settle."""
+        """True when the row left the queue; False when it waits for an active reservation to settle or for the
+        plan's quota."""
         run, target = row["run"], row["target"]
         check_inputs(row)
         attempt = latest_attempt(directory, run, target)
-        settled, outstanding = ledger(directory, active)
-        items = sum(review["items"] for review in groups[(run, target)])
-        budget = None
-        if cap is not None:
-            budget = allowance(cap, settled + sum(outstanding) + HEADROOM * len(outstanding), items)
-            if active and (budget is None or budget < desired(items)):
-                return False
-            if budget is None:
-                print(f"Stopped at ${settled}: total authorization ${cap}", flush=True)
-                block("budget-stopped", "Insufficient reserved budget for another batch", 3)
-                return True
+        budget, settled, outstanding, items = quote(row)
+        if cap is not None and active and (budget is None or budget < desired(items)):
+            return False
+        if not fundable(budget, settled):
+            return True
+        if not within_quota():
+            return False
         attempt.mkdir(parents=True, exist_ok=True)
         work, key = grading_workspace(attempt, workspaces), attempt / "key.json"
         row["workspace"] = str(attempt.relative_to(ROOT))
@@ -454,6 +514,8 @@ def execute(authorization_path, directory, limit=None, expected_cli_version=None
         dispatch = dispatch_arguments(work, key, grader, budget, cli_version)
         if digest(authorization_path) != authorization_hash:
             raise ValueError("authorization changed before reservation")
+        if not within_quota():
+            return False
         reserved = reserved_total(outstanding)
         with (attempt / "reservation.json").open("x") as handle:
             json.dump({"maxBudgetUsd": None if budget is None else float(budget), "spentBeforeUpperUsd": float(settled),
@@ -479,7 +541,8 @@ def execute(authorization_path, directory, limit=None, expected_cli_version=None
         elif not limit or completed < limit:
             guarded(label(row), lambda: settle(row, attempt, 0))
     if queue and not stopped and not (limit and completed >= limit):
-        guarded("Queue preflight", preflight)
+        if guarded("Queue budget", lambda: fundable(*quote(queue[0])[:2])) and within_quota():
+            guarded("Queue preflight", preflight)
     with ThreadPoolExecutor(max_workers=workers) as pool:
         while True:
             while (queue and not stopped and len(active) < workers
