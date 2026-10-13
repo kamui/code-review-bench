@@ -64,9 +64,10 @@ class ExportTest(unittest.TestCase):
             self.assertEqual([(f['eligibility'], f['manifestations']) for f in result['tasks'][0]['families']], [('approved', ['CL-t1'])])
             self.assertEqual(result['attempts'][0]['assessment'], {
                 'state': 'assessed',
-                'families': [{'familyId': 'GT-t1', 'outcome': 'caught', 'sufficiency': 'absent', 'claimIds': ['c1']}],
+                'families': [{'familyId': 'GT-t1', 'outcome': 'caught', 'sufficiency': 'absent', 'claimIds': ['c1'], 'causeOnly': False}],
                 'claims': [{'id': 'c1', 'itemId': 'item-0', 'outcome': 'eligible', 'familyId': 'GT-t1',
-                            'canonicalId': 'CL-t1', 'duplicateGroup': None}],
+                            'canonicalId': 'CL-t1', 'duplicateGroup': None, 'nativeOutcome': 'eligible', 'knownProblems': [], 'olderProblems': [], 'olderCandidateId': None}],
+                'olderProblems': None,
                 'recommendations': [], 'remedyInventory': 'complete', 'advice': []})
             self.assertFalse(any(key in result['attempts'][0] for key in ('recovered', 'falseFindings', 'score')))
             detail = current.read_json(root / 'public/data/attempts/run/att-001.json')
@@ -82,7 +83,7 @@ class ExportTest(unittest.TestCase):
             self.assertEqual(detail['items'][0]['fixSufficiency'], 'absent')
             self.assertEqual(detail['items'][0]['claims'][0]['quote'], 'A write is lost.')
 
-    def test_a_batch_saved_under_verdict_contract_v2_is_refused(self):
+    def test_a_batch_saved_under_verdict_contract_v2_is_exported(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             selected, documents = fixture(root)
@@ -100,9 +101,42 @@ class ExportTest(unittest.TestCase):
             seal(root, batch, current.grading_fingerprint({'run': batch['run'], 'target': batch['target']}, selected, documents,
                                                           documents['policy'], root))
             save_current(root, selected, documents)
-            with self.assertRaisesRegex(current.Inconsistent, 'runs/run t-example: .*current-verdicts/v2'):
-                self.build_fixture(root)
-            self.assertFalse((root / 'public/data').exists())
+            result = self.build_fixture(root)
+            self.assertEqual(result['schemaVersion'], 5)
+            self.assertEqual(result['attempts'][0]['assessment']['claims'], [])
+            self.assertIsNone(result['attempts'][0]['assessment']['olderProblems'])
+
+    def test_native_v2_claims_keep_multiple_matches_and_cause_only_facts(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            selected, documents = fixture(root)
+            assessed_grade(selected, documents, root)
+            review = documents['grade']['batches'][0]['reviews'][0]
+            claim = review['claims'][0]
+            claim.pop('family_id')
+            claim['outcome'] = 'problem'
+            claim['known_problems'] = [
+                {'family_id': identifier, 'says_what': what, 'identifies_cause': 'yes', 'reason': 'Original words'}
+                for identifier, what in [('GT-t1', 'yes'), ('GT-t2', 'no')]]
+            review['families'][0]['cause_only'] = False
+            review['families'].append({'family_id': 'GT-t2', 'outcome': 'missed', 'sufficiency': 'unassessed',
+                                       'claim_ids': [], 'cause_only': True})
+            facts = exporter.assessment(review)
+            self.assertEqual(facts['claims'][0]['nativeOutcome'], 'problem')
+            self.assertEqual(facts['claims'][0]['outcome'], 'eligible')
+            self.assertEqual([entry['familyId'] for entry in facts['claims'][0]['knownProblems']], ['GT-t1', 'GT-t2'])
+            self.assertTrue(facts['families'][1]['causeOnly'])
+            stage = root / 'stage'
+            with patch.object(exporter, 'ROOT', root), patch.object(exporter, 'BASE_PATH', ''):
+                attempt = exporter.export_attempt(root / 'bench/runs/run', selected['attempts'][0], {}, stage, review)
+            detail = current.read_json(stage / attempt['detailUrl'].removeprefix('/'))
+            self.assertEqual(detail['items'][0]['claims'][0]['assignment'], 'problem')
+            self.assertEqual(len(detail['items'][0]['claims'][0]['knownProblems']), 2)
+            for native, category in [('unproven', 'unsupported'), ('outside-this-change', 'scope-excluded'),
+                                     ('minor-defect', 'inconsequential'), ('suggestion', 'advisory')]:
+                claim['outcome'] = native
+                projected = exporter.assessment(review)['claims'][0]
+                self.assertEqual((projected['nativeOutcome'], projected['outcome']), (native, category))
 
     def test_pending_candidates_are_exported_and_keep_an_audited_control_provisional(self):
         with TemporaryDirectory() as directory:
@@ -131,7 +165,7 @@ class ExportTest(unittest.TestCase):
             self.assertEqual(result['tasks'][0]['control'], 'provisional')
             self.assertEqual(result['candidates'], [{'id': 'NC-0123456789ab', 'taskId': 't-example', 'recordedAt': '2026-10-01T00:00:00Z',
                 'claim': 'A retry repeats the write.', 'limits': 'No reproduction was run.',
-                'relevance': 'Could become a new causal family.'}])
+                'relevance': 'Could become a new causal family.', 'kind': 'ordinary'}])
 
     def test_failed_export_keeps_the_previous_complete_files(self):
         with TemporaryDirectory() as directory:

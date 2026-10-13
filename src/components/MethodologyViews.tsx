@@ -24,7 +24,7 @@ function harm(card: Scorecard): Reading {
   return { text: 'Unavailable', reason: bound.kind === 'observed' ? `${unsafe} unsafe among ${safe + unsafe} assessed remedies so far. ${bound.reason}` : bound.reason }
 }
 
-export const scorecardTabs = ['detection', 'delivery', 'reliability', 'remedies', 'controls', 'advice', 'usage', 'candidates', 'comparison'] as const
+export const scorecardTabs = ['detection', 'delivery', 'reliability', 'remedies', 'controls', 'older', 'advice', 'usage', 'candidates', 'comparison'] as const
 
 export function MethodologyViews({ dataset, configurations, cards, selection, detection, now, onInspect, initialTab = 'detection' }: {
   dataset: Dataset; configurations: Configuration[]; cards: Scorecard[]; selection: Selection; detection: DetectionView; now: Date
@@ -70,7 +70,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
     <Text size="sm" c="dimmed" mt="xs">Every value comes from the shared scoring kernel for the selected setups and PRs. Dimensions stay separate: there is no blended score. A numbered mark explains an unavailable value below its table.</Text>
     <Tabs defaultValue={initialTab} mt="md">
       <Tabs.List><Tabs.Tab value="detection">Detection</Tabs.Tab><Tabs.Tab value="delivery">Delivery</Tabs.Tab><Tabs.Tab value="reliability">Claim reliability</Tabs.Tab>
-        <Tabs.Tab value="remedies">Remedies</Tabs.Tab><Tabs.Tab value="controls">Controls</Tabs.Tab><Tabs.Tab value="advice">Advice benefit</Tabs.Tab>
+        <Tabs.Tab value="remedies">Remedies</Tabs.Tab><Tabs.Tab value="controls">Controls</Tabs.Tab><Tabs.Tab value="older">Older problems caught</Tabs.Tab><Tabs.Tab value="advice">Advice benefit</Tabs.Tab>
         <Tabs.Tab value="usage">Cost and time</Tabs.Tab><Tabs.Tab value="candidates">Pending candidates ({novel.length + awaiting.length})</Tabs.Tab><Tabs.Tab value="comparison">Compare two setups</Tabs.Tab></Tabs.List>
 
       <Tabs.Panel value="detection" pt="md"><Stack>
@@ -156,11 +156,27 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
           { label: 'Sufficiency unassessed', value: row => String(row.card.remedies.sufficiency.unassessed) }]} />
       </Stack></Tabs.Panel>
 
+      <Tabs.Panel value="older" pt="md"><Stack>
+        <Text size="sm">Approved older problems earn one credit per admitted review that says what goes wrong. Silence creates no miss. These counts do not change recall or recommendations.</Text>
+        <DataTable label="Older problems caught" rows={rows} rowKey={key} minWidth={1150} columns={[setup,
+          { label: 'Approved catalog', value: row => String(row.card.older.catalog) },
+          { label: 'Review/problem credits', value: row => reading(row.card.older.credits, String) },
+          { label: 'Distinct problems raised', value: row => reading(row.card.older.problems, String) },
+          { label: 'Reviews with a catch', value: row => reading(row.card.older.reviews, String) },
+          { label: 'Observed credits', value: row => String(row.card.older.observed.credits) },
+          { label: 'Reviews assessed / admitted', value: row => `${row.card.older.assessed} / ${row.card.older.admitted}` },
+          { label: 'Unresolved credit', value: row => String(row.card.older.unresolved) },
+          { label: 'Pending candidates', value: row => String(row.card.older.candidates.length) }]} />
+        {rows.map(row => <div key={key(row)}><Text size="sm" fw={600}>{row.configuration.short}</Text>
+          <ul>{row.card.older.rows.map(problem => <li key={problem.problemId}>{problem.title}: {problem.catches} observed catches; {problem.assessed} assessments, {problem.unresolved} unresolved.</li>)}</ul></div>)}
+        <Text size="xs" c="dimmed">The catalog contains discovered cases, not every older fault. Assessment coverage does not establish historical audit coverage.</Text>
+      </Stack></Tabs.Panel>
+
       <Tabs.Panel value="controls" pt="md"><Stack>
         <Text size="sm" className="footnote">Only an independently audited clean control gets a correct-silence percentage, over the reviews that were delivered. An empty reference list is not an audit, and a failed trial is missing output, not silence.</Text>
         <DataTable label="Audited controls" rows={rows} rowKey={key} minWidth={1150} columns={[setup,
           { label: 'Audited controls', value: row => String(row.card.controls.audited) }, { label: 'Admitted control reviews', value: row => String(row.card.controls.admitted) },
-          { label: 'Correctly silent', value: row => share(row.card.controls.cleanFraction) },
+          { label: 'Without a refuted or unsupported claim', value: row => share(row.card.controls.cleanFraction) },
           { label: 'With a refuted or unsupported claim', value: row => String(row.card.controls.alarmed) }, { label: 'With an unresolved claim', value: row => String(row.card.controls.unresolved) },
           { label: 'Awaiting assessment', value: row => String(row.card.controls.unassessed) }, { label: 'Missing output', value: row => String(row.card.controls.missingOutput) },
           { label: 'Pending trials', value: row => String(row.card.controls.pending) }, { label: 'Unaudited or provisional controls', value: row => String(row.card.controls.unaudited.length) }]} />

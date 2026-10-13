@@ -63,7 +63,7 @@ def route(before, root=record.ROOT, policy_path=POLICY, pairs=None, before_path=
     if adopted is None:
         return {"level": 0, "reasons": ["no policy is adopted, so agents settle nothing beyond ADR-0006", *record.reasons(before, root)]}
     reasons = []
-    if TYPES[before["decision_type"]] != "open":
+    if TYPES.get(before["decision_type"], "owner") != "open":
         reasons.append(f"{before['decision_type']} stays on its existing owner or reconciler route")
     if not summary.eligible({"before": before}):
         reasons.append("only contract 2 first answers written before the question qualify")
