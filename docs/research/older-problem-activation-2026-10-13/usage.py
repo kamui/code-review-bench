@@ -13,7 +13,8 @@ import sys
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
-CASES = {"x1": "OP-candidate-x-1", "s1": "OP-candidate-s-1", "s2": "OP-candidate-s-2", "s3": "OP-candidate-s-3", "o1": "OP-candidate-o-1"}
+CASES = {"x1": "OP-candidate-x-1", "s1": "OP-candidate-s-1", "s2": "OP-candidate-s-2", "s3": "OP-candidate-s-3", "o1": "OP-candidate-o-1",
+         "j5": "GT-j5", "j7": "GT-j7", "y3": "GT-y3"}
 
 
 def rate(model):

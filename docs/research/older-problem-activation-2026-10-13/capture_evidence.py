@@ -14,7 +14,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 PREFIX = "artifacts/research/older-problem-activation-2026-10-13"
-SCRIPTS = ("setup.sh", "run.sh", "probe/probe.py", "probe/probe-result.json")
+SCRIPTS = ("setup.sh", "run.sh", "setup-reconciliation.sh", "run-reconciliation.sh", "probe/probe.py", "probe/probe-result.json")
 
 
 def digest(path):
