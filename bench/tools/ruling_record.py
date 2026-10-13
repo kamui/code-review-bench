@@ -42,6 +42,9 @@ DECISION_TYPES = {
     "control": {"outcomes": ("audited-clean", "provisional", "known-problems"), "blind": 1},
     "reconciliation": {"outcomes": ("first-error", "first-correct", "undetermined"), "blind": 0},
 }
+EARLIER_TYPES = {"older-admission": "pre-existing-admission", "older-credit": "pre-existing-raise", "older-grouping": "pre-existing-grouping"}
+EARLIER_ROUND = {"path": "docs/research/older-problem-activation-2026-10-13/opening.json",
+                 "sha256": "f5764d9090b87173c6905ced49d33e83fd0ebb0849450a02c35d2e421a0a3a15"}
 BLIND_ANSWERS = {1: "one blind answer", 2: "two blind answers"}
 NAMES_A_PROBLEM = ("duplicate", "same-family")
 COULD_NOT_TELL = ("unproven", "cannot-tell", "unknown", "undetermined")
@@ -62,6 +65,14 @@ ROUND = ("round", "opened", "closed", "no_record")
 
 def load(path):
     return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def read_before(path):
+    """A before-record is never rewritten, so one of the round that opened before the decision types were renamed keeps
+    its earlier spelling on disk and is read under the current name."""
+    record = load(path)
+    current = EARLIER_TYPES.get(record.get("decision_type")) if record.get("round_opening") == EARLIER_ROUND else None
+    return {**record, "decision_type": current} if current else record
 
 
 def digest(path):
@@ -432,7 +443,7 @@ if __name__ == "__main__":
         parser.add_argument("--policy", default=delegation.POLICY)
         args = parser.parse_args()
         try:
-            before = load(args.before)
+            before = read_before(args.before)
             problems = faults(before)
             if before.get("contract") != 2:
                 problems.append("`route` needs a contract 2 record, which pins the case file the user is shown")
@@ -448,7 +459,7 @@ if __name__ == "__main__":
             parser.exit(1, f"{error}\n")
         raise SystemExit(0)
     before_path, *after_path = sys.argv[1:3]
-    record = load(before_path)
+    record = read_before(before_path)
     problems = faults(record)
     after = load(after_path[0]) if after_path else None
     if after and not problems:

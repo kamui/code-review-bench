@@ -119,6 +119,19 @@ class ContractTwoTest(unittest.TestCase):
             with self.subTest(decision_type):
                 self.assertEqual(ruling_record.faults(sound(decision_type)), [])
 
+    def test_a_record_of_the_round_opened_before_the_rename_is_read_under_the_current_name(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "third-01.before.json")
+            for earlier, current in ruling_record.EARLIER_TYPES.items():
+                with self.subTest(earlier):
+                    record = {**sound(current), "decision_type": earlier, "round_opening": ruling_record.EARLIER_ROUND}
+                    path.write_text(json.dumps(record), encoding="utf-8")
+                    self.assertEqual(ruling_record.read_before(path), {**record, "decision_type": current})
+                    self.assertEqual(ruling_record.faults(ruling_record.read_before(path)), [])
+                    path.write_text(json.dumps({**record, "round_opening": {**ruling_record.EARLIER_ROUND, "sha256": "0" * 64}}), encoding="utf-8")
+                    self.assertEqual(ruling_record.faults(ruling_record.read_before(path)),
+                                     [f"decision_type must be one of {', '.join(ruling_record.DECISION_TYPES)}"])
+
     def test_a_label_record_with_a_candidate_outcome_is_refused(self):
         self.refused("band", lambda record: record["answers"][1].update(outcome="problem"),
                      "assessor-1: a band outcome must be one of serious, other-material, unknown, not-applicable")
