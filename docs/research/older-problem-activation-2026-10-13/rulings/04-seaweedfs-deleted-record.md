@@ -46,22 +46,32 @@ All three parties answered **admitted** at medium confidence, each short of high
 
 ## The label, asked in the same question
 
-The owner decided on 2026-10-13 that an admitted older problem is labelled serious or other-material, "as the same fault would be if the change had introduced it" (reported by the asking session; not filed, and the sentence is a draft). So the boundary's fifth exception, "Already lost before the change", and its third reading rule, "Discount what bad input already did", are not applied. Both labels earn the same one credit. A fault that would be a minor defect is not admitted.
+The label was prepared twice, because the labelling sentence changed. The first labels were made under "as the same fault would be if the change had introduced it". The owner then approved this sentence for the rubric, as the asking session reports (not filed yet): "The user labels each pre-existing problem serious or other-material by what the fault does to the people who meet it. The label does not change the credit." The asking session reports what that means for boundary v4, which is unchanged: S1, S2, S4 and S6 apply on what the fault does; S3, S5, the five exceptions and reading rule 3 compare with the version before the change and do not apply; the test question cannot be asked as written, so the label rests on who is hurt, what they experience and how stuck they are. The second labels were made under that sentence, and the recommended option follows them. "Pre-existing problem" is the owner's new name for an older problem; this part uses it, and the rest of the file is as it was written.
 
-The impact card is [`../impact/records/OP-candidate-s-3.json`](../impact/records/OP-candidate-s-3.json), written as if the change had introduced the fault. The blind inspector read it as [`../impact/inspection/cards/OP-candidate-s-3.md`](../impact/inspection/cards/OP-candidate-s-3.md), with the labelling sentence over boundary v4 without its anchor tables, and no key to the card's sources. The asking session's label was committed before that session ran. Both first labels are in [`04-seaweedfs-deleted-record.OP-candidate-s-3-label.before.json`](04-seaweedfs-deleted-record.OP-candidate-s-3-label.before.json).
+The impact card is [`../impact/records.v2/OP-candidate-s-3.json`](../impact/records.v2/OP-candidate-s-3.json). The blind inspector of the second round read it as [`../impact/inspection/cards.v2/OP-candidate-s-3.md`](../impact/inspection/cards.v2/OP-candidate-s-3.md), with the approved sentence and its consequences over boundary v4 without its anchor tables, and no key to the card's sources. That card differs from the first round's in one line, which no longer says the fault is read as if the change had introduced it. In each round the asking session's label was committed before the blind session ran. The records are [`04-seaweedfs-deleted-record.OP-candidate-s-3-label.before.json`](04-seaweedfs-deleted-record.OP-candidate-s-3-label.before.json) and [`04-seaweedfs-deleted-record.OP-candidate-s-3-label-2.before.json`](04-seaweedfs-deleted-record.OP-candidate-s-3-label-2.before.json).
+
+**Second labels, under the approved sentence:**
+
+| Party | Label | The rule it names | Confidence | Reason | The strongest point against, in its words |
+| --- | --- | --- | --- | --- | --- |
+| the asking session (Claude Opus 5.5) | serious | S2 and S4 | medium (no-precedent) | "An operation returns success with data dropped": the store request succeeds and the new record is deleted, with no error and nothing logged, so the program is not told to store the file again. | The window is narrow and storing the file again repairs it. |
+| Codex gpt-6.1-sol, blind | serious | S2 | medium (no-precedent) | Run evidence shows the new record of a successful store deleted by the listing, leaving the file absent by path and in listings, directly satisfying S2. | The fault requires a create to overlap an expiry listing, and storing the file again can restore it. |
+
+**First labels, under the earlier sentence, kept as they were written:**
 
 | Party | Label | The rule it names | Confidence | Reason | The strongest point against, in its words |
 | --- | --- | --- | --- | --- | --- |
 | the asking session (Claude Opus 5.5) | serious | S2 and S4 | medium (no-precedent) | "An operation returns success with data dropped": the store request succeeds and the new record is deleted, with no error and nothing logged. | The window is narrow and storing the file again repairs it. |
 | Codex gpt-6.1-sol, blind | serious | S2, S4 | medium (no-precedent) | The expiry listing deletes a newly stored file's record after its store reports success, making the file unavailable by path and listing. | Another store can recreate the file and permanent loss of its volume payload was not run, but the successful store's new metadata record is demonstrably deleted without an error. |
 
-- The two labels agree: serious. Both parties named S2 and S4.
-- For serious: S2, "An operation returns success with data dropped or garbled." The store request succeeds and the new record is deleted, with no error and nothing logged.
+- The two labels agree in both rounds: serious. Under the approved sentence both parties rest on S2; the asking session also names S4. The ground did not change.
+- Who is hurt, and how stuck: a store request returns success and the new record is deleted, with no error and nothing logged. The program is not told to store the file again.
+- For serious: S2, "An operation returns success with data dropped or garbled."
 - For other-material: the window is narrow and was forced, not raced, and storing the file again repairs it.
-- In the regrade round, under the boundary as it is written, the asking session and the blind inspector both answered other-material. The fifth exception, which answers S2 under the boundary as it is written, is not applied to an older problem.
-- The recommended label is **serious**, at medium confidence. The nearest filed label is GT-p1 on Hono, where a read "returns success with the real fields missing", serious by S2 and S4.
+- The fifth exception, which answers S2 under the boundary as it is written, does not apply under the approved sentence.
+- The recommended label is **serious**, at medium confidence, unchanged. The nearest filed label is GT-p1 on Hono, where a read "returns success with the real fields missing", serious by S2 and S4.
 
-For the label `ruling_record.py route` prints **ASK**: band stays on its existing owner or reconciler route; two blind high-confidence answers and the medium-or-high recommender must agree; an earlier decision of this type is still pending; this decision type has not earned level 1 from earlier closed rounds.
+For the second label `ruling_record.py route` prints **ASK**: band stays on its existing owner or reconciler route; two blind high-confidence answers and the medium-or-high recommender must agree; an earlier decision of this type is still pending; this decision type has not earned level 1 from earlier closed rounds.
 
 ## Route
 

@@ -48,23 +48,32 @@ The recommendation is **admit**, at low confidence. The builder accepts the vali
 
 ## The label, asked in the same question
 
-The owner decided on 2026-10-13 that an admitted older problem is labelled serious or other-material, "as the same fault would be if the change had introduced it" (reported by the asking session; not filed, and the sentence is a draft). So the boundary's fifth exception, "Already lost before the change", and its third reading rule, "Discount what bad input already did", are not applied. Both labels earn the same one credit. A fault that would be a minor defect is not admitted.
+The label was prepared twice, because the labelling sentence changed. The first labels were made under "as the same fault would be if the change had introduced it". The owner then approved this sentence for the rubric, as the asking session reports (not filed yet): "The user labels each pre-existing problem serious or other-material by what the fault does to the people who meet it. The label does not change the credit." The asking session reports what that means for boundary v4, which is unchanged: S1, S2, S4 and S6 apply on what the fault does; S3, S5, the five exceptions and reading rule 3 compare with the version before the change and do not apply; the test question cannot be asked as written, so the label rests on who is hurt, what they experience and how stuck they are. The second labels were made under that sentence, and the recommended option follows them. "Pre-existing problem" is the owner's new name for an older problem; this part uses it, and the rest of the file is as it was written.
 
-The impact card is [`../impact/records/OP-candidate-j-2.json`](../impact/records/OP-candidate-j-2.json), written as if the change had introduced the fault. The blind inspector read it as [`../impact/inspection/cards/OP-candidate-j-2.md`](../impact/inspection/cards/OP-candidate-j-2.md), with the labelling sentence over boundary v4 without its anchor tables, and no key to the card's sources. The asking session's label was committed before that session ran. Both first labels are in [`10-trpc-class-instance-admission.OP-candidate-j-2-label.before.json`](10-trpc-class-instance-admission.OP-candidate-j-2-label.before.json).
+The impact card is [`../impact/records.v2/OP-candidate-j-2.json`](../impact/records.v2/OP-candidate-j-2.json). The blind inspector of the second round read it as [`../impact/inspection/cards.v2/OP-candidate-j-2.md`](../impact/inspection/cards.v2/OP-candidate-j-2.md), with the approved sentence and its consequences over boundary v4 without its anchor tables, and no key to the card's sources. That card differs from the first round's in one line, which no longer says the fault is read as if the change had introduced it. In each round the asking session's label was committed before the blind session ran. The records are [`10-trpc-class-instance-admission.OP-candidate-j-2-label.before.json`](10-trpc-class-instance-admission.OP-candidate-j-2-label.before.json) and [`10-trpc-class-instance-admission.OP-candidate-j-2-label-2.before.json`](10-trpc-class-instance-admission.OP-candidate-j-2-label-2.before.json).
+
+**Second labels, under the approved sentence:**
+
+| Party | Label | The rule it names | Confidence | Reason | The strongest point against, in its words |
+| --- | --- | --- | --- | --- | --- |
+| the asking session (Claude Opus 5.5) | other-material | none of S1, S2, S4, S6; who is hurt and how stuck | low (gap, no-precedent) | A developer's build fails in their own resolver when they pass a class-instance input on as its class. Nothing goes wrong at run time and no data is involved. No protection, data, reported state or cost is touched. | They are more stuck than with the optional field: the message names neither the middleware nor the helper, no setting avoids it, and a type cast as a way round was not run. |
+| Codex gpt-6.1-sol, blind | serious | who is hurt | medium (no-precedent) | Run evidence shows that developers validating a class instance cannot compile a resolver that passes it on as that class after middleware, and the read source provides no setting that restores its type. | Class inputs with private members have no documented example, public-member uses still compile, and the runtime instance remains intact. |
+
+**First labels, under the earlier sentence, kept as they were written:**
 
 | Party | Label | The rule it names | Confidence | Reason | The strongest point against, in its words |
 | --- | --- | --- | --- | --- | --- |
 | the asking session (Claude Opus 5.5) | other-material | none; S3 does not reach it | low (gap, no-precedent) | S3 speaks of "ordinary or documented use". A class of the application's own with a private member as a whole input, with a middleware, is in no documentation, test or example, and nobody is shown writing it. The compiler shows the error at once in the developer's own resolver. | In S3's words it is type-checked code that would have compiled before and no longer compiles. |
 | Codex gpt-6.1-sol, blind | serious | S3 | medium (no-precedent) | An accepted class-instance validator followed by middleware makes the resolver's class-typed call fail compilation, with no setting to restore it. | Application-defined class inputs are absent from the examples and public-member uses compile, but the accepted validator preserves a real class instance at runtime while the middleware prevents a valid typed resolver call. |
 
-- The two labels differ. The asking session answered other-material at low confidence: S3 speaks of "ordinary or documented use", and this use is in no documentation, test or example. The blind inspector answered serious at medium confidence on S3, and took the builder's acceptance of any validator as support for the set-up.
-- For serious: S3's last sentence, "Type-checked code that compiled on the previous release and no longer compiles after a patch release is a failed operation for the people who upgrade." Read as introduced, that is this fault, and no setting restores it. The boundary says an uncommon path and "an error that shows itself at once" limit how many people are affected, and that neither alone makes a bug one the implementer need not hear about.
-- The nearest ruling went that way: a tRPC instance created inside a generic function, of which the question said "Nothing but the accepted type supports the use." The asking session answered other-material there too, the blind inspector serious, and the owner chose serious (last-push ruling 8, GT-j6).
-- For other-material: S3 begins "Something that ordinary or documented use relied on", and says "A setup the project's documentation describes is supported." Nothing at the head documents or uses a class of the application's own as an input, and over HTTP it needs a transformer. Nothing goes wrong at run time.
-- Having read the blind label, the asking session changes its recommendation to **serious**, at low confidence. Its first label rested on how uncommon the use is, which the boundary says limits a label and does not lower it, and last-push ruling 8 is a ruling of the same shape. The first label stays in the record as it was written.
-- One consequence to see before answering: GT-j7, which keeps the array and tuple uses built by the same copy, is labelled other-material under the boundary as it is written.
+- Under the approved sentence the two labels differ. The asking session answered other-material at low confidence: none of S1, S2, S4 and S6 reaches a failed build. The blind inspector answered serious at medium confidence on who is hurt: a developer "cannot compile a resolver that passes it on as that class after middleware, and the read source provides no setting that restores its type."
+- Under the earlier sentence the asking session answered other-material and the blind inspector serious, and after reading it the asking session recommended serious. Every ground for serious in that round was S3, with last-push ruling 8, which was decided on S3 too. S3 compares with the version before the change and does not apply now, so the recommendation goes back to other-material.
+- **What the label turns on.** The same judgement as for the optional field: whether a build that fails on valid code, with nothing wrong at run time, hurts enough to be serious when no sign applies. Here the developer is more stuck: the message names neither the middleware nor the helper, and no way round was run.
+- For serious: the build fails in the developer's own resolver, no setting avoids it, and the boundary says an uncommon path does not alone make a bug one that need not be raised.
+- For other-material: nothing goes wrong at run time and no data, protection or reported state is touched. Uses that read only public members compile. When the class-instance use was still part of GT-j7 the owner said of that problem on 2026-10-13, "this is a problem in my view, and I would mark it other-material" (reported by the asking session), under the boundary as it is written.
+- The recommended label is **other-material**, at low confidence. If question 11 joins this fault with the optional field, the one entry gets one label.
 
-For the label `ruling_record.py route` prints **ASK**: band stays on its existing owner or reconciler route; recommender: gap or conflict in the rule; two blind high-confidence answers and the medium-or-high recommender must agree; an earlier decision of this type is still pending; this decision type has not earned level 1 from earlier closed rounds.
+For the second label `ruling_record.py route` prints **ASK**: band stays on its existing owner or reconciler route; recommender: gap or conflict in the rule; two blind high-confidence answers and the medium-or-high recommender must agree; an earlier decision of this type is still pending; this decision type has not earned level 1 from earlier closed rounds.
 
 ## Route
 
@@ -78,8 +87,8 @@ An admission and a label stay with the owner whatever the parties answer. Nothin
 
 Options:
 
-1. Admit, serious (Recommended)
-2. Admit, other-material: nothing documents or shows a class-instance input
+1. Admit, other-material (Recommended)
+2. Admit, serious: the build fails in the developer's own resolver and no setting restores it
 3. Not admitted: being able to pass a class instance does not mean the code was built for it
 
 What each choice does:
