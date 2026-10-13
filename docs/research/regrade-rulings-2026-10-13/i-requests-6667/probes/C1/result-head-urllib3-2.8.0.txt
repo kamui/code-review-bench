@@ -1,0 +1,72 @@
+python 3.13.15  OpenSSL 3.5.8 25 Aug 2026
+urllib3 2.8.0
+requests 2.31.0 from <scratch>/head/src/requests
+commit under test: head 4089f3dc (the change)
+------------------------------------------------------------
+requests.adapters._preloaded_ssl_context (the context built at import): present, allows TLSv1_2 (771) to MAXIMUM_SUPPORTED
+
+=== A. Version settings passed through init_poolmanager, no context from the adapter ===
+
+A0 plain Session -> tls1.2+1.3 origin, verify=True (control)
+  caller gets: 200 origin=tls1.2+1.3 tls=TLSv1.3; cipher TLS_AES_256_GCM_SHA384
+  TLS handshakes started: 1
+  context the connection used: the shared context requests built at import; allows TLSv1_2 (771) to MAXIMUM_SUPPORTED
+  pool was given: ssl_context=the shared context requests built at import, ssl_minimum_version=None, ssl_maximum_version=None, ssl_version=None
+
+A1 adapter sets ssl_minimum_version=TLSv1_3 -> tls1.2-only origin, verify=True (the setting says: refuse)
+  caller gets: 200 origin=tls1.2-only tls=TLSv1.2; cipher ECDHE-RSA-AES256-GCM-SHA384
+  TLS handshakes started: 1
+  context the connection used: the shared context requests built at import; allows TLSv1_2 (771) to MAXIMUM_SUPPORTED
+  pool was given: ssl_context=the shared context requests built at import, ssl_minimum_version=<TLSVersion.TLSv1_3: 772>, ssl_maximum_version=None, ssl_version=None
+
+A2 documented-shape adapter sets ssl_version=PROTOCOL_TLSv1_2 -> tls1.2+1.3 origin, verify=True (the setting says: TLSv1.2)
+  caller gets: 200 origin=tls1.2+1.3 tls=TLSv1.3; cipher TLS_AES_256_GCM_SHA384
+  TLS handshakes started: 1
+  context the connection used: the shared context requests built at import; allows TLSv1_2 (771) to MAXIMUM_SUPPORTED
+  pool was given: ssl_context=the shared context requests built at import, ssl_minimum_version=None, ssl_maximum_version=None, ssl_version=<_SSLMethod.PROTOCOL_TLSv1_2: 5>
+
+A3 adapter sets ssl_maximum_version=TLSv1_2 -> tls1.2+1.3 origin, verify=True (the setting says: TLSv1.2)
+  caller gets: 200 origin=tls1.2+1.3 tls=TLSv1.3; cipher TLS_AES_256_GCM_SHA384
+  TLS handshakes started: 1
+  context the connection used: the shared context requests built at import; allows TLSv1_2 (771) to MAXIMUM_SUPPORTED
+  pool was given: ssl_context=the shared context requests built at import, ssl_minimum_version=None, ssl_maximum_version=<TLSVersion.TLSv1_2: 771>, ssl_version=None
+
+A4 same adapter as A1, verify=<CA file> -> tls1.2-only origin (the setting says: refuse)
+  caller gets: RAISED requests.exceptions.SSLError: (Caused by SSLError(SSLError(1, '[SSL: TLSV1_ALERT_PROTOCOL_VERSION] tlsv1 alert protocol version (_ssl.c:1032)')))
+  TLS handshakes started: 1
+  context the connection used: a context urllib3 built for this pool; allows TLSv1_3 (772) to MAXIMUM_SUPPORTED
+  pool was given: ssl_context=none, ssl_minimum_version=<TLSVersion.TLSv1_3: 772>, ssl_maximum_version=None, ssl_version=None
+
+A5 same adapter as A3, verify=False -> tls1.2+1.3 origin (the setting says: TLSv1.2)
+  caller gets: 200 origin=tls1.2+1.3 tls=TLSv1.2; cipher ECDHE-RSA-AES256-GCM-SHA384
+  TLS handshakes started: 1
+  context the connection used: a context urllib3 built for this pool; allows TLSv1_2 (771) to TLSv1_2
+  pool was given: ssl_context=none, ssl_minimum_version=None, ssl_maximum_version=<TLSVersion.TLSv1_2: 771>, ssl_version=None
+
+=== B. The adapter passes its own ssl_context through init_poolmanager ===
+
+B1 own context with minimum_version=TLSv1_3 -> tls1.2-only origin, verify=True (the context says: refuse)
+  caller gets: 200 origin=tls1.2-only tls=TLSv1.2; cipher ECDHE-RSA-AES256-GCM-SHA384
+  TLS handshakes started: 1
+  context the connection used: the shared context requests built at import; allows TLSv1_2 (771) to MAXIMUM_SUPPORTED
+  pool was given: ssl_context=the shared context requests built at import, ssl_minimum_version=None, ssl_maximum_version=None, ssl_version=None
+
+B2 own context trusting a private CA -> private-ca origin, verify=True (the context says: trusted)
+  caller gets: RAISED requests.exceptions.SSLError: (Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1032)')))
+  TLS handshakes started: 1
+  context the connection used: the shared context requests built at import; allows TLSv1_2 (771) to MAXIMUM_SUPPORTED
+  pool was given: ssl_context=the shared context requests built at import, ssl_minimum_version=None, ssl_maximum_version=None, ssl_version=None
+
+B3 own context limited to cipher ECDHE-RSA-AES128-GCM-SHA256 -> tls1.2-only origin, verify=True
+  caller gets: 200 origin=tls1.2-only tls=TLSv1.2; cipher ECDHE-RSA-AES256-GCM-SHA384
+  TLS handshakes started: 1
+  context the connection used: the shared context requests built at import; allows TLSv1_2 (771) to MAXIMUM_SUPPORTED
+  pool was given: ssl_context=the shared context requests built at import, ssl_minimum_version=None, ssl_maximum_version=None, ssl_version=None
+
+=== C. urllib3 alone, no requests code: version settings with and without a context ===
+C1 ssl_minimum_version=TLSv1_3, no ssl_context -> tls1.2-only origin: RAISED urllib3.exceptions.SSLError: [SSL: TLSV1_ALERT_PROTOCOL_VERSION] tlsv1 alert protocol version (_ssl.c:1032)
+C2 ssl_minimum_version=TLSv1_3 and a ready-made ssl_context -> tls1.2-only origin: 200 origin=tls1.2-only tls=TLSv1.2
+C3 ssl_version=PROTOCOL_TLSv1_2, no ssl_context -> tls1.2+1.3 origin: 200 origin=tls1.2+1.3 tls=TLSv1.2
+C4 ssl_version=PROTOCOL_TLSv1_2 and a ready-made ssl_context -> tls1.2+1.3 origin: 200 origin=tls1.2+1.3 tls=TLSv1.3
+C5 ssl_maximum_version=TLSv1_2, no ssl_context -> tls1.2+1.3 origin: 200 origin=tls1.2+1.3 tls=TLSv1.2
+C6 ssl_maximum_version=TLSv1_2 and a ready-made ssl_context -> tls1.2+1.3 origin: 200 origin=tls1.2+1.3 tls=TLSv1.3

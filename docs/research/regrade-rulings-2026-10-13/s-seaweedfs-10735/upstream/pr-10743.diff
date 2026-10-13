@@ -1,0 +1,178 @@
+diff --git a/weed/filer/redis2/universal_redis_store.go b/weed/filer/redis2/universal_redis_store.go
+index d4ce64d80d7..f2fc80360d1 100644
+--- a/weed/filer/redis2/universal_redis_store.go
++++ b/weed/filer/redis2/universal_redis_store.go
+@@ -205,7 +205,7 @@ func (store *UniversalRedis2Store) ListDirectoryEntries(ctx context.Context, dir
+ 		if err != nil {
+ 			glog.V(0).InfofCtx(ctx, "list %s : %v", path, err)
+ 			if err == filer_pb.ErrNotFound {
+-				store.removeOrphanedDirectoryListMember(ctx, dirListKey, path, fileName)
++				store.removeOrphanedDirectoryListMember(ctx, dirPath, fileName)
+ 				err = nil
+ 				continue
+ 			}
+@@ -234,7 +234,18 @@ func (store *UniversalRedis2Store) ListDirectoryEntries(ctx context.Context, dir
+ 	return lastFileName, err
+ }
+ 
+-func (store *UniversalRedis2Store) removeOrphanedDirectoryListMember(ctx context.Context, dirListKey string, path util.FullPath, fileName string) {
++func (store *UniversalRedis2Store) removeOrphanedDirectoryListMember(ctx context.Context, dirPath util.FullPath, fileName string) {
++	// a directory converted to super large after accumulating members still has a legacy index
++	if store.isSuperLargeDirectory(string(dirPath)) {
++		return
++	}
++
++	// survive the listing request being canceled mid-repair
++	ctx = context.WithoutCancel(ctx)
++
++	dirListKey := store.getKey(genDirectoryListKey(string(dirPath)))
++	path := util.NewFullPath(string(dirPath), fileName)
++
+ 	if err := store.Client.ZRem(ctx, dirListKey, fileName).Err(); err != nil {
+ 		return
+ 	}
+@@ -244,10 +255,17 @@ func (store *UniversalRedis2Store) removeOrphanedDirectoryListMember(ctx context
+ 	// and whose ZAddNX was therefore a no-op.
+ 	exists, err := store.Client.Exists(ctx, store.getKey(string(path))).Result()
+ 	if err == nil && exists == 0 {
+-		return
++		// an evicted directory may still have a live child index; empty zsets self-delete,
++		// so a present index holds children a recursive delete still needs to reach
++		children, childrenErr := store.Client.Exists(ctx, store.getKey(genDirectoryListKey(string(path)))).Result()
++		if childrenErr == nil && children == 0 {
++			return
++		}
+ 	}
+ 
+-	store.Client.ZAddNX(ctx, dirListKey, redis.Z{Score: 0, Member: fileName})
++	if err := store.Client.ZAddNX(ctx, dirListKey, redis.Z{Score: 0, Member: fileName}).Err(); err != nil {
++		glog.V(0).InfofCtx(ctx, "restore %s in %s: %v", fileName, dirPath, err)
++	}
+ }
+ 
+ func genDirectoryListKey(dir string) (dirList string) {
+diff --git a/weed/filer/redis2/universal_redis_store_test.go b/weed/filer/redis2/universal_redis_store_test.go
+index e5d17e5e6c4..10e67383a1d 100644
+--- a/weed/filer/redis2/universal_redis_store_test.go
++++ b/weed/filer/redis2/universal_redis_store_test.go
+@@ -27,18 +27,25 @@ func newTestStore(t *testing.T, keyPrefix string) (*UniversalRedis2Store, util.F
+ 
+ 	ctx := context.Background()
+ 	client := redis.NewClient(&redis.Options{Addr: addr})
++	t.Cleanup(func() {
++		if err := client.Close(); err != nil {
++			t.Errorf("close redis client: %v", err)
++		}
++	})
+ 	if err := client.Ping(ctx).Err(); err != nil {
+ 		t.Fatalf("connect to redis at %s: %v", addr, err)
+ 	}
+ 
+ 	store := &UniversalRedis2Store{Client: client, keyPrefix: keyPrefix}
+-	store.loadSuperLargeDirectories(nil)
+ 
+ 	dir := util.FullPath(fmt.Sprintf("/redis2_test_%d", time.Now().UnixNano()))
+ 	t.Cleanup(func() {
+-		store.DeleteFolderChildren(ctx, dir)
+-		store.DeleteEntry(ctx, dir)
+-		client.Close()
++		if err := store.DeleteFolderChildren(ctx, dir); err != nil {
++			t.Errorf("cleanup %s children: %v", dir, err)
++		}
++		if err := store.DeleteEntry(ctx, dir); err != nil {
++			t.Errorf("cleanup %s: %v", dir, err)
++		}
+ 	})
+ 
+ 	return store, dir
+@@ -61,7 +68,7 @@ func listNames(t *testing.T, store *UniversalRedis2Store, dir util.FullPath) []s
+ 
+ 	names := []string{}
+ 	if _, err := store.ListDirectoryEntries(context.Background(), dir, "", true, 100, func(entry *filer.Entry) (bool, error) {
+-		_, name := entry.FullPath.DirAndName()
++		_, name := entry.DirAndName()
+ 		names = append(names, name)
+ 		return true, nil
+ 	}); err != nil {
+@@ -104,19 +111,73 @@ func TestListDirectoryEntriesRemovesOrphanedIndexMembers(t *testing.T) {
+ }
+ 
+ func TestRemoveOrphanedDirectoryListMemberKeepsRecreatedEntry(t *testing.T) {
+-	store, dir := newTestStore(t, "")
++	for _, keyPrefix := range []string{"", "sw:"} {
++		t.Run("keyPrefix="+keyPrefix, func(t *testing.T) {
++			store, dir := newTestStore(t, keyPrefix)
++
++			path := dir.Child("recreated")
++			insertTestEntry(t, store, path, 0)
++
++			store.removeOrphanedDirectoryListMember(context.Background(), dir, "recreated")
++
++			if members := indexMembers(t, store, dir); len(members) != 1 || members[0] != "recreated" {
++				t.Fatalf("directory index holds %v, want [recreated]", members)
++			}
++
++			if names := listNames(t, store, dir); len(names) != 1 || names[0] != "recreated" {
++				t.Fatalf("listed %v, want [recreated]", names)
++			}
++		})
++	}
++}
++
++func TestRemoveOrphanedDirectoryListMemberKeepsDirectoryWithChildren(t *testing.T) {
++	for _, keyPrefix := range []string{"", "sw:"} {
++		t.Run("keyPrefix="+keyPrefix, func(t *testing.T) {
++			store, dir := newTestStore(t, keyPrefix)
++
++			sub := dir.Child("sub")
++			insertTestEntry(t, store, sub, 0)
++			insertTestEntry(t, store, sub.Child("kid"), 0)
++			defer func() {
++				if err := store.DeleteFolderChildren(context.Background(), sub); err != nil {
++					t.Errorf("cleanup %s children: %v", sub, err)
++				}
++			}()
++
++			// evict the directory's own value while its child index is live
++			if err := store.Client.Del(context.Background(), store.getKey(string(sub))).Err(); err != nil {
++				t.Fatalf("drop value key: %v", err)
++			}
++
++			if names := listNames(t, store, dir); len(names) != 0 {
++				t.Fatalf("listed %v, want none", names)
++			}
+ 
+-	path := dir.Child("recreated")
+-	insertTestEntry(t, store, path, 0)
++			if members := indexMembers(t, store, dir); len(members) != 1 || members[0] != "sub" {
++				t.Fatalf("directory index holds %v, want [sub]", members)
++			}
++
++			if exists, err := store.Client.Exists(context.Background(), store.getKey(string(sub.Child("kid")))).Result(); err != nil || exists != 1 {
++				t.Fatalf("child value key exists=%d err=%v, want it kept", exists, err)
++			}
++		})
++	}
++}
+ 
+-	store.removeOrphanedDirectoryListMember(context.Background(), store.getKey(genDirectoryListKey(string(dir))), path, "recreated")
++func TestRemoveOrphanedDirectoryListMemberSkipsSuperLargeDirectory(t *testing.T) {
++	store, dir := newTestStore(t, "")
++	store.loadSuperLargeDirectories([]string{string(dir)})
+ 
+-	if members := indexMembers(t, store, dir); len(members) != 1 || members[0] != "recreated" {
+-		t.Fatalf("directory index holds %v, want [recreated]", members)
++	// a member left from before the directory became super large
++	if err := store.Client.ZAdd(context.Background(), store.getKey(genDirectoryListKey(string(dir))), redis.Z{Score: 0, Member: "legacy"}).Err(); err != nil {
++		t.Fatalf("plant legacy member: %v", err)
+ 	}
+ 
+-	if names := listNames(t, store, dir); len(names) != 1 || names[0] != "recreated" {
+-		t.Fatalf("listed %v, want [recreated]", names)
++	store.removeOrphanedDirectoryListMember(context.Background(), dir, "legacy")
++
++	if members := indexMembers(t, store, dir); len(members) != 1 || members[0] != "legacy" {
++		t.Fatalf("directory index holds %v, want [legacy] untouched", members)
+ 	}
+ }
+ 

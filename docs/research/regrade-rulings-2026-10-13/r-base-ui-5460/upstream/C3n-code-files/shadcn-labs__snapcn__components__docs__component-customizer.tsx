@@ -1,0 +1,379 @@
+"use client";
+
+import { Select as SelectPrimitive } from "@base-ui/react/select";
+import { ChevronDownIcon } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ColorPicker } from "@/components/ui/color-picker";
+import { ElasticSlider } from "@/components/ui/elastic-slider";
+import { Label } from "@/components/ui/label";
+import { SelectContent, SelectItem } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
+import type { ControlConfig, ControlType } from "@/lib/customizer-config";
+import { cn } from "@/lib/utils";
+
+/** Shared pill surface so every non-slider control matches the elastic slider. */
+// `min-w-0` so a row can never be wider than the column it sits in — without
+// it a long label pushes the row out and the whole panel scrolls sideways.
+const PILL =
+  "flex h-11 min-w-0 items-center gap-3 rounded-xl bg-control px-3 text-sm transition-colors";
+
+/** Strip trailing zeros so the value reads like the reference (1, 0.8, 0.1). */
+function formatNumber(v: number) {
+  return String(v);
+}
+
+function SelectPill({
+  id,
+  ctrl,
+  value,
+  onChange,
+}: {
+  id: string;
+  ctrl: Extract<ControlType, { type: "select" }>;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <SelectPrimitive.Root
+      value={value}
+      // base-ui types the value as `string | null` (null on deselect); the
+      // customizer never deselects, but guard it so a null can't leak out.
+      onValueChange={(v) => {
+        if (v !== null) onChange(v as string);
+      }}
+    >
+      <SelectPrimitive.Trigger
+        id={id}
+        className={cn(
+          PILL,
+          "w-full justify-between outline-none hover:bg-muted/70 focus-visible:ring-2 focus-visible:ring-ring/40",
+        )}
+      >
+        <span className="min-w-0 truncate font-medium text-muted-foreground">
+          {ctrl.label}
+        </span>
+        <span className="flex items-center gap-1 font-medium text-foreground">
+          <SelectPrimitive.Value />
+          {/* Raw primitive instead of the SelectTrigger wrapper so the chevron
+              sits beside the value inside our custom pill layout. */}
+          <SelectPrimitive.Icon
+            render={
+              <ChevronDownIcon className="size-4 text-muted-foreground" />
+            }
+          />
+        </span>
+      </SelectPrimitive.Trigger>
+      <SelectContent alignItemWithTrigger={false}>
+        {ctrl.options.map((opt) => (
+          <SelectItem key={opt} value={opt}>
+            {opt}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </SelectPrimitive.Root>
+  );
+}
+
+function NumberInputPill({
+  id,
+  ctrl,
+  value,
+  onChange,
+}: {
+  id: string;
+  ctrl: Extract<ControlType, { type: "number-input" }>;
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(String(value));
+  const committed = useRef(value);
+
+  useEffect(() => {
+    if (value !== committed.current) {
+      committed.current = value;
+      setDraft(String(value));
+    }
+  }, [value]);
+
+  const commit = (raw: string) => {
+    if (raw === "" || raw === "-") return;
+    const n = Number(raw);
+    if (Number.isNaN(n)) return;
+    const clamped = Math.min(ctrl.max, Math.max(ctrl.min, n));
+    committed.current = clamped;
+    onChange(clamped);
+  };
+
+  return (
+    <div className={PILL}>
+      <Label
+        htmlFor={id}
+        className="min-w-0 truncate font-medium text-muted-foreground"
+      >
+        {ctrl.label}
+      </Label>
+      <input
+        id={id}
+        type="number"
+        inputMode="numeric"
+        min={ctrl.min}
+        max={ctrl.max}
+        step={ctrl.step}
+        value={draft}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          commit(e.target.value);
+        }}
+        onBlur={() => setDraft(String(committed.current))}
+        className="min-w-0 flex-1 bg-transparent text-right font-mono text-sm font-medium text-foreground outline-none placeholder:text-muted-foreground/50 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+      />
+    </div>
+  );
+}
+
+function ImagePill({
+  id,
+  ctrl,
+  value,
+  onChange,
+}: {
+  id: string;
+  ctrl: Extract<ControlType, { type: "image" }>;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const src = value ?? "";
+  const isData = src.startsWith("data:");
+
+  const onFile = (file: File | undefined) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => onChange(reader.result as string);
+    reader.readAsDataURL(file);
+  };
+
+  return (
+    <div className={PILL}>
+      <Label
+        htmlFor={`${id}-url`}
+        className="min-w-0 truncate font-medium text-muted-foreground"
+      >
+        {ctrl.label}
+      </Label>
+      {src ? (
+        // biome-ignore lint/performance/noImgElement: tiny live preview of a user data-URL/URL
+        <img
+          src={src}
+          alt=""
+          className="size-6 shrink-0 rounded-md object-cover"
+        />
+      ) : null}
+      <input
+        id={`${id}-url`}
+        type="text"
+        value={isData ? "uploaded image" : src}
+        readOnly={isData}
+        placeholder="Image URL"
+        onChange={(e) => onChange(e.target.value)}
+        className="min-w-0 flex-1 bg-transparent text-right font-mono text-xs font-medium text-foreground outline-none placeholder:text-muted-foreground/50"
+      />
+      <button
+        type="button"
+        onClick={() => fileRef.current?.click()}
+        className="shrink-0 rounded-lg bg-muted px-2 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted/70"
+      >
+        Upload
+      </button>
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => onFile(e.target.files?.[0])}
+      />
+    </div>
+  );
+}
+
+function Control({
+  id,
+  ctrl,
+  value,
+  onChange,
+}: {
+  id: string;
+  ctrl: ControlType;
+  value: unknown;
+  onChange: (value: unknown) => void;
+}) {
+  switch (ctrl.type) {
+    case "number":
+      return (
+        <ElasticSlider
+          label={ctrl.label}
+          value={value as number}
+          onValueChange={onChange}
+          min={ctrl.min}
+          max={ctrl.max}
+          step={ctrl.step}
+          formatValue={formatNumber}
+          className="[--elastic-slider-height:--spacing(11)] [--elastic-slider-radius:0.75rem] "
+        />
+      );
+
+    case "number-input":
+      return (
+        <NumberInputPill
+          id={id}
+          ctrl={ctrl}
+          value={value as number}
+          onChange={onChange}
+        />
+      );
+
+    case "select":
+      return (
+        <SelectPill
+          id={id}
+          ctrl={ctrl}
+          value={value as string}
+          onChange={onChange}
+        />
+      );
+
+    case "boolean":
+      return (
+        <div className={cn(PILL, "justify-between")}>
+          <Label
+            htmlFor={id}
+            className="min-w-0 truncate font-medium text-muted-foreground"
+          >
+            {ctrl.label}
+          </Label>
+          <Switch
+            id={id}
+            checked={value as boolean}
+            onCheckedChange={onChange}
+          />
+        </div>
+      );
+
+    case "color":
+      return (
+        <div className={cn(PILL, "justify-between")}>
+          <Label
+            htmlFor={id}
+            className="min-w-0 truncate font-medium text-muted-foreground"
+          >
+            {ctrl.label}
+          </Label>
+          {/* Was `<input type="color">`. Native has no text field on any
+              platform, so the one thing people actually do here — paste a hex
+              out of a brand document — meant eyeballing it off the OS gradient.
+              The whole row is the trigger, so the target is a row rather than a
+              20px square. */}
+          <ColorPicker
+            id={id}
+            value={(value as string) ?? ""}
+            onValueChange={onChange}
+            className="flex items-center gap-2"
+          >
+            <span className="font-medium font-mono text-foreground text-sm uppercase">
+              {value as string}
+            </span>
+            <span
+              aria-hidden="true"
+              className="inline-flex size-5 shrink-0 rounded-lg border border-border/60"
+              style={{ background: value as string }}
+            />
+          </ColorPicker>
+        </div>
+      );
+
+    case "text":
+      return (
+        // Stacked and wrapping, not a pill. This was a one-line, right-aligned
+        // field sharing an 11px-tall row with its label inside a 256px rail: a
+        // headline longer than a few words scrolled out of sight, and the only
+        // way to change it was to select the invisible text and retype. It is
+        // the editor's most rage-clicked element by a distance — 126 clicks
+        // from 40 people in three weeks, which is a triple-click to select all,
+        // over and over.
+        <div className="grid min-w-0 gap-1.5">
+          <Label
+            htmlFor={id}
+            className="min-w-0 truncate font-medium text-muted-foreground"
+          >
+            {ctrl.label}
+          </Label>
+          <Textarea
+            id={id}
+            rows={2}
+            value={value as string}
+            // Newlines collapse to a space: the box is multi-line so the copy
+            // is *visible*, not so a prop can carry a line break. Every scene
+            // renders this string into a `div`, where a newline is whitespace
+            // anyway — so Enter would look like it did something and change
+            // nothing.
+            onChange={(e) =>
+              onChange(e.target.value.replace(/\s*\n+\s*/g, " "))
+            }
+            className="min-h-0 rounded-xl border-transparent bg-control px-3 py-2 text-sm md:text-sm"
+          />
+        </div>
+      );
+
+    case "image":
+      return (
+        <ImagePill
+          id={id}
+          ctrl={ctrl}
+          value={(value as string) ?? ""}
+          onChange={onChange}
+        />
+      );
+
+    default: {
+      // Compile-time exhaustiveness: adding a new ControlType errors here.
+      const _exhaustive: never = ctrl;
+      void _exhaustive;
+      return null;
+    }
+  }
+}
+
+export function ComponentCustomizer({
+  controls,
+  values,
+  onChange,
+  columns,
+}: {
+  controls: ControlConfig;
+  values: Record<string, unknown>;
+  onChange: (key: string, value: unknown) => void;
+  /** Force a single column (e.g. a narrow editor panel). Omit for the
+   * responsive 1→2→3 grid the docs previews use. */
+  columns?: 1;
+}) {
+  return (
+    <div
+      className={
+        columns === 1
+          ? "grid gap-3"
+          : "grid gap-3 sm:grid-cols-2 lg:grid-cols-3"
+      }
+    >
+      {Object.entries(controls).map(([key, ctrl]) => (
+        <Control
+          key={key}
+          id={`ctrl-${key}`}
+          ctrl={ctrl}
+          value={values[key]}
+          onChange={(value) => onChange(key, value)}
+        />
+      ))}
+    </div>
+  );
+}

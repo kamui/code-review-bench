@@ -1,0 +1,47 @@
+diff --git a/weed/command/scaffold/filer.toml b/weed/command/scaffold/filer.toml
+index be7aa076496..52df80744cc 100644
+--- a/weed/command/scaffold/filer.toml
++++ b/weed/command/scaffold/filer.toml
+@@ -285,7 +285,7 @@ ca_cert_path = ""
+ client_cert_path = ""
+ client_key_path = ""
+ # allows reads from slave servers or the master, but all writes still go to the master
+-readOnly = false
++useReadOnly = false
+ # automatically use the closest Redis server for reads
+ routeByLatency = false
+ # This changes the data layout. Only add new directories. Removing/Updating will cause data loss.
+diff --git a/weed/filer/redis2/universal_redis_store.go b/weed/filer/redis2/universal_redis_store.go
+index 0cdd92c166e..e74d5fc4c9f 100644
+--- a/weed/filer/redis2/universal_redis_store.go
++++ b/weed/filer/redis2/universal_redis_store.go
+@@ -250,11 +250,11 @@ func (store *UniversalRedis2Store) removeOrphanedDirectoryListMember(ctx context
+ 	// InsertEntry writes the value before adding the member, so a value present
+ 	// again here may belong to an insert that found the member still in place
+ 	// and whose ZAddNX was therefore a no-op.
+-	exists, err := store.Client.Exists(ctx, store.getKey(string(path))).Result()
++	exists, err := store.existsOnMaster(ctx, store.getKey(string(path)))
+ 	if err == nil && exists == 0 {
+ 		// an evicted directory may still have a live child index; empty zsets self-delete,
+ 		// so a present index holds children a recursive delete still needs to reach
+-		children, childrenErr := store.Client.Exists(ctx, store.getKey(genDirectoryListKey(string(path)))).Result()
++		children, childrenErr := store.existsOnMaster(ctx, store.getKey(genDirectoryListKey(string(path))))
+ 		if childrenErr == nil && children == 0 {
+ 			return
+ 		}
+@@ -265,6 +265,15 @@ func (store *UniversalRedis2Store) removeOrphanedDirectoryListMember(ctx context
+ 	}
+ }
+ 
++var existsScript = redis.NewScript(`return redis.call('EXISTS', KEYS[1])`)
++
++// replica-routed clients (useReadOnly, routeByLatency) would run a plain EXISTS on a lagging
++// replica and misread a live value as absent, turning the repair destructive; a script always
++// runs on the key's master
++func (store *UniversalRedis2Store) existsOnMaster(ctx context.Context, key string) (int64, error) {
++	return existsScript.Run(ctx, store.Client, []string{key}).Int64()
++}
++
+ func isLogicallyExpired(entry *filer.Entry) bool {
+ 	return entry.TtlSec > 0 && entry.Attr.Crtime.Add(time.Duration(entry.TtlSec)*time.Second).Before(time.Now())
+ }

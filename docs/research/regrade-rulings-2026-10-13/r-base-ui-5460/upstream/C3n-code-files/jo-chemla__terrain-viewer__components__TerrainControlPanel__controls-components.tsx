@@ -1,0 +1,966 @@
+import type React from "react"
+import { useState, useEffect, useRef, forwardRef, createContext, useContext, useId, Fragment } from "react"
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, Eye, EyeOff, Pin, ArrowRightToLine, Link2, Search, X } from "lucide-react"
+import { Label } from "@/components/ui/label"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Slider } from "@/components/ui/slider"
+import type { Slider as SliderPrimitive } from "@base-ui/react/slider"
+import { Separator } from "@/components/ui/separator"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Toggle } from "@/components/ui/toggle"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { Marker, MarkerContent } from "@/components/ui/marker"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { useToast } from "@/components/ui/toast"
+import type { LucideIcon } from "lucide-react"
+import { atom, useAtom, useSetAtom } from "jotai"
+import { cn } from "@/lib/utils"
+import { activeSliderAtom, transparentUiAtom, vizActivationAtom, revealSectionAtom , activeViewAtom } from "@/lib/settings-atoms"
+import { GRID_LAYOUTS, type GridLayoutId, type ViewId } from "@/lib/grid-layouts"
+import { holdControl } from "@/lib/slider-hold"
+
+
+// ─── Active-slider atom (global, no prop drilling) ────────────────────────────
+
+// ─── Section context (module-level, not inside component) ────────────────────
+
+export const SectionIdContext = createContext<string>("")
+
+// ─── SegmentedToggle ────────────────────────────────────────────────────────
+// iOS-style segmented control (muted track + one elevated "background" pill for
+// the active option). The active pill is driven by an explicit value match, NOT
+// data-pressed: with Base UI, Tooltip's own presence attribute (data-popup-open)
+// and Toggle's (data-pressed) no longer collide the way Radix's shared
+// data-state once did (this bit the old Phong toggles) — but the explicit
+// value-match check is simple and already proven, so left as-is. Reads
+// clearly in light + dark
+// where the previous data-[state=on]:bg-white pill was invisible on light.
+const SEG_ITEM_BASE = "flex-1 rounded-sm px-2 py-1 text-xs cursor-pointer transition-colors text-muted-foreground font-normal hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+const SEG_ITEM_ACTIVE = "bg-background shadow-sm font-semibold text-foreground"
+
+export interface SegmentedOption<T extends string> {
+  value: T
+  label: React.ReactNode
+  disabled?: boolean
+  tooltip?: string
+}
+
+export function SegmentedToggle<T extends string>({
+  value, onChange, options, className, disabled,
+}: {
+  value: T
+  onChange: (v: T) => void
+  options: SegmentedOption<T>[]
+  className?: string
+  disabled?: boolean
+}) {
+  return (
+    <ToggleGroup
+      value={[value]}
+      onValueChange={([v]) => v && onChange(v as T)}
+      disabled={disabled}
+      className={cn("gap-0.5 rounded-md bg-muted p-0.5", className)}
+    >
+      {options.map((o) => {
+        const item = (
+          <ToggleGroupItem value={o.value} disabled={o.disabled} className={cn(SEG_ITEM_BASE, value === o.value && SEG_ITEM_ACTIVE)}>
+            {o.label}
+          </ToggleGroupItem>
+        )
+        return o.tooltip ? (
+          <Tooltip key={o.value}>
+            <TooltipTrigger delay={300} render={item} />
+            <TooltipContent><p>{o.tooltip}</p></TooltipContent>
+          </Tooltip>
+        ) : (
+          <Fragment key={o.value}>{item}</Fragment>
+        )
+      })}
+    </ToggleGroup>
+  )
+}
+
+// ─── MobileSlider ─────────────────────────────────────────────────────────────
+
+// forwardRef can't carry a generic type parameter through, so the component is
+// implemented against the widest props and re-exported below under a generic
+// signature (same trick as Base UI's own SliderRoot declaration) — that's what
+// lets `value={[min, max]}` call sites get an array-typed onValueChange
+// instead of the raw `number | readonly number[]` union.
+const MobileSliderInner = forwardRef<
+  HTMLDivElement,
+  SliderPrimitive.Root.Props & { sliderId?: string }
+>(({ sliderId, className, onPointerDown, onPointerUp, onPointerCancel, value, onValueChange, min = 0, max = 100, ...props }, ref) => {
+  const [transparentUi, setTransparentUi] = useAtom(transparentUiAtom)
+
+  // A value outside [min, max] (typed into a bound field, or left behind by a
+  // bounds change) used to put its thumb off the end of the track, where it
+  // was invisible and ungrabbable. Draw such a thumb pinned AT the nearest
+  // end instead — it reads as "beyond this edge" and can still be dragged —
+  // while the real value is kept in state: when a different thumb moves,
+  // the pinned one's original out-of-range value is handed back unchanged,
+  // so dragging one bound never silently snaps the other to the track edge.
+  const clampOne = (v: number) => Math.min(max, Math.max(min, v))
+  const displayValue = Array.isArray(value) ? value.map(clampOne) : typeof value === "number" ? clampOne(value) : value
+  const handleValueChange = (next: any, ...rest: any[]) => {
+    if (Array.isArray(next) && Array.isArray(value)) {
+      const restored = next.map((v: number, i: number) =>
+        v === (displayValue as number[])[i] && value[i] !== (displayValue as number[])[i] ? value[i] : v)
+      ;(onValueChange as any)?.(restored, ...rest)
+      return
+    }
+    ;(onValueChange as any)?.(next, ...rest)
+  }
+  
+  const [, setActiveSlider] = useAtom(activeSliderAtom)
+  const id = sliderId ?? (props as any)["aria-label"] ?? "slider"
+
+  // Base UI's Slider Root types onPointerDown/Up/Cancel as BaseUIEvent<PointerEvent>
+  // (a plain PointerEvent plus a preventBaseUIHandler() method Base UI attaches
+  // at runtime). We only forward the event through, never call that method, so
+  // the `any` cast is a safe pass-through rather than a real type mismatch.
+  // The release is listened for on the window, not only on the slider: Base
+  // UI tracks the drag on the document without capturing the pointer, so a
+  // fast drag that ends off the slider (seen on Firefox / macOS) delivers its
+  // pointerup somewhere else, this element's own onPointerUp never fires, and
+  // the side panel stayed transparent until another slider was pressed and
+  // released slowly. Only clears its own id, never a slider pressed since.
+  // holdControl keeps this slider's group (label, value, bound inputs)
+  // opaque while the rest of the panel fades - see lib/slider-hold.ts.
+  const releaseHoldRef = useRef<(() => void) | null>(null)
+  const releaseHold = () => { releaseHoldRef.current?.(); releaseHoldRef.current = null }
+  useEffect(() => releaseHold, [])
+  const handlePointerDown = (e: React.PointerEvent<HTMLSpanElement>) => {
+    if (transparentUi) {
+      setActiveSlider(id)
+      releaseHold()
+      releaseHoldRef.current = holdControl(e.currentTarget)
+      const release = () => {
+        window.removeEventListener("pointerup", release, true)
+        window.removeEventListener("pointercancel", release, true)
+        window.removeEventListener("blur", release)
+        releaseHold()
+        setActiveSlider((current) => (current === id ? null : current))
+      }
+      window.addEventListener("pointerup", release, true)
+      window.addEventListener("pointercancel", release, true)
+      window.addEventListener("blur", release)
+    }
+    onPointerDown?.(e as any)
+  }
+  const handlePointerUp = (e: React.PointerEvent<HTMLSpanElement>) => {
+    releaseHold()
+    if (transparentUi) setActiveSlider(null)
+    onPointerUp?.(e as any)
+  }
+  const handlePointerCancel = (e: React.PointerEvent<HTMLSpanElement>) => {
+    releaseHold()
+    if (transparentUi) setActiveSlider(null)
+    onPointerCancel?.(e as any)
+  }
+
+  return (
+    <Slider
+      ref={ref}
+      className={cn(className, transparentUi ? "relative z-[1]" : "")}
+      onPointerDown={handlePointerDown}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerCancel}
+      min={min}
+      max={max}
+      value={displayValue as any}
+      onValueChange={handleValueChange as any}
+      {...props}
+    />
+  )
+})
+MobileSliderInner.displayName = "MobileSlider"
+
+export const MobileSlider = MobileSliderInner as <Value extends number | readonly number[] = number | readonly number[]>(
+  props: SliderPrimitive.Root.Props<Value> & { sliderId?: string; ref?: React.Ref<HTMLDivElement> },
+) => React.ReactElement
+
+// ─── PasswordInput ────────────────────────────────────────────────────────────
+
+export const PasswordInput = forwardRef<HTMLInputElement, any>(({ className, ...props }, ref) => {
+  const [showPassword, setShowPassword] = useState(false)
+
+  return (
+    <div className="relative">
+      <Input
+        type={showPassword ? "text" : "password"}
+        className={`pr-10 ${className || ''}`}
+        ref={ref}
+        {...props}
+      />
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent cursor-pointer"
+        onClick={() => setShowPassword(!showPassword)}
+      >
+        {showPassword ? (
+          <EyeOff className="h-4 w-4 text-muted-foreground" />
+        ) : (
+          <Eye className="h-4 w-4 text-muted-foreground" />
+        )}
+      </Button>
+    </div>
+  )
+})
+PasswordInput.displayName = "PasswordInput"
+
+// ─── Section ──────────────────────────────────────────────────────────────────
+
+export const Section: React.FC<{
+  title: string
+  isOpen: boolean
+  onOpenChange: (open: boolean) => void
+  withSeparator?: boolean
+  // Extra control (e.g. AdvancedModeToggle) rendered in the header row, right
+  // before the chevron — sits at the SAME right edge as every section's own
+  // expand/collapse chevron, for free, instead of being positioned inside
+  // CollapsibleContent with ad-hoc margins trying to fake that alignment.
+  // Radix supports multiple CollapsibleTrigger instances sharing one
+  // Collapsible (both just call the same onOpenToggle), so splitting the
+  // header into a title-trigger and a chevron-trigger with this slot between
+  // them doesn't change the "click anywhere in the header to expand" feel.
+  headerExtra?: React.ReactNode
+  // The show-flag name of this section's viz-mode (e.g. "showLrm"). When that
+  // mode is switched on, a breathing dot appears next to the title for 3s. The
+  // activation timestamp is read from vizActivationAtom (written by
+  // TerrainControlPanel) rather than tracked here, because the section remounts
+  // already-on when toggled, hiding any local false→true edge.
+  pulseKey?: string
+  // Plain DOM id on the header row — a stable hook for the guided product
+  // tour (product-tour.tsx) to spotlight/anchor a whole section by its
+  // title, without needing a forwarded ref through every call site.
+  id?: string
+  // Replaces the default open/close chevron entirely. One section (Visualization
+  // Modes) folds this control together with its pin into a single three-state
+  // button, and a chevron sitting next to a pin that both mean "state of this
+  // section" was one control too many.
+  headerChevron?: React.ReactNode
+  children: React.ReactNode
+}> = ({ title, isOpen, onOpenChange, withSeparator = true, headerExtra, pulseKey, id, headerChevron, children }) => {
+  const [vizActivation] = useAtom(vizActivationAtom)
+  const autoId = useId()
+
+  // Breathing "just activated" dot — on for the remainder of 3s from the moment
+  // this section's mode was switched on (works across the mount that toggling
+  // causes: on mount we read how long ago the activation was).
+  const activatedAt = pulseKey ? vizActivation[pulseKey] : undefined
+  const [pulse, setPulse] = useState(false)
+  useEffect(() => {
+    if (!activatedAt) return
+    const remaining = 3000 - (Date.now() - activatedAt)
+    if (remaining <= 0) return
+    setPulse(true)
+    const t = setTimeout(() => setPulse(false), remaining)
+    return () => clearTimeout(t)
+  }, [activatedAt])
+
+  return (
+    // Wraps the whole section (header + content + its own trailing separator)
+    // in one element carrying `id` — so a guided-tour step that targets this
+    // section spotlights the entire thing, not just the header row. The
+    // wrapper's own `space-y-2` reproduces the gap the surrounding scroll
+    // container's `space-y-2` used to provide between these same two nodes
+    // when they were direct siblings of it (see Fragment history) — without
+    // it, the separator would sit flush against the content above it.
+    // `scroll-mt-[100px]`: this component only ever sits inside
+    // TerrainControlPanel.tsx's own scrollable panel, whose `maskImage`
+    // fades its top/bottom 56px (FADE_PX) to hint more content is
+    // scrollable — natively respected by scrollIntoView's `block: "start"`
+    // (see product-tour.tsx), so a tour step landing on this section's own
+    // title leaves it clear of that fade instead of sitting right under it.
+    // data-fade-scope: while a slider is dragged (Transparent UI), this
+    // section fades whole, or, when it holds the slider, all of it but the
+    // slider's group and this header row (data-fade-keep, lib/slider-hold.ts).
+    <div id={id} data-fade-scope="" className="space-y-2 scroll-mt-[100px]">
+      <Collapsible open={isOpen} onOpenChange={onOpenChange}>
+        <div data-fade-keep="" className="flex items-center justify-between w-full py-2 transition-opacity duration-150">
+          <CollapsibleTrigger className="flex-1 min-w-0 text-base font-medium text-left cursor-pointer flex items-center gap-3">
+            <span className="text-left">{title}</span>
+            {pulse && (
+              // Ripple-breath dot: solid primary core + expanding/fading rings
+              // (see .breathing-dot in index.css). ml-1 adds a touch more
+              // breathing room from the title beyond the flex gap.
+              <span className="breathing-dot ml-1 shrink-0" aria-hidden>
+                <span className="ripple-ring" />
+                {/*
+                <span className="ripple-ring" />
+                <span className="ripple-ring" />
+                */ }
+                <span className="ripple-core" />
+              </span>
+            )}
+          </CollapsibleTrigger>
+          <div className="flex items-center gap-3 shrink-0">
+            {headerExtra}
+            {headerChevron ?? (
+              <CollapsibleTrigger className="cursor-pointer">
+                <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${isOpen ? "rotate-180" : ""}`} />
+              </CollapsibleTrigger>
+            )}
+          </div>
+        </div>
+        <SectionIdContext.Provider value={autoId}>
+          <CollapsibleContent className="space-y-2 pt-1 px-2 transition-opacity duration-150">
+            {children}
+          </CollapsibleContent>
+        </SectionIdContext.Provider>
+      </Collapsible>
+       {withSeparator && (
+         <Separator className="transition-opacity duration-150" />
+      )}
+    </div>
+  )
+}
+
+// ─── GroupHeading ─────────────────────────────────────────────────────────────
+// Quiet subtitle for a cluster of related controls within a Section — sits
+// between the Section's own title (text-base font-medium) and a control's
+// label (text-sm), so it needs to read as neither. Previously duplicated
+// verbatim in terrain-analysis-section.tsx and relief-visualization-section.tsx;
+// a few other places used a plain text-sm Label or a differently-tracked <h4>
+// for the same role instead, which is the inconsistency this consolidates.
+export const GroupHeading: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className }) => (
+  <p className={cn("text-xs font-semibold text-muted-foreground uppercase tracking-wide", className)}>{children}</p>
+)
+
+// ─── AdvancedModeToggle ────────────────────────────────────────────────────────
+//
+// Basic/Advanced switch for a Terrain Analysis / Relief Visualization /
+// Lighting Effects section (one atom per section — see
+// terrainAnalysisAdvancedAtom & friends in settings-atoms.ts, folding one
+// doesn't affect the others): Basic collapses every sub-mode to just its
+// checkbox/title/opacity slider, same as the everything-off look; Advanced
+// (default) shows each sub-mode's full options block (color ramp, range
+// sliders, etc.) as before. Deliberately does NOT swap between two different
+// icons — a shadcn Toggle (radix pressed/unpressed styling) instead keeps the
+// same "collapse" glyph always and communicates state via the button's own
+// pressed look (data-[state=on]:bg-accent), pressed meaning "currently
+// collapsed to basic" — more explicit than an icon-swap once you already know
+// what the icon means.
+export const AdvancedModeToggle: React.FC<{ advanced: boolean; onToggle: () => void }> = ({ advanced, onToggle }) => (
+  <Tooltip>
+    {/* Base UI's Toggle uses data-pressed and Tooltip's own presence attribute
+        is data-popup-open, so (unlike Radix, where both collided on
+        data-state) there's no real need for the extra wrapping span anymore
+        — kept anyway to avoid touching the render-prop composition twice. */}
+    <TooltipTrigger
+      delay={0}
+      render={
+        <span>
+          <Toggle
+            pressed={!advanced}
+            onPressedChange={() => onToggle()}
+            size="sm"
+            aria-label={advanced ? "Collapse to basic — hide sub-mode options" : "Expand to advanced — show sub-mode options"}
+            className="cursor-pointer"
+          >
+            <ChevronsDownUp className="h-4 w-4" />
+          </Toggle>
+        </span>
+      }
+    />
+    <TooltipContent><p>{advanced ? "Collapse to basic (hide sub-mode options)" : "Expand to advanced (show sub-mode options)"}</p></TooltipContent>
+  </Tooltip>
+)
+
+// ─── PinToggle ─────────────────────────────────────────────────────────────────
+//
+// Same shape as AdvancedModeToggle just above (Toggle + Tooltip, one icon that
+// never swaps, pressed look communicates state) — pins a section open through
+// "Fold all sections" (see vizModePinnedAtom / handleFoldExpandAll in
+// TerrainControlPanel.tsx). Reusing that pattern instead of a plain icon Button
+// is deliberate: a ghost Button has no persistent on/off look, which read as a
+// harsh, always-black icon with no indication of pinned state.
+/** Three states in one control, replacing a chevron AND a pin sitting side by
+ *  side: folded (chevron down) -> expanded (chevron up) -> pinned (pin, stays
+ *  expanded through "Fold all sections") -> folded. Clicking the section TITLE
+ *  still behaves as before, including refusing to collapse while pinned, so
+ *  this button is the only way out of the pinned state - which is what makes
+ *  the cycle discoverable rather than a trap. */
+export const SectionFoldPinToggle: React.FC<{
+  isOpen: boolean; pinned: boolean
+  onChange: (next: { isOpen: boolean; pinned: boolean }) => void
+  wiggleNonce?: number
+}> = ({ isOpen, pinned, onChange, wiggleNonce = 0 }) => {
+  const state = pinned ? "pinned" : isOpen ? "expanded" : "folded"
+  const next = state === "folded"
+    ? { isOpen: true, pinned: false }
+    : state === "expanded"
+      ? { isOpen: true, pinned: true }
+      : { isOpen: false, pinned: false }
+  const label = {
+    folded: "Folded - click to expand",
+    expanded: "Expanded - click to pin it open",
+    pinned: "Pinned open (survives \u201cFold all sections\u201d) - click to fold",
+  }[state]
+  const Icon = state === "pinned" ? Pin : ChevronDown
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        delay={0}
+        render={
+          <button
+            type="button"
+            aria-label={label}
+            onClick={() => onChange(next)}
+            className="cursor-pointer inline-flex items-center justify-center"
+          >
+            <Icon
+              key={state === "pinned" ? wiggleNonce : undefined}
+              className={cn(
+                "h-4 w-4 shrink-0 transition-transform",
+                state === "expanded" && "rotate-180",
+                state === "pinned" && wiggleNonce > 0 && "animate-pin-wiggle",
+              )}
+            />
+          </button>
+        }
+      />
+      <TooltipContent><p>{label}</p></TooltipContent>
+    </Tooltip>
+  )
+}
+
+export const PinToggle: React.FC<{ pinned: boolean; onToggle: () => void; wiggleNonce?: number }> = ({ pinned, onToggle, wiggleNonce = 0 }) => (
+  <Tooltip>
+    <TooltipTrigger
+      delay={0}
+      render={
+        <span>
+          <Toggle
+            pressed={pinned}
+            onPressedChange={() => onToggle()}
+            size="sm"
+            aria-label={pinned ? "Unpin — folds along with everything else" : "Pin open — stays expanded when folding all sections"}
+            className="cursor-pointer"
+          >
+            {/* key bump remounts the icon so the shake restarts on every blocked
+                attempt, not just the first (see .animate-pin-wiggle in index.css) */}
+            <Pin key={wiggleNonce} className={cn("h-4 w-4", wiggleNonce > 0 && "animate-pin-wiggle")} />
+          </Toggle>
+        </span>
+      }
+    />
+    <TooltipContent><p>{pinned ? "Pinned open (stays expanded when folding all sections)" : "Not pinned (folds along with everything else)"}</p></TooltipContent>
+  </Tooltip>
+)
+
+// ─── SourceGridToggle ───────────────────────────────────────────────────────
+// Split/grid's per-source-row "use this for view X" toggle — generalizes the
+// old two-button SourceAbToggle into a button MATRIX shaped exactly like the
+// current gridLayout (e.g. 3 columns × 2 rows for "3x2"), each cell labeled
+// with its letter (A-F). Independent Toggle buttons rather than one Radix
+// ToggleGroup(type="single") — a single-select group can only ever show ONE
+// view pressed at a time, which would silently break picking the SAME source
+// for two views (both can genuinely be active at once; the group's single
+// `value` prop could only ever display one of them as pressed). Each button
+// reads its own on/off state directly via `isActive(side)`, so any subset can
+// show pressed together. Clicking a button that's already pressed is a no-op
+// (onPressedChange only fires the select callback when turning ON) — every
+// view always needs SOME active source, there's no "off" state to toggle
+// into. Individual cells stay square (rounded-none) — only the outer group
+// gets a rounded-md + overflow-hidden clip, matching every other input's
+// rounded corners — and a small font size, matching the "looks like a tiny
+// copy of the map grid" look this was asked to have.
+export const SourceGridToggle: React.FC<{
+  gridLayout: GridLayoutId
+  isActive: (side: ViewId) => boolean
+  onSelect: (side: ViewId) => void
+  disabled?: boolean
+  /** Radio behaviour by default (a basemap cannot be unselected, only
+   *  replaced); overlays are a set, so their toggle also fires on unpress. */
+  allowUnpress?: boolean
+  /** A selected view (activeViewAtom): the grid collapses to that view's
+   *  one button, so the mode is switched for it alone. */
+  onlySide?: ViewId | null
+}> = ({ gridLayout, isActive, onSelect, disabled, allowUnpress, onlySide }) => onlySide ? (
+  <Toggle
+    pressed={isActive(onlySide)}
+    onPressedChange={(pressed) => { if (pressed || allowUnpress) onSelect(onlySide) }}
+    disabled={disabled}
+    title={`View ${onlySide} only (selected through its pill)`}
+    // 26 px: a one-row grid is 24 px of cells inside a 1 px border.
+    className="h-[26px] min-w-[26px] px-1.5 rounded-md border text-[10px] leading-none cursor-pointer data-pressed:font-bold"
+  >
+    {onlySide}
+  </Toggle>
+) : (
+  <div className="flex flex-col border shrink-0 overflow-hidden rounded-md divide-y divide-border">
+    {GRID_LAYOUTS[gridLayout].grid.map((row, rowIdx) => (
+      <div key={rowIdx} className="flex divide-x divide-border">
+        {row.map((side) => (
+          <Toggle
+            key={side}
+            pressed={isActive(side)}
+            onPressedChange={(pressed) => { if (pressed || allowUnpress) onSelect(side) }}
+            disabled={disabled}
+            className="h-6 w-6 min-w-6 p-0 rounded-none text-[10px] leading-none cursor-pointer data-pressed:font-bold"
+          >
+            {side}
+          </Toggle>
+        ))}
+      </div>
+    ))}
+  </div>
+)
+
+// ─── MacroSeparator ────────────────────────────────────────────────────────────
+// A bolder, higher-contrast divider dropped between macro groups of sections
+// (Sources / Options / Tools, etc) — every Section already renders its own thin
+// Separator after itself, so this is an extra, more visible line layered on top
+// of that rhythm specifically at the handful of spots that mark a bigger jump.
+// Which Section ends up immediately before a MacroSeparator varies at runtime
+// (many sections conditionally render nothing), so rather than threading a
+// "the section before me is skipped" computation through every optional
+// section, a plain sibling-based CSS rule (see index.css) hides whichever
+// ordinary Separator ends up directly adjacent to one of these — regardless
+// of which section that turns out to be.
+// isOpen/onToggle turn a labeled separator into a fold control for everything
+// between it and the next one (see macroGroupOpenAtom in TerrainControlPanel.tsx)
+// — chevrons flank the label on both sides, per the user's requested
+// "--- ^ options ^ ---" look. Omitting onToggle keeps a labeled separator
+// purely decorative (unused today, but keeps the component backward-compatible).
+export const MacroSeparator: React.FC<{ label?: string; isOpen?: boolean; onToggle?: () => void }> = ({ label, isOpen, onToggle }) => {
+  if (label) {
+    const foldable = onToggle !== undefined
+    return (
+      <Marker
+        variant="separator"
+        className={cn(
+          "macro-separator py-1 before:h-[2px] before:bg-foreground/20 after:h-[2px] after:bg-foreground/20",
+          foldable && "cursor-pointer"
+        )}
+        onClick={onToggle}
+        role={foldable ? "button" : undefined}
+        tabIndex={foldable ? 0 : undefined}
+      >
+        <MarkerContent className="text-xs font-semibold uppercase tracking-wide text-muted-foreground group-hover/marker:text-foreground transition-colors">
+          {foldable ? (
+            <span className="inline-flex items-center gap-1.5">
+              <ChevronDown className={`h-3 w-3 shrink-0 transition-transform ${isOpen ? "rotate-180" : ""}`} />
+              {label}
+              <ChevronDown className={`h-3 w-3 shrink-0 transition-transform ${isOpen ? "rotate-180" : ""}`} />
+            </span>
+          ) : label}
+        </MarkerContent>
+      </Marker>
+    )
+  }
+  return (
+    <Separator className="macro-separator data-[orientation=horizontal]:h-[2px] bg-foreground/20 rounded-full" />
+  )
+}
+
+// ─── SliderControl ────────────────────────────────────────────────────────────
+
+export const SliderControl: React.FC<{
+  label: string; value: number; onChange: (value: number) => void; min: number; max: number; step: number
+  suffix?: string; decimals?: number; disabled?: boolean; hideValue?: boolean
+  sliderId?: string
+}> = ({ label, value, onChange, min, max, step, suffix = "", decimals = 0, disabled = false, hideValue = false, sliderId }) => {
+  const sectionId = useContext(SectionIdContext)
+  const id = `${sectionId}:${sliderId ?? label}`
+
+  return (
+    <div data-slider-group="" className="space-y-1">
+      <div className="flex items-center justify-between">
+        <Label className="text-sm">{label}</Label>
+        {!hideValue && <span className="text-sm text-muted-foreground">{value.toFixed(decimals)}{suffix}</span>}
+      </div>
+      <MobileSlider sliderId={id} value={value} onValueChange={(v) => onChange(v as number)} min={min} max={max} step={step} className="cursor-pointer" disabled={disabled} />
+    </div>
+  )
+}
+
+// ─── CheckboxWithSlider ───────────────────────────────────────────────────────
+
+/** Jumps the panel to a mode's own options section (opening it if collapsed).
+ *  An action, not a state: it stores nothing and changes nothing on the map.
+ *
+ *  When the mode is off, the options section is either absent or inert, so
+ *  jumping there lands on nothing and reads as a broken button. Say why
+ *  instead — a toast rather than a disabled control, because a disabled button
+ *  gives no reason and this one has a one-click fix. */
+export const GotoOptionsButton: React.FC<{ section: string; className?: string; modeActive?: boolean; modeLabel?: React.ReactNode }> = ({ section, className, modeActive = true, modeLabel }) => {
+  const reveal = useSetAtom(revealSectionAtom)
+  const toast = useToast()
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            aria-label="Go to this mode's options"
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              if (!modeActive) {
+                toast({
+                  key: `goto-inactive-${section}`,
+                  tone: "warn", title: "Turn the mode on first",
+                  body: `Tick the checkbox to enable ${typeof modeLabel === "string" ? modeLabel : "this mode"}, then jump to its options.`,
+                })
+                return
+              }
+              reveal(section)
+            }}
+            className={cn("shrink-0 rounded p-0.5 cursor-pointer transition-colors", modeActive ? "text-muted-foreground/60 hover:text-foreground" : "text-muted-foreground/30 hover:text-muted-foreground/60", className)}
+          >
+            <ArrowRightToLine className="h-3.5 w-3.5" />
+          </button>
+        }
+      />
+      <TooltipContent><p>{modeActive ? "Go to this mode’s options" : "Turn the mode on to reach its options"}</p></TooltipContent>
+    </Tooltip>
+  )
+}
+
+export const CheckboxWithSlider: React.FC<{
+  // ReactNode (not just string) so a mode that's slow to compute can append an
+  // inline icon (e.g. SVF/Openness's hourglass) that inherits the label's own
+  // text color, instead of a colored emoji glyph.
+  id: string; label: React.ReactNode; checked: boolean; onCheckedChange: (checked: boolean) => void
+  sliderValue?: number; onSliderChange?: (value: number) => void; hideSlider?: boolean; disabled?: boolean
+  tooltip?: string
+  /** Section key this mode's own options live in. Renders a small "go to
+   *  options" button at the left edge of the slider column - the question
+   *  "where do I tune this" is asked right here, next to the switch that
+   *  turned it on, not from a menu somewhere else. */
+  gotoSection?: string
+  /** Per-view modes (lib/viz-views.ts): with this set the checkbox becomes
+   *  the view-grid toggle, one cell per map view. */
+  perView?: { gridLayout: GridLayoutId; isActive: (side: ViewId) => boolean; onSelect: (side: ViewId) => void; onAll: () => void }
+}> = ({ id, label, checked, onCheckedChange, sliderValue = 0, onSliderChange = () => null, hideSlider = false, disabled = false, tooltip, gotoSection, perView }) => {
+  const [activeView] = useAtom(activeViewAtom)
+  const sectionId = useContext(SectionIdContext)
+  const fullId = `${sectionId}:${id}`
+
+  // In per-view mode the checkbox is gone, so the label click puts the mode
+  // on every view (the way a basemap label does), rather than toggling.
+  const labelEl = <Label htmlFor={perView ? undefined : id} onClick={perView ? perView.onAll : undefined} className={`text-sm cursor-pointer ${hideSlider && !gotoSection ? "col-span-2" : ""}`}>{label}</Label>
+
+  return (
+    <div data-slider-group="" className="grid grid-cols-[auto_1fr_1fr] gap-2 items-center">
+      {perView
+        ? <SourceGridToggle gridLayout={perView.gridLayout} isActive={perView.isActive} onSelect={perView.onSelect} disabled={disabled} allowUnpress onlySide={activeView} />
+        : <Checkbox id={id} checked={checked} onCheckedChange={onCheckedChange} className="cursor-pointer" disabled={disabled} />}
+      {tooltip ? (
+        <Tooltip>
+          <TooltipTrigger render={labelEl} />
+          <TooltipContent><p>{tooltip}</p></TooltipContent>
+        </Tooltip>
+      ) : labelEl}
+      {!hideSlider && (
+        <div className="flex items-center gap-1.5 min-w-0">
+          {gotoSection && <GotoOptionsButton section={gotoSection} modeActive={checked} modeLabel={label} />}
+          <MobileSlider sliderId={fullId} value={sliderValue} onValueChange={(v) => onSliderChange(v as number)} min={0} max={1} step={0.1} className="cursor-pointer flex-1" disabled={!checked || disabled} />
+        </div>
+      )}
+      {/* No slider (Contours + GeoGrid): keep the arrow in the same column, at
+          the same x as the other rows' arrows, over an empty slider slot. */}
+      {hideSlider && gotoSection && (
+        <div className="flex items-center gap-1.5 min-w-0">
+          <GotoOptionsButton section={gotoSection} modeActive={checked} modeLabel={label} />
+          <div className="flex-1" />
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── CopyModalLinkButton ────────────────────────────────────────────────────
+// Sits beside a modal's title: copies the current link with the one-shot
+// parameter that opens this modal on arrival (?openLibrary=terrain,
+// ?bookmarksGallery=true, ?openDataLayers=true), so nobody has to remember
+// the parameter names.
+export const CopyModalLinkButton: React.FC<{ param: string; value: string; label: string }> = ({ param, value, label }) => {
+  const toast = useToast()
+  return (
+    <TooltipIconButton
+      icon={Link2}
+      tooltip={`Copy a link that opens ${label} (?${param}=${value})`}
+      size="sm"
+      className="h-6 w-6 p-0 text-muted-foreground"
+      onClick={() => {
+        const url = new URL(window.location.href)
+        url.searchParams.set(param, value)
+        navigator.clipboard?.writeText(url.toString()).then(
+          () => toast({ key: "copy-modal-link", title: "Link copied", body: `Opens ${label} on arrival.` }),
+          () => toast({ key: "copy-modal-link", tone: "alert", title: "Could not copy", body: url.toString() }),
+        )
+      }}
+    />
+  )
+}
+
+// ─── CycleButtonGroup ─────────────────────────────────────────────────────────
+
+export const CycleButtonGroup: React.FC<{
+  value: string; options: { value: string; label: string | JSX.Element }[]
+  onChange: (value: string) => void; onCycle: (direction: number) => void
+  /** Optional extra control (e.g. a color swatch) slotted between the select
+   *  and the chevron pair. */
+  middle?: React.ReactNode
+}> = ({ value, options, onChange, onCycle, middle }) => (
+  // items-center: `middle` (e.g. Tells' ColorAlphaSwatch, h-6) is shorter than
+  // the h-8 Select/chevrons — without it, a shorter middle child sits flush to
+  // the row's top instead of vertically centered (an explicit cross-axis size
+  // opts an item out of the default align-items: stretch).
+  <div className="flex items-center gap-2">
+    <Select value={value} onValueChange={(v) => v && onChange(v)} items={options}>
+      {/* min-w-0 + truncate: a long label (Duotone NW/NE...) used to widen
+          the trigger and push the chevron pair past the panel's edge. */}
+      <SelectTrigger className="flex-1 min-w-0 h-8 cursor-pointer overflow-hidden [&>span]:truncate"><SelectValue /></SelectTrigger>
+      <SelectContent>
+        {options.map((opt) => <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>)}
+      </SelectContent>
+    </Select>
+    {middle}
+    <div className="flex border rounded-md shrink-0 h-8">
+      <Button variant="ghost" size="icon" onClick={() => onCycle(-1)} className="rounded-r-none border-r cursor-pointer h-7 w-7">
+        <ChevronLeft className="h-4 w-4" />
+      </Button>
+      <Button variant="ghost" size="icon" onClick={() => onCycle(1)} className="rounded-l-none cursor-pointer h-7 w-7">
+        <ChevronRight className="h-4 w-4" />
+      </Button>
+    </div>
+  </div>
+)
+
+// ─── TooltipButton ────────────────────────────────────────────────────────────
+
+interface TooltipButtonProps {
+  icon: LucideIcon
+  label: string
+  tooltip: string
+  onClick: () => void
+  disabled?: boolean
+  className?: string
+  // Plain DOM id on the wrapping span — a stable hook for the guided
+  // product tour (product-tour.tsx) to target this button.
+  id?: string
+}
+
+export const TooltipButton: React.FC<TooltipButtonProps> = ({
+  icon: Icon,
+  label,
+  tooltip,
+  onClick,
+  disabled = false,
+  className = "flex-1",
+  id,
+}) => {
+  return (
+    <Tooltip>
+      {/* Wrapping span keeps the tooltip working when disabled — a native disabled
+          button doesn't dispatch pointer/hover events, so the trigger would never
+          open if the Button itself were the trigger. */}
+      <TooltipTrigger
+        render={
+          <span id={id} className={className}>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={disabled}
+              className="cursor-pointer bg-transparent min-w-0 w-full"
+              onClick={onClick}
+            >
+              <Icon className="h-3 w-3 sm:h-4 sm:w-4 mr-1 shrink-0" />
+              <span className="truncate text-xs sm:text-sm">{label}</span>
+            </Button>
+          </span>
+        }
+      />
+      <TooltipContent>
+        <p>{tooltip}</p>
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+// ─── TooltipIconButton ────────────────────────────────────────────────────────
+
+interface TooltipIconButtonProps {
+  icon: LucideIcon
+  tooltip: string
+  onClick?: () => void
+  disabled?: boolean
+  className?: string
+  variant?: React.ComponentProps<typeof Button>["variant"]
+  size?: React.ComponentProps<typeof Button>["size"]
+  // Plain DOM id on the underlying button — a stable hook for the guided
+  // product tour (product-tour.tsx) to target this control.
+  id?: string
+  // A link rather than an action: click and middle-click both open it in a
+  // new tab (a button gets no middle-click "open in new tab" of its own).
+  href?: string
+}
+
+export const TooltipIconButton = forwardRef<HTMLButtonElement, TooltipIconButtonProps>(({
+  icon: Icon,
+  tooltip,
+  onClick,
+  disabled = false,
+  className = "",
+  variant = "ghost",
+  size = "icon",
+  id,
+  href,
+}, ref) => {
+  const open = href ? () => window.open(href, "_blank", "noopener,noreferrer") : undefined
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        delay={0}
+        render={
+          <Button
+            ref={ref}  // ← forward to the actual button
+            id={id}
+            variant={variant}
+            size={size}
+            onClick={onClick ?? open}
+            onAuxClick={open ? (e: React.MouseEvent) => { if (e.button === 1) { e.preventDefault(); open() } } : undefined}
+            onMouseDown={open ? (e: React.MouseEvent) => { if (e.button === 1) e.preventDefault() } : undefined}
+            disabled={disabled}
+            className={`cursor-pointer ${className}`}
+          >
+            <Icon className="h-4 w-4" />
+          </Button>
+        }
+      />
+      <TooltipContent>
+        <p>{tooltip}</p>
+      </TooltipContent>
+    </Tooltip>
+  )
+})
+
+// ─── DraftBoundInput ────────────────────────────────────────────────────────────
+//
+// Text input for a slider min/max bound that tolerates in-progress typing (e.g. a
+// lone "-", or clearing the field to retype) without ever committing or displaying
+// NaN. Deliberately does NOT commit on every keystroke — typing "100" digit-by-digit
+// used to commit 1, then 10, then 100 in quick succession, visibly jerking the slider
+// track as its range changed mid-type. Validation/commit only happens on Enter or blur.
+//
+// ArrowUp/ArrowDown nudge the value by `step` (Shift held = 10×step), mirroring a
+// native <input type="number"> spinner — this is a plain text input (see above),
+// so that stepping isn't free and is replicated here. Nudging commits immediately.
+export const DraftBoundInput: React.FC<{
+  value: number | undefined
+  onCommit: (value: number | undefined) => void
+  placeholder?: string
+  className: string
+  step?: number
+}> = ({ value, onCommit, placeholder, className, step = 1 }) => {
+  const [draft, setDraft] = useState<string>(value === undefined ? "" : String(value))
+
+  // Keep the draft in sync when the bound changes externally (ramp switch, reset button, etc.)
+  useEffect(() => {
+    setDraft(value === undefined ? "" : String(value))
+  }, [value])
+
+  const commit = () => {
+    if (draft === "") { onCommit(undefined); return }
+    const parsed = parseFloat(draft)
+    if (Number.isFinite(parsed)) onCommit(parsed)
+    else setDraft(value === undefined ? "" : String(value)) // revert an incomplete draft (e.g. a lone "-")
+  }
+
+  const nudge = (direction: 1 | -1, big: boolean) => {
+    const current = value ?? parseFloat(draft)
+    const base = Number.isFinite(current) ? current : 0
+    // Round away float noise (e.g. 0.1 + 0.2) without clobbering legitimate sub-integer steps.
+    const next = Math.round((base + direction * step * (big ? 10 : 1)) * 1e6) / 1e6
+    setDraft(String(next))
+    onCommit(next)
+  }
+
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      placeholder={placeholder}
+      className={className}
+      value={draft}
+      onChange={(e) => {
+        const next = e.target.value
+        // Only accept strings that could become a valid number: optional leading
+        // minus, digits, optional single decimal point — lets "-" sit there uncommitted
+        // while the user keeps typing instead of being rejected/reverted immediately.
+        if (!/^-?\d*\.?\d*$/.test(next)) return
+        setDraft(next)
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") { e.currentTarget.blur(); return }
+        if (e.key === "ArrowUp") { e.preventDefault(); nudge(1, e.shiftKey) }
+        else if (e.key === "ArrowDown") { e.preventDefault(); nudge(-1, e.shiftKey) }
+      }}
+      onBlur={commit}
+    />
+  )
+}
+TooltipIconButton.displayName = "TooltipIconButton"
+
+// ─── Range-bound clamping ─────────────────────────────────────────────────────
+//
+// For a two-input min/max range (DraftBoundInput pair), the paired-slider variant
+// already sorts its two values with Math.min/Math.max on every drag so min can
+// never end up above max. The two independent text inputs commit one bound at a
+// time though, so without this same sort a user typing a min above the current
+// max (or vice versa) produces an inverted range — which color-relief-color
+// consumers (via remapColorRampStops) turn into non-ascending paint stops that
+// maplibre's style validator rejects outright.
+export function clampMinCommit(v: number | undefined, currentMax: number): number | undefined {
+  return v === undefined ? undefined : Math.min(v, currentMax)
+}
+export function clampMaxCommit(v: number | undefined, currentMin: number): number | undefined {
+  return v === undefined ? undefined : Math.max(v, currentMin)
+}
+// ─── ByodFilter ───────────────────────────────────────────────────────────────
+//
+// Filters a Bring Your Own Data list by name and description. Shown only once
+// the list is long enough to need it; plain component state, not in the URL.
+
+/** Rows matching a lower-cased query in their name or description. */
+export const matchesByodQuery = (s: { name: string; description?: string }, q: string) =>
+  !q || `${s.name} ${s.description ?? ""}`.toLowerCase().includes(q)
+
+export const BYOD_FILTER_MIN = 6
+
+export function ByodFilter({ value, onChange, shown, total }: { value: string; onChange: (v: string) => void; shown: number; total: number }) {
+  // The app's own Input (not a bare type="search", whose native clear button
+  // is a blue browser glyph), with a lucide Search and a clear X of our own.
+  return (
+    <div className="relative flex items-center">
+      <Search className="pointer-events-none absolute left-2 h-3.5 w-3.5 text-muted-foreground" />
+      <Input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Escape" && value) { e.stopPropagation(); onChange("") } }}
+        placeholder={`Filter ${total} sources`}
+        aria-label="Filter your sources by name or description"
+        className="h-7 pl-7 pr-14 text-xs md:text-xs cursor-text"
+      />
+      {value ? (
+        <span className="absolute right-1.5 flex items-center gap-1">
+          <span className="text-[11px] tabular-nums text-muted-foreground">{shown}/{total}</span>
+          <button type="button" onClick={() => onChange("")} aria-label="Clear the filter" className="cursor-pointer rounded-sm p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground">
+            <X className="h-3 w-3" />
+          </button>
+        </span>
+      ) : null}
+    </div>
+  )
+}

@@ -1,0 +1,13 @@
+| Probe | head | fix-fitting-pairs |
+| --- | --- | --- |
+| `GT-j1-generic-1-compose.ts` | **TS2345** | **TS2345** |
+| `GT-j1-generic-2-read.ts` | **TS2339** | **TS2339** |
+| `GT-j1-generic-3-inline.ts` | **TS2339** | **TS2339** |
+| `GT-j1-nonobject-1-ctx-undefined.ts` | **TS18048** | **TS18048** |
+| `GT-j1-nonobject-2-ctx-maybe.ts` | **TS18048** | **TS18048** |
+| `GT-j1-nonobject-3-ctx-null.ts` | **TS18047** | **TS18047** |
+| `GT-j1-nonobject-4-input-read.ts` | **TS18048** | compiles |
+| `GT-j1-nonobject-5-input-call.ts` | **TS2578** | compiles |
+| `GT-j1-nonobject-6-input-null.ts` | **TS18047** | compiles |
+| `GT-j1-nonobject-7-input-concat.ts` | **TS18048** | compiles |
+| `control-string-input.ts` | compiles | compiles |

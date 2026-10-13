@@ -1,0 +1,61 @@
+diff --git a/weed/filer/redis2/universal_redis_store.go b/weed/filer/redis2/universal_redis_store.go
+index d4ce64d80..cd713d241 100644
+--- a/weed/filer/redis2/universal_redis_store.go
++++ b/weed/filer/redis2/universal_redis_store.go
+@@ -213,8 +213,10 @@ func (store *UniversalRedis2Store) ListDirectoryEntries(ctx context.Context, dir
+ 		} else {
+ 			if entry.TtlSec > 0 {
+ 				if entry.Attr.Crtime.Add(time.Duration(entry.TtlSec) * time.Second).Before(time.Now()) {
+-					store.Client.Del(ctx, store.getKey(string(path))).Result()
+-					store.Client.ZRem(ctx, dirListKey, fileName).Result()
++					if !store.deleteIfStillExpired(ctx, path) {
++						continue
++					}
++					store.removeOrphanedDirectoryListMember(ctx, dirListKey, path, fileName)
+ 					continue
+ 				}
+ 			}
+@@ -235,19 +237,32 @@ func (store *UniversalRedis2Store) ListDirectoryEntries(ctx context.Context, dir
+ }
+ 
+ func (store *UniversalRedis2Store) removeOrphanedDirectoryListMember(ctx context.Context, dirListKey string, path util.FullPath, fileName string) {
+-	if err := store.Client.ZRem(ctx, dirListKey, fileName).Err(); err != nil {
+-		return
+-	}
++	store.Client.Eval(ctx, "if redis.call('EXISTS', KEYS[2]) == 0 then return redis.call('ZREM', KEYS[1], ARGV[1]) end return 0", []string{dirListKey, store.getKey(string(path))}, fileName)
++}
+ 
+-	// InsertEntry writes the value before adding the member, so a value present
+-	// again here may belong to an insert that found the member still in place
+-	// and whose ZAddNX was therefore a no-op.
+-	exists, err := store.Client.Exists(ctx, store.getKey(string(path))).Result()
+-	if err == nil && exists == 0 {
+-		return
+-	}
++var errNoLongerExpired = fmt.Errorf("the value is no longer the expired one")
+ 
+-	store.Client.ZAddNX(ctx, dirListKey, redis.Z{Score: 0, Member: fileName})
++func (store *UniversalRedis2Store) deleteIfStillExpired(ctx context.Context, path util.FullPath) bool {
++	key := store.getKey(string(path))
++	err := store.Client.Watch(ctx, func(tx *redis.Tx) error {
++		data, err := tx.Get(ctx, key).Result()
++		if err != nil {
++			return err
++		}
++		current := &filer.Entry{FullPath: path}
++		if err := current.DecodeAttributesAndChunks(util.MaybeDecompressData([]byte(data))); err != nil {
++			return err
++		}
++		if current.TtlSec <= 0 || !current.Attr.Crtime.Add(time.Duration(current.TtlSec)*time.Second).Before(time.Now()) {
++			return errNoLongerExpired
++		}
++		_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
++			pipe.Del(ctx, key)
++			return nil
++		})
++		return err
++	}, key)
++	return err == nil
+ }
+ 
+ func genDirectoryListKey(dir string) (dirList string) {

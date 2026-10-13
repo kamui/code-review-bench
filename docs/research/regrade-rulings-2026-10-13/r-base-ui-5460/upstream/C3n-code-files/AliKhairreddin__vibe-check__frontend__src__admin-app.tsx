@@ -1,0 +1,4221 @@
+import { Checkbox } from '@/components/ui/checkbox';
+import { selectedControlClassName } from '@/lib/control-styles';
+import { ReleaseButton } from '@/components/release-controls';
+import { EmailBatchesButton } from '@/components/release-email-dialog';
+import { deletableBatchReviewIds, hasBatchReleases, hasReviewReleases, isReviewDeletable } from '@/lib/review-releases';
+import { Select } from '@/components/ui/select';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { matchesReviewFilter, REVIEW_RESULT_FILTERS, validateReviewSearch, type ReviewResultFilter } from '@/lib/review-filters';
+import { AlertDialog } from '@base-ui/react/alert-dialog';
+import { Menu } from '@base-ui/react/menu';
+import { createRoot, type Root } from 'react-dom/client';
+import {
+  QueryClient,
+  QueryClientProvider,
+  useInfiniteQuery,
+  useMutation,
+  useQueries,
+  useQuery,
+} from '@tanstack/react-query';
+import {
+  createRootRoute,
+  createRoute,
+  createRouter,
+  Link,
+  Outlet,
+  RouterProvider,
+  redirect,
+  useNavigate,
+  useParams,
+  useRouterState,
+} from '@tanstack/react-router';
+import {
+  AlertCircle,
+  BookOpen,
+  CalendarClock,
+  CarFront,
+  ChevronDown,
+  Check,
+  CheckCircle2,
+  Code2,
+  Download,
+  ExternalLink,
+  FileImage,
+  FileJson,
+  HardDrive,
+  History,
+  House,
+  Laptop,
+  LayoutDashboard,
+  Layers3,
+  LoaderCircle,
+  LogOut,
+  Menu as MenuIcon,
+  Moon,
+  MessageSquareText,
+  RefreshCw,
+  ScanSearch,
+  Search,
+  Settings,
+  SlidersHorizontal,
+  Sun,
+  Trash2,
+  Upload,
+  Plus,
+  Radio,
+} from 'lucide-react';
+import { ShareButton, SharedLinksPanel } from '@/components/share-controls';
+import { shareableReviewIds } from '@/lib/review-sharing';
+import { PlatformDashboard } from '@/components/platform-dashboard';
+import { AdminPlansPanel } from '@/components/admin-plans';
+import { Link2, Users } from 'lucide-react';
+import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { Button, buttonVariants } from '@/components/ui/button';
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Progress,
+  ProgressLabel,
+  ProgressValue,
+} from '@/components/ui/progress';
+import { Separator } from '@/components/ui/separator';
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarRail,
+  SidebarTrigger,
+  useSidebar,
+} from '@/components/ui/sidebar';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Switch } from '@/components/ui/switch';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { Textarea } from '@/components/ui/textarea';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { cn } from '@/lib/utils';
+import { useTheme, type Theme } from '@/hooks/use-theme';
+import { DashboardPage } from '@/components/dashboard';
+import { DriveBrowser } from '@/components/drive-browser';
+import {
+  AdminAccessGate,
+  AdminAccessProvider,
+  AdminPortalGate,
+  useAdminAccess,
+} from '@/components/admin-access-gate';
+import { ApiAccessPanel } from '@/components/api-access-panel';
+import { ApiDocsPage } from '@/components/api-docs-page';
+import { ApiReferencePage } from '@/components/api-reference-page';
+import { LearningPage } from '@/components/learning-page';
+import { OfferSettingsPanel } from '@/components/offer-settings-panel';
+import { AutomationsPage } from '@/components/automations-page';
+import { LiveScansPage } from '@/components/live-scans-page';
+import { CreativeEvidenceImage, CreativeThumbnail } from '@/components/creative-media';
+import { BatchStatusDistribution } from '@/components/batch-status-distribution';
+import {
+  BatchHistoryOfferResultsRail,
+  BatchOfferResultsRail,
+  batchOutcomeForOffer,
+  findOfferOutcome,
+  getOfferColumns,
+  OfferEligibilityGrid,
+  OfferOutcomeCell,
+  OfferResultsHeader,
+  ReviewOfferResultsRail,
+  reviewOutcomeForOffer,
+  type OfferColumn,
+} from '@/components/offer-outcomes';
+import {
+  deleteReview,
+  fetchWithAdminAccess,
+  createDriveReview,
+  createReviewBatch,
+  createReview,
+  type Finding,
+  getBatch,
+  getBatches,
+  getReport,
+  getReviewEvidence,
+  getReviewSources,
+  getStatus,
+  listOfferCatalog,
+  listReviewHistoryPage,
+  listReviewHistorySources,
+  resolveDriveSelection,
+  reportBatchUploadFailure,
+  retryDriveBatchItem,
+  type OverallStatus,
+  type OfferOutcome,
+  type OfferResult,
+  type ResultStatus,
+  type ReviewBatch,
+  type ReviewBatchItem,
+  type ReviewHistoryItem,
+  type ReviewHistorySource,
+  type ReviewVertical,
+  type ReviewEvidenceFrame,
+  type Status,
+} from '@/lib/api';
+
+type CreativeSource = 'drive' | 'computer';
+type UploadPhase = 'pending' | 'uploading' | 'importing' | 'queued' | 'failed';
+
+type BatchItem = {
+  id: string;
+  fileName: string;
+  kind: 'creative' | 'ad_copy';
+  size: number;
+  uploadProgress: number;
+  phase: UploadPhase;
+  batchId?: string;
+  mediaKind: 'video' | 'image' | 'copy_only';
+  driveFileId?: string;
+  vertical?: ReviewVertical;
+  jobId?: string;
+  error?: string;
+};
+
+const queryClient = new QueryClient();
+const ACTIVE_BATCH_KEY = 'vibe-check-active-batch-v3';
+const OPENROUTER_MODEL_KEY = 'vibe-check-openrouter-model';
+const SIDEBAR_OPEN_KEY = 'vibe-check-sidebar-open';
+const DEFAULT_OPENROUTER_MODEL = 'deepseek/deepseek-v4-flash';
+const AD_COPY_PREVIEW_LENGTH = 56;
+const UPLOAD_CONCURRENCY = 10;
+const MAX_BATCH_ITEMS = 100;
+const MAX_OFFERS_PER_REVIEW = 10;
+const SOURCE_LABELS: Record<Finding['source'], string> = {
+  ad_copy: 'Ad Copy',
+  audio: 'Audio Transcript',
+  onscreen_text: 'On-screen Text',
+  policy: 'Policy',
+  visual: 'Visual',
+};
+const STATUS_LABELS: Record<OverallStatus | 'analyzing_visuals' | 'complete' | 'complete_with_failures' | 'failed', string> = {
+  analyzing_visuals: 'Analyzing Visuals',
+  complete: 'Complete',
+  complete_with_failures: 'Some failed',
+  failed: 'Failed',
+  green: 'Green',
+  yellow: 'Yellow',
+  red: 'Red',
+};
+const RESULT_META: Record<OverallStatus, {
+  description: string;
+  badgeClass: string;
+  dotClass: string;
+}> = {
+  green: {
+    description: 'Ready to run — no policy issue identified.',
+    badgeClass: 'border-emerald-600/30 bg-emerald-500/15 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-400/15 dark:text-emerald-300',
+    dotClass: 'bg-emerald-500',
+  },
+  yellow: {
+    description: 'Needs attention — fix or review the routine issue before publishing.',
+    badgeClass: 'border-yellow-600/30 bg-yellow-400/15 text-yellow-700 dark:border-yellow-400/30 dark:bg-yellow-400/15 dark:text-yellow-300',
+    dotClass: 'bg-yellow-400',
+  },
+  red: {
+    description: 'Critical stop — the policy explicitly identifies serious enforcement risk.',
+    badgeClass: 'border-red-600/30 bg-red-500/15 text-red-700 dark:border-red-400/30 dark:bg-red-400/15 dark:text-red-300',
+    dotClass: 'bg-red-500',
+  },
+};
+
+function loadActiveBatch(): BatchItem[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const saved = window.localStorage.getItem(ACTIVE_BATCH_KEY);
+    const parsed = saved ? JSON.parse(saved) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((value) => {
+      const item = value as Partial<BatchItem>;
+      if (typeof item.jobId !== 'string' || !item.jobId) return [];
+      const kind = item.kind === 'ad_copy' ? 'ad_copy' : 'creative';
+      return [{
+        id: typeof item.id === 'string' && item.id ? item.id : item.jobId,
+        batchId: typeof item.batchId === 'string' ? item.batchId : undefined,
+        fileName: typeof item.fileName === 'string' && item.fileName ? item.fileName : item.jobId,
+        kind,
+        mediaKind: item.mediaKind === 'video' || item.mediaKind === 'image'
+          ? item.mediaKind
+          : kind === 'ad_copy' ? 'copy_only' : 'video',
+        size: typeof item.size === 'number' ? item.size : 0,
+        uploadProgress: 100,
+        phase: 'queued' as const,
+        jobId: item.jobId,
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function AppShell() {
+  const { theme, toggleTheme } = useTheme();
+  const [sidebarOpen, setSidebarOpen] = useState(() => {
+    if (typeof window === 'undefined') return true;
+    return window.localStorage.getItem(SIDEBAR_OPEN_KEY) !== 'false';
+  });
+
+  useEffect(() => {
+    window.localStorage.setItem(SIDEBAR_OPEN_KEY, String(sidebarOpen));
+  }, [sidebarOpen]);
+
+  return (
+    <SidebarProvider open={sidebarOpen} onOpenChange={setSidebarOpen}>
+      <AppSidebar theme={theme} onToggleTheme={toggleTheme} />
+      <SidebarInset className="min-w-0">
+        <AppHeader theme={theme} onToggleTheme={toggleTheme} />
+        <AppContent />
+      </SidebarInset>
+    </SidebarProvider>
+  );
+}
+
+function AppContent() {
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const isWideLayout = pathname.startsWith('/batches/')
+    || pathname === '/history'
+    || pathname === '/developers/api';
+
+  return (
+    <div
+      className={cn(
+        'mx-auto w-full p-4 sm:p-6 lg:p-8',
+        isWideLayout ? 'max-w-none' : 'max-w-7xl'
+      )}
+    >
+      <Outlet />
+    </div>
+  );
+}
+
+function AppHeader({
+  onToggleTheme,
+  theme,
+}: {
+  onToggleTheme: () => void;
+  theme: Theme;
+}) {
+  const { openMobile, setOpenMobile } = useSidebar();
+  const triggerVerb = openMobile ? 'Close' : 'Open';
+
+  return (
+    <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b bg-background/90 px-4 backdrop-blur md:hidden">
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        className="-ml-1"
+        onClick={() => setOpenMobile(!openMobile)}
+        aria-label={`${triggerVerb} navigation`}
+        aria-expanded={openMobile}
+        aria-haspopup="dialog"
+        title={`${triggerVerb} navigation`}
+      >
+        <MenuIcon />
+      </Button>
+      <Link to="/" className="flex items-center gap-2 font-heading text-sm font-semibold">
+        <ScanSearch className="size-4" strokeWidth={2.2} />
+        AdChecked
+      </Link>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        className="ml-auto"
+        onClick={onToggleTheme}
+        aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+      >
+        {theme === 'dark' ? <Sun /> : <Moon />}
+      </Button>
+    </header>
+  );
+}
+
+function AppSidebar({
+  onToggleTheme,
+  theme,
+}: {
+  onToggleTheme: () => void;
+  theme: Theme;
+}) {
+  const { canManageSettings, error, isSigningOut, lock, role, username } = useAdminAccess();
+
+  return (
+    <Sidebar collapsible="icon">
+      <SidebarHeader className="p-3 group-data-[collapsible=icon]:p-2">
+        <div className="flex items-center gap-1">
+          <Link
+            to="/"
+            className="flex h-10 min-w-0 flex-1 items-center gap-2 overflow-hidden rounded-lg px-1.5 text-sidebar-foreground outline-none transition-[color,background-color,opacity] hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring group-data-[collapsible=icon]:pointer-events-none group-data-[collapsible=icon]:opacity-0"
+          >
+            <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-sidebar-border bg-card shadow-sm">
+              <ScanSearch className="size-4" strokeWidth={2.2} />
+            </span>
+            <span className="grid min-w-0 leading-tight group-data-[collapsible=icon]:hidden">
+              <span className="truncate font-heading text-sm font-semibold">AdChecked</span>
+              <span className="truncate text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">Admin console</span>
+            </span>
+          </Link>
+          <SidebarTrigger
+            className="md:hidden"
+            aria-label="Close navigation"
+            title="Close navigation"
+          />
+        </div>
+      </SidebarHeader>
+      <SidebarContent>
+        <nav aria-label="Primary navigation">
+          <SidebarGroup>
+            <SidebarGroupLabel className="uppercase tracking-[0.12em]">Performance</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {canManageSettings ? <ShellLink to="/" label="Platform overview" icon={<LayoutDashboard />} /> : null}
+                <ShellLink to={canManageSettings ? '/publisher' : '/'} label="Digital Nudge" icon={<Users />} />
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+          <SidebarGroup>
+            <SidebarGroupLabel className="uppercase tracking-[0.12em]">Workspace</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <ShellLink to="/reviews/new" label="New review" icon={<Plus />} />
+                <ShellLink to="/history" label="Review history" icon={<History />} />
+                <ShellLink to="/shares" label="Shared links" icon={<Link2 />} />
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+          <SidebarGroup>
+            <SidebarGroupLabel className="uppercase tracking-[0.12em]">Operations</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <ShellLink to="/learning" label="Learning" icon={<History />} />
+                <ShellLink to="/live-scans" label="Live scans" icon={<Radio />} />
+                {canManageSettings ? <ShellLink to="/automations" label="Automations" icon={<CalendarClock />} /> : null}
+                <ShellLink to="/developers/api" label="API docs" icon={<Code2 />} />
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        </nav>
+      </SidebarContent>
+      <SidebarFooter className="gap-3 border-t border-sidebar-border p-3 group-data-[collapsible=icon]:p-2">
+        <nav aria-label="Account navigation">
+          <SidebarMenu>
+            {canManageSettings ? <ShellLink to="/settings" label="Settings" icon={<Settings />} /> : null}
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                tooltip={theme === 'dark' ? 'Light mode' : 'Dark mode'}
+                onClick={onToggleTheme}
+              >
+                {theme === 'dark' ? <Sun /> : <Moon />}
+                <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                tooltip="Sign out"
+                disabled={isSigningOut}
+                onClick={() => void lock()}
+              >
+                {isSigningOut ? <LoaderCircle className="animate-spin" /> : <LogOut />}
+                <span>{isSigningOut ? 'Signing out' : 'Sign out'}</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </nav>
+        {error ? (
+          <p role="alert" className="rounded-lg border border-destructive/25 bg-destructive/5 p-2 text-xs text-destructive group-data-[collapsible=icon]:hidden">
+            {error}
+          </p>
+        ) : null}
+        <div role="group" aria-label="Signed-in account" className="rounded-lg border border-sidebar-border bg-card/60 p-3 text-xs leading-5 group-data-[collapsible=icon]:hidden">
+          <p className="truncate font-medium">AdChecked</p>
+          <p className="truncate text-muted-foreground" title={role === 'employee' ? username : undefined}>{role === 'employee' ? `${username || 'Employee'} · Employee` : 'Platform admin'}</p>
+        </div>
+      </SidebarFooter>
+      <SidebarBorderTrigger />
+      <SidebarRail />
+    </Sidebar>
+  );
+}
+
+function SidebarBorderTrigger() {
+  const { open } = useSidebar();
+  const label = open ? 'Collapse navigation' : 'Expand navigation';
+
+  return (
+    <SidebarTrigger
+      className="absolute top-5 -right-3.5 z-30 hidden size-7 rounded-full border border-sidebar-border bg-background shadow-sm hover:bg-muted md:inline-flex"
+      aria-label={label}
+      title={`${label} (Ctrl+B)`}
+    />
+  );
+}
+
+function ShellLink({
+  icon,
+  label,
+  to,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  to: '/' | '/reviews/new' | '/history' | '/live-scans' | '/automations' | '/developers/api' | '/settings' | '/learning' | '/shares' | '/publisher';
+}) {
+  const { setOpenMobile } = useSidebar();
+
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        tooltip={label}
+        render={
+          <Link
+            to={to}
+            activeOptions={{ exact: to === '/' }}
+            activeProps={{ className: 'bg-sidebar-accent text-sidebar-accent-foreground' }}
+            onClick={() => setOpenMobile(false)}
+          />
+        }
+      >
+        {icon}
+        <span>{label}</span>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  );
+}
+
+function RootLayout() {
+  return <AdminPortalGate><AppShell /></AdminPortalGate>;
+}
+
+function AdminLoginRedirect() {
+  const navigate = useNavigate();
+  useEffect(() => {
+    void navigate({ to: '/', replace: true });
+  }, [navigate]);
+  return null;
+}
+
+const rootRoute = createRootRoute({ component: RootLayout });
+
+function ReviewWorkspace() {
+  const [sceneDetection, setSceneDetection] = useState(false);
+  const [creativeSource, setCreativeSource] = useState<CreativeSource>('drive');
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [selectedDriveId, setSelectedDriveId] = useState('default');
+  const [selectedDriveFolders, setSelectedDriveFolders] = useState<Map<string, string>>(new Map());
+  const [selectedDriveFileIds, setSelectedDriveFileIds] = useState<Set<string>>(new Set());
+  const [selectedOfferIds, setSelectedOfferIds] = useState<Set<string> | null>(null);
+  const [selectedVertical, setSelectedVertical] = useState<ReviewVertical>('auto-insurance');
+  const [adCopyText, setAdCopyText] = useState('');
+  const [batchItems, setBatchItems] = useState<BatchItem[]>(loadActiveBatch);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
+  const adCopyLines = useMemo(() => splitAdCopyLines(adCopyText), [adCopyText]);
+
+  const selectedFolderList = useMemo(
+    () => Array.from(selectedDriveFolders.keys()).sort(),
+    [selectedDriveFolders]
+  );
+  const selectedFileList = useMemo(
+    () => Array.from(selectedDriveFileIds).sort(),
+    [selectedDriveFileIds]
+  );
+  const driveSelectionQuery = useQuery({
+    queryKey: ['drive', selectedDriveId, 'selection', selectedFolderList, selectedFileList],
+    queryFn: () => resolveDriveSelection(selectedDriveId, selectedFolderList, selectedFileList),
+    enabled:
+      creativeSource === 'drive' &&
+      (selectedFolderList.length > 0 || selectedFileList.length > 0),
+    staleTime: 60_000,
+  });
+  const offersQuery = useQuery({
+    queryKey: ['offers'],
+    queryFn: listOfferCatalog,
+    staleTime: 60_000,
+  });
+  const eligibleOffers = useMemo(
+    () => (offersQuery.data ?? []).filter((offer) => offer.enabled && offer.configured),
+    [offersQuery.data]
+  );
+  const selectedOffers = useMemo(
+    () => eligibleOffers.filter(
+      (offer) => selectedOfferIds === null || selectedOfferIds.has(offer.offer_id)
+    ),
+    [eligibleOffers, selectedOfferIds]
+  );
+  const effectiveSelectedOfferIds = useMemo(
+    () => new Set(selectedOffers.map((offer) => offer.offer_id)),
+    [selectedOffers]
+  );
+
+  const selectedDriveFiles = driveSelectionQuery.data?.files ?? [];
+  const creativeCount = creativeSource === 'drive' ? selectedDriveFiles.length : selectedFiles.length;
+  const isResolvingDriveSelection = creativeSource === 'drive'
+    && Boolean(selectedDriveFolders.size || selectedDriveFileIds.size)
+    && driveSelectionQuery.isFetching;
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const persisted = batchItems.filter((item) => item.jobId);
+    if (persisted.length) {
+      window.localStorage.setItem(ACTIVE_BATCH_KEY, JSON.stringify(persisted));
+      return;
+    }
+    window.localStorage.removeItem(ACTIVE_BATCH_KEY);
+  }, [batchItems]);
+
+  const submittedItems = batchItems.filter(
+    (item): item is BatchItem & { jobId: string } => Boolean(item.jobId)
+  );
+  const statusQueries = useQueries({
+    queries: submittedItems.map((item) => ({
+      queryKey: ['status', item.jobId],
+      queryFn: () => getStatus(item.jobId),
+      refetchInterval: (query: { state: { data?: Status } }) => {
+        const status = query.state.data;
+        return status?.report_ready || status?.status === 'failed' ? false : 1500;
+      },
+    })),
+  });
+
+  const queryByItemId = new Map(
+    submittedItems.map((item, index) => [item.id, statusQueries[index]] as const)
+  );
+  const rows = batchItems.map((item) => {
+    const query = queryByItemId.get(item.id);
+    return {
+      item,
+      status: query?.data,
+      queryError: query?.error,
+      retry: query?.refetch,
+    };
+  });
+
+  const overallProgress = useMemo(() => {
+    if (!rows.length) return 0;
+    const total = rows.reduce((sum, row) => sum + progressFor(row.item, row.status), 0);
+    return Math.round(total / rows.length);
+  }, [rows]);
+  const failedCount = rows.filter(
+    ({ item, status }) => Boolean(item.error) || status?.status === 'failed'
+  ).length;
+  const completeCount = rows.filter(({ status }) => status?.report_ready).length;
+  const pendingCount = rows.length - completeCount - failedCount;
+  const activeBatchId = batchItems.find((item) => item.batchId)?.batchId;
+
+  function updateBatchItem(id: string, patch: Partial<BatchItem>) {
+    setBatchItems((current) =>
+      current.map((item) => (item.id === id ? { ...item, ...patch } : item))
+    );
+  }
+
+  function toggleOffer(offerId: string) {
+    setSelectedOfferIds((current) => {
+      const next = new Set(
+        current ?? eligibleOffers.map((offer) => offer.offer_id)
+      );
+      if (next.has(offerId)) next.delete(offerId);
+      else next.add(offerId);
+      return next;
+    });
+  }
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSubmitError('');
+
+    const form = event.currentTarget;
+    const fileInput = form.elements.namedItem('creative') as HTMLInputElement | null;
+    const files = creativeSource === 'computer' ? Array.from(fileInput?.files ?? []) : [];
+    const driveFiles = creativeSource === 'drive' ? selectedDriveFiles : [];
+    const creatives = creativeSource === 'drive' ? driveFiles : files;
+    const copyOnly = creatives.length === 0;
+
+    if (
+      creativeSource === 'drive' &&
+      (selectedDriveFolders.size || selectedDriveFileIds.size) &&
+      driveSelectionQuery.isFetching
+    ) {
+      setSubmitError('The selected Drive folders are still being resolved. Try again in a moment.');
+      return;
+    }
+    if (creativeSource === 'drive' && driveSelectionQuery.error) {
+      setSubmitError(errorMessage(driveSelectionQuery.error));
+      return;
+    }
+    if (offersQuery.isLoading) {
+      setSubmitError('Offer eligibility is still loading. Try again in a moment.');
+      return;
+    }
+    if (offersQuery.error) {
+      setSubmitError(`Offer eligibility could not be loaded. ${errorMessage(offersQuery.error)}`);
+      return;
+    }
+    if (!eligibleOffers.length) {
+      setSubmitError('Turn on at least one offer with saved guidelines before starting a review.');
+      return;
+    }
+    if (!selectedOffers.length) {
+      setSubmitError('Select at least one offer to include in this review.');
+      return;
+    }
+    if (selectedOffers.length > MAX_OFFERS_PER_REVIEW) {
+      setSubmitError(`No more than ${MAX_OFFERS_PER_REVIEW} offers can be active for a review.`);
+      return;
+    }
+
+    if (!creatives.length && !adCopyLines.length) {
+      setSubmitError('Choose at least one creative or enter ad copy to review.');
+      return;
+    }
+    if ((copyOnly ? adCopyLines.length : creatives.length) > MAX_BATCH_ITEMS) {
+      setSubmitError(`Select no more than ${MAX_BATCH_ITEMS} creatives or copy lines per batch.`);
+      return;
+    }
+
+    const sharedFields = new FormData(form);
+    sharedFields.set('model', loadOpenRouterModel());
+    sharedFields.set('offer_ids', JSON.stringify(selectedOffers.map((offer) => offer.offer_id)));
+    sharedFields.set('vertical', selectedVertical);
+    const batchId = (copyOnly ? adCopyLines.length : creatives.length) > 1 ? randomId() : undefined;
+    const batchSourceLabel = creativeSource === 'drive' && creatives.length
+      ? driveBatchSourceLabel(selectedDriveFolders, selectedDriveFileIds.size)
+      : '';
+    const nextItems: BatchItem[] = copyOnly
+      ? adCopyLines.map((copy, index) => ({
+          id: randomId(),
+          batchId,
+          fileName: adCopyItemName(copy, index),
+          kind: 'ad_copy' as const,
+          mediaKind: 'copy_only' as const,
+          size: new Blob([copy]).size,
+          uploadProgress: 0,
+          phase: 'pending' as const,
+          vertical: selectedVertical,
+        }))
+      : creatives.map((file) => ({
+          id: randomId(),
+          batchId,
+          fileName: file.name,
+          kind: 'creative' as const,
+          mediaKind: ('mime_type' in file ? file.mime_type : file.type).startsWith('video/') || file.name.toLowerCase().endsWith('.mp4')
+            ? 'video' as const
+            : 'image' as const,
+          size: file.size ?? 0,
+          uploadProgress: 0,
+          phase: 'pending' as const,
+          driveFileId: 'file_id' in file ? file.file_id : undefined,
+          vertical: selectedVertical,
+        }));
+
+    setBatchItems(nextItems);
+    setIsSubmitting(true);
+
+    try {
+      if (batchId) {
+        await createReviewBatch({
+          batch_id: batchId,
+          offer_ids: selectedOffers.map((offer) => offer.offer_id),
+          ...(batchSourceLabel ? { source_label: batchSourceLabel } : {}),
+          review_context: buildBatchReviewContext(
+            sharedFields,
+            creativeSource === 'drive' ? selectedDriveId : null,
+            sceneDetection,
+            selectedOffers.map((offer) => offer.offer_id)
+          ),
+          items: nextItems.map((item) => ({
+            item_id: item.id,
+            file_name: item.fileName,
+            media_kind: item.mediaKind,
+            ...(item.driveFileId ? {
+              drive_id: selectedDriveId,
+              drive_file_id: item.driveFileId,
+            } : {}),
+            ...(item.vertical ? { vertical: item.vertical } : {}),
+          })),
+        });
+      }
+      await runWithConcurrency(nextItems, UPLOAD_CONCURRENCY, async (item, index) => {
+        const copyLine = copyOnly ? adCopyLines[index] : undefined;
+        const file = copyOnly ? null : files[index] ?? null;
+        const driveFile = item.driveFileId
+          ? driveFiles.find((candidate) => candidate.file_id === item.driveFileId)
+          : undefined;
+        updateBatchItem(item.id, { phase: driveFile ? 'importing' : 'uploading' });
+
+        try {
+          const status = driveFile
+            ? await createDriveReview(buildDriveReviewInput(
+                sharedFields,
+                selectedDriveId,
+                driveFile.file_id,
+                sceneDetection,
+                batchId,
+                item.id
+              ))
+            : await createReview(
+                buildReviewForm(
+                  sharedFields,
+                  file,
+                  sceneDetection,
+                  copyLine,
+                  batchId,
+                  item.id
+                ),
+                (progress) => updateBatchItem(item.id, { uploadProgress: progress })
+              );
+          updateBatchItem(item.id, {
+            jobId: status.job_id,
+            phase: 'queued',
+            uploadProgress: 100,
+          });
+          queryClient.setQueryData(['status', status.job_id], status);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          updateBatchItem(item.id, {
+            phase: 'failed',
+            error: message,
+            uploadProgress: 100,
+          });
+          if (batchId) {
+            try {
+              await reportBatchUploadFailure(batchId, item.id, message);
+            } catch (batchError) {
+              setSubmitError(
+                `A failed upload could not be recorded in the batch: ${errorMessage(batchError)}`
+              );
+            }
+          }
+        }
+      });
+    } catch (error) {
+      const message = errorMessage(error);
+      setSubmitError(message);
+      setBatchItems((current) => current.map((item) => ({
+        ...item,
+        error: message,
+        phase: 'failed',
+        uploadProgress: 100,
+      })));
+    } finally {
+      setIsSubmitting(false);
+      void queryClient.invalidateQueries({ queryKey: ['reviews'] });
+    }
+  }
+
+  return (
+    <div className="grid gap-4">
+      <div className="grid gap-4">
+        <Card>
+        <CardHeader>
+          <CardTitle as="h1" className="text-xl">New review</CardTitle>
+          <CardDescription>
+            Select creatives from Google Drive, upload from your computer, or review copy by itself.
+          </CardDescription>
+          <CardAction>
+            <Badge variant="outline">
+              {selectionBadgeLabel(creativeCount, adCopyLines.length)}
+            </Badge>
+          </CardAction>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={submit} className="grid gap-5">
+            <div className="grid gap-3">
+              <div className="flex items-center justify-between gap-3">
+                <Label>Offers to review</Label>
+                <Badge variant="outline">
+                  {selectedOffers.length} selected
+                </Badge>
+              </div>
+              {offersQuery.isLoading ? (
+                <Skeleton className="h-28" />
+              ) : offersQuery.error ? (
+                <Alert variant="destructive">
+                  <AlertCircle />
+                  <AlertTitle>Offers unavailable</AlertTitle>
+                  <AlertDescription>{errorMessage(offersQuery.error)}</AlertDescription>
+                </Alert>
+              ) : (
+                <OfferEligibilityGrid
+                  offers={offersQuery.data ?? []}
+                  selectedOfferIds={effectiveSelectedOfferIds}
+                  onToggle={toggleOffer}
+                />
+              )}
+              <p className="text-xs leading-5 text-muted-foreground">
+                Check the offers to include. Evidence is extracted once and evaluated against only the selected saved guidelines.
+              </p>
+            </div>
+
+            <div className="grid gap-3">
+              <Label>Creative vertical</Label>
+              <div className="grid grid-cols-2 gap-1 rounded-lg border bg-muted/40 p-1" role="group" aria-label="Creative vertical">
+                <Button
+                  type="button"
+                  variant={selectedVertical === 'auto-insurance' ? 'selected' : 'ghost'}
+                  aria-pressed={selectedVertical === 'auto-insurance'}
+                  onClick={() => setSelectedVertical('auto-insurance')}
+                >
+                  <CarFront />
+                  Auto Insurance
+                </Button>
+                <Button
+                  type="button"
+                  variant={selectedVertical === 'home-insurance' ? 'selected' : 'ghost'}
+                  aria-pressed={selectedVertical === 'home-insurance'}
+                  onClick={() => setSelectedVertical('home-insurance')}
+                >
+                  <House />
+                  Home Insurance
+                </Button>
+              </div>
+              <p className="text-xs leading-5 text-muted-foreground">
+                Applies to every creative in this selected folder or group and controls where it appears in client and admin views.
+              </p>
+            </div>
+
+            <div className="grid gap-3">
+              <Label>Ad creatives</Label>
+              <div className="grid grid-cols-2 gap-1 rounded-lg border bg-muted/40 p-1" role="group" aria-label="Creative source">
+                <Button
+                  type="button"
+                  variant={creativeSource === 'drive' ? 'selected' : 'ghost'}
+                  aria-pressed={creativeSource === 'drive'}
+                  onClick={() => {
+                    setCreativeSource('drive');
+                    setSelectedFiles([]);
+                  }}
+                >
+                  <HardDrive />
+                  Google Drive
+                </Button>
+                <Button
+                  type="button"
+                  variant={creativeSource === 'computer' ? 'selected' : 'ghost'}
+                  aria-pressed={creativeSource === 'computer'}
+                  onClick={() => {
+                    setCreativeSource('computer');
+                    setSelectedDriveFolders(new Map());
+                    setSelectedDriveFileIds(new Set());
+                  }}
+                >
+                  <Laptop />
+                  This computer
+                </Button>
+              </div>
+
+              {creativeSource === 'drive' ? (
+                <div>
+                  <DriveBrowser
+                    driveId={selectedDriveId}
+                    selectedFolders={selectedDriveFolders}
+                    selectedFileIds={selectedDriveFileIds}
+                    onDriveChange={(driveId) => {
+                      setSelectedDriveId(driveId);
+                      if (driveId === 'kissterra-home') setSelectedVertical('home-insurance');
+                      else if (driveId === 'kissterra') setSelectedVertical('auto-insurance');
+                      setSelectedDriveFolders(new Map());
+                      setSelectedDriveFileIds(new Set());
+                    }}
+                    onSelectionChange={(folders, files) => {
+                      setSelectedDriveFolders(folders);
+                      setSelectedDriveFileIds(files);
+                    }}
+                  />
+                  {(selectedDriveFolders.size || selectedDriveFileIds.size) ? (
+                    <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
+                      {driveSelectionQuery.isFetching ? <LoaderCircle className="size-3.5 animate-spin" /> : null}
+                      {driveSelectionQuery.isFetching
+                        ? 'Resolving selected folders…'
+                        : driveSelectionQuery.error
+                          ? errorMessage(driveSelectionQuery.error)
+                          : `${selectedDriveFiles.length} deduplicated creative${selectedDriveFiles.length === 1 ? '' : 's'} ready`}
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="grid gap-2">
+                  <Input
+                    id="creative"
+                    multiple
+                    name="creative"
+                    type="file"
+                    accept="video/mp4,image/jpeg,image/png,image/webp"
+                    aria-describedby="creative-help"
+                    className="h-auto min-h-20 cursor-pointer border-dashed py-5 file:mr-3 file:h-9 file:cursor-pointer file:rounded-md file:border file:border-border file:bg-background file:px-3 file:py-2 hover:file:bg-accent"
+                    onChange={(event) => setSelectedFiles(Array.from(event.currentTarget.files ?? []))}
+                  />
+                  <p id="creative-help" className="text-xs leading-5 text-muted-foreground">
+                    MP4, JPG, PNG, or WebP · up to 400 MB each · up to {UPLOAD_CONCURRENCY} uploads at a time
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <FormField label="Ad copy / platform captions" htmlFor="ad_copy">
+              <div className="grid gap-2">
+                <Textarea
+                  id="ad_copy"
+                  name="ad_copy"
+                  value={adCopyText}
+                  className="min-h-32"
+                  placeholder={'Save more today.\nGet a free quote in minutes.'}
+                  aria-describedby="ad-copy-help"
+                  onChange={(event) => setAdCopyText(event.currentTarget.value)}
+                />
+                <p id="ad-copy-help" className="text-xs leading-5 text-muted-foreground">
+                  Without a creative, each non-empty line becomes a separate job. With
+                  creatives, the full text is attached to every selected creative.
+                </p>
+              </div>
+            </FormField>
+
+            <details className="group rounded-lg border bg-muted/20">
+              <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-3 text-sm font-medium [&::-webkit-details-marker]:hidden">
+                <SlidersHorizontal className="size-4 text-muted-foreground" />
+                Advanced review options
+                <span className="ml-auto hidden text-xs font-normal text-muted-foreground group-open:hidden sm:inline">
+                  Policy, transcript, notes, and sampling
+                </span>
+              </summary>
+              <div className="grid gap-4 border-t px-3 py-4">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <FormField label="Additional policy/guidelines" htmlFor="policy_text">
+                    <Textarea
+                      id="policy_text"
+                      name="policy_text"
+                      className="min-h-28"
+                      placeholder="Saved publisher guidelines are included automatically."
+                    />
+                  </FormField>
+                  <FormField label="Optional transcript override" htmlFor="manual_transcript">
+                    <Textarea
+                      id="manual_transcript"
+                      name="manual_transcript"
+                      className="min-h-28"
+                    />
+                  </FormField>
+                </div>
+
+                <FormField label="Optional product/brand notes" htmlFor="notes">
+                  <Textarea id="notes" name="notes" className="min-h-24" />
+                </FormField>
+
+                <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_180px]">
+                  <div className="hidden md:block" aria-hidden="true" />
+                  <FormField label="Frame interval" htmlFor="frame_interval_seconds">
+                    <Input
+                      id="frame_interval_seconds"
+                      name="frame_interval_seconds"
+                      type="number"
+                      step="0.5"
+                      min="0.5"
+                      defaultValue="1"
+                    />
+                  </FormField>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 rounded-lg border bg-background/70 px-3 py-3">
+                  <div className="grid gap-1">
+                    <Label htmlFor="scene_detection">Video scene-change detection</Label>
+                    <p className="text-sm text-muted-foreground">
+                      Also sample sharp visual cuts so brief on-screen text is less likely
+                      to be missed. This can add processing time.
+                    </p>
+                  </div>
+                  <Switch
+                    id="scene_detection"
+                    checked={sceneDetection}
+                    onCheckedChange={setSceneDetection}
+                  />
+                </div>
+              </div>
+            </details>
+
+            {submitError ? (
+              <Alert variant="destructive">
+                <AlertCircle />
+                <AlertTitle>Review blocked</AlertTitle>
+                <AlertDescription>{submitError}</AlertDescription>
+              </Alert>
+            ) : null}
+
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm text-muted-foreground">
+                {submissionHint(creativeCount, adCopyLines.length)}
+              </p>
+              <Button
+                type="submit"
+                variant={isResolvingDriveSelection ? 'secondary' : 'default'}
+                disabled={
+                  isSubmitting
+                  || isResolvingDriveSelection
+                  || offersQuery.isLoading
+                  || Boolean(offersQuery.error)
+                  || !eligibleOffers.length
+                  || eligibleOffers.length > MAX_OFFERS_PER_REVIEW
+                }
+              >
+                {isResolvingDriveSelection ? (
+                  <LoaderCircle data-icon="inline-start" className="animate-spin" />
+                ) : (
+                  <Upload data-icon="inline-start" />
+                )}
+                {isResolvingDriveSelection
+                  ? selectedDriveFolders.size
+                    ? `Resolving ${selectedDriveFolders.size === 1 ? 'folder' : 'folders'}…`
+                    : 'Resolving selection…'
+                  : isSubmitting
+                    ? 'Starting reviews…'
+                    : createButtonLabel(creativeCount || adCopyLines.length)}
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-xl">Batch progress</CardTitle>
+            <CardDescription className="max-sm:col-span-2">
+              Jobs are submitted in groups of up to {UPLOAD_CONCURRENCY}, without waiting for earlier reviews to finish. Reviews process in parallel as capacity becomes available; additional jobs wait automatically.
+            </CardDescription>
+            <CardAction className="max-sm:row-span-1 max-sm:row-start-1">
+              <div className="flex items-center gap-2">
+                {completeCount > 0 ? <ReleaseButton jobIds={rows.flatMap(({ status }) => status?.status === 'complete' ? [status.job_id] : [])} hasReleased={rows.some(({ status }) => hasReviewReleases(status))} /> : null}
+                {completeCount > 0 ? <ShareButton jobIds={rows.flatMap(({ status }) => status?.status === 'complete' ? [status.job_id] : [])} label="Share batch" /> : null}
+                {activeBatchId ? (
+                  <Link
+                    to="/batches/$batchId"
+                    params={{ batchId: activeBatchId }}
+                    className={buttonVariants({ variant: 'outline', size: 'sm' })}
+                  >
+                    Batch results
+                  </Link>
+                ) : null}
+                {rows.length ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={isSubmitting}
+                    onClick={() => setBatchItems([])}
+                  >
+                    Clear
+                  </Button>
+                ) : null}
+                {rows.length ? (
+                  <Badge
+                    variant={
+                      failedCount ? 'destructive' : overallProgress === 100
+                        ? 'secondary'
+                        : 'outline'
+                    }
+                  >
+                    {failedCount
+                      ? `${failedCount} failed`
+                      : overallProgress === 100
+                        ? 'Complete'
+                        : `${overallProgress}%`}
+                  </Badge>
+                ) : (
+                  <Badge variant="outline">{UPLOAD_CONCURRENCY} parallel submissions</Badge>
+                )}
+              </div>
+            </CardAction>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+            {rows.length ? (
+              <>
+                <Progress value={overallProgress}>
+                  <ProgressLabel>
+                    {completeCount} complete · {pendingCount} in progress
+                  </ProgressLabel>
+                  <ProgressValue />
+                </Progress>
+                {failedCount ? (
+                  <Alert variant="destructive">
+                    <AlertCircle />
+                    <AlertTitle>Some jobs did not complete</AlertTitle>
+                    <AlertDescription>
+                      Review the failed job messages below, then adjust the input and resubmit.
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
+                <div className="max-h-[38rem] overflow-auto rounded-lg border">
+                  <Table>
+                    <TableHeader className="sticky top-0 z-10 bg-card">
+                      <TableRow>
+                        <TableHead>Creative</TableHead>
+                        <TableHead className="w-36">Vertical</TableHead>
+                        <TableHead className="w-28">Type</TableHead>
+                        <TableHead className="w-36">Status</TableHead>
+                        <TableHead className="min-w-72">Progress</TableHead>
+                        <TableHead className="w-32 text-right">Action</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {rows.map(({ item, queryError, retry, status }) => (
+                        <BatchRow
+                          key={item.id}
+                          item={item}
+                          status={status}
+                          queryError={queryError}
+                          onRetry={retry ? () => void retry() : undefined}
+                        />
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </>
+            ) : (
+              <EmptyBatchState />
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+    </div>
+  );
+}
+
+function FormField({
+  children,
+  htmlFor,
+  label,
+}: {
+  children: React.ReactNode;
+  htmlFor: string;
+  label: string;
+}) {
+  return (
+    <div className="grid gap-2">
+      <Label htmlFor={htmlFor}>{label}</Label>
+      {children}
+    </div>
+  );
+}
+
+function EmptyBatchState() {
+  return (
+    <div className="grid min-h-64 place-items-center rounded-lg border border-dashed bg-muted/20 p-6 text-center">
+      <div className="grid max-w-xs gap-2">
+        <div className="mx-auto grid size-10 place-items-center rounded-lg border bg-card">
+          <FileImage className="size-5 text-muted-foreground" />
+        </div>
+        <p className="text-sm font-medium">No active batch</p>
+        <p className="text-sm text-muted-foreground">
+          Start a review to watch up to {MAX_BATCH_ITEMS} jobs move through the queue.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function BatchRow({
+  item,
+  onRetry,
+  queryError,
+  status,
+}: {
+  item: BatchItem;
+  onRetry?: () => void;
+  queryError?: Error | null;
+  status?: Status;
+}) {
+  const progress = progressFor(item, status);
+  const displayStatus = item.error
+    ? 'failed'
+    : status?.status ?? (queryError ? 'connection_issue' : item.phase);
+  const message =
+    item.error ??
+    status?.message ??
+    (queryError ? 'Status temporarily unavailable' : phaseMessage(item.phase, item.kind));
+
+  return (
+    <TableRow>
+      <TableCell className="max-w-0">
+        <p className="truncate text-sm font-medium" title={item.fileName}>{item.fileName}</p>
+        {queryError ? (
+          <p className="truncate text-xs text-destructive" title={errorMessage(queryError)}>
+            Status refresh unavailable
+          </p>
+        ) : null}
+      </TableCell>
+      <TableCell>
+        <Badge variant="outline" className="text-[10px]">
+          {historyVerticalLabel(item.vertical ?? status?.vertical ?? 'auto-insurance')}
+        </Badge>
+      </TableCell>
+      <TableCell className="text-xs text-muted-foreground">
+        {item.kind === 'ad_copy' ? 'Ad copy' : formatBytes(item.size)}
+      </TableCell>
+      <TableCell><StatusBadge status={displayStatus} /></TableCell>
+      <TableCell>
+        <Progress value={progress}>
+          <ProgressLabel className="truncate">{message}</ProgressLabel>
+          <ProgressValue />
+        </Progress>
+      </TableCell>
+      <TableCell className="text-right">
+        {queryError && onRetry ? (
+          <Button type="button" variant="outline" size="xs" onClick={onRetry}>
+            <RefreshCw />
+            Retry
+          </Button>
+        ) : status?.report_ready ? (
+          <div className="flex flex-wrap justify-end gap-1">
+          <ReleaseButton jobIds={[status.job_id]} hasReleased={hasReviewReleases(status)} />
+          <ShareButton jobIds={[status.job_id]} label="Share" size="xs" />
+          <Link
+            to="/reviews/$jobId/report"
+            params={{ jobId: status.job_id }}
+            className={buttonVariants({ variant: 'outline', size: 'xs' })}
+          >
+            <FileJson data-icon="inline-start" />
+            Report
+          </Link>
+          </div>
+        ) : item.jobId ? (
+          <Link
+            to="/reviews/$jobId"
+            params={{ jobId: item.jobId }}
+            className={buttonVariants({ variant: 'ghost', size: 'xs' })}
+          >
+            View job
+          </Link>
+        ) : (
+          <span className="text-xs text-muted-foreground">—</span>
+        )}
+      </TableCell>
+    </TableRow>
+  );
+}
+
+type HistoryResultFilter = 'all' | OverallStatus | 'na';
+type HistoryTypeFilter = 'all' | 'creative' | 'copy_only';
+type HistoryVerticalFilter = 'all' | ReviewVertical;
+type HistoryDeleteRequest = {
+  ids: string[];
+  label: string;
+};
+type HistoryEntry =
+  | {
+      createdAt: number | null;
+      entryKey: string;
+      kind: 'review';
+      review: ReviewHistoryItem;
+    }
+  | {
+      batch?: ReviewBatch;
+      batchId: string;
+      createdAt: number | null;
+      entryKey: string;
+      kind: 'batch';
+      reviews: ReviewHistoryItem[];
+    };
+
+function HistoryCard({
+  allHistory = false,
+  sourceLabel = 'Digital Nudge',
+  sourceSelector,
+  error,
+  hasMore = false,
+  isFetchingMore = false,
+  isLoading,
+  onLoadMore,
+  onRetry,
+  reviews,
+}: {
+  allHistory?: boolean;
+  sourceLabel?: string;
+  sourceSelector?: React.ReactNode;
+  error: Error | null;
+  hasMore?: boolean;
+  isFetchingMore?: boolean;
+  isLoading: boolean;
+  onLoadMore?: () => void;
+  onRetry: () => void;
+  reviews: ReviewHistoryItem[];
+}) {
+  const navigate = useNavigate();
+  const { canManageSettings } = useAdminAccess();
+  const [searchQuery, setSearchQuery] = useState('');
+  const [offerFilter, setOfferFilter] = useState('all');
+  const [resultFilter, setResultFilter] = useState<HistoryResultFilter>('all');
+  const [typeFilter, setTypeFilter] = useState<HistoryTypeFilter>('all');
+  const [verticalFilter, setVerticalFilter] = useState<HistoryVerticalFilter>('all');
+  const [selectedReviewIds, setSelectedReviewIds] = useState<Set<string>>(new Set());
+  const [deleteRequest, setDeleteRequest] = useState<HistoryDeleteRequest | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const offerCatalogQuery = useQuery({
+    queryKey: ['offers'],
+    queryFn: listOfferCatalog,
+    staleTime: 60_000,
+  });
+  const batchIds = useMemo(
+    () => Array.from(new Set(reviews.flatMap((review) => review.batch_id ? [review.batch_id] : []))),
+    [reviews]
+  );
+  const batchesQuery = useQuery({
+    queryKey: ['batches', 'history', batchIds],
+    queryFn: () => getBatches(batchIds),
+    enabled: batchIds.length > 0,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+  });
+  const historyEntries = useMemo(
+    () => buildHistoryEntries(reviews, batchesQuery.data ?? []),
+    [batchesQuery.data, reviews]
+  );
+  const offerColumns = useMemo(
+    () => getOfferColumns(
+      offerCatalogQuery.data ?? [],
+      reviews.map((review) => review.offer_outcomes)
+    ),
+    [offerCatalogQuery.data, reviews]
+  );
+  const deleteMutation = useMutation({
+    mutationFn: deleteReviewSelection,
+    onSuccess: ({ deletedIds, failedIds, firstError }) => {
+      setDeleteRequest(null);
+      void queryClient.invalidateQueries({ queryKey: ['reviews'] });
+      for (const jobId of deletedIds) {
+        queryClient.removeQueries({ queryKey: ['status', jobId] });
+        queryClient.removeQueries({ queryKey: ['report', jobId] });
+        queryClient.removeQueries({ queryKey: ['source', jobId] });
+      }
+      setSelectedReviewIds(new Set(failedIds));
+      setDeleteError(
+        failedIds.length
+          ? `${deletedIds.length ? `Removed ${deletedIds.length}. ` : ''}Could not remove ${failedIds.length} selected review${failedIds.length === 1 ? '' : 's'}: ${errorMessage(firstError)}`
+          : null
+      );
+      try {
+        const deleted = new Set(deletedIds);
+        const active = loadActiveBatch().filter((item) => !item.jobId || !deleted.has(item.jobId));
+        if (active.length) window.localStorage.setItem(ACTIVE_BATCH_KEY, JSON.stringify(active));
+        else window.localStorage.removeItem(ACTIVE_BATCH_KEY);
+      } catch {
+        // History removal still succeeded if local progress cleanup is unavailable.
+      }
+    },
+  });
+  const normalizedSearch = searchQuery.trim().toLocaleLowerCase();
+  const filteredEntries = useMemo(() => {
+    return historyEntries.filter((entry) => {
+      if (normalizedSearch && !historyEntryMatchesSearch(entry, normalizedSearch)) return false;
+      if (!historyEntryMatchesTypeFilter(entry, typeFilter)) return false;
+      if (!historyEntryMatchesVerticalFilter(entry, verticalFilter)) return false;
+      return historyEntryMatchesResultFilter(
+        entry,
+        offerColumns,
+        offerFilter,
+        resultFilter
+      );
+    });
+  }, [
+    historyEntries,
+    normalizedSearch,
+    offerColumns,
+    offerFilter,
+    resultFilter,
+    typeFilter,
+    verticalFilter,
+  ]);
+  const filtersActive = Boolean(
+    normalizedSearch ||
+    offerFilter !== 'all' ||
+    resultFilter !== 'all' ||
+    typeFilter !== 'all' ||
+    verticalFilter !== 'all'
+  );
+  const selectableVisibleIds = Array.from(new Set(
+    filteredEntries.flatMap(deletableHistoryEntryIds)
+  ));
+  const allVisibleSelected = selectableVisibleIds.length > 0 &&
+    selectableVisibleIds.every((jobId) => selectedReviewIds.has(jobId));
+  const someVisibleSelected = !allVisibleSelected &&
+    selectableVisibleIds.some((jobId) => selectedReviewIds.has(jobId));
+  const selectedCount = selectedReviewIds.size;
+  const selectedShareIds = [...new Set(historyEntries.flatMap(entry =>
+    shareableReviewIds(entry.kind === 'batch' ? historyEntryBatchItems(entry) : [entry.review], offerFilter)
+  ))].filter(jobId => selectedReviewIds.has(jobId));
+
+  useEffect(() => {
+    setSelectedReviewIds(new Set());
+  }, [normalizedSearch, offerFilter, resultFilter, typeFilter, verticalFilter]);
+
+  useEffect(() => {
+    const deletableIds = new Set(historyEntries.flatMap(deletableHistoryEntryIds));
+    setSelectedReviewIds(current => {
+      const next = new Set([...current].filter(jobId => deletableIds.has(jobId)));
+      return next.size === current.size ? current : next;
+    });
+  }, [historyEntries]);
+
+  function resetFilters() {
+    setSearchQuery('');
+    setOfferFilter('all');
+    setResultFilter('all');
+    setTypeFilter('all');
+    setVerticalFilter('all');
+  }
+
+  function toggleEntrySelection(entry: HistoryEntry) {
+    const entryIds = deletableHistoryEntryIds(entry);
+    const entrySelected = entryIds.length > 0 &&
+      entryIds.every((jobId) => selectedReviewIds.has(jobId));
+    setSelectedReviewIds((current) => {
+      const next = new Set(current);
+      for (const jobId of entryIds) {
+        if (entrySelected) next.delete(jobId);
+        else next.add(jobId);
+      }
+      return next;
+    });
+  }
+
+  function openHistoryEntry(entry: HistoryEntry) {
+    if (entry.kind === 'batch') {
+      void navigate({ to: '/batches/$batchId', params: { batchId: entry.batchId } });
+      return;
+    }
+    const to = entry.review.report_ready
+      ? '/reviews/$jobId/report' as const
+      : '/reviews/$jobId' as const;
+    void navigate({ to, params: { jobId: entry.review.job_id } });
+  }
+
+  function toggleVisibleSelection() {
+    setSelectedReviewIds((current) => {
+      const next = new Set(current);
+      if (allVisibleSelected) {
+        for (const jobId of selectableVisibleIds) next.delete(jobId);
+      } else {
+        for (const jobId of selectableVisibleIds) next.add(jobId);
+      }
+      return next;
+    });
+  }
+
+  return (
+    <>
+      <Card size={allHistory ? 'sm' : 'default'}>
+        <CardHeader>
+          <CardTitle
+            as={allHistory ? 'h1' : 'h2'}
+            className={cn('text-xl', allHistory && 'group-data-[size=sm]/card:text-lg')}
+          >
+            {allHistory ? `${sourceLabel} review history` : 'Review history'}
+          </CardTitle>
+          <CardDescription>
+            {allHistory
+              ? 'Showing submissions from the selected source. Choose another API partner or publisher to view their history.'
+              : 'Recent uploads, with multi-creative batches grouped into one row.'}
+          </CardDescription>
+          <CardAction>
+            <div className="flex items-center gap-2">
+              <EmailBatchesButton />
+              <Badge variant="outline">
+                {filtersActive
+                  ? `${filteredEntries.length} of ${historyEntries.length}`
+                  : allHistory
+                    ? `${historyEntries.length}${hasMore ? '+' : ''} loaded`
+                    : `${historyEntries.length} recent`}
+              </Badge>
+              {!allHistory ? (
+                <Link
+                  to="/history"
+                  className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}
+                >
+                  View all
+                </Link>
+              ) : null}
+            </div>
+          </CardAction>
+        </CardHeader>
+        <CardContent>
+          {sourceSelector}
+          {deleteError ? (
+            <Alert variant="destructive" className="mb-3">
+              <AlertCircle />
+              <AlertTitle>Could not remove every review</AlertTitle>
+              <AlertDescription>
+                {deleteError}{' '}
+                {canManageSettings ? (
+                  <Link to="/settings" className="font-medium underline underline-offset-4">
+                    Check admin access in Settings.
+                  </Link>
+                ) : (
+                  'Try again or ask an owner for help.'
+                )}
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          {!error && !isLoading && reviews.length ? (
+            <>
+              <div className="mb-3 flex flex-wrap items-center gap-2">
+                <div className="relative min-w-56 flex-1 sm:max-w-sm">
+                  <Search
+                    aria-hidden="true"
+                    className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
+                  />
+                  <Input
+                    type="search"
+                    value={searchQuery}
+                    onChange={(event) => setSearchQuery(event.target.value)}
+                    placeholder="Search reviews"
+                    aria-label="Search review history"
+                    className="pl-8"
+                  />
+                </div>
+                <div className="flex flex-wrap items-center gap-2" aria-label="History filters">
+                  <SlidersHorizontal className="size-4 text-muted-foreground" aria-hidden="true" />
+                  <Select
+                    value={verticalFilter}
+                    active={verticalFilter !== 'all'}
+                    onValueChange={(value) => setVerticalFilter(value as HistoryVerticalFilter)}
+                    aria-label="Filter by vertical"
+                    className={historyFilterClassName}
+                    options={[
+                      { value: 'all', label: 'All verticals' },
+                      { value: 'auto-insurance', label: 'Auto Insurance' },
+                      { value: 'home-insurance', label: 'Home Insurance' },
+                    ]}
+                  />
+                  <Select
+                    value={offerFilter}
+                    active={offerFilter !== 'all'}
+                    onValueChange={(value) => setOfferFilter(value)}
+                    aria-label="Filter by offer"
+                    className={historyFilterClassName}
+                    options={[
+                      { value: 'all', label: 'All offers' },
+                      ...offerColumns.map((offer) => ({ value: offer.offer_id, label: offer.offer_name })),
+                    ]}
+                  />
+                  <Select
+                    value={resultFilter}
+                    active={resultFilter !== 'all'}
+                    onValueChange={(value) => setResultFilter(value as HistoryResultFilter)}
+                    aria-label="Filter by result"
+                    className={historyFilterClassName}
+                    options={[
+                      { value: 'all', label: 'All results' },
+                      { value: 'red', label: 'Red' },
+                      { value: 'yellow', label: 'Yellow' },
+                      { value: 'green', label: 'Green' },
+                      { value: 'na', label: 'N/A' },
+                    ]}
+                  />
+                  <Select
+                    value={typeFilter}
+                    active={typeFilter !== 'all'}
+                    onValueChange={(value) => setTypeFilter(value as HistoryTypeFilter)}
+                    aria-label="Filter by review type"
+                    className={historyFilterClassName}
+                    options={[
+                      { value: 'all', label: 'All types' },
+                      { value: 'creative', label: 'Creative' },
+                      { value: 'copy_only', label: 'Copy only' },
+                    ]}
+                  />
+                  {filtersActive ? (
+                    <Button type="button" variant="ghost" size="xs" onClick={resetFilters}>
+                      Clear filters
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+              {selectedCount ? (
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/30 px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <Badge variant="secondary">{selectedCount} selected</Badge>
+                    {selectedShareIds.length ? <ReleaseButton jobIds={selectedShareIds} hasReleased={reviews.some(review => selectedShareIds.includes(review.job_id) && hasReviewReleases(review)) || historyEntries.some(entry => entry.kind === 'batch' && entry.batch?.items.some(item => item.job_id && selectedShareIds.includes(item.job_id) && item.has_releases))} /> : null}
+                    {selectedShareIds.length ? <ShareButton jobIds={selectedShareIds} offerId={offerFilter === 'all' ? undefined : offerFilter} /> : null}
+                    {selectedShareIds.length < selectedCount ? <span className="text-xs text-muted-foreground">Only completed results can be shared</span> : null}
+                    {allVisibleSelected ? (
+                      <span className="text-xs text-muted-foreground">
+                        All visible reviews selected
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      onClick={() => setSelectedReviewIds(new Set())}
+                    >
+                      Clear
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="xs"
+                      onClick={() => setDeleteRequest({
+                        ids: Array.from(selectedReviewIds),
+                        label: selectedCount === 1
+                          ? '1 selected review'
+                          : `${selectedCount} selected reviews`,
+                      })}
+                    >
+                      <Trash2 />
+                      Delete {selectedCount}
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+            </>
+          ) : null}
+          {error ? (
+            <Alert variant="destructive">
+              <AlertCircle />
+              <AlertTitle>History unavailable</AlertTitle>
+              <AlertDescription>{errorMessage(error)}</AlertDescription>
+              <AlertAction>
+                <Button type="button" variant="outline" size="xs" onClick={onRetry}>
+                  <RefreshCw />
+                  Retry
+                </Button>
+              </AlertAction>
+            </Alert>
+          ) : isLoading ? (
+            <div className="grid gap-3">
+              <Skeleton className="h-10" />
+              <Skeleton className="h-24" />
+            </div>
+          ) : filteredEntries.length ? (
+            <div className={cn('overflow-auto max-md:overscroll-x-contain', !allHistory && 'max-h-[42rem]')}>
+              <Table className="min-w-[82rem] table-fixed">
+                <colgroup>
+                  <col className="w-8" />
+                  <col className="w-14" />
+                  <col className="w-56" />
+                  <col className="w-36" />
+                  <col className="w-28" />
+                  <col className="w-32" />
+                  <col className="w-[clamp(20rem,24vw,28rem)]" />
+                  <col className="w-72" />
+                </colgroup>
+                <TableHeader className="sticky top-0 z-10 bg-card">
+                  <TableRow>
+                    <TableHead className="h-11 px-2">
+                      <HistoryCheckbox
+                        checked={allVisibleSelected}
+                        indeterminate={someVisibleSelected}
+                        disabled={!selectableVisibleIds.length}
+                        ariaLabel="Select all visible reviews"
+                        onChange={toggleVisibleSelection}
+                      />
+                    </TableHead>
+                    <TableHead className="h-11 px-2 text-xs text-muted-foreground">Creative</TableHead>
+                    <TableHead className="h-11 text-xs text-muted-foreground">Upload</TableHead>
+                    <TableHead className="h-11 text-xs text-muted-foreground">Vertical</TableHead>
+                    <TableHead className="h-11 text-xs text-muted-foreground">Uploaded</TableHead>
+                    <TableHead className="h-11 text-xs text-muted-foreground">Status</TableHead>
+                    <TableHead className="h-11 text-xs text-muted-foreground">
+                      <OfferResultsHeader label="Effective results" offers={offerColumns} />
+                    </TableHead>
+                    <TableHead className="h-11 text-right text-xs text-muted-foreground">Action</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredEntries.map((entry) => {
+                    const entryIds = deletableHistoryEntryIds(entry);
+                    const hasReleased = entry.kind === 'batch'
+                      ? hasBatchReleases(entry.reviews, entry.batch)
+                      : hasReviewReleases(entry.review);
+                    const selected = entryIds.length > 0 &&
+                      entryIds.every((jobId) => selectedReviewIds.has(jobId));
+                    const partiallySelected = !selected &&
+                      entryIds.some((jobId) => selectedReviewIds.has(jobId));
+                    const label = historyEntryLabel(entry);
+                    const subtitle = historyEntrySubtitle(entry);
+                    const verticals = historyEntryVerticals(entry);
+                    const shareIds = shareableReviewIds(entry.kind === 'batch' ? historyEntryBatchItems(entry) : [entry.review], offerFilter);
+                    return (
+                      <TableRow
+                        key={entry.entryKey}
+                        role="link"
+                        tabIndex={0}
+                        className="cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                        data-state={selected || partiallySelected ? 'selected' : undefined}
+                        onClick={(event) => {
+                          if (!isInteractiveRowTarget(event.target)) openHistoryEntry(entry);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' && !isInteractiveRowTarget(event.target)) {
+                            openHistoryEntry(entry);
+                          }
+                        }}
+                      >
+                        <TableCell className="px-2 py-1.5">
+                          <HistoryCheckbox
+                            checked={selected}
+                            indeterminate={partiallySelected}
+                            disabled={!entryIds.length}
+                            ariaLabel={`Select ${label}`}
+                            onChange={() => toggleEntrySelection(entry)}
+                          />
+                        </TableCell>
+                        <TableCell className="px-2 py-1.5">
+                          <CreativeThumbnail
+                            alt={`Preview of ${label}`}
+                            className="size-10"
+                            driveUrl={entry.kind === 'review' && entry.review.source_kind === 'google_drive_file'
+                              ? entry.review.source_url
+                              : null}
+                            fileName={entry.kind === 'review'
+                              ? entry.review.file_name
+                              : entry.reviews.find((review) => review.has_creative !== false)?.file_name}
+                            jobId={entry.kind === 'review'
+                              ? entry.review.has_creative === false ? null : entry.review.job_id
+                              : entry.reviews.find((review) => review.has_creative !== false)?.job_id ?? null}
+                          />
+                        </TableCell>
+                        <TableCell className="px-2 py-1.5">
+                          <span className="flex min-w-0 items-center gap-2">
+                            {entry.kind === 'batch' ? (
+                              <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                                <Layers3 className="size-3.5" aria-hidden="true" />
+                              </span>
+                            ) : null}
+                            <span className="min-w-0">
+                              <span className="block truncate font-medium" title={label}>{label}</span>
+                              {subtitle ? (
+                                <span className="block truncate text-xs text-muted-foreground" title={subtitle}>
+                                  {subtitle}
+                                </span>
+                              ) : null}
+                            </span>
+                          </span>
+                        </TableCell>
+                        <TableCell className="px-2 py-1.5">
+                          <span className="flex flex-wrap gap-1">
+                            {verticals.map((vertical) => (
+                              <Badge key={vertical} variant="outline" className="text-[10px]">
+                                {historyVerticalLabel(vertical)}
+                              </Badge>
+                            ))}
+                          </span>
+                        </TableCell>
+                        <TableCell
+                          className="px-2 py-1.5 text-xs text-muted-foreground"
+                          title={formatDateTime(entry.createdAt)}
+                        >
+                          {formatHistoryDateTime(entry.createdAt)}
+                        </TableCell>
+                        <TableCell className="px-2 py-1.5">
+                          <StatusBadge status={historyEntryStatus(entry)} />
+                        </TableCell>
+                        <TableCell className="px-2 py-1.5">
+                          {entry.kind === 'batch' ? (
+                            <BatchHistoryOfferResultsRail
+                              items={historyEntryBatchItems(entry)}
+                              offers={offerColumns}
+                            />
+                          ) : (
+                            <ReviewOfferResultsRail offers={offerColumns} review={entry.review} />
+                          )}
+                        </TableCell>
+                        <TableCell className="px-2 py-1.5 text-right">
+                          <div className="flex min-w-max justify-end gap-1">
+                            {historyEntryStatus(entry) === 'complete' || historyEntryStatus(entry) === 'complete_with_failures' ? <ReleaseButton
+                              {...(entry.kind === 'batch' ? { batchId: entry.batchId } : { jobIds: [entry.review.job_id] })}
+                              hasReleased={hasReleased}
+                            /> : null}
+                            {shareIds.length && (entry.kind !== 'batch' || entry.batch) ? <ShareButton jobIds={shareIds} offerId={offerFilter === 'all' ? undefined : offerFilter} label={entry.kind === 'batch' ? 'Share batch' : 'Share'} size="xs" /> : null}
+                            {entry.kind === 'batch' ? (
+                              <Link
+                                to="/batches/$batchId"
+                                params={{ batchId: entry.batchId }}
+                                aria-label={`Open ${label}`}
+                                className={cn(buttonVariants({ variant: 'outline', size: 'xs' }))}
+                              >
+                                <Layers3 data-icon="inline-start" />
+                                Open
+                              </Link>
+                            ) : entry.review.report_ready ? (
+                              <Link
+                                to="/reviews/$jobId/report"
+                                params={{ jobId: entry.review.job_id }}
+                                aria-label={`Open report for ${label}`}
+                                className={cn(buttonVariants({ variant: 'outline', size: 'xs' }))}
+                              >
+                                <FileJson data-icon="inline-start" />
+                                Report
+                              </Link>
+                            ) : (
+                              <Link
+                                to="/reviews/$jobId"
+                                params={{ jobId: entry.review.job_id }}
+                                aria-label={`View job for ${label}`}
+                                className={cn(buttonVariants({ variant: 'ghost', size: 'xs' }))}
+                              >
+                                Job
+                              </Link>
+                            )}
+                            {allHistory && hasReleased ? (
+                              <Tooltip>
+                                <TooltipTrigger render={<Button
+                                  variant="ghost"
+                                  size="icon-xs"
+                                  disabled
+                                  focusableWhenDisabled
+                                  className="cursor-not-allowed opacity-50"
+                                  aria-label={`Cannot remove ${label}: released creatives cannot be deleted`}
+                                />}>
+                                  <Trash2 />
+                                </TooltipTrigger>
+                                <TooltipContent>Released creatives can’t be deleted.</TooltipContent>
+                              </Tooltip>
+                            ) : allHistory && entryIds.length ? (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon-xs"
+                                aria-label={`Remove ${label} from history`}
+                                title="Remove from history and dashboard stats"
+                                onClick={() => setDeleteRequest({
+                                  ids: entryIds,
+                                  label,
+                                })}
+                              >
+                                <Trash2 />
+                              </Button>
+                            ) : null}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          ) : reviews.length ? (
+            <div className="grid min-h-36 place-items-center rounded-lg border border-dashed bg-muted/20 p-6 text-center">
+              <div className="grid max-w-sm gap-1">
+                <p className="text-sm font-medium">No matching reviews</p>
+                <p className="text-sm text-muted-foreground">
+                  Adjust the search or reset one of the active filters.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="grid min-h-36 place-items-center rounded-lg border border-dashed bg-muted/20 p-6 text-center">
+              <p className="max-w-sm text-sm text-muted-foreground">
+                Completed and in-progress reviews will appear here after the first upload.
+              </p>
+            </div>
+          )}
+          {allHistory && hasMore && !error ? (
+            <div className="mt-4 flex justify-center border-t pt-4">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={onLoadMore}
+                disabled={isFetchingMore}
+              >
+                {isFetchingMore ? <LoaderCircle className="animate-spin" /> : null}
+                {isFetchingMore ? 'Loading older reviews' : 'Load older reviews'}
+              </Button>
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <AlertDialog.Root
+        open={Boolean(deleteRequest)}
+        onOpenChange={(open) => {
+          if (!open && !deleteMutation.isPending) setDeleteRequest(null);
+        }}
+      >
+        <AlertDialog.Portal>
+          <AlertDialog.Backdrop className="fixed inset-0 z-40 bg-black/45 backdrop-blur-[1px]" />
+          <AlertDialog.Viewport className="fixed inset-0 z-50 grid place-items-center overflow-y-auto p-4">
+            <AlertDialog.Popup className="w-full max-w-md rounded-xl bg-popover p-5 text-popover-foreground shadow-xl ring-1 ring-foreground/10">
+              <div className="grid gap-4">
+                <div className="grid size-9 place-items-center rounded-lg bg-destructive/10 text-destructive">
+                  <Trash2 className="size-4" />
+                </div>
+                <div className="grid gap-1">
+                  <AlertDialog.Title className="text-base font-semibold">
+                    {deleteRequest?.ids.length === 1
+                      ? 'Remove this review?'
+                      : `Remove ${deleteRequest?.ids.length ?? 0} reviews?`}
+                  </AlertDialog.Title>
+                  <AlertDialog.Description className="text-sm leading-5 text-muted-foreground">
+                    {deleteRequest?.ids.length === 1 ? (
+                      <>
+                        <span className="font-medium text-foreground">{deleteRequest.label}</span>{' '}
+                        will disappear from history and dashboard stats.
+                      </>
+                    ) : (
+                      `${deleteRequest?.ids.length ?? 0} selected reviews will disappear from history and dashboard stats.`
+                    )}{' '}
+                    Original Google Drive files and uploaded sources are not deleted.
+                  </AlertDialog.Description>
+                </div>
+                <div className="flex justify-end gap-2">
+                  <AlertDialog.Close
+                    disabled={deleteMutation.isPending}
+                    className={buttonVariants({ variant: 'outline', size: 'sm' })}
+                  >
+                    Cancel
+                  </AlertDialog.Close>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="sm"
+                    disabled={deleteMutation.isPending || !deleteRequest}
+                    onClick={() => {
+                      if (deleteRequest) deleteMutation.mutate(deleteRequest.ids);
+                    }}
+                  >
+                    {deleteMutation.isPending ? (
+                      <LoaderCircle className="animate-spin" />
+                    ) : (
+                      <Trash2 />
+                    )}
+                    {deleteMutation.isPending
+                      ? 'Removing'
+                      : deleteRequest?.ids.length === 1
+                        ? 'Remove review'
+                        : `Remove ${deleteRequest?.ids.length ?? 0}`}
+                  </Button>
+                </div>
+              </div>
+            </AlertDialog.Popup>
+          </AlertDialog.Viewport>
+        </AlertDialog.Portal>
+      </AlertDialog.Root>
+    </>
+  );
+}
+
+const historyFilterClassName =
+  'h-8 text-xs';
+
+function HistoryCheckbox({
+  ariaLabel,
+  checked,
+  disabled = false,
+  indeterminate = false,
+  onChange,
+}: {
+  ariaLabel: string;
+  checked: boolean;
+  disabled?: boolean;
+  indeterminate?: boolean;
+  onChange: () => void;
+}) {
+  return (
+    <Checkbox
+      indeterminate={indeterminate}
+      checked={checked}
+      disabled={disabled}
+      aria-label={ariaLabel}
+      onChange={onChange}
+      className="size-4"
+    />
+  );
+}
+
+function buildHistoryEntries(
+  reviews: ReviewHistoryItem[],
+  batches: ReviewBatch[]
+): HistoryEntry[] {
+  const batchById = new Map(batches.map((batch) => [batch.batch_id, batch]));
+  const reviewsByBatchId = new Map<string, ReviewHistoryItem[]>();
+  for (const review of reviews) {
+    if (!review.batch_id) continue;
+    const grouped = reviewsByBatchId.get(review.batch_id) ?? [];
+    grouped.push(review);
+    reviewsByBatchId.set(review.batch_id, grouped);
+  }
+
+  const seenBatches = new Set<string>();
+  return reviews.flatMap((review): HistoryEntry[] => {
+    if (!review.batch_id) {
+      return [{
+        createdAt: review.created_at ?? null,
+        entryKey: `review:${review.job_id}`,
+        kind: 'review',
+        review,
+      }];
+    }
+    if (seenBatches.has(review.batch_id)) return [];
+    seenBatches.add(review.batch_id);
+    const batch = batchById.get(review.batch_id);
+    const groupedReviews = reviewsByBatchId.get(review.batch_id) ?? [review];
+    return [{
+      batch,
+      batchId: review.batch_id,
+      createdAt: batch?.created_at ?? groupedReviews[0]?.created_at ?? null,
+      entryKey: `batch:${review.batch_id}`,
+      kind: 'batch',
+      reviews: groupedReviews,
+    }];
+  });
+}
+
+function historyEntryBatchItems(entry: Extract<HistoryEntry, { kind: 'batch' }>): ReviewBatchItem[] {
+  if (entry.batch) {
+    return entry.batch.items.map((item) => {
+      const review = entry.reviews.find((value) =>
+        value.job_id === item.job_id || value.batch_item_id === item.item_id
+      );
+      return review ? {
+        ...item,
+        offer_outcomes: review.offer_outcomes,
+        result: normalizeResultStatus(review.overall_status),
+      } : item;
+    });
+  }
+  return entry.reviews.map((review) => ({
+    file_name: review.file_name,
+    item_id: review.batch_item_id ?? review.job_id,
+    job_id: review.job_id,
+    media_kind: review.has_creative === false
+      ? 'copy_only'
+      : /\.(?:jpe?g|png|webp)$/i.test(review.file_name)
+        ? 'image'
+        : 'video',
+    message: review.message,
+    offer_outcomes: review.offer_outcomes,
+    result: normalizeResultStatus(review.overall_status),
+    status: review.status,
+    vertical: review.vertical,
+  }));
+}
+
+function historyEntryVerticals(entry: HistoryEntry): ReviewVertical[] {
+  if (entry.kind === 'review') return [reviewVertical(entry.review)];
+  const verticals = new Set<ReviewVertical>();
+  for (const review of entry.reviews) verticals.add(reviewVertical(review));
+  for (const item of historyEntryBatchItems(entry)) {
+    if (item.vertical) verticals.add(item.vertical);
+  }
+  return Array.from(verticals).sort();
+}
+
+function reviewVertical(review: ReviewHistoryItem): ReviewVertical {
+  if (review.vertical) return review.vertical;
+  return /(^|[^a-z0-9])home([^a-z0-9]|$)/i.test(review.file_name)
+    ? 'home-insurance'
+    : 'auto-insurance';
+}
+
+function historyVerticalLabel(vertical: ReviewVertical) {
+  return vertical === 'home-insurance' ? 'Home Insurance' : 'Auto Insurance';
+}
+
+function historyEntryItemCount(entry: Extract<HistoryEntry, { kind: 'batch' }>) {
+  return entry.batch?.expected_count ?? historyEntryBatchItems(entry).length;
+}
+
+function historyEntryLabel(entry: HistoryEntry) {
+  if (entry.kind === 'review') return entry.review.file_name || entry.review.job_id;
+  const count = historyEntryItemCount(entry);
+  const copyOnly = historyEntryBatchItems(entry).every((item) => item.media_kind === 'copy_only');
+  return copyOnly
+    ? `Batch · ${count} copy review${count === 1 ? '' : 's'}`
+    : `Batch · ${count} creative${count === 1 ? '' : 's'}`;
+}
+
+function historyEntrySubtitle(entry: HistoryEntry) {
+  if (entry.kind === 'review') return '';
+  const names = historyEntryBatchItems(entry).map((item) => item.file_name).filter(Boolean);
+  if (names.length) return names.length > 1 ? `${names[0]} +${names.length - 1} more` : names[0];
+  if (entry.batch?.source_label && !/^\d+ selected files?$/i.test(entry.batch.source_label)) {
+    return entry.batch.source_label;
+  }
+  return `Batch ${entry.batchId.slice(0, 8)}`;
+}
+
+function historyEntryStatus(entry: HistoryEntry) {
+  if (entry.kind === 'review') return entry.review.status;
+  const statuses = historyEntryBatchItems(entry).map((item) => item.status);
+  const terminal = statuses.filter((status) => isTerminalBatchStatus(status)).length;
+  const failed = statuses.filter((status) => isFailedBatchStatus(status)).length;
+  if (terminal !== statuses.length) return 'in_progress';
+  if (!failed) return 'complete';
+  if (failed === statuses.length) return 'failed';
+  return 'complete_with_failures';
+}
+
+function deletableHistoryEntryIds(entry: HistoryEntry) {
+  if (entry.kind === 'review') {
+    return isReviewDeletable(entry.review) ? [entry.review.job_id] : [];
+  }
+  return deletableBatchReviewIds(entry.reviews, entry.batch);
+}
+
+function historyEntryMatchesSearch(entry: HistoryEntry, normalizedSearch: string) {
+  if (entry.kind === 'review') return reviewMatchesSearch(entry.review, normalizedSearch);
+  return [
+    entry.batchId,
+    entry.batch?.source_label,
+    historyEntryLabel(entry),
+    historyEntryStatus(entry),
+    formatStatus(historyEntryStatus(entry)),
+    formatDateTime(entry.createdAt),
+    ...historyEntryBatchItems(entry).flatMap((item) => [
+      item.file_name,
+      item.job_id,
+      item.status,
+      item.message,
+      item.result,
+      ...(item.offer_outcomes ?? []).flatMap((outcome) => [
+        outcome.offer_id,
+        outcome.offer_name,
+        outcome.overall_status,
+        outcome.creative_result,
+        outcome.ad_copy_result,
+        outcome.message,
+      ]),
+    ]),
+  ].some((value) => value?.toLocaleLowerCase().includes(normalizedSearch));
+}
+
+function historyEntryMatchesTypeFilter(entry: HistoryEntry, typeFilter: HistoryTypeFilter) {
+  if (typeFilter === 'all') return true;
+  if (entry.kind === 'review') {
+    return typeFilter === 'creative'
+      ? entry.review.has_creative !== false
+      : entry.review.has_creative === false;
+  }
+  const items = historyEntryBatchItems(entry);
+  return typeFilter === 'creative'
+    ? items.some((item) => item.media_kind !== 'copy_only')
+    : items.some((item) => item.media_kind === 'copy_only');
+}
+
+function historyEntryMatchesVerticalFilter(
+  entry: HistoryEntry,
+  verticalFilter: HistoryVerticalFilter
+) {
+  if (verticalFilter === 'all') return true;
+  if (entry.kind === 'review') return entry.review.vertical === verticalFilter;
+  return entry.reviews.some((review) => review.vertical === verticalFilter);
+}
+
+function historyEntryMatchesResultFilter(
+  entry: HistoryEntry,
+  offerColumns: ReturnType<typeof getOfferColumns>,
+  offerFilter: string,
+  resultFilter: HistoryResultFilter
+) {
+  if (entry.kind === 'review') {
+    return reviewMatchesResultFilter(entry.review, offerColumns, offerFilter, resultFilter);
+  }
+  if (offerFilter === 'all' && resultFilter === 'all') return true;
+  const relevantOffers = offerFilter === 'all'
+    ? offerColumns
+    : offerColumns.filter((offer) => offer.offer_id === offerFilter);
+  const outcomes = historyEntryBatchItems(entry).flatMap((item) =>
+    relevantOffers.map((offer) => batchOutcomeForOffer(item, offer))
+  );
+  if (resultFilter === 'na') {
+    return outcomes.some((outcome) => !outcome || outcome.evaluation_state !== 'evaluated');
+  }
+  if (resultFilter !== 'all') {
+    return outcomes.some((outcome) =>
+      outcome?.evaluation_state === 'evaluated' && outcome.overall_status === resultFilter
+    );
+  }
+  return outcomes.some((outcome) => outcome?.evaluation_state === 'evaluated');
+}
+
+function isInteractiveRowTarget(target: EventTarget | null) {
+  return target instanceof Element && Boolean(
+    target.closest('a, button, input, select, textarea, [role="button"], [role="menuitem"]')
+  );
+}
+
+function reviewMatchesSearch(review: ReviewHistoryItem, normalizedSearch: string) {
+  return [
+    review.file_name,
+    review.job_id,
+    review.status,
+    formatStatus(review.status),
+    review.overall_status,
+    review.overall_status ? formatStatus(review.overall_status) : null,
+    review.creative_result,
+    review.creative_result ? formatStatus(review.creative_result) : null,
+    review.ad_copy_result,
+    review.ad_copy_result ? formatStatus(review.ad_copy_result) : null,
+    ...(review.offer_ids ?? []),
+    ...(review.offer_outcomes ?? []).flatMap((outcome) => [
+      outcome.offer_id,
+      outcome.offer_name,
+      outcome.overall_status,
+      outcome.creative_result,
+      outcome.ad_copy_result,
+      outcome.message,
+    ]),
+    formatDateTime(review.created_at),
+  ].some((value) => value?.toLocaleLowerCase().includes(normalizedSearch));
+}
+
+function reviewMatchesResultFilter(
+  review: ReviewHistoryItem,
+  offerColumns: ReturnType<typeof getOfferColumns>,
+  offerFilter: string,
+  resultFilter: HistoryResultFilter
+) {
+  if (offerFilter === 'all' && resultFilter === 'all') return true;
+  const relevantOffers = offerFilter === 'all'
+    ? offerColumns
+    : offerColumns.filter((offer) => offer.offer_id === offerFilter);
+  const outcomes = relevantOffers.map((offer) => reviewOutcomeForOffer(review, offer));
+
+  if (resultFilter === 'na') {
+    return outcomes.some(
+      (outcome) => !outcome || outcome.evaluation_state !== 'evaluated'
+    );
+  }
+  if (resultFilter !== 'all') {
+    return outcomes.some(
+      (outcome) =>
+        outcome?.evaluation_state === 'evaluated' &&
+        outcome.overall_status === resultFilter
+    );
+  }
+  return outcomes.some((outcome) => outcome?.evaluation_state === 'evaluated');
+}
+
+async function deleteReviewSelection(ids: string[]) {
+  const queue = [...ids];
+  const deletedIds: string[] = [];
+  const failedIds: string[] = [];
+  let firstError: unknown;
+  const workerCount = Math.min(4, queue.length);
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (queue.length) {
+      const jobId = queue.shift();
+      if (!jobId) return;
+      try {
+        await deleteReview(jobId);
+        deletedIds.push(jobId);
+      } catch (error) {
+        failedIds.push(jobId);
+        firstError ??= error;
+      }
+    }
+  }));
+
+  return { deletedIds, failedIds, firstError };
+}
+
+function AllHistoryPage() {
+  const search = historyRoute.useSearch();
+  const navigate = historyRoute.useNavigate();
+  const sourcesQuery = useQuery({
+    queryKey: ['review-history-sources'],
+    queryFn: listReviewHistorySources,
+  });
+  const catalog: ReviewHistorySource[] = sourcesQuery.data ?? [{ value: 'digital-nudge', label: 'Digital Nudge', kind: 'internal' }];
+  const requestedSource = catalog.find(option => option.value === search.source);
+  const isTesting = requestedSource ? requestedSource.account_type === 'testing' : search.mode === 'testing';
+  const sources = catalog.filter(option => (option.account_type === 'testing') === isTesting);
+  const source = search.source ?? sources[0]?.value ?? (isTesting ? 'api:none' : 'digital-nudge');
+  const setSource = (value: string) => void navigate({ search: {
+    source: value === 'digital-nudge' ? undefined : value,
+    mode: isTesting ? 'testing' : undefined,
+  } });
+  const sourceLabel = sources.find((option) => option.value === source)?.label ?? 'Selected source';
+  const query = useInfiniteQuery({
+    queryKey: ['reviews', 'all-history', source],
+    queryFn: ({ pageParam }) => listReviewHistoryPage(pageParam, 50, source),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.has_more ? lastPage.next_cursor : undefined,
+    refetchInterval: 30_000,
+  });
+  const reviews = query.data?.pages.flatMap((page) => page.reviews) ?? [];
+
+  return (
+    <HistoryCard
+      key={source}
+      allHistory
+      sourceLabel={sourceLabel}
+      sourceSelector={
+        <div className="mb-4 grid gap-2">
+          <div className="flex flex-wrap items-center gap-3">
+            <Label htmlFor="history-source">Source</Label>
+            <Select
+              id="history-source"
+              aria-label="Review source"
+              value={source}
+              onValueChange={setSource}
+              options={sources}
+              className="w-full sm:w-72"
+            />
+            <span className="text-xs text-muted-foreground">
+              {isTesting ? <>Testing API reviews. <Link to="/history" search={{}} className="underline">Back to Digital Nudge</Link></> : 'Digital Nudge opens by default.'}
+            </span>
+          </div>
+          {sourcesQuery.error ? (
+            <Alert variant="destructive">
+              <AlertCircle />
+              <AlertDescription>
+                Sources could not load. <button className="underline" onClick={() => void sourcesQuery.refetch()}>Try again</button>
+              </AlertDescription>
+            </Alert>
+          ) : null}
+        </div>
+      }
+      error={query.error}
+      hasMore={query.hasNextPage}
+      isFetchingMore={query.isFetchingNextPage}
+      isLoading={query.isLoading}
+      onLoadMore={() => void query.fetchNextPage()}
+      onRetry={() => void query.refetch()}
+      reviews={reviews}
+    />
+  );
+}
+
+function ProgressPage() {
+  const { jobId } = useParams({ from: '/reviews/$jobId' });
+  const query = useQuery({
+    queryKey: ['status', jobId],
+    queryFn: () => getStatus(jobId),
+    refetchInterval: (currentQuery) => {
+      const status = currentQuery.state.data;
+      return status?.report_ready || status?.status === 'failed' ? false : 1500;
+    },
+  });
+  const status = query.data;
+
+  return (
+    <Card className="mx-auto max-w-3xl">
+      <CardHeader>
+        <CardTitle as="h1" className="text-xl">Job progress</CardTitle>
+        <CardDescription>{status?.file_name ?? jobId}</CardDescription>
+        <CardAction>
+          <StatusBadge status={status?.status ?? 'loading'} />
+        </CardAction>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        <Progress value={status?.progress ?? 0}>
+          <ProgressLabel>{status?.message ?? 'Loading job status'}</ProgressLabel>
+          <ProgressValue />
+        </Progress>
+        {status?.report_ready ? (
+          <div className="flex flex-wrap gap-2">
+          <Link
+            className={cn(buttonVariants({ variant: 'default' }), 'justify-self-start')}
+            to="/reviews/$jobId/report"
+            params={{ jobId }}
+          >
+            <FileJson data-icon="inline-start" />
+            Open report
+          </Link>
+          <ReleaseButton jobIds={[jobId]} hasReleased={hasReviewReleases(status)} size="sm" />
+          <ShareButton jobIds={[jobId]} />
+          </div>
+        ) : null}
+        {query.error ? (
+          <Alert variant="destructive">
+            <AlertCircle />
+            <AlertTitle>Status unavailable</AlertTitle>
+            <AlertDescription>{errorMessage(query.error)}</AlertDescription>
+            <AlertAction>
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                onClick={() => void query.refetch()}
+              >
+                <RefreshCw />
+                Retry
+              </Button>
+            </AlertAction>
+          </Alert>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+function PdfDownloadMenu({
+  baseHref,
+  contentLabel = 'This creative',
+  offers,
+  size = 'default',
+}: {
+  baseHref: string;
+  contentLabel?: string;
+  offers: OfferColumn[];
+  size?: 'default' | 'sm';
+}) {
+  const [downloadingHref, setDownloadingHref] = useState('');
+  const [downloadError, setDownloadError] = useState('');
+
+  async function startDownload(href: string) {
+    if (downloadingHref) return;
+    setDownloadingHref(href);
+    setDownloadError('');
+    try {
+      const response = await fetchWithAdminAccess(href, { credentials: 'same-origin' });
+      if (!response.ok) {
+        throw new Error(`PDF request failed with status ${response.status}.`);
+      }
+      const blob = await response.blob();
+      const signature = await blob.slice(0, 5).text();
+      if (signature !== '%PDF-') {
+        throw new Error('The server returned a non-PDF response.');
+      }
+      const disposition = response.headers.get('content-disposition') ?? '';
+      const encodedName = disposition.match(/filename\*=utf-8''([^;]+)/i)?.[1];
+      const quotedName = disposition.match(/filename="([^"]+)"/i)?.[1];
+      let filename = 'adchecked-report.pdf';
+      try {
+        filename = encodedName ? decodeURIComponent(encodedName) : (quotedName || filename);
+      } catch {
+        filename = quotedName || filename;
+      }
+      filename = filename.split(/[\\/]/).pop() || 'adchecked-report.pdf';
+      if (!filename.toLowerCase().endsWith('.pdf')) filename += '.pdf';
+
+      const objectUrl = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }));
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = filename;
+      link.style.display = 'none';
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000);
+    } catch {
+      setDownloadError('The PDF could not be downloaded. Refresh the page and try again.');
+    } finally {
+      setDownloadingHref('');
+    }
+  }
+
+  function downloadLinkProps(href: string) {
+    return {
+      href,
+      onClick: (event: React.MouseEvent<HTMLAnchorElement>) => {
+        event.preventDefault();
+        void startDownload(href);
+      },
+    };
+  }
+
+  return (
+    <div className="grid w-fit gap-1">
+      <Menu.Root>
+        <Menu.Trigger className={buttonVariants({ size })} disabled={Boolean(downloadingHref)}>
+          {downloadingHref ? (
+            <LoaderCircle data-icon="inline-start" className="animate-spin" />
+          ) : (
+            <Download data-icon="inline-start" />
+          )}
+          {downloadingHref ? 'Preparing PDF' : 'Download PDF'}
+          <ChevronDown data-icon="inline-end" />
+        </Menu.Trigger>
+        <Menu.Portal>
+          <Menu.Positioner sideOffset={6} align="end" className="z-50 outline-none">
+            <Menu.Popup className="min-w-64 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg outline-none">
+              <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
+                Choose PDF version
+              </div>
+              <Menu.LinkItem
+                {...downloadLinkProps(baseHref)}
+                closeOnClick
+                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground"
+              >
+                <Download className="size-4 text-muted-foreground" />
+                <span className="grid">
+                  <span className="font-medium">Unified · all offers</span>
+                  <span className="text-xs text-muted-foreground">{contentLabel} · every offer result</span>
+                </span>
+              </Menu.LinkItem>
+              <div className="my-1 h-px bg-border" />
+              {offers.map((offer) => {
+                const href = `${baseHref}?offer_id=${encodeURIComponent(offer.offer_id)}`;
+                return (
+                  <Menu.LinkItem
+                    key={offer.offer_id}
+                    {...downloadLinkProps(href)}
+                    closeOnClick
+                    className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground"
+                  >
+                    <Download className="size-4 text-muted-foreground" />
+                    <span className="grid">
+                      <span className="font-medium">{offer.offer_name} only</span>
+                      <span className="text-xs text-muted-foreground">{contentLabel} · one offer</span>
+                    </span>
+                  </Menu.LinkItem>
+                );
+              })}
+            </Menu.Popup>
+          </Menu.Positioner>
+        </Menu.Portal>
+      </Menu.Root>
+      {downloadError ? (
+        <p role="alert" className="max-w-72 text-xs text-destructive">{downloadError}</p>
+      ) : null}
+    </div>
+  );
+}
+
+function AuthenticatedDownloadButton({ fallbackName, href, label }: {
+  fallbackName: string;
+  href: string;
+  label: string;
+}) {
+  const [isDownloading, setIsDownloading] = useState(false);
+
+  async function download() {
+    if (isDownloading) return;
+    setIsDownloading(true);
+    try {
+      const response = await fetchWithAdminAccess(href, { credentials: 'same-origin' });
+      if (!response.ok) throw new Error(`Download failed with status ${response.status}.`);
+      const blob = await response.blob();
+      const disposition = response.headers.get('content-disposition') ?? '';
+      const encodedName = disposition.match(/filename\*=utf-8''([^;]+)/i)?.[1];
+      const quotedName = disposition.match(/filename="([^"]+)"/i)?.[1];
+      let filename = fallbackName;
+      try {
+        filename = encodedName ? decodeURIComponent(encodedName) : (quotedName || fallbackName);
+      } catch {
+        filename = quotedName || fallbackName;
+      }
+      filename = filename.split(/[\\/]/).pop() || fallbackName;
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = filename;
+      link.style.display = 'none';
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000);
+    } finally {
+      setIsDownloading(false);
+    }
+  }
+
+  return (
+    <Button type="button" variant="outline" className="w-fit" disabled={isDownloading} onClick={() => void download()}>
+      {isDownloading ? <LoaderCircle className="animate-spin" /> : <Download />}
+      {isDownloading ? 'Preparing download' : label}
+    </Button>
+  );
+}
+
+function ReportPage() {
+  const { jobId } = useParams({ from: '/reviews/$jobId/report' });
+  const reportSearch = reportRoute.useSearch();
+  const [selectedOfferId, setSelectedOfferId] = useState(reportSearch.offer ?? '');
+  useEffect(() => setSelectedOfferId(reportSearch.offer ?? ''), [reportSearch.offer, jobId]);
+  const query = useQuery({ queryKey: ['report', jobId], queryFn: () => getReport(jobId), refetchInterval: 30_000 });
+  const statusQuery = useQuery({ queryKey: ['status', jobId], queryFn: () => getStatus(jobId), refetchInterval: 30_000 });
+  const sourceQuery = useQuery({
+    queryKey: ['source', jobId],
+    queryFn: () => getReviewSources(jobId),
+    enabled: Boolean(query.data),
+  });
+  const evidenceQuery = useQuery({
+    queryKey: ['evidence', jobId],
+    queryFn: () => getReviewEvidence(jobId),
+    enabled: Boolean(query.data),
+  });
+  const offerResults: OfferResult[] = query.data
+    ? query.data.offer_results?.length
+      ? query.data.offer_results
+      : [query.data]
+    : [];
+  const offerOutcomes: OfferOutcome[] = query.data?.offer_outcomes?.length
+    ? query.data.offer_outcomes
+    : offerResults.map((result) => ({
+        offer_id: result.offer_id,
+        offer_name: result.offer_name,
+        evaluation_state: 'evaluated' as const,
+        overall_status: normalizeResultStatus(result.overall_status),
+        creative_result: normalizeResultStatus(result.source_results?.creative?.status),
+        ad_copy_result: normalizeResultStatus(result.source_results?.ad_copy?.status),
+        with_override: result.internal_disposition === 'accepted_with_override',
+        message: 'Evaluated using saved offer guidelines.',
+      }));
+  const detailedResults = offerResults.filter((result) => {
+    const outcome = findOfferOutcome(offerOutcomes, result.offer_id);
+    return !outcome || outcome.evaluation_state === 'evaluated';
+  });
+  const activeOffer = detailedResults.find((result) => result.offer_id === selectedOfferId)
+    ?? detailedResults[0];
+  const offerColumns = getOfferColumns([], [offerOutcomes]);
+
+  if (query.isLoading) {
+    return (
+      <div className="grid gap-4">
+        <Skeleton className="h-40" />
+        <Skeleton className="h-80" />
+      </div>
+    );
+  }
+
+  if (!query.data) {
+    return (
+      <Alert variant="destructive">
+        <AlertCircle />
+        <AlertTitle>Report unavailable</AlertTitle>
+        <AlertDescription>
+          {query.error ? errorMessage(query.error) : 'The report is not ready yet.'}
+        </AlertDescription>
+        <AlertAction>
+          <Button
+            type="button"
+            variant="outline"
+            size="xs"
+            onClick={() => void query.refetch()}
+          >
+            <RefreshCw />
+            Retry
+          </Button>
+        </AlertAction>
+      </Alert>
+    );
+  }
+
+  if (!activeOffer) {
+    return (
+      <Alert variant="destructive">
+        <AlertCircle />
+        <AlertTitle>Offer results unavailable</AlertTitle>
+        <AlertDescription>This report does not contain a readable offer result.</AlertDescription>
+      </Alert>
+    );
+  }
+
+  const activeOutcome = findOfferOutcome(offerOutcomes, activeOffer.offer_id);
+  const effectiveActiveStatus = activeOutcome?.effective_status
+    ?? activeOutcome?.overall_status
+    ?? normalizeResultStatus(activeOffer.overall_status)
+    ?? 'yellow';
+
+  const sourceResults = [
+    { label: 'Creative', result: activeOffer.source_results?.creative },
+    { label: 'Ad copy', result: activeOffer.source_results?.ad_copy },
+  ].filter((item): item is {
+    label: string;
+    result: NonNullable<typeof item.result>;
+  } => Boolean(item.result));
+  const linkedSources = sourceQuery.data?.sources.filter(
+    (source) => source.status === 'linked' && source.url
+  ) ?? [];
+  const unresolvedSources = sourceQuery.data?.sources.filter(
+    (source) => source.status !== 'linked'
+  ) ?? [];
+
+  return (
+    <div className="grid gap-4">
+      <div className="flex justify-end gap-2"><ReleaseButton jobIds={[jobId]} hasReleased={hasReviewReleases(statusQuery.data)} /><ShareButton key={`${jobId}:${activeOffer.offer_id}`} jobIds={[jobId]} offerId={activeOffer.offer_id} /></div>
+      <Card size="sm">
+        <CardHeader>
+          <CardTitle as="h1" className="text-xl">Offer availability</CardTitle>
+          <CardDescription>
+            Evaluated offers include a result. Offers that were off or missing guidelines remain N/A for this review.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div
+            className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4"
+            role="group"
+            aria-label="Offer result selection"
+          >
+            {offerColumns.map((offer) => {
+              const outcome = findOfferOutcome(offerOutcomes, offer.offer_id);
+              const result = detailedResults.find((candidate) => candidate.offer_id === offer.offer_id);
+              const isSelected = result?.offer_id === activeOffer.offer_id;
+              const content = (
+                <>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-sm font-medium">{offer.offer_name}</span>
+                    <OfferOutcomeCell compact outcome={outcome} />
+                  </div>
+                  <span className="text-xs leading-4 text-muted-foreground">
+                    {result
+                      ? isSelected ? 'Showing detailed findings' : 'Open detailed findings'
+                      : outcome?.message || 'No result was generated.'}
+                  </span>
+                </>
+              );
+              return result ? (
+                <button
+                  key={offer.offer_id}
+                  type="button"
+                  aria-pressed={isSelected}
+                  className={cn(
+                    'grid gap-2 rounded-lg border bg-background p-3 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50',
+                    isSelected && selectedControlClassName
+                  )}
+                  onClick={() => setSelectedOfferId(result.offer_id)}
+                >
+                  {content}
+                </button>
+              ) : (
+                <div key={offer.offer_id} className="grid gap-2 rounded-lg border bg-muted/20 p-3">
+                  {content}
+                </div>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle as="h2" className="text-xl">{activeOffer.offer_name} review summary</CardTitle>
+          <CardDescription className="max-sm:col-span-2">
+            Review job {jobId}{activeOffer.guideline_version ? ` · guidelines v${activeOffer.guideline_version}` : ''}
+          </CardDescription>
+          <CardAction className="max-sm:col-span-2 max-sm:col-start-1 max-sm:row-span-1 max-sm:row-start-3 max-sm:justify-self-stretch">
+            <div className="flex flex-wrap justify-end gap-2 max-sm:justify-start">
+              <StatusBadge status={effectiveActiveStatus} />
+              <InternalDispositionBadge disposition={activeOffer.internal_disposition} />
+            </div>
+          </CardAction>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          {Boolean(activeOffer.learning_version) ? <details className="rounded-md border p-3 text-sm">
+            <summary className="cursor-pointer font-medium">Learning applied · revision {activeOffer.learning_version}</summary>
+            <p className="mt-2 text-muted-foreground">Base guidelines v{activeOffer.guideline_version}. {activeOffer.applied_learning?.length ? `${activeOffer.applied_learning.length} learned clarification(s) applied to this creative.` : 'No learned clarification changed this result.'}</p>
+            <a className="mt-2 inline-block font-medium underline underline-offset-4" href={`/learning?offer=${encodeURIComponent(activeOffer.offer_id)}&version=${activeOffer.learning_version}`}>View guideline history and evidence</a>
+          </details> : null}
+          {activeOutcome?.client_decision && activeOutcome.automated_status ? (
+            <Alert>
+              <CheckCircle2 />
+              <AlertTitle>Client decision applied</AlertTitle>
+              <AlertDescription>
+                <span className="block">The effective result is {formatStatus(effectiveActiveStatus)} because the client {activeOutcome.client_decision} this creative. The original AdChecked result was {formatStatus(activeOutcome.automated_status)}.</span>
+                {activeOutcome.client_feedback_note ? <span className="mt-2 block rounded-md border bg-background/70 p-2 text-foreground"><span className="font-semibold">Decision note:</span> {activeOutcome.client_feedback_note}</span> : null}
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          <div className="flex flex-col gap-4 sm:flex-row">
+            <CreativeThumbnail
+              alt={`Preview for review ${jobId}`}
+              className="h-40 w-32"
+              driveUrl={linkedSources.find((source) => source.kind === 'google_drive_file')?.url}
+              fileName={statusQuery.data?.file_name}
+              jobId={jobId}
+            />
+            <div className="grid content-start gap-3">
+              <p className="max-w-4xl text-sm leading-6 text-muted-foreground">
+                {activeOffer.summary}
+              </p>
+              <p className="text-sm font-medium">
+                {resultDescription(activeOffer.overall_status)}
+              </p>
+            </div>
+          </div>
+          {activeOffer.internal_disposition === 'accepted_with_override' ? (
+            <Alert>
+              <CheckCircle2 />
+              <AlertTitle>Green with internal exception for {activeOffer.offer_name}</AlertTitle>
+              <AlertDescription>
+                The creative is ready to run under the current saved internal rules. The policy differences that changed the decision are recorded below.
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          {activeOffer.applied_overrides?.length ? (
+            <div className="grid gap-3">
+              <div>
+                <h3 className="text-sm font-medium">Applied internal exceptions</h3>
+                <p className="text-xs text-muted-foreground">
+                  These saved rules materially changed the effective result from the official source policy.
+                </p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {activeOffer.applied_overrides.map((override) => (
+                  <div key={override.override_id} className="grid gap-2 rounded-lg border border-emerald-600/25 bg-emerald-500/5 p-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="secondary">{override.title || override.override_id}</Badge>
+                      <Badge variant="outline">{formatSource(override.source)}</Badge>
+                    </div>
+                    <p className="text-sm">{override.evidence}</p>
+                    <p className="text-xs leading-5 text-muted-foreground">{override.rationale}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {sourceResults.length ? (
+            <div className="grid gap-3 sm:grid-cols-2">
+              {sourceResults.map(({ label, result }) => (
+                <div key={label} className="grid gap-2 rounded-lg border bg-muted/20 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-sm font-medium">{label}</span>
+                    <StatusBadge status={result.status} />
+                  </div>
+                  {result.summary ? (
+                    <p className="text-sm leading-6 text-muted-foreground">{result.summary}</p>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
+          <div className="flex flex-wrap items-center gap-2">
+            <PdfDownloadMenu
+              baseHref={`/api/reviews/${jobId}/report.pdf`}
+              offers={detailedResults.map((result) => ({
+                offer_id: result.offer_id,
+                offer_name: result.offer_name,
+              }))}
+            />
+            <AuthenticatedDownloadButton
+              href={`/api/reviews/${jobId}/report.json`}
+              fallbackName={`${jobId}-adchecked-report.json`}
+              label="Download JSON"
+            />
+            {linkedSources.map((source) => (
+              <a
+                key={`${source.kind}-${source.url}`}
+                className={cn(buttonVariants({ variant: 'default' }), 'w-fit')}
+                href={source.url ?? undefined}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <ExternalLink data-icon="inline-start" />
+                {source.label}
+              </a>
+            ))}
+            {sourceQuery.isLoading ? <Badge variant="outline">Locating source…</Badge> : null}
+          </div>
+          {unresolvedSources.length || sourceQuery.error ? (
+            <div className="flex flex-col items-start gap-2 rounded-lg border bg-muted/20 p-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="grid gap-1 text-sm text-muted-foreground">
+                {unresolvedSources.map((source) => (
+                  <p key={`${source.label}-${source.status}`}>{source.message}</p>
+                ))}
+                {sourceQuery.error ? <p>{errorMessage(sourceQuery.error)}</p> : null}
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={sourceQuery.isFetching}
+                onClick={() => void sourceQuery.refetch()}
+              >
+                <RefreshCw />
+                Retry
+              </Button>
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-xl">Findings with creative evidence</CardTitle>
+          <CardDescription>
+            {activeOffer.findings.length} effective-policy finding{activeOffer.findings.length === 1 ? '' : 's'} paired with the closest saved frame
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {activeOffer.findings.length ? (
+            <div className="grid gap-3 lg:grid-cols-2">
+              {activeOffer.findings.map((finding, index) => (
+                <ReviewFindingCard
+                  key={`${finding.source}-${finding.timestamp_start ?? 'none'}-${index}`}
+                  driveUrl={linkedSources.find((source) => source.kind === 'google_drive_file')?.url}
+                  fileName={statusQuery.data?.file_name}
+                  finding={finding}
+                  frame={nearestReviewEvidenceFrame(
+                    evidenceQuery.data?.frames ?? [],
+                    finding.timestamp_start
+                  )}
+                  index={index + 1}
+                  jobId={jobId}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="grid min-h-40 place-items-center rounded-lg border border-emerald-600/25 bg-emerald-500/5 p-6 text-center">
+              <div className="grid gap-2">
+                <CheckCircle2 className="mx-auto size-6 text-emerald-600" />
+                <p className="font-medium">No findings were returned</p>
+                <p className="text-sm text-muted-foreground">The creative is ready to run under this offer’s reviewed policy.</p>
+              </div>
+            </div>
+          )}
+          {evidenceQuery.error ? (
+            <p className="mt-3 text-xs text-muted-foreground">
+              Saved frames are temporarily unavailable; the finding text is still complete.
+            </p>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-xl">Safer rewrites</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4 text-sm leading-6 text-muted-foreground">
+            <p>{activeOffer.safe_rewrite.ad_copy || 'No copy rewrite returned.'}</p>
+            {activeOffer.safe_rewrite.onscreen_text.length ? (
+              <ul className="grid list-disc gap-2 pl-5">
+                {activeOffer.safe_rewrite.onscreen_text.map((text, index) => (
+                  <li key={`${text}-${index}`}>{text}</li>
+                ))}
+              </ul>
+            ) : null}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-xl">Review limitations</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ul className="grid list-disc gap-2 pl-5 text-sm leading-6 text-muted-foreground">
+              {activeOffer.limitations.map((limitation, index) => (
+                <li key={`${limitation}-${index}`}>{limitation}</li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function BatchPage() {
+  const { batchId } = useParams({ from: '/batches/$batchId' });
+  const search = batchRoute.useSearch();
+  const navigate = batchRoute.useNavigate();
+  const selectedOfferId = search.offer ?? 'all';
+  const selectedResult = search.result ?? 'all';
+  const setSelectedOfferId = (offer: string) => void navigate({ search: { ...search, offer } });
+  const [expandedItemIds, setExpandedItemIds] = useState<Set<string>>(new Set());
+  const [selectedShareIds, setSelectedShareIds] = useState<Set<string>>(new Set());
+  useEffect(() => setSelectedShareIds(new Set()), [batchId, selectedOfferId, selectedResult]);
+  const query = useQuery({
+    queryKey: ['batch', batchId],
+    queryFn: () => getBatch(batchId),
+    refetchInterval: (current: { state: { data?: ReviewBatch } }) => {
+      const batch = current.state.data;
+      return batch?.items.every((item) => isTerminalBatchStatus(item.status)) ? 30_000 : 1500;
+    },
+  });
+  const offerCatalogQuery = useQuery({
+    queryKey: ['offers'],
+    queryFn: listOfferCatalog,
+    staleTime: 60_000,
+  });
+  const retryMutation = useMutation({
+    mutationFn: (itemId: string) => retryDriveBatchItem(batchId, itemId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['batch', batchId] }),
+  });
+
+  if (query.isLoading) return <Skeleton className="h-72" />;
+  if (!query.data) {
+    return (
+      <Alert variant="destructive">
+        <AlertCircle />
+        <AlertTitle>Batch unavailable</AlertTitle>
+        <AlertDescription>
+          {query.error ? errorMessage(query.error) : 'Batch not found.'}
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
+  const completeCount = query.data.items.filter((item) => item.status === 'complete').length;
+  const failedCount = query.data.items.filter((item) => isFailedBatchStatus(item.status)).length;
+  const batchComplete = query.data.items.every((item) => isTerminalBatchStatus(item.status));
+  const offerColumns = getOfferColumns(
+    offerCatalogQuery.data ?? [],
+    query.data.items.map((item) => item.offer_outcomes)
+  );
+  const selectedOffer = offerColumns.find((offer) => offer.offer_id === selectedOfferId) ?? null;
+  const visibleOfferColumns = selectedOffer ? [selectedOffer] : offerColumns;
+  const pdfOffers = offerColumns.filter((offer) => query.data.items.some((item) =>
+    findOfferOutcome(item.offer_outcomes, offer.offer_id)?.evaluation_state === 'evaluated'
+  ));
+  const visibleItems = query.data.items.filter(item => matchesReviewFilter(item, selectedOfferId, selectedResult));
+  const batchShareIds = shareableReviewIds(query.data.items, selectedOfferId);
+  const visibleShareIds = shareableReviewIds(visibleItems, selectedOfferId);
+  const selectedIds = visibleShareIds.filter(id => selectedShareIds.has(id));
+  const allSelected = visibleShareIds.length > 0 && selectedIds.length === visibleShareIds.length;
+
+  return (
+    <Card className="min-w-0">
+      <CardHeader>
+        <CardTitle as="h1" className="text-xl">
+          Batch report
+        </CardTitle>
+        <CardDescription className="max-sm:col-span-2">
+          Uploaded {formatDate(query.data.created_at)} · {completeCount} complete · {failedCount} failed · {query.data.expected_count} total
+        </CardDescription>
+        <CardAction className="max-sm:row-span-1 max-sm:row-start-1">
+          <div className="flex flex-wrap justify-end gap-2">
+            {batchComplete && completeCount > 0 ? <ReleaseButton batchId={batchId} hasReleased={query.data.items.some(item => item.has_releases)} size="sm" /> : null}
+            <ShareButton jobIds={batchShareIds} offerId={selectedOfferId === 'all' ? undefined : selectedOfferId} label="Share batch" />
+            {batchComplete ? (
+              <PdfDownloadMenu
+                baseHref={`/api/batches/${query.data.batch_id}/report.pdf`}
+                contentLabel={`All ${query.data.expected_count} creative${query.data.expected_count === 1 ? '' : 's'}`}
+                offers={pdfOffers}
+                size="sm"
+              />
+            ) : null}
+            <Link to="/history" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
+              Back to history
+            </Link>
+          </div>
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        <BatchStatusDistribution
+          items={query.data.items}
+          offers={offerColumns}
+          selectedOfferId={selectedOfferId}
+          onOfferChange={setSelectedOfferId}
+        />
+        {retryMutation.error ? (
+          <Alert variant="destructive" className="mb-4">
+            <AlertCircle />
+            <AlertTitle>Retry could not start</AlertTitle>
+            <AlertDescription>{errorMessage(retryMutation.error)}</AlertDescription>
+          </Alert>
+        ) : null}
+        <div className="mb-4 grid gap-1">
+          <h2 className="text-sm font-medium">Individual creative results</h2>
+          <p className="text-xs text-muted-foreground">
+            Showing {visibleItems.length} of {query.data.items.length} items. Color filters use the original AdChecked assessment.
+          </p>
+          <p className="text-xs text-muted-foreground">Share batch includes all completed creatives for the selected offer. Select individual creatives below to share a smaller set.</p>
+          {selectedIds.length ? <div className="my-2 flex flex-wrap items-center gap-2"><Badge variant="secondary">{selectedIds.length} selected</Badge><ShareButton jobIds={selectedIds} offerId={selectedOfferId === 'all' ? undefined : selectedOfferId} /><Button size="sm" variant="ghost" onClick={() => setSelectedShareIds(new Set())}>Clear selection</Button></div> : null}
+          <label className="mt-2 grid max-w-64 gap-1 text-xs font-medium">
+            Filter by AdChecked result
+            <Select
+              className="h-8"
+              value={selectedResult}
+              active={selectedResult !== 'all'}
+              onValueChange={(value) => void navigate({ search: { ...search, result: value as ReviewResultFilter } })}
+              options={[
+                ...(REVIEW_RESULT_FILTERS.map((result) => ({
+                  value: result,
+                  label: {
+                    all: 'All results',
+                    red: 'Red',
+                    yellow: 'Yellow',
+                    green: 'Green',
+                    failed: 'Review failed',
+                    upload_failed: 'Upload / import failed',
+                    unavailable: 'Not reviewed / unavailable',
+                  }[result],
+                })) ?? []),
+              ]}
+            />
+          </label>
+          {selectedResult !== 'all' ? <Button className="mt-2 w-fit" variant="ghost" size="sm" onClick={() => void navigate({ search: { ...search, result: 'all' } })}>Clear result filter</Button> : null}
+        </div>
+        <Table className="min-w-[64rem] table-fixed">
+          <colgroup>
+            <col className="w-10" />
+            <col className="w-20" />
+            <col className="w-28" />
+            <col />
+            <col className="w-36" />
+            <col className={selectedOffer ? 'w-48' : 'w-80'} />
+            <col className="w-44" />
+          </colgroup>
+          <TableHeader>
+            <TableRow>
+              <TableHead><HistoryCheckbox ariaLabel="Select all completed creatives in this batch" checked={allSelected} indeterminate={selectedIds.length > 0 && !allSelected} disabled={!visibleShareIds.length} onChange={() => setSelectedShareIds(allSelected ? new Set() : new Set(visibleShareIds))} /></TableHead>
+              <TableHead>Creative</TableHead>
+              <TableHead>Type</TableHead>
+              <TableHead>Name</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead className="text-xs">
+                <OfferResultsHeader label="Effective results" offers={visibleOfferColumns} />
+              </TableHead>
+              <TableHead className="text-right">Report & details</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {!visibleItems.length ? <TableRow><TableCell colSpan={7} className="py-8 text-center text-muted-foreground">No items match this client and result.</TableCell></TableRow> : null}
+            {visibleItems.map((item) => {
+              const isExpanded = expandedItemIds.has(item.item_id);
+              const hasDecisionContext = visibleOfferColumns.some((offer) => {
+                const outcome = batchOutcomeForOffer(item, offer);
+                return outcome?.evaluation_state === 'evaluated';
+              });
+              return (
+              <React.Fragment key={item.item_id}>
+                <TableRow>
+                  <TableCell className="align-top"><HistoryCheckbox ariaLabel={`Select ${item.file_name}`} checked={Boolean(item.job_id && selectedShareIds.has(item.job_id))} disabled={!item.job_id || !visibleShareIds.includes(item.job_id)} onChange={() => setSelectedShareIds(current => { const next = new Set(current); if (item.job_id) { if (next.has(item.job_id)) next.delete(item.job_id); else next.add(item.job_id); } return next; })} /></TableCell>
+                  <TableCell className="align-top">
+                    <CreativeThumbnail
+                      alt={`Preview of ${item.file_name}`}
+                      driveUrl={item.drive_file_id ? `https://drive.google.com/file/d/${encodeURIComponent(item.drive_file_id)}/view` : null}
+                      fileName={item.file_name}
+                      jobId={item.media_kind === 'copy_only' ? null : item.job_id}
+                      mediaKind={item.media_kind}
+                    />
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap">{batchTypeLabel(item.media_kind)}</TableCell>
+                  <TableCell className="min-w-0 whitespace-normal align-top">
+                    <span className="block truncate font-medium" title={item.file_name}>{item.file_name}</span>
+                    {isFailedBatchStatus(item.status) && item.message ? (
+                      <span
+                        className="mt-1 block line-clamp-2 break-words text-xs leading-4 text-destructive"
+                        title={item.message}
+                      >
+                        {item.message}
+                      </span>
+                    ) : null}
+                  </TableCell>
+                  <TableCell className="align-top"><StatusBadge status={item.status} /></TableCell>
+                  <TableCell>
+                    <BatchOfferResultsRail item={item} offers={visibleOfferColumns} />
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex flex-wrap justify-end gap-1">
+                    {item.job_id && visibleShareIds.includes(item.job_id) ? <ShareButton jobIds={[item.job_id]} offerId={selectedOfferId === 'all' ? undefined : selectedOfferId} label="Share" /> : null}
+                    {item.status === 'upload_failed' && !item.job_id ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={retryMutation.isPending}
+                        onClick={() => retryMutation.mutate(item.item_id)}
+                      >
+                        {retryMutation.isPending && retryMutation.variables === item.item_id ? (
+                          <LoaderCircle className="animate-spin" />
+                        ) : (
+                          <RefreshCw />
+                        )}
+                        Retry
+                      </Button>
+                    ) : item.status === 'complete' && item.job_id ? (
+                      <Link
+                        to="/reviews/$jobId/report"
+                        params={{ jobId: item.job_id }}
+                        search={{ offer: selectedOfferId === 'all' ? undefined : selectedOfferId }}
+                        className={buttonVariants({ variant: 'outline', size: 'sm' })}
+                      >
+                        <FileJson data-icon="inline-start" />
+                        Open report
+                      </Link>
+                    ) : item.job_id ? (
+                      <Link
+                        to="/reviews/$jobId"
+                        params={{ jobId: item.job_id }}
+                        className={buttonVariants({ variant: 'ghost', size: 'sm' })}
+                      >
+                        View job
+                      </Link>
+                    ) : (
+                      <span className="text-sm text-muted-foreground">—</span>
+                    )}
+                    {hasDecisionContext ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={`${isExpanded ? 'Hide' : 'Show'} decision context for ${item.file_name}`}
+                        aria-expanded={isExpanded}
+                        title={`${isExpanded ? 'Hide' : 'Show'} assessment, decision, and note`}
+                        onClick={() => setExpandedItemIds((current) => {
+                          const next = new Set(current);
+                          if (next.has(item.item_id)) next.delete(item.item_id);
+                          else next.add(item.item_id);
+                          return next;
+                        })}
+                      >
+                        <ChevronDown className={cn('transition-transform', isExpanded && 'rotate-180')} />
+                      </Button>
+                    ) : null}
+                    </div>
+                  </TableCell>
+                </TableRow>
+                {isExpanded ? (
+                  <TableRow className="bg-muted/15 hover:bg-muted/15">
+                    <TableCell colSpan={7} className="p-3">
+                      <BatchItemDecisionDetails item={item} offers={visibleOfferColumns} />
+                    </TableCell>
+                  </TableRow>
+                ) : null}
+              </React.Fragment>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
+}
+
+function BatchItemDecisionDetails({ item, offers }: { item: ReviewBatchItem; offers: OfferColumn[] }) {
+  const outcomes = offers.flatMap((offer) => {
+    const outcome = batchOutcomeForOffer(item, offer);
+    return outcome?.evaluation_state === 'evaluated' ? [{ offer, outcome }] : [];
+  });
+
+  if (!outcomes.length) return <p className="text-sm text-muted-foreground">No evaluated offer results are available.</p>;
+
+  return (
+    <div className="grid gap-3">
+      {outcomes.map(({ offer, outcome }) => {
+        const automatedStatus = outcome.automated_status ?? outcome.overall_status;
+        const effectiveStatus = outcome.effective_status ?? outcome.overall_status;
+        return (
+          <section key={offer.offer_id} className="grid gap-3 rounded-lg border bg-background p-3 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,0.8fr)]">
+            <div className="grid content-start gap-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">AdChecked assessment</span>
+              <span className="text-sm font-medium">{offer.offer_name}</span>
+              {automatedStatus ? <StatusBadge status={automatedStatus} /> : <Badge variant="outline">N/A</Badge>}
+            </div>
+            <div className="grid content-start gap-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Client decision</span>
+              {outcome.client_decision ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="outline" className={cn(
+                    outcome.client_decision === 'approved' && 'border-emerald-600/35 bg-emerald-500/10 text-emerald-700',
+                    outcome.client_decision === 'disapproved' && 'border-red-600/35 bg-red-500/10 text-red-700',
+                  )}>
+                    {outcome.client_decision === 'approved' ? <CheckCircle2 /> : <AlertCircle />}
+                    {outcome.client_decision === 'approved' ? 'Approved' : 'Disapproved'}
+                  </Badge>
+                  {outcome.client_decided_at ? <span className="text-xs text-muted-foreground">{formatDateTime(outcome.client_decided_at)}</span> : null}
+                </div>
+              ) : <Badge variant="outline" className="w-fit text-muted-foreground">Pending</Badge>}
+              {outcome.client_feedback_note ? (
+                <p className="mt-1 flex gap-2 rounded-md border bg-muted/20 p-2 text-xs leading-5"><MessageSquareText className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" /><span><span className="font-semibold">Decision note:</span> {outcome.client_feedback_note}</span></p>
+              ) : outcome.client_decision ? <p className="text-xs text-muted-foreground">No decision note was added.</p> : null}
+            </div>
+            <div className="grid content-start gap-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Effective disposition</span>
+              {effectiveStatus ? <StatusBadge status={effectiveStatus} /> : <Badge variant="outline">Not ready</Badge>}
+              <span className="text-xs text-muted-foreground">{effectiveStatus === 'green' ? 'Ready' : effectiveStatus === 'red' ? 'Hold' : 'Needs review'}</span>
+            </div>
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+type SettingsView = 'api' | 'policies' | 'runtime' | 'plans';
+
+const settingsViews: Array<{
+  description: string;
+  icon: typeof Code2;
+  label: string;
+  value: SettingsView;
+}> = [
+  { value: 'plans', label: 'Advertiser plans', description: 'Workspace allocations and publisher capacity', icon: Users },
+  {
+    value: 'api',
+    label: 'API access',
+    description: 'Partners, keys, scopes, webhooks, and documentation',
+    icon: Code2,
+  },
+  {
+    value: 'policies',
+    label: 'Policies & offers',
+    description: 'Official guidelines, internal rules, and offer access',
+    icon: SlidersHorizontal,
+  },
+  {
+    value: 'runtime',
+    label: 'Review runtime',
+    description: 'Model selection and browser review defaults',
+    icon: Laptop,
+  },
+];
+
+function isSettingsView(value: unknown): value is SettingsView {
+  return value === 'api' || value === 'policies' || value === 'runtime' || value === 'plans';
+}
+
+function SettingsViewMenu({
+  onChange,
+  view,
+}: {
+  onChange: (view: SettingsView) => void;
+  view: SettingsView;
+}) {
+  const selected = settingsViews.find((option) => option.value === view) ?? settingsViews[0];
+  const SelectedIcon = selected.icon;
+
+  return (
+    <div className="grid min-w-0 gap-1.5 sm:min-w-80">
+      <Label>Settings view</Label>
+      <Menu.Root>
+        <Menu.Trigger
+          className={cn(
+            buttonVariants({ variant: 'outline' }),
+            'h-auto w-full justify-between gap-4 px-3 py-2.5'
+          )}
+          aria-label={`Settings view: ${selected.label}`}
+        >
+          <span className="flex min-w-0 items-center gap-2.5 text-left">
+            <span className="grid size-8 shrink-0 place-items-center rounded-md bg-secondary">
+              <SelectedIcon className="size-4" />
+            </span>
+            <span className="grid min-w-0 gap-0.5">
+              <span className="truncate font-medium">{selected.label}</span>
+              <span className="truncate text-xs font-normal text-muted-foreground">{selected.description}</span>
+            </span>
+          </span>
+          <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+        </Menu.Trigger>
+        <Menu.Portal>
+          <Menu.Positioner sideOffset={6} align="start" className="z-50 outline-none">
+            <Menu.Popup className="w-[min(24rem,calc(100vw-2rem))] rounded-xl border bg-popover p-1.5 text-popover-foreground shadow-lg outline-none">
+              <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Choose a settings page</div>
+              {settingsViews.map((option) => {
+                const Icon = option.icon;
+                const active = option.value === view;
+                return (
+                  <Menu.Item
+                    key={option.value}
+                    closeOnClick
+                    className="flex cursor-pointer items-center gap-3 rounded-lg px-2.5 py-2.5 text-sm outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground"
+                    onClick={() => onChange(option.value)}
+                  >
+                    <span className={cn('grid size-8 shrink-0 place-items-center rounded-md', active ? 'bg-primary text-primary-foreground' : 'bg-secondary')}>
+                      <Icon className="size-4" />
+                    </span>
+                    <span className="grid min-w-0 flex-1 gap-0.5">
+                      <span className="font-medium">{option.label}</span>
+                      <span className="text-xs leading-4 text-muted-foreground">{option.description}</span>
+                    </span>
+                    <Check className={cn('size-4 shrink-0 text-primary', active ? 'opacity-100' : 'opacity-0')} aria-hidden="true" />
+                  </Menu.Item>
+                );
+              })}
+            </Menu.Popup>
+          </Menu.Positioner>
+        </Menu.Portal>
+      </Menu.Root>
+    </div>
+  );
+}
+
+function RuntimeSettingsPanel() {
+  const [model, setModel] = useState(loadOpenRouterModel);
+  const [saved, setSaved] = useState(false);
+
+  function saveSettings(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const nextModel = model.trim() || DEFAULT_OPENROUTER_MODEL;
+    window.localStorage.setItem(OPENROUTER_MODEL_KEY, nextModel);
+    setModel(nextModel);
+    setSaved(true);
+  }
+
+  return (
+    <Card>
+        <CardHeader>
+          <CardTitle className="text-xl">Runtime configuration</CardTitle>
+          <CardDescription>Model selection for reviews started from this browser.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-5 text-sm leading-6 text-muted-foreground">
+          <form className="grid gap-3" onSubmit={saveSettings}>
+            <FormField label="OpenRouter model" htmlFor="settings-model">
+              <Input
+                id="settings-model"
+                value={model}
+                placeholder={DEFAULT_OPENROUTER_MODEL}
+                onChange={(event) => {
+                  setModel(event.currentTarget.value);
+                  setSaved(false);
+                }}
+              />
+            </FormField>
+            <div className="flex items-center gap-3">
+              <Button type="submit">Save model</Button>
+              <span className="text-xs text-muted-foreground" aria-live="polite">
+                {saved ? 'Saved for future reviews on this browser.' : 'Used for every new review.'}
+              </span>
+            </div>
+          </form>
+          <Separator />
+          <p>
+            Configure OPENROUTER_API_KEY and CONVEX_HTTP_SECRET as Cloudflare Worker
+            secrets. The Convex URL is non-secret Worker config, and creatives stay in
+            temporary container storage while Convex saves filename, status, progress,
+            and final report JSON.
+          </p>
+          <Alert>
+            <CheckCircle2 />
+            <AlertTitle>Parallel processing</AlertTitle>
+            <AlertDescription>
+              Multi-creative uploads create separate jobs. Uploads and backend reviews run
+              through the distributed review queue, with per-job progress reported back to the UI.
+            </AlertDescription>
+          </Alert>
+        </CardContent>
+      </Card>
+  );
+}
+
+function SettingsPage() {
+  const { canManageSettings } = useAdminAccess();
+  const { view } = settingsRoute.useSearch();
+  const navigate = settingsRoute.useNavigate();
+
+  if (!canManageSettings) return <OwnerAccessRequired section="Settings" />;
+
+  function changeView(nextView: SettingsView) {
+    void navigate({
+      to: '/settings',
+      search: { view: nextView },
+    });
+  }
+
+  return (
+    <div className="mx-auto grid max-w-6xl gap-4">
+      <section className="grid gap-1">
+        <h1 className="font-heading text-2xl font-semibold tracking-tight">Settings</h1>
+        <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
+          Manage API integrations, offer-specific policies, and review runtime defaults.
+        </p>
+      </section>
+      <Card size="sm">
+        <CardContent className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <SettingsViewMenu view={view} onChange={changeView} />
+          <p className="max-w-lg text-xs leading-5 text-muted-foreground sm:text-right">
+            Each view has its own URL, so you can bookmark it or send a direct link to the right settings page.
+          </p>
+        </CardContent>
+      </Card>
+      {view === 'plans' ? <AdminPlansPanel /> : view === 'runtime' ? (
+        <RuntimeSettingsPanel />
+      ) : (
+        <AdminAccessGate>
+          {view === 'api' ? <ApiAccessPanel /> : <OfferSettingsPanel />}
+        </AdminAccessGate>
+      )}
+    </div>
+  );
+}
+
+type ApiDocsView = 'guide' | 'reference';
+
+function isApiDocsView(value: unknown): value is ApiDocsView {
+  return value === 'guide' || value === 'reference';
+}
+
+function ApiHubPage() {
+  const { view } = developerApiDocsRoute.useSearch();
+  const navigate = developerApiDocsRoute.useNavigate();
+
+  useEffect(() => {
+    const previousTitle = document.title;
+    document.title = view === 'guide'
+      ? 'AdChecked Partner API · Developer guide'
+      : 'AdChecked Partner API · Interactive reference';
+    return () => {
+      document.title = previousTitle;
+    };
+  }, [view]);
+
+  function changeView(nextView: ApiDocsView) {
+    void navigate({
+      to: '/developers/api',
+      search: { view: nextView },
+    });
+  }
+
+  return (
+    <div className="grid gap-6">
+      <Card className="overflow-hidden" size="sm">
+        <CardContent className="grid gap-4 bg-card sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+          <div className="grid gap-1">
+            <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+              <Code2 className="size-4" /> API documentation
+            </div>
+            <h1 className="font-heading text-2xl font-semibold tracking-tight">Build and test from one place</h1>
+            <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
+              Start with the integration guide, then switch to the interactive reference when you are ready to inspect or call an endpoint.
+            </p>
+          </div>
+          <Button nativeButton={false} variant="outline" render={<a href="https://api.adchecked.com/api/v1/openapi.json" target="_blank" rel="noreferrer" />}>
+            <FileJson /> OpenAPI JSON <ExternalLink />
+          </Button>
+        </CardContent>
+        <Separator />
+        <CardContent className="pt-3">
+          <div className="grid gap-2 sm:grid-cols-2" role="tablist" aria-label="API documentation view">
+            <Button
+              type="button"
+              role="tab"
+              aria-selected={view === 'guide'}
+              variant={view === 'guide' ? 'default' : 'ghost'}
+              className="h-auto justify-start gap-3 px-4 py-3 text-left"
+              onClick={() => changeView('guide')}
+            >
+              <BookOpen className="size-4 shrink-0" />
+              <span className="grid gap-0.5">
+                <span>Guide</span>
+                <span className={cn('text-xs font-normal', view === 'guide' ? 'text-primary-foreground/75' : 'text-muted-foreground')}>
+                  Concepts, workflow, and quick start
+                </span>
+              </span>
+            </Button>
+            <Button
+              type="button"
+              role="tab"
+              aria-selected={view === 'reference'}
+              variant={view === 'reference' ? 'default' : 'ghost'}
+              className="h-auto justify-start gap-3 px-4 py-3 text-left"
+              onClick={() => changeView('reference')}
+            >
+              <Code2 className="size-4 shrink-0" />
+              <span className="grid gap-0.5">
+                <span>Interactive reference</span>
+                <span className={cn('text-xs font-normal', view === 'reference' ? 'text-primary-foreground/75' : 'text-muted-foreground')}>
+                  Endpoints, schemas, and live requests
+                </span>
+              </span>
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+      <div role="tabpanel">
+        {view === 'guide' ? <ApiDocsPage embedded /> : <ApiReferencePage embedded />}
+      </div>
+    </div>
+  );
+}
+
+function AutomationsRoutePage() {
+  const { canManageSettings } = useAdminAccess();
+  if (!canManageSettings) return <OwnerAccessRequired section="Automations" />;
+  return (
+    <AdminAccessGate>
+      <AutomationsPage />
+    </AdminAccessGate>
+  );
+}
+
+function OwnerAccessRequired({ section }: { section: string }) {
+  return (
+    <div className="mx-auto grid max-w-xl gap-4">
+      <Card>
+        <CardHeader>
+          <span className="mb-2 grid size-10 place-items-center rounded-xl bg-secondary text-secondary-foreground">
+            <Settings className="size-4" />
+          </span>
+          <CardTitle as="h1" className="text-xl">Owner access required</CardTitle>
+          <CardDescription>
+            {section} can change workspace configuration and is not available to employee accounts.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Link to="/reviews/new" className={buttonVariants()}>
+            <Plus /> Start a review
+          </Link>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const result = normalizeResultStatus(status);
+  if (result) return <ResultBadge status={result} />;
+  const label = formatStatus(status);
+  return (
+    <Badge
+      variant={isFailedBatchStatus(status) ? 'destructive' : status === 'complete' ? 'secondary' : 'outline'}
+      className="max-w-full"
+      title={status === 'complete_with_failures' ? 'Batch finished; some reviews failed.' : label}
+    >
+      <span className="truncate">{label}</span>
+    </Badge>
+  );
+}
+
+function ResultBadge({ status }: { status: OverallStatus }) {
+  const meta = RESULT_META[status];
+  return (
+    <Badge
+      variant="outline"
+      className={meta.badgeClass}
+      title={meta.description}
+      aria-label={`${formatStatus(status)}: ${meta.description}`}
+    >
+      <span aria-hidden="true" className={cn('size-1.5 rounded-full', meta.dotClass)} />
+      {formatStatus(status)}
+    </Badge>
+  );
+}
+
+function InternalDispositionBadge({
+  disposition,
+}: {
+  disposition?: OfferResult['internal_disposition'];
+}) {
+  if (!disposition || disposition === 'clear') return null;
+  if (disposition === 'accepted_with_override') {
+    return (
+      <Badge variant="secondary" title="The official-policy issue is permitted by a saved internal rule.">
+        <CheckCircle2 />
+        Accepted internally
+      </Badge>
+    );
+  }
+  if (disposition === 'human_review') return <Badge variant="outline">Internal review needed</Badge>;
+  return (
+    <Badge
+      variant="outline"
+      className="border-orange-600/30 bg-orange-500/15 text-orange-700 dark:text-orange-300"
+    >
+      Action required
+    </Badge>
+  );
+}
+
+function SeverityBadge({ severity }: { severity: Finding['severity'] }) {
+  if (severity === 'high') return <Badge variant="destructive">High</Badge>;
+  if (severity === 'medium') return <Badge variant="secondary">Medium</Badge>;
+  return <Badge variant="outline">Low</Badge>;
+}
+
+function ReviewFindingCard({
+  driveUrl,
+  fileName,
+  finding,
+  frame,
+  index,
+  jobId,
+}: {
+  driveUrl?: string | null;
+  fileName?: string;
+  finding: Finding;
+  frame: ReviewEvidenceFrame | null;
+  index: number;
+  jobId: string;
+}) {
+  return (
+    <article className="flex gap-3 rounded-xl border bg-card p-3">
+      {frame ? (
+        <CreativeEvidenceImage
+          alt={`Evidence frame for finding ${index}`}
+          driveUrl={driveUrl}
+          fileName={fileName}
+          filename={frame.filename}
+          jobId={jobId}
+          startSeconds={frame.timestamp}
+        />
+      ) : (
+        <span className="grid h-32 w-24 shrink-0 place-items-center rounded-lg border bg-muted/30 px-2 text-center text-[11px] font-medium text-muted-foreground sm:h-36 sm:w-28">
+          {formatSource(finding.source)}
+        </span>
+      )}
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Badge variant="outline">#{index}</Badge>
+          <SeverityBadge severity={finding.severity} />
+          <Badge variant="outline">{formatSource(finding.source)}</Badge>
+          {finding.timestamp_start ? (
+            <Badge variant="secondary">{formatFindingTimestamp(finding.timestamp_start)}</Badge>
+          ) : null}
+        </div>
+        <p className="mt-3 text-sm font-medium leading-5">{finding.evidence}</p>
+        <div className="mt-3 grid gap-2 text-xs leading-5 text-muted-foreground">
+          <p><span className="font-semibold text-foreground">Policy:</span> {finding.policy_reason}</p>
+          <p><span className="font-semibold text-foreground">Fix:</span> {finding.suggested_fix}</p>
+        </div>
+        {finding.internal_override ? (
+          <div className="mt-3 rounded-lg border border-emerald-600/25 bg-emerald-500/5 p-2 text-xs leading-5">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="secondary">{formatStatus(finding.internal_override.disposition)}</Badge>
+              <span className="font-medium">{finding.internal_override.title || finding.internal_override.override_id}</span>
+            </div>
+            {finding.internal_override.rationale ? (
+              <p className="mt-1 text-muted-foreground">{finding.internal_override.rationale}</p>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    </article>
+  );
+}
+
+function nearestReviewEvidenceFrame(
+  frames: ReviewEvidenceFrame[],
+  timestamp: string | null | undefined
+): ReviewEvidenceFrame | null {
+  if (!frames.length) return null;
+  const target = parseFindingTimestampSeconds(timestamp);
+  if (target === null || Number.isNaN(target)) return frames[0] ?? null;
+  return frames.reduce((nearest, frame) => {
+    if (frame.timestamp === null) return nearest;
+    if (!nearest || nearest.timestamp === null) return frame;
+    return Math.abs(frame.timestamp - target) < Math.abs(nearest.timestamp - target)
+      ? frame
+      : nearest;
+  }, null as ReviewEvidenceFrame | null) ?? frames[0] ?? null;
+}
+
+function formatFindingTimestamp(value: string) {
+  const seconds = parseFindingTimestampSeconds(value);
+  if (seconds === null || Number.isNaN(seconds)) return value;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = Math.max(0, Math.round(seconds % 60));
+  return `${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
+}
+
+function parseFindingTimestampSeconds(value: string | null | undefined) {
+  if (!value) return null;
+  const parts = value.trim().split(':').map(Number);
+  if (parts.length >= 2 && parts.length <= 3 && parts.every(Number.isFinite)) {
+    const seconds = parts[parts.length - 1] + parts[parts.length - 2] * 60;
+    return parts.length === 3 ? seconds + parts[0] * 3600 : seconds;
+  }
+  const parsed = Number.parseFloat(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function buildReviewForm(
+  source: FormData,
+  creative: File | null,
+  sceneDetection: boolean,
+  adCopyOverride?: string,
+  batchId?: string,
+  batchItemId?: string
+) {
+  const form = new FormData();
+  if (creative) form.append('creative', creative);
+
+  for (const key of [
+    'ad_copy',
+    'policy_text',
+    'notes',
+    'manual_transcript',
+    'model',
+    'offer_ids',
+    'vertical',
+    'frame_interval_seconds',
+  ]) {
+    if (key === 'ad_copy' && adCopyOverride !== undefined) {
+      form.append(key, adCopyOverride);
+      continue;
+    }
+    const value = source.get(key);
+    if (typeof value === 'string') form.append(key, value);
+  }
+
+  if (sceneDetection) form.append('scene_detection', 'true');
+  if (batchId && batchItemId) {
+    form.append('batch_id', batchId);
+    form.append('batch_item_id', batchItemId);
+  }
+  return form;
+}
+
+function buildDriveReviewInput(
+  source: FormData,
+  driveId: string,
+  fileId: string,
+  sceneDetection: boolean,
+  batchId?: string,
+  batchItemId?: string
+) {
+  const value = (key: string) => {
+    const field = source.get(key);
+    return typeof field === 'string' ? field : '';
+  };
+  const frameInterval = Number(value('frame_interval_seconds'));
+  let offerIds = ['acp'];
+  try {
+    const parsed = JSON.parse(value('offer_ids'));
+    if (Array.isArray(parsed) && parsed.every((item) => typeof item === 'string')) {
+      offerIds = parsed;
+    }
+  } catch {
+    // The backend also defaults legacy submissions to ACP.
+  }
+  return {
+    drive_id: driveId,
+    file_id: fileId,
+    ad_copy: value('ad_copy'),
+    policy_text: value('policy_text'),
+    notes: value('notes'),
+    manual_transcript: value('manual_transcript'),
+    model: value('model'),
+    frame_interval_seconds: Number.isFinite(frameInterval) ? frameInterval : 1,
+    scene_detection: sceneDetection,
+    offer_ids: offerIds,
+    vertical: value('vertical') === 'home-insurance' ? 'home-insurance' as const : 'auto-insurance' as const,
+    ...(batchId && batchItemId ? { batch_id: batchId, batch_item_id: batchItemId } : {}),
+  };
+}
+
+function buildBatchReviewContext(
+  source: FormData,
+  driveId: string | null,
+  sceneDetection: boolean,
+  offerIds: string[]
+) {
+  const value = (key: string) => {
+    const field = source.get(key);
+    return typeof field === 'string' ? field : '';
+  };
+  const frameInterval = Number(value('frame_interval_seconds'));
+  return {
+    ...(driveId ? { drive_id: driveId } : {}),
+    ad_copy: value('ad_copy'),
+    policy_text: value('policy_text'),
+    notes: value('notes'),
+    manual_transcript: value('manual_transcript'),
+    model: value('model'),
+    frame_interval_seconds: Number.isFinite(frameInterval) ? frameInterval : 1,
+    scene_detection: sceneDetection,
+    offer_ids: offerIds,
+  };
+}
+
+function loadOpenRouterModel() {
+  if (typeof window === 'undefined') return DEFAULT_OPENROUTER_MODEL;
+  return window.localStorage.getItem(OPENROUTER_MODEL_KEY)?.trim() || DEFAULT_OPENROUTER_MODEL;
+}
+
+async function runWithConcurrency<T>(
+  items: readonly T[],
+  concurrency: number,
+  task: (item: T, index: number) => Promise<void>
+) {
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        await task(items[index], index);
+      }
+    })
+  );
+}
+
+function splitAdCopyLines(value: string) {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function adCopyItemName(copy: string, index: number) {
+  const preview = copy.replace(/\s+/g, ' ').trim();
+  if (!preview) return `Ad copy ${index + 1}`;
+  const trimmed =
+    preview.length > AD_COPY_PREVIEW_LENGTH
+      ? `${preview.slice(0, AD_COPY_PREVIEW_LENGTH - 3).trim()}...`
+      : preview;
+  return `Ad copy ${index + 1}: ${trimmed}`;
+}
+
+function selectionBadgeLabel(creativeCount: number, copyLineCount: number) {
+  if (creativeCount) return `${creativeCount} creative${creativeCount === 1 ? '' : 's'}`;
+  if (copyLineCount) return `${copyLineCount} copy line${copyLineCount === 1 ? '' : 's'}`;
+  return '0 selected';
+}
+
+function createButtonLabel(jobCount: number) {
+  if (!jobCount) return 'Create review';
+  return `Create ${jobCount} review${jobCount === 1 ? '' : 's'}`;
+}
+
+function submissionHint(creativeCount: number, copyLineCount: number) {
+  if (creativeCount > 1) return `${creativeCount} creatives will upload up to ${UPLOAD_CONCURRENCY} at a time.`;
+  if (creativeCount === 1) return 'Each creative becomes one review job.';
+  if (copyLineCount > 1) return `${copyLineCount} ad copy lines will submit up to ${UPLOAD_CONCURRENCY} at a time.`;
+  if (copyLineCount === 1) return 'This ad copy line becomes one review job.';
+  return 'Select a creative or enter ad copy to create a review job.';
+}
+
+function progressFor(item: BatchItem, status?: Status) {
+  if (status) return status.progress;
+  if (item.error) return 100;
+  if (item.phase === 'uploading') return item.uploadProgress;
+  return 0;
+}
+
+function phaseMessage(phase: UploadPhase, kind: BatchItem['kind']) {
+  if (phase === 'uploading') return kind === 'ad_copy' ? 'Submitting' : 'Uploading';
+  if (phase === 'importing') return 'Starting Drive import';
+  if (phase === 'queued') return 'Queued';
+  if (phase === 'failed') return 'Failed';
+  return kind === 'ad_copy' ? 'Pending submission' : 'Pending upload';
+}
+
+function formatStatus(status: string) {
+  if (status in STATUS_LABELS) return STATUS_LABELS[status as keyof typeof STATUS_LABELS];
+  return status
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function normalizeResultStatus(status?: string | null): OverallStatus | null {
+  const normalized: Record<ResultStatus, OverallStatus> = {
+    green: 'green',
+    amber: 'yellow',
+    yellow: 'yellow',
+    orange: 'yellow',
+    red: 'red',
+    pass: 'green',
+    needs_review: 'yellow',
+    likely_violation: 'red',
+  };
+  return normalized[status as ResultStatus] ?? null;
+}
+
+function resultDescription(status: string) {
+  const result = normalizeResultStatus(status);
+  return result ? RESULT_META[result].description : '';
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function formatSource(source: Finding['source']) {
+  return SOURCE_LABELS[source] ?? formatStatus(source);
+}
+
+function formatBytes(bytes: number) {
+  if (!bytes) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / 1024 ** index;
+  return `${value.toFixed(value >= 10 || index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
+function formatDateTime(value?: number | null) {
+  if (!value) return 'Unknown';
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(value));
+}
+
+function formatHistoryDateTime(value?: number | null) {
+  if (!value) return 'Unknown';
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(value));
+}
+
+function formatDate(value: number) {
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'long' }).format(new Date(value));
+}
+
+function randomId() {
+  return crypto.randomUUID().replace(/-/g, '');
+}
+
+function driveBatchSourceLabel(
+  selectedFolders: Map<string, string>,
+  selectedFileCount: number
+) {
+  const folderNames = Array.from(selectedFolders.values())
+    .sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: 'base' }));
+  const visibleFolders = folderNames.slice(0, 3);
+  const folderLabel = folderNames.length > 3
+    ? `${visibleFolders.join(', ')} + ${folderNames.length - 3} more folders`
+    : visibleFolders.join(', ');
+  const fileLabel = selectedFileCount
+    ? `${selectedFileCount} selected ${selectedFileCount === 1 ? 'file' : 'files'}`
+    : '';
+  const label = [folderLabel, fileLabel].filter(Boolean).join(' + ');
+  return label.length > 500 ? `${label.slice(0, 497).trimEnd()}...` : label;
+}
+
+function isFailedBatchStatus(status: string) {
+  return status === 'failed' || status === 'upload_failed';
+}
+
+function isTerminalBatchStatus(status: string) {
+  return status === 'complete' || isFailedBatchStatus(status);
+}
+
+function batchTypeLabel(mediaKind: 'video' | 'image' | 'copy_only') {
+  if (mediaKind === 'video') return 'Creative Vid';
+  if (mediaKind === 'image') return 'Creative Image';
+  return 'Ad copy';
+}
+
+function PlatformLanding() {
+  const { canManageSettings } = useAdminAccess();
+  return canManageSettings ? <PlatformDashboard /> : <DashboardPage />;
+}
+const publisherOperationsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/publisher', component: DashboardPage });
+
+const indexRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/',
+  component: PlatformLanding,
+});
+const loginRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/login',
+  component: AdminLoginRedirect,
+});
+const newReviewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/reviews/new',
+  component: ReviewWorkspace,
+});
+const progressRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/reviews/$jobId',
+  component: ProgressPage,
+});
+const historyRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/history',
+  validateSearch: (search: Record<string, unknown>): { source?: string; mode?: 'testing' } => ({
+    source: typeof search.source === 'string' && search.source.length <= 250
+      && /^(digital-nudge|api:.+|publisher:.+)$/.test(search.source) ? search.source : undefined,
+    mode: search.mode === 'testing' ? 'testing' : undefined,
+  }),
+  component: AllHistoryPage,
+});
+const liveScansRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/live-scans',
+  component: LiveScansPage,
+});
+const reportRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/reviews/$jobId/report',
+  validateSearch: validateReviewSearch,
+  component: ReportPage,
+});
+const batchRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/batches/$batchId',
+  validateSearch: validateReviewSearch,
+  component: BatchPage,
+});
+const learningRoute = createRoute({ getParentRoute: () => rootRoute, path: '/learning', component: LearningPage });
+
+const settingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/settings',
+  validateSearch: (search: Record<string, unknown>) => ({
+    view: isSettingsView(search.view) ? search.view : 'api' as SettingsView,
+  }),
+  component: SettingsPage,
+});
+const automationsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/automations',
+  component: AutomationsRoutePage,
+});
+const apiDocsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/api/v1/docs',
+  beforeLoad: () => {
+    throw redirect({ to: '/developers/api', search: { view: 'guide' } });
+  },
+});
+const developerApiDocsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/developers/api',
+  validateSearch: (search: Record<string, unknown>) => ({
+    view: isApiDocsView(search.view) ? search.view : 'guide' as ApiDocsView,
+  }),
+  component: ApiHubPage,
+});
+const apiReferenceRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/api/v1/reference',
+  beforeLoad: () => {
+    throw redirect({ to: '/developers/api', search: { view: 'reference' } });
+  },
+});
+const developerApiReferenceRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/developers/reference',
+  beforeLoad: () => {
+    throw redirect({ to: '/developers/api', search: { view: 'reference' } });
+  },
+});
+const sharesRoute = createRoute({ getParentRoute: () => rootRoute, path: '/shares', component: SharedLinksPanel });
+
+const router = createRouter({
+  routeTree: rootRoute.addChildren([
+    indexRoute,
+    loginRoute,
+    newReviewRoute,
+    historyRoute,
+    liveScansRoute,
+    automationsRoute,
+    apiDocsRoute,
+    developerApiDocsRoute,
+    apiReferenceRoute,
+    developerApiReferenceRoute,
+    batchRoute,
+    progressRoute,
+    reportRoute,
+    settingsRoute,
+    learningRoute,
+    publisherOperationsRoute,
+    sharesRoute,
+  ]),
+});
+
+let adminRoot: Root | undefined;
+
+export function mountAdminApp(element: HTMLElement) {
+  document.title = 'Admin console · AdChecked';
+  adminRoot ??= createRoot(element);
+  adminRoot.render(
+    <TooltipProvider>
+      <QueryClientProvider client={queryClient}>
+        <AdminAccessProvider>
+          <RouterProvider router={router} />
+        </AdminAccessProvider>
+      </QueryClientProvider>
+    </TooltipProvider>,
+  );
+}
