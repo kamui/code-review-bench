@@ -32,9 +32,9 @@ BEFORE = ("ruling", "decision_type", "group", "reconstructed", "dossier", "rule"
 ANSWER = ("by", "model", "family", "blind", "exposure", "outcome", "clauses", "conflict", "nearest", "confidence", "would_settle", "rule_gap", "reason")
 AFTER = ("ruling", "before", "asked", "outcome", "by_default", "ground", "rule_sentence_shown")
 DECISION_TYPES = {
-    "older-admission": {"outcomes": ("admitted", "not-admitted", "cannot-tell"), "blind": 2},
-    "older-credit": {"outcomes": ("recovers", "does-not-recover", "cannot-tell"), "blind": 2},
-    "older-grouping": {"outcomes": ("same-family", "separate", "cannot-tell"), "blind": 2},
+    "pre-existing-admission": {"outcomes": ("admitted", "not-admitted", "cannot-tell"), "blind": 2},
+    "pre-existing-credit": {"outcomes": ("recovers", "does-not-recover", "cannot-tell"), "blind": 2},
+    "pre-existing-grouping": {"outcomes": ("same-family", "separate", "cannot-tell"), "blind": 2},
     "candidate": {"outcomes": (*RANK, "refuted", "unproven", "outside-scope", "duplicate", "cannot-tell"), "blind": 2},
     "recovery": {"outcomes": ("recovers", "does-not-recover", "cannot-tell"), "blind": 2},
     "grouping": {"outcomes": ("same-family", "separate", "cannot-tell"), "blind": 2},
@@ -154,7 +154,7 @@ def answer_faults(record, answer, rulings, root):
     if answer["outcome"] in NAMES_A_PROBLEM and not answer.get("same_fault_as"):
         found.append(f"{by}: `{answer['outcome']}` needs `same_fault_as`, the problem it names")
     facts = answer.get("facts")
-    if decision_type in ("recovery", "older-credit") and not (reconstructed and facts is None) and not two_facts(facts):
+    if decision_type in ("recovery", "pre-existing-credit") and not (reconstructed and facts is None) and not two_facts(facts):
         found.append(f"{by}: a recovery answer needs `facts`: {' and '.join(FACTS)}, each yes, no or cannot-tell")
     if answer["written"] not in WRITTEN or (not reconstructed and answer["written"] != "before-question"):
         found.append(f"{by}: `written` must be one of {', '.join(WRITTEN)}, and before-question in a record that is not reconstructed")
@@ -310,14 +310,14 @@ def second_after_faults(record, after, root):
         found.append("`by_default` must be true or false")
     if after["ground"] is not None and not (isinstance(after["ground"], str) and after["ground"].strip()):
         found.append("`ground` must be the user's own words, or null when they gave none")
-    if record["decision_type"] in ("recovery", "older-credit") and not two_facts(after.get("facts")):
+    if record["decision_type"] in ("recovery", "pre-existing-credit") and not two_facts(after.get("facts")):
         found.append(f"a recovery decision needs `facts`: {' and '.join(FACTS)}, each yes, no or cannot-tell")
     if after["outcome"] in NAMES_A_PROBLEM and not (isinstance(after.get("same_fault_as"), str) and after["same_fault_as"].strip()):
         found.append(f"`{after['outcome']}` needs `same_fault_as`, the problem it names")
     miss, lesson = after["miss"], after["lesson"]
     first = recommender(record)
     owed = (first["outcome"] != after["outcome"] or asked > 1
-            or (record["decision_type"] in ("recovery", "older-credit") and two_facts(after.get("facts")) and first.get("facts") != after.get("facts"))
+            or (record["decision_type"] in ("recovery", "pre-existing-credit") and two_facts(after.get("facts")) and first.get("facts") != after.get("facts"))
             or (after["outcome"] in NAMES_A_PROBLEM and after.get("same_fault_as")
                 and first.get("same_fault_as") != after["same_fault_as"]))
     if miss is not None and not (isinstance(miss, dict) and miss.get("cause") in CAUSES and isinstance(miss.get("note"), str) and miss["note"].strip()):

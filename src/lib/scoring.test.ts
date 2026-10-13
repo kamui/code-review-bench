@@ -552,24 +552,24 @@ with patch.object(exporter, 'ROOT', root), patch.object(exporter, 'BENCH', root 
   })
 })
 
-describe('older problems caught', () => {
-  const older = { id: 'OP-1', title: 'Older lost write', trigger: 'Concurrent writes', consequence: 'Lost update',
+describe('pre-existing problems caught', () => {
+  const preExisting = { id: 'OP-1', title: 'Pre-existing lost write', trigger: 'Concurrent writes', consequence: 'Lost update',
     requiredOutcome: 'Preserve writes', concerns: ['Reliability'], admissionUrl: '/fixture/ruling' }
-  const subject = () => task('older', [], 'audited-clean', { olderProblems: [older] })
+  const subject = () => task('pre-existing', [], 'audited-clean', { preExistingProblems: [preExisting] })
   const assessed = (pr: ReturnType<typeof task>, outcome: 'raised' | 'not-raised' | 'unresolved') => review(pr, null, {
     assessment: assessment(pr, [], { claims: outcome === 'raised' ? [claim('c-old', 'scope-excluded')] : [],
-      olderProblems: [{ problemId: older.id, outcome, claimIds: outcome === 'raised' ? ['c-old'] : [],
+      preExistingProblems: [{ problemId: preExisting.id, outcome, claimIds: outcome === 'raised' ? ['c-old'] : [],
         saysWhat: outcome === 'raised' ? 'yes' : outcome === 'not-raised' ? 'no' : 'cannot-tell', identifiesCause: 'no' }] }) })
 
   test('counts per admitted repetition, excludes failed and superseded attempts, and leaves ordinary dimensions unchanged', () => {
     const pr = subject(), first = assessed(pr, 'raised'), second = assessed(pr, 'raised'), quiet = assessed(pr, 'not-raised')
     const data = build([pr], { a: [[pr, [{ attempts: [failed(pr), first] }, second, quiet, failed(pr)]]] })
     const result = card(data, 'a')
-    expect(result.older).toMatchObject({ catalog: 1, admitted: 3, assessed: 3, unresolved: 0,
+    expect(result.preExisting).toMatchObject({ catalog: 1, admitted: 3, assessed: 3, unresolved: 0,
       observed: { credits: 2, problems: 1, reviews: 2 }, credits: { kind: 'available', value: 2 } })
     const without = structuredClone(data)
-    for (const row of without.attempts) if (row.assessment) row.assessment.olderProblems = null
-    const ordinary = ({ older: _older, ...rest }: ReturnType<typeof scorecard>) => rest
+    for (const row of without.attempts) if (row.assessment) row.assessment.preExistingProblems = null
+    const ordinary = ({ preExisting: _preExisting, ...rest }: ReturnType<typeof scorecard>) => rest
     expect(ordinary(result)).toEqual(ordinary(card(without, 'a')))
     expect(result.controls.silent).toBe(3)
     expect(result.detection.all.equalProblem.kind).toBe('unavailable')
@@ -579,21 +579,21 @@ describe('older problems caught', () => {
     const pr = subject()
     for (const extra of [assessed(pr, 'unresolved'), review(pr, null), { attempts: [failed(pr)], pending: true as const }]) {
       const result = card(build([pr], { a: [[pr, [assessed(pr, 'raised'), extra]]] }), 'a')
-      expect(result.older.catalog).toBe(1)
-      expect(result.older.observed.credits).toBe(1)
-      expect(result.older.credits.kind).toBe('unavailable')
+      expect(result.preExisting.catalog).toBe(1)
+      expect(result.preExisting.observed.credits).toBe(1)
+      expect(result.preExisting.credits.kind).toBe('unavailable')
     }
     const missing = build([pr, task('missing', [])], { a: [[pr, [assessed(pr, 'raised')]]] })
-    expect(card(missing, 'a').older.credits.kind).toBe('unavailable')
+    expect(card(missing, 'a').preExisting.credits.kind).toBe('unavailable')
   })
 
   test('complete silence is a zero count and empty selections are unavailable', () => {
     const pr = subject()
-    expect(value(card(build([pr], { a: [[pr, [assessed(pr, 'not-raised')]]] }), 'a').older.credits)).toBe(0)
-    expect(card(build([pr], { a: [[pr, [failed(pr)]]] }), 'a').older.credits.kind).toBe('unavailable')
+    expect(value(card(build([pr], { a: [[pr, [assessed(pr, 'not-raised')]]] }), 'a').preExisting.credits)).toBe(0)
+    expect(card(build([pr], { a: [[pr, [failed(pr)]]] }), 'a').preExisting.credits.kind).toBe('unavailable')
     const plain = task('plain', [])
-    expect(card(build([plain], { a: [[plain, [review(plain, [])]]] }), 'a').older.credits.kind).toBe('unavailable')
-    expect(card(build([pr], { a: [[pr, [assessed(pr, 'raised')]]] }), 'a', 'Security').older.catalog).toBe(0)
+    expect(card(build([plain], { a: [[plain, [review(plain, [])]]] }), 'a').preExisting.credits.kind).toBe('unavailable')
+    expect(card(build([pr], { a: [[pr, [assessed(pr, 'raised')]]] }), 'a', 'Security').preExisting.catalog).toBe(0)
   })
 
   test('keeps pending admission unavailable and preserves independent false claims and unsafe remedies', () => {
@@ -601,11 +601,11 @@ describe('older problems caught', () => {
     if (!found.assessment) throw new Error('fixture needs assessment')
     found.assessment.claims.push(claim('false', 'refuted'))
     found.assessment.recommendations.push(remedy('unsafe', ['c-old'], 'unsafe'))
-    const data = build([pr], { a: [[pr, [found]]] }, { candidates: [{ id: 'pending', taskId: pr.id, kind: 'older-problem',
-      recordedAt: '2026-10-13T00:00:00Z', claim: 'Another older fault', limits: 'Not admitted', relevance: 'Reliability' }] })
+    const data = build([pr], { a: [[pr, [found]]] }, { candidates: [{ id: 'pending', taskId: pr.id, kind: 'pre-existing-problem',
+      recordedAt: '2026-10-13T00:00:00Z', claim: 'Another pre-existing fault', limits: 'Not admitted', relevance: 'Reliability' }] })
     const result = card(data, 'a')
-    expect(result.older.credits.kind).toBe('unavailable')
-    expect(result.older.observed.credits).toBe(1)
+    expect(result.preExisting.credits.kind).toBe('unavailable')
+    expect(result.preExisting.observed.credits).toBe(1)
     expect(result.controls.alarmed).toBe(1)
     expect(result.remedies.unsafe).toBe(1)
   })

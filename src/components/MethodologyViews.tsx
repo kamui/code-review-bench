@@ -24,7 +24,7 @@ function harm(card: Scorecard): Reading {
   return { text: 'Unavailable', reason: bound.kind === 'observed' ? `${unsafe} unsafe among ${safe + unsafe} assessed remedies so far. ${bound.reason}` : bound.reason }
 }
 
-export const scorecardTabs = ['detection', 'delivery', 'reliability', 'remedies', 'controls', 'older', 'advice', 'usage', 'candidates', 'comparison'] as const
+export const scorecardTabs = ['detection', 'delivery', 'reliability', 'remedies', 'controls', 'pre-existing', 'advice', 'usage', 'candidates', 'comparison'] as const
 
 export function MethodologyViews({ dataset, configurations, cards, selection, detection, now, onInspect, initialTab = 'detection' }: {
   dataset: Dataset; configurations: Configuration[]; cards: Scorecard[]; selection: Selection; detection: DetectionView; now: Date
@@ -70,7 +70,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
     <Text size="sm" c="dimmed" mt="xs">Every value comes from the shared scoring kernel for the selected setups and PRs. Dimensions stay separate: there is no blended score. A numbered mark explains an unavailable value below its table.</Text>
     <Tabs defaultValue={initialTab} mt="md">
       <Tabs.List><Tabs.Tab value="detection">Detection</Tabs.Tab><Tabs.Tab value="delivery">Delivery</Tabs.Tab><Tabs.Tab value="reliability">Claim reliability</Tabs.Tab>
-        <Tabs.Tab value="remedies">Remedies</Tabs.Tab><Tabs.Tab value="controls">Controls</Tabs.Tab><Tabs.Tab value="older">Older problems caught</Tabs.Tab><Tabs.Tab value="advice">Advice benefit</Tabs.Tab>
+        <Tabs.Tab value="remedies">Remedies</Tabs.Tab><Tabs.Tab value="controls">Controls</Tabs.Tab><Tabs.Tab value="pre-existing">Pre-existing problems caught</Tabs.Tab><Tabs.Tab value="advice">Advice benefit</Tabs.Tab>
         <Tabs.Tab value="usage">Cost and time</Tabs.Tab><Tabs.Tab value="candidates">Pending candidates ({novel.length + awaiting.length})</Tabs.Tab><Tabs.Tab value="comparison">Compare two setups</Tabs.Tab></Tabs.List>
 
       <Tabs.Panel value="detection" pt="md"><Stack>
@@ -156,20 +156,20 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
           { label: 'Sufficiency unassessed', value: row => String(row.card.remedies.sufficiency.unassessed) }]} />
       </Stack></Tabs.Panel>
 
-      <Tabs.Panel value="older" pt="md"><Stack>
-        <Text size="sm">Approved older problems earn one credit per admitted review that says what goes wrong. Silence creates no miss. These counts do not change recall or recommendations.</Text>
-        <DataTable label="Older problems caught" rows={rows} rowKey={key} minWidth={1150} columns={[setup,
-          { label: 'Approved catalog', value: row => String(row.card.older.catalog) },
-          { label: 'Review/problem credits', value: row => reading(row.card.older.credits, String) },
-          { label: 'Distinct problems raised', value: row => reading(row.card.older.problems, String) },
-          { label: 'Reviews with a catch', value: row => reading(row.card.older.reviews, String) },
-          { label: 'Observed credits', value: row => String(row.card.older.observed.credits) },
-          { label: 'Reviews assessed / admitted', value: row => `${row.card.older.assessed} / ${row.card.older.admitted}` },
-          { label: 'Unresolved credit', value: row => String(row.card.older.unresolved) },
-          { label: 'Pending candidates', value: row => String(row.card.older.candidates.length) }]} />
+      <Tabs.Panel value="pre-existing" pt="md"><Stack>
+        <Text size="sm">Approved pre-existing problems earn one credit per admitted review that says what goes wrong. Silence creates no miss. These counts do not change recall or recommendations.</Text>
+        <DataTable label="Pre-existing problems caught" rows={rows} rowKey={key} minWidth={1150} columns={[setup,
+          { label: 'Approved catalog', value: row => String(row.card.preExisting.catalog) },
+          { label: 'Review/problem credits', value: row => reading(row.card.preExisting.credits, String) },
+          { label: 'Distinct problems raised', value: row => reading(row.card.preExisting.problems, String) },
+          { label: 'Reviews with a catch', value: row => reading(row.card.preExisting.reviews, String) },
+          { label: 'Observed credits', value: row => String(row.card.preExisting.observed.credits) },
+          { label: 'Reviews assessed / admitted', value: row => `${row.card.preExisting.assessed} / ${row.card.preExisting.admitted}` },
+          { label: 'Unresolved credit', value: row => String(row.card.preExisting.unresolved) },
+          { label: 'Pending candidates', value: row => String(row.card.preExisting.candidates.length) }]} />
         {rows.map(row => <div key={key(row)}><Text size="sm" fw={600}>{row.configuration.short}</Text>
-          <ul>{row.card.older.rows.map(problem => <li key={problem.problemId}>{problem.title}: {problem.catches} observed catches; {problem.assessed} assessments, {problem.unresolved} unresolved.</li>)}</ul></div>)}
-        <Text size="xs" c="dimmed">The catalog contains discovered cases, not every older fault. Assessment coverage does not establish historical audit coverage.</Text>
+          <ul>{row.card.preExisting.rows.map(problem => <li key={problem.problemId}>{problem.title}: {problem.catches} observed catches; {problem.assessed} assessments, {problem.unresolved} unresolved.</li>)}</ul></div>)}
+        <Text size="xs" c="dimmed">The catalog contains discovered cases, not every pre-existing fault. Assessment coverage does not establish historical audit coverage.</Text>
       </Stack></Tabs.Panel>
 
       <Tabs.Panel value="controls" pt="md"><Stack>

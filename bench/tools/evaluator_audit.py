@@ -70,7 +70,7 @@ Exit codes: 0 done; 1 the records are inconsistent or the audit is unfinished, o
 from __future__ import annotations
 
 import argparse
-import older_grading
+import pre_existing_grading
 from collections import Counter
 from datetime import datetime, timezone
 import hashlib
@@ -95,9 +95,9 @@ CREDIT_STRATA = {"caught": "caught", "missed": "missed", "unresolved": "unresolv
 IMPACT_STRATA = ("serious", "other-material")
 CLAIM_STRATA = {"problem": "problem", "refuted": "refuted", "unproven": "unproven", "suggestion": "suggestion",
                 "minor-defect": "minor-defect", "outside-this-change": "outside-this-change", "unresolved": "unresolved-claim"}
-OLDER_STRATA = {"raised": "older-raised", "not-raised": "older-not-raised", "unresolved": "older-unresolved"}
+PRE_EXISTING_STRATA = {"raised": "pre-existing-raised", "not-raised": "pre-existing-not-raised", "unresolved": "pre-existing-unresolved"}
 UNITS = {**dict.fromkeys((*CREDIT_STRATA.values(), *IMPACT_STRATA), "family-review"),
-         **dict.fromkeys(CLAIM_STRATA.values(), "claim"), "control-silence": "control-review", **dict.fromkeys(OLDER_STRATA.values(), "older-review")}
+         **dict.fromkeys(CLAIM_STRATA.values(), "claim"), "control-silence": "control-review", **dict.fromkeys(PRE_EXISTING_STRATA.values(), "pre-existing-review")}
 ANSWERS = ("true", "this_change", "promised", "delivered")
 FINDINGS = ("first-error", "first-correct", "undetermined")
 
@@ -268,7 +268,7 @@ def checked(root, current):
     saved grades are validated in full once those checks pass."""
     selected, documents = current_grading.load_current(root, current, grades=False)
     other = [f"{batch['run']}/{batch['target']}" for batch in documents["grade"]["batches"]
-             if batch.get("verdicts") not in (grading_validation.CONTRACT_V2, older_grading.CONTRACT)]
+             if batch.get("verdicts") not in (grading_validation.CONTRACT_V2, pre_existing_grading.CONTRACT)]
     if other:
         raise Inconsistent(f"{len(other)} batch(es) were not graded under {grading_validation.CONTRACT_V2}: " + ", ".join(other[:5]))
     problems = cohort_problems(selected, documents, root)
@@ -291,7 +291,7 @@ def task_facts(documents):
     return {reference["target"]: {"control": reference["control"]["status"], "known_problems": {
         family["id"]: family["impact"]["band"] if family["impact"]["band"] in IMPACT_STRATA else None
         for family in known_problems(reference)},
-        **({"older_problems": [p["id"] for p in reference["older_problems"]]} if reference.get("older_problems") else {})} for reference in documents["reference"]["targets"]}
+        **({"pre_existing_problems": [p["id"] for p in reference["pre_existing_problems"]]} if reference.get("pre_existing_problems") else {})} for reference in documents["reference"]["targets"]}
 
 
 def units_of(selected, batches, tasks):
@@ -312,11 +312,11 @@ def units_of(selected, batches, tasks):
                     found.append((f"{attempt}#{family}", {
                         "unit": "family-review", **common, "subject": family, "strata": [CREDIT_STRATA[result], *([label] if label else [])],
                         "first": {"result": result, "claim_ids": claim_ids}}))
-                for problem in task.get("older_problems", []):
-                    result = older_grading.assessment({"id": problem},
-                        [{"id": c["id"], **older_grading.saved_claim(c)} for c in review["claims"]], True)
-                    found.append((f"{attempt}#older:{problem}", {"unit": "older-review", **common, "subject": problem,
-                        "strata": [OLDER_STRATA[result["outcome"]]],
+                for problem in task.get("pre_existing_problems", []):
+                    result = pre_existing_grading.assessment({"id": problem},
+                        [{"id": c["id"], **pre_existing_grading.saved_claim(c)} for c in review["claims"]], True)
+                    found.append((f"{attempt}#pre-existing:{problem}", {"unit": "pre-existing-review", **common, "subject": problem,
+                        "strata": [PRE_EXISTING_STRATA[result["outcome"]]],
                         "first": {"result": result["outcome"], "claim_ids": result["claim_ids"]}}))
                 if task["control"] == "audited-clean":
                     result, claim_ids = control_result(review["claims"])
@@ -343,10 +343,10 @@ def draw(args):
     unknown = sorted(f"{stratum['id']} ({stratum['unit']})" for stratum in plan["strata"] if UNITS.get(stratum["id"]) != stratum["unit"])
     if unknown:
         raise Inconsistent("this tool does not know these declared strata, so no sample is drawn: " + ", ".join(unknown))
-    if any(reference.get("older_problems") for reference in documents["reference"]["targets"]):
+    if any(reference.get("pre_existing_problems") for reference in documents["reference"]["targets"]):
         declared = {stratum["id"] for stratum in plan["strata"]}
-        if not set(OLDER_STRATA.values()) <= declared:
-            raise Inconsistent("older-problem audit strata and acceptance criteria need owner approval before drawing")
+        if not set(PRE_EXISTING_STRATA.values()) <= declared:
+            raise Inconsistent("pre-existing-problem audit strata and acceptance criteria need owner approval before drawing")
     if problems:
         return problems + ["the whole-cohort checks failed, so no sample is drawn"]
     directory = current_grading.local_path(str(args.current), root)
@@ -428,7 +428,7 @@ def second(args):
         families = reference["families"]
         raised = grade.raised_candidates(verdicts, key["reviews"], attempts, next(t for t in selected["tasks"] if t["id"] == target))
         reviews = [grade.graded_v2(entry, verdicts["reviews"][entry["token"]], attempts[entry["attempt_id"]], families, evidence,
-                                   {}, [], raised, reference.get("older_problems", []) if first.get("verdicts") == older_grading.CONTRACT else None)
+                                   {}, [], raised, reference.get("pre_existing_problems", []) if first.get("verdicts") == pre_existing_grading.CONTRACT else None)
                    for entry in sorted(key["reviews"], key=lambda r: r["attempt_id"])]
         (out / "assessment.json").write_text(json.dumps({"run": run, "target": target, "reviews": reviews}, indent=2) + "\n",
                                              encoding="utf-8")
@@ -459,9 +459,9 @@ def identity(review):
 
 def answer(unit, review):
     """What one assessment of the unit's review gives the unit: its result and what stands behind it."""
-    if unit["unit"] == "older-review":
-        result = older_grading.assessment({"id": unit["subject"]},
-            [{"id": c["id"], **older_grading.saved_claim(c)} for c in review["claims"]], True)
+    if unit["unit"] == "pre-existing-review":
+        result = pre_existing_grading.assessment({"id": unit["subject"]},
+            [{"id": c["id"], **pre_existing_grading.saved_claim(c)} for c in review["claims"]], True)
         return {"result": result["outcome"], "claim_ids": result["claim_ids"]}
     if unit["unit"] == "claim":
         claim = next(claim for claim in review["claims"] if claim["id"] == unit["subject"])
