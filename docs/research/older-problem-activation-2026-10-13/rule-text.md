@@ -2,6 +2,8 @@
 
 Prepared 2026-10-13. The three proposed files are not in force and this page adopts none of them. It shows every sentence that differs from the file in force, in reading order, with one line on what each difference does. The proposed text is quoted as it stands. Suggested wording is kept apart, at the end. Inside a quotation a link is shown as its text, or as (…) where the target is long.
 
+Written before the owner's answers of 2026-10-13. The asking session holds those answers and writes their records; [`activation.md`](activation.md) says what it reports and what that changes in the plan. This page is left as it was written.
+
 All of it is read: the two files of each pair were compared with `git diff --no-index`, and the proposed files with the text as it stood before version 9 (commit `b25a00a9`).
 
 | Proposed file | File in force | Sentences added | Removed | Changed |
