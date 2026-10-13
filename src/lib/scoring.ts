@@ -316,23 +316,23 @@ function preExistingProblems(dataset: Dataset, ran: Cell[], selection: Selection
   const rows = catalog.map(({ taskId, problem }) => {
     const assessed = reviews.filter(review => review.taskId === taskId && review.assessment?.state === 'assessed')
       .flatMap(review => review.assessment?.preExistingProblems?.find(row => row.problemId === problem.id) ?? [])
-    return { taskId, problemId: problem.id, title: problem.title, catches: assessed.filter(row => row.outcome === 'raised').length,
+    return { taskId, problemId: problem.id, title: problem.title, raised: assessed.filter(row => row.outcome === 'raised').length,
       assessed: assessed.length, unresolved: assessed.filter(row => row.outcome === 'unresolved').length }
   })
   const assessed = reviews.filter(review => review.assessment?.state === 'assessed' && catalog.filter(entry => entry.taskId === review.taskId)
     .every(entry => review.assessment?.preExistingProblems?.some(row => row.problemId === entry.problem.id))).length
   const unresolved = sum(rows.map(row => row.unresolved))
-  const observed = { credits: sum(rows.map(row => row.catches)), problems: rows.filter(row => row.catches > 0).length,
+  const observed = { raised: sum(rows.map(row => row.raised)), problems: rows.filter(row => row.raised > 0).length,
     reviews: reviews.filter(review => review.assessment?.state === 'assessed' && review.assessment.preExistingProblems?.some(row =>
       row.outcome === 'raised' && catalog.some(entry => entry.taskId === review.taskId && entry.problem.id === row.problemId))).length }
   const candidates = dataset.candidates.filter(candidate => selection.taskIds.includes(candidate.taskId) && candidate.kind === 'pre-existing-problem')
   const blocked = gap ?? (catalog.length ? null : 'No approved pre-existing problems in this selection.')
     ?? (pending ? 'Scheduled trials await execution.' : null) ?? (reviews.length ? null : 'No admitted reviews for the pre-existing-problem catalog.')
     ?? (assessed < reviews.length ? 'Admitted reviews await pre-existing-problem assessment.' : null)
-    ?? (unresolved ? 'Pre-existing-problem credit is unresolved.' : null)
+    ?? (unresolved ? 'Whether a pre-existing problem was raised is unresolved.' : null)
     ?? (candidates.length ? 'Pre-existing-problem candidates await admission.' : null)
   return { catalog: catalog.length, admitted: reviews.length, assessed, unresolved, pending, candidates,
-    observed, rows, credits: gated(blocked, available(observed.credits)),
+    observed, rows, raised: gated(blocked, available(observed.raised)),
     problems: gated(blocked, available(observed.problems)), reviews: gated(blocked, available(observed.reviews)) }
 }
 

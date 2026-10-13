@@ -552,7 +552,7 @@ with patch.object(exporter, 'ROOT', root), patch.object(exporter, 'BENCH', root 
   })
 })
 
-describe('pre-existing problems caught', () => {
+describe('pre-existing problems raised', () => {
   const preExisting = { id: 'OP-1', title: 'Pre-existing lost write', trigger: 'Concurrent writes', consequence: 'Lost update',
     requiredOutcome: 'Preserve writes', concerns: ['Reliability'], admissionUrl: '/fixture/ruling' }
   const subject = () => task('pre-existing', [], 'audited-clean', { preExistingProblems: [preExisting] })
@@ -566,7 +566,7 @@ describe('pre-existing problems caught', () => {
     const data = build([pr], { a: [[pr, [{ attempts: [failed(pr), first] }, second, quiet, failed(pr)]]] })
     const result = card(data, 'a')
     expect(result.preExisting).toMatchObject({ catalog: 1, admitted: 3, assessed: 3, unresolved: 0,
-      observed: { credits: 2, problems: 1, reviews: 2 }, credits: { kind: 'available', value: 2 } })
+      observed: { raised: 2, problems: 1, reviews: 2 }, raised: { kind: 'available', value: 2 } })
     const without = structuredClone(data)
     for (const row of without.attempts) if (row.assessment) row.assessment.preExistingProblems = null
     const ordinary = ({ preExisting: _preExisting, ...rest }: ReturnType<typeof scorecard>) => rest
@@ -575,24 +575,24 @@ describe('pre-existing problems caught', () => {
     expect(result.detection.all.equalProblem.kind).toBe('unavailable')
   })
 
-  test('keeps observed catches and catalog available when credit, coverage or admission is incomplete', () => {
+  test('keeps the observed count and catalog available when a result is unresolved or coverage or admission is incomplete', () => {
     const pr = subject()
     for (const extra of [assessed(pr, 'unresolved'), review(pr, null), { attempts: [failed(pr)], pending: true as const }]) {
       const result = card(build([pr], { a: [[pr, [assessed(pr, 'raised'), extra]]] }), 'a')
       expect(result.preExisting.catalog).toBe(1)
-      expect(result.preExisting.observed.credits).toBe(1)
-      expect(result.preExisting.credits.kind).toBe('unavailable')
+      expect(result.preExisting.observed.raised).toBe(1)
+      expect(result.preExisting.raised.kind).toBe('unavailable')
     }
     const missing = build([pr, task('missing', [])], { a: [[pr, [assessed(pr, 'raised')]]] })
-    expect(card(missing, 'a').preExisting.credits.kind).toBe('unavailable')
+    expect(card(missing, 'a').preExisting.raised.kind).toBe('unavailable')
   })
 
   test('complete silence is a zero count and empty selections are unavailable', () => {
     const pr = subject()
-    expect(value(card(build([pr], { a: [[pr, [assessed(pr, 'not-raised')]]] }), 'a').preExisting.credits)).toBe(0)
-    expect(card(build([pr], { a: [[pr, [failed(pr)]]] }), 'a').preExisting.credits.kind).toBe('unavailable')
+    expect(value(card(build([pr], { a: [[pr, [assessed(pr, 'not-raised')]]] }), 'a').preExisting.raised)).toBe(0)
+    expect(card(build([pr], { a: [[pr, [failed(pr)]]] }), 'a').preExisting.raised.kind).toBe('unavailable')
     const plain = task('plain', [])
-    expect(card(build([plain], { a: [[plain, [review(plain, [])]]] }), 'a').preExisting.credits.kind).toBe('unavailable')
+    expect(card(build([plain], { a: [[plain, [review(plain, [])]]] }), 'a').preExisting.raised.kind).toBe('unavailable')
     expect(card(build([pr], { a: [[pr, [assessed(pr, 'raised')]]] }), 'a', 'Security').preExisting.catalog).toBe(0)
   })
 
@@ -604,8 +604,8 @@ describe('pre-existing problems caught', () => {
     const data = build([pr], { a: [[pr, [found]]] }, { candidates: [{ id: 'pending', taskId: pr.id, kind: 'pre-existing-problem',
       recordedAt: '2026-10-13T00:00:00Z', claim: 'Another pre-existing fault', limits: 'Not admitted', relevance: 'Reliability' }] })
     const result = card(data, 'a')
-    expect(result.preExisting.credits.kind).toBe('unavailable')
-    expect(result.preExisting.observed.credits).toBe(1)
+    expect(result.preExisting.raised.kind).toBe('unavailable')
+    expect(result.preExisting.observed.raised).toBe(1)
     expect(result.controls.alarmed).toBe(1)
     expect(result.remedies.unsafe).toBe(1)
   })

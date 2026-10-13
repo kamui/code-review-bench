@@ -78,7 +78,7 @@ class PreExistingTests(unittest.TestCase):
         result['new_candidates'][0]['kind'] = 'ordinary'
         self.assertTrue(grading_validation.validate(result, snapshot))
 
-    def test_duplicate_cause_only_quiet_and_unresolved_credit(self):
+    def test_duplicate_cause_only_quiet_and_unresolved_assessments(self):
         for claims, admitted, expected in [([verdict(), verdict(id='c2')], True, 'raised'),
                                           ([], True, 'not-raised'), ([verdict()], False, 'unresolved')]:
             result = pre_existing_grading.assessment(self.problem, claims, admitted)

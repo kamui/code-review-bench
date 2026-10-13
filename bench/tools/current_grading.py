@@ -504,7 +504,7 @@ def validate_documents(documents, selected, root=ROOT, grades=True):
         require(("family_id" in ruling) != ("pre_existing_problem_id" in ruling), "credit must name exactly one ordinary or pre-existing problem")
         is_pre_existing = "pre_existing_problem_id" in ruling
         if is_pre_existing:
-            require(ruling.get("settled_by", "owner") == "owner", "pre-existing-problem credit stays with the owner")
+            require(ruling.get("settled_by", "owner") == "owner", "a credit ruling on a pre-existing problem stays with the owner")
         settlement_faults = [] if is_pre_existing else delegation.filing_faults(ruling, "recovery", root)
         require(not settlement_faults, f"{ruling['id']}: {'; '.join(settlement_faults)}")
         target = ruling["target"]

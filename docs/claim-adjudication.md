@@ -154,4 +154,4 @@ Run `bun run verify:claims`, `bun run verify:current`, `python3 bench/tools/test
 
 ## Pre-existing-problem candidates
 
-An outside-change ruling does not admit a pre-existing problem. Admission, grouping and disputed wording credit use their own owner decisions and records under [pre-existing-problem credit](pre-existing-problem-credit.md). Preserve ordinary `scope-excluded` eligibility and link an approved pre-existing problem separately. No new decision type inherits existing delegation authority.
+An outside-change ruling does not admit a pre-existing problem. Admission, grouping and a disputed question of whether a comment's wording raised one use their own owner decisions and records under [pre-existing problems](pre-existing-problems.md). Preserve ordinary `scope-excluded` eligibility and link an approved pre-existing problem separately. No new decision type inherits existing delegation authority.
