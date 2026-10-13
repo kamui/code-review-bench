@@ -1,0 +1,24 @@
+| Probe | head | fix-union-pairs | fix-missing-first | fix-fitting-pairs |
+| --- | --- | --- | --- | --- |
+| `control-11-five-variants-no-middleware.ts` | compiles | compiles | compiles | compiles |
+| `control-2-hybrid-call-no-middleware.ts` | compiles | compiles | compiles | compiles |
+| `control-4-in-narrowing-no-middleware.ts` | compiles | compiles | compiles | compiles |
+| `docs-1-object-input-then-middleware.ts` | compiles | compiles | compiles | compiles |
+| `operands.ts` | compiles | compiles | compiles | compiles |
+| `union-1-types.ts` | compiles | compiles | compiles | compiles |
+| `union-10-exact-type.ts` | **TS2322** | compiles | **TS2322** | compiles |
+| `union-11-five-variants-three-middlewares.ts` | **TS18048, TS2322, TS2589** | compiles | **TS18048, TS2322, TS2589** | compiles |
+| `union-12-two-variants-four-middlewares.ts` | **TS2589** | compiles | **TS2589** | compiles |
+| `union-13-narrowed-type.ts` | compiles | compiles | compiles | compiles |
+| `union-14-optional-object.ts` | compiles | compiles | compiles | compiles |
+| `union-2-hybrid-call.ts` | **TS2578** | compiles | **TS2578** | compiles |
+| `union-3-read-other-variant.ts` | compiles | compiles | compiles | compiles |
+| `union-4-in-narrowing.ts` | **TS2345** | compiles | **TS2345** | compiles |
+| `union-5-valid-uses.ts` | compiles | compiles | compiles | compiles |
+| `union-6-plain-union.ts` | compiles | compiles | compiles | compiles |
+| `union-7-concat.ts` | **TS2578** | compiles | **TS2578** | compiles |
+| `union-8-three-variants.ts` | compiles | compiles | compiles | compiles |
+| `union-9-shared-keys.ts` | compiles | compiles | compiles | compiles |
+| `workaround-1-middleware-before-input.ts` | compiles | compiles | compiles | compiles |
+| `workaround-2-union-inside-object.ts` | compiles | compiles | compiles | compiles |
+| `workaround-3-cast-in-resolver.ts` | compiles | compiles | compiles | compiles |

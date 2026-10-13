@@ -1,0 +1,53 @@
+Probe environment for M2 (M2a and M2b; seaweedfs/seaweedfs#10735), run on 2026-10-12
+
+Host:      Linux 6.6.87.2-microsoft-standard-WSL2 (x86_64)
+Go:        go1.26.5 linux/amd64 (GOTOOLCHAIN=local; the repository's go.mod asks for go 1.25.8), go test -p 4
+go-redis:  github.com/redis/go-redis/v9 v9.21.0 at base, at the first commit and at head (go.mod)
+Redis:     Redis server v=8.2.1 sha=00000000:1 malloc=jemalloc-5.3.0 bits=64 build=57cb261e95183901
+           built in scratch from https://github.com/redis/redis/archive/refs/tags/8.2.1.tar.gz
+           (sha256 517e47ebce911ebbed2fe86047a871d9cbeadc7d2de15ffca37a1540eb4d588f) with gcc 11.4.0, "make -j4 MALLOC=jemalloc",
+           standalone on 127.0.0.1:27735, started with: --save "" --appendonly no
+           (default maxmemory-policy noeviction; no cluster, no replica, no sentinel)
+           This is a real redis-server, not a test double. No system package was installed.
+weed:      built in scratch with "go build -p 4 ./weed" at base and at head; both report "version 30GB 4.41"
+Modules:   the Go module cache of the dependency archive (s-seaweedfs-10735.tar.gz, sha256 d8c8c5b6...), plus what
+           "go build ./weed" downloaded from proxy.golang.org into the same scratch cache
+Other:     gh 2.100.0 (2026-09-03), curl 7.81.0, Python 3.14.7, gcc 11.4.0
+
+Commits (cloned from the local mirror <mirrors>/s-seaweedfs-10735.git; 4.42 fetched from github.com/seaweedfs/seaweedfs):
+  db5a086d048c5c2d6e51e82bb070d20df04d688d  base, the commit before the pull request
+  9f99628001cdc79c2d49775cfc3b3ab35b77fb85  the pull request's first commit (a single ZREM, no put-back)
+  6c8fde6642cd428e884cc9c9d88c9aaa189c4bf1  head, pushed 2026-08-13T14:12:47Z
+  f04da8e9ad8db7ae06bd2caba1b6560b36e28e31  tag 4.42, 2026-08-17, later than the last push; used only for "known only later"
+
+zz_probe_helpers_test.go is the saved helper file of the earlier rounds, copied unchanged
+(docs/research/last-push-rulings-2026-10-11/s-seaweedfs-10735/probes/S1/zz_probe_helpers_test.go, sha256 6d082ea4...).
+
+Files and how each was produced:
+
+  zz_probe_m2_test.go, ../run.sh
+      One probe for both windows of the logical-expiry branch. It drives the real redis2 store, and in cases E, F
+      and G a real filer.Filer on each side, against the redis-server above.
+      The file under test is "logically expired with its value still in Redis": creation time 10 s ago, TtlSec 5,
+      written by the store's own InsertEntry, so Redis holds the value for 5 more seconds. Case G reaches the same
+      state with no shortcut (store, store again 2 s later, list 1.5 s after that).
+      "Concurrent" requests are not raced. The order is forced: a go-redis hook on the listing's client runs the
+      other request, complete, between two of the listing's commands. Every case prints the command order as Redis
+      saw it. No error is injected anywhere. Nothing asserts.
+  result-base.txt, result-first-commit.txt, result-head.txt
+      PROBE_REDIS_ADDR=127.0.0.1:27735 sh ../run.sh <clone at the commit> M2 'TestProbeM2$' <out>
+  result-release-4.42.txt
+      The same probe at tag 4.42. Later than the last push. At 4.42 the branch no longer issues a DEL, so the hooks of
+      cases A and E are "NOT REACHED"; ../grouping/result-release-4.42.txt places the insert before the ZREM instead.
+  ../M2a/result-*.txt, ../M2b/result-*.txt
+      python3 -I ../extract.py ..   (the subtests of each group, cut out of the files above, lines unchanged)
+  ../M1/result-end-to-end-*.txt, step 4
+      "weed server -filer" on redis2: a file stored with ttl=1m, stored again 40 s later, listed 75 s after the first
+      store; "redis-cli monitor" shows the listing issue GET, DEL, ZREM. No race in that run.
+
+What the probes are and are not:
+  - A forced order shows what each order does. It does not show how often two requests fall in that order. The
+    windows are one Redis round trip wide (between two consecutive commands of one listing).
+  - redis_cluster2 and redis2_sentinel were not run.
+  - The S3 gateway and the HTTP upload handler were not raced; cases E and F call Filer.CreateEntry, which those
+    handlers call.

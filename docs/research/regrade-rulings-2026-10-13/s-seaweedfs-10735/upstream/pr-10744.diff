@@ -1,0 +1,165 @@
+diff --git a/weed/filer/redis2/universal_redis_store.go b/weed/filer/redis2/universal_redis_store.go
+index f2fc80360d1..0cdd92c166e 100644
+--- a/weed/filer/redis2/universal_redis_store.go
++++ b/weed/filer/redis2/universal_redis_store.go
+@@ -211,12 +211,9 @@ func (store *UniversalRedis2Store) ListDirectoryEntries(ctx context.Context, dir
+ 			}
+ 			break
+ 		} else {
+-			if entry.TtlSec > 0 {
+-				if entry.Attr.Crtime.Add(time.Duration(entry.TtlSec) * time.Second).Before(time.Now()) {
+-					store.Client.Del(ctx, store.getKey(string(path))).Result()
+-					store.Client.ZRem(ctx, dirListKey, fileName).Result()
+-					continue
+-				}
++			if isLogicallyExpired(entry) {
++				store.deleteExpiredEntry(ctx, dirPath, path, fileName)
++				continue
+ 			}
+ 
+ 			resEachEntryFunc, resEachEntryFuncErr := eachEntryFunc(entry)
+@@ -268,6 +265,56 @@ func (store *UniversalRedis2Store) removeOrphanedDirectoryListMember(ctx context
+ 	}
+ }
+ 
++func isLogicallyExpired(entry *filer.Entry) bool {
++	return entry.TtlSec > 0 && entry.Attr.Crtime.Add(time.Duration(entry.TtlSec)*time.Second).Before(time.Now())
++}
++
++// deletes the value only when it still holds exactly the bytes the expiry decision was made on;
++// single-key, so it runs on all transports where a multi-key script would be CROSSSLOT.
++// -1: already gone, 0: changed under us, 1: deleted
++var deleteIfUnchangedScript = redis.NewScript(`
++local v = redis.call('GET', KEYS[1])
++if v == false then
++	return -1
++end
++if v == ARGV[1] then
++	return redis.call('DEL', KEYS[1])
++end
++return 0`)
++
++func (store *UniversalRedis2Store) deleteExpiredEntry(ctx context.Context, dirPath util.FullPath, path util.FullPath, fileName string) {
++	// survive the listing request being canceled mid-delete
++	ctx = context.WithoutCancel(ctx)
++	valueKey := store.getKey(string(path))
++
++	// re-read so the delete can be conditioned on exactly the bytes checked
++	data, err := store.Client.Get(ctx, valueKey).Bytes()
++	if err == redis.Nil {
++		store.removeOrphanedDirectoryListMember(ctx, dirPath, fileName)
++		return
++	}
++	if err != nil {
++		return
++	}
++
++	entry := &filer.Entry{FullPath: path}
++	if err := entry.DecodeAttributesAndChunks(util.MaybeDecompressData(data)); err != nil {
++		return
++	}
++	if !isLogicallyExpired(entry) {
++		// a concurrent insert recreated it
++		return
++	}
++
++	// 0 means a concurrent recreate changed the value: keep it. -1 means the redis
++	// TTL won after the re-read: the member still needs the not-found repair.
++	deleted, err := deleteIfUnchangedScript.Run(ctx, store.Client, []string{valueKey}, data).Int()
++	if err != nil || deleted == 0 {
++		return
++	}
++	store.removeOrphanedDirectoryListMember(ctx, dirPath, fileName)
++}
++
+ func genDirectoryListKey(dir string) (dirList string) {
+ 	return dir + DIR_LIST_MARKER
+ }
+diff --git a/weed/filer/redis2/universal_redis_store_test.go b/weed/filer/redis2/universal_redis_store_test.go
+index 10e67383a1d..315848fd18c 100644
+--- a/weed/filer/redis2/universal_redis_store_test.go
++++ b/weed/filer/redis2/universal_redis_store_test.go
+@@ -202,3 +202,83 @@ func TestListDirectoryEntriesRemovesIndexMembersExpiredByRedis(t *testing.T) {
+ 		t.Fatalf("directory index holds %v, want none", members)
+ 	}
+ }
++
++// logically expired (Crtime + TtlSec long past) while the physical key survives,
++// because the redis TTL re-arms from the SET time
++func insertLogicallyExpiredTestEntry(t *testing.T, store *UniversalRedis2Store, path util.FullPath) {
++	t.Helper()
++
++	created := time.Now().Add(-time.Hour)
++	if err := store.InsertEntry(context.Background(), &filer.Entry{
++		FullPath: path,
++		Attr:     filer.Attr{Crtime: created, Mtime: created, Mode: 0644, TtlSec: 60},
++	}); err != nil {
++		t.Fatalf("InsertEntry %s: %v", path, err)
++	}
++}
++
++func TestListDirectoryEntriesDeletesLogicallyExpiredEntries(t *testing.T) {
++	for _, keyPrefix := range []string{"", "sw:"} {
++		t.Run("keyPrefix="+keyPrefix, func(t *testing.T) {
++			store, dir := newTestStore(t, keyPrefix)
++
++			insertLogicallyExpiredTestEntry(t, store, dir.Child("stale"))
++
++			if names := listNames(t, store, dir); len(names) != 0 {
++				t.Fatalf("listed %v, want none", names)
++			}
++
++			if exists, err := store.Client.Exists(context.Background(), store.getKey(string(dir.Child("stale")))).Result(); err != nil || exists != 0 {
++				t.Fatalf("value key exists=%d err=%v, want it deleted", exists, err)
++			}
++
++			if members := indexMembers(t, store, dir); len(members) != 0 {
++				t.Fatalf("directory index holds %v, want none", members)
++			}
++		})
++	}
++}
++
++func TestDeleteExpiredEntryKeepsRecreatedValue(t *testing.T) {
++	store, dir := newTestStore(t, "")
++
++	path := dir.Child("phoenix")
++	insertLogicallyExpiredTestEntry(t, store, path)
++	// a recreate lands after the lister decided to expire the old value
++	insertTestEntry(t, store, path, 0)
++
++	store.deleteExpiredEntry(context.Background(), dir, path, "phoenix")
++
++	if names := listNames(t, store, dir); len(names) != 1 || names[0] != "phoenix" {
++		t.Fatalf("listed %v, want [phoenix]", names)
++	}
++
++	if members := indexMembers(t, store, dir); len(members) != 1 || members[0] != "phoenix" {
++		t.Fatalf("directory index holds %v, want [phoenix]", members)
++	}
++}
++
++func TestDeleteIfUnchangedScriptOnlyDeletesSameBytes(t *testing.T) {
++	store, dir := newTestStore(t, "")
++
++	key := store.getKey(string(dir.Child("guarded")))
++	if err := store.Client.Set(context.Background(), key, "v1", 0).Err(); err != nil {
++		t.Fatalf("set: %v", err)
++	}
++
++	if deleted, err := deleteIfUnchangedScript.Run(context.Background(), store.Client, []string{key}, []byte("v2")).Int(); err != nil || deleted != 0 {
++		t.Fatalf("deleted=%d err=%v, want no delete on changed bytes", deleted, err)
++	}
++
++	if deleted, err := deleteIfUnchangedScript.Run(context.Background(), store.Client, []string{key}, []byte("v1")).Int(); err != nil || deleted != 1 {
++		t.Fatalf("deleted=%d err=%v, want delete on matching bytes", deleted, err)
++	}
++
++	if exists, err := store.Client.Exists(context.Background(), key).Result(); err != nil || exists != 0 {
++		t.Fatalf("exists=%d err=%v, want key gone", exists, err)
++	}
++
++	if deleted, err := deleteIfUnchangedScript.Run(context.Background(), store.Client, []string{key}, []byte("v1")).Int(); err != nil || deleted != -1 {
++		t.Fatalf("deleted=%d err=%v, want -1 on a missing key", deleted, err)
++	}
++}
