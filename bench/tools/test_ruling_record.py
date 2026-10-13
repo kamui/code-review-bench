@@ -420,7 +420,7 @@ class RoundTest(unittest.TestCase):
 class SavedRecordsTest(unittest.TestCase):
     def test_every_saved_record_is_sound(self):
         for path in sorted(RESEARCH.rglob("rulings/*.before.json")):
-            record = ruling_record.load(path)
+            record = ruling_record.read_before(path)
             self.assertEqual(ruling_record.faults(record), [], path)
             after = Path(str(path).replace(".before.", ".after."))
             if after.exists():
