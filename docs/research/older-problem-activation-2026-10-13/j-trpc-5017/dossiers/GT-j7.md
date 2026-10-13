@@ -37,3 +37,7 @@ It keeps the label it has, other-material (last-push ruling 9). A build error in
 ## Not run
 
 The runtime probes, a second compiler version, the other seventeen array probes, an editor.
+
+## After the first answers
+
+The asking session's first answer was that it stays a problem. Both blind sessions answered outside this change. The recommendation put to the owner is outside this change; [the question file](../../rulings/07-trpc-array-input.md) gives the reasons it changed.

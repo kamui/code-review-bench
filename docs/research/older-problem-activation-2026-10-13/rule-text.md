@@ -52,7 +52,7 @@ In reading order.
 - Removed: "*Example:* Kubernetes' message cut can split a character. The change renamed the limit on that line and changed nothing it does, so the cut is outside the review (regrade 2)."
 - Added: "*Reconciliation required before activation:* tRPC's optional-field ruling used editing the type helper as its scope reason (second-pass 7). Check the fault's lines and every other responsibility route before changing that saved decision."
 - Kept: the Base UI example (first-round 27).
-- What it does: a grader loses the two examples that show "outside the review" under version 9, and reads a note addressed to whoever activates the text. The check the note asks for is done: see [the reference check](reference-check.md) and [reconciliation 1](reconciliation/01-trpc-optional-field.md).
+- What it does: a grader loses the two examples that show "outside the review" under version 9, and reads a note addressed to whoever activates the text. The check the note asks for is done: see [the reference check](reference-check.md) and [question 6](rulings/06-trpc-optional-field.md).
 
 Nothing else in the rules differs: Before 1, Before 3, Before 4, both questions and the three outcomes are word for word the text in force.
 
@@ -156,7 +156,7 @@ Unchanged: `known_problems` and its two facts, the table of outcomes, `duplicate
 **With version 9's accepted text.**
 
 6. Rules 1.2 words the rename sentence differently from version 9. The meaning is the same.
-7. Rules 1.4 replaces the tRPC example with a note. Version 9 states as fact that "The change rewrote the lines of the type helper that hold it". The diff shows the copy that holds the fault unchanged (read; see reconciliation 1). So version 9's example needs correcting whatever happens to the proposal, and the proposed note is right to doubt it. A note to the activator is still not a rule a grader can apply.
+7. Rules 1.4 replaces the tRPC example with a note. Version 9 states as fact that "The change rewrote the lines of the type helper that hold it". The diff shows the copy that holds the fault unchanged (read; see question 6 in `rulings/`). So version 9's example needs correcting whatever happens to the proposal, and the proposed note is right to doubt it. A note to the activator is still not a rule a grader can apply.
 
 **Between proposed sentences.**
 
@@ -212,7 +212,7 @@ None of this is adopted. It is offered so that the owner reads one text and not 
 
 That keeps rubric 2.4 and 2.5 as the owner accepted them and keeps the two regrade examples.
 
-**B. Correct the tRPC example of rule Before 2** in the same new version, in whichever direction [reconciliation 1](reconciliation/01-trpc-optional-field.md) is ruled. If GT-j5 moves outside, the example becomes one of "outside the review". If it stays, the example gives the true reason.
+**B. Correct the tRPC example of rule Before 2** in the same new version, in whichever direction [question 6](rulings/06-trpc-optional-field.md) is ruled. If GT-j5 moves outside, the example becomes one of "outside the review". If it stays, the example gives the true reason.
 
 **C. Define the term once, in section 7.** For example: "An older problem is a fault that was in the project before the change, that the change did not introduce, worsen, expose or say it fixes, and that the owner has admitted. It is admitted when, judged on what a reviewer could know at the cut-off, the answer to 'Promised?' is yes and to 'Delivered?' is no." Whether to add "and that a reviewer of this change would meet in the code the change edits" is the owner's choice under point 1.
 
