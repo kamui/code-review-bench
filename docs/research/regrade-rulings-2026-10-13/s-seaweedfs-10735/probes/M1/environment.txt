@@ -1,0 +1,65 @@
+Probe environment for M1 (seaweedfs/seaweedfs#10735), run on 2026-10-12
+
+Host:      Linux 6.6.87.2-microsoft-standard-WSL2 (x86_64)
+Go:        go1.26.5 linux/amd64 (GOTOOLCHAIN=local; the repository's go.mod asks for go 1.25.8), go test -p 4
+go-redis:  github.com/redis/go-redis/v9 v9.21.0 at base, at the first commit and at head (go.mod)
+Redis:     Redis server v=8.2.1 sha=00000000:1 malloc=jemalloc-5.3.0 bits=64 build=57cb261e95183901
+           built in scratch from https://github.com/redis/redis/archive/refs/tags/8.2.1.tar.gz
+           (sha256 517e47ebce911ebbed2fe86047a871d9cbeadc7d2de15ffca37a1540eb4d588f) with gcc 11.4.0, "make -j4 MALLOC=jemalloc",
+           standalone on 127.0.0.1:27735, started with: --save "" --appendonly no
+           (default maxmemory-policy noeviction; no cluster, no replica, no sentinel)
+           This is a real redis-server, not a test double. No system package was installed.
+weed:      built in scratch with "go build -p 4 ./weed" at base and at head; both report "version 30GB 4.41"
+Modules:   the Go module cache of the dependency archive (s-seaweedfs-10735.tar.gz, sha256 d8c8c5b6...), plus what
+           "go build ./weed" downloaded from proxy.golang.org into the same scratch cache
+Other:     gh 2.100.0 (2026-09-03), curl 7.81.0, Python 3.14.7, gcc 11.4.0
+
+Commits (cloned from the local mirror <mirrors>/s-seaweedfs-10735.git; 4.42 fetched from github.com/seaweedfs/seaweedfs):
+  db5a086d048c5c2d6e51e82bb070d20df04d688d  base, the commit before the pull request
+  9f99628001cdc79c2d49775cfc3b3ab35b77fb85  the pull request's first commit (a single ZREM, no put-back)
+  6c8fde6642cd428e884cc9c9d88c9aaa189c4bf1  head, pushed 2026-08-13T14:12:47Z
+  f04da8e9ad8db7ae06bd2caba1b6560b36e28e31  tag 4.42, 2026-08-17, later than the last push; used only for "known only later"
+
+zz_probe_helpers_test.go is the saved helper file of the earlier rounds, copied unchanged
+(docs/research/last-push-rulings-2026-10-11/s-seaweedfs-10735/probes/S1/zz_probe_helpers_test.go, sha256 6d082ea4...).
+
+Files and how each was produced:
+
+  zz_probe_m1_test.go, ../run.sh
+      The Go probe. It drives the real redis2 store (Redis2Store) and a real filer.Filer built the way the project's
+      own store tests build one (filer.NewFiler(...); SetStore(store)) against the redis-server above.
+      Every dead name in cases A to G, J and K is made the way the pull request's own test makes one: an entry
+      inserted with TtlSec 1, which Redis itself expires; the probe waits 2.5 s. In cases H and I one name is made dead
+      by deleting its value key directly (redis DEL), so that the case does not have to wait.
+      Nothing is raced, nothing is injected, nothing asserts.
+  result-base.txt, result-head.txt
+      PROBE_REDIS_ADDR=127.0.0.1:27735 sh ../run.sh <clone at the commit> M1 'TestProbeM1$' <out>
+  result-head-with-fix-M1.txt
+      The same probe on the head with ../grouping/fix-M1.patch applied (the store's listing refills its page).
+  result-release-4.42.txt
+      The same probe at tag 4.42. Later than the last push.
+  end-to-end.sh, zz_probe_m1_grpc_test.go
+      The documented way, nothing forced: "weed server -filer -s3" with a filer.toml that enables only [redis2],
+      files stored over HTTP with ?ttl=1m (a-*.txt) and without (b-*.txt), a wait past the time-to-live, then each
+      directory listed by one gRPC ListEntries request, by "weed shell" fs.ls, by S3 ListObjectsV2 (anonymous, no
+      S3 configuration), by the HTTP JSON listing, and one HTTP DELETE of a directory without recursive=true.
+      Objects under the bucket were stored through the filer's HTTP API, not through S3 PutObject, so that they
+      could carry ?ttl=1m; the S3 gateway lists what the filer holds.
+      Step 4 of the script belongs to M2: a file stored with ttl=1m, stored again 40 s later, listed 75 s after the
+      first store, with "redis-cli monitor" recording the commands.
+  result-end-to-end-base.txt, result-end-to-end-head.txt
+      sh end-to-end.sh <weed built at the commit> <clone at the commit> <work dir> <redis-cli> 27735 <db> 18600
+  grouping.txt
+      python3 -I ../extract.py ..   (rows of ../grouping/table.json)
+
+In every result file the store's log lines "list <path> : filer: no entry is found in filer store" are counted in the
+header and left out; ../run.sh says how.
+
+What was not run:
+  - redis_cluster2 and redis2_sentinel (they share this code; no cluster or sentinel was set up).
+  - A dead name made by eviction under a memory limit (earlier rounds ran that for GT-s2 and GT-s5; the listing code
+    cannot tell how a value went missing).
+  - A FUSE mount, the Java or Python clients, and S3 ListObjects V1.
+  - The S3 empty-folder cleaner end to end. Its count (Filer.CountDirectoryEntries) is run in case E; its delete is
+    the call run in case J.
+  - How often a full page of consecutive dead names occurs in real deployments.

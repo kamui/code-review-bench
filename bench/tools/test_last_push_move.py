@@ -5,7 +5,8 @@ none.
 Usage: python3 bench/tools/test_last_push_move.py
 Inputs: a copy of this repository's bench and docs trees in a temporary directory, made of hard links
 where the file system allows, with its own copy of bench/grading and of the registry. The copy is first
-put back to the selection the move published, without what the later review-code selection changed.
+put back to the selection the move published, without what the later regrade rulings and the review-code
+selection changed.
 It is then put back to the records as they were before the move, from the retirement file and the
 registry saved before publication, and the filing's own scripts run in it. Needs the freeze commits of
 the selected runs in the clone. No network, and nothing is written into this checkout.
@@ -15,6 +16,7 @@ Exit codes: 0 all checks pass; 1 a test fails.
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -32,6 +34,7 @@ ROOT = Path(__file__).resolve().parents[2]
 FILING = Path("docs/research/last-push-rulings-2026-10-11/filing")
 RECUT = Path("docs/research/last-push-recut-2026-10-07")
 SELECTION = Path("docs/research/last-push-review-code-2026-10-12/selection")
+REGRADE = Path("docs/research/regrade-rulings-2026-10-13/filing")
 GRADING, CURRENT = Path("bench/grading"), Path("bench/grading/current")
 REGISTRY, INVENTORY = Path("bench/scoreboard.current.json"), CURRENT / "inventory.json"
 RETIRED, RECEIPT = GRADING / "retired/last-push-recut.v1.json", GRADING / "rulings/cohort-rebuild.v8.md"
@@ -71,6 +74,15 @@ def filing_script(root: Path, name: str):
 
 def read(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def regrade_filing(root: Path):
+    """The script that filed the regrade rulings, of the repository at ``root``, loaded so that it takes that root."""
+    spec = importlib.util.spec_from_file_location("regrade_filing_record", root / REGRADE / "record.py")
+    module = importlib.util.module_from_spec(spec)
+    with patch.object(sys, "path", list(sys.path)):
+        spec.loader.exec_module(module)
+    return module
 
 
 def before_the_selection(root: Path, stage) -> None:
@@ -148,6 +160,7 @@ class OneGenerationTests(unittest.TestCase):
         cls.root = Path(cls.temp.name).resolve()
         copy_of_the_repository(cls.root)
         cls.move = filing_script(cls.root, "move")
+        regrade_filing(cls.root).Filing().undo()
         before_the_selection(cls.root, cls.move.stage)
         cls.published = tree(cls.root)
         before_the_move(cls.root, cls.move)

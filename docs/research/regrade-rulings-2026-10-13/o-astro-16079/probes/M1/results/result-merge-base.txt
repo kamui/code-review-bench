@@ -1,0 +1,89 @@
+# state: merge-base, the parent of the head (b089b904f)
+# checked-out commit: b089b904f1ed578e9edaefd129bf9843120a808f
+# patch applied: none
+# entrypoint.ts blob in working tree: 25bf034a1d6037f1e5ba6386a091a02e9dd9ce7b
+# middleware.ts blob in working tree: 0f215ee84aa462bc5427734484d3a574bd6cd74f
+# built dist/serverless/entrypoint.js, lines mentioning x-vercel-isr: 0
+# built dist/serverless/entrypoint.js, lines assigning url.pathname: 1
+
+middleware secret found in the built _render function: true
+routes in .vercel/output/config.json that mention the middleware: [{"src":"^/_server-islands/([^/]+?)/?$","dest":"_middleware"},{"src":"^/_image/?$","dest":"_middleware"},{"src":"^/api/([^/]+?)/?$","dest":"_middleware"},{"src":"^/blog/([^/]+?)/?$","dest":"_middleware"},{"src":"^/search/?$","dest":"_middleware"},{"src":"^/$","dest":"_middleware"},{"src":"^/404/?$","dest":"_middleware"},{"src":"^/.*$","dest":"_middleware","status":404}]
+
+== A. The expression the edge middleware puts in x-astro-path (src/serverless/middleware.ts line 133), evaluated in Node
+    request.url https://example.com/search  ->  request.url.replace(origin, '') = "/search"
+    request.url https://example.com/blog/hello  ->  request.url.replace(origin, '') = "/blog/hello"
+    request.url https://example.com/api/public  ->  request.url.replace(origin, '') = "/api/public"
+    request.url https://example.com/  ->  request.url.replace(origin, '') = "/"
+    request.url https://example.com/search?q=a  ->  request.url.replace(origin, '') = "/search?q=a"
+    request.url https://example.com/blog/hello?ref=x  ->  request.url.replace(origin, '') = "/blog/hello?ref=x"
+    request.url https://example.com/api/public?x=1  ->  request.url.replace(origin, '') = "/api/public?x=1"
+    request.url https://example.com/?q=a  ->  request.url.replace(origin, '') = "/?q=a"
+    new URL('/_render', 'https://example.com/search?q=a').href = "https://example.com/_render"   (the address the middleware fetches, line 129)
+    url.pathname = '/search?q=a' on https://example.com/_render gives href "https://example.com/search%3Fq=a", pathname "/search%3Fq=a", search ""
+
+== B. Control: the _render function called directly, no middleware headers (what the same site gets without edge middleware)
+GET /search?q=a
+    {"status":200,"middlewareSaw":"/search?q=a","route":"search","href":"https://example.com/search?q=a","pathname":"/search","search":"?q=a","q":"a","requestUrl":"https://example.com/search?q=a"}
+GET /blog/hello?ref=x
+    {"status":200,"middlewareSaw":"/blog/hello?ref=x","route":"blog/[slug]","slug":"hello","href":"https://example.com/blog/hello?ref=x","pathname":"/blog/hello","search":"?ref=x","ref":"x"}
+GET /api/public?x=1
+    {"status":200,"middlewareSaw":"/api/public?x=1","route":"api/[id]","id":"public","requestUrl":"https://example.com/api/public?x=1","search":"?x=1","x":"1"}
+GET /?q=a
+    {"status":200,"middlewareSaw":"/?q=a","route":"index","href":"https://example.com/?q=a","pathname":"/","search":"?q=a","q":"a","requestUrl":"https://example.com/?q=a"}
+
+== C. Control: _render called at /_render with the valid middleware secret and x-astro-path WITHOUT a query string
+x-astro-path: /search
+    {"status":200,"middlewareSaw":"/search","route":"search","href":"https://example.com/search","pathname":"/search","search":"","q":null,"requestUrl":"https://example.com/search"}
+x-astro-path: /blog/hello
+    {"status":200,"middlewareSaw":"/blog/hello","route":"blog/[slug]","slug":"hello","href":"https://example.com/blog/hello","pathname":"/blog/hello","search":"","ref":null}
+x-astro-path: /api/public
+    {"status":200,"middlewareSaw":"/api/public","route":"api/[id]","id":"public","requestUrl":"https://example.com/api/public","search":"","x":null}
+x-astro-path: /
+    {"status":200,"middlewareSaw":"/","route":"index","href":"https://example.com/","pathname":"/","search":"","q":null,"requestUrl":"https://example.com/"}
+
+== D. _render called at /_render with the valid middleware secret and x-astro-path WITH a query string
+x-astro-path: /search?q=a
+    {"status":404,"middlewareSaw":"/search%3Fq=a","nonProbeBody":"title=404: Not Found"}
+x-astro-path: /blog/hello?ref=x
+    {"status":200,"middlewareSaw":"/blog/hello%3Fref=x","route":"blog/[slug]","slug":"hello%3Fref=x","href":"https://example.com/blog/hello%3Fref=x","pathname":"/blog/hello%3Fref=x","search":"","ref":null}
+x-astro-path: /api/public?x=1
+    {"status":200,"middlewareSaw":"/api/public%3Fx=1","route":"api/[id]","id":"public%3Fx=1","requestUrl":"https://example.com/api/public%3Fx=1","search":"","x":null}
+x-astro-path: /?q=a
+    {"status":404,"middlewareSaw":"/%3Fq=a","nonProbeBody":"title=404: Not Found"}
+
+== E. Control: the same header with a wrong secret (the override is not applied; the request is for /_render)
+x-astro-path: /search?q=a, x-astro-middleware-secret: wrong
+    {"status":404,"middlewareSaw":"/_render","nonProbeBody":"title=404: Not Found"}
+
+== F. End to end in-process: the built edge middleware function is called with the visitor's request;
+==    its fetch() to /_render is handed to the built _render function instead of the network.
+visitor requests GET /search
+    middleware sent: [{"fetched":"https://example.com/_render","method":"GET","x-astro-path":"/search","carriesValidSecret":true}]
+    visitor receives: {"status":200,"middlewareSaw":"/search","route":"search","href":"https://example.com/search","pathname":"/search","search":"","q":null,"requestUrl":"https://example.com/search"}
+visitor requests GET /blog/hello
+    middleware sent: [{"fetched":"https://example.com/_render","method":"GET","x-astro-path":"/blog/hello","carriesValidSecret":true}]
+    visitor receives: {"status":200,"middlewareSaw":"/blog/hello","route":"blog/[slug]","slug":"hello","href":"https://example.com/blog/hello","pathname":"/blog/hello","search":"","ref":null}
+visitor requests GET /api/public
+    middleware sent: [{"fetched":"https://example.com/_render","method":"GET","x-astro-path":"/api/public","carriesValidSecret":true}]
+    visitor receives: {"status":200,"middlewareSaw":"/api/public","route":"api/[id]","id":"public","requestUrl":"https://example.com/api/public","search":"","x":null}
+visitor requests GET /
+    middleware sent: [{"fetched":"https://example.com/_render","method":"GET","x-astro-path":"/","carriesValidSecret":true}]
+    visitor receives: {"status":200,"middlewareSaw":"/","route":"index","href":"https://example.com/","pathname":"/","search":"","q":null,"requestUrl":"https://example.com/"}
+visitor requests GET /search?q=a
+    middleware sent: [{"fetched":"https://example.com/_render","method":"GET","x-astro-path":"/search?q=a","carriesValidSecret":true}]
+    visitor receives: {"status":404,"middlewareSaw":"/search?q=a","nonProbeBody":"title=404: Not Found"}
+visitor requests GET /blog/hello?ref=x
+    middleware sent: [{"fetched":"https://example.com/_render","method":"GET","x-astro-path":"/blog/hello?ref=x","carriesValidSecret":true}]
+    visitor receives: {"status":200,"middlewareSaw":"/blog/hello?ref=x","route":"blog/[slug]","slug":"hello%3Fref=x","href":"https://example.com/blog/hello%3Fref=x","pathname":"/blog/hello%3Fref=x","search":"","ref":null}
+visitor requests GET /api/public?x=1
+    middleware sent: [{"fetched":"https://example.com/_render","method":"GET","x-astro-path":"/api/public?x=1","carriesValidSecret":true}]
+    visitor receives: {"status":200,"middlewareSaw":"/api/public?x=1","route":"api/[id]","id":"public%3Fx=1","requestUrl":"https://example.com/api/public%3Fx=1","search":"","x":null}
+visitor requests GET /?q=a
+    middleware sent: [{"fetched":"https://example.com/_render","method":"GET","x-astro-path":"/?q=a","carriesValidSecret":true}]
+    visitor receives: {"status":404,"middlewareSaw":"/?q=a","nonProbeBody":"title=404: Not Found"}
+
+== G. The same site with a catch-all page ([...rest].astro), end to end in-process
+visitor requests GET /search
+    {"status":200,"middlewareSaw":"/search","route":"search","href":"https://example.com/search","pathname":"/search","search":"","q":null,"requestUrl":"https://example.com/search"}
+visitor requests GET /search?q=a
+    {"status":200,"middlewareSaw":"/search?q=a","route":"[...rest]","rest":"search%3Fq=a","href":"https://example.com/search%3Fq=a","pathname":"/search%3Fq=a","search":"","q":null}

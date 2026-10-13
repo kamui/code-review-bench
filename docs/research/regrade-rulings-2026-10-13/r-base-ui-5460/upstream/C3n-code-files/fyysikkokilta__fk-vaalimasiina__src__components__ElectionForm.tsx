@@ -1,0 +1,239 @@
+'use client'
+
+import { Field } from '@base-ui/react/field'
+import { Form } from '@base-ui/react/form'
+import { Radio } from '@base-ui/react/radio'
+import { RadioGroup } from '@base-ui/react/radio-group'
+import { useTranslations } from 'next-intl'
+import { useState } from 'react'
+import { z } from 'zod'
+
+import { Button } from '~/components/ui/Button'
+
+type ElectionFormData = {
+  electionId?: string
+  title: string
+  description: string
+  seats: number
+  votingMethod: 'STV' | 'MAJORITY'
+  candidatesData: string[]
+}
+
+type ElectionFormDataEdit = ElectionFormData & { electionId: string }
+
+export default function ElectionForm({
+  formId,
+  election,
+  addCandidate,
+  removeCandidate,
+  onValidSubmit,
+  isEdit = false
+}: {
+  formId: string
+  election: ElectionFormData
+  addCandidate: (candidateName: string) => void
+  removeCandidate: (index: number) => void
+  onValidSubmit: (data: ElectionFormData | ElectionFormDataEdit) => void
+  isEdit?: boolean
+}) {
+  const t = useTranslations('ElectionForm')
+  const [newCandidate, setNewCandidate] = useState('')
+  const [errors, setErrors] = useState<Record<string, string | string[]> | undefined>(undefined)
+  const [formErrors, setFormErrors] = useState<string[]>([])
+
+  const createSchema = z
+    .object({
+      title: z.string(t('validation.title_string')).min(1, t('validation.title_nonempty')),
+      description: z
+        .string(t('validation.description_string'))
+        .min(1, t('validation.description_nonempty')),
+      seats: z.coerce.number(t('validation.seats_number')).min(1, t('validation.seats_min')),
+      votingMethod: z.enum(['STV', 'MAJORITY']),
+      candidatesData: z
+        .array(
+          z.string(t('validation.candidate_string')).min(1, t('validation.candidate_nonempty')),
+          t('validation.candidates_array')
+        )
+        .min(1, t('validation.candidates_nonempty'))
+    })
+    .refine((data) => data.candidatesData.length >= data.seats, {
+      message: t('validation.candidates_geq_seats'),
+      path: ['candidates']
+    })
+
+  const editSchema = createSchema.extend({
+    electionId: z.uuid(t('validation.electionId_uuid'))
+  })
+
+  const handleFormSubmit = (formValues: Record<string, string | number>) => {
+    const toParse = {
+      ...formValues,
+      electionId: election?.electionId,
+      candidatesData: election.candidatesData
+    }
+
+    const schema = isEdit ? editSchema : createSchema
+    const result = schema.safeParse(toParse)
+
+    if (!result.success) {
+      const flattened = z.flattenError(result.error)
+      setErrors(flattened.fieldErrors)
+      setFormErrors(flattened.formErrors)
+      return
+    }
+
+    setNewCandidate('')
+    setErrors(undefined)
+    setFormErrors([])
+    onValidSubmit(result.data)
+  }
+
+  return (
+    <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+      <Form id={formId} errors={errors} onFormSubmit={handleFormSubmit} className="contents">
+        <div className="contents">
+          {formErrors.length > 0 && (
+            <div className="col-span-full space-y-1 text-red-600">
+              {formErrors.map((err) => (
+                <div key={err} role="alert">
+                  {err}
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="space-y-4">
+            <Field.Root name="title">
+              <Field.Label className="mb-2 block text-sm font-medium text-gray-700">
+                {t('election_title')}
+              </Field.Label>
+              <Field.Control
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                type="text"
+                defaultValue={election.title}
+              />
+              <Field.Error className="mt-1 text-sm text-red-600" />
+            </Field.Root>
+            <Field.Root name="description">
+              <Field.Label className="mb-2 block text-sm font-medium text-gray-700">
+                {t('description')}
+              </Field.Label>
+              <Field.Control
+                render={
+                  <textarea
+                    name="description"
+                    rows={4}
+                    defaultValue={election.description}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  />
+                }
+              />
+              <Field.Error className="mt-1 text-sm text-red-600" />
+            </Field.Root>
+            <Field.Root name="seats">
+              <Field.Label className="mb-2 block text-sm font-medium text-gray-700">
+                {t('seats')}
+              </Field.Label>
+              <Field.Control
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                type="number"
+                defaultValue={election.seats}
+              />
+              <Field.Error className="mt-1 text-sm text-red-600" />
+            </Field.Root>
+          </div>
+          <div className="space-y-4">
+            <Field.Root name="votingMethod">
+              <RadioGroup
+                name="votingMethod"
+                defaultValue={election.votingMethod ?? 'STV'}
+                className="flex flex-col gap-2"
+                aria-labelledby="voting-method-legend"
+              >
+                <div id="voting-method-legend" className="block text-sm font-medium text-gray-700">
+                  {t('voting_method')}
+                </div>
+                <div className="flex flex-wrap justify-center gap-4">
+                  <label className="flex cursor-pointer items-center gap-2">
+                    <Radio.Root
+                      value="STV"
+                      aria-label={t('voting_method_stv')}
+                      className="data-checked:border-fk-black data-checked:bg-fk-black flex h-4 w-4 items-center justify-center rounded-full border border-gray-300"
+                    >
+                      <Radio.Indicator className="h-2 w-2 rounded-full bg-white" />
+                    </Radio.Root>
+                    <span>{t('voting_method_stv')}</span>
+                  </label>
+                  <label className="flex cursor-pointer items-center gap-2">
+                    <Radio.Root
+                      value="MAJORITY"
+                      aria-label={t('voting_method_majority')}
+                      className="data-checked:border-fk-black data-checked:bg-fk-black flex h-4 w-4 items-center justify-center rounded-full border border-gray-300"
+                    >
+                      <Radio.Indicator className="h-2 w-2 rounded-full bg-white" />
+                    </Radio.Root>
+                    <span>{t('voting_method_majority')}</span>
+                  </label>
+                </div>
+              </RadioGroup>
+              <Field.Error className="mt-1 text-sm text-red-600" />
+            </Field.Root>
+            <div>
+              <label
+                htmlFor="newCandidate"
+                className="mb-2 block text-sm font-medium text-gray-700"
+              >
+                {t('new_candidate')}
+              </label>
+              <div className="flex items-start gap-2">
+                <input
+                  value={newCandidate}
+                  onChange={(e) => setNewCandidate(e.target.value)}
+                  type="text"
+                  id="newCandidate"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                />
+                <Button
+                  type="button"
+                  variant="primary"
+                  disabled={!newCandidate || newCandidate.trim() === ''}
+                  onClick={() => {
+                    addCandidate(newCandidate)
+                    setNewCandidate('')
+                  }}
+                >
+                  {t('add_candidate')}
+                </Button>
+              </div>
+              {errors?.candidates && (
+                <p className="mt-1 text-sm text-red-600" role="alert">
+                  {Array.isArray(errors.candidates) ? errors.candidates[0] : errors.candidates}
+                </p>
+              )}
+            </div>
+            <div>
+              <label className="text-sm font-medium text-gray-700">{t('candidates')}</label>
+              <ul className="space-y-2">
+                {election.candidatesData.map((candidate, i) => (
+                  <li
+                    key={i}
+                    className="flex items-center justify-between rounded-lg border border-gray-200 p-3"
+                  >
+                    <span className="font-medium">{candidate}</span>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="small"
+                      onClick={() => removeCandidate(i)}
+                    >
+                      {t('remove_candidate')}
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </div>
+      </Form>
+    </div>
+  )
+}

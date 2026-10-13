@@ -1,0 +1,95 @@
+# sasoder/content-killer:server/src/routes/updateRouter.ts at 35b138efa0a165d9d6ed0b8c31c99c7b595e8623, committed 2025-01-10T19:05:05Z
+import { Hono } from 'hono';
+import { projectStorage } from '@/db/storage';
+import { zValidator } from '@hono/zod-validator';
+import { TimestampTextSchema } from '@/lib/serverSchema';
+import { UpdateTemplateSchema, UpdateProjectDataSchema, UploadPauseSoundSchema } from '@/lib/apiSchema';
+
+const ALLOWED_AUDIO_EXTENSIONS = ['mp3', 'wav', 'm4a', 'aac'];
+
+const updateRouter = new Hono()
+	.put('/template/:id', zValidator('json', UpdateTemplateSchema), async c => {
+		try {
+			const id = c.req.param('id');
+			const template = c.req.valid('json');
+			if (id !== template.id) {
+				return c.json({ error: 'ID mismatch' }, 400);
+			}
+			await projectStorage.updateTemplate(template);
+			return c.json(template);
+		} catch (error) {
+			console.error('Error updating project template:', error);
+			return c.json({ error: 'Failed to update project template' }, 500);
+		}
+	})
+	.delete('/template/:id', async c => {
+		try {
+			const id = c.req.param('id');
+			await projectStorage.deleteTemplate(id);
+			return c.json({ message: 'Template deleted successfully' });
+		} catch (error) {
+			console.error('Error deleting template:', error);
+			return c.json({ error: 'Failed to delete template' }, 500);
+		}
+	})
+	.put('/project/:id/description', zValidator('json', TimestampTextSchema), async c => {
+		const id = c.req.param('id');
+		const description = c.req.valid('json');
+		const project = await projectStorage.getProject(id);
+
+		if (!project) {
+			return c.json({ error: 'Project not found' }, 404);
+		}
+
+		project.description = description;
+		await projectStorage.updateProjectState(project);
+		return c.json({ message: 'Description updated' }, 200);
+	})
+	.put('/project/:id/commentary', zValidator('json', TimestampTextSchema), async c => {
+		const id = c.req.param('id');
+		const commentary = c.req.valid('json');
+		const project = await projectStorage.getProject(id);
+
+		if (!project) {
+			return c.json({ error: 'Project not found' }, 404);
+		}
+
+		project.commentary = commentary;
+		await projectStorage.updateProjectState(project);
+		return c.json({ message: 'Commentary updated' }, 200);
+	})
+	.put('/project/:id', zValidator('json', UpdateProjectDataSchema), async c => {
+		const id = c.req.param('id');
+		const { data } = c.req.valid('json');
+		const project = await projectStorage.getProject(id);
+
+		if (!project) {
+			return c.json({ error: 'Project not found' }, 404);
+		}
+
+		await projectStorage.updateProjectState({ ...project, ...data });
+		return c.json({ message: 'Project updated' }, 200);
+	})
+	.post('/template/:id/pauseSound', zValidator('form', UploadPauseSoundSchema), async c => {
+		try {
+			const id = c.req.param('id');
+
+			const body = await c.req.parseBody();
+			const file = body['file'] as File;
+			const fileExt = file.name.split('.').pop()?.toLowerCase() || 'mp3';
+			if (!ALLOWED_AUDIO_EXTENSIONS.includes(fileExt)) {
+				return c.json({ error: 'Unsupported audio format' }, 400);
+			}
+
+			const buffer = await file.arrayBuffer();
+			const filename = file.name;
+			await projectStorage.updateTemplatePauseSound(id, filename, Buffer.from(buffer));
+
+			return c.json({ filename }, 201);
+		} catch (error) {
+			console.error('Error uploading pause sound:', error);
+			return c.json({ error: 'Failed to upload pause sound' }, 500);
+		}
+	});
+
+export { updateRouter };

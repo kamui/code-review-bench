@@ -1,0 +1,181 @@
+# ChrisDev3lops/Chad-Hill-Rizz-Backend:src/routes/fortnite/friends.ts at 5816024bf52319992fa8da7b974e6c4c2afdd864, committed 2026-06-22T02:49:47Z
+import { parseBody } from "hono/utils/body";
+import app from "../..";
+import { Friends } from "../../db/schemas/friends";
+import { Hyrda } from "../../util/errors";
+import { GetAuthUser, verifyUser } from "../../util/managers/tokenManager";
+import {
+  acceptFriendRequest,
+  blockFriend,
+  deleteFriend,
+  sendFriendReq,
+} from "../../util/managers/friendManager";
+import {
+  getPresenceFromUser,
+  getPresenceStatus,
+} from "../../util/managers/xmppManager";
+
+interface FriendsMap {
+  accountId: string;
+  status: "ACCEPTED" | "PENDING";
+  direction: "INBOUND" | "OUTBOUND";
+  created: Date;
+  favorite: boolean;
+}
+
+app.get("/friends/api/v1/*/settings", (c) => {
+  return c.json({});
+});
+
+app.get("/friends/api/v1/*/blocklist", (c) => {
+  return c.json([]);
+});
+
+app.get("/friends/api/public/list/fortnite/*/recentPlayers", (c) => {
+  return c.json([]);
+});
+
+app.get("/friends/api/public/friends/:accountId", verifyUser, async (c) => {
+  const accountId = c.req.param("accountId");
+
+  const friends = await Friends.findOne({ accountId }).lean();
+
+  if (!friends) return c.sendError(Hyrda.friends.accountNotFound);
+
+  let response: FriendsMap[] = [];
+
+  const sections = [
+    { key: "accepted", status: "ACCEPTED", direction: "OUTBOUND" },
+    { key: "incoming", status: "PENDING", direction: "INBOUND" },
+    { key: "outgoing", status: "PENDING", direction: "OUTBOUND" },
+  ] as const;
+
+  sections.forEach(({ key, status, direction }) => {
+    friends.list[key].forEach((friend) => {
+      response.push({
+        accountId: friend.accountId,
+        status,
+        direction,
+        created: friend.created,
+        favorite: false,
+      });
+    });
+  });
+
+  return c.json(response);
+});
+
+app
+  .post(
+    "/friends/api/v1/:accountId/friends/:receiverId",
+    verifyUser,
+    async (c) => {
+      const user = await GetAuthUser(c);
+
+      let sender = await Friends.findOne({ accountId: user?.accountId }).lean();
+      let reciever = await Friends.findOne({
+        accountId: c.req.param("receiverId"),
+      }).lean();
+
+      if (!sender || !reciever) return c.sendStatus(403);
+
+      if (sender.list.incoming.find((i) => i.accountId == reciever.accountId)) {
+        if (!(await acceptFriendRequest(sender.accountId, reciever.accountId)))
+          return c.sendStatus(403);
+
+        await getPresenceFromUser(sender.accountId, reciever.accountId, false);
+        await getPresenceFromUser(reciever.accountId, sender.accountId, false);
+      } else if (
+        !sender.list.outgoing.find((i) => i.accountId == reciever.accountId)
+      ) {
+        if (!(await sendFriendReq(sender.accountId, reciever.accountId)))
+          return c.sendStatus(403);
+      }
+
+      return c.sendStatus(204);
+    },
+  )
+  .delete(async (c) => {
+    const user = await GetAuthUser(c);
+    let sender = await Friends.findOne({ accountId: user?.accountId });
+    let receiver = await Friends.findOne({
+      accountId: c.req.param("receiverId"),
+    });
+    if (!sender || !receiver) return c.sendStatus(403);
+
+    if (
+      !(await deleteFriend(
+        sender.accountId as string,
+        receiver.accountId as string,
+      ))
+    )
+      return c.sendStatus(403);
+
+    getPresenceFromUser(
+      sender.accountId as string,
+      receiver.accountId as string,
+      true,
+    );
+    getPresenceFromUser(
+      receiver.accountId as string,
+      sender.accountId as string,
+      true,
+    );
+
+    return c.sendStatus(204);
+  });
+
+app.delete("/friends/api/*/blocklist/*/:receiverId", verifyUser, async (c) => {
+  const user = await GetAuthUser(c);
+  let sender = await Friends.findOne({ accountId: user?.accountId });
+  let receiver = await Friends.findOne({
+    accountId: c.req.param("receiverId"),
+  });
+  if (!sender || !receiver) return c.sendStatus(204);
+
+  if (
+    !(await deleteFriend(
+      sender.accountId as string,
+      receiver.accountId as string,
+    ))
+  )
+    return c.sendStatus(403);
+
+  return c.sendStatus(204);
+});
+
+app.get("/friends/api/v1/:accountId/summary", verifyUser, async (c) => {
+  const user = await GetAuthUser(c);
+  const friends = await Friends.findOne({ accountId: user?.accountId }).lean();
+
+  if (!friends) return c.json({});
+
+  return c.json({
+    friends: friends.list.accepted.map((f) => ({
+      accountId: f.accountId,
+      groups: [],
+      mutual: 0,
+      alias: f.alias ?? "",
+      note: "",
+      favorite: false,
+      created: f.created,
+    })),
+    incoming: friends.list.incoming.map((f) => ({
+      accountId: f.accountId,
+      mutual: 0,
+      favorite: false,
+      created: f.created,
+    })),
+    outgoing: friends.list.outgoing.map((f) => ({
+      accountId: f.accountId,
+      favorite: false,
+    })),
+    blocklist: friends.list.blocked.map((f) => ({
+      accountId: f.accountId,
+    })),
+    suggested: [],
+    settings: {
+      acceptInvites: "public",
+    },
+  });
+});

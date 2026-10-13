@@ -1,0 +1,122 @@
+# The change as it read at the last push, 2026-08-13T14:12:47Z
+# description: GraphQL userContentEdits of pull request 10735 (graphql-pr-10735-edits-timeline.json), the version last edited at or before the last push: 2026-08-13T11:39:15Z by coderabbitai, 8421 characters
+# edits after the last push: 2026-08-13T14:14:08Z by petedodd-pd, 2026-08-13T14:15:20Z by coderabbitai
+
+## query 1 (M1: does the description speak of what a listing returns, a limit, a page or an empty directory)
+regular expression (case-insensitive) 'limit|page|pagination|truncat|empty|complete|fewer|short|IsDirectoryEmpty|hasMore|stale filenames|appearing in results' on the description at the last push
+hits: 2
+48: - `TestListDirectoryEntriesRemovesOrphanedIndexMembers` — two entries, one's value key dropped; asserts the listing returns only the live entry *and* that the index is left holding only the live name. Run with `keyPrefix` empty and set.
+89:   * Directory listings now automatically remove references to missing or expired entries, preventing stale filenames from appearing in results.
+
+## query 2 (M2: what the description says of the expiry branch)
+regular expression (case-insensitive) 'expiry branch|logically expired|second branch|intended behaviour|else. branch|working branch|mirror|adjacent|not included' on the description at the last push
+hits: 7
+8: - the value key is there but the entry is logically expired (`Crtime + TtlSec < now`) → `DEL` the value **and `ZREM` the member** (`:213-219`).
+10: The second branch is the intended behaviour — the code already means to keep the index consistent. The first branch is the one that actually runs for TTL entries, because the two expiry deadlines are on different clocks:
+15: `Crtime` is stamped before the store write, so `Crtime <= set_time` and the logical deadline is the *earlier* of the two — by the sub-millisecond gap between stamping the attribute and Redis processing the `SET`. The `else` branch can therefore only run if a listing lands inside that gap. Every listing after it finds `GET` returning `redis.Nil` and takes the not-found branch, the one that leaves the member behind. (An entry that is later *updated* re-arms the Redis TTL from the update time while `Crtime` stays put, which is the only case where the working branch is reliably reachable — so the leak is specific to entries created once and never touched again, which is the common TTL case.)
+26: One line: `ZREM` the member in the not-found branch, mirroring what the expiry branch already does four lines below, against the same `dirListKey` variable.
+38: The `ZREM` result is discarded, matching the adjacent expiry branch: a failed repair is retried on the next listing and must not fail the listing itself.
+40: **Deliberately not included:** making the physical TTL a backstop behind the logical one (`SET ... EX TtlSec + grace`) so the logical branch wins the race and performs the clean two-part delete. That changes when data actually disappears from Redis for every `redis2` user, and it would not remove the need for this fix, since the non-TTL routes above produce the same orphan. Happy to raise it separately if you want it.
+66: `redis3` has the same shape at `universal_redis_store.go:140-166`, and is worse off: its not-found branch removes nothing at all, and its expiry branch calls `ZRem` on `<dir>\x00` — which in `redis3` is a **string** holding the serialised skiplist root (`kv_directory_children.go:43`), not a ZSET. That returns `WRONGTYPE`, the result is discarded, and it has therefore never removed anything.
+
+## the two commit messages, oldest first (git log db5a086d..6c8fde66 --reverse)
+commit 9f99628001cdc79c2d49775cfc3b3ab35b77fb85
+author date 2026-08-13T12:08:32+01:00
+committer date 2026-08-13T12:08:32+01:00
+
+fix(redis2): remove orphaned directory index members on listing
+
+ListDirectoryEntries skipped index members whose value key was gone and
+left them in the ZSET, so the per-directory child index grew without
+bound under any TTL workload. Mirror the ZRem the logical-expiry branch
+already performs.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+----
+commit 6c8fde6642cd428e884cc9c9d88c9aaa189c4bf1
+author date 2026-08-13T15:12:32+01:00
+committer date 2026-08-13T15:12:32+01:00
+
+fix(redis2): keep the index member when a concurrent insert recreates the value
+
+The orphan cleanup removed the member unconditionally, so an InsertEntry
+landing between FindEntry and the ZRem left a live value with no index
+member, invisible to listings until another InsertEntry on that path.
+UpdateEntry does not re-add it, so the loss persisted.
+
+Restore the member when the value is present again after the removal.
+The value key and the directory index key hash to different slots, so a
+Lua script or MULTI over both is not available to the cluster store.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+----
+
+## the diff of weed/filer/redis2/universal_redis_store.go (git diff db5a086d 6c8fde66)
+diff --git a/weed/filer/redis2/universal_redis_store.go b/weed/filer/redis2/universal_redis_store.go
+index 776952fc4..d4ce64d80 100644
+--- a/weed/filer/redis2/universal_redis_store.go
++++ b/weed/filer/redis2/universal_redis_store.go
+@@ -205,6 +205,7 @@ func (store *UniversalRedis2Store) ListDirectoryEntries(ctx context.Context, dir
+ 		if err != nil {
+ 			glog.V(0).InfofCtx(ctx, "list %s : %v", path, err)
+ 			if err == filer_pb.ErrNotFound {
++				store.removeOrphanedDirectoryListMember(ctx, dirListKey, path, fileName)
+ 				err = nil
+ 				continue
+ 			}
+@@ -233,6 +234,22 @@ func (store *UniversalRedis2Store) ListDirectoryEntries(ctx context.Context, dir
+ 	return lastFileName, err
+ }
+ 
++func (store *UniversalRedis2Store) removeOrphanedDirectoryListMember(ctx context.Context, dirListKey string, path util.FullPath, fileName string) {
++	if err := store.Client.ZRem(ctx, dirListKey, fileName).Err(); err != nil {
++		return
++	}
++
++	// InsertEntry writes the value before adding the member, so a value present
++	// again here may belong to an insert that found the member still in place
++	// and whose ZAddNX was therefore a no-op.
++	exists, err := store.Client.Exists(ctx, store.getKey(string(path))).Result()
++	if err == nil && exists == 0 {
++		return
++	}
++
++	store.Client.ZAddNX(ctx, dirListKey, redis.Z{Score: 0, Member: fileName})
++}
++
+ func genDirectoryListKey(dir string) (dirList string) {
+ 	return dir + DIR_LIST_MARKER
+ }
+
+
+## query 3 (the test file the change adds: test names, limits used, what is asserted)
+regular expression (case-insensitive) '^func Test|ListDirectoryEntries\\(|t\\.Fatalf|TtlSec' on weed/filer/redis2/universal_redis_store_test.go at head
+hits: 18
+31: 		t.Fatalf("connect to redis at %s: %v", addr, err)
+47: func insertTestEntry(t *testing.T, store *UniversalRedis2Store, path util.FullPath, ttlSec int32) {
+53: 		Attr:     filer.Attr{Crtime: now, Mtime: now, Mode: 0644, TtlSec: ttlSec},
+55: 		t.Fatalf("InsertEntry %s: %v", path, err)
+63: 	if _, err := store.ListDirectoryEntries(context.Background(), dir, "", true, 100, func(entry *filer.Entry) (bool, error) {
+68: 		t.Fatalf("ListDirectoryEntries %s: %v", dir, err)
+78: 		t.Fatalf("read directory index of %s: %v", dir, err)
+83: func TestListDirectoryEntriesRemovesOrphanedIndexMembers(t *testing.T) {
+92: 				t.Fatalf("drop value key: %v", err)
+96: 				t.Fatalf("listed %v, want [alive]", names)
+100: 				t.Fatalf("directory index holds %v, want [alive]", members)
+106: func TestRemoveOrphanedDirectoryListMemberKeepsRecreatedEntry(t *testing.T) {
+115: 		t.Fatalf("directory index holds %v, want [recreated]", members)
+119: 		t.Fatalf("listed %v, want [recreated]", names)
+123: func TestListDirectoryEntriesRemovesIndexMembersExpiredByRedis(t *testing.T) {
+131: 		t.Fatalf("check value key: %v", err)
+137: 		t.Fatalf("listed %v, want none", names)
+141: 		t.Fatalf("directory index holds %v, want none", members)
+
+## LATER THAN THE LAST PUSH: the description as edited at 2026-08-13T14:14:08Z by petedodd-pd (1 min 21 s after the push), lines about the expiry branch
+regular expression (case-insensitive) 'expiry branch|not included' on the description after the first later edit
+hits: 4
+26: `ZREM` the member in the not-found branch, mirroring what the expiry branch already does below and against the same `dirListKey` variable — guarded against a concurrent recreate, per the review point below.
+46: **Deliberately not included:** making the physical TTL a backstop behind the logical one (`SET ... EX TtlSec + grace`) so the logical branch wins the race and performs the clean two-part delete. That changes when data actually disappears from Redis for every `redis2` user, and it would not remove the need for this fix, since the non-TTL routes above produce the same orphan. Happy to raise it separately if you want it.
+48: **Also deliberately not included:** the expiry branch at `:214-219` has a pre-existing instance of the same race, with a worse outcome — a concurrent `InsertEntry` landing between `FindEntry` and the `DEL` loses the freshly written value, not just the index member. Closing it needs a compare-and-delete on the value rather than the compensating restore used here, so it is a separate change and not one I want to smuggle into this one.
+75: `redis3` has the same shape at `universal_redis_store.go:140-166`, and is worse off: its not-found branch removes nothing at all, and its expiry branch calls `ZRem` on `<dir>\x00` — which in `redis3` is a **string** holding the serialised skiplist root (`kv_directory_children.go:43`), not a ZSET. That returns `WRONGTYPE`, the result is discarded, and it has therefore never removed anything.
