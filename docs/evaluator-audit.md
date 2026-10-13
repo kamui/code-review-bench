@@ -93,3 +93,7 @@ A stratum over its tolerance fails the round. The affected batches are graded ag
 ## What the audit does not show
 
 Agreement between two graders is not accuracy against the truth. Both can share an error, and a model grader can share one with another model. The sample bounds error rates only for the strata it drew from and only at the sizes selected. The claim list is the first grader's and is not audited, so a pass does not certify how comments were split or grouped. Claims with a canonical claim rest on their saved rulings and links. Remedy sufficiency and safety have their own independent checks in the [grading contract](current-grading.md#claims-recovery-and-remedies) and are outside these strata. Reference eligibility, impact labels and control audits are checked through [impact and control calibration](impact-calibration.md).
+
+## Older-problem credit
+
+A v3 catalog requires approved audit sizes and tolerances for `older-raised`, `older-not-raised` and `older-unresolved`, each an `older-review` unit. The sampler derives each result from the original claim facts and compares it with an independent assessment. These units do not enter ordinary recall or impact strata. A plan without these strata cannot audit an older catalog. See [the dormant contract and activation gates](older-problem-credit.md).

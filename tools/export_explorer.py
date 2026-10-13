@@ -16,7 +16,6 @@ PUBLIC = ROOT / "public"
 BASE_PATH = os.environ.get("BASE_PATH", "/").rstrip("/")
 sys.path.insert(0, str(BENCH / "tools"))
 import current_grading
-import grading_validation
 import skill_provenance
 import evidence_store
 
@@ -101,13 +100,33 @@ def conditions(arms, records, effort, billing):
         ("Billing basis", recorded(billing)))]
 
 
+V2_OUTCOMES = {"problem": "eligible", "unproven": "unsupported", "outside-this-change": "scope-excluded",
+               "suggestion": "advisory", "minor-defect": "inconsequential"}
+
+
+def projected_claim(claim):
+    return {"id": claim["id"], "itemId": claim["anchor"]["item_id"],
+            "outcome": V2_OUTCOMES.get(claim["outcome"], claim["outcome"]), "nativeOutcome": claim["outcome"],
+            "familyId": claim.get("family_id"), "canonicalId": claim["canonical_id"],
+            "duplicateGroup": claim["duplicate_group"],
+            "knownProblems": [{"familyId": e["family_id"], "saysWhat": e["says_what"],
+                               "identifiesCause": e["identifies_cause"], "reason": e["reason"]}
+                              for e in claim.get("known_problems", [])],
+            "olderProblems": [{"problemId": e["problem_id"], "saysWhat": e["says_what"],
+                               "identifiesCause": e["identifies_cause"], "reason": e["reason"]}
+                              for e in claim.get("older_problems", [])],
+            "olderCandidateId": claim.get("older_candidate_id")}
+
+
 def assessment(grade):
     """Project one saved grade record; judgments and eligibility stay as recorded."""
     return {"state": grade["state"],
             "families": [{"familyId": f["family_id"], "outcome": f["outcome"], "sufficiency": f["sufficiency"],
-                          "claimIds": f["claim_ids"]} for f in grade["families"]],
-            "claims": [{"id": c["id"], "itemId": c["anchor"]["item_id"], "outcome": c["outcome"], "familyId": c["family_id"],
-                        "canonicalId": c["canonical_id"], "duplicateGroup": c["duplicate_group"]} for c in grade["claims"]],
+                          "claimIds": f["claim_ids"], "causeOnly": f.get("cause_only", False)} for f in grade["families"]],
+            "claims": [projected_claim(c) for c in grade["claims"]],
+            "olderProblems": ([{"problemId": e["problem_id"], "outcome": e["outcome"], "claimIds": e["claim_ids"],
+                               "saysWhat": e["says_what"], "identifiesCause": e["identifies_cause"]}
+                              for e in grade["older_problems"]] if "older_problems" in grade else None),
             "recommendations": [{"id": r["id"], "addressedClaims": r["addressed_claims"], "safety": r["safety"]["state"],
                                  "sufficiency": [{"familyId": s["family_id"], "outcome": s["outcome"]} for s in r["sufficiency"]]}
                                 for r in grade["recommendations"]],
@@ -129,7 +148,10 @@ def export_attempt(run, facts, archives, stage, grade=None, billing_correction=N
         claims = [{"id": c["id"], "quote": c["anchor"]["quote"], "assignment": c["outcome"], "canonical_claim_id": c["canonical_id"],
                    "rulingUrl": (rulings or {}).get(c["canonical_id"]),
                    "notes": c["reason"], "evidence": [e["path"] for e in c["evidence"]],
-                   "fix_sufficiency": sufficiency.get(c["family_id"], "unassessed"), "group": c["duplicate_group"]}
+                   "fix_sufficiency": ", ".join(sorted({sufficiency.get(e["family_id"], "unassessed")
+                                        for e in c.get("known_problems", [])})) or sufficiency.get(c.get("family_id"), "unassessed"),
+                   "knownProblems": projected_claim(c)["knownProblems"], "olderProblems": projected_claim(c)["olderProblems"],
+                   "olderCandidateId": c.get("older_candidate_id"), "group": c["duplicate_group"]}
                   for c in (grade["claims"] if grade else []) if c["anchor"]["item_id"] == f"item-{index}"]
         groups = {c.pop("group") for c in claims} - {None}
         items.append({"id": f"item-{index}", "claim": item.get("claim") or "Untitled finding",
@@ -182,10 +204,6 @@ def write_export(stage, selected, documents):
     for claim in documents["claim"]["claims"]:
         if claim["family_id"] is not None:
             manifestations.setdefault(claim["family_id"], []).append(claim["id"])
-    for batch in documents["grade"]["batches"]:
-        if batch.get("verdicts") == grading_validation.CONTRACT_V2:
-            raise current_grading.Inconsistent(f"{batch['run']} {batch['target']}: the export does not read grades saved "
-                                               f"under {grading_validation.CONTRACT_V2} yet")
     grades = {Path(b["run"]).name + "/" + r["attempt_id"]: (r, b["assessor"]) for b in documents["grade"]["batches"] for r in b["reviews"]}
     decisions = {d["id"]: d for d in documents["adjudication"]["decisions"]}
     rulings = {c["id"]: ruling(decisions, c["adjudication"], stage) for c in documents["claim"]["claims"]}
@@ -207,6 +225,10 @@ def write_export(stage, selected, documents):
                                                 if (url := ruling(decisions, f[d]["adjudication"], stage))],
                                     "manifestations": sorted(manifestations.get(f["id"], []))}
                                    for f in references[task["id"]]["families"]],
+                      "olderProblems": [{"id": p["id"], "title": p["title"], "trigger": p["trigger"],
+                                          "consequence": p["consequence"], "requiredOutcome": p["obligation"],
+                                          "concerns": p["concerns"], "admissionUrl": ruling(decisions, p["admission"], stage)}
+                                         for p in references[task["id"]].get("older_problems", [])],
                       "control": status["controls"][task["id"]], "controlReason": references[task["id"]]["control"]["reason"],
                       "controlRulingUrl": ruling(decisions, references[task["id"]]["control"]["adjudication"], stage),
                       "registerUrl": reference_url, "packetUrl": evidence(ROOT / task["packet"]["path"], stage),
@@ -257,7 +279,7 @@ def write_export(stage, selected, documents):
             outcomes.append({"configurationId": entry["id"], "taskId": task["id"], "status": "ran" if cells else "not run",
                 "reason": "Selected scheduled cells." if cells else "No selected scheduled cell.",
                 "trials": trials, "attemptIds": [a for c in cells for a in c["attempts"]]})
-    dataset = {"schemaVersion": 4, "release": "Current v1 preview", "revision": imported["revision"],
+    dataset = {"schemaVersion": 5, "release": "Current v1 preview", "revision": imported["revision"],
                "evidence": {"datasetHash": status["dataset_hash"],
                             "coverage": {"requiredReviews": status["required_reviews"], "assessedReviews": status["assessed_reviews"],
                                          "unresolvedRecoveries": status["unresolved_recoveries"],
@@ -267,7 +289,7 @@ def write_export(stage, selected, documents):
                "profileStatus": profiles["status"], "tasks": tasks, "configurations": configurations,
                "outcomes": outcomes, "attempts": list(attempts.values()),
                "candidates": [{"id": c["id"], "taskId": c["target"], "recordedAt": c["recorded_at"], "claim": c["claim"],
-                               "limits": c["limits"], "relevance": c["relevance"]}
+                               "limits": c["limits"], "relevance": c["relevance"], "kind": c.get("kind", "ordinary")}
                               for c in documents["candidate"]["candidates"] if c["decision"] is None],
                "import": {"files": len(imported["files"]), "transcripts": len(imported["transcripts"]),
                           "mismatches": sum(a["status"] == "mismatch" for a in imported["transcripts"])}}
@@ -293,6 +315,7 @@ def validate_export(stage, dataset):
     links = [dataset["tasks"][0]["registerUrl"]] if dataset["tasks"] else []
     for task in dataset["tasks"]:
         links += [task["packetUrl"]] + [task["controlRulingUrl"]] * bool(task["controlRulingUrl"])
+        links += [p["admissionUrl"] for p in task["olderProblems"] if p["admissionUrl"]]
         links += [r["url"] for family in task["families"] for r in family["rulings"]]
     for configuration in dataset["configurations"]:
         links += [release["provenanceUrl"] for release in configuration["skillReleases"]]
