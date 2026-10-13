@@ -1,6 +1,6 @@
 #!/bin/sh
 # usage: run.sh <scratch> <repository>
-# Builds base, head and six patched variants of tRPC's server source in <scratch>, outside the repository, and
+# Builds base, head and eight patched variants of tRPC's server source in <scratch>, outside the repository, and
 # type-checks the saved optional-field probe and four saved array probes with their controls against each.
 # <scratch>/env must hold typescript 5.1.3, zod 3.20.2 and @types/node 18.16.16 (bun add, in <scratch>/env).
 set -eu
@@ -14,7 +14,7 @@ ARRAY="04-uses-tuple-spread.ts 05-control-tuple-spread-no-middleware.ts 07-uses-
 mkdir -p "$S/trees/base" "$S/trees/head" "$S/variants" "$S/probes" "$S/results"
 git --git-dir="$M" archive 2abb2d5cd19740be37272dac6ad7fdd36244ae54 packages/server/src packages/client/src | tar -x -C "$S/trees/base"
 git --git-dir="$M" archive 7dc04a7e94654dfad6ef1289dfe01a0a206fff3b packages/server/src packages/client/src | tar -x -C "$S/trees/head"
-for pair in base+copy-only base+checks-only base+array-check head+copy-only head+checks-only head+array-check; do
+for pair in base+copy-only base+checks-only base+array-check base+copy-intersection head+copy-only head+checks-only head+array-check head+copy-intersection; do
   tree=${pair%%+*}; patch=${pair#*+}
   rm -rf "$S/variants/$pair"; cp -r "$S/trees/$tree" "$S/variants/$pair"
   (cd "$S/variants/$pair" && patch -p1 --quiet --no-backup-if-mismatch < "$HERE/patches/$patch-at-$tree.patch")
@@ -22,7 +22,7 @@ done
 cp "$K2/check.cjs" "$S/probes/k2-check.cjs"
 for p in $ARRAY; do cp "$K2/$p" "$S/probes/"; done
 ln -sfn "$S/env/node_modules" "$S/probes/node_modules"
-for name in base head base+copy-only head+copy-only base+checks-only head+checks-only base+array-check head+array-check; do
+for name in base head base+copy-only head+copy-only base+checks-only head+checks-only base+array-check head+array-check base+copy-intersection head+copy-intersection; do
   case $name in base|head) tree=$S/trees/$name ;; *) tree=$S/variants/$name ;; esac
   ln -sfn "$S/env/node_modules" "$tree/node_modules"
   mkdir -p "$S/runs/$name"
