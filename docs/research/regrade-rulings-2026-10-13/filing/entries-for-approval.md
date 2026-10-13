@@ -1,6 +1,6 @@
-# Answer-key wording for the owner to accept
+# Answer-key wording the owner accepted
 
-`record.py` writes this file from [`plan.v1.json`](plan.v1.json) each time it files. The titles below are in `bench/grading/current/references.json` as written here. The owner accepts them before the pull request merges. To change one, run `record.py --undo`, edit the title in the plan and run `record.py` again; nothing else in the plan depends on a title.
+`record.py` writes this file from [`plan.v1.json`](plan.v1.json) each time it files. The titles below are in `bench/grading/current/references.json` as written here. The owner was shown them on 2026-10-13 and chose "Accept all as drafted"; [`answers.md`](answers.md) has the question.
 
 Each ruling file under [`../rulings/`](../rulings/) holds the owner's answer that a title rests on. The label of a new known problem is the owner's. The label of a widened one stays as it was.
 
