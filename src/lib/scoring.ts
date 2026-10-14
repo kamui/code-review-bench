@@ -4,10 +4,12 @@ import type { Assessment, Attempt, Dataset, Family, Task } from './data'
 export const bands = [...impactBands, 'all'] as const
 export const estimators = ['equalProblem', 'equalPr'] as const
 export const conditionalMetrics = ['refuted', 'unsupported', 'unresolved', 'harmful', 'clean'] as const
+export const preExistingLabels = ['serious', 'other-material'] as const
 export type Band = (typeof bands)[number]
 export type Estimator = (typeof estimators)[number]
 export type ClaimOutcome = (typeof claimOutcomes)[number]
 export type ConditionalMetric = (typeof conditionalMetrics)[number]
+export type PreExistingLabel = (typeof preExistingLabels)[number]
 export type Measure<T = number> = { kind: 'available'; value: T } | { kind: 'unavailable'; reason: string }
 export type Selection = { taskIds: string[]; concern: string | null }
 export type TrialState = 'pending' | 'unadmitted' | 'admitted'
@@ -310,30 +312,37 @@ function preExistingProblems(dataset: Dataset, ran: Cell[], selection: Selection
   const catalog = dataset.tasks.filter(task => selection.taskIds.includes(task.id)).flatMap(task =>
     (task.preExistingProblems ?? []).filter(problem => selection.concern === null || problem.concerns.includes(selection.concern))
       .map(problem => ({ taskId: task.id, problem })))
-  const relevant = ran.filter(cell => catalog.some(entry => entry.taskId === cell.task.id))
-  const reviews = admittedReviews(relevant)
-  const pending = delivery(relevant).pending
-  const rows = catalog.map(({ taskId, problem }) => {
-    const assessed = reviews.filter(review => review.taskId === taskId && review.assessment?.state === 'assessed')
-      .flatMap(review => review.assessment?.preExistingProblems?.find(row => row.problemId === problem.id) ?? [])
-    return { taskId, problemId: problem.id, title: problem.title, raised: assessed.filter(row => row.outcome === 'raised').length,
-      assessed: assessed.length, unresolved: assessed.filter(row => row.outcome === 'unresolved').length }
-  })
-  const assessed = reviews.filter(review => review.assessment?.state === 'assessed' && catalog.filter(entry => entry.taskId === review.taskId)
-    .every(entry => review.assessment?.preExistingProblems?.some(row => row.problemId === entry.problem.id))).length
-  const unresolved = sum(rows.map(row => row.unresolved))
-  const observed = { raised: sum(rows.map(row => row.raised)), problems: rows.filter(row => row.raised > 0).length,
-    reviews: reviews.filter(review => review.assessment?.state === 'assessed' && review.assessment.preExistingProblems?.some(row =>
-      row.outcome === 'raised' && catalog.some(entry => entry.taskId === review.taskId && entry.problem.id === row.problemId))).length }
   const candidates = dataset.candidates.filter(candidate => selection.taskIds.includes(candidate.taskId) && candidate.kind === 'pre-existing-problem')
-  const blocked = gap ?? (catalog.length ? null : 'No approved pre-existing problems in this selection.')
-    ?? (pending ? 'Scheduled trials await execution.' : null) ?? (reviews.length ? null : 'No admitted reviews for the pre-existing-problem catalog.')
-    ?? (assessed < reviews.length ? 'Admitted reviews await pre-existing-problem assessment.' : null)
-    ?? (unresolved ? 'Whether a pre-existing problem was raised is unresolved.' : null)
-    ?? (candidates.length ? 'Pre-existing-problem candidates await admission.' : null)
-  return { catalog: catalog.length, admitted: reviews.length, assessed, unresolved, pending, candidates,
-    observed, rows, raised: gated(blocked, available(observed.raised)),
-    problems: gated(blocked, available(observed.problems)), reviews: gated(blocked, available(observed.reviews)) }
+  const unlabelled = catalog.filter(entry => entry.problem.impact === 'unknown').length
+  const counts = (label: PreExistingLabel) => {
+    const labelled = catalog.filter(entry => entry.problem.impact === label)
+    const relevant = ran.filter(cell => labelled.some(entry => entry.taskId === cell.task.id))
+    const reviews = admittedReviews(relevant)
+    const pending = delivery(relevant).pending
+    const rows = labelled.map(({ taskId, problem }) => {
+      const assessed = reviews.filter(review => review.taskId === taskId && review.assessment?.state === 'assessed')
+        .flatMap(review => review.assessment?.preExistingProblems?.find(row => row.problemId === problem.id) ?? [])
+      return { taskId, problemId: problem.id, title: problem.title, raised: assessed.filter(row => row.outcome === 'raised').length,
+        assessed: assessed.length, unresolved: assessed.filter(row => row.outcome === 'unresolved').length }
+    })
+    const assessed = reviews.filter(review => review.assessment?.state === 'assessed' && labelled.filter(entry => entry.taskId === review.taskId)
+      .every(entry => review.assessment?.preExistingProblems?.some(row => row.problemId === entry.problem.id))).length
+    const unresolved = sum(rows.map(row => row.unresolved))
+    const observed = { raised: sum(rows.map(row => row.raised)), problems: rows.filter(row => row.raised > 0).length,
+      reviews: reviews.filter(review => review.assessment?.state === 'assessed' && review.assessment.preExistingProblems?.some(row =>
+        row.outcome === 'raised' && labelled.some(entry => entry.taskId === review.taskId && entry.problem.id === row.problemId))).length }
+    const blocked = gap ?? (catalog.length ? null : 'No approved pre-existing problems in this selection.')
+      ?? (unlabelled ? `${plural(unlabelled, 'pre-existing problem awaits', 'pre-existing problems await')} an impact label.` : null)
+      ?? (labelled.length ? null : `No approved pre-existing problem in this selection is labelled ${label}.`)
+      ?? (pending ? 'Scheduled trials await execution.' : null) ?? (reviews.length ? null : 'No admitted reviews for the pre-existing-problem catalog.')
+      ?? (assessed < reviews.length ? 'Admitted reviews await pre-existing-problem assessment.' : null)
+      ?? (unresolved ? 'Whether a pre-existing problem was raised is unresolved.' : null)
+      ?? (candidates.length ? 'Pre-existing-problem candidates await admission.' : null)
+    return { catalog: labelled.length, admitted: reviews.length, assessed, unresolved, pending, observed, rows,
+      raised: gated(blocked, available(observed.raised)), problems: gated(blocked, available(observed.problems)),
+      reviews: gated(blocked, available(observed.reviews)) }
+  }
+  return { candidates, labels: { serious: counts('serious'), 'other-material': counts('other-material') } }
 }
 
 function advice(ran: Cell[]) {

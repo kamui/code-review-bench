@@ -141,27 +141,40 @@ export function scorecardFixture(): Dataset {
     attempts: dataset.attempts.map(attempt => ({ ...attempt, label: attempt.id.replace('run/', ''), detailUrl: `/data/attempts/${attempt.id}.json` })) }
 }
 
+/**
+ * The scorecard fixture with a serious pre-existing problem on `audited`, an other-material one on `empty` and a
+ * candidate that awaits admission on `novel`. With every PR selected the candidate withholds the final counts;
+ * without `novel` each label is final or withheld for its own reason; a selection of the other PRs has no approved
+ * problem.
+ */
 export function preExistingScorecardFixture(): Dataset {
   const dataset = scorecardFixture()
-  const audited = dataset.tasks.find(task => task.id === 'audited')
-  if (!audited) throw new Error('Fixture lacks audited task')
-  audited.preExistingProblems = [{ id: 'OP-fixture', title: 'Pre-existing truncation loses a character', trigger: 'Unicode message',
-    consequence: 'Event is refused', requiredOutcome: 'Deliver event', concerns: ['Testing'], admissionUrl: null }]
-  for (const outcome of dataset.outcomes.filter(row => row.taskId === audited.id)) {
-    for (const id of outcome.attemptIds) {
-      const attempt = dataset.attempts.find(row => row.id === id)
-      if (!attempt?.assessment) continue
-      if (outcome.configurationId === 'ungraded' && id === outcome.attemptIds[0]) {
-        attempt.assessment.preExistingProblems = null
-        continue
-      }
-      const raised = outcome.configurationId === 'steady'
-      const unresolved = outcome.configurationId === 'risky'
-      if (raised) attempt.assessment.claims.push(claim('pre-existing-fixture', 'scope-excluded', { nativeOutcome: 'outside-this-change',
-        preExistingProblems: [{ problemId: 'OP-fixture', saysWhat: 'yes', identifiesCause: 'no', reason: 'Describes refused event' }] }))
-      attempt.assessment.preExistingProblems = [{ problemId: 'OP-fixture', outcome: raised ? 'raised' : unresolved ? 'unresolved' : 'not-raised',
-        claimIds: raised ? ['pre-existing-fixture'] : [], saysWhat: raised ? 'yes' : unresolved ? 'cannot-tell' : 'no', identifiesCause: 'no' }]
+  const admit = (taskId: string, problem: NonNullable<Task['preExistingProblems']>[number], outcome: (configurationId: string, index: number) => 'raised' | 'not-raised' | 'unresolved' | null) => {
+    const subject = dataset.tasks.find(task => task.id === taskId)
+    if (!subject) throw new Error(`Fixture lacks the ${taskId} task`)
+    subject.preExistingProblems = [problem]
+    for (const row of dataset.outcomes.filter(row => row.taskId === taskId)) {
+      row.attemptIds.forEach((id, index) => {
+        const assessment = dataset.attempts.find(attempt => attempt.id === id)?.assessment
+        const result = outcome(row.configurationId, index)
+        if (!assessment) return
+        if (result === null) { assessment.preExistingProblems = null; return }
+        if (result === 'raised') assessment.claims.push(claim(`raises-${problem.id}`, 'scope-excluded', { nativeOutcome: 'outside-this-change',
+          preExistingProblems: [{ problemId: problem.id, saysWhat: 'yes', identifiesCause: 'no', reason: 'Says what goes wrong' }] }))
+        assessment.preExistingProblems = [{ problemId: problem.id, outcome: result, claimIds: result === 'raised' ? [`raises-${problem.id}`] : [],
+          saysWhat: result === 'raised' ? 'yes' : result === 'unresolved' ? 'cannot-tell' : 'no', identifiesCause: 'no' }]
+      })
     }
   }
+  admit('audited', { id: 'OP-fixture', title: 'Pre-existing truncation loses a character', trigger: 'Unicode message',
+    consequence: 'Event is refused', requiredOutcome: 'Deliver event', concerns: ['Testing'], impact: 'serious', admissionUrl: null },
+  (configurationId, index) => configurationId === 'ungraded' && index === 0 ? null
+    : configurationId === 'steady' ? 'raised' : configurationId === 'risky' ? 'unresolved' : 'not-raised')
+  admit('empty', { id: 'OP-fixture-header', title: 'Pre-existing retry drops a header', trigger: 'Second attempt of a request',
+    consequence: 'Request is refused', requiredOutcome: 'Resend every header', concerns: ['Maintainability'], impact: 'other-material', admissionUrl: null },
+  (configurationId, index) => (configurationId === 'steady' && index < 2) || (configurationId === 'selective' && index === 0) ? 'raised' : 'not-raised')
+  dataset.candidates.push({ id: 'NC-00000000f1c6', taskId: 'novel', kind: 'pre-existing-problem', recordedAt: '2026-09-22T12:00:00Z',
+    claim: 'The cache was never invalidated on tenant deletion, before or after this change.',
+    limits: 'Read from the source at both commits; not run.', relevance: 'Would add a pre-existing problem to this task once admitted.' })
   return datasetSchema.parse(dataset)
 }

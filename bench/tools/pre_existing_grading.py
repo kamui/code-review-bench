@@ -9,11 +9,17 @@ FIELDS = {"pre_existing_problems", "pre_existing_candidate"}
 def verdict_problems(claim, families, pre_existing):
     if not isinstance(claim, dict) or set(claim) != claim_grading.V2_CLAIM_FIELDS | FIELDS:
         return ["v3 claims need the v2 fields plus pre_existing_problems and pre_existing_candidate"]
-    problems = claim_grading.verdict_problems_v2({k: v for k, v in claim.items() if k not in FIELDS}, families)
+    return (claim_grading.verdict_problems_v2({k: v for k, v in claim.items() if k not in FIELDS}, families)
+            + raising_problems(claim, pre_existing))
+
+
+def raising_problems(claim, pre_existing):
+    """What a claim's pre-existing-problem entries and candidate break: an unlisted problem, an ordinary problem
+    named beside them, or a claim that is neither true and outside this change nor unresolved for want of evidence."""
     entries, candidate = claim["pre_existing_problems"], claim["pre_existing_candidate"]
     if not isinstance(entries, list):
-        return problems + ["pre_existing_problems must be a list"]
-    ids = set()
+        return ["pre_existing_problems must be a list"]
+    problems, ids = [], set()
     for entry in entries:
         if not (isinstance(entry, dict) and set(entry) == {"problem", "says_what", "identifies_cause", "reason"}
                 and isinstance(entry["problem"], str) and entry["problem"] in pre_existing
