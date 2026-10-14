@@ -110,7 +110,7 @@ def probe(evidence_dir: Path | None = None) -> dict:
         validator = work / "validator"
         (validator / "tools").mkdir(parents=True)
         tools = Path(grading_policy.__file__).resolve().parent
-        for name in ("grading_validation.py", "claim_grading.py", "check_manifest.py"):
+        for name in ("grading_validation.py", "claim_grading.py", "pre_existing_grading.py", "check_manifest.py"):
             shutil.copyfile(tools / name, validator / "tools" / name)
         (validator / "inputs.json").write_text(json.dumps({"families": [], "canonical": {}, "matches": {}, "links": {},
                                                          "reviews": {"blind-probe": {"items": []}}}))

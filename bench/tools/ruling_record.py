@@ -32,6 +32,9 @@ BEFORE = ("ruling", "decision_type", "group", "reconstructed", "dossier", "rule"
 ANSWER = ("by", "model", "family", "blind", "exposure", "outcome", "clauses", "conflict", "nearest", "confidence", "would_settle", "rule_gap", "reason")
 AFTER = ("ruling", "before", "asked", "outcome", "by_default", "ground", "rule_sentence_shown")
 DECISION_TYPES = {
+    "pre-existing-admission": {"outcomes": ("admitted", "not-admitted", "cannot-tell"), "blind": 2},
+    "pre-existing-raise": {"outcomes": ("recovers", "does-not-recover", "cannot-tell"), "blind": 2},
+    "pre-existing-grouping": {"outcomes": ("same-family", "separate", "cannot-tell"), "blind": 2},
     "candidate": {"outcomes": (*RANK, "refuted", "unproven", "outside-scope", "duplicate", "cannot-tell"), "blind": 2},
     "recovery": {"outcomes": ("recovers", "does-not-recover", "cannot-tell"), "blind": 2},
     "grouping": {"outcomes": ("same-family", "separate", "cannot-tell"), "blind": 2},
@@ -39,6 +42,9 @@ DECISION_TYPES = {
     "control": {"outcomes": ("audited-clean", "provisional", "known-problems"), "blind": 1},
     "reconciliation": {"outcomes": ("first-error", "first-correct", "undetermined"), "blind": 0},
 }
+EARLIER_TYPES = {"older-admission": "pre-existing-admission", "older-credit": "pre-existing-raise", "older-grouping": "pre-existing-grouping"}
+EARLIER_ROUND = {"path": "docs/research/older-problem-activation-2026-10-13/opening.json",
+                 "sha256": "f5764d9090b87173c6905ced49d33e83fd0ebb0849450a02c35d2e421a0a3a15"}
 BLIND_ANSWERS = {1: "one blind answer", 2: "two blind answers"}
 NAMES_A_PROBLEM = ("duplicate", "same-family")
 COULD_NOT_TELL = ("unproven", "cannot-tell", "unknown", "undetermined")
@@ -59,6 +65,14 @@ ROUND = ("round", "opened", "closed", "no_record")
 
 def load(path):
     return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def read_before(path):
+    """A before-record is never rewritten, so one of the round that opened before the decision types were renamed keeps
+    its earlier spelling on disk and is read under the current name."""
+    record = load(path)
+    current = EARLIER_TYPES.get(record.get("decision_type")) if record.get("round_opening") == EARLIER_ROUND else None
+    return {**record, "decision_type": current} if current else record
 
 
 def digest(path):
@@ -151,7 +165,7 @@ def answer_faults(record, answer, rulings, root):
     if answer["outcome"] in NAMES_A_PROBLEM and not answer.get("same_fault_as"):
         found.append(f"{by}: `{answer['outcome']}` needs `same_fault_as`, the problem it names")
     facts = answer.get("facts")
-    if decision_type == "recovery" and not (reconstructed and facts is None) and not two_facts(facts):
+    if decision_type in ("recovery", "pre-existing-raise") and not (reconstructed and facts is None) and not two_facts(facts):
         found.append(f"{by}: a recovery answer needs `facts`: {' and '.join(FACTS)}, each yes, no or cannot-tell")
     if answer["written"] not in WRITTEN or (not reconstructed and answer["written"] != "before-question"):
         found.append(f"{by}: `written` must be one of {', '.join(WRITTEN)}, and before-question in a record that is not reconstructed")
@@ -307,14 +321,14 @@ def second_after_faults(record, after, root):
         found.append("`by_default` must be true or false")
     if after["ground"] is not None and not (isinstance(after["ground"], str) and after["ground"].strip()):
         found.append("`ground` must be the user's own words, or null when they gave none")
-    if record["decision_type"] == "recovery" and not two_facts(after.get("facts")):
+    if record["decision_type"] in ("recovery", "pre-existing-raise") and not two_facts(after.get("facts")):
         found.append(f"a recovery decision needs `facts`: {' and '.join(FACTS)}, each yes, no or cannot-tell")
     if after["outcome"] in NAMES_A_PROBLEM and not (isinstance(after.get("same_fault_as"), str) and after["same_fault_as"].strip()):
         found.append(f"`{after['outcome']}` needs `same_fault_as`, the problem it names")
     miss, lesson = after["miss"], after["lesson"]
     first = recommender(record)
     owed = (first["outcome"] != after["outcome"] or asked > 1
-            or (record["decision_type"] == "recovery" and two_facts(after.get("facts")) and first.get("facts") != after.get("facts"))
+            or (record["decision_type"] in ("recovery", "pre-existing-raise") and two_facts(after.get("facts")) and first.get("facts") != after.get("facts"))
             or (after["outcome"] in NAMES_A_PROBLEM and after.get("same_fault_as")
                 and first.get("same_fault_as") != after["same_fault_as"]))
     if miss is not None and not (isinstance(miss, dict) and miss.get("cause") in CAUSES and isinstance(miss.get("note"), str) and miss["note"].strip()):
@@ -429,7 +443,7 @@ if __name__ == "__main__":
         parser.add_argument("--policy", default=delegation.POLICY)
         args = parser.parse_args()
         try:
-            before = load(args.before)
+            before = read_before(args.before)
             problems = faults(before)
             if before.get("contract") != 2:
                 problems.append("`route` needs a contract 2 record, which pins the case file the user is shown")
@@ -445,7 +459,7 @@ if __name__ == "__main__":
             parser.exit(1, f"{error}\n")
         raise SystemExit(0)
     before_path, *after_path = sys.argv[1:3]
-    record = load(before_path)
+    record = read_before(before_path)
     problems = faults(record)
     after = load(after_path[0]) if after_path else None
     if after and not problems:
