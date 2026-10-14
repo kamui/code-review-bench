@@ -1,0 +1,15 @@
+| Probe | head | fix-fitting-pairs |
+| --- | --- | --- |
+| `GT-j4-brand-1-string-fn.ts` | **TS2345** | **TS2345** |
+| `GT-j4-brand-2-brand-fn.ts` | **TS2345** | **TS2345** |
+| `GT-j4-brand-3-number.ts` | **TS2345** | **TS2345** |
+| `GT-j4-brand-4-concat.ts` | **TS2345** | **TS2345** |
+| `GT-j5-optional-1-call.ts` | **TS2345** | **TS2345** |
+| `GT-j5-optional-2-input-type.ts` | **TS2741** | **TS2741** |
+| `GT-j5-optional-3-custom-validator.ts` | **TS2345** | **TS2345** |
+| `GT-j5-optional-4-concat.ts` | **TS2345** | **TS2345** |
+| `GT-j7-04-uses-tuple-spread.ts` | **TS2556** | **TS2556** |
+| `GT-j7-07-uses-class-private.ts` | **TS2345** | **TS2345** |
+| `GT-j7-13-promise-all.ts` | **TS2322** | **TS2322** |
+| `GT-j7-15-object-values.ts` | **TS2322** | **TS2322** |
+| `control-string-input.ts` | compiles | compiles |

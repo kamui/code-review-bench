@@ -1,0 +1,1125 @@
+# Yet Another Design System
+
+A production design system built by a **product designer who does not write code**. Treat the human
+as an expert on design-system concepts (tokens, variants, semantics, a11y) but assume they will not
+hand-edit code — explain choices in plain language, and keep the setup runnable with simple commands.
+
+## Goal
+
+Ship a themeable React component library whose look is driven entirely by design tokens exported from
+Figma, so the code matches Figma and both stay in sync.
+
+## Stack
+
+- **React 19 + TypeScript**, built with **Vite**
+- **Tailwind CSS v4** (via `@tailwindcss/vite`) — theme lives in CSS, not `tailwind.config.js`
+- **Base UI** — headless, accessible primitives. Package is **`@base-ui/react`** (v1+; it was renamed
+  from `@base-ui-components/react`, so ignore older docs that use the old name). Import e.g.
+  `import { Dialog } from '@base-ui/react'` or subpath `'@base-ui/react/dialog'`. Components use the
+  compound pattern (a `Root` orchestrates state; child parts consume context).
+- **Storybook** for previewing/testing each component in isolation
+- **`tailwind-variants`** maps Figma variants → class sets; `src/lib/cn.ts` (clsx + tailwind-merge)
+  lets a caller override a component's defaults
+- **`lucide-react`** for icons, wrapped by the `Icon` component
+- Fonts: **Inter** (sans), **Geist Mono** (mono), self-hosted via `@fontsource`
+- **Recharts** for data visualization — the library shadcn/ui uses. Charts are SVG, and color
+  reaches them as `stroke="var(--data-viz-categorical-01)"` rather than as a class, because SVG
+  attributes take values
+
+## Commands
+
+```bash
+npm run dev          # token playground (localhost:5173)
+npm run storybook    # component library (localhost:6006)
+npm run build        # tsc -b && vite build
+npm run lint         # oxlint
+npm test             # every story, in real Chromium, with axe
+python3 generate.py  # rebuild src/styles/theme.css from tokens/*.json
+```
+
+`lint`, `build` and `test` run on every pull request and on `main`
+(`.github/workflows/ci.yml`). **`npm run build` is the load-bearing one**, because
+it is the only step that type-checks: Vite strips types without looking at them,
+so Storybook and the story suite both pass happily on code `tsc` rejects. That is
+exactly how a type error reached `main` once — every story green, `npm run build`
+red — and it is the reason the check exists.
+
+## Design tokens
+
+`src/styles/theme.css` is **generated — never hand-edit it.** Structure:
+
+- `@theme { --color-* … }` — the **primitive** palette → utilities like `bg-blue-500`. Also static
+  dimensions: `--spacing: 0.25rem`, `--radius-*`, `--text-*` (+ `--text-*--line-height`), `--blur-*`,
+  `--shadow-*`, `--inset-shadow-*`, `--font-sans/-mono`, `--font-weight-*`.
+- `:root { --neutral-50 … --neutral-950 }` plus one `:root[data-neutral="…"]` block per ramp — the
+  **neutral tier**, see below.
+- `:root { --surface-canvas … }` and `.dark { … }` — the **semantic** tokens (role-based, theme-aware).
+- `@theme inline { --color-surface-canvas: var(--surface-canvas) … }` — exposes semantic tokens as
+  color utilities.
+- A trailing `:root` for reference-only values: `--border-width-*`, `--opacity-*`,
+  `--icon-stroke-weight`.
+
+### The golden rule for components
+
+**Style components with semantic-token utilities, never raw primitives or hex.** Use classes like
+`bg-surface-background-primary`, `text-content-primary`, `border-surface-border`,
+`bg-action-primary-background`, `text-action-primary-foreground`, `hover:bg-action-primary-background-hover`,
+`shadow-low`, `rounded-md`. Primitive utilities (`bg-blue-500`) exist but are for defining semantics,
+not for use inside components.
+
+### Dark mode
+
+Toggled by `class="dark"` on `<html>`. Because color lives in the semantic layer, **do not write
+`dark:` variants for color** — the token swaps itself. A theme toggle just adds/removes that class.
+
+### The neutral is swappable
+
+Nine ramps are neutrals — **Stone** (default), Taupe, Mauve, Mist, Olive, Slate, Gray, Zinc,
+Neutral. Choosing one is `<html data-neutral="taupe">`, and it moves every surface, border, text
+color, action, input, focus ring, shadow and neutral badge in both themes at once.
+
+The seam is an eleven-step alias tier between primitives and semantics. **No semantic token names a
+ramp** — `--surface-background-emphasized: var(--neutral-800)`, never `var(--color-stone-800)`. Because no
+component reads a primitive either, the semantic layer is a complete choke point and the swap is
+total with zero per-component work. That property is worth protecting: a component that reaches for
+`bg-stone-200` would be the one thing on the page that does not follow.
+
+Three things that are easy to get wrong:
+
+- **`--neutral-800` ≠ `--color-neutral-800`.** The first is the tier, the second is Tailwind's
+  Neutral ramp. `--color-` marks a primitive everywhere in this system, and that prefix is the whole
+  distinction. The tier is deliberately **not** in `@theme`: there it would generate `bg-neutral-*`
+  and shadow the real scale's utilities.
+- **`:root[data-neutral=…]` is (0,2,0)**, so it beats bare `:root` (0,1,0) regardless of source
+  order. Both selectors land on the same `<html>` element, so specificity is doing real work here.
+- **The ramp is orthogonal to the theme.** It composes with `.dark` instead of multiplying against
+  it — the semantic layer already decides which step each theme uses.
+
+**A semantic alias to `@Stone/N` means the tier, not the ramp.** `generate.py` reinterprets it and
+emits `var(--neutral-N)`. The rule exists because the tier used to have no counterpart in Figma —
+a semantic token could only alias the *primitive* Stone scale.
+
+**Figma grew the collection on 2026-08-31, and the rule still has not retired.** The file now has a
+real `Neutral Palette` collection: eleven variables named `50`…`950`, and nine modes — Stone, Taupe,
+Mauve, Mist, Olive, Slate, Gray, Zinc, Neutral — in that order, each mode aliasing the matching
+Tailwind ramp. That is `NEUTRAL_SCALES` × `NEUTRAL_STEPS` exactly, mirrored at source, and every
+neutral in the semantic layer now aliases it instead of Stone.
+
+What blocks the retirement is not the collection, it is the **export encoding**, which nobody has
+seen yet. The exporter writes an alias as `@<variable name>`, and these variables are named bare
+numbers, so `@Neutral Palette::800` has no obvious spelling: `@800` carries no ramp at all, and
+`@Neutral/800` collides head-on with Tailwind's Neutral ramp, which `Data Viz` really does use.
+**One real re-export settles it** — until then `NEUTRAL_ROLE = "Stone"` is still the correct reading
+of the JSON on disk, and that was measured, not assumed (see below).
+
+There was a second rule beside it renaming `Decorative/Stone` to `Decorative/Neutral`, written into
+the generator rather than the JSON so a re-export could not undo it. Figma has since renamed it at
+source and the rule is gone — the regenerated `theme.css` came out byte-identical, which is what a
+clean retirement looks like.
+
+The generator also re-points the **alpha variants**. Ten of the raw hex values in the semantic layer
+are the neutral at some alpha — ghost backgrounds, both overlays, both shadows. Left as `oklch()`
+literals they freeze at Stone and stay stone-tinted on every other ramp, which is exactly what makes
+a swap look half-applied. They are matched by RGB against the default ramp and emitted as
+`color-mix(in oklab, var(--neutral-800) 10%, transparent)`; the run prints every one it re-points.
+`#ffffff99` and `#00000080` do not match and stay literal, which is right — white and black are not
+neutrals in the swappable sense. The Data Viz accessibility border used to sit in that list too; on
+2026-08-27 Figma moved it from `#162020`/`#f3f4f4` to `#1b1816`/`#f5f5f5`, which *are* the neutral at
+some alpha, so it now re-points onto `--neutral-900`/`--neutral-100` and follows the ramp like the
+rest. The old value carried a faint teal cast (`oklch(23.4% 0.0143 196.218)`) that froze on every ramp.
+
+**That RGB matching is now a confirmed guess rather than a live one.** The same 2026-08-31 change
+also declares the alpha in Figma: those twelve values are no longer flat hex but a
+`VARIABLE_EXPRESSION` with `expressionFunction: "COMPOSE_COLOR"` and two arguments — a color alias
+and an opacity alias, the second pointing at the `opacity/opacity-N` FLOAT variables in the `Design
+Tokens` collection. So Figma now states the pair the generator was inferring, and states it the same
+way: `Surface/Inner Shadow` light is `Neutral Palette::800 × opacity-10`, which is precisely the
+`color-mix(… var(--neutral-800) 10% …)` already being emitted. White and black stay white and black
+there too (`Surface/Drop Shadow` dark is `Black × opacity-50`), so the "do not match, stay literal"
+branch is right for the same reason it always was.
+
+**The whole thing was checked by diff, not by eye.** Reading all 181 Semantic Theme variables with
+both modes resolved and comparing against `tokens/semantic.json` gave 180 names identical, no
+additions, no removals, and only **two** value differences — both applied here:
+
+- `Data Viz/Utility/Accessibility Overlay` went from 56% to 55% in both themes — the 8-bit `8f`
+  became a round `opacity-55`, which is the same value written honestly.
+- `Action/Ghost/Border Hover` **dark** went from 10% to 0%. That one was a slip while rebuilding the
+  token, not a decision: Nathan confirmed the value is **10%, in both modes**. So light moved 0% →
+  10% as well, and the ghost button now gains a faint hover border in light mode that it never had.
+  It sits 10%-over-10% on `Action/Ghost/Background Hover`, so it reads as a denser edge rather than a
+  distinct ring, which is the intent.
+
+  Figma has caught up — the token reads `opacity/opacity-10` in both modes. It had to be fixed by
+  hand: **the Plugin API cannot write the new composed values.** `setValueForMode` answers
+  `Composed color variable values are not supported`, so `use_figma` can read a `COMPOSE_COLOR`
+  expression but never author one, and any change to one of these twelve tokens is a manual edit in
+  the Figma UI. Do not route around that by writing a flat `#rrggbbaa` back: it would regress the
+  token from a ramp-following alias to a hex frozen at Stone, which is the exact bug the collection
+  was created to fix.
+
+Both sides agree as of 2026-08-31, and that is a measurement too: FNV-1a fingerprints of
+`name|light|dark`, folded per top-level group in the export's own encoding, match across all eight
+groups and over all 180 tokens (`020c3225`). That is the cheap form of the diff — two short outputs
+instead of two full dumps — and it is the one to reach for when checking whether Figma and
+`tokens/*.json` have drifted. Give the value encoder a **loud failure** for an unrecognized shape
+(return null and collect the nulls), or a `COMPOSE_COLOR` stringifies to `"[object Object]"` and the
+dump looks clean while hiding twelve tokens.
+
+The 181st variable was **`Status`, a BOOLEAN sitting in a color collection** with the value `false`
+in both modes — it would have made `generate.py` emit a broken `--status: False;` line. It was
+**deleted on 2026-08-31 at Nathan's instruction**, and `Semantic Theme` is now 180 variables, all
+`COLOR`.
+
+**It was not a stray, and it is worth knowing why the first read said it was.** `Status` was doing
+real work: bound to `visible` on a `Status` instance inside the `Start Slot Items` slot of all six
+`Nav Item` variants (`Type=Primary|Secondary` × `State=Default|Hover|Selected`), so one switch
+flipped the status indicator across the whole set. A BOOLEAN in a color collection *looks* like a
+mis-click, and it was not — **check the bindings before calling a variable unused.** The six
+instances were unbound first and pinned to their resolved value (`visible: false`), so nothing was
+left dangling and no other binding on them was touched.
+
+To restore the switch: create a BOOLEAN variable in a single-mode collection (not `Semantic Theme`,
+which would put the export problem straight back) and rebind `visible` on
+
+```
+40004485:27348  Type=Secondary, State=Default    40004485:27351  Type=Primary,   State=Hover
+40004485:27349  Type=Primary,   State=Selected   40004485:27352  Type=Secondary, State=Hover
+40004485:27350  Type=Secondary, State=Selected   40004485:27353  Type=Primary,   State=Default
+```
+
+**A removed variable still resolves by id.** `getVariableByIdAsync` kept returning
+`{id, name: "Status"}` after `remove()`, in a later script run, with the variable gone from the
+collection. So "does the id still resolve" is not a deletion test — check
+`collection.variableIds.indexOf(id)`, or look the name up through the collection.
+
+### The navigation theme tier
+
+A second swappable collection alongside the neutral one: **`Navigation Theme`**, seven variables
+(`Background`, `Nav Content/Primary`, `Nav Content/Subtle`, `Nav Item/Background Hover`,
+`Nav Item/Border Hover`, `Nav Item/Background Selected`, `Nav Item/Border Selected`) across
+**thirty-seven modes** — Neutral and Neutral Inverse, Canvas, and a light/inverse pair for each of
+the seventeen chromatic Tailwind ramps.
+
+It is in code as of 2026-09-01: `tokens/navigation.json`, section 1c of `generate.py`, section 2b of
+`theme.css`, and `NavItem` / `SideNav` / `TopNav` consuming it. The switch is one attribute,
+`<html data-nav-theme="blue-inverse">`, exactly like the neutral tier's.
+
+**Nine of those modes are Figma's and twenty-eight are not, and the split is a hard limit rather
+than a preference.** A Figma variable collection holds a bounded number of modes and this one is
+full, so Blue, Purple, Pink, the two neutrals and Canvas come from the export, and the other
+fourteen ramps are derived in `generate.py` from Blue's own steps. `tokens/navigation.json` stays
+what it says it is — the export, and nothing else — because a re-export overwrites that file
+wholesale and anything hand-added to it would go with it. **Adding a ramp is one word in
+`NAV_CODE_RAMPS`**, and retuning Blue in Figma retunes all twenty-eight on the next run.
+
+Three things about it are worth knowing before building anything else on it:
+
+- **It is not theme-aware, on purpose.** All but one mode is absolute — `Neutral` is a white
+  nav in dark mode too. Only `Canvas` aliases back into `Semantic Theme`, so only that one follows
+  `.dark`. That is the opposite of how the neutral tier composes, and it is the design. Measured both
+  ways once the tier existed: `--nav-content-primary` moves between light and dark on `Canvas` and
+  holds everywhere else.
+- **Blue's recipe does not generalize, and that was measured the hard way.** Every derived mode is
+  Blue's steps with the ramp name swapped — except `Nav Content/Subtle` in the light variant, which
+  is step **700** rather than Blue's 600. Those are the 12px `SideNav` group headers on a step-50
+  background, so they owe 4.5:1, and blue clears it at 600 only because blue is unusually dark
+  there (4.82:1). Thirteen of the seventeen ramps do not: yellow is 2.83:1, amber 3.08, teal 3.51.
+  **The generalization was checked by measurement and it failed** — the recipe is a starting point,
+  not a law, and `src/styles/nav-contrast.test.ts` now holds every mode to the threshold rather
+  than trusting a sweep.
+- **`Canvas` was `Transparent` until 2026-09-02**, and its `Background` was `Surface/Canvas` at alpha
+  0. The look did not change and the mechanism did: matching the canvas exactly is indistinguishable
+  from being see-through while nothing is behind it, but `MobileNav`'s sheet paints the same token and
+  opens *over* the page, where alpha 0 would have shown the content straight through its rows. A solid
+  colour equal to the canvas keeps the transparent appearance and gives the sheet something to sit on;
+  the name followed, saying what the value is rather than what it looks like. **Treat it as a
+  constraint** — an alpha-0 background here breaks the sheet. The `data-nav-theme` attribute value
+  changed with it, so an app pinning `transparent` needs the new spelling.
+- **The neutral modes go through `Neutral Palette`**, so a nav on `Neutral`/`Neutral Inverse` still
+  follows `data-neutral`, while every chromatic mode is pinned to a Tailwind ramp. That falls
+  out for free: `Neutral Palette` is the same eleven steps as `--neutral-*`, so an alias into it
+  lands on the tier the semantic layer already uses. It is also why the neutral family needs no
+  nav themes of its own — those two modes already cover all nine neutral ramps.
+
+**A Figma mode failed contrast once, and the fix went to Figma.** `Pink` shipped on 2026-09-02 with
+`Nav Content/Subtle` at `Pink/600` on `Pink/50` — 4.16:1, Blue's shape on a ramp not dark enough at
+600 to carry it. It was **fixed at source**: the variable now aliases `Pink/700` (5.39:1), and the
+export followed. An override in `generate.py` would have been quicker and would have been the exact
+drift this tier exists to prevent; a lowered threshold would have weakened all thirty-seven modes to
+excuse one. **That is the shape of the fix when `nav-contrast.test.ts` goes red on a mode from the
+export** — the derived ramps are the only ones `NAV_RECIPE_OVERRIDES` gets to speak for.
+
+**The export needs a value encoder that fails loudly, and this is where that was proved.** The first
+read of the collection came back with all forty-nine values `null` — not because Figma refused, but
+because the script had mapped `modeId` to `id` and then asked for `m.modeId`. A two-branch reader
+would have written a file full of `undefined` and looked clean doing it. Two shapes to know:
+`valuesByMode` is keyed by the collection's own mode ids, and a composed value's `type` is
+`VARIABLE_EXPRESSION`, not `EXPRESSION`.
+
+**The composed-value handler stays, though nothing uses it now.** `Background` in the old
+`Transparent` mode was `COMPOSE_COLOR(@Surface/Canvas, 0)`, and `generate.py` grew a general parser
+for it that emits `color-mix(in oklab, var(--x) N%, transparent)`. The 2026-09-02 rename to `Canvas`
+made that the collection's last composed value and removed it, so the parser is currently unexercised
+— and it is kept deliberately rather than pruned as dead code. `COMPOSE_COLOR` is a shape any Figma
+export can grow again at any time, and without the handler a future one would silently emit
+`/* unresolved */`. A parser for a value shape the source can produce is not dead; it is a guard.
+
+**Contrast is not automatic.** The ramps differ in lightness at the same step, so a pair that clears
+4.5:1 on Stone is not guaranteed to on Olive. `npm test` runs axe on every story but only at the
+default ramp, so a non-default ramp wants a manual sweep of `content-subtle` on `surface-canvas`
+and the secondary action pair.
+
+**What stays pinned, on purpose.** The four `Data Viz` `@Neutral/*` tokens do not follow the ramp:
+a chart benchmark wants a chromaless gray whatever the UI neutral is. They are now the *only*
+`@Neutral/*` references left in the semantic layer, which is the invariant to keep — a fifth one
+appearing is a Figma slip, not a decision. `Action/Overlay/Foreground` was exactly that: `@Neutral/950`
+in dark among an otherwise all-Stone family, caught when the tier was built and fixed in Figma to
+`@Black`, which is the symmetric partner of the `@White` it already had in light.
+
+**The categorical series is twelve categories, and per-mode again.** It changed twice in two days,
+and the second change reversed the first — worth reading as one story, because the reversal is the
+useful part.
+
+On **2026-08-27** all fourteen categories were made *mode-independent*: one alias serving both Light
+and Dark. Nathan confirmed that was deliberate. But one value has to sit on both canvases, and that
+is a hard ceiling: clearing 3:1 against both `Stone/100` and `Stone/950` confines a color to
+relative luminance **0.108–0.271** — in practice only steps 500/600/700 of any hue — and **the best
+any single color can manage against both at once is 4.28:1** (at L≈0.175). Nine of the fourteen
+cleared 3:1 on only one canvas. A second problem sat underneath: the fourteen used just **ten**
+distinct hues, four pairs separated by lightness alone, and inside that narrow band lightness is
+gone as a separator (`Pink/500` vs `Pink/700` is 1.64:1).
+
+On **2026-08-28** Nathan resolved both by splitting the modes again and dropping to **twelve**
+categories. `Categorical/13` and `/14` were **deleted** — not renamed. All twelve now use a distinct
+hue, so nothing depends on lightness to tell two categories apart, and ten of the twelve carry a
+different step per mode (`09` Purple/500 and `10` Green/600 happen to land on the same step in both,
+which is a coincidence of the ramp, not a return to the old rule).
+
+**The reversal is the thing to remember: per-mode values exist to buy contrast headroom.** Splitting
+the modes lifts the 4.28:1 ceiling entirely — `01` is now 6.69:1 on light and 10.77:1 on dark, which
+no single-value token could have reached. So if a future change proposes collapsing the series back
+to one value per category, that is the cost it is paying, and it has now been tried and reversed
+once.
+
+**Three still fall short on the light canvas** and are known: `04` `Yellow/500` at 1.74:1, `03`
+`Emerald/500` at 2.25:1, and `10` `Green/600` at 2.95:1 — the last effectively on the line. Yellow
+is the structural one; it needs roughly `Yellow/700` to clear 3:1 on `Stone/100`, which is a visibly
+different yellow. Nathan is aware and has parked it, so **do not quietly "fix" these** — they are a
+known, accepted state, and `Data Viz/Utility/Accessibility Overlay` is the mitigation for a mark that
+needs separating from its ground.
+
+The benchmark, alt and placeholder entries are the exception to all of it and still differ per mode
+on their own logic, because they are ground, not series.
+
+### Color is OKLCH, and Tailwind owns the primitives
+
+Every color is emitted as `oklch()`. Figma cannot store OKLCH, so its hex values are 8-bit
+roundings; nearly all 288 primitives are Tailwind palette colors, so `generate.py` reads
+`node_modules/tailwindcss/theme.css` and uses Tailwind's canonical value, falling back to converting
+the Figma hex only when there is no counterpart.
+
+The exceptions are the four **custom neutral ramps — Taupe, Mauve, Mist and Olive** — which Tailwind
+has no counterpart for, so their 44 values are converted from hex. Because they are scale-shaped
+names, `generate.py` lists all 44 under "scale-shaped names with no Tailwind counterpart" on every
+run. That warning exists to catch a *misspelling* in Figma; for these four it is expected.
+
+**Consequence:** a primitive changed in Figma is ignored. `generate.py` reports any primitive that
+differs from Tailwind by more than hex rounding (>0.05 in OKLab) so the override is visible. A color
+that isn't a Tailwind value belongs in the **semantic** layer, which is fully Figma-driven.
+
+### Motion
+
+Motion is a token tier like color or radius, not a library. The scale is **Astryx's**, taken
+verbatim: nine durations — `fast`/`medium`/`slow`, each with a `-min` and `-max` — and one easing
+curve, `standard` (`cubic-bezier(0.24, 1, 0.4, 1)`).
+
+Tailwind v4 has `--transition-duration-*` and `--ease-*` as theme namespaces, so the tokens arrive as
+utilities on their own: **`duration-fast`**, **`ease-standard`**. The names are Astryx's; the prefixes
+are Tailwind's. That translation is the same one `generate.py` already does turning Figma's
+`border-radius/rounded-md` into `--radius-md`.
+
+`tokens/motion.json` is **hand-seeded** — Figma does not have these variables yet. It uses the same
+`[{n, t, v}]` shape as a real export, so once they exist in Figma they arrive through
+`dimensions.json` and deleting `motion.json` is the whole migration. In Figma, durations are ordinary
+FLOAT variables; the curve is a **STRING** variable, because Figma has no bezier type.
+
+`prefers-reduced-motion: reduce` is honored globally in section 5 of `theme.css`, so no component has
+to remember to. It clamps to **1ms rather than 0** on purpose: Base UI decides when a popup may
+unmount by asking `element.getAnimations()`, and a zero-length transition can mean no animation is
+ever observed — which would leave the popup mounted forever.
+
+**Why no JS animation library.** We looked at `motion` (`motion/react`, formerly Framer Motion) and
+turned it down twice over. Base UI's supported path is CSS transitions — `data-starting-style` /
+`data-ending-style`, and it holds the element in the DOM until the transition ends; driving a popup
+with Motion instead means making *every* overlay controlled, adding `keepMounted`, wrapping in
+`AnimatePresence` and calling `actionsRef.current.unmount()` from `onAnimationComplete`. And its
+durations and easings would live in JS objects — a second source of truth that Figma cannot reach,
+which is the one thing this system exists to avoid.
+
+**When a library would earn its place:** layout animation (FLIP), drag, and spring-based gestures —
+none of which CSS does. **Two candidates were checked and fell; the third, drag, cleared the bar on
+2026-09-17 and is `@dnd-kit`.** See `DragAndDrop/CLAUDE.md` for the full record; the short version
+is that a drag is a *gesture*, not an animation. The platform check was done first: HTML5 drag and
+drop exists, and has no keyboard path, no touch on half the devices that matter, and a drag image
+the token layer cannot style — which is also why the Figma Make prototype the request came with,
+built on react-dnd's HTML5 backend, was read for its interaction model and not ported. `@dnd-kit`
+is headless in the strict sense (it renders nothing but two hidden accessibility nodes), ships the
+keyboard sensor and the live region, and expresses every transition as a plain CSS string on
+`style` — so the durations and the easing are still `--transition-duration-fast` and
+`--ease-standard`, and the reduced-motion clamp still wins. The one exception is the opt-in
+`DragAndDrop.Overlay`'s drop animation, which is a Web Animations call and reads the tokens off the
+stylesheet as numbers at the moment it fires. The rule this leaves is the one the two failures had
+already written: **check what the platform or the headless primitive already does before assuming
+the motion needs JavaScript**, and when a library does earn its place, its numbers still come from
+the tokens.
+
+A sliding Tabs indicator was the first, and turned out not to need anything: Base UI's
+`Tabs.Indicator` publishes the active tab's geometry as `--active-tab-left` / `--active-tab-width`,
+so the slide is a CSS transition on `translate` and `width`.
+
+**Carousel was the last one standing, and it fell the same way.** Astryx's own carousel was read at
+the DOM rather than from its docs, and its track is `overflow-x: auto` with `scroll-behavior:
+smooth` — the browser owns the easing, the momentum and the snap, and a design system gets all three
+for the price of two utility classes. So the general shape of the answer holds twice over: **check
+whether the platform or the headless primitive already does the thing before assuming the animation
+needs JavaScript.** A third candidate has to clear that bar before it is a candidate.
+
+`Carousel` also found the one hole in the reduced-motion rule. Section 5 clamps
+`animation-duration` and `transition-duration`, and `scroll-behavior` is neither, so a smooth scroll
+sails straight through a `prefers-reduced-motion: reduce` that stops everything else. Anything that
+scrolls programmatically owes a `motion-reduce:scroll-auto` of its own.
+
+### Font smoothing
+
+Section 6 of `theme.css` sets `-webkit-font-smoothing: antialiased` +
+`-moz-osx-font-smoothing: grayscale` on `html` — exactly Tailwind's `antialiased` utility, applied
+once at the root rather than as a class on `<body>`. Figma draws text with grayscale antialiasing;
+a browser on macOS defaults to a smoothing pass that thickens every stroke, so without this the same
+Inter 400 reads heavier in the app than on the canvas. It lives in the stylesheet, not in
+`index.html`, because that is the one file the playground, Storybook and consumers all import — a
+body class would only fix the playground. Windows and Linux ignore both properties and need no
+match; they never applied the extra pass.
+
+### Color scheme
+
+Section 7 of `theme.css` sets `color-scheme: light` on `:root` and `dark` on `.dark`. That is how
+the browser learns the page's theme, so the things it draws itself follow the tokens: scrollbars
+first, plus native pickers and autofill. Before it, a dark page got light-mode scrollbars. On the
+Combobox panel that was a dark-gray overlay thumb you could barely see, and on a system that
+always shows scrollbars it was a light track. It is `.dark` rather than `html.dark` to match the
+semantic block, and like section 6 it lives in the generated stylesheet so that every consumer
+gets it.
+
+
+Every focusable thing in the library uses one ring, exported from `src/lib/focus.ts` as `focusRing`
+(on the element itself) and `focusRingWithin` (on a card that should light up when a control inside
+it takes focus). Import it; do not write focus classes by hand.
+
+It draws two strokes, **both outside the component**: a 2px gap in `focus/focus-inner-border` — the
+canvas color, white in light mode and stone-900 in dark, so it reads as a gap — then a 2px ring in
+`focus/focus-outer-border`. Nothing is painted on or inside the component, so a focused component is
+pixel-identical to an unfocused one.
+
+**Why it is not `border-2`.** It was, and a 1px border going to 2px grew every hug-width component by
+2px the moment it took focus: the Button grid visibly re-flowed as you tabbed across it. Each
+component then worked round that in its own way — an `inset-ring`, an inset `outline`, a transparent
+1px border at rest — which is how the library ended up with five focus idioms and a white line
+painted *inside* a ticked checkbox. A ring and its offset are both `box-shadow`, so they cost no
+layout anywhere and cannot create a scrollbar either; the problem cannot come back.
+
+`outline` is deliberately left free: Avatar uses it for the canvas ring between overlapping avatars.
+
+A fourth export, `focusRingFromParent`, paints the ring on a **direct child** of the focused element
+(`[:focus-visible>&]`). It exists for one shape: an ARIA `treeitem` holds the tab stop but its box
+contains the whole open subtree, so a ring on it would ring the parent and every child. `TreeList`
+is the only user, and the bar for a second one is the same — an element that must be focused for
+ARIA's sake while the thing that should *look* focused is inside it.
+
+Two rings on one control is the thing to watch for. A Checkbox or Radio `inContainer` hands the ring
+to the card and draws none on the box — the box is inside the card, so both would fire at once.
+
+**Not to be confused with the `Token` component.** `tokens/` here is the Figma export;
+`src/components/Token/` is the pill that shows one chosen value. Same word, unrelated things.
+
+### Refreshing tokens
+
+Figma → `tokens/*.json` → `generate.py` → `src/styles/theme.css`. When Figma changes, re-export the
+three JSON files and run `python3 generate.py`. Never hand-edit the generated `theme.css`.
+
+`generate.py` refuses to write if it would emit an invalid CSS custom property name. This matters:
+an invalid name is dropped **silently** by the browser, which is how eight diverging colors once
+went missing. Figma's `+`/`-` sign prefixes become `pos-`/`neg-` (`--data-viz-diverging-neg-08`).
+
+**`src/styles/tokens.test.ts` is the same guard one layer up**, and it runs in CI. Tailwind builds
+utilities from what it finds in `@theme`, so a class naming a token that does not exist generates
+*nothing* — the element simply paints unstyled. Nothing else catches it: `tsc` sees a string, the
+stories still render, and axe passes because transparent-on-canvas has fine contrast. That is
+exactly how renaming `decorative-stone` reached `main` with Avatar's initials fallback and Toast's
+default variant silently unpainted. **When a token is renamed, grep the whole of `src` for the old
+name — and do not pipe that grep through `head`, because `theme.css` will fill the output before a
+component does.** That is precisely how those two were missed.
+
+### The Foundations group in Storybook
+
+`src/foundations/` is a documentation group, not part of the published library — eight story files
+under a `Foundations/` title, ordered ahead of `Components` by `storySort` in `.storybook/preview.tsx`.
+Overview, Color, Semantic Color, Typography, Space, Shape, Elevation, Motion.
+
+**Every page is parsed out of `theme.css` at load time** (`src/foundations/tokens.ts`, which imports
+it with Vite's `?raw`). Nothing is hand-listed, so the pages cannot drift: add a ramp, rename a role,
+retune the motion scale, and the documentation follows on the next reload. Same reasoning as
+`tokens.test.ts` reading the file rather than trusting a copy of it.
+
+The centerpiece is **Semantic Color → Mapping**: every role with its light *and* dark target side by
+side, in one table, in either theme. That works because the two targets name the *ramp* tier
+(`neutral-800`) or a primitive (`red-700`), neither of which depends on the theme — only the choice
+between them does. The handful of roles that alias another semantic token (`feedback-success-background`
+is `decorative-green-background`) are expanded per theme by `resolve()` in `tokens.ts`, or they would
+quietly show the same color in both columns.
+
+**Trap: Tailwind drops `@theme` variables nothing uses.** `--color-orange-500` is in `theme.css`, but
+no utility and no token references it, so it is not in the stylesheet the browser gets —
+`var(--color-orange-500)` resolves to nothing and the swatch paints blank. Half the primitive ramps
+came out with holes in them before this was understood. It only bites code that reads a primitive as
+a *variable* rather than through a `bg-*` class, which is to say: these pages, and SVG attributes.
+`paint()` in `tokens.ts` substitutes primitives for their literal OKLCH from the same file. The ramp
+and semantic tiers are left live on purpose — they live in plain `:root` blocks Tailwind never
+touches, and that is what makes the Theme and Neutral toolbar switches move these pages.
+
+A scrollable table needs `tabIndex={0}` and a label, or axe fails the story on
+`scrollable-region-focusable` — a region you can only reach by dragging is unreachable from a
+keyboard. `Showcase.tsx`'s `ShowcaseTable` does this once for all the Foundations pages, and
+`Table` does it for itself.
+
+## Figma is the source of truth
+
+- File key: `8bRBn0lf6TfPyFWR2XttDP` (Yet Another Design System)
+- **Trap:** calling `get_metadata` with no `nodeId` lists only the 📓 Cover page, making the file look
+  empty. It is not — components live under high-numbered node ids (`400020xx:xxxxx`). Ask for a link
+  to the specific node rather than concluding the components are elsewhere.
+- `search_design_system` also surfaces look-alike components from the Sprout Social org libraries
+  ("Seeds Components", "Seeds Foundations"). Those are a different, read-only source — use this file.
+- Code Connect (`get_context_for_code_connect`) requires a Dev/Full seat on an Org plan and is **not**
+  available here. Read variants with `get_metadata` + `get_variable_defs` instead.
+- Icon instances inside components are hidden by default, and hidden nodes report unreliable
+  geometry — trust `get_variable_defs` over measured sizes.
+- **`get_variable_defs` on a parent silently omits the variables of hidden children.** It does not
+  report them as unset; it does not mention them at all — so a hidden slot reads exactly like a slot
+  with no token bound. `Menu Item`'s `Slot Items` is hidden by default, and querying the variant
+  returned no surface fill whatsoever, which looked like the Kbd inside it had been left on the old
+  token. It had not. **Query the hidden node by its own id** (`40004278:7482` for the Action slot's
+  Kbd, `40004278:7706` for Danger) and the bindings are all there. The general rule: an absent token
+  in a parent's output is not evidence of anything until you have checked whether the node that
+  would carry it is visible.
+- **An instance inherits its main component's bindings**, so retokenizing a component updates every
+  instance without touching them. Worth remembering before raising "the instances still point at the
+  old token" — check one by id first.
+- Colors come back as `{r,g,b,a}` 0–1 floats — convert to hex.
+- **Three authoring limits found building the Dialog page, all of which shape what a component can
+  be in this file — and the first has since lifted.** There was no `figma.createSlot` — reading the
+  property *threw* — so a slot could only be made by hand in the UI. As of 2026-09-17 the API has
+  `ComponentNode.createSlot()` and a `SLOT` component-property type: `set.addComponentProperty(name,
+  'SLOT', '', { slotSettings })` on the set, then `frame.componentPropertyReferences = { slotContentId:
+  key }` on the frame in each variant turns an existing frame into a slot (App Shell's `Content` was
+  made that way). The binding **renames the layer to the property's name**, so read it back by type,
+  not by the old name. `detachInstance()` still turns a `SLOT` into a plain `FRAME`. `componentPropertyReferences` accepts only `characters`, `visible`
+  and `mainComponent`, so a **nested instance's** property (a Button's `Label Text` inside a
+  component) cannot be bound to an outer property — add one anyway and you get a control wired to
+  nothing. And `page.clone()` turns the page's `COMPONENT` into an `INSTANCE` of the original, which
+  is convenient for copying a Docs template and useless for copying a component.
+- **`instance.componentProperties` is read-only.** The setter is `instance.setProperties({...})`.
+- **The Best Practices block on a component's Docs page reads "Usage rule." on every page**,
+  Popover's included. An unfilled one is the template's normal state, not evidence that a particular
+  component was left behind.
+
+## Components
+
+Each component gets its own folder with the component, its story, and a barrel `index.ts`.
+
+### Which form control
+
+The deciding question is **whether the value has to come from a known set**, not how it looks.
+
+- **No** — free text, nothing to pick from: **Input**. A name, an email, a URL. More than one
+  line of it — a description, a comment, a message: **TextArea**. A file from the person's device:
+  **FileInput**.
+- **No, but suggestions help** — still free text, and a value that is not on the list is still
+  allowed: **Autocomplete**. A search box that remembers recent searches.
+- **Yes** — then it is only a question of how many, and whether you need to type to find one:
+  - few enough to show all at once: **Radio** (with room to explain each) or **SegmentedControl**
+    (a compact strip beside a Button)
+  - too many to show, few enough to scroll: **Select**
+  - too many to scroll: **Combobox** — typing filters, but the value must come from the list.
+
+**Autocomplete and Combobox look identical and differ on exactly one thing:** whether off-list input
+is allowed. That is the distinction to keep hold of, and Base UI puts it in the API rather than in a
+prop — Autocomplete's `value` is the input *string*, and a row has no `selected` state at all. Both
+are built.
+
+Orthogonal to all of it: **Checkbox** for an intention a Save button later commits, **Switch** for a
+setting that takes effect the moment you let go, **Slider** for an approximate number.
+
+### Built
+
+Every component's full decision record — its Figma nodes, its variants, what was left out and why —
+lives in a `CLAUDE.md` in its own folder, and is loaded automatically when you work on files there.
+**Read that file before changing a component.** Most of what looks like a free choice in the code was
+settled once, against the Figma file, for a reason that is written down.
+
+**Most records now end in a `## Best practices` section**, which is the same text as the Best
+practices block on that component's Figma Docs page, node id cited. It answers *when to reach for
+this component and when not to*, where the rest of the record answers *how it is built* — so it is
+the half to read when you are choosing between two components rather than changing one. **The two
+copies are one text in two places**: change a rule here and change it in Figma in the same breath,
+or the file and the repo start disagreeing about what the component is for, which is the one kind of
+drift nothing in CI can catch. **Forty-three records carry it.** The data-viz family shares one: the `↪ Data Viz`
+page has a single Docs frame for all fifteen charts, so `Chart`'s record holds the family's rules —
+which chart answers which question, and the rules that hold across all of them — and each chart's
+own record adds only what is its alone.
+
+**Two records have no Figma block to mirror, and say so where the source line goes.**
+`ThemeControl`'s set is drawn on the `↪ Navigation` page, which has a single block covering the
+navigation family, so it has nowhere of its own on the canvas; `BentoGrid` still has no node at all.
+Both were written here rather than copied, and both owe the file a block — the same standing debt
+`Combobox.Empty` and Select's scroll arrows carry. `AppShell` was a third for a few hours: built
+code-first against a page of frames, and drawn into the file as an eight-variant set with a Docs
+block the same day. **Do not read a missing block as a component
+nobody has thought about**; read the source line, which says which of the two situations it is.
+
+**Carousel is the first record whose block went code → file, and it exposes a second way the two
+copies can drift.** Its page shipped with the template's "Usage rule." on both sides, so the rules
+were written in the record and pushed to Figma afterwards rather than copied down. Three of them —
+`layout`, `hasLoop` and the accessible name — name things the **code** has and the Figma component
+does not, which is Avatar's problem seen from the other end: a designer reading the canvas would
+hunt the variant panel for a `layout` switch and find nothing. So the canvas text is phrased around
+the *design decision* and the record adds the prop that spells it. **When a rule names something
+only one side has, say the thing both sides share, and let each copy add its own spelling.**
+
+**Transcribing that block is not typing, and Avatar is the case that proves it.** Two of its seven
+Do's named props that do not exist here — `tooltip={false}` and a group `max` — because the rules
+came across from Astryx with Astryx's API still in them, and this library left both out on purpose.
+Copied down unread they would have put two uncompilable props into a file every agent loads. So
+**check each rule against the component before mirroring it**: a rule naming a prop, a variant or a
+default is a claim about this code, and the Figma page is not where that claim was tested. Where one
+is wrong, keep the advice and reword it round the real API — **in both places, in the same sitting**,
+which is what happened to Avatar's two. A record that merely notes the file is behind leaves the
+wrong instruction sitting on the canvas where the next person reads it.
+
+| Component | | |
+|---|---|---|
+| [Accordion](src/components/Accordion/CLAUDE.md) | a stack of sections, one open at a time | height animated off a measurement Base UI publishes |
+| [Button](src/components/Button/CLAUDE.md) | the action control | five appearances, three sizes, icon-only derived from the absence of a label |
+| [Icon](src/components/Icon/CLAUDE.md) | any Lucide glyph | four sizes, color inherited via `currentColor` |
+| [Badge](src/components/Badge/CLAUDE.md) | a status label | all 18 hues of the Decorative ramp, one size; `neutral` follows the swappable ramp |
+| [Breadcrumbs](src/components/Breadcrumbs/CLAUDE.md) | a trail to the current page | four separators, last child is current automatically |
+| [Divider](src/components/Divider/CLAUDE.md) | a line separating content | orientation × emphasis, optional label |
+| [Avatar](src/components/Avatar/CLAUDE.md) | a person, and a stack of them | photo, initials or `+N`; `AvatarGroup` overlaps, and `surface` says what the ring hides in |
+| [Tooltip](src/components/Tooltip/CLAUDE.md) | a label for what you point at | first component on the motion tokens |
+| [SegmentedControl](src/components/SegmentedControl/CLAUDE.md) | one of a few, all visible | a compact strip sized beside a Button |
+| [NavItem](src/components/Nav/CLAUDE.md) | one row of a navigation bar | Figma's `Type` axis is a size; the 1px inside stroke is an `inset-ring`, not a border |
+| [SideNav](src/components/Nav/CLAUDE.md) | the application rail | 224 expanded, 56 collapsed; collapsed labels become tooltips and headers become a rule; groups are Base UI's `Collapsible` |
+| [TopNav](src/components/Nav/CLAUDE.md) | the horizontal bar | app or site; the page list centres because both ends are `flex-1`; `floating` is only the shadow |
+| [ResponsiveNav](src/components/Nav/CLAUDE.md) | TopNav above 768, MobileNav below | a CSS swap at `md:`, which the component owns rather than the caller |
+| [MobileNav](src/components/Nav/CLAUDE.md) | the phone bar and its bottom sheet | pins itself to an edge; the sheet is Drawer's raw parts on the nav tier, so it slides and swipes like a Drawer |
+| [TopBar](src/components/TopBar/CLAUDE.md) | the page header beside a SideNav | breadcrumbs, search and actions; a `<header>`, so exactly one per page |
+| [ThemeControl](src/components/ThemeControl/CLAUDE.md) | the light/dark switch | reports the intent and never touches the document |
+| [Tabs](src/components/Tabs/CLAUDE.md) | switch between panels | sliding indicator, in pure CSS |
+| [Banner](src/components/Banner/CLAUDE.md) | a persistent page message | four severities, optional actions |
+| [Toast](src/components/Toast/CLAUDE.md) | a notification that leaves | a stack that collapses |
+| [Checkbox](src/components/Checkbox/CLAUDE.md) | tick one thing on or off | plus `Checkbox.Group`, and `inContainer` |
+| [Radio](src/components/Radio/CLAUDE.md) | exactly one of a visible list | plus `Radio.Group` |
+| [Menu](src/components/Menu/CLAUDE.md) | actions in a popup | items, separators, submenus |
+| [ContextMenu](src/components/ContextMenu/CLAUDE.md) | the same actions, on right-click | Menu's rows re-attached, not copied; opens at the pointer |
+| [Popover](src/components/Popover/CLAUDE.md) | a panel of content, on click | the library's first `role="dialog"`; Figma's own drawing has no accessible name, which is why `label` exists |
+| [Dialog](src/components/Dialog/CLAUDE.md) | a modal surface that blocks the page | the first genuinely modal component; `Body` is the scroll container Popover was standing in for, and the one part Figma cannot draw |
+| [AlertDialog](src/components/AlertDialog/CLAUDE.md) | confirm something you cannot undo | the sharing rule at its limit — Base UI hands over every part but the Root |
+| [Switch](src/components/Switch/CLAUDE.md) | a setting that applies at once | knob grows 14 → 16 as it slides |
+| [Slider](src/components/Slider/CLAUDE.md) | an approximate number | `range` derived from an array value; the number fields are `NumberInput` with the steppers off, and they made it controlled from the inside |
+| [Link](src/components/Link/CLAUDE.md) | inline and standalone navigation | what Button's removed `link` appearance became |
+| [Input](src/components/Input/CLAUDE.md) | a line of free text | plus `InputGroup` for attachments |
+| [TextArea](src/components/TextArea/CLAUDE.md) | more than one line of free text | Input's box made multi-line on Base UI's `Input` with `render={<textarea />}`; height is `rows`, the counter reports and never truncates |
+| [Field](src/components/Field/CLAUDE.md) | label, sub-label, validation | wraps a control; owns the label |
+| [FileInput](src/components/FileInput/CLAUDE.md) | choose a file, by browsing or dropping | a real `<input type="file">` under Base UI's `Input`, kept in the accessibility tree where Astryx hides it; `input` is Input's box, `dropzone` the same box dashed; rejections come back through `onFileReject` and the message goes in the Field |
+| [Form](src/components/Form/CLAUDE.md) | the form those fields sit in, and when they are checked | Base UI's Form: `noValidate`, checked on submit, first invalid focused, server errors by name; `Row` is Astryx's equal columns at 16, `Actions` is the button row twelve stories had hand-rolled; `name` goes on the Field, and it found the Field's label swallowing every control's own |
+| [Select](src/components/Select/CLAUDE.md) | one value from a long list | needs `items` on Root to render a label |
+| [NumberInput](src/components/NumberInput/CLAUDE.md) | an exact number, nudged by one | Input's box borrowed; the ring is scoped to the caret because the steppers are inside it |
+| [OTPInput](src/components/OTPInput/CLAUDE.md) | a code somebody was just sent | square slots at the field's own height; Base UI throws away `aria-label` on the first one |
+| [Token](src/components/Token/CLAUDE.md) | one chosen value as a pill | 20 / 24 tall, so a field full of them never grows |
+| [Combobox](src/components/Combobox/CLAUDE.md) | a long list, filtered by typing | a trigger with a searchable popup, or a tokenizer |
+| [ContentBlock](src/components/ContentBlock/CLAUDE.md) | a card that owns one region of a page | header slots, three emphases, the part a bento view is made of |
+| [BentoGrid](src/components/BentoGrid/CLAUDE.md) | the mosaic those blocks sit in | columns, spans, and one breakpoint doing all the collapsing |
+| [Kbd](src/components/Kbd/CLAUDE.md) | a keyboard shortcut | Figma draws the key and the group, Astryx's `keys` string API; `mod` resolves per platform |
+| [Card](src/components/Card/CLAUDE.md) | the plain container | `rounded-md` inside ContentBlock's `rounded-lg`; the border tracks the fill unless the file says otherwise |
+| [ClickableCard](src/components/Card/CLAUDE.md) | the same card as a hit target | `href` picks the element; `ghost` is the list row, `selected` is `aria-current` |
+| [Carousel](src/components/Carousel/CLAUDE.md) | a browsable set, one screen at a time | the last motion-library candidate, answered by `overflow-x: auto` and two utility classes; Figma owns the layout, Astryx the engine |
+| [Autocomplete](src/components/Autocomplete/CLAUDE.md) | free text that suggests without constraining | Combobox with one rule removed; `Input`'s box, Combobox's popup, shared not copied |
+| [Chart](src/components/Chart/CLAUDE.md) | the chrome every chart sits in | container, legend, tooltip, swatch, palette, axis rules; half the Figma page is a drawing mechanism, not an API |
+| [LineSeries](src/components/LineSeries/CLAUDE.md) | change over time | the chart that proved the chrome; 30-odd Figma components become three props |
+| [AreaSeries](src/components/AreaSeries/CLAUDE.md) | how much, over time | two fills that are different drawings; opaque areas make paint order part of the API |
+| [VerticalBar](src/components/VerticalBar/CLAUDE.md) | how much, per category | Figma's three bar types are one boolean; rounded stacked segments Recharts cannot draw |
+| [HorizontalBar](src/components/HorizontalBar/CLAUDE.md) | how much, per named category, when the label needs the room | VerticalBar on its side; the gap moves to the right edge, every row is labeled, and the height follows the rows |
+| [Spark](src/components/Spark/CLAUDE.md) | a shape the size of a word | the one chart that is not a `ChartContainer`; labeled or decorative, enforced by the type |
+| [Donut](src/components/Donut/CLAUDE.md) | parts of one whole | a slice is a series with one value; hover is a halo that does not resize the slice |
+| [Gauge](src/components/Gauge/CLAUDE.md) | how far along | a donut folded in half, which turns the hole into a shelf; the radius has to be computed |
+| [Radar](src/components/Radar/CLAUDE.md) | several series across a few dimensions | translucent because no paint order can work; the grid's outer ring is a second element |
+| [Metric](src/components/Metric/CLAUDE.md) | a labeled number and what it did | no Recharts at all; two of its four components are wrappers over `Badge` and `Card` |
+| [HeatMap](src/components/HeatMap/CLAUDE.md) | how much, across two dimensions | a CSS grid, not a chart; the one caller of `ChartContainer`'s `responsive={false}` |
+| [TreeMap](src/components/TreeMap/CLAUDE.md) | parts of a whole, past a donut's limit | the only chart whose marks carry their own text |
+| [Radial](src/components/Radial/CLAUDE.md) | how much, per category, on a common scale | one Figma drawing hiding two rules; the track is what makes it honest |
+| [Sankey](src/components/Sankey/CLAUDE.md) | where a quantity went, stage to stage | the file draws nothing at all; a ribbon takes the color it left with |
+| [Scatter](src/components/Scatter/CLAUDE.md) | two measures against each other, one mark per observation | the file's plot point with the line taken away; `quadrant` swaps the axes for `_Quadrant Grid`'s crosshair, and the hidden table says which box each point is in |
+| [AspectRatio](src/components/AspectRatio/CLAUDE.md) | a box that keeps its shape | five named ratios plus a number for Figma's `Custom`; the only component that paints nothing, and the first whose Figma set was widened to meet the code |
+| [Calendar](src/components/Calendar/CLAUDE.md) | pick a date, or a range, from a month grid | the first component with no Base UI primitive underneath it; range mode is derived from the value's shape |
+| [DatePicker](src/components/Calendar/CLAUDE.md) | that grid in a panel, with presets and a footer | two of Figma's three variants are `numberOfMonths` and the value's shape; the file's own variant names caught a bug no screenshot would have |
+| [Table](src/components/Table/CLAUDE.md) | structured data in rows and columns | numbers are mono because the value says so, not because a prop does; the rules are pseudo-elements, so the file's 32/40/56 can be asserted |
+| [Pagination](src/components/Pagination/CLAUDE.md) | move through a data set a page at a time | counts, not rows, so it is not a table component; the arithmetic is a pure module because every way it can be wrong renders perfectly |
+| [ProgressBar](src/components/ProgressBar/CLAUDE.md) | how far along a task is | the first component with no Figma variants to read, so the file was drawn from it; `indeterminate` is `value={null}`, and two of Astryx's rules are dropped because the token layer cannot hold them in both themes |
+| [TreeList](src/components/TreeList/CLAUDE.md) | a hierarchy you can fold and walk | Astryx's data API on an APG tree; the second roving tabindex after Calendar, and the first ring painted off a parent's focus rather than the focused element's |
+| [Outline](src/components/Outline/CLAUDE.md) | the headings on this page, with the one in view marked | Tabs' scale, Tabs' 1px rule under its 2px indicator turned vertical, and Tabs' one-Tab-stop-then-arrows — the one exception to the Nav rule, decided twice; arrows move focus and never activate, because activating scrolls; a scroll listener, not an observer, because `offset` is a line; the last heading wins at the end of the scroll, and the clicked one wins while it is on screen |
+| [Skeleton](src/components/Skeleton/CLAUDE.md) | the shape of content still loading | shadcn's pulse at `duration-slow` each way, so the 2s is a token; `Skeleton.Text` is a bar the font-size tall in a box the line-height tall |
+| [ChatMessage](src/components/Chat/CLAUDE.md) | one turn of a conversation | `direction` set once and read by context; the tail is one corner; the log is the caller's `role="log"`, and the default bubble only reads on `surface-background-primary` |
+| [ThoughtProcess](src/components/Chat/CLAUDE.md) | what an assistant did before it answered, folded away | a single disclosure on `Collapsible`, not an Accordion; Figma's Thinking row is `thinking` plus an `icon` slot the application fills, and while it thinks the label rotates through the system's own lines under a shimmer, the fifth keyframe |
+| [ToolCall](src/components/Chat/CLAUDE.md) | one thing an assistant did on the way | collapsible derived from `detail`; four statuses where the file draws one, and the spinner rests under reduced motion on its own |
+| [AppShell](src/components/AppShell/CLAUDE.md) | the frame an app sits in | `floating` puts the blocks on the canvas, `contained` puts them in a panel; the nav reads its shadow off the shell through context, and `Content` is the one `<main>` that scrolls; give it a `MobileNav` and it swaps to it below 768, read in CSS with `:has()` rather than declared; Figma's set has the phone variants |
+| [ChatComposer](src/components/Chat/CLAUDE.md) | where a message is written and sent | Input's box stacked, with `ring="textarea"` because it holds buttons; Enter sends, Shift+Enter breaks; `streaming` is Figma's Stop; the first field that grows |
+| [DragAndDrop](src/components/DragAndDrop/CLAUDE.md) | the drag foundation: a root, sortable containers and items, a grip | `@dnd-kit`, the first library to clear the motion bar; pointer from anywhere on the item, keyboard from the grip only; the kanban and the dashboard are its stories, not components; drawn into the file the next day as two sets, the third having become `Resize` |
+| [Resize](src/components/Resize/CLAUDE.md) | the strip you drag to change a size | a focusable `separator` that reports the caller's unit; the handle is the gap it sits in, at the gap's size — 16 on the dashboard, 8 beside the rail; left `DragAndDrop` the day it was built because a resize is not a drag, and the rail was its first caller with no drag at all |
+| [Panel](src/components/Panel/CLAUDE.md) | a region beside the page that pushes it over | an in-flow `<aside>` after the Page, 384 wide, resizable from the shell's gap with `sized="after"`; the slide is a width transition on `usePresence`, not a portal, and closed it renders nothing; below 768 it goes under the page and the handle turns horizontal; ContentBlock's surface with its `floating` axis, defaulted from the shell; a Panel written inside a Panel stacks over it, 12px in per level, portalled into the root's aside |
+| [Drawer](src/components/Drawer/CLAUDE.md) | a surface that slides over the page | Base UI's Drawer under Dialog's wrapper shape; right, left or bottom, swipe to dismiss with the scrim thinning; every side drawer is a bottom sheet on a phone, read with `usePhone` — the library's one `matchMedia` hook, allowed because a closed drawer paints nothing; drawn into the file the same day as a three-side set; a Drawer inside a Drawer stacks on Base UI's `--nested-drawers`, to Panel's 12px |
+| [Questionnaire](src/components/Questionnaire/CLAUDE.md) | an assistant asking before it acts, one question at a time | the first form primitive that is not Base UI's — `@shadcn/react/questionnaire` is the step machine, every pixel is ours; the title is a `<p>` because a legend cannot be a flex item; the row is Radio's and Checkbox's card painted off the `<label>`, the fourth copy and the one that got them extracted; the key is a `Kbd`; answers come out of `FormData`, arrays for `multiple`; `Recap` is the answered form, a `<dl>` in a Card that takes the questionnaire's place in the same turn |
+
+### Data visualization
+
+Charts live on the Figma page **↪ Data Viz (In Progress)** (`40004316:13427`) and are built on
+**Recharts**. Two things about that page decide how much work it is.
+
+**Half of it does not become code.** Everything with a leading underscore — `_Line Series / Segment`
+(16 variants), `_Radar / Areas` (20), `_Donut / Slice Sweep`, `_X-Axis Presets` (26) — exists because
+Figma has to draw a chart by hand, one segment at a time, and cannot compute a tick from data.
+Recharts does both. Those are a *drawing mechanism*, not an API: a segment's "Direction=Positive" is
+not a decision, it is what the data did between two points. **Ask "decision or mechanism?" of every
+underscored component before implementing it** — reading them as a component list turns ~15 real
+components into 30-plus.
+
+**shadcn's `ChartStyle` has no counterpart here, and must not gain one.** shadcn injects a `<style>`
+block per chart mapping `--color-desktop` onto a hex, because its charts are handed raw colors with
+nowhere theme-aware to put them. `--data-viz-*` are semantic tokens — `:root` plus `.dark` — so a
+mark painted with one follows the theme with no injected CSS, no second palette and no `dark:`
+variant. That is the whole point of the semantic layer, arriving somewhere new for free.
+
+The Data Viz tokens had been in `theme.css` since the twelve-category split with **nothing reading
+them**; `src/components/Chart/` is the first code that does.
+
+Three rules worth having in mind before touching a chart:
+
+- **The categorical order is fixed and never cycled by rank**, and past twelve series the scale
+  returns the placeholder gray rather than wrapping. Two visible series sharing a color is worse
+  than admitting the scale ran out. Figma agrees from the other end — its legend has a `+X more` row.
+- **Text never wears the series color.** Identity comes from the swatch beside it. Three of the
+  twelve hues are illegible as text on the light canvas, and coloring text also removes the channel
+  a low-color-vision reader was relying on.
+- **Charts do not animate.** Recharts animates in JavaScript with its own constants — a second source
+  of truth Figma cannot reach — so `isAnimationActive={false}` everywhere, and any motion that is
+  wanted goes back as CSS on the tokens. Its tooltip writes a `transition` *inline* even when series
+  animation is off; see the Chart record.
+- **Recharts' defaults are set for a different library than this one**, and two have already had to
+  be turned off. `accessibilityLayer` defaults **on**, making the chart root focusable — fine inside
+  `ChartContainer`, a real fault inside `Spark`'s `aria-hidden` wrapper, where axe caught it. Its
+  automatic y-domain ends at the largest value present, which gives round ticks only when the data
+  happens to be round. Assume a Recharts default is aimed at a chart with no design system behind it.
+- **White does the separating, not a border.** The stacked bar's 1px gap, the solid area's
+  surface-colored top edge, the donut's slice stroke and the tree map's tile inset are one idea in
+  four places: a border would be ink that is not data. Recognize it before inventing a fifth
+  mechanism.
+- **Color is assigned over the full series list, never the visible one.** It is what makes the
+  interactive legend safe — switching a series off cannot repaint the survivors. The fixed
+  categorical order and the hidden-series filter are the same rule seen from two sides.
+- **Figma's Data Viz page references one token that does not exist.** The tree map's tile metric
+  binds `Overlay/Text`, and no `Overlay/*` token is in any of `tokens/*.json`. `content-inverse`
+  stands in. Worth knowing that the file is not a complete description of the token layer.
+- **Radial and Sankey went code-first and the file has caught up.** Both sections held nothing usable
+  when the components were built — Radial only its mechanism, Sankey nothing at all — and both were
+  drawn on 2026-08-30 with the same shape as `Donut`, a `Chart Legend` instance over a plot
+  component. Nothing in the code changed when they landed. **Sankey is the one case where the
+  drawing was *derived* from the code** rather than made independently, because there was nothing to
+  derive it from otherwise; its record says so, and says the code is the older authority there.
+  **`Scatter` went the same way on 2026-09-18**, and closed `_Quadrant Grid` with it: the section was
+  empty, the chart was built on the plot point, the grid and the crosshair the file already had, and
+  the drawing was made from the code's numbers. Its record has the two things the build had to
+  change in the file — four hidden SF Mono texts nobody's machine could load, and an x axis with no
+  numeric preset.
+- **Figma measures `arcData` from three o'clock, clockwise**, while every polar chart here starts at
+  twelve. A sweep drawn without the quarter-turn offset looks entirely plausible and is wrong.
+- **A hidden browser tab makes every measured chart lie.** `ChartContainer` sizes itself with a
+  `ResizeObserver`, and a tab that is never rendered does not run the rendering steps, so the
+  observer never fires — `plotWidth` stays 0 and Donut, Gauge and Radial all silently fall back to
+  their percentage radii. Nothing is broken; the *measurement* is. When the Browser pane is hidden,
+  verify polar geometry with a real browser instead — a short Playwright script against the
+  Storybook iframe does it.
+- **Measure the geometry; do not read it off a screenshot.** Both chart bugs found so far were
+  invisible in a picture and obvious in a number — a missing 1px gap between two stacked segments,
+  and grouped bars at 7px because `barCategoryGap` is applied to each side of the band. Pull the
+  rendered attributes out of the DOM, or pin the arithmetic in a node test, as `Chart/axes.test.ts`
+  and `Chart/bars.test.ts` do.
+
+### Patterns that recur across components
+
+These were each settled inside one component and then held everywhere. They are the reason a new
+component usually has fewer decisions in it than it looks.
+
+- **Derive a variant instead of adding a prop, where the value already says it.** Figma models these
+  as axes, but Avatar's `Content`, Button's icon-only form, Slider's `range` and Breadcrumbs' current
+  page all follow from what you pass. A prop that can contradict the children is a prop that will.
+- **Focus is `focusRing`, `focusRingUnhovered` or `focusRingWithin` from `src/lib/focus.ts`, never
+  hand-written.** Reach for `focusRingUnhovered` in a list whose rows **take focus because you
+  pointed at them** — anything on Base UI's `highlightItemOnHover`. There `:focus-visible` is not a
+  safe proxy for "the keyboard put you here": Chrome decides it for a scripted `.focus()` by asking
+  what the last interaction was, so hovering a menu row after any keypress paints a full keyboard
+  ring under the cursor. Both menus had it; `ContextMenu` had it on *every* hover, because its
+  trigger is a `<div>` that never takes focus, so nothing ever sets the pointer modality at all.
+  The ring is scoped off the hovered row rather than removed — the hover background still marks it,
+  and arrowing away from a parked mouse rings the row you moved to. Do **not** fold that scoping
+  into `focusRing`: on a Button a mouse resting over something you tabbed to should not swallow the
+  ring, because there the hover did not cause the focus. Use
+  `focusRingWithin` when focus lands on a descendant — a card around a Checkbox, or Slider's thumb
+  with its visually hidden input inside it. Watch for two rings on one control, and for the opposite
+  failure: a container that rings identically wherever focus is inside it says nothing. Combobox's
+  tokenizer has several focusable descendants, so its box scopes the ring to the caret and each chip
+  carries its own. **One ring at a time, always on the thing that has focus** — or, in TreeList's
+  case, on the row directly under it, because the focused `<li>` is also the box round every open
+  child: `focusRingFromParent`, the one ring keyed off a parent's `:focus-visible`.
+- **When Base UI hands over the same component object, share it rather than copy it.**
+  `ContextMenu` is `Menu` opened by right-click — Base UI's `context-menu` subpath re-exports
+  Menu's `Item`, `Group`, `SubmenuRoot` and `Popup` as the *same objects*, and Figma draws the two
+  sets identically. So ContextMenu writes a Root, a Trigger and a Popup, and re-attaches the rest
+  under its own namespace; the recipe they share sits in `Menu/styles.ts`. The test for this is
+  not "do they look alike" but "is it the same primitive underneath" — Combobox looks like Select
+  and is a different component, so it duplicates, correctly.
+  **Autocomplete is the first case where the answer is neither, and the line runs through one
+  component.** Base UI's `autocomplete` subpath re-exports Combobox's `Popup`, `Positioner`, `List`,
+  `Group`, `GroupLabel`, `Collection`, `Empty` and `Input` as the same objects, while `Root`, `Item`,
+  `Trigger`, `Value` and `Separator` are genuinely its own. So the popup recipes moved to
+  `Combobox/styles.ts` and the field recipes stayed put — and the field itself is `Input`'s `box`
+  imported outright, which is the same rule pointing at a third component. **Ask the question per
+  part, not per component.**
+- **A copy earns a shared module when the fourth one appears, and not before.** Checkbox drew the
+  labeled-control row, card, label column and box; Radio copied them and said a third would be the
+  point to extract; Switch copied them again and said a fourth would; Questionnaire's answer row was
+  the fourth, and `Checkbox/styles.ts` now holds all of it, with the three differences that had
+  accumulated as variants (`layout`, `fill`, `stateFrom`). The reason to wait was real — Figma keeps
+  the sets separate, and a shared module bets they drift together — and the reason to stop waiting
+  was that three copies had already drifted *nowhere*, which is the evidence the bet wanted.
+- **When a second control writes a primitive's state, the component has to hold that state — and
+  build Base UI's event object to report it.** Slider's number fields are the first case: two
+  controls write one value, so `Slider.Root` is given a controlled `value` and the uncontrolled case
+  is mirrored in the component (DatePicker's arrangement). A typed edit then has no Base UI event to
+  forward, because a keystroke in a sibling control is not one of the primitive's own reasons — so
+  it builds one with `createChangeEventDetails` from **`@base-ui/react/internals/createBaseUIEventDetails`**,
+  a real entry in the package's `exports` map. That is the library's **first `internals/` import**,
+  and the bar for the next one is the same: use Base UI's own factory rather than hand-copying a
+  shape that will drift. Two things to expect when you do this — clamp in *your* handler rather than
+  relying on the child control's `min`/`max`, which only bite on commit (Slider shipped `[90, 80]`
+  to `onValueChange` for one render before this was fixed), and check the primitive's own inline
+  geometry still holds at the narrower width your new control leaves behind (Slider's indicator went
+  to a negative percentage and filled the whole track).
+- **A portalled popup needs a `z-index`, and gets it from `src/lib/layers.ts`.** Being appended to
+  `<body>` last does not settle painting order: every positioned element with a positive `z-index`
+  paints above every one left on `auto`, whatever the document order. So a popup on `auto` is
+  punched through by any `z-10` on the page — which is not hypothetical, since `Token.Remove` is
+  `relative z-10` and its crosses floated over an open Combobox menu. `overlayLayer` goes on the
+  **Positioner**, which is the element Base UI positions, and sits at 40 so `Toast`'s `z-50` stays
+  the top of the library.
+- **Figma's `overflow-clip` is not ported** — eleven times now, across SegmentedControl, Banner,
+  Toast, Menu, Switch, Slider, Select, Combobox, ContentBlock and Autocomplete. A canvas has no other
+  way to bound a frame; here the focus ring paints outside the component on purpose, and clipping
+  would slice it off.
+- **Controls grow as you touch them.** Switch's knob 14 → 16 as it slides, Slider's handle 16 → 20 on
+  hover, focus and drag.
+- **Field owns the label — unless the label is a hit target.** A control with nothing to name itself
+  gets its label from Field (Input, InputGroup, TextArea, Select, Combobox and Autocomplete).
+  Checkbox, Radio and Switch keep their own, because their `<label>` wraps the control and that is
+  what makes the text clickable. **Whether the label is a real `<label>` is a third question**, and
+  Field's `nativeLabel` is where it is answered: a `<button>` control wants it off, an `<input>` on.
+  Combobox is the case that shows the two are independent — the same component, `false` in its
+  single-select shape and `true` as a tokenizer. Autocomplete keeps the default `true` for the same
+  reason the tokenizer does: its control is a real `<input>`, so clicking the label should land the
+  caret.
+- **Code sometimes goes first and Figma catches up.** Badge's four extra hues, Divider's `emphasis`,
+  SegmentedControl's `large`, three of Slider's four decisions and Accordion's `container` were built
+  here against a file that did not have them, then drawn into the file afterwards. The direction is
+  unusual but it is allowed — what is not allowed is leaving the file behind. Accordion is the one to
+  copy: its row went 32 → 40 in code and the Figma variants followed within the day, so the two never
+  drifted far enough to argue about. **Menu's `destructive` is the longest-running case and it closed
+  the same way**: built against a `Menu Item` whose `Type` was Action | Nested only, and drawn into
+  the file as `Type=Danger` the day ContextMenu landed. Nothing in the code changed when it arrived,
+  which is the test of whether a catch-up was really a catch-up.
+  **Popover is the newest, and the largest**: `Title`, `Description` and `Close` were built against a
+  node that drew a bare surface with one slot, and drawn into the file the same day — a whole part
+  set catching up rather than a variant axis. It also shows what the catch-up is *for*. Figma's
+  drawing had no title, and a `role="dialog"` with no title has no accessible name, so the file was
+  not merely incomplete: as drawn it could not ship. Nothing in the code changed when the parts
+  landed, and both sides were measured rather than eyeballed.
+- **Catching up can mean the file deleting something, not adding it.** ContextMenu shipped sharing
+  Menu's rows, on the grounds that Base UI hands over the same component objects and Figma drew the
+  two identically. Figma then retired its own `Context Menu Item` and `Context Menu Group` sets so
+  that `Context Menu` instances `Menu Group` and `Menu Item` directly. Both sides reached one shared
+  row from opposite directions — which is a stronger signal than either one alone, and the reason to
+  say out loud when a component is a *reuse* rather than a resemblance.
+- **A prop named after a DOM attribute has to give way, one side or the other.** Three now, and each
+  was found by the same `Omit`-or-rename type error: Divider's `style` became `lineStyle`, Banner's
+  `title` kept the prop name and `Omit`ed the attribute, and ContentBlock's header slot was named
+  `titleSlot` before it could collide with `slot`. The rule that decides it is whether the prop name
+  is the one a caller would reach for first. `slot`, `title`, `style`, `color` and `content` are the
+  ones to watch.
+- **Each entry records which Base UI component it was.** Twenty-two so far, Divider first and Form the latest; Panel is the case beside it that checked two Base UI candidates and used neither, and Questionnaire the first form component whose primitive is another library's — `@shadcn/react` — because Base UI had the controls and not the step machine. Worth keeping
+  up, because it is how the library tracks how much of Base UI it has actually exercised.
+- **The default size is the first option, everywhere.** Reach for it in application stories — the
+  `InContext` family, and anything standing in for a real screen — and in composition generally, so
+  what gets built reads as the ordinary case rather than a styled one. `small` and `large` belong in
+  the stories that exist to show the scale, or where something genuinely calls for them: a Button
+  inside an addon is `small` because it has to fit inside a 32px field, and that is a reason. "It
+  looked better" is not, and it is how a library ends up with no default anybody recognizes.
+  **Check the reason before believing it.** ContentBlock's header actions were `small` on the
+  assumption that a 48px row was tight; it is `min-h-12` with 8px of padding either side, so it has
+  exactly the 32px a default Button is, and the constraint was imagined. A tight fit is easy to
+  assume and quick to measure.
+  **The rule cuts the other way too, and the kanban board is the case.** Its AvatarGroup was the
+  default `base` against a composition that draws 24px avatars at 64px — so `size="small"` there is
+  a measured constraint, not a preference, and it is the first place in the library where reaching
+  past the default is the *correct* answer. The test is the same either way: go and measure the
+  Figma node. Both failures look identical in review and only one of them is settled by opinion.
+- **A ring that hides in the background has to be told what the background is.** CSS has no
+  "the fill of whatever contains me", so an element that paints a band of its own backdrop —
+  Avatar's group ring, its status dot's ring — cannot derive it and needs a prop. That is the
+  exception to the derive-don't-declare rule above, and the boundary is worth stating: derive what
+  the *element itself* already knows (its children, its `href`, whether it is inside a group);
+  declare what only its **ancestors** know. `surface` names the token, so `card-primary` binds what
+  `Surface/Background Primary` binds — Card's `padding={3}` rule again. Anything else that draws a
+  knockout, a notch or a seam will hit this, and should copy the prop rather than invent a second
+  spelling.
+  **Carousel adds a third case: a wrapper cannot read its child's intent about its own size.** Its
+  slides were `w-full`, which is right for Figma's one-per-view gallery and silently wrong for a
+  strip of cards — five 200px cards sat in five 400px slides and only one was ever visible. Sizing
+  the wrapper to its content instead *collapses* it, because the usual child is an `AspectRatio` and
+  that is `w-full`. Asking the child produces a circular layout rather than an answer, so the caller
+  declares it as `layout="fill" | "hug"`, reusing Tabs' and SegmentedControl's words. The general
+  form: **derive from what a child *is*, never from what it wants to be given.**
+
+## Still to build
+
+Foundational and static first:
+
+1. **List Item** — variants/states; native, styled.
+2. Then: Indicator, Chart Legend Buttons.
+
+**`Table Cell` came off this list the same way**, absorbed into `Table` rather than shipped on its
+own. A table cell outside a table has nothing to be — no width, no density, no row to take its rule
+from — so exporting it would have been exporting a `<td>`. It is still there as `Table.Cell` for the
+composable API, which is the difference between absorbing a roadmap item and dropping it.
+
+**`Carousel Pagination Button` came off this list by being built into `Carousel`** rather than
+shipped on its own. Figma models it as a component because a canvas has to draw a dot somewhere;
+nothing outside a carousel has a use for a 24px dot that grows into a 36px pill, so exporting it
+would have widened the public API to no end. Worth remembering as a shape: **a roadmap entry can be
+closed by absorbing it, and the test is whether anything else would ever import it.**
+
+**`Calendar` and `DatePicker` were built without ever being on this list**, and
+that is worth noting rather than quietly tidying away. The bar above is that a
+roadmap item earns its build when the file draws it *and* something has been
+reinvented in its absence; this one was asked for directly, with the Figma node
+in hand. The bar governs what to build **next** when nobody is asking — it is not
+a gate on what somebody asks for.
+
+**`ProgressBar` is the Calendar case a fourth time, and the first with *nothing* to read.**
+`Calendar`, `Pagination`, `NumberInput` and `OTPInput` were all built off-list; the first two had
+a drawn Figma node, the second two had none. This one had a page — `↪ Progress Bar`
+(`40004748:43527`) — that was a **scaffold**: a Docs frame reading "Description goes here.", two
+blank Preview frames, one "Usage rule." card per column, and an empty Components section. So there
+was no variant list to model and the usual order ran backwards: props were settled from Base UI's
+`Progress` and Astryx's `ProgressBar`, then the file was drawn from the built component in the same
+sitting. Worth naming because **a scaffolded page reads exactly like a drawn one in a page list** —
+ten more of them are sitting there — and the difference decides whether a build starts by reading
+or by deciding.
+
+The file is not left behind: the page now has a 12-variant `Progress Bar` set (`40005130:525`), a
+filled Preview in both themes, and nine guidance cards. **Three of the build's findings are about
+the canvas lying rather than about the component** — `resize()` silently pinning a height so an
+in-flow row rendered nothing, a shared TEXT property overriding every variant's drawn value, and a
+set-level screenshot showing a node whose `absoluteRenderBounds` is `null`. All three are written up
+in the component's record; the general form is that **a Figma render is evidence about the render,
+and `absoluteRenderBounds` is evidence about the node.**
+
+Its sibling primitive is left alone deliberately. Base UI ships `meter` with the identical five
+parts and `role="meter"`, and a bar that reports a *level* rather than a *task* is a different
+component under the same drawing. Not built, and the record says so rather than leaving the next
+person to wonder whether it was missed.
+
+**Two of Astryx's rules were dropped, both for the same reason, and both found by measuring rather
+than by reading.** Its marks take their color from whatever they sit on, and its `neutral` variant is
+a quieter gray than its accent. Neither survives a two-theme token layer: no token clears 3:1 on
+`Feedback/Warning/Highlight` in *both* themes (Yellow/600 is light in each), and every gray in the
+semantic layer collides with `Input/Selected` in one theme or the other. **The dark preview in Figma
+is where the second one showed** — two rows of the variant grid drew the identical bar. Worth
+generalizing: **a rule imported from a single-theme system has to be re-measured in both, and a
+variant that vanishes into its neighbour in half the themes is worse than a variant that is not
+there.**
+
+**It also turned up a real gap in the `Feedback` ramp, and that gap is now closed at source.**
+`Highlight` was the same step in both themes, which is fine behind a 1px invalid border and not fine
+as a large fill on a track: `Decorative/Yellow/Highlight` measured 2.33:1 on the light track and
+`Decorative/Red/Highlight` 2.16:1 on the dark one. Both are now theme-aware — Yellow/700 light with
+Yellow/600 dark, Red/600 light with Red/400 dark — changed in Figma, mirrored into
+`tokens/semantic.json`, and regenerated, for a two-line diff in `theme.css`.
+
+**This is the `Pink` precedent run end to end, and it is the pattern to copy.** A component asks a
+token for something; a test written *in that component* records the measurement rather than the
+opinion; the token moves at source; the exception is deleted. What made it cheap was checking the
+blast radius before touching anything — `Badge` binds `Background` and `Foreground` and never
+`Highlight`, so its eighteen hues did not move, and the only other consumer is the invalid border on
+`Checkbox`, `Radio` and `Input`, which improved in dark (6.05:1, from 3.67). **`Decorative/Green/Highlight`
+was already Green/700 / Green/600 for exactly the reason Yellow now is**, so the ramp was never
+uniform and the change joined an existing shape rather than inventing one. Check for that before
+arguing a token is untouchable.
+
+**`Pagination` is the Calendar case again, and worth naming as such.** It was never on this list.
+Figma drew it (`40004379:65925`) but nothing had been reinvented in its absence — `Table` had gone
+out of its way *not* to invent it, parking the entry with "do not invent the component here" and
+shipping `rowCount`/`rowIndexStart` as the hook instead. So only half the bar was met, and it was
+built anyway because it was asked for with the node in hand. The half that was met turned out to be
+the useful half: `Table`'s record had already decided the shape, so the build was a sibling
+component and a two-prop join rather than a negotiation about where pagination belongs.
+
+**`TreeList` is the Calendar case once more, and the first roadmap-free build whose Figma page was
+drawn *and* had to be corrected.** Asked for with the node in hand and Astryx's `TreeList` as the
+reference; nothing had been reinvented in its absence (`SideNav.Group` is one level of the same
+drawing, and knows it). The file's `Tree List Item` set was complete — twelve variants, three slots
+— but two of its bindings could not ship: the Selected and Focus fills were `Surface/Background
+Subtle`, which is the canvas in both themes, and the Selected label was `Content/Subtle`. Both were
+settled with Nathan before the build and fixed at source the same day, so the file and the code
+agree; the record has the measurements. It is also the case that made **`focusRingFromParent`**
+necessary — see Focus above — and the second hand-rolled roving tabindex, because Base UI's
+`internals/composite` is a flat-list engine that knows nothing of expand and collapse.
+
+**Dialog is built, and the entry it closes is the cleanest run of Card's rule so far.** The bar is
+that a roadmap item earns its build when the file draws it *and* something has already been
+reinvented in its absence — and both halves arrived together. Figma drew `Dialog` (`40004383:17046`),
+and Popover's `max-h-(--available-height) overflow-y-auto` had been standing in for the scrolling
+case with its own record calling it "a floor, not a home". `Dialog.Body` is the home, and both of
+Astryx's "don't" rules for a popover now have somewhere to send people.
+
+**AlertDialog came with it, and is worth reading for the sharing rule rather than for itself.**
+Base UI's `alert-dialog` subpath re-exports every part but `Root` out of `dialog/` — and `Trigger`
+is not even re-exported, it is `export const AlertDialogTrigger = DialogTrigger`. So it re-attaches
+the library's *own* Dialog wrappers rather than the raw parts, which is a step past ContextMenu
+(rows shared, Popup written) and past Autocomplete (parts shared from two components). It is also
+the first component since BentoGrid to ship with **no Figma node at all** — a debt since closed by
+an `↪ Alert Dialog` page. Figma models it as a *sibling* of Dialog rather than a reuse, because the
+canvas cannot express "the same parts under a different root"; what keeps that honest is the two
+things it removes, the close button and the content slot. See its record.
+
+**Card is built, and the entry it closes is worth keeping.** It asked whether a card was anything
+more than a `ContentBlock` with no `ContentBlock.Header`, and said to close the entry rather than
+build if nobody asked. The file answered in geometry: a card is `rounded-md` (8px) on 12px of
+padding where a block is `rounded-lg` (12px) on 16, and the compositions nest one inside the other.
+So they are different objects that compose, not one component and its degenerate case. The
+corroboration was already in the repo — sixteen story files had hand-rolled the div, at three
+different paddings, one of them as a literal `function Card()`. **That is the shape of evidence to
+look for on the entries above**: a roadmap item earns its build when the file draws it *and*
+something has already been reinvented in its absence.
+
+`ContentBlock` and `BentoGrid` landed together, because a block on its own does not show what it is
+for. **BentoGrid is the first component in the library with no Figma node behind it at all** — not a
+variant added ahead of the file, but a whole component. It owes the file a drawing.
+
+**Content Block's debts are both closed, and the pair is the clearest illustration of the two
+routes.** `Emphasis` went code → file: `subtle` and `accent` shipped ahead of any drawing, and the
+file later added all three variants at exactly the token pairs the code already had —
+Surface/Background Primary, Subtle and Emphasized, the last on Surface/Border Emphasized — so
+nothing changed in code when it landed. That is the Accordion route again, after `Clickable Card`'s
+`State=Selected` below, and the first time it has carried a whole variant axis rather than one
+state. The header's right padding went the other way, file → code correcting file: `_Content Block
+Header` drew `pl-4 pr-2`, which only reads as 16 both sides when the actions slot is filled, because
+a 32px ghost Button's own 12px covers the missing 8. Empty, the header sat 8px short. Code went to
+`px-4`, and Figma rebound the right padding to `spacing/4` to match.
+
+**The check that made the second one trustworthy is worth repeating.** Reading the component alone
+would not have settled it — a variant instance can pin an old padding as a local override and look
+correct in the component while every real use is stale. Walk the set's instances and assert both the
+number *and* the bound variable name: all twelve came back 16 bound to `spacing/4` with no override.
+Same instinct as diffing a token export rather than trusting one node.
+
+**Card's two debts are both settled, and only one of them by drawing.** `Clickable Card` gained a
+`State=Selected` for both emphases the day after it shipped — Surface/Background Subtle on Surface/Border
+Emphasized, exactly what the code had, so nothing changed here. That is the Accordion route working.
+
+The `Padding` one closed the other way, and it is the more useful precedent: **not every code axis
+can become a Figma property, and the answer is sometimes an instance override rather than a
+variant.** Figma's four property kinds are VARIANT, BOOLEAN, TEXT and INSTANCE_SWAP — *none of them
+is a number* — so padding could only ever have been a string axis, taking Card from 6 variants to 24
+and Clickable Card from 10 to 40. Sixty-four frames for one value. Instead the override lives on the
+instance, where it is verified to work, and **it must always be a token rebind** — repoint the
+instance's padding at a different `spacing/N` variable, never type a raw number, or the value leaves
+the system and has no counterpart in code.
+
+That is also why the code prop is `padding={3}` and not `padding="default"`. When the shared
+vocabulary is the token, a second set of size words is a translation table between a designer saying
+`spacing/4` and a caller writing the prop. **The general rule: before adding a variant axis to the
+file, check whether the property is one Figma can actually express — and if the value is a token,
+let the prop say the token.**
+
+The form family is complete against the file bar one: **Checkbox Group** and **Radio Group** are
+built as `Checkbox.Group` and `Radio.Group`, Checkbox, Radio and Switch take their validity from a
+Field as well as from their own prop, and Slider is closed as a deliberate non-change (see its
+entry). Combobox landed and took Token with it — `Combobox.Chips` / `Chip` / `ChipRemove` supply
+the behavior, Token supplies the look, and the 20 / 24 against a field's inner 22 / 30 / 38 held
+when measured. **Autocomplete has since landed and closed the family** — Combobox with one rule
+removed, and the clearest case yet of the sharing rule doing real work: Base UI's `autocomplete`
+subpath re-exports Combobox's `Popup`, `List`, `Group`, `Collection` and `Empty` as the *same
+component objects*, so those recipes moved to `Combobox/styles.ts` rather than being written twice.
+Its field is `Input`'s box for the same reason from the other direction — the file draws an Input
+Group, and `focusRingWithin` is correct there because `Autocomplete.InputGroup` has exactly one
+focusable descendant. Nothing in the form family is left unbuilt against the file.
+
+**`Form` closed the one thing the family had no counterpart for at all.** Field's own JSDoc had
+said "a Form component that does not exist yet" since the day it shipped, and `Field.Error` had
+only ever been rendered for a string `error` — both the same debt. Base UI's `Form` is the
+`<form>`: `noValidate`, every Field checked on submit, the first invalid control focused, server
+errors by Field `name`. Two rules came out of its source and are in its record: **`name` goes on
+the Field**, because a Checkbox Group is only reachable that way, and inside a named Field a
+grouped Checkbox carries `value`. It also found that a control inside a Field was being *named*
+by the Field — both boxes in a group announced by the Field's label — which Checkbox, Radio and
+Switch now say explicitly is not so.
+
+**`TextArea` is the ProgressBar case again** — an `(In Progress)` scaffold with nothing to read, so props were settled from Base UI's `Input` (which is `Field.Control`, and expects a `<textarea>` through `render`) and Astryx's `TextArea`, and the file was drawn from the built component in the same sitting: the Input set cloned and reshaped, `Type=Text Area` added to the Field set. Its record has the one trap that came out of it — cloning a Field variant drops every property reference and looks finished.
+
+**`NumberInput` and `OTPInput` have since been added, and both went code-first.** Neither was on the roadmap and neither had a Figma node — `Input`'s record had parked `type="number"` spinners as "`NumberField` is its own component" — so they are the Calendar case again: asked for directly, built, and drawn into the file in the same sitting. Two pages that had been sitting as `(In Progress)` stubs are now filled and renamed. `NumberInput` is also the first thing to touch `Input/styles.ts`'s shared `box` since Autocomplete, adding a `ring` variant because `focusRingWithin` cannot say *which* descendant should fire the ring and this box has three.
+
+**`Questionnaire` is the first form component whose primitive is not Base UI's.** Asked for with the
+Figma section in hand and shadcn's questionnaire as the reference, and shadcn's own headless
+`@shadcn/react/questionnaire` (MIT, React its only peer, no runtime dependencies) is the engine:
+Base UI has the radio and the checkbox but not the step machine round them, and the `@dnd-kit` bar
+— check what the primitive already does before writing it — was met the same way. Every pixel is
+the library's through `render`. Its record has the two things the build turned on: the title is a
+`<p>` named to the fieldset because a `<legend>` cannot be a flex item, and the row is Radio's and
+Checkbox's card painted off the `<label>` — **the fourth copy Radio's record said would be the point
+to extract, and it was**: Nathan called it, and the row, card, label column, box and dial now live
+in `Checkbox/styles.ts`, imported by Radio, Switch and Questionnaire, with the three real
+differences as variants and the two selector spellings side by side. The file drew it first; what it
+did not draw (invalid, the message, Previous/Skip/Submit, a Docs page) was drawn the next day, and
+nothing in the code moved when it landed. Its one token question — the description shipped on
+`Content/Primary` because the file bound it there — was settled the same day at source: the node
+moved to `Content/Subtle`, the code followed. Its record has the API finding: **a variant's
+`clone()` lands on the page, not in its set**, and cannot take property references until it is
+appended.
+
+For each: read its Figma variants → model them as typed props → implement with `tailwind-variants` →
+cover all states → write a story showing every variant in light and dark. Then write the component's
+`CLAUDE.md` alongside it, and add a row to the table above.
+
+## Working style
+
+- Propose a short plan and get a yes before scaffolding or installing.
+- Keep commits/steps small and explain them in plain language.
+- Don't hardcode colors, spacing, radii, or shadows — always tokens.
+- Verify by measuring (computed styles, screenshots) rather than assuming.

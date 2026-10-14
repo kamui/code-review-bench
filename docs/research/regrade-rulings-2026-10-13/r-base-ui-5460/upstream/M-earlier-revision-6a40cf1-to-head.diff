@@ -1,0 +1,163 @@
+diff --git a/packages/react/src/field/control/FieldControl.test.tsx b/packages/react/src/field/control/FieldControl.test.tsx
+index ebb481307..a548b2ac1 100644
+--- a/packages/react/src/field/control/FieldControl.test.tsx
++++ b/packages/react/src/field/control/FieldControl.test.tsx
+@@ -19,14 +19,15 @@ describe('<Field.Control />', () => {
+   it('avoids rerendering for uncontrolled input changes', async () => {
+     const renderCountRef = { current: 0 };
+ 
+-    function RenderCountedControl() {
+-      renderCountRef.current += 1;
+-      return <Field.Control data-testid="control" />;
+-    }
+-
+     renderNonStrict(
+       <Field.Root>
+-        <RenderCountedControl />
++        <Field.Control
++          data-testid="control"
++          render={(props) => {
++            renderCountRef.current += 1;
++            return <input {...props} />;
++          }}
++        />
+       </Field.Root>,
+     );
+ 
+@@ -43,6 +44,41 @@ describe('<Field.Control />', () => {
+     expect(afterFirstChange).toBeLessThanOrEqual(initialRenderCount + 1);
+   });
+ 
++  it('renders once per keystroke for controlled input changes', async () => {
++    const renderCountRef = { current: 0 };
++
++    function App() {
++      const [value, setValue] = React.useState('');
++      return (
++        <Field.Root>
++          <Field.Control
++            data-testid="control"
++            value={value}
++            onValueChange={setValue}
++            render={(props) => {
++              renderCountRef.current += 1;
++              return <input {...props} />;
++            }}
++          />
++        </Field.Root>
++      );
++    }
++
++    renderNonStrict(<App />);
++
++    const control = screen.getByTestId('control');
++
++    // The first keystroke also flips dirty and filled, so measure the steady state after it.
++    fireEvent.change(control, { target: { value: 'a' } });
++    const settledRenderCount = renderCountRef.current;
++
++    fireEvent.change(control, { target: { value: 'ab' } });
++    fireEvent.change(control, { target: { value: 'abc' } });
++
++    // The controlled echo must not schedule a second render per keystroke.
++    expect(renderCountRef.current).toBe(settledRenderCount + 2);
++  });
++
+   it('validates once when changed by the user', async () => {
+     const validate = vi.fn();
+ 
+diff --git a/packages/react/src/field/control/FieldControl.tsx b/packages/react/src/field/control/FieldControl.tsx
+index 7bfc70b86..06941f827 100644
+--- a/packages/react/src/field/control/FieldControl.tsx
++++ b/packages/react/src/field/control/FieldControl.tsx
+@@ -82,8 +82,7 @@ export const FieldControl = React.forwardRef(function FieldControl(
+ 
+   const isControlled = valueProp !== undefined;
+   const value = isControlled ? valueUnwrapped : undefined;
+-  // The DOM input always holds a string, so the Field-owned initial baseline and the dirty
+-  // comparisons against it must use the serialized form of the controlled value.
++  // The DOM value is always a string, so dirty comparisons must serialize the controlled value.
+   const serializedValue = value == null ? undefined : String(value);
+ 
+   const getValueFromInput = useStableCallback(() => validation.inputRef.current?.value);
+@@ -98,28 +97,21 @@ export const FieldControl = React.forwardRef(function FieldControl(
+   );
+ 
+   useIsoLayoutEffect(() => {
+-    if (serializedValue !== undefined) {
+-      setFilled(serializedValue !== '');
+-    } else if (validation.inputRef.current?.value) {
++    if (validation.inputRef.current?.value) {
+       setFilled(true);
+     }
+-  }, [validation.inputRef, setFilled, serializedValue]);
++  }, [validation.inputRef, setFilled]);
+ 
+-  const processedValueRef = React.useRef<string | undefined>(undefined);
+-
+-  // A controlled transition that the change handler didn't produce is a programmatic change: it
+-  // mirrors a user change, minus the echo of a value the change handler already processed.
+   useValueChanged(serializedValue, () => {
+-    const processedValue = processedValueRef.current;
+-    processedValueRef.current = undefined;
+-    if (serializedValue === undefined || serializedValue === processedValue) {
++    if (serializedValue === undefined) {
+       return;
+     }
+ 
++    clearErrors(name);
+     setDirty(serializedValue !== (validityData.initialValue ?? ''));
+-    if (!disabled) {
+-      validation.change(serializedValue);
+-    }
++    setFilled(serializedValue !== '');
++
++    validation.change(serializedValue);
+   });
+ 
+   const inputRef = React.useRef<HTMLElement>(null);
+@@ -130,25 +122,6 @@ export const FieldControl = React.forwardRef(function FieldControl(
+     }
+   }, [autoFocus, setFocused]);
+ 
+-  useIsoLayoutEffect(() => {
+-    if (disabled) {
+-      setFocused(false);
+-    }
+-  }, [disabled, setFocused]);
+-
+-  // A control that unmounts or becomes disabled while focused never fires blur, which would latch
+-  // `data-focused`. Skip it when a replacement control already owns focus, since the shared
+-  // `inputRef` then points at the replacement.
+-  useIsoLayoutEffect(() => {
+-    return () => {
+-      const input = validation.inputRef.current;
+-      if (input && activeElement(ownerDocument(input)) === input) {
+-        return;
+-      }
+-      setFocused(false);
+-    };
+-  }, [setFocused, validation.inputRef]);
+-
+   const element = useRenderElement('input', componentProps, {
+     ref: [forwardedRef, inputRef],
+     state,
+@@ -163,11 +136,15 @@ export const FieldControl = React.forwardRef(function FieldControl(
+         ...(isControlled ? { value } : { defaultValue }),
+         onChange(event) {
+           const inputValue = event.currentTarget.value;
+-          // Even a canceled change counts as processed: the consumer opted out of Base UI handling
+-          // for it, so the controlled echo must not validate it either.
+-          processedValueRef.current = inputValue;
+           const details = createChangeEventDetails(REASONS.none, event.nativeEvent);
+           onValueChange?.(inputValue, details);
++
++          // Controlled values sync from the `value` prop instead, so that a value the consumer
++          // rejects or rewrites never reaches the field state.
++          if (isControlled) {
++            return;
++          }
++
+           // `validation.change` reads `markedDirtyRef`, so update dirty before validating.
+           setDirty(inputValue !== (validityData.initialValue ?? ''));
+           setFilled(inputValue !== '');

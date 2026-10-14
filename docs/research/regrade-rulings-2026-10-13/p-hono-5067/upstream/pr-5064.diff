@@ -1,0 +1,106 @@
+diff --git a/src/utils/body.test.ts b/src/utils/body.test.ts
+index 5fa3879c82..30a3e3cade 100644
+--- a/src/utils/body.test.ts
++++ b/src/utils/body.test.ts
+@@ -42,6 +42,17 @@ describe('Parse Body Util', () => {
+     expect(await parseBody(req)).toEqual({ message: 'hello' })
+   })
+ 
++  it('should parse mixed-case `x-www-form-urlencoded` content type', async () => {
++    const searchParams = new URLSearchParams()
++    searchParams.append('message', 'hello')
++
++    const req = createRequest(SEARCH_URL, 'POST', searchParams, {
++      'Content-Type': 'Application/X-WWW-Form-Urlencoded',
++    })
++
++    expect(await parseBody(req)).toEqual({ message: 'hello' })
++  })
++
+   it('should not parse multiple values in default', async () => {
+     const data = new FormData()
+     data.append('file', 'bbb')
+diff --git a/src/utils/body.ts b/src/utils/body.ts
+index b7fdf1b36a..b2932df15f 100644
+--- a/src/utils/body.ts
++++ b/src/utils/body.ts
+@@ -100,10 +100,9 @@ export const parseBody: ParseBody = async (
+   const headers = request instanceof HonoRequest ? request.raw.headers : request.headers
+   const contentType = headers.get('Content-Type')
+ 
+-  if (
+-    contentType?.startsWith('multipart/form-data') ||
+-    contentType?.startsWith('application/x-www-form-urlencoded')
+-  ) {
++  const mediaType = contentType?.split(';')[0].trim().toLowerCase()
++
++  if (mediaType === 'multipart/form-data' || mediaType === 'application/x-www-form-urlencoded') {
+     return parseFormData(request, { all, dot })
+   }
+ 
+diff --git a/src/validator/validator.test.ts b/src/validator/validator.test.ts
+index eb90ee89bb..0f8527a9b9 100644
+--- a/src/validator/validator.test.ts
++++ b/src/validator/validator.test.ts
+@@ -146,6 +146,19 @@ describe('JSON', () => {
+     expect(data).toEqual({ foo: 'bar' })
+   })
+ 
++  it('Should validate if Content-Type media type is mixed-case application/json', async () => {
++    const res = await app.request('http://localhost/post', {
++      method: 'POST',
++      body: JSON.stringify({ foo: 'bar' }),
++      headers: {
++        'Content-Type': 'Application/JSON',
++      },
++    })
++
++    expect(res.status).toBe(200)
++    expect(await res.json()).toEqual({ foo: 'bar' })
++  })
++
+   it('Should not validate if Content-Type is not set', async () => {
+     const res = await app.request('http://localhost/post', {
+       method: 'POST',
+@@ -278,6 +291,24 @@ describe('FormData', () => {
+     })
+   })
+ 
++  it('Should validate mixed-case URL Encoded Content-Type', async () => {
++    const params = new URLSearchParams()
++    params.append('foo', 'bar')
++
++    const res = await app.request('/post', {
++      method: 'POST',
++      body: params,
++      headers: {
++        'content-type': 'Application/X-WWW-Form-Urlencoded; charset=UTF-8',
++      },
++    })
++
++    expect(res.status).toBe(200)
++    expect(await res.json()).toEqual({
++      foo: 'bar',
++    })
++  })
++
+   it('Should validate if Content-Type is a application/x-www-form-urlencoded with a charset', async () => {
+     const params = new URLSearchParams()
+     params.append('foo', 'bar')
+diff --git a/src/validator/validator.ts b/src/validator/validator.ts
+index fd4d29cc23..a1053d4ad5 100644
+--- a/src/validator/validator.ts
++++ b/src/validator/validator.ts
+@@ -21,9 +21,9 @@ export type ValidationFunction<
+   c: Context<E, P>
+ ) => OutputType | TypedResponse | Promise<OutputType> | Promise<TypedResponse>
+ 
+-const jsonRegex = /^application\/([a-z-\.]+\+)?json(;\s*[a-zA-Z0-9\-]+\=([^;]+))*$/
+-const multipartRegex = /^multipart\/form-data(;\s?boundary=[a-zA-Z0-9'"()+_,\-./:=?]+)?$/
+-const urlencodedRegex = /^application\/x-www-form-urlencoded(;\s*[a-zA-Z0-9\-]+\=([^;]+))*$/
++const jsonRegex = /^application\/([a-z-\.]+\+)?json(;\s*[a-zA-Z0-9\-]+\=([^;]+))*$/i
++const multipartRegex = /^multipart\/form-data(;\s?boundary=[a-zA-Z0-9'"()+_,\-./:=?]+)?$/i
++const urlencodedRegex = /^application\/x-www-form-urlencoded(;\s*[a-zA-Z0-9\-]+\=([^;]+))*$/i
+ 
+ export type ExtractValidationResponse<VF> = VF extends (value: any, c: any) => infer R
+   ? R extends Promise<infer PR>

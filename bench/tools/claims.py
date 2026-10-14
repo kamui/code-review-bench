@@ -255,7 +255,8 @@ def pinned(case, decisions):
     """What an equivalent item's canonical claim must say: the saved approved outcome, else unresolved."""
     decision = decisions.get(case["adjudication"])
     approved = decision is not None and decision["status"] == "approved"
-    return {"outcome": decision["outcome"] if approved else "unresolved", "family": case["family_id"]}
+    return {"outcome": decision["outcome"] if approved else "unresolved", "family": case["family_id"],
+            **({"pre_existing_problem": case["pre_existing_problem_id"]} if case.get("pre_existing_problem_id") else {})}
 
 
 def grading_context(cases, decisions):

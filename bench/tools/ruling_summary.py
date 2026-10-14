@@ -53,7 +53,7 @@ def records(root=record.ROOT):
         if problems:
             raise ValueError(f"{round_path}: {'; '.join(problems)}")
     for path in sorted(research.rglob("*.before.json")):
-        before = record.load(path)
+        before = record.read_before(path)
         problems = record.faults(before, root)
         round_path = path.parent / "round.json"
         if not round_path.is_file():

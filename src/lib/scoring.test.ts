@@ -7,8 +7,9 @@ import { main as scorecardCommand } from '../../tools/scorecard'
 import { datasetSchema, detailSchema } from './data'
 import type { Attempt, Dataset, Task } from './data'
 import { assessment, build, claim, claims, failed, family, remedy, review, scorecardFixture, task } from './fixture'
+import type { Trial } from './fixture'
 import { summarize } from './metrics'
-import { comparisonTasks, leaderboard, matched, meanTaskRecall, orderingConflicts, pairwise, pendingCandidates, recommend, referenceCoverage, scorecard } from './scoring'
+import { comparisonTasks, leaderboard, matched, meanTaskRecall, orderingConflicts, pairwise, pendingCandidates, preExistingLabels, recommend, referenceCoverage, scorecard } from './scoring'
 import type { Measure } from './scoring'
 
 const card = (data: Dataset, id: string, concern: string | null = null) => scorecard(data, id, { taskIds: data.tasks.map(item => item.id), concern })
@@ -548,6 +549,126 @@ with patch.object(exporter, 'ROOT', root), patch.object(exporter, 'BENCH', root 
     expect(await scorecardCommand(['--data', path], { out: text => { stdout += text }, error: () => {} })).toBe(0)
     expect(stdout).toContain('Repeated serious misses: unavailable (1 serious outcome is undetermined.); 1 serious references with observed misses or undetermined outcomes.')
     expect(stdout).not.toContain('not caught in at least one scheduled trial')
+    await rm(root, { recursive: true })
+  })
+})
+
+describe('pre-existing problems raised', () => {
+  type Problem = NonNullable<Task['preExistingProblems']>[number]
+  const preExisting: Problem = { id: 'OP-1', title: 'Pre-existing lost write', trigger: 'Concurrent writes', consequence: 'Lost update',
+    requiredOutcome: 'Preserve writes', concerns: ['Reliability'], impact: 'serious', admissionUrl: '/fixture/ruling' }
+  const minor: Problem = { ...preExisting, id: 'OP-2', title: 'Pre-existing dropped header', impact: 'other-material' }
+  const subject = (problems = [preExisting], id = 'pre-existing') => task(id, [], 'audited-clean', { preExistingProblems: problems })
+  type Result = 'raised' | 'not-raised' | 'unresolved'
+  const assessed = (pr: ReturnType<typeof task>, outcome: Result, others: Record<string, Result> = {}) => {
+    const results = Object.entries({ [preExisting.id]: outcome, ...others })
+    return review(pr, null, { assessment: assessment(pr, [], {
+      claims: results.flatMap(([id, result]) => result === 'raised' ? [claim(`c-${id}`, 'scope-excluded')] : []),
+      preExistingProblems: results.map(([problemId, result]) => ({ problemId, outcome: result, claimIds: result === 'raised' ? [`c-${problemId}`] : [],
+        saysWhat: result === 'raised' ? 'yes' : result === 'not-raised' ? 'no' : 'cannot-tell', identifiesCause: 'no' })) }) })
+  }
+  const serious = (data: Dataset, concern: string | null = null) => card(data, 'a', concern).preExisting.labels.serious
+
+  test('counts per admitted repetition, excludes failed and superseded attempts, and leaves ordinary dimensions unchanged', () => {
+    const pr = subject(), first = assessed(pr, 'raised'), second = assessed(pr, 'raised'), quiet = assessed(pr, 'not-raised')
+    const data = build([pr], { a: [[pr, [{ attempts: [failed(pr), first] }, second, quiet, failed(pr)]]] })
+    const result = card(data, 'a')
+    expect(result.preExisting.labels.serious).toMatchObject({ catalog: 1, admitted: 3, assessed: 3, unresolved: 0,
+      observed: { raised: 2, problems: 1, reviews: 2 }, raised: { kind: 'available', value: 2 } })
+    const without = structuredClone(data)
+    for (const row of without.attempts) if (row.assessment) row.assessment.preExistingProblems = null
+    const ordinary = ({ preExisting: _preExisting, ...rest }: ReturnType<typeof scorecard>) => rest
+    expect(ordinary(result)).toEqual(ordinary(card(without, 'a')))
+    expect(result.controls.silent).toBe(3)
+    expect(result.detection.all.equalProblem.kind).toBe('unavailable')
+  })
+
+  test('gives each count separately for serious and for other-material problems and adds no total', () => {
+    const pr = subject([preExisting, minor])
+    const data = build([pr], { a: [[pr, [assessed(pr, 'raised', { [minor.id]: 'raised' }), assessed(pr, 'raised', { [minor.id]: 'not-raised' }),
+      assessed(pr, 'not-raised', { [minor.id]: 'not-raised' })]]] })
+    const result = card(data, 'a').preExisting
+    expect(Object.keys(result).sort()).toEqual(['candidates', 'labels'])
+    expect(result.labels.serious).toMatchObject({ catalog: 1, admitted: 3, assessed: 3, raised: { kind: 'available', value: 2 },
+      problems: { kind: 'available', value: 1 }, reviews: { kind: 'available', value: 2 }, rows: [{ problemId: preExisting.id, raised: 2 }] })
+    expect(result.labels['other-material']).toMatchObject({ catalog: 1, admitted: 3, assessed: 3, raised: { kind: 'available', value: 1 },
+      problems: { kind: 'available', value: 1 }, reviews: { kind: 'available', value: 1 }, rows: [{ problemId: minor.id, raised: 1 }] })
+  })
+
+  test('withholds one label for its own reason and leaves the other final', () => {
+    const grave = subject(), light = subject([minor], 'light')
+    const quiet = (outcome: Result) => review(light, null, { assessment: assessment(light, [], { preExistingProblems: [
+      { problemId: minor.id, outcome, claimIds: [], saysWhat: outcome === 'unresolved' ? 'cannot-tell' : 'no', identifiesCause: 'no' }] }) })
+    const withheld: [Attempt | Trial, string][] = [[assessed(grave, 'unresolved'), 'Whether a pre-existing problem was raised is unresolved.'],
+      [review(grave, null), 'Admitted reviews await pre-existing-problem assessment.'],
+      [{ attempts: [failed(grave)], pending: true }, 'Scheduled trials await execution.']]
+    for (const [extra, reason] of withheld) {
+      const result = card(build([grave, light], { a: [[grave, [assessed(grave, 'raised'), extra]], [light, [quiet('not-raised')]]] }), 'a').preExisting.labels
+      expect(result.serious.raised).toEqual({ kind: 'unavailable', reason })
+      expect(result.serious.observed.raised).toBe(1)
+      expect(result['other-material'].raised).toEqual({ kind: 'available', value: 0 })
+    }
+    const only = card(build([grave], { a: [[grave, [assessed(grave, 'raised')]]] }), 'a').preExisting.labels
+    expect(only.serious.raised).toEqual({ kind: 'available', value: 1 })
+    expect(only['other-material']).toMatchObject({ catalog: 0,
+      raised: { kind: 'unavailable', reason: 'No approved pre-existing problem in this selection is labelled other-material.' } })
+  })
+
+  test('a problem without an approved label withholds both labels', () => {
+    const pr = subject([preExisting, { ...minor, impact: 'unknown' }])
+    const result = card(build([pr], { a: [[pr, [assessed(pr, 'raised', { [minor.id]: 'raised' })]]] }), 'a').preExisting.labels
+    for (const label of preExistingLabels) expect(result[label].raised).toEqual({ kind: 'unavailable', reason: '1 pre-existing problem awaits an impact label.' })
+    expect([result.serious.observed.raised, result['other-material'].catalog]).toEqual([1, 0])
+  })
+
+  test('keeps the observed count and catalog available when a result is unresolved or coverage or admission is incomplete', () => {
+    const pr = subject()
+    for (const extra of [assessed(pr, 'unresolved'), review(pr, null), { attempts: [failed(pr)], pending: true as const }]) {
+      const result = serious(build([pr], { a: [[pr, [assessed(pr, 'raised'), extra]]] }))
+      expect(result.catalog).toBe(1)
+      expect(result.observed.raised).toBe(1)
+      expect(result.raised.kind).toBe('unavailable')
+    }
+    const missing = build([pr, task('missing', [])], { a: [[pr, [assessed(pr, 'raised')]]] })
+    expect(serious(missing).raised.kind).toBe('unavailable')
+  })
+
+  test('complete silence is a zero count and empty selections are unavailable', () => {
+    const pr = subject()
+    expect(value(serious(build([pr], { a: [[pr, [assessed(pr, 'not-raised')]]] })).raised)).toBe(0)
+    expect(serious(build([pr], { a: [[pr, [failed(pr)]]] })).raised.kind).toBe('unavailable')
+    const plain = task('plain', [])
+    for (const label of preExistingLabels) expect(card(build([plain], { a: [[plain, [review(plain, [])]]] }), 'a').preExisting.labels[label].raised)
+      .toEqual({ kind: 'unavailable', reason: 'No approved pre-existing problems in this selection.' })
+    expect(serious(build([pr], { a: [[pr, [assessed(pr, 'raised')]]] }), 'Security').catalog).toBe(0)
+  })
+
+  test('keeps pending admission unavailable and preserves independent false claims and unsafe remedies', () => {
+    const pr = subject(), found = assessed(pr, 'raised')
+    if (!found.assessment) throw new Error('fixture needs assessment')
+    found.assessment.claims.push(claim('false', 'refuted'))
+    found.assessment.recommendations.push(remedy('unsafe', [`c-${preExisting.id}`], 'unsafe'))
+    const data = build([pr], { a: [[pr, [found]]] }, { candidates: [{ id: 'pending', taskId: pr.id, kind: 'pre-existing-problem',
+      recordedAt: '2026-10-13T00:00:00Z', claim: 'Another pre-existing fault', limits: 'Not admitted', relevance: 'Reliability' }] })
+    const result = card(data, 'a')
+    expect(result.preExisting.labels.serious.raised).toEqual({ kind: 'unavailable', reason: 'Pre-existing-problem candidates await admission.' })
+    expect(result.preExisting.labels.serious.observed.raised).toBe(1)
+    expect(result.controls.alarmed).toBe(1)
+    expect(result.remedies.unsafe).toBe(1)
+  })
+
+  test('the command prints each label on its own lines and the controls wording in force', async () => {
+    const pr = subject([preExisting, minor])
+    const data = build([pr], { a: [[pr, [assessed(pr, 'raised', { [minor.id]: 'not-raised' })]]] })
+    const root = await mkdtemp(join(tmpdir(), 'scorecard-'))
+    const path = join(root, 'benchmark.json')
+    await writeFile(path, JSON.stringify(data))
+    let stdout = ''
+    expect(await scorecardCommand(['--data', path], { out: text => { stdout += text }, error: () => {} })).toBe(0)
+    expect(stdout).toContain('Pre-existing problems raised, serious: 1 per review and problem; 1 distinct problems; 1 reviews that raised one. Observed: 1 raised; 1/1 reviews assessed; 1 approved problems; 0 unresolved; 0 pending candidates.\n  OP-1: observed raised 1 times; 1 assessments; 0 unresolved.')
+    expect(stdout).toContain('Pre-existing problems raised, other-material: 0 per review and problem; 0 distinct problems; 0 reviews that raised one. Observed: 0 raised; 1/1 reviews assessed; 1 approved problems; 0 unresolved; 0 pending candidates.\n  OP-2: observed raised 0 times; 1 assessments; 0 unresolved.')
+    expect(stdout).toContain('without a refuted or unproven claim;')
+    expect(stdout).not.toContain('unsupported claim')
     await rm(root, { recursive: true })
   })
 })

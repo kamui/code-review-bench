@@ -2,7 +2,7 @@
 
 The evaluator audit checks the grades themselves. An independent second grader labels a sample of the first grader's work again, and the two results are compared. Until a round concludes, [`audits.json`](../bench/grading/current/audits.json) stays `unassessed`, the scorecard gives no overall recommendation, and nobody reports an agreement rate.
 
-This is the second plan. The user [selected](../bench/grading/rulings/cohort-rebuild-audit.v3.md) it on 2026-10-12 and amended it the same day after a review of its declaration, while [`grades.json`](../bench/grading/current/grades.json) held no batch, so no regraded result existed to tune it against. The strata, the selection rule, the seed, the sizes and the tolerances are fixed in `audits.json`. Changing any of them after grading starts is a recorded deviation with its own human receipt. The [record](research/cohort-rebuild-2026-10-05/audit/next-plan/note.md) holds the two proposals it was built from and the reasons for each choice.
+This is the second plan. The user [selected](../bench/grading/rulings/cohort-rebuild-audit.v3.md) it on 2026-10-12 and amended it the same day after a review of its declaration, while [`grades.json`](../bench/grading/current/grades.json) held no batch, so no regraded result existed to tune it against. On 2026-10-13 the user [amended it again](../bench/grading/rulings/cohort-rebuild-audit.v4.md) for pre-existing problems. No grade under contract v3 existed then, but that amendment was not declared blind: a first regrade under contract v2 was saved and its aggregate outcomes were known, as the declaration's `basis` says. The strata, the selection rule, the seed, the sizes and the tolerances are fixed in `audits.json`. Changing any of them after grading starts is a recorded deviation with its own human receipt. The [record](research/cohort-rebuild-2026-10-05/audit/next-plan/note.md) holds the two proposals it was built from and the reasons for each choice.
 
 The first plan, declared on 2026-10-03 under the previous rubric, is [closed as superseded](../bench/grading/rulings/cohort-rebuild-audit.v3.md). Its round did not pass and is not described as passed. `audits.json` keeps its declaration and evidence under `superseded`, and its records stay in `bench/grading/current/audit/evaluator-audit-v1-2026-10-03/`.
 
@@ -29,18 +29,22 @@ A stratum is a set of graded units of one kind.
 | `outside-this-change` | claim | The claim's outcome is `outside-this-change`. | 30 | 1 | 14.9% |
 | `unresolved-claim` | claim | The claim's outcome is `unresolved`, for every open reason. | 40 | 1 | 11.3% |
 | `control-silence` | control-review | Every control-review unit. | 40 | 1 | 11.3% |
+| `pre-existing-raised` | pre-existing-review | The unit's result is `raised`. | all | none: audited whole | no rate claimed |
+| `pre-existing-unresolved` | pre-existing-review | The unit's result is `unresolved`. | all | none: audited whole | no rate claimed |
+| `pre-existing-not-raised` | pre-existing-review | The unit's result is `not-raised`. | 60 | 1 | 7.7% |
 
-Each limit is a one-sided 95% binomial bound for that stratum alone, at the largest passing count of errors. The thirteen are not one joint guarantee, and the audit gives no overall error percentage.
+Each limit is a one-sided 95% binomial bound for that stratum alone, at the largest passing count of errors. The strata are not one joint guarantee, and the audit gives no overall error percentage. The last three were added on 2026-10-13 ([audit decision 8](../bench/grading/rulings/cohort-rebuild-audit.v4.md)); [Pre-existing problems raised](#pre-existing-problems-raised) says what their unit is.
 
 A claim whose outcome is `problem` also decides a `caught` unit, but the two are checked apart: when two claims of a review credit the same known problem, a wrong label on one leaves the credit unchanged. A problem whose impact label is not approved when the sample is drawn is outside `serious` and `other-material`.
 
 ## Check the whole cohort first
 
-Three checks cover every selected batch before the draw. They need no sample and no model.
+Four checks cover every selected batch before the draw. They need no sample and no model.
 
 1. The saved credit of every family-review unit equals the derivation above. All six credit errors of the first round came from one derivation bug.
 2. Every claim with a canonical claim holds that claim's saved label and known problem.
 3. No grade is stale, and no review lacks a row for a known problem of its task.
+4. For every admitted review and every pre-existing problem of its task there is exactly one saved result, and it equals the derivation of the unit. No claim names both a known problem and a pre-existing problem. No result of raised rests on a candidate that is still pending, or on a claim that is neither `outside-this-change` nor unresolved for want of evidence.
 
 ## Draw the sample
 
@@ -53,6 +57,8 @@ Draw once, after every selected batch has a current grade and before anyone open
 5. A unit drawn in two strata is assessed once and counted in both.
 6. Save the drawn units with the per-task and per-configuration counts of the sample. The draw is not balanced by configuration, so the counts show what it covered.
 
+The sample is drawn only when no candidate for a pre-existing problem is pending. Each candidate the regrade raises is ruled on first, the batches of a task with a new admission are graded again, and the draw follows, so that a pass describes one fixed list of pre-existing problems.
+
 ## The second grader
 
 The second grader is independent of the first: a person, or a separately authorized model session that did not produce the grade. The user [selected](../bench/grading/rulings/cohort-rebuild-audit.v1.md) Codex GPT-6.1 Sol at high effort, a different model family from the [grader](grading-readiness.md). The second pass is a paid dispatch and needs its own authorization, queue and usage estimate after the draw.
@@ -63,7 +69,9 @@ It labels every listed claim of every review in the batch under the ordinary ver
 
 A disagreement is a different credit result, a different claim outcome or a different control result. A difference only in the kind of suggestion, the open reason, a question's answer, the wording of evidence, a duplicate group or the second fact is not one. The second fact, "identifies the cause as a fault", is recorded and neither compared nor shown, as [decision P24](research/cohort-rebuild-2026-10-05/second-pass/rulings/P24-the-second-fact-is-recorded-not-shown.md) says.
 
-The records of a round are under `bench/grading/current/audit/<seed>/` and are written once. From the draw to the conclusion `grades.json` must stay the file the sample pins. `bench/tools/evaluator_audit.py` runs each step and reads grades saved under verdict contract v2: `check` runs the three whole-cohort checks, `draw` runs them again and draws, `claims` writes a sampled batch's claim list for `grade.py prepare --inventory`, `second` saves a second assessment, `compare` matches and compares, and `conclude` applies the tolerances. `draw` refuses a declared stratum or unit kind the tool does not know. The sample pins each task's known problems, their impact labels and its control status as drawn, because a ruling may change one of them before the round concludes without changing a grade. Every later step draws again from the pinned grades and those facts and refuses a sample that differs.
+The records of a round are under `bench/grading/current/audit/<seed>/` and are written once. From the draw to the conclusion `grades.json` must stay the file the sample pins. `bench/tools/evaluator_audit.py` runs each step and reads grades saved under verdict contract v3, which the validation policy names, or under v2, which it named before pre-existing problems; it refuses a batch graded under any other. The units, strata and checks for pre-existing problems apply to a batch graded under v3. `check` runs the four whole-cohort checks, `draw` runs them again and draws, `claims` writes a sampled batch's claim list for `grade.py prepare --inventory`, `second` saves a second assessment, `compare` matches and compares, and `conclude` applies the tolerances. `draw` refuses a declared stratum or unit kind the tool does not know. The sample pins each task's known problems, their impact labels and its control status as drawn, because a ruling may change one of them before the round concludes without changing a grade. Every later step draws again from the pinned grades and those facts and refuses a sample that differs.
+
+The second grader is also told this: when the review text states a fault from before the change that the claim list does not record, note it as a concern about the list, with the evidence. Such notes are reported and are not counted as errors.
 
 ## Reconcile
 
@@ -79,7 +87,7 @@ A tolerance is the largest count of confirmed first-grader errors that a stratum
 
 A stratum over its tolerance fails the round. The affected batches are graded again and every stratum is drawn once more with seed `evaluator-audit-v2-2026-10-12-round-2` and fresh second sessions, under a separately approved spend. A second failure returns to the user for a new plan. A failed round's records stay in its directory.
 
-`audits.json` becomes `assessed` only when every stratum was drawn, assessed a second time, reconciled and within tolerance, with the populations, drawn units, second assessments, confusion tables and reconciliation saved as pinned evidence. Until then any display says the audit is pending or failed and gives no recommendation. After a pass the allowed sentence is: "Detection, claim outcomes and control silence passed evaluator audit v2 at its declared tolerances, for the fixed claim list." An assessed audit describes the grades as they were drawn: correcting its confirmed errors afterwards leaves it assessed, as the user [chose](../bench/grading/rulings/cohort-rebuild-audit.v1.md).
+`audits.json` becomes `assessed` only when every stratum was drawn, assessed a second time, reconciled and within tolerance, with the populations, drawn units, second assessments, confusion tables and reconciliation saved as pinned evidence. Until then any display says the audit is pending or failed and gives no recommendation. After a pass the allowed sentence is: "Detection, claim outcomes, control silence and pre-existing problems raised passed evaluator audit v2 at its declared tolerances, for the fixed claim list and the pre-existing problems admitted when the sample was drawn. Every raised and unresolved pre-existing problem result was checked in full." An assessed audit describes the grades as they were drawn: correcting its confirmed errors afterwards leaves it assessed, as the user [chose](../bench/grading/rulings/cohort-rebuild-audit.v1.md).
 
 ## Reported without a tolerance
 
@@ -88,8 +96,27 @@ A stratum over its tolerance fails the round. The affected batches are graded ag
 - Agreement on "says what goes wrong" for each claim and known problem, and credit results split by impact label and by credit.
 - Claims with a canonical claim, apart from the rest. Trial tasks, apart from the others.
 - Concerns the second grader notes about the claim list, duplicate groups or item kinds.
+- Each grader's `says_what` for every claim and pre-existing problem, and the claims where they differ. The comparison holds them as `reported.pre_existing.says_what.pairs`.
+- For every `outside-this-change` claim in a second-graded batch, both graders' entries for pre-existing problems and their candidates, side by side.
+- Candidates for a pre-existing problem that only the second grader raised. Each goes to the user as a candidate like any other and is not by itself a first-grader error.
+- The second grader's notes of faults from before the change that the claim list does not record.
+- Results for pre-existing problems by problem, by task and by impact label.
 - Sessions, failures, replacements and usage.
 
 ## What the audit does not show
 
 Agreement between two graders is not accuracy against the truth. Both can share an error, and a model grader can share one with another model. The sample bounds error rates only for the strata it drew from and only at the sizes selected. The claim list is the first grader's and is not audited, so a pass does not certify how comments were split or grouped. Claims with a canonical claim rest on their saved rulings and links. Remedy sufficiency and safety have their own independent checks in the [grading contract](current-grading.md#claims-recovery-and-remedies) and are outside these strata. Reference eligibility, impact labels and control audits are checked through [impact and control calibration](impact-calibration.md).
+
+## Pre-existing problems raised
+
+A `pre-existing-review` unit is one admitted review and one admitted pre-existing problem of its task. Its id is `<run>/<attempt>#pre-existing:<problem>`. Its result is `raised` when a claim of the review has `says_what` "yes" for the problem, otherwise `unresolved` when one has "cannot-tell", otherwise `not-raised`. `identifies_cause` never enters, and a difference in it alone is not a disagreement. Neither is a different candidate id for the same fault.
+
+The user chose the amendment on 2026-10-13 ([audit decision 8](../bench/grading/rulings/cohort-rebuild-audit.v4.md)), from [a proposal](research/older-problem-activation-2026-10-13/owner/audit-arena/synthesis/proposal.md) written after two independent proposals were scored blind.
+
+- Every `raised` unit and every `unresolved` unit is checked, with no sample and no tolerance: every confirmed error is corrected and reported, and no rate is claimed.
+- `not-raised` is sampled at 60 units with 1 error allowed, the rule the plan uses for `missed`. A wrong "not raised" hides something a review raised; it costs no review a miss.
+- These units do not enter the strata for known problems or for impact labels.
+- A pass does not show that the list holds every fault from before a change, that the claim list is complete, or that an impact label is right.
+- A pre-existing problem admitted after the round concludes is outside that round. Its task's batches are graded again, every raised and unresolved result for it is checked by a second session before its counts are shown, and the pass sentence is not extended to it.
+
+The declaration in `audits.json` holds the three strata, the fourth check and the rule for the draw. `evaluator_audit.py` runs the four whole-cohort checks by name (`saved-credit`, `canonical-claims`, `current-and-covered` and `pre-existing-results`), refuses to draw while a candidate for a pre-existing problem is pending, and audits a stratum of size "all" whole. See [the contract for pre-existing problems](pre-existing-problems.md).

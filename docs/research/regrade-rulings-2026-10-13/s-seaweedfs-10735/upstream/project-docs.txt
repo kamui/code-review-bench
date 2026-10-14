@@ -1,0 +1,220 @@
+# Project documentation as it stood at the last push (2026-08-13T14:12:47Z).
+# wiki: seaweedfs/seaweedfs.wiki at c950d27415ac65555039e76ea5d65f1aabcb7623 2026-08-11T12:29:16-07:00 add Mount over the Internet, its last commit before the last push
+# repository: clone-head at 6c8fde6642cd428e884cc9c9d88c9aaa189c4bf1
+
+## query 1 (M1: listing and paging)
+rg -n -i 'lastFileName|limit=|\| limit|ShouldDisplayLoadMore|pagination|List files under|list sub folders|max-keys|IsTruncated|ListObjects|persists all|directory list is stored' wiki/Filer-Server-API.md wiki/Directories-and-Files.md wiki/Filer-Stores.md wiki/Filer-Redis-Setup.md wiki/Amazon-S3-API.md wiki/Store-file-with-a-Time-To-Live.md wiki/Super-Large-Directories.md wiki/Choosing-a-Filer-Store.md wiki/Filer-Commands-and-Operations.md
+hits: 20
+wiki/Filer-Redis-Setup.md:5:Since Redis is a key-value store, the directory list could not be efficiently iterated by scanning the keys. So the directory list is stored as a [sorted set](https://redis.io/topics/data-types#sorted-sets) in `redis2`:
+wiki/Filer-Redis-Setup.md:24:The directory list is stored as a skip list, and the child names are spread into the list items. This prevents each directory entry from being too large and slower to access. Skip list has `O(log(N))` access time. With each sorted set storing 1 million names, it should scale very well to billions of files in one directory.
+wiki/Amazon-S3-API.md:134:| ListObjects | Yes | V1 (legacy) |
+wiki/Amazon-S3-API.md:135:| ListObjectsV2 | Yes | |
+wiki/Directories-and-Files.md:3:When talking about file systems, many people would assume directories, list files under a directory, etc. These are expected if we want to hook up SeaweedFS with linux by FUSE, or with Hadoop, etc.
+wiki/Directories-and-Files.md:39:# list sub folders and files, use browser to visit this url: "http://localhost:8888/path/to/"
+wiki/Directories-and-Files.md:47:http://localhost:8888/path/to/sources/?lastFileName=abc.txt&limit=50
+wiki/Directories-and-Files.md:83:Clients can assess one "weed filer" via HTTP, list files under a directory, create files via HTTP POST, read files via HTTP GET directly.
+wiki/Filer-Stores.md:3:The Filer Store persists all file metadata and directory information.
+wiki/Filer-Stores.md:7:| memory       | O(1)   | limited by memory | Local, Fast                | | Yes| | for testing only, no persistent storage |
+wiki/Filer-Stores.md:16:| [Redis2](https://github.com/seaweedfs/seaweedfs/wiki/Filer-Redis-Setup)| O(1)   | limited   | Local or Distributed, Fastest  ||Native| | one directory's children are stored in one key~value entry |
+wiki/Filer-Server-API.md:124:  "LastFileName": "jquery-sparklines",
+wiki/Filer-Server-API.md:125:  "ShouldDisplayLoadMore": false
+wiki/Filer-Server-API.md:402:### List files under a directory
+wiki/Filer-Server-API.md:403:Some folder can be very large. To efficiently list files, we use a non-traditional way to iterate files. Every pagination you provide a "lastFileName", and a "limit=x". The filer locate the "lastFileName" in O(log(n)) time, and retrieve the next x files.
+wiki/Filer-Server-API.md:405:curl -H "Accept: application/json" "http://localhost:8888/javascript/?pretty=y&lastFileName=jquery-2.1.3.min.js&limit=2"
+wiki/Filer-Server-API.md:428:  "LastFileName": "jquery-sparklines",
+wiki/Filer-Server-API.md:429:  "ShouldDisplayLoadMore": false
+wiki/Filer-Server-API.md:434:| limit | how many file to show | 100 |
+wiki/Filer-Server-API.md:435:| lastFileName | the last file in previous batch | empty |
+
+## query 2 (M1: any statement that a listing may come back short, or about names without a record)
+rg -n -i 'orphan|stale|dead (name|member|entr)|expired (name|entr|file)|skip|fewer than|may return less|incomplete|eventual' wiki/Filer-Server-API.md wiki/Directories-and-Files.md wiki/Filer-Stores.md wiki/Filer-Redis-Setup.md wiki/Store-file-with-a-Time-To-Live.md wiki/Super-Large-Directories.md wiki/Choosing-a-Filer-Store.md
+hits: 10
+wiki/Super-Large-Directories.md:49:So for large directories configured in Redis, SeaweedFS skips this operation, so the list of child entries are not stored.
+wiki/Store-file-with-a-Time-To-Live.md:52:TTL seems easy to implement since we just need to report the file as missing if the time is over the TTL. However, the real difficulty is to efficiently reclaim disk space from expired files, similar to JVM memory garbage collection, which is a sophisticated piece of work with many man-years of effort.
+wiki/Filer-Redis-Setup.md:19: <directory_path>: <skip list>
+wiki/Filer-Redis-Setup.md:20: <skip list item 1>: <sorted set of 1 million names>
+wiki/Filer-Redis-Setup.md:21: <skip list item 2>: <sorted set of 1 million names>
+wiki/Filer-Redis-Setup.md:24:The directory list is stored as a skip list, and the child names are spread into the list items. This prevents each directory entry from being too large and slower to access. Skip list has `O(log(N))` access time. With each sorted set storing 1 million names, it should scale very well to billions of files in one directory.
+wiki/Filer-Redis-Setup.md:28:* Updating an entry needs to takes `O(log(N))` times to access the skip list item first.
+wiki/Filer-Server-API.md:41:| skipCheckParentDir | Ensuring parent directory exists cost one metadata API call. Skipping this can reduce network latency. | false |
+wiki/Filer-Server-API.md:460:> curl -X DELETE http://localhost:8888/path/to?recursive=true&skipChunkDeletion=true
+wiki/Filer-Server-API.md:466:| skipChunkDeletion | if "skipChunkDeletion=true", do not delete file chunks on volume servers | false |
+
+## query 3 (M1 and M2: time-to-live on the filer)
+rg -n -i 'ttl' wiki/Filer-Server-API.md wiki/Directories-and-Files.md wiki/Filer-Stores.md wiki/Filer-Redis-Setup.md wiki/Choosing-a-Filer-Store.md wiki/Filer-Setup.md wiki/Filer-Commands-and-Operations.md wiki/S3-Lifecycle-vs-Volume-TTL.md
+hits: 23
+wiki/S3-Lifecycle-vs-Volume-TTL.md:1:# S3 Lifecycle vs Volume TTL
+wiki/S3-Lifecycle-vs-Volume-TTL.md:7:| | Volume TTL | S3 Lifecycle (default) |
+wiki/S3-Lifecycle-vs-Volume-TTL.md:9:| Set by | `fs.configure -ttl`, `assign?ttl=` | `PutBucketLifecycleConfiguration` |
+wiki/S3-Lifecycle-vs-Volume-TTL.md:10:| Granularity | whole TTL volume | per object |
+wiki/S3-Lifecycle-vs-Volume-TTL.md:17:The core difference: **volume TTL is decided once, at write time, for a whole volume. S3 lifecycle is a policy the worker re-checks on every pass, per object.**
+wiki/S3-Lifecycle-vs-Volume-TTL.md:19:## Volume TTL
+wiki/S3-Lifecycle-vs-Volume-TTL.md:21:A file's TTL is tied to its *volume*. Files sharing a TTL land in the same volumes, and the volume server drops a whole volume once its newest file expires — no per-file delete, no vacuum. Set it per directory with `fs.configure -ttl 20d`, or per write with `assign?ttl=`.
+wiki/S3-Lifecycle-vs-Volume-TTL.md:31:## The TTL fast path (opt-in)
+wiki/S3-Lifecycle-vs-Volume-TTL.md:33:This bridges the two. When enabled on a bucket, an `Expiration.Days` rule is stamped as a volume TTL at write time — so disk is reclaimed by dropping the volume, and the worker only removes the metadata entry (no per-chunk deletes).
+wiki/S3-Lifecycle-vs-Volume-TTL.md:35:It is **off by default** because a volume TTL can't be taken back:
+wiki/S3-Lifecycle-vs-Volume-TTL.md:38:- Dead bytes stay in a TTL volume — showing zero deleted bytes — until the whole volume ages out. That is the classic "lifecycle ran but disk wasn't reclaimed" symptom.
+wiki/S3-Lifecycle-vs-Volume-TTL.md:54:- **Fast path on**, or a **dedicated TTL collection** (`fs.configure -ttl`) — for high-churn, non-versioned data with a fixed retention, where you want the cheapest reclamation and accept that the per-object TTL is final.
+wiki/Filer-Commands-and-Operations.md:24:This put very little loads on filer and the master server. Data is only transmitted between the local machine and the volume server.
+wiki/Choosing-a-Filer-Store.md:5:Cassandra and ScyllaDB are distributed, having native support for TTL.
+wiki/Filer-Stores.md:5:| Filer Store Name | Lookup | number of entries in a folder | Scalability | Directory Renaming | TTL | [Fast Bucket Deletion](https://github.com/seaweedfs/seaweedfs/wiki/S3-API-FAQ#how-to-speed-up-bucket-deletion) |Note |
+wiki/Filer-Server-API.md:22:  // set file TTL
+wiki/Filer-Server-API.md:23:  POST /path/to/file?ttl=1d
+wiki/Filer-Server-API.md:36:| ttl | time to live, examples, 3m: 3 minutes, 4h: 4 hours, 5d: 5 days, 6w: 6 weeks, 7M: 7 months, 8y: 8 years | empty |
+wiki/Filer-Server-API.md:84:      "TtlSec": 0,
+wiki/Filer-Server-API.md:115:      "TtlSec": 0,
+wiki/Filer-Server-API.md:138:    "TtlSec": 0,
+wiki/Filer-Server-API.md:166:  "TtlSec": 0,
+wiki/Filer-Server-API.md:419:      "TtlSec": 0,
+
+## query 4 (M2: concurrent requests on one path)
+rg -n -i 'concurren|race|atomic|lock|serializ' wiki/Filer-Stores.md wiki/Filer-Redis-Setup.md wiki/Filer-Operation-Serialization.md wiki/Store-file-with-a-Time-To-Live.md wiki/Directories-and-Files.md
+hits: 78
+wiki/Filer-Operation-Serialization.md:1:# Filer Operation Serialization
+wiki/Filer-Operation-Serialization.md:3:How SeaweedFS serializes multi-step operations across a filer cluster so that
+wiki/Filer-Operation-Serialization.md:4:read-modify-write sequences on the same key are atomic without a heavyweight
+wiki/Filer-Operation-Serialization.md:5:distributed lock held across RPCs.
+wiki/Filer-Operation-Serialization.md:16:       owner filer        ← single serialization point per key
+wiki/Filer-Operation-Serialization.md:18:            ▼   entryLockTable.AcquireLock(lock_key)
+wiki/Filer-Operation-Serialization.md:19:   apply condition + mutations atomically
+wiki/Filer-Operation-Serialization.md:22:Everything that needs cross-filer atomicity — S3 conditional writes, version
+wiki/Filer-Operation-Serialization.md:23:pointer recomputes, multi-entry object transactions, [[Distributed POSIX Locks]]
+wiki/Filer-Operation-Serialization.md:26:## Why not just a distributed lock?
+wiki/Filer-Operation-Serialization.md:28:The older mechanism (the `DistributedLock` RPC, still used for whole-file
+wiki/Filer-Operation-Serialization.md:29:write locking) hands the caller a lease token; the caller holds it across one
+wiki/Filer-Operation-Serialization.md:34:The serialization architecture inverts this: the caller sends *the whole
+wiki/Filer-Operation-Serialization.md:36:the filer that owns the key. The lock is held only for that call. If the
+wiki/Filer-Operation-Serialization.md:42:`ServerAddress` (see [`weed/cluster/lock_manager/lock_ring.go`](https://github.com/seaweedfs/seaweedfs/blob/master/weed/cluster/lock_manager/lock_ring.go)).
+wiki/Filer-Operation-Serialization.md:48:mutate (e.g. the object's path, or `"s3.fuse.lock:" + path` for an inode
+wiki/Filer-Operation-Serialization.md:49:lock). `LockRing.GetPrimary(route_key)` returns the filer that owns it.
+wiki/Filer-Operation-Serialization.md:63:    if owner := fs.filer.Dlm.LockRing.GetPrimary(req.RouteKey); owner != "" && owner != fs.option.Host {
+wiki/Filer-Operation-Serialization.md:70:## Layer 2 — Per-path lock on the owner
+wiki/Filer-Operation-Serialization.md:72:Each filer keeps an in-memory `entryLockTable` keyed by `util.FullPath`
+wiki/Filer-Operation-Serialization.md:76:// entryLockTable serializes mutations to the same entry path on this filer.
+wiki/Filer-Operation-Serialization.md:77:// ...the local serialization point for read-modify-write operations that
+wiki/Filer-Operation-Serialization.md:78:// replaces the distributed lock for that key. Idle keys are evicted
+wiki/Filer-Operation-Serialization.md:80:entryLockTable *util.LockTable[util.FullPath]
+wiki/Filer-Operation-Serialization.md:83:`AcquireLock(name, fullpath, ExclusiveLock)` blocks until any other holder of
+wiki/Filer-Operation-Serialization.md:85:lock layer all take it. Because routing always sends a given key's writes to
+wiki/Filer-Operation-Serialization.md:87:is exactly one place in the system that holds the lock for that key.
+wiki/Filer-Operation-Serialization.md:89:Idle entries are evicted by the `util.LockTable` itself, so the table size
+wiki/Filer-Operation-Serialization.md:90:tracks active concurrency, not total entries.
+wiki/Filer-Operation-Serialization.md:92:## Layer 3 — `ObjectTransaction` (composite atomic op)
+wiki/Filer-Operation-Serialization.md:94:`ObjectTransaction` is the canonical atomic primitive. One request describes:
+wiki/Filer-Operation-Serialization.md:97:* `lock_key` — the path the per-path lock is taken on (Layer 2);
+wiki/Filer-Operation-Serialization.md:99:  (or `lock_key`), e.g. "object exists with this ETag", or `If-None-Match: *`;
+wiki/Filer-Operation-Serialization.md:101:  operations applied in order under the lock.
+wiki/Filer-Operation-Serialization.md:106:exclusive hold of the per-path lock, so concurrent writers of the same
+wiki/Filer-Operation-Serialization.md:110:transactions in one round trip; each runs under its own per-path lock, and a
+wiki/Filer-Operation-Serialization.md:113:This replaces the old pattern of "take a distributed lock → do RPC A → do
+wiki/Filer-Operation-Serialization.md:114:RPC B → release lock" with one RPC that the caller cannot drop mid-sequence.
+wiki/Filer-Operation-Serialization.md:120:| S3 versioned PUT/DELETE | Atomically write the version + flip the `latest` pointer + create/delete a marker |
+wiki/Filer-Operation-Serialization.md:121:| S3 conditional writes ([[S3 Conditional Operations]]) | Evaluate `If-Match`/`If-None-Match` against current state under lock |
+wiki/Filer-Operation-Serialization.md:122:| S3 Object Lock ([[S3 Object Lock and Retention]]) | Enforce WORM guards against the existing entry as a precondition |
+wiki/Filer-Operation-Serialization.md:134:keys. For a single key, ownership transitions atomically the moment every
+wiki/Filer-Operation-Serialization.md:147:`LockRing` keeps the last few snapshots, not just the current one, with
+wiki/Filer-Operation-Serialization.md:148:timestamps ([`weed/cluster/lock_manager/lock_ring.go`](https://github.com/seaweedfs/seaweedfs/blob/master/weed/cluster/lock_manager/lock_ring.go)).
+wiki/Filer-Operation-Serialization.md:154:When the new owner gets a non-blocking call that would normally answer
+wiki/Filer-Operation-Serialization.md:160:a non-blocking call.
+wiki/Filer-Operation-Serialization.md:173:Each filer tracks `posixLockReadyAt` (atomic, set by the sweeper after the
+wiki/Filer-Operation-Serialization.md:174:first successful sweep). For `posixLockWarmup` (currently 10s) after that
+wiki/Filer-Operation-Serialization.md:175:timestamp, the owner defers granting non-blocking acquires whose
+wiki/Filer-Operation-Serialization.md:177:conflict shape as the cooling probe. Holders re-assert their locks on the
+wiki/Filer-Operation-Serialization.md:178:next keepalive (see [[Distributed POSIX Locks]]), so the warm-up window
+wiki/Filer-Operation-Serialization.md:183:"single-serialization-point-per-key" guarantee that everything else
+wiki/Filer-Operation-Serialization.md:187:[`weed/server/filer_grpc_server_posix_lock.go`](https://github.com/seaweedfs/seaweedfs/blob/master/weed/server/filer_grpc_server_posix_lock.go);
+wiki/Filer-Operation-Serialization.md:188:ObjectTransaction reuses the same `LockRing.GetPrimary` / forwarding path
+wiki/Filer-Operation-Serialization.md:193:Because the serialization layer is generic, anything routed by key inherits
+wiki/Filer-Operation-Serialization.md:194:the same atomicity guarantee. Two examples shipped in master:
+wiki/Filer-Operation-Serialization.md:197:  [[S3 Object Versioning]], [[S3 Object Lock and Retention]]) — the S3
+wiki/Filer-Operation-Serialization.md:200:  distributed lock is held across the multi-entry update.
+wiki/Filer-Operation-Serialization.md:201:* **Cross-mount POSIX advisory locks** ([[Distributed POSIX Locks]]) — the
+wiki/Filer-Operation-Serialization.md:202:  mount calls a dedicated `PosixLock` RPC that uses the same route-by-key,
+wiki/Filer-Operation-Serialization.md:204:  an in-memory `posixlock.Manager` on the owner filer rather than the entry
+wiki/Filer-Operation-Serialization.md:205:  lock table.
+wiki/Filer-Operation-Serialization.md:209:* [[Distributed POSIX Locks]]
+wiki/Filer-Redis-Setup.md:27:* Adding or deleting needs one additional lock operation.
+wiki/Filer-Stores.md:12:| Sqlite       | O(logN)| unlimited | Local, Very Fast               |Atomic| Yes | Yes | Default, fairly scalable, Stream backup. Need to manually build. |
+wiki/Filer-Stores.md:15:| YDB          | O(logN)| unlimited | Local or Distributed, Fast     |Atomic| Native| Yes | Easy to manage; True elastic Scalability; High Availability. Need to manually build. |
+wiki/Filer-Stores.md:19:| MySql        | O(logN)| unlimited | Local or Distributed, Fast     |Atomic| Yes| | Easy to manage |
+wiki/Filer-Stores.md:20:| MySql2       | O(logN)| unlimited | Local or Distributed, Fast    |Atomic| Yes| Yes| Easy to manage |
+wiki/Filer-Stores.md:21:| Postgres     | O(logN)| unlimited | Local or Distributed, Fast     |Atomic| Yes| | Easy to manage |
+wiki/Filer-Stores.md:22:| Postgres2    | O(logN)| unlimited | Local or Distributed, Fast    |Atomic| Yes| Yes| Easy to manage |
+wiki/Filer-Stores.md:23:| MemSql       | O(logN)| unlimited | Distributed, Fast     |Atomic| Yes| Yes| Scalable |
+wiki/Filer-Stores.md:24:| TiDB         | O(logN)| unlimited | Distributed, Fast     |Atomic| Yes| Yes| Scalable |
+wiki/Filer-Stores.md:25:| CockroachDB  | O(logN)| unlimited | Distributed, Fast     |Atomic| Yes| Yes| Scalable |
+wiki/Filer-Stores.md:26:| YugabyteDB   | O(logN)| unlimited | Distributed, Fast     |Atomic| Yes| Yes| Scalable |
+wiki/Filer-Stores.md:30:| TiKV         | O(logN)| unlimited | Distributed, Fast     |Atomic|Yes| Yes| Scalable. High Availability. Need to manually build. |
+wiki/Filer-Stores.md:59:# optionally, you can use concurrency to speed up the meta load process
+wiki/Filer-Stores.md:60:# -concurrency=N specifies the number of parallel meta load operations to filer
+wiki/Filer-Stores.md:64:# > fs.meta.load -concurrency=1 localhost-8888-20190417-005421.meta
+
+## query 5 (repository at head: README and the filer.toml scaffold)
+rg -n -i 'redis' clone-head/README.md; rg -n 'redis2|ttl|expire' clone-head/weed/command/scaffold/filer.toml
+hits: 7
+142:e.g., MySql, Postgres, Redis, Cassandra, HBase, Mongodb, Elastic Search, LevelDB, RocksDB, Sqlite, MemSql, TiDB, Etcd, CockroachDB, YDB, etc.
+459:* SeaweedFS Filer metadata store can be any well-known and proven data store, e.g., Redis, Cassandra, HBase, Mongodb, Elastic Search, MySql, Postgres, Sqlite, MemSql, TiDB, CockroachDB, Etcd, YDB etc, and is easy to customize.
+501:SeaweedFS Filer uses off-the-shelf stores, such as MySql, Postgres, Sqlite, Mongodb, Redis, Elastic Search, Cassandra, HBase, MemSql, TiDB, CockroachCB, Etcd, YDB, to manage file directories. These stores are proven, scalable, and easier to manage.
+219:[redis2]
+251:[redis2_sentinel]
+267:# see [redis2] for the connection tuning keys
+442:[redis2.tmp]
+
+## wiki/Filer-Server-API.md lines 399-437 (the documented listing)
+```
+curl -X POST "http://localhost:8888/test/"
+```
+### List files under a directory
+Some folder can be very large. To efficiently list files, we use a non-traditional way to iterate files. Every pagination you provide a "lastFileName", and a "limit=x". The filer locate the "lastFileName" in O(log(n)) time, and retrieve the next x files.
+```bash
+curl -H "Accept: application/json" "http://localhost:8888/javascript/?pretty=y&lastFileName=jquery-2.1.3.min.js&limit=2"
+{
+  "Path": "/javascript",
+  "Entries": [
+    {
+      "FullPath": "/javascript/jquery-sparklines",
+      "Mtime": "2020-04-19T16:08:14-07:00",
+      "Crtime": "2020-04-19T16:08:14-07:00",
+      "Mode": 2147484152,
+      "Uid": 502,
+      "Gid": 20,
+      "Mime": "",
+      "Replication": "000",
+      "Collection": "",
+      "TtlSec": 0,
+      "UserName": "",
+      "GroupNames": null,
+      "SymlinkTarget": "",
+      "Md5": null,
+      "Extended": null
+    }
+  ],
+  "Limit": 2,
+  "LastFileName": "jquery-sparklines",
+  "ShouldDisplayLoadMore": false
+}
+```
+| Parameter | Description | Default |
+| ---- | -- | -- |
+| limit | how many file to show | 100 |
+| lastFileName | the last file in previous batch | empty |
+| namePattern | match file names, case-sensitive wildcard characters '*' and '?' | empty |
+| namePatternExclude | nagetive match file names, case-sensitive wildcard characters '*' and '?' | empty |
+## wiki/Filer-Stores.md lines 1-12
+### Comparing Storage Options
+
+The Filer Store persists all file metadata and directory information.
+
+| Filer Store Name | Lookup | number of entries in a folder | Scalability | Directory Renaming | TTL | [Fast Bucket Deletion](https://github.com/seaweedfs/seaweedfs/wiki/S3-API-FAQ#how-to-speed-up-bucket-deletion) |Note |
+| ---------------- | -- | -- | -- | -- | -- | -- | -- |
+| memory       | O(1)   | limited by memory | Local, Fast                | | Yes| | for testing only, no persistent storage |
+| leveldb      | O(logN)| unlimited | Local, Very Fast               | | Yes| | Default, fairly scalable |
+| leveldb2     | O(logN)| unlimited | Local, Very Fast               | | Yes| | Similar to leveldb, part of the lookup key is 128bit MD5 instead of the long full file path |
+| leveldb3     | O(logN)| unlimited | Local, Very Fast               | | Yes| Yes| Similar to leveldb2, separate leveldb instance for each bucket |
+| RocksDB      | O(logN)| unlimited | Local, Very Fast               | | Native| | Default, fairly scalable. Need to manually build. |
+| Sqlite       | O(logN)| unlimited | Local, Very Fast               |Atomic| Yes | Yes | Default, fairly scalable, Stream backup. Need to manually build. |
+
+## wiki/Filer-Stores.md, the rows for the Redis stores (the sixth column is TTL)
+16:| [Redis2](https://github.com/seaweedfs/seaweedfs/wiki/Filer-Redis-Setup)| O(1)   | limited   | Local or Distributed, Fastest  ||Native| | one directory's children are stored in one key~value entry |
+17:| [Redis3](https://github.com/seaweedfs/seaweedfs/wiki/Filer-Redis-Setup)| O(1)   | unlimited   | Local or Distributed, Fastest  ||Native| | one directory's children are spread into multiple key~value entries |
+61:# caution: this may not work correctly with some databases like Redis

@@ -1,0 +1,101 @@
+package loadbalancer_test
+
+import (
+	"testing"
+
+	"github.com/mrshabel/beckdb/loadbalancer"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/attributes"
+	"google.golang.org/grpc/balancer"
+	"google.golang.org/grpc/balancer/base"
+	"google.golang.org/grpc/resolver"
+)
+
+const (
+	rpcMethodGet    = "/proto.BeckDB/Get"
+	rpcMethodSet    = "/proto.BeckDB/Set"
+	rpcMethodDelete = "/proto.BeckDB/Delete"
+)
+
+func TestPickerNoSubConnAvailable(t *testing.T) {
+	picker := &loadbalancer.Picker{}
+
+	for _, method := range []string{rpcMethodSet, rpcMethodGet, rpcMethodDelete} {
+		result, err := picker.Pick(balancer.PickInfo{FullMethodName: method})
+		require.Equal(t, balancer.ErrNoSubConnAvailable, err)
+		require.Nil(t, result.SubConn)
+	}
+}
+
+func TestPickerWritesToLeader(t *testing.T) {
+	picker, subConns := setupPicker(t, 2)
+
+	for _, method := range []string{rpcMethodSet, rpcMethodDelete} {
+		for idx := range 5 {
+			result, err := picker.Pick(balancer.PickInfo{FullMethodName: method})
+			require.NoError(t, err, "pick %s iteration %d", method, idx)
+			require.Equal(t, subConns[0], result.SubConn, "%s should always pick leader", method)
+		}
+	}
+}
+
+func TestPickerReadsFromFollowers(t *testing.T) {
+	// 2 follower nodes. index 1, 2
+	picker, subConns := setupPicker(t, 2)
+
+	// validate round robin picks
+	for idx := range 5 {
+		result, err := picker.Pick(balancer.PickInfo{FullMethodName: rpcMethodGet})
+		require.NoError(t, err)
+
+		expectedFollowerIdx := idx % 2
+		// always skip leader
+		require.Equal(t, subConns[expectedFollowerIdx+1], result.SubConn, "read iteration %d: wrong follower", idx)
+	}
+}
+
+// single node cluster
+func TestPickerSingleNodeRead(t *testing.T) {
+	// no follower nodes
+	picker, subConns := setupPicker(t, 0)
+
+	result, err := picker.Pick(balancer.PickInfo{FullMethodName: rpcMethodGet})
+	require.NoError(t, err)
+	require.Equal(t, subConns[0], result.SubConn, "read should fall back to leader when no follower exist")
+
+}
+
+// helpers
+
+// instantiate a picker with 1 leader and n followers
+func setupPicker(t *testing.T, followerCount int) (balancer.Picker, []*mockSubConn) {
+	t.Helper()
+
+	info := base.PickerBuildInfo{
+		ReadySCs: make(map[balancer.SubConn]base.SubConnInfo),
+	}
+
+	// setup resolver with subconnections
+	var subConns []*mockSubConn
+	for idx := range followerCount + 1 {
+		subConn := &mockSubConn{}
+
+		addr := resolver.Address{
+			Attributes: attributes.New("is_leader", idx == 0),
+		}
+		info.ReadySCs[subConn] = base.SubConnInfo{Address: addr}
+		subConns = append(subConns, subConn)
+	}
+
+	picker := &loadbalancer.Picker{}
+	return picker.Build(info), subConns
+}
+
+type mockSubConn struct {
+	balancer.SubConn
+
+	addrs []resolver.Address
+}
+
+func (s *mockSubConn) UpdateAddresses(addrs []resolver.Address) { s.addrs = addrs }
+func (s *mockSubConn) Connect()                                 {}

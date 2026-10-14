@@ -1,0 +1,16 @@
+| Probe | head | fix-missing-first | fix-union-pairs | fix-fitting-pairs |
+| --- | --- | --- | --- | --- |
+| `control-1-two-inputs-no-middleware.ts` | compiles | compiles | compiles | compiles |
+| `control-2-required-concat.ts` | compiles | compiles | compiles | compiles |
+| `control-3-standalone-disjoint-refused.ts` | compiles | compiles | compiles | compiles |
+| `operands.ts` | compiles | compiles | compiles | compiles |
+| `optional-1-concat.ts` | **TS2578** | compiles | **TS2578** | compiles |
+| `optional-10-same-optional-empty-object.ts` | compiles | compiles | compiles | compiles |
+| `optional-2-concat-only-first.ts` | compiles | compiles | compiles | compiles |
+| `optional-3-concat-empty-object.ts` | compiles | compiles | compiles | compiles |
+| `optional-4-concat-resolver.ts` | **TS2339** | compiles | **TS2339** | compiles |
+| `optional-5-standalone.ts` | **TS2578** | compiles | **TS2578** | compiles |
+| `optional-6-standalone-resolver.ts` | **TS2339** | compiles | **TS2339** | compiles |
+| `optional-7-use-then-input.ts` | compiles | compiles | compiles | compiles |
+| `optional-8-use-then-input-only-second.ts` | compiles | compiles | compiles | compiles |
+| `optional-9-same-optional-with-middleware.ts` | compiles | compiles | compiles | compiles |
