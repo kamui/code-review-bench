@@ -17,6 +17,7 @@ the repository before they rebuild an earlier state.
 It does not file the admissions, the labels or the switch to the new text. Those need tool support that is built on
 another branch."""
 import hashlib
+import importlib.util
 import json
 import subprocess
 import sys
@@ -24,8 +25,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[4]
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))
-import receipts  # noqa: E402
+
+
+def sibling(name):
+    """A script beside this one, loaded by its path, so that a test's copy of the repository gets its own."""
+    spec = importlib.util.spec_from_file_location(f"activation_filing_{name}", HERE / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 ROUND = "docs/research/older-problem-activation-2026-10-13"
 CURRENT = ROOT / "bench/grading/current"
@@ -279,8 +286,7 @@ def file(documents, before, receipt):
 def undo():
     """Put the record files and the cards back as `before.v1.json` holds them, byte for byte. The admissions, filed
     after questions 6 to 8 by `admit.py`, are undone first."""
-    import admit
-    admit.undo()
+    sibling("admit").undo()
     before = read(HERE / "before.v1.json")
     documents = {name: read(CURRENT / f"{name}.json") for name in FILES}
     families = before["families"]
