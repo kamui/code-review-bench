@@ -35,6 +35,7 @@ FILING = Path("docs/research/last-push-rulings-2026-10-11/filing")
 RECUT = Path("docs/research/last-push-recut-2026-10-07")
 SELECTION = Path("docs/research/last-push-review-code-2026-10-12/selection")
 REGRADE = Path("docs/research/regrade-rulings-2026-10-13/filing")
+ACTIVATION = Path("docs/research/older-problem-activation-2026-10-13/filing")
 GRADING, CURRENT = Path("bench/grading"), Path("bench/grading/current")
 REGISTRY, INVENTORY = Path("bench/scoreboard.current.json"), CURRENT / "inventory.json"
 RETIRED, RECEIPT = GRADING / "retired/last-push-recut.v1.json", GRADING / "rulings/cohort-rebuild.v8.md"
@@ -83,6 +84,15 @@ def regrade_filing(root: Path):
     with patch.object(sys, "path", list(sys.path)):
         spec.loader.exec_module(module)
     return module
+
+
+def undo_the_activation_filing(root: Path) -> None:
+    """Put the copy back to the records before the activation round's reconciliations, which were filed after the regrade rulings."""
+    spec = importlib.util.spec_from_file_location("activation_filing_record", root / ACTIVATION / "record.py")
+    module = importlib.util.module_from_spec(spec)
+    with patch.object(sys, "path", list(sys.path)):
+        spec.loader.exec_module(module)
+    module.undo()
 
 
 def before_the_selection(root: Path, stage) -> None:
@@ -160,6 +170,7 @@ class OneGenerationTests(unittest.TestCase):
         cls.root = Path(cls.temp.name).resolve()
         copy_of_the_repository(cls.root)
         cls.move = filing_script(cls.root, "move")
+        undo_the_activation_filing(cls.root)
         regrade_filing(cls.root).Filing().undo()
         before_the_selection(cls.root, cls.move.stage)
         cls.published = tree(cls.root)

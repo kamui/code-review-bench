@@ -4,7 +4,8 @@
 Usage: python3 bench/tools/test_regrade_filing.py
 Inputs: a copy of this repository's bench and docs trees in a temporary directory, as
 test_last_push_move.py makes it. The copy is put back to the records before the filing with the filing's
-own ``--undo``, which reads ``before.v1.json``, and the filing runs in it. Needs the freeze commits of the
+own ``--undo``, which reads ``before.v1.json``, after the activation round's reconciliations, filed later, are undone
+the same way, and the filing runs in it. Needs the freeze commits of the
 selected runs in the clone. No network, and nothing is written into this checkout.
 Exit codes: 0 all checks pass; 1 a test fails.
 """
@@ -18,7 +19,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from test_last_push_move import Failing, copy_of_the_repository, differing, regrade_filing, tree
+from test_last_push_move import Failing, copy_of_the_repository, differing, regrade_filing, tree, undo_the_activation_filing
 
 ROOT = Path(__file__).resolve().parents[2]
 FILING = Path("docs/research/regrade-rulings-2026-10-13/filing")
@@ -49,6 +50,7 @@ class OneGenerationTests(unittest.TestCase):
         copy_of_the_repository(cls.root)
         (cls.root / BEFORE).unlink()
         shutil.copy2(ROOT / BEFORE, cls.root / BEFORE)
+        undo_the_activation_filing(cls.root)
         cls.filing = regrade_filing(cls.root)
         cls.filed = tree(cls.root)
         cls.filing.Filing().undo()
