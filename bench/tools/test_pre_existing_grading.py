@@ -175,7 +175,7 @@ class PrepareV3Tests(unittest.TestCase):
         case = MapV2('test_a_credit_ruling_must_name_a_saved_comment_a_known_problem_and_its_receipt_passage')
         case.setUp()
         try:
-            case.set_policy(verdicts=pre_existing_grading.CONTRACT)
+            case.use_contract_v3()
             case.start()
             snapshot = current.read_json(case.work / 'validator/inputs.json')
             self.assertEqual(snapshot['contract'], pre_existing_grading.CONTRACT)
@@ -220,7 +220,7 @@ class PrepareV3Tests(unittest.TestCase):
         case.setUp()
         try:
             case.cohort.admit('OP-1', 'serious')
-            case.set_policy(verdicts=pre_existing_grading.CONTRACT)
+            case.use_contract_v3()
             before = self.prepared_files(case, 'before')
             self.assertIn('references.json', before[1])
             documents = case.cohort.documents
@@ -251,7 +251,7 @@ class PrepareV3Tests(unittest.TestCase):
         case.setUp()
         try:
             label = case.cohort.admit('OP-1', 'serious')
-            case.set_policy(verdicts=pre_existing_grading.CONTRACT)
+            case.use_contract_v3()
             case.start()
             listed = current.read_json(case.work / 'references.json')['pre_existing_problems']
             self.assertEqual([sorted(problem) for problem in listed],
