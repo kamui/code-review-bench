@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { MantineProvider } from '@mantine/core'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { Dataset } from '../lib/data'
-import { assessment, build, family, remedy, review, scorecardFixture, task } from '../lib/fixture'
+import { assessment, build, family, preExistingScorecardFixture, remedy, review, scorecardFixture, task } from '../lib/fixture'
 import { summarize } from '../lib/metrics'
 import type { DetectionView } from '../lib/metrics'
 import { leaderboard, matched } from '../lib/scoring'
@@ -26,9 +26,9 @@ function chart(dataset: Dataset, detection: DetectionView, view: 'setups' | 'tra
     axis={axis} view={view} showAllLabels={false} onSelect={() => {}} /></MantineProvider>))
 }
 
-function panels(dataset: Dataset) {
+function panels(dataset: Dataset, taskIds = dataset.tasks.map(item => item.id)) {
   const selected = dataset.configurations.filter(configuration => !configuration.experimental)
-  const board = leaderboard(dataset, { selected: selected.map(configuration => configuration.id), candidateTaskIds: dataset.tasks.map(item => item.id), concern: null })
+  const board = leaderboard(dataset, { selected: selected.map(configuration => configuration.id), candidateTaskIds: taskIds, concern: null })
   return scorecardTabs.map(tab => text(renderToStaticMarkup(<MantineProvider><MethodologyViews dataset={dataset} configurations={selected} cards={board.cards}
     selection={board.selection} detection={{ band: 'serious', estimator: 'equalProblem' }} now={now} onInspect={() => {}} initialTab={tab} /></MantineProvider>))).join(' ')
 }
@@ -99,6 +99,33 @@ describe('scorecard page on the fixture', () => {
     const subject = task('pr', [family('f')])
     const ungraded = build([subject], { a: [[subject, [review(subject, null)]]] }, { audit: 'unassessed', coverage: { requiredReviews: 1, complete: false, reason: 'Ungraded.' } })
     expect(page(ungraded)).toContain('PR tasks 1 known problems 1 review methods 1 models tested 1')
+  })
+})
+
+describe('pre-existing problems raised on the fixture', () => {
+  const fixture = preExistingScorecardFixture()
+  const columns = 'Setup Approved catalog Raised, per review and problem Distinct problems raised Reviews that raised one Observed raised Reviews assessed / admitted Unresolved Pending candidates'
+
+  test('gives each count separately for serious and for other-material problems', () => {
+    const rendered = panels(fixture, ['payments', 'queue', 'docs', 'audited', 'empty'])
+    expect(rendered).toContain(`Serious pre-existing problems ${columns} Claude built-in / Fixture A / High 1 3 1 3 3 3 / 3 0 0 ce-code-review / Fixture B / High 1 0 0 0 0 3 / 3 0 0`)
+    expect(rendered).toContain(`Other material pre-existing problems ${columns} Claude built-in / Fixture A / High 1 2 1 2 2 3 / 3 0 0 ce-code-review / Fixture B / High 1 1 1 1 1 3 / 3 0 0`)
+    expect(rendered).toContain('Whether a pre-existing problem was raised is unresolved. (3 values) No admitted reviews for the pre-existing-problem catalog. (3 values) Admitted reviews await pre-existing-problem assessment. (3 values)')
+    expect(rendered).toContain('ce-code-review / Fixture A / High 1 0 0 0 0 3 / 3 0 0 Claude built-in / Fixture C / High 1 Unavailable 1 : No admitted reviews for the pre-existing-problem catalog.')
+  })
+
+  test('withholds the final counts while a candidate awaits admission, for a label with no problem and for a selection with none', () => {
+    const pending = panels(fixture)
+    expect(pending).toContain('Claude built-in / Fixture A / High 1 Unavailable 1 : Pre-existing-problem candidates await admission. Unavailable 1 : Pre-existing-problem candidates await admission. Unavailable 1 : Pre-existing-problem candidates await admission. 3 3 / 3 0 1')
+    expect(pending).toContain('Pre-existing-problem candidates await admission. (15 values)')
+    expect(panels(fixture, ['audited'])).toContain('No approved pre-existing problem in this selection is labelled other-material. (18 values)')
+    expect(panels(fixture, ['payments', 'docs']).split('No approved pre-existing problems in this selection. (18 values)')).toHaveLength(3)
+  })
+
+  test('the controls table says refuted or unproven', () => {
+    const rendered = panels(fixture)
+    expect(rendered).toContain('Admitted control reviews Without a refuted or unproven claim With a refuted or unproven claim With an unresolved claim')
+    expect(rendered).not.toContain('refuted or unsupported')
   })
 })
 

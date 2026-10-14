@@ -106,6 +106,23 @@ class ExportTest(unittest.TestCase):
             self.assertEqual(result['attempts'][0]['assessment']['claims'], [])
             self.assertIsNone(result['attempts'][0]['assessment']['preExistingProblems'])
 
+    def test_a_pre_existing_problem_is_exported_with_its_impact_label(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            selected, documents = fixture(root)
+            reference = documents['reference']['targets'][0]
+            label = approved(documents, root, 'OP-1', 'impact', 'other-material')
+            label['boundary'] = label['receipt']
+            reference['pre_existing_problems'] = [{
+                **{field: value for field, value in reference['families'][0].items() if field not in ('eligibility', 'impact')},
+                'id': 'OP-1', 'consequence': 'A saved write disappears.', 'concerns': ['Reliability'], 'revision': reference['revision'],
+                'admission': approved(documents, root, 'OP-1', 'pre-existing-admission', 'admitted')['id'],
+                'impact': {'band': 'other-material', 'reason': 'Saved ruling', 'adjudication': label['id']}}]
+            save_current(root, selected, documents)
+            exported = self.build_fixture(root)['tasks'][0]['preExistingProblems']
+            self.assertEqual([(problem['id'], problem['impact'], problem['admissionUrl']) for problem in exported],
+                             [('OP-1', 'other-material', '/bench/evidence/receipt-OP-1-pre-existing-admission.md')])
+
     def test_native_v2_claims_keep_multiple_matches_and_cause_only_facts(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
