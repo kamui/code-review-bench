@@ -17,6 +17,7 @@ import unittest
 
 import calibration
 import current_grading as current
+import evaluator_audit
 from test_current_grading import approved, fixture, save_current, write
 
 TOOL = Path(__file__).with_name("calibration.py")
@@ -137,6 +138,73 @@ class CalibrationTest(unittest.TestCase):
         self.save()
         self.assertEqual(self.run_tool("check").stdout.strip(), "calibration records valid; 1/1 families have an approved impact band")
         self.assertEqual(self.queue()["families"][0]["needs"], ["eligibility ruling"])
+
+    def admit(self):
+        """OP-1, admitted with an approved label that pins its card."""
+        admission = approved(self.documents, self.root, "OP-1", "pre-existing-admission", "admitted")
+        label = approved(self.documents, self.root, "OP-1", "impact", "other-material")
+        admission["receipt_scope"], label["receipt_scope"] = "OP-1 for pre-existing-admission", "OP-1 for impact"
+        self.admitted_card = {**self.card, "family": "OP-1", "attribution": {"relation": "pre-existing", "reason": "The same at both commits."}}
+        label.update(boundary=self.decision["boundary"], reason="OWNER-LABEL-REASON")
+        self.problem = {**{field: self.family[field] for field in ("title", "obligation", "trigger", "mechanism", "grouping_reason", "evidence")},
+                        "id": "OP-1", "consequence": "A saved write disappears.", "concerns": ["Reliability"],
+                        "revision": self.target["revision"], "admission": admission["id"],
+                        "impact": {"band": "other-material", "reason": "Saved human ruling", "adjudication": label["id"]}}
+        self.target["pre_existing_problems"] = [self.problem]
+        self.documents["audit"]["plan"]["strata"] += [stratum(s) for s in sorted(evaluator_audit.PRE_EXISTING_STRATA.values())]
+        return label
+
+    def save_admitted(self, label, queue=True):
+        card = write(self.root, "bench/grading/current/impact-cards/OP-1.json", self.admitted_card)
+        label["evidence"] = [current.pin_file(card, self.root)]
+        self.save(queue)
+
+    def test_an_admitted_pre_existing_problem_carries_an_approved_label_as_a_family_does(self):
+        label = self.admit()
+        self.save_admitted(label)
+        result = self.run_tool("check")
+        self.assertEqual((result.returncode, result.stdout.strip()), (0, "calibration records valid; 0/1 families have an approved "
+                         "impact band; 1/1 pre-existing problems have an approved impact label"))
+        row = self.queue()["pre_existing_problems"][0]
+        self.assertEqual((row["impact"]["band"], row["impact"]["decision"]["status"], row["impact"]["disagreement"]),
+                         ("other-material", "approved", False))
+        label["independent_checks"] = [self.independent_check("refuted")]
+        self.save_admitted(label)
+        self.assertTrue(self.queue()["pre_existing_problems"][0]["impact"]["disagreement"])
+        self.assertEqual(self.run_tool("check").returncode, 0)
+
+    def test_an_admitted_pre_existing_problem_without_an_approved_label_is_a_problem(self):
+        label = self.admit()
+        self.problem["impact"] = {"band": "unknown", "reason": "Awaiting the label", "adjudication": None}
+        label.update(status="proposed", authority="automation", receipt=None, receipt_scope=None)
+        self.save_admitted(label, queue=False)
+        self.assert_problem("OP-1: an admitted pre-existing problem needs an approved impact label")
+        self.documents["adjudication"]["decisions"].remove(label)
+        self.save(queue=False)
+        self.assert_problem("OP-1: needs exactly one impact decision, approved or proposed; found 0")
+
+    def test_only_a_pre_existing_problems_card_attributes_its_fault_as_pre_existing(self):
+        label = self.admit()
+        self.admitted_card["attribution"]["relation"] = "introduced"
+        self.save_admitted(label, queue=False)
+        self.assert_problem("impact-cards/OP-1.json: the card of a pre-existing problem, and no other, attributes its fault as pre-existing")
+        self.admitted_card["attribution"]["relation"] = "pre-existing"
+        self.card["attribution"]["relation"] = "pre-existing"
+        self.save_admitted(label, queue=False)
+        self.assert_problem("impact-cards/GT-t1.json: the card of a pre-existing problem, and no other, attributes its fault as pre-existing")
+
+    def test_a_pre_existing_problems_blinded_card_omits_its_label_and_the_ruling_that_holds_it(self):
+        label = self.admit()
+        self.save_admitted(label)
+        out, key = self.root / "cards", self.root / "cards.key.json"
+        result = self.run_tool("cards", "--out", str(out), "--key", str(key))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        text = (out / "OP-1.md").read_text(encoding="utf-8")
+        for shown in ("## Pre-existing problem", "Admission: Admitted by a saved human ruling.", "Attribution (pre-existing): The same at both commits."):
+            self.assertIn(shown, text)
+        for hidden in ("OWNER-LABEL-REASON", "other-material\n", "R1", "Eligibility"):
+            self.assertNotIn(hidden, text)
+        self.assertEqual(list(json.loads(key.read_text(encoding="utf-8"))["OP-1"]), ["E1"])
 
     def test_performance_and_maintenance_cards_name_their_cost_and_activity(self):
         for domain, field, problem in (("performance", "workload", "names its workload and cost"),
