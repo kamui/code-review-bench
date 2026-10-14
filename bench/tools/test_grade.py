@@ -560,7 +560,7 @@ class PrepareV2(Grade):
         super().setUp()
         self.policy_path = self.root / "bench/grading/current/validation-policy.json"
         self.set_policy(verdicts="current-verdicts/v2")
-        for source, field in (("scoring.next.md", "rubric"), ("grader.next.md", "grader"), ("rules.next.md", "rules")):
+        for source, field in (("scoring.pre-existing.v1.md", "rubric"), ("grader.pre-existing.v1.md", "grader"), ("rules.pre-existing.v1.md", "rules")):
             path = self.root / "bench/rubric" / source
             shutil.copyfile(current.BENCH / "rubric" / source, path)
             self.set_policy(**{field: current.pin_file(path, self.root)})
@@ -591,7 +591,7 @@ class PrepareV2(Grade):
         self.assertNotEqual(before, self.cohort.fingerprint())
         self.prepared()
         self.assertEqual((self.work / "rubric.md").read_bytes(),
-                         (self.root / "bench/rubric/scoring.next.md").read_bytes().rstrip(b"\n") + b"\n\n" + alternate.read_bytes())
+                         (self.root / "bench/rubric/scoring.pre-existing.v1.md").read_bytes().rstrip(b"\n") + b"\n\n" + alternate.read_bytes())
         snapshot = json.loads((self.work / "validator/inputs.json").read_text())
         self.assertEqual(snapshot["contract"], "current-verdicts/v2")
         self.assertNotIn("inventory", snapshot)

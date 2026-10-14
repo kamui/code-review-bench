@@ -80,7 +80,7 @@ class Audit(Grade):
         super().setUp()
         policy = self.root / "bench/grading/current/validation-policy.json"
         pins = {}
-        for source, field in (("scoring.next.md", "rubric"), ("grader.next.md", "grader"), ("rules.next.md", "rules")):
+        for source, field in (("scoring.pre-existing.v1.md", "rubric"), ("grader.pre-existing.v1.md", "grader"), ("rules.pre-existing.v1.md", "rules")):
             shutil.copyfile(current.BENCH / "rubric" / source, self.root / "bench/rubric" / source)
             pins[field] = current.pin_file(self.root / "bench/rubric" / source, self.root)
         write_json(policy, {**json.loads(policy.read_text()), **pins, "verdicts": "current-verdicts/v2"})
