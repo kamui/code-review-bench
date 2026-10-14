@@ -88,21 +88,33 @@ class PreExistingTests(unittest.TestCase):
         self.problem['impact']['band'] = 'serious'
         self.check()
 
-    def test_a_label_change_changes_no_batch_fingerprint_and_no_grading_input(self):
+    def test_a_label_or_the_ruling_that_states_it_changes_no_batch_fingerprint_and_no_grading_input(self):
         def fingerprints():
             return [current.grading_fingerprint(batch, self.selected, self.docs, self.docs['policy'], self.root)
                     for batch in self.selected['batches']]
         before = fingerprints()
-        self.label.update(outcome='serious', reason='LABEL-REASON', independent_checks=[{
-            'source': self.label['receipt'], 'checker': 'independent', 'independent_of': 'primary', 'result': 'confirmed',
-            'reason': 'Label checked'}])
+        admission = self.docs['adjudication']['decisions'][0]
+        shared = write(self.root, 'receipt-shared.md', {'answer': 'LABEL-REASON: admit, serious'})
+        self.label.update(outcome='serious', reason='LABEL-REASON', receipt=current.pin_file(shared, self.root), receipt_scope='LABEL-REASON',
+                          independent_checks=[{**self.label['independent_checks'][0], 'result': 'confirmed'}])
         self.problem['impact'] = {'band': 'serious', 'reason': 'LABEL-REASON', 'adjudication': self.label['id']}
+        admission.update(reason='LABEL-REASON: admitted and labelled serious', receipt=current.pin_file(shared, self.root),
+                         receipt_scope='LABEL-REASON: admit, serious', evidence=[current.pin_file(shared, self.root)])
         self.check()
         self.assertEqual(fingerprints(), before)
         inputs = current.grading_inputs(self.selected['batches'][0], self.selected, self.docs, self.docs['policy'], self.root)
         self.assertEqual([problem['id'] for problem in inputs['pre_existing_problems']], ['OP-1'])
+        self.assertEqual(inputs['pre_existing_admissions'], [{
+            'id': admission['id'], 'target': 't-example', 'revision': self.reference['revision'], 'subject': 'OP-1',
+            'dimension': 'pre-existing-admission', 'status': 'approved', 'outcome': 'admitted'}])
         text = current.canonical(inputs).decode()
-        self.assertEqual([word for word in ('impact', 'serious', 'LABEL-REASON', self.label['id']) if word in text], [])
+        self.assertEqual([word for word in ('impact', 'serious', 'LABEL-REASON', 'receipt-shared', self.label['id']) if word in text], [])
+        for withdrawn in ({'status': 'proposed'}, {'outcome': 'not-admitted'}):
+            with self.subTest(withdrawn=withdrawn):
+                kept = dict(admission)
+                admission.update(withdrawn)
+                self.assertNotEqual(fingerprints(), before)
+                admission.clear(); admission.update(kept)
 
     def test_truth_links_and_pending_candidates_are_separate(self):
         self.assertEqual(pre_existing_grading.verdict_problems(verdict(), [], ['OP-1']), [])
@@ -184,6 +196,52 @@ class PrepareV3Tests(unittest.TestCase):
             saved = current.read_json(case.root / 'bench/grading/current/candidates.json')['candidates'][0]
             self.assertEqual(saved['kind'], 'pre-existing-problem')
             self.assertEqual(case.review()['claims'][0]['pre_existing_candidate_id'], saved['id'])
+        finally:
+            case.tearDown()
+
+    def prepared_files(self, case, name):
+        """(fingerprint, files) of a fresh preparation: the lines of each file a grader is given, by name. Review
+        tokens are random and order the prompt's list of reviews, so each token is replaced by its attempt and the
+        lines are sorted before two preparations are compared."""
+        work = case.root / name
+        key = case.prepared(work, case.root / 'keys' / f'{name}.json')
+        tokens = {review['token']: review['attempt_id'] for review in key['reviews']}
+        files = {}
+        for path in sorted(path for path in work.rglob('*') if path.is_file() and 'clone' not in path.relative_to(work).parts[0]):
+            text, relative = path.read_text(encoding='utf-8'), path.relative_to(work).as_posix()
+            for token, attempt in tokens.items():
+                text, relative = text.replace(token, attempt), relative.replace(token, attempt)
+            files[relative] = sorted(text.splitlines())
+        return key['input_fingerprint'], files
+
+    def test_a_changed_label_or_admission_ruling_changes_no_prepared_file_and_a_withdrawn_admission_changes_the_fingerprint(self):
+        from test_grade import MapV2
+        case = MapV2('test_a_possible_new_problem_is_recorded_as_a_candidate_and_named_by_its_claim')
+        case.setUp()
+        try:
+            case.cohort.admit('OP-1', 'serious')
+            case.set_policy(verdicts=pre_existing_grading.CONTRACT)
+            before = self.prepared_files(case, 'before')
+            self.assertIn('references.json', before[1])
+            documents = case.cohort.documents
+            admission = next(d for d in documents['adjudication']['decisions'] if d['dimension'] == 'pre-existing-admission')
+            label = next(d for d in documents['adjudication']['decisions'] if d['dimension'] == 'impact')
+            shared = case.root / 'receipt-shared.md'
+            shared.write_text('The user answered: admit, other-material.', encoding='utf-8')
+            pin = current.pin_file(shared, case.root)
+            admission.update(reason='Admitted and labelled other-material', receipt=pin, receipt_scope='admit, other-material', evidence=[pin])
+            label.update(outcome='other-material', reason='Relabelled', receipt=pin, receipt_scope='admit, other-material')
+            documents['reference']['targets'][0]['pre_existing_problems'][0]['impact'].update(band='other-material', reason='Relabelled')
+            case.cohort.save()
+            case.cohort.load()
+            self.assertEqual(self.prepared_files(case, 'after'), before)
+            admission = next(d for d in case.cohort.documents['adjudication']['decisions'] if d['dimension'] == 'pre-existing-admission')
+            for withdrawn in ({'status': 'proposed'}, {'outcome': 'not-admitted'}):
+                with self.subTest(withdrawn=withdrawn):
+                    kept = dict(admission)
+                    admission.update(withdrawn)
+                    self.assertNotEqual(case.cohort.fingerprint(), before[0])
+                    admission.clear(); admission.update(kept)
         finally:
             case.tearDown()
 
