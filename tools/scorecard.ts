@@ -1,7 +1,7 @@
 import { parseArgs } from 'node:util'
 import { datasetSchema } from '../src/lib/data'
 import type { Dataset } from '../src/lib/data'
-import { bands, leaderboard, matched, orderingConflicts, recommend } from '../src/lib/scoring'
+import { bands, leaderboard, matched, orderingConflicts, preExistingLabels, recommend } from '../src/lib/scoring'
 import type { Measure, Scorecard } from '../src/lib/scoring'
 
 const usage = `Usage: bun tools/scorecard.ts [--data PATH] [--configuration ID]... [--task ID]... [--concern LABEL] [--json]
@@ -46,9 +46,12 @@ function lines(card: Scorecard) {
     `Repeated serious misses: ${figure(card.seriousMisses.repeated, 0)}; ${card.seriousMisses.families.length} serious references with observed misses or undetermined outcomes.`,
     `Claims per admitted review: refuted ${figure(reliability.outcomes.refuted.perAdmittedReview)}; unsupported ${figure(reliability.outcomes.unsupported.perAdmittedReview)}; unresolved ${figure(reliability.outcomes.unresolved.perAdmittedReview)}; ${reliability.assessed}/${reliability.admitted} admitted reviews assessed.`,
     `Harmful recommendations: ${harm}; ${remedies.inventoried}/${remedies.admitted} admitted reviews inventoried, ${remedies.unassessed} remedies lack a safety assessment.`,
-    `Audited clean controls: ${rate(controls.cleanFraction)} without a refuted or unsupported claim; ${controls.audited} audited, ${controls.unaudited.length} unaudited, ${controls.unresolved} reviews with unresolved claims, ${controls.missingOutput} missing outputs.`,
-    `Pre-existing problems raised: ${figure(card.preExisting.raised, 0)} per review and problem; ${figure(card.preExisting.problems, 0)} distinct problems; ${figure(card.preExisting.reviews, 0)} reviews that raised one. Observed: ${card.preExisting.observed.raised} raised; ${card.preExisting.assessed}/${card.preExisting.admitted} reviews assessed; ${card.preExisting.catalog} approved problems; ${card.preExisting.unresolved} unresolved; ${card.preExisting.candidates.length} pending candidates.`,
-    ...card.preExisting.rows.map(row => `  ${row.problemId}: observed raised ${row.raised} times; ${row.assessed} assessments; ${row.unresolved} unresolved.`),
+    `Audited clean controls: ${rate(controls.cleanFraction)} without a refuted or unproven claim; ${controls.audited} audited, ${controls.unaudited.length} unaudited, ${controls.unresolved} reviews with unresolved claims, ${controls.missingOutput} missing outputs.`,
+    ...preExistingLabels.flatMap(label => {
+      const counts = card.preExisting.labels[label]
+      return [`Pre-existing problems raised, ${label}: ${figure(counts.raised, 0)} per review and problem; ${figure(counts.problems, 0)} distinct problems; ${figure(counts.reviews, 0)} reviews that raised one. Observed: ${counts.observed.raised} raised; ${counts.assessed}/${counts.admitted} reviews assessed; ${counts.catalog} approved problems; ${counts.unresolved} unresolved; ${card.preExisting.candidates.length} pending candidates.`,
+        ...counts.rows.map(row => `  ${row.problemId}: observed raised ${row.raised} times; ${row.assessed} assessments; ${row.unresolved} unresolved.`)]
+    }),
     `Advice: ${advice.supported} supported and ${advice.unsupported} unsupported sampled dossiers from ${advice.sampledReviews}/${advice.admitted} admitted reviews.`,
     `Cost per scheduled trial: ${figure(card.cost.perTrial, 4)} USD over ${card.cost.attempts} attempts. Median completed time: ${card.time.summary.kind === 'available' ? `${card.time.summary.value.median.toFixed(0)} s` : `unavailable (${card.time.summary.reason})`}; ${card.time.completed}/${card.time.scheduled} trials completed.`, '']
 }

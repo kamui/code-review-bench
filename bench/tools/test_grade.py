@@ -287,6 +287,21 @@ class Cohort:
         self.documents["reference"]["targets"][0]["control"]["status"] = "known-problems"
         self.approve_family(identifier)
 
+    def admit(self, identifier, band="other-material"):
+        """An admitted pre-existing problem with its approved impact label."""
+        admission = approved(self.documents, self.root, identifier, "pre-existing-admission", "admitted")
+        label = approved(self.documents, self.root, identifier, "impact", band)
+        label.update(boundary=label["receipt"], independent_checks=[{
+            "source": label["receipt"], "checker": "independent", "independent_of": "primary", "result": "confirmed",
+            "reason": "Label checked"}])
+        problem = {field: value for field, value in self.family(identifier).items() if field not in ("eligibility", "impact")}
+        self.documents["reference"]["targets"][0].setdefault("pre_existing_problems", []).append({
+            **problem, "consequence": "A close is lost before and after the change.", "concerns": ["Reliability"],
+            "revision": self.revision, "admission": admission["id"],
+            "impact": {"band": band, "reason": f"Saved ruling on {identifier}'s label", "adjudication": label["id"]}})
+        self.save()
+        return label
+
     def add_claim(self, identifier, links, outcome=None, family=None):
         """A canonical claim linked to (run, attempt, item index, relation); ``outcome`` saves a human ruling."""
         record = {"id": identifier, "target": TARGET, "revision": self.revision,
