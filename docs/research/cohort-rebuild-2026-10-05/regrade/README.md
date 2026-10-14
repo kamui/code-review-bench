@@ -50,3 +50,18 @@ Version 2 graded the rest of `selected` and all of `rebuilt`. Its `plain` queue 
 
 Version 3 plans the 21 batches left, all in `plain`, under a ceiling of $100. The earlier versions spent $245.55, which counts the two attempts whose mapping failed, so $254.45 of the approved $500 was left. [`approval.v3.json`](approval.v3.json) records that. Its queue directory is `.local/regrade/plain-v3`.
 
+
+## Version 4
+
+Pull request 140 put pre-existing problems in force on 2026-10-14: version 10 of the rule text, the files `bench/rubric/*.pre-existing.v1.md` and verdict contract `current-verdicts/v3`. The policy file's pin is in every batch's fingerprint, so every grade of versions 1 to 3 is stale, and `grade.py invalidate` returned all 198 batches to the queue. The $500 approved on 2026-10-12 belonged to those versions and is closed; they spent $267.19 at list price.
+
+Version 4 plans all 198 batches again under a new ceiling of $400. [`approval.v4.json`](approval.v4.json) records the owner's answer of 2026-10-14: "Opus 5.5 high, $400 ceiling, pilot first (Recommended)". The grader, its effort and its session limit are unchanged. Graders now also record, for each true claim outside this change, whether it raises a listed pre-existing problem, and refer an unlisted one as a candidate; the audit's sample is drawn only when no candidate awaits the owner.
+
+| Queue | Batches | Saved reviews | Comments | Allowances | Ceiling |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `selected` | 45 | 189 | 645 | $141.66 | $93.92 |
+| `rebuilt` | 125 | 387 | 1,247 | $377.52 | $250.30 |
+| `plain` | 28 | 87 | 261 | $84.12 | $55.77 |
+| All | 198 | 663 | 2,153 | $603.30 | $399.99 |
+
+Its queue directories are `.local/regrade/selected-v4`, `rebuilt-v4` and `plain-v4`. A pilot of one batch per queue goes first and is read before the rest runs.
