@@ -69,6 +69,24 @@ FILED = {
 }
 CANDIDATES = {"PE-x1": ["x-1"], "PE-s1": ["s-1"], "PE-s2": ["s-2"], "PE-s3": ["s-3"], "PE-o1": ["o-1"], "PE-j1": ["j-1", "j-2"], "PE-p1": ["p-1"],
               "PE-q1": ["q-1"]}
+REGRADE = "docs/research/regrade-rulings-2026-10-13"
+PROBES = f"{ROUND}/j-trpc-5017/probes/results"
+# What an entry on a task's list pins as its evidence. An entry's evidence is part of a batch's fingerprint, so it holds
+# only files that are written once and state no label: the neutral case and saved runs. The dossiers, the question
+# files, the label records and the impact card are pinned by the decisions and the card, which are outside it.
+ENTRY_EVIDENCE = {
+    "PE-x1": [f"{ROUND}/x-kubernetes-141463/cases/OP-candidate-x-1.md", f"{REGRADE}/x-kubernetes-141463/cases/M1.md"],
+    "PE-s1": [f"{ROUND}/s-seaweedfs-10735/cases/OP-candidate-s-1.md", f"{REGRADE}/s-seaweedfs-10735/cases/M1.md"],
+    "PE-s2": [f"{ROUND}/s-seaweedfs-10735/cases/OP-candidate-s-2.md", f"{REGRADE}/s-seaweedfs-10735/cases/M2a.md"],
+    "PE-s3": [f"{ROUND}/s-seaweedfs-10735/cases/OP-candidate-s-3.md", f"{REGRADE}/s-seaweedfs-10735/cases/M2b.md"],
+    "PE-o1": [f"{ROUND}/o-astro-16079/cases/OP-candidate-o-1.md", f"{REGRADE}/o-astro-16079/cases/M1.md"],
+    "PE-j1": [f"{ROUND}/j-trpc-5017/cases/OP-candidate-j-1.md", f"{ROUND}/j-trpc-5017/cases/OP-candidate-j-2.md", f"{PROBES}/table.txt",
+              f"{PROBES}/table-grouping.txt", f"{PROBES}/table-ways-round.txt"],
+    "PE-p1": [f"{ROUND}/p-hono-5067/cases/OP-candidate-p-1.md", f"{ROUND}/p-hono-5067/probes/result-base.txt",
+              f"{ROUND}/p-hono-5067/probes/result-head.txt"],
+    "PE-q1": [f"{ROUND}/q-soba-195/cases/OP-candidate-q-1.md", f"{ROUND}/q-soba-195/probes/result-base.txt",
+              f"{ROUND}/q-soba-195/probes/result-head.txt"],
+}
 SAVED_CLAIMS = {"CL-x-truncated-note-character": "PE-x1", "CL-s-listing-short-page": "PE-s1", "CL-s-expiry-lost-name": "PE-s2",
                 "CL-s-expiry-deleted-record": "PE-s3", "CL-o-edge-middleware-query-string": "PE-o1", "CL-j-optional-key-required": "PE-j1"}
 SCOPE_REASON = {
@@ -228,7 +246,7 @@ def file(documents, before, entries, receipt):
             added.add(decision["id"])
             decisions[:] = [item for item in decisions if item["id"] != decision["id"]] + [decision]
         problem = {"id": identifier, **{field: entry[field] for field in ("title", "obligation", "trigger", "mechanism", "grouping_reason")},
-                   "evidence": json.loads(cards[identifier])["evidence"], "consequence": entry["consequence"], "concerns": entry["concerns"],
+                   "evidence": [pin(path) for path in ENTRY_EVIDENCE[identifier]], "consequence": entry["consequence"], "concerns": entry["concerns"],
                    "revision": revisions[target], "admission": admission["id"],
                    "impact": {"band": entry["label"], "adjudication": impact["id"],
                               "reason": f"Chosen by the user on {filed['day']} ({numbers(identifier)}), by what the fault does to the people who meet it."}}
