@@ -18,7 +18,8 @@ ROOT = HERE.parents[2]
 CASES = {"x1": "OP-candidate-x-1", "s1": "OP-candidate-s-1", "s2": "OP-candidate-s-2", "s3": "OP-candidate-s-3", "o1": "OP-candidate-o-1",
          "j5": "GT-j5", "j7": "GT-j7", "y3": "GT-y3", "j1": "OP-candidate-j-1", "j2": "OP-candidate-j-2", "jg": "OP-grouping-j",
          "p1": "OP-candidate-p-1", "q1": "OP-candidate-q-1", "lb": "the nine impact cards, for a label each",
-         "lb2": "the nine impact cards in their second version, for a label under the changed sentence"}
+         "lb2": "the nine impact cards in their second version, for a label under the changed sentence",
+         "lbj7": "the narrowed card of the known problem GT-j7, for a label under the boundary as written"}
 
 
 OTHER = [

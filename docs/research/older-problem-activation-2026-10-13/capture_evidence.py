@@ -14,7 +14,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 PREFIX = "artifacts/research/older-problem-activation-2026-10-13"
-SCRIPTS = ("setup.sh", "run.sh", "setup-reconciliation.sh", "run-reconciliation.sh", "setup-more.sh", "run-more.sh", "setup-labels.sh", "setup-labels-2.sh",
+SCRIPTS = ("setup.sh", "run.sh", "setup-reconciliation.sh", "run-reconciliation.sh", "setup-more.sh", "run-more.sh", "setup-labels.sh", "setup-labels-2.sh", "setup-label-j7.sh",
            "probe/probe.py", "probe/probe-result.json")
 
 
