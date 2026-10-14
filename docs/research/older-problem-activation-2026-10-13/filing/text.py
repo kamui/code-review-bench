@@ -22,8 +22,8 @@ QUESTIONS = [
     (4, "04-seaweedfs-deleted-record"), (5, "05-astro-edge-middleware-query-string"), (6, "06-trpc-optional-field"),
     (7, "07-trpc-array-input"), (8, "08-django-login-fallback"), (9, "09-trpc-optional-field-admission"),
     (10, "10-trpc-class-instance-admission"), (11, "11-trpc-class-instance-grouping"), (12, "12-hono-method-override-admission"),
-    (13, "13-soba-lfs-file-variable-admission")]
-REVIEWED = {6: "second-07", 7: "first-06", 8: "first-01"}
+    (13, "13-soba-lfs-file-variable-admission"), (14, "14-trpc-optional-field-comment")]
+REVIEWED = {6: "second-07", 7: "first-06", 8: "first-01", 14: "regrade-26"}
 
 PIECE_1 = "A fault is on a rewritten line when the line itself does the wrong thing, even if it did the same wrong thing before the change."
 PIECE_2 = "A comment on such a fault can still raise a pre-existing problem (rubric, section 6)."
@@ -139,7 +139,7 @@ def clauses():
 def index():
     path = TERMS / "rulings.index.json"
     saved = json.loads(path.read_text(encoding="utf-8"))
-    note = (" Each question of the activation round of 2026-10-13 (activation 1 to 13) has its own name, except questions 6 to 8, which showed a saved "
+    note = (" Each question of the activation round of 2026-10-13 (activation 1 to 13) has its own name, except questions 6 to 8 and 14, which showed a saved "
             "ruling again and are aliases of it. The round's records name a question `older-N`, the word of the day they were written, and that name "
             "is an alias too.")
     if note not in saved["about"]:
