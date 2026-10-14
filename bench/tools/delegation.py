@@ -149,7 +149,7 @@ def filing_faults(decision, decision_type, root):
     if not record.pinned(after.get("before"), root):
         return ["settlement needs its pinned before-record"]
     before_path = root / after["before"]["path"]
-    before = record.load(before_path)
+    before = record.read_before(before_path)
     found = record.faults(before, root)
     if found:
         return found

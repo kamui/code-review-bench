@@ -306,33 +306,33 @@ function controls(ran: Cell[], gap: string | null) {
     missingOutput: counts.unadmitted, pending: counts.pending, cleanFraction: gated(blocked, available(count('silent') / reviews.length)) }
 }
 
-function olderProblems(dataset: Dataset, ran: Cell[], selection: Selection, gap: string | null) {
+function preExistingProblems(dataset: Dataset, ran: Cell[], selection: Selection, gap: string | null) {
   const catalog = dataset.tasks.filter(task => selection.taskIds.includes(task.id)).flatMap(task =>
-    (task.olderProblems ?? []).filter(problem => selection.concern === null || problem.concerns.includes(selection.concern))
+    (task.preExistingProblems ?? []).filter(problem => selection.concern === null || problem.concerns.includes(selection.concern))
       .map(problem => ({ taskId: task.id, problem })))
   const relevant = ran.filter(cell => catalog.some(entry => entry.taskId === cell.task.id))
   const reviews = admittedReviews(relevant)
   const pending = delivery(relevant).pending
   const rows = catalog.map(({ taskId, problem }) => {
     const assessed = reviews.filter(review => review.taskId === taskId && review.assessment?.state === 'assessed')
-      .flatMap(review => review.assessment?.olderProblems?.find(row => row.problemId === problem.id) ?? [])
-    return { taskId, problemId: problem.id, title: problem.title, catches: assessed.filter(row => row.outcome === 'raised').length,
+      .flatMap(review => review.assessment?.preExistingProblems?.find(row => row.problemId === problem.id) ?? [])
+    return { taskId, problemId: problem.id, title: problem.title, raised: assessed.filter(row => row.outcome === 'raised').length,
       assessed: assessed.length, unresolved: assessed.filter(row => row.outcome === 'unresolved').length }
   })
   const assessed = reviews.filter(review => review.assessment?.state === 'assessed' && catalog.filter(entry => entry.taskId === review.taskId)
-    .every(entry => review.assessment?.olderProblems?.some(row => row.problemId === entry.problem.id))).length
+    .every(entry => review.assessment?.preExistingProblems?.some(row => row.problemId === entry.problem.id))).length
   const unresolved = sum(rows.map(row => row.unresolved))
-  const observed = { credits: sum(rows.map(row => row.catches)), problems: rows.filter(row => row.catches > 0).length,
-    reviews: reviews.filter(review => review.assessment?.state === 'assessed' && review.assessment.olderProblems?.some(row =>
+  const observed = { raised: sum(rows.map(row => row.raised)), problems: rows.filter(row => row.raised > 0).length,
+    reviews: reviews.filter(review => review.assessment?.state === 'assessed' && review.assessment.preExistingProblems?.some(row =>
       row.outcome === 'raised' && catalog.some(entry => entry.taskId === review.taskId && entry.problem.id === row.problemId))).length }
-  const candidates = dataset.candidates.filter(candidate => selection.taskIds.includes(candidate.taskId) && candidate.kind === 'older-problem')
-  const blocked = gap ?? (catalog.length ? null : 'No approved older problems in this selection.')
-    ?? (pending ? 'Scheduled trials await execution.' : null) ?? (reviews.length ? null : 'No admitted reviews for the older-problem catalog.')
-    ?? (assessed < reviews.length ? 'Admitted reviews await older-problem assessment.' : null)
-    ?? (unresolved ? 'Older-problem credit is unresolved.' : null)
-    ?? (candidates.length ? 'Older-problem candidates await admission.' : null)
+  const candidates = dataset.candidates.filter(candidate => selection.taskIds.includes(candidate.taskId) && candidate.kind === 'pre-existing-problem')
+  const blocked = gap ?? (catalog.length ? null : 'No approved pre-existing problems in this selection.')
+    ?? (pending ? 'Scheduled trials await execution.' : null) ?? (reviews.length ? null : 'No admitted reviews for the pre-existing-problem catalog.')
+    ?? (assessed < reviews.length ? 'Admitted reviews await pre-existing-problem assessment.' : null)
+    ?? (unresolved ? 'Whether a pre-existing problem was raised is unresolved.' : null)
+    ?? (candidates.length ? 'Pre-existing-problem candidates await admission.' : null)
   return { catalog: catalog.length, admitted: reviews.length, assessed, unresolved, pending, candidates,
-    observed, rows, credits: gated(blocked, available(observed.credits)),
+    observed, rows, raised: gated(blocked, available(observed.raised)),
     problems: gated(blocked, available(observed.problems)), reviews: gated(blocked, available(observed.reviews)) }
 }
 
@@ -386,7 +386,7 @@ export function scorecard(dataset: Dataset, configurationId: string, selection: 
     detection: byBand(band => recall(ran, rows, band, gap)),
     seriousCaught: seriousCaught(ran, rows, gap), seriousMisses: seriousMisses(rows, gap), families: rows, tasks: taskRows(ran, rows),
     reliability: reliability(ran, gap), remedies: remedies(ran, gap), controls: controls(ran, gap), advice: advice(ran),
-    older: olderProblems(dataset, ran, selection, gap),
+    preExisting: preExistingProblems(dataset, ran, selection, gap),
     cost: usage(ran, gap, attempt => attempt.cost), tokens: usage(ran, gap, attempt => attempt.outputTokens), time: timing(ran, gap),
     limits: { unknownImpact: rows.filter(row => row.impact === 'unknown').length, pendingCandidates, auditComplete: dataset.evidence.audit.state === 'assessed' },
   }

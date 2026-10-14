@@ -84,7 +84,7 @@ BENCH = TOOLS.parent
 sys.path.insert(0, str(TOOLS))
 import claims  # noqa: E402
 import claim_grading  # noqa: E402
-import older_grading  # noqa: E402
+import pre_existing_grading  # noqa: E402
 import grading_validation  # noqa: E402
 import grading_policy  # noqa: E402
 import clean_context  # noqa: E402
@@ -99,7 +99,7 @@ from current_grading import Inconsistent, InputError, read_json  # noqa: E402
 PLACEHOLDERS = ("{TARGET}", "{FAMILY_IDS}", "{REVIEWS}", "{ALLOWANCE}")
 FAMILY_FIELDS = ("id", "title", "obligation", "trigger", "mechanism")
 QUOTABLE = ("claim", "consequence", "proposed_fix")
-VALIDATOR_TOOLS = ("grading_validation.py", "claim_grading.py", "older_grading.py", "check_manifest.py")
+VALIDATOR_TOOLS = ("grading_validation.py", "claim_grading.py", "pre_existing_grading.py", "check_manifest.py")
 SOURCE_PREFIX = re.compile(r"(?<=\]\()/(?!/)(?:[^/)\n]+/)+att-\d+/(?=clone(?:-work|-cache)?/)")
 
 
@@ -208,9 +208,9 @@ def prepare(args, loaded=None) -> list:
     selected, documents, fingerprint = batch_inputs(root, args.current, run, target_id, loaded)
     policy = read_json(root / documents["policy"]["path"])
     contract = policy.get("verdicts", grading_validation.CONTRACT)
-    if contract not in (grading_validation.CONTRACT, grading_validation.CONTRACT_V2, older_grading.CONTRACT):
+    if contract not in (grading_validation.CONTRACT, grading_validation.CONTRACT_V2, pre_existing_grading.CONTRACT):
         raise Inconsistent(f"unsupported verdict contract {contract!r}")
-    if getattr(args, "inventory", None) and contract not in (grading_validation.CONTRACT_V2, older_grading.CONTRACT):
+    if getattr(args, "inventory", None) and contract not in (grading_validation.CONTRACT_V2, pre_existing_grading.CONTRACT):
         raise Inconsistent("--inventory requires current-verdicts/v2")
     try:
         rubric = read_bytes(current_grading.resolve_pin(policy["rubric"], root))
@@ -233,10 +233,10 @@ def prepare(args, loaded=None) -> list:
     manifest = read_json(root / "bench" / run / "manifest.json")
     reference = next(r for r in documents["reference"]["targets"] if r["target"] == target_id)
     families = [{field: family[field] for field in FAMILY_FIELDS} for family in reference["families"]]
-    older_definitions = [{field: problem[field] for field in (*FAMILY_FIELDS, "consequence", "grouping_reason")}
-                         for problem in reference.get("older_problems", [])]
+    pre_existing_definitions = [{field: problem[field] for field in (*FAMILY_FIELDS, "consequence", "grouping_reason")}
+                                for problem in reference.get("pre_existing_problems", [])]
     references_raw = (json.dumps({"target": target_id, "families": families,
-                                 **({"older_problems": older_definitions} if contract == older_grading.CONTRACT else {})},
+                                 **({"pre_existing_problems": pre_existing_definitions} if contract == pre_existing_grading.CONTRACT else {})},
                                 indent=2, ensure_ascii=False) + "\n").encode("utf-8")
 
     reviews, tokens = [], set()
@@ -301,15 +301,15 @@ def prepare(args, loaded=None) -> list:
                 claim_text += f"\n{case['id']} {link['relation']}: {token} item {number}\n"
         ruled = [ruling for ruling in documents["credit"]["rulings"]
                  if ruling["target"] == target_id and ruling["review"]["path"] in by_path]
-        if ruled and contract in (grading_validation.CONTRACT_V2, older_grading.CONTRACT):
+        if ruled and contract in (grading_validation.CONTRACT_V2, pre_existing_grading.CONTRACT):
             claim_text += ("\n# Rulings on one comment\n\nThe user ruled on these comments one at a time. In that item's "
                            "claims, record these facts for the known problem named.\n")
-            for ruling in sorted(ruled, key=lambda r: (by_path[r["review"]["path"]], int(r["item_id"].removeprefix("item-")), older_grading.credit_subject(r))):
+            for ruling in sorted(ruled, key=lambda r: (by_path[r["review"]["path"]], int(r["item_id"].removeprefix("item-")), pre_existing_grading.credit_subject(r))):
                 token, number = by_path[ruling["review"]["path"]], str(int(ruling["item_id"].removeprefix("item-")) + 1)
                 credits.setdefault(token, {}).setdefault(number, []).append(
-                    {"family": older_grading.credit_subject(ruling), "says_what": ruling["says_what"], "identifies_cause": ruling["identifies_cause"],
-                     **({"older": True} if "older_problem_id" in ruling else {})})
-                claim_text += (f"\n{token} item {number}, {older_grading.credit_subject(ruling)}: says what goes wrong, {ruling['says_what']}; "
+                    {"family": pre_existing_grading.credit_subject(ruling), "says_what": ruling["says_what"], "identifies_cause": ruling["identifies_cause"],
+                     **({"pre_existing": True} if "pre_existing_problem_id" in ruling else {})})
+                claim_text += (f"\n{token} item {number}, {pre_existing_grading.credit_subject(ruling)}: says what goes wrong, {ruling['says_what']}; "
                                f"identifies the cause as a fault, {ruling['identifies_cause'] or 'not ruled'}.\n")
         if getattr(args, "claim_evidence", None):
             evidence = claims.grading_evidence(applicable, decisions, claims.load_extracts(args.claim_evidence), root)
@@ -346,10 +346,10 @@ def prepare(args, loaded=None) -> list:
                 "reviews": sources}
     if inventory is not None:
         snapshot["inventory"] = inventory
-    if contract in (grading_validation.CONTRACT_V2, older_grading.CONTRACT):
+    if contract in (grading_validation.CONTRACT_V2, pre_existing_grading.CONTRACT):
         snapshot["credits"] = credits
-    if contract == older_grading.CONTRACT:
-        snapshot["older_problems"] = [p["id"] for p in reference.get("older_problems", [])]
+    if contract == pre_existing_grading.CONTRACT:
+        snapshot["pre_existing_problems"] = [p["id"] for p in reference.get("pre_existing_problems", [])]
     snapshot_raw = json.dumps(snapshot, indent=2, ensure_ascii=False).encode("utf-8")
     command = command_policy(target_id, provisioning, target)
     if getattr(args, "preflight_only", False):
@@ -457,7 +457,7 @@ def command_policy(target, provisioning, revision=None):
 
 def runner_files():
     return {name: sha256(read_bytes(TOOLS / name)) for name in
-            ("grade.py", "grading-hosts.v1", "grading_policy.py", "grading_client_probe.py", "grading_validation.py", "claim_grading.py", "older_grading.py", "check_manifest.py",
+            ("grade.py", "grading-hosts.v1", "grading_policy.py", "grading_client_probe.py", "grading_validation.py", "claim_grading.py", "pre_existing_grading.py", "check_manifest.py",
              "claims.py", "current_grading.py", "normalize_review.py", "clean_context.py", "attempt_audit.py", "transcript_usage.py", "provision.py",
              "prune_workspace.py", "upstream.py", "review_isolation.py", "diff_identity.py", "packet_selection.py",
              "codex_grade_dispatch.py", "codex_grading.py", "codex_usage.py")}
@@ -842,7 +842,7 @@ def inventory(args) -> list:
     if problems:
         raise Inconsistent("\n".join(problems))
     snapshot = read_json(work / "validator/inputs.json")
-    if snapshot["contract"] not in (grading_validation.CONTRACT_V2, older_grading.CONTRACT):
+    if snapshot["contract"] not in (grading_validation.CONTRACT_V2, pre_existing_grading.CONTRACT):
         raise Inconsistent("inventory requires a current-verdicts/v2 workspace")
     _raw, verdicts, problems = read_verdicts(work)
     if problems:
@@ -989,7 +989,7 @@ def graded(entry: dict, verdict: dict, facts: dict, families: list, evidence: li
 
 
 def graded_v2(entry: dict, verdict: dict, facts: dict, families: list, evidence: list, checks: dict, check_pins: list,
-              candidates: dict, older=None) -> dict:
+              candidates: dict, pre_existing=None) -> dict:
     """One review's current grade under verdict contract v2: each claim with its answers to the ordered
     questions and its facts for known problems, the items that claim nothing, and each known problem's recovery
     from the claims' own "says what goes wrong"."""
@@ -1006,11 +1006,11 @@ def graded_v2(entry: dict, verdict: dict, facts: dict, families: list, evidence:
                  "open": c["open"], "candidate_id": candidates[c["candidate"]]["id"] if c["candidate"] else None,
                  "duplicate_group": c["duplicate_group"], "reason": c["notes"], "evidence": evidence}
                 for number, item in items for c in item["claims"]]
-    if older is not None:
+    if pre_existing is not None:
         for saved, original in zip(assessed, claims):
-            saved["older_problems"] = [{"problem_id": e["problem"], **{k: e[k] for k in ("says_what", "identifies_cause", "reason")}}
-                                       for e in original["older_problems"]]
-            saved["older_candidate_id"] = candidates[original["older_candidate"]]["id"] if original["older_candidate"] else None
+            saved["pre_existing_problems"] = [{"problem_id": e["problem"], **{k: e[k] for k in ("says_what", "identifies_cause", "reason")}}
+                                              for e in original["pre_existing_problems"]]
+            saved["pre_existing_candidate_id"] = candidates[original["pre_existing_candidate"]]["id"] if original["pre_existing_candidate"] else None
     recommendations = []
     for r in verdict["recommendations"]:
         independent = [{"source": check_pins[c["file"]], **{k: c[k] for k in ("checker", "independent_of", "result", "reason")}}
@@ -1041,8 +1041,8 @@ def graded_v2(entry: dict, verdict: dict, facts: dict, families: list, evidence:
                                  "reason": verdict["remedy_inventory"]["reason"] or "Every fix the review asks for is listed.",
                                  "anchors": list(anchors.values())},
             "advice": [],
-            **({"older_problems": [older_grading.assessment(p, claims, facts["admission"]["state"] == "admitted")
-                                   for p in older]} if older is not None else {})}
+            **({"pre_existing_problems": [pre_existing_grading.assessment(p, claims, facts["admission"]["state"] == "admitted")
+                                          for p in pre_existing]} if pre_existing is not None else {})}
 
 
 def raised_candidates(verdicts: dict, reviews: list, attempts: dict, task: dict) -> dict:
@@ -1054,7 +1054,7 @@ def raised_candidates(verdicts: dict, reviews: list, attempts: dict, task: dict)
         anchors = [{"review": attempts[review["attempt_id"]]["review"], "item_id": f"item-{int(number) - 1}", "quote": claim["quote"]}
                    for review in sorted(reviews, key=lambda r: r["attempt_id"])
                    for number, item in sorted(verdicts["reviews"][review["token"]]["items"].items(), key=lambda pair: int(pair[0]))
-                   for claim in item["claims"] if candidate["id"] in (claim["candidate"], claim.get("older_candidate"))]
+                   for claim in item["claims"] if candidate["id"] in (claim["candidate"], claim.get("pre_existing_candidate"))]
         identity = sorted({(a["review"]["path"], a["item_id"], a["quote"]) for a in anchors})
         identifier = "NC-" + current_grading.digest({"target": task["id"], "wording": identity})[:12]
         if identifiers.setdefault(identifier, candidate["id"]) != candidate["id"]:
@@ -1089,7 +1089,7 @@ def replace_json(path: Path, value) -> None:
 def map_verdicts(args) -> list:
     root, work, key = Path(args.root).resolve(), Path(args.work).resolve(), read_json(args.key)
     contract = read_json(work / "validator/inputs.json").get("contract")
-    v2 = contract in (grading_validation.CONTRACT_V2, older_grading.CONTRACT)
+    v2 = contract in (grading_validation.CONTRACT_V2, pre_existing_grading.CONTRACT)
     run, target, fingerprint = key["run"], key["target"], key["input_fingerprint"]
     selected, documents = unchanged_inputs(root, args.current, key)
     provenance, problems = provenance_of(work, key, args.assessor)
@@ -1135,7 +1135,7 @@ def map_verdicts(args) -> list:
         raised = raised_candidates(verdicts, key["reviews"], attempts, task)
         grades = [(graded_v2(entry, verdicts["reviews"][entry["token"]], attempts[entry["attempt_id"]], reference["families"],
                              [assessor["verdicts"], assessor["receipt"]], checks, check_pins, raised,
-                             reference.get("older_problems", []) if contract == older_grading.CONTRACT else None) if v2 else
+                             reference.get("pre_existing_problems", []) if contract == pre_existing_grading.CONTRACT else None) if v2 else
                    graded(entry, verdicts["reviews"][entry["token"]], attempts[entry["attempt_id"]], reference["families"],
                           [assessor["verdicts"], assessor["receipt"]], checks, check_pins))
                   for entry in sorted(key["reviews"], key=lambda r: r["attempt_id"])]
