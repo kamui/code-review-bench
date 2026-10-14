@@ -343,7 +343,7 @@ class Draw(Audit):
             "caught": "whole", "missed": "sampled", "unresolved-credit": "empty", "serious": "whole", "other-material": "empty",
             "problem": "whole", "refuted": "whole", "unproven": "whole", "suggestion": "whole", "minor-defect": "empty",
             "outside-this-change": "empty", "unresolved-claim": "empty", "control-silence": "empty",
-            "older-raised": "empty", "older-not-raised": "empty", "older-unresolved": "empty"})
+            "pre-existing-raised": "empty", "pre-existing-not-raised": "empty", "pre-existing-unresolved": "empty"})
         self.assertEqual(len(strata["missed"]["drawn"]), 2)
         self.assertEqual(sorted(strata["serious"]["drawn"]), strata["serious"]["population"])
         self.assertEqual(strata["control-silence"]["drawn"], [])
