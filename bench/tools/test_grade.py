@@ -555,15 +555,29 @@ class Prepare(Grade):
         self.assertFalse((self.root / "fresh").exists() or self.key.exists())
 
 
+# The text a contract is graded under. Each fixture pins the text of its own contract, so that the instructions a test
+# prepares and the validation it runs are the pair that was, or is, in force together.
+TEXT_V2 = (("scoring.next.md", "rubric"), ("grader.next.md", "grader"), ("rules.next.md", "rules"))
+TEXT_V3 = (("scoring.pre-existing.v1.md", "rubric"), ("grader.pre-existing.v1.md", "grader"), ("rules.pre-existing.v1.md", "rules"))
+
+
 class PrepareV2(Grade):
     def setUp(self):
         super().setUp()
         self.policy_path = self.root / "bench/grading/current/validation-policy.json"
         self.set_policy(verdicts="current-verdicts/v2")
-        for source, field in (("scoring.pre-existing.v1.md", "rubric"), ("grader.pre-existing.v1.md", "grader"), ("rules.pre-existing.v1.md", "rules")):
+        self.pin_text(TEXT_V2)
+
+    def pin_text(self, text):
+        for source, field in text:
             path = self.root / "bench/rubric" / source
             shutil.copyfile(current.BENCH / "rubric" / source, path)
             self.set_policy(**{field: current.pin_file(path, self.root)})
+
+    def use_contract_v3(self):
+        """Verdict contract v3 with the text that is in force with it."""
+        self.pin_text(TEXT_V3)
+        self.set_policy(verdicts="current-verdicts/v3")
 
     def set_policy(self, **fields):
         write_json(self.policy_path, {**json.loads(self.policy_path.read_text()), **fields})
@@ -591,7 +605,7 @@ class PrepareV2(Grade):
         self.assertNotEqual(before, self.cohort.fingerprint())
         self.prepared()
         self.assertEqual((self.work / "rubric.md").read_bytes(),
-                         (self.root / "bench/rubric/scoring.pre-existing.v1.md").read_bytes().rstrip(b"\n") + b"\n\n" + alternate.read_bytes())
+                         (self.root / "bench/rubric/scoring.next.md").read_bytes().rstrip(b"\n") + b"\n\n" + alternate.read_bytes())
         snapshot = json.loads((self.work / "validator/inputs.json").read_text())
         self.assertEqual(snapshot["contract"], "current-verdicts/v2")
         self.assertNotIn("inventory", snapshot)
