@@ -145,7 +145,7 @@ class CalibrationTest(unittest.TestCase):
         label = approved(self.documents, self.root, "OP-1", "impact", "other-material")
         admission["receipt_scope"], label["receipt_scope"] = "OP-1 for pre-existing-admission", "OP-1 for impact"
         self.admitted_card = {**self.card, "family": "OP-1", "attribution": {"relation": "pre-existing", "reason": "The same at both commits."}}
-        label.update(boundary=self.decision["boundary"], reason="OWNER-LABEL-REASON")
+        label.update(boundary=self.decision["boundary"], reason="OWNER-LABEL-REASON", independent_checks=[self.independent_check("confirmed")])
         self.problem = {**{field: self.family[field] for field in ("title", "obligation", "trigger", "mechanism", "grouping_reason", "evidence")},
                         "id": "OP-1", "consequence": "A saved write disappears.", "concerns": ["Reliability"],
                         "revision": self.target["revision"], "admission": admission["id"],
@@ -172,6 +172,19 @@ class CalibrationTest(unittest.TestCase):
         self.save_admitted(label)
         self.assertTrue(self.queue()["pre_existing_problems"][0]["impact"]["disagreement"])
         self.assertEqual(self.run_tool("check").returncode, 0)
+
+    def test_every_label_of_a_pre_existing_problem_needs_an_independent_inspection(self):
+        label = self.admit()
+        label["independent_checks"] = []
+        self.save_admitted(label, queue=False)
+        self.assert_problem("AD-OP-1-impact: the label of a pre-existing problem needs an independent inspection")
+        label["independent_checks"] = [{**self.independent_check("confirmed"), "checker": "proposer"}]
+        self.save_admitted(label, queue=False)
+        self.assert_problem("AD-OP-1-impact: the label of a pre-existing problem needs an independent inspection")
+        self.problem["impact"] = {"band": "unknown", "reason": "Awaiting the label", "adjudication": None}
+        label.update(status="proposed", authority="automation", receipt=None, receipt_scope=None, independent_checks=[])
+        self.save_admitted(label, queue=False)
+        self.assert_problem("AD-OP-1-impact: the label of a pre-existing problem records an independent inspection, including disagreement")
 
     def test_an_admitted_pre_existing_problem_without_an_approved_label_is_a_problem(self):
         label = self.admit()
