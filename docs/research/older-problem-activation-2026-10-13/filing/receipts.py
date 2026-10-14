@@ -315,8 +315,11 @@ def answers(log):
 
 
 def write(path, text):
+    """Replace the file when its text differs, so that a hard link to it in a test's copy of the repository is left alone."""
     if not path.exists() or path.read_text(encoding="utf-8") != text:
-        path.write_text(text, encoding="utf-8")
+        temporary = path.with_name(path.name + ".tmp")
+        temporary.write_text(text, encoding="utf-8")
+        temporary.replace(path)
         print("wrote", path.relative_to(ROOT))
 
 

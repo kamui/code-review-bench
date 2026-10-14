@@ -101,7 +101,7 @@ NEW_CLAIMS = {
         "links": [("2026-10-08-last-push-claude-fable", "att-019", "item-5", "(and the backup itself also ignores the file)"),
                   ("2026-10-08-last-push-claude-fable", "att-029", "item-3", "(and the providers' envTrue calls likewise never enable LFS)")]},
 }
-read, text, pin, row = record.read, record.text, record.pin, record.row
+read, text, pin, row, put = record.read, record.text, record.pin, record.row, record.put
 
 
 def digest(value):
@@ -204,7 +204,7 @@ def before_this(documents):
               "decisions": {f"AD-{name}": row(decisions, f"AD-{name}") for name in SAVED_CLAIMS},
               "sha256": {f"bench/grading/current/{name}.json": digest(comparable(name, documents[name])) for name in record.FILES}}
     before["sha256"][QUEUE] = hashlib.sha256((ROOT / QUEUE).read_bytes()).hexdigest()
-    path.write_text(json.dumps(before, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    put(path, json.dumps(before, indent=1, ensure_ascii=False) + "\n")
     return before
 
 
@@ -289,9 +289,9 @@ def file(documents, before, entries, receipt):
 
 def write(documents, cards):
     for name in record.FILES:
-        (CURRENT / f"{name}.json").write_text(text(documents[name]), encoding="utf-8")
+        put(CURRENT / f"{name}.json", text(documents[name]))
     for identifier, value in cards.items():
-        (ROOT / CARDS / f"{identifier}.json").write_text(value, encoding="utf-8")
+        put(ROOT / CARDS / f"{identifier}.json", value)
     subprocess.run([sys.executable, str(ROOT / "bench/tools/calibration.py"), "--root", str(ROOT), "queue", "--out", str(ROOT / QUEUE)], check=True, cwd=ROOT)
 
 
@@ -317,7 +317,7 @@ def undo():
     for name in record.FILES:
         if digest(comparable(name, documents[name])) != before["sha256"][f"bench/grading/current/{name}.json"]:
             raise SystemExit(f"{name}.json: the undone file is not the file before the admissions; nothing was written")
-    (HERE / "recorded.json").write_text(json.dumps(record.RECORDED, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    put(HERE / "recorded.json", json.dumps(record.RECORDED, indent=1, ensure_ascii=False) + "\n")
     subprocess.run([sys.executable, str(HERE / "receipts.py")], check=True, cwd=ROOT)
     for decision in documents["adjudications"]["decisions"]:
         if decision["receipt"] and decision["receipt"]["path"] == RECEIPT:
@@ -337,7 +337,7 @@ def main():
     entries = catalog()
     documents = {name: read(CURRENT / f"{name}.json") for name in record.FILES}
     before = before_this(documents)
-    (HERE / "recorded.json").write_text(json.dumps(recorded(entries), indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    put(HERE / "recorded.json", json.dumps(recorded(entries), indent=1, ensure_ascii=False) + "\n")
     subprocess.run([sys.executable, str(HERE / "receipts.py")], check=True, cwd=ROOT)
     cards = file(documents, before, entries, pin(RECEIPT))
     write(documents, cards)

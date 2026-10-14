@@ -189,6 +189,14 @@ class IntakeTests(unittest.TestCase):
                 redirect_stdout(io.StringIO()):
             script.main()
 
+    def at_the_intake(self, by_task: dict) -> dict:
+        """``by_task`` without the tasks whose first claim was filed after the intake. Such a claim is of a kind that did
+        not exist then: every claim of the task names a pre-existing problem."""
+        claims = read(ROOT / CURRENT / "claims.json")["claims"]
+        later = {task for task in by_task if task not in self.intake["reviews"]}
+        self.assertTrue(all(claim.get("pre_existing_problem_id") for claim in claims if claim["target"] in later), later)
+        return {task: value for task, value in by_task.items() if task not in later}
+
     def packets(self) -> tuple:
         self.run_script("packets", self.temp / "packets", self.temp / "key.json")
         return self.temp / "packets", read(self.temp / "key.json")
@@ -198,14 +206,15 @@ class IntakeTests(unittest.TestCase):
         claims = read(ROOT / CURRENT / "claims.json")["claims"]
         entered = {row["target"] for row in read(ROOT / "bench" / read(ROOT / SELECTION / "plan.v1.json")["enters"]["run"] / "manifest.json")["cohort"]}
         self.assertEqual(sorted(key), sorted({claim["target"] for claim in claims} & entered))
-        self.assertEqual({task: sorted({source["review"]["path"] for source in names["items"].values()}) for task, names in key.items()},
-                         self.intake["reviews"])
+        self.assertEqual(self.at_the_intake({task: sorted({source["review"]["path"] for source in names["items"].values()})
+                                             for task, names in key.items()}), self.intake["reviews"])
         for task, names in key.items():
             part = read(packets / task / "part-1.json")
             self.assertEqual(sorted(path.name for path in (packets / task).iterdir()), ["part-1.json", "prompt.md"])
             self.assertEqual((packets / task / "prompt.md").read_bytes(), (ROOT / PROMPT).read_bytes())
             self.assertEqual(sorted(names["claims"].values()), sorted(claim["id"] for claim in claims if claim["target"] == task))
-            comments = sum(len(read(ROOT / path)["items"]) for path in self.intake["reviews"][task])
+            comments = len(names["items"]) if task not in self.intake["reviews"] else sum(
+                len(read(ROOT / path)["items"]) for path in self.intake["reviews"][task])
             self.assertEqual((len(part["items"]), len(names["items"])), (comments, comments))
             text = (packets / task / "part-1.json").read_text(encoding="utf-8")
             self.assertEqual(claim_tools.exposed(text, claim_tools.identities([], ROOT)), [], task)
@@ -224,7 +233,7 @@ class IntakeTests(unittest.TestCase):
         self.assertEqual([(link["claim"], link["relation"], link["item_id"], link["review"]) for link in collected["links"]],
                          [("CL-m-teardown-lock-wait", relation, key[task]["items"][item]["item_id"], key[task]["items"][item]["review"])
                           for item, relation in ((first, "equivalent"), (others[0], "related"))])
-        self.assertEqual(collected["reviews"], self.intake["reviews"])
+        self.assertEqual(self.at_the_intake(collected["reviews"]), self.intake["reviews"])
         (packets / task / "matches-1.json").write_text(json.dumps({**matches, "unmatched": others[2:]}))
         with self.assertRaisesRegex(SystemExit, "does not cover every item once"):
             self.run_script("collect", packets, self.temp / "key.json", HERE=self.temp)

@@ -132,6 +132,13 @@ CLAIM_J7 = {
 }
 
 
+def put(path, value):
+    """Write a file by replacing it, so that a hard link to it in a test's copy of the repository is left alone."""
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(value, encoding="utf-8")
+    temporary.replace(path)
+
+
 def read(path):
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -171,7 +178,7 @@ def saved_before(documents):
                          for name in ("CL-j-optional-key-required", "CL-j-array-input-merge")},
               "credits": {ruling["id"]: ruling for ruling in documents["credits"]["rulings"] if ruling.get("family_id") == "GT-j5"},
               "cards": {name: (CURRENT / f"impact-cards/{name}.json").read_text(encoding="utf-8") for name in CARDS}}
-    path.write_text(json.dumps(before, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    put(path, json.dumps(before, indent=1, ensure_ascii=False) + "\n")
     return before
 
 
@@ -307,9 +314,9 @@ def undo():
         if hashlib.sha256(value.encode("utf-8")).hexdigest() != before["sha256"][path]:
             raise SystemExit(f"{path}: the undone file is not the file before the filing; nothing was written")
     for path, value in texts.items():
-        (ROOT / path).write_text(value, encoding="utf-8")
+        put(ROOT / path, value)
     for name, value in before["cards"].items():
-        (CURRENT / f"impact-cards/{name}.json").write_text(value, encoding="utf-8")
+        put(CURRENT / f"impact-cards/{name}.json", value)
     subprocess.run([sys.executable, str(ROOT / "bench/tools/calibration.py"), "--root", str(ROOT), "queue", "--out",
                     str(CURRENT / "decision-queue.json")], check=True, cwd=ROOT)
     queue = "bench/grading/current/decision-queue.json"
@@ -321,12 +328,12 @@ def undo():
 def main():
     documents = {name: read(CURRENT / f"{name}.json") for name in FILES}
     before = saved_before(documents)
-    (HERE / "recorded.json").write_text(json.dumps(RECORDED, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    put(HERE / "recorded.json", json.dumps(RECORDED, indent=1, ensure_ascii=False) + "\n")
     subprocess.run([sys.executable, str(HERE / "receipts.py")], check=True, cwd=ROOT)
     card_text = file(documents, before, pin(RECEIPT))
     for name in FILES:
-        (CURRENT / f"{name}.json").write_text(text(documents[name]), encoding="utf-8")
-    (CURRENT / "impact-cards/GT-j7.json").write_text(card_text, encoding="utf-8")
+        put(CURRENT / f"{name}.json", text(documents[name]))
+    put(CURRENT / "impact-cards/GT-j7.json", card_text)
     (CURRENT / "impact-cards/GT-j5.json").unlink(missing_ok=True)
     subprocess.run([sys.executable, str(ROOT / "bench/tools/calibration.py"), "--root", str(ROOT), "queue", "--out",
                     str(CURRENT / "decision-queue.json")], check=True, cwd=ROOT)
