@@ -256,7 +256,7 @@ def pinned(case, decisions):
     decision = decisions.get(case["adjudication"])
     approved = decision is not None and decision["status"] == "approved"
     return {"outcome": decision["outcome"] if approved else "unresolved", "family": case["family_id"],
-            **({"older_problem": case["older_problem_id"]} if case.get("older_problem_id") else {})}
+            **({"pre_existing_problem": case["pre_existing_problem_id"]} if case.get("pre_existing_problem_id") else {})}
 
 
 def grading_context(cases, decisions):

@@ -66,8 +66,8 @@ class ExportTest(unittest.TestCase):
                 'state': 'assessed',
                 'families': [{'familyId': 'GT-t1', 'outcome': 'caught', 'sufficiency': 'absent', 'claimIds': ['c1'], 'causeOnly': False}],
                 'claims': [{'id': 'c1', 'itemId': 'item-0', 'outcome': 'eligible', 'familyId': 'GT-t1',
-                            'canonicalId': 'CL-t1', 'duplicateGroup': None, 'nativeOutcome': 'eligible', 'knownProblems': [], 'olderProblems': [], 'olderCandidateId': None}],
-                'olderProblems': None,
+                            'canonicalId': 'CL-t1', 'duplicateGroup': None, 'nativeOutcome': 'eligible', 'knownProblems': [], 'preExistingProblems': [], 'preExistingCandidateId': None}],
+                'preExistingProblems': None,
                 'recommendations': [], 'remedyInventory': 'complete', 'advice': []})
             self.assertFalse(any(key in result['attempts'][0] for key in ('recovered', 'falseFindings', 'score')))
             detail = current.read_json(root / 'public/data/attempts/run/att-001.json')
@@ -104,7 +104,7 @@ class ExportTest(unittest.TestCase):
             result = self.build_fixture(root)
             self.assertEqual(result['schemaVersion'], 5)
             self.assertEqual(result['attempts'][0]['assessment']['claims'], [])
-            self.assertIsNone(result['attempts'][0]['assessment']['olderProblems'])
+            self.assertIsNone(result['attempts'][0]['assessment']['preExistingProblems'])
 
     def test_native_v2_claims_keep_multiple_matches_and_cause_only_facts(self):
         with TemporaryDirectory() as directory:
