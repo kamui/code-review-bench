@@ -186,6 +186,8 @@ def narrowed_family(before):
     family = json.loads(json.dumps(before["families"]["GT-j7"]))
     for field, changes in J7.items():
         family[field] = edit(family[field], changes, f"GT-j7 {field}") + J7_MORE.get(field, "")
+    # The owner accepted a revised title and obligation after the filing was shown (owner/answers.md, entry A41).
+    family.update(read(HERE / "catalog.v2.json")["known"]["GT-j7"])
     family["eligibility"]["reason"] = family["eligibility"]["reason"] + f" Kept by the user on {DAY}, narrowed to array and tuple inputs (activation ruling 7)."
     family["impact"]["reason"] = family["impact"]["reason"] + f" Kept by the user on {DAY} for the narrowed wording (activation ruling 7)."
     family["evidence"] = family["evidence"] + [pin(f"{ROUND}/rulings/07-trpc-array-input.md"), pin(f"{ROUND}/j-trpc-5017/probes/results/table.txt")]

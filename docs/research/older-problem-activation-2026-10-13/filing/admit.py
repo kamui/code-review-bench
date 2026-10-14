@@ -5,7 +5,8 @@
 
 Run from the repository root. It first files questions 6 to 8 as `record.py` does, then files what the owner answered
 on questions 1 to 5 and 9 to 13 (`../owner/answers.md`, entries A24 to A31). The wording of each entry is read from
-`catalog.v1.json`, so a changed sentence is one edit there and a rerun. For each admitted problem it writes an
+`catalog.v2.json`, which `wordings.py` writes from the text the owner accepted, so a changed sentence is one edit in
+that text and a rerun. For each admitted problem it writes an
 admission decision, an impact card, an impact decision with the blind inspector's label, and the entry in
 `references.json`. Each saved claim of an admitted fault names its pre-existing problem and keeps its scope-excluded
 decision; three faults that had no saved claim get one, with the comments behind it linked as intake.
@@ -13,8 +14,9 @@ decision; three faults that had no saved claim get one, with the comments behind
 The admission and the label are separate decisions. An admission's reason, its passage in the receipt and every
 claim decision say nothing of the label, because a grader is shown claim decisions.
 
-`before.v2.json` holds what the records were after questions 6 to 8 and before this filing: the rows it changes, the
-ids it adds and each file's hash. `--undo` puts the records back to that state and checks the hashes. Running the
+`before.v2.json` holds the rows this filing changes, as they were after questions 6 to 8. `--undo` puts them back
+and takes out everything the filing added; `record.py --undo` then checks each file against its hash before the
+whole filing. Running the
 filing again undoes it first and files it anew, which leaves every file as it was when nothing in the catalog changed."""
 import hashlib
 import importlib.util
@@ -108,20 +110,8 @@ def digest(value):
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def comparable(name, document):
-    """A record file's text for comparing with its saved hash. The tenth receipt is written again whenever a line is
-    added to it, so its own hash in a decision that cites it is left out of the comparison."""
-    if name != "adjudications":
-        return text(document)
-    copy = json.loads(json.dumps(document))
-    for decision in copy["decisions"]:
-        if decision["receipt"] and decision["receipt"]["path"] == RECEIPT:
-            decision["receipt"]["sha256"] = ""
-    return text(copy)
-
-
 def catalog():
-    return {entry["id"]: entry for entry in read(HERE / "catalog.v1.json")["entries"]}
+    return {entry["id"]: entry for entry in read(HERE / "catalog.v2.json")["entries"]}
 
 
 def numbers(identifier):
@@ -192,18 +182,15 @@ def links(spec):
 
 
 def before_this(documents):
+    """The rows this filing changes, as they are now. `main` calls it after it has undone an earlier filing of the
+    admissions and filed questions 6 to 8 again, so the rows hold nothing of this filing."""
     path = HERE / "before.v2.json"
-    if path.exists():
-        return read(path)
     decisions = documents["adjudications"]["decisions"]
-    before = {"about": "The current records after questions 6 to 8 were filed and before the admissions: the rows the filing of the admissions "
-                       "changes, as they were, and the hash of each record file. In the hash of adjudications.json the tenth receipt's own hash is "
-                       "left blank, because the receipt is written again when a line is added to it. `admit.py --undo` puts the records back to "
-                       "this state.",
+    before = {"about": "The rows the filing of the admissions changes, as they were after questions 6 to 8 were filed. `admit.py --undo` "
+                       "puts them back and takes out everything the filing added. The check that an undone file is the file before the whole "
+                       "filing is `record.py --undo`'s, against the hashes in before.v1.json.",
               "claims": {name: {key: value for key, value in row(documents["claims"]["claims"], name).items() if key != "links"} for name in SAVED_CLAIMS},
-              "decisions": {f"AD-{name}": row(decisions, f"AD-{name}") for name in SAVED_CLAIMS},
-              "sha256": {f"bench/grading/current/{name}.json": digest(comparable(name, documents[name])) for name in record.FILES}}
-    before["sha256"][QUEUE] = hashlib.sha256((ROOT / QUEUE).read_bytes()).hexdigest()
+              "decisions": {f"AD-{name}": row(decisions, f"AD-{name}") for name in SAVED_CLAIMS}}
     put(path, json.dumps(before, indent=1, ensure_ascii=False) + "\n")
     return before
 
@@ -314,9 +301,6 @@ def undo():
             claim.update(before["claims"][claim["id"]])
     for reference in documents["references"]["targets"]:
         reference.pop("pre_existing_problems", None)
-    for name in record.FILES:
-        if digest(comparable(name, documents[name])) != before["sha256"][f"bench/grading/current/{name}.json"]:
-            raise SystemExit(f"{name}.json: the undone file is not the file before the admissions; nothing was written")
     put(HERE / "recorded.json", json.dumps(record.RECORDED, indent=1, ensure_ascii=False) + "\n")
     subprocess.run([sys.executable, str(HERE / "receipts.py")], check=True, cwd=ROOT)
     for decision in documents["adjudications"]["decisions"]:
@@ -325,8 +309,6 @@ def undo():
     write(documents, {})
     for identifier in entries:
         (ROOT / CARDS / f"{identifier}.json").unlink(missing_ok=True)
-    if hashlib.sha256((ROOT / QUEUE).read_bytes()).hexdigest() != before["sha256"][QUEUE]:
-        raise SystemExit("the regenerated queue is not the queue before the admissions")
     print("put back the records as they were before the admissions were filed")
 
 
