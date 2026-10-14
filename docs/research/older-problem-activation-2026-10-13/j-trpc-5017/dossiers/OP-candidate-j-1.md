@@ -21,7 +21,7 @@ No: with a middleware a call that leaves the field out fails to compile, at both
 
 ## Who is hurt, and how badly
 
-A developer who calls a procedure that has an optional field and a middleware. Their build fails on a call the validator accepts. They get past it by writing the field as `undefined` (read, not run). Nothing goes wrong at run time and no data is involved. Optional fields and a middleware are both everyday parts of the library, so the set-up is ordinary; how many callers leave the field out was not measured.
+A developer who calls a procedure that has an optional field and a middleware. Their build fails on a call the validator accepts. They get past it by writing the field as `undefined` at the call, or the server's developer puts the middleware before the input, which removes the error for every caller (run on 2026-10-13, [the table of ways round](../probes/results/table-ways-round.txt)). Nothing goes wrong at run time and no data is involved. Optional fields and a middleware are both everyday parts of the library, so the set-up is ordinary; how many callers leave the field out was not measured.
 
 ## The strongest argument against admitting it
 
@@ -29,4 +29,4 @@ It is a build error with a one-word way round, and the project changed the calle
 
 ## Not run
 
-A full build, an editor, the HTTP client, the way round with `undefined`.
+A full build, an editor, the HTTP client.

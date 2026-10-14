@@ -21,7 +21,7 @@ No, for this use: the resolver cannot pass the input to a function that takes th
 
 ## Who is hurt, and how badly
 
-A server developer whose procedure takes an instance of their own class with a private member and has a middleware. The build fails in their own resolver, with a message that names neither the middleware nor the helper. Nothing goes wrong at run time. Over HTTP the use also needs a transformer that rebuilds class instances, so it is a narrow set-up. A type cast as a way round was not run.
+A server developer whose procedure takes an instance of their own class with a private member and has a middleware. The build fails in their own resolver, with a message that names neither the middleware nor the helper. Nothing goes wrong at run time. Over HTTP the use also needs a transformer that rebuilds class instances, so it is a narrow set-up. A cast to the class or an `instanceof` check in the resolver gets past it, and so does putting the middleware before the input (run on 2026-10-13, [the table of ways round](../probes/results/table-ways-round.txt)).
 
 ## The grouping question, by running
 
@@ -41,4 +41,4 @@ Nothing shows anyone using a class-instance input, and the rule warns that being
 
 ## Not run
 
-An editor, the HTTP client with a transformer, a class without a private member, a `#private` field, a type cast.
+An editor, the HTTP client with a transformer, a class without a private member, a `#private` field.
