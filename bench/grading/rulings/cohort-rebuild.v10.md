@@ -1,6 +1,6 @@
 # Rulings during the issue 30 cohort rebuild, tenth receipt
 
-Recorded at 2026-10-14T01:30:00Z. Authority: user. Issue: https://github.com/kamui/code-review-bench/issues/135.
+Recorded at 2026-10-14T01:49:09Z. Authority: user. Issue: https://github.com/kamui/code-review-bench/issues/135.
 
 After the [ninth receipt](cohort-rebuild.v9.md) the user took up the kind it had left open: a fault from before a change, which the change did not cause, that a review points out. On 2026-10-13 and 2026-10-14 the user named it a pre-existing problem, decided where one may sit, how one is admitted and how it is labelled, approved the text of version 10 of the two questions with a new section of the rubric and of the grader's instructions, ruled on three known problems under "changed lines only", and admitted eight pre-existing problems on six pull requests, each with its label. The asking session wrote [the log](../../../docs/research/older-problem-activation-2026-10-13/owner/answers.md) as each answer was given: the question as shown, the options and the user's answer. Every entry below is copied from that log without a change. The sentences around an entry, and the lines that start "Recorded:", are the recording session's and state what was filed. Where a prepared question file and the log differ, the log holds. The dossiers, probes and records are under `docs/research/older-problem-activation-2026-10-13/`.
 

@@ -1,10 +1,10 @@
-# The evidence of the round's 28 Codex sessions
+# The evidence of the round's Codex sessions
 
-The 28 blind sessions are packed locally and **not published**. Publication needs the owner's word. [`execution-evidence.v1.json`](execution-evidence.v1.json) is the index: the package's hash, the scan, and each session's exec log and native transcript by hash. [`usage.v1.json`](usage.v1.json) holds the usage.
+The 29 blind sessions and three other sessions are packed locally and **not published**. Publication needs the owner's word. [`execution-evidence.v1.json`](execution-evidence.v1.json) is the index: the package's hash, the scan, and each session's exec log and native transcript by hash. [`usage.v1.json`](usage.v1.json) holds the usage.
 
 ## The sessions
 
-28 sessions with Codex at high effort, client 0.162.1. None stopped and none was run again; no case file was corrected after a session read it.
+29 blind sessions with Codex at high effort, client 0.162.1. None stopped and none was run again; no case file was corrected after a session read it.
 
 | Sessions | Cases | Models | List price |
 | --- | --- | --- | ---: |
@@ -14,9 +14,10 @@ The 28 blind sessions are packed locally and **not published**. Publication need
 | 4 | The Hono and soba admissions, two each | the same two | $1.39 |
 | 1 | The nine impact cards, for a label each under the first sentence | `gpt-6.1-sol` | $0.09 |
 | 1 | The nine cards in their second version, for a label each under the approved sentence | `gpt-6.1-sol` | $0.12 |
-| 28 | | | $9.05 |
+| 1 | The narrowed card of the known problem GT-j7, for a label under the boundary as it is written | `gpt-6.1-sol` | $0.09 |
+| 29 | | | $9.14 |
 
-The figures are from `usage.py` (run), against limits of 30 sessions and $15. Each row is rounded; the unrounded sum is $9.0538. The sessions ran on the ChatGPT plan, so each figure is a list-price equivalent and not a payment.
+The figures are from `usage.py` (run), against limits of 30 sessions and $15. Each row is rounded; the unrounded sum is $9.1357. The sessions ran on the ChatGPT plan, so each figure is a list-price equivalent and not a payment.
 
 Each session's working folder held `rule.md`, `earlier-rulings.md` and its case under `cases/`. Its prompt was a brief under [`assessors/`](assessors/):
 
@@ -37,7 +38,7 @@ The asking session ran three more Codex sessions itself, at high effort and read
 | The review of the rename to pre-existing problems | `gpt-6.1-sol` | $0.61 |
 | All three | | $3.85 |
 
-With them the round has 31 Codex sessions at $12.91 of list price (run, `usage.py`, which lists the three apart). The arena's blind judge was a Claude session. No transcript of it is saved, so it is in neither the usage nor the package.
+With them the round has 32 Codex sessions at $12.99 of list price (run, `usage.py`, which lists the three apart). The arena's blind judge was a Claude session. No transcript of it is saved, so it is in neither the usage nor the package.
 
 ## How the sessions were isolated
 
@@ -67,7 +68,7 @@ The command is `run.sh`. `run-reconciliation.sh` and `run-more.sh` are the same 
 Both are at `~/.t3/evidence-packages/older-problem-activation-2026-10-13-v1/`, made with `capture_evidence.py` and `evidence_store.py pack` (run; "pack: verified"; capturing twice gave the same selection and index). Neither is published.
 
 - **The 28 blind sessions alone**, under `packed-4/`: 278 files, 12.9 MB before packing, one asset of 3.8 MB, sha256 `444da5dd…81d1`. For each session: its working folder as the session left it, its `codex exec --json` log, error output and last message, and its native transcript; the eight setup and run scripts; the probe's script and result.
-- **All 31 sessions**, under `packed-5/`: 303 files, 18.2 MB before packing, one asset of 5.1 MB, sha256 `eb53a77f…4d55`. It adds, for each of the three other sessions, its folder with the brief and the output, its event log and its native transcript.
+- **All 32 sessions**, under `packed-6/`: 313 files, 18.5 MB before packing, one asset of 5.2 MB, sha256 `42ac319c…f4d3`. It also holds the 29th blind session, the inspection of the narrowed GT-j7 card, which ran under the round's isolation and whose files add nothing of a new kind to the scan below. It adds, for each of the three other sessions, its folder with the brief and the output, its event log and its native transcript.
 
 ## The scans
 
@@ -81,16 +82,16 @@ The 28 blind sessions (`scan-4/`):
 - 1,962 mentions of the local home directory in 89 files, and 73 of the Codex home in 35.
 - The account's instructions file in the 28 native transcripts. No list of skills, no plugin list and no memory in any file.
 
-All 31 sessions (`scan-5/`). The three other sessions add what an ordinary Codex session of the account carries:
+All 32 sessions (`scan-6/`). The three other sessions add what an ordinary Codex session of the account carries:
 
-- Still no credential pattern, and no token-shaped string in the raw bytes, the 149 encrypted reasoning fields included.
+- Still no credential pattern, and no token-shaped string in the raw bytes, the 154 encrypted reasoning fields included.
 - The file name `auth.json` three times, in the rename review's event log and native transcript. It is a name only; no content of the file is there.
 - A Windows profile path, 32 times in 6 files, and the name of an unrelated organisation from the account's context, 20 times in 4 files.
 - The path of another checkout of this repository, 15 times in 2 files, in the rename review.
 - A list of installed skills in the three native transcripts.
 - The repository owner's login 106 times in 26 files.
 
-The owner may prefer to publish the 28 blind sessions alone, or all 31 with these facts in view.
+The owner may prefer to publish the 28 blind sessions alone, or all 32 with these facts in view.
 
 ## What is not in it
 
