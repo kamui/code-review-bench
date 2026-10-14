@@ -31,7 +31,9 @@ class PreExistingTests(unittest.TestCase):
         self.problem.update(id='OP-1', consequence='A saved write disappears.', concerns=['Reliability'],
                             revision=reference['revision'], admission=approved(self.docs, self.root, 'OP-1', 'pre-existing-admission', 'admitted')['id'])
         self.label = approved(self.docs, self.root, 'OP-1', 'impact', 'other-material')
-        self.label['boundary'] = self.label['receipt']
+        self.label.update(boundary=self.label['receipt'], independent_checks=[{
+            'source': self.label['receipt'], 'checker': 'independent', 'independent_of': 'primary', 'result': 'refuted',
+            'reason': 'The inspector labelled it serious'}])
         self.problem['impact'] = {'band': 'other-material', 'reason': 'Saved ruling', 'adjudication': self.label['id']}
         reference['families'] = []
         reference['pre_existing_problems'] = [self.problem]
@@ -63,15 +65,16 @@ class PreExistingTests(unittest.TestCase):
         self.assertNotEqual(one, two)
         self.assertEqual(self.reference['families'], [])
 
-    def test_a_label_names_its_approved_impact_decision_as_a_familys_does(self):
+    def test_a_label_names_its_approved_impact_decision_and_always_records_an_independent_inspection(self):
         self.check()
-        confirmed = {'source': self.label['receipt'], 'checker': 'independent', 'independent_of': 'primary', 'result': 'confirmed',
-                     'reason': 'Label checked'}
+        confirmed = {**self.label['independent_checks'][0], 'result': 'confirmed', 'reason': 'Label checked'}
         cases = [(lambda: self.problem.pop('impact'), 'current reference'),
                  (lambda: self.problem['impact'].update(band='serious'), 'unapproved impact label'),
                  (lambda: self.label.update(status='proposed'), 'unapproved impact label'),
                  (lambda: self.label.update(subject='OP-2'), 'adjudication does not apply'),
                  (lambda: self.label.update(boundary=None), 'calibrated boundary'),
+                 (lambda: self.label.update(independent_checks=[]), 'the label of a pre-existing problem needs an independent inspection'),
+                 (lambda: self.label['independent_checks'][0].update(checker='primary'), 'needs an independent inspection'),
                  (lambda: (self.label.update(outcome='serious'), self.problem['impact'].update(band='serious')), 'independent check'),
                  (lambda: self.problem['impact'].update(band='unknown'), 'unknown impact cannot claim approval')]
         for change, error in cases:

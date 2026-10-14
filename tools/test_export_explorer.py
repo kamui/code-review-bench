@@ -112,7 +112,8 @@ class ExportTest(unittest.TestCase):
             selected, documents = fixture(root)
             reference = documents['reference']['targets'][0]
             label = approved(documents, root, 'OP-1', 'impact', 'other-material')
-            label['boundary'] = label['receipt']
+            label.update(boundary=label['receipt'], independent_checks=[{
+                'source': label['receipt'], 'checker': 'independent', 'independent_of': 'primary', 'result': 'confirmed', 'reason': 'Label checked'}])
             reference['pre_existing_problems'] = [{
                 **{field: value for field, value in reference['families'][0].items() if field not in ('eligibility', 'impact')},
                 'id': 'OP-1', 'consequence': 'A saved write disappears.', 'concerns': ['Reliability'], 'revision': reference['revision'],
