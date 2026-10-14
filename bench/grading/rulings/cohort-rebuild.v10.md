@@ -579,6 +579,12 @@ Facts shown: the behaviour under JSON and protobuf, the condition keeping the te
 
 Presentation note from the owner: the heading "Who can meet it" is ambiguous; use a clearer one.
 
+Recorded: PE-x1 is a pre-existing problem of x-kubernetes-141463, admitted.
+
+Recorded: the impact label of PE-x1 is other-material.
+
+Recorded: claim CL-x-truncated-note-character stays scope-excluded: outside this change. It is a claim of the pre-existing problem PE-x1.
+
 ### Activation, ruling 2: SeaweedFS PR 10735, a listing page filled by names whose records are gone comes back empty
 
 The prepared question, with its facts and the first answers of every party: [`02-seaweedfs-listing-page-of-dead-names.md`](../../../docs/research/older-problem-activation-2026-10-13/rulings/02-seaweedfs-listing-page-of-dead-names.md).
@@ -601,6 +607,12 @@ The user chose "Admit, serious (Recommended)".
 Decision: admitted as a pre-existing problem of s-seaweedfs-10735, labelled serious.
 
 Facts shown: the behaviour end to end and the non-recursive delete (run in the regrade round); before and after; the one added line; the wiki's paging sentence (read); who is affected; three admission answers (admitted: low, medium, medium); both labels serious (S4 and S2; S2); the reasoning for serious and the case for other-material; 41 reviews, four linked.
+
+Recorded: PE-s1 is a pre-existing problem of s-seaweedfs-10735, admitted.
+
+Recorded: the impact label of PE-s1 is serious.
+
+Recorded: claim CL-s-listing-short-page stays scope-excluded: outside this change. It is a claim of the pre-existing problem PE-s1.
 
 ### Activation, ruling 3: SeaweedFS PR 10735, a create during expiry keeps its record and loses its name
 
@@ -642,6 +654,12 @@ Options shown:
 
 The user chose "Yes, on the list, serious (as you answered)". The decision of A26 stands. The word "admitted" stays.
 
+Recorded: PE-s2 is a pre-existing problem of s-seaweedfs-10735, admitted.
+
+Recorded: the impact label of PE-s2 is serious.
+
+Recorded: claim CL-s-expiry-lost-name stays scope-excluded: outside this change. It is a claim of the pre-existing problem PE-s2.
+
 ### Activation, ruling 4: SeaweedFS PR 10735, a create during a listing has its new record deleted
 
 The prepared question, with its facts and the first answers of every party: [`04-seaweedfs-deleted-record.md`](../../../docs/research/older-problem-activation-2026-10-13/rulings/04-seaweedfs-deleted-record.md).
@@ -667,6 +685,12 @@ The user chose "On the list, serious, separate (Recommended)".
 
 Decision: admitted as a pre-existing problem of s-seaweedfs-10735, labelled serious, separate from the lost name of admission 3.
 
+Recorded: PE-s3 is a pre-existing problem of s-seaweedfs-10735, admitted.
+
+Recorded: the impact label of PE-s3 is serious.
+
+Recorded: claim CL-s-expiry-deleted-record stays scope-excluded: outside this change. It is a claim of the pre-existing problem PE-s3.
+
 ### Activation, ruling 5: Astro PR 16079, with edge middleware a request with a query string loses it and misses its route
 
 The prepared question, with its facts and the first answers of every party: [`05-astro-edge-middleware-query-string.md`](../../../docs/research/older-problem-activation-2026-10-13/rulings/05-astro-edge-middleware-query-string.md).
@@ -689,6 +713,12 @@ The user chose "On the list, serious (Recommended)".
 Decision: admitted as a pre-existing problem of o-astro-16079, labelled serious.
 
 Facts shown: the behaviour through the built functions (run in the regrade round), same at three commits; the regression from #15413; unchanged line 28 and the description (read); the adapter guide; who is affected; three admission answers (admitted, medium); both labels serious on S4; S3 not used; Vercel's own runtime not run.
+
+Recorded: PE-o1 is a pre-existing problem of o-astro-16079, admitted.
+
+Recorded: the impact label of PE-o1 is serious.
+
+Recorded: claim CL-o-edge-middleware-query-string stays scope-excluded: outside this change. It is a claim of the pre-existing problem PE-o1.
 
 ### Activation, ruling 6: tRPC PR 5017, the known problem GT-j5 under changed lines only
 
@@ -833,6 +863,14 @@ The user chose "One (Recommended)".
 
 Decision: the optional field and the class instance are admitted as one pre-existing problem of j-trpc-5017, labelled other-material. The label differs from the blind inspector's (serious), which was made before the ways-round runs.
 
+Recorded: PE-j1 is a pre-existing problem of j-trpc-5017, admitted.
+
+Recorded: the impact label of PE-j1 is other-material.
+
+Recorded: claim CL-j-optional-key-required stays scope-excluded: outside this change. It is a claim of the pre-existing problem PE-j1.
+
+Recorded: claim CL-j-class-instance-middleware is scope-excluded: outside this change. It is a claim of the pre-existing problem PE-j1.
+
 ### Activation, ruling 10: tRPC PR 5017, a class-instance input cannot be passed on as its class after a middleware
 
 The prepared question, with its facts and the first answers of every party: [`10-trpc-class-instance-admission.md`](../../../docs/research/older-problem-activation-2026-10-13/rulings/10-trpc-class-instance-admission.md).
@@ -868,6 +906,12 @@ Decision: outside this change (the title confines the fix to utils/body and vali
 
 Facts shown: the runs of 2026-10-13 in Bun and Node; the unchanged file and lines 74 and 92; the change's six files, title and issue; not worse, and the one new thing (parseBody returns the fields inside the wrongly reached handler); the two Before 2 routes with the Django contrast; the documentation sentence and RFC 9110; evidence against (tests in lower case, behaviour since 2024, no maintainer statement); who is affected and what was not run or searched; three admission answers (low, medium, medium); both labels serious on S4 and what the label turns on; the 13 comments sorted (eleven on this middleware in ten reviews; two not put forward).
 
+Recorded: PE-p1 is a pre-existing problem of p-hono-5067, admitted.
+
+Recorded: the impact label of PE-p1 is serious.
+
+Recorded: claim CL-p-method-override-media-type-case is scope-excluded: outside this change. It is a claim of the pre-existing problem PE-p1.
+
 ### Activation, ruling 13: soba PR 195, a `_FILE` variable does not turn on the LFS backup
 
 The prepared question, with its facts and the first answers of every party: [`13-soba-lfs-file-variable-admission.md`](../../../docs/research/older-problem-activation-2026-10-13/rulings/13-soba-lfs-file-variable-admission.md).
@@ -890,6 +934,12 @@ The user chose "On the list, serious (Recommended)".
 Decision: admitted as a pre-existing problem of q-soba-195, labelled serious; the task stays an audited-clean control. The owner read the changelog's general sentence as the promise and the README's sentence about secrets as not withdrawing it (rule Promised 1c, the owner's call).
 
 Facts shown: the run of 2026-10-13 (all six providers) and the source reading; a whole backup not run; same before and after; evidence for (changelog 1.3.5, the start-up log's file-aware read) and against (README "Secrets", the LFS section, no document or test, issues not searched); who is affected; three admission answers (low, medium, medium); both labels serious on S2; the recommendation at low confidence on the promise.
+
+Recorded: PE-q1 is a pre-existing problem of q-soba-195, admitted.
+
+Recorded: the impact label of PE-q1 is serious.
+
+Recorded: claim CL-q-lfs-file-variable is scope-excluded: outside this change. It is a claim of the pre-existing problem PE-q1.
 
 ## The summary of the admissions, as the log has it
 

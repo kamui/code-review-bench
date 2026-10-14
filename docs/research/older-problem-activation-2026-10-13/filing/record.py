@@ -277,7 +277,10 @@ def file(documents, before, receipt):
 
 
 def undo():
-    """Put the record files and the cards back as `before.v1.json` holds them, byte for byte."""
+    """Put the record files and the cards back as `before.v1.json` holds them, byte for byte. The admissions, filed
+    after questions 6 to 8 by `admit.py`, are undone first."""
+    import admit
+    admit.undo()
     before = read(HERE / "before.v1.json")
     documents = {name: read(CURRENT / f"{name}.json") for name in FILES}
     families = before["families"]
@@ -325,4 +328,9 @@ def main():
 
 
 if __name__ == "__main__":
-    undo() if "--undo" in sys.argv[1:] else main()
+    if "--undo" in sys.argv[1:]:
+        undo()
+    elif (HERE / "before.v2.json").exists():
+        raise SystemExit("the admissions are filed on top of these records: run admit.py, which files questions 6 to 8 first")
+    else:
+        main()
