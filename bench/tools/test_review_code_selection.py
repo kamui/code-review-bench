@@ -27,7 +27,7 @@ from unittest.mock import patch
 import claims as claim_tools
 import current_grading  # noqa: F401
 from test_last_push_move import (CURRENT, INVENTORY, RECUT, REGISTRY, ROOT, SELECTION, Failing, before_the_selection,
-                                 copy_of_the_repository, differing, read, regrade_filing, tree)
+                                 copy_of_the_repository, differing, read, regrade_filing, undo_the_activation_filing, tree)
 
 WRITTEN = [REGISTRY, INVENTORY, CURRENT / "claims.json"]
 LEFT = "bench/runs/2026-09-24-builtin-baseline/attempts/att-083/normalized.json"
@@ -168,9 +168,10 @@ class OneGenerationTests(unittest.TestCase):
 
 class RecordTests(unittest.TestCase):
     def test_the_committed_record_is_the_one_the_script_derives(self) -> None:
-        """The record counts the claims as the selection left them, so the regrade rulings filed later are undone first."""
+        """The record counts the claims as the selection left them, so the rulings filed later are undone first."""
         root = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
         copy_of_the_repository(root)
+        undo_the_activation_filing(root)
         regrade_filing(root).Filing().undo()
         selection = selection_script(root)
         self.assertEqual(selection.RECORD.read_text(encoding="utf-8"), selection.Selection().recorded())
