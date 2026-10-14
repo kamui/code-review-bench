@@ -24,7 +24,8 @@ def digest(path):
 
 def capture(assessors, native_root):
     usage = json.loads((HERE / "usage.v1.json").read_text(encoding="utf-8"))
-    ids, native = {row["thread_id"] for row in usage["sessions"]}, {}
+    other = usage.get("other_sessions", {}).get("sessions", [])
+    ids, native = {row["thread_id"] for row in usage["sessions"] + other}, {}
     for path in native_root.rglob("*.jsonl"):
         for thread in ids:
             if path.name.endswith(f"{thread}.jsonl"):
@@ -58,10 +59,24 @@ def capture(assessors, native_root):
         for path in sorted((assessors / name).rglob("*")):
             if path.is_file():
                 select(path, f"assessors/{name}/{path.relative_to(assessors / name)}")
+    work, others = assessors.parent, []
+    for session in other:
+        name, log = session["session"], work / session["log"]
+        if digest(log) != session["log_sha256"]:
+            raise ValueError(f"saved log hash differs for {name}")
+        transcript = native[session["thread_id"]]
+        metadata = json.loads(transcript.read_text(encoding="utf-8").splitlines()[0])
+        if metadata.get("type") != "session_meta" or metadata["payload"]["id"] != session["thread_id"]:
+            raise ValueError(f"native transcript identity differs for {name}")
+        others.append({"session": name, "thread_id": session["thread_id"], "log": select(log, f"other/{name}/events.jsonl"),
+                       "native": select(transcript, f"native/{name}.jsonl")})
+        for path in sorted(log.parent.rglob("*")):
+            if path.is_file() and path != log:
+                select(path, f"other/{name}/{path.relative_to(log.parent)}")
     return ({"repository": "kamui/code-review-bench", "tag": "evidence-older-problem-activation-2026-10-13-v1",
              "subjects": ["older-problem-activation-2026-10-13"], "files": sorted(files.values(), key=lambda row: row["path"])},
             {"schema_version": 1, "usage": {"path": str((HERE / "usage.v1.json").relative_to(HERE.parents[2])), "sha256": digest(HERE / "usage.v1.json")},
-             "sessions": sessions})
+             "sessions": sessions, "other_sessions": others})
 
 
 if __name__ == "__main__":
