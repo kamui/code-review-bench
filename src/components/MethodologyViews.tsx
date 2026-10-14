@@ -3,7 +3,7 @@ import { Group, Paper, Select, Stack, Switch, Table, Tabs, Text, Title } from '@
 import type { Configuration, Dataset } from '../lib/data'
 import { bandLabels, compact, conditionDifferences, detectionLabel, duration, estimatorLabels, lowerFirst, measured, money, percent, perReview, points, reading, scaled, share } from '../lib/metrics'
 import type { DetectionView, Reading } from '../lib/metrics'
-import { bands, candidates as pendingFamilies, conditionalMetrics, estimators, matched, orderingConflicts, pairwise, pendingCandidates, recommend, referenceCoverage } from '../lib/scoring'
+import { bands, candidates as pendingFamilies, conditionalMetrics, estimators, matched, orderingConflicts, pairwise, pendingCandidates, preExistingLabels, recommend, referenceCoverage } from '../lib/scoring'
 import type { ConditionalMetric, Estimator, Scorecard, Selection } from '../lib/scoring'
 import type { Inspection } from './EvidenceDrawer'
 import { DataTable, Value } from './Reading'
@@ -157,18 +157,21 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
       </Stack></Tabs.Panel>
 
       <Tabs.Panel value="pre-existing" pt="md"><Stack>
-        <Text size="sm">An approved pre-existing problem counts as raised once for each admitted review that says what goes wrong. Silence creates no miss. These counts do not change recall or recommendations.</Text>
-        <DataTable label="Pre-existing problems raised" rows={rows} rowKey={key} minWidth={1150} columns={[setup,
-          { label: 'Approved catalog', value: row => String(row.card.preExisting.catalog) },
-          { label: 'Raised, per review and problem', value: row => reading(row.card.preExisting.raised, String) },
-          { label: 'Distinct problems raised', value: row => reading(row.card.preExisting.problems, String) },
-          { label: 'Reviews that raised one', value: row => reading(row.card.preExisting.reviews, String) },
-          { label: 'Observed raised', value: row => String(row.card.preExisting.observed.raised) },
-          { label: 'Reviews assessed / admitted', value: row => `${row.card.preExisting.assessed} / ${row.card.preExisting.admitted}` },
-          { label: 'Unresolved', value: row => String(row.card.preExisting.unresolved) },
-          { label: 'Pending candidates', value: row => String(row.card.preExisting.candidates.length) }]} />
-        {rows.map(row => <div key={key(row)}><Text size="sm" fw={600}>{row.configuration.short}</Text>
-          <ul>{row.card.preExisting.rows.map(problem => <li key={problem.problemId}>{problem.title}: observed raised {problem.raised} times; {problem.assessed} assessments, {problem.unresolved} unresolved.</li>)}</ul></div>)}
+        <Text size="sm">An approved pre-existing problem counts as raised once for each admitted review that says what goes wrong. Silence creates no miss. Each count is given separately for serious and for other-material pre-existing problems. These counts do not change recall or recommendations.</Text>
+        {preExistingLabels.map(label => <Stack key={label}>
+          <Text size="sm" fw={600}>{bandLabels[label]} pre-existing problems</Text>
+          <DataTable label={`${bandLabels[label]} pre-existing problems raised`} rows={rows} rowKey={key} minWidth={1150} columns={[setup,
+            { label: 'Approved catalog', value: row => String(row.card.preExisting.labels[label].catalog) },
+            { label: 'Raised, per review and problem', value: row => reading(row.card.preExisting.labels[label].raised, String) },
+            { label: 'Distinct problems raised', value: row => reading(row.card.preExisting.labels[label].problems, String) },
+            { label: 'Reviews that raised one', value: row => reading(row.card.preExisting.labels[label].reviews, String) },
+            { label: 'Observed raised', value: row => String(row.card.preExisting.labels[label].observed.raised) },
+            { label: 'Reviews assessed / admitted', value: row => `${row.card.preExisting.labels[label].assessed} / ${row.card.preExisting.labels[label].admitted}` },
+            { label: 'Unresolved', value: row => String(row.card.preExisting.labels[label].unresolved) },
+            { label: 'Pending candidates', value: row => String(row.card.preExisting.candidates.length) }]} />
+          {rows.map(row => <div key={key(row)}><Text size="sm" fw={600}>{row.configuration.short}</Text>
+            <ul>{row.card.preExisting.labels[label].rows.map(problem => <li key={problem.problemId}>{problem.title}: observed raised {problem.raised} times; {problem.assessed} assessments, {problem.unresolved} unresolved.</li>)}</ul></div>)}
+        </Stack>)}
         <Text size="xs" c="dimmed">The catalog contains discovered cases, not every pre-existing fault. Assessment coverage does not establish historical audit coverage.</Text>
       </Stack></Tabs.Panel>
 
@@ -176,8 +179,8 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
         <Text size="sm" className="footnote">Only an independently audited clean control gets a correct-silence percentage, over the reviews that were delivered. An empty reference list is not an audit, and a failed trial is missing output, not silence.</Text>
         <DataTable label="Audited controls" rows={rows} rowKey={key} minWidth={1150} columns={[setup,
           { label: 'Audited controls', value: row => String(row.card.controls.audited) }, { label: 'Admitted control reviews', value: row => String(row.card.controls.admitted) },
-          { label: 'Without a refuted or unsupported claim', value: row => share(row.card.controls.cleanFraction) },
-          { label: 'With a refuted or unsupported claim', value: row => String(row.card.controls.alarmed) }, { label: 'With an unresolved claim', value: row => String(row.card.controls.unresolved) },
+          { label: 'Without a refuted or unproven claim', value: row => share(row.card.controls.cleanFraction) },
+          { label: 'With a refuted or unproven claim', value: row => String(row.card.controls.alarmed) }, { label: 'With an unresolved claim', value: row => String(row.card.controls.unresolved) },
           { label: 'Awaiting assessment', value: row => String(row.card.controls.unassessed) }, { label: 'Missing output', value: row => String(row.card.controls.missingOutput) },
           { label: 'Pending trials', value: row => String(row.card.controls.pending) }, { label: 'Unaudited or provisional controls', value: row => String(row.card.controls.unaudited.length) }]} />
         {[...coverage.controls.unaudited, ...coverage.controls.provisional].length > 0 && <div><Text size="sm" fw={600}>Controls without a clean percentage</Text>
