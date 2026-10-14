@@ -7,6 +7,7 @@ The first-answer tables, the label tables and the route lines are read from the 
 cannot drift from them. The prose is in round.texts.json. Run it again after a record changes. `label_part` and
 `TEST` are also used by the ruling files written by hand."""
 import json
+import sys
 import subprocess
 from pathlib import Path
 
@@ -143,3 +144,5 @@ if __name__ == "__main__":
             "## Answer", "", "Not asked. The after-record is written when the owner has answered.", ""])
         (HERE / "rulings" / f"{name}.md").write_text(ruling, encoding="utf-8")
         print(name, verdict)
+    # The answers are the owner's, from the log, and filing/receipts.py puts them at the end of each file.
+    subprocess.run([sys.executable, str(HERE / "filing/receipts.py"), "--answers"], check=True, cwd=ROOT)

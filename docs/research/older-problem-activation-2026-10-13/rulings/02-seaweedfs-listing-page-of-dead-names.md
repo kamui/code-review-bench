@@ -1,6 +1,6 @@
 # Older problems, admission 2: SeaweedFS PR 10735, a listing page filled by names whose records are gone comes back empty
 
-Prepared 2026-10-13. Not asked yet. The fault is the one the owner ruled outside this change on 2026-10-13 (regrade ruling 3) and marked a candidate for this credit. That ruling is not reopened. The question is whether it is admitted as an older problem and, if so, with which label. The saved claim is `CL-s-listing-short-page`. The dossier is [`../s-seaweedfs-10735/dossiers/OP-candidate-s-1.md`](../s-seaweedfs-10735/dossiers/OP-candidate-s-1.md); the case every blind session read is [`../s-seaweedfs-10735/cases/OP-candidate-s-1.md`](../s-seaweedfs-10735/cases/OP-candidate-s-1.md). The first answers are in the before-record beside this file, committed before the owner is asked.
+Prepared 2026-10-13 and answered since; the answer is at the end of this file. The fault is the one the owner ruled outside this change on 2026-10-13 (regrade ruling 3) and marked a candidate for this credit. That ruling is not reopened. The question is whether it is admitted as an older problem and, if so, with which label. The saved claim is `CL-s-listing-short-page`. The dossier is [`../s-seaweedfs-10735/dossiers/OP-candidate-s-1.md`](../s-seaweedfs-10735/dossiers/OP-candidate-s-1.md); the case every blind session read is [`../s-seaweedfs-10735/cases/OP-candidate-s-1.md`](../s-seaweedfs-10735/cases/OP-candidate-s-1.md). The first answers are in the before-record beside this file, committed before the owner is asked.
 
 ## The facts
 
@@ -97,4 +97,23 @@ What each choice does:
 
 ## Answer
 
-Not asked. The after-record is written when the owner has answered.
+The owner answered. What follows is copied from [the owner's log](../owner/answers.md) without a change. Where this file and the log differ, the log holds.
+
+### A25. Admission 2 of 9: SeaweedFS 10735, the listing page of dead names (round question 2)
+
+Logged 2026-10-13T22:34Z. Prepared file: rulings/02-seaweedfs-listing-page-of-dead-names.md at b794b277.
+
+Question as shown: "SeaweedFS 10735, the listing page that comes back empty while live files remain: is it admitted as a pre-existing problem, and with which label?"
+
+Options shown:
+
+- "Admit, serious (Recommended)": It joins the task's list as serious: the listing reports an empty, complete folder that holds live files, and a non-recursive delete then removes live records.
+- "Admit, other-material": It joins the task's list as other-material: asking again gives the right answer, and it takes a whole page of dead names.
+- "Not admitted": It stays outside this change and nothing is recorded as raised for it.
+- "Need more context": Tell me what is missing, for example the diff, the delete case step by step, or the four linked comments.
+
+The user chose "Admit, serious (Recommended)".
+
+Decision: admitted as a pre-existing problem of s-seaweedfs-10735, labelled serious.
+
+Facts shown: the behaviour end to end and the non-recursive delete (run in the regrade round); before and after; the one added line; the wiki's paging sentence (read); who is affected; three admission answers (admitted: low, medium, medium); both labels serious (S4 and S2; S2); the reasoning for serious and the case for other-material; 41 reviews, four linked.

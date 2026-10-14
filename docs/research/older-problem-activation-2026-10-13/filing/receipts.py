@@ -285,6 +285,22 @@ The selection authorizes no dispatch. The second pass needs its own queue, usage
 """
 
 
+def answers(log):
+    """Put the owner's answer at the end of each prepared question file, as the log has it."""
+    for number, _, name, names in QUESTIONS:
+        path = ROOT / ROUND / "rulings" / f"{name}.md"
+        text = path.read_text(encoding="utf-8")
+        head, mark, _ = text.partition("\n## Answer\n")
+        if not mark:
+            raise SystemExit(f"{path.name}: no Answer section")
+        head = head.replace("Prepared 2026-10-13. Not asked yet.", "Prepared 2026-10-13 and answered since; the answer is at the end of this file.")
+        lead = ("The owner answered. What follows is copied from [the owner's log](../owner/answers.md) without a change. Where this file and the "
+                "log differ, the log holds.")
+        if not names:
+            lead += " This question was answered together with question 9, in the same two entries."
+        write(path, f"{head}{mark}\n{lead}\n\n{askings(log, names or ['A29 (open)', 'A29, decided'])}")
+
+
 def write(path, text):
     if not path.exists() or path.read_text(encoding="utf-8") != text:
         path.write_text(text, encoding="utf-8")
@@ -292,7 +308,11 @@ def write(path, text):
 
 
 if __name__ == "__main__":
+    import sys
     log = entries()
+    answers(log)
+    if "--answers" in sys.argv:
+        raise SystemExit(0)
     files = decisions(log)
     for name, text in files.items():
         write(RULINGS / f"{name}.md", text)

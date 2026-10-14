@@ -8,6 +8,8 @@ and the Hono and soba admissions. The dossiers of these questions are written by
 label tables and the route lines are read from the records and the record tool, as round.py reads them for
 questions 1 to 5. Run it again after a record changes."""
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 from round import PARTY, ROUND, TEST, answers_table, bullets, label_part, route
@@ -45,7 +47,7 @@ if __name__ == "__main__":
         record = json.loads((ROOT / record_path).read_text(encoding="utf-8"))
         verdict, reasons = route(record_path)
         head = [f"# Older problems, {text['heading']}", "", text["intro"], "", *sections(text)]
-        if record["decision_type"] == "older-grouping":
+        if record["decision_type"] in ("older-grouping", "pre-existing-grouping"):
             body = ["## First answers", "", grouping_table(record), "", text["answers_note"], "",
                     "## Recommendation", "", text["recommendation"], "",
                     *closing(text, [f"`ruling_record.py route` prints **{verdict}**: " + "; ".join(reasons) + ".", "",
@@ -63,3 +65,5 @@ if __name__ == "__main__":
                                     "delegation.", ""])]
         (HERE / "rulings" / f"{name}.md").write_text("\n".join(head + body), encoding="utf-8")
         print(name, verdict)
+    # The answers are the owner's, from the log, and filing/receipts.py puts them at the end of each file.
+    subprocess.run([sys.executable, str(HERE / "filing/receipts.py"), "--answers"], check=True, cwd=ROOT)

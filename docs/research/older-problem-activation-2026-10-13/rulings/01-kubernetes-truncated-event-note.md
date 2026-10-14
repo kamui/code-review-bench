@@ -1,6 +1,6 @@
 # Older problems, admission 1: Kubernetes PR 141463, a long scheduling message cut inside a character
 
-Prepared 2026-10-13. Not asked yet. The fault is the one the owner ruled outside this change on 2026-10-13 (regrade ruling 2) and marked a candidate for this credit. That ruling is not reopened. The question is whether it is admitted as an older problem and, if so, with which label. The saved claim is `CL-x-truncated-note-character`. The dossier is [`../x-kubernetes-141463/dossiers/OP-candidate-x-1.md`](../x-kubernetes-141463/dossiers/OP-candidate-x-1.md); the case every blind session read is [`../x-kubernetes-141463/cases/OP-candidate-x-1.md`](../x-kubernetes-141463/cases/OP-candidate-x-1.md). The first answers are in the before-record beside this file, committed before the owner is asked.
+Prepared 2026-10-13 and answered since; the answer is at the end of this file. The fault is the one the owner ruled outside this change on 2026-10-13 (regrade ruling 2) and marked a candidate for this credit. That ruling is not reopened. The question is whether it is admitted as an older problem and, if so, with which label. The saved claim is `CL-x-truncated-note-character`. The dossier is [`../x-kubernetes-141463/dossiers/OP-candidate-x-1.md`](../x-kubernetes-141463/dossiers/OP-candidate-x-1.md); the case every blind session read is [`../x-kubernetes-141463/cases/OP-candidate-x-1.md`](../x-kubernetes-141463/cases/OP-candidate-x-1.md). The first answers are in the before-record beside this file, committed before the owner is asked.
 
 ## The facts
 
@@ -99,4 +99,27 @@ What each choice does:
 
 ## Answer
 
-Not asked. The after-record is written when the owner has answered.
+The owner answered. What follows is copied from [the owner's log](../owner/answers.md) without a change. Where this file and the log differ, the log holds.
+
+### A24. Admission 1 of 9: Kubernetes 141463, the message cut inside a character (round question 1)
+
+Logged 2026-10-13T21:47Z. Prepared file: rulings/01-kubernetes-truncated-event-note.md at b794b277, with before-records for the admission and both label rounds.
+
+Question as shown: "Kubernetes 141463, the message cut inside a character: is it admitted as a pre-existing problem, and with which label?"
+
+Options shown:
+
+- "Admit, other-material (Recommended)": It joins the task's list. A person loses a diagnostic message but the pod's condition keeps the full reason, which is the boundary's "lost diagnostic detail" shape.
+- "Admit, serious": It joins the task's list as serious: under JSON the whole event is lost, which the data sign S2 counts for a recording that loses its payload.
+- "Not admitted": Nothing promises non-ASCII messages this long, so it stays outside this change and nothing is recorded as raised for it.
+- "Need more context": Tell me what is missing, for example the impact card, the five linked comments, or the debugging page's words.
+
+The user answered: "admit, other-material
+
+unrelated, but "Who can meet it" is not a good heading for this section, it sounds ambiguous, change it to a more clear heading/section"
+
+Decision: admitted as a pre-existing problem of x-kubernetes-141463, labelled other-material.
+
+Facts shown: the behaviour under JSON and protobuf, the condition keeping the text, same before and after (run in the regrade round); the 2021 pull request and issue, the debugging page (read); who can be affected (read and a run search); the three admission answers (all admitted, medium); both labels under the approved sentence (other-material; blind at low confidence); the reasoning for other-material against S2; the strongest argument against admitting; what admitting does (36 reviews, five linked).
+
+Presentation note from the owner: the heading "Who can meet it" is ambiguous; use a clearer one.
