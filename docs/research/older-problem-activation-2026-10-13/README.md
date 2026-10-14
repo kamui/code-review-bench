@@ -1,5 +1,7 @@
 # Preparing the activation of older-problem credit
 
+**The owner has since answered every question, and the answers are filed.** [`owner/`](owner/) holds the log of the answers, the approved rule text and the accepted wordings, and [`filing/README.md`](filing/README.md) says what was filed: version 10 of the rule text, 71 known problems, eight pre-existing problems with their labels, the audit amendment and the switch of the validation policy. What follows is the preparation as it was written before the answers, and it is left as it was.
+
 Prepared 2026-10-13 for [issue 135](https://github.com/kamui/code-review-bench/issues/135). This directory prepares material and questions for the owner. It adopts no policy, admits no candidate, changes no entry of the answer key, grades nothing and publishes nothing. The policy in force is unchanged.
 
 | File | What it is |
