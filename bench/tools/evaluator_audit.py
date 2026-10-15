@@ -444,6 +444,9 @@ def listed_claims(args):
 
 def second(args):
     root, work, key = Path(args.root).resolve(), Path(args.work).resolve(), read_json(args.key)
+    safety_policy = read_json(work / "validator/inputs.json").get("safety_policy", "legacy")
+    if safety_policy not in ("legacy", grading_validation.NO_SAFETY):
+        raise Inconsistent("the second grader requires an assessment prepared with --inventory")
     run, target = key["run"], key["target"]
     directory, sample = drawn_sample(root, args.current)
     first = sampled_grade(sample, root, run, target)
@@ -490,6 +493,8 @@ def second(args):
                    "link_disputes": verdicts["link_disputes"], "new_candidates": verdicts["new_candidates"],
                    "reviews": [{field: review[field] for field in ("token", "attempt_id", "items", "review")}
                                for review in key["reviews"]]}
+        if "remedy_policy" in key:
+            receipt["remedy_policy"] = key["remedy_policy"]
         (out / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
         try:
             prune_workspace.prune_grading(work, read_json(root / "bench/targets" / target / "target.json").get("head"),

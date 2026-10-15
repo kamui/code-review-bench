@@ -11,6 +11,8 @@ import pre_existing_grading
 
 CONTRACT = "current-verdicts/v1"
 CONTRACT_V2 = "current-verdicts/v2"
+CONDITIONAL_SAFETY = "conditional-safety/v1"
+NO_SAFETY = "no-safety/v1"
 VERDICT_FIELDS = {"reviews", "new_candidates", "link_disputes"}
 REVIEW_FIELDS = {"items", "recommendations", "remedy_inventory"}
 RECOMMENDATION_FIELDS = {"id", "anchors", "addressed_claims", "duplicate_group", "sufficiency", "safety"}
@@ -157,7 +159,7 @@ def claim_problems(token, review, sources, snapshot, disputed, naming):
     return problems, claims
 
 
-def remedy_problems(token, review, sources, claims, *, v2=False):
+def remedy_problems(token, review, sources, claims, *, v2=False, safety_policy="legacy"):
     """Corrective requests as distinct recommendations: each anchored in original wording, assessed for
     sufficiency per addressed family and for safety on its own."""
     recommendations, inventory = review["recommendations"], review["remedy_inventory"]
@@ -165,6 +167,9 @@ def remedy_problems(token, review, sources, claims, *, v2=False):
         return [f"{token}: recommendations must be a list"]
     problems, ids, groups, anchored = [], set(), set(), set()
     fields = RECOMMENDATION_FIELDS - {"duplicate_group"} if v2 else RECOMMENDATION_FIELDS
+    if safety_policy == NO_SAFETY:
+        fields = fields - {"safety"}
+    outcomes = ("sufficient", "partial", "unassessed") + (("ineffective",) if safety_policy != "legacy" else ())
     for index, recommendation in enumerate(recommendations, 1):
         where = f"{token} recommendation {index}"
         if not shaped(recommendation, fields) or not filled(recommendation["id"]):
@@ -196,18 +201,24 @@ def remedy_problems(token, review, sources, claims, *, v2=False):
         sufficiency = recommendation["sufficiency"]
         if not (isinstance(sufficiency, list) and all(
                 shaped(s, {"family", "outcome", "reason", "evidence"}) and filled(s["reason"]) and filled(s["family"])
-                and s["outcome"] in ("sufficient", "partial", "unassessed")
+                and s["outcome"] in outcomes
                 and (texts(s["evidence"]) or (s["outcome"] == "unassessed" and s["evidence"] == []))
                 for s in sufficiency)):
             problems.append(f"{where}: each sufficiency entry needs family, outcome, reason and evidence; only "
                             "unassessed may have none")
         elif sorted(s["family"] for s in sufficiency) != sorted(families):
             problems.append(f"{where}: assess sufficiency once for every family its addressed claims name")
+        if safety_policy == NO_SAFETY:
+            continue
         safety = recommendation["safety"]
         if not (shaped(safety, {"state", "reason", "evidence"}) and filled(safety["reason"])
                 and safety["state"] in ("safe", "unsafe", "unassessed")
                 and (texts(safety["evidence"]) or (safety["state"] == "unassessed" and safety["evidence"] == []))):
             problems.append(f"{where}: safety needs state, reason and evidence; only unassessed may have none")
+        elif safety_policy == CONDITIONAL_SAFETY and isinstance(sufficiency, list) and not any(
+                isinstance(s, dict) and s.get("outcome") in ("sufficient", "partial") for s in sufficiency):
+            if safety["state"] != "unassessed" or safety["evidence"] != []:
+                problems.append(f"{where}: skip safety unless a fix is sufficient or partial; use unassessed with no safety evidence")
     if not (shaped(inventory, {"state", "reason"}) and inventory["state"] in ("complete", "incomplete")
             and (filled(inventory["reason"]) or
                  (v2 and inventory["state"] == "complete" and inventory["reason"] == ""))):
@@ -264,6 +275,13 @@ def validate(verdicts, snapshot):
     if contract not in (CONTRACT, CONTRACT_V2, pre_existing_grading.CONTRACT):
         return [f"unsupported verdict contract {contract!r}"]
     v2 = contract in (CONTRACT_V2, pre_existing_grading.CONTRACT)
+    safety_policy = snapshot.get("safety_policy", "legacy")
+    if safety_policy not in ("legacy", CONDITIONAL_SAFETY, NO_SAFETY):
+        return [f"unsupported safety policy {safety_policy!r}"]
+    if safety_policy != "legacy" and contract != pre_existing_grading.CONTRACT:
+        return ["the safety policy requires verdict contract v3"]
+    if safety_policy == NO_SAFETY and "inventory" not in snapshot:
+        return ["the second grader requires a pinned claim inventory"]
     if not (shaped(verdicts, VERDICT_FIELDS) and isinstance(verdicts["reviews"], dict)
             and isinstance(verdicts["new_candidates"], list) and isinstance(verdicts["link_disputes"], list)):
         return ["verdicts.json needs exactly a reviews object, a new_candidates list and a link_disputes list"]
@@ -292,7 +310,7 @@ def validate(verdicts, snapshot):
             if pre_existing_names is not None and claim["pre_existing_candidate"] is not None:
                 pre_existing_names.add(claim["pre_existing_candidate"])
         if not found:
-            problems += remedy_problems(token, review, sources[token]["items"], claims, v2=v2)
+            problems += remedy_problems(token, review, sources[token]["items"], claims, v2=v2, safety_policy=safety_policy)
     if pre_existing_names is not None and pre_existing_names & ordinary_names:
         problems.append("a candidate cannot be both ordinary and pre-existing")
     return problems + candidate_problems(verdicts["new_candidates"], naming, v2=v2, pre_existing_names=pre_existing_names)

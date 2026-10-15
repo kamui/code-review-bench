@@ -272,7 +272,7 @@ function remedies(ran: Cell[], gap: string | null) {
   const recorded = reviews.flatMap(review => review.assessment?.recommendations ?? [])
   const safety = (state: 'safe' | 'unsafe' | 'unassessed') => recorded.filter(remedy => remedy.safety === state).length
   const caught = reviews.flatMap(review => review.assessment?.families.filter(family => family.outcome === 'caught') ?? [])
-  const sufficiency = (state: 'sufficient' | 'partial' | 'absent' | 'unassessed') => caught.filter(family => family.sufficiency === state).length
+  const sufficiency = (state: 'sufficient' | 'partial' | 'ineffective' | 'absent' | 'unassessed') => caught.filter(family => family.sufficiency === state).length
   const inventoried = reviews.filter(review => review.assessment?.remedyInventory === 'complete').length
   const blocked = gap ?? (reviews.length ? null : 'No admitted reviews.') ?? (inventoried ? null : 'No admitted review has a complete remedy inventory.')
   const unsafeReviews = reviews.filter(review => review.assessment?.recommendations.some(remedy => remedy.safety === 'unsafe')).length
@@ -282,7 +282,7 @@ function remedies(ran: Cell[], gap: string | null) {
         : { kind: 'lower-bound', perAdmittedReview: safety('unsafe') / reviews.length, reviewFraction: unsafeReviews / reviews.length }
   return { admitted: reviews.length, inventoried, unsafeReviews,
     recommendations: recorded.length, safe: safety('safe'), unsafe: safety('unsafe'), unassessed: safety('unassessed'),
-    sufficiency: { sufficient: sufficiency('sufficient'), partial: sufficiency('partial'), absent: sufficiency('absent'), unassessed: sufficiency('unassessed') },
+    sufficiency: { sufficient: sufficiency('sufficient'), partial: sufficiency('partial'), ineffective: sufficiency('ineffective'), absent: sufficiency('absent'), unassessed: sufficiency('unassessed') },
     harm, unsafePerAssessedRemedy: gated(gap, safety('safe') + safety('unsafe') ? available(safety('unsafe') / (safety('safe') + safety('unsafe')))
       : unavailable('No remedy has an assessed safety.')) }
 }

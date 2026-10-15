@@ -144,7 +144,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
       </Stack></Tabs.Panel>
 
       <Tabs.Panel value="remedies" pt="md"><Stack>
-        <Text size="sm" className="footnote">Sufficiency asks whether a recommendation resolves the problem it addresses; safety asks, independently, whether applying it does harm. A recommendation without a safety assessment is unassessed, never safe. Only when admission is final and no trial is pending are unsafe recommendations per admitted review a lower bound, because unassessed ones could add to it. Pending cohorts show observed counts and assessed exposure without a final-cohort bound.</Text>
+        <Text size="sm" className="footnote">Sufficiency asks whether a recommendation resolves the problem it addresses; safety asks, independently, whether applying it does harm. New first-grader assessments check safety only for sufficient or partial fixes; the second grader omits safety. Historical assessments retain their original coverage. A recommendation without a safety assessment is unassessed, never safe. The assessed subset is selected for usefulness, so its unsafe share does not describe all advice. Only when admission is final and no trial is pending are unsafe recommendations per admitted review a lower bound, because unassessed ones could add to it. Pending cohorts show observed counts and assessed exposure without a final-cohort bound.</Text>
         <DataTable label="Remedy sufficiency and safety" rows={rows} rowKey={key} minWidth={1250} columns={[setup,
           { label: 'Inventoried / admitted reviews', value: row => `${row.card.remedies.inventoried} / ${row.card.remedies.admitted}` },
           { label: 'Recommendations', value: row => String(row.card.remedies.recommendations) }, { label: 'Assessed safe', value: row => String(row.card.remedies.safe) },
@@ -152,7 +152,8 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
           { label: 'Unsafe per admitted review', value: row => harm(row.card) },
           { label: 'Unsafe share of assessed remedies', value: row => share(row.card.remedies.unsafePerAssessedRemedy) },
           { label: 'Caught problems: fix sufficient', value: row => String(row.card.remedies.sufficiency.sufficient) },
-          { label: 'Partial', value: row => String(row.card.remedies.sufficiency.partial) }, { label: 'No fix offered', value: row => String(row.card.remedies.sufficiency.absent) },
+          { label: 'Partial', value: row => String(row.card.remedies.sufficiency.partial) },
+          { label: 'Ineffective', value: row => String(row.card.remedies.sufficiency.ineffective) }, { label: 'No fix offered', value: row => String(row.card.remedies.sufficiency.absent) },
           { label: 'Sufficiency unassessed', value: row => String(row.card.remedies.sufficiency.unassessed) }]} />
       </Stack></Tabs.Panel>
 

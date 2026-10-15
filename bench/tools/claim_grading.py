@@ -96,8 +96,10 @@ def family_sufficiency(outcome, remedies, inventory_complete):
         return "sufficient"
     if "unassessed" in remedies:
         return "unassessed"
-    if remedies:
+    if "partial" in remedies:
         return "partial"
+    if remedies:
+        return "ineffective"
     return "absent" if inventory_complete else "unassessed"
 
 
