@@ -22,9 +22,10 @@ client databases, bundled skills, locks and executable links are excluded from
 the package; the original local workspaces remain intact. See the
 [selection record](evidence-selection.v1.json) and [publication scope](publication.v1.json).
 
-The release payload is prepared locally; publication and remote verification are
-the remaining packaging steps. The [prepared manifest](prepared-evidence-manifest.v1.json)
-pins every selected file. After publication, restore it with:
+The [published manifest](../../../bench/evidence/manifests/classifier-experiments-2026-10-15-v1.json)
+pins every selected file in the [immutable release](https://github.com/kamui/code-review-bench/releases/tag/evidence-classifier-experiments-2026-10-15-v1).
+The [remote restoration receipt](../../../bench/evidence/receipts/classifier-experiments-2026-10-15-v1-restoration.json)
+records a fresh download and verification. Restore the payload with:
 
 ```sh
 python3 bench/tools/evidence_store.py fetch \
@@ -57,7 +58,7 @@ for the expressly frozen development examples. Never send the private key file
 as a classifier packet.
 
 `dataset/generate.py --check` additionally reconstructs the original dataset from
-the live adjudication sources. Run it at this experiment's source revision
+the live adjudication sources. It requires the original adjudication source bytes from revision
 `1727db27263cb652af3d6fd1bf337cb1507950c8`; later human rulings can intentionally
 change those sources. Recomputing the frozen summaries does not require a new
 adjudication or a paid model call. The dispatch scripts are historical experiment
@@ -65,3 +66,9 @@ tools with dated quota and probe pins, not a newly authorized live grading job.
 
 [Cold restoration checks](cold-check.v1.json) record recomputation in a separate
 checkout populated from the prepared archive, without the original result paths.
+
+The reports describe the end of data collection, before this publication. The
+[publication checks](publication-verification.v1.json) cover packaging and replay.
+Replaying with the final evaluator preserves the reported numbers but can add
+validation metadata to older metric files; the original saved metrics remain in
+Git. No new classifier calls were made for publication.
