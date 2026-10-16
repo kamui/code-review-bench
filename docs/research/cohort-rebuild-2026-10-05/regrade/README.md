@@ -65,3 +65,18 @@ Version 4 plans all 198 batches again under a new ceiling of $400. [`approval.v4
 | All | 198 | 663 | 2,153 | $603.30 | $399.99 |
 
 Its queue directories are `.local/regrade/selected-v4`, `rebuilt-v4` and `plain-v4`. A pilot of one batch per queue goes first and is read before the rest runs.
+
+## Version 5
+
+The owner paused version 4 for the weekly Claude limit on 2026-10-14 after it had mapped 6 of 198 batches for $16.16 at list price: the three pilot batches and three selected batches that were already in flight. Pull request 147 then changed four of the tools version 4 pins, so version 4 cannot run on. Its first-grader text adds the fix result "ineffective", which the earlier text recorded as "partial", and checks a fix's safety only when the fix cures the problem in whole or in part. It leaves every batch's fingerprint unchanged, so the 6 mapped batches stay current.
+
+Version 5 grades the other 192 batches under that text. [`approval.v5.json`](approval.v5.json) records the owner's answer of 2026-10-15: "Keep the 6, grade 192, ceiling $384". The 6 batches therefore keep full safety checks and no "ineffective" answer, so fix results are mixed across the cohort. The ceiling of $383.84 keeps the whole regrade, with the $16.16 spent under version 4, within the $400 approved on 2026-10-14. The grader, its effort and its session limit are unchanged. The planner now also pins `bench/grading/current/remedy-policy.json`, `bench/rubric/remedy-policy.v1.json` and the first grader's texts `bench/rubric/grader.safety-first.v1.md` and `bench/rubric/scoring.safety-first.v1.md`.
+
+| Queue | Batches | Saved reviews | Comments | Allowances | Ceiling |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `selected` | 41 | 189 | 455 | $124.26 | $82.39 |
+| `rebuilt` | 124 | 387 | 1,207 | $373.62 | $247.73 |
+| `plain` | 27 | 87 | 234 | $81.00 | $53.70 |
+| All | 192 | 663 | 1,896 | $578.88 | $383.82 |
+
+Its queue directories are `.local/regrade/selected-v5`, `rebuilt-v5` and `plain-v5`.
