@@ -201,6 +201,21 @@ describe('reliability, remedies and controls', () => {
     expect(value(result.reliability.itemsPerAdmittedReview)).toBe(3)
   })
 
+  test('ineffective fixes keep detection credit and skipped safety stays outside the assessed denominator', () => {
+    const pr = task('pr', [family('x'), family('y')])
+    const remedies = [remedy('ineffective', ['c-x'], 'unassessed', [{ familyId: 'x', outcome: 'ineffective' }]),
+      remedy('useful', ['c-y'], 'unsafe', [{ familyId: 'y', outcome: 'partial' }])]
+    const checked = review(pr, null, { assessment: assessment(pr, ['x', 'y'], { recommendations: remedies,
+      families: [{ familyId: 'x', outcome: 'caught', sufficiency: 'ineffective', claimIds: ['c-x'] },
+        { familyId: 'y', outcome: 'caught', sufficiency: 'partial', claimIds: ['c-y'] }] }) })
+    const data = datasetSchema.parse(build([pr], { a: [[pr, [checked]]] }))
+    const result = card(data, 'a')
+    expect(value(result.detection.all.equalProblem)).toBe(1)
+    expect(result.remedies).toMatchObject({ safe: 0, unsafe: 1, unassessed: 1,
+      sufficiency: { sufficient: 0, partial: 1, ineffective: 1, absent: 0, unassessed: 0 } })
+    expect(value(result.remedies.unsafePerAssessedRemedy)).toBe(1)
+  })
+
   test('a remedy shared by two allegations counts once and harm per admitted review differs from harm per assessed remedy', () => {
     const pr = task('pr', [family('x'), family('y')])
     const shared = remedy('fix', ['c-x', 'c-y'], 'unsafe', [{ familyId: 'x', outcome: 'sufficient' }, { familyId: 'y', outcome: 'partial' }])
