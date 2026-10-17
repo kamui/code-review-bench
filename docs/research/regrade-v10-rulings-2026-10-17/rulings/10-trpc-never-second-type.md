@@ -188,3 +188,9 @@ First answers:
 | recommender | other-material | medium (no-precedent) | A never context or input is not an ordinary use, and every documented use compiles. |
 | assessor-1 | other-material | low (gap, no-precedent) | I read exception 2 as covering explicit compiler rejection of the never-based combinations, while the runs show ordinary and documented combinations compiling. |
 
+
+## The owner's answer
+
+Asked 2026-10-17, twice. The first question recommended a suggestion. The owner wrote: "So i agree the comment is the issue. Why isnt this a minor defect though? Just b/c the code works, the comment can lead to confusion about what this should be doing and it is wrong is it not?" Shown: the rule's "A minor defect needs something that is in fact wrong: … a statement that is untrue" and the last-push 6 precedent; the recommendation was corrected to minor defect.
+
+Answer: **"Minor defect."**
