@@ -6,6 +6,12 @@ import re
 import ruling_record as record
 
 
+RESERVING_CLAUSES = {
+    "before-4", "promised-1c", "promised-5", "promised-7b", "promised-8b", "delivered-2", "delivered-3",
+    "B4", "P1c", "P5", "P7b", "P9b", "D8", "D9",
+}
+
+
 def natural(value):
     return tuple((1, int(part)) if part.isdigit() else (0, part) for part in re.split(r"(\d+)", value))
 
@@ -231,6 +237,14 @@ def summarize(pairs, root=record.ROOT, round_name=None):
     adopted = delegation.policy(root)
     result = {"policy": "policy v2 adopted" if adopted else "not adopted; counts and levels grant no authority", "round": round_name,
               "baseline": {}, "contract_2": {}, "earlier_reading_citations": {}, "pending": [pair["path"] for pair in selected if not pair["after"]]}
+    result["reservation_only_cannot_tell"] = [
+        {"path": pair["path"], "ruling": pair["before"]["ruling"], "group": pair["before"]["group"],
+         "by": answer["by"], "clauses": answer["clauses"]}
+        for pair in selected
+        for answer in pair["before"]["answers"]
+        if answer["blind"] and answer["outcome"] == "cannot-tell"
+        and answer["clauses"] and set(answer["clauses"]) <= RESERVING_CLAUSES
+    ]
     citations = Counter()
     for pair in selected:
         rulings = index(pair, root)
@@ -338,6 +352,10 @@ def render(result):
                 lines += ["", "Five audit calls:", *[f"- {path}" for path in entry["audit_calls"]]]
             lines.append("")
     lines += ["Earlier-reading rulings cited:", *[f"- {name}: {count}" for name, count in result["earlier_reading_citations"].items()], ""]
+    reservations = result["reservation_only_cannot_tell"]
+    lines += [f"Blind cannot-tell answers citing only reserving clauses: {len(reservations)}.",
+              *[f"- {item['ruling']} {item['group']}, {item['by']}: {', '.join(item['clauses'])}. {item['path']}"
+                for item in reservations], ""]
     if result["pending"]:
         lines += ["Pending decisions:", *[f"- {path}" for path in result["pending"]]]
     return "\n".join(lines)
