@@ -333,3 +333,11 @@ First answers:
 | recommender | other-material | medium (no-precedent) | The FailedScheduling note is garbled or lost while the pod's condition keeps the reason unaltered. |
 | assessor-1 | other-material | medium (no-precedent) | The runs preserve scheduling behaviour and the whole failure reason in PodScheduled even when the diagnostic event is garbled or explicitly rejected and logged. |
 
+
+## The owner's answer
+
+Asked 2026-10-17. After the first question the owner asked: "Why is this recommended as other-material instead of minor defect?" The answer shown: a short reason with a `%` arrives garbled and could read as delivered (a minor defect alone), while a `%` that takes the note past 1024 bytes loses the event, which Delivered 1 counts as not delivered; both blind answers rested on the lost event.
+
+Question: "Kubernetes: admit the '%' in the scheduling-failure message as a pre-existing problem, and with which label?"
+
+Answer: **"Admit, other-material (Recommended)"**.
