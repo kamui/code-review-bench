@@ -1,0 +1,265 @@
+Everything the change said up to the last push (2023-11-09T22:08:09Z): the pull request's title and description, its commit messages, the review thread and conversation, issue #5020 with its comments, and the diff. Assembled from the saved API responses beside this file and git diff in a clone of the mirror.
+
+===== PR title
+fix(server): inference fix for inputs with middleware
+
+===== PR body (never edited: userContentEdits totalCount 0)
+Closes #
+
+## 🎯 Changes
+
+What changes are made in this PR? Is it a feature or a bug fix?
+
+## ✅ Checklist
+
+- [ ] I have followed the steps listed in the [Contributing guide](https://github.com/trpc/trpc/blob/main/CONTRIBUTING.md).
+- [ ] If necessary, I have added documentation related to the changes made.
+- [ ] I have added or updated the tests related to the changes made.
+
+
+===== commit 03089eb10 2023-11-09T22:07:48Z
+wip
+
+===== commit 6123ef5d7 2023-11-09T22:07:48Z
+wip
+
+===== commit 4b811ff4d 2023-11-09T22:07:48Z
+ok
+
+===== commit 896324afa 2023-11-09T22:07:48Z
+nah
+
+===== commit a82b49293 2023-11-09T22:07:48Z
+revert
+
+===== commit 3c12b289c 2023-11-09T22:07:48Z
+col
+
+===== commit 26814253f 2023-11-09T22:07:48Z
+rename
+
+===== commit 7dc04a7e9 2023-11-09T22:07:48Z
+types/utils.ts/Overwrite: only overwrite keys of objects
+
+Overwrite<string,string> resulted in a mangled object type
+because the existing implementation iterated over the string
+type's keys (e.g. 'charCodeAt')
+
+This commit changes the implementation so that keys are only
+iterated and overwritten in the case of objects. Otherwise,
+a non-never TWith type will entirely replace TType, e.g.
+Overwrite<string, number> results in 'number'.
+
+===== review comment 2023-11-09T11:16:53Z KATT on packages/tests/server/regression/issue-5017-inference-middleware.test.ts:40
+This is the one that's failing
+
+===== review comment 2023-11-09T17:30:37Z jussisaurio on packages/tests/server/regression/issue-5017-inference-middleware.test.ts:40
+I think this happens because of `Overwrite<string, string>` which results in the garbled nonsense you're seeing in the inferred type.
+
+This part is obviously the culprit -- it needs some handling to only overwrite in cases that make sense. I might not have time to work on this right now or in the coming days but I'll try something tonight if I can
+
+```
+  _input_in: UnsetMarker extends TNext['_input_in']
+    ? TPrev['_input_in']
+    : Overwrite<TPrev['_input_in'], TNext['_input_in']>;
+  _input_out: UnsetMarker extends TNext['_input_out']
+    ? TPrev['_input_out']
+    : Overwrite<TPrev['_input_out'], TNext['_input_out']>
+  ```
+
+===== review comment 2023-11-09T17:36:20Z jussisaurio on packages/tests/server/regression/issue-5017-inference-middleware.test.ts:40
+I think the proper solution would be a sane implementation of `Overwrite` that only does things you'd expect. Example pseudo:
+
+```
+Given A and B,
+
+- If they are both objects, overwrite A's keys with B's keys
+- If only A is object, return A
+- If only B is object, return B
+- If A extends any, return A
+- If B extends any, return B
+- Otherwise return never
+```
+
+But are there any other practical usecases for Overwrite?
+
+EDIT: alternative pseudo:
+
+```
+- If they are both objects, overwrite A's keys with B
+- If both extend any, return B
+- Otherwise return the one that extends any, or if neither: never
+```
+
+===== review comment 2023-11-09T17:52:22Z jussisaurio on packages/tests/server/regression/issue-5017-inference-middleware.test.ts:40
+I think it makes more sense for an intuitive meaning of "Overwrite" so that key-wise overwrite happens when both are objects, and otherwise `TWith` just replaces `TType` entirely.
+
+===== conversation 2023-11-09T10:51:35Z vercel[bot]
+[vc]: #9n2lQCfovNMj9gbSr9XMa62NZtHvG1lZdkDc/aXIkoo=:eyJpc01vbm9yZXBvIjp0cnVlLCJ0eXBlIjoiZ2l0aHViIiwicHJvamVjdHMiOlt7Im5hbWUiOiJ0cnBjLW5leHQtYXBwLWRpciIsInJvb3REaXJlY3RvcnkiOiJleGFtcGxlcy8uZXhwZXJpbWVudGFsL25leHQtYXBwLWRpciIsImxpdmVGZWVkYmFjayI6eyJyZXNvbHZlZCI6MCwidW5yZXNvbHZlZCI6MCwidG90YWwiOjAsImxp [deployment table truncated]
+
+===== issue #5020 2023-11-09T17:01:34Z KATT: bug: inference of strings with middleware defined after gets mangled
+### Provide environment information
+
+latest
+
+### Describe the bug
+
+inference gets wrong, see below
+
+### Link to reproduction
+
+https://github.com/trpc/trpc/pull/5017
+
+### To reproduce
+
+```ts
+import { inferRouterInputs, inferRouterOutputs, initTRPC } from '@trpc/server';
+import { z } from 'zod';
+
+const t = initTRPC.create();
+const appRouter = t.router({
+  str: t.procedure.input(z.string()).query(({ input }) => input),
+  strWithMiddleware: t.procedure
+    // ^?
+    .input(z.string())
+    .use((opts) => opts.next())
+    .query(({ input }) => input),
+
+  voidWithMiddleware: t.procedure
+    .use((opts) => opts.next())
+    .query(() => {
+      // ..
+    }),
+});
+type AppRouter = typeof appRouter;
+
+describe('inferRouterInputs', () => {
+  type AppRouterInputs = inferRouterInputs<AppRouter>;
+  type AppRouterOutputs = inferRouterOutputs<AppRouter>;
+
+  test('string', async () => {
+    {
+      type Input = AppRouterInputs['str'];
+      type Output = AppRouterOutputs['str'];
+      expectTypeOf<Input>().toBeString();
+      expectTypeOf<Output>().toBeString();
+    }
+    {
+      type Input = AppRouterInputs['strWithMiddleware'];
+      //   ^? 
+
+      type Output = AppRouterOutputs['strWithMiddleware'];
+      expectTypeOf<Input>().toBeString();
+      // ❌❌❌❌❌❌❌❌❌
+      expectTypeOf<Output>().toBeString();
+    }
+  });
+});
+
+```
+
+### Additional information
+
+see #5017
+
+### 👨‍👧‍👦 Contributing
+
+- [X] 🙋‍♂️ Yes, I'd be down to file a PR fixing this bug!
+
+===== issue #5020 comment 2023-11-09T17:03:36Z KATT
+cc @jussisaurio would you like to have a look? 🙏 ❤️ 
+
+===== issue #5020 comment 2023-11-09T17:54:51Z jussisaurio
+Pushed a tentative fix for the `Overwrite` utility function, lmk what you think
+
+===== issue #5020 comment 2023-11-09T17:55:08Z jussisaurio
+Pushed to your draft PR, that is :)
+
+===== diff base..head
+diff --git a/packages/server/src/core/internals/utils.ts b/packages/server/src/core/internals/utils.ts
+index 5a363ce3b..ccbda53cf 100644
+--- a/packages/server/src/core/internals/utils.ts
++++ b/packages/server/src/core/internals/utils.ts
+@@ -3,18 +3,32 @@ import { ProcedureParams } from '../procedure';
+ 
+ /**
+  * @internal
++ * Overwrite properties in `TType` with properties in `TWith`
++ * Only overwrites properties when both types are objects
++ * Otherwise it will overwrite the entire TType with TWith,
++ * unless TWith is never.
+  */
+-export type Overwrite<TType, TWith> = TType extends any
+-  ? TWith extends any
+-    ? {
++export type Overwrite<TType, TWith> = TType extends object
++  ? TWith extends object
++    ? // Both TType and TWith are objects: overwrite key-by-key
++      {
+         [K in keyof TType | keyof TWith]: K extends keyof TWith
+           ? TWith[K]
+           : K extends keyof TType
+           ? TType[K]
+           : never;
+       }
++    : TWith extends any
++    ? // TWith is not an object but some non-never type, so fully overwrite TType
++      TWith
+     : never
++  : TType extends any
++  ? TWith extends any
++    ? // Same as above: just overwrite TType with TWith
++      TWith
++    : TType
+   : never;
++
+ /**
+  * @internal
+  */
+diff --git a/packages/tests/server/regression/issue-5020-inference-middleware.test.ts b/packages/tests/server/regression/issue-5020-inference-middleware.test.ts
+new file mode 100644
+index 000000000..3e30b1566
+--- /dev/null
++++ b/packages/tests/server/regression/issue-5020-inference-middleware.test.ts
+@@ -0,0 +1,40 @@
++import { inferRouterInputs, inferRouterOutputs, initTRPC } from '@trpc/server';
++import { z } from 'zod';
++
++const t = initTRPC.create();
++const appRouter = t.router({
++  str: t.procedure.input(z.string()).query(({ input }) => input),
++  strWithMiddleware: t.procedure
++    // ^?
++    .input(z.string())
++    .use((opts) => opts.next())
++    .query(({ input }) => input),
++
++  voidWithMiddleware: t.procedure
++    .use((opts) => opts.next())
++    .query(() => {
++      // ..
++    }),
++});
++type AppRouter = typeof appRouter;
++
++describe('inferRouterInputs', () => {
++  type AppRouterInputs = inferRouterInputs<AppRouter>;
++  type AppRouterOutputs = inferRouterOutputs<AppRouter>;
++
++  test('string', async () => {
++    {
++      type Input = AppRouterInputs['str'];
++      type Output = AppRouterOutputs['str'];
++      expectTypeOf<Input>().toBeString();
++      expectTypeOf<Output>().toBeString();
++    }
++    {
++      type Input = AppRouterInputs['strWithMiddleware'];
++      //   ^?
++      type Output = AppRouterOutputs['strWithMiddleware'];
++      expectTypeOf<Input>().toBeString();
++      expectTypeOf<Output>().toBeString();
++    }
++  });
++});
+
