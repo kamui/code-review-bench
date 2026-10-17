@@ -45,9 +45,13 @@ imports, and executable Python fragments. It intentionally retains prose and sav
 commands as references. A reference is not proof that a command ran. Import edges
 resolve same-directory modules and the maintained tooling import roots. Literal
 paths resolve from the repository or the source document's directory, with parent
-segments normalized; ambiguous basenames produce `possible-name-reference`
-edges. Those edges conservatively retain possible dependencies and do not establish
-that every matching file executes. No scan can infer arbitrary computed Python.
+segments normalized. Ambiguous basenames in Python sources produce
+`possible-name-reference` caller records, without activating their targets. Current
+TypeScript, harness and schema sources are live callers. Embedded `import` and
+`from` clauses link their tracked Python modules as `embedded-import-reference`
+callers; this is a conservative text scan, not proof that a command executed.
+Python target commands in `bench/policies/grading-commands.v1.json` are target
+dependencies. No scan can infer arbitrary computed Python.
 The audited dynamic directory rules cover the live loaders that assemble filenames
 from parameters. Refresh those rules when a loader changes.
 
@@ -87,7 +91,10 @@ All migration owners below are **kamui**. Issue assignment denotes the target sl
 conditional on the #152 pilot and that slice's dependencies. It does not expand the
 existing issue. Tests are assigned to #151 for contract capture and move with their
 owning implementation later. The inventory's per-module assignment is exhaustive;
-an unassigned maintained module fails generation.
+an unassigned maintained or active research module fails generation. `RESEARCH_GROUPS`
+assigns each retained research helper explicitly, including usage to #152, freeze-ref
+resolution to #153, evidence relocation to #155, grading and calibration to #156,
+and run preparation and dispatch to #157.
 
 | Group and issue | Responsibilities and callers | Mutable state and public or serialized contracts | Existing verification |
 | --- | --- | --- | --- |
@@ -101,8 +108,8 @@ an unassigned maintained module fails generation.
 | Cleanup, #159 | Pruning and retirement; run filing, regrading, controllers | Valid-only, verified clone cleanup and receipts; whole-workspace inventory, investigation closure, restoration and exclusive retirement. Preserve protected active, failed, modified or unverified work and ledger-dependent bytes. | `test_prune_workspace.py`, `test_retire_workspace.py`; [storage contract](../evidence-storage.md). |
 | Retirement, #160 | Test aggregator, census, wrappers, docs, CI and package commands | Keep each public entrypoint available through cutover, then remove the maintained Python implementation and migrate every caller. Retained targets, frozen skills and historical replay still declare Python separately. | Census check, contract suite, Python-unavailable current-engine acceptance after migration. |
 
-Active research helpers are assigned to #157 for dispatch, #156 for filing, and #154
-for processing. Their tests run on disposable copies because some APIs write whole
+Active research helpers carry the responsibility assignments in `RESEARCH_GROUPS`.
+Their tests run on disposable copies because some APIs write whole
 record generations. Preserve `before.v1.json`, validation, atomic replacement,
 idempotent replay, and undo semantics. Do not run those helpers against live records
 to validate this inventory. #151 captures those behaviors before a future port.
