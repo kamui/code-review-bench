@@ -266,6 +266,48 @@ class ContributorTests(unittest.TestCase):
         self.assertEqual(len(self.calls), 1)
         self.assertFalse((self.state / "pending/R1").exists())
 
+    def test_client_rejection_cannot_be_retried_as_an_infrastructure_replacement(self):
+        def reject(config, attempt, target, packet, skill):
+            self.fake_execute(config, attempt, target, packet, skill)
+            write(attempt / "completion.json", {"exit_code": 1, "tree_before": "same", "tree_after": "same"})
+            (attempt / "stderr.txt").write_text("model is not supported by this client")
+        with self.no_charge_run(), patch.object(adapters, "execute", side_effect=reject):
+            code, output = self.invoke("run", "review", "--harness", "codex", "--model", "gpt-6.1-sol", "--attempt-usd", "1", "--yes")
+        self.assertEqual(code, 1, output)
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(read(self.state / "runs/R1/attempts/att-001/attempt.json")["disposition"], "configuration-rejected")
+        with self.no_charge_run():
+            code, output = self.invoke("run", "--resume", "R1", "--replace", "att-001", "--reason", "retry", "--yes")
+        self.assertEqual(code, 1, output)
+        self.assertIn("cannot be retried unchanged", output)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_cleanup_failure_recovers_without_another_review(self):
+        with self.no_charge_run(), patch.object(cli.prune_workspace, "prune", side_effect=ValueError("cleanup interrupted")):
+            code, output = self.invoke("run", "review", "--harness", "codex", "--model", "gpt-6.1-sol", "--tasks", "task-a", "--attempt-usd", "1", "--yes")
+        self.assertEqual(code, 2, output)
+        self.assertEqual(len(self.calls), 1)
+        self.assertFalse((self.state / "pending/R1").exists())
+        with self.no_charge_run():
+            code, output = self.invoke("run", "--resume", "R1", "--yes")
+        self.assertEqual(code, 0, output)
+        self.assertEqual(len(self.calls), 1)
+        self.assertTrue((self.state / "pending/R1").exists())
+
+    def test_interrupted_package_build_can_be_retried(self):
+        self.run_complete("--tasks", "task-a")
+        saved = submit.snapshot()
+        saved.update(staging_repository="contributor/code-review-bench", login="contributor")
+        def fail_during_pack(selection, output):
+            output.mkdir()
+            (output / "partial-archive").write_text("preserved incomplete staging")
+            raise OSError("disk write interrupted")
+        with patch.object(evidence_store, "pack", side_effect=fail_during_pack), self.assertRaises(OSError):
+            submit.package(saved)
+        local = submit.package(saved)
+        self.assertTrue((local / "packages/manifest.json").is_file())
+        self.assertEqual(len(list(local.glob("packages-building-*/partial-archive"))), 1)
+
 
 class AdapterTests(unittest.TestCase):
     def test_published_skill_and_entire_task_suite_prepare_without_a_model_call(self):
