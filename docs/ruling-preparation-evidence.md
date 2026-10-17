@@ -1,6 +1,6 @@
 # Evidence retained when preparing a ruling
 
-[Prepare a ruling](claim-adjudication.md#prepare-a-ruling) gives the five steps. These requirements still apply to each case.
+[Prepare a ruling](claim-adjudication.md#prepare-a-ruling) gives the six steps. These requirements still apply to each case.
 
 - Start with a neutral case file and the [dossier brief](ruling-dossier-brief.md). Fetch and read the source at the relevant base and head, name the supported promise and the consequence, and save probes, counterevidence and search limits. Run `ruling_dossier.py` for candidates. A missing search or unresolved fact cannot be hidden by confidence.
 - Give blind assessors the case, pinned rule and [precedent sheet](adjudication-record.md#the-sheet-of-earlier-rulings), without the recommendation. Preserve their exact briefs and outputs. Record their model, family, effort, exposure, answer, confidence and reason. Follow the record's independence requirements. In the issue #48 session two sessions of one model agreed on 28 of 30 labels and the owner then changed about seven; another session alone is not evidence of correctness.

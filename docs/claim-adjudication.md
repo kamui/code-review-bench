@@ -50,13 +50,14 @@ An equivalent match also asserts that the item identifies the canonical problem 
 
 ## Prepare a ruling
 
-Follow these five steps and retain the [evidence and one-at-a-time requirements](ruling-preparation-evidence.md). [Policy v2](adr/0007-settle-adjudications-on-earned-confidence.md) is adopted. Live routing starts after the policy PR passes final review and merges; settlement also requires the decision type to earn its threshold.
+Follow these six steps and retain the [evidence and one-at-a-time requirements](ruling-preparation-evidence.md). [Policy v2](adr/0007-settle-adjudications-on-earned-confidence.md) is adopted. Live routing starts after the policy PR passes final review and merges; settlement also requires the decision type to earn its threshold.
 
 1. **Prepare.** Write the neutral case file, build the sheet of earlier owner rulings with `ruling_record.py precedents`, and give the blind assessors the case, rule and sheet. Add the recommender's first answer and commit `<ruling>.before.json`. For a new policy round, first commit its [opening snapshot](adjudication-record.md#round-opening-and-policy-v2).
-2. **Route.** Run `ruling_record.py route <ruling>.before.json`. It prints SETTLE or ASK with reasons. ASK includes the case facts and every party's pick, confidence and reason.
-3. **Decide.** For SETTLE, write the ruling and after-record as settled by agents under the pinned policy. For ASK, save the owner's words in the after-record. If one part of a question is ASK, show the whole case once with settled parts marked. File the candidate or credit decision through the shared [settlement check](adjudication-record.md#filing-a-policy-v2-settlement).
-4. **Learn.** Preserve the owner's ground in the precedent sheet for the next case. For a miss, record its cause and the file actually changed to fix it. Never rewrite first answers or invent a ground.
-5. **Account.** Close the round only when its records are complete. Save `ruling_record.py summary --round NAME` and its digest in the round README. The owner reads the digest or level-2 sample; a changed settlement resets that decision type immediately.
+2. **Route.** Run `ruling_record.py route <ruling>.before.json`. It prints SETTLE or ASK with reasons. ASK includes the case facts, every party's pick, confidence and reason, and the picks that differ from the recommender's.
+3. **Reconcile.** Before asking, take each party whose pick differs from the recommender's, as `route` lists them under "To reconcile before asking". Read the party's reason, check the fact or rule it turns on by running or reading where you can, and decide whether it changes the recommendation. Do the same for a grader's record that disagrees with the recommendation. In the question, say for each what the party said, what was checked, and whether the recommendation changed. The first answers in the before-record stay as written, and the after-record still compares the decision with them.
+4. **Decide.** For SETTLE, write the ruling and after-record as settled by agents under the pinned policy. For ASK, save the owner's words in the after-record. If one part of a question is ASK, show the whole case once with settled parts marked. File the candidate or credit decision through the shared [settlement check](adjudication-record.md#filing-a-policy-v2-settlement).
+5. **Learn.** Preserve the owner's ground in the precedent sheet for the next case. For a miss, record its cause and the file actually changed to fix it. Never rewrite first answers or invent a ground.
+6. **Account.** Close the round only when its records are complete. Save `ruling_record.py summary --round NAME` and its digest in the round README. The owner reads the digest or level-2 sample; a changed settlement resets that decision type immediately.
 
 ## Record the eligibility decision
 

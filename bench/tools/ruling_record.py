@@ -295,13 +295,23 @@ def pick(answer):
             + (f" (says what goes wrong: {facts['says_what']}, identifies the cause as a fault: {facts['identifies_cause']})" if facts else ""))
 
 
+def disagreements(record):
+    """docs/claim-adjudication.md, "Reconcile": each party whose pick is not the recommender's."""
+    first = recommender(record)
+    return [answer for answer in record["answers"] if answer is not first and pick(answer) != pick(first)]
+
+
 def question(record, root=ROOT):
-    """What the user is shown: the whole case file every blind party read, then every party's first answer."""
+    """What the user is shown: the whole case file every blind party read, every party's first answer, and what the recommender must reconcile."""
     rows = [f"| {cell(answer['by'])} | {cell(pick(answer))} | {answer['confidence'] or 'not recorded'}"
             f"{' (' + ', '.join(answer['short_of_high']) + ')' if answer['short_of_high'] else ''} | {cell(answer['reason'])} |"
             for answer in record["answers"]]
+    first = recommender(record)
+    differing = [f"- {answer['by']} picks {pick(answer)} where the recommender picks {pick(first)}. Its reason: {' '.join(str(answer['reason']).split())}"
+                 for answer in disagreements(record)] or ["- None: every party's pick is the recommender's."]
     return "\n".join([f"The case, {record['case']['path']}:", "", (root / record["case"]["path"]).read_text(encoding="utf-8").strip(), "",
-                      "First answers:", "", "| Party | Pick | Confidence | Reason |", "| --- | --- | --- | --- |", *rows])
+                      "First answers:", "", "| Party | Pick | Confidence | Reason |", "| --- | --- | --- | --- |", *rows, "",
+                      "To reconcile before asking:", "", *differing])
 
 
 def second_after_faults(record, after, root):
