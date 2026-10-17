@@ -91,7 +91,7 @@ Resume continues orchestration with the original plan. It files finished but unf
 ./bin/bench run --resume R43
 ```
 
-The frozen attempt and replacement caps still apply. Valid misses cannot be replaced. A rejected model or method needs a corrected reviewed profile and a new run. An interrupted attempt with unknown usage blocks more paid work until the owner reconciles accounting. The contributor interface does not add maintainer accounting or grading commands.
+The frozen attempt and replacement caps still apply. Valid misses cannot be replaced. A rejected model or method needs a corrected reviewed profile and a new run. Unknown usage or an exceeded reservation permanently blocks further paid work in that run. Preserve its evidence and reservations, check the provider bill, and authorize a new run for the missing tasks, configurations, and repetitions shown in `status`. If any reviews validated, include them with `--include-partial` below; if none validated, there is nothing to submit from that run. Starting a new run does not settle the old run's unknown charge. The contributor interface does not add maintainer accounting or grading commands.
 
 To submit only the verified completed reviews from an interrupted larger plan:
 
@@ -108,6 +108,8 @@ Delete its recognizable directory, such as `.bench/pending/R43`, in your file ma
 ## Submit the pending selection
 
 `./bin/bench submit` previews every pending configuration and its coverage, validates all selected entries, then asks you to authorize publication. One invalid entry blocks the selection with its cause. The saved selection excludes runs completed afterward. Before publication begins, deleting a selected pending entry revises the selection on the next submit. After staging begins, the saved selection is fixed; restore any selected entry you deleted before retrying.
+
+Submit from each run's recorded `source_commit` in `.bench/runs/<run-id>/manifest.json`. Validation compares frozen runner files with your current checkout, so pulling changed tools can block submission as well as resume. Pending runs with different runner versions need separate submissions: before staging, temporarily move the other pending entry directories outside `.bench/pending/`, check out the selected run's source commit, and submit. Restore those entries and switch source commits for the next submission. Keep all underlying `.bench/runs/` evidence intact.
 
 Submission stages large payloads as immutable assets on a public release in your fork. It downloads and restores those assets before writing the [evidence storage manifest](evidence-storage.md). Small records, release mappings, and restoration receipts go in one evidence-only PR. The CLI uses a separate checkout, so your working branch and unrelated edits stay out of that PR. It does not grade results, edit adjudications, update the roster or scoreboard, merge, or close issues.
 

@@ -83,17 +83,30 @@ def price(requests, pricing, complete):
     if not complete:
         usage['reason'] = 'client did not record a successful complete request sequence'
         return usage
+    rate_fields = {'prompt', 'completion', 'input_cache_read', 'input_cache_write'}
+    overrides = pricing.get('overrides', [])
+    if not isinstance(overrides, list) or any(
+            not isinstance(row, dict) or set(row) - (rate_fields | {'min_prompt_tokens'})
+            or type(row.get('min_prompt_tokens')) is not int or row['min_prompt_tokens'] < 0
+            for row in overrides):
+        usage['reason'] = 'frozen pricing has unsupported or invalid overrides; usage remains unknown'
+        return usage
     total = 0.0
     for request in requests:
         counts = {key: request.get(key) for key in ('input', 'output', 'cache_read', 'cache_write')}
         if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in counts.values()) or sum(counts.values()) == 0:
             usage['reason'] = 'missing, invalid, or zero-default request token usage'
             return usage
+        request_prices = dict(pricing)
+        prompt_tokens = counts['input'] + counts['cache_read'] + counts['cache_write']
+        for row in overrides:
+            if prompt_tokens > row['min_prompt_tokens']:
+                request_prices.update({field: row[field] for field in rate_fields if field in row})
         for count, field in [('input', 'prompt'), ('output', 'completion'), ('cache_read', 'input_cache_read'), ('cache_write', 'input_cache_write')]:
             if counts[count] == 0:
                 continue
             try:
-                rate = float(pricing[field])
+                rate = float(request_prices[field])
             except (KeyError, ValueError, TypeError):
                 usage['reason'] = f'frozen pricing has no usable {field} rate'
                 return usage

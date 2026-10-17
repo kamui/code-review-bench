@@ -186,7 +186,7 @@ def verify_run(run):
         if row["path"].startswith("runtime/"):
             current = common.ROOT / "bench/tools" / Path(row["path"]).name
             if not current.is_file() or digest(current) != row["sha256"]:
-                raise Refused(f"runner runtime differs from the frozen run: {current}; restore the pinned source commit before resuming")
+                raise Refused(f"{run.name}: runner runtime differs from the frozen run: {current}; restore source commit {manifest['source_commit']} before resuming or submitting; submit pending runs with different runtimes separately by temporarily excluding their pending entries")
     for attempt in attempts(run):
         if (attempt / "evidence.json").is_file():
             verify_index(attempt, read(attempt / "evidence.json")["files"])
@@ -343,10 +343,10 @@ def run_action(run, manifest, rows, replacement_id=None):
         cause = f"{run.name}: private audit material missing; publication blocked; preserve this run locally and prepare a fresh run"
         return RunAction(cause, refusal=cause, blocks_recovery=True)
     if any(row["usage"].get("priced_total_usd") is None for row in rows):
-        next_step = "request accounting reconciliation before more paid work" + partial
+        next_step = "preserve this run and its reservations; check the provider bill before authorizing a new run for the missing cells shown in status" + partial
         return RunAction(next_step, refusal=f"{run.name}: unknown usage prevents more paid work; retain the reservation and {next_step}")
     if any(row["usage"]["priced_total_usd"] > row["reserved_usd"] for row in rows):
-        next_step = "request accounting reconciliation before more paid work" + partial
+        next_step = "preserve this run and its reservations; check the provider bill before authorizing a new run for the missing cells shown in status" + partial
         return RunAction(next_step, refusal=f"{run.name}: an attempt exceeded its reservation; {next_step}")
     failed = [row for row in rows if row["disposition"] != "valid completed"
               and not any(other.get("predecessor") == row["attempt_id"] for other in rows)]
@@ -477,6 +477,10 @@ def status():
             print(f"  Last orchestration error: {state['cause']}")
         for config in manifest["configurations"]:
             print(f"  {config['invocation']} {config['harness']} {config['model']} effort={config['effort']}")
+        for cell in manifest["cells"]:
+            if not any(row["cell"] == cell for row in valid):
+                config = manifest["configurations"][cell["configuration"]]
+                print(f"  Missing: {cell['target']} | configuration={cell['configuration']} effort={config['effort']} repetition={cell['replicate']}")
         for row in rows:
             if row["disposition"] != "valid completed":
                 print(f"  {row['attempt_id']}: {row['disposition']}: {row.get('cause')}; diagnostics={run / 'attempts' / row['attempt_id']}")
