@@ -31,6 +31,8 @@ class InventoryTests(unittest.TestCase):
                 destination.write_text(text)
             write("bench/tools/test_answers.py", 'import importlib.util\nSCRIPT = "docs/research/old/answers.py"\n')
             write("docs/research/old/answers.py", "import json\n")
+            write("docs/research/old/doc_helper.py", "import json\n")
+            write("docs/nested/workflow.md", "Run [the helper](../research/old/doc_helper.py).\n")
             write("bench/tools/regrade_queues.sh", "python3 - <<'PY'\nprint('hello')\nPY\n")
             write("package.json", '{"scripts":{"x":"python3.12 bench/tools/test_answers.py"}}')
             write("bench/import-manifest.json", '{"files":[],"repository":"fixture","revision":"unknown"}')
@@ -42,11 +44,14 @@ class InventoryTests(unittest.TestCase):
                             "commit", "-qm", "fixture"], check=True)
             write("untracked.py", "print('excluded')")
             result = inventory.census(inventory.Snapshot("HEAD", root))
-            self.assertEqual(result["tracked_paths"], 7)
+            self.assertEqual(result["tracked_paths"], 9)
             files = {row["path"]: row for row in result["python_files"]}
             self.assertEqual(files["docs/research/old/answers.py"]["class"], "active-outside-tooling")
             self.assertEqual(files["docs/research/old/answers.py"]["callers"][0]["line"], 2)
             self.assertNotIn("untracked.py", files)
+            self.assertEqual(files["docs/research/old/doc_helper.py"]["class"], "active-outside-tooling")
+            self.assertEqual(files["docs/research/old/doc_helper.py"]["callers"],
+                             [{"path": "docs/nested/workflow.md", "line": 1, "kind": "path-reference"}])
             refs = {row["path"] for row in result["references"]}
             self.assertIn("bench/tools/regrade_queues.sh", refs)
             self.assertIn("package.json", refs)

@@ -15,6 +15,7 @@ import io
 import gzip
 import json
 from pathlib import Path
+import posixpath
 import re
 import subprocess
 
@@ -114,6 +115,17 @@ def references(snapshot):
     return rows
 
 
+def file_references(source, token, python_paths, names):
+    candidate = token.removeprefix("./")
+    relative = posixpath.normpath(str(Path(source).parent / candidate))
+    matches = {path for path in (candidate, relative) if path in python_paths}
+    if matches:
+        return [(path, "path-reference") for path in sorted(matches)]
+    if "/" not in candidate:
+        return [(path, "possible-name-reference") for path in names[candidate]]
+    return []
+
+
 def dependencies(path, text, python_paths, names):
     edges = set()
     imports = []
@@ -136,15 +148,7 @@ def dependencies(path, text, python_paths, names):
         edges.update((candidate, line, "import") for candidate in candidates if candidate in python_paths)
     for number, line in enumerate(text.splitlines(), 1):
         for token in re.findall(r"[\w./-]+\.py\b", line):
-            candidate = token.removeprefix("./")
-            if candidate in python_paths:
-                edges.add((candidate, number, "path-reference"))
-            local = str(Path(path).parent / candidate)
-            if local in python_paths:
-                edges.add((local, number, "path-reference"))
-            if "/" not in candidate and candidate not in python_paths and local not in python_paths:
-                for possible in names[candidate]:
-                    edges.add((possible, number, "possible-name-reference"))
+            edges.update((target, number, kind) for target, kind in file_references(path, token, python_paths, names))
     return sorted(edges), imports, parse_error
 
 
@@ -190,9 +194,8 @@ def census(snapshot):
         for token in row["tokens"]:
             if not token.endswith(".py"):
                 continue
-            target = token.removeprefix("./")
-            if target in py:
-                incoming[target].append({"path": path, "line": row["line"], "kind": "path-reference"})
+            for target, kind in file_references(path, token, py, names):
+                incoming[target].append({"path": path, "line": row["line"], "kind": kind})
                 graph[path].add(target)
     for caller, directories in DYNAMIC_ROOTS.items():
         if caller not in paths:
