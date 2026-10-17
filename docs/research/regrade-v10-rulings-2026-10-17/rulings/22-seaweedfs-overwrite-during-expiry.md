@@ -542,3 +542,9 @@ First answers:
 | recommender | serious | medium (no-precedent) | An overwrite reported as successful keeps its record and loses its name for good. |
 | assessor-1 | serious | medium (no-precedent) | The real-store and filer runs show a successful overwrite permanently detached from its directory, and another overwrite does not restore its name. |
 
+
+## The owner's answer
+
+Asked 2026-10-17. Question: "SeaweedFS: join the two overwrite routes to PE-s3 and PE-s2, and credit the comment for PE-s2?"
+
+Answer: **"Join both; credit PE-s2 (Recommended)"**: C2na is part of PE-s3 and C2nb part of PE-s2, each widened to a create or an overwrite; the comment recovers PE-s2 (says what goes wrong: yes; identifies the cause as a fault: yes).
