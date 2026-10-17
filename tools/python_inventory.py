@@ -65,6 +65,7 @@ RESEARCH_GROUPS = {
           "last-push-review-code-2026-10-12/selection/selection.py", "last-push-rulings-2026-10-11/filing/collect.py",
           "last-push-rulings-2026-10-11/filing/move.py", "last-push-rulings-2026-10-11/filing/packets.py",
           "last-push-rulings-2026-10-11/filing/record.py", "older-problem-activation-2026-10-13/filing/admit.py",
+          "older-problem-activation-2026-10-13/filing/audit.py", "older-problem-activation-2026-10-13/filing/text.py",
           "older-problem-activation-2026-10-13/filing/receipts.py", "older-problem-activation-2026-10-13/filing/record.py",
           "older-problem-activation-2026-10-13/filing/wordings.py", "reference-calibration-2026-10-03/blind_items.py",
           "regrade-rulings-2026-10-13/filing/record.py"],
