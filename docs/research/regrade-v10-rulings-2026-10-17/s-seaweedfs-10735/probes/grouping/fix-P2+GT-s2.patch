@@ -1,0 +1,30 @@
+diff --git a/weed/filer/redis2/universal_redis_store.go b/weed/filer/redis2/universal_redis_store.go
+index d4ce64d80..8c12d023e 100644
+--- a/weed/filer/redis2/universal_redis_store.go
++++ b/weed/filer/redis2/universal_redis_store.go
+@@ -91,7 +91,14 @@ func (store *UniversalRedis2Store) doInsertEntry(ctx context.Context, entry *fil
+ 
+ func (store *UniversalRedis2Store) UpdateEntry(ctx context.Context, entry *filer.Entry) (err error) {
+ 
+-	return store.doInsertEntry(ctx, entry)
++	if err = store.doInsertEntry(ctx, entry); err != nil {
++		return err
++	}
++	dir, name := entry.FullPath.DirAndName()
++	if name != "" && !store.isSuperLargeDirectory(dir) {
++		store.Client.ZAddNX(ctx, store.getKey(genDirectoryListKey(dir)), redis.Z{Score: 0, Member: name})
++	}
++	return nil
+ }
+ 
+ func (store *UniversalRedis2Store) FindEntry(ctx context.Context, fullpath util.FullPath) (entry *filer.Entry, err error) {
+@@ -137,6 +144,9 @@ func (store *UniversalRedis2Store) DeleteEntry(ctx context.Context, fullpath uti
+ 		if err != nil {
+ 			return fmt.Errorf("DeleteEntry %s in parent dir: %v", fullpath, err)
+ 		}
++		if exists, existsErr := store.Client.Exists(ctx, store.getKey(string(fullpath))).Result(); existsErr == nil && exists > 0 {
++			store.Client.ZAddNX(ctx, store.getKey(genDirectoryListKey(dir)), redis.Z{Score: 0, Member: name})
++		}
+ 	}
+ 
+ 	return nil
