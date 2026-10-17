@@ -55,8 +55,9 @@ def reconciled(run: Path) -> set:
     return {json.loads(line).get("reconciles") for line in charges.read_text(encoding="utf-8").splitlines() if line.strip()}
 
 
-def prune(attempt: Path, workspace: Path, *, apply: bool = False, target_dir: Path | None = None) -> dict:
-    root = attempt.parents[4]
+def prune(attempt: Path, workspace: Path, *, apply: bool = False, target_dir: Path | None = None,
+          contributor_run: Path | None = None) -> dict:
+    root = contributor_run.parents[2] if contributor_run else attempt.parents[4]
     record = read(attempt / "attempt.json")
     if record["disposition"] != "valid completed":
         raise Refused("attempt did not complete validly")
@@ -65,7 +66,13 @@ def prune(attempt: Path, workspace: Path, *, apply: bool = False, target_dir: Pa
             native_artifacts.verify(attempt, record["native_artifact_storage"])
         except (OSError, ValueError, KeyError) as error:
             raise Refused(f"native artifact storage is unverified: {error}") from error
-    if workspace.name != record["attempt_id"] or workspace.parent.name != record["run_id"]:
+    if contributor_run:
+        identity_matches = (contributor_run.name == record["run_id"]
+                            and workspace == contributor_run / "attempts" / record["attempt_id"]
+                            and attempt == workspace and target_dir is not None)
+    else:
+        identity_matches = workspace.name == record["attempt_id"] and workspace.parent.name == record["run_id"]
+    if not identity_matches:
         raise Refused("workspace identity differs from the filed attempt")
     if workspace.is_symlink():
         raise Refused("workspace is a symlink")
