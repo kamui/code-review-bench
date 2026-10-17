@@ -50,8 +50,8 @@ DYNAMIC_ROOTS = {
     "bench/tools/test_packet_replacements.py": ["docs/research/last-push-recut-2026-10-07"],
     "bench/tools/test_review_code_selection.py": ["docs/research/last-push-review-code-2026-10-12/selection"],
     "bench/tools/test_last_push_move.py": ["docs/research/last-push-rulings-2026-10-11/filing",
-                                           "docs/research/regrade-rulings-2026-10-13/filing",
-                                           "docs/research/older-problem-activation-2026-10-13/filing"],
+                                           "docs/research/regrade-rulings-2026-10-13/filing/record.py",
+                                           "docs/research/older-problem-activation-2026-10-13/filing/record.py"],
 }
 RESEARCH_GROUPS = {
     152: ["last-push-review-code-2026-10-12/selection/usage.py", "last-push-rulings-2026-10-11/usage.py"],
@@ -60,12 +60,11 @@ RESEARCH_GROUPS = {
           "last-push-recut-2026-10-07/recut.py", "last-push-recut-2026-10-07/stage_edition.py",
           "last-push-recut-2026-10-07/verify.py"],
     155: ["last-push-recut-2026-10-07/relocate_transcripts.py"],
-    156: ["cohort-rebuild-2026-10-05/regrade/plan.py", "cohort-rebuild-2026-10-05/second-pass/filing/record.py",
+    156: ["cohort-rebuild-2026-10-05/regrade/plan.py",
           "last-push-review-code-2026-10-12/selection/collect.py", "last-push-review-code-2026-10-12/selection/packets.py",
           "last-push-review-code-2026-10-12/selection/selection.py", "last-push-rulings-2026-10-11/filing/collect.py",
           "last-push-rulings-2026-10-11/filing/move.py", "last-push-rulings-2026-10-11/filing/packets.py",
           "last-push-rulings-2026-10-11/filing/record.py", "older-problem-activation-2026-10-13/filing/admit.py",
-          "older-problem-activation-2026-10-13/filing/audit.py", "older-problem-activation-2026-10-13/filing/text.py",
           "older-problem-activation-2026-10-13/filing/receipts.py", "older-problem-activation-2026-10-13/filing/record.py",
           "older-problem-activation-2026-10-13/filing/wordings.py", "reference-calibration-2026-10-03/blind_items.py",
           "regrade-rulings-2026-10-13/filing/record.py"],
@@ -253,16 +252,21 @@ def census(snapshot):
         for token in row["tokens"]:
             if not token.endswith(".py"):
                 continue
-            for target, kind in file_references(path, token, py):
+            resolved = file_references(path, token, py)
+            if not resolved and path in live and "/" not in token:
+                resolved = [(target, "possible-name-reference") for target in names[token]]
+            for target, kind in resolved:
                 incoming[target].append({"path": path, "line": row["line"], "kind": kind})
-                graph[path].add(target)
-    for caller, directories in DYNAMIC_ROOTS.items():
+                if kind != "possible-name-reference":
+                    graph[path].add(target)
+    for caller, locations in DYNAMIC_ROOTS.items():
         if caller not in paths:
             continue
         for target in sorted(py):
-            if str(Path(target).parent) in directories:
+            if target in locations or str(Path(target).parent) in locations:
                 graph[caller].add(target)
-                incoming[target].append({"path": caller, "line": 1, "kind": "audited-dynamic-directory"})
+                kind = "audited-dynamic-file" if target in locations else "audited-dynamic-directory"
+                incoming[target].append({"path": caller, "line": 1, "kind": kind})
     pending = list(live)
     while pending:
         for dependency in graph[pending.pop()] - live:

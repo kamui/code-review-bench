@@ -46,7 +46,14 @@ class InventoryTests(unittest.TestCase):
             write("src/smoke.test.ts", "const python = `\nimport current_grading as current, export_explorer as exporter\n"
                   "from test_current_grading import fixture\n`\nspawn(['python3', '-c', python])\n")
             write("bench/harness/runner.sh", "python3 bench/tools/current_grading.py\n")
-            write("bench/schema/run.schema.json", '{"runner":"bench/tools/current_grading.py"}')
+            write("bench/schema/run.schema.json", '{"runner":"bench/tools/current_grading.py","test":"test_current_grading.py"}')
+            write(".github/workflows/tests.yml", "run: python3 -m unittest discover -p test_current_grading.py\n")
+            write("docs/research/unused/test_current_grading.py", "import json\n")
+            write("bench/tools/test_last_push_move.py", "import json\n")
+            activation = "docs/research/older-problem-activation-2026-10-13/filing/"
+            regrade = "docs/research/regrade-rulings-2026-10-13/filing/"
+            for path in (activation + "record.py", regrade + "record.py", activation + "audit.py", activation + "text.py"):
+                write(path, "import json\n")
             write("bench/policies/grading-commands.v1.json", '{"test_kind":"python"}')
             write("bench/tools/regrade_queues.sh", "python3 - <<'PY'\nprint('hello')\nPY\n")
             write("package.json", '{"scripts":{"x":"python3.12 bench/tools/test_answers.py"}}')
@@ -59,7 +66,7 @@ class InventoryTests(unittest.TestCase):
                             "commit", "-qm", "fixture"], check=True)
             write("untracked.py", "print('excluded')")
             result = inventory.census(inventory.Snapshot("HEAD", root))
-            self.assertEqual(result["tracked_paths"], 17)
+            self.assertEqual(result["tracked_paths"], 24)
             files = {row["path"]: row for row in result["python_files"]}
             self.assertEqual(files[answers]["class"], "active-outside-tooling")
             self.assertEqual(files[answers]["callers"][0]["line"], 2)
@@ -70,6 +77,16 @@ class InventoryTests(unittest.TestCase):
                              [{"path": "docs/nested/workflow.md", "line": 1, "kind": "path-reference"}])
             self.assertEqual(files["docs/research/unused/record.py"]["class"], "historical-replay")
             self.assertEqual(files["docs/research/unused/record.py"]["callers"][0]["kind"], "possible-name-reference")
+            for caller in (".github/workflows/tests.yml", "bench/schema/run.schema.json"):
+                self.assertTrue(any(row["path"] == caller and row["kind"] == "possible-name-reference"
+                                    for row in files["bench/tools/test_current_grading.py"]["callers"]))
+            self.assertEqual(files["docs/research/unused/test_current_grading.py"]["class"], "historical-replay")
+            for directory in (activation, regrade):
+                self.assertEqual(files[directory + "record.py"]["class"], "active-outside-tooling")
+                self.assertTrue(any(row["kind"] == "audited-dynamic-file" for row in files[directory + "record.py"]["callers"]))
+            for name in ("audit.py", "text.py"):
+                self.assertEqual(files[activation + name]["class"], "historical-replay")
+                self.assertNotIn("migration", files[activation + name])
             for module in ("bench/tools/current_grading.py", "tools/export_explorer.py", "bench/tools/test_current_grading.py"):
                 self.assertTrue(any(row["path"] == "src/smoke.test.ts" and row["kind"] == "embedded-import-reference"
                                     for row in files[module]["callers"]))

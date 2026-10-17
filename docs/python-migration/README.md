@@ -45,15 +45,16 @@ imports, and executable Python fragments. It intentionally retains prose and sav
 commands as references. A reference is not proof that a command ran. Import edges
 resolve same-directory modules and the maintained tooling import roots. Literal
 paths resolve from the repository or the source document's directory, with parent
-segments normalized. Ambiguous basenames in Python sources produce
+segments normalized. Ambiguous basenames in Python sources and current non-Python
+callers produce
 `possible-name-reference` caller records, without activating their targets. Current
 TypeScript, harness and schema sources are live callers. Embedded `import` and
 `from` clauses link their tracked Python modules as `embedded-import-reference`
 callers; this is a conservative text scan, not proof that a command executed.
 Python target commands in `bench/policies/grading-commands.v1.json` are target
 dependencies. No scan can infer arbitrary computed Python.
-The audited dynamic directory rules cover the live loaders that assemble filenames
-from parameters. Refresh those rules when a loader changes.
+The audited dynamic rules retain directories for loaders that assemble filenames
+from parameters and exact files for fixed-name loaders. Refresh those rules when a loader changes.
 
 ## Classification and preservation
 
@@ -73,10 +74,11 @@ separate from the current scorecard, whose sole owner remains `src/lib/scoring.t
 
 The explicit dynamic loaders in `test_packet_replacements.py`,
 `test_review_code_selection.py`, and `test_last_push_move.py` also retain the recut,
-selection, and filing directories. Their local imports extend the closure to
+selection, and filing code. Their local imports extend the closure to
 `stage_edition`, `record`, `move`, and related helpers. `test_regrade_filing.py`
 reaches the saved filing and activation implementations through `test_last_push_move`.
-The directory rules deliberately include sibling replay commands as candidates.
+Parameterized directory rules include sibling replay commands as candidates;
+the regrade and activation loaders retain only their named `record.py` files.
 They do not authorize running a command that writes the current ledger.
 
 No maintained responsibility is proven dead by this census. A missing caller alone
