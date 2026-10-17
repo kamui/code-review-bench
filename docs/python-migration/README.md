@@ -44,7 +44,8 @@ The scan includes interpreter names, `sys.executable`, file references, dynamic
 imports, and executable Python fragments. It intentionally retains prose and saved
 commands as references. A reference is not proof that a command ran. Import edges
 resolve same-directory modules and the maintained tooling import roots. Literal
-paths resolve directly; ambiguous basenames produce `possible-name-reference`
+paths resolve from the repository or the source document's directory, with parent
+segments normalized; ambiguous basenames produce `possible-name-reference`
 edges. Those edges conservatively retain possible dependencies and do not establish
 that every matching file executes. No scan can infer arbitrary computed Python.
 The audited dynamic directory rules cover the live loaders that assemble filenames
