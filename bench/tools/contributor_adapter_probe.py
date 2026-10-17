@@ -112,6 +112,7 @@ def probe(harness, attempt):
             control = read(attempt / "pi-control.json")
             control["models"] = models
             write(attempt / "pi-control.json", control)
+        adapters.secrets.pin(attempt, client, [env["OPENROUTER_API_KEY"]])
         return []
 
     try:

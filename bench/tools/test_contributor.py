@@ -413,10 +413,40 @@ class ContributorTests(unittest.TestCase):
                     secrets.audit(attempt)
                 self.assertFalse((attempt / ".private").exists())
 
+    def test_claude_account_enums_do_not_block_runs_and_real_leaks_stay_blocked(self):
+        import contributor_secrets as secrets
+        profile = {"oauthAccount": {"emailAddress": "dummy-private@example.test", "accountUuid": "dummy-account-uuid",
+                   "organizationUuid": "dummy-org-uuid", "organizationRole": "admin", "billingType": "stripe_subscription",
+                   "organizationType": "claude_max", "displayName": "Jane"}, "userID": "dummy-user-identity"}
+        for text in ("def require_admin(request): stripe_subscription = claude_max; Jane", "dummy-private@example.test"):
+            with self.subTest(text=text):
+                def execute(config, attempt, target, packet, skill):
+                    self.fake_execute(config, attempt, target, packet, skill)
+                    write(attempt / "home/.claude.json", profile)
+                    secrets.pin(attempt, "claude-code", secrets.values("claude-code", attempt / "home"))
+                    (attempt / "stdout.jsonl").write_text(text)
+                with self.no_charge_run(), patch.object(adapters, "execute", side_effect=execute):
+                    code, output = self.invoke("run", "/code-review", "--harness", "claude-code", "--model", "claude-opus-5-5",
+                                               "--tasks", "task-a", "--attempt-usd", "1", "--yes")
+                    if "require_admin" in text:
+                        self.assertEqual(code, 0, output)
+                        self.assertTrue((self.state / "pending/R1/entry.json").exists())
+                    else:
+                        self.assertEqual(code, 1, output)
+                        self.assertNotIn("dummy-private@example.test", output)
+                        code, output = self.invoke("run", "--resume", "R2", "--yes")
+                        self.assertEqual(code, 1, output)
+                        code, output = self.invoke("status")
+                        self.assertEqual(code, 0)
+                        self.assertIn("exclude this run from publication", output)
+                        self.assertNotIn("Next: ./bin/bench run --resume R2", output)
+
     def test_public_bundles_exclude_account_stores_but_keep_session_evidence(self):
         import contributor_secrets as secrets
         import tarfile
         marker = "PRIVATE-ACCOUNT-IDENTITY-NOT-PUBLIC"
+        import hashlib
+        private_hash = hashlib.sha256(b"dummy-private-audit-key").hexdigest().encode()
         retained = ["home/.codex/sessions/rollout-test.jsonl", "home/.claude/projects/task/session.jsonl",
                     "home/.claude/projects/task/tool-results/output.txt", "home/sessions/pi.jsonl",
                     "clone-work/pi-children/child/home/sessions/child.jsonl"]
@@ -443,12 +473,18 @@ class ContributorTests(unittest.TestCase):
                 for member in archive:
                     seen.add(member.name)
                     self.assertNotIn(".private", member.name)
-                    self.assertNotIn(marker.encode(), archive.extractfile(member).read())
+                    self.assertNotIn("loaded-secrets.json", member.name)
+                    payload = archive.extractfile(member).read()
+                    self.assertNotIn(marker.encode(), payload)
+                    self.assertNotIn(private_hash, payload)
                     if member.name.endswith(".tar.gz"):
                         with tarfile.open(fileobj=archive.extractfile(member), mode="r:gz") as nested:
                             for item in nested:
                                 self.assertNotIn(".private", item.name)
-                                self.assertNotIn(marker.encode(), nested.extractfile(item).read())
+                                self.assertNotIn("loaded-secrets.json", item.name)
+                                payload = nested.extractfile(item).read()
+                                self.assertNotIn(marker.encode(), payload)
+                                self.assertNotIn(private_hash, payload)
         for relative in retained:
             self.assertTrue(any(name.endswith(relative) for name in seen), relative)
         for relative in private:
@@ -558,6 +594,12 @@ assert not (home / 'ambient-marker').exists()
 assert pathlib.Path('AGENTS.md').read_text() == ''
 assert list(pathlib.Path('.opencode').iterdir()) == []
 try:
+    (home.parent / '.private/audit-secrets.json').write_text('forbidden audit edit')
+except OSError:
+    pass
+else:
+    raise AssertionError('private audit material must be read-only to the client')
+try:
     pathlib.Path('source.txt').write_text('forbidden source edit')
 except OSError:
     pass
@@ -586,7 +628,7 @@ else:
                 executable.chmod(0o755)
                 config = {"harness": harness, "model": "openai/gpt-6.1-sol", "effort": "high", "kind": "skill",
                           "runtime": {"path": str(executable), "sha256": digest(executable)}, "policy": "Frozen policy", "rates": {"model": {"pricing": {"prompt":"0.001"}}}}
-                with patch.object(adapters, "credentials", return_value=[]):
+                with patch.object(adapters, "credentials", side_effect=lambda harness, home, env: adapters.secrets.pin(home.parent, harness, ["dummy-adapter-key"])):
                     result = adapters.execute(config, attempt, {"merge_base": "base", "head":"head", "provisioning": {"allowance": "read only", "unavailable": "tests"}}, packet, skill)
                 self.assertEqual(result, 0, (attempt / "stderr.txt").read_text())
                 usage, normalized = adapters.collect(config, attempt)
