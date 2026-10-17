@@ -151,35 +151,35 @@ def audit(attempt):
     receipt = attempt / "secret-audit.json"
     if (attempt / "secret-audit-failed.json").exists():
         raise Refused(f"credential inspection failed for {attempt}; exclude the run; raw evidence remains local")
-    database = attempt / "home/.local/share/opencode/opencode.db"
-    if database.is_file():
-        try:
-            with closing(sqlite3.connect(f"file:{database}?mode=ro", uri=True)) as connection:
-                for table in ("credential", "account", "control_account"):
-                    if connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0]:
-                        raise Refused("OpenCode account state cannot enter public evidence")
-        except sqlite3.Error as error:
-            raise Refused(f"OpenCode evidence store cannot be checked for account state: {error}") from error
-    files = public_index(attempt, exclude=EXCLUDED)
-    if receipt.exists():
-        saved = read(receipt)
-        if saved["files"] != files:
-            raise Refused(f"credential-audited evidence changed: {attempt}")
-        verify_index(attempt, saved["files"])
-        remove_private(attempt)
-        return
-    pin_path = attempt / ".private/loaded-secrets.json"
-    secrets = []
-    if (attempt / "credential-audit-required.json").exists() or pin_path.exists():
-        if not pin_path.exists():
-            raise Refused(f"private audit material missing for {attempt.name}; publication refused; preserve this run locally")
-        loaded = read(pin_path)
-        private = attempt / ".private/audit-secrets.json"
-        secrets = read(private)["values"] if private.exists() else []
-        if not set(loaded["sha256"]).issubset(fingerprints(secrets)):
-            raise Refused(f"private audit material missing for {attempt.name}; publication refused; preserve this run locally")
-    budget = [4 * 1024 ** 3]
     try:
+        database = attempt / "home/.local/share/opencode/opencode.db"
+        if database.is_file():
+            try:
+                with closing(sqlite3.connect(f"file:{database}?mode=ro", uri=True)) as connection:
+                    for table in ("credential", "account", "control_account"):
+                        if connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0]:
+                            raise Refused("OpenCode account state cannot enter public evidence")
+            except sqlite3.Error as error:
+                raise Refused(f"OpenCode evidence store cannot be checked for account state: {error}") from error
+        files = public_index(attempt, exclude=EXCLUDED)
+        if receipt.exists():
+            saved = read(receipt)
+            if saved["files"] != files:
+                raise Refused(f"credential-audited evidence changed: {attempt}")
+            verify_index(attempt, saved["files"])
+            remove_private(attempt)
+            return
+        pin_path = attempt / ".private/loaded-secrets.json"
+        secrets = []
+        if (attempt / "credential-audit-required.json").exists() or pin_path.exists():
+            if not pin_path.exists():
+                raise Refused(f"private audit material missing for {attempt.name}; publication refused; preserve this run locally")
+            loaded = read(pin_path)
+            private = attempt / ".private/audit-secrets.json"
+            secrets = read(private)["values"] if private.exists() else []
+            if not set(loaded["sha256"]).issubset(fingerprints(secrets)):
+                raise Refused(f"private audit material missing for {attempt.name}; publication refused; preserve this run locally")
+        budget = [4 * 1024 ** 3]
         for row in files:
             if any(secret in row["path"] for secret in secrets):
                 raise Refused("loaded credential found in an evidence filename; exclude the run; raw evidence retained locally")

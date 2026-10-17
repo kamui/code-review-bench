@@ -453,7 +453,15 @@ def status():
             elif failed:
                 next_step = f"resolve {failed['attempt_id']} diagnostics, then ./bin/bench run --resume {run.name} --replace {failed['attempt_id']} --reason TEXT"
             else:
-                next_step = f"./bin/bench run --resume {run.name}"
+                remaining = [cell for cell in manifest["cells"] if cell not in [row["cell"] for row in valid]]
+                capped = remaining and (cost + manifest["configurations"][remaining[0]["configuration"]]["reserve_usd"] > manifest["budget_usd"]
+                                        or len(attempts(run)) >= manifest["max_attempts"])
+                if capped:
+                    next_step = "accounting/attempt cap reached; prepare a new authorized run"
+                    if valid:
+                        next_step += f" or include verified partial results: ./bin/bench run --resume {run.name} --include-partial"
+                else:
+                    next_step = f"./bin/bench run --resume {run.name}"
             print("  Next: " + next_step)
 
 
