@@ -539,6 +539,62 @@ class ContributorTests(unittest.TestCase):
                 self.assertIn("credential inspection failed", output)
                 self.assertFalse((self.state / "pending" / run_id).exists())
 
+    def test_status_reconciles_reservation_breach_and_can_include_verified_partial(self):
+        def collect(config, attempt):
+            usage = {"metering_status": "complete", "priced_total_usd": 1.5}
+            normalized = {"parse_status": "empty", "items": []}
+            write(attempt / "usage.json", usage, immutable=True)
+            write(attempt / "normalized.json", normalized, immutable=True)
+            return usage, normalized
+        with self.no_charge_run(), patch.object(adapters, "collect", side_effect=collect):
+            code, output = self.invoke("run", "review", "--harness", "codex", "--model", "gpt-6.1-sol", "--attempt-usd", "1", "--budget-usd", "10", "--yes")
+            self.assertEqual(code, 1, output)
+            code, output = self.invoke("status")
+            self.assertEqual(code, 0, output)
+            next_step = next(line for line in output.splitlines() if "Next:" in line)
+            self.assertIn("accounting reconciliation", next_step)
+            self.assertIn("--include-partial", next_step)
+            code, output = self.invoke("run", "--resume", "R1", "--include-partial")
+            self.assertEqual(code, 0, output)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_status_stops_unaffordable_replacement(self):
+        def collect(config, attempt):
+            write(attempt / "usage.json", {"metering_status": "complete", "priced_total_usd": .5}, immutable=True)
+            raise ValueError("infrastructure failure after metered usage")
+        with self.no_charge_run(), patch.object(adapters, "collect", side_effect=collect):
+            code, output = self.invoke("run", "review", "--harness", "codex", "--model", "gpt-6.1-sol", "--tasks", "task-a", "--attempt-usd", "1", "--yes")
+            self.assertEqual(code, 1, output)
+            code, output = self.invoke("status")
+            self.assertEqual(code, 0, output)
+            next_step = next(line for line in output.splitlines() if "Next:" in line)
+            self.assertIn("new authorized run", next_step)
+            self.assertNotIn("--replace", next_step)
+            self.assertNotIn("--include-partial", next_step)
+            code, output = self.invoke("run", "--resume", "R1", "--replace", "att-001", "--reason", "infra", "--yes")
+            self.assertEqual(code, 1, output)
+            self.assertIn("accounting/attempt cap", output)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_status_stops_exhausted_replacement_allowance(self):
+        def collect(config, attempt):
+            write(attempt / "usage.json", {"metering_status": "complete", "priced_total_usd": 0}, immutable=True)
+            raise ValueError("infrastructure failure with zero metered usage")
+        with self.no_charge_run(), patch.object(adapters, "collect", side_effect=collect):
+            code, output = self.invoke("run", "review", "--harness", "codex", "--model", "gpt-6.1-sol", "--tasks", "task-a", "--attempt-usd", "1", "--budget-usd", "10", "--yes")
+            self.assertEqual(code, 1, output)
+            code, output = self.invoke("run", "--resume", "R1", "--replace", "att-001", "--reason", "infra", "--yes")
+            self.assertEqual(code, 1, output)
+            code, output = self.invoke("status")
+            self.assertEqual(code, 0, output)
+            next_step = next(line for line in output.splitlines() if "Next:" in line)
+            self.assertIn("new authorized run", next_step)
+            self.assertNotIn("--replace", next_step)
+            code, output = self.invoke("run", "--resume", "R1", "--replace", "att-002", "--reason", "infra", "--yes")
+            self.assertEqual(code, 1, output)
+            self.assertIn("replacement allowance exhausted", output)
+        self.assertEqual(len(self.calls), 2)
+
     def test_client_rejection_cannot_be_retried_as_an_infrastructure_replacement(self):
         def reject(config, attempt, target, packet, skill):
             self.fake_execute(config, attempt, target, packet, skill)
