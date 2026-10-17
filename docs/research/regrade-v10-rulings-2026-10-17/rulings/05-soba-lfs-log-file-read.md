@@ -281,3 +281,9 @@ First answers:
 | recommender | other-material | medium (no-precedent) | An unused read of a file at start-up. |
 | assessor-1 | other-material | medium (no-precedent) | The run/read evidence limits this fault to at most five small startup file reads with no obstruction or loss caused by the reads themselves. |
 
+
+## The owner's answer
+
+Asked 2026-10-17. Question: "soba: does the comment on the LFS log condition earn credit for PE-q1, and is the unused file read a problem?"
+
+Answer: **"No credit (no / no); read not a problem (Recommended)"**: no credit for PE-q1, says what goes wrong: no, identifies the cause as a fault: no; the unused start-up file read is not admitted.
