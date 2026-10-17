@@ -179,6 +179,7 @@ After the reasons it prints the question to show the user:
 
 1. The whole case file that every blind party read.
 2. A table with one row for each party: its pick, its confidence with the conditions it falls short on, and its reason. A `recovery` pick shows the two facts. A `duplicate` or `same-family` pick names the known problem.
+3. Under "To reconcile before asking", each party whose pick differs from the recommender's, with its reason, or a line saying that every pick agrees. [Reconcile](claim-adjudication.md#prepare-a-ruling) says what the asking session does with them.
 
 `route` needs a contract 2 record, because contract 1 pins no case file.
 

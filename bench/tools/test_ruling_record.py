@@ -413,6 +413,18 @@ class RouteTest(unittest.TestCase):
                       ruling_record.question(record))
         self.assertIn("| recommender | same-family of GT-r2 | high | ", ruling_record.question(sound("grouping")))
 
+    def test_each_pick_that_differs_from_the_recommender_is_listed_to_reconcile(self):
+        record = sound("recovery")
+        self.assertTrue(ruling_record.question(record).endswith("To reconcile before asking:\n\n- None: every party's pick is the recommender's."))
+        record["answers"][2].update(outcome="does-not-recover", facts={"says_what": "no", "identifies_cause": "yes"}, reason="It names\nonly the cause.")
+        record["answers"][1]["facts"] = {**record["answers"][0]["facts"], "identifies_cause": "cannot-tell"}
+        listed = ruling_record.question(record).split("To reconcile before asking:\n\n")[1].splitlines()
+        self.assertEqual(listed, [
+            "- assessor-1 picks recovers (says what goes wrong: yes, identifies the cause as a fault: cannot-tell) where the recommender picks "
+            "recovers (says what goes wrong: yes, identifies the cause as a fault: no). Its reason: The case file settles it.",
+            "- assessor-2 picks does-not-recover (says what goes wrong: no, identifies the cause as a fault: yes) where the recommender picks "
+            "recovers (says what goes wrong: yes, identifies the cause as a fault: no). Its reason: It names only the cause."])
+
     def test_a_contract_1_record_has_no_case_file_to_show(self):
         run = self.route(REVIEW_9)
         self.assertEqual((run.returncode, run.stdout), (1, "`route` needs a contract 2 record, which pins the case file the user is shown\n"))
