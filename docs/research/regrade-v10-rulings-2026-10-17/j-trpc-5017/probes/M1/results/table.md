@@ -1,0 +1,14 @@
+| Probe | base | head | pe-j1-copy-intersection | m1-builtin-check | both-copy-intersection-and-builtin-check | gt-j7-array-check | both-array-check-and-builtin-check | fix-same-input |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `m1-01-types.ts` | compiles | compiles | compiles | compiles | compiles | compiles | compiles | compiles |
+| `m1-02-exact-type-date.ts` | compiles | compiles | compiles | compiles | compiles | compiles | compiles | compiles |
+| `m1-03-exact-type-map.ts` | **TS2554** | **TS2554** | compiles | compiles | compiles | **TS2554** | compiles | compiles |
+| `m1-04-control-exact-type-no-middleware.ts` | compiles | compiles | compiles | compiles | compiles | compiles | compiles | compiles |
+| `m1-05-uses-date.ts` | compiles | compiles | **TS2322** | compiles | compiles | compiles | compiles | compiles |
+| `m1-06-uses-map-set.ts` | compiles | compiles | compiles | compiles | compiles | compiles | compiles | compiles |
+| `m1-07-callers.ts` | compiles | compiles | compiles | compiles | compiles | compiles | compiles | compiles |
+| `m1-08-mistake-message.ts` | **TS2322** | **TS2322** | **TS2322** | **TS2322** | **TS2322** | **TS2322** | **TS2322** | **TS2322** |
+| `m1-09-strict-identity.ts` | **TS2322** | **TS2322** | **TS2322** | compiles | compiles | **TS2322** | compiles | compiles |
+| `m1-10-control-strict-identity-no-middleware.ts` | compiles | compiles | compiles | compiles | compiles | compiles | compiles | compiles |
+| `m1-11-readonly-size-write.ts` | **TS2578** | **TS2578** | compiles | compiles | compiles | **TS2578** | compiles | compiles |
+| `m1-12-documented-way-middleware-first.ts` | compiles | compiles | compiles | compiles | compiles | compiles | compiles | compiles |
