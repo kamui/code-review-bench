@@ -49,7 +49,27 @@ GROUPS = {
 DYNAMIC_ROOTS = {
     "bench/tools/test_packet_replacements.py": ["docs/research/last-push-recut-2026-10-07"],
     "bench/tools/test_review_code_selection.py": ["docs/research/last-push-review-code-2026-10-12/selection"],
-    "bench/tools/test_last_push_move.py": ["docs/research/last-push-rulings-2026-10-11/filing"],
+    "bench/tools/test_last_push_move.py": ["docs/research/last-push-rulings-2026-10-11/filing",
+                                           "docs/research/regrade-rulings-2026-10-13/filing",
+                                           "docs/research/older-problem-activation-2026-10-13/filing"],
+}
+RESEARCH_GROUPS = {
+    152: ["last-push-review-code-2026-10-12/selection/usage.py", "last-push-rulings-2026-10-11/usage.py"],
+    153: ["portable-evidence-2026-10-10/freeze_commits.py"],
+    154: ["builtin-review-benchmark-2026-09-24/answers.py", "last-push-recut-2026-10-07/plan.py",
+          "last-push-recut-2026-10-07/recut.py", "last-push-recut-2026-10-07/stage_edition.py",
+          "last-push-recut-2026-10-07/verify.py"],
+    155: ["last-push-recut-2026-10-07/relocate_transcripts.py"],
+    156: ["cohort-rebuild-2026-10-05/regrade/plan.py", "cohort-rebuild-2026-10-05/second-pass/filing/record.py",
+          "last-push-review-code-2026-10-12/selection/collect.py", "last-push-review-code-2026-10-12/selection/packets.py",
+          "last-push-review-code-2026-10-12/selection/selection.py", "last-push-rulings-2026-10-11/filing/collect.py",
+          "last-push-rulings-2026-10-11/filing/move.py", "last-push-rulings-2026-10-11/filing/packets.py",
+          "last-push-rulings-2026-10-11/filing/record.py", "older-problem-activation-2026-10-13/filing/admit.py",
+          "older-problem-activation-2026-10-13/filing/receipts.py", "older-problem-activation-2026-10-13/filing/record.py",
+          "older-problem-activation-2026-10-13/filing/wordings.py", "reference-calibration-2026-10-03/blind_items.py",
+          "regrade-rulings-2026-10-13/filing/record.py"],
+    157: ["last-push-recut-2026-10-07/dispatch_replacements.py", "last-push-recut-2026-10-07/replacement_runs.py",
+          "last-push-recut-2026-10-07/skill_replacement_runs.py", "skill-matrix-2026-10-02/dispatch_serial.py"],
 }
 
 
@@ -87,7 +107,8 @@ class Snapshot:
 def category(path):
     if path.startswith("artifacts/import-source/"):
         return "imported-original"
-    if "/inputs/skill/" in path or "/skills/" in path:
+    if ("/inputs/skill/" in path or "/skills/" in path or path.startswith("bench/targets/")
+            or path == "bench/policies/grading-commands.v1.json"):
         return "target-or-skill-dependency"
     if path.startswith(("bench/runs/", "bench/fixtures/", "bench/claims/evidence/")):
         return "frozen-evidence"
@@ -95,6 +116,10 @@ def category(path):
         return "maintained"
     if any(part in Path(path).parts for part in ("probes", "upstream", "evidence", "reproductions")):
         return "target-or-skill-dependency"
+    if (path.startswith(("src/", ".github/", "bin/", "bench/harness/", "bench/schema/", "bench/policies/", "bench/arms/"))
+            or path in ("package.json", "README.md", "AGENTS.md")
+            or (path.startswith("docs/") and not path.startswith("docs/research/"))):
+        return "active-outside-tooling"
     return "historical-replay"
 
 
@@ -115,15 +140,35 @@ def references(snapshot):
     return rows
 
 
-def file_references(source, token, python_paths, names):
+def file_references(source, token, python_paths):
     candidate = token.removeprefix("./")
     relative = posixpath.normpath(str(Path(source).parent / candidate))
     matches = {path for path in (candidate, relative) if path in python_paths}
     if matches:
         return [(path, "path-reference") for path in sorted(matches)]
-    if "/" not in candidate:
-        return [(path, "possible-name-reference") for path in names[candidate]]
     return []
+
+
+def import_edges(path, imports, python_paths):
+    edges = set()
+    for name, line in imports:
+        module = name.replace(".", "/")
+        candidates = [str(Path(path).parent / f"{module}.py"), f"{module}.py",
+                      f"bench/tools/{module}.py", f"tools/{module}.py"]
+        edges.update((candidate, line, "import") for candidate in candidates if candidate in python_paths)
+    return edges
+
+
+def embedded_imports(text):
+    imports = []
+    for number, line in enumerate(text.splitlines(), 1):
+        froms = list(re.finditer(r"\bfrom\s+([\w.]+)\s+import\s+", line))
+        imports.extend((match[1], number) for match in froms)
+        for match in re.finditer(r"\bimport\s+([A-Za-z_][\w.]*(?:\s+as\s+\w+)?"
+                                 r"(?:\s*,\s*[A-Za-z_][\w.]*(?:\s+as\s+\w+)?)*)", line):
+            if not any(source.start() <= match.start() < source.end() for source in froms):
+                imports.extend((name.strip().split()[0], number) for name in match[1].split(","))
+    return imports
 
 
 def dependencies(path, text, python_paths, names):
@@ -141,14 +186,13 @@ def dependencies(path, text, python_paths, names):
                 imports.extend((alias.name, node.lineno) for alias in node.names)
             elif isinstance(node, ast.ImportFrom) and node.module:
                 imports.append((node.module, node.lineno))
-    for name, line in imports:
-        module = name.replace(".", "/")
-        candidates = [str(Path(path).parent / f"{module}.py"), f"{module}.py",
-                      f"bench/tools/{module}.py", f"tools/{module}.py"]
-        edges.update((candidate, line, "import") for candidate in candidates if candidate in python_paths)
+    edges.update(import_edges(path, imports, python_paths))
     for number, line in enumerate(text.splitlines(), 1):
         for token in re.findall(r"[\w./-]+\.py\b", line):
-            edges.update((target, number, kind) for target, kind in file_references(path, token, python_paths, names))
+            resolved = file_references(path, token, python_paths)
+            if not resolved and "/" not in token:
+                resolved = [(target, "possible-name-reference") for target in names[token]]
+            edges.update((target, number, kind) for target, kind in resolved)
     return sorted(edges), imports, parse_error
 
 
@@ -162,6 +206,14 @@ def responsibility(path):
     raise ValueError(f"Maintained responsibility has no migration owner: {path}")
 
 
+def research_responsibility(path):
+    relative = path.removeprefix("docs/research/")
+    for issue, assigned in RESEARCH_GROUPS.items():
+        if relative in assigned:
+            return {"owner": "kamui", "issue": issue, "group": "research-callers"}
+    raise ValueError(f"Active research responsibility has no migration owner: {path}")
+
+
 def census(snapshot):
     paths = set(snapshot.paths)
     py = {p for p in paths if p.endswith(".py")}
@@ -171,7 +223,8 @@ def census(snapshot):
             names[Path(path).name].append(path)
     refs = references(snapshot)
     sources = py | {r["path"] for r in refs}
-    snapshot.preload(py | {p for p in paths if p.startswith("bench/runs/")
+    live = {p for p in sources if category(p) in ("maintained", "active-outside-tooling")}
+    snapshot.preload(py | live | {p for p in paths if p.startswith("bench/runs/")
                                and p.endswith(("/manifest.json", "/attempt.json"))}
                      | {"bench/import-manifest.json"})
     incoming = defaultdict(list)
@@ -186,6 +239,11 @@ def census(snapshot):
         parsed[path] = (imports, error)
         for target, line, kind in edges:
             incoming[target].append({"path": path, "line": line, "kind": kind})
+            if kind != "possible-name-reference":
+                graph[path].add(target)
+    for path in sorted(live - py):
+        for target, line, _ in import_edges(path, embedded_imports(snapshot.read(path).decode(errors="replace")), py):
+            incoming[target].append({"path": path, "line": line, "kind": "embedded-import-reference"})
             graph[path].add(target)
     for row in refs:
         path = row["path"]
@@ -194,7 +252,7 @@ def census(snapshot):
         for token in row["tokens"]:
             if not token.endswith(".py"):
                 continue
-            for target, kind in file_references(path, token, py, names):
+            for target, kind in file_references(path, token, py):
                 incoming[target].append({"path": path, "line": row["line"], "kind": kind})
                 graph[path].add(target)
     for caller, directories in DYNAMIC_ROOTS.items():
@@ -204,9 +262,6 @@ def census(snapshot):
             if str(Path(target).parent) in directories:
                 graph[caller].add(target)
                 incoming[target].append({"path": caller, "line": 1, "kind": "audited-dynamic-directory"})
-    live = {p for p in sources if p.startswith(("bench/tools/", "tools/", ".github/", "bin/"))
-            or p in ("package.json", "README.md", "AGENTS.md")
-            or (p.startswith("docs/") and not p.startswith("docs/research/"))}
     pending = list(live)
     while pending:
         for dependency in graph[pending.pop()] - live:
@@ -237,9 +292,7 @@ def census(snapshot):
         if classification == "maintained":
             row["migration"] = responsibility(path)
         elif classification == "active-outside-tooling":
-            row["migration"] = {"owner": "kamui", "issue":
-                                157 if "dispatch" in path else 156 if "/filing/" in path else 154,
-                                "group": "research-callers"}
+            row["migration"] = research_responsibility(path)
         files.append(row)
     for row in refs:
         row["class"] = category(row["path"])

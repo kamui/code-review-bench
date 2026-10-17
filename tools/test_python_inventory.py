@@ -17,6 +17,10 @@ class InventoryTests(unittest.TestCase):
             "bench/runs/r/inputs/skill/scripts/run.py": "target-or-skill-dependency",
             "docs/research/case/probes/probe.py": "target-or-skill-dependency",
             "docs/research/old/driver.py": "historical-replay",
+            "src/lib/scoring.test.ts": "active-outside-tooling",
+            "bench/harness/runner.sh": "active-outside-tooling",
+            "bench/schema/run.schema.json": "active-outside-tooling",
+            "bench/policies/grading-commands.v1.json": "target-or-skill-dependency",
         }
         for path, expected in cases.items():
             with self.subTest(path=path):
@@ -29,10 +33,21 @@ class InventoryTests(unittest.TestCase):
                 destination = root / path
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text(text)
-            write("bench/tools/test_answers.py", 'import importlib.util\nSCRIPT = "docs/research/old/answers.py"\n')
-            write("docs/research/old/answers.py", "import json\n")
-            write("docs/research/old/doc_helper.py", "import json\n")
-            write("docs/nested/workflow.md", "Run [the helper](../research/old/doc_helper.py).\n")
+            answers = "docs/research/builtin-review-benchmark-2026-09-24/answers.py"
+            helper = "docs/research/reference-calibration-2026-10-03/blind_items.py"
+            write("bench/tools/test_answers.py", f'import importlib.util\nSCRIPT = "{answers}"\nMENTION = "record.py"\n')
+            write(answers, "import json\n")
+            write(helper, "import json\n")
+            write("docs/research/unused/record.py", "import json\n")
+            write("docs/nested/workflow.md", "Run [the helper](../research/reference-calibration-2026-10-03/blind_items.py).\n")
+            write("bench/tools/current_grading.py", "import json\n")
+            write("tools/export_explorer.py", "import json\n")
+            write("bench/tools/test_current_grading.py", "import json\n")
+            write("src/smoke.test.ts", "const python = `\nimport current_grading as current, export_explorer as exporter\n"
+                  "from test_current_grading import fixture\n`\nspawn(['python3', '-c', python])\n")
+            write("bench/harness/runner.sh", "python3 bench/tools/current_grading.py\n")
+            write("bench/schema/run.schema.json", '{"runner":"bench/tools/current_grading.py"}')
+            write("bench/policies/grading-commands.v1.json", '{"test_kind":"python"}')
             write("bench/tools/regrade_queues.sh", "python3 - <<'PY'\nprint('hello')\nPY\n")
             write("package.json", '{"scripts":{"x":"python3.12 bench/tools/test_answers.py"}}')
             write("bench/import-manifest.json", '{"files":[],"repository":"fixture","revision":"unknown"}')
@@ -44,14 +59,24 @@ class InventoryTests(unittest.TestCase):
                             "commit", "-qm", "fixture"], check=True)
             write("untracked.py", "print('excluded')")
             result = inventory.census(inventory.Snapshot("HEAD", root))
-            self.assertEqual(result["tracked_paths"], 9)
+            self.assertEqual(result["tracked_paths"], 17)
             files = {row["path"]: row for row in result["python_files"]}
-            self.assertEqual(files["docs/research/old/answers.py"]["class"], "active-outside-tooling")
-            self.assertEqual(files["docs/research/old/answers.py"]["callers"][0]["line"], 2)
+            self.assertEqual(files[answers]["class"], "active-outside-tooling")
+            self.assertEqual(files[answers]["callers"][0]["line"], 2)
             self.assertNotIn("untracked.py", files)
-            self.assertEqual(files["docs/research/old/doc_helper.py"]["class"], "active-outside-tooling")
-            self.assertEqual(files["docs/research/old/doc_helper.py"]["callers"],
+            self.assertEqual(files[helper]["class"], "active-outside-tooling")
+            self.assertEqual(files[helper]["migration"]["issue"], 156)
+            self.assertEqual(files[helper]["callers"],
                              [{"path": "docs/nested/workflow.md", "line": 1, "kind": "path-reference"}])
+            self.assertEqual(files["docs/research/unused/record.py"]["class"], "historical-replay")
+            self.assertEqual(files["docs/research/unused/record.py"]["callers"][0]["kind"], "possible-name-reference")
+            for module in ("bench/tools/current_grading.py", "tools/export_explorer.py", "bench/tools/test_current_grading.py"):
+                self.assertTrue(any(row["path"] == "src/smoke.test.ts" and row["kind"] == "embedded-import-reference"
+                                    for row in files[module]["callers"]))
+            self.assertTrue(all(row["class"] == "active-outside-tooling" for row in result["references"]
+                                if row["path"].startswith(("src/", "bench/harness/", "bench/schema/"))))
+            self.assertEqual(next(row for row in result["references"] if row["path"].startswith("bench/policies/"))["class"],
+                             "target-or-skill-dependency")
             refs = {row["path"] for row in result["references"]}
             self.assertIn("bench/tools/regrade_queues.sh", refs)
             self.assertIn("package.json", refs)
@@ -61,6 +86,8 @@ class InventoryTests(unittest.TestCase):
     def test_unknown_maintained_module_requires_assignment(self):
         with self.assertRaisesRegex(ValueError, "no migration owner"):
             inventory.responsibility("tools/unassigned.py")
+        with self.assertRaisesRegex(ValueError, "no migration owner"):
+            inventory.research_responsibility("docs/research/unassigned.py")
 
     def test_host_observation_preserves_unfinished_state(self):
         with tempfile.TemporaryDirectory() as directory:
