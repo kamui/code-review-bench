@@ -96,7 +96,7 @@ def main(only):
             answers = [answer(party, source, decision["case_name"], BRIEFS[kindname], decision.get("recommender_exposure", "none"), sheet, clauses, rulings, left_out, normalized)
                        for party, source in files.items()]
             note = decision.get("note", "") + (" Differences between this record and the saved answer files, which keep each party's own words: " + "; ".join(left_out) + "." if left_out else "")
-            source = f"{ROUND}/{decision['target']}/{'cards' if kind == 'band' else 'cases'}/{decision['case_name']}.md"
+            source = f"{ROUND}/{decision['target']}/{'cards' if kind == 'band' else 'cases'}/{decision['group']}.md"
             record = {"contract": 2, "ruling": question["ruling"], "decision_type": kind, "target": decision["target"], "group": decision["group"], "reconstructed": False,
                       "note": note.strip(), "round_opening": opening, "filing": decision.get("filing"),
                       "dossier": f"{ROUND}/{decision['target']}" if kind == "candidate" else None,
