@@ -10,6 +10,7 @@ import tempfile
 import unittest
 
 import ruling_record
+import ruling_summary
 
 ROOT = Path(__file__).resolve().parents[2]
 RESEARCH = ROOT / "docs/research"
@@ -347,6 +348,49 @@ class AfterContractTwoTest(unittest.TestCase):
         record, after = ruling_record.load(REVIEW_9), ruling_record.load(str(REVIEW_9).replace(".before.", ".after."))
         after.update(contract=2, settled_by="owner", policy=None, miss=None, lesson=None)
         self.assertEqual(ruling_record.after_faults(record, after, REVIEW_9), ["a contract 2 after-record belongs to a contract 2 before-record"])
+
+
+class ReservationSummaryTest(unittest.TestCase):
+    def pair(self, decision_type="candidate", round_name="first"):
+        return {"before": sound(decision_type), "after": None, "path": f"{round_name}/third-01.before.json",
+                "hash": "0" * 64, "round": round_name, "closed": False}
+
+    def test_summary_lists_blind_reservation_only_answers_including_pending_groupings(self):
+        for decision_type in ("candidate", "grouping"):
+            for clause in ("before-4", "promised-1c", "promised-5", "promised-7b", "promised-8b", "delivered-2", "delivered-3",
+                           "B4", "P1c", "P5", "P7b", "P9b", "D8", "D9"):
+                with self.subTest(decision_type=decision_type, clause=clause):
+                    pair = self.pair(decision_type)
+                    pair["before"]["answers"][1].update(outcome="cannot-tell", clauses=[clause])
+                    result = ruling_summary.summarize([pair])
+                    expected = {"path": pair["path"], "ruling": "third-01", "group": "N1",
+                                "by": "assessor-1", "clauses": [clause]}
+                    self.assertEqual(result["reservation_only_cannot_tell"], [expected])
+                    rendered = ruling_summary.render(result)
+                    self.assertIn("Blind cannot-tell answers citing only reserving clauses: 1.\n", rendered)
+                    self.assertIn(f"- third-01 N1, assessor-1: {clause}. first/third-01.before.json\n", rendered)
+
+    def test_summary_requires_only_reserving_clauses_and_a_blind_cannot_tell(self):
+        for changes in ({"clauses": []}, {"clauses": ["before-4", "before-1"]}, {"clauses": ["before-1"]},
+                        {"clauses": ["future-rule"]}, {"blind": False}, {"outcome": "duplicate"}):
+            with self.subTest(changes=changes):
+                pair = self.pair()
+                pair["before"]["answers"][1].update(outcome="cannot-tell", clauses=["before-4"])
+                pair["before"]["answers"][1].update(changes)
+                result = ruling_summary.summarize([pair])
+                self.assertEqual(result["reservation_only_cannot_tell"], [])
+                self.assertIn("Blind cannot-tell answers citing only reserving clauses: 0.\n", ruling_summary.render(result))
+
+    def test_summary_respects_round_and_keeps_each_assessor(self):
+        selected, other = self.pair(), self.pair(round_name="second")
+        for pair in (selected, other):
+            for answer in pair["before"]["answers"]:
+                answer.update(outcome="cannot-tell", clauses=["before-4", "promised-5"])
+        before = copy.deepcopy([selected, other])
+        result = ruling_summary.summarize([selected, other], round_name="first")
+        self.assertEqual([(item["path"], item["by"], item["clauses"]) for item in result["reservation_only_cannot_tell"]],
+                         [(selected["path"], by, ["before-4", "promised-5"]) for by in ("assessor-1", "assessor-2")])
+        self.assertEqual([selected, other], before)
 
 
 class RouteTest(unittest.TestCase):
