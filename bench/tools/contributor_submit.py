@@ -129,7 +129,7 @@ def package(saved):
         for item in row["entry"]["attempts"]:
             attempt = run / "attempts" / item["id"]
             secrets.audit(attempt)
-            for member in file_index(attempt, exclude=("clone", "clone-cache")):
+            for member in secrets.public_index(attempt, exclude=("clone", "clone-cache")):
                 if Path(member["path"]).name in ("auth.json", ".credentials.json", ".claude.json"):
                     raise Refused(f"credential file found in selected evidence: {attempt / member['path']}; remove the credential copy before retrying")
                 selection.append({"source": str(attempt / member["path"]),

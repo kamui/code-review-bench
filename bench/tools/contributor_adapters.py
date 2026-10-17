@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import shutil
 import signal
+import sqlite3
 import subprocess
 import sys
 import uuid
@@ -74,8 +75,6 @@ def verify_rates(pin, harness, model, root):
 
 
 def credentials(harness, home, env):
-    copied = []
-    secrets.pin(home.parent, harness, secrets.values(harness))
     if harness in ("opencode", "pi"):
         key = os.environ.get("OPENROUTER_API_KEY")
         if not key:
@@ -90,13 +89,12 @@ def credentials(harness, home, env):
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
         target.chmod(0o600)
-        copied.append(target)
         if harness == "claude-code":
             account = read(Path.home() / ".claude.json")
             allowed = ("oauthAccount", "userID", "installMethod")
             write(home / ".claude.json", {**{k: account[k] for k in allowed if k in account},
                                           "hasCompletedOnboarding": True})
-    return copied
+    secrets.pin(home.parent, harness, [env["OPENROUTER_API_KEY"]] if harness in ("pi", "opencode") else secrets.values(harness, home))
 
 
 def client_command(config, attempt, home, clone, skill):
@@ -245,10 +243,9 @@ def execute_client(config, attempt, target, packet, frozen_skill, launched):
     isolation["frozen_adapter_masks"] = [str(path) for path in protected]
     write(attempt / "sandbox.json", isolation, immutable=True)
     before = codex_skill_runner.tree_identity(clone)
-    copied = []
     result = None
     try:
-        copied = credentials(config["harness"], home, env)
+        credentials(config["harness"], home, env)
         write(attempt / "dispatch.json", {"started_at": stamp(), "argv": argv,
               "requested_model": config["model"], "requested_effort": config["effort"],
               "runtime": runtime, "context_id": receipt["context_id"], "prompt_sha256": digest(attempt / "input.md")}, immutable=True)
@@ -270,8 +267,7 @@ def execute_client(config, attempt, target, packet, frozen_skill, launched):
                     os.killpg(process.pid, signal.SIGKILL)
                     process.wait()
     finally:
-        for path in copied:
-            path.unlink(missing_ok=True)
+        secrets.clear(attempt)
     write(attempt / "completion.json", {"exit_code": result, "completed_at": stamp(),
           "tree_before": before, "tree_after": codex_skill_runner.tree_identity(clone)}, immutable=True)
     return result
@@ -282,6 +278,13 @@ def json_lines(path):
 
 
 def collect(config, attempt):
+    try:
+        return collect_client(config, attempt)
+    except sqlite3.Error as error:
+        raise Refused(f"OpenCode usage database unavailable or invalid; usage remains unknown: {error}") from error
+
+
+def collect_client(config, attempt):
     harness = config["harness"]
     model = config["model"]
     output = attempt / "stdout.jsonl"

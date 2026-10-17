@@ -195,7 +195,7 @@ def verify_run(run):
 def archive_attempt(run, attempt, record):
     secrets.audit(attempt)
     archive = attempt / "transcript-package"
-    files = file_index(attempt, exclude=("clone", "clone-cache", "transcript-package", "attempt.json", "evidence.json", "workspace-pruned.json", "usage-requests.jsonl"))
+    files = secrets.public_index(attempt, exclude=("clone", "clone-cache", "transcript-package", "attempt.json", "evidence.json", "workspace-pruned.json", "usage-requests.jsonl"))
     if not archive.exists():
         selection = {"repository": "kamui/code-review-bench", "tag": "evidence-contributor-local", "subjects": [f"{run.name}/{attempt.name}"],
                      "files": [{"source": str(attempt / row["path"]), "path": f"artifacts/contributions/{run.name}/{attempt.name}/{row['path']}", "kind": "evidence"} for row in files]}
@@ -216,7 +216,7 @@ def archive_attempt(run, attempt, record):
     (attempt / "usage-requests.jsonl").write_text(json.dumps(record["usage"]) + "\n")
     target_dir = run / "inputs/targets" / record["cell"]["target"]
     prune_workspace.prune(attempt, attempt, apply=True, target_dir=target_dir, contributor_run=run)
-    index = file_index(attempt, exclude=("clone", "clone-cache", "evidence.json"))
+    index = secrets.public_index(attempt, exclude=("clone", "clone-cache", "evidence.json"))
     write(attempt / "evidence.json", {"files": index}, immutable=True)
 
 
@@ -263,7 +263,7 @@ def finalize_attempt(run, attempt, manifest):
 
 def seal_attempt(attempt):
     secrets.audit(attempt)
-    write(attempt / "evidence.json", {"files": file_index(attempt, exclude=("clone", "clone-cache", "evidence.json"))}, immutable=True)
+    write(attempt / "evidence.json", {"files": secrets.public_index(attempt, exclude=("clone", "clone-cache", "evidence.json"))}, immutable=True)
 
 
 def records(run):
@@ -277,7 +277,7 @@ def eligible(run, *, partial=False):
         if not (attempt / "attempt.json").is_file():
             raise Refused(f"{run.name}/{attempt.name} is unfiled; resume orchestration before selecting results")
         secrets.audit(attempt)
-        if file_index(attempt, exclude=("clone", "clone-cache", "evidence.json")) != read(attempt / "evidence.json")["files"]:
+        if secrets.public_index(attempt, exclude=("clone", "clone-cache", "evidence.json")) != read(attempt / "evidence.json")["files"]:
             raise Refused(f"{attempt}: sealed evidence inventory changed")
         if (attempt / "transcript-package").exists() and read(attempt / "attempt.json")["disposition"] != "valid completed":
             raise Refused(f"{attempt}: unverified transcript package cannot enter a partial submission")
