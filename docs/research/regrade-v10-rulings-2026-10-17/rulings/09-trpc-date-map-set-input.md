@@ -194,3 +194,9 @@ First answers:
 | recommender | other-material | medium (no-precedent) | Every ordinary use of a Date, Map or Set input compiles; only an exact-type test and a read-only mark differ. |
 | assessor-1 | other-material | medium (no-precedent) | Every tested ordinary use works, and reading rule 3 discounts the invalid size write because the same bad write already compiled and threw before the change. |
 
+
+## The owner's answer
+
+Asked 2026-10-17, twice. After the first question the owner asked: "go into more depth on the case for this being outside the review. Did this PR introduce this defect?" Shown: `Overwrite` at the base, where every type went through the key-by-key copy, and at the head, where a new gate sends only objects to the same unchanged copy; the types are identical at both commits (run); the case for outside (the unchanged copy line, rule Before 2's sentence on unchanged lines, activation 6) and for in the review (activation 7, which turned on failing valid uses). The recommendation was revised to outside the review.
+
+Answer: **"Outside the review (Recommended)"**: not a fault of this change, and not admitted as a pre-existing problem, since every valid use compiles.
