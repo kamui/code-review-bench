@@ -12,6 +12,7 @@ import uuid
 import contributor_common as common
 from contributor_common import Refused, command, digest, file_index, lock, read, stamp, verify_index, write
 import evidence_store
+import contributor_secrets as secrets
 
 BASE = "kamui/code-review-bench"
 
@@ -30,7 +31,12 @@ def snapshot():
     if journal.exists():
         saved = read(journal)
         if saved["status"] != "complete":
-            return saved
+            excluded = any(not (common.STATE / "pending" / row["run_id"] / "entry.json").exists() for row in saved["entries"])
+            if saved["status"] == "selected" and not saved.get("staging_repository") and excluded:
+                saved["status"] = "abandoned-before-publication"
+                write(common.STATE / "submissions" / saved["id"] / "journal.json", saved)
+            else:
+                return saved
     pending = common.STATE / "pending"
     selected = []
     for directory in sorted(pending.iterdir()) if pending.exists() else []:
@@ -122,8 +128,9 @@ def package(saved):
                               "path": f"artifacts/contributions/{saved['id']}/{run.name}/inputs/{item['path']}", "kind": "evidence"})
         for item in row["entry"]["attempts"]:
             attempt = run / "attempts" / item["id"]
+            secrets.audit(attempt)
             for member in file_index(attempt, exclude=("clone", "clone-cache")):
-                if Path(member["path"]).name in ("auth.json", ".credentials.json"):
+                if Path(member["path"]).name in ("auth.json", ".credentials.json", ".claude.json"):
                     raise Refused(f"credential file found in selected evidence: {attempt / member['path']}; remove the credential copy before retrying")
                 selection.append({"source": str(attempt / member["path"]),
                                   "path": f"artifacts/contributions/{saved['id']}/{run.name}/attempts/{item['id']}/{member['path']}", "kind": "evidence"})
@@ -207,7 +214,11 @@ def push_records(saved, local):
 
 
 def find_pr(saved):
-    prs = json.loads(gh("pr", "list", "--repo", BASE, "--state", "all", "--head", f"{saved['login']}:{saved['branch']}", "--base", "main", "--json", "url,headRefOid,state"))
+    rows = json.loads(gh("pr", "list", "--repo", BASE, "--state", "all", "--head", saved['branch'], "--base", "main",
+                         "--json", "url,headRefOid,state,headRefName,headRepositoryOwner,headRepository"))
+    prs = [row for row in rows if row["headRefName"] == saved["branch"]
+           and row.get("headRepositoryOwner", {}).get("login") == saved["login"]
+           and row.get("headRepository", {}).get("name") == saved["staging_repository"].split("/")[1]]
     if len(prs) > 1:
         raise Refused("multiple matching PRs found; inspect saved submission before retrying")
     if prs:

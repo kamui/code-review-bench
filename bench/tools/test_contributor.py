@@ -72,6 +72,8 @@ class ContributorTests(unittest.TestCase):
         self.executable.chmod(0o755)
         self.runtime = {"path": str(self.executable), "sha256": digest(self.executable), "version": "0.161.0"}
         self.rate = {"provider": "native", "rate": {"input": 1, "output": 1, "cache_read": .1, "cache_write_5m": 1.25}}
+        shutil.copy2(REPOSITORY / "bench/tools/contributor_pi.js", self.root / "bench/tools/contributor_pi.js")
+        shutil.copy2(REPOSITORY / "bench/contributor-invocation.md", self.root / "bench/contributor-invocation.md")
         self.calls = []
         self.real_subprocess_run = subprocess.run
 
@@ -241,11 +243,12 @@ class ContributorTests(unittest.TestCase):
     def test_ambiguous_pr_write_reads_before_retrying(self):
         saved = {"login": "contributor", "branch": "contributions/x", "head": self.head,
                  "entries": [], "staging_repository": "contributor/code-review-bench", "tag": "tag"}
-        existing = [{"url": "https://github.com/kamui/code-review-bench/pull/999", "headRefOid": self.head, "state": "OPEN"}]
+        existing = [{"headRefName": saved["branch"], "headRepositoryOwner": {"login": "contributor"}, "headRepository": {"name": "code-review-bench"}, "url": "https://github.com/kamui/code-review-bench/pull/999", "headRefOid": self.head, "state": "OPEN"}]
         calls = []
         def fake_gh(*arguments):
             calls.append(arguments)
             if arguments[:2] == ("pr", "list"):
+                self.assertEqual(arguments[arguments.index("--head") + 1], saved["branch"])
                 return json.dumps(existing if len(calls) > 1 else [])
             raise common.Refused("lost response after server created PR")
         with patch.object(submit, "gh", side_effect=fake_gh):
@@ -258,6 +261,100 @@ class ContributorTests(unittest.TestCase):
         with self.assertRaisesRegex(common.Refused, "invalid pending"):
             submit.snapshot()
         self.assertTrue((self.state / "pending/R1/entry.json").exists())
+
+    def test_unknown_resume_reports_actionable_error(self):
+        code, output = self.invoke("run", "--resume", "R999", "--yes")
+        self.assertEqual(code, 1, output)
+        self.assertIn("unknown run R999", output)
+        self.assertNotIn("Traceback", output)
+
+    def test_partial_reconciles_unfiled_completed_and_interrupted_attempts(self):
+        with self.no_charge_run(), patch.object(cli, "archive_attempt", side_effect=OSError("filing interrupted")):
+            code, _ = self.invoke("run", "review", "--harness", "codex", "--model", "gpt-6.1-sol", "--attempt-usd", "1", "--yes")
+        self.assertEqual(code, 2)
+        run = self.state / "runs/R1"
+        stopped = run / "attempts/att-002"
+        stopped.mkdir()
+        cell = read(run / "manifest.json")["cells"][1]
+        write(stopped / "claim.json", {"cell": cell, "reserved_usd": 1})
+        write(stopped / "dispatch.json", {"started_at": "unknown"})
+        (stopped / "stdout.jsonl").write_text("interrupted raw output")
+        with self.no_charge_run():
+            code, output = self.invoke("run", "--resume", "R1", "--include-partial")
+        self.assertEqual(code, 0, output)
+        entry = read(self.state / "pending/R1/entry.json")
+        self.assertEqual(len(entry["attempts"]), 2)
+        self.assertEqual(len(entry["missing"]), 1)
+        self.assertEqual(read(stopped / "attempt.json")["usage"]["priced_total_usd"], None)
+
+    def test_prelaunch_failure_keeps_zero_charge_proof_and_can_be_replaced(self):
+        real_execute = adapters.execute
+        with self.no_charge_run(), patch.object(adapters, "execute", side_effect=real_execute), \
+             patch.object(adapters, "credentials", side_effect=common.Refused("missing credential")):
+            code, output = self.invoke("run", "review", "--harness", "codex", "--model", "gpt-6.1-sol", "--tasks", "task-a", "--attempt-usd", "1", "--yes")
+        self.assertEqual(code, 1, output)
+        with self.no_charge_run():
+            code, _ = self.invoke("run", "--resume", "R1", "--yes")
+            self.assertEqual(code, 1)
+            record = read(self.state / "runs/R1/attempts/att-001/attempt.json")
+            self.assertEqual(record["disposition"], "setup-failed")
+            self.assertEqual(record["usage"]["priced_total_usd"], 0)
+            code, output = self.invoke("run", "--resume", "R1", "--replace", "att-001", "--reason", "authenticated client", "--yes")
+        self.assertEqual(code, 0, output)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_pending_publication_recovers_rename_without_resurrecting_exclusions(self):
+        original = Path.rename
+        def interrupted(path, target):
+            if path.name == "pending-entry":
+                raise OSError("rename interrupted")
+            return original(path, target)
+        with self.no_charge_run(), patch.object(Path, "rename", interrupted):
+            code, _ = self.invoke("run", "review", "--harness", "codex", "--model", "gpt-6.1-sol", "--tasks", "task-a", "--attempt-usd", "1", "--yes")
+        self.assertEqual(code, 2)
+        with self.no_charge_run():
+            code, output = self.invoke("run", "--resume", "R1", "--yes")
+        self.assertEqual(code, 0, output)
+        pending = self.state / "pending/R1"
+        self.assertTrue((pending / "entry.json").exists())
+        shutil.rmtree(pending)
+        with self.no_charge_run():
+            code, output = self.invoke("run", "--resume", "R1", "--yes")
+        self.assertEqual(code, 0, output)
+        self.assertFalse(pending.exists())
+
+    def test_declined_unpublished_selection_can_exclude_an_entry(self):
+        self.run_complete("--tasks", "task-a")
+        saved = submit.snapshot()
+        shutil.rmtree(self.state / "pending/R1")
+        self.run_complete("--tasks", "task-b")
+        revised = submit.snapshot()
+        self.assertNotEqual(saved["id"], revised["id"])
+        self.assertEqual([row["run_id"] for row in revised["entries"]], ["R2"])
+
+    def test_credential_audit_checks_archive_contents_and_survives_key_rotation(self):
+        import contributor_secrets as secrets
+        import tarfile
+        attempt = self.root / "credential-attempt"
+        attempt.mkdir()
+        key = "local-test-key-never-an-account"
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": key}):
+            secrets.pin(attempt, "pi", [key])
+            with tarfile.open(attempt / "payload.tar.gz", "w:gz") as archive:
+                data = key.encode()
+                member = tarfile.TarInfo("transcript")
+                member.size = len(data)
+                archive.addfile(member, io.BytesIO(data))
+            with self.assertRaisesRegex(common.Refused, "loaded credential found"):
+                secrets.audit(attempt)
+            (attempt / "payload.tar.gz").unlink()
+            (attempt / "stdout.jsonl").write_text("safe transcript")
+            secrets.audit(attempt)
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": "rotated-key"}):
+            secrets.audit(attempt)
+            (attempt / "stdout.jsonl").write_text("changed transcript")
+            with self.assertRaisesRegex(common.Refused, "evidence changed"):
+                secrets.audit(attempt)
 
     def test_budget_refusal_preserves_progress_without_pending(self):
         with self.no_charge_run():
@@ -281,6 +378,10 @@ class ContributorTests(unittest.TestCase):
         self.assertEqual(code, 1, output)
         self.assertIn("cannot be retried unchanged", output)
         self.assertEqual(len(self.calls), 1)
+        code, output = self.invoke("status")
+        self.assertEqual(code, 0)
+        self.assertIn("request a corrected reviewed profile", output)
+        self.assertNotIn("Next: ./bin/bench run --resume R1\n", output)
 
     def test_cleanup_failure_recovers_without_another_review(self):
         with self.no_charge_run(), patch.object(cli.prune_workspace, "prune", side_effect=ValueError("cleanup interrupted")):
@@ -348,10 +449,11 @@ class AdapterTests(unittest.TestCase):
                 packet.write_text("Review source.txt\n")
                 skill = Path(temporary) / "skill"
                 skill.mkdir()
+                shutil.copy2(REPOSITORY / "bench/contributor-invocation.md", skill.parent / "invocation.md")
                 (skill / "SKILL.md").write_text("Produce a review.\n")
                 executable = attempt / "fake-client"
                 executable.write_text('''#!/usr/bin/python3
-import json, os, pathlib, sys
+import json, os, pathlib, sys, sqlite3
 assert '--resume' not in sys.argv and '--continue' not in sys.argv
 home = pathlib.Path(os.environ['HOME'])
 assert not (home / 'ambient-marker').exists()
@@ -367,16 +469,27 @@ report = pathlib.Path(os.environ['CE_REVIEW_ARTIFACT_ROOT'])
 report.mkdir(parents=True)
 (report / 'review.json').write_text(json.dumps({'status':'complete','verdict':'clear','findings':[]}))
 if '--provider' in sys.argv:
-    print(json.dumps({'type':'message_end','message':{'role':'assistant','model':'openai/gpt-6.1-sol','thinkingLevel':'high','usage':{'cost':{'total':0.01}}}}))
+    print(json.dumps({'type':'message_end','message':{'role':'assistant','model':'openai/gpt-6.1-sol','provider':'openrouter','thinkingLevel':'high','stopReason':'stop','usage':{'input':10,'output':0,'cacheRead':0,'cacheWrite':0,'cost':{'total':0.99}}}}))
     print(json.dumps({'type':'agent_settled','aborted':False}))
 else:
-    print(json.dumps({'type':'step_finish','part':{'reason':'stop','cost':0.01}}))
+    dbpath = home / '.local/share/opencode/opencode.db'
+    dbpath.parent.mkdir(parents=True)
+    db = sqlite3.connect(dbpath)
+    for table in ('credential','account','control_account'):
+        db.execute('CREATE TABLE '+table+' (id TEXT)')
+    db.execute('CREATE TABLE session_v2 (id TEXT,parent_id TEXT,fork_session_id TEXT,idle_outcome TEXT,tokens_input INTEGER,tokens_output INTEGER,tokens_reasoning INTEGER,tokens_cache_read INTEGER,tokens_cache_write INTEGER)')
+    db.execute("INSERT INTO session_v2 VALUES ('root',NULL,NULL,'succeeded',10,0,0,0,0)")
+    db.execute('CREATE TABLE session_message (id TEXT,session_id TEXT,type TEXT,time_created INTEGER,data TEXT)')
+    message = {'time':{'completed':1},'model':{'id':'openai/gpt-6.1-sol','providerID':'openrouter','variant':'high'},'finish':'stop','tokens':{'input':10,'output':0,'reasoning':0,'cache':{'read':0,'write':0}}}
+    db.execute("INSERT INTO session_message VALUES ('message','root','assistant',1,?)",(json.dumps(message),))
+    db.commit(); db.close()
+    print(json.dumps({'type':'step_start','messageID':'message'}))
 ''')
                 executable.chmod(0o755)
                 config = {"harness": harness, "model": "openai/gpt-6.1-sol", "effort": "high", "kind": "skill",
-                          "runtime": {"path": str(executable), "sha256": digest(executable)}, "policy": "Frozen policy"}
+                          "runtime": {"path": str(executable), "sha256": digest(executable)}, "policy": "Frozen policy", "rates": {"model": {"pricing": {"prompt":"0.001"}}}}
                 with patch.object(adapters, "credentials", return_value=[]):
-                    result = adapters.execute(config, attempt, {"merge_base": "base", "provisioning": {"allowance": "read only", "unavailable": "tests"}}, packet, skill)
+                    result = adapters.execute(config, attempt, {"merge_base": "base", "head":"head", "provisioning": {"allowance": "read only", "unavailable": "tests"}}, packet, skill)
                 self.assertEqual(result, 0, (attempt / "stderr.txt").read_text())
                 usage, normalized = adapters.collect(config, attempt)
                 self.assertEqual(usage["priced_total_usd"], .01)
@@ -413,34 +526,20 @@ else:
                     native, _ = adapters.client_command(config, attempt, home, clone, None)
                     self.assertEqual(native[-2:], ["review", "-"])
 
-    def test_pi_and_opencode_meter_authoritative_completion_once(self):
-        for harness in ("pi", "opencode"):
-            with self.subTest(harness=harness), tempfile.TemporaryDirectory() as temporary:
-                attempt = Path(temporary)
-                (attempt / "clone-work/report").mkdir(parents=True)
-                write(attempt / "clone-work/report/review.json", {"status": "complete", "verdict": "clear", "findings": []})
-                if harness == "pi":
-                    message = {"role": "assistant", "model": "openai/gpt-6.1-sol", "thinkingLevel": "high", "usage": {"cost": {"total": .02}}}
-                    rows = [{"type": "message_update", "usage": message["usage"]}, {"type": "message_end", "message": message},
-                            {"type": "agent_settled", "aborted": False}]
-                else:
-                    rows = [{"type": "step_finish", "part": {"reason": "stop", "cost": .02, "tokens": {"input": 5}}}]
-                (attempt / "stdout.jsonl").write_text("\n".join(map(json.dumps, rows)))
-                usage, report = adapters.collect({"harness": harness, "model": "openai/gpt-6.1-sol", "effort": "high"}, attempt)
-                self.assertEqual(usage["priced_total_usd"], .02)
-                self.assertEqual(report["parse_status"], "empty")
-
-    def test_pi_unknown_cost_stays_unknown(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            attempt = Path(temporary)
-            (attempt / "clone-work/report").mkdir(parents=True)
-            write(attempt / "clone-work/report/review.json", {"status": "complete", "verdict": "clear", "findings": []})
-            rows = [{"type": "message_end", "message": {"role": "assistant", "model": "openai/gpt-6.1-sol"}},
-                    {"type": "agent_settled", "aborted": False}]
-            (attempt / "stdout.jsonl").write_text("\n".join(map(json.dumps, rows)))
-            usage, _ = adapters.collect({"harness": "pi", "model": "openai/gpt-6.1-sol", "effort": "high"}, attempt)
-            self.assertIsNone(usage["priced_total_usd"])
-            self.assertEqual(usage["metering_status"], "incomplete")
+    def test_pi_meter_uses_frozen_prices_and_rejects_api_error_defaults(self):
+        import contributor_openrouter as meter
+        message = {"role": "assistant", "model": "openai/gpt-6.1-sol", "provider": "openrouter", "thinkingLevel": "high",
+                   "stopReason": "stop", "usage": {"input": 90, "output": 20, "cacheRead": 10, "cacheWrite": 0,
+                   "cost": {"total": 0}}}
+        rows = [{"type": "message_update", "usage": message["usage"]}, {"type": "message_end", "message": message},
+                {"type": "agent_settled", "aborted": False}]
+        requests, _, complete, _ = meter.pi(rows)
+        prices = {"prompt": ".000003", "completion": ".000005", "input_cache_read": ".0000003"}
+        self.assertAlmostEqual(meter.price(requests, prices, complete)["priced_total_usd"], .000373)
+        message["stopReason"] = "error"
+        requests, _, complete, _ = meter.pi(rows)
+        self.assertIsNone(meter.price(requests, prices, complete)["priced_total_usd"])
+        self.assertIsNone(meter.price(requests, {}, True)["priced_total_usd"])
 
 
 if __name__ == "__main__":
