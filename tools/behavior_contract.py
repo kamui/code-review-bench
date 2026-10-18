@@ -80,7 +80,11 @@ def require_capabilities(case, root):
             if error.errno not in (errno.EILSEQ, errno.EINVAL):
                 raise
             raise UnavailableFixture(f"{capability}: {error}") from error
-        probe.unlink()
+        try:
+            if b"probe-\xff" not in os.listdir(os.fsencode(root)):
+                raise UnavailableFixture(f"{capability}: filesystem changed the filename bytes")
+        finally:
+            probe.unlink()
 
 
 def snapshot(root):

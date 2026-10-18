@@ -288,6 +288,27 @@ class ContractTests(unittest.TestCase):
             with patch.object(Path, "write_bytes", refuse), self.assertRaises(contract.UnavailableFixture):
                 contract.require_capabilities(case, Path(temporary))
 
+    def test_escaped_filename_case_reports_unavailable_and_continues(self):
+        original = contract.os.listdir
+        def escaped_names(path):
+            return [b"probe-%FF" if name == b"probe-\xff" else name
+                    for name in original(path)]
+        with patch.object(contract.os, "listdir", escaped_names):
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                with self.assertRaisesRegex(contract.UnavailableFixture, "non-utf8-paths"):
+                    contract.require_capabilities({"requires": ["non-utf8-paths"]}, root)
+                self.assertEqual(list(root.iterdir()), [])
+            with patch.object(sys, "argv", ["behavior_contract", "--allow-known-defects"]):
+                import contextlib
+                import io
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    self.assertEqual(contract.main(), 0)
+                self.assertIn("SKIP UNAVAILABLE non-utf8-path", output.getvalue())
+                self.assertNotIn("PASS non-utf8-path", output.getvalue())
+                self.assertIn("PASS transcript-duplicate-maxima", output.getvalue())
+
     def test_invalid_primary_json_reports_each_case_and_continues(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
