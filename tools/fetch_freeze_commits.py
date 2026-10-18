@@ -26,7 +26,10 @@ def main() -> int:
             commits.add(manifest["freeze_commit"])
     missing = sorted(commit for commit in commits if not present(commit))
     if missing:
-        subprocess.run(["git", "-C", str(ROOT), "fetch", "--no-tags", "--depth=1", "origin", *missing], check=False)
+        shallow = subprocess.check_output(
+            ["git", "-C", str(ROOT), "rev-parse", "--is-shallow-repository"], text=True).strip() == "true"
+        depth = ["--depth=1"] if shallow else []
+        subprocess.run(["git", "-C", str(ROOT), "fetch", "--no-tags", *depth, "origin", *missing], check=False)
     absent = [commit for commit in missing if not present(commit)]
     for commit in absent:
         print(f"freeze commit {commit} could not be fetched", file=sys.stderr)
