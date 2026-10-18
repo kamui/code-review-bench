@@ -12,13 +12,13 @@ export const segmentLabels: Record<LabelSegment, string> = {
   'outside-this-change': 'Outside this change', refuted: 'Refuted', unproven: 'Unproven', unresolved: 'Unresolved',
 }
 const untrueSegments: LabelSegment[] = ['refuted', 'unproven', 'unresolved']
-const trueSegments = labelSegments.filter(segment => !untrueSegments.includes(segment))
+export const trueSegments = labelSegments.filter(segment => !untrueSegments.includes(segment))
 const hatched: LabelSegment[] = ['outside-this-change', 'unresolved']
 
 type Row = { id: string; label: string; rates: Record<LabelSegment, Measure> }
 
-const swatch = (segment: LabelSegment) => ({ background: `var(--label-${segment.replace(':', '-')})` })
-const segmentClass = (base: string, segment: LabelSegment) => hatched.includes(segment) ? `${base} hatched` : base
+export const swatch = (segment: LabelSegment) => ({ background: `var(--label-${segment.replace(':', '-')})` })
+export const segmentClass = (base: string, segment: LabelSegment) => hatched.includes(segment) ? `${base} hatched` : base
 const tickStep = (extent: number) => extent <= 3 ? 0.5 : extent <= 8 ? 1 : extent <= 16 ? 2 : 5
 const blocked = (row: Row) => labelSegments.map(segment => row.rates[segment]).find(rate => rate.kind === 'unavailable')
 const length = (row: Row, segments: LabelSegment[]) => segments.reduce((total, segment) => total + (measured(row.rates[segment]) ?? 0), 0)
