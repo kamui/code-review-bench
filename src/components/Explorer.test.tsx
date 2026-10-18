@@ -205,12 +205,20 @@ describe('overview', () => {
 
   test('a header sort states its rule and keeps setups without the value last in both directions', () => {
     const cheapest = overview({ column: 'cost', direction: 'ascending' }), dearest = overview({ column: 'cost', direction: 'descending' })
-    expect(text(cheapest)).toContain('Sorted by cost per scheduled trial, lowest first. Setups without a value come last.')
-    expect(setups(cheapest)).toEqual(['Claude built-in / Fixture C / High', 'ce-code-review / Fixture C / High', 'Claude built-in / Fixture A / High',
-      'ce-code-review / Fixture A / High', 'ce-code-review / Fixture B / High', 'Claude built-in / Fixture B / High'])
-    expect(setups(dearest).slice(-2)).toEqual(['ce-code-review / Fixture B / High', 'Claude built-in / Fixture B / High'])
+    expect(text(cheapest)).toContain('Sorted by cost per scheduled trial, lowest first. A lower-bound cost sorts by its bound. Setups without a value come last.')
+    expect(setups(cheapest)).toEqual(['Claude built-in / Fixture C / High', 'ce-code-review / Fixture B / High', 'ce-code-review / Fixture C / High',
+      'Claude built-in / Fixture A / High', 'ce-code-review / Fixture A / High', 'Claude built-in / Fixture B / High'])
+    expect(setups(dearest)).toEqual(['ce-code-review / Fixture A / High', 'Claude built-in / Fixture A / High', 'ce-code-review / Fixture C / High',
+      'ce-code-review / Fixture B / High', 'Claude built-in / Fixture C / High', 'Claude built-in / Fixture B / High'])
     expect(cheapest).toMatch(/aria-sort="ascending"[^>]*>(?:<[^>]+>)*<span class="overview-title">Cost per scheduled trial/)
     expect(text(overview({ column: 'setup', direction: 'ascending' }))).toContain('Sorted by setup name, A to Z.')
+  })
+
+  test('says what to select when no setup is selected', () => {
+    const empty = renderToStaticMarkup(<MantineProvider><Overview summaries={[]} detection={{ band: 'all', estimator: 'equalProblem' }}
+      sort={{ column: 'claims', direction: 'descending' }} onSort={() => {}} onSelect={() => {}} /></MantineProvider>)
+    expect(empty).toContain('role="status"')
+    expect(text(empty)).toContain('Select at least one review method and model.')
   })
 })
 

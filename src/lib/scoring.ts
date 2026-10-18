@@ -506,18 +506,18 @@ export const overviewFirstDirection: Record<OverviewColumn, SortDirection> = {
   setup: 'ascending', detection: 'descending', claims: 'descending', doubt: 'ascending', cost: 'ascending', time: 'ascending' }
 const exact = (measure: Bounded): number | null => measure.kind === 'available' ? measure.value : null
 
-/** The overview's sort key for one column: claims sort by problem claims per review alone, and a lower-bound cost has no exact value. */
+/** The overview's sort key for one column: claims sort by problem claims per review alone, and a lower-bound cost sorts by its bound. */
 export function overviewKey(card: Scorecard, column: Exclude<OverviewColumn, 'setup'>, band: Band, estimator: Estimator): number | null {
   switch (column) {
     case 'detection': return exact(card.detection[band][estimator])
     case 'claims': return exact(card.reliability.problemClaimsPerReview)
     case 'doubt': return exact(card.reliability.reviewsWithDoubt.refutedOrUnproven)
-    case 'cost': return exact(card.cost.perTrial)
+    case 'cost': return card.cost.perTrial.kind === 'unavailable' ? null : card.cost.perTrial.value
     case 'time': return card.time.summary.kind === 'available' ? card.time.summary.value.median : null
   }
 }
 
-/** Orders by one column, never a blend. A setup without that column's value goes last in either direction; ties go by name. */
+/** Orders by one column, never a blend. A setup whose value is unavailable goes last in either direction; ties go by name. */
 export function overviewOrder<T>(rows: T[], of: (row: T) => { name: string; card: Scorecard }, sort: OverviewSort, band: Band, estimator: Estimator): T[] {
   const sign = sort.direction === 'ascending' ? 1 : -1
   const keyed = rows.map(row => {

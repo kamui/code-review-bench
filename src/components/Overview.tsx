@@ -71,9 +71,11 @@ export function Overview({ summaries, detection, sort, onSort, onSelect }: {
   const notes = notesFor(readings.flatMap(cells => [cells.detection, cells.claims, cells.doubt, cells.cost, cells.time]))
   const active = heads[sort.column]
   const missing = sort.column !== 'setup' && rows.some(summary => overviewKey(summary.card, sort.column as Exclude<OverviewColumn, 'setup'>, detection.band, detection.estimator) === null)
-  const rule = `Sorted by ${active.measure}, ${active[sort.direction]}.${missing ? ' Setups without a value come last.' : ''}`
+  const bounded = sort.column === 'cost' && rows.some(summary => summary.card.cost.perTrial.kind === 'atLeast')
+  const rule = `Sorted by ${active.measure}, ${active[sort.direction]}.${bounded ? ' A lower-bound cost sorts by its bound.' : ''}${missing ? ' Setups without a value come last.' : ''}`
   const toggle = (column: OverviewColumn) => onSort(column === sort.column
     ? { column, direction: sort.direction === 'ascending' ? 'descending' : 'ascending' } : { column, direction: overviewFirstDirection[column] })
+  if (!rows.length) return <div className="plot-empty" role="status"><span>Select at least one review method and model.</span></div>
   return <div className="overview" onMouseLeave={() => setTip(null)}>
     <p className="overview-rule" aria-live="polite">{rule}</p>
     <div role="table" aria-label={`Overview of the selected setups. ${rule}`} className="overview-table">

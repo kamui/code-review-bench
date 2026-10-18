@@ -433,18 +433,19 @@ describe('overview measures and order', () => {
     expect(reason(card(build([task('none', [])], { a: [[task('none', []), [review(task('none', []), [])]]] }), 'a').problemsCaught.serious)).toBe('No references in this band.')
   })
 
-  test('sorts by one column, puts setups without its exact value last in both directions and breaks ties by name', () => {
+  test('sorts by one column, a lower-bound cost by its bound, puts unavailable values last in both directions and breaks ties by name', () => {
     const many = graded([], [problem('a', 's'), problem('b', 'm')]), one = graded([], [problem('a', 's')])
     const data = build([pr], { tie: [[pr, [one]]], many: [[pr, [many]]], early: [[pr, [one]]], old: [[pr, [graded([], [claim('x', 'eligible', { familyId: 's' })])]]],
-      bound: [[pr, [review(pr, null, { assessment: assessment(pr, [], { claims: [] }), cost: null, costLowerBound: 0.01 })]]] })
+      bound: [[pr, [review(pr, null, { assessment: assessment(pr, [], { claims: [] }), cost: null, costLowerBound: 0.01 })]]],
+      none: [[pr, [review(pr, null, { assessment: assessment(pr, [], { claims: [] }), cost: null })]]] })
     const rows = data.configurations.map(item => ({ name: item.id, card: card(data, item.id) }))
     const order = (column: Parameters<typeof overviewOrder>[2]['column'], direction: 'ascending' | 'descending') =>
       overviewOrder(rows, row => row, { column, direction }, 'all', 'equalProblem').map(row => row.name)
-    expect(order('claims', 'descending')).toEqual(['many', 'early', 'tie', 'bound', 'old'])
-    expect(order('claims', 'ascending')).toEqual(['bound', 'early', 'tie', 'many', 'old'])
-    expect(order('cost', 'ascending').at(-1)).toBe('bound')
-    expect(order('cost', 'descending').at(-1)).toBe('bound')
-    expect(order('setup', 'descending')).toEqual(['tie', 'old', 'many', 'early', 'bound'])
+    expect(order('claims', 'descending')).toEqual(['many', 'early', 'tie', 'bound', 'none', 'old'])
+    expect(order('claims', 'ascending')).toEqual(['bound', 'none', 'early', 'tie', 'many', 'old'])
+    expect(order('cost', 'ascending')).toEqual(['bound', 'early', 'many', 'old', 'tie', 'none'])
+    expect(order('cost', 'descending')).toEqual(['early', 'many', 'old', 'tie', 'bound', 'none'])
+    expect(order('setup', 'descending')).toEqual(['tie', 'old', 'none', 'many', 'early', 'bound'])
   })
 })
 
