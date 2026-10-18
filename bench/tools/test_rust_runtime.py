@@ -372,6 +372,31 @@ class Resolution(Store):
         self.assertIn(f"fixture-tool has no selected version in {empty}", done.stderr)
         self.assertIn("install it with:", done.stderr)
 
+    def test_a_store_reached_through_a_symlink_resolves_to_its_canonical_path(self):
+        real = self.root / "real"
+        real.mkdir()
+        (self.root / "linked").symlink_to(real, target_is_directory=True)
+        self.store = self.root / "linked/store"
+
+        def canonical(pin: dict) -> Path:
+            return real / "store/fixture-tool" / pin["sha256"] / "fixture-tool"
+
+        selected = self.head_version("selected")
+        rust_runtime.select(self.store, "fixture-tool", selected)
+        self.assertNotEqual(self.entry(selected) / "fixture-tool", canonical(selected))
+        self.assertEqual(self.resolve(), canonical(selected))
+        prints_its_path = script(self.root / "prints-its-path", '"$0"')
+        frozen = rust_runtime.pin_of(rust_runtime.retain(self.store, prints_its_path, fake_receipt(prints_its_path))[0])
+        run_dir = self.root / "run"
+        run_dir.mkdir()
+        (run_dir / "runtimes.frozen.json").write_text(json.dumps({"fixture-tool": frozen}), encoding="utf-8")
+        self.assertEqual(self.resolve(run_dir), canonical(frozen))
+        self.assertEqual(self.cli("resolve", "fixture-tool", "--run", str(run_dir)),
+                         (0, json.dumps({"executable": str(canonical(frozen))}, indent=2) + "\n", ""))
+        done = subprocess.run([sys.executable, str(TOOL), "exec", "fixture-tool", "--run", str(run_dir),
+                               "--store", str(self.store)], capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual((done.returncode, done.stdout), (0, f"{canonical(frozen)}\n"), done.stderr)
+
 
 class Interpreter(unittest.TestCase):
     def test_queue_commands_load_without_tomllib_and_only_install_needs_it(self):
