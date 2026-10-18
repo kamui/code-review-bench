@@ -40,9 +40,10 @@ The pin that queues and runs use is the executable's SHA-256 together with the r
 
 `install` needs Python 3.11 or later; the other commands and `review_queue.py` do not.
 After the cleanliness check it writes the crate's Git tree at `HEAD` into a private snapshot, copying
-each file's committed bytes. The checks below that read the crate, the toolchain query and the build
-all run in that snapshot, and the receipt hashes its files. An edit saved to the checkout during an
-install therefore cannot reach the executable, even when it is reverted before the install ends.
+each file's committed bytes. The manifest and `cargo metadata` checks, the toolchain query and the
+build use that snapshot, and the receipt hashes its files. The Cargo configuration and workspace
+checks inspect both the checkout and the snapshot. An edit saved to the checkout during an install
+therefore cannot reach the executable, even when it is reverted before the install ends.
 It refuses what a receipt could not restore:
 
 - Uncommitted or untracked files in the crate, and an active `rustc` whose release differs from

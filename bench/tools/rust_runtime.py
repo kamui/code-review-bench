@@ -21,10 +21,11 @@ that already holds a pin keeps it through restart and recovery; nothing here fal
 or to Python when the pinned one is missing or changed.
 
 ``install`` needs a clean, committed crate. It writes the crate's Git tree at ``HEAD`` into a private
-snapshot and checks and builds only that snapshot, so an edit saved to the checkout meanwhile cannot reach
-the executable. The build runs ``cargo build --locked --offline --release`` for this host's target, with only
-``BUILD_ENVIRONMENT`` passed through and source paths remapped, once the active ``rustc`` is the release
-``rust-toolchain.toml`` pins. It refuses what a receipt could not restore:
+snapshot. The manifest and metadata checks, the receipt's hashes, the toolchain query and the build use that
+snapshot, so an edit saved to the checkout meanwhile cannot reach the executable; the configuration and
+workspace checks inspect the checkout as well. The build runs ``cargo build --locked --offline --release``
+for this host's target, with only ``BUILD_ENVIRONMENT`` passed through and source paths remapped, once the
+active ``rustc`` is the release ``rust-toolchain.toml`` pins. It refuses what a receipt could not restore:
 
 - Any Cargo configuration file that would apply to the checkout or the snapshot, a relative ``HOME``,
   ``CARGO_HOME``, ``RUSTUP_HOME`` or ``TMPDIR``, a parent Cargo workspace, and ``[patch]`` or ``[replace]`` sections.
