@@ -144,7 +144,10 @@ retained, and the non-UTF-8 case explicitly pins rendered output bytes.
 Published decision files are immutable. `bun run test:web` runs the Git-history
 check and the JavaScript digest vectors before the rest of the suite. The history
 check anchors all existing versions at the first commit that adds v2, then anchors
-each later version at its own first addition. This also works after squash merges.
+each later version at its own first addition. The corpus must select the latest
+version, and each version must link to its immediate predecessor, including the
+legacy v1 root. A fresh root, skipped predecessor or rollback fails. This also works
+after squash merges.
 An edited or removed published version fails, even after its self-digest is
 recomputed or the edit is committed. Add a new version instead. The check requires
 full Git history; CI uses `fetch-depth: 0`. A source archive alone cannot establish
