@@ -21,12 +21,14 @@ baseline collision with a real `ordinal-None` ID. Arbitrarily large integer ordi
 are preserved. Counts themselves are limited to unsigned 64-bit integers.
 
 Both candidates reject negative, fractional, boolean or out-of-range counts,
-non-object records/payloads, invalid identities, mixed naive/aware timestamps,
+non-object records, non-object payloads on the four consumed record types, invalid
+identities, mixed naive/aware timestamps,
 overflowing totals and nonfinite rates/costs. These are deliberate pilot boundary
 checks, rather than a claim that the permissive baseline accepts exactly the same
 input language. Cache reads plus writes cannot exceed Codex input. Thinking counts
 retain the baseline interpretation; this pilot adds no new output-subset rule.
-The adapter also checks totals across input files.
+The adapter also checks totals across input files. Other record types are ignored
+without validating their payload, matching the baseline.
 
 The Rust parser accepts extended RFC 3339, basic ISO date/time with zone, naive
 extended/basic date/time, and date-only stamps. It rejects leap seconds and years
@@ -47,6 +49,6 @@ optional fields and aggregation have not been ported to the Rust domain. No Rust
 transcript performance or structural guarantee is claimed.
 
 The application forbids unsafe Rust; dependencies retain their own implementation
-policies. Private Rust fields prevent construction of invalid domain values through
-the public safe API, but they cannot validate billing truth, file provenance, or
-external side effects. Production still has the separately recorded U1–U3 defects.
+policies. Private Rust fields restrict count, rate and identity construction through
+the public safe API. Summary arithmetic and costs still require runtime checks;
+the types cannot validate billing truth, file provenance, or external side effects. Production still has the separately recorded U1–U3 defects.

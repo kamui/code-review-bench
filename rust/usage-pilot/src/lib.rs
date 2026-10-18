@@ -279,17 +279,17 @@ pub fn read_rollout(reader: impl BufRead, path: &str) -> Result<Rollout, UsageEr
         })?;
         let record = object(&raw, &location)?;
         let kind = record.get("type").and_then(Value::as_str);
-        let empty = Map::new();
-        let payload = match record.get("payload") {
-            None | Some(Value::Null) => &empty,
-            Some(value) => object(value, &location)?,
-        };
         if !matches!(
             kind,
             Some("session_meta" | "turn_context" | "response_item" | "token_usage_record")
         ) {
             continue;
         }
+        let empty = Map::new();
+        let payload = match record.get("payload") {
+            None | Some(Value::Null) => &empty,
+            Some(value) => object(value, &location)?,
+        };
         match kind {
             Some("session_meta") => {
                 let native = session_id(payload.get("id"), &location)?;
