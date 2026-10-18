@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { MantineProvider } from '@mantine/core'
+import { createMemoryHistory, createRootRoute, createRouter, RouterContextProvider } from '@tanstack/react-router'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { Dataset } from '../lib/data'
 import { assessment, build, claim, claims, family, preExistingScorecardFixture, remedy, review, scorecardFixture, task } from '../lib/fixture'
@@ -8,13 +9,16 @@ import type { DetectionView } from '../lib/metrics'
 import { leaderboard, matched, scorecard } from '../lib/scoring'
 import { Chart } from './Chart'
 import { Dashboard } from './Explorer'
+import type { Page } from './Explorer'
 import { MethodologyViews, scorecardTabs } from './MethodologyViews'
 import { SeriousMisses } from './SeriousMisses'
 
 const now = new Date('2026-10-03T12:00:00Z')
 const text = (markup: string) => markup.replace(/<style[\s\S]*?<\/style>/g, '').replace(/<[^>]+>/g, ' ').replace(/&#x27;/g, "'").replace(/&amp;/g, '&').replace(/\s+/g, ' ')
 const card = (dataset: Dataset, id: string) => scorecard(dataset, id, { taskIds: dataset.tasks.map(item => item.id), concern: null })
-const page = (dataset: Dataset) => text(renderToStaticMarkup(<MantineProvider><Dashboard dataset={dataset} now={now} /></MantineProvider>))
+const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory() })
+const markup = (dataset: Dataset, view: Page) => renderToStaticMarkup(<RouterContextProvider router={router}><MantineProvider><Dashboard dataset={dataset} page={view} now={now} /></MantineProvider></RouterContextProvider>)
+const page = (dataset: Dataset) => text(`${markup(dataset, 'scorecard')} ${markup(dataset, 'tasks')}`)
 
 function chart(dataset: Dataset, detection: DetectionView, view: 'setups' | 'tradeoff' | 'models' = 'setups', axis: 'cost' | 'refuted' = 'cost', omit: string[] = []) {
   const selected = dataset.configurations.filter(configuration => !configuration.experimental && !omit.includes(configuration.id))
@@ -130,6 +134,16 @@ describe('scorecard page on the fixture', () => {
   test('the task catalog mean says how many selected setups it covers and why the others are left out', () => {
     expect(rendered).toContain('43.8% Mean of 4 of 6 selected setups. Not included: 1 scheduled trial awaits execution. (1 setup) 1 admitted review awaits assessment. (1 setup)')
     expect(rendered).toContain('Unavailable : No references in this band. (6 setups)')
+  })
+
+  test('keeps the task catalog on its own page, reached from the navigation and the filter chips', () => {
+    const scorecard = markup(fixture, 'scorecard'), tasks = markup(fixture, 'tasks')
+    expect(text(scorecard)).toContain('The scorecard')
+    expect(text(scorecard)).not.toContain('Explore the tasks')
+    expect(text(tasks)).toContain('Explore the tasks')
+    for (const heading of ['The scorecard', 'What the numbers mean', 'PR tasks']) expect(text(tasks)).not.toContain(heading)
+    for (const rendered of [scorecard, tasks]) expect(rendered).toContain('<a href="/tasks"')
+    expect(tasks).toContain('href="/#scorecard"')
   })
 
   test('derives the hero counts from the whole export, experiments included', () => {
