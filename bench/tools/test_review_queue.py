@@ -26,8 +26,10 @@ import uuid
 import prune_workspace
 import review_queue
 import run_cell
+import rust_runtime
 import subscription_meters
 import test_interrupted_attempts as fixtures
+from test_rust_runtime import fake_receipt, script
 
 RUN_ID = fixtures.RUN_ID
 CAPTURED = fixtures.CAPTURED
@@ -80,6 +82,8 @@ def review(argv: list) -> subprocess.CompletedProcess:
     attempt = Path(argv[2])
     with (plan_root() / "reviews.log").open("a", encoding="utf-8") as log:
         log.write(attempt.name + "\n")
+    with (plan_root() / "runtimes.log").open("a", encoding="utf-8") as log:
+        log.write(json.dumps({name: value for name, value in os.environ.items() if name.startswith("BENCH_RUST_")}) + "\n")
     subagents = attempt / "home/.claude/projects/p/s1/subagents"
     subagents.mkdir(parents=True)
     (attempt / "home/.claude/projects/p/s1.jsonl").write_text("", encoding="utf-8")
@@ -192,6 +196,8 @@ def fake_queue(argv: list) -> int:
     review_queue.write = write
     for (module, name), value in faked().items():
         setattr(module, name, value)
+    if os.environ.get("FAKE_QUEUE_REPO"):
+        review_queue.REPO = Path(os.environ["FAKE_QUEUE_REPO"])
     os.environ["FAKE_CONTROLLER"] = str(os.getpid())
     return review_queue.main(argv)
 
@@ -1240,6 +1246,196 @@ class Status(QueueFixture):
                 controller = review_queue.report(queue, now)["controller"]
                 self.assertEqual((controller["process"]["status"], controller["heartbeat_age_seconds"]), (expected, round(now - beat)))
                 (self.state / "invocations" / f"{name}.json").unlink()
+
+
+class RustRuntimes(QueueFixture):
+    """A queue whose run froze a Rust executable retained in a store, built from the crate tree at the run's freeze commit."""
+
+    def setUp(self):
+        super().setUp()
+        self.repo = self.root / "repo"
+        (self.repo / "rust/fixture-tool").mkdir(parents=True)
+        (self.repo / "rust/fixture-tool/Cargo.toml").write_text('[package]\nname = "fixture-tool"\n', encoding="utf-8")
+        git = ["git", "-C", str(self.repo), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid"]
+        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+        subprocess.run([*git, "add", "."], check=True)
+        subprocess.run([*git, "commit", "-qm", "freeze"], check=True)
+        self.commit = subprocess.check_output([*git, "rev-parse", "HEAD"], text=True).strip()
+        self.tree = subprocess.check_output([*git, "rev-parse", "HEAD:rust/fixture-tool"], text=True).strip()
+        self.store = self.root / "runtime-store"
+        self.one, self.two = self.version("one"), self.version("two")
+        rust_runtime.select(self.store, "fixture-tool", self.one)
+        rust_runtime.select(self.store, "fixture-tool", self.two)
+        self.manifest["freeze_commit"] = self.commit
+        (self.run_dir / "manifest.json").write_text(json.dumps(self.manifest), encoding="utf-8")
+        self.freeze(self.run_dir, self.two)
+        self.spec.update(runtimes={"fixture-tool": self.two}, runtime_store=str(self.store))
+        self.queue.write_text(json.dumps(self.spec), encoding="utf-8")
+        self.enterContext(patch.object(review_queue, "REPO", self.repo))
+        self.enterContext(patch.dict(os.environ, {"FAKE_QUEUE_REPO": str(self.repo)}))
+
+    def version(self, output: str, **changes) -> dict:
+        executable = script(self.root / f"fixture-tool-{output}", output)
+        receipt = fake_receipt(executable, **changes)
+        receipt["source"] = {**receipt["source"], "tree": self.tree, "revision": "a" * 40}
+        directory, _ = rust_runtime.retain(self.store, executable, receipt)
+        return rust_runtime.pin_of(directory)
+
+    def executable(self, pin: dict) -> Path:
+        return self.store / "fixture-tool" / pin["sha256"] / "fixture-tool"
+
+    @staticmethod
+    def freeze(run_dir: Path, pin: dict) -> None:
+        (run_dir / "runtimes.frozen.json").write_text(json.dumps({"fixture-tool": pin}), encoding="utf-8")
+
+    def used(self) -> list:
+        return [json.loads(line) for line in (self.root / "runtimes.log").read_text(encoding="utf-8").splitlines()]
+
+    def test_a_launch_runs_the_pinned_executable_and_records_its_pin(self):
+        code, events, err = self.command("run", "--count", "1")
+        self.assertEqual((code, self.reviews()), (0, ["att-001"]), (events, err))
+        self.assertEqual(self.used(), [{"BENCH_RUST_FIXTURE_TOOL": str(self.executable(self.two)),
+                                        "BENCH_RUST_FIXTURE_TOOL_SHA256": self.two["sha256"]}])
+        self.assertEqual(subprocess.check_output([self.used()[0]["BENCH_RUST_FIXTURE_TOOL"]], text=True), "two\n")
+        self.assertEqual(self.launch_records()[0]["runtimes"], {"fixture-tool": self.two})
+
+    def test_an_inherited_rust_runtime_variable_never_reaches_a_launch(self):
+        inherited = {"BENCH_RUST_FIXTURE_TOOL": "/bin/true", "BENCH_RUST_FIXTURE_TOOL_SHA256": "0" * 64, "BENCH_RUST_OTHER": "/bin/true"}
+        with patch.dict(os.environ, inherited):
+            code, events, err = self.command("run", "--count", "1")
+        self.assertEqual(code, 0, (events, err))
+        self.assertEqual(self.used(), [{"BENCH_RUST_FIXTURE_TOOL": str(self.executable(self.two)),
+                                        "BENCH_RUST_FIXTURE_TOOL_SHA256": self.two["sha256"]}])
+
+    def test_a_missing_replaced_or_unattributable_executable_is_refused_before_any_launch(self):
+        executable, receipt = self.executable(self.two), self.executable(self.two).with_name("receipt.json")
+        saved = {path: path.read_bytes() for path in (executable, receipt)}
+
+        def rewrite(path: Path, content: bytes) -> None:
+            path.unlink()
+            path.write_bytes(content)
+
+        # A receipt for another target needs a queue pinning it, which would be a new queue, so only ``check`` reads it.
+        rewrite(receipt, saved[receipt].replace(rust_runtime.host_target().encode(), b"aarch64-apple-darwin"))
+        foreign = {**self.two, "receipt_sha256": rust_runtime.sha256_file(receipt)}
+        self.queue.write_text(json.dumps({**self.spec, "runtimes": {"fixture-tool": foreign}}), encoding="utf-8")
+        self.freeze(self.run_dir, foreign)
+        self.assert_blocked(self.command("check"), "fixture-tool was built for aarch64-apple-darwin; this host is")
+        rewrite(receipt, saved[receipt])
+        self.queue.write_text(json.dumps(self.spec), encoding="utf-8")
+        self.freeze(self.run_dir, self.two)
+        changes = {
+            "the fixture-tool Rust runtime: the pinned fixture-tool executable": lambda: executable.unlink(),
+            "no longer hashes to its pin": lambda: rewrite(executable, b"#!/bin/sh\necho swapped\n"),
+            "receipt.json no longer hashes to its pin": lambda: rewrite(receipt, saved[receipt].replace(b'"built_at"', b'"built_at" ', 1)),
+        }
+        for needle, change in changes.items():
+            with self.subTest(needle=needle):
+                change()
+                self.assert_blocked(self.command("check"), needle)
+                self.assert_blocked(self.command("run"), needle)
+                for path, content in saved.items():
+                    path.unlink(missing_ok=True)
+                    path.write_bytes(content)
+                executable.chmod(0o555)
+        self.assertEqual(self.reviews(), [])
+        code, events, err = self.command("run", "--count", "1")
+        self.assertEqual((code, self.reviews()), (0, ["att-001"]), (events, err))
+
+    def test_a_queue_pin_that_differs_from_what_the_run_froze_is_refused(self):
+        for frozen in ({"fixture-tool": self.one}, {}, {"fixture-tool": self.two, "other-tool": self.two}):
+            with self.subTest(frozen=frozen):
+                (self.run_dir / "runtimes.frozen.json").write_text(json.dumps(frozen), encoding="utf-8")
+                self.assert_blocked(self.command("run"), "the queue's Rust runtime pins differ from the run's runtimes.frozen.json")
+        (self.run_dir / "runtimes.frozen.json").unlink()
+        self.assert_blocked(self.command("run"), "runtimes.frozen.json")
+        self.assertEqual(self.reviews(), [])
+
+    def test_an_executable_built_from_another_crate_tree_than_the_freeze_commit_is_refused(self):
+        other = self.version("other")
+        (self.repo / "rust/fixture-tool/Cargo.toml").write_text('[package]\nname = "fixture-tool"\nversion = "2"\n', encoding="utf-8")
+        git = ["git", "-C", str(self.repo), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid"]
+        subprocess.run([*git, "commit", "-qam", "change the crate"], check=True)
+        later = subprocess.check_output([*git, "rev-parse", "HEAD"], text=True).strip()
+        self.manifest["freeze_commit"] = later
+        (self.run_dir / "manifest.json").write_text(json.dumps(self.manifest), encoding="utf-8")
+        self.spec["runtimes"]["fixture-tool"] = other
+        self.queue.write_text(json.dumps(self.spec), encoding="utf-8")
+        self.freeze(self.run_dir, other)
+        self.assert_blocked(self.command("run"), f"was built from crate tree {self.tree}; freeze commit {later} has")
+        self.assertEqual(self.reviews(), [])
+
+    def test_runtime_names_that_generate_the_same_launch_variable_are_refused(self):
+        executable = script(self.root / "fixture-tool-sha256", "other")
+        receipt = fake_receipt(executable, "fixture-tool-sha256")
+        receipt["source"] = {**receipt["source"], "tree": self.tree}
+        receipt["crate"] = {**receipt["crate"], "path": "rust/fixture-tool"}
+        other = rust_runtime.pin_of(rust_runtime.retain(self.store, executable, receipt)[0])
+        runtimes = {"fixture-tool": self.two, "fixture-tool-sha256": other}
+        (self.run_dir / "runtimes.frozen.json").write_text(json.dumps(runtimes), encoding="utf-8")
+        self.queue.write_text(json.dumps({**self.spec, "runtimes": runtimes}), encoding="utf-8")
+        for action in ("check", "run"):
+            with self.subTest(action=action):
+                code, events, err = self.command(action)
+                self.assertEqual(code, 2, (events, err))
+                self.assertIn("runtime names generate the same launch variable BENCH_RUST_FIXTURE_TOOL_SHA256", err)
+        self.assertEqual(self.reviews(), [])
+
+    def test_a_reserved_runtime_name_may_not_be_set_through_the_queue_environment(self):
+        self.queue.write_text(json.dumps({**self.spec, "environment": {"BENCH_RUST_FIXTURE_TOOL": "/bin/true"}}), encoding="utf-8")
+        code, events, err = self.command("check")
+        self.assertEqual(code, 2, (events, err))
+        self.assertIn("environment may not set BENCH_RUST_FIXTURE_TOOL", err)
+
+    def test_restart_after_a_crash_and_rollback_keep_the_started_run_on_its_pin(self):
+        self.crashed("after_claim")
+        self.assertEqual(self.reviews(), [])
+        rust_runtime.rollback(self.store, "fixture-tool")
+        self.assertEqual(rust_runtime.current_pin(self.store, "fixture-tool"), self.one)
+        self.plan(hold=True)
+        first = subprocess.Popen([*FAKE, "run", "--queue", str(self.queue)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        self.addCleanup(first.wait)
+        self.addCleanup(first.stdout.close)
+        self.addCleanup((self.root / "release").touch)
+        deadline = time.monotonic() + 30
+        while not self.reviews():
+            self.assertIsNone(first.poll(), "the restarted controller ended before its review started")
+            self.assertLess(time.monotonic(), deadline, "the restarted controller never launched")
+            time.sleep(0.02)
+        self.assert_blocked(self.command("run"), "another serial controller holds")
+        (self.root / "release").touch()
+        self.assertEqual(first.wait(60), 0, first.stdout.read())
+        self.assertEqual({row["BENCH_RUST_FIXTURE_TOOL_SHA256"] for row in self.used()}, {self.two["sha256"]})
+        self.assertEqual({record["runtimes"]["fixture-tool"]["sha256"] for record in self.launch_records()}, {self.two["sha256"]})
+
+    def test_a_pinned_version_that_disappears_blocks_without_falling_back_and_new_runs_take_the_rollback(self):
+        code, events, err = self.command("run", "--count", "1")
+        self.assertEqual(code, 0, (events, err))
+        rust_runtime.rollback(self.store, "fixture-tool")
+        self.executable(self.two).unlink()
+        self.assert_blocked(self.command("run"), "the pinned fixture-tool executable")
+        self.assertEqual(self.reviews(), ["att-001"])
+        self.assertTrue(self.executable(self.one).is_file())
+        other = self.second_run()
+        self.freeze(self.run_dir.parent / other, rust_runtime.current_pin(self.store, "fixture-tool"))
+        fresh = {**self.spec, "queue_id": "fixture-rollback", "runs": [str(self.run_dir.parent / other)],
+                 "state_dir": str(self.root / "state-rollback"), "runtimes": {"fixture-tool": self.one}}
+        self.queue.write_text(json.dumps(fresh), encoding="utf-8")
+        code, events, err = self.command("run", "--count", "1")
+        self.assertEqual(code, 0, (events, err))
+        self.assertEqual([row["BENCH_RUST_FIXTURE_TOOL_SHA256"] for row in self.used()], [self.two["sha256"], self.one["sha256"]])
+
+    def test_a_recorded_runtime_deviation_does_not_move_the_run_or_bypass_a_check(self):
+        notes = {"reason": "A parser fix.", "scope": "Later cells.", "validation": "Corpus checks.", "accounting": "Nothing replaced."}
+        path = rust_runtime.deviation(self.store, self.run_dir, "fixture-tool", self.two["sha256"], self.one["sha256"], notes)
+        self.assertIsNone(review_queue.diagnosis(self.run_state(), "att-001"))
+        self.queue.write_text(json.dumps({**self.spec, "runtimes": {"fixture-tool": self.one}}), encoding="utf-8")
+        self.assert_blocked(self.command("check"), "runtimes.frozen.json")
+        self.queue.write_text(json.dumps(self.spec), encoding="utf-8")
+        self.executable(self.two).unlink()
+        self.assert_blocked(self.command("run"), "the pinned fixture-tool executable")
+        self.assertEqual(self.reviews(), [])
+        self.assertTrue(path.is_file())
 
 
 class Pins(unittest.TestCase):

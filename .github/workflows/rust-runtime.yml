@@ -1,0 +1,80 @@
+name: Rust runtime
+
+on:
+  pull_request:
+    paths:
+      - 'rust/**'
+      - 'bench/tools/rust_runtime.py'
+      - 'bench/tools/test_rust_runtime.py'
+      - 'docs/python-migration/runtime-evidence/rollback.sh'
+      - '.github/workflows/rust-runtime.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'rust/**'
+      - 'bench/tools/rust_runtime.py'
+      - 'bench/tools/test_rust_runtime.py'
+      - 'docs/python-migration/runtime-evidence/rollback.sh'
+      - '.github/workflows/rust-runtime.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  rust-runtime:
+    strategy:
+      fail-fast: false
+      matrix:
+        # One runner per entry of rust_runtime.SUPPORTED_TARGETS.
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+    name: rust-runtime (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install rustup when the image has none
+        run: |
+          if ! command -v rustup > /dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+      - name: Install pinned Rust toolchain and dependencies
+        working-directory: rust/usage-pilot
+        run: |
+          rustup show
+          rustup default "$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')"
+          test "$(rustc -vV | sed -n 's/^host: //p')" = "${{ matrix.target }}"
+          cargo fetch --locked
+      - name: Check pinning, retention and rollback
+        working-directory: bench/tools
+        env:
+          RUST_RUNTIME_REQUIRE_CARGO: '1'
+        run: python3 -m unittest test_rust_runtime -v
+      - name: Install the usage pilot and run the corpus with the retained executable
+        run: |
+          store="$RUNNER_TEMP/rust-runtime-store"
+          python3 bench/tools/rust_runtime.py install --crate rust/usage-pilot --store "$store" --select | tee "$RUNNER_TEMP/install.json"
+          sha=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["pin"]["sha256"])' "$RUNNER_TEMP/install.json")
+          python3 bench/tools/rust_runtime.py verify usage-pilot "$sha" --store "$store"
+          python3 - "$store/usage-pilot/$sha/usage-pilot" > "$RUNNER_TEMP/map.json" <<'EOF'
+          import json, os, sys
+          adapter = os.path.abspath("tools/usage_pilot/adapter.py")
+          print(json.dumps({"codex": [sys.executable, adapter, "codex", "--engine", "rust", "--binary", sys.argv[1]],
+                            "transcript": [sys.executable, adapter, "transcript"]}))
+          EOF
+          python3 tools/behavior_contract.py --implementations "$RUNNER_TEMP/map.json"
+      - name: Install a second version and roll back
+        run: docs/python-migration/runtime-evidence/rollback.sh "$RUNNER_TEMP/rollback" "$(git rev-parse HEAD)"
