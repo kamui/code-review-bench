@@ -12,11 +12,14 @@ from __future__ import annotations
 import argparse
 import base64
 import difflib
+import errno
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
+import struct
 import sys
 import tempfile
 
@@ -35,9 +38,49 @@ def relative(value):
     return os.fsdecode(raw)
 
 
+def canonical(value):
+    if value is None:
+        return b"n"
+    if isinstance(value, bool):
+        return b"t" if value else b"f"
+    if isinstance(value, int):
+        return b"i" + str(value).encode("ascii") + b";"
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("nonfinite contract number")
+        return b"d" + struct.pack(">d", value)
+    if isinstance(value, str):
+        raw = value.encode("utf-8")
+        return b"s" + str(len(raw)).encode("ascii") + b":" + raw
+    if isinstance(value, list):
+        return b"[" + str(len(value)).encode("ascii") + b":" + b"".join(map(canonical, value))
+    if isinstance(value, dict):
+        keys = sorted(value, key=lambda key: key.encode("utf-8"))
+        return b"{" + str(len(keys)).encode("ascii") + b":" + b"".join(
+            canonical(key) + canonical(value[key]) for key in keys)
+    raise ValueError("unsupported contract value")
+
+
 def digest(value):
-    return hashlib.sha256(json.dumps(value, ensure_ascii=True, sort_keys=True,
-                                     separators=(",", ":")).encode("ascii")).hexdigest()
+    return hashlib.sha256(canonical(value)).hexdigest()
+
+
+class UnavailableFixture(Exception):
+    pass
+
+
+def require_capabilities(case, root):
+    for capability in case.get("requires", []):
+        if capability != "non-utf8-paths":
+            raise ValueError(f"unknown fixture capability {capability}")
+        probe = root / os.fsdecode(b"probe-\xff")
+        try:
+            probe.write_bytes(b"")
+        except OSError as error:
+            if error.errno not in (errno.EILSEQ, errno.EINVAL):
+                raise
+            raise UnavailableFixture(f"{capability}: {error}") from error
+        probe.unlink()
 
 
 def snapshot(root):
@@ -62,6 +105,7 @@ def snapshot(root):
 def execute(case, commands):
     with tempfile.TemporaryDirectory(prefix="behavior-contract-") as temporary:
         root = Path(temporary)
+        require_capabilities(case, root)
         for entry in case["initial"]:
             path = root / relative(entry["path_b64"])
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -75,7 +119,9 @@ def execute(case, commands):
         home.mkdir()
         environment = {"PATH": os.defpath, "HOME": str(home), "LC_ALL": "C.UTF-8",
                        "TZ": "UTC", "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUTF8": "1"}
-        result = subprocess.run([*commands[case["program"]], *case["argv"]], cwd=root,
+        argv = [os.fsdecode(decode(arg["bytes_b64"])) if isinstance(arg, dict) else arg
+                for arg in case["argv"]]
+        result = subprocess.run([*commands[case["program"]], *argv], cwd=root,
                                 input=decode(case["stdin_b64"]), capture_output=True,
                                 env=environment, timeout=10)
         return {"exit": result.returncode, "stdout": result.stdout, "stderr": result.stderr,
@@ -140,17 +186,44 @@ def differential(left, right, case):
     expected = {"exit": left["exit"], "filesystem": left["filesystem"]}
     for stream in ("stdout", "stderr"):
         if case["expected"][stream]["mode"] in ("json", "json-pointers") and left["exit"] == 0:
-            expected[stream] = {"mode": "json", "value": json_value(left[stream])}
+            try:
+                expected[stream] = {"mode": "json", "value": json_value(left[stream])}
+            except (ValueError, UnicodeError) as error:
+                return [f"{stream} primary semantic: {error}; actual bytes {left[stream]!r}"]
         else:
             expected[stream] = {"mode": "bytes", "bytes_b64": base64.b64encode(left[stream]).decode("ascii")}
     return compare(expected, right)
+
+
+def load_decisions(path):
+    decisions = json_value(path.read_bytes())
+    previous = {}
+    if "previous" in decisions:
+        source = decisions["previous"]
+        prior_path = path.parent / source["path"]
+        if hashlib.sha256(prior_path.read_bytes()).hexdigest() != source["sha256"]:
+            raise ValueError("previous decisions changed")
+        previous = load_decisions(prior_path) if source["format"] == "decisions/2" else json_value(prior_path.read_bytes())
+    records = decisions["records"]
+    if set(previous) - set(records):
+        raise ValueError("decision history cannot remove cases")
+    for name, record in records.items():
+        payload = {key: value for key, value in record.items() if key != "decision"}
+        if not record["reason"].strip() or record["decision"] != "decision-" + digest(payload):
+            raise ValueError(f"{name}: changed contract needs an explicit decision record")
+        old = previous.get(name)
+        if old and record != old:
+            if (record.get("supersedes") != old["contract_sha256"]
+                    or record["decision"] == old["decision"] or record["reason"] == old["reason"]):
+                raise ValueError(f"{name}: new decision must supersede the previous digest with a new reason")
+    return records
 
 
 def load_corpus(path):
     corpus = json.loads(path.read_text(encoding="utf-8"))
     if corpus["format"] != "behavior-contract/1":
         raise ValueError("unsupported corpus format")
-    decisions = json.loads((path.parent / corpus["decisions"]).read_text(encoding="utf-8"))
+    decisions = load_decisions(path.parent / corpus["decisions"])
     ids = set()
     for case in corpus["cases"]:
         if case["id"] in ids:
@@ -179,7 +252,11 @@ def main():
         other = json.loads(args.differential.read_text(encoding="utf-8")) if args.differential else None
         failed = 0
         for case in corpus["cases"]:
-            actual = execute(case, commands)
+            try:
+                actual = execute(case, commands)
+            except UnavailableFixture as error:
+                print(f"SKIP UNAVAILABLE {case['id']}: {error}")
+                continue
             differences = compare(case["expected"], actual)
             known = case.get("baseline_defect")
             if differences and args.allow_known_defects and known and not compare(known["observed"], actual):

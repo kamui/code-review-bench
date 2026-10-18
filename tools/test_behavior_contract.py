@@ -10,17 +10,24 @@ from __future__ import annotations
 import base64
 import copy
 import json
+import errno
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import behavior_contract as contract
 
 
 def encoded(value):
     return base64.b64encode(value).decode("ascii")
+
+
+def decision(case, reason="test", **extra):
+    payload = dict(reason=reason, contract_sha256=contract.digest(case), **extra)
+    return dict(decision="decision-" + contract.digest(payload), **payload)
 
 
 class ContractTests(unittest.TestCase):
@@ -60,7 +67,7 @@ class ContractTests(unittest.TestCase):
                                 "stderr": {"mode": "bytes", "bytes_b64": ""}, "filesystem": actual["filesystem"]}
             # Only this synthetic driver snapshots setup; pilot expectations are independently derived.
             corpus.write_text(json.dumps({"format": "behavior-contract/1", "decisions": "decisions.json", "cases": [base]}), encoding="utf-8")
-            decisions.write_text(json.dumps({"probe": {"reason": "test", "contract_sha256": contract.digest(base)}}), encoding="utf-8")
+            decisions.write_text(json.dumps({"records": {"probe": decision(base)}}), encoding="utf-8")
             for source, expected in (
                 (correct, "PASS probe"),
                 (correct.replace('count":1', 'count":2'), "semantic"),
@@ -95,18 +102,133 @@ class ContractTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 contract.relative(encoded(raw))
 
+    def test_canonical_digest_vectors(self):
+        values = [None, True, 1, 1.0, 4e-5, 9007199254740993, -0.0, "雪😀",
+                  {"雪": [True, None, 10.0], "a": 1}]
+        vectors = json.loads((contract.CORPUS.parent / "digest-vectors.json").read_text())
+        self.assertEqual(len(values), len(vectors))
+        for value, vector in zip(values, vectors):
+            self.assertEqual(contract.canonical(value).hex(), vector["canonical_hex"], vector["name"])
+            self.assertEqual(contract.digest(value), vector["sha256"], vector["name"])
+        for value in (float("inf"), float("nan"), "\udcff"):
+            with self.assertRaises((ValueError, UnicodeError)):
+                contract.canonical(value)
+
     def test_removed_case_needs_decision(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             corpus = json.loads(contract.CORPUS.read_text(encoding="utf-8"))
-            decisions = contract.CORPUS.parent / corpus["decisions"]
-            (root / corpus["decisions"]).write_bytes(decisions.read_bytes())
+            for decisions in contract.CORPUS.parent.glob("usage-decisions.*.json"):
+                (root / decisions.name).write_bytes(decisions.read_bytes())
             corpus["cases"] = [case for case in corpus["cases"] if case["id"] != "unknown-is-not-zero"]
             path = root / "corpus.json"
             path.write_text(json.dumps(corpus), encoding="utf-8")
             result = self.run_cli("--corpus", path, "--allow-known-defects")
             self.assertEqual(result.returncode, 2, result.stdout)
             self.assertIn("removal needs an explicit decision", result.stderr)
+
+    def test_changed_digest_requires_new_superseding_decision(self):
+        case = {"id": "probe", "expected": {"exit": 2}}
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            previous = root / "previous.json"
+            previous.write_text(json.dumps({"records": {"probe": decision(case, "Reject unknown")}}))
+            corpus = {"format": "behavior-contract/1", "decisions": "decisions.json", "cases": [case]}
+            case["expected"]["exit"] = 0
+            path = root / "corpus.json"
+            path.write_text(json.dumps(corpus))
+            old = json.loads(previous.read_text())["records"]["probe"]
+            changed = dict(old, contract_sha256=contract.digest(case))
+            decisions = {"previous": {"path": previous.name, "format": "decisions/2",
+                                      "sha256": contract.hashlib.sha256(previous.read_bytes()).hexdigest()},
+                         "records": {"probe": changed}}
+            target = root / "decisions.json"
+            for record in (changed, decision(case, "Reject unknown"),
+                           decision(case, "Approve known zero"),
+                           decision(case, "Reject unknown", supersedes=old["contract_sha256"])):
+                decisions["records"]["probe"] = record
+                target.write_text(json.dumps(decisions))
+                with self.assertRaisesRegex(ValueError, "explicit decision|supersede"):
+                    contract.load_corpus(path)
+            decisions["records"]["probe"] = decision(case, "Approve known zero", supersedes=old["contract_sha256"])
+            target.write_text(json.dumps(decisions))
+            self.assertEqual(contract.load_corpus(path)["cases"], [case])
+            previous.write_text("{}")
+            with self.assertRaisesRegex(ValueError, "previous decisions changed"):
+                contract.load_corpus(path)
+
+    def test_open_defects_retain_independent_cases(self):
+        register = (contract.REPO / "docs/python-migration/contracts/defects.md").read_text()
+        corpus = contract.load_corpus(contract.CORPUS)
+        for section in register.split("\n## ")[1:]:
+            if "- Status: open" not in section:
+                continue
+            identifier = section.split(":", 1)[0]
+            matches = [case for case in corpus["cases"] if
+                       ("#" + identifier.lower() + "-") in case.get("baseline_defect", {}).get("resolution", "")]
+            self.assertEqual(len(matches), 1, identifier)
+            self.assertIn("`" + matches[0]["id"] + "`", section)
+            self.assertTrue(contract.compare(matches[0]["expected"], {
+                "exit": matches[0]["baseline_defect"]["observed"]["exit"],
+                "stdout": json.dumps(matches[0]["baseline_defect"]["observed"]["stdout"]["value"]).encode(),
+                "stderr": b"", "filesystem": matches[0]["expected"]["filesystem"]}), identifier)
+
+    def test_unavailable_filesystem_case_continues(self):
+        original = Path.write_bytes
+        def refuse(path, data):
+            if path.name == contract.os.fsdecode(b"probe-\xff"):
+                raise OSError(errno.EILSEQ, "invalid filename")
+            return original(path, data)
+        with patch.object(Path, "write_bytes", refuse), patch.object(sys, "argv", ["behavior_contract", "--allow-known-defects"]):
+            import contextlib
+            import io
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(contract.main(), 0)
+            self.assertIn("SKIP UNAVAILABLE non-utf8-path", output.getvalue())
+            self.assertNotIn("PASS non-utf8-path", output.getvalue())
+            self.assertIn("PASS transcript-duplicate-maxima", output.getvalue())
+        with tempfile.TemporaryDirectory() as temporary:
+            case = {"requires": ["non-utf8-paths"]}
+            with patch.object(Path, "write_bytes", refuse), self.assertRaises(contract.UnavailableFixture):
+                contract.require_capabilities(case, Path(temporary))
+
+    def test_invalid_primary_json_reports_each_case_and_continues(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            commands = root / "commands.json"
+            commands.write_text(json.dumps({name: [sys.executable, "-c", "print('not-json')"]
+                                            for name in ("codex", "transcript")}))
+            result = self.run_cli("--implementations", commands, "--differential", commands)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn("DIFFERENTIAL duplicate-response", result.stdout)
+            self.assertIn("stdout primary semantic:", result.stdout)
+            self.assertIn("FAIL transcript-duplicate-maxima", result.stdout)
+            self.assertEqual(result.stderr, "")
+
+    def test_duplicate_rules_reject_first_last_and_maximum_mutants(self):
+        cases = contract.load_corpus(contract.CORPUS)["cases"]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for program, case_id, before, after in (
+                ("codex", "duplicate-response-last", "usage_by_response[key] = usage",
+                 "usage_by_response.setdefault(key, usage)"),
+                ("codex", "duplicate-response-last", "usage_by_response[key] = usage",
+                 "usage_by_response[key] = {k: max(v, usage_by_response.get(key, {}).get(k, 0)) for k, v in usage.items()}"),
+                ("transcript", "transcript-duplicate-maxima", 'max(turn["output"], int(used.get("output_tokens") or 0))',
+                 'int(used.get("output_tokens") or 0) if turn["lines"] == 1 else turn["output"]'),
+                ("transcript", "transcript-duplicate-maxima", 'max(turn["input"], int(used.get("input_tokens") or 0))',
+                 'int(used.get("input_tokens") or 0)'),
+            ):
+                source = (contract.REPO / "bench/tools" / f"{program}_usage.py").read_text()
+                self.assertIn(before, source)
+                mutant = root / f"{program}_usage.py"
+                mutant.write_text(source.replace(before, after))
+                case = next(case for case in cases if case["id"] == case_id)
+                actual = contract.execute(case, {program: [sys.executable, str(mutant)]})
+                self.assertEqual(actual["exit"], 0, actual["stderr"])
+                differences = contract.compare(case["expected"], actual)
+                self.assertTrue(any("stdout semantic:" in diff for diff in differences), differences)
 
     def test_differential_recognizes_only_independent_defect_fixes(self):
         with tempfile.TemporaryDirectory() as temporary:
