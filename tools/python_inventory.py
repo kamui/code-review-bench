@@ -49,7 +49,7 @@ GROUPS = {
     "contributor": (158, "contributor contributor_adapter_probe contributor_adapters contributor_common "
                    "contributor_openrouter contributor_secrets contributor_submit"),
     "cleanup": (159, "prune_workspace retire_workspace"),
-    "retirement": (160, "run_bench_tests python_inventory"),
+    "retirement": (160, "run_bench_tests select_grading_tests python_inventory"),
 }
 DYNAMIC_ROOTS = {
     "bench/tools/test_packet_replacements.py": ["docs/research/last-push-recut-2026-10-07"],
