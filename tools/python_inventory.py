@@ -377,29 +377,18 @@ def main():
     census_path = ROOT / DESTINATION
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ref", help="Commit to inventory; defaults to HEAD, or recorded commit for --check")
-    parser.add_argument("--output", type=Path, default=census_path)
+    parser.add_argument("--output", type=Path)
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--observe-runtime", action="store_true", help="Read host state without invoking controllers")
     parser.add_argument("--work-root", type=Path, default=Path.home() / ".t3/bench-runs")
     parser.add_argument("--queue-root", type=Path, default=Path.home() / ".t3/bench-queues")
     args = parser.parse_args()
     if args.observe_runtime:
-        same_output = args.output.resolve() == census_path.resolve()
-        if args.output.exists() and census_path.exists():
-            same_output = same_output or args.output.samefile(census_path)
-        if args.check or args.ref or same_output:
-            parser.error("--observe-runtime requires a separate --output and cannot use --check or --ref")
-        observed_roots = (args.work_root, args.queue_root, ROOT / ".local", ROOT / ".bench")
-        if any(args.output.resolve().is_relative_to(root.resolve()) for root in observed_roots):
-            parser.error("--observe-runtime output must be outside the observed state roots")
-        rendered = json.dumps(observe_runtime(args.work_root, args.queue_root), indent=2, sort_keys=True) + "\n"
-        try:
-            with args.output.open("x") as output:
-                output.write(rendered)
-        except FileExistsError:
-            parser.error("--observe-runtime requires a new --output; existing files are preserved")
-        print(f"Wrote read-only host observation to {args.output}")
+        if args.check or args.ref or args.output is not None:
+            parser.error("--observe-runtime emits JSON to stdout and cannot use --output, --check or --ref")
+        print(json.dumps(observe_runtime(args.work_root, args.queue_root), indent=2, sort_keys=True))
         return
+    args.output = args.output or census_path
     previous = args.output.read_bytes() if args.check else None
     if previous is not None and args.output.suffix == ".gz":
         previous = gzip.decompress(previous)

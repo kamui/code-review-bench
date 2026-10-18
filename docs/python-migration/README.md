@@ -24,7 +24,9 @@ python3 -m unittest discover -s tools -p test_python_inventory.py -v
 snapshot with a changing checkout. To refresh the scope, generate a new version at
 an explicit committed revision and compare its classifications and callers. Preserve
 earlier versions. Run the generator from the repository containing that revision.
-It never imports the inventoried modules or runs their commands.
+It never imports the inventoried modules or runs their commands. Generation writes
+the selected output file and creates missing parent directories; `--check` only
+compares the reconstructed census without writing it.
 
 The census enumerates every tracked `.py` path with its class, hash, physical line
 count, code-resolution command, imports, parse errors, and incoming references.
@@ -144,13 +146,13 @@ work roots, untracked external queues, and process termination remain unknown.
 
 ```sh
 python3 tools/python_inventory.py --observe-runtime \
-  --work-root "$HOME/.t3/bench-runs" --queue-root "$HOME/.t3/bench-queues" \
-  --output /tmp/python-runtime-observation.json
+  --work-root "$HOME/.t3/bench-runs" --queue-root "$HOME/.t3/bench-queues"
 ```
 
-The observation output must be a new file outside the observed work, queue,
-`.local`, and `.bench` roots. Existing files, including symlinks and hardlinks,
-are never overwritten; choose a new filename for each observation.
+Observation mode emits JSON to stdout and accepts no `--output`, `--ref`, or
+`--check`. It opens no output file. Capture stdout separately in a caller-owned
+evidence path outside live or frozen state; shell redirection remains the caller's
+responsibility.
 
 Historical resolution follows the recorded dependency, in order:
 
