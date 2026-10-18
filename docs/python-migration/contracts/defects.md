@@ -5,6 +5,16 @@ Each entry owns a distinct resolution in [#152](https://github.com/kamui/code-re
 The pilot must implement the expectation or obtain an explicit compatibility decision
 before expansion. Updating expected output to match Python does not resolve a defect.
 
+## Pilot resolution in #152
+
+The isolated [pilot](../pilot/protocol.md) adopts all three independent expectations.
+Its typed Python and Rust Codex adapters reject U1; their shared Python transcript
+adapter rejects U2 and U3 before the existing transcript calculation. This records
+the compatibility decision for U2's previously documented skip behavior: a damaged
+transcript cannot produce complete accounting. These diagnostics apply to the pilot
+only. Production callers retain their current implementation and the baseline defects
+below remain reproducible there. The corpus and its saved observations are unchanged.
+
 ## U1: Missing counts become zero
 
 - Reproduced at baseline `5f188bf7c3aaf479f7dbd577f6f45d417f8b26b6` by
