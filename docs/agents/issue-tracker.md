@@ -2,6 +2,11 @@
 
 Issues and specs for `kamui/code-review-bench` live as GitHub issues. Use the `gh` CLI for all operations.
 
+## Reviewing identity
+
+- **Reviewing app**: NitpikBot
+- **Client id**: Iv23liUX65fu007Gg3DF
+
 ## Conventions
 
 - **Create an issue**: `gh issue create --title "..." --body-file <path>`. For multiline bodies, write the exact text to a temporary file first.
