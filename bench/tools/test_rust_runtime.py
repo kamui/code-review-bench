@@ -408,6 +408,20 @@ class RealBuilds(unittest.TestCase):
                     rust_runtime.build(self.crate, self.repo, Path(scratch))
         self.assertFalse(self.store.exists())
 
+    def test_a_relative_build_directory_is_refused(self):
+        # Cargo resolves these against the crate, where an ignored configuration file the check never sees can wait.
+        (self.crate / ".gitignore").write_text("/target/\n/relative-home/\n", encoding="utf-8")
+        self.git("commit", "-qam", "ignore a local Cargo home")
+        (self.crate / "relative-home").mkdir()
+        (self.crate / "relative-home/config.toml").write_text("[profile.release]\ndebug-assertions = true\n", encoding="utf-8")
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        for name in ("CARGO_HOME", "HOME", "RUSTUP_HOME", "TMPDIR"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory(dir=self.root) as scratch:
+                with patch.dict(os.environ, {name: "relative-home"}):
+                    with self.assertRaisesRegex(rust_runtime.Refused, f"{name} must be absolute"):
+                        rust_runtime.build(self.crate, self.repo, Path(scratch))
+        self.assertFalse(self.store.exists())
+
     def test_build_metadata_git_does_not_track_or_a_source_override_is_refused(self):
         for name in ("Cargo.lock", "rust-toolchain.toml"):
             with self.subTest(name=name):

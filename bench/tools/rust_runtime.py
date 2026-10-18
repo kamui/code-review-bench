@@ -24,8 +24,8 @@ or to Python when the pinned one is missing or changed.
 host's target, with only ``BUILD_ENVIRONMENT`` passed through and source paths remapped, once the active
 ``rustc`` is the release ``rust-toolchain.toml`` pins. It refuses what a receipt could not restore:
 
-- Any Cargo configuration file the build would read, a parent Cargo workspace, and ``[patch]`` or
-  ``[replace]`` sections.
+- Any Cargo configuration file the build would read, a relative ``HOME``, ``CARGO_HOME``, ``RUSTUP_HOME``
+  or ``TMPDIR``, a parent Cargo workspace, and ``[patch]`` or ``[replace]`` sections.
 - A manifest, lockfile or toolchain file Git does not track, a tracked symbolic link, and a local
   dependency whose manifest Git does not track in the crate.
 - A local file in the build's dep-info that Git does not track in the crate, such as an ignored included file.
@@ -289,7 +289,12 @@ def local_inputs(dep_info: Path) -> list:
 
 
 def build_environment() -> dict:
-    return {name: os.environ[name] for name in BUILD_ENVIRONMENT if name in os.environ}
+    """The passed-through variables; a relative directory would resolve against cargo's directory, not this one."""
+    env = {name: os.environ[name] for name in BUILD_ENVIRONMENT if name in os.environ}
+    relative = sorted(name for name in ("HOME", "CARGO_HOME", "RUSTUP_HOME", "TMPDIR") if name in env and not Path(env[name]).is_absolute())
+    if relative:
+        raise Refused(f"{', '.join(relative)} must be absolute for a build whose configuration a receipt can pin")
+    return env
 
 
 def consumed_variables(scratch: Path) -> set:
