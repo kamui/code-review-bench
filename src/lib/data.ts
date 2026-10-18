@@ -8,7 +8,7 @@ export const claimLabels = ['problem', 'minor-defect', 'suggestion', 'outside-th
 export const suggestionKinds = ['improvement', 'outside-supported-use', 'relied-on', 'known-cause'] as const
 
 export const familySchema = z.object({
-  id: z.string(), title: z.string(), trigger: z.string(), consequence: z.string(), requiredOutcome: z.string(),
+  id: z.string(), shortLabel: z.string().min(1), title: z.string(), trigger: z.string(), consequence: z.string(), requiredOutcome: z.string(),
   concerns: z.array(z.string()), eligibility: z.enum(['approved', 'pending']), eligibilityReason: z.string(),
   impact: z.enum(impactBands), impactReason: z.string(),
   rulings: z.array(z.object({ dimension: z.enum(['eligibility', 'impact']), url: z.string() })), manifestations: z.array(z.string()),
