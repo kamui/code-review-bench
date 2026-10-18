@@ -407,6 +407,15 @@ class RealBuilds(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=self.root) as scratch:
             with self.assertRaisesRegex(rust_runtime.Refused, "not tracked in rust/fixture-tool.*rust/fixture-tool/ignored.txt"):
                 rust_runtime.build(self.crate, self.repo, Path(scratch))
+        (self.crate / "ignored.txt").unlink()
+        (self.crate / "src/value.txt").symlink_to("../../../outside.txt")
+        (self.crate / "src/main.rs").write_text('fn main() { print!("{}", include_str!("value.txt")); }\n', encoding="utf-8")
+        self.git("add", ".")
+        self.git("commit", "-qm", "include a tracked symbolic link")
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        with tempfile.TemporaryDirectory(dir=self.root) as scratch:
+            with self.assertRaisesRegex(rust_runtime.Refused, "rust/fixture-tool tracks symbolic links.*rust/fixture-tool/src/value.txt"):
+                rust_runtime.build(self.crate, self.repo, Path(scratch))
         self.assertFalse(self.store.exists())
 
 

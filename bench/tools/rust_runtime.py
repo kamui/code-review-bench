@@ -24,7 +24,8 @@ or to Python when the pinned one is missing or changed.
 host's target, with build-affecting environment variables cleared and source paths remapped, after checking
 that the active ``rustc`` is the release ``rust-toolchain.toml`` pins. Cargo configuration files outside the
 crate's tracked tree are refused, because a receipt could not restore them, and so is a build whose dep-info
-lists a local file that Git does not track in the crate, such as a path dependency outside it or an ignored file. ``install`` needs
+lists a local file that Git does not track in the crate, such as a path dependency outside it or an ignored file,
+or a crate that tracks a symbolic link. ``install`` needs
 Python 3.11 or later; the other commands do not. ``restore`` retains an executable from elsewhere, such as
 another store or a rebuild, only when it hashes to the receipt.
 
@@ -342,7 +343,11 @@ def build(crate_dir: Path, repo: Path, scratch: Path) -> tuple:
     env.update(CARGO_TARGET_DIR=str(scratch), CARGO_ENCODED_RUSTFLAGS="\x1f".join(flags))
     run(command, crate_dir, env)
     executable = scratch / identity["target"] / "release" / identity["crate"]["bin"]
-    tracked = {(repo / name).resolve() for name in run(["git", "ls-files", "-z", "--", identity["crate"]["path"]], repo).split("\0") if name}
+    entries = [row.split("\t", 1) for row in run(["git", "ls-files", "-s", "-z", "--", identity["crate"]["path"]], repo).split("\0") if row]
+    links = [name for mode, name in entries if mode.startswith("120000 ")]
+    if links:
+        raise Refused(f"{identity['crate']['path']} tracks symbolic links, whose targets its receipt cannot pin: " + ", ".join(links))
+    tracked = {(repo / name).resolve() for _, name in entries}
     unpinned = [path for path in local_inputs(executable.with_name(executable.name + ".d"))
                 if not path.is_relative_to(scratch.resolve()) and path not in tracked]
     if unpinned:

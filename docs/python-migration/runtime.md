@@ -43,7 +43,8 @@ It refuses a crate with uncommitted or untracked files. It also refuses an activ
 whose release differs from `rust-toolchain.toml`, and any Cargo configuration file in the crate's
 parent directories or in `CARGO_HOME`. A receipt could not restore such a file. After the build,
 it refuses any local file that cargo's dep-info lists and Git does not track in the crate, such as
-a path dependency outside it or an ignored `include_str!` target. The crate's Git tree then covers
+a path dependency outside it or an ignored `include_str!` target, and a crate that tracks a
+symbolic link, whose target the tree does not hold. The crate's Git tree then covers
 every local input that cargo records,
 and `Cargo.lock` covers registry and Git dependencies. A build script or procedural macro that
 reads a file without declaring it is not detected; `usage-pilot` has neither. The build runs
