@@ -219,6 +219,18 @@ def verify_decision_history(repo):
         current = repo / path
         if not current.is_file() or current.read_bytes() != git("show", commit + ":" + path):
             raise ValueError(f"{path}: published decision changed; add a new version superseding it")
+    versions = [directory + f"usage-decisions.v{number}.json" for number in range(1, len(releases) + 1)]
+    if set(versions) != set(releases):
+        raise ValueError("decision history versions must be contiguous")
+    corpus = json_value((repo / directory / "usage.v1.json").read_bytes())
+    if corpus["decisions"] != Path(versions[-1]).name:
+        raise ValueError("corpus must use the latest published decision version")
+    for number, path in enumerate(versions[1:], 2):
+        previous = json_value((repo / path).read_bytes()).get("previous", {})
+        expected_format = "decisions/1" if number == 2 else "decisions/2"
+        if previous.get("path") != Path(versions[number - 2]).name or previous.get("format") != expected_format:
+            raise ValueError(f"{path}: decision history must retain its immediate predecessor")
+    load_decisions(repo / versions[-1])
 
 
 def load_decisions(path):

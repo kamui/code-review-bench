@@ -30,6 +30,36 @@ def decision(case, reason="test", **extra):
     return dict(decision="decision-" + contract.digest(payload), **payload)
 
 
+def write_decision_version(directory, number):
+    previous_path = directory / f"usage-decisions.v{number - 1}.json"
+    previous = json.loads(previous_path.read_text())
+    old = previous if number == 2 else previous["records"]
+    value = {"previous": {"path": previous_path.name,
+                          "format": "decisions/1" if number == 2 else "decisions/2",
+                          "sha256": contract.hashlib.sha256(previous_path.read_bytes()).hexdigest()},
+             "records": {"probe": decision({"id": "probe"}, f"version {number}",
+                                           supersedes=old["probe"]["contract_sha256"])}}
+    path = directory / f"usage-decisions.v{number}.json"
+    path.write_text(json.dumps(value))
+    (directory / "usage.v1.json").write_text(json.dumps({"decisions": path.name}))
+    return path
+
+
+def history_repo(root):
+    def git(*args):
+        return subprocess.check_output(["git", "-C", str(root), "-c", "user.name=kamui",
+                                        "-c", "user.email=2255+kamui@users.noreply.github.com", *args],
+                                       stderr=subprocess.PIPE)
+    git("init", "--initial-branch=main")
+    directory = root / "tools/behavior_contracts"
+    directory.mkdir(parents=True)
+    (directory / "usage-decisions.v1.json").write_text(json.dumps({"probe": decision({"id": "probe"}, "legacy")}))
+    write_decision_version(directory, 2)
+    git("add", ".")
+    git("commit", "-m", "test(bench): adopt decision history")
+    return git
+
+
 class ContractTests(unittest.TestCase):
     def run_cli(self, *args):
         return subprocess.run([sys.executable, str(Path(contract.__file__)), *map(str, args)],
@@ -179,19 +209,11 @@ class ContractTests(unittest.TestCase):
     def test_published_decisions_cannot_be_edited_or_removed(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            def git(*args):
-                return subprocess.check_output(["git", "-C", str(root), "-c", "user.name=kamui",
-                                                "-c", "user.email=2255+kamui@users.noreply.github.com", *args],
-                                               stderr=subprocess.PIPE)
-            git("init", "--initial-branch=main")
+            git = history_repo(root)
             directory = root / "tools/behavior_contracts"
-            directory.mkdir(parents=True)
             v1 = directory / "usage-decisions.v1.json"
             v2 = directory / "usage-decisions.v2.json"
-            v1.write_text("legacy")
-            v2.write_text("published")
-            git("add", ".")
-            git("commit", "-m", "test(bench): adopt decision history")
+            published = v2.read_bytes()
             contract.verify_decision_history(root)
             v2.write_text("same reason with recomputed digest and ID")
             with self.assertRaisesRegex(ValueError, "published decision changed"):
@@ -200,19 +222,44 @@ class ContractTests(unittest.TestCase):
             git("commit", "-m", "test(bench): simulate an in-place decision edit")
             with self.assertRaisesRegex(ValueError, "published decision changed"):
                 contract.verify_decision_history(root)
-            v2.write_text("published")
-            v3 = directory / "usage-decisions.v3.json"
-            v3.write_text("new explicit decision")
+            v2.write_bytes(published)
+            v3 = write_decision_version(directory, 3)
+            published_v3 = v3.read_bytes()
             git("add", ".")
             git("commit", "-m", "test(bench): retain history and add a decision")
             contract.verify_decision_history(root)
             v3.write_text("edited new case with no earlier record")
             with self.assertRaisesRegex(ValueError, "published decision changed"):
                 contract.verify_decision_history(root)
-            v3.write_text("new explicit decision")
+            v3.write_bytes(published_v3)
             v1.unlink()
             with self.assertRaisesRegex(ValueError, "published decision changed"):
                 contract.verify_decision_history(root)
+
+    def test_active_history_cannot_rollback_or_skip_predecessors(self):
+        for scenario in ("rollback", "new-root", "skip-predecessor"):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                git = history_repo(root)
+                directory = root / "tools/behavior_contracts"
+                write_decision_version(directory, 3)
+                git("add", ".")
+                git("commit", "-m", "test(bench): publish another decision")
+                contract.verify_decision_history(root)
+                if scenario == "rollback":
+                    (directory / "usage.v1.json").write_text(json.dumps({"decisions": "usage-decisions.v2.json"}))
+                else:
+                    v4 = write_decision_version(directory, 4)
+                    value = json.loads(v4.read_text())
+                    if scenario == "new-root":
+                        del value["previous"]
+                    else:
+                        value["previous"] = json.loads((directory / "usage-decisions.v2.json").read_text())["previous"]
+                    v4.write_text(json.dumps(value))
+                git("add", ".")
+                git("commit", "-m", "test(bench): simulate bypassing active history")
+                with self.assertRaisesRegex(ValueError, "latest published|immediate predecessor"):
+                    contract.verify_decision_history(root)
 
     def test_corpus_rejects_duplicate_json_keys(self):
         with tempfile.TemporaryDirectory() as temporary:
