@@ -24,9 +24,10 @@ or to Python when the pinned one is missing or changed.
 a private Cargo home that holds no configuration, only links to the host's registry and Git caches. It
 selects the toolchain once, from the snapshot's ``rust-toolchain.toml``, and runs that toolchain's own
 ``cargo`` and ``rustc`` from ``/`` for every later step. Cargo searches its working directory's ancestors and
-its home for configuration, and stops its workspace search at its home, so no file another process saves
-outside the private home, even briefly, can reach the build. The manifest and metadata checks, the
-receipt's hashes, the toolchain query and the build use that snapshot. The build runs
+its home for configuration, and stops its workspace search at its home, so Cargo configuration or a workspace
+manifest saved elsewhere, even briefly, cannot change the build; ``/.cargo``, the toolchain and the shared caches
+stay trusted. The manifest and metadata checks, the receipt's hashes, the toolchain query and the build use
+that snapshot. The build runs
 ``cargo build --locked --offline --release`` for this host's target, with only ``BUILD_ENVIRONMENT`` passed
 through and source paths remapped, once that ``rustc`` is the release ``rust-toolchain.toml`` pins. It
 refuses what a receipt could not restore:
@@ -279,12 +280,13 @@ def cargo_configs(source: Path) -> list:
 
 
 def private_home(scratch: Path, host: dict) -> Path:
-    """A Cargo home only this build reads, linking the host's registry and Git caches and the locks that guard them."""
+    """A Cargo home only this build reads, linking the host's registry and Git caches and the locks that guard them.
+    A missing lock is linked anyway, so cargo creates it in the host home and other cargo processes share it."""
     shared = Path(host["CARGO_HOME"]) if host.get("CARGO_HOME") else Path(host.get("HOME") or Path.home()) / ".cargo"
     home = Path(tempfile.mkdtemp(prefix="cargo-home-", dir=scratch))
-    for name in ("registry", "git", ".package-cache", ".package-cache-mutate"):
-        if (shared / name).exists():
-            (home / name).symlink_to(shared / name)
+    caches = [name for name in ("registry", "git") if (shared / name).exists()]
+    for name in caches + ([".package-cache", ".package-cache-mutate"] if caches else []):
+        (home / name).symlink_to(shared / name)
     return home.resolve()
 
 
@@ -433,7 +435,7 @@ def build(crate_dir: Path, repo: Path, scratch: Path) -> tuple:
     # The snapshot lies inside the Cargo home, and rustc applies the last matching prefix.
     flags = [f"--remap-path-prefix={home}=/cargo", f"--remap-path-prefix={source}=/source"]
     command = ["cargo", "build", "--locked", "--offline", "--release", "--target", identity["target"], "--bin", identity["crate"]["bin"]]
-    passed = sorted(host)
+    passed = sorted(env)
     env.update(CARGO_TARGET_DIR=str(target_dir), CARGO_ENCODED_RUSTFLAGS="\x1f".join(flags))
     run([*command, "--manifest-path", str(source / "Cargo.toml")], CARGO_CWD, env)
     executable = target_dir / identity["target"] / "release" / identity["crate"]["bin"]

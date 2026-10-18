@@ -6,6 +6,7 @@ cargo in a disposable repository; it is skipped without cargo unless ``RUST_RUNT
 from __future__ import annotations
 
 from contextlib import redirect_stderr, redirect_stdout
+import fcntl
 import io
 import json
 import os
@@ -295,6 +296,22 @@ class Interpreter(unittest.TestCase):
         self.assertIn("install needs Python 3.11 or later", done.stdout)
 
 
+class PrivateCargoHome(unittest.TestCase):
+    def test_a_build_home_shares_the_host_caches_and_their_locks_but_no_configuration(self):
+        root = Path(self.enterContext(tempfile.TemporaryDirectory(prefix="rust-runtime-home-test-")))
+        shared = root / "host-home"
+        (shared / "registry").mkdir(parents=True)
+        (shared / "config.toml").write_text(DEBUG_ASSERTIONS, encoding="utf-8")
+        home = rust_runtime.private_home(root, {"CARGO_HOME": str(shared)})
+        self.assertEqual(sorted(path.name for path in home.iterdir()), [".package-cache", ".package-cache-mutate", "registry"])
+        self.assertEqual((home / "registry").resolve(), (shared / "registry").resolve())
+        for lock in (".package-cache", ".package-cache-mutate"):
+            with self.subTest(lock=lock), open(home / lock, "a") as build, open(shared / lock, "a") as other:
+                fcntl.flock(build, fcntl.LOCK_EX)
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
 class Deviations(Store):
     def setUp(self):
         super().setUp()
@@ -437,7 +454,7 @@ class RealBuilds(unittest.TestCase):
                     rust_runtime.build(self.crate, self.repo, Path(scratch))
         self.assertFalse(self.store.exists())
 
-    def test_cargo_configuration_and_workspaces_outside_the_private_cargo_home_never_reach_the_build(self):
+    def test_cargo_configuration_and_parent_workspaces_saved_outside_the_private_cargo_home_do_not_change_the_build(self):
         (self.crate / "src/main.rs").write_text('fn main() { println!("{}", cfg!(debug_assertions)); }\n', encoding="utf-8")
         self.git("commit", "-qam", "report debug assertions")
         host_home = self.root / "cargo-home"
@@ -555,7 +572,8 @@ class RealBuilds(unittest.TestCase):
         self.git("commit", "-qam", "no build script")
         with tempfile.TemporaryDirectory(dir=self.root) as scratch, patch.dict(os.environ, {"RUSTFLAGS": "-C opt-level=0"}):
             _, receipt = rust_runtime.build(self.crate, self.repo, Path(scratch))
-        self.assertEqual(receipt["build"]["environment"], sorted(name for name in rust_runtime.BUILD_ENVIRONMENT if name in os.environ))
+        self.assertEqual(receipt["build"]["environment"],
+                         sorted({name for name in rust_runtime.BUILD_ENVIRONMENT if name in os.environ} | {"CARGO_HOME", "PATH"}))
         self.assertFalse(self.store.exists())
 
     def test_a_build_that_reads_local_files_git_does_not_track_in_the_crate_is_refused(self):

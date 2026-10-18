@@ -21,7 +21,8 @@ Both files are read-only. The tool never overwrites or removes an entry. The rec
   `Cargo.lock` and `rust-toolchain.toml`, and the `origin` URL when it is a network URL.
 - `toolchain`: the pinned channel, `rustc -vV` and `cargo -V`.
 - `target` and `libc`: the target triple and the C library of the build host.
-- `build`: the command, the path remapping flags, and the names of the environment variables the build saw.
+- `build`: the command, the path remapping flags, and the names of the `PATH`, `HOME`, `CARGO_HOME`,
+  `RUSTUP_HOME`, `RUSTUP_TOOLCHAIN` and `TMPDIR` variables the build saw.
 - `artifact`: the file name, SHA-256 and size.
 
 A receipt holds no absolute path, so it stays valid when a store moves to another directory or host.
@@ -49,11 +50,13 @@ the snapshot, and the receipt hashes its files.
 
 Cargo looks for configuration in its working directory, each parent of it and its home, and stops
 its workspace search at its home. The build therefore reads configuration only from `/.cargo`, which
-only an administrator can write, and from the private home, which holds none. A file saved to the
-checkout, the host Cargo home, the temporary directory or any parent of the snapshot during an install
-cannot reach the executable, even when it is removed before the install ends. Configuration in those
-places is ignored, not refused. A later `rustup override` or toolchain change cannot switch the
-toolchain partway through an install.
+only an administrator can write, and from the private home, which holds none. Cargo configuration
+saved to the checkout, the host Cargo home, the temporary directory or a parent of the snapshot, and a
+workspace `Cargo.toml` saved in a parent of the snapshot, cannot change the executable during an
+install, even when removed before it ends. Configuration in those places is ignored, not refused. A
+later `rustup override` or toolchain change cannot switch the toolchain partway through an install.
+A toolchain whose `cargo` is not beside `rustc` in its sysroot's `bin` is refused. The shared caches
+and the toolchain remain inputs, trusted as described below; this is not a hermetic build.
 It refuses what a receipt could not restore:
 
 - Uncommitted or untracked files in the crate, and a selected `rustc` whose release differs from
