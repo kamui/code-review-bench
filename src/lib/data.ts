@@ -4,6 +4,8 @@ const nullableNumber = z.number().finite().nullable()
 const count = z.number().int().nonnegative()
 export const impactBands = ['serious', 'other-material', 'unknown'] as const
 export const claimOutcomes = ['eligible', 'refuted', 'unsupported', 'advisory', 'inconsequential', 'scope-excluded', 'unresolved'] as const
+export const claimLabels = ['problem', 'minor-defect', 'suggestion', 'outside-this-change', 'refuted', 'unproven', 'unresolved'] as const
+export const suggestionKinds = ['improvement', 'outside-supported-use', 'relied-on', 'known-cause'] as const
 
 export const familySchema = z.object({
   id: z.string(), title: z.string(), trigger: z.string(), consequence: z.string(), requiredOutcome: z.string(),
@@ -37,6 +39,7 @@ export const assessmentSchema = z.object({
     sufficiency: z.enum(['sufficient', 'partial', 'ineffective', 'absent', 'unassessed']), causeOnly: z.boolean().optional(), claimIds: z.array(z.string()) })),
   claims: z.array(z.object({ id: z.string(), itemId: z.string(), outcome: z.enum(claimOutcomes),
     nativeOutcome: z.enum([...claimOutcomes, 'problem', 'unproven', 'outside-this-change', 'suggestion', 'minor-defect']).optional(),
+    kind: z.enum(suggestionKinds).nullable().optional(),
     knownProblems: z.array(knownFactSchema).optional(), preExistingProblems: z.array(preExistingFactSchema).optional(),
     preExistingCandidateId: z.string().nullable().optional(),
     familyId: z.string().nullable(), canonicalId: z.string().nullable(), duplicateGroup: z.string().nullable() })),

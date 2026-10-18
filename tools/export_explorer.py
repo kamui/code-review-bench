@@ -107,7 +107,7 @@ V2_OUTCOMES = {"problem": "eligible", "unproven": "unsupported", "outside-this-c
 def projected_claim(claim):
     return {"id": claim["id"], "itemId": claim["anchor"]["item_id"],
             "outcome": V2_OUTCOMES.get(claim["outcome"], claim["outcome"]), "nativeOutcome": claim["outcome"],
-            "familyId": claim.get("family_id"), "canonicalId": claim["canonical_id"],
+            "kind": claim.get("kind"), "familyId": claim.get("family_id"), "canonicalId": claim["canonical_id"],
             "duplicateGroup": claim["duplicate_group"],
             "knownProblems": [{"familyId": e["family_id"], "saysWhat": e["says_what"],
                                "identifiesCause": e["identifies_cause"], "reason": e["reason"]}

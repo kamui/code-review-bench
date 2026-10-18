@@ -92,7 +92,7 @@ export function scorecardFixture(): Dataset {
     review(subject, null, { ...usage, observedItems: caught.length + extra.length, assessment: assessment(subject, caught, {
       families: subject.families.filter(item => item.eligibility === 'approved').map(item => ({ familyId: item.id, outcome: caught.includes(item.id) ? 'caught' : 'missed',
         sufficiency: caught.includes(item.id) ? 'sufficient' : 'unassessed', claimIds: caught.includes(item.id) ? [`c-${item.id}`] : [] })),
-      claims: [...caught.map(id => claim(`c-${id}`, 'eligible', { familyId: id })), ...extra], advice,
+      claims: [...caught.map(id => claim(`c-${id}`, 'eligible', { familyId: id, nativeOutcome: 'problem' })), ...extra], advice,
       recommendations: caught.map(id => remedy(`fix-${id}`, [`c-${id}`], safety, [{ familyId: id, outcome: 'sufficient' }])) }) })
   const thrice = <T>(make: () => T): T[] => [make(), make(), make()]
   const quiet = (subject: Task, usage: Partial<Attempt>) => thrice(() => fixing(subject, [], 'safe', usage))
@@ -103,7 +103,7 @@ export function scorecardFixture(): Dataset {
   const cells: Cells = {
     steady: [[payments, thrice(() => fixing(payments, ['S1', 'S2', 'M1', 'U1'], 'safe', steady))], [queue, thrice(() => fixing(queue, ['S3', 'M2'], 'safe', steady))],
       [docs, thrice(() => fixing(docs, ['U2'], 'safe', steady))], [audited, quiet(audited, steady)], [empty, quiet(empty, steady)],
-      [novel, [fixing(novel, [], 'safe', steady, [claim('candidate', 'unresolved')]), ...quiet(novel, steady).slice(1)]]],
+      [novel, [fixing(novel, [], 'safe', steady, [claim('candidate', 'unresolved', { nativeOutcome: 'unresolved' })]), ...quiet(novel, steady).slice(1)]]],
     selective: [[payments, [fixing(payments, ['S1'], 'safe', selective, [claim('wrong-1', 'refuted'), claim('wrong-2', 'refuted')]), failed(payments, { ...selective, cost: null, costLowerBound: 0.3 }), failed(payments, { ...selective, cost: null })]],
       [queue, thrice(() => fixing(queue, ['M2', 'M3'], 'safe', selective, [claim('thin', 'unsupported')]))], [docs, quiet(docs, selective)],
       [audited, quiet(audited, selective)], [empty, quiet(empty, selective)], [novel, quiet(novel, selective)]],
@@ -111,10 +111,13 @@ export function scorecardFixture(): Dataset {
       [queue, thrice(() => fixing(queue, ['S3'], 'safe', waiting))], [docs, thrice(() => fixing(docs, ['U2', 'U3'], 'safe', waiting))],
       [audited, quiet(audited, waiting)], [empty, quiet(empty, waiting)], [novel, quiet(novel, waiting)]],
     risky: [[payments, [fixing(payments, ['S1', 'S2', 'M1'], 'unsafe', risky), fixing(payments, ['S1', 'S2'], 'unassessed', risky), fixing(payments, ['S1', 'S2', 'U1'], 'unassessed', risky)]],
-      [queue, thrice(() => fixing(queue, ['S3', 'M2', 'M3'], 'safe', risky, [claim('tip', 'advisory'), claim('note', 'advisory')], [
+      [queue, thrice(() => fixing(queue, ['S3', 'M2', 'M3'], 'safe', risky, [claim('tip', 'advisory', { nativeOutcome: 'suggestion', kind: 'improvement' }), claim('note', 'advisory', { nativeOutcome: 'suggestion', kind: 'known-cause' }),
+        claim('edge', 'advisory', { nativeOutcome: 'suggestion', kind: 'outside-supported-use' }), claim('relied', 'advisory', { nativeOutcome: 'suggestion', kind: 'relied-on' }),
+        claim('nit', 'inconsequential', { nativeOutcome: 'minor-defect' }), claim('elsewhere', 'scope-excluded', { nativeOutcome: 'outside-this-change' }),
+        claim('wrong', 'refuted', { nativeOutcome: 'refuted' })], [
         { id: 'd-tip', claimIds: ['tip'], kind: 'sampled', benefit: 'supported', sample }, { id: 'd-note', claimIds: ['note'], kind: 'generic', benefit: 'unresolved', sample: null }]))],
       [docs, thrice(() => fixing(docs, ['U2', 'U3'], 'safe', risky))],
-      [audited, [fixing(audited, [], 'safe', risky, [claim('alarm', 'unsupported')]), ...quiet(audited, risky).slice(1)]], [empty, quiet(empty, risky)], [novel, quiet(novel, risky)]],
+      [audited, [fixing(audited, [], 'safe', risky, [claim('alarm', 'unsupported', { nativeOutcome: 'unproven' })]), ...quiet(audited, risky).slice(1)]], [empty, quiet(empty, risky)], [novel, quiet(novel, risky)]],
     silent: tasks.map((subject): [Task, Attempt[]] => [subject, thrice(() => failed(subject, at(0.1, 200, 15)))]),
     ungraded: [[payments, [fixing(payments, ['S1', 'S2', 'M1', 'U1'], 'safe', ungraded), review(payments, null, { ...ungraded, observedItems: 2 }), fixing(payments, ['S1'], 'safe', ungraded)]],
       [queue, thrice(() => fixing(queue, ['S3'], 'safe', ungraded))], [docs, quiet(docs, ungraded)], [audited, quiet(audited, ungraded)], [empty, quiet(empty, ungraded)], [novel, quiet(novel, ungraded)]],
