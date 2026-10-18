@@ -1,0 +1,48 @@
+Run on 2026-10-17 (UTC; the US Eastern date is the same), Linux x86_64 (WSL2 kernel 6.6.87.2-microsoft-standard-WSL2), 24 CPUs, 15 GiB RAM.
+
+Source: a clone of the benchmark's git mirror of kubernetes/kubernetes (git clone --shared), checked out at base, with a
+second worktree at head; both left unchanged. Probe files and the patched variants were laid over the tree with
+`go test -overlay`; `git status --short` was empty before every run and is printed in each result.
+  base  6bb42350227f0a714f4730165e7ba622c69bd99e
+  head  d9cf69d74a25a209e79c7061ff86a14ab4b4b634
+
+Go: go version go1.27.0 linux/amd64 from the benchmark's dependency archive for this pull request
+(sha256 67293aae156762555aecda7f7461b2638230525a907a5877316dae9b34af9388), with its build cache.
+Flags: GOFLAGS="-mod=vendor -trimpath" GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local, with -p 4 -vet=off -count=1.
+Modules: the repository's checked-in vendor directory. Nothing was downloaded for the build.
+
+etcd: Version: 3.7.1; the release hack/lib/etcd.sh pins at head (ETCD_VERSION 3.7.1),
+  downloaded from https://github.com/etcd-io/etcd/releases/download/v3.7.1/etcd-v3.7.1-linux-amd64.tar.gz,
+  sha256 e8cd3fa8064c98137c5dbd78b76f969417ace84efb83c481041d7a52ffdd8fb9, equal to the release's SHA256SUMS entry.
+
+Commands (the runners in this directory, with the scratch root replaced by <scratch>):
+  run-chain.sh <clone> <label> <result> [patched schedule_one.go]
+      go test -v -p 4 -vet=off -count=1 -overlay <overlay> -run '^TestP1Chain$' ./pkg/scheduler
+  run-apiserver.sh <clone> <label> <raw result> [patched schedule_one.go], then filter-apiserver.sh <raw> <result>
+      go test -v -p 4 -vet=off -count=1 -timeout 20m -overlay <overlay> -run '^TestP1(APIServer|ManyNodes)$' ./test/integration/scheduler/queueing
+  cel_probe_test.go, in staging/src/k8s.io/dynamic-resource-allocation/cel:
+      go test -v -count=1 -vet=off -overlay <overlay> -run '^TestP1CELErrorText$' .
+  fmt_probe.go, in its own empty module: go run .
+  go vet ./pkg/scheduler/ and go vet -printf.funcs=Eventf ./pkg/scheduler/ at each commit.
+
+Files:
+  chain_probe_test.go        part 1, laid over pkg/scheduler; calls the commit's own sched.handleSchedulingFailure
+  apiserver_probe_test.go    part 2, laid over test/integration/scheduler/queueing; adapted from the earlier probe of this
+                             pull request (docs/research/regrade-rulings-2026-10-13/x-kubernetes-141463/probes/M1/)
+  cel_probe_test.go          part 3
+  fmt_probe.go               part 4
+  patches/fix-pe-x1.patch    the smallest fix for PE-x1 alone: the cut backs off to a character boundary (the same
+                             change as the earlier round's rune-boundary.patch)
+  patches/fix-p1.patch       the smallest fix for this group alone: Eventf(..., "%s", msg) at head line 839
+  patches/fix-both.patch     both together
+  result-base.txt, result-head.txt                        parts 1 and 2 (and 3, 4 and vet) at each commit
+  result-head-fix-pe-x1.txt, -fix-p1.txt, -fix-both.txt   parts 1 and 2 at head with each patch
+  history.txt                git log -S runs on the call and the lint setting
+  tools/readhits.py          reads each public code-search hit at its newest commit before the cut-off
+
+Repeats: part 1 ran twice at head and once at base and at each variant. Part 2 ran three times at head, twice at base
+and twice with each variant; the earlier versions of the probe lacked the decoding of protobuf error bodies or the public
+plugin's message form, and the cases they shared gave the same lines. Base and head give the same lines apart from the
+commit line, the label, event ids and test durations.
+The scheduler's own log lines (part 1) and the API server's, etcd's and scheduler's log lines (part 2) are dropped
+from the saved results; the recorder's "Server rejected event" lines are kept, counted.

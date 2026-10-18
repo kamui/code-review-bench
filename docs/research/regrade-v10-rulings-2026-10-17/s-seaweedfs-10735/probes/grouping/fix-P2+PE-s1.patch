@@ -1,0 +1,112 @@
+diff --git a/weed/filer/redis2/universal_redis_store.go b/weed/filer/redis2/universal_redis_store.go
+index d4ce64d80..5b90adc3c 100644
+--- a/weed/filer/redis2/universal_redis_store.go
++++ b/weed/filer/redis2/universal_redis_store.go
+@@ -137,6 +137,9 @@ func (store *UniversalRedis2Store) DeleteEntry(ctx context.Context, fullpath uti
+ 		if err != nil {
+ 			return fmt.Errorf("DeleteEntry %s in parent dir: %v", fullpath, err)
+ 		}
++		if exists, existsErr := store.Client.Exists(ctx, store.getKey(string(fullpath))).Result(); existsErr == nil && exists > 0 {
++			store.Client.ZAddNX(ctx, store.getKey(genDirectoryListKey(dir)), redis.Z{Score: 0, Member: name})
++		}
+ 	}
+ 
+ 	return nil
+@@ -186,49 +189,62 @@ func (store *UniversalRedis2Store) ListDirectoryEntries(ctx context.Context, dir
+ 		}
+ 	}
+ 
+-	members, err := store.Client.ZRangeByLex(ctx, dirListKey, &redis.ZRangeBy{
+-		Min:    min,
+-		Max:    "+",
+-		Offset: 0,
+-		Count:  limit,
+-	}).Result()
+-	if err != nil {
+-		return lastFileName, fmt.Errorf("list %s : %v", dirPath, err)
+-	}
+-
+-	// fetch entry meta
++	var delivered int64
+ 	var entry *filer.Entry
+-	for _, fileName := range members {
+-		path := util.NewFullPath(string(dirPath), fileName)
+-		entry, err = store.FindEntry(ctx, path)
+-		lastFileName = fileName
++	for {
++		want := limit - delivered
++		stopped := false
++		var members []string
++		members, err = store.Client.ZRangeByLex(ctx, dirListKey, &redis.ZRangeBy{
++			Min:    min,
++			Max:    "+",
++			Offset: 0,
++			Count:  want,
++		}).Result()
+ 		if err != nil {
+-			glog.V(0).InfofCtx(ctx, "list %s : %v", path, err)
+-			if err == filer_pb.ErrNotFound {
+-				store.removeOrphanedDirectoryListMember(ctx, dirListKey, path, fileName)
+-				err = nil
+-				continue
+-			}
+-			break
+-		} else {
+-			if entry.TtlSec > 0 {
+-				if entry.Attr.Crtime.Add(time.Duration(entry.TtlSec) * time.Second).Before(time.Now()) {
+-					store.Client.Del(ctx, store.getKey(string(path))).Result()
+-					store.Client.ZRem(ctx, dirListKey, fileName).Result()
++			return lastFileName, fmt.Errorf("list %s : %v", dirPath, err)
++		}
++
++		// fetch entry meta
++		for _, fileName := range members {
++			path := util.NewFullPath(string(dirPath), fileName)
++			entry, err = store.FindEntry(ctx, path)
++			lastFileName = fileName
++			if err != nil {
++				glog.V(0).InfofCtx(ctx, "list %s : %v", path, err)
++				if err == filer_pb.ErrNotFound {
++					store.removeOrphanedDirectoryListMember(ctx, dirListKey, path, fileName)
++					err = nil
+ 					continue
+ 				}
+-			}
+-
+-			resEachEntryFunc, resEachEntryFuncErr := eachEntryFunc(entry)
+-			if resEachEntryFuncErr != nil {
+-				err = fmt.Errorf("failed to process eachEntryFunc: %w", resEachEntryFuncErr)
+ 				break
+-			}
++			} else {
++				if entry.TtlSec > 0 {
++					if entry.Attr.Crtime.Add(time.Duration(entry.TtlSec) * time.Second).Before(time.Now()) {
++						store.Client.Del(ctx, store.getKey(string(path))).Result()
++						store.Client.ZRem(ctx, dirListKey, fileName).Result()
++						continue
++					}
++				}
+ 
+-			if !resEachEntryFunc {
+-				break
++				delivered++
++				resEachEntryFunc, resEachEntryFuncErr := eachEntryFunc(entry)
++				if resEachEntryFuncErr != nil {
++					err = fmt.Errorf("failed to process eachEntryFunc: %w", resEachEntryFuncErr)
++					stopped = true
++					break
++				}
++
++				if !resEachEntryFunc {
++					stopped = true
++					break
++				}
+ 			}
+ 		}
++		if err != nil || stopped || delivered >= limit || int64(len(members)) < want {
++			break
++		}
++		min = "(" + lastFileName
+ 	}
+ 
+ 	return lastFileName, err
