@@ -4,6 +4,7 @@ import subprocess
 import tempfile
 import unittest
 import json
+import sys
 
 import python_inventory as inventory
 
@@ -20,6 +21,9 @@ class InventoryTests(unittest.TestCase):
             "src/lib/scoring.test.ts": "active-outside-tooling",
             "bench/harness/runner.sh": "active-outside-tooling",
             "bench/schema/run.schema.json": "active-outside-tooling",
+            "bench/README.md": "active-outside-tooling",
+            "bench/contributor-invocation.md": "active-outside-tooling",
+            "artifacts/import-source/bench/README.md": "imported-original",
             "bench/policies/grading-commands.v1.json": "target-or-skill-dependency",
         }
         for path, expected in cases.items():
@@ -48,6 +52,8 @@ class InventoryTests(unittest.TestCase):
             write("bench/harness/runner.sh", "python3 bench/tools/current_grading.py\n")
             write("bench/schema/run.schema.json", '{"runner":"bench/tools/current_grading.py","test":"test_current_grading.py"}')
             write(".github/workflows/tests.yml", "run: python3 -m unittest discover -p test_current_grading.py\n")
+            write("bench/README.md", "Run test_current_grading.py with Python.\n")
+            write("bench/contributor-invocation.md", "Run current_grading.py with Python.\n")
             write("docs/research/unused/test_current_grading.py", "import json\n")
             write("bench/tools/test_last_push_move.py", "import json\n")
             activation = "docs/research/older-problem-activation-2026-10-13/filing/"
@@ -66,7 +72,7 @@ class InventoryTests(unittest.TestCase):
                             "commit", "-qm", "fixture"], check=True)
             write("untracked.py", "print('excluded')")
             result = inventory.census(inventory.Snapshot("HEAD", root))
-            self.assertEqual(result["tracked_paths"], 24)
+            self.assertEqual(result["tracked_paths"], 26)
             files = {row["path"]: row for row in result["python_files"]}
             self.assertEqual(files[answers]["class"], "active-outside-tooling")
             self.assertEqual(files[answers]["callers"][0]["line"], 2)
@@ -77,9 +83,11 @@ class InventoryTests(unittest.TestCase):
                              [{"path": "docs/nested/workflow.md", "line": 1, "kind": "path-reference"}])
             self.assertEqual(files["docs/research/unused/record.py"]["class"], "historical-replay")
             self.assertEqual(files["docs/research/unused/record.py"]["callers"][0]["kind"], "possible-name-reference")
-            for caller in (".github/workflows/tests.yml", "bench/schema/run.schema.json"):
+            for caller in (".github/workflows/tests.yml", "bench/schema/run.schema.json", "bench/README.md"):
                 self.assertTrue(any(row["path"] == caller and row["kind"] == "possible-name-reference"
                                     for row in files["bench/tools/test_current_grading.py"]["callers"]))
+            self.assertTrue(any(row["path"] == "bench/contributor-invocation.md" and row["kind"] == "possible-name-reference"
+                                for row in files["bench/tools/current_grading.py"]["callers"]))
             self.assertEqual(files["docs/research/unused/test_current_grading.py"]["class"], "historical-replay")
             for directory in (activation, regrade):
                 self.assertEqual(files[directory + "record.py"]["class"], "active-outside-tooling")
@@ -91,7 +99,8 @@ class InventoryTests(unittest.TestCase):
                 self.assertTrue(any(row["path"] == "src/smoke.test.ts" and row["kind"] == "embedded-import-reference"
                                     for row in files[module]["callers"]))
             self.assertTrue(all(row["class"] == "active-outside-tooling" for row in result["references"]
-                                if row["path"].startswith(("src/", "bench/harness/", "bench/schema/"))))
+                                if row["path"].startswith(("src/", "bench/harness/", "bench/schema/"))
+                                or row["path"] in ("bench/README.md", "bench/contributor-invocation.md")))
             self.assertEqual(next(row for row in result["references"] if row["path"].startswith("bench/policies/"))["class"],
                              "target-or-skill-dependency")
             refs = {row["path"] for row in result["references"]}
@@ -126,6 +135,31 @@ class InventoryTests(unittest.TestCase):
             self.assertEqual(result["workspaces"][0]["attempts"][0]["present"], ["home", "clone"])
             self.assertNotIn("do not read or export", json.dumps(result))
             self.assertEqual(before, {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()})
+
+    def test_observation_output_cannot_alias_the_census(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = root / "tools/python_inventory.py"
+            script.parent.mkdir()
+            script.write_bytes(Path(inventory.__file__).read_bytes())
+            census = root / inventory.DESTINATION
+            census.parent.mkdir(parents=True)
+            census.write_bytes(b"retained census")
+            alias = root / "alias.gz"
+            alias.symlink_to(census)
+            command = [sys.executable, str(script), "--observe-runtime", "--work-root", str(root / "work"),
+                       "--queue-root", str(root / "queues")]
+            for output in ([], ["--output", str(census)], ["--output", inventory.DESTINATION],
+                           ["--output", "tools/../" + inventory.DESTINATION], ["--output", str(alias)]):
+                with self.subTest(output=output):
+                    result = subprocess.run(command + output, cwd=root, capture_output=True, text=True)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("requires a separate --output", result.stderr)
+                    self.assertEqual(census.read_bytes(), b"retained census")
+            output = root / "observation.json"
+            subprocess.run(command + ["--output", str(output)], cwd=root, capture_output=True, check=True)
+            self.assertEqual(json.loads(output.read_text())["workspaces"], [])
+            self.assertEqual(census.read_bytes(), b"retained census")
 
 
 if __name__ == "__main__":

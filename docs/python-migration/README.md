@@ -48,7 +48,9 @@ paths resolve from the repository or the source document's directory, with paren
 segments normalized. Ambiguous basenames in Python sources and current non-Python
 callers produce
 `possible-name-reference` caller records, without activating their targets. Current
-TypeScript, harness and schema sources are live callers. Embedded `import` and
+TypeScript, harness and schema sources, `bench/README.md`, and the contributor
+invocation guide are live callers. The preserved copy under `artifacts/import-source`
+remains an imported original. Embedded `import` and
 `from` clauses link their tracked Python modules as `embedded-import-reference`
 callers; this is a conservative text scan, not proof that a command executed.
 Python target commands in `bench/policies/grading-commands.v1.json` are target
