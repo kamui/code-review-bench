@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { MantineProvider } from '@mantine/core'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { Dataset } from '../lib/data'
-import { assessment, build, family, preExistingScorecardFixture, remedy, review, scorecardFixture, task } from '../lib/fixture'
+import { assessment, build, claim, claims, family, preExistingScorecardFixture, remedy, review, scorecardFixture, task } from '../lib/fixture'
 import { summarize } from '../lib/metrics'
 import type { DetectionView } from '../lib/metrics'
 import { leaderboard, matched } from '../lib/scoring'
@@ -84,6 +84,17 @@ describe('scorecard page on the fixture', () => {
     expect(rendered).toContain('Read from the diff only; no reproduction was run.')
     expect(rendered).toContain('Pending candidates (2)')
     expect(rendered).toContain('The selected setups differ in recorded client, network access, sandbox')
+  })
+
+  test('shows claim labels per admitted review, each suggestion kind apart, and why a setup has none', () => {
+    const subject = task('pr', [family('s', 'serious')])
+    const labelled = claims(subject, [claim('c-s', 'eligible', { nativeOutcome: 'problem', familyId: 's' }),
+      claim('tip', 'advisory', { nativeOutcome: 'suggestion', kind: 'known-cause' }), claim('wrong', 'refuted', { nativeOutcome: 'refuted' })])
+    const shown = panels(build([subject], { labelled: [[subject, [labelled]]], older: [[subject, [claims(subject, [claim('old', 'advisory')])]]] }))
+    expect(shown).toContain('Suggestion: relied on, not promised Suggestion: cause of a known problem Outside this change Refuted Unproven Unresolved '
+      + 'labelled 1.00 0.00 0.00 0.00 0.00 0.00 0.00 1.00 0.00 1.00 0.00 0.00')
+    expect(shown).toContain('older Unavailable 1 : 1 admitted review was graded before these labels.')
+    for (const retired of ['Advisory claims', 'Non-material observations']) expect(shown).not.toContain(retired)
   })
 
   test('the task catalog mean says how many selected setups it covers and why the others are left out', () => {
