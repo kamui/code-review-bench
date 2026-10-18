@@ -81,6 +81,12 @@ components, and dot segments are refused. JSON argv uses escaped surrogate code
 points for non-UTF-8 POSIX path bytes. macOS and Linux, including WSL, are the scope;
 native Windows is outside the existing script policy.
 
+Codex session discovery follows the selected root and its descendants. Transcript
+usage takes explicit parent and child file paths, as its production callers do.
+`transcript-parent-child-explicit` pins their sum and keeps identical request IDs
+in different sessions distinct. `transcript-missing-root-path` pins an unreadable
+root input, and `transcript-known-zero` distinguishes explicit zero from U3.
+
 ## Comparison decisions
 
 `bytes` compares decoded `bytes_b64` without normalization. Newlines, whitespace,
