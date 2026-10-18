@@ -117,7 +117,7 @@ def category(path):
     if any(part in Path(path).parts for part in ("probes", "upstream", "evidence", "reproductions")):
         return "target-or-skill-dependency"
     if (path.startswith(("src/", ".github/", "bin/", "bench/harness/", "bench/schema/", "bench/policies/", "bench/arms/"))
-            or path in ("package.json", "README.md", "AGENTS.md")
+            or path in ("package.json", "README.md", "AGENTS.md", "bench/README.md", "bench/contributor-invocation.md")
             or (path.startswith("docs/") and not path.startswith("docs/research/"))):
         return "active-outside-tooling"
     return "historical-replay"
@@ -383,7 +383,7 @@ def main():
     parser.add_argument("--queue-root", type=Path, default=Path.home() / ".t3/bench-queues")
     args = parser.parse_args()
     if args.observe_runtime:
-        if args.check or args.ref or args.output == ROOT / DESTINATION:
+        if args.check or args.ref or args.output.resolve() == (ROOT / DESTINATION).resolve():
             parser.error("--observe-runtime requires a separate --output and cannot use --check or --ref")
         args.output.write_text(json.dumps(observe_runtime(args.work_root, args.queue_root), indent=2, sort_keys=True) + "\n")
         print(f"Wrote read-only host observation to {args.output}")
