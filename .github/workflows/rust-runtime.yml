@@ -1,0 +1,54 @@
+name: Rust runtime
+
+on:
+  pull_request:
+    paths:
+      - 'rust/**'
+      - 'bench/tools/rust_runtime.py'
+      - 'bench/tools/test_rust_runtime.py'
+      - '.github/workflows/rust-runtime.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'rust/**'
+      - 'bench/tools/rust_runtime.py'
+      - 'bench/tools/test_rust_runtime.py'
+      - '.github/workflows/rust-runtime.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  rust-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned Rust toolchain and dependencies
+        working-directory: rust/usage-pilot
+        run: |
+          rustup show
+          cargo fetch --locked
+      - name: Check pinning, retention and rollback
+        working-directory: bench/tools
+        env:
+          RUST_RUNTIME_REQUIRE_CARGO: '1'
+        run: python3 -m unittest test_rust_runtime -v
+      - name: Install the usage pilot and run the corpus with the retained executable
+        run: |
+          store="$RUNNER_TEMP/rust-runtime-store"
+          python3 bench/tools/rust_runtime.py install --crate rust/usage-pilot --store "$store" --select | tee "$RUNNER_TEMP/install.json"
+          sha=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["pin"]["sha256"])' "$RUNNER_TEMP/install.json")
+          python3 bench/tools/rust_runtime.py verify usage-pilot "$sha" --store "$store"
+          python3 - "$store/usage-pilot/$sha/usage-pilot" > "$RUNNER_TEMP/map.json" <<'EOF'
+          import json, os, sys
+          adapter = os.path.abspath("tools/usage_pilot/adapter.py")
+          print(json.dumps({"codex": [sys.executable, adapter, "codex", "--engine", "rust", "--binary", sys.argv[1]],
+                            "transcript": [sys.executable, adapter, "transcript"]}))
+          EOF
+          python3 tools/behavior_contract.py --implementations "$RUNNER_TEMP/map.json"

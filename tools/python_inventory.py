@@ -32,7 +32,7 @@ REFERENCE = re.compile(
 GROUPS = {
     "behavioral-contracts": (151, "behavior_contract"),
     "usage": (152, "codex_usage transcript_usage"),
-    "runtime": (153, "seal skill_provenance fetch_freeze_commits"),
+    "runtime": (153, "seal skill_provenance fetch_freeze_commits rust_runtime"),
     "processing": (154, "build_packet derive_packet diff_identity normalize_review normalize_thermo "
                    "compare score scoreboard_svg rates roster upstream export_explorer collect_run methodology"),
     "storage": (155, "evidence_inventory evidence_store reconcile_evidence recover_evidence "
