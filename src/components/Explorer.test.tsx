@@ -150,6 +150,17 @@ describe('chart', () => {
     expect(models).toContain('No cost per scheduled trial for a (1 attempt has no recorded usage.).')
   })
 
+  test('a lower-bound cost is shown with its reason in the table and left off the chart', () => {
+    const subject = task('pr', [family('s', 'serious')])
+    const dataset = build([subject], { a: [[subject, [review(subject, ['s'], { cost: null, costLowerBound: 0.5 }), review(subject, ['s'])]]] })
+    const whole = page(dataset)
+    expect(whole).toContain("≥ $0.75 1 : 1 attempt's usage was only partly recorded.")
+    expect(whole).toContain("1 attempt's usage was only partly recorded. (1 value)")
+    const setups = chart(dataset, { band: 'serious', estimator: 'equalProblem' })
+    expect(setups).toContain("No cost per scheduled trial for a (Only a lower bound is known. 1 attempt's usage was only partly recorded.).")
+    expect(setups).not.toContain('$0.75')
+  })
+
   test('an unlabelled dataset leaves serious detection unavailable instead of falling back to all references', () => {
     const subject = task('pr', [family('u1'), family('u2')])
     const unlabelled = build([subject], { a: [[subject, [review(subject, ['u1'])]]], b: [[subject, [review(subject, ['u1', 'u2'])]]] })

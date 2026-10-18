@@ -35,7 +35,7 @@ export function assessment(subject: Task, caught: string[], overrides: Partial<A
 let serial = 0
 export const review = (subject: Task, caught: string[] | null, overrides: Partial<Attempt> = {}): Attempt => ({ id: `run/att-${serial += 1}`, label: 'att',
   runId: 'run', taskId: subject.id, replicate: 1, disposition: 'valid completed', complete: true, admitted: true, observedItems: 0,
-  assessment: caught === null ? null : assessment(subject, caught), cost: 1, outputTokens: 100, durationSeconds: 60, billing: 'api-dollars',
+  assessment: caught === null ? null : assessment(subject, caught), cost: 1, costLowerBound: null, outputTokens: 100, durationSeconds: 60, billing: 'api-dollars',
   predecessor: null, retryReason: null, detailUrl: '', ...overrides })
 
 export const failed = (subject: Task, overrides: Partial<Attempt> = {}) => review(subject, null, { admitted: false, complete: false, disposition: 'harness-invalid: audit', ...overrides })
@@ -104,7 +104,7 @@ export function scorecardFixture(): Dataset {
     steady: [[payments, thrice(() => fixing(payments, ['S1', 'S2', 'M1', 'U1'], 'safe', steady))], [queue, thrice(() => fixing(queue, ['S3', 'M2'], 'safe', steady))],
       [docs, thrice(() => fixing(docs, ['U2'], 'safe', steady))], [audited, quiet(audited, steady)], [empty, quiet(empty, steady)],
       [novel, [fixing(novel, [], 'safe', steady, [claim('candidate', 'unresolved')]), ...quiet(novel, steady).slice(1)]]],
-    selective: [[payments, [fixing(payments, ['S1'], 'safe', selective, [claim('wrong-1', 'refuted'), claim('wrong-2', 'refuted')]), failed(payments, selective), failed(payments, selective)]],
+    selective: [[payments, [fixing(payments, ['S1'], 'safe', selective, [claim('wrong-1', 'refuted'), claim('wrong-2', 'refuted')]), failed(payments, { ...selective, cost: null, costLowerBound: 0.3 }), failed(payments, { ...selective, cost: null })]],
       [queue, thrice(() => fixing(queue, ['M2', 'M3'], 'safe', selective, [claim('thin', 'unsupported')]))], [docs, quiet(docs, selective)],
       [audited, quiet(audited, selective)], [empty, quiet(empty, selective)], [novel, quiet(novel, selective)]],
     waiting: [[payments, [fixing(payments, ['S1', 'S2'], 'safe', waiting), fixing(payments, ['S1'], 'safe', waiting), { attempts: [stopped], pending: true }]],

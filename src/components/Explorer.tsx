@@ -5,7 +5,7 @@ import { useMediaQuery } from '@mantine/hooks'
 import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpDown, ArrowUpRight, Check, ChevronDown, CodeXml, Database, Info, Moon, Search, Sun, X } from 'lucide-react'
 import { fetchDataset, skillReleaseLabel } from '../lib/data'
 import type { Configuration, Dataset, Task } from '../lib/data'
-import { bandLabels, compact, conditionDifferences, datasetStatus, detectionLabel, estimatorLabels, heroCounts, measured, money, percent, perReview, reading, reasonCounts, share, summarize } from '../lib/metrics'
+import { bandLabels, compact, conditionDifferences, datasetStatus, detectionLabel, estimatorLabels, heroCounts, lowerBound, measured, money, percent, perReview, reading, reasonCounts, share, summarize } from '../lib/metrics'
 import type { Axis, Reading } from '../lib/metrics'
 import { bands, estimators, leaderboard, matched, meanTaskRecall, pendingCandidates, referenceCoverage } from '../lib/scoring'
 import { Chart, Mark } from './Chart'
@@ -87,7 +87,7 @@ export function Dashboard({ dataset, now = new Date() }: { dataset: Dataset; now
       cost: reading(row.card.cost.perTrial, value => `${money(value)}${row.configuration.billing === 'list-price-equivalent' ? '*' : ''}`),
       tokens: reading(row.card.tokens.perTrial, compact), refuted: perReview(row.card.reliability.outcomes.refuted.perAdmittedReview) }
     return { ...row, cells, order: { setup: row.configuration.short, equalProblem: measured(recall.equalProblem), equalPr: measured(recall.equalPr),
-      seriousCaught: measured(row.card.seriousCaught.equalPr), repeatedMisses: measured(row.card.seriousMisses.repeated), cost: row.cost, tokens: row.tokens,
+      seriousCaught: measured(row.card.seriousCaught.equalPr), repeatedMisses: measured(row.card.seriousMisses.repeated), cost: lowerBound(row.card.cost.perTrial), tokens: row.tokens,
       refuted: measured(row.card.reliability.outcomes.refuted.perAdmittedReview), completed: row.completed } }
   }).sort((left, right) => {
     const a = left.order[sort.column], b = right.order[sort.column]
