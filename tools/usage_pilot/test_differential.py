@@ -75,6 +75,30 @@ class DifferentialTests(unittest.TestCase):
                         self.assertEqual(result.returncode, 2, result.stderr)
                         self.assertEqual(result.stdout, b"")
 
+    def test_payload_validation_only_for_consumed_record_types(self):
+        usage = dict(input_tokens=1, cached_input_tokens=0, cache_write_input_tokens=0,
+                     output_tokens=0, reasoning_output_tokens=0)
+        valid = {"type": "token_usage_record", "payload": {"response_id": "r", "usage": usage}}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "input.jsonl"
+            for kind in ("event_msg", "future_record", "session_meta", "turn_context",
+                         "response_item", "token_usage_record"):
+                consumed = kind not in ("event_msg", "future_record")
+                for payload in ([], "text", 42, True):
+                    path.write_text(json.dumps({"type": kind, "payload": payload}) + "\n"
+                                    + json.dumps(valid), encoding="utf-8")
+                    engines = ("typed", "rust") if consumed else ("existing", "typed", "rust")
+                    for engine in engines:
+                        with self.subTest(kind=kind, payload=payload, engine=engine):
+                            result = self.run_core(engine, path)
+                            self.assertEqual(result.returncode, 2 if consumed else 0, result.stderr)
+                            if consumed:
+                                self.assertEqual(result.stdout, b"")
+                            else:
+                                summary = json.loads(result.stdout)
+                                self.assertEqual(summary["turns"], 1)
+                                self.assertEqual(summary["input"], 1)
+
     def test_large_ordinal_and_timestamp_forms(self):
         usage = dict(input_tokens=1, cached_input_tokens=0, cache_write_input_tokens=0,
                      output_tokens=0, reasoning_output_tokens=0)

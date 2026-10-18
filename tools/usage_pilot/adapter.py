@@ -13,26 +13,28 @@ import math
 from pathlib import Path
 import subprocess
 import sys
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from bench.tools import codex_usage, transcript_usage
-from tools.usage_pilot import typed_usage
+from bench.tools import codex_usage
+
+if TYPE_CHECKING:
+    from tools.usage_pilot import typed_usage
 
 DEFAULT_BINARY = ROOT / "rust/usage-pilot/target/release/usage-pilot"
 TRANSCRIPT_COUNTS = (
     "input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens",
 )
-_READ_TRANSCRIPT = transcript_usage.read_transcript
 _ADD = codex_usage.add
 
 
 def add_checked(total: dict, part: dict) -> dict:
     for field in ("turns", "tool_calls", "text_only_turns", "input", "cache_write",
                   "cache_read", "output", "thinking"):
-        typed_usage.checked_add(total.get(field, 0), part[field], "TOTAL", field)
+        if total.get(field, 0) + part[field] > (1 << 64) - 1:
+            raise codex_usage.RolloutError(f"TOTAL: {field} exceeds u64::MAX")
     if not math.isfinite(total.get("cost", 0.0) + part["cost"]):
         raise codex_usage.RolloutError("TOTAL: cost must be finite and non-negative")
     return _ADD(total, part)
@@ -48,12 +50,16 @@ class RustRollout(TypedDict):
 
 
 def read_typed_rollout(path: Path) -> TypedRollout:
+    from tools.usage_pilot import typed_usage
+
     return {"path": str(path), "rollout": typed_usage.read_rollout(path)}
 
 
 def summarize_typed(
     rollout: TypedRollout, prices: tuple[float, float], cached_mult: float, write_mult: float,
 ) -> dict[str, typed_usage.JsonValue]:
+    from tools.usage_pilot import typed_usage
+
     return typed_usage.summarize(rollout["rollout"], prices, cached_mult, write_mult).to_dict()
 
 
@@ -92,7 +98,9 @@ def summarize_rust(
     return summary
 
 
-def read_transcript(path: str) -> transcript_usage.Usage:
+def validate_transcript(path: str) -> None:
+    from tools.usage_pilot import typed_usage
+
     requests: dict[str | tuple[str, int], int] = {}
     anonymous = 0
     try:
@@ -129,7 +137,6 @@ def read_transcript(path: str) -> transcript_usage.Usage:
         raise SystemExit(f"transcript_usage: {path}: invalid UTF-8") from None
     except codex_usage.RolloutError as error:
         raise SystemExit(f"transcript_usage: {error}") from None
-    return _READ_TRANSCRIPT(path)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -140,10 +147,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--binary", type=Path)
     options, remaining = parser.parse_known_args(args)
     if options.program == "transcript":
+        from bench.tools import transcript_usage
+
         if options.engine or options.binary:
             parser.error("transcript uses the shared Python adapter; no engine or binary applies")
         original = transcript_usage.read_transcript
-        transcript_usage.read_transcript = read_transcript
+        def read_validated(path: str):
+            validate_transcript(path)
+            return original(path)
+
+        transcript_usage.read_transcript = read_validated
         try:
             return transcript_usage.main(remaining)
         finally:
