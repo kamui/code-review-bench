@@ -9,7 +9,7 @@ import type { Attempt, Dataset, Task } from './data'
 import { assessment, build, claim, claims, failed, family, remedy, review, scorecardFixture, task } from './fixture'
 import type { Trial } from './fixture'
 import { summarize } from './metrics'
-import { comparisonTasks, leaderboard, matched, meanTaskRecall, orderingConflicts, pairwise, pendingCandidates, preExistingLabels, recommend, referenceCoverage, scorecard, seriousMatrix, skillsPerModel } from './scoring'
+import { comparisonTasks, leaderboard, matched, meanTaskRecall, orderingConflicts, overviewOrder, pairwise, pendingCandidates, preExistingLabels, recommend, referenceCoverage, scorecard, seriousMatrix, skillsPerModel } from './scoring'
 import type { Bounded } from './scoring'
 
 const card = (data: Dataset, id: string, concern: string | null = null) => scorecard(data, id, { taskIds: data.tasks.map(item => item.id), concern })
@@ -382,6 +382,70 @@ describe('claim labels per admitted review', () => {
     expect(reasons([claims(pr, [claim('lost', 'eligible', { nativeOutcome: 'problem', knownProblems: [] })])]))
       .toEqual(new Set(['A problem claim names no known problem of its PR.']))
     expect(reasons([labelled, review(pr, null)])).toEqual(new Set(['1 admitted review awaits assessment.']))
+  })
+})
+
+describe('overview measures and order', () => {
+  const pr = task('pr', [family('s', 'serious'), family('m', 'other-material'), family('u')])
+  const says = (...ids: string[]) => ids.map(familyId => ({ familyId, saysWhat: 'yes' as const, identifiesCause: 'no' as const, reason: 'Says what goes wrong' }))
+  const problem = (id: string, familyId: string, overrides = {}) => claim(id, 'eligible', { nativeOutcome: 'problem', knownProblems: says(familyId), ...overrides })
+  const native = (id: string, label: 'refuted' | 'unproven' | 'unresolved') => claim(id, label === 'unproven' ? 'unsupported' : label, { nativeOutcome: label })
+  const graded = (caught: string[], found: ReturnType<typeof claim>[]) => review(pr, null, { assessment: assessment(pr, caught, { claims: [...caught.map(id => problem(`c-${id}`, id)), ...found] }) })
+
+  test('counts distinct problem claims per review across bands, one per duplicate group, with no id and group collision', () => {
+    const first = graded([], [problem('a', 's', { duplicateGroup: 'g' }), problem('b', 'm', { duplicateGroup: 'g' }), problem('g', 'm'), problem('c', 'u'),
+      claim('tip', 'advisory', { nativeOutcome: 'suggestion', kind: 'improvement' })])
+    const second = graded([], [native('wrong', 'refuted')])
+    const result = card(build([pr], { a: [[pr, [first, second]]] }), 'a').reliability
+    expect(value(result.problemClaimsPerReview)).toBe(1.5)
+    expect((['problem:serious', 'problem:other-material', 'problem:unknown'] as const).map(segment => value(result.labelsPerAdmittedReview[segment]))).toEqual([0.5, 1, 0.5])
+  })
+
+  test('gives the share of reviews with a refuted or unproven claim and, apart, those whose only doubt is unresolved', () => {
+    const reviews = [graded([], [native('w', 'refuted'), native('o', 'unresolved')]), graded([], [native('t', 'unproven')]), graded([], [native('o', 'unresolved')]), graded([], [])]
+    const doubt = card(build([pr], { a: [[pr, reviews]] }), 'a').reliability.reviewsWithDoubt
+    expect([value(doubt.refutedOrUnproven), value(doubt.onlyUnresolved)]).toEqual([0.5, 0.25])
+  })
+
+  test('withholds the overview measures for the same reasons as the claim labels', () => {
+    const reasons = (reviews: (Attempt | Trial)[]) => {
+      const { reliability } = card(build([pr], { a: [[pr, reviews]] }), 'a')
+      return new Set([reliability.problemClaimsPerReview, reliability.reviewsWithDoubt.refutedOrUnproven, reliability.reviewsWithDoubt.onlyUnresolved].map(reason))
+    }
+    expect(reasons([graded([], [claim('old', 'refuted')])])).toEqual(new Set(['1 admitted review was graded before these labels.']))
+    expect(reasons([graded([], []), review(pr, null)])).toEqual(new Set(['1 admitted review awaits assessment.']))
+    expect(reasons([graded([], []), { attempts: [], pending: true }])).toEqual(new Set(['1 scheduled trial awaits execution.']))
+    expect(reasons([graded([], [claim('lost', 'eligible', { nativeOutcome: 'problem', knownProblems: [] })])])).toEqual(new Set(['A problem claim names no known problem of its PR.']))
+  })
+
+  test('counts known problems of a band caught in at least one admitted review, and withholds the count while it could still change', () => {
+    const caught = card(build([pr], { a: [[pr, [graded(['s'], []), graded(['s', 'u'], []), failed(pr)]]] }), 'a').problemsCaught
+    expect([value(caught.serious), value(caught['other-material']), value(caught.unknown), value(caught.all)])
+      .toEqual([{ caught: 1, known: 1 }, { caught: 0, known: 1 }, { caught: 1, known: 1 }, { caught: 2, known: 3 }])
+    const open = graded(['s'], [])
+    const recovery = open.assessment?.families.find(row => row.familyId === 'm')
+    if (recovery) recovery.outcome = 'unresolved'
+    const withheld = (reviews: (Attempt | Trial)[]) => card(build([pr], { a: [[pr, reviews]] }), 'a').problemsCaught
+    expect(reason(withheld([open])['other-material'])).toBe('A recovery in this band is unresolved.')
+    expect(value(withheld([open]).serious)).toEqual({ caught: 1, known: 1 })
+    expect(reason(withheld([graded(['s'], []), review(pr, null)]).serious)).toBe('An admitted review awaits assessment.')
+    expect(reason(withheld([graded(['s'], []), { attempts: [], pending: true }]).serious)).toBe('A scheduled trial awaits execution.')
+    expect(reason(card(build([task('none', [])], { a: [[task('none', []), [review(task('none', []), [])]]] }), 'a').problemsCaught.serious)).toBe('No references in this band.')
+  })
+
+  test('sorts by one column, a lower-bound cost by its bound, puts unavailable values last in both directions and breaks ties by name', () => {
+    const many = graded([], [problem('a', 's'), problem('b', 'm')]), one = graded([], [problem('a', 's')])
+    const data = build([pr], { tie: [[pr, [one]]], many: [[pr, [many]]], early: [[pr, [one]]], old: [[pr, [graded([], [claim('x', 'eligible', { familyId: 's' })])]]],
+      bound: [[pr, [review(pr, null, { assessment: assessment(pr, [], { claims: [] }), cost: null, costLowerBound: 0.01 })]]],
+      none: [[pr, [review(pr, null, { assessment: assessment(pr, [], { claims: [] }), cost: null })]]] })
+    const rows = data.configurations.map(item => ({ name: item.id, card: card(data, item.id) }))
+    const order = (column: Parameters<typeof overviewOrder>[2]['column'], direction: 'ascending' | 'descending') =>
+      overviewOrder(rows, row => row, { column, direction }, 'all', 'equalProblem').map(row => row.name)
+    expect(order('claims', 'descending')).toEqual(['many', 'early', 'tie', 'bound', 'none', 'old'])
+    expect(order('claims', 'ascending')).toEqual(['bound', 'none', 'early', 'tie', 'many', 'old'])
+    expect(order('cost', 'ascending')).toEqual(['bound', 'early', 'many', 'old', 'tie', 'none'])
+    expect(order('cost', 'descending')).toEqual(['early', 'many', 'old', 'tie', 'bound', 'none'])
+    expect(order('setup', 'descending')).toEqual(['tie', 'old', 'none', 'many', 'early', 'bound'])
   })
 })
 

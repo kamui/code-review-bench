@@ -13,6 +13,7 @@ export type PreExistingLabel = (typeof preExistingLabels)[number]
 export const labelSegments = ['problem:serious', 'problem:other-material', 'problem:unknown', 'minor-defect', 'suggestion:improvement',
   'suggestion:outside-supported-use', 'suggestion:relied-on', 'suggestion:known-cause', 'outside-this-change', 'refuted', 'unproven', 'unresolved'] as const
 export type LabelSegment = (typeof labelSegments)[number]
+const problemSegments: LabelSegment[] = ['problem:serious', 'problem:other-material', 'problem:unknown']
 export type Measure<T = number> = { kind: 'available'; value: T } | { kind: 'unavailable'; reason: string }
 export type Bounded<T = number> = Measure<T> | { kind: 'atLeast'; value: T; reason: string }
 export type Selection = { taskIds: string[]; concern: string | null }
@@ -246,6 +247,16 @@ function seriousMisses(rows: FamilyRow[], gap: string | null) {
       : available(families.filter(row => row.notCaught > 1).length)) }
 }
 
+/** Known problems of a band caught in at least one admitted review; withheld rather than lowered while any trial on the band could still change the count. */
+function problemsCaught(rows: FamilyRow[], band: Band, gap: string | null): Measure<{ caught: number; known: number }> {
+  const members = rows.filter(row => band === 'all' || row.impact === band)
+  const blocked = gap ?? (members.length ? null : 'No references in this band.')
+    ?? (members.some(row => row.pending) ? 'A scheduled trial awaits execution.' : null)
+    ?? (members.some(row => row.ungraded) ? 'An admitted review awaits assessment.' : null)
+    ?? (members.some(row => row.unresolved) ? 'A recovery in this band is unresolved.' : null)
+  return gated(blocked, available({ caught: members.filter(row => row.caught > 0).length, known: members.length }))
+}
+
 function taskRows(ran: Cell[], rows: FamilyRow[]) {
   return ran.map(cell => ({
     taskId: cell.task.id,
@@ -296,7 +307,7 @@ function labelSegment(families: Family[], claim: Claim): Measure<LabelSegment> {
   }
 }
 
-function labelCounts(families: Family[], assessment: Assessment): Measure<Map<LabelSegment, number>> {
+function labelClaims(families: Family[], assessment: Assessment): Measure<Map<LabelSegment, Set<string>>> {
   const groups = new Map<LabelSegment, Set<string>>()
   for (const claim of assessment.claims) {
     const segment = labelSegment(families, claim)
@@ -304,7 +315,7 @@ function labelCounts(families: Family[], assessment: Assessment): Measure<Map<La
     const distinct = claim.duplicateGroup === null ? `claim:${claim.id}` : `group:${claim.duplicateGroup}`
     groups.set(segment.value, (groups.get(segment.value) ?? new Set()).add(distinct))
   }
-  return available(new Map([...groups].map(([segment, ids]) => [segment, ids.size])))
+  return available(groups)
 }
 
 function reliability(ran: Cell[], gap: string | null) {
@@ -316,11 +327,16 @@ function reliability(ran: Cell[], gap: string | null) {
   const graded = ran.flatMap(cell => admittedReviews([cell]).flatMap(assessed).map(assessment => ({ families: cell.task.families, assessment })))
   const earlier = graded.filter(({ assessment }) => assessment.claims.some(claim => !hasLabel(claim))).length
   const labelled = rated ?? (earlier ? `${plural(earlier, 'admitted review was', 'admitted reviews were')} graded before these labels.` : null)
-  const counts = collect(graded.map(({ families, assessment }) => labelCounts(families, assessment)))
-  const labelRate = (segment: LabelSegment): Measure => labelled !== null ? unavailable(labelled)
-    : counts.kind === 'unavailable' ? counts : available(sum(counts.value.map(found => found.get(segment) ?? 0)) / reviews.length)
+  const counts = collect(graded.map(({ families, assessment }) => labelClaims(families, assessment)))
+  const labelRate = (count: (found: Map<LabelSegment, Set<string>>) => number): Measure => labelled !== null ? unavailable(labelled)
+    : counts.kind === 'unavailable' ? counts : available(sum(counts.value.map(count)) / reviews.length)
+  const holds = (found: Map<LabelSegment, Set<string>>, segments: LabelSegment[]) => segments.some(segment => found.has(segment))
+  const doubted = (found: Map<LabelSegment, Set<string>>) => holds(found, ['refuted', 'unproven'])
   return { admitted: reviews.length, assessed: facts.length, pending,
-    labelsPerAdmittedReview: byLabel(labelRate),
+    labelsPerAdmittedReview: byLabel(segment => labelRate(found => found.get(segment)?.size ?? 0)),
+    problemClaimsPerReview: labelRate(found => new Set(problemSegments.flatMap(segment => [...found.get(segment) ?? []])).size),
+    reviewsWithDoubt: { refutedOrUnproven: labelRate(found => Number(doubted(found))),
+      onlyUnresolved: labelRate(found => Number(!doubted(found) && holds(found, ['unresolved']))) },
     outcomes: byOutcome(outcome => {
       const distinct = sum(facts.map(fact => fact.outcomes[outcome].distinct))
       const containing = facts.filter(fact => fact.outcomes[outcome].distinct > 0).length
@@ -472,6 +488,7 @@ export function scorecard(dataset: Dataset, configurationId: string, selection: 
     configurationId, coverage: { ran: ran.length, selected: selection.taskIds.length, missing },
     delivery: delivery(ran),
     detection: byBand(band => recall(ran, rows, band, gap)),
+    problemsCaught: byBand(band => problemsCaught(rows, band, gap)),
     seriousCaught: seriousCaught(ran, rows, gap), seriousMisses: seriousMisses(rows, gap), families: rows, tasks: taskRows(ran, rows),
     reliability: reliability(ran, gap), remedies: remedies(ran, gap), controls: controls(ran, gap), advice: advice(ran),
     preExisting: preExistingProblems(dataset, ran, selection, gap),
@@ -480,6 +497,39 @@ export function scorecard(dataset: Dataset, configurationId: string, selection: 
   }
 }
 export type Scorecard = ReturnType<typeof scorecard>
+
+export const overviewColumns = ['setup', 'detection', 'claims', 'doubt', 'cost', 'time'] as const
+export type OverviewColumn = (typeof overviewColumns)[number]
+export type SortDirection = 'ascending' | 'descending'
+export type OverviewSort = { column: OverviewColumn; direction: SortDirection }
+export const overviewFirstDirection: Record<OverviewColumn, SortDirection> = {
+  setup: 'ascending', detection: 'descending', claims: 'descending', doubt: 'ascending', cost: 'ascending', time: 'ascending' }
+const exact = (measure: Bounded): number | null => measure.kind === 'available' ? measure.value : null
+
+/** The overview's sort key for one column: claims sort by problem claims per review alone, and a lower-bound cost sorts by its bound. */
+export function overviewKey(card: Scorecard, column: Exclude<OverviewColumn, 'setup'>, band: Band, estimator: Estimator): number | null {
+  switch (column) {
+    case 'detection': return exact(card.detection[band][estimator])
+    case 'claims': return exact(card.reliability.problemClaimsPerReview)
+    case 'doubt': return exact(card.reliability.reviewsWithDoubt.refutedOrUnproven)
+    case 'cost': return card.cost.perTrial.kind === 'unavailable' ? null : card.cost.perTrial.value
+    case 'time': return card.time.summary.kind === 'available' ? card.time.summary.value.median : null
+  }
+}
+
+/** Orders by one column, never a blend. A setup whose value is unavailable goes last in either direction; ties go by name. */
+export function overviewOrder<T>(rows: T[], of: (row: T) => { name: string; card: Scorecard }, sort: OverviewSort, band: Band, estimator: Estimator): T[] {
+  const sign = sort.direction === 'ascending' ? 1 : -1
+  const keyed = rows.map(row => {
+    const { name, card } = of(row)
+    return { row, name, value: sort.column === 'setup' ? null : overviewKey(card, sort.column, band, estimator) }
+  })
+  return keyed.sort((left, right) => {
+    if (sort.column === 'setup') return sign * left.name.localeCompare(right.name)
+    if (left.value === null || right.value === null) return Number(left.value === null) - Number(right.value === null) || left.name.localeCompare(right.name)
+    return sign * (left.value - right.value) || left.name.localeCompare(right.name)
+  }).map(item => item.row)
+}
 
 /** Serious references of the selected PRs by PR, with one cell per given scorecard in the given order; a cell is null where that setup did not run the PR. */
 export function seriousMatrix(dataset: Dataset, selection: Selection, cards: Scorecard[]) {
