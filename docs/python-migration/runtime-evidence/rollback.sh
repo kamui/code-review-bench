@@ -49,13 +49,17 @@ corpus "$store/usage-pilot/$one/usage-pilot"
 echo "== corpus, version two"
 corpus "$store/usage-pilot/$two/usage-pilot"
 echo "== rollback"
-$tool rollback usage-pilot --store "$store" | python3 -c 'import json, sys; row = json.load(sys.stdin); print(row["action"], row["pin"]["sha256"], "previous", row["previous"]["sha256"])'
+$tool rollback usage-pilot --store "$store" > "$scratch/rollback.json"
+python3 -c 'import json, sys; row = json.load(open(sys.argv[1])); print(row["action"], row["pin"]["sha256"], "previous", row["previous"]["sha256"])' "$scratch/rollback.json"
 echo "== selected after rollback"
-$tool pin usage-pilot --store "$store" | tee "$scratch/pin.json"
+$tool pin usage-pilot --store "$store" > "$scratch/pin.json"
+cat "$scratch/pin.json"
 selected=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["usage-pilot"]["sha256"])' "$scratch/pin.json")
 test "$selected" = "$one" || { echo "rollback selected $selected, not $one"; exit 1; }
 echo "== both versions still verify"
-$tool verify usage-pilot "$one" --store "$store" > /dev/null && echo "one verifies"
-$tool verify usage-pilot "$two" --store "$store" > /dev/null && echo "two verifies"
+$tool verify usage-pilot "$one" --store "$store" > /dev/null
+echo "one verifies"
+$tool verify usage-pilot "$two" --store "$store" > /dev/null
+echo "two verifies"
 echo "== retained entries"
 ls "$store/usage-pilot"
