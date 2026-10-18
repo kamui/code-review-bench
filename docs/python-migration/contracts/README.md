@@ -124,8 +124,8 @@ tests. A missing pointer fails with its actual bytes. `escaping-order-time` cove
 escaped models, timezone-equivalent timestamps, and fractional second truncation;
 `non-utf8-path` also covers a valid final JSONL record without a newline.
 
-Every case has a saved SHA-256 in `usage-decisions.v2.json`. Its `previous` entry
-pins the unchanged `usage-decisions.v1.json` bytes and format. Each current record
+Every case has a saved SHA-256 in `usage-decisions.v3.json`. Its `previous` entry
+pins v2, which pins the unchanged legacy v1 bytes and format. Each current record
 contains `reason`, `contract_sha256`, optional `supersedes`, and a `decision` ID.
 The ID is `decision-` followed by the canonical digest of the record without its
 `decision` field. Editing only a contract digest leaves an invalid decision ID.
@@ -136,8 +136,23 @@ Changed records must name the prior contract digest in `supersedes`, change thei
 reason, and receive a new decision ID. Unchanged records can be copied verbatim.
 History cannot remove a case. Corpus and current decision ID sets must match.
 The original v1 digests remain legacy Python JSON hashes and are never recomputed.
+Version 3 records the non-UTF-8 comparator's old semantic rule and new byte rule,
+including its formatting compatibility cost.
 The v2 records explicitly adopt canonical bytes v1; accounting expectations are
 retained, and the non-UTF-8 case explicitly pins rendered output bytes.
+
+Published decision files are immutable. `bun run test:web` runs the Git-history
+check and the JavaScript digest vectors before the rest of the suite. The history
+check anchors all existing versions at the first commit that adds v2, then anchors
+each later version at its own first addition. This also works after squash merges.
+An edited or removed published version fails, even after its self-digest is
+recomputed or the edit is committed. Add a new version instead. The check requires
+full Git history; CI uses `fetch-depth: 0`. A source archive alone cannot establish
+publication history, so run this gate in the full checkout before publication:
+
+```sh
+python3 tools/behavior_contract.py --verify-decision-history
+```
 
 There is no golden update command. An approved behavior change requires a new
 version with its authority, old and new behavior, rationale, compatibility impact,
