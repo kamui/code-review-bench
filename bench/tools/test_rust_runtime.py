@@ -31,7 +31,7 @@ def fake_receipt(executable: Path, name: str = "fixture-tool", **changes) -> dic
         "toolchain": {"channel": "1.99.1", "rustc": {"release": "1.99.1", "host": rust_runtime.host_target()},
                       "cargo": "cargo 1.99.1"},
         "target": rust_runtime.host_target(), "libc": rust_runtime.host_libc(),
-        "build": {"command": ["cargo", "build"], "rustflags": [], "cleared_environment": "", "cargo_config_files": []},
+        "build": {"command": ["cargo", "build"], "rustflags": [], "environment": [], "cargo_config_files": []},
         "artifact": {"file": name, "sha256": rust_runtime.sha256_file(executable), "size": executable.stat().st_size},
         "built_at": "2026-10-18T00:00:00Z",
     }
@@ -117,9 +117,10 @@ class Checks(Store):
         with self.assertRaisesRegex(rust_runtime.Refused, "receipt.json is missing"):
             rust_runtime.check(self.store, "fixture-tool", pin)
 
-    def test_a_binary_for_another_target_libc_or_an_unverified_host_is_refused(self):
-        other = self.version("mac", target="aarch64-apple-darwin")
-        with self.assertRaisesRegex(rust_runtime.Refused, "built for aarch64-apple-darwin; this host is"):
+    def test_a_binary_for_another_target_libc_or_an_unsupported_host_is_refused(self):
+        foreign = next(target for target in sorted(rust_runtime.SUPPORTED_TARGETS) if target != rust_runtime.host_target())
+        other = self.version("foreign", target=foreign)
+        with self.assertRaisesRegex(rust_runtime.Refused, f"built for {foreign}; this host is"):
             rust_runtime.check(self.store, "fixture-tool", other)
         newer = self.version("newer-libc", libc={"name": "glibc", "version": "99.0"})
         with self.assertRaisesRegex(rust_runtime.Refused, "links glibc 99.0; this host has"):
@@ -127,10 +128,13 @@ class Checks(Store):
         musl = self.version("musl", libc={"name": "musl", "version": "1.2"})
         with self.assertRaisesRegex(rust_runtime.Refused, "links musl 1.2"):
             rust_runtime.check(self.store, "fixture-tool", musl)
-        arm = self.version("arm", target="aarch64-unknown-linux-gnu")
-        with patch.object(rust_runtime, "host_target", return_value="aarch64-unknown-linux-gnu"):
-            with self.assertRaisesRegex(rust_runtime.Refused, "aarch64-unknown-linux-gnu is not a verified Rust runtime target"):
-                rust_runtime.check(self.store, "fixture-tool", arm)
+        here = self.version("here")
+        with patch.object(rust_runtime, "SUPPORTED_TARGETS", rust_runtime.SUPPORTED_TARGETS - {rust_runtime.host_target()}):
+            with self.assertRaisesRegex(rust_runtime.Refused, f"{rust_runtime.host_target()} is not a supported Rust runtime target"):
+                rust_runtime.check(self.store, "fixture-tool", here)
+        with patch.object(rust_runtime, "host_target", return_value=None):
+            with self.assertRaisesRegex(rust_runtime.Refused, "this host is"):
+                rust_runtime.check(self.store, "fixture-tool", here)
 
     def test_an_entry_is_never_replaced_and_a_wrong_hash_is_never_retained(self):
         pin = self.version("one")
@@ -373,6 +377,31 @@ class RealBuilds(unittest.TestCase):
             with patch.dict(os.environ, {"CARGO_HOME": str(home)}):
                 with self.assertRaisesRegex(rust_runtime.Refused, "cargo configuration a receipt cannot restore"):
                     rust_runtime.build(self.crate, self.repo, Path(scratch))
+        self.assertFalse(self.store.exists())
+
+    def test_a_build_sees_only_the_passed_through_environment_and_may_not_read_it(self):
+        (self.crate / "src/main.rs").write_text('fn main() { println!("{}", env!("RUNTIME_FLAVOR")); }\n', encoding="utf-8")
+        self.git("commit", "-qam", "read an environment variable")
+        with tempfile.TemporaryDirectory(dir=self.root) as scratch, patch.dict(os.environ, {"RUNTIME_FLAVOR": "one"}):
+            with self.assertRaisesRegex(rust_runtime.InputError, "RUNTIME_FLAVOR"):
+                rust_runtime.build(self.crate, self.repo, Path(scratch))
+        (self.crate / "src/main.rs").write_text('fn main() { println!("{:?}", option_env!("HOME")); }\n', encoding="utf-8")
+        self.git("commit", "-qam", "read HOME")
+        with tempfile.TemporaryDirectory(dir=self.root) as scratch:
+            with self.assertRaisesRegex(rust_runtime.Refused, "read host environment variables its receipt cannot pin: HOME"):
+                rust_runtime.build(self.crate, self.repo, Path(scratch))
+        (self.crate / "src/main.rs").write_text('fn main() { println!("one"); }\n', encoding="utf-8")
+        (self.crate / "build.rs").write_text('fn main() { println!("cargo:rerun-if-env-changed=PATH"); }\n', encoding="utf-8")
+        self.git("add", ".")
+        self.git("commit", "-qm", "a build script that reads PATH")
+        with tempfile.TemporaryDirectory(dir=self.root) as scratch:
+            with self.assertRaisesRegex(rust_runtime.Refused, "receipt cannot pin: PATH"):
+                rust_runtime.build(self.crate, self.repo, Path(scratch))
+        (self.crate / "build.rs").unlink()
+        self.git("commit", "-qam", "no build script")
+        with tempfile.TemporaryDirectory(dir=self.root) as scratch, patch.dict(os.environ, {"RUSTFLAGS": "-C opt-level=0"}):
+            _, receipt = rust_runtime.build(self.crate, self.repo, Path(scratch))
+        self.assertEqual(receipt["build"]["environment"], sorted(name for name in rust_runtime.BUILD_ENVIRONMENT if name in os.environ))
         self.assertFalse(self.store.exists())
 
     def test_a_build_that_reads_local_files_git_does_not_track_in_the_crate_is_refused(self):

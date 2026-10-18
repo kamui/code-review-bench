@@ -21,11 +21,12 @@ that already holds a pin keeps it through restart and recovery; nothing here fal
 or to Python when the pinned one is missing or changed.
 
 ``install`` builds from a clean, committed crate with ``cargo build --locked --offline --release`` for this
-host's target, with build-affecting environment variables cleared and source paths remapped, after checking
+host's target, with only ``BUILD_ENVIRONMENT`` passed through and source paths remapped, after checking
 that the active ``rustc`` is the release ``rust-toolchain.toml`` pins. Cargo configuration files outside the
 crate's tracked tree are refused, because a receipt could not restore them, and so is a build whose dep-info
 lists a local file that Git does not track in the crate, such as a path dependency outside it or an ignored file,
-or a crate that tracks a symbolic link. ``install`` needs
+or a crate that tracks a symbolic link, and a build that rustc or a build script reports reading one of the
+passed-through variables. ``install`` needs
 Python 3.11 or later; the other commands do not. ``restore`` retains an executable from elsewhere, such as
 another store or a rebuild, only when it hashes to the receipt.
 
@@ -63,13 +64,12 @@ REPO = Path(__file__).resolve().parents[2]
 DEFAULT_STORE = Path("~/.t3/bench-runtime")
 RECEIPT = "rust-runtime-receipt/1"
 DEVIATION = "rust-runtime-deviation/1"
-# Hosts whose installation, pinning and rollback were exercised; see docs/python-migration/runtime.md.
-VERIFIED_TARGETS = frozenset({"x86_64-unknown-linux-gnu"})
+# The supported hosts of docs/agents/scripts.md; .github/workflows/rust-runtime.yml exercises each one.
 HOST_TARGETS = {("Linux", "x86_64"): "x86_64-unknown-linux-gnu", ("Linux", "aarch64"): "aarch64-unknown-linux-gnu",
                 ("Darwin", "x86_64"): "x86_64-apple-darwin", ("Darwin", "arm64"): "aarch64-apple-darwin"}
-CLEARED = re.compile(r"RUSTFLAGS|RUSTDOCFLAGS|CARGO_ENCODED_RUSTFLAGS|CARGO_ENCODED_RUSTDOCFLAGS|RUSTC|RUSTC_WRAPPER|"
-                     r"RUSTC_WORKSPACE_WRAPPER|CARGO_INCREMENTAL|CARGO_TARGET_DIR|CARGO_BUILD_\w+|CARGO_PROFILE_\w+|"
-                     r"CARGO_TARGET_\w+")
+SUPPORTED_TARGETS = frozenset(HOST_TARGETS.values())
+# The only variables a build sees. Any other variable a crate reads is absent, so it reads the same everywhere.
+BUILD_ENVIRONMENT = ("PATH", "HOME", "CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN", "TMPDIR")
 NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 
@@ -201,8 +201,8 @@ def host_problem(name: str, receipt: dict) -> str | None:
     host = host_target()
     if receipt["target"] != host:
         return f"{name} was built for {receipt['target']}; this host is {host or platform.system() + ' ' + platform.machine()}"
-    if host not in VERIFIED_TARGETS:
-        return f"{host} is not a verified Rust runtime target ({', '.join(sorted(VERIFIED_TARGETS))})"
+    if host not in SUPPORTED_TARGETS:
+        return f"{host} is not a supported Rust runtime target ({', '.join(sorted(SUPPORTED_TARGETS))})"
     built, libc = receipt.get("libc") or {}, host_libc()
     if built.get("name") and (built["name"] != libc["name"]
                               or version_tuple(libc["version"] or "") < version_tuple(built["version"] or "")):
@@ -285,7 +285,19 @@ def local_inputs(dep_info: Path) -> list:
 
 
 def build_environment() -> dict:
-    return {name: value for name, value in os.environ.items() if not CLEARED.fullmatch(name)}
+    return {name: os.environ[name] for name in BUILD_ENVIRONMENT if name in os.environ}
+
+
+def consumed_variables(scratch: Path) -> set:
+    """The environment variables rustc's dep-info or a build script's ``rerun-if-env-changed`` says the build read."""
+    names = set()
+    for path in scratch.rglob("*.d"):
+        names |= {line[len("# env-dep:"):].split("=", 1)[0] for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
+                  if line.startswith("# env-dep:")}
+    for path in scratch.rglob("build/*/output"):
+        names |= {line.split("=", 1)[1].strip() for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
+                  if line.startswith(("cargo:rerun-if-env-changed=", "cargo::rerun-if-env-changed="))}
+    return names
 
 
 def describe(crate_dir: Path, repo: Path, env: dict) -> dict:
@@ -313,8 +325,8 @@ def describe(crate_dir: Path, repo: Path, env: dict) -> dict:
     if rustc.get("release") != channel:
         raise Refused(f"the active rustc is {rustc.get('release')}; {relative}/rust-toolchain.toml pins {channel}")
     target = host_target()
-    if target not in VERIFIED_TARGETS or rustc.get("host") != target:
-        raise Refused(f"this host ({rustc.get('host')}) is not a verified Rust runtime target ({', '.join(sorted(VERIFIED_TARGETS))})")
+    if target not in SUPPORTED_TARGETS or rustc.get("host") != target:
+        raise Refused(f"this host ({rustc.get('host')}) is not a supported Rust runtime target ({', '.join(sorted(SUPPORTED_TARGETS))})")
     revision = run(["git", "rev-parse", "HEAD"], repo).strip()
     bins = [row["name"] for row in manifest.get("bin", [])] or [package["name"]]
     return {"crate": {"name": package["name"], "version": package.get("version"), "path": relative, "bin": bins[0]},
@@ -340,14 +352,18 @@ def build(crate_dir: Path, repo: Path, scratch: Path) -> tuple:
     cargo_home = Path(env.get("CARGO_HOME") or Path.home() / ".cargo").resolve()
     flags = [f"--remap-path-prefix={crate_dir.resolve()}=/source", f"--remap-path-prefix={cargo_home}=/cargo"]
     command = ["cargo", "build", "--locked", "--offline", "--release", "--target", identity["target"], "--bin", identity["crate"]["bin"]]
-    env.update(CARGO_TARGET_DIR=str(scratch), CARGO_ENCODED_RUSTFLAGS="\x1f".join(flags))
-    run(command, crate_dir, env)
-    executable = scratch / identity["target"] / "release" / identity["crate"]["bin"]
     entries = [row.split("\t", 1) for row in run(["git", "ls-files", "-s", "-z", "--", identity["crate"]["path"]], repo).split("\0") if row]
     links = [name for mode, name in entries if mode.startswith("120000 ")]
     if links:
         raise Refused(f"{identity['crate']['path']} tracks symbolic links, whose targets its receipt cannot pin: " + ", ".join(links))
     tracked = {(repo / name).resolve() for _, name in entries}
+    passed = sorted(env)
+    env.update(CARGO_TARGET_DIR=str(scratch), CARGO_ENCODED_RUSTFLAGS="\x1f".join(flags))
+    run(command, crate_dir, env)
+    executable = scratch / identity["target"] / "release" / identity["crate"]["bin"]
+    read = sorted(consumed_variables(scratch) & set(env))
+    if read:
+        raise Refused(f"the build read host environment variables its receipt cannot pin: {', '.join(read)}")
     unpinned = [path for path in local_inputs(executable.with_name(executable.name + ".d"))
                 if not path.is_relative_to(scratch.resolve()) and path not in tracked]
     if unpinned:
@@ -355,7 +371,7 @@ def build(crate_dir: Path, repo: Path, scratch: Path) -> tuple:
                       + ", ".join(map(str, unpinned)))
     receipt = {"schema": RECEIPT, **identity,
                "build": {"command": command, "rustflags": ["--remap-path-prefix=<crate>=/source", "--remap-path-prefix=<cargo home>=/cargo"],
-                         "cleared_environment": CLEARED.pattern, "cargo_config_files": []},
+                         "environment": passed, "cargo_config_files": []},
                "artifact": {"file": identity["crate"]["bin"], "sha256": sha256_file(executable), "size": executable.stat().st_size},
                "built_at": now()}
     return executable, receipt

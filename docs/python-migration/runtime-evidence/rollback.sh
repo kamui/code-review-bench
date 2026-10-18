@@ -42,6 +42,8 @@ $tool pin usage-pilot --store "$store"
 echo "== each retained version, run without arguments"
 usage "$store/usage-pilot/$one/usage-pilot"
 usage "$store/usage-pilot/$two/usage-pilot"
+usage "$store/usage-pilot/$one/usage-pilot" | grep -q '"usage-pilot PATH' || { echo "version one lost its message"; exit 1; }
+usage "$store/usage-pilot/$two/usage-pilot" | grep -q 'second version' || { echo "version two lost its message"; exit 1; }
 echo "== corpus, version one"
 corpus "$store/usage-pilot/$one/usage-pilot"
 echo "== corpus, version two"
@@ -49,7 +51,9 @@ corpus "$store/usage-pilot/$two/usage-pilot"
 echo "== rollback"
 $tool rollback usage-pilot --store "$store" | python3 -c 'import json, sys; row = json.load(sys.stdin); print(row["action"], row["pin"]["sha256"], "previous", row["previous"]["sha256"])'
 echo "== selected after rollback"
-$tool pin usage-pilot --store "$store"
+$tool pin usage-pilot --store "$store" | tee "$scratch/pin.json"
+selected=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["usage-pilot"]["sha256"])' "$scratch/pin.json")
+test "$selected" = "$one" || { echo "rollback selected $selected, not $one"; exit 1; }
 echo "== both versions still verify"
 $tool verify usage-pilot "$one" --store "$store" > /dev/null && echo "one verifies"
 $tool verify usage-pilot "$two" --store "$store" > /dev/null && echo "two verifies"

@@ -21,7 +21,7 @@ Both files are read-only. The tool never overwrites or removes an entry. The rec
   `Cargo.lock` and `rust-toolchain.toml`, and the `origin` URL when it is a network URL.
 - `toolchain`: the pinned channel, `rustc -vV` and `cargo -V`.
 - `target` and `libc`: the target triple and the C library of the build host.
-- `build`: the command, the path remapping flags, and the pattern of cleared environment variables.
+- `build`: the command, the path remapping flags, and the names of the environment variables the build saw.
 - `artifact`: the file name, SHA-256 and size.
 
 A receipt holds no absolute path, so it stays valid when a store moves to another directory or host.
@@ -49,7 +49,10 @@ every local input that cargo records,
 and `Cargo.lock` covers registry and Git dependencies. A build script or procedural macro that
 reads a file without declaring it is not detected; `usage-pilot` has neither. The build runs
 `cargo build --locked --offline --release --target <host> --bin <bin>` in a temporary target directory.
-It clears `RUSTFLAGS`, `RUSTC_WRAPPER`, `CARGO_BUILD_*`, `CARGO_PROFILE_*` and related variables, and
+The build sees only `PATH`, `HOME`, `CARGO_HOME`, `RUSTUP_HOME`, `RUSTUP_TOOLCHAIN` and `TMPDIR`, so
+`RUSTFLAGS`, wrappers, profile overrides and any variable a crate reads with `env!` are absent. A
+build is refused when rustc's dep-info or a build script's `rerun-if-env-changed` shows it read one of
+those six. A build script that reads a variable without declaring it is not detected. The build also
 remaps the crate and `CARGO_HOME` paths. Installing the same build again keeps the existing entry.
 An entry with the same hash but another receipt is refused.
 
@@ -83,7 +86,7 @@ the default. Before every launch, `review_queue.py` checks the following:
 - Each run's `runtimes.frozen.json` equals the queue's `runtimes`. A run without the file needs a
   queue that pins no runtime, so earlier runs and queues behave as before.
 - The executable and receipt hash to the pin, and the executable is a regular executable file.
-- The receipt's target is this host's, the host is a verified target (below), and the host has the
+- The receipt's target is this host's, the host is a supported target (below), and the host has the
   receipt's C library at the same or a newer version.
 - The receipt's crate tree equals the crate tree at each run's `freeze_commit`.
 - `RUNTIME_PATHS` now includes `rust`, so changed Rust sources, `Cargo.lock` or toolchain files in
@@ -121,22 +124,24 @@ it. No check reads it as permission: the queue still requires the frozen pin.
 
 ## Platform coverage
 
-| Target | Status |
-| --- | --- |
-| `x86_64-unknown-linux-gnu` | Verified on Linux 6.6 under WSL2 with glibc 2.35, Rust 1.99.1 and Python 3.14.7. The `Rust runtime` workflow runs the runtime tests and an install on GitHub's `ubuntu-latest` with Python 3.12; its run records the result. |
-| `aarch64-unknown-linux-gnu`, `x86_64-apple-darwin`, `aarch64-apple-darwin` | Not verified. `install` and every check refuse them. |
-| Native Windows | Outside the [script policy](../agents/scripts.md). |
+The [script policy](../agents/scripts.md) supports macOS and Linux. `SUPPORTED_TARGETS` holds one
+target for each of those hosts, and the `Rust runtime` workflow runs on a matching GitHub runner for
+each: the runtime tests with real cargo builds, an install of `usage-pilot`, the corpus with the
+retained executable, and [`rollback.sh`](runtime-evidence/rollback.sh). Merge a change to the
+runtime only after every target's job passes.
 
-Add a target to `VERIFIED_TARGETS` only after its install, check and rollback tests pass on that
-host. `review_queue.py` reads `/proc` and runs only on Linux. The C library check compares the build
-host's glibc with this host's, which is stricter than the symbol versions the executable needs.
+| Target | Runner | Local run |
+| --- | --- | --- |
+| `x86_64-unknown-linux-gnu` | `ubuntu-latest` | Linux 6.6 under WSL2, glibc 2.35, Rust 1.99.1, Python 3.14.7 |
+| `aarch64-unknown-linux-gnu` | `ubuntu-24.04-arm` | None |
+| `x86_64-apple-darwin` | `macos-15-intel` | None |
+| `aarch64-apple-darwin` | `macos-latest` | None |
 
-The [script policy](../agents/scripts.md) supports macOS and Linux. This stage verifies Rust artifacts
-only on x86_64 Linux with glibc; it does not narrow that policy. On the other hosts no Rust runtime
-can be installed or pinned, and a queue that pins none behaves as before, so no host loses a working
-path. `review_queue.py` already runs only on Linux. A later stage that moves a caller to Rust must keep
-that caller working on every supported host: it verifies the host's target here first, or keeps the
-current implementation there. #160 owns verifying the remaining supported hosts before Python retires.
+Each workflow run records its own results; this table records only where the checks run. Native
+Windows is outside the script policy, and every check refuses an unknown host. `review_queue.py`
+reads `/proc` and runs only on Linux, so queue pins apply only there. The C library check compares
+the build host's glibc with this host's, which is stricter than the symbol versions the executable
+needs; macOS receipts record no C library.
 
 ## Ownership of the other runtime modules
 
