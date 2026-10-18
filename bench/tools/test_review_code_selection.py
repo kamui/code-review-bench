@@ -26,7 +26,7 @@ from unittest.mock import patch
 
 import claims as claim_tools
 import current_grading  # noqa: F401
-from test_last_push_move import (CURRENT, INVENTORY, RECUT, REGISTRY, ROOT, SELECTION, Failing, before_the_selection,
+from test_last_push_move import (CURRENT, INVENTORY, RECUT, REGISTRY, ROOT, SELECTION, V10, Failing, before_the_selection,
                                  copy_of_the_repository, differing, read, regrade_filing, undo_the_activation_filing, tree)
 
 WRITTEN = [REGISTRY, INVENTORY, CURRENT / "claims.json"]
@@ -191,10 +191,12 @@ class IntakeTests(unittest.TestCase):
 
     def at_the_intake(self, by_task: dict) -> dict:
         """``by_task`` without the tasks whose first claim was filed after the intake. Such a claim is of a kind that did
-        not exist then: every claim of the task names a pre-existing problem."""
+        not exist then, a claim of a pre-existing problem, or one the v10 regrade rulings filed."""
         claims = read(ROOT / CURRENT / "claims.json")["claims"]
+        filed_later = set(read(ROOT / V10 / "before.v1.json")["records"]["claims"]["added"])
         later = {task for task in by_task if task not in self.intake["reviews"]}
-        self.assertTrue(all(claim.get("pre_existing_problem_id") for claim in claims if claim["target"] in later), later)
+        self.assertTrue(all(claim.get("pre_existing_problem_id") or claim["id"] in filed_later
+                            for claim in claims if claim["target"] in later), later)
         return {task: value for task, value in by_task.items() if task not in later}
 
     def packets(self) -> tuple:

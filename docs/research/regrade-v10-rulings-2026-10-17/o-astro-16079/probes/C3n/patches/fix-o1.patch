@@ -1,0 +1,66 @@
+diff --git a/packages/integrations/vercel/src/index.ts b/packages/integrations/vercel/src/index.ts
+index c7672aacd..5515f8a48 100644
+--- a/packages/integrations/vercel/src/index.ts
++++ b/packages/integrations/vercel/src/index.ts
+@@ -43,6 +43,7 @@ const PACKAGE_NAME = '@astrojs/vercel';
+  */
+ export const ASTRO_PATH_HEADER = 'x-astro-path';
+ export const ASTRO_PATH_PARAM = 'x_astro_path';
++export const ASTRO_PATH_TOKEN_PARAM = 'x_astro_path_token';
+ 
+ /**
+  * The edge function calls the node server at /_render,
+@@ -60,7 +61,8 @@ const MIDDLEWARE_PATH = '_middleware';
+ // This isn't documented by vercel anywhere, but unlike serverless
+ // and edge functions, isr functions are not passed the original path.
+ // Instead, we have to use $0 to refer to the regex match from "src".
+-const ISR_PATH = `/_isr?${ASTRO_PATH_PARAM}=$0`;
++const getIsrPath = (pathToken: string) =>
++	`/_isr?${ASTRO_PATH_PARAM}=$0&${ASTRO_PATH_TOKEN_PARAM}=${pathToken}`;
+ 
+ // https://vercel.com/docs/concepts/functions/serverless-functions/runtimes/node-js#node.js-version
+ const SUPPORTED_NODE_VERSIONS: Record<
+@@ -487,7 +489,7 @@ export default function vercelAdapter({
+ 								const dest =
+ 									src.startsWith('^\\/_image') || src.startsWith('^\\/_server-islands')
+ 										? NODE_PATH
+-										: ISR_PATH;
++										: getIsrPath(middlewareSecret);
+ 								if (!route.isPrerendered)
+ 									routeDefinitions.push({
+ 										src,
+@@ -709,7 +711,7 @@ class VercelBuilder {
+ 		await writeJson(prerenderConfig, {
+ 			expiration: isr.expiration ?? false,
+ 			bypassToken: isr.bypassToken,
+-			allowQuery: [ASTRO_PATH_PARAM],
++			allowQuery: [ASTRO_PATH_PARAM, ASTRO_PATH_TOKEN_PARAM],
+ 			passQuery: true,
+ 		});
+ 	}
+diff --git a/packages/integrations/vercel/src/serverless/entrypoint.ts b/packages/integrations/vercel/src/serverless/entrypoint.ts
+index c02049c8a..e91c8c06e 100644
+--- a/packages/integrations/vercel/src/serverless/entrypoint.ts
++++ b/packages/integrations/vercel/src/serverless/entrypoint.ts
+@@ -4,6 +4,7 @@ import {
+ 	ASTRO_MIDDLEWARE_SECRET_HEADER,
+ 	ASTRO_PATH_HEADER,
+ 	ASTRO_PATH_PARAM,
++	ASTRO_PATH_TOKEN_PARAM,
+ } from '../index.js';
+ import { middlewareSecret, skewProtection } from 'virtual:astro-vercel:config';
+ import { createApp } from 'astro/app/entrypoint';
+@@ -19,10 +20,12 @@ export default {
+ 		const middlewareSecretHeader = request.headers.get(ASTRO_MIDDLEWARE_SECRET_HEADER);
+ 		const hasValidMiddlewareSecret = middlewareSecretHeader === middlewareSecret;
+ 		let realPath = undefined;
++		let fromIsr = false;
+ 		if(hasValidMiddlewareSecret) {
+ 			realPath = request.headers.get(ASTRO_PATH_HEADER)
+-		} else if(request.headers.get('x-vercel-isr') === '1') {
++		} else if(url.searchParams.get(ASTRO_PATH_TOKEN_PARAM) === middlewareSecret) {
+ 			realPath = url.searchParams.get(ASTRO_PATH_PARAM);
++			fromIsr = true;
+ 		}
+ 		if (typeof realPath === 'string') {
+ 			url.pathname = realPath;

@@ -1,0 +1,43 @@
+diff --git a/weed/filer/redis2/universal_redis_store.go b/weed/filer/redis2/universal_redis_store.go
+index d4ce64d80..2f8fab9e3 100644
+--- a/weed/filer/redis2/universal_redis_store.go
++++ b/weed/filer/redis2/universal_redis_store.go
+@@ -137,6 +137,9 @@ func (store *UniversalRedis2Store) DeleteEntry(ctx context.Context, fullpath uti
+ 		if err != nil {
+ 			return fmt.Errorf("DeleteEntry %s in parent dir: %v", fullpath, err)
+ 		}
++		if exists, existsErr := store.Client.Exists(ctx, store.getKey(string(fullpath))).Result(); existsErr == nil && exists > 0 {
++			store.Client.ZAddNX(ctx, store.getKey(genDirectoryListKey(dir)), redis.Z{Score: 0, Member: name})
++		}
+ 	}
+ 
+ 	return nil
+@@ -235,9 +238,7 @@ func (store *UniversalRedis2Store) ListDirectoryEntries(ctx context.Context, dir
+ }
+ 
+ func (store *UniversalRedis2Store) removeOrphanedDirectoryListMember(ctx context.Context, dirListKey string, path util.FullPath, fileName string) {
+-	if err := store.Client.ZRem(ctx, dirListKey, fileName).Err(); err != nil {
+-		return
+-	}
++	store.Client.ZRem(ctx, dirListKey, fileName)
+ 
+ 	// InsertEntry writes the value before adding the member, so a value present
+ 	// again here may belong to an insert that found the member still in place
+@@ -247,7 +248,16 @@ func (store *UniversalRedis2Store) removeOrphanedDirectoryListMember(ctx context
+ 		return
+ 	}
+ 
+-	store.Client.ZAddNX(ctx, dirListKey, redis.Z{Score: 0, Member: fileName})
++	var restoreErr error
++	for attempt := 0; attempt < 3; attempt++ {
++		if attempt > 0 {
++			time.Sleep(100 * time.Millisecond)
++		}
++		if restoreErr = store.Client.ZAddNX(ctx, dirListKey, redis.Z{Score: 0, Member: fileName}).Err(); restoreErr == nil {
++			return
++		}
++	}
++	glog.V(0).InfofCtx(ctx, "restore %s: %v", path, restoreErr)
+ }
+ 
+ func genDirectoryListKey(dir string) (dirList string) {
