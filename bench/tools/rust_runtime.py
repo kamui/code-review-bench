@@ -262,15 +262,12 @@ def pin_of(directory: Path) -> dict:
 # --- building and retaining ---------------------------------------------------------------------
 
 def cargo_configs(crate_dir: Path, env: dict) -> list:
-    """Cargo configuration files a build in ``crate_dir`` would read."""
-    home = Path(env.get("CARGO_HOME") or Path.home() / ".cargo")
-    found = []
-    for directory in (crate_dir, *crate_dir.parents, home):
-        for name in ("config", "config.toml"):
-            path = (directory if directory == home else directory / ".cargo") / name
-            if path.is_file():
-                found.append(path)
-    return found
+    """Cargo configuration files a build in ``crate_dir`` would read: each ancestor's ``.cargo`` and the Cargo home."""
+    home = Path(env["CARGO_HOME"]) if env.get("CARGO_HOME") else Path(env.get("HOME") or Path.home()) / ".cargo"
+    resolved = crate_dir.resolve()
+    directories = [directory / ".cargo" for directory in (resolved, *resolved.parents)] + [home]
+    return sorted({path for directory in directories for name in ("config", "config.toml")
+                   if (path := directory / name).is_file()})
 
 
 def local_inputs(dep_info: Path) -> list:

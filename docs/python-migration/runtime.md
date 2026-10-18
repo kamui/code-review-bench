@@ -43,7 +43,8 @@ It refuses what a receipt could not restore:
 
 - Uncommitted or untracked files in the crate, and an active `rustc` whose release differs from
   `rust-toolchain.toml`.
-- Any Cargo configuration file in the crate, its parent directories or `CARGO_HOME`, and a relative
+- Any Cargo configuration file in the `.cargo` directory of the crate or a parent, or in `CARGO_HOME`,
+  each checked even when `CARGO_HOME` is one of those directories, and a relative
   `HOME`, `CARGO_HOME`, `RUSTUP_HOME` or `TMPDIR`, which cargo would resolve against the crate.
 - A parent Cargo workspace, `[patch]` or `[replace]` sections, and a `Cargo.toml`, `Cargo.lock` or
   `rust-toolchain.toml` that Git does not track.

@@ -408,6 +408,25 @@ class RealBuilds(unittest.TestCase):
                     rust_runtime.build(self.crate, self.repo, Path(scratch))
         self.assertFalse(self.store.exists())
 
+    def test_a_configuration_in_an_ancestor_is_found_when_cargo_home_overlaps_it(self):
+        (self.repo / ".gitignore").write_text("/.cargo/\n/rust/.cargo/\n", encoding="utf-8")
+        self.git("add", ".")
+        self.git("commit", "-qm", "ignore local Cargo configuration")
+        for overlap in (self.crate, self.crate.parent, self.repo):
+            with self.subTest(overlap=overlap.name), tempfile.TemporaryDirectory(dir=self.root) as scratch:
+                config = (self.crate if overlap == self.crate else overlap) / ".cargo/config.toml"
+                if overlap == self.crate:
+                    (self.crate / ".gitignore").write_text("/target/\n/.cargo/\n", encoding="utf-8")
+                    self.git("commit", "-qam", "ignore the crate's Cargo configuration")
+                config.parent.mkdir()
+                config.write_text("[profile.release]\ndebug-assertions = true\n", encoding="utf-8")
+                self.assertEqual(self.git("status", "--porcelain"), "")
+                with patch.dict(os.environ, {"CARGO_HOME": str(overlap)}):
+                    with self.assertRaisesRegex(rust_runtime.Refused, f"cargo configuration a receipt cannot restore would apply: .*{config}"):
+                        rust_runtime.build(self.crate, self.repo, Path(scratch))
+                shutil.rmtree(config.parent)
+        self.assertFalse(self.store.exists())
+
     def test_a_relative_build_directory_is_refused(self):
         # Cargo resolves these against the crate, where an ignored configuration file the check never sees can wait.
         (self.crate / ".gitignore").write_text("/target/\n/relative-home/\n", encoding="utf-8")
