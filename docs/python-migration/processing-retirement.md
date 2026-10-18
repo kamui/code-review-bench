@@ -26,13 +26,14 @@ describes, for example `git show bd1fde436:bench/tools/score.py`. Imported origi
 
 ## Kept: `compare.py`
 
-`bench/tools/compare.py` has a current caller, so it stays, byte-unchanged. Three tests in the
-historical group of `tools/run_bench_tests.py` load #156 filing scripts:
-`last-push-rulings-2026-10-11/filing/move.py` and `last-push-review-code-2026-10-12/selection/selection.py`.
-Both import `last-push-recut-2026-10-07/stage_edition.py`. Its `staged_registry()` executes
-`replacement_runs.py` and `skill_replacement_runs.py`, which `import compare`. With `compare.py`
-removed, these fail with `ModuleNotFoundError: No module named 'compare'`:
+`bench/tools/compare.py` has a current caller, so it stays, byte-unchanged.
+`last-push-recut-2026-10-07/stage_edition.py`'s `staged_registry()` executes `replacement_runs.py` and
+`skill_replacement_runs.py`, which `import compare`. Current tests reach it two ways: directly, and
+through the #156 filing scripts `last-push-rulings-2026-10-11/filing/move.py` and
+`last-push-review-code-2026-10-12/selection/selection.py`, which import it. With `compare.py` removed,
+these fail with `ModuleNotFoundError: No module named 'compare'`:
 
+- `test_packet_replacements.StagedSelectionTests` (all eight tests)
 - `test_last_push_move.OneGenerationTests` (class setup)
 - `test_review_code_selection.OneGenerationTests` (class setup)
 - `test_review_code_selection.RecordTests.test_the_committed_record_is_the_one_the_script_derives`
@@ -50,20 +51,22 @@ for new run freezes.
 | Helper | Classification | Evidence |
 | --- | --- | --- |
 | `builtin-review-benchmark-2026-09-24/answers.py` | Historical replay | Its only caller that ran it was `bench/tools/test_answers.py`, deleted here. `tools/import_benchmark.py` lists it as a path to copy on import, and `tools/test_python_inventory.py` writes a fixture with the same path; neither runs it. |
-| `last-push-recut-2026-10-07/plan.py`, `recut.py`, `verify.py` | Historical replay | Their only caller that ran them was the audited loader in `bench/tools/test_packet_replacements.py`, deleted here. Research and grading docs name them as record commands. |
-| `last-push-recut-2026-10-07/stage_edition.py` | Not historical replay yet | The #156 filing scripts above still import and run it in the historical test group. No #154 port is assigned; it follows those filing scripts under #156. |
+| `last-push-recut-2026-10-07/verify.py` | Historical replay | Its only caller that ran it was `PacketReplacementTests` in `bench/tools/test_packet_replacements.py`, deleted here. |
+| `last-push-recut-2026-10-07/plan.py`, `recut.py` | Historical replay | No current test or command runs them. Research and grading docs name them as record commands. |
+| `last-push-recut-2026-10-07/stage_edition.py` | Not historical replay yet | The #156 filing scripts above still import and run it in the historical test group, and `StagedSelectionTests`, kept in `test_packet_replacements.py`, checks its staged selection. No #154 port is assigned; it follows those filing scripts under #156. |
 
-The v2 census misses the `stage_edition` import from `move.py` and `selection.py`, because each
-script inserts the other directory into `sys.path` first. A census generated after this change
-therefore lists `stage_edition.py`, `replacement_runs.py` and `skill_replacement_runs.py` as
-historical replay, although the historical tests run them. Its next version should record that
-edge; `stage_edition`'s path references to the two run helpers then keep all three live.
+The census rules need two changes in the next version. Its loader rule for
+`test_packet_replacements.py` covers the whole recut directory, so it keeps `plan.py`, `recut.py`
+and `verify.py` live; narrow it to `stage_edition.py`. It also misses the `stage_edition` import
+from `move.py` and `selection.py`, because each script inserts the other directory into `sys.path`
+first; record that edge. `stage_edition`'s path references to the two run helpers then keep them
+live too.
 
 Helper bytes are unchanged.
 
 ### Packet-pin drift without `verify.py`
 
-`test_packet_replacements.py` ran `verify.py` against eight edits of a disposable copy. Each was
+`PacketReplacementTests` ran `verify.py` against eight edits of a disposable copy. Each was
 applied to a disposable worktree at `bd1fde436`, one at a time, after restoring the pinned evidence:
 
 | Edit | `current_grading.py check` |
