@@ -8,8 +8,9 @@ This stage does not claim that the small-CLI target passed.
 
 `bench/tools/rust_runtime.py` builds, retains, selects and checks Rust executables.
 `bench/tools/review_queue.py` refuses a launch whose pinned executable is missing, changed, built
-for another host or built from another source. No production caller runs a Rust executable yet;
-#154 moves the first readers onto `BENCH_RUST_<NAME>`.
+for another host or built from another source. `bench-tools`, the crate of
+[#154](processing.md), holds the first maintained commands, which run as
+[a maintained command](#running-a-maintained-command) does.
 
 ## What a receipt pins
 
@@ -129,6 +130,29 @@ the pins. The controller drops any `BENCH_RUST_` variable it inherits, and the q
 not set these names. Restart and recovery run the same checks
 against the same pinned version. One controller per work root still holds `serial.lock`.
 
+## Running a maintained command
+
+`resolve` prints the executable an operation runs, and `exec` runs it with the arguments after `--`, replacing
+the Python process so the program's exit code and output are the command's:
+
+```sh
+python3 bench/tools/rust_runtime.py resolve bench-tools [--run bench/runs/<run>]
+python3 bench/tools/rust_runtime.py exec bench-tools [--run bench/runs/<run>] -- roster
+```
+
+Both take the first of these and refuse everything else, printing the install command:
+
+1. `BENCH_RUST_<NAME>` with `BENCH_RUST_<NAME>_SHA256`, as a queue launch sets them. The file must be an
+   absolute path to an executable that hashes to the second variable. Setting only one of them is refused.
+2. With `--run`, the pin for the name in the run's `runtimes.frozen.json`, checked as a queue checks it. A run
+   without that pin is refused; the selection is never read.
+3. Otherwise the store's selected version, checked against its pin and this host, only while its receipt's crate
+   tree is the crate tree at the checkout's `HEAD`. A commit that changes the crate needs a new install.
+
+There is no Python fallback, no `cargo run` and no unreceipted `target/` executable. The store is `--store`, else
+`BENCH_RUNTIME_STORE`, else `~/.t3/bench-runtime`, for every command. A queue still names its store with
+`runtime_store`. CI installs into a store under the runner's temporary directory.
+
 ## Upgrade and rollback
 
 To upgrade, install the new version and `select` it. Only runs frozen after that take it.
@@ -161,7 +185,8 @@ it. No check reads it as permission: the queue still requires the frozen pin.
 The [script policy](../agents/scripts.md) supports macOS and Linux. `SUPPORTED_TARGETS` holds one
 target for each of those hosts, and the `Rust runtime` workflow runs on a matching GitHub runner for
 each: the runtime tests with real cargo builds, an install of `usage-pilot`, the corpus with the
-retained executable, and [`rollback.sh`](runtime-evidence/rollback.sh). Merge a change to the
+retained executable, and [`rollback.sh`](runtime-evidence/rollback.sh). It also checks `bench-tools` with
+`cargo fmt`, `clippy` and `cargo test`, installs it and resolves the retained executable. Merge a change to the
 runtime only after every target's job passes.
 
 | Target | Runner | Local run |

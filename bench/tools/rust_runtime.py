@@ -10,10 +10,12 @@ Usage::
     python3 bench/tools/rust_runtime.py rollback NAME [--store DIR]
     python3 bench/tools/rust_runtime.py pin NAME [--store DIR]
     python3 bench/tools/rust_runtime.py list NAME [--store DIR]
+    python3 bench/tools/rust_runtime.py resolve NAME [--run RUN_DIR] [--store DIR]
+    python3 bench/tools/rust_runtime.py exec NAME [--run RUN_DIR] [--store DIR] -- ARGS...
     python3 bench/tools/rust_runtime.py deviation --run RUN_DIR --name NAME --from SHA256 --to SHA256
         --reason TEXT --scope TEXT --validation TEXT --accounting TEXT [--store DIR]
 
-The store (default ``~/.t3/bench-runtime``) keeps each built executable under ``NAME/SHA256/`` beside its
+The store (``--store``, else ``BENCH_RUNTIME_STORE``, else ``~/.t3/bench-runtime``) keeps each built executable under ``NAME/SHA256/`` beside its
 ``receipt.json``. Entries are never overwritten or removed by this tool, so every retained version stays
 runnable offline for rollback. ``selected.json`` names the version new operations take: ``pin`` prints it as
 the pin a queue file lists under ``runtimes``. ``select`` and ``rollback`` change only that file. An operation
@@ -48,12 +50,19 @@ entry. It names the source revision, the crate's Git tree, the hashes of ``Cargo
 ``rust-toolchain.toml``, ``rustc -vV``, ``cargo -V``, the target, the C library the build linked against,
 the build command and its flags, and the executable's SHA-256 and size.
 
+``resolve`` prints the executable an operation runs and ``exec`` runs it with ``ARGS``, taking the first of:
+``BENCH_RUST_<NAME>`` with a matching ``BENCH_RUST_<NAME>_SHA256``, as a queue launch sets them; with ``--run``,
+the run's ``runtimes.frozen.json`` pin; otherwise the selected version, only when its receipt's crate tree is the
+crate tree at ``HEAD``. Anything else is refused with the install command: there is no Python fallback, no
+``cargo run`` and no unreceipted ``target/`` build.
+
 ``deviation`` writes a versioned record of a required runtime change into a run's ``deviations/``, with both
 identities. It names no ``predecessor`` or ``cause``, so it is not an attempt diagnosis, and no check reads it
 as permission: a run still runs only on the runtime its queue pins.
 
 Exit codes: 0 done; 1 a check refused (missing, changed or incompatible executable, unclean source, a
-conflicting entry); 2 an input could not be read or a subprocess failed.
+conflicting entry); 2 an input could not be read or a subprocess failed. Once ``exec`` starts the executable,
+the exit code is that program's.
 """
 from __future__ import annotations
 
@@ -75,6 +84,7 @@ from datetime import datetime, timezone
 
 REPO = Path(__file__).resolve().parents[2]
 DEFAULT_STORE = Path("~/.t3/bench-runtime")
+STORE_VARIABLE = "BENCH_RUNTIME_STORE"
 RECEIPT = "rust-runtime-receipt/1"
 DEVIATION = "rust-runtime-deviation/1"
 # The supported hosts of docs/agents/scripts.md; .github/workflows/rust-runtime.yml exercises each one.
@@ -157,6 +167,15 @@ def version_tuple(text: str) -> tuple:
 
 def located(store: Path | str) -> Path:
     return Path(store).expanduser().resolve()
+
+
+def default_store() -> Path:
+    return Path(os.environ.get(STORE_VARIABLE) or DEFAULT_STORE)
+
+
+def variable(name: str) -> str:
+    """The variable a queue launch puts a pinned executable's path in; its SHA-256 is in ``<variable>_SHA256``."""
+    return "BENCH_RUST_" + name.upper().replace("-", "_")
 
 
 @contextlib.contextmanager
@@ -250,18 +269,23 @@ def check(store: Path, name: str, pin: dict, *, here: bool = True) -> tuple:
     return executable, receipt
 
 
+def crate_tree(repo: Path, commit: str, path: str) -> str | None:
+    done = subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}:{path}"],
+                          capture_output=True, text=True, encoding="utf-8")
+    return None if done.returncode else done.stdout.strip()
+
+
 def source_problem(receipt: dict, freeze_commit: str | None, repo: Path = REPO) -> str | None:
     """Why the executable was not built from the crate tree at ``freeze_commit``, or None."""
     if not freeze_commit:
         return "the manifest has no freeze_commit to compare the crate with"
     path = receipt["crate"]["path"]
-    done = subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "--quiet", f"{freeze_commit}^{{commit}}:{path}"],
-                          capture_output=True, text=True, encoding="utf-8")
-    if done.returncode:
+    tree = crate_tree(repo, freeze_commit, path)
+    if tree is None:
         return f"freeze commit {freeze_commit} has no crate {path}"
-    if done.stdout.strip() != receipt["source"]["tree"]:
+    if tree != receipt["source"]["tree"]:
         return (f"{receipt['crate']['name']} was built from crate tree {receipt['source']['tree']}; "
-                f"freeze commit {freeze_commit} has {done.stdout.strip()}")
+                f"freeze commit {freeze_commit} has {tree}")
     return None
 
 
@@ -536,6 +560,46 @@ def current_pin(store: Path, name: str) -> dict:
     return current["pin"]
 
 
+# --- resolving ----------------------------------------------------------------------------------
+
+def install_command(name: str) -> str:
+    return f"python3 bench/tools/rust_runtime.py install --crate rust/{name} --select"
+
+
+def resolve(name: str, run_dir: Path | None = None, store: Path | None = None, repo: Path = REPO) -> Path:
+    """The executable an operation runs: the launch's ``BENCH_RUST_<NAME>`` with its matching SHA-256; else the
+    pin in ``run_dir``'s ``runtimes.frozen.json``; else the selected version, only when its crate tree is the one at
+    ``HEAD``. Refuses anything else rather than falling back to another version or implementation."""
+    store = located(default_store() if store is None else store)
+    path, digest = os.environ.get(variable(name)), os.environ.get(variable(name) + "_SHA256")
+    if path is not None or digest is not None:
+        if not path or not digest:
+            raise Refused(f"{variable(name)} and {variable(name)}_SHA256 must be set together")
+        executable = Path(path)
+        if not executable.is_absolute() or executable.is_symlink() or not executable.is_file():
+            raise Refused(f"{variable(name)} is {path}, not the absolute path of an executable file")
+        if sha256_file(executable) != digest:
+            raise Refused(f"{executable} does not hash to {variable(name)}_SHA256 {digest}")
+        if not os.access(executable, os.X_OK):
+            raise Refused(f"{executable} is not executable")
+        return executable
+    if run_dir is not None:
+        pins = read_json(run_dir / "runtimes.frozen.json")
+        if name not in pins:
+            raise Refused(f"{run_dir / 'runtimes.frozen.json'} pins no {name} runtime")
+        return check(store, name, pins[name])[0]
+    try:
+        executable, receipt = check(store, name, current_pin(store, name))
+    except Refused as error:
+        raise Refused(f"{error}; install it with: {install_command(name)}") from None
+    path = receipt["crate"]["path"]
+    tree = crate_tree(repo, "HEAD", path)
+    if tree != receipt["source"]["tree"]:
+        raise Refused(f"the selected {name} was built from crate tree {receipt['source']['tree']}; HEAD has "
+                      f"{tree or 'no crate ' + path}; install it with: {install_command(name)}")
+    return executable
+
+
 # --- deviations ---------------------------------------------------------------------------------
 
 def deviation(store: Path, run_dir: Path, name: str, old: str, new: str, notes: dict) -> Path:
@@ -575,6 +639,10 @@ def main(argv: list | None = None) -> int:
         sub.add_argument("sha256")
     for name in ("rollback", "pin", "list"):
         commands.add_parser(name).add_argument("name")
+    for name in ("resolve", "exec"):
+        sub = commands.add_parser(name)
+        sub.add_argument("name")
+        sub.add_argument("--run", type=Path)
     deviate = commands.add_parser("deviation")
     deviate.add_argument("--run", required=True, type=Path)
     deviate.add_argument("--name", required=True)
@@ -583,10 +651,18 @@ def main(argv: list | None = None) -> int:
     for note in ("reason", "scope", "validation", "accounting"):
         deviate.add_argument(f"--{note}", required=True)
     for sub in commands.choices.values():
-        sub.add_argument("--store", type=Path, default=DEFAULT_STORE)
+        sub.add_argument("--store", type=Path)
+    argv = list(sys.argv[1:] if argv is None else argv)
+    forwarded = []
+    if argv[:1] == ["exec"] and "--" in argv:
+        split = argv.index("--")
+        argv, forwarded = argv[:split], argv[split + 1:]
     args = parser.parse_args(argv)
-    store = located(args.store)
+    store = located(default_store() if args.store is None else args.store)
     try:
+        if args.command == "exec":
+            executable = resolve(args.name, args.run, store)
+            os.execv(executable, [str(executable), *forwarded])
         if args.command == "install":
             crate_dir = (REPO / args.crate).resolve()
             with tempfile.TemporaryDirectory(prefix="rust-runtime-build-") as scratch:
@@ -608,6 +684,8 @@ def main(argv: list | None = None) -> int:
             result = rollback(store, args.name)
         elif args.command == "pin":
             result = {args.name: current_pin(store, args.name)}
+        elif args.command == "resolve":
+            result = {"executable": str(resolve(args.name, args.run, store))}
         elif args.command == "list":
             versions = sorted(path.name for path in (store / args.name).iterdir() if SHA256.fullmatch(path.name)) \
                 if (store / args.name).is_dir() else []

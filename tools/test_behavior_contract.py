@@ -45,6 +45,21 @@ def write_decision_version(directory, number):
     return path
 
 
+def write_family_version(directory, family, number, case_id="probe"):
+    path = directory / f"{family}-decisions.v{number}.json"
+    if number == 1:
+        value = {"records": {case_id: decision({"id": case_id}, "version 1")}}
+    else:
+        previous_path = directory / f"{family}-decisions.v{number - 1}.json"
+        old = json.loads(previous_path.read_text())["records"][case_id]
+        value = {"previous": {"path": previous_path.name, "format": "decisions/2",
+                              "sha256": contract.hashlib.sha256(previous_path.read_bytes()).hexdigest()},
+                 "records": {case_id: decision({"id": case_id}, f"version {number}", supersedes=old["contract_sha256"])}}
+    path.write_text(json.dumps(value))
+    (directory / f"{family}.v1.json").write_text(json.dumps({"decisions": path.name}))
+    return path
+
+
 def history_repo(root):
     def git(*args):
         return subprocess.check_output(["git", "-C", str(root), "-c", "user.name=kamui",
@@ -260,6 +275,53 @@ class ContractTests(unittest.TestCase):
                 git("commit", "-m", "test(bench): simulate bypassing active history")
                 with self.assertRaisesRegex(ValueError, "latest published|immediate predecessor"):
                     contract.verify_decision_history(root)
+
+    def test_each_decision_family_keeps_its_own_published_history(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            git = history_repo(root)
+            directory = root / "tools/behavior_contracts"
+            v1 = write_family_version(directory, "roster", 1)
+            git("add", ".")
+            git("commit", "-m", "test(bench): publish a second decision family")
+            contract.verify_decision_history(root)
+            published = v1.read_bytes()
+            v1.write_text(json.dumps({"records": {}}))
+            with self.assertRaisesRegex(ValueError, "roster-decisions.v1.json: published decision changed"):
+                contract.verify_decision_history(root)
+            v1.write_bytes(published)
+            write_family_version(directory, "roster", 2)
+            git("add", ".")
+            git("commit", "-m", "test(bench): supersede the second family")
+            contract.verify_decision_history(root)
+            (directory / "roster.v1.json").write_text(json.dumps({"decisions": v1.name}))
+            with self.assertRaisesRegex(ValueError, "roster.v1.json: corpus must use the latest published"):
+                contract.verify_decision_history(root)
+            (directory / "roster.v1.json").unlink()
+            with self.assertRaisesRegex(ValueError, "roster: no corpus uses this decision history"):
+                contract.verify_decision_history(root)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            git = history_repo(root)
+            directory = root / "tools/behavior_contracts"
+            v1 = write_family_version(directory, "roster", 1)
+            value = json.loads(v1.read_text())
+            value["previous"] = json.loads((directory / "usage-decisions.v2.json").read_text())["previous"]
+            v1.write_text(json.dumps(value))
+            git("add", ".")
+            git("commit", "-m", "test(bench): give a first version a predecessor")
+            with self.assertRaisesRegex(ValueError, "a first decision version has no predecessor"):
+                contract.verify_decision_history(root)
+
+    def test_prefix_pins_leading_bytes_only(self):
+        expected = {"exit": 2, "stdout": {"mode": "bytes", "bytes_b64": ""},
+                    "stderr": {"mode": "prefix", "bytes_b64": encoded(b"tool: command failed: git\n")}, "filesystem": []}
+        actual = {"exit": 2, "stdout": b"", "stderr": b"tool: command failed: git\nfatal: any wording\n", "filesystem": []}
+        self.assertEqual(contract.compare(expected, actual), [])
+        self.assertTrue(contract.compare(expected, dict(actual, stderr=b"tool: command failed")))
+        differences = contract.differential(actual, dict(actual, stderr=b"tool: command failed: git\nother\n"),
+                                            {"expected": expected})
+        self.assertTrue(any("stderr bytes" in diff for diff in differences), differences)
 
     def test_corpus_rejects_duplicate_json_keys(self):
         with tempfile.TemporaryDirectory() as temporary:

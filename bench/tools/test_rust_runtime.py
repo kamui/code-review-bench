@@ -277,6 +277,102 @@ class Selection(Store):
         self.assertEqual(rust_runtime.selected(self.store, "fixture-tool"), rows[-1])
 
 
+class Resolution(Store):
+    """Which executable an operation runs, without a fallback to another version or to Python."""
+
+    def setUp(self):
+        super().setUp()
+        self.repo = self.root / "repo"
+        (self.repo / "rust/fixture-tool").mkdir(parents=True)
+        self.git("init", "-q")
+        self.commit("one")
+        self.enterContext(patch.dict(os.environ))
+        for name in ("BENCH_RUST_FIXTURE_TOOL", "BENCH_RUST_FIXTURE_TOOL_SHA256", rust_runtime.STORE_VARIABLE):
+            os.environ.pop(name, None)
+
+    def git(self, *args: str) -> str:
+        return subprocess.check_output(["git", "-C", str(self.repo), "-c", "user.name=Fixture",
+                                        "-c", "user.email=fixture@example.invalid", *args], text=True).strip()
+
+    def commit(self, text: str) -> None:
+        (self.repo / "rust/fixture-tool/main.rs").write_text(text, encoding="utf-8")
+        self.git("add", ".")
+        self.git("commit", "-qm", text)
+
+    def head_version(self, output: str) -> dict:
+        tree = self.git("rev-parse", "HEAD:rust/fixture-tool")
+        source = {**fake_receipt(script(self.root / "probe", "x"))["source"], "tree": tree}
+        return self.version(output, source=source)
+
+    def resolve(self, run_dir: Path | None = None) -> Path:
+        return rust_runtime.resolve("fixture-tool", run_dir, self.store, self.repo)
+
+    def test_the_selected_version_runs_only_while_its_crate_tree_is_the_one_at_head(self):
+        with self.assertRaisesRegex(rust_runtime.Refused, "no selected version.*install it with: python3 "
+                                    "bench/tools/rust_runtime.py install --crate rust/fixture-tool --select"):
+            self.resolve()
+        pin = self.head_version("one")
+        rust_runtime.select(self.store, "fixture-tool", pin)
+        self.assertEqual(self.resolve(), self.entry(pin) / "fixture-tool")
+        self.commit("two")
+        with self.assertRaisesRegex(rust_runtime.Refused, "selected fixture-tool was built from crate tree .*; "
+                                    "HEAD has .*; install it with"):
+            self.resolve()
+
+    def test_a_launch_variable_is_used_only_with_its_matching_hash(self):
+        rust_runtime.select(self.store, "fixture-tool", self.head_version("selected"))
+        launched = script(self.root / "launched", "launched")
+        os.environ["BENCH_RUST_FIXTURE_TOOL"] = str(launched)
+        with self.assertRaisesRegex(rust_runtime.Refused, "must be set together"):
+            self.resolve()
+        os.environ["BENCH_RUST_FIXTURE_TOOL_SHA256"] = "0" * 64
+        with self.assertRaisesRegex(rust_runtime.Refused, "does not hash to BENCH_RUST_FIXTURE_TOOL_SHA256"):
+            self.resolve()
+        os.environ["BENCH_RUST_FIXTURE_TOOL_SHA256"] = rust_runtime.sha256_file(launched)
+        self.assertEqual(self.resolve(), launched)
+        os.environ["BENCH_RUST_FIXTURE_TOOL"] = "launched"
+        with self.assertRaisesRegex(rust_runtime.Refused, "not the absolute path"):
+            self.resolve()
+        self.assertEqual(rust_runtime.variable("fixture-tool"), "BENCH_RUST_FIXTURE_TOOL")
+        import review_queue
+        self.assertEqual(rust_runtime.variable("bench-tools"), review_queue.runtime_variable("bench-tools"))
+
+    def test_a_run_uses_its_frozen_pin_and_never_the_selection(self):
+        frozen, selected = self.version("frozen"), self.head_version("selected")
+        rust_runtime.select(self.store, "fixture-tool", selected)
+        run_dir = self.root / "run"
+        run_dir.mkdir()
+        with self.assertRaisesRegex(rust_runtime.Refused, "runtimes.frozen.json is missing"):
+            self.resolve(run_dir)
+        (run_dir / "runtimes.frozen.json").write_text(json.dumps({"other-tool": selected}), encoding="utf-8")
+        with self.assertRaisesRegex(rust_runtime.Refused, "pins no fixture-tool runtime"):
+            self.resolve(run_dir)
+        (run_dir / "runtimes.frozen.json").write_text(json.dumps({"fixture-tool": frozen}), encoding="utf-8")
+        self.assertEqual(self.resolve(run_dir), self.entry(frozen) / "fixture-tool")
+        executable = self.entry(frozen) / "fixture-tool"
+        self.unlock(executable)
+        executable.write_text("#!/bin/sh\necho changed\n", encoding="utf-8")
+        with self.assertRaisesRegex(rust_runtime.Refused, "no longer hashes to its pin"):
+            self.resolve(run_dir)
+
+    def test_exec_runs_the_resolved_executable_with_its_arguments_and_exit_code(self):
+        program = self.root / "echo-args"
+        program.write_text('#!/bin/sh\nprintf "%s|" "$@"\nexit 3\n', encoding="utf-8")
+        program.chmod(0o755)
+        env = {**os.environ, "BENCH_RUST_FIXTURE_TOOL": str(program),
+               "BENCH_RUST_FIXTURE_TOOL_SHA256": rust_runtime.sha256_file(program)}
+        done = subprocess.run([sys.executable, str(TOOL), "exec", "fixture-tool", "--", "roster", "--root", "a b", "--"],
+                              env=env, capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual((done.returncode, done.stdout), (3, "roster|--root|a b|--|"), done.stderr)
+        empty = self.root / "empty-store"
+        done = subprocess.run([sys.executable, str(TOOL), "exec", "fixture-tool", "--", "roster"],
+                              env={**os.environ, rust_runtime.STORE_VARIABLE: str(empty)},
+                              capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual((done.returncode, done.stdout), (1, ""))
+        self.assertIn(f"fixture-tool has no selected version in {empty.resolve()}", done.stderr)
+        self.assertIn("install it with:", done.stderr)
+
+
 class Interpreter(unittest.TestCase):
     def test_queue_commands_load_without_tomllib_and_only_install_needs_it(self):
         # Python 3.10 has no tomllib; a None entry in sys.modules makes its import fail the same way.

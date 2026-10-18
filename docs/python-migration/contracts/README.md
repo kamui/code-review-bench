@@ -101,7 +101,9 @@ root input, and `transcript-known-zero` distinguishes explicit zero from U3.
 
 ## Comparison decisions
 
-`bytes` compares decoded `bytes_b64` without normalization. Newlines, whitespace,
+`bytes` compares decoded `bytes_b64` without normalization. `prefix` requires the output to start with the
+decoded bytes, for diagnostics that end with another program's wording, such as git's. The differential still
+compares the whole stream of both implementations byte for byte. Newlines, whitespace,
 JSON escaping and order, and trailing bytes matter in hashed files and retry payloads.
 The corpus preserves every input byte and its SHA-256. It also captures one rendered
 Markdown row byte-for-byte, including two-decimal cost rounding and its final newline.
@@ -143,11 +145,13 @@ retained, and the non-UTF-8 case explicitly pins rendered output bytes.
 
 Published decision files are immutable. `bun run test:web` runs the Git-history
 check and the JavaScript digest vectors before the rest of the suite. The history
-check anchors all existing versions at the first commit that adds v2, then anchors
-each later version at its own first addition. The corpus must select the latest
-version, and each version must link to its immediate predecessor, including the
-legacy v1 root. A fresh root, skipped predecessor or rollback fails. This also works
-after squash merges.
+check covers every decision family, each named `<area>-decisions.v<N>.json`, on its own.
+In the `usage` family, whose v1 is the legacy map, it anchors all existing versions at
+the first commit that adds v2. A family whose v1 already holds `records` anchors v1 at its own first addition, and its v1 names no
+predecessor. Each later version is anchored at its own first addition. Every corpus
+must select its family's latest version, a family that no corpus uses fails, and each
+version must link to its immediate predecessor, including the legacy v1 root. A fresh
+root, skipped predecessor or rollback fails. This also works after squash merges.
 An edited or removed published version fails, even after its self-digest is
 recomputed or the edit is committed. Add a new version instead. The check requires
 full Git history; CI uses `fetch-depth: 0`. A source archive alone cannot establish

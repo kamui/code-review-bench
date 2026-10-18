@@ -6,6 +6,8 @@ on:
       - 'rust/**'
       - 'bench/tools/rust_runtime.py'
       - 'bench/tools/test_rust_runtime.py'
+      - 'tools/behavior_contract.py'
+      - 'tools/behavior_contracts/**'
       - 'docs/python-migration/runtime-evidence/rollback.sh'
       - '.github/workflows/rust-runtime.yml'
   push:
@@ -14,6 +16,8 @@ on:
       - 'rust/**'
       - 'bench/tools/rust_runtime.py'
       - 'bench/tools/test_rust_runtime.py'
+      - 'tools/behavior_contract.py'
+      - 'tools/behavior_contracts/**'
       - 'docs/python-migration/runtime-evidence/rollback.sh'
       - '.github/workflows/rust-runtime.yml'
 
@@ -58,6 +62,13 @@ jobs:
           rustup default "$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')"
           test "$(rustc -vV | sed -n 's/^host: //p')" = "${{ matrix.target }}"
           cargo fetch --locked
+          (cd ../bench-tools && cargo fetch --locked)
+      - name: Check bench-tools formatting, lints and tests
+        working-directory: rust/bench-tools
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
       - name: Check pinning, retention and rollback
         working-directory: bench/tools
         env:
@@ -76,5 +87,12 @@ jobs:
                             "transcript": [sys.executable, adapter, "transcript"]}))
           EOF
           python3 tools/behavior_contract.py --implementations "$RUNNER_TEMP/map.json"
+      - name: Install bench-tools and check decision history
+        env:
+          BENCH_RUNTIME_STORE: ${{ runner.temp }}/rust-runtime-store
+        run: |
+          python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select
+          python3 bench/tools/rust_runtime.py resolve bench-tools | tee "$RUNNER_TEMP/bench-tools.json"
+          python3 tools/behavior_contract.py --verify-decision-history
       - name: Install a second version and roll back
         run: docs/python-migration/runtime-evidence/rollback.sh "$RUNNER_TEMP/rollback" "$(git rev-parse HEAD)"
