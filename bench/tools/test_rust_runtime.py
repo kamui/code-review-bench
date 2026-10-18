@@ -21,6 +21,7 @@ from unittest.mock import patch
 import rust_runtime
 
 TOOL = Path(__file__).resolve().with_name("rust_runtime.py")
+DEBUG_ASSERTIONS = "[profile.release]\ndebug-assertions = true\n"
 
 
 def fake_receipt(executable: Path, name: str = "fixture-tool", **changes) -> dict:
@@ -408,7 +409,7 @@ class RealBuilds(unittest.TestCase):
                 self.assertIsNone(rust_runtime.source_problem(receipt, self.git("rev-parse", "HEAD").strip(), self.repo))
                 self.assertEqual(subprocess.check_output([executable], text=True), "one\n")
 
-    def test_an_unclean_crate_another_toolchain_or_unrestorable_cargo_configuration_is_refused(self):
+    def test_an_unclean_crate_another_toolchain_or_a_tracked_cargo_configuration_is_refused(self):
         with tempfile.TemporaryDirectory(dir=self.root) as scratch:
             (self.crate / "src/extra.rs").write_text("\n", encoding="utf-8")
             with self.assertRaisesRegex(rust_runtime.Refused, "uncommitted or untracked files"):
@@ -420,31 +421,70 @@ class RealBuilds(unittest.TestCase):
             with patch.dict(os.environ, {"RUSTUP_TOOLCHAIN": self.release}):
                 with self.assertRaisesRegex(rust_runtime.Refused, f"the active rustc is {self.release}; .* pins 1.0.0"):
                     rust_runtime.build(self.crate, self.repo, Path(scratch))
-            home = self.root / "cargo-home"
-            home.mkdir()
-            (home / "config.toml").write_text("[build]\nrustflags = []\n", encoding="utf-8")
-            with patch.dict(os.environ, {"CARGO_HOME": str(home)}):
-                with self.assertRaisesRegex(rust_runtime.Refused, "cargo configuration a receipt cannot restore"):
+            (self.crate / "rust-toolchain.toml").write_text(f'[toolchain]\nchannel = "{self.release}"\n', encoding="utf-8")
+            (self.crate / ".cargo").mkdir()
+            (self.crate / ".cargo/config.toml").write_text(DEBUG_ASSERTIONS, encoding="utf-8")
+            self.git("add", ".")
+            self.git("commit", "-qm", "a tracked Cargo configuration")
+            with self.assertRaisesRegex(rust_runtime.Refused, "cargo configuration a receipt cannot restore .*/.cargo/config.toml"):
+                rust_runtime.build(self.crate, self.repo, Path(scratch))
+        with tempfile.TemporaryDirectory(dir=self.root) as scratch, tempfile.TemporaryDirectory(dir=self.root) as cwd:
+            # Stands in for /.cargo, which only an administrator can write.
+            (Path(cwd) / ".cargo").mkdir()
+            (Path(cwd) / ".cargo/config").write_text(DEBUG_ASSERTIONS, encoding="utf-8")
+            with patch.object(rust_runtime, "CARGO_CWD", Path(cwd)):
+                with self.assertRaisesRegex(rust_runtime.Refused, f"cargo configuration a receipt cannot restore .*{cwd}/.cargo/config"):
                     rust_runtime.build(self.crate, self.repo, Path(scratch))
         self.assertFalse(self.store.exists())
 
-    def test_a_configuration_in_an_ancestor_is_found_when_cargo_home_overlaps_it(self):
-        (self.repo / ".gitignore").write_text("/.cargo/\n/rust/.cargo/\n", encoding="utf-8")
-        self.git("add", ".")
-        self.git("commit", "-qm", "ignore local Cargo configuration")
-        for overlap in (self.crate, self.crate.parent, self.repo):
-            with self.subTest(overlap=overlap.name), tempfile.TemporaryDirectory(dir=self.root) as scratch:
-                config = (self.crate if overlap == self.crate else overlap) / ".cargo/config.toml"
-                if overlap == self.crate:
-                    (self.crate / ".gitignore").write_text("/target/\n/.cargo/\n", encoding="utf-8")
-                    self.git("commit", "-qam", "ignore the crate's Cargo configuration")
-                config.parent.mkdir()
-                config.write_text("[profile.release]\ndebug-assertions = true\n", encoding="utf-8")
-                self.assertEqual(self.git("status", "--porcelain"), "")
-                with patch.dict(os.environ, {"CARGO_HOME": str(overlap)}):
-                    with self.assertRaisesRegex(rust_runtime.Refused, f"cargo configuration a receipt cannot restore would apply: .*{config}"):
-                        rust_runtime.build(self.crate, self.repo, Path(scratch))
-                shutil.rmtree(config.parent)
+    def test_cargo_configuration_and_workspaces_outside_the_private_cargo_home_never_reach_the_build(self):
+        (self.crate / "src/main.rs").write_text('fn main() { println!("{}", cfg!(debug_assertions)); }\n', encoding="utf-8")
+        self.git("commit", "-qam", "report debug assertions")
+        host_home = self.root / "cargo-home"
+        settings = [host_home / "config.toml", self.repo / ".cargo/config.toml", self.root / ".cargo/config.toml"]
+
+        def build(scratch: Path, saved: list) -> str:
+            """Builds while each ``(path, text)`` in ``saved`` exists only from the start of cargo build to its end."""
+            real = rust_runtime.run
+
+            def save_and_revert(command, cwd, env=None):
+                if command[:2] != ["cargo", "build"]:
+                    return real(command, cwd, env)
+                manifest = Path(command[command.index("--manifest-path") + 1]) if "--manifest-path" in command else Path(cwd) / "Cargo.toml"
+                files = [(path, text(manifest) if callable(text) else text) for path, text in saved]
+                try:
+                    for path, content in files:
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_text(content, encoding="utf-8")
+                    return real(command, cwd, env)
+                finally:
+                    for path, _ in files:
+                        path.unlink()
+
+            with patch.dict(os.environ, {"CARGO_HOME": str(host_home)}), patch.object(rust_runtime, "run", save_and_revert):
+                executable, receipt = rust_runtime.build(self.crate, self.repo, scratch)
+            self.assertEqual(receipt["build"]["cargo_config_files"], [])
+            self.assertEqual(self.git("status", "--porcelain", "--", "rust/fixture-tool"), "")
+            return subprocess.check_output([executable], text=True)
+
+        with self.subTest(when="saved before the install"), tempfile.TemporaryDirectory(dir=self.root) as scratch:
+            for path in settings:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(DEBUG_ASSERTIONS, encoding="utf-8")
+            try:
+                self.assertEqual(build(Path(scratch), []), "false\n")
+            finally:
+                for path in settings:
+                    path.unlink()
+        for path in settings:
+            with self.subTest(when="saved during the build", path=path), tempfile.TemporaryDirectory(dir=self.root) as scratch:
+                self.assertEqual(build(Path(scratch), [(path, DEBUG_ASSERTIONS)]), "false\n")
+        with self.subTest(when="a workspace saved during the build"), tempfile.TemporaryDirectory(dir=self.root) as scratch:
+            root = Path(scratch).resolve()
+            claim = [(root / "Cargo.toml", lambda manifest: f'[workspace]\nmembers = ["{manifest.parent.relative_to(root).as_posix()}"]\n'
+                      + DEBUG_ASSERTIONS),
+                     (root / "Cargo.lock", (self.crate / "Cargo.lock").read_text(encoding="utf-8"))]
+            self.assertEqual(build(Path(scratch), claim), "false\n")
         self.assertFalse(self.store.exists())
 
     def test_a_relative_build_directory_is_refused(self):

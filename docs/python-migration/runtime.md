@@ -39,20 +39,28 @@ The pin that queues and runs use is the executable's SHA-256 together with the r
    ```
 
 `install` needs Python 3.11 or later; the other commands and `review_queue.py` do not.
-After the cleanliness check it writes the crate's Git tree at `HEAD` into a private snapshot, copying
-each file's committed bytes. The manifest and `cargo metadata` checks, the toolchain query and the
-build use that snapshot, and the receipt hashes its files. The Cargo configuration and workspace
-checks inspect both the checkout and the snapshot. An edit saved to the checkout during an install
-therefore cannot reach the executable, even when it is reverted before the install ends.
+After the cleanliness check it creates a private Cargo home for the build. That home holds no
+configuration, only links to the host Cargo home's registry and Git caches and the lock files that
+guard them. It writes the crate's Git tree at `HEAD` into a snapshot directly inside that home,
+copying each file's committed bytes. It then selects the toolchain once, through rustup or another
+proxy, from the snapshot's `rust-toolchain.toml`. Every later step runs that toolchain's own `cargo`
+and `rustc` from `/`. The manifest and `cargo metadata` checks, the toolchain query and the build use
+the snapshot, and the receipt hashes its files.
+
+Cargo looks for configuration in its working directory, each parent of it and its home, and stops
+its workspace search at its home. The build therefore reads configuration only from `/.cargo`, which
+only an administrator can write, and from the private home, which holds none. A file saved to the
+checkout, the host Cargo home, the temporary directory or any parent of the snapshot during an install
+cannot reach the executable, even when it is removed before the install ends. Configuration in those
+places is ignored, not refused. A later `rustup override` or toolchain change cannot switch the
+toolchain partway through an install.
 It refuses what a receipt could not restore:
 
-- Uncommitted or untracked files in the crate, and an active `rustc` whose release differs from
+- Uncommitted or untracked files in the crate, and a selected `rustc` whose release differs from
   `rust-toolchain.toml`.
-- Any Cargo configuration file in the `.cargo` directory of the crate, the snapshot or a parent of
-  either, or in `CARGO_HOME`, each checked even when `CARGO_HOME` is one of those directories, and a
-  relative `HOME`, `CARGO_HOME`, `RUSTUP_HOME` or `TMPDIR`, which cargo would resolve against its
-  working directory.
-- A parent Cargo workspace of the crate or the snapshot, `[patch]` or `[replace]` sections, and a
+- A Cargo configuration file in `/.cargo`, or in a `.cargo` directory the crate tracks, which the
+  build would ignore. A relative `HOME`, `CARGO_HOME`, `RUSTUP_HOME` or `TMPDIR`.
+- A parent Cargo workspace of the crate in the checkout, `[patch]` or `[replace]` sections, and a
   `Cargo.toml`, `Cargo.lock` or `rust-toolchain.toml` that Git does not track.
 - A tracked symbolic link or submodule, whose target the tree does not hold.
 - A local package in `cargo metadata --all-features`, such as an absolute path dependency, whose
@@ -69,11 +77,12 @@ snapshot without declaring it is not detected; `usage-pilot` has neither. The in
 system linker and Cargo's registry and Git caches are trusted as installed: the receipt records the
 `rustc` and `cargo` identities, but nothing re-verifies those files' contents. The build runs
 `cargo build --locked --offline --release --target <host> --bin <bin>` in a temporary target directory.
-The build sees only `PATH`, `HOME`, `CARGO_HOME`, `RUSTUP_HOME`, `RUSTUP_TOOLCHAIN` and `TMPDIR`, so
+The build sees only `PATH`, led by the selected toolchain's `bin` directory, `HOME`, the private
+`CARGO_HOME`, `RUSTUP_HOME`, `RUSTUP_TOOLCHAIN` and `TMPDIR`, so
 `RUSTFLAGS`, wrappers, profile overrides and any variable a crate reads with `env!` are absent. A
 build is refused when rustc's dep-info or a build script's `rerun-if-env-changed` shows it read one of
 those six. A build script that reads a variable without declaring it is not detected. The build also
-remaps the snapshot and `CARGO_HOME` paths. Installing the same build again keeps the existing entry.
+remaps the snapshot and private `CARGO_HOME` paths. Installing the same build again keeps the existing entry.
 An entry with the same hash but another receipt is refused.
 
 The default store is `~/.t3/bench-runtime`. Every command takes `--store`.

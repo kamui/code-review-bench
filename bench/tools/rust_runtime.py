@@ -20,15 +20,19 @@ the pin a queue file lists under ``runtimes``. ``select`` and ``rollback`` chang
 that already holds a pin keeps it through restart and recovery; nothing here falls back to another version
 or to Python when the pinned one is missing or changed.
 
-``install`` needs a clean, committed crate. It writes the crate's Git tree at ``HEAD`` into a private
-snapshot. The manifest and metadata checks, the receipt's hashes, the toolchain query and the build use that
-snapshot, so an edit saved to the checkout meanwhile cannot reach the executable; the configuration and
-workspace checks inspect the checkout as well. The build runs ``cargo build --locked --offline --release``
-for this host's target, with only ``BUILD_ENVIRONMENT`` passed through and source paths remapped, once the
-active ``rustc`` is the release ``rust-toolchain.toml`` pins. It refuses what a receipt could not restore:
+``install`` needs a clean, committed crate. It writes the crate's Git tree at ``HEAD`` into a snapshot inside
+a private Cargo home that holds no configuration, only links to the host's registry and Git caches. It
+selects the toolchain once, from the snapshot's ``rust-toolchain.toml``, and runs that toolchain's own
+``cargo`` and ``rustc`` from ``/`` for every later step. Cargo searches its working directory's ancestors and
+its home for configuration, and stops its workspace search at its home, so no file another process saves
+outside the private home, even briefly, can reach the build. The manifest and metadata checks, the
+receipt's hashes, the toolchain query and the build use that snapshot. The build runs
+``cargo build --locked --offline --release`` for this host's target, with only ``BUILD_ENVIRONMENT`` passed
+through and source paths remapped, once that ``rustc`` is the release ``rust-toolchain.toml`` pins. It
+refuses what a receipt could not restore:
 
-- Any Cargo configuration file that would apply to the checkout or the snapshot, a relative ``HOME``,
-  ``CARGO_HOME``, ``RUSTUP_HOME`` or ``TMPDIR``, a parent Cargo workspace, and ``[patch]`` or ``[replace]`` sections.
+- A Cargo configuration file in ``/.cargo`` or tracked in the crate, a relative ``HOME``, ``CARGO_HOME``,
+  ``RUSTUP_HOME`` or ``TMPDIR``, a parent Cargo workspace in the checkout, and ``[patch]`` or ``[replace]`` sections.
 - A manifest, lockfile or toolchain file Git does not track, a tracked symbolic link or submodule, and a local
   dependency whose manifest is outside the snapshot.
 - A local file in the build's dep-info outside the snapshot, such as an absolute ``include_str!`` path. A
@@ -78,6 +82,8 @@ HOST_TARGETS = {("Linux", "x86_64"): "x86_64-unknown-linux-gnu", ("Linux", "aarc
 SUPPORTED_TARGETS = frozenset(HOST_TARGETS.values())
 # The only variables a build sees. Any other variable a crate reads is absent, so it reads the same everywhere.
 BUILD_ENVIRONMENT = ("PATH", "HOME", "CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN", "TMPDIR")
+# Cargo reads configuration from every ancestor of its working directory; this one has no ancestor but itself.
+CARGO_CWD = Path("/")
 NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 
@@ -265,13 +271,31 @@ def pin_of(directory: Path) -> dict:
 
 # --- building and retaining ---------------------------------------------------------------------
 
-def cargo_configs(crate_dir: Path, env: dict) -> list:
-    """Cargo configuration files a build in ``crate_dir`` would read: each ancestor's ``.cargo`` and the Cargo home."""
-    home = Path(env["CARGO_HOME"]) if env.get("CARGO_HOME") else Path(env.get("HOME") or Path.home()) / ".cargo"
-    resolved = crate_dir.resolve()
-    directories = [directory / ".cargo" for directory in (resolved, *resolved.parents)] + [home]
-    return sorted({path for directory in directories for name in ("config", "config.toml")
-                   if (path := directory / name).is_file()})
+def cargo_configs(source: Path) -> list:
+    """Cargo configuration files the build would read from ``CARGO_CWD``, or that the crate tracks and the build would
+    ignore. The private Cargo home holds none."""
+    return sorted(path for directory in (CARGO_CWD, source) for name in ("config", "config.toml")
+                  if (path := directory / ".cargo" / name).is_file())
+
+
+def private_home(scratch: Path, host: dict) -> Path:
+    """A Cargo home only this build reads, linking the host's registry and Git caches and the locks that guard them."""
+    shared = Path(host["CARGO_HOME"]) if host.get("CARGO_HOME") else Path(host.get("HOME") or Path.home()) / ".cargo"
+    home = Path(tempfile.mkdtemp(prefix="cargo-home-", dir=scratch))
+    for name in ("registry", "git", ".package-cache", ".package-cache-mutate"):
+        if (shared / name).exists():
+            (home / name).symlink_to(shared / name)
+    return home.resolve()
+
+
+def isolated_environment(source: Path, host: dict) -> dict:
+    """The build environment: ``host`` with the private Cargo home, and ``PATH`` led by the bin directory of the
+    toolchain that rustup or another proxy selects for the snapshot, chosen once here."""
+    tools = Path(run(["rustc", "--print", "sysroot"], source, host).strip()) / "bin"
+    missing = [name for name in ("cargo", "rustc") if not (tools / name).is_file()]
+    if missing:
+        raise InputError(f"the selected toolchain {tools.parent} has no {' or '.join(missing)}")
+    return {**host, "CARGO_HOME": str(source.parent), "PATH": os.pathsep.join(filter(None, (str(tools), host.get("PATH"))))}
 
 
 def local_inputs(dep_info: Path) -> list:
@@ -332,12 +356,13 @@ def snapshot(repo: Path, tree: str, relative: str, destination: Path) -> set:
     return written
 
 
-def describe(crate_dir: Path, repo: Path, source: Path, env: dict) -> tuple:
-    """The committed source and the active toolchain a build would use, and the files of the crate's snapshot.
+def describe(crate_dir: Path, repo: Path, source: Path, host: dict) -> tuple:
+    """The committed source and the toolchain a build would use, the files of the crate's snapshot, and the build's
+    environment.
 
-    Writes the crate tree at ``HEAD`` into ``source``, then checks and describes that snapshot, so the receipt names
-    exactly what cargo compiles. Refuses an unclean crate, local build inputs Git does not track there, or another
-    toolchain."""
+    Writes the crate tree at ``HEAD`` into ``source``, directly inside the private Cargo home, then checks and
+    describes that snapshot, so the receipt names exactly what cargo compiles. Refuses an unclean crate, local build
+    inputs Git does not track there, or another toolchain."""
     relative = crate_dir.resolve().relative_to(repo.resolve()).as_posix()
     dirty = run(["git", "status", "--porcelain", "--untracked-files=all", "--", relative], repo)
     if dirty.strip():
@@ -349,7 +374,7 @@ def describe(crate_dir: Path, repo: Path, source: Path, env: dict) -> tuple:
     revision = run(["git", "rev-parse", "HEAD"], repo).strip()
     tree = run(["git", "rev-parse", f"{revision}:{relative}"], repo).strip()
     tracked = snapshot(repo, tree, relative, source)
-    configs = sorted(set(cargo_configs(crate_dir, env)) | set(cargo_configs(source, env)))
+    configs = cargo_configs(source)
     if configs:
         raise Refused("cargo configuration a receipt cannot restore would apply: " + ", ".join(map(str, configs)))
     untracked = [name for name in ("Cargo.toml", "Cargo.lock", "rust-toolchain.toml") if (source / name).resolve() not in tracked]
@@ -364,16 +389,19 @@ def describe(crate_dir: Path, repo: Path, source: Path, env: dict) -> tuple:
     overrides = sorted(key for key in ("patch", "replace") if key in manifest)
     if overrides:
         raise Refused(f"{relative}/Cargo.toml has [{'], ['.join(overrides)}] sections, whose sources its receipt cannot pin")
+    env = isolated_environment(source, host)
     for directory in (crate_dir, source):
-        workspace = Path(run(["cargo", "locate-project", "--workspace", "--message-format", "plain", "--offline"], directory, env).strip())
+        workspace = Path(run(["cargo", "locate-project", "--workspace", "--message-format", "plain", "--offline",
+                              "--manifest-path", str(directory / "Cargo.toml")], CARGO_CWD, env).strip())
         if workspace.resolve() != (directory / "Cargo.toml").resolve():
             raise Refused(f"{relative} belongs to the Cargo workspace {workspace}, whose manifest and lockfile its receipt cannot pin")
-    metadata = json.loads(run(["cargo", "metadata", "--offline", "--locked", "--all-features", "--format-version", "1"], source, env))
+    metadata = json.loads(run(["cargo", "metadata", "--offline", "--locked", "--all-features", "--format-version", "1",
+                               "--manifest-path", str(source / "Cargo.toml")], CARGO_CWD, env))
     local = sorted(str(package["manifest_path"]) for package in metadata["packages"] if package["source"] is None
                    and Path(package["manifest_path"]).resolve() not in tracked)
     if local:
         raise Refused(f"{relative} depends on local packages whose manifests it does not track: {', '.join(local)}")
-    rustc = dict(line.split(": ", 1) for line in run(["rustc", "-vV"], source, env).splitlines() if ": " in line)
+    rustc = dict(line.split(": ", 1) for line in run(["rustc", "-vV"], CARGO_CWD, env).splitlines() if ": " in line)
     if rustc.get("release") != channel:
         raise Refused(f"the active rustc is {rustc.get('release')}; {relative}/rust-toolchain.toml pins {channel}")
     target = host_target()
@@ -385,8 +413,8 @@ def describe(crate_dir: Path, repo: Path, source: Path, env: dict) -> tuple:
                        "cargo_toml_sha256": sha256_file(source / "Cargo.toml"),
                        "cargo_lock_sha256": sha256_file(source / "Cargo.lock"),
                        "toolchain_file_sha256": sha256_file(source / "rust-toolchain.toml")},
-            "toolchain": {"channel": channel, "rustc": rustc, "cargo": run(["cargo", "-V"], source, env).strip()},
-            "target": target, "libc": host_libc()}, tracked
+            "toolchain": {"channel": channel, "rustc": rustc, "cargo": run(["cargo", "-V"], CARGO_CWD, env).strip()},
+            "target": target, "libc": host_libc()}, tracked, env
 
 
 def origin(repo: Path) -> str | None:
@@ -398,15 +426,16 @@ def origin(repo: Path) -> str | None:
 def build(crate_dir: Path, repo: Path, scratch: Path) -> tuple:
     """Build the crate's binary from a snapshot of its committed tree in ``scratch``; returns the executable and its
     receipt, without retaining it."""
-    env = build_environment()
-    source, target_dir = Path(tempfile.mkdtemp(prefix="source-", dir=scratch)).resolve(), scratch / "target"
-    identity, tracked = describe(crate_dir, repo, source, env)
-    cargo_home = Path(env.get("CARGO_HOME") or Path.home() / ".cargo").resolve()
-    flags = [f"--remap-path-prefix={source.resolve()}=/source", f"--remap-path-prefix={cargo_home}=/cargo"]
+    host = build_environment()
+    home = private_home(scratch, host)
+    source, target_dir = home / "source", scratch / "target"
+    identity, tracked, env = describe(crate_dir, repo, source, host)
+    # The snapshot lies inside the Cargo home, and rustc applies the last matching prefix.
+    flags = [f"--remap-path-prefix={home}=/cargo", f"--remap-path-prefix={source}=/source"]
     command = ["cargo", "build", "--locked", "--offline", "--release", "--target", identity["target"], "--bin", identity["crate"]["bin"]]
-    passed = sorted(env)
+    passed = sorted(host)
     env.update(CARGO_TARGET_DIR=str(target_dir), CARGO_ENCODED_RUSTFLAGS="\x1f".join(flags))
-    run(command, source, env)
+    run([*command, "--manifest-path", str(source / "Cargo.toml")], CARGO_CWD, env)
     executable = target_dir / identity["target"] / "release" / identity["crate"]["bin"]
     read = sorted(consumed_variables(target_dir) & set(env))
     if read:
@@ -417,7 +446,7 @@ def build(crate_dir: Path, repo: Path, scratch: Path) -> tuple:
         raise Refused(f"the build read local files that are not tracked in {identity['crate']['path']}, which its receipt cannot pin: "
                       + ", ".join(map(str, unpinned)))
     receipt = {"schema": RECEIPT, **identity,
-               "build": {"command": command, "rustflags": ["--remap-path-prefix=<crate>=/source", "--remap-path-prefix=<cargo home>=/cargo"],
+               "build": {"command": command, "rustflags": ["--remap-path-prefix=<cargo home>=/cargo", "--remap-path-prefix=<crate>=/source"],
                          "environment": passed, "cargo_config_files": []},
                "artifact": {"file": identity["crate"]["bin"], "sha256": sha256_file(executable), "size": executable.stat().st_size},
                "built_at": now()}
