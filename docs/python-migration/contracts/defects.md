@@ -22,3 +22,33 @@ before expansion. Updating expected output to match Python does not resolve a de
 
 Run `python3 tools/behavior_contract.py` to see the actual mismatch. The explicit
 `--allow-known-defects` mode recognizes only that recorded baseline result.
+
+## U2: Transcript truncation is accepted
+
+- Reproduced at baseline `5f188bf7c3aaf479f7dbd577f6f45d417f8b26b6` by
+  `transcript-truncated` in `tools/behavior_contracts/usage.v1.json`.
+- A valid billed assistant request is followed by a partial JSON line.
+- Independent expectation: exit 2, empty stdout, and a diagnostic naming line 2.
+  A damaged log cannot establish complete accounting.
+- Observed: exit 0, one turn, input 5, output 1, cost 0.000020 dollars. The current
+  `read_transcript` API explicitly documents skipping invalid JSON lines.
+- Resolution task U2 for #152: decide compatibility for this documented behavior
+  before porting transcript usage. Implement rejection, or save an explicit decision
+  for a representation that preserves incomplete accounting. A partial total must
+  not silently become complete metering in `contributor_adapters.py`.
+- Status: open. Production behavior is unchanged; the observed full JSON and effects
+  are saved separately from the independent rejection expectation.
+
+## U3: Transcript missing counts become zero
+
+- Reproduced at baseline `5f188bf7c3aaf479f7dbd577f6f45d417f8b26b6` by
+  `transcript-unknown` in `tools/behavior_contracts/usage.v1.json`.
+- An assistant request has an empty usage object.
+- Independent expectation: exit 2, empty stdout, and a missing `input_tokens` diagnostic.
+- Observed: exit 0, one turn, zero token counts, and cost 0. `read_transcript` uses
+  `used.get(...) or 0` and therefore loses the unknown state, as U1 does for Codex.
+- Resolution task U3 for #152: validate required counts before aggregation and preserve
+  known zero separately from absent or null accounting. Track this independently of U1
+  because the transcript parser and released diagnostics have separate callers.
+- Status: open, production unchanged. The fixture retains the observed full JSON and
+  effects separately from its independent expectation.

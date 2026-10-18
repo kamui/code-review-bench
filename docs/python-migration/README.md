@@ -111,6 +111,7 @@ and run preparation and dispatch to #157.
 
 | Group and issue | Responsibilities and callers | Mutable state and public or serialized contracts | Existing verification |
 | --- | --- | --- | --- |
+| Behavioral contracts, #151 | `behavior_contract`; local usage corpus and implementation command maps | Versioned argv, input bytes, disposable roots, exit and output comparisons, filesystem effects, independent expectations and explicit change decisions. Later slices extend the corpus. | `test_behavior_contract.py`; [contract reference](contracts/README.md). |
 | Usage, #152 | `codex_usage`, `transcript_usage`; dispatchers, runners, accounting and explorer consumers | Parse native usage, retain missing versus zero counts, cache categories, failed and replacement usage. Preserve JSON and TSV or CSV field names, cost units, flags, and output ordering. Read-only pilot. | `test_codex_usage.py`, `test_transcript_usage.py`; independent expected outcomes and differentials belong to #151. |
 | Runtime, #153 | `seal`, `skill_provenance`, `fetch_freeze_commits`; run preparation and CI | Freeze commits, run-relative skill pins, SHA-256, exact runtime release provenance, client versions and artifacts, deviations, freeze fetches. Started operations retain their runtime. | `test_skill_provenance.py`, manifest checks, clean-context checks. |
 | Processing, #154 | Packets, diff identity, normalizers, comparisons, legacy scores, SVG, rates, roster, upstream, methodology, explorer export and collection; package scripts, Pages and `dispatch.sh` | Packet and normalized-review schemas, rate catalog append semantics, method/task selection, exports and evidence URLs. Preserve byte hashes and unknown values. `score.py` and historical answer tables do not own the current scorecard kernel. | Per-module tests in the census; `test_export_explorer.py`, `test_collect_run.py`, `test_score_release.py`, `test_rates.py`, web scoring tests. |
@@ -125,7 +126,8 @@ Active research helpers carry the responsibility assignments in `RESEARCH_GROUPS
 Their tests run on disposable copies because some APIs write whole
 record generations. Preserve `before.v1.json`, validation, atomic replacement,
 idempotent replay, and undo semantics. Do not run those helpers against live records
-to validate this inventory. #151 captures those behaviors before a future port.
+to validate this inventory. The owning storage and grading slices, #155 and #156, extend #151's corpus
+with those behaviors before porting their helpers.
 
 `dispatch.sh` is a maintained #157 caller, including inline command validation,
 client hash checks and native review launch. `regrade_queues.sh` is a maintained

@@ -95,6 +95,54 @@ class ContractTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 contract.relative(encoded(raw))
 
+    def test_removed_case_needs_decision(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            corpus = json.loads(contract.CORPUS.read_text(encoding="utf-8"))
+            decisions = contract.CORPUS.parent / corpus["decisions"]
+            (root / corpus["decisions"]).write_bytes(decisions.read_bytes())
+            corpus["cases"] = [case for case in corpus["cases"] if case["id"] != "unknown-is-not-zero"]
+            path = root / "corpus.json"
+            path.write_text(json.dumps(corpus), encoding="utf-8")
+            result = self.run_cli("--corpus", path, "--allow-known-defects")
+            self.assertEqual(result.returncode, 2, result.stdout)
+            self.assertIn("removal needs an explicit decision", result.stderr)
+
+    def test_differential_recognizes_only_independent_defect_fixes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            wrapper = root / "fixed.py"
+            corpus = contract.load_corpus(contract.CORPUS)
+            defects = [case for case in corpus["cases"] if "baseline_defect" in case]
+            errors = {case["argv"][0]: contract.decode(case["expected"]["stderr"]["bytes_b64"]).decode("utf-8")
+                      for case in defects}
+            source = ("import os, sys\n"
+                      f"errors = {errors!r}\n"
+                      "program, args = sys.argv[1], sys.argv[2:]\n"
+                      "if args[0] in errors:\n"
+                      "    sys.stderr.write(errors[args[0]])\n"
+                      "    sys.exit(2)\n"
+                      f"script = {str(contract.REPO / 'bench/tools')!r} + '/' + program + '_usage.py'\n"
+                      "os.execv(sys.executable, [sys.executable, script, *args])\n")
+            wrapper.write_text(source, encoding="utf-8")
+            commands = root / "fixed.json"
+            commands.write_text(json.dumps({name: [sys.executable, str(wrapper), name]
+                                            for name in ("codex", "transcript")}), encoding="utf-8")
+            result = self.run_cli("--allow-known-defects", "--differential", commands)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            for case in defects:
+                self.assertIn("APPROVED FIX " + case["id"], result.stdout)
+            baseline = root / "baseline.json"
+            baseline.write_text(json.dumps({name: [sys.executable, str(contract.REPO / "bench/tools" / f"{name}_usage.py")]
+                                            for name in ("codex", "transcript")}), encoding="utf-8")
+            regression = self.run_cli("--implementations", commands, "--allow-known-defects", "--differential", baseline)
+            self.assertEqual(regression.returncode, 1, regression.stdout + regression.stderr)
+            self.assertIn("DIFFERENTIAL unknown-is-not-zero", regression.stdout)
+            wrapper.write_text(source.replace("sys.exit(2)", "sys.exit(9)"), encoding="utf-8")
+            wrong = self.run_cli("--allow-known-defects", "--differential", commands)
+            self.assertEqual(wrong.returncode, 1, wrong.stdout + wrong.stderr)
+            self.assertIn("DIFFERENTIAL unknown-is-not-zero", wrong.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
