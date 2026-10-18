@@ -2,7 +2,9 @@
 
 This records the processing stage, [#154](https://github.com/kamui/code-review-bench/issues/154), part of
 [#149](https://github.com/kamui/code-review-bench/issues/149). It lands in slices that follow the
-[delivery plan](https://github.com/kamui/code-review-bench/issues/154#issuecomment-6253814508). Slice 1,
+[delivery plan](https://github.com/kamui/code-review-bench/issues/154#issuecomment-6253814508). Slice 0,
+[#192](https://github.com/kamui/code-review-bench/issues/192), retires modules with no current caller, as
+[processing retirement](processing-retirement.md) records. Slice 1,
 [#193](https://github.com/kamui/code-review-bench/issues/193), adds the crate and ports `roster` and `diff_identity`.
 
 ## The `bench-tools` crate
@@ -66,8 +68,9 @@ byte for byte. Renaming them needs a new decision version.
 ## Research records
 
 `docs/research/last-push-recut-2026-10-07/plan.py` imports `roster`. It is a saved research record whose derived
-`review-plan.v1.json` is already committed, and no test loads it. It stays byte-unchanged. Replay it at a commit that
-has `bench/tools/roster.py`, such as the source commit its inventory entry resolves to.
+`review-plan.v1.json` is already committed, and no test loads it. [Processing retirement](processing-retirement.md#research-helpers)
+classifies it as historical replay. It stays byte-unchanged. Replay it at a commit that has `bench/tools/roster.py`,
+such as the source commit its inventory entry resolves to.
 
 ## Verification
 
