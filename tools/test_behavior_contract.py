@@ -324,7 +324,7 @@ class ContractTests(unittest.TestCase):
         self.assertTrue(any("stderr bytes" in diff for diff in differences), differences)
 
     def test_each_program_defaults_to_its_maintained_implementation(self):
-        corpus = {"cases": [{"program": name} for name in ("codex", "roster")]}
+        corpus = {"cases": [{"program": name} for name in ("codex", "diff-identity", "roster")]}
         program = Path(self.enterContext(tempfile.TemporaryDirectory())) / "bench-tools"
         program.write_text("#!/bin/sh\n", encoding="utf-8")
         program.chmod(0o755)
@@ -332,6 +332,7 @@ class ContractTests(unittest.TestCase):
                                               "BENCH_RUST_BENCH_TOOLS_SHA256": contract.hashlib.sha256(program.read_bytes()).hexdigest()}):
             commands = contract.default_commands(corpus)
         self.assertEqual(commands, {"codex": [sys.executable, str(contract.REPO / "bench/tools/codex_usage.py")],
+                                    "diff-identity": [sys.executable, str(contract.REPO / "bench/tools/diff_identity.py")],
                                     "roster": [str(program), "roster"]})
         store = Path(self.enterContext(tempfile.TemporaryDirectory())) / "store"
         with patch.dict(contract.os.environ, {"BENCH_RUNTIME_STORE": str(store)}):
@@ -339,6 +340,24 @@ class ContractTests(unittest.TestCase):
             contract.os.environ.pop("BENCH_RUST_BENCH_TOOLS_SHA256", None)
             with self.assertRaisesRegex(ValueError, "roster: bench-tools has no selected version.*install --crate rust/bench-tools"):
                 contract.default_commands(corpus)
+
+    def test_diff_identity_corpus_holds_for_the_retained_library_and_rejects_byte_order(self):
+        corpus = contract.CORPUS.parent / "diff-identity.v1.json"
+        result = self.run_cli("--corpus", corpus)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("PASS diff-identity-manifest", result.stdout)
+        source = (contract.REPO / "bench/tools/diff_identity.py").read_text()
+        before = "rows.sort(key=lambda row: row[1])"
+        self.assertIn(before, source)
+        with tempfile.TemporaryDirectory() as temporary:
+            mutant = Path(temporary) / "diff_identity.py"
+            mutant.write_text(source.replace(before, "rows.sort(key=lambda row: row[1].encode('utf-8', 'surrogateescape'))"))
+            commands = Path(temporary) / "commands.json"
+            commands.write_text(json.dumps({"diff-identity": [sys.executable, str(mutant)]}))
+            result = self.run_cli("--corpus", corpus, "--implementations", commands)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("FAIL diff-identity-manifest", result.stdout)
+        self.assertIn("PASS diff-identity-empty", result.stdout)
 
     def test_corpus_rejects_duplicate_json_keys(self):
         with tempfile.TemporaryDirectory() as temporary:

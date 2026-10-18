@@ -54,23 +54,29 @@ independent assertions. The harness never obtains expected output from a candida
 
 ## Run the bench-tools corpora
 
-[`roster.v1.json`](../../../tools/behavior_contracts/roster.v1.json) pins the first command of
+[`roster.v1.json`](../../../tools/behavior_contracts/roster.v1.json) and
+[`diff-identity.v1.json`](../../../tools/behavior_contracts/diff-identity.v1.json) pin the first commands of
 [`bench-tools`](../processing.md). Select a corpus with `--corpus`:
 
 ```sh
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/roster.v1.json
+python3 tools/behavior_contract.py --corpus tools/behavior_contracts/diff-identity.v1.json --differential /tmp/rust.json
 ```
 
-Without `--implementations`, each program runs its maintained implementation. `codex` and `transcript`
-run their Python scripts. `roster` has no Python
+Without `--implementations`, each program runs its maintained implementation. `codex`, `transcript` and
+`diff-identity` run their Python scripts; `diff_identity.py` is a retained library. `roster` has no Python
 implementation, so it runs the executable `rust_runtime.resolve("bench-tools")` selects, and the command refuses
-when none is installed for `HEAD`. A command map can name that executable instead:
+when none is installed for `HEAD`. A command map for the Rust programs names that executable:
 
 ```json
 {
-  "roster": ["/absolute/path/to/bench-tools", "roster"]
+  "roster": ["/absolute/path/to/bench-tools", "roster"],
+  "diff-identity": ["/absolute/path/to/bench-tools", "diff-identity"]
 }
 ```
+
+The `diff-identity` fixtures are bare repositories whose non-UTF-8 path names exist only inside Git tree objects,
+so they need no `requires` capability. The cases run `git` from the minimal `PATH`.
 
 ## Fixture format `behavior-contract/1`
 
@@ -168,7 +174,7 @@ check and the JavaScript digest vectors before the rest of the suite. The histor
 check covers every decision family, each named `<area>-decisions.v<N>.json`, on its own.
 In the `usage` family, whose v1 is the legacy map, it anchors all existing versions at
 the first commit that adds v2. A family whose v1 already holds `records`, such as
-`roster`, anchors v1 at its own first addition, and its v1 names no
+`roster` and `diff-identity`, anchors v1 at its own first addition, and its v1 names no
 predecessor. Each later version is anchored at its own first addition. Every corpus
 must select its family's latest version, a family that no corpus uses fails, and each
 version must link to its immediate predecessor, including the legacy v1 root. A fresh

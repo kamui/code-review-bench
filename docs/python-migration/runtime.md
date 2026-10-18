@@ -186,8 +186,8 @@ The [script policy](../agents/scripts.md) supports macOS and Linux. `SUPPORTED_T
 target for each of those hosts, and the `Rust runtime` workflow runs on a matching GitHub runner for
 each: the runtime tests with real cargo builds, an install of `usage-pilot`, the corpus with the
 retained executable, and [`rollback.sh`](runtime-evidence/rollback.sh). It also checks `bench-tools` with
-`cargo fmt`, `clippy` and `cargo test`, installs it, runs its `roster` corpus with the retained executable,
-and runs `roster` on the repository. Merge a change to the
+`cargo fmt`, `clippy` and `cargo test`, installs it, runs its corpora with the retained executable and the
+`diff-identity` differential against Python, and runs `roster` on the repository. Merge a change to the
 runtime only after every target's job passes.
 
 | Target | Runner | Local run |
