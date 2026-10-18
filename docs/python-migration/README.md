@@ -7,15 +7,19 @@ grading decision, or publication of benchmark evidence.
 
 ## Reproducible records
 
-[`inventory.v1.json.gz`](inventory.v1.json.gz) contains the census, compressed with
+[`inventory.v2.json.gz`](inventory.v2.json.gz) contains the census, compressed with
 an empty gzip filename and a zero timestamp. Its `source_commit` identifies all
 input bytes. The snapshot commit precedes only the generated inventory artifact.
 [`runtime-observation.v1.json`](runtime-observation.v1.json) is a separate, dated
 observation of this delivery host, not a claim about other hosts or current liveness.
+[`inventory.v1.json.gz`](inventory.v1.json.gz) preserves the earlier census.
+
+Generating or checking the census requires Python 3.11 or later to parse the
+tracked sources, including research modules that use Python 3.11 syntax.
 
 ```sh
 python3 tools/python_inventory.py --check
-gzip -dc docs/python-migration/inventory.v1.json.gz > /tmp/python-inventory.json
+gzip -dc docs/python-migration/inventory.v2.json.gz > /tmp/python-inventory.json
 python3 tools/python_inventory.py --ref HEAD --output /tmp/python-inventory-current.json.gz
 python3 -m unittest discover -s tools -p test_python_inventory.py -v
 ```
@@ -47,8 +51,9 @@ imports, and executable Python fragments. It intentionally retains prose and sav
 commands as references. A reference is not proof that a command ran. Import edges
 resolve same-directory modules and the maintained tooling import roots. Literal
 paths resolve from the repository or the source document's directory, with parent
-segments normalized. Ambiguous basenames in Python sources and current non-Python
-callers produce
+segments normalized. Shell `$(dirname "$0")/` paths and variables assigned that
+sibling directory resolve relative to the caller. Other unresolved paths in Python
+sources and current non-Python callers fall back to their basenames and produce
 `possible-name-reference` caller records, without activating their targets. Current
 TypeScript, harness and schema sources, `bench/README.md`, and the contributor
 invocation guide are live callers. The preserved copy under `artifacts/import-source`
@@ -106,7 +111,7 @@ and run preparation and dispatch to #157.
 | --- | --- | --- | --- |
 | Usage, #152 | `codex_usage`, `transcript_usage`; dispatchers, runners, accounting and explorer consumers | Parse native usage, retain missing versus zero counts, cache categories, failed and replacement usage. Preserve JSON and TSV or CSV field names, cost units, flags, and output ordering. Read-only pilot. | `test_codex_usage.py`, `test_transcript_usage.py`; independent expected outcomes and differentials belong to #151. |
 | Runtime, #153 | `seal`, `skill_provenance`, `fetch_freeze_commits`; run preparation and CI | Freeze commits, run-relative skill pins, SHA-256, exact runtime release provenance, client versions and artifacts, deviations, freeze fetches. Started operations retain their runtime. | `test_skill_provenance.py`, manifest checks, clean-context checks. |
-| Processing, #154 | Packets, diff identity, normalizers, comparisons, legacy scores, SVG, rates, roster, upstream, methodology, explorer export and collection; package scripts and Pages | Packet and normalized-review schemas, rate catalog append semantics, method/task selection, exports and evidence URLs. Preserve byte hashes and unknown values. `score.py` and historical answer tables do not own the current scorecard kernel. | Per-module tests in the census; `test_export_explorer.py`, `test_collect_run.py`, `test_score_release.py`, `test_rates.py`, web scoring tests. |
+| Processing, #154 | Packets, diff identity, normalizers, comparisons, legacy scores, SVG, rates, roster, upstream, methodology, explorer export and collection; package scripts, Pages and `dispatch.sh` | Packet and normalized-review schemas, rate catalog append semantics, method/task selection, exports and evidence URLs. Preserve byte hashes and unknown values. `score.py` and historical answer tables do not own the current scorecard kernel. | Per-module tests in the census; `test_export_explorer.py`, `test_collect_run.py`, `test_score_release.py`, `test_rates.py`, web scoring tests. |
 | Storage, #155 | Evidence inventory, store, resolution, recovery, reconciliation, native artifacts, import verification; all readers and `verify:import` | Manifest logical paths and hashes, canonical release payloads, restoration receipts, missing and superseded evidence, refusal to overwrite changed files. Keep import verification until its replacement works. | Storage and import tests, `bun run verify:import`; [storage contract](../evidence-storage.md). |
 | Grading, #156 | Schemas, audit, claim links, adjudications, calibration, current-grading validation, dossiers, rulings, grading and regrading; current tools and live filing tests | Owner-saved rulings, approved versus pending decisions, authorization, blinded grading, ledgers and reservations, mapping versions, exclusive batch state, transactional filing, quotas and disk reserve. Preserve every schema under `bench/schema`, rubric version, CLI exit status, and recovery protocol consumed by these modules. | Claim, grading, filing and ruling tests listed per module; [adjudication](../claim-adjudication.md), [record](../adjudication-record.md), [readiness](../grading-readiness.md). |
 | Supervision, #157 | Provisioning, clean contexts, run cells, filing, review queues, meters, runner adapters, container and fake-client probes; dispatch scripts and contributor adapters | Claims, attempts, fresh homes, isolation receipts, PID/process lineage, locks, launch and recovery logs, rate limits, client pins, interrupted attempts, replacements, cleanup receipts, caps and authorization. One controller per run. Preserve command flags, environment names, native payloads and exit codes. | Runner, queue, interruption, container, isolation and client tests; [clean contexts](../clean-context.md). |

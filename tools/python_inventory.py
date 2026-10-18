@@ -20,10 +20,14 @@ import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
-DESTINATION = "docs/python-migration/inventory.v1.json.gz"
+DESTINATION = "docs/python-migration/inventory.v2.json.gz"
+SHELL_DIRECTORY = r'\$\(dirname\s+(?:"\$0"|\$0)\)'
+PYTHON_PATH = re.compile(
+    rf"(?:{SHELL_DIRECTORY}|\$\{{[A-Za-z_]\w*\}}|\$[A-Za-z_]\w*)?[\w./-]+\.py\b"
+)
 REFERENCE = re.compile(
     r"\b(?:python(?:[23](?:\.\d+)?)?|pypy\d*|PYTHON\w*)\b|sys\.executable|"
-    r"[\w./-]+\.py\b|importlib|__import__|\b(?:exec|eval|compile)\("
+    + PYTHON_PATH.pattern + r"|importlib|__import__|\b(?:exec|eval|compile)\("
 )
 GROUPS = {
     "usage": (152, "codex_usage transcript_usage"),
@@ -140,7 +144,20 @@ def references(snapshot):
     return rows
 
 
-def file_references(source, token, python_paths):
+def sibling_variables(text):
+    assignments = defaultdict(list)
+    directory = rf'(?:{SHELL_DIRECTORY}|"{SHELL_DIRECTORY}"|\$\(cd\s+"{SHELL_DIRECTORY}"\s*&&\s*pwd\))'
+    for match in re.finditer(r"(?m)^\s*(?:export\s+)?([A-Za-z_]\w*)=(.*)$", text):
+        assignments[match[1]].append(re.fullmatch(directory, match[2].strip()) is not None)
+    return {name for name, values in assignments.items() if all(values)}
+
+
+def file_references(source, token, python_paths, siblings=()):
+    prefix, slash, remainder = token.partition("/")
+    if slash and (re.fullmatch(SHELL_DIRECTORY, prefix)
+                  or prefix.startswith("$") and prefix[1:].strip("{}") in siblings):
+        relative = posixpath.normpath(str(Path(source).parent / remainder))
+        return [(relative, "path-reference")] if relative in python_paths else []
     candidate = token.removeprefix("./")
     relative = posixpath.normpath(str(Path(source).parent / candidate))
     matches = {path for path in (candidate, relative) if path in python_paths}
@@ -187,11 +204,12 @@ def dependencies(path, text, python_paths, names):
             elif isinstance(node, ast.ImportFrom) and node.module:
                 imports.append((node.module, node.lineno))
     edges.update(import_edges(path, imports, python_paths))
+    siblings = sibling_variables(text)
     for number, line in enumerate(text.splitlines(), 1):
-        for token in re.findall(r"[\w./-]+\.py\b", line):
-            resolved = file_references(path, token, python_paths)
-            if not resolved and "/" not in token:
-                resolved = [(target, "possible-name-reference") for target in names[token]]
+        for token in PYTHON_PATH.findall(line):
+            resolved = file_references(path, token, python_paths, siblings)
+            if not resolved:
+                resolved = [(target, "possible-name-reference") for target in names[Path(token).name]]
             edges.update((target, number, kind) for target, kind in resolved)
     return sorted(edges), imports, parse_error
 
@@ -245,6 +263,7 @@ def census(snapshot):
         for target, line, _ in import_edges(path, embedded_imports(snapshot.read(path).decode(errors="replace")), py):
             incoming[target].append({"path": path, "line": line, "kind": "embedded-import-reference"})
             graph[path].add(target)
+    siblings = {path: sibling_variables(snapshot.read(path).decode(errors="replace")) for path in live - py}
     for row in refs:
         path = row["path"]
         if path in py:
@@ -252,9 +271,9 @@ def census(snapshot):
         for token in row["tokens"]:
             if not token.endswith(".py"):
                 continue
-            resolved = file_references(path, token, py)
-            if not resolved and path in live and "/" not in token:
-                resolved = [(target, "possible-name-reference") for target in names[token]]
+            resolved = file_references(path, token, py, siblings.get(path, ()))
+            if not resolved and path in live:
+                resolved = [(target, "possible-name-reference") for target in names[Path(token).name]]
             for target, kind in resolved:
                 incoming[target].append({"path": path, "line": row["line"], "kind": kind})
                 if kind != "possible-name-reference":
