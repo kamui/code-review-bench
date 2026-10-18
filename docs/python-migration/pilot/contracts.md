@@ -35,6 +35,14 @@ extended/basic date/time, and date-only stamps. It rejects leap seconds and year
 outside Python's 1–9999 range as unparseable. Missing/unparseable stamps leave timing
 unknown. Python's `fromisoformat` accepts additional forms such as ISO week dates and
 minute-only times; those are outside the native timestamp forms validated here.
+Conversely, Rust accepts lowercase `t`/`z` and unpadded forms such as
+`2026-10-18t10:00:07z` and `2026-1-1T0:0:5Z` that both Python variants leave
+unparseable; this can produce different `wall_seconds`. Rust splits JSONL at LF
+and accepts CRLF through JSON whitespace handling. Python's universal-newline
+reader also splits at CR alone; multiple records separated only by CR therefore
+parse in Python but fail as malformed JSON in Rust. These differences are accepted
+as limits of this isolated pilot, not production compatibility decisions. Normalizing
+these forms is deferred unless a separately reviewed integration needs them.
 Rust uses serde_json's strict JSON and default nesting limit; Python's JSON decoder
 has different nonfinite-number and depth behavior. These compatibility limits
 preclude an unqualified public-parser parity or cutover claim. The unchanged corpus

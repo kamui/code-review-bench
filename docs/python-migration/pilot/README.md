@@ -1,8 +1,11 @@
 # Usage pilot result
 
 **Recommendation for independent review: stop expansion of #149.** Rust improves
-large-file usage processing, but the complete small-file CLI exceeds the latency
-limit fixed in [the precommitted protocol](protocol.md). Retain the isolated pilot,
+large-file usage processing, but this bounded hybrid integration has not established
+the small-file CLI target fixed in [the precommitted protocol](protocol.md).
+The measured Python adapter spawning Rust adds 6.37 ms median against the 5 ms limit;
+its 1.45 ms standard deviation exceeds the 1.37 ms margin, and 2 of 7 paired trials
+add less than 5 ms. The native executable alone takes 2.31 ms. Retain the isolated pilot,
 strict Python adapter, corpus comparisons and arithmetic tests. No production caller
 has moved, and this result does not authorize #153.
 
@@ -72,9 +75,10 @@ process and formatting; this report does not attribute that whole cost to Rust.
 
 ## Contracts and costs
 
-Both candidate command maps pass all 23 unchanged corpus cases. Rust owns the 13
-Codex cases; the 10 transcript cases use the same strict Python adapter in both
-maps. Differential results identify only approved U1–U3 corrections. The
+Both candidate command maps pass all 23 unchanged corpus cases. Of the 13 Codex
+cases, 12 reach the Rust executable; `missing-root` fails in shared Python discovery
+before Rust runs. The 10 transcript cases use the same strict Python adapter in both
+maps. Corpus differential results identify only approved U1–U3 corrections. The
 [defect register](../contracts/defects.md#pilot-resolution-in-152) records rejection
 of unknown counts and damaged transcripts in the pilot, with production unchanged.
 [Boundary details](contracts.md) name additional validation and compatibility limits.
@@ -86,7 +90,7 @@ checks are gates. Parsing, count/cache bounds, finite prices and checked sums re
 runtime work. Python's strict mypy gate checks the typed domain, but `NewType` and
 dataclass annotations do not enforce construction at runtime. Both implementations
 still need independent behavior tests. These structural differences alone do not
-justify expansion after the measured CLI gate failed.
+justify expansion while the measured CLI target remains unestablished.
 
 The initial release build took 4.91 s elapsed, 11.40 s CPU and 284,672 KiB peak RSS,
 with dependencies already downloaded. The implementation span between the protocol
@@ -124,11 +128,17 @@ runtime provenance and production recovery remain outside this pilot.
 
 After independent approval, the parent can record this decision on the epic:
 
-> Stop the Rust migration expansion from #152. The isolated Rust usage parser passes
-> the approved contracts and improves the large-file CLI median from 450.07 ms to
-> 228.73 ms, but small-file CLI latency increases from 35.73 ms to 42.11 ms, exceeding
-> the precommitted 5 ms limit. The structural type benefits do not independently
-> justify expansion after that gate failed. Retain the pilot, strict Python adapters
+> Stop the Rust migration expansion from #152. The candidate command map passes the
+> approved corpus: 12 Codex cases reach Rust, while missing-root discovery and all
+> transcript cases run in shared Python. Large-file CLI median improves from
+> 450.07 ms to 228.73 ms. Small-file CLI median increases from 35.73 ms to 42.11 ms
+> (+6.37 ms against the precommitted 5 ms limit), with near-boundary variation:
+> the Rust adapter's 1.45 ms standard deviation exceeds the 1.37 ms margin, and 2 of
+> 7 paired trials add less than 5 ms. This measures the Python adapter spawning the
+> Rust executable; native Rust alone takes 2.31 ms. The small-CLI target is not
+> established for this bounded hybrid integration on this shared host. Under the
+> precommitted protocol, stop; the structural type benefits do not independently
+> justify expansion. Retain the pilot, strict Python adapters
 > and behavioral/arithmetic tests. Keep production entrypoints unchanged and mark
 > conditional issues #153–#160 not planned. This is a stopped migration, not a
 > completed Python retirement. Evidence: the #152 PR's pilot report, protocol,
