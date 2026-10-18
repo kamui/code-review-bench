@@ -122,6 +122,9 @@ and run preparation and dispatch to #157.
 | Cleanup, #159 | Pruning and retirement; run filing, regrading, controllers | Valid-only, verified clone cleanup and receipts; whole-workspace inventory, investigation closure, restoration and exclusive retirement. Preserve protected active, failed, modified or unverified work and ledger-dependent bytes. | `test_prune_workspace.py`, `test_retire_workspace.py`; [storage contract](../evidence-storage.md). |
 | Retirement, #160 | Test aggregator, census, wrappers, docs, CI and package commands | Keep each public entrypoint available through cutover, then remove the maintained Python implementation and migrate every caller. Retained targets, frozen skills and historical replay still declare Python separately. | Census check, contract suite, Python-unavailable current-engine acceptance after migration. |
 
+[Rust runtime pinning](runtime.md#ownership-of-the-other-runtime-modules) moves `seal`,
+`skill_provenance` and `fetch_freeze_commits` from the runtime group to #157 and #160.
+
 Active research helpers carry the responsibility assignments in `RESEARCH_GROUPS`.
 Their tests run on disposable copies because some APIs write whole
 record generations. Preserve `before.v1.json`, validation, atomic replacement,
@@ -183,10 +186,10 @@ Historical resolution follows the recorded dependency, in order:
    until evidence supplies it. Installing today's Python is an exploratory replay,
    not proof of the original runtime. No version, image or interpreter pin is invented.
 
-`review_queue.RUNTIME_PATHS` is currently `bench/tools`, `bench/schema`,
-`bench/policies`, and `docs/clean-context.md`. `runtime_problem` compares those paths
-with `freeze_commit` before dispatch. #153 must extend provenance for Rust before
-new runs use it, without weakening this check. Development proceeds on separate
+`review_queue.RUNTIME_PATHS` was `bench/tools`, `bench/schema`, `bench/policies`,
+and `docs/clean-context.md` at this census. `runtime_problem` compares those paths
+with `freeze_commit` before dispatch. #153 added `rust` to them and pins each Rust
+executable a run uses; see [Rust runtime pinning](runtime.md). Development proceeds on separate
 branches and checkouts. Unfinished runs retain the old checkout, Python environment,
 client executables, companions, state roots and exclusive controller. Never point
 an existing controller at this development checkout or start a second controller.
