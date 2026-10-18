@@ -289,7 +289,8 @@ function labelCounts(families: Family[], assessment: Assessment): Measure<Map<La
   for (const claim of assessment.claims) {
     const segment = labelSegment(families, claim)
     if (segment.kind === 'unavailable') return segment
-    groups.set(segment.value, (groups.get(segment.value) ?? new Set()).add(claim.duplicateGroup ?? claim.id))
+    const distinct = claim.duplicateGroup === null ? `claim:${claim.id}` : `group:${claim.duplicateGroup}`
+    groups.set(segment.value, (groups.get(segment.value) ?? new Set()).add(distinct))
   }
   return available(new Map([...groups].map(([segment, ids]) => [segment, ids.size])))
 }

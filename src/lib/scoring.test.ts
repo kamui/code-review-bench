@@ -367,6 +367,12 @@ describe('claim labels per admitted review', () => {
       refuted: 0.5, unproven: 0.5, unresolved: 0.5 })
   })
 
+  test('merges only claims in the same duplicate group, even when a claim id equals a group id', () => {
+    const shared = claims(pr, [suggestion('g', 'improvement'), claim('one', 'advisory', { nativeOutcome: 'suggestion', kind: 'improvement', duplicateGroup: 'g' }),
+      claim('two', 'advisory', { nativeOutcome: 'suggestion', kind: 'improvement', duplicateGroup: 'g' })])
+    expect(value(card(build([pr], { a: [[pr, [shared]]] }), 'a').reliability.labelsPerAdmittedReview['suggestion:improvement'])).toBe(2)
+  })
+
   test('withholds every label while a review was graded before these labels or lacks a fact the label needs', () => {
     const labelled = claims(pr, [claim('tip', 'advisory', { nativeOutcome: 'suggestion', kind: 'improvement' })])
     const reasons = (reviews: Attempt[]) => new Set(Object.values(card(build([pr], { a: [[pr, reviews]] }), 'a').reliability.labelsPerAdmittedReview).map(reason))
