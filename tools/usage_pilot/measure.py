@@ -94,7 +94,7 @@ def environment() -> dict:
         "rustc": capture(["rustc", "--version", "--verbose"]), "cargo": capture(["cargo", "--version"]),
         "platform": platform.platform(), "cpu": capture(["lscpu"]), "cores": os.cpu_count(),
         "load": list(os.getloadavg()), "processes": capture(["ps", "-eo", "pid,comm,pcpu,pmem", "--sort=-pcpu"]),
-        "limits": "Shared host; uncontrolled OS page cache; no external waits in measured commands. Peak RSS is the maximum process RSS including reaped descendants, not summed simultaneous tree RSS. Warm RSS includes warmup. CPU and elapsed for warm mode exclude warmup; process totals are also retained.",
+        "limits": "Shared host; uncontrolled OS page cache; no external waits in measured commands. GNU time isolates peak RSS from the Python launcher fork high-water mark. Peak RSS is the maximum process RSS including reaped descendants, not summed simultaneous tree RSS. Cold elapsed and process CPU include the small GNU time supervisor; core-loop timings are also retained. Warm RSS includes warmup. CPU and elapsed for warm mode exclude warmup; process totals are also retained.",
     }
 
 
@@ -117,9 +117,11 @@ def run(inputs: Path, output: Path) -> int:
                 for trial in range(7):
                     for engine in ENGINES[trial % 3:] + ENGINES[:trial % 3]:
                         cmd = command(engine, path, mode)
+                        stats = output / "rss.tmp"
                         with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
                             start = time.perf_counter()
-                            child = subprocess.Popen(cmd, cwd=REPO, stdout=stdout, stderr=stderr)
+                            child = subprocess.Popen(["/usr/bin/time", "-f", "%M", "-o", str(stats.resolve()), *cmd],
+                                                     cwd=REPO, stdout=stdout, stderr=stderr)
                             _, status, usage = os.wait4(child.pid, 0)
                             child.returncode = os.waitstatus_to_exitcode(status)
                             elapsed = time.perf_counter() - start
@@ -129,7 +131,7 @@ def run(inputs: Path, output: Path) -> int:
                         row = {"size": size, "mode": mode, "trial": trial + 1, "engine": engine,
                                "command": cmd, "exit": completed.returncode, "process_elapsed_seconds": elapsed,
                                "user_seconds": usage.ru_utime, "system_seconds": usage.ru_stime,
-                               "peak_rss_kib": usage.ru_maxrss,
+                               "peak_rss_kib": int(stats.read_text(encoding="utf-8").splitlines()[-1]),
                                "resource_raw": dict(zip(("utime", "stime", "maxrss", "ixrss", "idrss", "isrss", "minflt", "majflt", "nswap", "inblock", "oublock", "msgsnd", "msgrcv", "nsignals", "nvcsw", "nivcsw"), usage)),
                                "stdout_sha256": digest(completed.stdout), "stderr": completed.stderr.decode("utf-8", "replace"),
                                "input_sha256": entry["sha256"], "load": list(os.getloadavg())}
@@ -157,6 +159,7 @@ def run(inputs: Path, output: Path) -> int:
                         raw.flush()
                         trials.append(row)
                         print(f"{size} {mode} {trial + 1} {engine}: {'ok' if row['verified'] else row['error']}", flush=True)
+    stats.unlink()
     summary = []
     for size in manifest["inputs"]:
         for mode in ("cold", "warm", "cli"):
