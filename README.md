@@ -126,6 +126,10 @@ python3 -m unittest discover -s bench/tools -p 'test_*.py'
 
 Set **Settings > Pages** to publish through **GitHub Actions**. The [workflow](.github/workflows/pages.yml) runs web and evidence checks, grading regressions, and client compatibility on PRs and pushes to `main`. Deployment requires all three jobs to pass. Manual runs are also available.
 
+Grading regressions has a 25-minute timeout. On PRs, it compares the complete head with the merge base and skips expensive steps only for changes confined to `src/components/*.tsx`, `src/routes/*.tsx`, their nested directories and CSS files, `src/styles.css`, or static assets under `public/`. The job keeps its passing status when those steps are skipped. Benchmark inputs, policies, prose, workflows, package commands, runtime pins, and unknown paths retain full coverage. Failed or empty change detection also runs the full suite. Main and manual runs always run it.
+
+`python3 tools/run_bench_tests.py --group core` selects the active regression modules. `--group historical` selects `test_last_push_move`, `test_regrade_filing`, `test_v10_filing`, and `test_review_code_selection`, including their rollback fault injection. The default `--group all` preserves both groups. Relevant PRs still run both through `bun run test:bench`, with all five CLI self-tests, until a complete dependency map supports narrower selection. No test moves exclusively after merge.
+
 The build prerenders the home page and publishes `dist/client`, including data and evidence. The workflow reads the Pages base path for repository URLs or custom domains. To build for the repository path locally:
 
 ```sh
