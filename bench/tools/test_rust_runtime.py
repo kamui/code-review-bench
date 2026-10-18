@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -234,6 +235,32 @@ class Selection(Store):
         self.assertEqual((code, out), (1, ""))
         self.assertIn("no longer hashes to its pin", err)
 
+    def test_a_rollback_returns_to_the_version_its_selection_replaced_despite_a_concurrent_select(self):
+        a, b, c = self.version("a"), self.version("b"), self.version("c")
+        rust_runtime.select(self.store, "fixture-tool", a)
+        rust_runtime.select(self.store, "fixture-tool", b)
+        real, racer = rust_runtime.selected, []
+
+        def selected_then_race(store, name):
+            current = real(store, name)
+            if not racer:
+                racer.append(subprocess.Popen([sys.executable, str(TOOL), "select", "fixture-tool", c["sha256"], "--store", str(self.store)],
+                                              stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True))
+                time.sleep(0.5)
+            return current
+
+        with patch.object(rust_runtime, "selected", selected_then_race):
+            rust_runtime.rollback(self.store, "fixture-tool")
+        self.assertEqual(racer[0].wait(60), 0, racer[0].stderr.read())
+        racer[0].stderr.close()
+        rows = [json.loads(line) for line in (self.store / "fixture-tool/selections.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([(row["action"], row["pin"]) for row in rows], [("select", a), ("select", b), ("rollback", a), ("select", c)])
+        for earlier, later in zip(rows, rows[1:]):
+            self.assertEqual(later["previous"], earlier["pin"])
+            if later["action"] == "rollback":
+                self.assertEqual(later["pin"], earlier["previous"])
+        self.assertEqual(rust_runtime.current_pin(self.store, "fixture-tool"), c)
+
     def test_concurrent_writers_serialize_on_the_store_lock(self):
         pins = [self.version(str(index)) for index in range(4)]
         writers = [subprocess.Popen([sys.executable, str(TOOL), "select", "fixture-tool", pins[index % 4]["sha256"],
@@ -377,6 +404,17 @@ class RealBuilds(unittest.TestCase):
             with patch.dict(os.environ, {"CARGO_HOME": str(home)}):
                 with self.assertRaisesRegex(rust_runtime.Refused, "cargo configuration a receipt cannot restore"):
                     rust_runtime.build(self.crate, self.repo, Path(scratch))
+        self.assertFalse(self.store.exists())
+
+    def test_a_crate_inside_another_cargo_workspace_is_refused(self):
+        (self.repo / "rust/Cargo.toml").write_text('[workspace]\nmembers = ["fixture-tool"]\n[profile.release]\nopt-level = 0\n',
+                                                   encoding="utf-8")
+        subprocess.run(["cargo", "generate-lockfile", "--offline"], cwd=self.repo / "rust", check=True, capture_output=True)
+        self.git("add", ".")
+        self.git("commit", "-qm", "a parent workspace")
+        with tempfile.TemporaryDirectory(dir=self.root) as scratch:
+            with self.assertRaisesRegex(rust_runtime.Refused, "rust/fixture-tool belongs to the Cargo workspace .*rust/Cargo.toml"):
+                rust_runtime.build(self.crate, self.repo, Path(scratch))
         self.assertFalse(self.store.exists())
 
     def test_a_build_sees_only_the_passed_through_environment_and_may_not_read_it(self):

@@ -25,7 +25,7 @@ host's target, with only ``BUILD_ENVIRONMENT`` passed through and source paths r
 that the active ``rustc`` is the release ``rust-toolchain.toml`` pins. Cargo configuration files outside the
 crate's tracked tree are refused, because a receipt could not restore them, and so is a build whose dep-info
 lists a local file that Git does not track in the crate, such as a path dependency outside it or an ignored file,
-or a crate that tracks a symbolic link, and a build that rustc or a build script reports reading one of the
+a crate inside another Cargo workspace, or a crate that tracks a symbolic link, and a build that rustc or a build script reports reading one of the
 passed-through variables. ``install`` needs
 Python 3.11 or later; the other commands do not. ``restore`` retains an executable from elsewhere, such as
 another store or a rebuild, only when it hashes to the receipt.
@@ -321,6 +321,9 @@ def describe(crate_dir: Path, repo: Path, env: dict) -> dict:
         raise InputError(f"{relative} needs Cargo.toml with a package and rust-toolchain.toml with a channel: {error!r}") from error
     if not (crate_dir / "Cargo.lock").is_file():
         raise InputError(f"{relative} has no Cargo.lock")
+    workspace = Path(run(["cargo", "locate-project", "--workspace", "--message-format", "plain", "--offline"], crate_dir, env).strip())
+    if workspace.resolve() != (crate_dir / "Cargo.toml").resolve():
+        raise Refused(f"{relative} belongs to the Cargo workspace {workspace}, whose manifest and lockfile its receipt cannot pin")
     rustc = dict(line.split(": ", 1) for line in run(["rustc", "-vV"], crate_dir, env).splitlines() if ": " in line)
     if rustc.get("release") != channel:
         raise Refused(f"the active rustc is {rustc.get('release')}; {relative}/rust-toolchain.toml pins {channel}")
@@ -419,28 +422,35 @@ def selected(store: Path, name: str) -> dict | None:
     return read_json(path) if path.is_file() else None
 
 
-def select(store: Path, name: str, pin: dict, *, action: str = "select") -> dict:
+def publish_selection(store: Path, name: str, pin: dict, action: str) -> dict:
+    """Record ``pin`` as the selection; the caller holds the runtime's lock."""
+    check(store, name, pin)
+    current = selected(store, name)
+    previous = current and current["pin"]
+    if previous == pin:
+        return current
+    row = {"pin": pin, "previous": previous, "action": action, "at": now()}
+    with open(store / name / "selections.jsonl", "a", encoding="utf-8") as history:
+        history.write(json.dumps(row, sort_keys=True) + "\n")
+        history.flush()
+        os.fsync(history.fileno())
+    publish(store / name / "selected.json", dumps(row))
+    return row
+
+
+def select(store: Path, name: str, pin: dict) -> dict:
     """Make ``pin`` the version new operations take. Operations holding a pin are unaffected."""
-    with locked(store, name) as directory:
-        check(store, name, pin)
-        current = selected(store, name)
-        previous = current and current["pin"]
-        if previous == pin:
-            return current
-        row = {"pin": pin, "previous": previous, "action": action, "at": now()}
-        with open(directory / "selections.jsonl", "a", encoding="utf-8") as history:
-            history.write(json.dumps(row, sort_keys=True) + "\n")
-            history.flush()
-            os.fsync(history.fileno())
-        publish(directory / "selected.json", dumps(row))
-        return row
+    with locked(store, name):
+        return publish_selection(store, name, pin, "select")
 
 
 def rollback(store: Path, name: str) -> dict:
-    current = selected(store, name)
-    if not current or not current.get("previous"):
-        raise Refused(f"{name} has no previously selected version to return to")
-    return select(store, name, current["previous"], action="rollback")
+    """Select the version the current selection replaced, reading and writing under one lock."""
+    with locked(store, name):
+        current = selected(store, name)
+        if not current or not current.get("previous"):
+            raise Refused(f"{name} has no previously selected version to return to")
+        return publish_selection(store, name, current["previous"], "rollback")
 
 
 def current_pin(store: Path, name: str) -> dict:

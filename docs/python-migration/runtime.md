@@ -43,8 +43,9 @@ It refuses a crate with uncommitted or untracked files. It also refuses an activ
 whose release differs from `rust-toolchain.toml`, and any Cargo configuration file in the crate's
 parent directories or in `CARGO_HOME`. A receipt could not restore such a file. After the build,
 it refuses any local file that cargo's dep-info lists and Git does not track in the crate, such as
-a path dependency outside it or an ignored `include_str!` target, and a crate that tracks a
-symbolic link, whose target the tree does not hold. The crate's Git tree then covers
+a path dependency outside it or an ignored `include_str!` target. It also refuses a crate that tracks
+a symbolic link, whose target the tree does not hold, and a crate inside another Cargo workspace,
+whose manifest and lockfile lie outside the crate. The crate's Git tree then covers
 every local input that cargo records,
 and `Cargo.lock` covers registry and Git dependencies. A build script or procedural macro that
 reads a file without declaring it is not detected; `usage-pilot` has neither. The build runs
@@ -103,7 +104,9 @@ To upgrade, install the new version and `select` it. Only runs frozen after that
 An unfinished run keeps its frozen pin until it ends. Never edit a started run's `runtimes.frozen.json`.
 
 `rollback` selects the version that was selected before the current one. Like `select`, it changes
-only `selected.json` and appends to `selections.jsonl`; both write under the store lock. Pinned
+only `selected.json` and appends to `selections.jsonl`. It reads the current selection and writes the
+new one under a single hold of the store lock, so a concurrent `select` cannot make it return to a
+stale version. Pinned
 operations do not read the selection. If a pinned version is missing or changed, the queue blocks.
 It does not fall back to the selected version, to another retained version or to Python. A
 possibly successful side effect is therefore never replayed through another implementation.
