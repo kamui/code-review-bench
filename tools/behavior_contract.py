@@ -159,6 +159,8 @@ def load_corpus(path):
         decision = decisions[case["id"]]
         if not decision["reason"] or decision["contract_sha256"] != digest(case):
             raise ValueError(f"{case['id']}: changed contract needs an explicit decision")
+    if ids != set(decisions):
+        raise ValueError("corpus case ids differ from decisions; removal needs an explicit decision")
     return corpus
 
 
@@ -188,10 +190,17 @@ def main():
             else:
                 print(f"PASS {case['id']}")
             if other:
-                differences = differential(actual, execute(case, other), case)
+                candidate = execute(case, other)
+                differences = differential(actual, candidate, case)
                 if differences:
-                    failed += 1
-                    print(f"DIFFERENTIAL {case['id']}\n" + "\n".join(differences))
+                    approved_fix = (args.allow_known_defects and known
+                                    and not compare(known["observed"], actual)
+                                    and not compare(case["expected"], candidate))
+                    if approved_fix:
+                        print(f"APPROVED FIX {case['id']}: {known['resolution']}\n" + "\n".join(differences))
+                    else:
+                        failed += 1
+                        print(f"DIFFERENTIAL {case['id']}\n" + "\n".join(differences))
         return 1 if failed else 0
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         print(f"behavior_contract: {error}", file=sys.stderr)

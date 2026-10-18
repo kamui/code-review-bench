@@ -5,7 +5,7 @@ part of [#149](https://github.com/kamui/code-review-bench/issues/149).
 The [inventory](../README.md#responsibilities-and-contracts) assigns the usage pilot
 to `bench/tools/codex_usage.py` and `bench/tools/transcript_usage.py`.
 Production commands, frozen evidence, and imported originals remain unchanged.
-#152 owns the typed Python and Rust pilot and the recorded baseline defect's resolution.
+#152 owns the typed Python and Rust pilot and the recorded baseline defects' resolutions.
 
 ## Run the usage corpus
 
@@ -21,7 +21,7 @@ python3 bench/tools/transcript_usage.py --self-test
 
 The corpus command exits 0 only if every case meets its independent expectation
 or exactly matches its separately saved baseline defect observation.
-Without `--allow-known-defects`, the independent missing-count expectation fails
+Without `--allow-known-defects`, the independent missing-count and truncation expectations fail
 at exit 1. `KNOWN DEFECT` is never an ordinary pass. Any different mismatch fails,
 even with that option. See [the defect register](defects.md).
 
@@ -43,7 +43,11 @@ python3 tools/behavior_contract.py --allow-known-defects --differential /tmp/can
 
 The first command tests independent expectations. The second additionally compares
 current Python with the candidate on separate roots. Differential agreement cannot
-establish correctness or suppress an independent failure. Full successful JSON
+establish correctness or suppress an independent failure. With `--allow-known-defects`,
+a candidate that meets the independent expectation while Python exactly matches the
+recorded baseline observation produces `APPROVED FIX`, its resolution link, and the
+actual diff. Other differences still fail, including a candidate that regresses from
+a fixed primary implementation to the old defect. Full successful JSON
 outputs participate in the differential, including fields outside a case's selected
 independent assertions. The harness never obtains expected output from a candidate.
 
@@ -105,7 +109,8 @@ escaped models, timezone-equivalent timestamps, and fractional second truncation
 Every case has a saved SHA-256 in `usage-decisions.v1.json`, computed over the
 whole case as sorted, ASCII JSON with compact separators. A changed input,
 comparator, expectation, or baseline exception requires updating its decision and
-reason. The runner refuses an unmatched digest. There is deliberately no golden
+reason. The runner refuses an unmatched digest or unequal corpus and decision ID sets,
+including an unrecorded case deletion. There is deliberately no golden
 update command. Retain earlier decisions and expectations when approving a behavior
 change; record the authority, old and new behavior, rationale, compatibility impact,
 and resolving issue in a new decision version. Matching a port is not authority.
