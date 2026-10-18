@@ -4,6 +4,7 @@ import subprocess
 import tempfile
 import unittest
 import json
+import os
 import sys
 
 import python_inventory as inventory
@@ -147,10 +148,13 @@ class InventoryTests(unittest.TestCase):
             census.write_bytes(b"retained census")
             alias = root / "alias.gz"
             alias.symlink_to(census)
+            hardlink = root / "hardlink.gz"
+            os.link(census, hardlink)
             command = [sys.executable, str(script), "--observe-runtime", "--work-root", str(root / "work"),
                        "--queue-root", str(root / "queues")]
             for output in ([], ["--output", str(census)], ["--output", inventory.DESTINATION],
-                           ["--output", "tools/../" + inventory.DESTINATION], ["--output", str(alias)]):
+                           ["--output", "tools/../" + inventory.DESTINATION], ["--output", str(alias)],
+                           ["--output", str(hardlink)]):
                 with self.subTest(output=output):
                     result = subprocess.run(command + output, cwd=root, capture_output=True, text=True)
                     self.assertNotEqual(result.returncode, 0)

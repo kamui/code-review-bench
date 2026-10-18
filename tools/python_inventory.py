@@ -374,16 +374,20 @@ def observe_runtime(work_root, queue_root):
 
 
 def main():
+    census_path = ROOT / DESTINATION
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ref", help="Commit to inventory; defaults to HEAD, or recorded commit for --check")
-    parser.add_argument("--output", type=Path, default=ROOT / DESTINATION)
+    parser.add_argument("--output", type=Path, default=census_path)
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--observe-runtime", action="store_true", help="Read host state without invoking controllers")
     parser.add_argument("--work-root", type=Path, default=Path.home() / ".t3/bench-runs")
     parser.add_argument("--queue-root", type=Path, default=Path.home() / ".t3/bench-queues")
     args = parser.parse_args()
     if args.observe_runtime:
-        if args.check or args.ref or args.output.resolve() == (ROOT / DESTINATION).resolve():
+        same_output = args.output.resolve() == census_path.resolve()
+        if args.output.exists() and census_path.exists():
+            same_output = same_output or args.output.samefile(census_path)
+        if args.check or args.ref or same_output:
             parser.error("--observe-runtime requires a separate --output and cannot use --check or --ref")
         args.output.write_text(json.dumps(observe_runtime(args.work_root, args.queue_root), indent=2, sort_keys=True) + "\n")
         print(f"Wrote read-only host observation to {args.output}")
