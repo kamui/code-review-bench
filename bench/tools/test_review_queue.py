@@ -1365,6 +1365,22 @@ class RustRuntimes(QueueFixture):
         self.assert_blocked(self.command("run"), f"was built from crate tree {self.tree}; freeze commit {later} has")
         self.assertEqual(self.reviews(), [])
 
+    def test_runtime_names_that_generate_the_same_launch_variable_are_refused(self):
+        executable = script(self.root / "fixture-tool-sha256", "other")
+        receipt = fake_receipt(executable, "fixture-tool-sha256")
+        receipt["source"] = {**receipt["source"], "tree": self.tree}
+        receipt["crate"] = {**receipt["crate"], "path": "rust/fixture-tool"}
+        other = rust_runtime.pin_of(rust_runtime.retain(self.store, executable, receipt)[0])
+        runtimes = {"fixture-tool": self.two, "fixture-tool-sha256": other}
+        (self.run_dir / "runtimes.frozen.json").write_text(json.dumps(runtimes), encoding="utf-8")
+        self.queue.write_text(json.dumps({**self.spec, "runtimes": runtimes}), encoding="utf-8")
+        for action in ("check", "run"):
+            with self.subTest(action=action):
+                code, events, err = self.command(action)
+                self.assertEqual(code, 2, (events, err))
+                self.assertIn("runtime names generate the same launch variable BENCH_RUST_FIXTURE_TOOL_SHA256", err)
+        self.assertEqual(self.reviews(), [])
+
     def test_a_reserved_runtime_name_may_not_be_set_through_the_queue_environment(self):
         self.queue.write_text(json.dumps({**self.spec, "environment": {"BENCH_RUST_FIXTURE_TOOL": "/bin/true"}}), encoding="utf-8")
         code, events, err = self.command("check")
