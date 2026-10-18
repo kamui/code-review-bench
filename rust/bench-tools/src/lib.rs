@@ -4,4 +4,5 @@
 
 pub mod pyjson;
 pub mod pytext;
+pub mod roster;
 pub mod sha256;

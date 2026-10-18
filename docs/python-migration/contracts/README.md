@@ -52,6 +52,26 @@ a fixed primary implementation to the old defect. Full successful JSON
 outputs participate in the differential, including fields outside a case's selected
 independent assertions. The harness never obtains expected output from a candidate.
 
+## Run the bench-tools corpora
+
+[`roster.v1.json`](../../../tools/behavior_contracts/roster.v1.json) pins the first command of
+[`bench-tools`](../processing.md). Select a corpus with `--corpus`:
+
+```sh
+python3 tools/behavior_contract.py --corpus tools/behavior_contracts/roster.v1.json
+```
+
+Without `--implementations`, each program runs its maintained implementation. `codex` and `transcript`
+run their Python scripts. `roster` has no Python
+implementation, so it runs the executable `rust_runtime.resolve("bench-tools")` selects, and the command refuses
+when none is installed for `HEAD`. A command map can name that executable instead:
+
+```json
+{
+  "roster": ["/absolute/path/to/bench-tools", "roster"]
+}
+```
+
 ## Fixture format `behavior-contract/1`
 
 The corpus is [`usage.v1.json`](../../../tools/behavior_contracts/usage.v1.json).
@@ -147,7 +167,8 @@ Published decision files are immutable. `bun run test:web` runs the Git-history
 check and the JavaScript digest vectors before the rest of the suite. The history
 check covers every decision family, each named `<area>-decisions.v<N>.json`, on its own.
 In the `usage` family, whose v1 is the legacy map, it anchors all existing versions at
-the first commit that adds v2. A family whose v1 already holds `records` anchors v1 at its own first addition, and its v1 names no
+the first commit that adds v2. A family whose v1 already holds `records`, such as
+`roster`, anchors v1 at its own first addition, and its v1 names no
 predecessor. Each later version is anchored at its own first addition. Every corpus
 must select its family's latest version, a family that no corpus uses fails, and each
 version must link to its immediate predecessor, including the legacy v1 root. A fresh

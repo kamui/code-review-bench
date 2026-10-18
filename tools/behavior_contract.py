@@ -5,7 +5,8 @@ Usage: python3 tools/behavior_contract.py [--corpus corpus.json] [--implementati
        [--differential commands.json] [--allow-known-defects]
        python3 tools/behavior_contract.py --verify-decision-history
 Inputs: versioned JSON corpus with argv, base64 bytes, filesystem and expectations. Without
---implementations, each program runs its maintained implementation.
+--implementations, each program runs its maintained implementation: the Python script where one is
+maintained or retained, otherwise the Rust executable rust_runtime.resolve selects.
 Exit codes: 0 contracts met (or explicitly allowed baseline defects); 1 differences;
 2 invalid inputs or failed execution. Commands are trusted local programs, not sandboxed.
 """
@@ -29,6 +30,7 @@ import tempfile
 REPO = Path(__file__).resolve().parents[1]
 CORPUS = REPO / "tools/behavior_contracts/usage.v1.json"
 PYTHON_PROGRAMS = {"codex": "bench/tools/codex_usage.py", "transcript": "bench/tools/transcript_usage.py"}
+RUST_PROGRAMS = {"roster": ("bench-tools", ["roster"])}
 DECISIONS = re.compile(r"(?P<family>.+)-decisions\.v[^/]*\.json")
 
 
@@ -288,6 +290,15 @@ def default_commands(corpus):
     for program in sorted({case["program"] for case in corpus["cases"]}):
         if program in PYTHON_PROGRAMS:
             commands[program] = [sys.executable, str(REPO / PYTHON_PROGRAMS[program])]
+        elif program in RUST_PROGRAMS:
+            if str(REPO / "bench/tools") not in sys.path:
+                sys.path.insert(0, str(REPO / "bench/tools"))
+            import rust_runtime
+            name, arguments = RUST_PROGRAMS[program]
+            try:
+                commands[program] = [str(rust_runtime.resolve(name)), *arguments]
+            except (rust_runtime.Refused, rust_runtime.InputError) as error:
+                raise ValueError(f"{program}: {error}") from None
     return commands
 
 

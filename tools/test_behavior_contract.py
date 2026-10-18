@@ -323,6 +323,23 @@ class ContractTests(unittest.TestCase):
                                             {"expected": expected})
         self.assertTrue(any("stderr bytes" in diff for diff in differences), differences)
 
+    def test_each_program_defaults_to_its_maintained_implementation(self):
+        corpus = {"cases": [{"program": name} for name in ("codex", "roster")]}
+        program = Path(self.enterContext(tempfile.TemporaryDirectory())) / "bench-tools"
+        program.write_text("#!/bin/sh\n", encoding="utf-8")
+        program.chmod(0o755)
+        with patch.dict(contract.os.environ, {"BENCH_RUST_BENCH_TOOLS": str(program),
+                                              "BENCH_RUST_BENCH_TOOLS_SHA256": contract.hashlib.sha256(program.read_bytes()).hexdigest()}):
+            commands = contract.default_commands(corpus)
+        self.assertEqual(commands, {"codex": [sys.executable, str(contract.REPO / "bench/tools/codex_usage.py")],
+                                    "roster": [str(program), "roster"]})
+        store = Path(self.enterContext(tempfile.TemporaryDirectory())) / "store"
+        with patch.dict(contract.os.environ, {"BENCH_RUNTIME_STORE": str(store)}):
+            contract.os.environ.pop("BENCH_RUST_BENCH_TOOLS", None)
+            contract.os.environ.pop("BENCH_RUST_BENCH_TOOLS_SHA256", None)
+            with self.assertRaisesRegex(ValueError, "roster: bench-tools has no selected version.*install --crate rust/bench-tools"):
+                contract.default_commands(corpus)
+
     def test_corpus_rejects_duplicate_json_keys(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "corpus.json"
