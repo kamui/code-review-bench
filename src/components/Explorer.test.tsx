@@ -188,7 +188,7 @@ describe('pre-existing problems raised on the fixture', () => {
 
 describe('overview', () => {
   const fixture = scorecardFixture()
-  const markup = renderToStaticMarkup(<MantineProvider><Dashboard dataset={fixture} now={now} /></MantineProvider>)
+  const markup = renderToStaticMarkup(<RouterContextProvider router={router}><MantineProvider><Dashboard dataset={fixture} page="scorecard" now={now} /></MantineProvider></RouterContextProvider>)
   const shown = text(markup)
   const setups = (rendered: string) => [...rendered.matchAll(/aria-label="([^"]+?)\. Inspect evidence"/g)].map(match => match[1])
   function overview(sort: OverviewSort) {
