@@ -160,6 +160,7 @@ class ContractTests(unittest.TestCase):
     def test_open_defects_retain_independent_cases(self):
         register = (contract.REPO / "docs/python-migration/contracts/defects.md").read_text()
         corpus = contract.load_corpus(contract.CORPUS)
+        registered = set()
         for section in register.split("\n## ")[1:]:
             if "- Status: open" not in section:
                 continue
@@ -167,11 +168,58 @@ class ContractTests(unittest.TestCase):
             matches = [case for case in corpus["cases"] if
                        ("#" + identifier.lower() + "-") in case.get("baseline_defect", {}).get("resolution", "")]
             self.assertEqual(len(matches), 1, identifier)
+            registered.add(matches[0]["id"])
             self.assertIn("`" + matches[0]["id"] + "`", section)
             self.assertTrue(contract.compare(matches[0]["expected"], {
                 "exit": matches[0]["baseline_defect"]["observed"]["exit"],
                 "stdout": json.dumps(matches[0]["baseline_defect"]["observed"]["stdout"]["value"]).encode(),
                 "stderr": b"", "filesystem": matches[0]["expected"]["filesystem"]}), identifier)
+        self.assertEqual(registered, {case["id"] for case in corpus["cases"] if "baseline_defect" in case})
+
+    def test_published_decisions_cannot_be_edited_or_removed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            def git(*args):
+                return subprocess.check_output(["git", "-C", str(root), "-c", "user.name=kamui",
+                                                "-c", "user.email=2255+kamui@users.noreply.github.com", *args],
+                                               stderr=subprocess.PIPE)
+            git("init", "--initial-branch=main")
+            directory = root / "tools/behavior_contracts"
+            directory.mkdir(parents=True)
+            v1 = directory / "usage-decisions.v1.json"
+            v2 = directory / "usage-decisions.v2.json"
+            v1.write_text("legacy")
+            v2.write_text("published")
+            git("add", ".")
+            git("commit", "-m", "test(bench): adopt decision history")
+            contract.verify_decision_history(root)
+            v2.write_text("same reason with recomputed digest and ID")
+            with self.assertRaisesRegex(ValueError, "published decision changed"):
+                contract.verify_decision_history(root)
+            git("add", ".")
+            git("commit", "-m", "test(bench): simulate an in-place decision edit")
+            with self.assertRaisesRegex(ValueError, "published decision changed"):
+                contract.verify_decision_history(root)
+            v2.write_text("published")
+            v3 = directory / "usage-decisions.v3.json"
+            v3.write_text("new explicit decision")
+            git("add", ".")
+            git("commit", "-m", "test(bench): retain history and add a decision")
+            contract.verify_decision_history(root)
+            v3.write_text("edited new case with no earlier record")
+            with self.assertRaisesRegex(ValueError, "published decision changed"):
+                contract.verify_decision_history(root)
+            v3.write_text("new explicit decision")
+            v1.unlink()
+            with self.assertRaisesRegex(ValueError, "published decision changed"):
+                contract.verify_decision_history(root)
+
+    def test_corpus_rejects_duplicate_json_keys(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "corpus.json"
+            path.write_text('{"format":"behavior-contract/1","format":"behavior-contract/1"}')
+            with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
+                contract.load_corpus(path)
 
     def test_unavailable_filesystem_case_continues(self):
         original = Path.write_bytes
@@ -205,6 +253,12 @@ class ContractTests(unittest.TestCase):
             self.assertIn("stdout primary semantic:", result.stdout)
             self.assertIn("FAIL transcript-duplicate-maxima", result.stdout)
             self.assertEqual(result.stderr, "")
+        left = {"exit": 0, "stdout": b"invalid", "stderr": b"left", "filesystem": []}
+        right = {"exit": 9, "stdout": b"{}", "stderr": b"right", "filesystem": [{"kind": "directory"}]}
+        differences = contract.differential(left, right, {"expected": {"stdout": {"mode": "json"},
+                                                                    "stderr": {"mode": "bytes"}}})
+        for detail in ("primary semantic", "exit: expected 0, actual 9", "stderr bytes", "filesystem effects"):
+            self.assertTrue(any(detail in diff for diff in differences), differences)
 
     def test_duplicate_rules_reject_first_last_and_maximum_mutants(self):
         cases = contract.load_corpus(contract.CORPUS)["cases"]

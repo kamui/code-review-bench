@@ -184,15 +184,41 @@ def compare(expected, actual):
 
 def differential(left, right, case):
     expected = {"exit": left["exit"], "filesystem": left["filesystem"]}
+    errors = []
     for stream in ("stdout", "stderr"):
         if case["expected"][stream]["mode"] in ("json", "json-pointers") and left["exit"] == 0:
             try:
                 expected[stream] = {"mode": "json", "value": json_value(left[stream])}
             except (ValueError, UnicodeError) as error:
-                return [f"{stream} primary semantic: {error}; actual bytes {left[stream]!r}"]
+                errors.append(f"{stream} primary semantic: {error}; actual bytes {left[stream]!r}")
+                expected[stream] = {"mode": "bytes", "bytes_b64": base64.b64encode(left[stream]).decode("ascii")}
         else:
             expected[stream] = {"mode": "bytes", "bytes_b64": base64.b64encode(left[stream]).decode("ascii")}
-    return compare(expected, right)
+    return errors + compare(expected, right)
+
+
+def verify_decision_history(repo):
+    def git(*args):
+        return subprocess.check_output(["git", "-C", str(repo), *args], stderr=subprocess.PIPE)
+    if git("rev-parse", "--is-shallow-repository").strip() != b"false":
+        raise ValueError("decision history requires a full git checkout (fetch-depth: 0)")
+    directory = "tools/behavior_contracts/"
+    anchors = git("log", "--reverse", "--format=%H", "--diff-filter=A", "HEAD", "--",
+                  directory + "usage-decisions.v2.json").decode().splitlines()
+    if not anchors:
+        raise ValueError("decision history has no committed v2 adoption")
+    anchor = anchors[0]
+    releases = {path: anchor for path in git("ls-tree", "-r", "--name-only", anchor, "--", directory).decode().splitlines()
+                if Path(path).match("usage-decisions.v*.json")}
+    for commit in git("log", "--reverse", "--format=%H", "--diff-filter=A", anchor + "..HEAD", "--",
+                      directory + "usage-decisions.v*.json").decode().splitlines():
+        for path in git("diff-tree", "--root", "--no-commit-id", "--name-only", "-r", "--diff-filter=A",
+                        commit, "--", directory + "usage-decisions.v*.json").decode().splitlines():
+            releases.setdefault(path, commit)
+    for path, commit in releases.items():
+        current = repo / path
+        if not current.is_file() or current.read_bytes() != git("show", commit + ":" + path):
+            raise ValueError(f"{path}: published decision changed; add a new version superseding it")
 
 
 def load_decisions(path):
@@ -220,7 +246,7 @@ def load_decisions(path):
 
 
 def load_corpus(path):
-    corpus = json.loads(path.read_text(encoding="utf-8"))
+    corpus = json_value(path.read_bytes())
     if corpus["format"] != "behavior-contract/1":
         raise ValueError("unsupported corpus format")
     decisions = load_decisions(path.parent / corpus["decisions"])
@@ -243,8 +269,13 @@ def main():
     parser.add_argument("--implementations", type=Path)
     parser.add_argument("--differential", type=Path)
     parser.add_argument("--allow-known-defects", action="store_true")
+    parser.add_argument("--verify-decision-history", action="store_true")
     args = parser.parse_args()
     try:
+        if args.verify_decision_history:
+            verify_decision_history(REPO)
+            print("Published decision history verified")
+            return 0
         corpus = load_corpus(args.corpus)
         defaults = {name: [sys.executable, str(REPO / "bench/tools" / f"{name}_usage.py")]
                     for name in ("codex", "transcript")}
