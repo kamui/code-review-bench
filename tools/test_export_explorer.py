@@ -53,6 +53,24 @@ class ExportTest(unittest.TestCase):
             self.assertEqual(detail['assessment'], {'state': 'unassessed', 'receiptUrl': None, 'verdictsUrl': None})
             self.assertEqual(detail['normalizedUrl'], '/bench/evidence/bench/runs/run/attempts/att-001/normalized.json')
 
+    def test_every_exported_family_needs_a_short_label(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            selected, documents = fixture(root)
+            task = self.build_fixture(root)['tasks'][0]
+            self.assertEqual(task['families'][0]['shortLabel'], 'Write is lost')
+            self.assertNotIn('labels', task['profile'])
+            before = (root / 'public/data/benchmark.json').read_bytes()
+            documents['reference']['targets'][0]['families'].append({**documents['reference']['targets'][0]['families'][0], 'id': 'GT-t2'})
+            save_current(root, selected, documents)
+            profiles = current.read_json(root / 'bench/profiles.json')
+            for labels in ({'GT-t1': ''}, {}):
+                profiles['tasks']['t-example']['labels'] = labels
+                write(root, 'bench/profiles.json', profiles)
+                with self.assertRaisesRegex(ValueError, r'^bench/profiles\.json has no short label for GT-t1, GT-t2$'):
+                    self.build_fixture(root)
+                self.assertEqual((root / 'public/data/benchmark.json').read_bytes(), before)
+
     def test_saved_assessments_are_exported_as_recorded_facts(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

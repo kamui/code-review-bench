@@ -14,7 +14,7 @@ const controlText: Record<Task['control'], string> = {
   'known-problems': 'No approved reference problem yet. This PR has no detection denominator and is not a clean control.',
 }
 
-export type Inspection = { kind: 'task'; id: string } | { kind: 'configuration'; id: string }
+export type Inspection = { kind: 'task'; id: string; attemptId?: string } | { kind: 'configuration'; id: string }
 
 export function EvidenceDrawer({ dataset, inspection, now, onClose }: { dataset: Dataset; inspection: Inspection | null; now: Date; onClose: () => void }) {
   const configuration = inspection?.kind === 'configuration' ? dataset.configurations.find(item => item.id === inspection.id) : undefined
@@ -22,15 +22,16 @@ export function EvidenceDrawer({ dataset, inspection, now, onClose }: { dataset:
   return <Drawer opened={inspection !== null} onClose={onClose} position="right" size="xl"
     title={task ? `${task.repo} #${task.pr}` : configuration?.short ?? 'Evidence'}
     classNames={{ title: 'drawer-title' }}>
-    {inspection && <InspectionBody key={`${inspection.kind}:${inspection.id}`} dataset={dataset} configuration={configuration} task={task} now={now} />}
+    {inspection && <InspectionBody key={`${inspection.kind}:${inspection.id}:${inspection.kind === 'task' ? inspection.attemptId ?? '' : ''}`} dataset={dataset}
+      configuration={configuration} task={task} initialAttemptId={inspection.kind === 'task' ? inspection.attemptId : undefined} now={now} />}
   </Drawer>
 }
 
-function InspectionBody({ dataset, configuration, task, now }: { dataset: Dataset; configuration?: Configuration; task?: Task; now: Date }) {
+function InspectionBody({ dataset, configuration, task, initialAttemptId, now }: { dataset: Dataset; configuration?: Configuration; task?: Task; initialAttemptId?: string; now: Date }) {
   const outcomes = dataset.outcomes.filter(outcome => configuration ? outcome.configurationId === configuration.id : outcome.taskId === task?.id)
   const allowed = new Set(outcomes.flatMap(outcome => outcome.attemptIds))
   const attempts = dataset.attempts.filter(attempt => allowed.has(attempt.id))
-  const [attemptId, setAttemptId] = useState<string | null>(attempts[0]?.id ?? null)
+  const [attemptId, setAttemptId] = useState<string | null>(attempts.find(item => item.id === initialAttemptId)?.id ?? attempts[0]?.id ?? null)
   const [tab, setTab] = useState<string | null>('reviews')
   const [detail, setDetail] = useState<AttemptDetail | null>(null)
   const [error, setError] = useState('')
