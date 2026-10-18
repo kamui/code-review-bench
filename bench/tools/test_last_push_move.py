@@ -36,6 +36,7 @@ RECUT = Path("docs/research/last-push-recut-2026-10-07")
 SELECTION = Path("docs/research/last-push-review-code-2026-10-12/selection")
 REGRADE = Path("docs/research/regrade-rulings-2026-10-13/filing")
 ACTIVATION = Path("docs/research/older-problem-activation-2026-10-13/filing")
+V10 = Path("docs/research/regrade-v10-rulings-2026-10-17/filing")
 GRADING, CURRENT = Path("bench/grading"), Path("bench/grading/current")
 REGISTRY, INVENTORY = Path("bench/scoreboard.current.json"), CURRENT / "inventory.json"
 RETIRED, RECEIPT = GRADING / "retired/last-push-recut.v1.json", GRADING / "rulings/cohort-rebuild.v8.md"
@@ -87,7 +88,13 @@ def regrade_filing(root: Path):
 
 
 def undo_the_activation_filing(root: Path) -> None:
-    """Put the copy back to the records before the activation round's reconciliations, which were filed after the regrade rulings."""
+    """Put the copy back to the records before the activation round's reconciliations, which were filed after the regrade rulings.
+    The v10 regrade rulings were filed after both, so they are undone first."""
+    spec = importlib.util.spec_from_file_location("v10_filing_record", root / V10 / "record.py")
+    module = importlib.util.module_from_spec(spec)
+    with patch.object(sys, "path", list(sys.path)):
+        spec.loader.exec_module(module)
+    module.Filing().undo()
     spec = importlib.util.spec_from_file_location("activation_filing_record", root / ACTIVATION / "record.py")
     module = importlib.util.module_from_spec(spec)
     with patch.object(sys, "path", list(sys.path)):
