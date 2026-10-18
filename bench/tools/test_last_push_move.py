@@ -37,6 +37,7 @@ SELECTION = Path("docs/research/last-push-review-code-2026-10-12/selection")
 REGRADE = Path("docs/research/regrade-rulings-2026-10-13/filing")
 ACTIVATION = Path("docs/research/older-problem-activation-2026-10-13/filing")
 V10 = Path("docs/research/regrade-v10-rulings-2026-10-17/filing")
+NARROWED = Path("docs/research/cohort-rebuild-2026-10-05/regrade/narrowed-link.v1.json")
 GRADING, CURRENT = Path("bench/grading"), Path("bench/grading/current")
 REGISTRY, INVENTORY = Path("bench/scoreboard.current.json"), CURRENT / "inventory.json"
 RETIRED, RECEIPT = GRADING / "retired/last-push-recut.v1.json", GRADING / "rulings/cohort-rebuild.v8.md"
@@ -89,7 +90,15 @@ def regrade_filing(root: Path):
 
 def undo_the_activation_filing(root: Path) -> None:
     """Put the copy back to the records before the activation round's reconciliations, which were filed after the regrade rulings.
-    The v10 regrade rulings were filed after both, so they are undone first."""
+    The v10 regrade rulings were filed after both, and a disputed link was narrowed after them, so those are undone first."""
+    narrowed = read(root / NARROWED)
+    claims = root / CURRENT / "claims.json"
+    text = claims.read_text(encoding="utf-8")
+    after, before = (f'"relation": {json.dumps(narrowed[side]["relation"])},\n          "reason": {json.dumps(narrowed[side]["reason"], ensure_ascii=False)}'
+                     for side in ("after", "before"))
+    if text.count(after) != 1:
+        raise AssertionError(f"{NARROWED}: the narrowed link is not in claims.json once")
+    claims.write_text(text.replace(after, before), encoding="utf-8")
     spec = importlib.util.spec_from_file_location("v10_filing_record", root / V10 / "record.py")
     module = importlib.util.module_from_spec(spec)
     with patch.object(sys, "path", list(sys.path)):
