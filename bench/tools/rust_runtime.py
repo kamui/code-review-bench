@@ -24,7 +24,7 @@ or to Python when the pinned one is missing or changed.
 host's target, with build-affecting environment variables cleared and source paths remapped, after checking
 that the active ``rustc`` is the release ``rust-toolchain.toml`` pins. Cargo configuration files outside the
 crate's tracked tree are refused, because a receipt could not restore them, and so is a build whose dep-info
-lists a local file outside the crate, such as a path dependency or an included file. ``install`` needs
+lists a local file that Git does not track in the crate, such as a path dependency outside it or an ignored file. ``install`` needs
 Python 3.11 or later; the other commands do not. ``restore`` retains an executable from elsewhere, such as
 another store or a rebuild, only when it hashes to the receipt.
 
@@ -342,11 +342,12 @@ def build(crate_dir: Path, repo: Path, scratch: Path) -> tuple:
     env.update(CARGO_TARGET_DIR=str(scratch), CARGO_ENCODED_RUSTFLAGS="\x1f".join(flags))
     run(command, crate_dir, env)
     executable = scratch / identity["target"] / "release" / identity["crate"]["bin"]
-    outside = [path for path in local_inputs(executable.with_name(executable.name + ".d"))
-               if not path.is_relative_to(crate_dir.resolve()) and not path.is_relative_to(scratch.resolve())]
-    if outside:
-        raise Refused(f"the build read local files outside {identity['crate']['path']}, which its receipt cannot pin: "
-                      + ", ".join(map(str, outside)))
+    tracked = {(repo / name).resolve() for name in run(["git", "ls-files", "-z", "--", identity["crate"]["path"]], repo).split("\0") if name}
+    unpinned = [path for path in local_inputs(executable.with_name(executable.name + ".d"))
+                if not path.is_relative_to(scratch.resolve()) and path not in tracked]
+    if unpinned:
+        raise Refused(f"the build read local files that are not tracked in {identity['crate']['path']}, which its receipt cannot pin: "
+                      + ", ".join(map(str, unpinned)))
     receipt = {"schema": RECEIPT, **identity,
                "build": {"command": command, "rustflags": ["--remap-path-prefix=<crate>=/source", "--remap-path-prefix=<cargo home>=/cargo"],
                          "cleared_environment": CLEARED.pattern, "cargo_config_files": []},

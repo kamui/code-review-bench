@@ -375,7 +375,7 @@ class RealBuilds(unittest.TestCase):
                     rust_runtime.build(self.crate, self.repo, Path(scratch))
         self.assertFalse(self.store.exists())
 
-    def test_a_build_that_reads_local_files_outside_the_crate_is_refused(self):
+    def test_a_build_that_reads_local_files_git_does_not_track_in_the_crate_is_refused(self):
         dependency = self.repo / "rust/sibling"
         (dependency / "src").mkdir(parents=True)
         (dependency / "Cargo.toml").write_text('[package]\nname = "sibling"\nversion = "0.1.0"\nedition = "2021"\n', encoding="utf-8")
@@ -387,7 +387,7 @@ class RealBuilds(unittest.TestCase):
         self.git("add", ".")
         self.git("commit", "-qm", "path dependency")
         with tempfile.TemporaryDirectory(dir=self.root) as scratch:
-            with self.assertRaisesRegex(rust_runtime.Refused, "local files outside rust/fixture-tool.*sibling/src/lib.rs"):
+            with self.assertRaisesRegex(rust_runtime.Refused, "not tracked in rust/fixture-tool.*sibling/src/lib.rs"):
                 rust_runtime.build(self.crate, self.repo, Path(scratch))
         (self.crate / "Cargo.toml").write_text(manifest, encoding="utf-8")
         (self.repo / "outside.txt").write_text("outside\n", encoding="utf-8")
@@ -396,7 +396,16 @@ class RealBuilds(unittest.TestCase):
         self.git("add", ".")
         self.git("commit", "-qm", "include an outside file")
         with tempfile.TemporaryDirectory(dir=self.root) as scratch:
-            with self.assertRaisesRegex(rust_runtime.Refused, "local files outside rust/fixture-tool.*outside.txt"):
+            with self.assertRaisesRegex(rust_runtime.Refused, "not tracked in rust/fixture-tool.*outside.txt"):
+                rust_runtime.build(self.crate, self.repo, Path(scratch))
+        (self.crate / ".gitignore").write_text("/target/\n/ignored.txt\n", encoding="utf-8")
+        (self.crate / "ignored.txt").write_text("ignored\n", encoding="utf-8")
+        (self.crate / "src/main.rs").write_text('fn main() { print!("{}", include_str!("../ignored.txt")); }\n', encoding="utf-8")
+        self.git("add", ".")
+        self.git("commit", "-qm", "include an ignored file")
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        with tempfile.TemporaryDirectory(dir=self.root) as scratch:
+            with self.assertRaisesRegex(rust_runtime.Refused, "not tracked in rust/fixture-tool.*rust/fixture-tool/ignored.txt"):
                 rust_runtime.build(self.crate, self.repo, Path(scratch))
         self.assertFalse(self.store.exists())
 
