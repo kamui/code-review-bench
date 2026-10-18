@@ -9,7 +9,7 @@ import type { Attempt, Dataset, Task } from './data'
 import { assessment, build, claim, claims, failed, family, remedy, review, scorecardFixture, task } from './fixture'
 import type { Trial } from './fixture'
 import { summarize } from './metrics'
-import { comparisonTasks, leaderboard, matched, meanTaskRecall, orderingConflicts, pairwise, pendingCandidates, preExistingLabels, recommend, referenceCoverage, scorecard, seriousMatrix } from './scoring'
+import { comparisonTasks, leaderboard, matched, meanTaskRecall, orderingConflicts, pairwise, pendingCandidates, preExistingLabels, recommend, referenceCoverage, scorecard, seriousMatrix, skillsPerModel } from './scoring'
 import type { Bounded } from './scoring'
 
 const card = (data: Dataset, id: string, concern: string | null = null) => scorecard(data, id, { taskIds: data.tasks.map(item => item.id), concern })
@@ -461,11 +461,33 @@ describe('serious misses, reference coverage and pending candidates', () => {
         ['s2', true, [['b', 1, 0, { kind: 'available', value: false }], ['a', 2, 0, { kind: 'available', value: true }]]]]],
       ['two', [['s3', false, [null, ['a', 0, 2, { kind: 'unavailable', reason: '2 serious outcomes are undetermined.' }]]]]]])
     expect([both.missed, both.unmissed, both.trialsPerCell]).toEqual([2, 1, 2])
+    expect(both.tasks.map(row => [row.taskId, row.serious])).toEqual([['one', 2], ['two', 1]])
     expect(both.tasks[0]?.problems[0]?.cells[0]?.trials.map(trial => trial.outcome)).toEqual(['caught', 'not-caught'])
     const alone = seriousMatrix(data, selection, [scorecard(data, 'a', selection)])
     expect(alone.tasks.flatMap(row => row.problems.map(problem => [problem.familyId, problem.missed]))).toEqual([['s1', false], ['s2', true], ['s3', false]])
     expect(seriousMatrix(data, selection, ['a', 'c'].map(id => scorecard(data, id, selection))).trialsPerCell).toBeNull()
     expect(seriousMatrix(data, { taskIds: ['one'], concern: 'Security' }, []).tasks).toEqual([])
+  })
+
+  test('trials keep numeric replicate order when the export lists them as text would sort', () => {
+    const subject = task('pr', [family('s', 'serious')])
+    const reviews = Array.from({ length: 10 }, (_, index) => review(subject, index === 1 ? [] : ['s']))
+    const data = build([subject], { a: [[subject, reviews]] })
+    const outcome = data.outcomes[0]
+    if (!outcome) throw new Error('Fixture lacks its outcome')
+    outcome.trials.sort((left, right) => String(left.replicate).localeCompare(String(right.replicate)))
+    expect(outcome.trials.map(trial => trial.replicate).slice(0, 3)).toEqual([1, 10, 2])
+    const selection = { taskIds: ['pr'], concern: null }
+    const trials = seriousMatrix(data, selection, [scorecard(data, 'a', selection)]).tasks[0]?.problems[0]?.cells[0]?.trials
+    expect(trials?.map(trial => trial.replicate)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+    expect(trials?.[1]).toEqual({ replicate: 2, attemptId: reviews[1]?.id ?? null, verdict: 'missed', outcome: 'not-caught' })
+    expect(scorecard(data, 'a', selection).tasks[0]?.trials.map(trial => trial.replicate)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+  })
+
+  test('skills per model counts distinct skills among the given setups, in model name order', () => {
+    expect(skillsPerModel([{ model: 'Opus', skill: '/a' }, { model: 'Luna', skill: '/a' }, { model: 'Opus', skill: '/b' }, { model: 'Opus', skill: '/b' }]))
+      .toEqual([{ model: 'Luna', skills: 1 }, { model: 'Opus', skills: 2 }])
+    expect(skillsPerModel([])).toEqual([])
   })
 
   test('reference coverage counts approved references by band and keeps unaudited and provisional controls apart from audited ones', () => {

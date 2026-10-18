@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Badge, Button, Chip, Group, Popover, Stack, Switch, Table, Text, Tooltip } from '@mantine/core'
 import type { Configuration, Dataset, Family, Task } from '../lib/data'
-import { seriousMatrix } from '../lib/scoring'
+import { seriousMatrix, skillsPerModel } from '../lib/scoring'
 import type { FamilyRow, Scorecard, Selection, TrialOutcome, Verdict } from '../lib/scoring'
 import { setupParts } from './Chart'
 import type { Inspection } from './EvidenceDrawer'
@@ -36,8 +36,8 @@ export function SeriousMisses({ dataset, configurations, cards, selection, onIns
   const [showAll, setShowAll] = useState(false)
   const [hovered, setHovered] = useState<number | null>(null)
   const columns = columnsOf(configurations, cards)
-  const models = [...new Set(columns.map(column => column.model))].sort((a, b) => a.localeCompare(b))
-  const chosen = models.includes(model) ? model : 'all'
+  const models = skillsPerModel(columns)
+  const chosen = models.some(item => item.model === model) ? model : 'all'
   const shown = chosen === 'all' ? columns : columns.filter(column => column.model === chosen)
   const matrix = seriousMatrix(dataset, selection, shown.map(column => column.card))
   if (!matrix.tasks.length) return <Text size="sm" c="dimmed">No reference on the selected PRs is labelled serious, so serious misses cannot be listed.</Text>
@@ -55,10 +55,7 @@ export function SeriousMisses({ dataset, configurations, cards, selection, onIns
     <Chip.Group value={chosen} onChange={value => setModel(typeof value === 'string' ? value : 'all')}>
       <Group gap="xs" aria-label="Model filter" role="radiogroup">
         <Chip value="all" size="xs">All models</Chip>
-        {models.map(name => {
-          const skills = new Set(columns.filter(column => column.model === name).map(column => column.skill)).size
-          return <Chip key={name} value={name} size="xs">{name} · {skills} {skills === 1 ? 'skill' : 'skills'}</Chip>
-        })}
+        {models.map(item => <Chip key={item.model} value={item.model} size="xs">{item.model} · {item.skills} {item.skills === 1 ? 'skill' : 'skills'}</Chip>)}
       </Group>
     </Chip.Group>
     <Text size="sm">{runs === null ? 'Each dot is one scheduled run of a setup on that PR, in run order.'
@@ -80,13 +77,12 @@ export function SeriousMisses({ dataset, configurations, cards, selection, onIns
           <Table.Tbody>{visible.map(row => {
             const task = dataset.tasks.find(item => item.id === row.taskId)
             if (!task) return null
-            const total = matrix.tasks.find(item => item.taskId === row.taskId)?.problems.length ?? 0
             return [<Table.Tr key={task.id} className="miss-pr">
               <Table.Th scope="rowgroup" className="miss-sticky">
                 <button type="button" className="text-button task-name" onClick={() => onInspect({ kind: 'task', id: task.id })}>{task.repo}<span>#{task.pr}</span></button>
                 <Group gap={4} mt={4}>{[...task.profile.changeKinds, ...task.profile.technologies].map(tag => <Badge key={tag} variant="outline" color="gray" size="xs">{tag}</Badge>)}</Group>
                 <Text size="xs" c="dimmed" mt={4} fw={400}>{task.shape}</Text>
-                <Text size="xs" mt={2} fw={500}>{problems(total)}</Text>
+                <Text size="xs" mt={2} fw={500}>{problems(row.serious)}</Text>
               </Table.Th>
               {shown.map((column, index) => <Table.Td key={column.configuration.id} className={highlight(index)} onMouseEnter={enter(index)} />)}
             </Table.Tr>,
