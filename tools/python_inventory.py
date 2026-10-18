@@ -389,7 +389,15 @@ def main():
             same_output = same_output or args.output.samefile(census_path)
         if args.check or args.ref or same_output:
             parser.error("--observe-runtime requires a separate --output and cannot use --check or --ref")
-        args.output.write_text(json.dumps(observe_runtime(args.work_root, args.queue_root), indent=2, sort_keys=True) + "\n")
+        observed_roots = (args.work_root, args.queue_root, ROOT / ".local", ROOT / ".bench")
+        if any(args.output.resolve().is_relative_to(root.resolve()) for root in observed_roots):
+            parser.error("--observe-runtime output must be outside the observed state roots")
+        rendered = json.dumps(observe_runtime(args.work_root, args.queue_root), indent=2, sort_keys=True) + "\n"
+        try:
+            with args.output.open("x") as output:
+                output.write(rendered)
+        except FileExistsError:
+            parser.error("--observe-runtime requires a new --output; existing files are preserved")
         print(f"Wrote read-only host observation to {args.output}")
         return
     previous = args.output.read_bytes() if args.check else None

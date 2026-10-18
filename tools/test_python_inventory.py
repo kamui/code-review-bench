@@ -165,6 +165,55 @@ class InventoryTests(unittest.TestCase):
             self.assertEqual(json.loads(output.read_text())["workspaces"], [])
             self.assertEqual(census.read_bytes(), b"retained census")
 
+    def test_observation_output_preserves_observed_roots_and_existing_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = root / "tools/python_inventory.py"
+            script.parent.mkdir()
+            script.write_bytes(Path(inventory.__file__).read_bytes())
+            work, queues = root / "work", root / "queues"
+            attempt = work / "unfinished" / "att-001"
+            attempt.mkdir(parents=True)
+            stop = attempt / "stop.json"
+            stop.write_text('{"status":"unfinished"}')
+            queue = queues / "queue"
+            queue.mkdir(parents=True)
+            pin = queue / "queue.pin.json"
+            pin.write_text('{"runs":{}}')
+            controller = queue / "controller.jsonl"
+            controller.write_text('{"at":"saved-time","launched":"launch-1","run":"unfinished"}\n')
+            alias = root / "work-alias"
+            alias.symlink_to(work, target_is_directory=True)
+            hardlink = root / "stop-hardlink.json"
+            os.link(stop, hardlink)
+            existing = root / "existing-observation.json"
+            existing.write_text("retained observation")
+            symlink = root / "stop-symlink.json"
+            symlink.symlink_to(stop)
+            command = [sys.executable, str(script), "--observe-runtime", "--work-root", str(work),
+                       "--queue-root", str(queues)]
+            before = {str(p.relative_to(root)): p.read_bytes() for base in (work, queues)
+                      for p in base.rglob("*") if p.is_file()}
+            for output in (stop, pin, controller, attempt / "new.json", queue / "new.json",
+                           alias / "unfinished/att-001/new.json", hardlink, symlink, existing,
+                           root / ".local/new.json", root / ".bench/new.json"):
+                with self.subTest(output=output):
+                    result = subprocess.run(command + ["--output", str(output)], cwd=root,
+                                            capture_output=True, text=True)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("--observe-runtime", result.stderr)
+                    self.assertEqual(before, {str(p.relative_to(root)): p.read_bytes() for base in (work, queues)
+                                             for p in base.rglob("*") if p.is_file()})
+                    self.assertEqual(existing.read_text(), "retained observation")
+            self.assertFalse((root / ".local").exists())
+            self.assertFalse((root / ".bench").exists())
+            output = root / "new-observation.json"
+            subprocess.run(command + ["--output", str(output)], cwd=root, capture_output=True, check=True)
+            self.assertEqual(json.loads(output.read_text())["queues"][0]["launches_without_saved_end"],
+                             {"launch-1": "unfinished"})
+            self.assertEqual(before, {str(p.relative_to(root)): p.read_bytes() for base in (work, queues)
+                                     for p in base.rglob("*") if p.is_file()})
+
 
 if __name__ == "__main__":
     unittest.main()

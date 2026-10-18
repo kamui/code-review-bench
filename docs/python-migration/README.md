@@ -148,6 +148,10 @@ python3 tools/python_inventory.py --observe-runtime \
   --output /tmp/python-runtime-observation.json
 ```
 
+The observation output must be a new file outside the observed work, queue,
+`.local`, and `.bench` roots. Existing files, including symlinks and hardlinks,
+are never overwritten; choose a new filename for each observation.
+
 Historical resolution follows the recorded dependency, in order:
 
 1. Resolve a path with its recorded SHA-256 at the inventory's source commit, or
