@@ -6,13 +6,14 @@ export type Cell = string | Reading
 export type Note = ReturnType<typeof reasonCounts>[number]
 export type Column<Row> = { label: string; value: (row: Row) => Cell }
 
-export const notesFor = (cells: Cell[]): Note[] => reasonCounts(cells.map(cell => typeof cell === 'string' ? null : cell.reason))
+export const notesFor = (cells: Cell[]): Note[] => reasonCounts(cells.map(cell => typeof cell === 'string' ? null : cell.reason ?? cell.annotation ?? null))
 
 export function Value({ cell, notes = [] }: { cell: Cell; notes?: Note[] }) {
   if (typeof cell === 'string') return cell
-  if (cell.reason === null) return cell.text
-  const index = notes.findIndex(note => note.reason === cell.reason)
-  return <span className="unavailable" title={cell.reason}>{cell.text}{index >= 0 && <sup aria-hidden="true">{index + 1}</sup>}<VisuallyHidden>: {cell.reason}</VisuallyHidden></span>
+  const note = cell.reason ?? cell.annotation
+  if (!note) return cell.text
+  const index = notes.findIndex(item => item.reason === note)
+  return <span className={cell.reason ? 'unavailable' : undefined} title={note}>{cell.text}{index >= 0 && <sup aria-hidden="true">{index + 1}</sup>}<VisuallyHidden>: {note}</VisuallyHidden></span>
 }
 
 export function Notes({ notes }: { notes: Note[] }) {

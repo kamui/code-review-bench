@@ -95,6 +95,7 @@ export function Chart({ summaries, detection, matching, axis, view, showAllLabel
       {view === 'skills' && <span><span className="skill-key" aria-hidden="true" />Each line joins one review method across the models it ran on, from lowest to highest {lowerFirst(axisLabels[axis])}. Hover or focus a point to follow its method.</span>}
       {view === 'tradeoff' && <span><span className="frontier-key" aria-hidden="true" />Frontier of {dimensions}: no other selected setup is higher on the first at a lower value of the second. It says nothing about any other measure.</span>}
       {view === 'models' && <span>Each row is one model. Marks show {lowerFirst(measure)} for each review method that ran on it.</span>}
+      {points.filter(point => point.summary.detectionNote).map(point => <span key={point.summary.configuration.id}>† {point.summary.configuration.short}: {point.summary.detectionNote}</span>)}
       {withheld.length > 0 && <span>Not plotted, {lowerFirst(measure)} unavailable: {withheld.map(row => `${row.reason} (${setups(row.count)})`).join(' ')}</span>}
       {unplotted.length > 0 && <span>No {lowerFirst(axisLabels[axis])} for {unplotted.map(point => `${point.summary.configuration.short} (${point.summary.reasons[axis]})`).join('; ')}.</span>}
       {axis === 'refuted' && <span>Refuted claims are compared on the {matching.included} of {matching.included + matching.excluded} selected PRs where every selected setup has admitted, assessed reviews, with PRs weighted equally. A setup that admitted only some trials of a matched PR is measured on the reviews it delivered; the tooltip gives its admitted trials.</span>}
@@ -128,7 +129,7 @@ function SetupRows({ points, measure, axis, scale, frontier, onSelect, interacti
           <span className="rank-name"><Mark configuration={configuration} />
             <span><strong>{method}</strong><span className="rank-model">{model}{effort && ` · ${effort}`}
               {frontier.has(configuration.id) && <span className="frontier-tag">On frontier</span>}</span></span></span>
-          <span className="rank-cell"><span className="rank-value">{percent(score)}</span>
+          <span className="rank-cell"><span className="rank-value">{percent(score)}{summary.detectionNote && '†'}</span>
             <span className="rank-track">{scoreTicks.map(tick => <span key={tick} className="rank-grid" style={{ left: `${tick}%` }} />)}
               {range && <span className="rank-whisker" style={{ left: `${range.low}%`, width: `${range.high - range.low}%` }} />}
               <span className="rank-dot" style={{ left: `${score}%` }}><Mark configuration={configuration} /></span></span></span>
@@ -280,7 +281,7 @@ function Models({ points, measure, axis, onSelect, interactions }: { points: Poi
           return <button type="button" key={configuration.id} className="model-entry" onClick={() => onSelect(configuration.id)} {...interactions(configuration.id)}
             aria-label={`${configuration.short}: ${percent(point.summary.detection)}, ${axisLabels[axis]} ${formatMetric(axis, point.metric, configuration)}. Inspect evidence`}>
             <Mark configuration={configuration} size={10} /><span>{setupParts(configuration).method}</span>
-            <strong>{percent(point.summary.detection)}</strong><span className="model-metric">{formatMetric(axis, point.metric, configuration)}</span>
+            <strong>{percent(point.summary.detection)}{point.summary.detectionNote && '†'}</strong><span className="model-metric">{formatMetric(axis, point.metric, configuration)}</span>
           </button>
         })}</span>
       </div>
@@ -293,6 +294,7 @@ function Tooltip({ point, measure, axis, left, top }: { point: Point; measure: s
   const lines: ReactNode[] = [
     !summary.configuration.builtin && <span key="skill">Skill: {skillReleaseLabel([summary.configuration])}</span>,
     <span key="score">{measure}: <b>{percent(summary.detection)}</b>{range && ` (${percent(range.low)} to ${percent(range.high)} leaving one PR out; sensitivity, not a confidence interval)`}</span>,
+    summary.detectionNote && <span key="zero-credit">† {summary.detectionNote}</span>,
     <span key="metric">{axisLabels[axis]}: <b>{formatMetric(axis, point.metric, summary.configuration)}</b>{point.metric === null && ` ${summary.reasons[axis]}`}</span>,
     axis === 'time' && summary.time && <span key="time">Mean {duration(summary.time.mean)} · middle 50% {duration(summary.time.q1)} to {duration(summary.time.q3)} · {summary.time.reviews} timed trials</span>,
     <span key="count">{summary.tasks} PRs · {summary.admitted} of {summary.trials} scheduled trials admitted, {summary.completed} complete</span>,

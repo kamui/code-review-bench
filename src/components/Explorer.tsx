@@ -82,8 +82,8 @@ export function Dashboard({ dataset, now = new Date() }: { dataset: Dataset; now
     .sort((left, right) => (right.detection ?? -1) - (left.detection ?? -1))
   const tableRows = comparisonSummaries.map(row => {
     const recall = row.card.detection[band]
-    const cells: Record<Exclude<ResultsColumn, 'setup' | 'completed'>, Reading> = { equalProblem: share(recall.equalProblem), equalPr: share(recall.equalPr),
-      seriousCaught: share(row.card.seriousCaught.equalPr), repeatedMisses: reading(row.card.seriousMisses.repeated, String),
+    const cells: Record<Exclude<ResultsColumn, 'setup' | 'completed'>, Reading> = { equalProblem: share(recall.equalProblem, recall.zeroCredit.reason), equalPr: share(recall.equalPr, recall.zeroCredit.reason),
+      seriousCaught: share(row.card.seriousCaught.equalPr, row.card.detection.serious.zeroCredit.reason), repeatedMisses: reading(row.card.seriousMisses.repeated, String),
       cost: reading(row.card.cost.perTrial, value => `${money(value)}${row.configuration.billing === 'list-price-equivalent' ? '*' : ''}`),
       tokens: reading(row.card.tokens.perTrial, compact), refuted: perReview(row.card.reliability.outcomes.refuted.perAdmittedReview) }
     return { ...row, cells, order: { setup: row.configuration.short, equalProblem: measured(recall.equalProblem), equalPr: measured(recall.equalPr),
@@ -291,7 +291,8 @@ function DetectionBar({ result }: { result: ReturnType<typeof meanTaskRecall> })
   if (result.mean.kind === 'unavailable') return <Text size="sm" c="dimmed" component="span"><Value cell={{ text: 'Unavailable', reason: withheld || result.mean.reason }} /></Text>
   const value = percent(result.mean.value * 100)
   return <span className="detection-cell"><span className="detection-bar"><span>{value}</span><span className="detection-track" aria-hidden="true"><span style={{ width: value }} /></span></span>
-    <Text size="xs" c="dimmed" component="span">Mean of {result.included} of {plural(result.selected, 'selected setup')}{withheld && `. Not included: ${withheld}`}</Text></span>
+    <Text size="xs" c="dimmed" component="span">Mean of {result.included} of {plural(result.selected, 'selected setup')}{withheld && `. Not included: ${withheld}`}</Text>
+    {result.annotations.map(note => <Text size="xs" c="dimmed" component="span" key={note.configurationId}>{note.reason}</Text>)}</span>
 }
 
 const concerns = ['Security', 'Performance', 'Scalability', 'Architecture', 'Reliability', 'Maintainability', 'Functional', 'Testing']
