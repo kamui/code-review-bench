@@ -36,12 +36,12 @@ type Heading = { title: string; short: string; hint?: string; note?: string; mea
 
 function headings(detection: DetectionView, claimsMax: number): Record<OverviewColumn, Heading> {
   return {
-    setup: { title: 'Review setup', short: 'Setup', measure: 'setup name', ascending: 'A to Z', descending: 'Z to A' },
-    detection: { title: detectionLabel(detection), short: 'Detection', measure: lowerFirst(detectionLabel(detection)), ascending: 'least first', descending: 'most first', ends: ['0%', '100%'] },
-    claims: { title: 'True claims per review', note: 'number: problem claims', short: 'Problem claims per review', measure: 'problem claims per review', ascending: 'fewest first', descending: 'most first', ends: ['0', String(claimsMax)] },
-    doubt: { title: 'Refuted or unproven', short: 'Refuted or unproven', hint: doubtMeaning, measure: 'share of reviews with a refuted or unproven claim', ascending: 'fewest first', descending: 'most first', ends: ['0%', '100%'] },
-    cost: { title: 'Cost per scheduled trial', short: 'Cost per trial', measure: 'cost per scheduled trial', ascending: 'lowest first', descending: 'highest first', note: 'log scale', ends: ['$0.001', '$10'] },
-    time: { title: 'Median completed-trial time', short: 'Median time', measure: 'median completed-trial time', ascending: 'shortest first', descending: 'longest first', note: 'log scale', ends: ['20 s', '30 min'] },
+    setup: { title: 'Setup', short: 'Setup', measure: 'setup name', ascending: 'A to Z', descending: 'Z to A' },
+    detection: { title: 'Detection', note: lowerFirst(bandLabels[detection.band]), short: 'Detection', measure: lowerFirst(detectionLabel(detection)), ascending: 'least first', descending: 'most first', ends: ['0%', '100%'] },
+    claims: { title: 'True claims', note: 'per review; number: problems', short: 'Problem claims per review', measure: 'problem claims per review', ascending: 'fewest first', descending: 'most first', ends: ['0', String(claimsMax)] },
+    doubt: { title: 'Refuted or unproven', note: 'share of reviews', short: 'Refuted or unproven', hint: doubtMeaning, measure: 'share of reviews with a refuted or unproven claim', ascending: 'fewest first', descending: 'most first', ends: ['0%', '100%'] },
+    cost: { title: 'Cost per trial', short: 'Cost per trial', measure: 'cost per scheduled trial', ascending: 'lowest first', descending: 'highest first', note: 'log scale', ends: ['$0.001', '$10'] },
+    time: { title: 'Median time', short: 'Median time', measure: 'median completed-trial time', ascending: 'shortest first', descending: 'longest first', note: 'log scale', ends: ['20 s', '30 min'] },
   }
 }
 
