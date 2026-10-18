@@ -182,6 +182,7 @@ def export_attempt(run, facts, archives, stage, grade=None, billing_correction=N
             "complete": facts["completion"]["state"] == "complete", "admitted": facts["admission"]["state"] == "admitted",
             "observedItems": len(items), "assessment": assessment(grade) if grade else None,
             "cost": record.get("usage", {}).get("priced_total_usd"),
+            "costLowerBound": record["usage"]["cost_bounds_usd"]["low"],
             "outputTokens": usage_tokens(directory / record["usage"]["requests"], record),
             "durationSeconds": duration_seconds(record),
             "billing": billing_correction["billing"] if billing_correction else record["usage"]["billing"],

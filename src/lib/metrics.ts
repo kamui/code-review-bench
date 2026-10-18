@@ -1,5 +1,5 @@
 import type { Configuration, Dataset } from './data'
-import type { Band, Estimator, Measure, Scorecard } from './scoring'
+import type { Band, Bounded, Estimator, Measure, Scorecard } from './scoring'
 
 export type Axis = 'cost' | 'tokens' | 'refuted' | 'time'
 export type DetectionView = { band: Band; estimator: Estimator }
@@ -10,13 +10,16 @@ export const estimatorLabels: Record<Estimator, string> = { equalProblem: 'probl
 export const detectionLabel = (view: DetectionView) => `${bandLabels[view.band]} detection, ${estimatorLabels[view.estimator]}`
 export const lowerFirst = (label: string) => label.charAt(0).toLowerCase() + label.slice(1)
 
-export const measured = <T>(measure: Measure<T>): T | null => measure.kind === 'available' ? measure.value : null
+export const measured = <T>(measure: Bounded<T>): T | null => measure.kind === 'available' ? measure.value : null
+export const lowerBound = (measure: Bounded): number | null => measure.kind === 'unavailable' ? null : measure.value
 export const scaled = (fraction: number | null): number | null => fraction === null ? null : fraction * 100
 export const points = (measure: Measure): number | null => scaled(measured(measure))
-const reasonOf = (measure: Measure<unknown>) => measure.kind === 'unavailable' ? measure.reason : null
+const reasonOf = (measure: Bounded<unknown>) => measure.kind === 'available' ? null
+  : measure.kind === 'atLeast' ? `Only a lower bound is known. ${measure.reason}` : measure.reason
 
-export const reading = <T>(measure: Measure<T>, format: (value: T) => string): Reading =>
-  measure.kind === 'available' ? { text: format(measure.value), reason: null } : { text: 'Unavailable', reason: measure.reason }
+export const reading = <T>(measure: Bounded<T>, format: (value: T) => string): Reading =>
+  measure.kind === 'available' ? { text: format(measure.value), reason: null }
+    : measure.kind === 'atLeast' ? { text: `≥ ${format(measure.value)}`, reason: measure.reason } : { text: 'Unavailable', reason: measure.reason }
 
 export function reasonCounts(reasons: (string | null)[]) {
   const counts = new Map<string, number>()
