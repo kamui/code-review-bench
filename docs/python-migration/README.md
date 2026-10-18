@@ -126,8 +126,8 @@ Active research helpers carry the responsibility assignments in `RESEARCH_GROUPS
 Their tests run on disposable copies because some APIs write whole
 record generations. Preserve `before.v1.json`, validation, atomic replacement,
 idempotent replay, and undo semantics. Do not run those helpers against live records
-to validate this inventory. The owning storage and grading slices, #155 and #156, extend #151's corpus
-with those behaviors before porting their helpers.
+to validate this inventory. Each helper's owning slice in `RESEARCH_GROUPS` extends #151's corpus with those
+behaviors before porting that helper.
 
 `dispatch.sh` is a maintained #157 caller, including inline command validation,
 client hash checks and native review launch. `regrade_queues.sh` is a maintained
