@@ -283,7 +283,7 @@ class Interpreter(unittest.TestCase):
             "import review_queue, rust_runtime\n"
             "from pathlib import Path\n"
             "try:\n"
-            "    rust_runtime.describe(Path('.'), rust_runtime.REPO, {})\n"
+            "    rust_runtime.describe(Path('.'), rust_runtime.REPO, Path('/nonexistent'), {})\n"
             "except rust_runtime.InputError as error:\n"
             "    print(error)\n"
         )
@@ -387,6 +387,26 @@ class RealBuilds(unittest.TestCase):
             self.assertEqual(receipt["artifact"]["sha256"], one["sha256"])
             _, added = rust_runtime.retain(self.store, executable, receipt)
         self.assertFalse(added)
+
+    def test_a_checkout_edit_saved_during_the_build_and_reverted_before_it_ends_is_not_compiled(self):
+        real, main = rust_runtime.run, self.crate / "src/main.rs"
+        committed = main.read_text(encoding="utf-8")
+        for step in ("metadata", "build"):
+            def edit_from(command, cwd, env=None):
+                if command[:2] == ["cargo", step]:
+                    main.write_text('fn main() { println!("edited"); }\n', encoding="utf-8")
+                try:
+                    return real(command, cwd, env)
+                finally:
+                    if command[:2] == ["cargo", "build"]:
+                        main.write_text(committed, encoding="utf-8")
+
+            with self.subTest(step=step), tempfile.TemporaryDirectory(dir=self.root) as scratch:
+                with patch.object(rust_runtime, "run", edit_from):
+                    executable, receipt = rust_runtime.build(self.crate, self.repo, Path(scratch))
+                self.assertEqual(self.git("status", "--porcelain"), "")
+                self.assertIsNone(rust_runtime.source_problem(receipt, self.git("rev-parse", "HEAD").strip(), self.repo))
+                self.assertEqual(subprocess.check_output([executable], text=True), "one\n")
 
     def test_an_unclean_crate_another_toolchain_or_unrestorable_cargo_configuration_is_refused(self):
         with tempfile.TemporaryDirectory(dir=self.root) as scratch:
@@ -504,30 +524,38 @@ class RealBuilds(unittest.TestCase):
         (dependency / "Cargo.toml").write_text('[package]\nname = "sibling"\nversion = "0.1.0"\nedition = "2021"\n', encoding="utf-8")
         (dependency / "src/lib.rs").write_text("pub fn value() -> u8 { 1 }\n", encoding="utf-8")
         manifest = (self.crate / "Cargo.toml").read_text(encoding="utf-8")
-        (self.crate / "Cargo.toml").write_text(manifest + '[dependencies]\nsibling = { path = "../sibling" }\n', encoding="utf-8")
-        (self.crate / "src/main.rs").write_text('fn main() { println!("{}", sibling::value()); }\n', encoding="utf-8")
-        subprocess.run(["cargo", "generate-lockfile", "--offline"], cwd=self.crate, check=True, capture_output=True)
-        self.git("add", ".")
-        self.git("commit", "-qm", "path dependency")
-        with tempfile.TemporaryDirectory(dir=self.root) as scratch:
-            with self.assertRaisesRegex(rust_runtime.Refused, "depends on local packages whose manifests it does not track: .*sibling/Cargo.toml"):
-                rust_runtime.build(self.crate, self.repo, Path(scratch))
-        (self.crate / "Cargo.toml").write_text(manifest + '[dependencies]\nsibling = { path = "../sibling", optional = true }\n', encoding="utf-8")
-        (self.crate / "src/main.rs").write_text('fn main() { println!("one"); }\n', encoding="utf-8")
-        subprocess.run(["cargo", "generate-lockfile", "--offline"], cwd=self.crate, check=True, capture_output=True)
-        self.git("commit", "-qam", "an optional path dependency that is never compiled")
-        with tempfile.TemporaryDirectory(dir=self.root) as scratch:
-            with self.assertRaisesRegex(rust_runtime.Refused, "depends on local packages whose manifests it does not track: .*sibling/Cargo.toml"):
-                rust_runtime.build(self.crate, self.repo, Path(scratch))
+        # The build compiles a snapshot of the crate tree, so only an absolute path still reaches a file outside it.
+        for path in (str(dependency), "../sibling"):
+            for optional in (False, True):
+                (self.crate / "Cargo.toml").write_text(manifest + f"[dependencies]\nsibling = {{ path = {json.dumps(path)}"
+                                                       + (", optional = true }\n" if optional else " }\n"), encoding="utf-8")
+                (self.crate / "src/main.rs").write_text('fn main() { println!("one"); }\n' if optional else
+                                                        'fn main() { println!("{}", sibling::value()); }\n', encoding="utf-8")
+                subprocess.run(["cargo", "generate-lockfile", "--offline"], cwd=self.crate, check=True, capture_output=True)
+                self.git("add", ".")
+                self.git("commit", "-qm", f"path dependency {path}, optional {optional}")
+                with self.subTest(path=path, optional=optional), tempfile.TemporaryDirectory(dir=self.root) as scratch:
+                    if path == "../sibling":
+                        with self.assertRaisesRegex(rust_runtime.InputError, "(?s)cargo metadata .*sibling"):
+                            rust_runtime.build(self.crate, self.repo, Path(scratch))
+                    else:
+                        with self.assertRaisesRegex(rust_runtime.Refused,
+                                                    "depends on local packages whose manifests it does not track: .*sibling/Cargo.toml"):
+                            rust_runtime.build(self.crate, self.repo, Path(scratch))
         (self.crate / "Cargo.toml").write_text(manifest, encoding="utf-8")
         (self.repo / "outside.txt").write_text("outside\n", encoding="utf-8")
-        (self.crate / "src/main.rs").write_text('fn main() { print!("{}", include_str!("../../../outside.txt")); }\n', encoding="utf-8")
-        subprocess.run(["cargo", "generate-lockfile", "--offline"], cwd=self.crate, check=True, capture_output=True)
-        self.git("add", ".")
-        self.git("commit", "-qm", "include an outside file")
-        with tempfile.TemporaryDirectory(dir=self.root) as scratch:
-            with self.assertRaisesRegex(rust_runtime.Refused, "not tracked in rust/fixture-tool.*outside.txt"):
-                rust_runtime.build(self.crate, self.repo, Path(scratch))
+        for path in (str(self.repo / "outside.txt"), "../../../outside.txt"):
+            (self.crate / "src/main.rs").write_text(f'fn main() {{ print!("{{}}", include_str!({json.dumps(path)})); }}\n', encoding="utf-8")
+            subprocess.run(["cargo", "generate-lockfile", "--offline"], cwd=self.crate, check=True, capture_output=True)
+            self.git("add", ".")
+            self.git("commit", "-qm", f"include {path}")
+            with self.subTest(path=path), tempfile.TemporaryDirectory(dir=self.root) as scratch:
+                if path.startswith(".."):
+                    with self.assertRaisesRegex(rust_runtime.InputError, "(?s)cargo build .*outside.txt"):
+                        rust_runtime.build(self.crate, self.repo, Path(scratch))
+                else:
+                    with self.assertRaisesRegex(rust_runtime.Refused, "not tracked in rust/fixture-tool.*outside.txt"):
+                        rust_runtime.build(self.crate, self.repo, Path(scratch))
         (self.crate / ".gitignore").write_text("/target/\n/ignored.txt\n", encoding="utf-8")
         (self.crate / "ignored.txt").write_text("ignored\n", encoding="utf-8")
         (self.crate / "src/main.rs").write_text('fn main() { print!("{}", include_str!("../ignored.txt")); }\n', encoding="utf-8")
@@ -535,7 +563,7 @@ class RealBuilds(unittest.TestCase):
         self.git("commit", "-qm", "include an ignored file")
         self.assertEqual(self.git("status", "--porcelain"), "")
         with tempfile.TemporaryDirectory(dir=self.root) as scratch:
-            with self.assertRaisesRegex(rust_runtime.Refused, "not tracked in rust/fixture-tool.*rust/fixture-tool/ignored.txt"):
+            with self.assertRaisesRegex(rust_runtime.InputError, "(?s)cargo build .*ignored.txt"):
                 rust_runtime.build(self.crate, self.repo, Path(scratch))
         (self.crate / "ignored.txt").unlink()
         (self.crate / "src/value.txt").symlink_to("../../../outside.txt")

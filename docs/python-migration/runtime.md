@@ -39,32 +39,40 @@ The pin that queues and runs use is the executable's SHA-256 together with the r
    ```
 
 `install` needs Python 3.11 or later; the other commands and `review_queue.py` do not.
+After the cleanliness check it writes the crate's Git tree at `HEAD` into a private snapshot, copying
+each file's committed bytes. The checks below that read the crate, the toolchain query and the build
+all run in that snapshot, and the receipt hashes its files. An edit saved to the checkout during an
+install therefore cannot reach the executable, even when it is reverted before the install ends.
 It refuses what a receipt could not restore:
 
 - Uncommitted or untracked files in the crate, and an active `rustc` whose release differs from
   `rust-toolchain.toml`.
-- Any Cargo configuration file in the `.cargo` directory of the crate or a parent, or in `CARGO_HOME`,
-  each checked even when `CARGO_HOME` is one of those directories, and a relative
-  `HOME`, `CARGO_HOME`, `RUSTUP_HOME` or `TMPDIR`, which cargo would resolve against the crate.
-- A parent Cargo workspace, `[patch]` or `[replace]` sections, and a `Cargo.toml`, `Cargo.lock` or
-  `rust-toolchain.toml` that Git does not track.
-- A tracked symbolic link, whose target the tree does not hold.
-- A local package in `cargo metadata --all-features`, such as a path dependency, whose manifest Git
-  does not track in the crate, even when that dependency is optional and never compiled.
-- After the build, a local file in cargo's dep-info that Git does not track in the crate, such as an
-  ignored `include_str!` target.
+- Any Cargo configuration file in the `.cargo` directory of the crate, the snapshot or a parent of
+  either, or in `CARGO_HOME`, each checked even when `CARGO_HOME` is one of those directories, and a
+  relative `HOME`, `CARGO_HOME`, `RUSTUP_HOME` or `TMPDIR`, which cargo would resolve against its
+  working directory.
+- A parent Cargo workspace of the crate or the snapshot, `[patch]` or `[replace]` sections, and a
+  `Cargo.toml`, `Cargo.lock` or `rust-toolchain.toml` that Git does not track.
+- A tracked symbolic link or submodule, whose target the tree does not hold.
+- A local package in `cargo metadata --all-features`, such as an absolute path dependency, whose
+  manifest is outside the snapshot, even when that dependency is optional and never compiled.
+- After the build, a local file in cargo's dep-info outside the snapshot, such as an absolute
+  `include_str!` path.
+
+A relative path to a file the crate's tree does not hold, such as an ignored `include_str!` target or
+a sibling path dependency, finds nothing in the snapshot, so `cargo metadata` or the build fails.
 
 The crate's Git tree then covers every local input that cargo records, and `Cargo.lock` covers
-registry and Git dependencies. A build script or procedural macro that reads a file without declaring
-it is not detected; `usage-pilot` has neither. The installed toolchain, the system linker and Cargo's
-registry and Git caches are trusted as installed: the receipt records the `rustc` and `cargo`
-identities, but nothing re-verifies those files' contents. The build runs
+registry and Git dependencies. A build script or procedural macro that reads a file outside the
+snapshot without declaring it is not detected; `usage-pilot` has neither. The installed toolchain, the
+system linker and Cargo's registry and Git caches are trusted as installed: the receipt records the
+`rustc` and `cargo` identities, but nothing re-verifies those files' contents. The build runs
 `cargo build --locked --offline --release --target <host> --bin <bin>` in a temporary target directory.
 The build sees only `PATH`, `HOME`, `CARGO_HOME`, `RUSTUP_HOME`, `RUSTUP_TOOLCHAIN` and `TMPDIR`, so
 `RUSTFLAGS`, wrappers, profile overrides and any variable a crate reads with `env!` are absent. A
 build is refused when rustc's dep-info or a build script's `rerun-if-env-changed` shows it read one of
 those six. A build script that reads a variable without declaring it is not detected. The build also
-remaps the crate and `CARGO_HOME` paths. Installing the same build again keeps the existing entry.
+remaps the snapshot and `CARGO_HOME` paths. Installing the same build again keeps the existing entry.
 An entry with the same hash but another receipt is refused.
 
 The default store is `~/.t3/bench-runtime`. Every command takes `--store`.
