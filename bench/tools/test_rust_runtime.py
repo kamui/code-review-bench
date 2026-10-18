@@ -51,7 +51,7 @@ def script(path: Path, output: str) -> Path:
 
 class Store(unittest.TestCase):
     def setUp(self):
-        self.root = Path(self.enterContext(tempfile.TemporaryDirectory(prefix="rust-runtime-test-")))
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory(prefix="rust-runtime-test-"))).resolve()
         self.store = self.root / "store"
 
     def version(self, output: str, name: str = "fixture-tool", **changes) -> dict:
@@ -369,7 +369,7 @@ class Resolution(Store):
                               env={**os.environ, rust_runtime.STORE_VARIABLE: str(empty)},
                               capture_output=True, text=True, encoding="utf-8")
         self.assertEqual((done.returncode, done.stdout), (1, ""))
-        self.assertIn(f"fixture-tool has no selected version in {empty.resolve()}", done.stderr)
+        self.assertIn(f"fixture-tool has no selected version in {empty}", done.stderr)
         self.assertIn("install it with:", done.stderr)
 
 
