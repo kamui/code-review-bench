@@ -110,6 +110,51 @@ class InventoryTests(unittest.TestCase):
             self.assertIsNone(result["runs"][0]["freeze_commit"])
             self.assertEqual(result["runs"][0]["dispositions"], {"harness-invalid": 1})
 
+    def test_computed_callers_resolve_siblings_and_retain_unknown_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sources = {
+                "bench/tools/dispatch.sh": '''python3 "$(dirname "$0")/clean_context.py"
+python3 "$(dirname "$0")/review_isolation.py"
+TOOLS=$(cd "$(dirname "$0")" && pwd)
+python3 "$TOOLS/normalize_review.py"
+python3 "${TOOLS}/attempt_audit.py"
+python3 "$UNKNOWN/copied/grading_validation.py"
+OTHER=$(dirname "$0")
+OTHER=/unresolved
+python3 "$OTHER/clean_context.py"
+''',
+                "bench/tools/grading_policy.py": '''import subprocess
+from pathlib import Path
+subprocess.run(["python3", str(Path(work) / "validator/tools/grading_validation.py")])
+''',
+                "docs/research/unused/normalize_review.py": "import json\n",
+                "bench/import-manifest.json": '{"files":[],"repository":"fixture","revision":"unknown"}',
+            }
+            for name in ("clean_context", "review_isolation", "normalize_review", "attempt_audit", "grading_validation"):
+                sources[f"bench/tools/{name}.py"] = "import json\n"
+            for path, text in sources.items():
+                target = root / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(text)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(root), "-c", "user.name=Test", "-c", "user.email=test@example.org",
+                            "commit", "-qm", "fixture"], check=True)
+            result = inventory.census(inventory.Snapshot("HEAD", root))
+            files = {row["path"]: row for row in result["python_files"]}
+            for name, line in (("clean_context", 1), ("review_isolation", 2), ("normalize_review", 4), ("attempt_audit", 5)):
+                self.assertIn({"path": "bench/tools/dispatch.sh", "line": line, "kind": "path-reference"},
+                              files[f"bench/tools/{name}.py"]["callers"])
+            self.assertEqual(files["bench/tools/grading_validation.py"]["callers"], [
+                {"path": "bench/tools/grading_policy.py", "line": 3, "kind": "possible-name-reference"},
+                {"path": "bench/tools/dispatch.sh", "line": 6, "kind": "possible-name-reference"},
+            ])
+            self.assertIn({"path": "bench/tools/dispatch.sh", "line": 9, "kind": "possible-name-reference"},
+                          files["bench/tools/clean_context.py"]["callers"])
+            self.assertEqual(files["docs/research/unused/normalize_review.py"]["callers"], [])
+            self.assertEqual(files["docs/research/unused/normalize_review.py"]["class"], "historical-replay")
+
     def test_unknown_maintained_module_requires_assignment(self):
         with self.assertRaisesRegex(ValueError, "no migration owner"):
             inventory.responsibility("tools/unassigned.py")
