@@ -104,7 +104,7 @@ describe('detection', () => {
     expect(final.remedies.harm).toEqual({ kind: 'lower-bound', perAdmittedReview: 0, reviewFraction: 0 })
   })
 
-  test('no admitted reviews, missing assessments and unresolved recovery are unavailable, never zero', () => {
+  test('missing assessments and absent admitted reviews remain unavailable', () => {
     const pr = task('pr', [family('f')])
     const none = card(build([pr], { a: [[pr, [failed(pr), failed(pr)]]] }), 'a')
     expect(value(none.detection.all.equalProblem)).toBe(0)
@@ -116,10 +116,60 @@ describe('detection', () => {
     expect(reason(ungraded.detection.all.equalProblem)).toBe('1 admitted review awaits assessment.')
     expect(reason(ungraded.reliability.outcomes.refuted.perAdmittedReview)).toBe('1 admitted review awaits assessment.')
     expect(ungraded.reliability).toMatchObject({ admitted: 2, assessed: 1 })
-    const open = review(pr, null, { assessment: assessment(pr, [], { families: [{ familyId: 'f', outcome: 'unresolved', sufficiency: 'unassessed', claimIds: [] }] }) })
-    const unresolved = card(build([pr], { a: [[pr, [open]]] }), 'a')
-    expect(reason(unresolved.detection.all.equalPr)).toBe('1 recovery is unresolved.')
-    expect(unresolved.tasks[0]?.bands.all).toMatchObject({ repetitions: [null], low: null, high: null })
+  })
+
+  test('unresolved outcomes get zero credit without losing catches, denominators or unresolved evidence', async () => {
+    const one = task('one', [family('x', 'serious', { manifestations: ['CL-x', 'CL-y'] })])
+    const many = task('many', [family('s', 'serious'), family('m', 'other-material')])
+    const unresolved = () => review(one, null, { cost: null, outputTokens: null, assessment: assessment(one, [], { families: [
+      { familyId: 'x', outcome: 'unresolved', sufficiency: 'unassessed', claimIds: [] }] }) })
+    const partial = review(many, null, { assessment: assessment(many, ['s'], { families: [
+      { familyId: 's', outcome: 'caught', sufficiency: 'absent', claimIds: ['c-s'] },
+      { familyId: 'm', outcome: 'unresolved', sufficiency: 'unassessed', claimIds: [] }] }) })
+    const caught = review(one, null, { assessment: assessment(one, ['x'], {
+      claims: [claim('c-x', 'eligible', { familyId: 'x', canonicalId: 'CL-x' })] }) })
+    const open = unresolved()
+    const data = build([one, many], { a: [[one, [caught, open, unresolved()]], [many, [partial, review(many, ['s', 'm'])]]] })
+    const result = card(data, 'a')
+    expect(value(result.detection.all.equalProblem)).toBeCloseTo(11 / 18)
+    expect(value(result.detection.all.equalPr)).toBeCloseTo(13 / 24)
+    expect(value(result.detection.all.admittedOnly.equalProblem)).toBeCloseTo(11 / 18)
+    expect(result.detection.all.zeroCredit).toEqual({ problems: 2, outcomes: 3,
+      reason: '3 unresolved detection decisions across 2 reference problems count as zero credit. They remain in the denominator; confirmed detections still count.' })
+    expect(result.detection.serious.zeroCredit).toMatchObject({ problems: 1, outcomes: 2 })
+    expect(result.detection['other-material'].zeroCredit).toMatchObject({ problems: 1, outcomes: 1 })
+    expect(result.detection.unknown.zeroCredit).toEqual({ problems: 0, outcomes: 0, reason: null })
+    expect(result.detection.all.observed).toEqual({ caught: 4, determined: 4 })
+    expect(result.families[0]).toMatchObject({ caught: 1, missed: 0, unresolved: 2 })
+    expect(result.tasks[0]?.bands.all).toMatchObject({ repetitions: [1, 0, 0], low: 0, high: 1 })
+    expect(result.tasks[1]?.bands.all.repetitions).toEqual([0.5, 1])
+    expect(value(result.detection.all.omissions.equalPr)).toMatchObject({ low: 1 / 3, high: 0.75 })
+    expect(value(result.detection.all.grouping)).toMatchObject({ units: 4, equalProblem: 11 / 24, equalPr: 11 / 24 })
+    expect(value(result.seriousCaught.equalPr)).toBeCloseTo(2 / 3)
+    expect(reason(result.seriousMisses.repeated)).toBe('2 serious outcomes are undetermined.')
+    expect(result.cost.perTrial).toEqual({ kind: 'atLeast', value: 3 / 5,
+      reason: '2 attempts have no recorded usage and are left out, so the true cost may be higher.' })
+    expect(result.tokens.perTrial.kind).toBe('unavailable')
+    expect(open.assessment?.families[0]?.outcome).toBe('unresolved')
+    expect(recommend(data, result, result, everything(data)).impact).toEqual({ kind: 'none',
+      reasons: ['Detection recovery remains unresolved; zero-credit estimates do not establish a recommendation.'] })
+    expect(meanTaskRecall([result], 'one', 'all').annotations).toMatchObject([{ configurationId: 'a',
+      reason: '2 unresolved detection decisions across 1 reference problem count as zero credit. They remain in the denominator; confirmed detections still count.' }])
+    const configuration = data.configurations[0]
+    if (!configuration) throw new Error('Missing fixture configuration')
+    for (const estimator of ['equalProblem', 'equalPr'] as const) {
+      expect(summarize(configuration, result, { band: 'all', estimator }, { kind: 'available', value: 0 }))
+        .toMatchObject({ detectionNote: result.detection.all.zeroCredit.reason, cost: null, tokens: null })
+    }
+    const directory = await mkdtemp(join(tmpdir(), 'unresolved-scorecard-'))
+    try {
+      const path = join(directory, 'data.json')
+      await writeFile(path, JSON.stringify(data))
+      let output = ''
+      expect(await scorecardCommand(['--data', path], { out: text => { output += text }, error: text => { throw new Error(text) } })).toBe(0)
+      expect(output).toContain('Detection, all: equal-problem 61.1%; equal-PR 54.2%;')
+      expect(output).toContain(result.detection.all.zeroCredit.reason ?? '')
+    } finally { await rm(directory, { recursive: true, force: true }) }
   })
 
   test('reports per-PR rows, leave-one-PR-out deltas for both averages and repetition variation', () => {
@@ -134,9 +184,9 @@ describe('detection', () => {
     expect(value(result.omissionRange.equalProblem)).toEqual({ low: 0.5, high: 1 })
     expect(result).toMatchObject({ wins: 2, ties: 0, losses: 0, pending: 0 })
     expect(card(data, 'a').tasks[0]?.bands.all).toMatchObject({ problems: 1, low: 0, high: 1 })
-    expect(meanTaskRecall([card(data, 'a'), card(data, 'b')], 'one', 'all')).toEqual({ mean: { kind: 'available', value: 0.25 }, included: 2, selected: 2, withheld: [] })
+    expect(meanTaskRecall([card(data, 'a'), card(data, 'b')], 'one', 'all')).toEqual({ mean: { kind: 'available', value: 0.25 }, annotations: [], included: 2, selected: 2, withheld: [] })
     expect(meanTaskRecall([card(data, 'a')], 'clean', 'all')).toEqual({ mean: { kind: 'unavailable', reason: 'No selected setup has a final recall for this PR.' },
-      included: 0, selected: 1, withheld: ['No references in this band.'] })
+      annotations: [], included: 0, selected: 1, withheld: ['No references in this band.'] })
     const fixture = scorecardFixture(), all = { taskIds: fixture.tasks.map(item => item.id), concern: null }
     const partial = meanTaskRecall(['steady', 'selective', 'waiting', 'risky', 'silent', 'ungraded'].map(id => scorecard(fixture, id, all)), 'payments', 'serious')
     expect(value(partial.mean)).toBeCloseTo((1 + 1 / 6 + 1 + 0) / 4)

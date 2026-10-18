@@ -67,18 +67,18 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
     : `${result.kind}, ${result.prefer ? `prefers ${short(result.prefer)}` : 'no preference'}`}{result.reasons.length > 0 && `. ${result.reasons.join(' ')}`}</Text>
   return <Paper withBorder radius="lg" p="lg" mt="xl" className="methodology-panel">
     <Title order={3}>The scorecard, dimension by dimension</Title>
-    <Text size="sm" c="dimmed" mt="xs">Every value comes from the shared scoring kernel for the selected setups and PRs. Dimensions stay separate: there is no blended score. A numbered mark explains an unavailable value below its table.</Text>
+    <Text size="sm" c="dimmed" mt="xs">Every value comes from the shared scoring kernel for the selected setups and PRs. Dimensions stay separate: there is no blended score. A numbered mark explains a value below its table.</Text>
     <Tabs defaultValue={initialTab} mt="md">
       <Tabs.List><Tabs.Tab value="detection">Detection</Tabs.Tab><Tabs.Tab value="delivery">Delivery</Tabs.Tab><Tabs.Tab value="reliability">Claim reliability</Tabs.Tab>
         <Tabs.Tab value="remedies">Remedies</Tabs.Tab><Tabs.Tab value="controls">Controls</Tabs.Tab><Tabs.Tab value="pre-existing">Pre-existing problems raised</Tabs.Tab><Tabs.Tab value="advice">Advice benefit</Tabs.Tab>
         <Tabs.Tab value="usage">Cost and time</Tabs.Tab><Tabs.Tab value="candidates">Pending candidates ({novel.length + awaiting.length})</Tabs.Tab><Tabs.Tab value="comparison">Compare two setups</Tabs.Tab></Tabs.List>
 
       <Tabs.Panel value="detection" pt="md"><Stack>
-        <Text size="sm" className="footnote">Recovery of each reference problem is averaged over the PR's scheduled trials; a resolved trial without an admitted review counts as not caught. Both averages are shown. Problems weighted equally is the primary average for the serious and other-material bands; the unknown and all-reference bands have no preferred average. A serious reference is one the implementer had to be made aware of before release. An other-material reference earns credit when a review raises it but did not have to be raised.</Text>
+        <Text size="sm" className="footnote">Recovery of each reference problem is averaged over the PR's scheduled trials; a resolved trial without an admitted review counts as not caught. Unresolved recoveries also receive zero credit and stay in the denominator, with an annotation counting affected problems and detection decisions. Both averages are shown. Problems weighted equally is the primary average for the serious and other-material bands; the unknown and all-reference bands have no preferred average. A serious reference is one the implementer had to be made aware of before release. An other-material reference earns credit when a review raises it but did not have to be raised.</Text>
         <Text size="sm">Approved references on the selected PRs: {bands.map(item => `${coverage.bands[item]} ${bandLabels[item].toLowerCase()}`).join(' · ')}. {coverage.pendingFamilies} more {coverage.pendingFamilies === 1 ? 'awaits' : 'await'} an eligibility ruling.</Text>
         <DataTable label="Detection by impact band and average" rows={rows} rowKey={key} minWidth={1250} columns={[setup,
-          ...bands.flatMap(item => estimators.map((average): Column<Row> => ({ label: `${bandLabels[item]}, ${averages[average]}`, value: row => share(row.card.detection[item][average]) }))),
-          { label: 'All labelled serious caught', value: row => share(row.card.seriousCaught.equalPr) },
+          ...bands.flatMap(item => estimators.map((average): Column<Row> => ({ label: `${bandLabels[item]}, ${averages[average]}`, value: row => share(row.card.detection[item][average], row.card.detection[item].zeroCredit.reason) }))),
+          { label: 'All labelled serious caught', value: row => share(row.card.seriousCaught.equalPr, row.card.detection.serious.zeroCredit.reason) },
           { label: 'Repeated serious misses', value: row => reading(row.card.seriousMisses.repeated, String) }]} />
         <Text size="xs" c="dimmed" className="footnote">All labelled serious caught is the share of scheduled trials that caught every serious reference of a PR, averaged over PRs with one. A repeated serious miss is a serious reference not caught in two or more scheduled trials.</Text>
         {conflicts.length > 0 && <Text size="sm">In the {bandLabels[band].toLowerCase()} band the two averages order {conflicts.length === 1 ? 'this pair' : 'these pairs'} differently: {conflicts.map(pair => `${short(pair.a)} and ${short(pair.b)}`).join('; ')}. That ordering depends on the average chosen.</Text>}
@@ -87,7 +87,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
           { label: 'Problems / PRs', value: row => `${row.card.detection[band].problems} / ${row.card.detection[band].prs}` },
           { label: 'Observed caught / determined', value: row => `${row.card.detection[band].observed.caught} / ${row.card.detection[band].observed.determined}` },
           { label: 'Admitted reviews / scheduled trials', value: row => `${row.card.detection[band].admittedOnly.admittedReviews} / ${row.card.detection[band].admittedOnly.scheduledTrials}` },
-          { label: `Admitted reviews only, ${averages[estimator]}`, value: row => share(row.card.detection[band].admittedOnly[estimator]) },
+          { label: `Admitted reviews only, ${averages[estimator]}`, value: row => share(row.card.detection[band].admittedOnly[estimator], row.card.detection[band].zeroCredit.reason) },
           { label: 'Range with one PR left out', value: row => reading(row.card.detection[band].omissions[estimator], span) },
           { label: 'Each linked claim as its own unit', value: row => reading(row.card.detection[band].grouping, grouping => `${percent(grouping[estimator] * 100)} over ${grouping.units} units`) }]} />
         <Text size="xs" c="dimmed" className="footnote">Observed counts are outcomes determined so far and are not a final rate. The admitted-only figure excludes failed trials, so it describes delivered reviews rather than the setup. The left-out range shows sensitivity to these PRs, not a confidence interval.</Text>
@@ -241,6 +241,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
             {differences.length ? <ul className="reason-list">{differences.map(difference => <li key={difference.name}>{difference.name}: {difference.values.map(row => `${row.value} (${row.configuration.short})`).join(' against ')}</li>)}</ul>
               : <Text size="sm">The recorded client, effort, permissions and billing basis match.</Text>}
             <Text size="xs" c="dimmed" className="footnote">A difference between two setups includes these conditions; it does not isolate the review method or the model.</Text></div>
+          {[a, b].map(side => side.card.detection[band].zeroCredit.reason && <Text size="sm" key={side.configuration.id}>{side.configuration.short}: {side.card.detection[band].zeroCredit.reason}</Text>)}
           <Text size="sm">A minus B in {lowerFirst(detectionLabel(detection))}: <Value cell={reading(comparison.full[estimator].delta, value => signed(value * 100))} />.
             With {estimatorLabels[estimator === 'equalPr' ? 'equalProblem' : 'equalPr']}: <Value cell={reading(comparison.full[estimator === 'equalPr' ? 'equalProblem' : 'equalPr'].delta, value => signed(value * 100))} />.
             {' '}Across {comparison.rows.length} shared PRs with {bandLabels[band].toLowerCase()} references, A is higher on {comparison.wins}, tied on {comparison.ties} and lower on {comparison.losses}; {comparison.pending} have no final comparison.</Text>
@@ -260,7 +261,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
               const sides = [a, b].flatMap(side => side.card.tasks.find(item => item.taskId === row.taskId) ?? [])
               return <Table.Tr key={row.taskId}>
                 <Table.Td>{name(row.taskId)}</Table.Td><Table.Td>{sides[0]?.bands[band].problems ?? 'Unavailable'}</Table.Td>
-                {sides.map((side, index) => <Table.Td key={index}><Value cell={share(side.bands[band].recall)} /><Text size="xs" c="dimmed">Observed {percent(scaled(side.bands[band].low))} to {percent(scaled(side.bands[band].high))}</Text></Table.Td>)}
+                {sides.map((side, index) => <Table.Td key={index}><Value cell={share(side.bands[band].recall)} />{side.bands[band].zeroCredit.reason && <Text size="xs" c="dimmed">{side.bands[band].zeroCredit.reason}</Text>}<Text size="xs" c="dimmed">Observed {percent(scaled(side.bands[band].low))} to {percent(scaled(side.bands[band].high))}</Text></Table.Td>)}
                 <Table.Td><Value cell={reading(row.delta, value => signed(value * 100))} /></Table.Td><Table.Td>{sides.map((side, index) => <Text size="xs" key={index}>{index === 0 ? 'A' : 'B'}: {side.trials.map((trial, position) => {
                   const value = side.bands[band].repetitions[position] ?? null
                   return `#${trial.replicate} ${value === null ? 'undetermined' : percent(value * 100)}${trial.state === 'unadmitted' ? ' failed' : trial.state === 'admitted' && !trial.complete ? ' incomplete' : ''}`

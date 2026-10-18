@@ -149,6 +149,11 @@ export function scorecardFixture(): Dataset {
  */
 export function preExistingScorecardFixture(): Dataset {
   const dataset = scorecardFixture()
+  const unresolved = dataset.outcomes.find(row => row.configurationId === 'risky' && row.taskId === 'payments')?.attemptIds[1]
+  const recovery = dataset.attempts.find(attempt => attempt.id === unresolved)?.assessment?.families.find(row => row.familyId === 'M1')
+  if (!recovery) throw new Error('Fixture lacks the other-material recovery')
+  recovery.outcome = 'unresolved'
+  dataset.evidence.coverage.unresolvedRecoveries += 1
   const admit = (taskId: string, problem: NonNullable<Task['preExistingProblems']>[number], outcome: (configurationId: string, index: number) => 'raised' | 'not-raised' | 'unresolved' | null) => {
     const subject = dataset.tasks.find(task => task.id === taskId)
     if (!subject) throw new Error(`Fixture lacks the ${taskId} task`)
