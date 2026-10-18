@@ -3,11 +3,11 @@ import { ActionIcon, Alert, Anchor, Badge, Button, Checkbox, Container, Group, L
   SegmentedControl, Select, Stack, Switch, Table, Tabs, Text, TextInput, Title, Tooltip, useComputedColorScheme, useMantineColorScheme } from '@mantine/core'
 import { useMediaQuery } from '@mantine/hooks'
 import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpDown, ArrowUpRight, Check, ChevronDown, CodeXml, Database, Info, Moon, Search, Sun, X } from 'lucide-react'
-import { fetchDataset, skillReleaseLabel } from '../lib/data'
+import { fetchDataset, impactBands, skillReleaseLabel } from '../lib/data'
 import type { Configuration, Dataset, Task } from '../lib/data'
 import { bandLabels, compact, conditionDifferences, datasetStatus, detectionLabel, estimatorLabels, heroCounts, lowerBound, measured, money, percent, perReview, reading, reasonCounts, share, summarize } from '../lib/metrics'
 import type { Axis, Reading } from '../lib/metrics'
-import { bands, estimators, leaderboard, matched, meanTaskRecall, pendingCandidates, referenceCoverage } from '../lib/scoring'
+import { estimators, leaderboard, matched, meanTaskRecall, pendingCandidates, referenceCoverage } from '../lib/scoring'
 import { Chart, Mark } from './Chart'
 import type { ChartView } from './Chart'
 import { EvidenceDrawer } from './EvidenceDrawer'
@@ -17,6 +17,7 @@ import { Notes, notesFor, Value } from './Reading'
 
 type LoadState = { kind: 'loading' } | { kind: 'failed'; message: string } | { kind: 'ready'; dataset: Dataset }
 type ResultsColumn = 'setup' | 'equalProblem' | 'equalPr' | 'seriousCaught' | 'repeatedMisses' | 'cost' | 'tokens' | 'refuted' | 'completed'
+const bands = ['all', ...impactBands] as const
 const controlLabels: Record<Task['control'], string> = { 'audited-clean': 'Audited clean control', provisional: 'Provisional control',
   unaudited: 'Empty register, unaudited', 'known-problems': 'No approved reference' }
 
@@ -43,7 +44,7 @@ export function Dashboard({ dataset, now = new Date() }: { dataset: Dataset; now
   const [selectedModels, setSelectedModels] = useState(modelChoices.map(model => model.value))
   const [includeExperiments, setIncludeExperiments] = useState(false)
   const [axis, setAxis] = useState<Axis>('cost')
-  const [band, setBand] = useState<(typeof bands)[number]>('serious')
+  const [band, setBand] = useState<(typeof bands)[number]>('all')
   const [estimator, setEstimator] = useState<(typeof estimators)[number]>('equalProblem')
   const detection = { band, estimator }
   const [view, setView] = useState<ChartView>('skills')

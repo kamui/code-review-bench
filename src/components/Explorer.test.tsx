@@ -87,7 +87,7 @@ describe('scorecard page on the fixture', () => {
   })
 
   test('the task catalog mean says how many selected setups it covers and why the others are left out', () => {
-    expect(rendered).toContain('54.2% Mean of 4 of 6 selected setups. Not included: 1 scheduled trial awaits execution. (1 setup) 1 admitted review awaits assessment. (1 setup)')
+    expect(rendered).toContain('43.8% Mean of 4 of 6 selected setups. Not included: 1 scheduled trial awaits execution. (1 setup) 1 admitted review awaits assessment. (1 setup)')
     expect(rendered).toContain('Unavailable : No references in this band. (6 setups)')
   })
 
