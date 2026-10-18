@@ -137,7 +137,7 @@ export function Dashboard({ dataset, page, now = new Date() }: { dataset: Datase
     <header className="site-header"><Container size="xl" className="nav-inner">
       <Link className="brand" to="/" aria-label="codereviewbench home"><span className="brand-mark"><CodeXml size={22} strokeWidth={2} /></span><span>code<span className="brand-review">review</span>bench<span className="brand-dot">.</span></span></Link>
       <div className="header-links">
-        <nav className="top-nav" aria-label="Main navigation"><Link className="section-link" to="/" hash="scorecard">Scorecard</Link><Link to="/tasks">Tasks</Link><Link className="section-link" to="/" hash="methodology">Methodology</Link></nav>
+        <nav className="top-nav" aria-label="Main navigation"><Link className="section-link" to="/" hash="scorecard" resetScroll={false}>Scorecard</Link><Link to="/tasks">Tasks</Link><Link className="section-link" to="/" hash="methodology" resetScroll={false}>Methodology</Link></nav>
         <a className="github-link" href="https://github.com/kamui/code-review-bench" target="_blank" rel="noreferrer" aria-label="GitHub repository">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4" />
