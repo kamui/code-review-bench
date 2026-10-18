@@ -8,14 +8,17 @@ import type { Configuration, Dataset, Task } from '../lib/data'
 import { bandLabels, compact, conditionDifferences, datasetStatus, detectionLabel, estimatorLabels, heroCounts, lowerBound, measured, money, percent, perReview, reading, reasonCounts, share, summarize } from '../lib/metrics'
 import type { Axis, Reading } from '../lib/metrics'
 import { estimators, leaderboard, matched, meanTaskRecall, pendingCandidates, referenceCoverage } from '../lib/scoring'
+import type { OverviewSort } from '../lib/scoring'
 import { Chart, Mark } from './Chart'
 import type { ChartView } from './Chart'
 import { EvidenceDrawer } from './EvidenceDrawer'
 import { MethodologyViews } from './MethodologyViews'
+import { Overview } from './Overview'
 import type { Inspection } from './EvidenceDrawer'
 import { Notes, notesFor, Value } from './Reading'
 
 type LoadState = { kind: 'loading' } | { kind: 'failed'; message: string } | { kind: 'ready'; dataset: Dataset }
+type MainView = 'overview' | ChartView
 type ResultsColumn = 'setup' | 'equalProblem' | 'equalPr' | 'seriousCaught' | 'repeatedMisses' | 'cost' | 'tokens' | 'refuted' | 'completed'
 const bands = ['all', ...impactBands] as const
 const controlLabels: Record<Task['control'], string> = { 'audited-clean': 'Audited clean control', provisional: 'Provisional control',
@@ -47,10 +50,13 @@ export function Dashboard({ dataset, now = new Date() }: { dataset: Dataset; now
   const [band, setBand] = useState<(typeof bands)[number]>('all')
   const [estimator, setEstimator] = useState<(typeof estimators)[number]>('equalProblem')
   const detection = { band, estimator }
-  const [view, setView] = useState<ChartView>('skills')
+  const [view, setView] = useState<MainView>('overview')
+  const [overviewSort, setOverviewSort] = useState<OverviewSort>({ column: 'claims', direction: 'descending' })
   const [showAllLabels, setShowAllLabels] = useState(false)
   const narrow = useMediaQuery('(max-width: 700px)') ?? false
-  const chartView = narrow ? 'setups' : view
+  const chartView = narrow && view !== 'overview' ? 'setups' : view
+  const views: { label: string; value: MainView }[] = [{ label: 'Overview', value: 'overview' }, { label: 'By method', value: 'skills' }, { label: 'By setup', value: 'setups' },
+    { label: 'By model', value: 'models' }, { label: 'Frontier', value: 'tradeoff' }]
   const [query, setQuery] = useState('')
   const [area, setArea] = useState<string | null>(null)
   const [change, setChange] = useState<string | null>(null)
@@ -164,12 +170,13 @@ export function Dashboard({ dataset, now = new Date() }: { dataset: Dataset; now
         <Paper withBorder radius="lg" className="leaderboard-paper">
           <div className="chart-layout"><div className="chart-main">
             <div className="chart-toolbar">
-              {!narrow && <SegmentedControl aria-label="Chart view" value={view} onChange={value => {
-                if (value === 'skills' || value === 'setups' || value === 'models' || value === 'tradeoff') setView(value)
-              }} data={[{ label: 'By method', value: 'skills' }, { label: 'By setup', value: 'setups' }, { label: 'By model', value: 'models' }, { label: 'Frontier', value: 'tradeoff' }]} />}
-              <SegmentedControl aria-label="Compare detection against" value={axis} onChange={value => {
+              <SegmentedControl aria-label="Chart view" value={chartView} onChange={value => {
+                const next = views.find(item => item.value === value)
+                if (next) setView(next.value)
+              }} data={narrow ? views.filter(item => item.value === 'overview' || item.value === 'setups') : views} />
+              {chartView !== 'overview' && <SegmentedControl aria-label="Compare detection against" value={axis} onChange={value => {
                 if (value === 'cost' || value === 'tokens' || value === 'refuted' || value === 'time') setAxis(value)
-              }} data={[{ label: 'Cost', value: 'cost' }, { label: 'Tokens', value: 'tokens' }, { label: 'Refuted claims', value: 'refuted' }, { label: 'Time', value: 'time' }]} />
+              }} data={[{ label: 'Cost', value: 'cost' }, { label: 'Tokens', value: 'tokens' }, { label: 'Refuted claims', value: 'refuted' }, { label: 'Time', value: 'time' }]} />}
             </div>
             <div className="measure-controls">
               <Select label="Impact band" size="xs" w={190} allowDeselect={false} value={band} data={bands.map(value => ({ value, label: `${bandLabels[value]} (${coverage.bands[value]})` }))}
@@ -183,7 +190,8 @@ export function Dashboard({ dataset, now = new Date() }: { dataset: Dataset; now
               {activeFilters.length > 0 && <a className="filter-link" href="#tasks">Edit filters</a>}
               {chartView === 'tradeoff' && <Switch className="label-switch" checked={showAllLabels} onChange={event => setShowAllLabels(event.currentTarget.checked)} label="Label every point" size="xs" />}
             </div>
-            <Chart summaries={summaries} detection={detection} matching={{ included: matchedRefuted.included.length, excluded: matchedRefuted.excluded.length }} axis={axis} view={chartView} showAllLabels={showAllLabels} onSelect={id => setInspection({ kind: 'configuration', id })} />
+            {chartView === 'overview' ? <Overview summaries={summaries} detection={detection} sort={overviewSort} onSort={setOverviewSort} onSelect={id => setInspection({ kind: 'configuration', id })} />
+              : <Chart summaries={summaries} detection={detection} matching={{ included: matchedRefuted.included.length, excluded: matchedRefuted.excluded.length }} axis={axis} view={chartView} showAllLabels={showAllLabels} onSelect={id => setInspection({ kind: 'configuration', id })} />}
           </div>
           <aside className="configuration-list" aria-label="Review methods"><Group justify="space-between" mb="lg"><Text fw={650} size="sm">Review methods</Text><Text size="xs" c="dimmed">{editions.filter(edition => editionIds(edition).some(id => selected.includes(id))).length} selected</Text></Group>
             <div className="skill-switch"><Switch checked={includeExperiments} onChange={event => toggleExperiments(event.currentTarget.checked)} label="Include skill experiments" size="xs" /></div>

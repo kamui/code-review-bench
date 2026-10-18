@@ -5,10 +5,12 @@ import type { Dataset } from '../lib/data'
 import { assessment, build, claim, claims, family, preExistingScorecardFixture, remedy, review, scorecardFixture, task } from '../lib/fixture'
 import { summarize } from '../lib/metrics'
 import type { DetectionView } from '../lib/metrics'
+import type { OverviewSort } from '../lib/scoring'
 import { leaderboard, matched, scorecard } from '../lib/scoring'
 import { Chart } from './Chart'
 import { Dashboard } from './Explorer'
 import { MethodologyViews, scorecardTabs } from './MethodologyViews'
+import { Overview } from './Overview'
 import { SeriousMisses } from './SeriousMisses'
 
 const now = new Date('2026-10-03T12:00:00Z')
@@ -167,6 +169,48 @@ describe('pre-existing problems raised on the fixture', () => {
     const rendered = panels(fixture)
     expect(rendered).toContain('Admitted control reviews Without a refuted or unproven claim With a refuted or unproven claim With an unresolved claim')
     expect(rendered).not.toContain('refuted or unsupported')
+  })
+})
+
+describe('overview', () => {
+  const fixture = scorecardFixture()
+  const markup = renderToStaticMarkup(<MantineProvider><Dashboard dataset={fixture} now={now} /></MantineProvider>)
+  const shown = text(markup)
+  const setups = (rendered: string) => [...rendered.matchAll(/aria-label="([^"]+?)\. Inspect evidence"/g)].map(match => match[1])
+  function overview(sort: OverviewSort) {
+    const selected = fixture.configurations.filter(configuration => !configuration.experimental)
+    const board = leaderboard(fixture, { selected: selected.map(item => item.id), candidateTaskIds: fixture.tasks.map(item => item.id), concern: null })
+    const summaries = selected.flatMap(configuration => board.cards.flatMap(card => card.configurationId === configuration.id
+      ? [summarize(configuration, card, { band: 'all', estimator: 'equalProblem' }, { kind: 'unavailable', reason: 'Not compared.' })] : []))
+    return renderToStaticMarkup(<MantineProvider><Overview summaries={summaries} detection={{ band: 'all', estimator: 'equalProblem' }} sort={sort} onSort={() => {}} onSelect={() => {}} /></MantineProvider>)
+  }
+
+  test('is the default view, sorted by problem claims per review with unavailable values last, and hides the detection axis control', () => {
+    expect(shown).toContain('Sorted by problem claims per review, most first. Setups without a value come last.')
+    expect(markup).not.toContain('Compare detection against')
+    expect(markup).toMatch(/aria-sort="descending"[^>]*>(?:<[^>]+>)*<span class="overview-title">True claims per review/)
+    expect(setups(markup).slice(0, 6)).toEqual(['ce-code-review / Fixture A / High', 'Claude built-in / Fixture A / High', 'ce-code-review / Fixture B / High',
+      'ce-code-review / Fixture C / High', 'Claude built-in / Fixture B / High', 'Claude built-in / Fixture C / High'])
+    expect(shown).toContain('Problem claims per review Unavailable 1 : 4 admitted reviews were graded before these labels.')
+    expect(shown).toContain('Refuted or unproven 22.2%')
+    expect(shown).toContain('Cost per trial ≥ $0.37')
+    expect(shown).toContain('Refuted or unproven: Share of admitted reviews with at least one refuted or unproven claim. Hatched: reviews whose only doubt is an unresolved claim.')
+  })
+
+  test('each claim segment names its label and rate, and a problem segment the known problems of its band caught', () => {
+    expect(markup).toContain('aria-label="Problem, other material · 0.33 claims per review · caught 2 of 3 other material known problems"')
+    expect(markup).toContain('aria-label="Minor defect · 0.17 claims per review"')
+    expect(markup).not.toMatch(/aria-label="Minor defect[^"]*caught/)
+  })
+
+  test('a header sort states its rule and keeps setups without the value last in both directions', () => {
+    const cheapest = overview({ column: 'cost', direction: 'ascending' }), dearest = overview({ column: 'cost', direction: 'descending' })
+    expect(text(cheapest)).toContain('Sorted by cost per scheduled trial, lowest first. Setups without a value come last.')
+    expect(setups(cheapest)).toEqual(['Claude built-in / Fixture C / High', 'ce-code-review / Fixture C / High', 'Claude built-in / Fixture A / High',
+      'ce-code-review / Fixture A / High', 'ce-code-review / Fixture B / High', 'Claude built-in / Fixture B / High'])
+    expect(setups(dearest).slice(-2)).toEqual(['ce-code-review / Fixture B / High', 'Claude built-in / Fixture B / High'])
+    expect(cheapest).toMatch(/aria-sort="ascending"[^>]*>(?:<[^>]+>)*<span class="overview-title">Cost per scheduled trial/)
+    expect(text(overview({ column: 'setup', direction: 'ascending' }))).toContain('Sorted by setup name, A to Z.')
   })
 })
 
