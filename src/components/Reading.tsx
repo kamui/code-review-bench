@@ -17,7 +17,7 @@ export function Value({ cell, notes = [] }: { cell: Cell; notes?: Note[] }) {
 
 export function Notes({ notes }: { notes: Note[] }) {
   if (!notes.length) return null
-  return <ol className="table-notes" aria-label="Why values are unavailable">
+  return <ol className="table-notes" aria-label="Notes on these values">
     {notes.map(note => <li key={note.reason}>{note.reason} <span className="note-count">({note.count} {note.count === 1 ? 'value' : 'values'})</span></li>)}
   </ol>
 }

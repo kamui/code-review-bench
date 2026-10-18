@@ -2,7 +2,7 @@ import { parseArgs } from 'node:util'
 import { datasetSchema } from '../src/lib/data'
 import type { Dataset } from '../src/lib/data'
 import { bands, leaderboard, matched, orderingConflicts, preExistingLabels, recommend } from '../src/lib/scoring'
-import type { Measure, Scorecard } from '../src/lib/scoring'
+import type { Bounded, Measure, Scorecard } from '../src/lib/scoring'
 
 const usage = `Usage: bun tools/scorecard.ts [--data PATH] [--configuration ID]... [--task ID]... [--concern LABEL] [--json]
 
@@ -11,7 +11,8 @@ setups are selected, as in the explorer. Tasks are the PRs every selected standa
 Exit codes: 0 printed; 1 an unknown configuration or task; 2 the export cannot be read or parsed.`
 
 const rate = (measure: Measure) => measure.kind === 'available' ? `${(measure.value * 100).toFixed(1)}%` : `unavailable (${measure.reason})`
-const figure = (measure: Measure, digits = 2) => measure.kind === 'available' ? measure.value.toFixed(digits) : `unavailable (${measure.reason})`
+const figure = (measure: Bounded, digits = 2, unit = '') => measure.kind === 'available' ? `${measure.value.toFixed(digits)}${unit}`
+  : measure.kind === 'atLeast' ? `≥ ${measure.value.toFixed(digits)}${unit} (${measure.reason})` : `unavailable (${measure.reason})`
 const reasons = (counts: Record<string, number>) => Object.entries(counts).map(([reason, count]) => `${count} ${reason}`).join('; ') || 'none'
 
 function report(dataset: Dataset, selected: string[], candidateTaskIds: string[], concern: string | null) {
@@ -53,7 +54,7 @@ function lines(card: Scorecard) {
         ...counts.rows.map(row => `  ${row.problemId}: observed raised ${row.raised} times; ${row.assessed} assessments; ${row.unresolved} unresolved.`)]
     }),
     `Advice: ${advice.supported} supported and ${advice.unsupported} unsupported sampled dossiers from ${advice.sampledReviews}/${advice.admitted} admitted reviews.`,
-    `Cost per scheduled trial: ${figure(card.cost.perTrial, 4)} USD over ${card.cost.attempts} attempts. Median completed time: ${card.time.summary.kind === 'available' ? `${card.time.summary.value.median.toFixed(0)} s` : `unavailable (${card.time.summary.reason})`}; ${card.time.completed}/${card.time.scheduled} trials completed.`, '']
+    `Cost per scheduled trial: ${figure(card.cost.perTrial, 4, ' USD')} over ${card.cost.attempts} attempts. Median completed time: ${card.time.summary.kind === 'available' ? `${card.time.summary.value.median.toFixed(0)} s` : `unavailable (${card.time.summary.reason})`}; ${card.time.completed}/${card.time.scheduled} trials completed.`, '']
 }
 
 type Output = { out: (text: string) => void; error: (text: string) => void }

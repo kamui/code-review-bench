@@ -10,15 +10,15 @@ import { assessment, build, claim, claims, failed, family, remedy, review, score
 import type { Trial } from './fixture'
 import { summarize } from './metrics'
 import { comparisonTasks, leaderboard, matched, meanTaskRecall, orderingConflicts, pairwise, pendingCandidates, preExistingLabels, recommend, referenceCoverage, scorecard } from './scoring'
-import type { Measure } from './scoring'
+import type { Bounded } from './scoring'
 
 const card = (data: Dataset, id: string, concern: string | null = null) => scorecard(data, id, { taskIds: data.tasks.map(item => item.id), concern })
 const everything = (data: Dataset) => ({ taskIds: data.tasks.map(item => item.id), concern: null })
-function value<T>(measure: Measure<T>): T {
-  if (measure.kind === 'unavailable') throw new Error(`unavailable: ${measure.reason}`)
+function value<T>(measure: Bounded<T>): T {
+  if (measure.kind !== 'available') throw new Error(`${measure.kind}: ${measure.reason}`)
   return measure.value
 }
-const reason = (measure: Measure<unknown>) => measure.kind === 'unavailable' ? measure.reason : 'available'
+const reason = (measure: Bounded<unknown>) => measure.kind === 'available' ? 'available' : measure.reason
 
 describe('detection', () => {
   test('serious recall can be 100% against 0% while all-reference recovery is 20% against 80%', () => {
@@ -356,7 +356,7 @@ describe('serious misses, reference coverage and pending candidates', () => {
 })
 
 describe('cost and time', () => {
-  test('cost divides every attempt by scheduled trials and missing usage is unavailable', () => {
+  test('cost divides every attempt by scheduled trials', () => {
     const pr = task('pr', [])
     const lost = failed(pr, { cost: 2, outputTokens: 200, durationSeconds: 20 })
     const data = build([pr], { a: [[pr, [{ attempts: [lost, review(pr, [], { cost: 3, outputTokens: 300, durationSeconds: 40 })] }, review(pr, [], { durationSeconds: 120 })]]] })
@@ -365,10 +365,27 @@ describe('cost and time', () => {
     expect(value(result.tokens.perTrial)).toBe(300)
     expect(value(result.time.summary)).toEqual({ median: 90, mean: 90, q1: 75, q3: 105 })
     expect(result.time).toMatchObject({ completed: 2, scheduled: 2, failed: 0, incomplete: 0, missing: 0, tasks: 1 })
-    const unmetered = card(build([pr], { a: [[pr, [review(pr, [], { cost: null, durationSeconds: null }), failed(pr), review(pr, [], { complete: false })]]] }), 'a')
-    expect(reason(unmetered.cost.perTrial)).toBe('1 attempt has no recorded usage.')
+    const unmetered = card(build([pr], { a: [[pr, [review(pr, [], { cost: null, outputTokens: null, durationSeconds: null }), failed(pr), review(pr, [], { complete: false })]]] }), 'a')
+    expect(unmetered.cost.perTrial).toEqual({ kind: 'atLeast', value: 2 / 3,
+      reason: '1 attempt has no recorded usage and is left out, so the true cost may be higher.' })
+    expect(reason(unmetered.tokens.perTrial)).toBe('1 attempt has no recorded usage.')
     expect(reason(unmetered.time.summary)).toBe('1 completed trial has no recorded duration.')
     expect(unmetered.time).toMatchObject({ completed: 1, scheduled: 3, failed: 1, incomplete: 1, missing: 1 })
+  })
+
+  test('partly metered attempts give a lower bound and attempts with no usage at all leave cost unavailable', () => {
+    const pr = task('pr', [])
+    const partial = (low: number) => failed(pr, { cost: null, costLowerBound: low })
+    const bounded = card(build([pr], { a: [[pr, [{ attempts: [partial(0.5), review(pr, [])] }, review(pr, [])]]] }), 'a')
+    expect(bounded.cost.perTrial).toEqual({ kind: 'atLeast', value: 1.25, reason: "1 attempt's usage was only partly recorded." })
+    expect(bounded.cost).toMatchObject({ total: 2, measuredAttempts: 2, attempts: 3 })
+    const both = card(build([pr], { a: [[pr, [partial(1), partial(1), review(pr, [], { cost: null })]]] }), 'a')
+    expect(both.cost.perTrial).toEqual({ kind: 'atLeast', value: 2 / 3, reason:
+      "2 attempts' usage was only partly recorded. 1 attempt has no recorded usage and is left out, so the true cost may be higher." })
+    const unrecorded = card(build([pr], { a: [[pr, [review(pr, [], { cost: null }), failed(pr, { cost: null })]]] }), 'a')
+    expect(unrecorded.cost.perTrial).toEqual({ kind: 'unavailable', reason: '2 attempts have no recorded usage.' })
+    const waiting = card(build([pr], { a: [[pr, [partial(1), { attempts: [failed(pr)], pending: true }]]] }), 'a')
+    expect(waiting.cost.perTrial).toEqual({ kind: 'unavailable', reason: '1 scheduled trial awaits execution.' })
   })
 })
 
