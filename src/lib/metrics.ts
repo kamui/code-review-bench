@@ -3,7 +3,7 @@ import type { Band, Bounded, Estimator, Measure, Scorecard } from './scoring'
 
 export type Axis = 'cost' | 'tokens' | 'refuted' | 'time'
 export type DetectionView = { band: Band; estimator: Estimator }
-export type Reading = { text: string; reason: string | null }
+export type Reading = { text: string; reason: string | null; annotation?: string }
 
 export const bandLabels: Record<Band, string> = { serious: 'Serious', 'other-material': 'Other material', unknown: 'Unknown impact', all: 'All references' }
 export const estimatorLabels: Record<Estimator, string> = { equalProblem: 'problems weighted equally', equalPr: 'PRs weighted equally' }
@@ -31,6 +31,7 @@ export type Summary = {
   configuration: Configuration
   card: Scorecard
   detection: number | null
+  detectionNote: string | null
   range: { low: number; high: number } | null
   cost: number | null
   tokens: number | null
@@ -48,7 +49,7 @@ export function summarize(configuration: Configuration, card: Scorecard, view: D
   const recall = card.detection[view.band], range = measured(recall.omissions[view.estimator]), time = measured(card.time.summary)
   const refuted = matchedRefuted
   return {
-    configuration, card, detection: points(recall[view.estimator]),
+    configuration, card, detection: points(recall[view.estimator]), detectionNote: recall.zeroCredit.reason,
     range: range && { low: range.low * 100, high: range.high * 100 },
     cost: measured(card.cost.perTrial), tokens: measured(card.tokens.perTrial), refuted: measured(refuted),
     time: time && { ...time, reviews: card.time.completed, tasks: card.time.tasks },
@@ -89,5 +90,8 @@ export const compact = (value: number | null): string => value === null ? '—'
   : new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value)
 
 export const duration = (seconds: number): string => seconds < 60 ? `${Math.round(seconds)} s` : `${(seconds / 60).toFixed(1)} min`
-export const share = (measure: Measure): Reading => reading(measure, value => percent(value * 100))
+export const share = (measure: Measure, annotation: string | null = null): Reading => ({
+  ...reading(measure, value => percent(value * 100)),
+  ...measure.kind === 'available' && annotation ? { annotation } : {},
+})
 export const perReview = (measure: Measure): Reading => reading(measure, value => value.toFixed(2))
