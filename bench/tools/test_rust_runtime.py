@@ -333,11 +333,11 @@ class RealBuilds(unittest.TestCase):
         self.crate = self.repo / "rust/fixture-tool"
         (self.crate / "src").mkdir(parents=True)
         self.git("init", "-q")
-        release = dict(line.split(": ", 1) for line in subprocess.check_output(["rustc", "-vV"], cwd=self.crate, text=True)
-                       .splitlines() if ": " in line)["release"]
+        self.release = dict(line.split(": ", 1) for line in subprocess.check_output(["rustc", "-vV"], cwd=self.crate, text=True)
+                            .splitlines() if ": " in line)["release"]
         (self.crate / "Cargo.toml").write_text('[package]\nname = "fixture-tool"\nversion = "0.1.0"\nedition = "2021"\n'
                                                '[profile.release]\noverflow-checks = true\n', encoding="utf-8")
-        (self.crate / "rust-toolchain.toml").write_text(f'[toolchain]\nchannel = "{release}"\n', encoding="utf-8")
+        (self.crate / "rust-toolchain.toml").write_text(f'[toolchain]\nchannel = "{self.release}"\n', encoding="utf-8")
         (self.crate / ".gitignore").write_text("/target/\n", encoding="utf-8")
         self.commit("one")
         self.store = self.root / "store"
@@ -396,14 +396,37 @@ class RealBuilds(unittest.TestCase):
             (self.crate / "src/extra.rs").unlink()
             (self.crate / "rust-toolchain.toml").write_text('[toolchain]\nchannel = "1.0.0"\n', encoding="utf-8")
             self.git("commit", "-qam", "old toolchain")
-            with self.assertRaisesRegex(rust_runtime.Refused, "pins 1.0.0"):
-                rust_runtime.build(self.crate, self.repo, Path(scratch))
+            # Without an override rustup would switch to the pinned release before the check could see the mismatch.
+            with patch.dict(os.environ, {"RUSTUP_TOOLCHAIN": self.release}):
+                with self.assertRaisesRegex(rust_runtime.Refused, f"the active rustc is {self.release}; .* pins 1.0.0"):
+                    rust_runtime.build(self.crate, self.repo, Path(scratch))
             home = self.root / "cargo-home"
             home.mkdir()
             (home / "config.toml").write_text("[build]\nrustflags = []\n", encoding="utf-8")
             with patch.dict(os.environ, {"CARGO_HOME": str(home)}):
                 with self.assertRaisesRegex(rust_runtime.Refused, "cargo configuration a receipt cannot restore"):
                     rust_runtime.build(self.crate, self.repo, Path(scratch))
+        self.assertFalse(self.store.exists())
+
+    def test_build_metadata_git_does_not_track_or_a_source_override_is_refused(self):
+        for name in ("Cargo.lock", "rust-toolchain.toml"):
+            with self.subTest(name=name):
+                self.git("rm", "-q", "--cached", f"rust/fixture-tool/{name}")
+                (self.crate / ".gitignore").write_text(f"/target/\n/{name}\n", encoding="utf-8")
+                self.git("commit", "-qam", f"ignore {name}")
+                self.assertEqual(self.git("status", "--porcelain"), "")
+                with tempfile.TemporaryDirectory(dir=self.root) as scratch:
+                    with self.assertRaisesRegex(rust_runtime.Refused, f"rust/fixture-tool does not track {name}"):
+                        rust_runtime.build(self.crate, self.repo, Path(scratch))
+                (self.crate / ".gitignore").write_text("/target/\n", encoding="utf-8")
+                self.git("add", ".")
+                self.git("commit", "-qm", f"track {name} again")
+        manifest = (self.crate / "Cargo.toml").read_text(encoding="utf-8")
+        (self.crate / "Cargo.toml").write_text(manifest + '[patch.crates-io]\nserde = { path = "vendor/serde" }\n', encoding="utf-8")
+        self.git("commit", "-qam", "a source override")
+        with tempfile.TemporaryDirectory(dir=self.root) as scratch:
+            with self.assertRaisesRegex(rust_runtime.Refused, r"Cargo.toml has \[patch\] sections"):
+                rust_runtime.build(self.crate, self.repo, Path(scratch))
         self.assertFalse(self.store.exists())
 
     def test_a_crate_inside_another_cargo_workspace_is_refused(self):
@@ -454,7 +477,14 @@ class RealBuilds(unittest.TestCase):
         self.git("add", ".")
         self.git("commit", "-qm", "path dependency")
         with tempfile.TemporaryDirectory(dir=self.root) as scratch:
-            with self.assertRaisesRegex(rust_runtime.Refused, "not tracked in rust/fixture-tool.*sibling/src/lib.rs"):
+            with self.assertRaisesRegex(rust_runtime.Refused, "depends on local packages whose manifests it does not track: .*sibling/Cargo.toml"):
+                rust_runtime.build(self.crate, self.repo, Path(scratch))
+        (self.crate / "Cargo.toml").write_text(manifest + '[dependencies]\nsibling = { path = "../sibling", optional = true }\n', encoding="utf-8")
+        (self.crate / "src/main.rs").write_text('fn main() { println!("one"); }\n', encoding="utf-8")
+        subprocess.run(["cargo", "generate-lockfile", "--offline"], cwd=self.crate, check=True, capture_output=True)
+        self.git("commit", "-qam", "an optional path dependency that is never compiled")
+        with tempfile.TemporaryDirectory(dir=self.root) as scratch:
+            with self.assertRaisesRegex(rust_runtime.Refused, "depends on local packages whose manifests it does not track: .*sibling/Cargo.toml"):
                 rust_runtime.build(self.crate, self.repo, Path(scratch))
         (self.crate / "Cargo.toml").write_text(manifest, encoding="utf-8")
         (self.repo / "outside.txt").write_text("outside\n", encoding="utf-8")
