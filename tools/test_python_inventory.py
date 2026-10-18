@@ -137,7 +137,7 @@ class InventoryTests(unittest.TestCase):
             self.assertNotIn("do not read or export", json.dumps(result))
             self.assertEqual(before, {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()})
 
-    def test_observation_output_cannot_alias_the_census(self):
+    def test_observation_cli_refuses_census_options(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             script = root / "tools/python_inventory.py"
@@ -152,20 +152,19 @@ class InventoryTests(unittest.TestCase):
             os.link(census, hardlink)
             command = [sys.executable, str(script), "--observe-runtime", "--work-root", str(root / "work"),
                        "--queue-root", str(root / "queues")]
-            for output in ([], ["--output", str(census)], ["--output", inventory.DESTINATION],
+            for output in (["--check"], ["--ref", "HEAD"], ["--output", str(census)], ["--output", inventory.DESTINATION],
                            ["--output", "tools/../" + inventory.DESTINATION], ["--output", str(alias)],
                            ["--output", str(hardlink)]):
                 with self.subTest(output=output):
                     result = subprocess.run(command + output, cwd=root, capture_output=True, text=True)
                     self.assertNotEqual(result.returncode, 0)
-                    self.assertIn("requires a separate --output", result.stderr)
+                    self.assertIn("emits JSON to stdout", result.stderr)
                     self.assertEqual(census.read_bytes(), b"retained census")
-            output = root / "observation.json"
-            subprocess.run(command + ["--output", str(output)], cwd=root, capture_output=True, check=True)
-            self.assertEqual(json.loads(output.read_text())["workspaces"], [])
+            result = subprocess.run(command, cwd=root, capture_output=True, text=True, check=True)
+            self.assertEqual(json.loads(result.stdout)["workspaces"], [])
             self.assertEqual(census.read_bytes(), b"retained census")
 
-    def test_observation_output_preserves_observed_roots_and_existing_files(self):
+    def test_observation_cli_leaves_runtime_paths_unchanged(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             script = root / "tools/python_inventory.py"
@@ -196,6 +195,7 @@ class InventoryTests(unittest.TestCase):
                       for p in base.rglob("*") if p.is_file()}
             for output in (stop, pin, controller, attempt / "new.json", queue / "new.json",
                            alias / "unfinished/att-001/new.json", hardlink, symlink, existing,
+                           root / "new-observation.json",
                            root / ".local/new.json", root / ".bench/new.json"):
                 with self.subTest(output=output):
                     result = subprocess.run(command + ["--output", str(output)], cwd=root,
@@ -207,9 +207,9 @@ class InventoryTests(unittest.TestCase):
                     self.assertEqual(existing.read_text(), "retained observation")
             self.assertFalse((root / ".local").exists())
             self.assertFalse((root / ".bench").exists())
-            output = root / "new-observation.json"
-            subprocess.run(command + ["--output", str(output)], cwd=root, capture_output=True, check=True)
-            self.assertEqual(json.loads(output.read_text())["queues"][0]["launches_without_saved_end"],
+            self.assertFalse((root / "new-observation.json").exists())
+            result = subprocess.run(command, cwd=root, capture_output=True, text=True, check=True)
+            self.assertEqual(json.loads(result.stdout)["queues"][0]["launches_without_saved_end"],
                              {"launch-1": "unfinished"})
             self.assertEqual(before, {str(p.relative_to(root)): p.read_bytes() for base in (work, queues)
                                      for p in base.rglob("*") if p.is_file()})
