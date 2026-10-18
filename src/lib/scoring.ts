@@ -1,4 +1,4 @@
-import { claimOutcomes, impactBands } from './data'
+import { claimLabels, claimOutcomes, impactBands } from './data'
 import type { Assessment, Attempt, Dataset, Family, Task } from './data'
 
 export const bands = [...impactBands, 'all'] as const
@@ -10,6 +10,9 @@ export type Estimator = (typeof estimators)[number]
 export type ClaimOutcome = (typeof claimOutcomes)[number]
 export type ConditionalMetric = (typeof conditionalMetrics)[number]
 export type PreExistingLabel = (typeof preExistingLabels)[number]
+export const labelSegments = ['problem:serious', 'problem:other-material', 'problem:unknown', 'minor-defect', 'suggestion:improvement',
+  'suggestion:outside-supported-use', 'suggestion:relied-on', 'suggestion:known-cause', 'outside-this-change', 'refuted', 'unproven', 'unresolved'] as const
+export type LabelSegment = (typeof labelSegments)[number]
 export type Measure<T = number> = { kind: 'available'; value: T } | { kind: 'unavailable'; reason: string }
 export type Bounded<T = number> = Measure<T> | { kind: 'atLeast'; value: T; reason: string }
 export type Selection = { taskIds: string[]; concern: string | null }
@@ -51,6 +54,12 @@ const byBand = <V>(value: (band: Band) => V): Record<Band, V> =>
 const byOutcome = <V>(value: (outcome: ClaimOutcome) => V): Record<ClaimOutcome, V> => ({
   eligible: value('eligible'), refuted: value('refuted'), unsupported: value('unsupported'), advisory: value('advisory'),
   inconsequential: value('inconsequential'), 'scope-excluded': value('scope-excluded'), unresolved: value('unresolved') })
+const byLabel = <V>(value: (segment: LabelSegment) => V): Record<LabelSegment, V> => ({
+  'problem:serious': value('problem:serious'), 'problem:other-material': value('problem:other-material'), 'problem:unknown': value('problem:unknown'),
+  'minor-defect': value('minor-defect'), 'suggestion:improvement': value('suggestion:improvement'),
+  'suggestion:outside-supported-use': value('suggestion:outside-supported-use'), 'suggestion:relied-on': value('suggestion:relied-on'),
+  'suggestion:known-cause': value('suggestion:known-cause'), 'outside-this-change': value('outside-this-change'), refuted: value('refuted'),
+  unproven: value('unproven'), unresolved: value('unresolved') })
 const matchesConcern = (family: Family, concern: string | null) => concern === null || family.concerns.includes(concern)
 
 export const references = (task: Task, concern: string | null) =>
@@ -258,13 +267,47 @@ const admittedReviews = (ran: Cell[]) => ran.flatMap(cell => cell.trials.flatMap
 const assessed = (attempt: Attempt) => attempt.assessment?.state === 'assessed' ? [attempt.assessment] : []
 const pendingReason = (pending: number) => pending ? `${plural(pending, 'scheduled trial awaits', 'scheduled trials await')} execution.` : null
 
+type Claim = Assessment['claims'][number]
+const hasLabel = (claim: Claim) => claimLabels.some(label => label === claim.nativeOutcome)
+
+/** A problem claim takes the most severe band among the known problems it says what goes wrong for. */
+function labelSegment(families: Family[], claim: Claim): Measure<LabelSegment> {
+  switch (claim.nativeOutcome) {
+    case 'problem': {
+      const named = new Set([...(claim.knownProblems ?? []).filter(fact => fact.saysWhat === 'yes').map(fact => fact.familyId), ...claim.familyId === null ? [] : [claim.familyId]])
+      const band = impactBands.find(impact => families.some(family => named.has(family.id) && family.impact === impact))
+      return band ? available<LabelSegment>(`problem:${band}`) : unavailable('A problem claim names no known problem of its PR.')
+    }
+    case 'suggestion': return claim.kind ? available<LabelSegment>(`suggestion:${claim.kind}`) : unavailable('A suggestion has no recorded kind.')
+    case 'minor-defect': case 'outside-this-change': case 'refuted': case 'unproven': case 'unresolved': return available(claim.nativeOutcome)
+    default: return unavailable('A claim was graded before these labels.')
+  }
+}
+
+function labelCounts(families: Family[], assessment: Assessment): Measure<Map<LabelSegment, number>> {
+  const groups = new Map<LabelSegment, Set<string>>()
+  for (const claim of assessment.claims) {
+    const segment = labelSegment(families, claim)
+    if (segment.kind === 'unavailable') return segment
+    groups.set(segment.value, (groups.get(segment.value) ?? new Set()).add(claim.duplicateGroup ?? claim.id))
+  }
+  return available(new Map([...groups].map(([segment, ids]) => [segment, ids.size])))
+}
+
 function reliability(ran: Cell[], gap: string | null) {
   const reviews = admittedReviews(ran), pending = delivery(ran).pending
   const facts = reviews.flatMap(assessed).map(reviewFacts)
   const delivered = gap ?? pendingReason(pending) ?? (reviews.length ? null : 'No admitted reviews.')
   const rated = delivered ?? (facts.length < reviews.length ? `${plural(reviews.length - facts.length, 'admitted review awaits', 'admitted reviews await')} assessment.` : null)
   const items = sum(reviews.map(review => review.observedItems))
+  const graded = ran.flatMap(cell => admittedReviews([cell]).flatMap(assessed).map(assessment => ({ families: cell.task.families, assessment })))
+  const earlier = graded.filter(({ assessment }) => assessment.claims.some(claim => !hasLabel(claim))).length
+  const labelled = rated ?? (earlier ? `${plural(earlier, 'admitted review was', 'admitted reviews were')} graded before these labels.` : null)
+  const counts = collect(graded.map(({ families, assessment }) => labelCounts(families, assessment)))
+  const labelRate = (segment: LabelSegment): Measure => labelled !== null ? unavailable(labelled)
+    : counts.kind === 'unavailable' ? counts : available(sum(counts.value.map(found => found.get(segment) ?? 0)) / reviews.length)
   return { admitted: reviews.length, assessed: facts.length, pending,
+    labelsPerAdmittedReview: byLabel(labelRate),
     outcomes: byOutcome(outcome => {
       const distinct = sum(facts.map(fact => fact.outcomes[outcome].distinct))
       const containing = facts.filter(fact => fact.outcomes[outcome].distinct > 0).length

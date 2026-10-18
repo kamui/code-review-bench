@@ -5,6 +5,7 @@ import { bandLabels, compact, conditionDifferences, detectionLabel, duration, es
 import type { DetectionView, Reading } from '../lib/metrics'
 import { bands, candidates as pendingFamilies, conditionalMetrics, estimators, matched, orderingConflicts, pairwise, pendingCandidates, preExistingLabels, recommend, referenceCoverage } from '../lib/scoring'
 import type { ConditionalMetric, Estimator, Scorecard, Selection } from '../lib/scoring'
+import { ClaimLabels } from './ClaimLabels'
 import type { Inspection } from './EvidenceDrawer'
 import { DataTable, Value } from './Reading'
 import type { Column } from './Reading'
@@ -125,11 +126,11 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
           { label: 'Unresolved per admitted review', value: row => perReview(row.card.reliability.outcomes.unresolved.perAdmittedReview) },
           { label: 'Admitted reviews with a refuted claim', value: row => share(row.card.reliability.outcomes.refuted.reviewFraction) },
           { label: 'Admitted reviews with an unsupported claim', value: row => share(row.card.reliability.outcomes.unsupported.reviewFraction) },
-          { label: 'Advisory claims', value: row => String(row.card.reliability.outcomes.advisory.distinct) },
-          { label: 'Non-material observations', value: row => String(row.card.reliability.outcomes.inconsequential.distinct) },
           { label: 'Scope exclusions', value: row => String(row.card.reliability.outcomes['scope-excluded'].distinct) },
           { label: 'Repeated claims', value: row => String(row.card.reliability.duplicates) }, { label: 'Mixed items', value: row => String(row.card.reliability.mixedItems) }]} />
         <Text size="xs" c="dimmed" className="footnote">Claim counts are distinct claims in assessed admitted reviews. Repeated claims count extra occurrences; mixed items hold claims with different outcomes. Item counts measure volume, not reading time.</Text>
+        <Title order={4}>Claim labels per admitted review</Title>
+        <ClaimLabels rows={rows.map(row => ({ id: key(row), label: row.configuration.short, rates: row.card.reliability.labelsPerAdmittedReview }))} />
         <Title order={4}>Matched on commonly admitted PRs</Title>
         <Group align="end"><Select label="Matched measure" aria-label="Matched measure" value={metric} w={360} allowDeselect={false}
           data={conditionalMetrics.map(item => ({ value: item, label: matchedLabels[item] }))} onChange={value => { const next = conditionalMetrics.find(item => item === value); if (next) setMetric(next) }} /></Group>

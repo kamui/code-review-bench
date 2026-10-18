@@ -66,7 +66,7 @@ class ExportTest(unittest.TestCase):
                 'state': 'assessed',
                 'families': [{'familyId': 'GT-t1', 'outcome': 'caught', 'sufficiency': 'absent', 'claimIds': ['c1'], 'causeOnly': False}],
                 'claims': [{'id': 'c1', 'itemId': 'item-0', 'outcome': 'eligible', 'familyId': 'GT-t1',
-                            'canonicalId': 'CL-t1', 'duplicateGroup': None, 'nativeOutcome': 'eligible', 'knownProblems': [], 'preExistingProblems': [], 'preExistingCandidateId': None}],
+                            'canonicalId': 'CL-t1', 'duplicateGroup': None, 'nativeOutcome': 'eligible', 'kind': None, 'knownProblems': [], 'preExistingProblems': [], 'preExistingCandidateId': None}],
                 'preExistingProblems': None,
                 'recommendations': [], 'remedyInventory': 'complete', 'advice': []})
             self.assertFalse(any(key in result['attempts'][0] for key in ('recovered', 'falseFindings', 'score')))
@@ -155,6 +155,9 @@ class ExportTest(unittest.TestCase):
                 claim['outcome'] = native
                 projected = exporter.assessment(review)['claims'][0]
                 self.assertEqual((projected['nativeOutcome'], projected['outcome']), (native, category))
+            for kind in ['improvement', 'outside-supported-use', 'relied-on', 'known-cause']:
+                claim['kind'] = kind
+                self.assertEqual(exporter.assessment(review)['claims'][0]['kind'], kind)
 
     def test_pending_candidates_are_exported_and_keep_an_audited_control_provisional(self):
         with TemporaryDirectory() as directory:
