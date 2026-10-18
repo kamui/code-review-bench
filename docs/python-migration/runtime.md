@@ -56,7 +56,9 @@ It refuses what a receipt could not restore:
 
 The crate's Git tree then covers every local input that cargo records, and `Cargo.lock` covers
 registry and Git dependencies. A build script or procedural macro that reads a file without declaring
-it is not detected; `usage-pilot` has neither. The build runs
+it is not detected; `usage-pilot` has neither. The installed toolchain, the system linker and Cargo's
+registry and Git caches are trusted as installed: the receipt records the `rustc` and `cargo`
+identities, but nothing re-verifies those files' contents. The build runs
 `cargo build --locked --offline --release --target <host> --bin <bin>` in a temporary target directory.
 The build sees only `PATH`, `HOME`, `CARGO_HOME`, `RUSTUP_HOME`, `RUSTUP_TOOLCHAIN` and `TMPDIR`, so
 `RUSTFLAGS`, wrappers, profile overrides and any variable a crate reads with `env!` are absent. A
