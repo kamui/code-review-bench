@@ -38,9 +38,13 @@ The pin that queues and runs use is the executable's SHA-256 together with the r
    python3 bench/tools/rust_runtime.py install --crate rust/usage-pilot --select
    ```
 
-`install` refuses a crate with uncommitted or untracked files. It also refuses an active `rustc`
+`install` needs Python 3.11 or later; the other commands and `review_queue.py` do not.
+It refuses a crate with uncommitted or untracked files. It also refuses an active `rustc`
 whose release differs from `rust-toolchain.toml`, and any Cargo configuration file in the crate's
-parent directories or in `CARGO_HOME`. A receipt could not restore such a file. The build runs
+parent directories or in `CARGO_HOME`. A receipt could not restore such a file. After the build,
+it refuses any local file that cargo's dep-info lists outside the crate, such as a path dependency
+or an `include_str!` target. The crate's Git tree then covers every local input, and `Cargo.lock`
+covers registry and Git dependencies. The build runs
 `cargo build --locked --offline --release --target <host> --bin <bin>` in a temporary target directory.
 It clears `RUSTFLAGS`, `RUSTC_WRAPPER`, `CARGO_BUILD_*`, `CARGO_PROFILE_*` and related variables, and
 remaps the crate and `CARGO_HOME` paths. Installing the same build again keeps the existing entry.
@@ -83,7 +87,8 @@ the default. Before every launch, `review_queue.py` checks the following:
   the checkout also differ from `freeze_commit`.
 
 A launch receives `BENCH_RUST_<NAME>` and `BENCH_RUST_<NAME>_SHA256`, and its launch record keeps
-the pins. The queue environment may not set these names. Restart and recovery run the same checks
+the pins. The controller drops any `BENCH_RUST_` variable it inherits, and the queue environment may
+not set these names. Restart and recovery run the same checks
 against the same pinned version. One controller per work root still holds `serial.lock`.
 
 ## Upgrade and rollback

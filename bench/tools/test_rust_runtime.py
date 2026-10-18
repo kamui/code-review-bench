@@ -244,6 +244,25 @@ class Selection(Store):
         self.assertEqual(rust_runtime.selected(self.store, "fixture-tool"), rows[-1])
 
 
+class Interpreter(unittest.TestCase):
+    def test_queue_commands_load_without_tomllib_and_only_install_needs_it(self):
+        # Python 3.10 has no tomllib; a None entry in sys.modules makes its import fail the same way.
+        probe = (
+            "import sys; sys.modules['tomllib'] = None\n"
+            "import review_queue, rust_runtime\n"
+            "from pathlib import Path\n"
+            "try:\n"
+            "    rust_runtime.describe(Path('.'), rust_runtime.REPO, {})\n"
+            "except rust_runtime.InputError as error:\n"
+            "    print(error)\n"
+        )
+        crate = self.enterContext(tempfile.TemporaryDirectory(dir=rust_runtime.REPO / "rust", prefix=".interpreter-test-"))
+        done = subprocess.run([sys.executable, "-c", probe.replace("Path('.')", repr(crate).join(["Path(", ")"]))],
+                              cwd=TOOL.parent, capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("install needs Python 3.11 or later", done.stdout)
+
+
 class Deviations(Store):
     def setUp(self):
         super().setUp()
@@ -354,6 +373,31 @@ class RealBuilds(unittest.TestCase):
             with patch.dict(os.environ, {"CARGO_HOME": str(home)}):
                 with self.assertRaisesRegex(rust_runtime.Refused, "cargo configuration a receipt cannot restore"):
                     rust_runtime.build(self.crate, self.repo, Path(scratch))
+        self.assertFalse(self.store.exists())
+
+    def test_a_build_that_reads_local_files_outside_the_crate_is_refused(self):
+        dependency = self.repo / "rust/sibling"
+        (dependency / "src").mkdir(parents=True)
+        (dependency / "Cargo.toml").write_text('[package]\nname = "sibling"\nversion = "0.1.0"\nedition = "2021"\n', encoding="utf-8")
+        (dependency / "src/lib.rs").write_text("pub fn value() -> u8 { 1 }\n", encoding="utf-8")
+        manifest = (self.crate / "Cargo.toml").read_text(encoding="utf-8")
+        (self.crate / "Cargo.toml").write_text(manifest + '[dependencies]\nsibling = { path = "../sibling" }\n', encoding="utf-8")
+        (self.crate / "src/main.rs").write_text('fn main() { println!("{}", sibling::value()); }\n', encoding="utf-8")
+        subprocess.run(["cargo", "generate-lockfile", "--offline"], cwd=self.crate, check=True, capture_output=True)
+        self.git("add", ".")
+        self.git("commit", "-qm", "path dependency")
+        with tempfile.TemporaryDirectory(dir=self.root) as scratch:
+            with self.assertRaisesRegex(rust_runtime.Refused, "local files outside rust/fixture-tool.*sibling/src/lib.rs"):
+                rust_runtime.build(self.crate, self.repo, Path(scratch))
+        (self.crate / "Cargo.toml").write_text(manifest, encoding="utf-8")
+        (self.repo / "outside.txt").write_text("outside\n", encoding="utf-8")
+        (self.crate / "src/main.rs").write_text('fn main() { print!("{}", include_str!("../../../outside.txt")); }\n', encoding="utf-8")
+        subprocess.run(["cargo", "generate-lockfile", "--offline"], cwd=self.crate, check=True, capture_output=True)
+        self.git("add", ".")
+        self.git("commit", "-qm", "include an outside file")
+        with tempfile.TemporaryDirectory(dir=self.root) as scratch:
+            with self.assertRaisesRegex(rust_runtime.Refused, "local files outside rust/fixture-tool.*outside.txt"):
+                rust_runtime.build(self.crate, self.repo, Path(scratch))
         self.assertFalse(self.store.exists())
 
 

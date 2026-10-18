@@ -23,8 +23,10 @@ or to Python when the pinned one is missing or changed.
 ``install`` builds from a clean, committed crate with ``cargo build --locked --offline --release`` for this
 host's target, with build-affecting environment variables cleared and source paths remapped, after checking
 that the active ``rustc`` is the release ``rust-toolchain.toml`` pins. Cargo configuration files outside the
-crate's tracked tree are refused, because a receipt could not restore them. ``restore`` retains an executable
-from elsewhere, such as another store or a rebuild, only when it hashes to the receipt.
+crate's tracked tree are refused, because a receipt could not restore them, and so is a build whose dep-info
+lists a local file outside the crate, such as a path dependency or an included file. ``install`` needs
+Python 3.11 or later; the other commands do not. ``restore`` retains an executable from elsewhere, such as
+another store or a rebuild, only when it hashes to the receipt.
 
 A receipt holds no absolute path: the crate path is relative to the repository and the executable to its
 entry. It names the source revision, the crate's Git tree, the hashes of ``Cargo.toml``, ``Cargo.lock`` and
@@ -53,7 +55,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import tomllib
 import uuid
 from datetime import datetime, timezone
 
@@ -267,6 +268,21 @@ def cargo_configs(crate_dir: Path, env: dict) -> list:
     return found
 
 
+def local_inputs(dep_info: Path) -> list:
+    """The local files cargo's dep-info lists for a build; registry and Git dependencies are pinned by Cargo.lock instead."""
+    try:
+        text = dep_info.read_text(encoding="utf-8")
+    except OSError as error:
+        raise InputError(f"cargo wrote no dep-info at {dep_info}: {error}") from error
+    paths = []
+    for line in text.splitlines():
+        if line.startswith("#") or ": " not in line:
+            continue
+        _, _, inputs = line.partition(": ")
+        paths += [Path(part.replace("\\ ", " ")).resolve() for part in re.split(r"(?<!\\) ", inputs.strip()) if part]
+    return paths
+
+
 def build_environment() -> dict:
     return {name: value for name, value in os.environ.items() if not CLEARED.fullmatch(name)}
 
@@ -280,6 +296,10 @@ def describe(crate_dir: Path, repo: Path, env: dict) -> dict:
     configs = cargo_configs(crate_dir, env)
     if configs:
         raise Refused("cargo configuration a receipt cannot restore would apply: " + ", ".join(map(str, configs)))
+    try:
+        import tomllib
+    except ModuleNotFoundError:
+        raise InputError("install needs Python 3.11 or later to read Cargo.toml") from None
     try:
         manifest = tomllib.loads((crate_dir / "Cargo.toml").read_text(encoding="utf-8"))
         channel = tomllib.loads((crate_dir / "rust-toolchain.toml").read_text(encoding="utf-8"))["toolchain"]["channel"]
@@ -322,6 +342,11 @@ def build(crate_dir: Path, repo: Path, scratch: Path) -> tuple:
     env.update(CARGO_TARGET_DIR=str(scratch), CARGO_ENCODED_RUSTFLAGS="\x1f".join(flags))
     run(command, crate_dir, env)
     executable = scratch / identity["target"] / "release" / identity["crate"]["bin"]
+    outside = [path for path in local_inputs(executable.with_name(executable.name + ".d"))
+               if not path.is_relative_to(crate_dir.resolve()) and not path.is_relative_to(scratch.resolve())]
+    if outside:
+        raise Refused(f"the build read local files outside {identity['crate']['path']}, which its receipt cannot pin: "
+                      + ", ".join(map(str, outside)))
     receipt = {"schema": RECEIPT, **identity,
                "build": {"command": command, "rustflags": ["--remap-path-prefix=<crate>=/source", "--remap-path-prefix=<cargo home>=/cargo"],
                          "cleared_environment": CLEARED.pattern, "cargo_config_files": []},

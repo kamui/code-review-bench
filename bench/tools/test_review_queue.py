@@ -1299,6 +1299,14 @@ class RustRuntimes(QueueFixture):
         self.assertEqual(subprocess.check_output([self.used()[0]["BENCH_RUST_FIXTURE_TOOL"]], text=True), "two\n")
         self.assertEqual(self.launch_records()[0]["runtimes"], {"fixture-tool": self.two})
 
+    def test_an_inherited_rust_runtime_variable_never_reaches_a_launch(self):
+        inherited = {"BENCH_RUST_FIXTURE_TOOL": "/bin/true", "BENCH_RUST_FIXTURE_TOOL_SHA256": "0" * 64, "BENCH_RUST_OTHER": "/bin/true"}
+        with patch.dict(os.environ, inherited):
+            code, events, err = self.command("run", "--count", "1")
+        self.assertEqual(code, 0, (events, err))
+        self.assertEqual(self.used(), [{"BENCH_RUST_FIXTURE_TOOL": str(self.executable(self.two)),
+                                        "BENCH_RUST_FIXTURE_TOOL_SHA256": self.two["sha256"]}])
+
     def test_a_missing_replaced_or_unattributable_executable_is_refused_before_any_launch(self):
         executable, receipt = self.executable(self.two), self.executable(self.two).with_name("receipt.json")
         saved = {path: path.read_bytes() for path in (executable, receipt)}

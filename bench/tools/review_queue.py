@@ -334,7 +334,7 @@ def runtimes(queue: Queue) -> dict:
 
 def environment(queue: Queue, pinned: dict) -> dict:
     env = {name: value for name, value in os.environ.items()
-           if not name.startswith(("CLAUDE", "ANTHROPIC", "CODEX_COMPANION")) and name != "AI_AGENT"}
+           if not name.startswith(("CLAUDE", "ANTHROPIC", "CODEX_COMPANION", "BENCH_RUST_")) and name != "AI_AGENT"}
     for client, pin in queue.clients.items():
         for what, path, digest in pinned_files(pin):
             try:
