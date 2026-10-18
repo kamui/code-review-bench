@@ -124,6 +124,8 @@ and run preparation and dispatch to #157.
 
 [Rust runtime pinning](runtime.md#ownership-of-the-other-runtime-modules) moves `seal`,
 `skill_provenance` and `fetch_freeze_commits` from the runtime group to #157 and #160.
+[Processing retirement](processing-retirement.md) removes `score` and `scoreboard_svg`, keeps
+`compare`, classifies five research helpers, and moves `methodology` to #156 and `collect_run` to #155.
 
 Active research helpers carry the responsibility assignments in `RESEARCH_GROUPS`.
 Their tests run on disposable copies because some APIs write whole
