@@ -96,6 +96,8 @@ helpers need no translation while retained as immutable evidence. #160 owns remo
 of current entrypoints only after their callers migrate. This includes removing this
 Python census generator or replacing it with an equivalent reproducible check.
 
+The usage pilot now has a [behavioral contract corpus](contracts/README.md) for #151.
+
 ## Responsibilities and contracts
 
 All migration owners below are **kamui**. Issue assignment denotes the target slice,
