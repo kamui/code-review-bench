@@ -122,6 +122,9 @@ and run preparation and dispatch to #157.
 | Cleanup, #159 | Pruning and retirement; run filing, regrading, controllers | Valid-only, verified clone cleanup and receipts; whole-workspace inventory, investigation closure, restoration and exclusive retirement. Preserve protected active, failed, modified or unverified work and ledger-dependent bytes. | `test_prune_workspace.py`, `test_retire_workspace.py`; [storage contract](../evidence-storage.md). |
 | Retirement, #160 | Test aggregator, census, wrappers, docs, CI and package commands | Keep each public entrypoint available through cutover, then remove the maintained Python implementation and migrate every caller. Retained targets, frozen skills and historical replay still declare Python separately. | Census check, contract suite, Python-unavailable current-engine acceptance after migration. |
 
+[Rust runtime pinning](runtime.md#ownership-of-the-other-runtime-modules) moves `seal`,
+`skill_provenance` and `fetch_freeze_commits` from the runtime group to #157 and #160.
+
 Active research helpers carry the responsibility assignments in `RESEARCH_GROUPS`.
 Their tests run on disposable copies because some APIs write whole
 record generations. Preserve `before.v1.json`, validation, atomic replacement,

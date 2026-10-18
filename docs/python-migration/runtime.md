@@ -131,6 +131,27 @@ Add a target to `VERIFIED_TARGETS` only after its install, check and rollback te
 host. `review_queue.py` reads `/proc` and runs only on Linux. The C library check compares the build
 host's glibc with this host's, which is stricter than the symbol versions the executable needs.
 
+The [script policy](../agents/scripts.md) supports macOS and Linux. This stage verifies Rust artifacts
+only on x86_64 Linux with glibc; it does not narrow that policy. On the other hosts no Rust runtime
+can be installed or pinned, and a queue that pins none behaves as before, so no host loses a working
+path. `review_queue.py` already runs only on Linux. A later stage that moves a caller to Rust must keep
+that caller working on every supported host: it verifies the host's target here first, or keeps the
+current implementation there. #160 owns verifying the remaining supported hosts before Python retires.
+
+## Ownership of the other runtime modules
+
+The [v2 inventory](README.md#responsibilities-and-contracts) also maps `seal`, `skill_provenance` and
+`fetch_freeze_commits` to #153. This stage adds `rust_runtime` and ports none of them. They keep their
+Python implementations until these stages move them:
+
+| Module | Owner | Reason |
+| --- | --- | --- |
+| `skill_provenance` | #157 | A freeze helper for new skill arms; #157 covers provisioning and freeze helpers. |
+| `fetch_freeze_commits` | #157 | Fetches freeze commits for runs and CI; #157 covers freeze helpers. |
+| `seal` | #160 | No narrower stage names it; #160 resolves every remaining responsibility. |
+
+The v2 census stays as recorded. Its next version records these owners.
+
 ## Rollback evidence
 
 [`runtime-evidence/`](runtime-evidence/) holds a local install of two versions of `usage-pilot`,
