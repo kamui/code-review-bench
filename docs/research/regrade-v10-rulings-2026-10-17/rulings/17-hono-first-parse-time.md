@@ -384,3 +384,9 @@ First answers:
 | recommender | other-material | medium (no-precedent) | Values are right and nothing fails; the time rises mainly for large uploads on Node and no real user's request over a network was measured. |
 | assessor-1 | unknown | low (no-single-rule, gap, no-precedent, flip-fact-open) | The runs prove substantial processing cost for larger Node uploads, but neither the cost's share of a real user's request time nor S6's scope across the unaffected or faster workloads is settled. |
 
+
+## The owner's answer
+
+Asked 2026-10-18 (ET 2026-10-17). Question: "Hono: is the slower first parseBody() of a form part of GT-p3?"
+
+Answer: **"Join to GT-p3 (Recommended)"**: GT-p3 widens to name the slower first read beside the memory; it stays other-material.
