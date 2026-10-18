@@ -20,7 +20,8 @@ python3 bench/tools/transcript_usage.py --self-test
 ```
 
 The corpus command exits 0 only if every case meets its independent expectation
-or exactly matches its separately saved baseline defect observation.
+or exactly matches its separately saved baseline defect observation, except cases
+reported as `SKIP UNAVAILABLE`. Skipped cases establish no coverage and are never passes.
 Without `--allow-known-defects`, the independent missing-count and truncation expectations fail
 at exit 1. `KNOWN DEFECT` is never an ordinary pass. Any different mismatch fails,
 even with that option. See [the defect register](defects.md).
@@ -58,6 +59,11 @@ It contains a format version, a relative `decisions` file, and ordered `cases`.
 Each case defines:
 
 - `id`, `program`, and `argv`, without a shell or environment interpolation.
+  Each argument is a Unicode string or an object `{ "bytes_b64": "..." }` for
+  exact POSIX bytes. No lone surrogate appears in the corpus JSON.
+- Optional `requires`, currently `non-utf8-paths`, probes the disposable filesystem
+  before setup. Invalid filename errors produce `SKIP UNAVAILABLE` and the run
+  continues. Other filesystem failures remain execution errors.
 - `stdin_b64`, the exact standard input bytes, including empty input.
 - `initial`, a list of `file` or `directory` entries with base64 relative
   `path_b64`. Files include `bytes_b64`. Parent directories are created.
@@ -77,14 +83,20 @@ in this corpus. Filesystem comparison covers the disposable tree, not arbitrary
 external effects, permissions, hard-link identity, or file metadata.
 
 Paths are relative POSIX bytes, encoded in base64. Absolute paths, NULs, empty
-components, and dot segments are refused. JSON argv uses escaped surrogate code
-points for non-UTF-8 POSIX path bytes. macOS and Linux, including WSL, are the scope;
-native Windows is outside the existing script policy.
+components, and dot segments are refused. macOS and Linux, including WSL, are the
+scope; native Windows is outside the existing script policy. Filesystems that refuse
+non-UTF-8 names, including Apple filesystems, cannot cover `non-utf8-path`. The
+capability probe reports that limit explicitly. On capable hosts, its stdout is
+byte-exact ASCII JSON, including the escaped path, field order and final newline.
+This keeps invalid Unicode out of the fixture document while preserving byte ff.
 
 Codex session discovery follows the selected root and its descendants. Transcript
 usage takes explicit parent and child file paths, as its production callers do.
 `transcript-parent-child-explicit` pins their sum and keeps identical request IDs
-in different sessions distinct. `transcript-missing-root-path` pins an unreadable
+in different sessions distinct. `duplicate-response-last` uses different repeated
+Codex records and requires the last entire record. `transcript-duplicate-maxima`
+requires each token field's maximum, with maxima split across records so neither
+first-record nor last-record deduplication can pass. `transcript-missing-root-path` pins an unreadable
 root input, and `transcript-known-zero` distinguishes explicit zero from U3.
 
 ## Comparison decisions
@@ -112,19 +124,61 @@ tests. A missing pointer fails with its actual bytes. `escaping-order-time` cove
 escaped models, timezone-equivalent timestamps, and fractional second truncation;
 `non-utf8-path` also covers a valid final JSONL record without a newline.
 
-Every case has a saved SHA-256 in `usage-decisions.v1.json`, computed over the
-whole case as sorted, ASCII JSON with compact separators. A changed input,
-comparator, expectation, or baseline exception requires updating its decision and
-reason. The runner refuses an unmatched digest or unequal corpus and decision ID sets,
-including an unrecorded case deletion. There is deliberately no golden
-update command. Retain earlier decisions and expectations when approving a behavior
-change; record the authority, old and new behavior, rationale, compatibility impact,
-and resolving issue in a new decision version. Matching a port is not authority.
+Every case has a saved SHA-256 in `usage-decisions.v2.json`. Its `previous` entry
+pins the unchanged `usage-decisions.v1.json` bytes and format. Each current record
+contains `reason`, `contract_sha256`, optional `supersedes`, and a `decision` ID.
+The ID is `decision-` followed by the canonical digest of the record without its
+`decision` field. Editing only a contract digest leaves an invalid decision ID.
+
+A new decision file retains its predecessor through `previous.path`, `sha256`, and
+`format` (`decisions/1` for the legacy map, `decisions/2` for records with history).
+Changed records must name the prior contract digest in `supersedes`, change their
+reason, and receive a new decision ID. Unchanged records can be copied verbatim.
+History cannot remove a case. Corpus and current decision ID sets must match.
+The original v1 digests remain legacy Python JSON hashes and are never recomputed.
+The v2 records explicitly adopt canonical bytes v1; accounting expectations are
+retained, and the non-UTF-8 case explicitly pins rendered output bytes.
+
+There is no golden update command. An approved behavior change requires a new
+version with its authority, old and new behavior, rationale, compatibility impact,
+and resolving issue in the reason. Matching a port is not authority. Earlier
+expectations remain available at their original git revision. The open entries in
+`defects.md` must retain their separate `baseline_defect` cases and independent
+expectations; the harness tests enforce that relationship.
+
+### Canonical bytes v1
+
+SHA-256 hashes the following binary encoding, without a trailing newline. JSON
+numbers without a fraction or exponent are arbitrary-precision integers; other
+numbers are finite IEEE 754 binary64 values. A consumer must preserve this distinction
+and exact integers when reading JSON. Strings contain Unicode scalar values only.
+Lengths and counts are unsigned ASCII decimal with no leading zeros except zero.
+
+| Value | Bytes |
+| --- | --- |
+| Null | ASCII `n` |
+| Boolean | ASCII `t` or `f` |
+| Integer | ASCII `i`, signed decimal without leading zeros or plus sign, then `;`. Zero is `0`. |
+| Binary64 | ASCII `d`, then eight bytes in big-endian IEEE 754 format, including the sign of zero. |
+| String | ASCII `s`, UTF-8 byte length, `:`, then the UTF-8 bytes. No normalization. |
+| Array | ASCII `[`, element count, `:`, then each encoded element in order. No closing byte. |
+| Object | ASCII `{`, member count, `:`, then encoded key and value pairs. Sort keys by unsigned UTF-8 byte order. No closing byte. |
+
+This encoding distinguishes `1` from `1.0`, preserves integers above 2^53, and avoids
+serializer-dependent exponent spellings. `digest-vectors.json` pins nine byte/hash
+vectors, including `4e-5`, negative zero, Unicode and nested objects. Python harness
+tests and the independent JavaScript encoder check those same vectors:
+
+```sh
+bun tools/behavior_contracts/check-digest.mjs
+```
 
 The negative CLI exercises in `test_behavior_contract.py` run deliberately wrong
 local programs. They detect a changed JSON count, a removed newline in a hashed
 file, and a duplicated publication journal entry. Diagnostics print actual semantic
 diffs or expected and actual bytes and filesystem entries, including hashes.
+Invalid primary JSON produces a per-case `DIFFERENTIAL` diagnostic and exit 1;
+it does not abort the remaining cases as an input error.
 The synthetic journal proves effect multiplicity detection without remote publication.
 It does not claim to test a real remote service.
 
