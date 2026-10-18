@@ -11,7 +11,7 @@ export const setup = (id: string, experimental = false, overrides: Partial<Confi
   method: 'builtin', builtin: true, experimental, note: '', billing: 'api-dollars', models: ['model'], reasoningEffort: 'high', reasoningSource: 'explicit',
   reviewEdition: 'baseline', reviewChange: null, skillProvenanceUrl: null, skillReleases: [], conditions: [], ...overrides })
 
-export const family = (id: string, impact: Family['impact'] = 'unknown', overrides: Partial<Family> = {}): Family => ({ id, title: id, trigger: '',
+export const family = (id: string, impact: Family['impact'] = 'unknown', overrides: Partial<Family> = {}): Family => ({ id, shortLabel: id, title: id, trigger: '',
   consequence: '', requiredOutcome: '', concerns: ['Functional'], eligibility: 'approved', eligibilityReason: 'Saved human eligibility ruling',
   impact, impactReason: impact === 'unknown' ? 'Awaiting calibration' : 'Saved human impact ruling', rulings: [], manifestations: [], ...overrides })
 
@@ -66,18 +66,18 @@ export function scorecardFixture(): Dataset {
   const profile = (technology: string, concern: string) => ({ changeKinds: ['Bug fix'], areas: ['Library'], technologies: [technology], concerns: [concern] })
   const named = (repo: string, pr: number, shape: string, technology: string, concern: string): Partial<Task> =>
     ({ repo, pr, shape, profile: profile(technology, concern), sourceUrl: `https://example.invalid/${repo}/pull/${pr}` })
-  const problem = (id: string, title: string, impact: Family['impact'], concern: string, overrides: Partial<Family> = {}) =>
-    family(id, impact, { title, concerns: [concern], trigger: `Trigger of ${id}`, consequence: `Consequence of ${id}`, requiredOutcome: `Obligation of ${id}`, ...overrides })
-  const payments = task('payments', [problem('S1', 'Refund is applied twice on retry', 'serious', 'Functional'),
-    problem('S2', 'Webhook signature is not verified', 'serious', 'Security'), problem('M1', 'Currency rounding drifts in reports', 'other-material', 'Functional'),
-    problem('U1', 'Retry backoff ignores the configured cap', 'unknown', 'Reliability')], 'known-problems',
+  const problem = (id: string, shortLabel: string, title: string, impact: Family['impact'], concern: string, overrides: Partial<Family> = {}) =>
+    family(id, impact, { shortLabel, title, concerns: [concern], trigger: `Trigger of ${id}`, consequence: `Consequence of ${id}`, requiredOutcome: `Obligation of ${id}`, ...overrides })
+  const payments = task('payments', [problem('S1', 'Refund applied twice', 'Refund is applied twice on retry', 'serious', 'Functional'),
+    problem('S2', 'Webhook signature unchecked', 'Webhook signature is not verified', 'serious', 'Security'), problem('M1', 'Report rounding drifts', 'Currency rounding drifts in reports', 'other-material', 'Functional'),
+    problem('U1', 'Backoff ignores its cap', 'Retry backoff ignores the configured cap', 'unknown', 'Reliability')], 'known-problems',
   named('example/payments', 101, 'Retry handling in a payment client', 'TypeScript', 'Security'))
-  const queue = task('queue', [problem('S3', 'Acknowledged jobs are redelivered after restart', 'serious', 'Reliability'),
-    problem('M2', 'Dead-letter count is off by one', 'other-material', 'Functional'), problem('M3', 'Metrics label cardinality grows per job', 'other-material', 'Performance'),
-    problem('P1', 'Shutdown hook can drop the last batch', 'unknown', 'Reliability', { eligibility: 'pending', eligibilityReason: 'Awaiting eligibility approval' })],
+  const queue = task('queue', [problem('S3', 'Acked jobs redelivered', 'Acknowledged jobs are redelivered after restart', 'serious', 'Reliability'),
+    problem('M2', 'Dead-letter count off by one', 'Dead-letter count is off by one', 'other-material', 'Functional'), problem('M3', 'Metric labels grow per job', 'Metrics label cardinality grows per job', 'other-material', 'Performance'),
+    problem('P1', 'Shutdown drops last batch', 'Shutdown hook can drop the last batch', 'unknown', 'Reliability', { eligibility: 'pending', eligibilityReason: 'Awaiting eligibility approval' })],
   'known-problems', named('example/queue', 202, 'Durable queue restart path', 'Go', 'Reliability'))
-  const docs = task('docs', [problem('U2', 'Install snippet omits a required step', 'unknown', 'Functional'),
-    problem('U3', 'Example config uses a removed option', 'unknown', 'Maintainability')], 'known-problems',
+  const docs = task('docs', [problem('U2', 'Install step missing', 'Install snippet omits a required step', 'unknown', 'Functional'),
+    problem('U3', 'Example uses removed option', 'Example config uses a removed option', 'unknown', 'Maintainability')], 'known-problems',
   named('example/docs', 303, 'Setup guide rewrite', 'Markdown', 'Functional'))
   const audited = task('audited', [], 'audited-clean', { ...named('example/clean', 404, 'Audited change with no problem', 'Python', 'Testing'),
     controlReason: 'Independent audit found no eligible problem' })

@@ -32,7 +32,7 @@ export const axisLabels: Record<Axis, string> = {
 }
 const setups = (count: number) => `${count} ${count === 1 ? 'setup' : 'setups'}`
 
-const setupParts = (configuration: Configuration) => {
+export const setupParts = (configuration: Configuration) => {
   const [method = configuration.short, model = '', effort = ''] = configuration.short.split(' / ')
   return { method, model, effort }
 }

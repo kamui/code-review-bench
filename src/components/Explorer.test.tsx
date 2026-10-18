@@ -5,13 +5,15 @@ import type { Dataset } from '../lib/data'
 import { assessment, build, claim, claims, family, preExistingScorecardFixture, remedy, review, scorecardFixture, task } from '../lib/fixture'
 import { summarize } from '../lib/metrics'
 import type { DetectionView } from '../lib/metrics'
-import { leaderboard, matched } from '../lib/scoring'
+import { leaderboard, matched, scorecard } from '../lib/scoring'
 import { Chart } from './Chart'
 import { Dashboard } from './Explorer'
 import { MethodologyViews, scorecardTabs } from './MethodologyViews'
+import { SeriousMisses } from './SeriousMisses'
 
 const now = new Date('2026-10-03T12:00:00Z')
 const text = (markup: string) => markup.replace(/<style[\s\S]*?<\/style>/g, '').replace(/<[^>]+>/g, ' ').replace(/&#x27;/g, "'").replace(/&amp;/g, '&').replace(/\s+/g, ' ')
+const card = (dataset: Dataset, id: string) => scorecard(dataset, id, { taskIds: dataset.tasks.map(item => item.id), concern: null })
 const page = (dataset: Dataset) => text(renderToStaticMarkup(<MantineProvider><Dashboard dataset={dataset} now={now} /></MantineProvider>))
 
 function chart(dataset: Dataset, detection: DetectionView, view: 'setups' | 'tradeoff' | 'models' = 'setups', axis: 'cost' | 'refuted' = 'cost', omit: string[] = []) {
@@ -41,7 +43,6 @@ describe('scorecard page on the fixture', () => {
     for (const heading of ['Serious, equal problems', 'Serious, equal PRs', 'Other material, equal problems', 'Unknown impact, equal PRs', 'All references, equal problems',
       'All labelled serious caught', 'Repeated serious misses']) expect(rendered).toContain(heading)
     expect(rendered).toContain('Approved references on the selected PRs: 3 serious · 3 other material · 3 unknown impact · 9 all references. 1 more awaits an eligibility ruling.')
-    expect(rendered).toContain('ce-code-review / Fixture B / High example/payments #101 Webhook signature is not verified 3 / 3 Yes')
     for (const retired of ['Findings score', 'findings score', '80%', 'Best tradeoff', 'Highest', 'Cheapest', 'Critical', 'leaderboard', 'Ranking'])
       expect(rendered).not.toContain(retired)
   })
@@ -55,10 +56,39 @@ describe('scorecard page on the fixture', () => {
     expect(rendered).not.toContain('Current v1')
   })
 
-  test('shows observed serious misses and undetermined outcomes without a final repeated-miss verdict', () => {
-    expect(rendered).toContain('Observed not caught / scheduled trials')
-    expect(rendered).toContain('Claude built-in / Fixture B / High example/payments #101 Webhook signature is not verified 1 / 3 (1 undetermined) Unavailable : 1 serious outcome is undetermined.')
-    expect(rendered).toContain('Claude built-in / Fixture B / High example/payments #101 Refund is applied twice on retry 0 / 3 (1 undetermined) Unavailable : 1 serious outcome is undetermined.')
+  test('the serious-miss drill-down puts setups grouped by skill against serious problems grouped by PR, one dot per run', () => {
+    expect(rendered).toContain('Serious references not caught All models Fixture A · 2 skills Fixture B · 2 skills Fixture C · 2 skills Each setup reviewed each PR 3 times; each dot is one run, in run order.')
+    expect(rendered).toContain('Caught Not caught, including a failed run that produced no review Not determined yet: ungraded, unresolved or pending Not caught in two or more runs Show problems no setup missed (0)')
+    expect(rendered).toContain('Serious problem ce-code-review Claude built-in Fixture A Fixture B Fixture C Fixture A Fixture B Fixture C example/payments #101 Bug fix TypeScript Retry handling in a payment client 2 serious problems Refund applied twice Functional Webhook signature unchecked Security example/queue #202')
+    expect(rendered).not.toContain('Observed not caught / scheduled trials')
+    const markup = renderToStaticMarkup(<MantineProvider><SeriousMisses dataset={fixture} configurations={fixture.configurations.filter(item => !item.experimental)}
+      cards={leaderboard(fixture, { selected: fixture.configurations.map(item => item.id), candidateTaskIds: fixture.tasks.map(item => item.id), concern: null }).cards}
+      selection={{ taskIds: fixture.tasks.map(item => item.id), concern: null }} onInspect={() => {}} /></MantineProvider>)
+    for (const label of ['ce-code-review · Fixture B, run 2 of 3: Failed: this run produced no review, which counts as not caught. Open this review.',
+      'ce-code-review · Fixture C, run 2 of 3: Not determined yet: this review awaits assessment. Open this review.',
+      'Claude built-in · Fixture B, run 3 of 3: Not determined yet: this run is pending. Open this review.', 'Claude built-in · Fixture A, run 1 of 3: Caught. Open this review.'])
+      expect(markup).toContain(`aria-label="${label}"`)
+    expect(markup.match(/miss-repeated/g)).toHaveLength(6)
+  })
+
+  test('the drill-down hides problems no shown setup missed, says when one has no concern tag and when a setup did not run the PR', () => {
+    const subject = task('pr', [family('found', 'serious', { shortLabel: 'Found by all', title: 'A problem every setup found' }),
+      family('lost', 'serious', { shortLabel: 'Missed once', title: 'A problem one run missed', concerns: [] })], 'known-problems', { repo: 'example/pr', pr: 7 })
+    const dataset = build([subject], {
+      high: [[subject, [review(subject, ['found']), review(subject, ['found', 'lost'])]]],
+      low: [[subject, [review(subject, ['found', 'lost']), review(subject, ['found', 'lost']), { attempts: [], pending: true }]]],
+      other: [], },
+    { configurations: { high: { short: 'Claude built-in / Model / High' }, low: { short: 'Claude built-in / Model / Low' }, other: { short: '/skill / Other / High' } } })
+    const markup = renderToStaticMarkup(<MantineProvider><SeriousMisses dataset={dataset} configurations={dataset.configurations} cards={dataset.configurations.map(item => card(dataset, item.id))}
+      selection={{ taskIds: ['pr'], concern: null }} onInspect={() => {}} /></MantineProvider>)
+    const shown = text(markup)
+    expect(shown).toContain('All models Model · 1 skill Other · 1 skill Each dot is one scheduled run of a setup on that PR, in run order.')
+    expect(shown).toContain('Show problems no setup missed (1)')
+    expect(shown).toContain('Serious problem /skill Claude built-in Other Model · High Model · Low example/pr #7')
+    expect(shown).toContain('2 serious problems Missed once No concern tag Not run')
+    expect(shown).not.toContain('Found by all')
+    expect(markup).toContain('aria-label="Claude built-in · Model · Low, run 3 of 3: Not determined yet: this run is pending."')
+    expect(markup).not.toContain('this run is pending. Open this review.')
   })
 
   test('qualifies harm bounds by final admission and reports pending cohorts as observed exposure', () => {

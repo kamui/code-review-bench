@@ -8,6 +8,7 @@ import type { ConditionalMetric, Estimator, Scorecard, Selection } from '../lib/
 import { ClaimLabels } from './ClaimLabels'
 import type { Inspection } from './EvidenceDrawer'
 import { DataTable, Value } from './Reading'
+import { SeriousMisses } from './SeriousMisses'
 import type { Column } from './Reading'
 
 const signed = (value: number) => `${value > 0 ? '+' : ''}${value.toFixed(2)} pp`
@@ -51,7 +52,6 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
   }
   const coverage = referenceCoverage(dataset, selection)
   const conflicts = orderingConflicts(rows.map(row => row.card), band)
-  const misses = rows.flatMap(row => row.card.seriousMisses.families.map(miss => ({ ...miss, configuration: row.configuration })))
   const common = matched(dataset, rows.map(key), selection, metric)
   const novel = pendingCandidates(dataset, selection.taskIds, now)
   const awaiting = dataset.tasks.filter(item => selection.taskIds.includes(item.id))
@@ -93,15 +93,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
           { label: 'Each linked claim as its own unit', value: row => reading(row.card.detection[band].grouping, grouping => `${percent(grouping[estimator] * 100)} over ${grouping.units} units`) }]} />
         <Text size="xs" c="dimmed" className="footnote">Observed counts are outcomes determined so far and are not a final rate. The admitted-only figure excludes failed trials, so it describes delivered reviews rather than the setup. The left-out range shows sensitivity to these PRs, not a confidence interval.</Text>
         <Title order={4}>Serious references not caught</Title>
-        {misses.length ? <Table.ScrollContainer minWidth={700}><Table aria-label="Serious references not caught" className="data-table">
-          <Table.Thead><Table.Tr><Table.Th scope="col">Setup</Table.Th><Table.Th scope="col">PR</Table.Th><Table.Th scope="col">Serious reference</Table.Th><Table.Th scope="col">Observed not caught / scheduled trials</Table.Th><Table.Th scope="col">Repeated</Table.Th></Table.Tr></Table.Thead>
-          <Table.Tbody>{misses.map(miss => <Table.Tr key={`${miss.configuration.id}/${miss.familyId}`}><Table.Th scope="row">{miss.configuration.short}</Table.Th>
-            <Table.Td><button className="text-button" onClick={() => onInspect({ kind: 'task', id: miss.taskId })}>{name(miss.taskId)}</button></Table.Td>
-            <Table.Td>{task(miss.taskId)?.families.find(family => family.id === miss.familyId)?.title ?? miss.familyId}</Table.Td>
-            <Table.Td>{miss.notCaught} / {miss.scheduled}{miss.undetermined > 0 && ` (${miss.undetermined} undetermined)`}</Table.Td>
-            <Table.Td><Value cell={reading(miss.repeated, repeated => repeated ? 'Yes' : 'No')} /></Table.Td></Table.Tr>)}</Table.Tbody>
-        </Table></Table.ScrollContainer>
-          : <Text size="sm" c="dimmed">{coverage.bands.serious ? 'No determined miss of a serious reference for the selected setups.' : 'No reference on the selected PRs is labelled serious, so serious misses cannot be listed.'}</Text>}
+        <SeriousMisses dataset={dataset} configurations={configurations} cards={cards} selection={selection} onInspect={onInspect} />
       </Stack></Tabs.Panel>
 
       <Tabs.Panel value="delivery" pt="md"><Stack>
