@@ -290,3 +290,9 @@ First answers:
 | assessor-1 | recovers (says what goes wrong: yes, identifies the cause as a fault: yes) | medium (no-precedent) | Under 'One part of what goes wrong is enough,' the comment calls client-controlled page selection a restored security vulnerability, and the run facts confirm that header-bearing requests render the query-selected page without the secret. |
 | assessor-2 | recovers (says what goes wrong: yes, identifies the cause as a fault: yes) | medium (no-precedent) | Under "The claim does not need a failing example," the comment calls client-controlled page selection a restored vulnerability if the header passes through, and the probes establish that conditional unauthorized override without establishing deployed header forwarding. |
 
+
+## The owner's answer
+
+Asked 2026-10-18 (ET 2026-10-17). Question: "Astro: do the two 'does Vercel strip a client-sent x-vercel-isr header?' comments earn GT-o1 credit?"
+
+Answer: **"Credit both (yes / yes) (Recommended)"**.
