@@ -202,7 +202,7 @@ describe('overview', () => {
   test('is the default view, sorted by problem claims per review with unavailable values last, and hides the detection axis control', () => {
     expect(shown).toContain('Sorted by problem claims per review, most first. Setups without a value come last.')
     expect(markup).not.toContain('Compare detection against')
-    expect(markup).toMatch(/aria-sort="descending"[^>]*>(?:<[^>]+>)*<span class="overview-title">True claims per review/)
+    expect(markup).toMatch(/aria-sort="descending"[^>]*>(?:<[^>]+>)*<span class="overview-title">True claims/)
     expect(setups(markup).slice(0, 6)).toEqual(['ce-code-review / Fixture A / High', 'Claude built-in / Fixture A / High', 'ce-code-review / Fixture B / High',
       'ce-code-review / Fixture C / High', 'Claude built-in / Fixture B / High', 'Claude built-in / Fixture C / High'])
     expect(shown).toContain('Problem claims per review Unavailable 1 : 4 admitted reviews were graded before these labels.')
@@ -224,7 +224,7 @@ describe('overview', () => {
       'Claude built-in / Fixture A / High', 'ce-code-review / Fixture A / High', 'Claude built-in / Fixture B / High'])
     expect(setups(dearest)).toEqual(['ce-code-review / Fixture A / High', 'Claude built-in / Fixture A / High', 'ce-code-review / Fixture C / High',
       'ce-code-review / Fixture B / High', 'Claude built-in / Fixture C / High', 'Claude built-in / Fixture B / High'])
-    expect(cheapest).toMatch(/aria-sort="ascending"[^>]*>(?:<[^>]+>)*<span class="overview-title">Cost per scheduled trial/)
+    expect(cheapest).toMatch(/aria-sort="ascending"[^>]*>(?:<[^>]+>)*<span class="overview-title">Cost per trial/)
     expect(text(overview({ column: 'setup', direction: 'ascending' }))).toContain('Sorted by setup name, A to Z.')
   })
 
