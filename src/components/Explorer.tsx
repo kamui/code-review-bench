@@ -35,8 +35,9 @@ export function Explorer() {
       .catch((error: unknown) => { if (!cancelled) setState({ kind: 'failed', message: error instanceof Error ? error.message : 'Unable to load benchmark data' }) })
     return () => { cancelled = true }
   }, [reload])
-  if (page === 'scorecard' && hash === 'tasks') return <Navigate to="/tasks" replace />
-  if (state.kind === 'loading') return <div className="loading"><Loader /><Text>Loading benchmark evidence…</Text></div>
+  const loading = <div className="loading"><Loader /><Text>Loading benchmark evidence…</Text></div>
+  if (page === 'scorecard' && hash === 'tasks') return <><Navigate to="/tasks" replace />{loading}</>
+  if (state.kind === 'loading') return loading
   if (state.kind === 'failed') return <Container size="sm" py={100}><Alert color="red" title="Benchmark unavailable">{state.message}</Alert><Button mt="md" onClick={() => setReload(value => value + 1)}>Retry</Button></Container>
   return <Dashboard dataset={state.dataset} page={page} />
 }
