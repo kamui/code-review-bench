@@ -55,6 +55,9 @@ export function ClaimLabels({ rows }: { rows: Row[] }) {
     <ul className="label-legend" aria-label="Claim labels">{labelSegments.map(segment => <li key={segment}>
       <span className={segmentClass('label-swatch', segment)} style={swatch(segment)} aria-hidden="true" />{segmentLabels[segment]}</li>)}</ul>
     <div className="label-plot" role="list" aria-label="Claim labels per admitted review">
+      {shown.length > 0 && <div className="label-row label-axis" aria-hidden="true"><span />
+        <span className="label-sides">{left > 0 && <span style={{ right: `${100 - origin}%` }}>Refuted, unproven or unresolved</span>}
+          <span style={{ left: `${origin}%` }}>True claims</span></span></div>}
       {rows.map(row => {
         const missing = unavailable(row)
         return <div role="listitem" key={row.id} className="label-row"
