@@ -27,3 +27,17 @@ The explorer and `bun run scorecard` show the current v1 scorecard only. Every r
 After publishing a new benchmark in the current scoreboard registry, regenerate the explorer data and verify the hero's task, known-problem, skill, and model counts. Follow the counting rules in [Future benchmark runs](README.md#future-benchmark-runs); totals cover the full published dataset, not the active chart filters.
 
 Write commits and PRs as the user's work, without model attribution or co-author trailers. Never bypass commit hooks.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live in GitHub Issues for `kamui/code-review-bench`. Before issue work, read `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the five default triage labels. Before triage, read the role mapping in `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout: root `GLOSSARY.md` and `docs/adr/`. Before exploring the codebase, read `docs/agents/domain.md`.
