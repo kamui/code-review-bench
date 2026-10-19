@@ -33,7 +33,8 @@ The pin that queues and runs use is the executable's SHA-256 together with the r
 
 1. Install rustup. The crate's `rust-toolchain.toml` names the toolchain; `rustup show` in the
    crate installs it.
-2. From the crate, run `cargo fetch --locked` once. This is the only step that needs the network.
+2. From the crate, run `cargo fetch --locked`, and again after every `Cargo.lock` change. This is the only step that
+   needs the network.
 3. From a clean, committed checkout, run:
 
    ```sh
