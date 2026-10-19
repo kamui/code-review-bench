@@ -701,6 +701,45 @@ fn every_zip64_end_record_after_the_locator_is_bounded_not_only_the_first() {
 }
 
 #[test]
+fn payload_signatures_are_not_scanned_before_the_first_member_and_prepended_data_still_reads() {
+    let payload = b"PK\x01\x02".repeat(256 * 1024);
+    let bytes = {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        writer.start_file("a", options).unwrap();
+        writer.write_all(&payload).unwrap();
+        writer.finish().unwrap().into_inner()
+    };
+    let limits = Limits {
+        members: 1,
+        payload: payload.len() as u64,
+    };
+    let read = Rc::new(Cell::new(0));
+    let source = Counting {
+        inner: Cursor::new(bytes.clone()),
+        read: read.clone(),
+    };
+    let mut before_first = None;
+    archive::read_zip(source, &limits, |_, _| {
+        before_first.get_or_insert(read.get());
+        Ok(())
+    })
+    .unwrap();
+    let before_first = before_first.unwrap();
+    assert!(
+        before_first < 4 * limits.zip_directory_bytes(),
+        "read {before_first} bytes before the first member"
+    );
+
+    let prepended = [&b"#!/bin/sh\n".repeat(100)[..], &bytes].concat();
+    assert_eq!(read_zip(&prepended, &limits).unwrap()[0].1, payload);
+    let zip64 = with_zip64_end(&scratch(&[("a", b"alpha")]), 1);
+    let prepended64 = [&b"#!/bin/sh\n".repeat(100)[..], &zip64].concat();
+    assert_eq!(read_zip(&prepended64, &ROOMY).unwrap()[0].1, b"alpha");
+}
+
+#[test]
 fn indexed_member_sizes_that_overflow_are_an_error_not_a_panic() {
     let directory = std::env::temp_dir().join(format!(
         "bench-tools-archive-overflow-{}",

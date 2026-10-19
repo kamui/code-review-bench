@@ -10,6 +10,7 @@ use flate2::{Compression, GzBuilder};
 use std::collections::HashSet;
 use std::fmt;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use zip::read::{ArchiveOffset, Config};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, DateTime, System, ZipArchive, ZipWriter};
 
@@ -696,22 +697,23 @@ fn each_zip64_end<R: Read + Seek>(
 }
 
 /// Refuse a central directory above `limits` before `ZipArchive` reads it. Every end record in the comment window
-/// is checked, because `ZipArchive` tries each in turn.
+/// is checked, because `ZipArchive` tries each in turn. Returns where the archive starts, as zipfile infers it from
+/// the last end record: `ZipArchive` would otherwise detect it by indexing every central header signature in the file,
+/// payload included.
 fn check_zip_end_records<R: Read + Seek>(
     file: &mut R,
     limits: &Limits,
-) -> Result<(), ArchiveError> {
+) -> Result<u64, ArchiveError> {
     let length = file.seek(SeekFrom::End(0))?;
     let start = length.saturating_sub(ZIP_END + ZIP_COMMENT_LIMIT + 1);
     let mut tail = vec![0u8; usize::try_from(length - start).unwrap_or(0)];
     file.seek(SeekFrom::Start(start))?;
     file.read_exact(&mut tail)?;
-    let mut found = false;
+    let mut archive_start = None;
     for at in (0..tail.len().saturating_sub(ZIP_END as usize - 1)).rev() {
         if tail[at..at + 4] != ZIP_END_SIGNATURE {
             continue;
         }
-        found = true;
         let record = &tail[at..at + ZIP_END as usize];
         let (entries32, bytes32) = (
             u16_at(record, 8).max(u16_at(record, 10)),
@@ -729,10 +731,17 @@ fn check_zip_end_records<R: Read + Seek>(
         };
         let mut zip64 = false;
         let mut locator = [0u8; 20];
-        if position >= 20
+        let has_locator = position >= 20
             && read_at(file, position - 20, &mut locator)?
-            && locator[..4] == ZIP64_LOCATOR_SIGNATURE
-        {
+            && locator[..4] == ZIP64_LOCATOR_SIGNATURE;
+        if archive_start.is_none() {
+            archive_start = Some(if may_be_zip64 && has_locator {
+                zip64_archive_start(file, position - 20, u64_at(&locator, 8))?
+            } else {
+                position.saturating_sub(bytes32.saturating_add(u32_at(record, 16)))
+            });
+        }
+        if has_locator {
             let offset = u64_at(&locator, 8);
             if offset < position - 20 {
                 each_zip64_end(file, offset, position - 20, |end| {
@@ -759,12 +768,22 @@ fn check_zip_end_records<R: Read + Seek>(
             },
         )?;
     }
-    if !found {
-        return Err(
-            Refusal::Malformed("no zip end of central directory record".to_string()).into(),
-        );
+    archive_start.ok_or_else(|| {
+        Refusal::Malformed("no zip end of central directory record".to_string()).into()
+    })
+}
+
+/// zipfile looks for the zip64 end record at the locator's offset and, for prepended data, just before the locator.
+fn zip64_archive_start<R: Read + Seek>(
+    file: &mut R,
+    locator_at: u64,
+    recorded: u64,
+) -> io::Result<u64> {
+    let mut signature = [0u8; 4];
+    if read_at(file, recorded, &mut signature)? && signature == ZIP64_END_SIGNATURE {
+        return Ok(0);
     }
-    Ok(())
+    Ok(locator_at.saturating_sub(56).saturating_sub(recorded))
 }
 
 /// Read a zip archive, giving each member and its decompressed data to `visit` in central directory order.
@@ -773,8 +792,11 @@ pub fn read_zip<R: Read + Seek>(
     limits: &Limits,
     mut visit: impl FnMut(&ZipMember, &mut dyn Read) -> Result<(), ArchiveError>,
 ) -> Result<(), ArchiveError> {
-    check_zip_end_records(&mut file, limits)?;
-    let mut archive = ZipArchive::new(file)?;
+    let start = check_zip_end_records(&mut file, limits)?;
+    let config = Config {
+        archive_offset: ArchiveOffset::Known(start),
+    };
+    let mut archive = ZipArchive::with_config(config, file)?;
     if archive.len() as u64 > limits.members {
         return Err(Refusal::TooManyEntries {
             limit: limits.members,
