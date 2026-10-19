@@ -897,6 +897,34 @@ fn attach_dash_led_values(arguments: Vec<OsString>) -> Vec<OsString> {
     attached
 }
 
+/// argparse refuses `-h` with an attached argument that starts with `=` or `-`, such as `-h=1` or `-h-x`, exit 2,
+/// where clap prints help. The first `-h` before `--` decides, as argparse acts on the first help it reads.
+fn refuse_help_with_explicit_argument(arguments: &[OsString]) -> Option<ExitCode> {
+    let command = arguments
+        .get(1)?
+        .to_str()
+        .filter(|name| !name.starts_with('-'))?;
+    let help = arguments
+        .iter()
+        .skip(2)
+        .map(|argument| pytext::os_bytes(argument))
+        .take_while(|argument| *argument != b"--")
+        .find(|argument| argument.starts_with(b"-h"))?;
+    let explicit = match help.get(2)? {
+        b'=' => &help[3..],
+        b'-' => &help[2..],
+        _ => return None,
+    };
+    Some(misuse(
+        command,
+        ErrorKind::UnknownArgument,
+        format!(
+            "argument -h/--help: ignored explicit argument {}",
+            pytext::repr(&pytext::surrogateescape(explicit))
+        ),
+    ))
+}
+
 fn main() -> ExitCode {
     let arguments: Vec<OsString> = std::env::args_os().collect();
     // clap reads `-hx` before a subcommand as `-h` and prints help; the top level has no Python
@@ -911,8 +939,12 @@ fn main() -> ExitCode {
             format!("unknown command {}", pytext::stderr_text(command)),
         );
     }
-    let cli = match Cli::try_parse_from(attach_dash_led_values(arguments)) {
+    let cli = match Cli::try_parse_from(attach_dash_led_values(arguments.clone())) {
         Ok(cli) => cli,
+        Err(error) if error.kind() == ErrorKind::DisplayHelp => {
+            return refuse_help_with_explicit_argument(&arguments)
+                .unwrap_or_else(|| report(&error));
+        }
         Err(error) => return report(&error),
     };
     let outcome = match cli {
