@@ -145,6 +145,7 @@ enum Event {
     Sync(PathBuf),
     Link(PathBuf, PathBuf),
     SyncDir(PathBuf),
+    Rename(PathBuf, PathBuf),
 }
 
 /// The host filesystem, recording each effect and failing the effect numbered `fail_at`, as a crash would stop it.
@@ -189,6 +190,11 @@ impl Disk for Recording {
     fn sync_dir(&mut self, path: &Path) -> io::Result<()> {
         self.record(Event::SyncDir(path.to_path_buf()))?;
         System.sync_dir(path)
+    }
+
+    fn rename(&mut self, from: &Path, to: &Path) -> io::Result<()> {
+        self.record(Event::Rename(from.to_path_buf(), to.to_path_buf()))?;
+        System.rename(from, to)
     }
 }
 
@@ -481,4 +487,180 @@ fn interrupting_verify_receipt_at_download_unpack_or_receipt_write_leaves_no_rec
         }
         std::fs::remove_dir_all(&root).unwrap();
     }
+}
+
+fn collect(root: &Path, disk: &mut dyn Disk) -> Result<Vec<u8>, evidence::collect::Failure> {
+    let mut remote = FakeRemote::new(&package());
+    let mut store = Store {
+        remote: &mut remote,
+        disk,
+        now: &fixed_clock,
+        temporary: py(&scratch_temporary()),
+    };
+    let run = root.join("bench/runs/r1");
+    evidence::collect::collect(&mut store, &py(root), run.as_os_str().as_bytes(), &[])
+}
+
+fn temporaries(root: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    for directory in directories(root) {
+        for entry in std::fs::read_dir(&directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|extension| extension == "tmp") {
+                found.push(path);
+            }
+        }
+    }
+    found
+}
+
+#[test]
+fn collection_links_a_synced_archive_and_replaces_the_mapping_atomically_at_every_interruption() {
+    let root = scratch("collect");
+    let run = root.join("bench/runs/r1");
+    let record = run.join("attempts/att-001/attempt.json");
+    let source = root.join("local-archive/att-001.tar.gz");
+    let archive = root.join("artifacts/transcripts/r1/att-001.tar.gz");
+    let mapping = run.join("transcripts.json");
+    std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+    std::fs::write(&source, b"transcript archive").unwrap();
+    std::fs::write(
+        &record,
+        format!(
+            r#"{{"transcript_archive": {{"path": "local-archive/att-001.tar.gz", "sha256": "{}"}}}}"#,
+            sha256::hex_digest(b"transcript archive")
+        ),
+    )
+    .unwrap();
+    let previous = b"[]\n";
+    let reset = || {
+        let _ = std::fs::remove_file(&archive);
+        std::fs::write(&mapping, previous).unwrap();
+        std::fs::set_permissions(&mapping, std::fs::Permissions::from_mode(0o600)).unwrap();
+    };
+    reset();
+    let mut complete = Recording::new(None);
+    assert_eq!(
+        collect(&root, &mut complete).unwrap(),
+        b"Collected 1 verified transcripts for r1"
+    );
+    let written = std::fs::read(&mapping).unwrap();
+    assert!(
+        written.starts_with(
+            b"[\n  {\n    \"attempt\": \"bench/runs/r1/attempts/att-001/attempt.json\""
+        )
+    );
+    assert_eq!(
+        std::fs::metadata(&mapping).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let position =
+        |wanted: &dyn Fn(&Event) -> bool| complete.events.iter().position(wanted).unwrap();
+    let archive_link = position(&|event| matches!(event, Event::Link(_, to) if to == &archive));
+    let Event::Link(archive_temporary, _) = &complete.events[archive_link] else {
+        unreachable!()
+    };
+    assert!(position(&|event| event == &Event::Sync(archive_temporary.clone())) < archive_link);
+    let rename = position(&|event| matches!(event, Event::Rename(_, to) if to == &mapping));
+    let Event::Rename(mapping_temporary, _) = &complete.events[rename] else {
+        unreachable!()
+    };
+    assert!(position(&|event| event == &Event::Sync(mapping_temporary.clone())) < rename);
+    assert!(
+        archive_link < rename,
+        "the mapping is written after its archive is in place"
+    );
+    assert!(complete.events[rename..].contains(&Event::SyncDir(run.clone())));
+    for fail_at in 0..complete.events.len() {
+        reset();
+        let mut interrupted = Recording::new(Some(fail_at));
+        assert!(collect(&root, &mut interrupted).is_err(), "{fail_at}");
+        let found = std::fs::read(&mapping).unwrap();
+        assert!(
+            found == previous || found == written,
+            "{fail_at}: {found:?}"
+        );
+        assert!(
+            !archive.exists() || std::fs::read(&archive).unwrap() == b"transcript archive",
+            "{fail_at}"
+        );
+        assert_eq!(temporaries(&root), Vec::<PathBuf>::new(), "{fail_at}");
+        assert_eq!(
+            collect(&root, &mut System).unwrap(),
+            b"Collected 1 verified transcripts for r1"
+        );
+        assert_eq!(std::fs::read(&mapping).unwrap(), written, "{fail_at}");
+    }
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// The host filesystem, rewriting `source` in place when the first file is created: after collection verified the
+/// archive and opened it for the copy.
+struct ChangesSource {
+    source: PathBuf,
+    changed: bool,
+}
+
+impl Disk for ChangesSource {
+    fn create(&mut self, path: &Path) -> io::Result<File> {
+        if !self.changed {
+            self.changed = true;
+            std::fs::write(&self.source, b"changed archive")?;
+        }
+        System.create(path)
+    }
+
+    fn sync(&mut self, file: &File, path: &Path) -> io::Result<()> {
+        System.sync(file, path)
+    }
+
+    fn link(&mut self, from: &Path, to: &Path) -> io::Result<()> {
+        System.link(from, to)
+    }
+
+    fn sync_dir(&mut self, path: &Path) -> io::Result<()> {
+        System.sync_dir(path)
+    }
+}
+
+#[test]
+fn collection_refuses_an_archive_that_changes_while_it_is_copied() {
+    let root = scratch("collect-changed");
+    let run = root.join("bench/runs/r1");
+    let record = run.join("attempts/att-001/attempt.json");
+    let source = root.join("local-archive/att-001.tar.gz");
+    let archive = root.join("artifacts/transcripts/r1/att-001.tar.gz");
+    let mapping = run.join("transcripts.json");
+    std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+    std::fs::write(&source, b"transcript archive").unwrap();
+    std::fs::write(
+        &record,
+        format!(
+            r#"{{"transcript_archive": {{"path": "local-archive/att-001.tar.gz", "sha256": "{}"}}}}"#,
+            sha256::hex_digest(b"transcript archive")
+        ),
+    )
+    .unwrap();
+    std::fs::write(&mapping, b"[]\n").unwrap();
+    let mut disk = ChangesSource {
+        source: source.clone(),
+        changed: false,
+    };
+    assert_eq!(
+        collect(&root, &mut disk),
+        Err(evidence::collect::Failure::Value(
+            [
+                &b"Transcript checksum mismatch: "[..],
+                record.as_os_str().as_bytes()
+            ]
+            .concat()
+        ))
+    );
+    assert!(disk.changed);
+    assert!(!archive.exists());
+    assert_eq!(std::fs::read(&mapping).unwrap(), b"[]\n");
+    assert_eq!(temporaries(&root), Vec::<PathBuf>::new());
+    std::fs::remove_dir_all(&root).unwrap();
 }

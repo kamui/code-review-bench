@@ -13,6 +13,7 @@ from unittest.mock import patch
 import evidence_inventory as inventory
 import evidence_store as store
 import retire_workspace as retire
+import rust_runtime
 import regrade
 from test_evidence_store import FakeGitHub
 
@@ -90,6 +91,20 @@ class RetirementTest(unittest.TestCase):
         self.assertEqual(before, self.remote.shared)
         self.assertTrue((self.base / 'receipt.json.completed.json').exists())
         self.assertIn('free_bytes_delta', result)
+
+    def test_rust_inventory_is_an_accepted_snapshot(self):
+        out = self.base / 'rust-inventory.json'
+        done = subprocess.run([str(rust_runtime.resolve('bench-tools')), 'evidence', 'inventory', '--root', str(self.work),
+                               '--out', str(out), '--hash-all'], capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        snapshot = store.read(out)['roots'][0]
+        self.assertEqual(snapshot, inventory.inventory(self.work, hash_all=True))
+        (self.repo / self.inventory_name).write_text(json.dumps(snapshot))
+        self.remote.freeze_git()
+        with patch.object(retire, 'active_users', return_value=[]):
+            result = self.run_retirement(apply=True)
+        self.assertTrue(result['applied'])
+        self.assertFalse(self.work.exists())
 
     def test_active_open_investigation_missing_diagnostics_and_unpushed_plan_refuse(self):
         with patch.object(retire, 'active_users', return_value=[123]):

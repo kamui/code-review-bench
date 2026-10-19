@@ -10,6 +10,7 @@ pub mod delegation;
 pub mod derive_packet;
 pub mod diff_identity;
 pub mod evidence;
+pub mod evidence_inventory;
 pub mod export_explorer;
 pub mod grading_reports;
 pub mod grading_validation;

@@ -6,6 +6,7 @@
 //! restart on a filesystem that honors `fsync`. A destination that exists but differs from the manifest is never
 //! trusted or overwritten: `materialize` lists every such file with a command that moves them aside.
 
+pub mod collect;
 pub mod publication;
 pub mod recovery;
 pub mod remote;
@@ -466,7 +467,7 @@ pub fn checked_file(path: &PyPath, sha: &str, bytes: u64, mode: Option<u32>) -> 
 }
 
 /// `Path.mkdir(parents=True, exist_ok=True)`, returning the directories it created, outermost first.
-pub(crate) fn make_dirs(path: &PyPath) -> Result<Vec<PyPath>> {
+pub fn make_dirs(path: &PyPath) -> Result<Vec<PyPath>> {
     let mut missing = Vec::new();
     for current in std::iter::once(path.clone()).chain(parents(path)) {
         if current.to_path_buf().is_dir() {
@@ -534,6 +535,12 @@ pub(crate) fn random_name(prefix: &str) -> String {
         value /= 37;
     }
     name
+}
+
+/// A new name in `directory` for a temporary file. It does not include the destination's name, so a destination
+/// whose name is near the filesystem's limit still has one.
+fn temporary_beside(directory: &PyPath) -> PyPath {
+    directory.join(format!(".{}.tmp", random_name("")).as_bytes())
 }
 
 /// `tempfile.TemporaryDirectory(prefix=..., dir=...)`: a new directory, mode 0700, removed with its contents.
@@ -809,16 +816,7 @@ pub fn write_new_as(
         sync_dirs(disk, &reaching)?;
         return same(path);
     }
-    let name = path
-        .as_bytes()
-        .rsplit(|byte| *byte == b'/')
-        .next()
-        .unwrap_or_default();
-    let temporary = directory.join(
-        [b".", name, b".", random_name("").as_bytes(), b".tmp"]
-            .concat()
-            .as_slice(),
-    );
+    let temporary = temporary_beside(&directory);
     let os_temporary = temporary.to_path_buf();
     let written = (|| -> Result<()> {
         // Named as `open(path, 'x')` names the record when its directory refuses a new file.
@@ -838,6 +836,69 @@ pub fn write_new_as(
     let _ = std::fs::remove_file(&os_temporary);
     written?;
     sync_dirs(disk, &reaching)
+}
+
+/// A synced temporary file beside `path`, filled by `fill`, which `settle` then moves to `path`. The temporary
+/// file is removed whatever happens, and `path`'s directory and each of its ancestors are synced afterwards.
+fn through_temporary(
+    disk: &mut dyn Disk,
+    path: &PyPath,
+    mode: Option<u32>,
+    fill: &mut dyn FnMut(&mut File) -> io::Result<()>,
+    settle: &mut dyn FnMut(&mut dyn Disk, &Path) -> Result<()>,
+) -> Result<()> {
+    let directory = parent(path);
+    let temporary = temporary_beside(&directory);
+    let os_temporary = temporary.to_path_buf();
+    let written = (|| -> Result<()> {
+        let mut file = disk
+            .create(&os_temporary)
+            .map_err(|error| os_failure(&error, temporary.as_bytes()))?;
+        if let Some(mode) = mode {
+            file.set_permissions(std::fs::Permissions::from_mode(mode))
+                .map_err(|error| os_failure(&error, temporary.as_bytes()))?;
+        }
+        fill(&mut file).map_err(|error| os_failure(&error, temporary.as_bytes()))?;
+        disk.sync(&file, &os_temporary)
+            .map_err(|error| os_failure(&error, temporary.as_bytes()))?;
+        settle(disk, &os_temporary)
+    })();
+    let _ = std::fs::remove_file(&os_temporary);
+    written?;
+    let reaching: BTreeSet<Vec<u8>> = std::iter::once(directory.clone())
+        .chain(parents(&directory))
+        .map(|ancestor| ancestor.as_bytes().to_vec())
+        .collect();
+    sync_dirs(disk, &reaching)
+}
+
+/// `open(path, 'xb')` and a write, made durable: the bytes go to a synced temporary file that is linked to `path`,
+/// so an interruption never leaves a partial file there. An existing entry at `path`, even a dangling link, is the
+/// `FileExistsError` Python raises.
+pub fn create_new(
+    disk: &mut dyn Disk,
+    path: &PyPath,
+    fill: &mut dyn FnMut(&mut File) -> io::Result<()>,
+) -> Result<()> {
+    through_temporary(disk, path, None, fill, &mut |disk, temporary| {
+        disk.link(temporary, &path.to_path_buf())
+            .map_err(|error| os_failure(&error, path.as_bytes()))
+    })
+}
+
+/// Replace `path` with `data` atomically: a synced temporary file, given `mode` when one is named, renamed over
+/// it, then its directory synced. A link at `path` is replaced, never written through.
+pub fn replace(disk: &mut dyn Disk, path: &PyPath, data: &[u8], mode: Option<u32>) -> Result<()> {
+    through_temporary(
+        disk,
+        path,
+        mode,
+        &mut |file| file.write_all(data),
+        &mut |disk, temporary| {
+            disk.rename(temporary, &path.to_path_buf())
+                .map_err(|error| os_failure(&error, path.as_bytes()))
+        },
+    )
 }
 
 /// `evidence_store.restoration_receipt`: verify every package from the remote, then write a new receipt.

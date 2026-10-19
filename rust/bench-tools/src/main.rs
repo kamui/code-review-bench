@@ -6,8 +6,8 @@ use bench_tools::pytext::{self, PyPath};
 use bench_tools::schema::{SchemaError, Validator};
 use bench_tools::{
     archive, build_packet, claims, delegation, derive_packet, diff_identity, evidence,
-    export_explorer, grading_reports, grading_validation, import_benchmark, native_artifacts,
-    normalize_thermo, pyfs, pyunicode, pyvalue, rates, roster, ruling, upstream,
+    evidence_inventory, export_explorer, grading_reports, grading_validation, import_benchmark,
+    native_artifacts, normalize_thermo, pyfs, pyunicode, pyvalue, rates, roster, ruling, upstream,
 };
 use clap::builder::PossibleValuesParser;
 use clap::error::ErrorKind;
@@ -451,6 +451,40 @@ enum EvidenceCommand {
         path: Vec<OsString>,
         #[arg(long)]
         offline: bool,
+    },
+    /// Collect portable, checksum-verified transcript references for a completed run into RUN/transcripts.json, as
+    /// tools/collect_run.py did, with the current directory as the repository.
+    #[command(infer_long_args = true)]
+    Collect {
+        #[arg(long, allow_negative_numbers = true)]
+        run: OsString,
+        /// A record directory of the run, such as probes/att-002, whose archive no copy holds; its entry keeps the
+        /// frozen hash with status missing.
+        #[arg(long, value_name = "RECORD", allow_negative_numbers = true)]
+        missing: Vec<OsString>,
+    },
+    /// Reconcile a saved host inventory with evidence identities, as reconcile_evidence.py did; never authorize
+    /// deletion.
+    #[command(infer_long_args = true)]
+    Reconcile {
+        #[arg(long, allow_negative_numbers = true)]
+        inventory: OsString,
+        #[arg(long, allow_negative_numbers = true)]
+        root: Option<OsString>,
+        #[arg(long, allow_negative_numbers = true)]
+        out: OsString,
+    },
+    /// Inventory execution storage without deleting or changing it, as evidence_inventory.py does: every entry that
+    /// is not a directory, including ignored files and symlinks. Classification never authorizes deletion.
+    #[command(infer_long_args = true)]
+    Inventory {
+        #[arg(long, required = true, allow_negative_numbers = true)]
+        root: Vec<OsString>,
+        #[arg(long, allow_negative_numbers = true)]
+        out: OsString,
+        /// Also hash rebuildable and account-state files locally.
+        #[arg(long)]
+        hash_all: bool,
     },
     /// Archive an attempt's transcripts and read the archive back, as file_attempt.archive_transcripts does.
     #[command(infer_long_args = true)]
@@ -1308,6 +1342,33 @@ fn run_evidence(command: EvidenceCommand) -> Result<ExitCode, ExitCode> {
     {
         return run_restore_local(&label, &original, &output);
     }
+    if let EvidenceCommand::Inventory {
+        root,
+        out,
+        hash_all,
+    } = command
+    {
+        return run_inventory(&root, &out, hash_all);
+    }
+    if let EvidenceCommand::Reconcile {
+        inventory,
+        root,
+        out,
+    } = command
+    {
+        let root = evidence_root(root.as_deref())?;
+        return report_failure(
+            "reconcile_evidence.py",
+            evidence_inventory::reconcile::run(
+                &mut evidence::System,
+                pytext::os_bytes(&inventory),
+                &root,
+                pytext::os_bytes(&out),
+            )
+            .map(String::into_bytes)
+            .map_err(String::into_bytes),
+        );
+    }
     let mut remote = evidence::GitHub;
     let mut disk = evidence::System;
     let mut store = evidence::Store {
@@ -1405,6 +1466,15 @@ fn run_evidence(command: EvidenceCommand) -> Result<ExitCode, ExitCode> {
             )
             .map(|()| "Recovery copy verified and restored.".to_string())
         }
+        EvidenceCommand::Collect { run, missing } => {
+            let root = evidence_root(None)?;
+            let missing: Vec<Vec<u8>> = missing.into_iter().map(bytes).collect();
+            return report_failure(
+                "collect_run.py",
+                evidence::collect::collect(&mut store, &root, pytext::os_bytes(&run), &missing)
+                    .map_err(|failure| failure.message().to_vec()),
+            );
+        }
         EvidenceCommand::ArchiveTranscripts {
             attempt_dir,
             dest,
@@ -1423,9 +1493,53 @@ fn run_evidence(command: EvidenceCommand) -> Result<ExitCode, ExitCode> {
             )
             .map(|archived| archived.json())
         }
-        EvidenceCommand::RestoreLocal { .. } => unreachable!("handled above"),
+        EvidenceCommand::RestoreLocal { .. }
+        | EvidenceCommand::Inventory { .. }
+        | EvidenceCommand::Reconcile { .. } => {
+            unreachable!("handled above")
+        }
     };
     evidence_outcome(outcome)
+}
+
+/// A command whose Python raised a traceback for every failure: its line on stdout, or `PROGRAM: ` and the
+/// exception's message on stderr with exit 1, a byte that is not UTF-8 written as Python writes it there.
+fn report_failure(program: &str, outcome: Result<Vec<u8>, Vec<u8>>) -> Result<ExitCode, ExitCode> {
+    match outcome {
+        Ok(line) => {
+            write_stdout(&[&line[..], b"\n"].concat())?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(message) => {
+            eprintln!("{program}: {}", pytext::stderr_text(&message));
+            Err(ExitCode::from(1))
+        }
+    }
+}
+
+/// `evidence_inventory.main`: the summary on stdout, a violation on stdout with exit 1, and an I/O failure on stderr
+/// with exit 2.
+fn run_inventory(roots: &[OsString], out: &OsStr, hash_all: bool) -> Result<ExitCode, ExitCode> {
+    let roots: Vec<Vec<u8>> = roots.iter().map(|root| bytes(root.clone())).collect();
+    match evidence_inventory::run(
+        &mut evidence::System,
+        &roots,
+        pytext::os_bytes(out),
+        hash_all,
+    ) {
+        Ok(summary) => {
+            write_stdout(format!("{summary}\n").as_bytes())?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(evidence_inventory::Error::Violation(message)) => {
+            write_stdout(&[&b"inventory: "[..], &message, b"\n"].concat())?;
+            Err(ExitCode::from(1))
+        }
+        Err(evidence_inventory::Error::Io(message)) => {
+            eprintln!("inventory: {message}");
+            Err(ExitCode::from(2))
+        }
+    }
 }
 
 /// `native_artifacts.py COMMAND ...`: the command's line on stdout, or `native_artifacts.py: <error>` on stderr
@@ -1804,18 +1918,22 @@ fn run_ruling(command: RulingCommand) -> Result<ExitCode, ExitCode> {
     }
 }
 
-/// argparse reads a dash-led argument as a value when it names no option and reads as a negative number or holds
-/// a space; `build-packet-option-values-with-leading-dash`, `grading-validation`'s `dash-led-*` cases and
-/// `pack-unicode-negative-out` pin that. clap takes only numbers, so before it parses them, the arguments of
-/// build-packet, grading validate, evidence pack and evidence publish attach such a value to its option with `=`,
-/// and grading validate's positional moves after `--`.
+/// argparse reads a dash-led argument as an option's value when it names no option and holds a space, and Python
+/// 3.14's also when it reads as a negative number; `build-packet-option-values-with-leading-dash`,
+/// `grading-validation`'s `dash-led-*` cases, `pack-unicode-negative-out` and `inventory-dash-led-space-root` pin
+/// that. clap takes only numbers, so before it parses them, these commands attach such a value to its option with
+/// `=`, and grading validate's positional moves after `--`. Only build-packet, grading validate, evidence pack and
+/// evidence publish, whose decisions pin Python 3.14, take the number form.
 fn attach_dash_led_values(arguments: Vec<OsString>) -> Vec<OsString> {
     let name = |index: usize| arguments.get(index).map(|name| pytext::os_bytes(name));
-    let path: &[&str] = match (name(1), name(2)) {
-        (Some(b"build-packet"), _) => &["build-packet"],
-        (Some(b"grading"), Some(b"validate")) => &["grading", "validate"],
-        (Some(b"evidence"), Some(b"pack")) => &["evidence", "pack"],
-        (Some(b"evidence"), Some(b"publish")) => &["evidence", "publish"],
+    let (path, numbers): (&[&str], bool) = match (name(1), name(2)) {
+        (Some(b"build-packet"), _) => (&["build-packet"], true),
+        (Some(b"grading"), Some(b"validate")) => (&["grading", "validate"], true),
+        (Some(b"evidence"), Some(b"collect")) => (&["evidence", "collect"], false),
+        (Some(b"evidence"), Some(b"inventory")) => (&["evidence", "inventory"], false),
+        (Some(b"evidence"), Some(b"reconcile")) => (&["evidence", "reconcile"], false),
+        (Some(b"evidence"), Some(b"pack")) => (&["evidence", "pack"], true),
+        (Some(b"evidence"), Some(b"publish")) => (&["evidence", "publish"], true),
         _ => return arguments,
     };
     let mut command = Cli::command();
@@ -1874,7 +1992,7 @@ fn attach_dash_led_values(arguments: Vec<OsString>) -> Vec<OsString> {
         argument.len() > 1
             && argument[0] == b'-'
             && !names_option(argument)
-            && (negative_number || argument.contains(&b' '))
+            && ((numbers && negative_number) || argument.contains(&b' '))
     };
     let mut attached = Vec::with_capacity(arguments.len());
     let mut positionals = Vec::new();
