@@ -8,755 +8,295 @@ use bench_tools::{
     archive, build_packet, claims, derive_packet, diff_identity, export_explorer, normalize_thermo,
     pyfs, pyunicode, rates, roster, upstream,
 };
-use std::collections::HashMap;
+use clap::builder::PossibleValuesParser;
+use clap::error::ErrorKind;
+use clap::{Args, CommandFactory, Parser, Subcommand};
 use std::ffi::{OsStr, OsString};
+use std::fmt::Display;
 use std::io::Write;
+use std::os::unix::ffi::OsStringExt;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: bench-tools {roster,diff-identity,normalize-review,normalize-thermo,derive-packet,build-packet,check-manifest,rates,upstream,export-explorer,archive} ...
-
-  roster            list the benchmarks the roster has and the ones still missing
-  diff-identity     print the changed-file manifest of base..head and its SHA-256
-  normalize-review  normalize one reviewer's native output into the common finding schema
-  normalize-thermo  map the thermo skill's verbatim finding index to the common finding schema
-  derive-packet     write the factual packet derived from a legacy packet
-  build-packet      build a phase-1 review packet for one pull request, frozen at a cutoff
-  check-manifest    validate JSON documents against a bench schema
-  rates             check the rate catalog against provider prices (rates check)
-  upstream          print the maintainer audit's shadow report (upstream report)
-  export-explorer   list, stage or publish the explorer export (tools/export_explorer.py runs it)
-  archive           check cached evidence packages or native scratch archives through bench_tools::archive";
-
-const ARCHIVE_USAGE: &str =
-    "usage: bench-tools archive check-packages [-h] --cache CACHE manifests [manifests ...]
-       bench-tools archive check-scratch [-h] archives [archives ...]";
-
-const CHECK_MANIFEST_USAGE: &str =
-    "usage: bench-tools check-manifest [-h] schema manifests [manifests ...]";
-
-const NORMALIZE_REVIEW_USAGE: &str = "usage: bench-tools normalize-review [-h] [--arm {review-code,claude-builtin,claude-skill,codex,codex-skill}]
-                                     [--composition COMPOSITION] [--payload PAYLOAD] [--stdout STDOUT]
-                                     [--native-review NATIVE_REVIEW] [--sessions-dir SESSIONS_DIR] [--clone CLONE]
-                                     [--out OUT] [--render RENDER] [--timing TIMING]";
-
-const NORMALIZE_THERMO_USAGE: &str = "usage: bench-tools normalize-thermo [-h] --artifact-root ARTIFACT_ROOT [--clone CLONE] --out OUT
-                                     [--arm {codex-skill,claude-skill}]";
-
-const DIFF_IDENTITY_USAGE: &str =
-    "usage: bench-tools diff-identity [-h] [--expect EXPECT] [--quiet] repo base head";
-
-/// A command-line mistake: print the usage and exit 2, as argparse does.
-struct Misuse {
-    usage: &'static str,
-    prog: &'static str,
-    message: String,
+/// Deterministic benchmark tools.
+#[derive(Parser)]
+#[command(
+    name = "bench-tools",
+    bin_name = "bench-tools",
+    args_override_self = true,
+    disable_help_subcommand = true
+)]
+enum Cli {
+    /// List the benchmarks the roster has and the ones still missing.
+    #[command(infer_long_args = true)]
+    Roster(RosterArgs),
+    /// Compute the diff identity of a base..head pair: the changed-file manifest and its SHA-256.
+    #[command(infer_long_args = true)]
+    DiffIdentity(DiffIdentityArgs),
+    /// Normalize one reviewer's native output into the benchmark's common finding schema.
+    #[command(infer_long_args = true)]
+    NormalizeReview(NormalizeReviewArgs),
+    /// Validate the thermo skill's verbatim finding index and map it to the shared schema.
+    #[command(infer_long_args = true)]
+    NormalizeThermo(NormalizeThermoArgs),
+    /// Derive a factual packet from a legacy #137-style packet by removing its run policy.
+    #[command(infer_long_args = true)]
+    DerivePacket(DerivePacketArgs),
+    /// Build a phase-1 review packet for one pull-request target, frozen at a cutoff instant.
+    #[command(infer_long_args = true)]
+    BuildPacket(Box<BuildPacketArgs>),
+    /// Validate a bench manifest against its schema, as check_manifest.py does.
+    #[command(infer_long_args = true)]
+    CheckManifest(CheckManifestArgs),
+    /// Check dated standard, short-context prices against official provider Markdown.
+    #[command(infer_long_args = true)]
+    Rates(RatesArgs),
+    /// Print the maintainer audit's shadow report over the claim registry.
+    #[command(infer_long_args = true)]
+    Upstream(UpstreamArgs),
+    /// List, stage or publish the explorer export from the current facts tools/export_explorer.py writes.
+    #[command(infer_long_args = true)]
+    ExportExplorer(ExportArgs),
+    /// Check cached evidence packages or native scratch archives through bench_tools::archive.
+    #[command(subcommand, infer_long_args = true)]
+    Archive(ArchiveCommand),
 }
 
-fn misuse(usage: &'static str, prog: &'static str, message: impl Into<String>) -> Misuse {
-    Misuse {
-        usage,
-        prog,
-        message: message.into(),
-    }
+#[derive(Args)]
+struct RosterArgs {
+    #[arg(long, default_value = ".", allow_negative_numbers = true)]
+    root: OsString,
 }
 
-enum Parsed<T> {
-    Run(T),
-    Help,
-}
-
-fn is_option(argument: &[u8]) -> bool {
-    let negative_number = argument.len() > 1
-        && argument[0] == b'-'
-        && argument[1..]
-            .iter()
-            .all(|byte| byte.is_ascii_digit() || *byte == b'.')
-        && argument[1..].iter().any(u8::is_ascii_digit);
-    argument.len() > 1 && argument[0] == b'-' && !negative_number
-}
-
-/// The value of an option given as `--name VALUE` or `--name=VALUE`.
-fn option_value(
-    name: &str,
-    argument: &[u8],
-    rest: &mut std::slice::Iter<'_, OsString>,
-    usage: &'static str,
-    prog: &'static str,
-) -> Result<Option<OsString>, Misuse> {
-    let flag = name.as_bytes();
-    if argument == flag {
-        return match rest.next() {
-            Some(value) if !is_option(pytext::os_bytes(value)) => Ok(Some(value.clone())),
-            _ => Err(misuse(
-                usage,
-                prog,
-                format!("argument {name}: expected one argument"),
-            )),
-        };
-    }
-    if argument.len() > flag.len() && argument.starts_with(flag) && argument[flag.len()] == b'=' {
-        use std::os::unix::ffi::OsStringExt;
-        return Ok(Some(OsString::from_vec(
-            argument[flag.len() + 1..].to_vec(),
-        )));
-    }
-    Ok(None)
-}
-
-fn unrecognized(usage: &'static str, prog: &'static str, argument: &[u8]) -> Misuse {
-    misuse(
-        usage,
-        prog,
-        format!("unrecognized arguments: {}", pytext::stderr_text(argument)),
-    )
-}
-
-fn parse_roster(arguments: &[OsString]) -> Result<Parsed<OsString>, Misuse> {
-    let prog = "bench-tools roster";
-    let mut root = OsString::from(".");
-    let mut rest = arguments.iter();
-    while let Some(argument) = rest.next() {
-        let bytes = pytext::os_bytes(argument);
-        if bytes == b"-h" || bytes == b"--help" {
-            return Ok(Parsed::Help);
-        }
-        match option_value("--root", bytes, &mut rest, roster::USAGE, prog)? {
-            Some(value) => root = value,
-            None => return Err(unrecognized(roster::USAGE, prog, bytes)),
-        }
-    }
-    Ok(Parsed::Run(root))
-}
-
-struct DiffArguments {
+#[derive(Args)]
+struct DiffIdentityArgs {
+    #[arg(value_names = ["REPO", "BASE", "HEAD"], allow_negative_numbers = true)]
     positional: Vec<OsString>,
+    #[arg(long, allow_negative_numbers = true)]
     expect: Option<OsString>,
+    #[arg(long)]
     quiet: bool,
 }
 
-fn parse_diff_identity(arguments: &[OsString]) -> Result<Parsed<DiffArguments>, Misuse> {
-    let prog = "bench-tools diff-identity";
-    let mut parsed = DiffArguments {
-        positional: Vec::new(),
-        expect: None,
-        quiet: false,
-    };
-    let mut rest = arguments.iter();
-    let mut options = true;
-    while let Some(argument) = rest.next() {
-        let bytes = pytext::os_bytes(argument);
-        if options && bytes == b"--" {
-            options = false;
-        } else if !options || !is_option(bytes) {
-            parsed.positional.push(argument.clone());
-        } else if bytes == b"-h" || bytes == b"--help" {
-            return Ok(Parsed::Help);
-        } else if bytes == b"--quiet" {
-            parsed.quiet = true;
-        } else if let Some(value) =
-            option_value("--expect", bytes, &mut rest, DIFF_IDENTITY_USAGE, prog)?
-        {
-            parsed.expect = Some(value);
-        } else {
-            return Err(unrecognized(DIFF_IDENTITY_USAGE, prog, bytes));
-        }
-    }
-    if parsed.positional.len() > 3 {
-        return Err(unrecognized(
-            DIFF_IDENTITY_USAGE,
-            prog,
-            pytext::os_bytes(&parsed.positional[3]),
-        ));
-    }
-    if parsed.positional.len() < 3 {
-        return Err(misuse(
-            DIFF_IDENTITY_USAGE,
-            prog,
-            "give a repository, a base revision and a head revision",
-        ));
-    }
-    Ok(Parsed::Run(parsed))
+#[derive(Args)]
+struct NormalizeReviewArgs {
+    #[arg(long, value_parser = PossibleValuesParser::new(Arm::NAMES))]
+    arm: Option<String>,
+    #[arg(long, allow_negative_numbers = true)]
+    composition: Option<OsString>,
+    #[arg(long, allow_negative_numbers = true)]
+    payload: Option<OsString>,
+    #[arg(long, allow_negative_numbers = true)]
+    stdout: Option<OsString>,
+    #[arg(long, allow_negative_numbers = true)]
+    native_review: Option<OsString>,
+    #[arg(long, allow_negative_numbers = true)]
+    sessions_dir: Option<OsString>,
+    #[arg(long, allow_negative_numbers = true)]
+    clone: Option<OsString>,
+    #[arg(long, allow_negative_numbers = true)]
+    out: Option<OsString>,
+    #[arg(long, allow_negative_numbers = true)]
+    render: Option<OsString>,
+    #[arg(long, allow_negative_numbers = true)]
+    timing: Option<OsString>,
 }
 
-/// Option names and their values, in the order last given.
-type OptionValues = Vec<(&'static str, Vec<u8>)>;
-
-/// `--name VALUE` options; the last of a repeated option is kept, as argparse keeps it.
-fn parse_options(
-    arguments: &[OsString],
-    names: &[&'static str],
-    usage: &'static str,
-    prog: &'static str,
-) -> Result<Parsed<OptionValues>, Misuse> {
-    let mut values: OptionValues = Vec::new();
-    let mut rest = arguments.iter();
-    'arguments: while let Some(argument) = rest.next() {
-        let bytes = pytext::os_bytes(argument);
-        if bytes == b"-h" || bytes == b"--help" {
-            return Ok(Parsed::Help);
-        }
-        for name in names {
-            if let Some(value) = option_value(name, bytes, &mut rest, usage, prog)? {
-                values.retain(|(known, _)| known != name);
-                values.push((name, pytext::os_bytes(&value).to_vec()));
-                continue 'arguments;
-            }
-        }
-        return Err(unrecognized(usage, prog, bytes));
-    }
-    Ok(Parsed::Run(values))
-}
-
-fn value_of(values: &[(&'static str, Vec<u8>)], name: &str) -> Option<Vec<u8>> {
-    values
-        .iter()
-        .find(|(known, _)| *known == name)
-        .map(|(_, value)| value.clone())
-}
-
-fn invalid_choice(
-    usage: &'static str,
-    prog: &'static str,
-    value: &[u8],
-    choices: &[&str],
-) -> Misuse {
-    let quoted: Vec<String> = choices.iter().map(|choice| format!("'{choice}'")).collect();
-    misuse(
-        usage,
-        prog,
-        format!(
-            "argument --arm: invalid choice: {} (choose from {})",
-            pytext::repr(&pytext::surrogateescape(value)),
-            quoted.join(", ")
-        ),
-    )
-}
-
-fn parse_normalize_review(
-    arguments: &[OsString],
-) -> Result<Parsed<normalize_review::Arguments>, Misuse> {
-    let usage = NORMALIZE_REVIEW_USAGE;
-    let prog = "bench-tools normalize-review";
-    let names = [
-        "--arm",
-        "--composition",
-        "--payload",
-        "--stdout",
-        "--native-review",
-        "--sessions-dir",
-        "--clone",
-        "--out",
-        "--render",
-        "--timing",
-    ];
-    let values = match parse_options(arguments, &names, usage, prog)? {
-        Parsed::Run(values) => values,
-        Parsed::Help => return Ok(Parsed::Help),
-    };
-    let arm = match value_of(&values, "--arm") {
-        Some(name) => {
-            Some(Arm::parse(&name).ok_or_else(|| invalid_choice(usage, prog, &name, &Arm::NAMES))?)
-        }
-        None => None,
-    };
-    let parsed = normalize_review::Arguments {
-        arm,
-        composition: value_of(&values, "--composition"),
-        payload: value_of(&values, "--payload"),
-        stdout: value_of(&values, "--stdout"),
-        native_review: value_of(&values, "--native-review"),
-        sessions_dir: value_of(&values, "--sessions-dir"),
-        clone: value_of(&values, "--clone"),
-        out: value_of(&values, "--out"),
-        render: value_of(&values, "--render"),
-        timing: value_of(&values, "--timing"),
-    };
-    let given = |value: &Option<Vec<u8>>| value.as_ref().is_some_and(|value| !value.is_empty());
-    if given(&parsed.render) {
-        return Ok(Parsed::Run(parsed));
-    }
-    let required = match arm {
-        None => return Err(misuse(usage, prog, "--arm is required")),
-        Some(Arm::ReviewCode) => (&parsed.composition, "--composition"),
-        Some(Arm::ClaudeBuiltin) => (&parsed.payload, "--payload"),
-        Some(Arm::Codex) => (&parsed.stdout, "--stdout"),
-        Some(Arm::CodexSkill | Arm::ClaudeSkill) => (&parsed.native_review, "--native-review"),
-    };
-    if !given(required.0) {
-        let arm = arm.map_or("", Arm::name);
-        return Err(misuse(
-            usage,
-            prog,
-            format!("{} is required for {arm}", required.1),
-        ));
-    }
-    Ok(Parsed::Run(parsed))
-}
-
-fn parse_normalize_thermo(
-    arguments: &[OsString],
-) -> Result<Parsed<normalize_thermo::Arguments>, Misuse> {
-    let usage = NORMALIZE_THERMO_USAGE;
-    let prog = "bench-tools normalize-thermo";
-    let names = ["--artifact-root", "--clone", "--out", "--arm"];
-    let values = match parse_options(arguments, &names, usage, prog)? {
-        Parsed::Run(values) => values,
-        Parsed::Help => return Ok(Parsed::Help),
-    };
-    let arm = match value_of(&values, "--arm") {
-        Some(name) => normalize_thermo::arm(&name)
-            .ok_or_else(|| invalid_choice(usage, prog, &name, &["codex-skill", "claude-skill"]))?,
-        None => Arm::CodexSkill,
-    };
-    let root = value_of(&values, "--artifact-root");
-    let out = value_of(&values, "--out");
-    let (Some(artifact_root), Some(out)) = (root.clone(), out.clone()) else {
-        let missing: Vec<&str> = [("--artifact-root", &root), ("--out", &out)]
-            .into_iter()
-            .filter(|(_, value)| value.is_none())
-            .map(|(name, _)| name)
-            .collect();
-        return Err(misuse(
-            usage,
-            prog,
-            format!(
-                "the following arguments are required: {}",
-                missing.join(", ")
-            ),
-        ));
-    };
-    Ok(Parsed::Run(normalize_thermo::Arguments {
-        artifact_root,
-        clone: value_of(&values, "--clone"),
-        out,
-        arm,
-    }))
-}
-
-/// Writes stderr first: Python writes it as it goes and stdout when it exits, so a caller that sends
-/// both to one file, as `dispatch.sh` does, sees that order.
-fn finish(outcome: &normalize_review::Outcome) -> Result<ExitCode, ExitCode> {
-    let mut stderr = std::io::stderr().lock();
-    let _ = stderr
-        .write_all(&outcome.stderr)
-        .and_then(|()| stderr.flush());
-    write_stdout(&outcome.stdout)?;
-    Ok(ExitCode::from(outcome.code))
-}
-
-fn run_normalize_review(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
-    match parse_normalize_review(arguments) {
-        Ok(Parsed::Run(parsed)) => finish(&normalize_review::command(
-            &parsed,
-            &normalize_review::utc_now,
-        )),
-        Ok(Parsed::Help) => help(
-            NORMALIZE_REVIEW_USAGE,
-            "Normalize one reviewer's native output into the benchmark's common finding schema.",
-        ),
-        Err(problem) => Err(report_misuse(&problem)),
-    }
-}
-
-fn run_normalize_thermo(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
-    match parse_normalize_thermo(arguments) {
-        Ok(Parsed::Run(parsed)) => finish(&normalize_thermo::command(&parsed)),
-        Ok(Parsed::Help) => help(
-            NORMALIZE_THERMO_USAGE,
-            "Validate the thermo skill's verbatim finding index and map it to the shared schema.",
-        ),
-        Err(problem) => Err(report_misuse(&problem)),
-    }
-}
-
-/// The long options that start with `prefix`, as argparse matches an abbreviation.
-fn long_option_matches<'a>(prefix: &[u8], long_options: &[&'a str]) -> Vec<&'a str> {
-    long_options
-        .iter()
-        .copied()
-        .filter(|option| option.as_bytes().starts_with(prefix))
-        .collect()
-}
-
-/// The long option that `argument` abbreviates, as argparse expands a unique prefix of a long option.
-fn expand_abbreviation(
-    argument: &[u8],
-    long_options: &[&str],
-    usage: &'static str,
-    prog: &'static str,
-) -> Result<Vec<u8>, Misuse> {
-    if !argument.starts_with(b"--") {
-        return Ok(argument.to_vec());
-    }
-    let split = argument.iter().position(|byte| *byte == b'=');
-    let (prefix, value) = argument.split_at(split.unwrap_or(argument.len()));
-    if long_options
-        .iter()
-        .any(|option| option.as_bytes() == prefix)
-    {
-        return Ok(argument.to_vec());
-    }
-    let matches = long_option_matches(prefix, long_options);
-    match matches.as_slice() {
-        [] => Ok(argument.to_vec()),
-        [option] => Ok([option.as_bytes(), value].concat()),
-        _ => Err(misuse(
-            usage,
-            prog,
-            format!(
-                "ambiguous option: {} could match {}",
-                pytext::stderr_text(argument),
-                matches.join(", ")
-            ),
-        )),
-    }
-}
-
-struct DeriveArguments {
-    legacy: OsString,
+#[derive(Args)]
+struct NormalizeThermoArgs {
+    #[arg(long, allow_negative_numbers = true)]
+    artifact_root: OsString,
+    #[arg(long, allow_negative_numbers = true)]
+    clone: Option<OsString>,
+    #[arg(long, allow_negative_numbers = true)]
     out: OsString,
-    newlines: derive_packet::Newlines,
+    #[arg(
+        long,
+        default_value = "codex-skill",
+        value_parser = PossibleValuesParser::new(["codex-skill", "claude-skill"])
+    )]
+    arm: String,
 }
 
-fn parse_derive_packet(arguments: &[OsString]) -> Result<Parsed<DeriveArguments>, Misuse> {
-    let prog = "bench-tools derive-packet";
-    let mut legacy = None;
-    let mut out = None;
-    let mut newlines = derive_packet::Newlines::Translate;
-    let mut rest = arguments.iter();
-    let mut options = true;
-    while let Some(argument) = rest.next() {
-        let bytes = pytext::os_bytes(argument);
-        if options && bytes == b"--" {
-            options = false;
-        } else if !options || !is_option(bytes) {
-            if legacy.is_some() {
-                return Err(unrecognized(derive_packet::USAGE, prog, bytes));
-            }
-            legacy = Some(argument.clone());
-        } else {
-            let option = expand_abbreviation(
-                bytes,
-                &["--help", "--no-newline-translation", "--out"],
-                derive_packet::USAGE,
-                prog,
-            )?;
-            if option == b"-h" || option == b"--help" {
-                return Ok(Parsed::Help);
-            } else if option == b"--no-newline-translation" {
-                newlines = derive_packet::Newlines::Keep;
-            } else if let Some(value) =
-                option_value("--out", &option, &mut rest, derive_packet::USAGE, prog)?
-            {
-                out = Some(value);
-            } else {
-                return Err(unrecognized(derive_packet::USAGE, prog, bytes));
-            }
-        }
-    }
-    match (legacy, out) {
-        (Some(legacy), Some(out)) if !legacy.is_empty() && !out.is_empty() => {
-            Ok(Parsed::Run(DeriveArguments {
-                legacy,
-                out,
-                newlines,
-            }))
-        }
-        _ => Err(misuse(
-            derive_packet::USAGE,
-            prog,
-            "give the legacy packet and --out",
-        )),
-    }
+#[derive(Args)]
+struct DerivePacketArgs {
+    #[arg(allow_negative_numbers = true)]
+    legacy: Option<OsString>,
+    #[arg(long, allow_negative_numbers = true)]
+    out: Option<OsString>,
+    #[arg(long)]
+    no_newline_translation: bool,
 }
 
-/// The options of `build_packet.py`, in the order argparse registered them.
-const BUILD_PACKET_OPTIONS: [&str; 26] = [
-    "-h",
-    "--help",
-    "--repo",
-    "--pr",
-    "--head",
-    "--merge-base",
-    "--base-sha",
-    "--staging",
-    "--target",
-    "--execution-note",
-    "--extra-section",
-    "--truncation-newest",
-    "--ref-pr",
-    "--spec-issue",
-    "--experiment-label",
-    "--subagent-model",
-    "--publish-to-fork",
-    "--upstream-repo",
-    "--original-author",
-    "--cutoff",
-    "--pushed-at",
-    "--pushed-at-source",
-    "--record",
-    "--replay",
-    "--factual",
-    "--out",
-];
-
-/// The value attached to an option: after `=` (`true`), or after a short option's letter (`false`).
-type Explicit<'a> = Option<(bool, &'a [u8])>;
-
-/// One command-line argument as argparse 3.14 classifies it before consuming any.
-enum Argument<'a> {
-    Positional(&'a [u8]),
-    /// The matching options, each with the explicit value after `=` (or after `-h`), if any.
-    Optional(Vec<(&'static str, Explicit<'a>)>),
-    Unknown(&'a [u8]),
+/// `int()` of a pull-request number, in decimal.
+fn python_int(value: &str) -> Result<String, String> {
+    pyunicode::parse_int(value).map_err(|_| "invalid int value".to_string())
 }
 
-/// argparse's `_parse_optional`, for a parser without positionals or negative-number-like options.
-fn classify(argument: &[u8]) -> Argument<'_> {
-    let known = |text: &[u8]| {
-        BUILD_PACKET_OPTIONS
-            .iter()
-            .find(|option| option.as_bytes() == text)
-            .copied()
-    };
-    if argument.first() != Some(&b'-') {
-        return Argument::Positional(argument);
-    }
-    if let Some(option) = known(argument) {
-        return Argument::Optional(vec![(option, None)]);
-    }
-    if argument.len() == 1 {
-        return Argument::Positional(argument);
-    }
-    let split = argument.iter().position(|byte| *byte == b'=');
-    let (prefix, explicit) = match split {
-        Some(at) => (&argument[..at], Some((true, &argument[at + 1..]))),
-        None => (argument, None),
-    };
-    if let (Some(option), Some(_)) = (known(prefix), explicit) {
-        return Argument::Optional(vec![(option, explicit)]);
-    }
-    let matches: Vec<(&'static str, Explicit<'_>)> = if argument[1] == b'-' {
-        long_option_matches(prefix, &BUILD_PACKET_OPTIONS)
-            .into_iter()
-            .map(|option| (option, explicit))
-            .collect()
-    } else if &argument[..2] == b"-h" {
-        vec![("-h", Some((false, &argument[2..])))]
-    } else {
-        Vec::new()
-    };
-    if !matches.is_empty() {
-        return Argument::Optional(matches);
-    }
-    let text = String::from_utf8_lossy(argument);
-    let mut rest = text.chars().skip(1).peekable();
-    if rest.peek() == Some(&'.') {
-        rest.next();
-    }
-    if rest
-        .next()
-        .is_some_and(|c| pytext::decimal_value(c).is_some())
-        || argument.contains(&b' ')
-    {
-        return Argument::Positional(argument);
-    }
-    Argument::Unknown(argument)
+#[derive(Args)]
+struct BuildPacketArgs {
+    #[arg(long, allow_negative_numbers = true)]
+    repo: OsString,
+    #[arg(long, allow_negative_numbers = true, value_parser = python_int)]
+    pr: String,
+    #[arg(long, allow_negative_numbers = true)]
+    head: OsString,
+    #[arg(long, allow_negative_numbers = true)]
+    merge_base: OsString,
+    #[arg(long, allow_negative_numbers = true)]
+    base_sha: OsString,
+    #[arg(long, allow_negative_numbers = true)]
+    staging: OsString,
+    #[arg(long, allow_negative_numbers = true)]
+    target: OsString,
+    #[arg(
+        long,
+        allow_negative_numbers = true,
+        default_value = build_packet::DEFAULT_EXECUTION_NOTE
+    )]
+    execution_note: OsString,
+    #[arg(long, allow_negative_numbers = true)]
+    extra_section: Option<OsString>,
+    #[arg(long, allow_negative_numbers = true)]
+    truncation_newest: Option<OsString>,
+    #[arg(long, allow_negative_numbers = true, value_parser = python_int)]
+    ref_pr: Option<String>,
+    #[arg(long, allow_negative_numbers = true)]
+    spec_issue: Option<OsString>,
+    #[arg(
+        long,
+        allow_negative_numbers = true,
+        default_value = build_packet::DEFAULT_EXPERIMENT_LABEL
+    )]
+    experiment_label: OsString,
+    #[arg(
+        long,
+        allow_negative_numbers = true,
+        default_value = build_packet::DEFAULT_SUBAGENT_MODEL
+    )]
+    subagent_model: OsString,
+    #[arg(long)]
+    publish_to_fork: bool,
+    #[arg(
+        long,
+        allow_negative_numbers = true,
+        default_value = build_packet::DEFAULT_UPSTREAM_REPO
+    )]
+    upstream_repo: OsString,
+    #[arg(
+        long,
+        allow_negative_numbers = true,
+        default_value = build_packet::DEFAULT_ORIGINAL_AUTHOR
+    )]
+    original_author: OsString,
+    #[arg(long, allow_negative_numbers = true)]
+    cutoff: Option<OsString>,
+    #[arg(long, allow_negative_numbers = true)]
+    pushed_at: Option<OsString>,
+    #[arg(long, allow_negative_numbers = true)]
+    pushed_at_source: Option<OsString>,
+    #[arg(long, allow_negative_numbers = true)]
+    record: Option<OsString>,
+    #[arg(long, allow_negative_numbers = true)]
+    replay: Option<OsString>,
+    #[arg(long)]
+    factual: bool,
+    #[arg(long, allow_negative_numbers = true)]
+    out: OsString,
 }
 
-fn utf8_option(option: &str, value: &[u8], prog: &'static str) -> Result<String, Misuse> {
-    String::from_utf8(value.to_vec()).map_err(|_| {
-        misuse(
-            build_packet::USAGE,
-            prog,
-            format!(
-                "argument {option}: not UTF-8 text: {}",
-                pytext::repr(&pytext::surrogateescape(value))
-            ),
-        )
-    })
+#[derive(Args)]
+struct CheckManifestArgs {
+    #[arg(value_names = ["SCHEMA", "MANIFESTS"], allow_negative_numbers = true)]
+    names: Vec<OsString>,
 }
 
-fn parse_build_packet(arguments: &[OsString]) -> Result<Parsed<build_packet::Arguments>, Misuse> {
-    let prog = "bench-tools build-packet";
-    let usage = build_packet::USAGE;
-    let mut items = Vec::new();
-    let mut rest = arguments.iter();
-    for argument in rest.by_ref() {
-        let bytes = pytext::os_bytes(argument);
-        if bytes == b"--" {
-            items.push(Argument::Positional(bytes));
-            break;
-        }
-        items.push(classify(bytes));
+fn source(value: &str) -> Result<(String, String), String> {
+    value
+        .split_once('=')
+        .filter(|(provider, _)| rates::PROVIDERS.iter().any(|(known, _)| known == provider))
+        .map(|(provider, url)| (provider.to_string(), url.to_string()))
+        .ok_or_else(|| "expected openai=URL or anthropic=URL".to_string())
+}
+
+#[derive(Args)]
+struct RatesArgs {
+    command: Option<OsString>,
+    #[arg(long, allow_negative_numbers = true)]
+    rates: Option<OsString>,
+    #[arg(long, allow_negative_numbers = true)]
+    model: Vec<String>,
+    #[arg(long)]
+    json: bool,
+    #[arg(long, value_name = "PROVIDER=URL", allow_negative_numbers = true, value_parser = source)]
+    source: Vec<(String, String)>,
+    #[arg(long, default_value = ".", allow_negative_numbers = true)]
+    root: OsString,
+}
+
+#[derive(Args)]
+struct UpstreamArgs {
+    command: Vec<OsString>,
+    #[arg(long, allow_negative_numbers = true)]
+    registry: Option<OsString>,
+    #[arg(long, default_value = ".", allow_negative_numbers = true)]
+    root: OsString,
+}
+
+#[derive(Args)]
+struct ExportArgs {
+    #[arg(value_name = "{evidence,stage,publish}")]
+    command: Vec<OsString>,
+    #[arg(long, allow_negative_numbers = true)]
+    root: Option<OsString>,
+    #[arg(long, allow_negative_numbers = true)]
+    facts: Option<OsString>,
+    #[arg(long, allow_negative_numbers = true)]
+    base_path: Option<String>,
+    #[arg(long, allow_negative_numbers = true)]
+    stage: Option<OsString>,
+    #[arg(long, allow_negative_numbers = true)]
+    public: Option<OsString>,
+}
+
+#[derive(Subcommand)]
+enum ArchiveCommand {
+    /// Verify each package the manifests index against its cached archive.
+    #[command(infer_long_args = true)]
+    CheckPackages {
+        #[arg(long, allow_negative_numbers = true)]
+        cache: OsString,
+        #[arg(required = true, allow_negative_numbers = true)]
+        manifests: Vec<OsString>,
+    },
+    /// Check that each entry of a native scratch archive hashes to its name.
+    #[command(infer_long_args = true)]
+    CheckScratch {
+        #[arg(required = true, allow_negative_numbers = true)]
+        archives: Vec<OsString>,
+    },
+}
+
+/// Prints a parse error or the help clap renders, and exits as it does: 2 for misuse, 0 for help.
+fn report(error: &clap::Error) -> ExitCode {
+    if error.print().is_err() {
+        return ExitCode::from(2);
     }
-    items.extend(rest.map(|argument| Argument::Positional(pytext::os_bytes(argument))));
-    let mut values: HashMap<&'static str, &[u8]> = HashMap::new();
-    let mut flags: Vec<&'static str> = Vec::new();
-    let mut extras: Vec<&[u8]> = Vec::new();
-    let mut index = 0;
-    while index < items.len() {
-        let matches = match &items[index] {
-            Argument::Positional(text) | Argument::Unknown(text) => {
-                extras.push(text);
-                index += 1;
-                continue;
-            }
-            Argument::Optional(matches) => matches,
-        };
-        if matches.len() > 1 {
-            let names: Vec<&str> = matches.iter().map(|(option, _)| *option).collect();
-            return Err(misuse(
-                usage,
-                prog,
-                format!("ambiguous option: could match {}", names.join(", ")),
-            ));
-        }
-        let (option, explicit) = matches[0];
-        index += 1;
-        match option {
-            "-h" | "--help" => match explicit {
-                Some((false, value)) if value.first() != Some(&b'-') => return Ok(Parsed::Help),
-                Some((_, value)) => {
-                    return Err(misuse(
-                        usage,
-                        prog,
-                        format!(
-                            "argument -h/--help: ignored explicit argument {}",
-                            pytext::stderr_text(value)
-                        ),
-                    ));
-                }
-                None => return Ok(Parsed::Help),
-            },
-            "--publish-to-fork" | "--factual" => {
-                if let Some((_, value)) = explicit {
-                    return Err(misuse(
-                        usage,
-                        prog,
-                        format!(
-                            "argument {option}: ignored explicit argument {}",
-                            pytext::stderr_text(value)
-                        ),
-                    ));
-                }
-                flags.push(option);
-            }
-            _ => {
-                let value = match explicit {
-                    Some((_, value)) => value,
-                    None => match items.get(index) {
-                        Some(Argument::Positional(value)) if *value != b"--" => {
-                            index += 1;
-                            value
-                        }
-                        _ => {
-                            return Err(misuse(
-                                usage,
-                                prog,
-                                format!("argument {option}: expected one argument"),
-                            ));
-                        }
-                    },
-                };
-                if matches!(option, "--pr" | "--ref-pr")
-                    && std::str::from_utf8(value)
-                        .ok()
-                        .and_then(|text| pyunicode::parse_int(text).ok())
-                        .is_none()
-                {
-                    return Err(misuse(
-                        usage,
-                        prog,
-                        format!(
-                            "argument {option}: invalid int value: {}",
-                            pytext::repr(&pytext::surrogateescape(value))
-                        ),
-                    ));
-                }
-                values.insert(option, value);
-            }
-        }
-    }
-    let missing: Vec<&str> = [
-        "--repo",
-        "--pr",
-        "--head",
-        "--merge-base",
-        "--base-sha",
-        "--staging",
-        "--target",
-        "--out",
-    ]
-    .into_iter()
-    .filter(|option| !values.contains_key(option))
-    .collect();
-    if !missing.is_empty() {
-        return Err(misuse(
-            usage,
-            prog,
-            format!(
-                "the following arguments are required: {}",
-                missing.join(", ")
-            ),
-        ));
-    }
-    if !extras.is_empty() {
-        let shown: Vec<String> = extras
-            .iter()
-            .map(|extra| pytext::stderr_text(extra))
-            .collect();
-        return Err(misuse(
-            usage,
-            prog,
-            format!("unrecognized arguments: {}", shown.join(" ")),
-        ));
-    }
-    let text = |option: &str, default: &str| -> Result<String, Misuse> {
-        values.get(option).map_or_else(
-            || Ok(default.to_string()),
-            |value| utf8_option(option, value, prog),
-        )
+    ExitCode::from(u8::try_from(error.exit_code()).unwrap_or(2))
+}
+
+/// A usage error found after parsing, reported with the subcommand's usage, exit 2.
+fn misuse(command: &str, kind: ErrorKind, message: impl Display) -> ExitCode {
+    let mut cli = Cli::command();
+    cli.build();
+    let error = match cli.find_subcommand_mut(command) {
+        Some(subcommand) => subcommand.error(kind, message),
+        None => cli.error(kind, message),
     };
-    let optional_text = |option: &str| -> Result<Option<String>, Misuse> {
-        values
-            .get(option)
-            .map(|value| utf8_option(option, value, prog))
-            .transpose()
-    };
-    let integer = |option: &str| -> Option<String> {
-        values
-            .get(option)
-            .and_then(|value| std::str::from_utf8(value).ok())
-            .and_then(|text| pyunicode::parse_int(text).ok())
-    };
-    let path = |option: &str| values.get(option).map(|value| value.to_vec());
-    Ok(Parsed::Run(build_packet::Arguments {
-        repo: text("--repo", "")?,
-        pr: integer("--pr").unwrap_or_default(),
-        head: text("--head", "")?,
-        merge_base: text("--merge-base", "")?,
-        base_sha: text("--base-sha", "")?,
-        staging: path("--staging").unwrap_or_default(),
-        target: text("--target", "")?,
-        execution_note: text("--execution-note", build_packet::DEFAULT_EXECUTION_NOTE)?,
-        extra_section: path("--extra-section"),
-        truncation_newest: optional_text("--truncation-newest")?,
-        ref_pr: integer("--ref-pr"),
-        spec_issue: optional_text("--spec-issue")?,
-        experiment_label: text("--experiment-label", build_packet::DEFAULT_EXPERIMENT_LABEL)?,
-        subagent_model: text("--subagent-model", build_packet::DEFAULT_SUBAGENT_MODEL)?,
-        publish_to_fork: flags.contains(&"--publish-to-fork"),
-        upstream_repo: text("--upstream-repo", build_packet::DEFAULT_UPSTREAM_REPO)?,
-        original_author: text("--original-author", build_packet::DEFAULT_ORIGINAL_AUTHOR)?,
-        cutoff: optional_text("--cutoff")?,
-        pushed_at: optional_text("--pushed-at")?,
-        pushed_at_source: optional_text("--pushed-at-source")?,
-        record: path("--record"),
-        replay: path("--replay"),
-        factual: flags.contains(&"--factual"),
-        out: path("--out").unwrap_or_default(),
-    }))
+    report(&error)
+}
+
+fn bytes(value: OsString) -> Vec<u8> {
+    value.into_vec()
 }
 
 fn write_stdout(bytes: &[u8]) -> Result<(), ExitCode> {
@@ -770,18 +310,8 @@ fn write_stdout(bytes: &[u8]) -> Result<(), ExitCode> {
         })
 }
 
-fn run_roster(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
-    let root = match parse_roster(arguments) {
-        Ok(Parsed::Run(root)) => root,
-        Ok(Parsed::Help) => {
-            return help(
-                roster::USAGE,
-                "List the benchmarks the roster has and the ones still missing.",
-            );
-        }
-        Err(problem) => return Err(report_misuse(&problem)),
-    };
-    let (lines, code) = match roster::report(&PyPath::new(pytext::os_bytes(&root))) {
+fn run_roster(arguments: RosterArgs) -> Result<ExitCode, ExitCode> {
+    let (lines, code) = match roster::report(&PyPath::new(pytext::os_bytes(&arguments.root))) {
         Ok(roster::Report::Lines(lines)) => (lines, 0),
         Ok(roster::Report::Violations(lines)) => (lines, 1),
         Err(roster::InputError(message)) => {
@@ -798,38 +328,42 @@ fn run_roster(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
     Ok(ExitCode::from(code))
 }
 
-fn run_diff_identity(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
-    let parsed = match parse_diff_identity(arguments) {
-        Ok(Parsed::Run(parsed)) => parsed,
-        Ok(Parsed::Help) => {
-            return help(
-                DIFF_IDENTITY_USAGE,
-                "Compute the diff identity of a base..head pair: the changed-file manifest and its SHA-256.",
-            );
-        }
-        Err(problem) => return Err(report_misuse(&problem)),
-    };
-    let [repo, base, head] = &parsed.positional[..] else {
-        return Err(ExitCode::from(2));
+fn run_diff_identity(arguments: DiffIdentityArgs) -> Result<ExitCode, ExitCode> {
+    let [repo, base, head] = &arguments.positional[..] else {
+        let (kind, message) = if arguments.positional.len() > 3 {
+            (
+                ErrorKind::UnknownArgument,
+                format!(
+                    "unrecognized arguments: {}",
+                    pytext::stderr_text(pytext::os_bytes(&arguments.positional[3]))
+                ),
+            )
+        } else {
+            (
+                ErrorKind::MissingRequiredArgument,
+                "give a repository, a base revision and a head revision".to_string(),
+            )
+        };
+        return Err(misuse("diff-identity", kind, message));
     };
     let (rows, digest) = diff_identity::identity(repo, base, head).map_err(|error| {
         eprintln!("diff_identity.py: {}", error.0);
         ExitCode::from(2)
     })?;
-    let mut output = if parsed.quiet {
+    let mut output = if arguments.quiet {
         Vec::new()
     } else {
         diff_identity::render(&rows)
     };
     output.extend_from_slice(
-        if parsed.quiet {
+        if arguments.quiet {
             format!("{digest}\n")
         } else {
             format!("sha256 {digest}\n")
         }
         .as_bytes(),
     );
-    let expected = parsed
+    let expected = arguments
         .expect
         .as_ref()
         .map(|value| pytext::os_bytes(value))
@@ -844,22 +378,101 @@ fn run_diff_identity(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
     Ok(ExitCode::from(if mismatch.is_some() { 1 } else { 0 }))
 }
 
-fn run_derive_packet(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
-    let parsed = match parse_derive_packet(arguments) {
-        Ok(Parsed::Run(parsed)) => parsed,
-        Ok(Parsed::Help) => {
-            return help(
-                derive_packet::USAGE,
-                "Derive a factual packet from a legacy #137-style packet by removing its run policy.",
-            );
-        }
-        Err(problem) => return Err(report_misuse(&problem)),
+/// Writes stderr first: Python writes it as it goes and stdout when it exits, so a caller that sends
+/// both to one file, as `dispatch.sh` does, sees that order.
+fn finish(outcome: &normalize_review::Outcome) -> Result<ExitCode, ExitCode> {
+    let mut stderr = std::io::stderr().lock();
+    let _ = stderr
+        .write_all(&outcome.stderr)
+        .and_then(|()| stderr.flush());
+    write_stdout(&outcome.stdout)?;
+    Ok(ExitCode::from(outcome.code))
+}
+
+fn run_normalize_review(arguments: NormalizeReviewArgs) -> Result<ExitCode, ExitCode> {
+    let arm = arguments
+        .arm
+        .as_deref()
+        .and_then(|name| Arm::parse(name.as_bytes()));
+    let parsed = normalize_review::Arguments {
+        arm,
+        composition: arguments.composition.map(bytes),
+        payload: arguments.payload.map(bytes),
+        stdout: arguments.stdout.map(bytes),
+        native_review: arguments.native_review.map(bytes),
+        sessions_dir: arguments.sessions_dir.map(bytes),
+        clone: arguments.clone.map(bytes),
+        out: arguments.out.map(bytes),
+        render: arguments.render.map(bytes),
+        timing: arguments.timing.map(bytes),
     };
-    let legacy = PyPath::new(pytext::os_bytes(&parsed.legacy));
-    let out = PyPath::new(pytext::os_bytes(&parsed.out));
-    match derive_packet::derive_file(&legacy, &out, parsed.newlines) {
+    let given = |value: &Option<Vec<u8>>| value.as_ref().is_some_and(|value| !value.is_empty());
+    if !given(&parsed.render) {
+        let required = match arm {
+            None => {
+                return Err(misuse(
+                    "normalize-review",
+                    ErrorKind::MissingRequiredArgument,
+                    "--arm is required",
+                ));
+            }
+            Some(Arm::ReviewCode) => (&parsed.composition, "--composition"),
+            Some(Arm::ClaudeBuiltin) => (&parsed.payload, "--payload"),
+            Some(Arm::Codex) => (&parsed.stdout, "--stdout"),
+            Some(Arm::CodexSkill | Arm::ClaudeSkill) => (&parsed.native_review, "--native-review"),
+        };
+        if !given(required.0) {
+            let arm = arm.map_or("", Arm::name);
+            return Err(misuse(
+                "normalize-review",
+                ErrorKind::MissingRequiredArgument,
+                format!("{} is required for {arm}", required.1),
+            ));
+        }
+    }
+    finish(&normalize_review::command(
+        &parsed,
+        &normalize_review::utc_now,
+    ))
+}
+
+fn run_normalize_thermo(arguments: NormalizeThermoArgs) -> Result<ExitCode, ExitCode> {
+    let Some(arm) = normalize_thermo::arm(arguments.arm.as_bytes()) else {
+        return Err(ExitCode::from(2));
+    };
+    finish(&normalize_thermo::command(&normalize_thermo::Arguments {
+        artifact_root: bytes(arguments.artifact_root),
+        clone: arguments.clone.map(bytes),
+        out: bytes(arguments.out),
+        arm,
+    }))
+}
+
+fn run_derive_packet(arguments: DerivePacketArgs) -> Result<ExitCode, ExitCode> {
+    let (Some(legacy), Some(out)) = (arguments.legacy, arguments.out) else {
+        return Err(misuse(
+            "derive-packet",
+            ErrorKind::MissingRequiredArgument,
+            "give the legacy packet and --out",
+        ));
+    };
+    if legacy.is_empty() || out.is_empty() {
+        return Err(misuse(
+            "derive-packet",
+            ErrorKind::MissingRequiredArgument,
+            "give the legacy packet and --out",
+        ));
+    }
+    let newlines = if arguments.no_newline_translation {
+        derive_packet::Newlines::Keep
+    } else {
+        derive_packet::Newlines::Translate
+    };
+    let legacy = PyPath::new(pytext::os_bytes(&legacy));
+    let out_path = PyPath::new(pytext::os_bytes(&out));
+    match derive_packet::derive_file(&legacy, &out_path, newlines) {
         Ok(digest) => {
-            let mut line = pytext::os_bytes(&parsed.out).to_vec();
+            let mut line = bytes(out);
             line.extend_from_slice(format!(" sha256 {digest}\n").as_bytes());
             write_stdout(&line)?;
             Ok(ExitCode::SUCCESS)
@@ -875,53 +488,20 @@ fn run_derive_packet(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
     }
 }
 
-/// Positional arguments, and whether help was asked for; `--` ends the options.
-fn positionals(
-    arguments: &[OsString],
-    usage: &'static str,
-    prog: &'static str,
-) -> Result<Parsed<Vec<OsString>>, Misuse> {
-    let mut found = Vec::new();
-    let mut options = true;
-    for argument in arguments {
-        let bytes = pytext::os_bytes(argument);
-        if options && bytes == b"--" {
-            options = false;
-        } else if !options || !is_option(bytes) {
-            found.push(argument.clone());
-        } else if bytes == b"-h" || bytes == b"--help" {
-            return Ok(Parsed::Help);
-        } else {
-            return Err(unrecognized(usage, prog, bytes));
-        }
-    }
-    Ok(Parsed::Run(found))
-}
-
 fn read_json_document(path: &[u8]) -> Result<pyjson::Value, String> {
     let text =
         pytext::read_text(&PyPath::new(path)).map_err(|error| error.message().to_string())?;
     pyjson::loads(&text, Duplicates::KeepLast).map_err(|error| error.to_string())
 }
 
-fn run_check_manifest(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
-    let prog = "bench-tools check-manifest";
-    let names = match positionals(arguments, CHECK_MANIFEST_USAGE, prog) {
-        Ok(Parsed::Run(names)) => names,
-        Ok(Parsed::Help) => {
-            return help(
-                CHECK_MANIFEST_USAGE,
-                "Validate a bench manifest against its schema, as check_manifest.py does.",
-            );
-        }
-        Err(problem) => return Err(report_misuse(&problem)),
-    };
+fn run_check_manifest(arguments: CheckManifestArgs) -> Result<ExitCode, ExitCode> {
+    let names = arguments.names;
     if names.len() < 2 || names[0].is_empty() {
-        return Err(report_misuse(&misuse(
-            CHECK_MANIFEST_USAGE,
-            prog,
+        return Err(misuse(
+            "check-manifest",
+            ErrorKind::MissingRequiredArgument,
             "give a schema and at least one manifest",
-        )));
+        ));
     }
     let schema_name = pytext::os_bytes(&names[0]);
     let schema = read_json_document(schema_name).map_err(|error| {
@@ -966,121 +546,59 @@ fn run_check_manifest(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
     Ok(ExitCode::from(u8::from(failed)))
 }
 
-struct RatesArguments {
-    rates: Option<OsString>,
-    models: Vec<String>,
-    json: bool,
-    sources: Vec<(String, String)>,
-    root: OsString,
-}
-
-fn text_argument(value: &OsString, prog: &'static str, name: &str) -> Result<String, Misuse> {
-    value.to_str().map(str::to_string).ok_or_else(|| {
-        misuse(
-            rates::USAGE,
-            prog,
-            format!("argument {name}: not valid UTF-8"),
-        )
-    })
-}
-
-fn parse_rates(arguments: &[OsString]) -> Result<Parsed<RatesArguments>, Misuse> {
-    let prog = "bench-tools rates";
-    let mut parsed = RatesArguments {
-        rates: None,
-        models: Vec::new(),
-        json: false,
-        sources: rates::PROVIDERS
-            .iter()
-            .map(|(provider, url)| ((*provider).to_string(), (*url).to_string()))
-            .collect(),
-        root: OsString::from("."),
-    };
-    let mut command = Vec::new();
-    let mut rest = arguments.iter();
-    while let Some(argument) = rest.next() {
-        let bytes = pytext::os_bytes(argument);
-        if !is_option(bytes) {
-            command.push(argument.clone());
-        } else if bytes == b"-h" || bytes == b"--help" {
-            return Ok(Parsed::Help);
-        } else if bytes == b"--json" {
-            parsed.json = true;
-        } else if let Some(value) = option_value("--rates", bytes, &mut rest, rates::USAGE, prog)? {
-            parsed.rates = Some(value);
-        } else if let Some(value) = option_value("--model", bytes, &mut rest, rates::USAGE, prog)? {
-            parsed.models.push(text_argument(&value, prog, "--model")?);
-        } else if let Some(value) = option_value("--root", bytes, &mut rest, rates::USAGE, prog)? {
-            parsed.root = value;
-        } else if let Some(value) = option_value("--source", bytes, &mut rest, rates::USAGE, prog)?
-        {
-            let value = text_argument(&value, prog, "--source")?;
-            let Some((provider, url)) = value.split_once('=').filter(|(provider, _)| {
-                rates::PROVIDERS.iter().any(|(known, _)| known == provider)
-            }) else {
-                return Err(misuse(
-                    rates::USAGE,
-                    prog,
-                    "argument --source: expected openai=URL or anthropic=URL",
-                ));
-            };
-            for entry in &mut parsed.sources {
-                if entry.0 == provider {
-                    entry.1 = url.to_string();
-                }
-            }
-        } else {
-            return Err(unrecognized(rates::USAGE, prog, bytes));
+fn run_rates(arguments: RatesArgs) -> Result<ExitCode, ExitCode> {
+    match arguments.command.as_deref().map(pytext::os_bytes) {
+        Some(b"check") => {}
+        Some(b"refresh") => {
+            return Err(misuse(
+                "rates",
+                ErrorKind::InvalidValue,
+                "refresh writes the catalog and stays in Python: python3 bench/tools/rates.py refresh",
+            ));
+        }
+        None => {
+            return Err(misuse(
+                "rates",
+                ErrorKind::MissingRequiredArgument,
+                "give the command check",
+            ));
+        }
+        Some(other) => {
+            return Err(misuse(
+                "rates",
+                ErrorKind::InvalidValue,
+                format!(
+                    "argument command: invalid choice: {} (choose from 'check')",
+                    pytext::repr(&pytext::surrogateescape(other))
+                ),
+            ));
         }
     }
-    match command
+    let mut sources: Vec<(String, String)> = rates::PROVIDERS
         .iter()
-        .map(|value| pytext::os_bytes(value))
-        .collect::<Vec<_>>()[..]
-    {
-        [b"check"] => Ok(Parsed::Run(parsed)),
-        [b"refresh"] => Err(misuse(
-            rates::USAGE,
-            prog,
-            "refresh writes the catalog and stays in Python: python3 bench/tools/rates.py refresh",
-        )),
-        [] => Err(misuse(rates::USAGE, prog, "give the command check")),
-        [other, ..] => Err(misuse(
-            rates::USAGE,
-            prog,
-            format!(
-                "argument command: invalid choice: {} (choose from 'check')",
-                pytext::repr(&pytext::surrogateescape(other))
-            ),
-        )),
-    }
-}
-
-fn run_rates(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
-    let parsed = match parse_rates(arguments) {
-        Ok(Parsed::Run(parsed)) => parsed,
-        Ok(Parsed::Help) => {
-            return help(
-                rates::USAGE,
-                "Check dated standard, short-context prices against official provider Markdown.",
-            );
+        .map(|(provider, url)| ((*provider).to_string(), (*url).to_string()))
+        .collect();
+    for (provider, url) in arguments.source {
+        for entry in &mut sources {
+            if entry.0 == provider {
+                entry.1.clone_from(&url);
+            }
         }
-        Err(problem) => return Err(report_misuse(&problem)),
-    };
-    let root = PyPath::new(&pyfs::resolve(pytext::os_bytes(&parsed.root)));
-    let catalog_path = match &parsed.rates {
+    }
+    let root = PyPath::new(&pyfs::resolve(pytext::os_bytes(&arguments.root)));
+    let catalog_path = match &arguments.rates {
         Some(path) => PyPath::new(pytext::os_bytes(path)),
         None => root.join(b"bench/rates.current.json"),
     };
     let seconds = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs());
-    let models = (!parsed.models.is_empty()).then_some(parsed.models.as_slice());
+    let models = (!arguments.model.is_empty()).then_some(arguments.model.as_slice());
     let report = rates::read_catalog(&root, &catalog_path).and_then(|catalog| {
         rates::inspect(
             &catalog,
             models,
-            &parsed.sources,
+            &sources,
             &rates::Network,
             &rates::utc_timestamp(seconds),
         )
@@ -1096,7 +614,7 @@ fn run_rates(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
             return Err(ExitCode::from(2));
         }
     };
-    let output = if parsed.json {
+    let output = if arguments.json {
         let options = pyjson::Dumps {
             indent: Some(2),
             ..pyjson::Dumps::default()
@@ -1114,62 +632,31 @@ fn run_rates(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
     Ok(ExitCode::from(u8::from(changed)))
 }
 
-fn run_upstream(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
-    let prog = "bench-tools upstream";
-    let mut registry = None;
-    let mut root = OsString::from(".");
-    let mut command = Vec::new();
-    let mut rest = arguments.iter();
-    let parsed: Result<(), Misuse> = (|| {
-        while let Some(argument) = rest.next() {
-            let bytes = pytext::os_bytes(argument);
-            if !is_option(bytes) {
-                command.push(bytes.to_vec());
-            } else if bytes == b"-h" || bytes == b"--help" {
-                command = vec![b"--help".to_vec()];
-                return Ok(());
-            } else if let Some(value) =
-                option_value("--registry", bytes, &mut rest, upstream::USAGE, prog)?
-            {
-                registry = Some(value);
-            } else if let Some(value) =
-                option_value("--root", bytes, &mut rest, upstream::USAGE, prog)?
-            {
-                root = value;
-            } else {
-                return Err(unrecognized(upstream::USAGE, prog, bytes));
-            }
-        }
-        Ok(())
-    })();
-    if let Err(problem) = parsed {
-        return Err(report_misuse(&problem));
-    }
-    match command.iter().map(Vec::as_slice).collect::<Vec<_>>()[..] {
+fn run_upstream(arguments: UpstreamArgs) -> Result<ExitCode, ExitCode> {
+    match arguments
+        .command
+        .iter()
+        .map(|value| pytext::os_bytes(value))
+        .collect::<Vec<_>>()[..]
+    {
         [b"report"] => {}
-        [b"--help"] => {
-            return help(
-                upstream::USAGE,
-                "Print the maintainer audit's shadow report over the claim registry.",
-            );
-        }
         [b"collect", ..] => {
-            return Err(report_misuse(&misuse(
-                upstream::USAGE,
-                prog,
+            return Err(misuse(
+                "upstream",
+                ErrorKind::InvalidValue,
                 "collect fetches snapshots and stays in Python: python3 bench/tools/upstream.py collect",
-            )));
+            ));
         }
         _ => {
-            return Err(report_misuse(&misuse(
-                upstream::USAGE,
-                prog,
+            return Err(misuse(
+                "upstream",
+                ErrorKind::MissingRequiredArgument,
                 "give the command report",
-            )));
+            ));
         }
     }
-    let mut repository = claims::Repository::new(pytext::os_bytes(&root));
-    let registry = match &registry {
+    let mut repository = claims::Repository::new(pytext::os_bytes(&arguments.root));
+    let registry = match &arguments.registry {
         Some(path) => pytext::os_bytes(path).to_vec(),
         None => repository.path(b"bench/claims/registry.json"),
     };
@@ -1192,18 +679,54 @@ fn run_upstream(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
     }
 }
 
-fn run_build_packet(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
-    let parsed = match parse_build_packet(arguments) {
-        Ok(Parsed::Run(parsed)) => parsed,
-        Ok(Parsed::Help) => {
-            return help(
-                build_packet::USAGE,
-                "Build a phase-1 review packet for one pull-request target, frozen at a cutoff instant.",
-            );
-        }
-        Err(problem) => return Err(report_misuse(&problem)),
-    };
-    match build_packet::build(&parsed) {
+fn utf8_option(option: &str, value: OsString) -> Result<String, ExitCode> {
+    value.into_string().map_err(|value| {
+        misuse(
+            "build-packet",
+            ErrorKind::InvalidUtf8,
+            format!(
+                "argument {option}: not UTF-8 text: {}",
+                pytext::repr(&pytext::surrogateescape(pytext::os_bytes(&value)))
+            ),
+        )
+    })
+}
+
+fn optional_utf8(option: &str, value: Option<OsString>) -> Result<Option<String>, ExitCode> {
+    value.map(|value| utf8_option(option, value)).transpose()
+}
+
+fn build_packet_arguments(arguments: BuildPacketArgs) -> Result<build_packet::Arguments, ExitCode> {
+    Ok(build_packet::Arguments {
+        repo: utf8_option("--repo", arguments.repo)?,
+        pr: arguments.pr,
+        head: utf8_option("--head", arguments.head)?,
+        merge_base: utf8_option("--merge-base", arguments.merge_base)?,
+        base_sha: utf8_option("--base-sha", arguments.base_sha)?,
+        staging: bytes(arguments.staging),
+        target: utf8_option("--target", arguments.target)?,
+        execution_note: utf8_option("--execution-note", arguments.execution_note)?,
+        extra_section: arguments.extra_section.map(bytes),
+        truncation_newest: optional_utf8("--truncation-newest", arguments.truncation_newest)?,
+        ref_pr: arguments.ref_pr,
+        spec_issue: optional_utf8("--spec-issue", arguments.spec_issue)?,
+        experiment_label: utf8_option("--experiment-label", arguments.experiment_label)?,
+        subagent_model: utf8_option("--subagent-model", arguments.subagent_model)?,
+        publish_to_fork: arguments.publish_to_fork,
+        upstream_repo: utf8_option("--upstream-repo", arguments.upstream_repo)?,
+        original_author: utf8_option("--original-author", arguments.original_author)?,
+        cutoff: optional_utf8("--cutoff", arguments.cutoff)?,
+        pushed_at: optional_utf8("--pushed-at", arguments.pushed_at)?,
+        pushed_at_source: optional_utf8("--pushed-at-source", arguments.pushed_at_source)?,
+        record: arguments.record.map(bytes),
+        replay: arguments.replay.map(bytes),
+        factual: arguments.factual,
+        out: bytes(arguments.out),
+    })
+}
+
+fn run_build_packet(arguments: BuildPacketArgs) -> Result<ExitCode, ExitCode> {
+    match build_packet::build(&build_packet_arguments(arguments)?) {
         Ok(report) => {
             write_stdout(&report)?;
             Ok(ExitCode::SUCCESS)
@@ -1223,68 +746,29 @@ fn run_build_packet(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
     }
 }
 
-#[derive(Default)]
-struct ExportArguments {
-    command: Vec<u8>,
-    root: Option<OsString>,
-    facts: Option<OsString>,
-    base_path: Option<String>,
-    stage: Option<OsString>,
-    public: Option<OsString>,
-}
-
-fn parse_export_explorer(arguments: &[OsString]) -> Result<Parsed<ExportArguments>, Misuse> {
-    let prog = "bench-tools export-explorer";
-    let usage = export_explorer::USAGE;
-    let mut parsed = ExportArguments::default();
-    let mut commands = Vec::new();
-    let mut rest = arguments.iter();
-    while let Some(argument) = rest.next() {
-        let bytes = pytext::os_bytes(argument);
-        if !is_option(bytes) {
-            commands.push(bytes.to_vec());
-        } else if bytes == b"-h" || bytes == b"--help" {
-            return Ok(Parsed::Help);
-        } else if let Some(value) = option_value("--root", bytes, &mut rest, usage, prog)? {
-            parsed.root = Some(value);
-        } else if let Some(value) = option_value("--facts", bytes, &mut rest, usage, prog)? {
-            parsed.facts = Some(value);
-        } else if let Some(value) = option_value("--base-path", bytes, &mut rest, usage, prog)? {
-            parsed.base_path = Some(
-                value
-                    .to_str()
-                    .map(str::to_string)
-                    .ok_or_else(|| misuse(usage, prog, "argument --base-path: not valid UTF-8"))?,
-            );
-        } else if let Some(value) = option_value("--stage", bytes, &mut rest, usage, prog)? {
-            parsed.stage = Some(value);
-        } else if let Some(value) = option_value("--public", bytes, &mut rest, usage, prog)? {
-            parsed.public = Some(value);
-        } else {
-            return Err(unrecognized(usage, prog, bytes));
-        }
-    }
-    let [command] = commands.as_slice() else {
+fn run_export_explorer(arguments: ExportArgs) -> Result<ExitCode, ExitCode> {
+    let [command] = arguments.command.as_slice() else {
         return Err(misuse(
-            usage,
-            prog,
+            "export-explorer",
+            ErrorKind::MissingRequiredArgument,
             "give one command: evidence, stage or publish",
         ));
     };
-    let required: &[(&str, bool)] = match command.as_slice() {
-        b"evidence" => &[("--facts", parsed.facts.is_some())],
+    let command = pytext::os_bytes(command);
+    let required: &[(&str, bool)] = match command {
+        b"evidence" => &[("--facts", arguments.facts.is_some())],
         b"stage" => &[
-            ("--facts", parsed.facts.is_some()),
-            ("--stage", parsed.stage.is_some()),
+            ("--facts", arguments.facts.is_some()),
+            ("--stage", arguments.stage.is_some()),
         ],
         b"publish" => &[
-            ("--stage", parsed.stage.is_some()),
-            ("--public", parsed.public.is_some()),
+            ("--stage", arguments.stage.is_some()),
+            ("--public", arguments.public.is_some()),
         ],
         other => {
             return Err(misuse(
-                usage,
-                prog,
+                "export-explorer",
+                ErrorKind::InvalidValue,
                 format!(
                     "argument command: invalid choice: {} (choose from 'evidence', 'stage', 'publish')",
                     pytext::repr(&pytext::surrogateescape(other))
@@ -1299,33 +783,21 @@ fn parse_export_explorer(arguments: &[OsString]) -> Result<Parsed<ExportArgument
         .collect();
     if !missing.is_empty() {
         return Err(misuse(
-            usage,
-            prog,
+            "export-explorer",
+            ErrorKind::MissingRequiredArgument,
             format!(
                 "the following arguments are required: {}",
                 missing.join(", ")
             ),
         ));
     }
-    parsed.command.clone_from(command);
-    Ok(Parsed::Run(parsed))
-}
-
-fn run_export_explorer(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
-    let parsed = match parse_export_explorer(arguments) {
-        Ok(Parsed::Run(parsed)) => parsed,
-        Ok(Parsed::Help) => {
-            return help(
-                export_explorer::USAGE,
-                "List, stage or publish the explorer export from the current facts tools/export_explorer.py writes.",
-            );
-        }
-        Err(problem) => return Err(report_misuse(&problem)),
-    };
-    let root = pyfs::resolve(pytext::os_bytes(
-        parsed.root.as_deref().unwrap_or(OsStr::new(".")),
-    ));
-    let base_path = parsed.base_path.as_deref().unwrap_or("/");
+    let root = pyfs::resolve(
+        arguments
+            .root
+            .as_deref()
+            .map_or(b".".as_slice(), pytext::os_bytes),
+    );
+    let base_path = arguments.base_path.as_deref().unwrap_or("/");
     let path = |value: &Option<OsString>| {
         value
             .as_deref()
@@ -1333,17 +805,20 @@ fn run_export_explorer(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
             .unwrap_or_default()
             .to_vec()
     };
-    let outcome = match parsed.command.as_slice() {
-        b"evidence" => export_explorer::Facts::read(&path(&parsed.facts))
+    let outcome = match command {
+        b"evidence" => export_explorer::Facts::read(&path(&arguments.facts))
             .and_then(|facts| export_explorer::evidence(&root, &facts, base_path))
             .map(|listed| format!("{}\n", pyjson::dumps(&listed, &pyjson::Dumps::default()))),
-        b"stage" => {
-            export_explorer::stage(&root, &path(&parsed.facts), base_path, &path(&parsed.stage))
-                .map(|summary| format!("{summary}\n"))
-        }
+        b"stage" => export_explorer::stage(
+            &root,
+            &path(&arguments.facts),
+            base_path,
+            &path(&arguments.stage),
+        )
+        .map(|summary| format!("{summary}\n")),
         _ => export_explorer::publish(
-            &path(&parsed.stage),
-            &path(&parsed.public),
+            &path(&arguments.stage),
+            &path(&arguments.public),
             &mut export_explorer::System,
         )
         .map(|()| String::new()),
@@ -1387,180 +862,236 @@ fn archive_row(entries: Vec<(&str, pyjson::Value)>) -> pyjson::Value {
     pyjson::Value::Object(row)
 }
 
-fn run_archive(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
-    let prog = "bench-tools archive";
-    let command = arguments.first().map(|command| pytext::os_bytes(command));
-    if matches!(command, Some(b"-h" | b"--help")) {
-        return help(
-            ARCHIVE_USAGE,
-            "Check archives through bench_tools::archive.",
-        );
-    }
-    let mut cache = None;
-    let mut names = Vec::new();
-    let mut rest = arguments.get(1..).unwrap_or_default().iter();
-    let mut options = true;
-    while let Some(argument) = rest.next() {
-        let bytes = pytext::os_bytes(argument);
-        if !options || !is_option(bytes) {
-            names.push(argument.clone());
-        } else if bytes == b"--" {
-            options = false;
-        } else if bytes == b"-h" || bytes == b"--help" {
-            return help(
-                ARCHIVE_USAGE,
-                "Check archives through bench_tools::archive.",
-            );
-        } else if command == Some(b"check-packages".as_slice())
-            && let Some(value) = option_value("--cache", bytes, &mut rest, ARCHIVE_USAGE, prog)
-                .map_err(|problem| report_misuse(&problem))?
-        {
-            cache = Some(value);
-        } else {
-            return Err(report_misuse(&unrecognized(ARCHIVE_USAGE, prog, bytes)));
-        }
-    }
-    if names.is_empty() {
-        return Err(report_misuse(&misuse(
-            ARCHIVE_USAGE,
-            prog,
-            "give at least one file",
-        )));
-    }
-    let (output, failed) = match command {
-        Some(b"check-packages") => {
-            let Some(cache) = cache else {
-                return Err(report_misuse(&misuse(
-                    ARCHIVE_USAGE,
-                    prog,
-                    "the following arguments are required: --cache",
-                )));
-            };
-            let mut manifests = Vec::new();
-            let (mut packages, mut members, mut bytes, mut failed) = (0, 0, 0, 0);
-            for name in &names {
-                let shown = pytext::stderr_text(pytext::os_bytes(name));
-                let indexed = read_json_document(pytext::os_bytes(name))
-                    .and_then(|manifest| archive::indexed_packages(&manifest))
-                    .map_err(|error| {
-                        eprintln!("archive: {shown}: {error}");
-                        ExitCode::from(2)
-                    })?;
-                let mut rows = Vec::new();
-                for package in &indexed {
-                    let result = archive::check_package(std::path::Path::new(&cache), package);
-                    packages += 1;
-                    members += package.members.len() as u64;
-                    bytes = u64::saturating_add(bytes, package.bytes);
-                    failed += u64::from(result.is_err());
-                    rows.push(archive_row(vec![
-                        ("sha256", pyjson::Value::Str(package.sha256.clone())),
-                        (
-                            "members",
-                            pyjson::Value::Int(package.members.len().to_string()),
-                        ),
-                        ("bytes", pyjson::Value::Int(package.bytes.to_string())),
-                        (
-                            "result",
-                            pyjson::Value::Str(
-                                result.err().unwrap_or_else(|| "verified".to_string()),
-                            ),
-                        ),
-                    ]));
-                }
-                manifests.push(archive_row(vec![
-                    ("manifest", pyjson::Value::Str(shown)),
-                    ("packages", pyjson::Value::Array(rows)),
-                ]));
-            }
-            let totals = vec![
-                ("manifests", names.len() as u64),
-                ("packages", packages),
-                ("members", members),
-                ("bytes", bytes),
-                ("verified", packages - failed),
-                ("failed", failed),
-            ];
-            (archive_report(manifests, "manifests", totals), failed)
-        }
-        Some(b"check-scratch") => {
-            let (mut rows, mut entries, mut failed) = (Vec::new(), 0, 0);
-            for name in &names {
-                let result = archive::check_scratch(std::path::Path::new(name));
-                let count = *result.as_ref().unwrap_or(&0);
-                entries += count;
-                failed += u64::from(result.is_err());
-                rows.push(archive_row(vec![
-                    (
-                        "archive",
-                        pyjson::Value::Str(pytext::stderr_text(pytext::os_bytes(name))),
-                    ),
-                    ("entries", pyjson::Value::Int(count.to_string())),
-                    (
-                        "result",
-                        pyjson::Value::Str(result.err().unwrap_or_else(|| "verified".to_string())),
-                    ),
-                ]));
-            }
-            let totals = vec![
-                ("archives", names.len() as u64),
-                ("entries", entries),
-                ("verified", names.len() as u64 - failed),
-                ("failed", failed),
-            ];
-            (archive_report(rows, "archives", totals), failed)
-        }
-        _ => {
-            return Err(report_misuse(&misuse(
-                ARCHIVE_USAGE,
-                prog,
-                "give check-packages or check-scratch",
-            )));
-        }
-    };
-    write_stdout(&output)?;
+fn finish_archive(output: &[u8], failed: u64) -> Result<ExitCode, ExitCode> {
+    write_stdout(output)?;
     Ok(ExitCode::from(u8::from(failed > 0)))
 }
 
-fn help(usage: &str, description: &str) -> Result<ExitCode, ExitCode> {
-    write_stdout(format!("{usage}\n\n{description}\n").as_bytes())?;
-    Ok(ExitCode::SUCCESS)
+fn check_packages(cache: &OsStr, names: &[OsString]) -> Result<ExitCode, ExitCode> {
+    let mut manifests = Vec::new();
+    let (mut packages, mut members, mut bytes, mut failed) = (0, 0, 0, 0);
+    for name in names {
+        let shown = pytext::stderr_text(pytext::os_bytes(name));
+        let indexed = read_json_document(pytext::os_bytes(name))
+            .and_then(|manifest| archive::indexed_packages(&manifest))
+            .map_err(|error| {
+                eprintln!("archive: {shown}: {error}");
+                ExitCode::from(2)
+            })?;
+        let mut rows = Vec::new();
+        for package in &indexed {
+            let result = archive::check_package(std::path::Path::new(&cache), package);
+            packages += 1;
+            members += package.members.len() as u64;
+            bytes = u64::saturating_add(bytes, package.bytes);
+            failed += u64::from(result.is_err());
+            rows.push(archive_row(vec![
+                ("sha256", pyjson::Value::Str(package.sha256.clone())),
+                (
+                    "members",
+                    pyjson::Value::Int(package.members.len().to_string()),
+                ),
+                ("bytes", pyjson::Value::Int(package.bytes.to_string())),
+                (
+                    "result",
+                    pyjson::Value::Str(result.err().unwrap_or_else(|| "verified".to_string())),
+                ),
+            ]));
+        }
+        manifests.push(archive_row(vec![
+            ("manifest", pyjson::Value::Str(shown)),
+            ("packages", pyjson::Value::Array(rows)),
+        ]));
+    }
+    let totals = vec![
+        ("manifests", names.len() as u64),
+        ("packages", packages),
+        ("members", members),
+        ("bytes", bytes),
+        ("verified", packages - failed),
+        ("failed", failed),
+    ];
+    finish_archive(&archive_report(manifests, "manifests", totals), failed)
 }
 
-fn report_misuse(problem: &Misuse) -> ExitCode {
-    eprintln!(
-        "{}\n{}: error: {}",
-        problem.usage, problem.prog, problem.message
-    );
-    ExitCode::from(2)
+fn check_scratch(names: &[OsString]) -> Result<ExitCode, ExitCode> {
+    let (mut rows, mut entries, mut failed) = (Vec::new(), 0, 0);
+    for name in names {
+        let result = archive::check_scratch(std::path::Path::new(name));
+        let count = *result.as_ref().unwrap_or(&0);
+        entries += count;
+        failed += u64::from(result.is_err());
+        rows.push(archive_row(vec![
+            (
+                "archive",
+                pyjson::Value::Str(pytext::stderr_text(pytext::os_bytes(name))),
+            ),
+            ("entries", pyjson::Value::Int(count.to_string())),
+            (
+                "result",
+                pyjson::Value::Str(result.err().unwrap_or_else(|| "verified".to_string())),
+            ),
+        ]));
+    }
+    let totals = vec![
+        ("archives", names.len() as u64),
+        ("entries", entries),
+        ("verified", names.len() as u64 - failed),
+        ("failed", failed),
+    ];
+    finish_archive(&archive_report(rows, "archives", totals), failed)
+}
+
+/// argparse reads a dash-led argument as an option's value when it names no option and reads as a negative
+/// number or holds a space; `build-packet-option-values-with-leading-dash` pins that. clap takes only numbers,
+/// so build-packet's arguments attach such a value to its option with `=` before clap parses them.
+fn attach_dash_led_values(arguments: Vec<OsString>) -> Vec<OsString> {
+    if arguments.get(1).map(|name| pytext::os_bytes(name)) != Some(b"build-packet") {
+        return arguments;
+    }
+    let mut command = Cli::command();
+    command.build();
+    let Some(build_packet) = command.find_subcommand("build-packet") else {
+        return arguments;
+    };
+    let options: Vec<(String, bool)> = build_packet
+        .get_arguments()
+        .filter_map(|argument| {
+            let takes_value = argument.get_action().takes_values();
+            argument
+                .get_long()
+                .map(|long| (format!("--{long}"), takes_value))
+        })
+        .collect();
+    let takes_value = |argument: &[u8]| {
+        if !argument.starts_with(b"--") || argument.contains(&b'=') {
+            return false;
+        }
+        let matches: Vec<bool> = match options.iter().find(|(name, _)| name.as_bytes() == argument)
+        {
+            Some((_, takes)) => vec![*takes],
+            None => options
+                .iter()
+                .filter(|(name, _)| name.as_bytes().starts_with(argument))
+                .map(|(_, takes)| *takes)
+                .collect(),
+        };
+        matches == [true]
+    };
+    let names_option = |argument: &[u8]| {
+        let prefix = argument
+            .split(|byte| *byte == b'=')
+            .next()
+            .unwrap_or_default();
+        argument.starts_with(b"-h")
+            || options.iter().any(|(name, _)| {
+                name.as_bytes() == prefix
+                    || (argument.starts_with(b"--") && name.as_bytes().starts_with(prefix))
+            })
+    };
+    let dash_led_value = |argument: &[u8]| {
+        let text = String::from_utf8_lossy(argument);
+        let mut rest = text.chars().skip(1).peekable();
+        if rest.peek() == Some(&'.') {
+            rest.next();
+        }
+        let negative_number = rest
+            .next()
+            .is_some_and(|c| pytext::decimal_value(c).is_some());
+        argument.len() > 1
+            && argument[0] == b'-'
+            && !names_option(argument)
+            && (negative_number || argument.contains(&b' '))
+    };
+    let mut attached = Vec::with_capacity(arguments.len());
+    let mut rest = arguments.into_iter().peekable();
+    while let Some(argument) = rest.next() {
+        let bytes = pytext::os_bytes(&argument);
+        if bytes == b"--" {
+            attached.push(argument);
+            attached.extend(rest);
+            break;
+        }
+        match rest.next_if(|value| takes_value(bytes) && dash_led_value(pytext::os_bytes(value))) {
+            Some(value) => {
+                let mut joined = argument.into_vec();
+                joined.push(b'=');
+                joined.extend_from_slice(pytext::os_bytes(&value));
+                attached.push(OsString::from_vec(joined));
+            }
+            None => attached.push(argument),
+        }
+    }
+    attached
+}
+
+/// argparse refuses `-h`, or a run of `h`s such as `-hh`, with an attached argument that starts with `=` or `-`,
+/// such as `-h=1`, `-hh=1` or `-h-x`, exit 2, where clap prints help. The first `-h` before `--` decides, as argparse acts on the first help it reads.
+fn refuse_help_with_explicit_argument(arguments: &[OsString]) -> Option<ExitCode> {
+    let command = arguments
+        .get(1)?
+        .to_str()
+        .filter(|name| !name.starts_with('-'))?;
+    let help = arguments
+        .iter()
+        .skip(2)
+        .map(|argument| pytext::os_bytes(argument))
+        .take_while(|argument| *argument != b"--")
+        .find(|argument| argument.starts_with(b"-h"))?;
+    let attached = &help[2..];
+    let attached = &attached[attached.iter().take_while(|byte| **byte == b'h').count()..];
+    let explicit = match attached.first()? {
+        b'=' => &attached[1..],
+        b'-' => attached,
+        _ => return None,
+    };
+    Some(misuse(
+        command,
+        ErrorKind::UnknownArgument,
+        format!(
+            "argument -h/--help: ignored explicit argument {}",
+            pytext::repr(&pytext::surrogateescape(explicit))
+        ),
+    ))
 }
 
 fn main() -> ExitCode {
-    let arguments: Vec<OsString> = std::env::args_os().skip(1).collect();
-    let outcome = match arguments.first().map(|command| pytext::os_bytes(command)) {
-        Some(b"roster") => run_roster(&arguments[1..]),
-        Some(b"diff-identity") => run_diff_identity(&arguments[1..]),
-        Some(b"normalize-review") => run_normalize_review(&arguments[1..]),
-        Some(b"normalize-thermo") => run_normalize_thermo(&arguments[1..]),
-        Some(b"derive-packet") => run_derive_packet(&arguments[1..]),
-        Some(b"build-packet") => run_build_packet(&arguments[1..]),
-        Some(b"check-manifest") => run_check_manifest(&arguments[1..]),
-        Some(b"rates") => run_rates(&arguments[1..]),
-        Some(b"upstream") => run_upstream(&arguments[1..]),
-        Some(b"export-explorer") => run_export_explorer(&arguments[1..]),
-        Some(b"archive") => run_archive(&arguments[1..]),
-        Some(b"-h" | b"--help") => help(USAGE, "Deterministic benchmark tools."),
-        Some(other) => {
-            eprintln!(
-                "{USAGE}\nbench-tools: error: unknown command {}",
-                pytext::stderr_text(other)
-            );
-            Err(ExitCode::from(2))
+    let arguments: Vec<OsString> = std::env::args_os().collect();
+    // clap reads `-hx` before a subcommand as `-h` and prints help; the top level has no Python
+    // counterpart, so it keeps the former parser's refusal of an unknown command.
+    if let Some(command) = arguments.get(1).map(|name| pytext::os_bytes(name))
+        && command.len() > 2
+        && command.starts_with(b"-h")
+    {
+        return misuse(
+            "",
+            ErrorKind::InvalidSubcommand,
+            format!("unknown command {}", pytext::stderr_text(command)),
+        );
+    }
+    let cli = match Cli::try_parse_from(attach_dash_led_values(arguments.clone())) {
+        Ok(cli) => cli,
+        Err(error) if error.kind() == ErrorKind::DisplayHelp => {
+            return refuse_help_with_explicit_argument(&arguments)
+                .unwrap_or_else(|| report(&error));
         }
-        None => {
-            eprintln!("{USAGE}\nbench-tools: error: give a command");
-            Err(ExitCode::from(2))
+        Err(error) => return report(&error),
+    };
+    let outcome = match cli {
+        Cli::Roster(arguments) => run_roster(arguments),
+        Cli::DiffIdentity(arguments) => run_diff_identity(arguments),
+        Cli::NormalizeReview(arguments) => run_normalize_review(arguments),
+        Cli::NormalizeThermo(arguments) => run_normalize_thermo(arguments),
+        Cli::DerivePacket(arguments) => run_derive_packet(arguments),
+        Cli::BuildPacket(arguments) => run_build_packet(*arguments),
+        Cli::CheckManifest(arguments) => run_check_manifest(arguments),
+        Cli::Rates(arguments) => run_rates(arguments),
+        Cli::Upstream(arguments) => run_upstream(arguments),
+        Cli::ExportExplorer(arguments) => run_export_explorer(arguments),
+        Cli::Archive(ArchiveCommand::CheckPackages { cache, manifests }) => {
+            check_packages(&cache, &manifests)
         }
+        Cli::Archive(ArchiveCommand::CheckScratch { archives }) => check_scratch(&archives),
     };
     outcome.unwrap_or_else(|code| code)
 }

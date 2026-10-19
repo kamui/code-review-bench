@@ -17,10 +17,6 @@ use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
-pub const USAGE: &str =
-    "usage: bench-tools export-explorer {evidence,stage,publish} [--root ROOT] [--facts FACTS]
-                                    [--base-path BASE_PATH] [--stage STAGE] [--public PUBLIC]";
-
 #[derive(Debug, PartialEq, Eq)]
 pub struct Failure {
     kind: &'static str,
