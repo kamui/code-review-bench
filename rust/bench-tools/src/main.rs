@@ -148,6 +148,44 @@ fn parse_diff_identity(arguments: &[OsString]) -> Result<Parsed<DiffArguments>, 
     Ok(Parsed::Run(parsed))
 }
 
+/// The long option that `argument` abbreviates, as argparse expands a unique prefix of a long option.
+fn expand_abbreviation(
+    argument: &[u8],
+    long_options: &[&str],
+    usage: &'static str,
+    prog: &'static str,
+) -> Result<Vec<u8>, Misuse> {
+    if !argument.starts_with(b"--") {
+        return Ok(argument.to_vec());
+    }
+    let split = argument.iter().position(|byte| *byte == b'=');
+    let (prefix, value) = argument.split_at(split.unwrap_or(argument.len()));
+    if long_options
+        .iter()
+        .any(|option| option.as_bytes() == prefix)
+    {
+        return Ok(argument.to_vec());
+    }
+    let matches: Vec<&str> = long_options
+        .iter()
+        .copied()
+        .filter(|option| option.as_bytes().starts_with(prefix))
+        .collect();
+    match matches.as_slice() {
+        [] => Ok(argument.to_vec()),
+        [option] => Ok([option.as_bytes(), value].concat()),
+        _ => Err(misuse(
+            usage,
+            prog,
+            format!(
+                "ambiguous option: {} could match {}",
+                pytext::stderr_text(argument),
+                matches.join(", ")
+            ),
+        )),
+    }
+}
+
 struct DeriveArguments {
     legacy: OsString,
     out: OsString,
@@ -170,16 +208,24 @@ fn parse_derive_packet(arguments: &[OsString]) -> Result<Parsed<DeriveArguments>
                 return Err(unrecognized(derive_packet::USAGE, prog, bytes));
             }
             legacy = Some(argument.clone());
-        } else if bytes == b"-h" || bytes == b"--help" {
-            return Ok(Parsed::Help);
-        } else if bytes == b"--no-newline-translation" {
-            newlines = derive_packet::Newlines::Keep;
-        } else if let Some(value) =
-            option_value("--out", bytes, &mut rest, derive_packet::USAGE, prog)?
-        {
-            out = Some(value);
         } else {
-            return Err(unrecognized(derive_packet::USAGE, prog, bytes));
+            let option = expand_abbreviation(
+                bytes,
+                &["--help", "--no-newline-translation", "--out"],
+                derive_packet::USAGE,
+                prog,
+            )?;
+            if option == b"-h" || option == b"--help" {
+                return Ok(Parsed::Help);
+            } else if option == b"--no-newline-translation" {
+                newlines = derive_packet::Newlines::Keep;
+            } else if let Some(value) =
+                option_value("--out", &option, &mut rest, derive_packet::USAGE, prog)?
+            {
+                out = Some(value);
+            } else {
+                return Err(unrecognized(derive_packet::USAGE, prog, bytes));
+            }
         }
     }
     match (legacy, out) {

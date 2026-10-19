@@ -71,13 +71,12 @@ recorded decision.
 - A lone surrogate escape such as `"\ud800"` and JSON nested more than 1,000 levels deep are refused, exiting 2.
   Python kept the surrogate, and its own nesting limit depends on its version and stack.
 - `repr` in a diagnostic escapes the non-printable characters Python escapes, except unassigned code points outside
-  the noncharacters, because the crate carries no Unicode tables.
+  the noncharacters, because the crate carries no table of assigned code points.
 - `diff-identity` has no `--self-test`; `cargo test` and the corpus cover it. It accepts options between
   positional arguments, which argparse refuses for some orders.
-- `derive-packet` has no `--self-test`; `cargo test` and the corpus cover it. It does not accept abbreviated options
-  such as `--o`, which argparse expanded.
-- `derive-packet` matches the issue number in the H1 with ASCII digits only. Python's `\d` also matched other
-  Unicode decimal digits.
+- `derive-packet` has no `--self-test`; `cargo test` and the corpus cover it.
+- `derive-packet` matches the issue number in the H1 with the Unicode 16.0 decimal digits that Python 3.14's `\d`
+  matches. An older Python's `\d` lacks the digits added since its Unicode version.
 - Usage errors print `bench-tools` usage text. Argparse wording is not a contract.
 
 `derive-packet-invalid-utf8` pins one intended change: an input that is not UTF-8 exits 2 with a message naming the
