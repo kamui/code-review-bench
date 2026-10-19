@@ -226,8 +226,10 @@ ranking.
   did. It loads the current facts in process with `current_grading::load_current` and `coverage_status`, refusing
   what the front's `json.dumps(allow_nan=False)` and facts file refused, restores the evidence they link, stages,
   reads the record again and refuses when the dataset hash changed, then publishes with `SIGINT` blocked. It reads
-  `--base-path` from `BASE_PATH`, as the front did; `bun run data` runs it through `rust_runtime.py exec`, which exits
-  2 with the install command when no `bench-tools` is selected for `HEAD`.
+  `--base-path` from `BASE_PATH`, as the front did; `bun run data` runs it through `rust_runtime.py exec`. With no
+  `bench-tools` selected for `HEAD`, `exec` prints the install command and exits 1, as `test_rust_runtime.py` pins
+  for every `exec` caller. The deleted front exited 2 there, but `bun run data` never reached it: its
+  `evidence:fetch` step already refused with exit 1, so the script's exit status is unchanged.
 
 - `evidence` lists every file the export links, with its frozen SHA-256 or null, in the order the export first
   names it, as JSON on stdout. The front restores the missing ones.

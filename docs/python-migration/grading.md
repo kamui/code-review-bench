@@ -232,8 +232,8 @@ until slice 11 deletes it; `packet_selection.py` stays for #157's callers.
 
 - `bench-tools export-explorer` with no command runs the whole export. It loads the current facts in process
   through `bench_tools::current_grading::load_current` and `coverage_status`, so the temporary facts file and
-  `tools/export_explorer.py` are gone. `bun run data` runs it through `rust_runtime.py exec`, which exits 2 with the
-  install command when no `bench-tools` is selected for `HEAD`. [The explorer
+  `tools/export_explorer.py` are gone. `bun run data` runs it through `rust_runtime.py exec`, which prints the
+  install command and exits 1 when no `bench-tools` is selected for `HEAD`, as the processing record explains. [The explorer
   export](processing.md#the-explorer-export) describes the command and its decisions.
 - `bench_tools::methodology` ports `methodology.plan`. `bench-tools methodology --out FILE [--root DIR]` writes the
   queue, and `plan:methodology` and `docs/current-grading.md` run it. `methodology.py` stays byte-unchanged as the
