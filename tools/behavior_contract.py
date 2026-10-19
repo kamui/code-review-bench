@@ -1086,12 +1086,16 @@ def load_real_record(path):
 
 
 def root_state(root):
-    """What a read-only command must leave unchanged: Git's view of a checkout, or every entry of another root."""
-    inside = subprocess.run(["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"], capture_output=True)
-    if inside.returncode == 0 and inside.stdout.strip() == b"true":
-        return subprocess.run(["git", "-C", str(root), "status", "--porcelain=v1", "-z", "--untracked-files=all"],
-                              capture_output=True, check=True).stdout
-    return json.dumps(snapshot(root), sort_keys=True).encode("ascii")
+    """Every entry below root, tracked, ignored or Git's own, by type, permissions, size, inode and change time.
+    Writing a file moves its change time even when its modification time and bytes are put back."""
+    state = []
+    for directory, dirs, files in os.walk(root):
+        for name in dirs + files:
+            path = os.path.join(directory, name)
+            info = os.lstat(path)
+            state.append((os.path.relpath(path, root), info.st_mode, info.st_size, info.st_ino, info.st_mtime_ns,
+                          info.st_ctime_ns))
+    return sorted(state)
 
 
 def run_real_record(command, commands, root):
@@ -1114,8 +1118,7 @@ def run_real_record(command, commands, root):
 
 
 def real_record_differences(left, right):
-    differences = [f"{side} changed the checked-out record" for side, run in (("primary", left), ("candidate", right))
-                   if run["changed"]]
+    differences = ["candidate changed the checked-out record"] if right["changed"] else []
     if left["exit"] != right["exit"]:
         differences.append(f"exit: primary {left['exit']}, candidate {right['exit']}")
     for stream in ("stdout", "stderr"):
@@ -1128,13 +1131,21 @@ def real_record_differences(left, right):
 
 
 def real_record(listing, commands, other, root):
+    """A command that changes the checkout stops the run, so no later run reads inputs it changed."""
     if not listing["commands"]:
         print("real record: no commands are listed")
         return 0
     failed = 0
     for command in listing["commands"]:
-        differences = real_record_differences(run_real_record(command, commands, root),
-                                              run_real_record(command, other, root))
+        primary = run_real_record(command, commands, root)
+        if primary["changed"]:
+            print(f"DIFFERENTIAL {command['id']}\nprimary changed the checked-out record; stopped before the candidate")
+            return 1
+        candidate = run_real_record(command, other, root)
+        differences = real_record_differences(primary, candidate)
+        if candidate["changed"]:
+            print(f"DIFFERENTIAL {command['id']}\n" + "\n".join(differences) + "\nstopped before the next command")
+            return 1
         if differences:
             failed += 1
             print(f"DIFFERENTIAL {command['id']}\n" + "\n".join(differences))

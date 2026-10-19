@@ -188,8 +188,10 @@ ported. [`grading.md`](../grading.md) records the baseline they serve.
   [`grading-real-record.v1.json`](../../../tools/behavior_contracts/grading-real-record.v1.json) lists against the
   primary implementation and the candidate on ROOT, by default this checkout. It compares exit status, stdout,
   stderr and each named output byte for byte. An `{"output": NAME}` argument names a file in a disposable
-  directory. A command that changes the checkout's Git status, or any entry of a root that is not a checkout,
-  fails. The list starts empty; #156 slice 3 adds the first commands and runs the mode in the Pages build job.
+  directory. Every entry below ROOT, tracked, ignored or Git's own, is compared by type, permissions, size, inode
+  and change time before and after each run. A run that changes one fails and stops the mode, so no later run
+  reads changed inputs. The list starts empty; #156 slice 3 adds the first commands and runs the mode in the Pages
+  build job.
 - **Fixture roots.** A case built from the grading fixture names it with `"fixture": "grading/<variant>"`. Its
   `initial` entries and leading setup steps must equal what
   [`grading_fixture.rs`](../../../rust/bench-tools/tests/support/grading_fixture.rs) builds, or
