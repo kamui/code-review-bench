@@ -1,17 +1,17 @@
 //! The read-only grading reports: the queue status `regrade_queues.sh status` prints, the attempt archive
 //! `regrade.archive_attempt` writes, and the time and cost audit log of `audit_log.py`.
 //!
-//! Values keep the Python semantics the outputs depend on, through `pyvalue`. Where Python raised an exception
+//! Values keep the Python semantics the outputs depend on, through `pysemantics`. Where Python raised an exception
 //! its caller did not catch, the failure is the last line of that traceback.
 
 use crate::archive::{self, ArchiveError, Limits, PackageWriter};
 use crate::pyjson::{self, Object, Value};
-use crate::pytext::{self, PyPath};
-use crate::pyvalue::{
+use crate::pysemantics::{
     Failure, Number, Result, at, contains, file_failure, fixed, fromisoformat, get, get_or,
     iterate, join, join_text, length, loads, lookup, maximum, mean, median, number, number_value,
     object, optional, python_sum, read, read_bytes, read_text, text, to_float, type_error,
 };
+use crate::pytext::{self, PyPath};
 use crate::sha256;
 use std::io::{self, Read, Write};
 use std::os::unix::fs::PermissionsExt;

@@ -64,6 +64,8 @@ independent assertions. The harness never obtains expected output from a candida
 [`check-manifest.v1.json`](../../../tools/behavior_contracts/check-manifest.v1.json),
 [`rates.v1.json`](../../../tools/behavior_contracts/rates.v1.json),
 [`upstream.v1.json`](../../../tools/behavior_contracts/upstream.v1.json),
+[`ruling-record.v1.json`](../../../tools/behavior_contracts/ruling-record.v1.json),
+[`ruling-dossier.v1.json`](../../../tools/behavior_contracts/ruling-dossier.v1.json),
 [`archive.v1.json`](../../../tools/behavior_contracts/archive.v1.json),
 [`regrade-reports.v1.json`](../../../tools/behavior_contracts/regrade-reports.v1.json) and
 [`audit-log.v1.json`](../../../tools/behavior_contracts/audit-log.v1.json) pin the commands of
@@ -80,7 +82,9 @@ Without `--implementations`, each program runs its maintained implementation. `c
 `rates.py` and `upstream.py` through drivers that read the case directory as the repository and, for `rates`, take
 `--source PROVIDER=URL` pages, so no case leaves the host; `rates-transport-failure` connects to a closed loopback
 port. `regrade-archive-attempt` runs the retained `regrade.archive_attempt` through a driver that reads the case
-directory as the repository. Cases whose Rust behavior was changed on purpose carry a `baseline_defect` with Python's output, so pass
+directory as the repository. `ruling` runs the retained `ruling_record.py` and `ruling_dossier.py` through a driver that
+reads the case directory, or the `--root` argument, as the repository. Cases whose Rust behavior was changed on purpose
+carry a `baseline_defect` with Python's output, so pass
 `--allow-known-defects` when Python is the primary. `roster`, `normalize-thermo`, `derive-packet`, `build-packet`,
 `export-explorer`, `archive`, `regrade-status` and `audit-log` have no Python implementation, so they run the executable `rust_runtime.resolve("bench-tools")`
 selects, and the command refuses when none is installed for `HEAD`. A command map for the Rust programs names that
@@ -101,7 +105,9 @@ executable:
   "archive": ["/absolute/path/to/bench-tools", "archive"],
   "regrade-status": ["/absolute/path/to/bench-tools", "regrade", "status", "--"],
   "regrade-archive-attempt": ["/absolute/path/to/bench-tools", "regrade", "archive-attempt"],
-  "audit-log": ["/absolute/path/to/bench-tools", "audit-log"]
+  "audit-log": ["/absolute/path/to/bench-tools", "audit-log"],
+  "ruling": ["/absolute/path/to/bench-tools", "ruling"],
+  "grading": ["/absolute/path/to/bench-tools", "grading"]
 }
 ```
 
@@ -121,6 +127,27 @@ and that its bytes are the committed files.
 Each `build-packet` case holds its staging mirror as a bare repository with one pack and its saved forge responses
 under `replay/`, so no case calls `gh` or the network. `build-packet-non-utf8-output-path` requires `non-utf8-paths`.
 
+## Run the grading validation corpus
+
+[`grading-validation.v1.json`](../../../tools/behavior_contracts/grading-validation.v1.json) pins
+`bench-tools grading validate [VERDICTS] --inputs FILE` ([#231](https://github.com/kamui/code-review-bench/issues/231)).
+Its `grading` program runs the retained `grading_validation.py` through a driver that takes `--inputs`, which must
+name a file called `inputs.json`, and points the script at it as `grade.py prepare`'s `validator/tools/` layout
+does. Twelve cases carry a `baseline_defect`, so pass `--allow-known-defects` when Python is the primary:
+`non-object-inputs` and `links-not-an-object`, where Python raises an uncaught `AttributeError`; `deep-nesting` and
+`lone-surrogate`, which `pyjson` refuses; `nan-review-tokens`, whose Python line order depends on a `NaN`'s address;
+`unicode-15-1-outcome`, quoted through Python 3.14's `repr`; `dash-led-exponent-path` and
+`dash-led-unicode-16-digit-path`, read as values as Python 3.14's argparse reads them (these three record Python
+3.12's result); and `help`, `help-before-invalid-short-help`, `missing-inputs-option` and `extra-argument`,
+which print clap's wording. `dash-led-paths`
+pins the dash-led values both Pythons accept. The `fixture-*` cases build on the grading
+fixture's `pending`, `proposed` and `disputed-without-ruling` variants, and two `saved-v1-*` cases hold archived
+validator inputs and verdicts.
+
+```sh
+python3 tools/behavior_contract.py --allow-known-defects --corpus tools/behavior_contracts/grading-validation.v1.json --differential /tmp/rust.json
+```
+
 ## Run the storage corpora
 
 [#217](https://github.com/kamui/code-review-bench/issues/217) pins the storage behavior that
@@ -131,7 +158,7 @@ under `replay/`, so no case calls `gh` or the network. `build-packet-non-utf8-ou
 | [`evidence-store.v1.json`](../../../tools/behavior_contracts/evidence-store.v1.json) | `evidence-store`, `evidence`, `python-resolve`, `recover-evidence`, `restore-local` | `evidence_store.py` directly; `python-resolve` calls the retained `evidence_store.resolve` as `prune_workspace.py` does. `evidence`, `recover-evidence` and `restore-local` run `bench-tools evidence`, `evidence recover` and `evidence restore-local` |
 | [`native-artifacts.v1.json`](../../../tools/behavior_contracts/native-artifacts.v1.json) | `native-artifacts` | `native_artifacts.py`; its driver adds `file ROOT INDEX OUT [--native-relative PATH]`, which runs `file_artifacts` and prints the pin |
 | [`evidence-inventory.v1.json`](../../../tools/behavior_contracts/evidence-inventory.v1.json) | `evidence-inventory`, `collect-run` | `evidence_inventory.py` directly; `collect_run.py` through a driver that reads the case directory as the repository |
-| [`import-benchmark.v1.json`](../../../tools/behavior_contracts/import-benchmark.v1.json) | `import-benchmark` | `import_benchmark.py --check` through the same kind of driver |
+| [`import-benchmark.v1.json`](../../../tools/behavior_contracts/import-benchmark.v1.json) | `import-benchmark` | None since [#223](https://github.com/kamui/code-review-bench/issues/223) deleted `import_benchmark.py`; `bench-tools import-benchmark`. Before that, `import_benchmark.py` ran through the same kind of driver |
 
 ```sh
 python3 tools/behavior_contract.py --allow-known-defects --corpus tools/behavior_contracts/evidence-store.v1.json
@@ -174,6 +201,12 @@ message, so these corpora run with `--allow-known-defects`: `recover-unknown-sou
 `collect-run-checksum-mismatch` and `import-check-changed-file`. Each decision records the old and new behavior.
 Each observation masks the traceback's frames with `mask_patterns` and pins the terminal exception type and message,
 so an unrelated crash is a failure, not the known defect.
+
+[#223](https://github.com/kamui/code-review-bench/issues/223) ports the `--check` and `--preserve` of `import_benchmark.py` to
+`bench-tools import-benchmark`. `import-benchmark-decisions.v3.json` records each case where the two differ, every
+other traceback included, with Python's output as its `baseline_defect`. The corpus ran against both, with a
+differential, before the Python was deleted; its expectations are now the gate. The `import-preserve-*` cases that
+recover bytes from Git history hold a small `.git` directory, without config, in their `initial` entries.
 
 ## Grading comparison features
 

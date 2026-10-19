@@ -8,13 +8,13 @@
 //! `export_explorer.py` printed, exiting 1 as it did.
 
 use crate::pyjson::{self, Object, Value};
-use crate::pytext::{self, PyPath};
-use crate::pyvalue::{
+use crate::pysemantics::{
     Dict, Failure, Result, at, concat, contains, count, file_failure, fromisoformat, get, get_or,
     index, iterate, join, join_text, length, loads, lookup, move_failure, number, number_value,
     object, optional, or, path_of, python_sum, read, read_bytes, read_text, set_of, sorted,
     str_text, text, unhashable,
 };
+use crate::pytext::{self, PyPath};
 use crate::{pyfs, sha256};
 use std::collections::HashSet;
 use std::ffi::OsStr;
