@@ -102,7 +102,7 @@ one-time check read all 33 published packages, from the 19 manifests in `bench/e
 | `evidence recover --source S [--root R] [--path P]... [--offline]` | `bench/tools/recover_evidence.py` |
 | `evidence restore-local ROOT ORIGINAL OUTPUT` | `local_evidence_resolution`, with the research record `restore-local.py`'s arguments |
 
-`pack` and `publish` stay in `evidence_store.py`. Packages are read through `bench_tools::archive`, so a fetch refuses
+Packages are read through `bench_tools::archive`, so a fetch refuses
 what [archives](#archives) refuses; the evidence-store v3 decisions record each form Python restored. Restoration is
 durable: each downloaded archive and restored member is written to a temporary file in `.cache/evidence`, synced, then
 hard-linked into place, and the directory is synced. Before it reports success, `fetch` also syncs every directory
@@ -121,6 +121,46 @@ only.
 longer imports `evidence_store`. `bun run evidence:fetch` and the Pages and rates workflows run `evidence fetch`;
 each job that fetches installs `bench-tools` first. `prune_workspace.py` still calls the retained
 `evidence_store.resolve`; `resolve-across-implementations` restores a path through Rust and resolves it through Python.
+
+### Evidence packing and publication
+
+[#220](https://github.com/kamui/code-review-bench/issues/220) moves packing and publication to `bench-tools evidence`, in
+`bench_tools::evidence::publication`, so Rust is the only packer and publisher:
+
+| Command | Python it replaces |
+| --- | --- |
+| `evidence pack --selection S --out O [--part-bytes N]` | `evidence_store.py`'s `pack` |
+| `evidence check-package DIR` | `contributor.archive_attempt`'s check of a package it packed: `DIR` holds exactly the manifest and its assets, and each part restores into an empty temporary directory |
+| `evidence publish --manifest M --out O` | `evidence_store.py`'s `publish` |
+
+`pack` keeps Python's selection shape, refusals, part order and messages, and restores each archive before linking it
+into place. `publish` keeps the draft and 1,000-asset checks, never replaces an asset, reads the release after a failed
+upload instead of uploading again, checks the asset's size and identity, and downloads and restores every package
+before it writes the published manifest; an existing published manifest is verified, and its directories synced, not
+uploaded again. `check-package` refuses a directory it cannot list. Each package
+and manifest is written as receipts are: to a synced temporary file, linked to its name without replacing one, and
+the directory synced. `tests/publication.rs` interrupts every disk effect of both commands, and injects a changed
+input, a failed link, a lost upload response, a partial asset, a rejected upload and a corrupted download.
+`evidence-store-decisions.v6.json` and `v7` record the changes from Python, each with its case: durable writes
+(`publish-leftover-temporary`), `--part-bytes` read with Unicode 16.0 digits (`pack-unicode-16-digit-part-bytes`), a
+selection holding a lone surrogate escape refused (`pack-lone-surrogate-selection`), dash-led option values read by
+Python 3.14's argparse rule (`pack-dash-led-out-python-3-14-rule`), and clap's wording for an invalid `--part-bytes`
+(`pack-int-control-whitespace-part-bytes`). `pack` and `publish` attach a dash-led value such as `-١` to its option,
+as `build-packet` does (`pack-unicode-negative-out`, `publish-unicode-negative-out`). A receipt or published manifest
+that cannot be created now names itself, not its temporary file, as `open(path, 'x')` does
+(`verify-receipt-unwritable-directory`, `publish-unwritable-directory`). `pack-restored-by-python` packs and publishes
+through Rust and restores through the retained `evidence_store.resolve`.
+
+The contributor CLI runs these commands through each run's pinned `bench-tools`, a [temporary bridge](#temporary-bridges).
+`prepare_run` writes the selected pin to the run's `runtimes.frozen.json` and records that file's SHA-256 in the run
+manifest. `run`, `run --resume` and `submit` resolve it before any other effect or paid-work prompt and print the
+install commands when it is missing; filing (`archive_attempt`) and `submit` run only the pinned executable, through
+`rust_runtime.for_run`. A submission takes the one pin its runs share, refuses runs with different pins, and saves the
+pin in its journal when it first packs. Its public records carry each run's `runtimes.frozen.json` beside the run
+manifest that hashes it. A run prepared before this change pins none and is refused with its
+`source_commit`. `prune_workspace.prune` still runs in process on the retained Python until
+[#159](https://github.com/kamui/code-review-bench/issues/159). `test_contributor.py` runs the CLI on disposable
+repositories with the installed `bench-tools` and the contract harness's stub `gh`.
 
 ### Native artifacts and transcript archives
 
@@ -262,7 +302,7 @@ lists them. When the Cargo cache lacks one, `rust_runtime.py install` fails and 
 | `bench/tools/rates.py`, its `check` command | `bench-tools rates check`, `bench_tools::rates` | `bun run rates:check`; `docs/rates.md` | Retained library, below. `refresh` stays in Python. |
 | `bench/tools/upstream.py`, its `report` command | `bench-tools upstream report`, `bench_tools::upstream`, with the registry checks of `claims.load_registry` in `bench_tools::claims` | `bun run audit:maintainers`; `docs/maintainer-adjudication.md` | Retained library, below. `collect` stays in Python. |
 | `tools/export_explorer.py`, its export | `bench-tools export-explorer evidence`, `stage` and `publish`, `bench_tools::export_explorer` | `bun run data` runs the front below; `.github/workflows/pages.yml` installs `bench-tools`; `src/lib/scoring.test.ts` passes `--root` and `--public` | The Python front, a temporary bridge below. The cases of `test_export_explorer.py` that read the export's internals moved to cargo tests and [`export-explorer.v1.json`](../../tools/behavior_contracts/export-explorer.v1.json); the rest run the front. |
-| `bench/tools/evidence_store.py`, its `fetch` and `verify` commands and `resolve` | `bench-tools evidence fetch`, `verify` and `resolve`, `bench_tools::evidence` | `bun run evidence:fetch`; `.github/workflows/pages.yml` and `rates.yml`; `export_explorer.py` through `export-explorer evidence --restore`; `docs/evidence-storage.md`, `docs/codex-container-fixture.md` | Retained byte-unchanged: `pack` and `publish` stay in Python, and `prune_workspace.py` and `native_artifacts.py` import it. [`evidence-store.v1.json`](../../tools/behavior_contracts/evidence-store.v1.json) runs `fetch` and `verify` against Rust, with a differential against Python in CI. |
+| `bench/tools/evidence_store.py`, its `pack`, `publish`, `fetch` and `verify` commands and `resolve` | `bench-tools evidence pack`, `check-package`, `publish`, `fetch`, `verify` and `resolve`, `bench_tools::evidence` | `bun run evidence:fetch`; `.github/workflows/pages.yml` and `rates.yml`; `export_explorer.py` through `export-explorer evidence --restore`; `contributor.py` and `contributor_submit.py` through each run's pinned `bench-tools`; `docs/evidence-storage.md`, `docs/codex-container-fixture.md`, `docs/contributing-reviews.md` | Retained byte-unchanged: `prune_workspace.py`, `retire_workspace.py` and `native_artifacts.py` import it. [`evidence-store.v1.json`](../../tools/behavior_contracts/evidence-store.v1.json) runs every command against Rust, with a differential against Python in CI. |
 | `bench/tools/native_artifacts.py`, its `verify` and `restore` commands and `file_artifacts`; `file_attempt.archive_transcripts` | `bench-tools native-artifacts verify`, `restore` and `file`, `evidence archive-transcripts` | `file_attempt.py`, below; `bench/README.md`, `docs/evidence-storage.md` | `native_artifacts.py` is retained byte-unchanged for `prune_workspace.py`. `archive_transcripts` is deleted; the corpus keeps its source as a driver. [`native-artifacts.v1.json`](../../tools/behavior_contracts/native-artifacts.v1.json) runs against Rust, with a differential against Python in CI. |
 | `tools/import_benchmark.py`, its `--check` and `--preserve` | `bench-tools import-benchmark`, `bench_tools::import_benchmark` | `bun run verify:import` and `bun run import:preserve`; `.github/workflows/rates.yml`; `tools/test_evidence_consumers.py`; `README.md`, `docs/evidence-storage.md` | Deleted with `test_import_benchmark.py`, whose cases are in [`import-benchmark.v1.json`](../../tools/behavior_contracts/import-benchmark.v1.json); the corpus ran against both before deletion. `--source` is retired. |
 | `bench/tools/recover_evidence.py`, `bench/tools/local_evidence_resolution.py` | `bench-tools evidence recover` and `restore-local`, `bench_tools::evidence::recovery` | `docs/evidence-storage.md` | Deleted with `test_recover_evidence.py` and `test_local_evidence_resolution.py`, whose cases are in the cargo tests and `evidence-store.v1.json`; the corpus ran against both before deletion. |
@@ -327,6 +367,7 @@ A bridge lets a Python caller run a Rust command until the caller itself moves t
 
 | Bridge | Removal condition | Removed by |
 | --- | --- | --- |
+| `contributor.py` and `contributor_submit.py` run `evidence pack`, `check-package` and `publish`, and `evidence verify --receipt`, through the run's pinned `bench-tools` ([#220](https://github.com/kamui/code-review-bench/issues/220)) | The contributor backend moves to Rust | [#158](https://github.com/kamui/code-review-bench/issues/158) |
 | `bench/tools/file_attempt.py` runs the run's pinned `bench-tools native-artifacts file` and `evidence archive-transcripts`, resolved by `rust_runtime.for_run`, and refuses a pin without them before filing. | Filing moves to Rust ([#157](https://github.com/kamui/code-review-bench/issues/157)) | #157 |
 | `tools/export_explorer.py` loads the current facts with `current_grading.load_current`, writes them to a temporary file with `json.dumps(allow_nan=False)`, restores the evidence with `bench-tools export-explorer evidence --restore`, runs `stage`, checks the dataset hash again, and runs `publish` with `SIGINT` ignored. It exits 2 when `bench-tools` is not installed for `HEAD`. | `load_current` moves to Rust ([#156](https://github.com/kamui/code-review-bench/issues/156)); evidence resolution moved with [#219](https://github.com/kamui/code-review-bench/issues/219) | #156 |
 
@@ -594,7 +635,7 @@ python3 tools/behavior_contract.py --verify-decision-history
 ```
 
 `MAP` is a [command map](contracts/README.md#run-the-usage-corpus) naming the resolved executable, as the `Rust
-runtime` workflow writes it. `EVIDENCE_MAP` also routes `evidence-store`'s `fetch` and `verify` to it, as
+runtime` workflow writes it. `EVIDENCE_MAP` also routes every `evidence-store` command to it, as
 [the storage corpora](contracts/README.md#run-the-storage-corpora) show. The `roster`, `normalize-thermo`, `derive-packet`, `build-packet`, `export-explorer`,
 `archive` and `import-benchmark` corpora run the Rust executable by default; the other corpora run the retained Python
 libraries by default. `derive-packet`, `build-packet`, `export-explorer` and `import-benchmark` have no Python

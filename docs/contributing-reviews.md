@@ -4,11 +4,20 @@ Run a review configuration, inspect its progress, then submit its evidence as a 
 
 ## Prepare your machine
 
-Use Linux with Python 3.11 or later, Git, GitHub CLI, and bubblewrap. Authenticate GitHub CLI with an account that can create a public fork, releases in that fork, and pull requests against `kamui/code-review-bench`:
+Use Linux with Python 3.11 or later, Git, GitHub CLI, bubblewrap, and [rustup](https://rustup.rs). Authenticate GitHub CLI with an account that can create a public fork, releases in that fork, and pull requests against `kamui/code-review-bench`:
 
 ```sh
 gh auth login
 ```
+
+`run` and `submit` pack, check and publish evidence with the Rust `bench-tools` executable. Install it from the repository root, and again after pulling a change to `rust/bench-tools`:
+
+```sh
+(cd rust/bench-tools && rustup show && cargo fetch --locked)
+python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select
+```
+
+Without it, `run`, `run --resume` and `submit` stop before preparing anything or asking about paid work, and print these commands. Each run freezes the `bench-tools` it was prepared with in `runtimes.frozen.json` and uses only that one, even after you install and select another; a submission uses the one its runs share. A run prepared before runs froze `bench-tools` is refused with the commit to resume it from.
 
 Install an approved client version from [the contributor profiles](../bench/contributor-profiles.json). Codex uses its existing `.codex/auth.json` authentication. Claude Code uses `.claude/.credentials.json` and account metadata in `.claude.json`. OpenCode and Pi use only `OPENROUTER_API_KEY` from your environment. Enter that key privately in your shell or secret manager. Never put it in an invocation or a tracked file.
 

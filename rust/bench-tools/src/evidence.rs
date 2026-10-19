@@ -6,6 +6,7 @@
 //! restart on a filesystem that honors `fsync`. A destination that exists but differs from the manifest is never
 //! trusted or overwritten: `materialize` lists every such file with a command that moves them aside.
 
+pub mod publication;
 pub mod recovery;
 pub mod remote;
 pub mod transcripts;
@@ -22,7 +23,7 @@ use std::io::{self, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::Path;
 
-pub use remote::{GitHub, Remote};
+pub use remote::{GitHub, Remote, Upload};
 
 /// Python's `bench/schema/evidence-storage.schema.json`, which a cargo test keeps byte-identical.
 pub const SCHEMA: &str = include_str!("evidence/evidence-storage.schema.json");
@@ -493,6 +494,22 @@ pub(crate) fn parent(path: &PyPath) -> PyPath {
         .unwrap_or_else(|| PyPath::new(b"."))
 }
 
+/// The directories from `path`'s parent up, each of which an interrupted earlier write may have given an entry it
+/// never synced.
+fn reaching(path: &PyPath) -> BTreeSet<Vec<u8>> {
+    let directory = parent(path);
+    std::iter::once(directory.clone())
+        .chain(parents(&directory))
+        .map(|ancestor| ancestor.as_bytes().to_vec())
+        .collect()
+}
+
+/// Sync the directories that reach an existing record, so a record an interrupted call linked is durable before a
+/// retry reports it.
+fn sync_reaching(disk: &mut dyn Disk, path: &PyPath) -> Result<()> {
+    sync_dirs(disk, &reaching(path))
+}
+
 /// Sync each directory that gained an entry: the parents of new directories and of new links.
 pub(crate) fn sync_dirs(disk: &mut dyn Disk, directories: &BTreeSet<Vec<u8>>) -> Result<()> {
     for directory in directories {
@@ -778,11 +795,7 @@ pub fn write_new_as(
 ) -> Result<()> {
     let directory = parent(path);
     make_dirs(&directory)?;
-    // An interrupted earlier call may have created any of these without syncing its entry.
-    let reaching: BTreeSet<Vec<u8>> = std::iter::once(directory.clone())
-        .chain(parents(&directory))
-        .map(|ancestor| ancestor.as_bytes().to_vec())
-        .collect();
+    let reaching = reaching(path);
     let encoded = format!("{}\n", pyjson::dumps(value, options));
     let same = |path: &PyPath| -> Result<()> {
         match pytext::read_text(path) {
@@ -808,9 +821,10 @@ pub fn write_new_as(
     );
     let os_temporary = temporary.to_path_buf();
     let written = (|| -> Result<()> {
+        // Named as `open(path, 'x')` names the record when its directory refuses a new file.
         let mut file = disk
             .create(&os_temporary)
-            .map_err(|error| os_failure(&error, temporary.as_bytes()))?;
+            .map_err(|error| os_failure(&error, path.as_bytes()))?;
         file.write_all(encoded.as_bytes())
             .map_err(|error| os_failure(&error, temporary.as_bytes()))?;
         disk.sync(&file, &os_temporary)

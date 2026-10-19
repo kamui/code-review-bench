@@ -63,18 +63,19 @@ Create a selection outside frozen runs. `source` is a local regular file; `path`
 ```
 
 ```sh
-python3 bench/tools/evidence_store.py pack --selection /tmp/selection.json --out /tmp/evidence-package-v1
+python3 bench/tools/rust_runtime.py exec bench-tools -- evidence pack \
+  --selection /tmp/selection.json --out /tmp/evidence-package-v1
 # Create a published evidence release once, before uploading to it.
 gh release create evidence-example-v1 --repo kamui/code-review-bench \
   --title 'Benchmark evidence example v1' --notes 'Immutable benchmark evidence payloads.'
-python3 bench/tools/evidence_store.py publish --manifest /tmp/evidence-package-v1/manifest.json \
-  --out bench/evidence/manifests/example-v1.json
+python3 bench/tools/rust_runtime.py exec bench-tools -- evidence publish \
+  --manifest /tmp/evidence-package-v1/manifest.json --out bench/evidence/manifests/example-v1.json
 python3 bench/tools/rust_runtime.py exec bench-tools -- evidence verify \
   --manifest bench/evidence/manifests/example-v1.json \
   --receipt bench/evidence/receipts/example-v1-restoration.json
 ```
 
-`publish` uploads without clobbering. It downloads each asset into an empty temporary directory, verifies its identity/hash and restores all indexed members before writing the published manifest. A retry verifies existing bytes instead of replacing them. An ambiguous upload triggers a read of the release, not another blind upload. A failed run may leave an uploaded asset, but never a successful publication receipt for unverified bytes.
+`publish` uploads without clobbering. It downloads each asset into an empty temporary directory, verifies its identity/hash and restores all indexed members before writing the published manifest. A retry verifies existing bytes instead of replacing them. An ambiguous upload triggers a read of the release, not another blind upload. A failed run may leave an uploaded asset, but never a successful publication receipt for unverified bytes. `pack` and `publish` write each package and manifest to a synced temporary file and link it to its name without replacing one, so an interrupted run leaves only whole packages and no manifest.
 
 Packages default to at most 1 GiB of uncompressed member bytes. `pack --part-bytes N` can raise that limit below 2 GiB; the compressed asset must also remain below 2 GiB. A single input larger than the selected part size is refused, not silently split or rewritten. Such inputs need an explicit versioned export/chunking design before migration. GitHub permits at most 1,000 assets per release; use another versioned release when full. See [GitHub release limits](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases#storage-and-bandwidth-quotas).
 

@@ -60,7 +60,7 @@ enum Cli {
     /// Check cached evidence packages or native scratch archives through bench_tools::archive.
     #[command(subcommand, infer_long_args = true)]
     Archive(ArchiveCommand),
-    /// Restore, resolve, verify and recover published evidence, as evidence_store.py, recover_evidence.py and
+    /// Pack, publish, restore, resolve, verify and recover evidence, as evidence_store.py, recover_evidence.py and
     /// restore-local.py did.
     #[command(subcommand, infer_long_args = true)]
     Evidence(EvidenceCommand),
@@ -381,6 +381,32 @@ enum ArchiveCommand {
 
 #[derive(Subcommand)]
 enum EvidenceCommand {
+    /// Pack a selection's files into new packages under OUT, each restored before it is linked into place, and
+    /// write OUT/manifest.json.
+    #[command(infer_long_args = true)]
+    Pack {
+        #[arg(long, allow_negative_numbers = true)]
+        selection: OsString,
+        #[arg(long, allow_negative_numbers = true)]
+        out: OsString,
+        #[arg(long, allow_negative_numbers = true, value_parser = python_int, default_value = "1073741824")]
+        part_bytes: String,
+    },
+    /// Check that DIRECTORY holds exactly a package manifest and its assets, and that every package restores.
+    #[command(infer_long_args = true)]
+    CheckPackage {
+        #[arg(allow_negative_numbers = true)]
+        directory: OsString,
+    },
+    /// Upload each package of MANIFEST that its release lacks, never replacing an asset, download and restore it,
+    /// then write the published manifest to OUT.
+    #[command(infer_long_args = true)]
+    Publish {
+        #[arg(long, allow_negative_numbers = true)]
+        manifest: OsString,
+        #[arg(long, allow_negative_numbers = true)]
+        out: OsString,
+    },
     /// Restore a published manifest's members under ROOT, through the verified cache in ROOT/.cache/evidence.
     #[command(infer_long_args = true)]
     Fetch {
@@ -1291,6 +1317,35 @@ fn run_evidence(command: EvidenceCommand) -> Result<ExitCode, ExitCode> {
         temporary: evidence::system_temp(),
     };
     let outcome = match command {
+        EvidenceCommand::Pack {
+            selection,
+            out,
+            part_bytes,
+        } => {
+            let cwd = evidence_root(None)?;
+            evidence::read(&PyPath::new(pytext::os_bytes(&selection)))
+                .and_then(|document| {
+                    evidence::publication::pack(
+                        store.disk,
+                        &document,
+                        &PyPath::new(pytext::os_bytes(&out)),
+                        &part_bytes,
+                        &cwd,
+                    )
+                })
+                .map(|_| "pack: verified".to_string())
+        }
+        EvidenceCommand::CheckPackage { directory } => evidence::publication::check_package(
+            &mut store,
+            &PyPath::new(pytext::os_bytes(&directory)),
+        )
+        .map(|()| "check-package: verified".to_string()),
+        EvidenceCommand::Publish { manifest, out } => evidence::publication::publish(
+            &mut store,
+            &PyPath::new(pytext::os_bytes(&manifest)),
+            &PyPath::new(pytext::os_bytes(&out)),
+        )
+        .map(|_| "publish: verified".to_string()),
         EvidenceCommand::Fetch {
             manifest,
             root,
@@ -1750,14 +1805,17 @@ fn run_ruling(command: RulingCommand) -> Result<ExitCode, ExitCode> {
 }
 
 /// argparse reads a dash-led argument as a value when it names no option and reads as a negative number or holds
-/// a space; `build-packet-option-values-with-leading-dash` and `grading-validation`'s `dash-led-*` cases pin that.
-/// clap takes only numbers, so before it parses them, build-packet's and grading validate's arguments attach such
-/// a value to its option with `=`, and grading validate's positional moves after `--`.
+/// a space; `build-packet-option-values-with-leading-dash`, `grading-validation`'s `dash-led-*` cases and
+/// `pack-unicode-negative-out` pin that. clap takes only numbers, so before it parses them, the arguments of
+/// build-packet, grading validate, evidence pack and evidence publish attach such a value to its option with `=`,
+/// and grading validate's positional moves after `--`.
 fn attach_dash_led_values(arguments: Vec<OsString>) -> Vec<OsString> {
     let name = |index: usize| arguments.get(index).map(|name| pytext::os_bytes(name));
     let path: &[&str] = match (name(1), name(2)) {
         (Some(b"build-packet"), _) => &["build-packet"],
         (Some(b"grading"), Some(b"validate")) => &["grading", "validate"],
+        (Some(b"evidence"), Some(b"pack")) => &["evidence", "pack"],
+        (Some(b"evidence"), Some(b"publish")) => &["evidence", "publish"],
         _ => return arguments,
     };
     let mut command = Cli::command();
