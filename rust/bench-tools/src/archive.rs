@@ -662,31 +662,37 @@ fn read_at<R: Read + Seek>(file: &mut R, at: u64, buf: &mut [u8]) -> io::Result<
     }
 }
 
-/// The first zip64 end record at or after `from` and before `to`, where `ZipArchive` looks for it.
-fn first_zip64_end<R: Read + Seek>(
+/// Every zip64 end record at or after `from` and before `to`, each of which `ZipArchive` may try in turn.
+fn each_zip64_end<R: Read + Seek>(
     file: &mut R,
     from: u64,
     to: u64,
-) -> io::Result<Option<[u8; 56]>> {
+    mut check: impl FnMut(&[u8; 56]) -> Result<(), ArchiveError>,
+) -> Result<(), ArchiveError> {
     let mut at = from;
     let mut chunk = vec![0u8; 64 * 1024];
     while at + 4 <= to {
         let length = usize::try_from((to - at).min(chunk.len() as u64)).unwrap_or(chunk.len());
         file.seek(SeekFrom::Start(at))?;
         file.read_exact(&mut chunk[..length])?;
-        if let Some(offset) = chunk[..length]
+        let found: Vec<usize> = chunk[..length]
             .windows(4)
-            .position(|window| window == ZIP64_END_SIGNATURE)
-        {
+            .enumerate()
+            .filter(|(_, window)| *window == ZIP64_END_SIGNATURE)
+            .map(|(offset, _)| offset)
+            .collect();
+        for offset in found {
             let mut record = [0u8; 56];
-            return Ok(read_at(file, at + offset as u64, &mut record)?.then_some(record));
+            if read_at(file, at + offset as u64, &mut record)? {
+                check(&record)?;
+            }
         }
         if length < 4 {
             break;
         }
         at += (length - 3) as u64;
     }
-    Ok(None)
+    Ok(())
 }
 
 /// Refuse a central directory above `limits` before `ZipArchive` reads it. Every end record in the comment window
@@ -715,7 +721,13 @@ fn check_zip_end_records<R: Read + Seek>(
             || bytes32 == 0xFFFF_FFFF
             || u32_at(record, 16) == 0xFFFF_FFFF;
         let position = start + at as u64;
-        let mut zip64 = None;
+        let within = |entries: u64, bytes: u64| -> Result<(), ArchiveError> {
+            if entries > limits.members || bytes > limits.zip_directory_bytes() {
+                return Err(Refusal::ZipDirectory { entries, bytes }.into());
+            }
+            Ok(())
+        };
+        let mut zip64 = false;
         let mut locator = [0u8; 20];
         if position >= 20
             && read_at(file, position - 20, &mut locator)?
@@ -723,35 +735,29 @@ fn check_zip_end_records<R: Read + Seek>(
         {
             let offset = u64_at(&locator, 8);
             if offset < position - 20 {
-                zip64 = first_zip64_end(file, offset, position - 20)?;
+                each_zip64_end(file, offset, position - 20, |end| {
+                    zip64 = true;
+                    // ZipArchive reads this record's extensible data into memory when the 32-bit record defers to it.
+                    let extensible = u64_at(end, 4).saturating_sub(44);
+                    if may_be_zip64 && extensible > NAME_RECORD_LIMIT {
+                        return Err(Refusal::Zip64Extensible { bytes: extensible }.into());
+                    }
+                    within(u64_at(end, 24).max(u64_at(end, 32)), u64_at(end, 40))
+                })?;
             }
         }
-        let mut claims = Vec::new();
-        if let Some(end) = zip64 {
-            claims.push((u64_at(&end, 24).max(u64_at(&end, 32)), u64_at(&end, 40)));
-            // ZipArchive reads this record's extensible data into memory when the 32-bit record defers to it.
-            let extensible = u64_at(&end, 4).saturating_sub(44);
-            if may_be_zip64 && extensible > NAME_RECORD_LIMIT {
-                return Err(Refusal::Zip64Extensible { bytes: extensible }.into());
-            }
-        }
-        claims.push((
-            if zip64.is_some() && entries32 == 0xFFFF {
+        within(
+            if zip64 && entries32 == 0xFFFF {
                 0
             } else {
                 entries32
             },
-            if zip64.is_some() && bytes32 == 0xFFFF_FFFF {
+            if zip64 && bytes32 == 0xFFFF_FFFF {
                 0
             } else {
                 bytes32
             },
-        ));
-        for (entries, bytes) in claims {
-            if entries > limits.members || bytes > limits.zip_directory_bytes() {
-                return Err(Refusal::ZipDirectory { entries, bytes }.into());
-            }
-        }
+        )?;
     }
     if !found {
         return Err(
@@ -995,9 +1001,14 @@ pub fn check_package(cache: &std::path::Path, package: &IndexedPackage) -> Resul
         .iter()
         .map(|member| (member.path.as_bytes(), member))
         .collect();
+    let payload = package
+        .members
+        .iter()
+        .try_fold(0u64, |sum, member| sum.checked_add(member.bytes))
+        .ok_or("indexed member sizes overflow")?;
     let limits = Limits {
         members: package.members.len() as u64,
-        payload: package.members.iter().map(|member| member.bytes).sum(),
+        payload,
     };
     let mut seen = 0usize;
     let mut mismatch = None;

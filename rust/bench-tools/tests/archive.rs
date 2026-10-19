@@ -684,3 +684,49 @@ fn zip64_extensible_data_over_the_limit_is_refused_before_it_is_read() {
     ));
     assert!(read.get() < 256 * 1024, "read {} bytes", read.get());
 }
+
+#[test]
+fn every_zip64_end_record_after_the_locator_is_bounded_not_only_the_first() {
+    let bytes = scratch(&[("a", b"alpha")]);
+    let large = with_zip64_end_extended(&bytes, 1, 2 * 1024 * 1024);
+    let record_at = positions(&large, b"PK\x06\x06")[0];
+    let mut decoy = b"PK\x06\x06".to_vec();
+    decoy.extend_from_slice(&44u64.to_le_bytes());
+    decoy.resize(56, 0);
+    let with_decoy = [&large[..record_at], &decoy, &large[record_at..]].concat();
+    assert!(matches!(
+        zip_refusal(read_zip(&with_decoy, &ROOMY)),
+        Refusal::Zip64Extensible { bytes } if bytes == 2 * 1024 * 1024
+    ));
+}
+
+#[test]
+fn indexed_member_sizes_that_overflow_are_an_error_not_a_panic() {
+    let directory = std::env::temp_dir().join(format!(
+        "bench-tools-archive-overflow-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let mut writer = PackageWriter::new(Vec::new());
+    writer.append(b"bench/a", 1, 0o644, &mut &b"a"[..]).unwrap();
+    let compressed = writer.finish().unwrap();
+    let sha = sha256::hex_digest(&compressed);
+    std::fs::write(directory.join(format!("{sha}.tar.gz")), &compressed).unwrap();
+    let member = |path: &str, bytes| archive::IndexedMember {
+        path: path.to_string(),
+        sha256: sha256::hex_digest(b"a"),
+        bytes,
+        mode: 0o644,
+    };
+    let package = archive::IndexedPackage {
+        asset: format!("{sha}.tar.gz"),
+        sha256: sha,
+        bytes: compressed.len() as u64,
+        members: vec![member("bench/a", u64::MAX), member("bench/b", 1)],
+    };
+    assert_eq!(
+        archive::check_package(&directory, &package),
+        Err("indexed member sizes overflow".to_string())
+    );
+    std::fs::remove_dir_all(directory).unwrap();
+}

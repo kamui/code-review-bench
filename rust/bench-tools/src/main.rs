@@ -1451,7 +1451,7 @@ fn run_archive(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
                     let result = archive::check_package(std::path::Path::new(&cache), package);
                     packages += 1;
                     members += package.members.len() as u64;
-                    bytes += package.bytes;
+                    bytes = u64::saturating_add(bytes, package.bytes);
                     failed += u64::from(result.is_err());
                     rows.push(archive_row(vec![
                         ("sha256", pyjson::Value::Str(package.sha256.clone())),
