@@ -571,12 +571,15 @@ fn parse_instant_text(text: &str) -> Result<Instant, InstantError> {
     let shape = instant_shape(&chars).ok_or_else(|| {
         InstantError::Value("expected a timezone-aware ISO-8601 instant".to_string())
     })?;
-    let mut zone: String = chars[shape.zone..].iter().collect();
-    if zone == "Z" || zone == "z" {
-        zone = "+00:00".to_string();
-    } else if !shape.zone_colon {
-        zone.insert(3, ':');
-    }
+    let zone_chars = &chars[shape.zone..];
+    let zone: String = if matches!(zone_chars, ['Z' | 'z']) {
+        "+00:00".to_string()
+    } else if shape.zone_colon {
+        zone_chars.iter().collect()
+    } else {
+        let (hours, minutes) = zone_chars.split_at(3);
+        hours.iter().chain([':'].iter()).chain(minutes).collect()
+    };
     let seconds: String = chars[..19].iter().collect();
     let normalized = match shape.fraction {
         Some((start, end)) => {
