@@ -262,12 +262,12 @@ follow slice 3's:
 which agree with the deleted front at the base commit except six decided in `export-explorer-decisions.v7.json`: a
 record the export refuses prints the traceback's last line instead of the traceback, keeping exit 1
 (`*-billing-receipt`, `*-missing-inventory`, `*-unicode-15-1-record`, which also quotes through Python 3.14's
-`repr`); `--r` is ambiguous with the hidden `--restore` (`*-abbreviated-root`); and `--facts`, `--base-path`,
+`repr`); `--r` is ambiguous with the hidden `--restore` (`*-abbreviated-root`); `--facts`, `--base-path`,
 `--stage` or `--restore` without a command is refused (`*-facts-without-command`); and `--public` led by `-` and a
 Unicode 16.0 digit is taken as Python 3.14 took it (`*-unicode-16-digit-public`). Dash-led `--root` and `--public`
 values such as `-.5` and `'-published dir'` agree with the front (`*-dash-led-*`, `*-negative-number-public`).
-`tests/export_explorer.rs` covers what a corpus cannot reach: a
-record changed after staging, a failed publication, `SIGINT` during publication and `BASE_PATH`.
+`tests/export_explorer.rs` covers what a corpus cannot reach: a record changed after staging, a failed publication,
+`SIGINT` during publication and `BASE_PATH`.
 
 On 2026-10-19, read-only against the checked-out record, `methodology --out` wrote the same queue as
 `methodology.py` under Python 3.12.15 and 3.14.7: 663 selected reviews, 198 batches and 126 shared-claim links. The
