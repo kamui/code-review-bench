@@ -164,11 +164,14 @@ ported. [`grading.md`](../grading.md) records the baseline they serve.
      in either implementation's output;
   2. applies only the declared normalizations. `clocks` and `identity` rules replace JSON pointers with
      `"<volatile>"` and a decided label. Each `sections` rule orders every run of adjacent Markdown sections under
-     its `heading` prefix, such as `### `, by their bytes with tokens masked. `tokens` lists prefixes, such as `blind`
-     and `review`, whose `<prefix>-<6 to 8 hex>` tokens become first-seen ordinals such as `<blind 1>`, scanning
-     stdout, stderr, then files in path order, in names and contents alike. Only tokens the run generated are
-     relabelled: a token the case's inputs hold (initial and written files, argv, stdin) keeps its bytes, and output
-     text already in a label's form, such as `<blind 2>`, is a `consistency:` difference;
+     its `heading` prefix, such as `### `, by their bytes with tokens masked. Each `tokens` rule names a `prefix`,
+     such as `blind` or `review`, and the `sites` where the run writes its generated tokens: each site is a `glob`
+     and the JSON `pointers` in each matching file. The `<prefix>-<6 to 8 hex>` values at those sites are the run's
+     generated tokens, and every occurrence of one becomes its first-seen ordinal, such as `<blind 1>`, scanning
+     stdout, stderr, then files in path order, in names and contents alike. Every other token-shaped text keeps its
+     bytes, so a changed quote or source byte differs whatever encoding the input used. A missing site, a site
+     holding anything but a token of its prefix, and output text already in a label's form, such as `<blind 2>`,
+     are `consistency:` differences;
   3. recomputes every pin over the normalized bytes it names and compares the trees byte for byte. A dropped,
      duplicated or changed section, quote, source byte, credit fact, unresolved state or pin still differs.
 
