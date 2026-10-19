@@ -125,7 +125,7 @@ lists them. When the Cargo cache lacks one, `rust_runtime.py install` fails and 
 | `equivalent` | 1.0.3 | MIT OR Apache-2.0 | Key comparison for `indexmap` |
 | `memchr` | 2.8.3 | Unlicense OR MIT | Byte search for `zip` |
 | `typed-path` | 0.12.3 | MIT OR Apache-2.0 | Entry path handling for `zip` |
-| `nix` | 0.31.3 | MIT | `statvfs` for `regrade status`'s free space ([#239](https://github.com/kamui/code-review-bench/issues/239)), a direct dependency built with `fs` only, since the crate forbids `unsafe`; on macOS also Unix calls for `zip` |
+| `nix` | 0.31.3 | MIT | `statvfs` for `regrade status`'s free space ([#239](https://github.com/kamui/code-review-bench/issues/239)), and blocking `SIGINT` while the explorer export publishes (#234), a direct dependency built with `fs` and `signal` only, since the crate forbids `unsafe`; on macOS also Unix calls for `zip` |
 | `bitflags` | 2.13.2 | MIT OR Apache-2.0 | Flag types for `nix` |
 | `cfg_aliases` | 0.2.2 | MIT | Build-time configuration for `nix` |
 
@@ -142,10 +142,10 @@ lists them. When the Cargo cache lacks one, `rust_runtime.py install` fails and 
 | `bench/tools/normalize_thermo.py` | `bench-tools normalize-thermo`, `bench_tools::normalize_thermo` | The same skill runners and `file_attempt.py --replay` | Deleted with `test_normalize_thermo.py`, whose cases are in [`normalize-thermo.v1.json`](../../tools/behavior_contracts/normalize-thermo.v1.json). |
 | `bench/tools/derive_packet.py` | `bench-tools derive-packet`, `bench_tools::derive_packet` | `bench-tools build-packet --factual`, in-process; `bench/README.md` | Deleted. Its self-test cases and every target's legacy packet are in [`derive-packet.v1.json`](../../tools/behavior_contracts/derive-packet.v1.json). The imported original is preserved at `artifacts/import-source/bench/tools/derive_packet.py`. |
 | `bench/tools/build_packet.py` | `bench-tools build-packet`, `bench_tools::build_packet` | `bench/README.md`, `docs/pr-selection.md` | Deleted with `test_build_packet.py` and `test_build_packet_fixture.json`. Every run the tests made, with its replay files and staging mirror, is a case in [`build-packet.v1.json`](../../tools/behavior_contracts/build-packet.v1.json), beside 36 more. The imported originals are preserved under `artifacts/import-source/bench/tools/`. |
-| `bench/tools/check_manifest.py` | `bench_tools::schema`, `bench-tools check-manifest` | None; its CLI callers stay with #156, below | Retained library, below. |
+| `bench/tools/check_manifest.py` | `bench_tools::schema`, `bench-tools check-manifest` | `bench/README.md`, `docs/current-grading.md`, `.github/workflows/rates.yml`; `test:bench` runs [`check-manifest.v1.json`](../../tools/behavior_contracts/check-manifest.v1.json) against Rust, which [#234](https://github.com/kamui/code-review-bench/issues/234) moved from the Python CLI | Retained library, below. |
 | `bench/tools/rates.py`, its `check` command | `bench-tools rates check`, `bench_tools::rates` | `bun run rates:check`; `docs/rates.md` | Retained library, below. `refresh` stays in Python. |
 | `bench/tools/upstream.py`, its `report` command | `bench-tools upstream report`, `bench_tools::upstream`, with the registry checks of `claims.load_registry` in `bench_tools::claims` | `bun run audit:maintainers`; `docs/maintainer-adjudication.md` | Retained library, below. `collect` stays in Python. |
-| `tools/export_explorer.py`, its export | `bench-tools export-explorer evidence`, `stage` and `publish`, `bench_tools::export_explorer` | `bun run data` runs the front below; `.github/workflows/pages.yml` installs `bench-tools`; `src/lib/scoring.test.ts` passes `--root` and `--public` | The Python front, a temporary bridge below. The cases of `test_export_explorer.py` that read the export's internals moved to cargo tests and [`export-explorer.v1.json`](../../tools/behavior_contracts/export-explorer.v1.json); the rest run the front. |
+| `tools/export_explorer.py`, its export | `bench-tools export-explorer`, and its `evidence`, `stage` and `publish`, `bench_tools::export_explorer` | `bun run data`; `.github/workflows/pages.yml` installs `bench-tools`; `src/lib/scoring.test.ts` passes `--root` and `--public` | Deleted with `test_export_explorer.py` by #234, whose cases are in `tests/export_explorer.rs`, the unit tests and [`export-explorer.v1.json`](../../tools/behavior_contracts/export-explorer.v1.json). |
 
 [Storage](storage.md#migrated-responsibilities) lists the responsibilities #155 moved.
 `tools/test_moved_cli_callers.py` fails when a current file other than the retained module still runs a moved
@@ -163,7 +163,7 @@ assigns it to that stage. [Storage](storage.md#retained-libraries) lists the lib
 | --- | --- | --- | --- |
 | `bench/tools/diff_identity.py` | `provision.py` imports `identity`; `test_cache_replacements.py` imports it; `grade.runner_files()` hashes it, so a byte change refuses every prepared grading batch | `provision.py` computes diff identity through the Rust runtime ([#157](https://github.com/kamui/code-review-bench/issues/157)) and `grade.runner_files()` no longer hashes `diff_identity.py` ([#156](https://github.com/kamui/code-review-bench/issues/156)) | #157 |
 | `bench/tools/normalize_review.py` | `grade.py` imports `render` for blind grading; `contributor_adapters.collect` calls `from_codex`, `from_claude_builtin` and `from_codex_skill` in process; `grade.runner_files()` hashes it | `grade.render` renders through the Rust runtime and `grade.runner_files()` no longer hashes `normalize_review.py` ([#156](https://github.com/kamui/code-review-bench/issues/156)), and the contributor backend normalizes through it ([#158](https://github.com/kamui/code-review-bench/issues/158)) | #158 |
-| `bench/tools/check_manifest.py` | `claims`, `claim_grading`, `current_grading`, `evidence_store`, `file_attempt`, `provision`, `rates`, `run_cell` and `upstream` import `validate`; `grade.runner_files()` hashes it. Its CLI runs in `bench/README.md`, `.github/workflows/rates.yml` and `test:bench`'s `--self-test` | No maintained module imports it and `grade.runner_files()` no longer hashes it. The delivery plan leaves `check_manifest` with [#156](https://github.com/kamui/code-review-bench/issues/156), which moves its CLI callers and its grading importers; `provision`, `run_cell` and `file_attempt` leave with [#157](https://github.com/kamui/code-review-bench/issues/157), `evidence_store` with [#159](https://github.com/kamui/code-review-bench/issues/159), and `rates`, the last importer, with [#160](https://github.com/kamui/code-review-bench/issues/160) | #160 |
+| `bench/tools/check_manifest.py` | `claims`, `claim_grading`, `current_grading`, `evidence_store`, `file_attempt`, `provision`, `rates`, `run_cell` and `upstream` import `validate`; `grade.runner_files()` hashes it. #234 moved its CLI callers to `bench-tools check-manifest` | No maintained module imports it and `grade.runner_files()` no longer hashes it. The delivery plan leaves `check_manifest` with [#156](https://github.com/kamui/code-review-bench/issues/156), which moves its grading importers; `provision`, `run_cell` and `file_attempt` leave with [#157](https://github.com/kamui/code-review-bench/issues/157), `evidence_store` with [#159](https://github.com/kamui/code-review-bench/issues/159), and `rates`, the last importer, with [#160](https://github.com/kamui/code-review-bench/issues/160) | #160 |
 | `bench/tools/rates.py` | `run_cell` and `contributor_adapters` call `read_catalog` and `inspect`, and `contributor_adapters` calls `latest` and `fetch`; `rates refresh` runs in `rates:refresh` and `.github/workflows/rates.yml` | `rates refresh` and the dispatch check move to Rust ([#160](https://github.com/kamui/code-review-bench/issues/160) owns `rates.yml`) and no module imports `rates` | #160 |
 | `bench/tools/upstream.py` | `claims` imports `validate_assessment` and `route`; `grade.runner_files()` hashes it; `upstream collect` is the documented snapshot capture | `claims` moves to Rust, `collect` has a replacement and `grade.runner_files()` no longer hashes `upstream.py` ([#156](https://github.com/kamui/code-review-bench/issues/156)) | #156 |
 | `bench/tools/compare.py` | The research run helpers `replacement_runs.py` and `skill_replacement_runs.py`, which `stage_edition.staged_registry()` executes, and `review_code_run.py` call `provisioning_hash` for a run manifest's `provisioning_sha256`; the #156 filing tests reach it through `move.py` and `selection.py`. Its comparison CLI is documented in `bench/README.md` | No current test or command runs those helpers from the current checkout ([#156](https://github.com/kamui/code-review-bench/issues/156)), and another command computes `provisioning_sha256` for new run freezes ([#157](https://github.com/kamui/code-review-bench/issues/157)) | #157 |
@@ -206,26 +206,35 @@ collection resolves a Rust runtime or calls either.
 A bridge lets a Python caller run a Rust command until the caller itself moves to Rust. [Storage](storage.md#temporary-bridges)
 lists the contributor CLI and `file_attempt.py` bridges.
 
-| Bridge | Removal condition | Removed by |
-| --- | --- | --- |
-| `tools/export_explorer.py` loads the current facts with `current_grading.load_current`, writes them to a temporary file with `json.dumps(allow_nan=False)`, restores the evidence with `bench-tools export-explorer evidence --restore`, runs `stage`, checks the dataset hash again, and runs `publish` with `SIGINT` ignored. It exits 2 when `bench-tools` is not installed for `HEAD`. | The export loads the current facts in process through `bench_tools::current_grading::load_current`, which [#233](https://github.com/kamui/code-review-bench/issues/233) ported ([#156](https://github.com/kamui/code-review-bench/issues/156) slice 4); evidence resolution moved with [#219](https://github.com/kamui/code-review-bench/issues/219) | #156 |
-
 #195's bridge, `build_packet.py --factual` running `bench-tools derive-packet` through `rust_runtime.resolve`, was
 removed by #196: `bench-tools build-packet --factual` calls `bench_tools::derive_packet::derive` in-process. It
 cannot exit 2 for a missing `bench-tools`, as the bridge did, because it is `bench-tools`. `derive-packet` keeps
 `--no-newline-translation`, which the bridge passed, because `derive-packet-no-newline-translation` pins it and
 decision history cannot remove a case.
 
+#156's bridge, `tools/export_explorer.py` loading the current facts with `current_grading.load_current` and passing
+them to `stage` in a temporary file, was removed by #234: `bench-tools export-explorer` with no command loads them in
+process, as [the explorer export](#the-explorer-export) describes.
+
 ## The explorer export
 
 `bench-tools export-explorer` writes the same `public/data` and `public/evidence` bytes as the Python export it
 replaces. `src/lib/scoring.ts` stays the only owner of scorecard arithmetic; the export computes no score, rate or
-ranking. The front passes `--base-path` from `BASE_PATH`, as the Python export read it.
+ranking.
+
+- With no command, `export-explorer [--root R] [--public P]` runs the whole export, as `tools/export_explorer.py`
+  did. It loads the current facts in process with `current_grading::load_current` and `coverage_status`, refusing
+  what the front's `json.dumps(allow_nan=False)` and facts file refused, restores the evidence they link, stages,
+  reads the record again and refuses when the dataset hash changed, then publishes with `SIGINT` blocked. It reads
+  `--base-path` from `BASE_PATH`, as the front did; `bun run data` runs it through `rust_runtime.py exec`. With no
+  `bench-tools` selected for `HEAD`, `exec` prints the install command and exits 1, as `test_rust_runtime.py` pins
+  for every `exec` caller. The deleted front exited 2 there, but `bun run data` never reached it: its
+  `evidence:fetch` step already refused with exit 1, so the script's exit status is unchanged.
 
 - `evidence` lists every file the export links, with its frozen SHA-256 or null, in the order the export first
   names it, as JSON on stdout. The front restores the missing ones.
 - `stage` refuses while `STAGE/previous` holds backups, replaces `STAGE`, writes the dataset, the attempt details
-  and the linked evidence, and checks them as `validate_export` did. It prints the summary line the front prints.
+  and the linked evidence, and checks them as `validate_export` did. It prints the whole export's summary line.
 - `publish` moves both directories into `PUBLIC`, restoring the previous pair when a move fails, and keeps backups
   it cannot restore in `STAGE/previous`.
 
@@ -248,6 +257,18 @@ export with its case:
   glob lists it, keeping a dangling link that 3.12 dropped.
 - `export-explorer-unicode-15-1-adjudication-id`: a diagnostic quotes input as the `repr` paragraph below
   describes, which differs from Python 3.12 on characters added in Unicode 15.1 and 16.0.
+
+`export-explorer-decisions.v7.json` adds the whole export's `export-explorer-current-*` cases, which agree with the
+deleted front except: a record the export refuses prints the traceback's last line and keeps exit 1
+(`*-billing-receipt`, `*-missing-inventory`, `*-unicode-15-1-record`); `--r` is ambiguous with the hidden
+`--restore` (`*-abbreviated-root`); an option of a command given without one is refused
+(`*-facts-without-command`); and a value led by `-` and a Unicode 16.0 digit is taken, as Python 3.14's argparse
+took it and 3.12's refused it (`*-unicode-16-digit-public`). Dash-led `--root` and `--public` values such as `-.5`
+and `'-published dir'` are taken as the front took them (`*-dash-led-*`, `*-negative-number-public`): `main.rs`
+attaches them before clap parses, as for `build-packet`, so `export-explorer`'s commands take them too. It supersedes
+`export-explorer-dot-digit-facts`, which v6 decided as refused, and `export-explorer-help-with-attached-argument` for
+the new first help line. `tests/export_explorer.rs` covers a record changed after staging, a failed publication, `SIGINT` during
+publication and `BASE_PATH`.
 
 ## Behavior the corpora do not pin
 
@@ -370,13 +391,13 @@ whose diagnostics quote input records this with a U+2EBF0 case: `derive-packet-u
 `claude-skill-unicode-15-1-report-status`, `check-manifest-unicode-15-1-path`, `rates-unicode-15-1-source-path`,
 `upstream-unicode-15-1-registry-path`, `diff-identity-unicode-15-1-git-record`,
 `export-explorer-unicode-15-1-adjudication-id`, `fetch-unicode-15-1-path`, `inventory-unicode-15-1-output-parent`,
-`collect-run-unicode-15-1-record` and `reconcile-unicode-15-1-inventory-path`. The seven whose Python is retained
+`collect-run-unicode-15-1-record` and `reconcile-unicode-15-1-inventory-path`. `export-explorer-current-unicode-15-1-record` and `methodology-unicode-15-1-repr` pin U+2FFC, added in Unicode 15.1. The seven whose Python is retained
 carry Python 3.12's escaped output as their `baseline_defect`. `derive-packet-unassigned-path` pins U+0378, which
 every Python version escapes.
 
 Diagnostics keep the Python program names, `roster.py:`, `diff_identity.py:`, `normalize_review.py:`,
 `normalize_thermo.py:`, `derive_packet.py:`, `build_packet:`, `check_manifest.py:`, `rates.py:`, `upstream.py:`,
-`export_explorer.py:`, `collect_run.py:`, `reconcile_evidence.py:` and `inventory:`, so saved stderr stays identical and the differential compares them byte for byte. Renaming them
+`export_explorer.py:`, `methodology.py:`, `collect_run.py:`, `reconcile_evidence.py:` and `inventory:`, so saved stderr stays identical and the differential compares them byte for byte. Renaming them
 needs a new decision version.
 
 ## Command-line parsing
@@ -389,7 +410,8 @@ Each family's latest decisions record where clap reads a subcommand's command li
 replaced, each with its case:
 
 - `*-abbreviated-*`: a unique prefix such as `--ro` runs; before, only `derive-packet` and `build-packet` took one.
-- `*-dot-digit-*`: a dash-led value such as `-.5` is refused, exit 2; `--root=-.5` still works, and `-5` and `-1.5`
+- `*-dot-digit-*`: a dash-led value such as `-.5` is refused, exit 2, except where `main.rs` attaches it as described
+  below; `--root=-.5` still works, and `-5` and `-1.5`
   are still values. `*-exponent-*`: `-1e5` is taken as a value, as Python 3.14 takes it, where it was refused, as
   Python 3.12 refuses it.
 - `*-double-dash`: a `--` with nothing after it is ignored where it was refused.
@@ -410,6 +432,8 @@ replaced, each with its case:
 - `inventory-dash-led-space-root`, `collect-run-dash-led-space-run` and `reconcile-dash-led-space-paths`: `evidence
   inventory`, `collect` and `reconcile` take a dash-led value that names no option and holds a space, as argparse
   does in every version; `main.rs` attaches it as it does for `build-packet`. A dash-led number stays clap's reading.
+  `export-explorer`, `current-grading` and `methodology` take both readings, as `build-packet` does
+  (`export-explorer-decisions.v7.json` records the change for `export-explorer-dot-digit-facts`).
 - `build-packet-help`, four `build-packet-usage-*` cases, `build-packet-non-utf8-text-option` and
   `export-explorer-usage-missing-stage` pin clap's wording by prefix; their exit codes are unchanged.
 - `archive`, which [#218](https://github.com/kamui/code-review-bench/issues/218) added with a hand-written parser, takes
@@ -460,7 +484,8 @@ python3 bench/tools/rust_runtime.py resolve bench-tools
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/roster.v1.json
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/diff-identity.v1.json --differential MAP
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/normalize-review.v1.json --differential MAP
-python3 tools/behavior_contract.py --corpus tools/behavior_contracts/check-manifest.v1.json --differential MAP
+python3 tools/behavior_contract.py --corpus tools/behavior_contracts/check-manifest.v1.json
+python3 tools/behavior_contract.py --corpus tools/behavior_contracts/check-manifest.v1.json --implementations PYTHON_MAP --differential MAP
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/rates.v1.json --differential MAP
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/upstream.v1.json --differential MAP
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/normalize-thermo.v1.json

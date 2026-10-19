@@ -67,6 +67,7 @@ independent assertions. The harness never obtains expected output from a candida
 [`ruling-record.v1.json`](../../../tools/behavior_contracts/ruling-record.v1.json),
 [`ruling-dossier.v1.json`](../../../tools/behavior_contracts/ruling-dossier.v1.json),
 [`current-grading.v1.json`](../../../tools/behavior_contracts/current-grading.v1.json),
+[`methodology.v1.json`](../../../tools/behavior_contracts/methodology.v1.json),
 [`archive.v1.json`](../../../tools/behavior_contracts/archive.v1.json),
 [`regrade-reports.v1.json`](../../../tools/behavior_contracts/regrade-reports.v1.json) and
 [`audit-log.v1.json`](../../../tools/behavior_contracts/audit-log.v1.json) pin the commands of
@@ -78,19 +79,22 @@ python3 tools/behavior_contract.py --corpus tools/behavior_contracts/diff-identi
 ```
 
 Without `--implementations`, each program runs its maintained implementation. `codex`, `transcript`,
-`diff-identity`, `normalize-review` and `check-manifest` run their Python scripts; `diff_identity.py`,
-`normalize_review.py` and `check_manifest.py` are retained libraries. `rates` and `upstream` run the retained
+`diff-identity` and `normalize-review` run their Python scripts; `diff_identity.py` and `normalize_review.py` are
+retained libraries. Since [#234](https://github.com/kamui/code-review-bench/issues/234), `check-manifest` runs
+`bench-tools`, and `behavior_contract.python_commands` maps it back to the retained `check_manifest.py` for the
+differential. `rates` and `upstream` run the retained
 `rates.py` and `upstream.py` through drivers that read the case directory as the repository and, for `rates`, take
 `--source PROVIDER=URL` pages, so no case leaves the host; `rates-transport-failure` connects to a closed loopback
 port. `regrade-archive-attempt` runs the retained `regrade.archive_attempt` through a driver that reads the case
 directory as the repository. `ruling` runs the retained `ruling_record.py` and `ruling_dossier.py` through a driver that
 reads the case directory, or the `--root` argument, as the repository. `current-grading` runs the retained
 `current_grading.py` the same way; its `fingerprints` operation, which the Python command line lacks, prints each
-selected batch with `current_grading.batch_state`'s fingerprint and state. Cases whose Rust behavior was changed on purpose
+selected batch with `current_grading.batch_state`'s fingerprint and state. `methodology` runs the retained
+`methodology.py` through a driver that reads the case directory as the repository. Cases whose Rust behavior was changed on purpose
 carry a `baseline_defect` with Python's output, so pass
 `--allow-known-defects` when Python is the primary. `roster`, `normalize-thermo`, `derive-packet`, `build-packet`,
-`export-explorer`, `archive`, `regrade-status` and `audit-log` have no Python implementation, so they run the executable `rust_runtime.resolve("bench-tools")`
-selects, and the command refuses when none is installed for `HEAD`. A command map for the Rust programs names that
+`export-explorer`, `archive`, `regrade-status` and `audit-log` have no Python implementation, so they, and
+`check-manifest`, run the executable `rust_runtime.resolve("bench-tools")` selects, and the command refuses when none is installed for `HEAD`. A command map for the Rust programs names that
 executable:
 
 ```json
@@ -111,6 +115,7 @@ executable:
   "audit-log": ["/absolute/path/to/bench-tools", "audit-log"],
   "ruling": ["/absolute/path/to/bench-tools", "ruling"],
   "current-grading": ["/absolute/path/to/bench-tools", "current-grading"],
+  "methodology": ["/absolute/path/to/bench-tools", "methodology"],
   "grading": ["/absolute/path/to/bench-tools", "grading"]
 }
 ```
@@ -281,7 +286,7 @@ ported. [`grading.md`](../grading.md) records the baseline they serve.
   directory. Every entry below ROOT, tracked, ignored or Git's own, is compared by type, permissions, size, inode
   and change time before and after each run. A run that changes one fails and stops the mode, so no later run
   reads changed inputs. #156 slice 3 listed `current-grading check`, `status`, `inventory --out` and
-  `fingerprints`, and the Pages build job runs the mode after its evidence and freeze-commit fetches.
+  `fingerprints`, slice 4 added `methodology --out`, and the Pages build job runs the mode after its evidence and freeze-commit fetches.
 - **Fixture roots.** A case built from the grading fixture names it with `"fixture": "grading/<variant>"`. Its
   `initial` entries and leading setup steps must equal what
   [`grading_fixture.rs`](../../../rust/bench-tools/tests/support/grading_fixture.rs) builds, or
@@ -314,7 +319,8 @@ Each case defines:
   `remove` step deletes the listed paths that exist; a `write` step adds `initial`-style
   entries, replacing files; a `shell` step runs its command line with `/bin/sh -c` in the root
   and must exit 0. Every command step's `expected.filesystem` is the whole tree
-  after it. A step case carries no `baseline_defect`.
+  after it. A step case carries no `baseline_defect` of its own; a command step may carry one, and
+  `--allow-known-defects` accepts the case when every differing step matches its own.
 
 A corpus may opt in to two settings. `snapshot_modes: true` adds each file's and
 directory's permission bits to the snapshot and runs setup and commands with umask 022;
