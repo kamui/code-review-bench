@@ -111,7 +111,7 @@ fn a_tls_failure_is_a_source_failure() {
 }
 
 /// urllib would connect to an https source directly here, because it reads only `https_proxy` for https URLs;
-/// rates-decisions.v6.json records that ureq takes the first proxy variable set for every URL.
+/// rates-decisions.v7.json records that ureq takes the first proxy variable set for every URL.
 #[test]
 fn an_https_source_tunnels_through_http_proxy() {
     let (address, server) = serve(vec![
@@ -127,5 +127,46 @@ fn an_https_source_tunnels_through_http_proxy() {
     assert!(
         requests[0].starts_with("CONNECT pricing.invalid:443 "),
         "{requests:?}"
+    );
+}
+
+/// ureq is built without its socks-proxy feature, yet a SOCKS ALL_PROXY still shadows HTTPS_PROXY;
+/// rates-decisions.v7.json records that no proxy is then used.
+#[test]
+fn a_socks_all_proxy_connects_directly_instead_of_through_https_proxy() {
+    let closed = TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let (address, server) = serve(vec![PAGE]);
+    let output = check_with(
+        &format!("http://{address}/page"),
+        &[
+            ("ALL_PROXY", &format!("socks5://{closed}")),
+            ("HTTPS_PROXY", &format!("http://{closed}")),
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "rates.py: provider pricing section is missing: Standard pricing data\n"
+    );
+    let requests = server.join().unwrap();
+    assert!(requests[0].starts_with("GET /page "), "{requests:?}");
+}
+
+#[test]
+fn a_socks_all_proxy_that_resolves_remotely_fails_without_connecting() {
+    let output = check_with(
+        "https://pricing.invalid/page.md",
+        &[("all_proxy", "socks5h://127.0.0.1:1080")],
+    );
+
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "rates.py: <urlopen error Connection refused>\n"
     );
 }

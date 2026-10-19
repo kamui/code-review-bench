@@ -254,14 +254,17 @@ recorded decision.
   and checks certificates against the Mozilla roots `webpki-roots` bundles, not the system trust store. An
   operating-system error and an HTTP error status print as urllib printed them, except that the reason phrase is the
   standard one for the code; a TLS or name-resolution failure prints ureq's text inside `<urlopen error ...>`. Each
-  exits 2. `rates-transport-failure`, decided in `rates-decisions.v6.json`, pins a refused connection by connecting to
+  exits 2. `rates-transport-failure`, decided in `rates-decisions.v7.json`, pins a refused connection by connecting to
   a closed loopback port, and `tests/rates_http.rs` pins an HTTP error status, a redirect and a TLS failure. `file:`
   URLs, in any letter case, are read as urllib reads them. Any other scheme, such as `data:` or `ftp:`, is refused
   with exit 2, as `rates-unsupported-url-scheme` pins. ureq takes one proxy for every URL, the first set of
   `ALL_PROXY`, `HTTPS_PROXY` and `HTTP_PROXY` (each before its lower-case name), and tunnels through it with
   `CONNECT`; urllib chose `http_proxy` or `https_proxy` by scheme and ignored `ALL_PROXY`. A host that sets only
-  `HTTP_PROXY` therefore sends `https` sources through it. The v6 decision records this, and `tests/rates_http.rs`
-  pins it.
+  `HTTP_PROXY` therefore sends `https` sources through it. ureq is built without its `socks-proxy` feature, but a
+  `socks`, `socks4`, `socks4a`, `socks5` or `socks5h` URL in `ALL_PROXY` or `all_proxy` is still that one proxy, so
+  `HTTPS_PROXY` and `HTTP_PROXY` go unread and no proxy is used: `socks`, `socks4` and `socks5` connect straight to the
+  page's host, and `socks4a` and `socks5h` print `<urlopen error Connection refused>` without connecting. urllib and
+  curl used `https_proxy` there. The v7 decision records this, and `tests/rates_http.rs` pins both cases.
   `--source PROVIDER=URL` is new. A successful `--json` receipt is outside the corpus because `checked_at` is the
   current time. A date out of range uses Python 3.14's `datetime` wording, and an integer price too large for a
   float exits 2 where Python raised `OverflowError`. `rates refresh` is refused with a pointer to `rates.py`.
