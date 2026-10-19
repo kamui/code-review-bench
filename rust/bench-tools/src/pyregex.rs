@@ -11,7 +11,7 @@
 //!
 //! The `regex` crate matches a translation of the parsed pattern, so it answers whether a match exists, which is
 //! all a schema `pattern` asks; it reports no groups or positions. A pattern whose translation exceeds the
-//! crate's default compiled size limit, or nests more than 1,500 levels of the crate's syntax, is refused. The
+//! crate's default compiled size limit, or nests more than 2,000 levels of the crate's syntax, is refused. The
 //! recursive parser runs first, so a pattern nested near 100,000 groups still exhausts the stack.
 
 use std::fmt::Write;
@@ -20,7 +20,7 @@ use std::sync::OnceLock;
 use crate::{pytext, pyunicode};
 
 const MAX_REPEAT: u32 = 1_000;
-const NEST_LIMIT: u32 = 1_500;
+const NEST_LIMIT: u32 = 2_000;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Unsupported(pub String);
@@ -470,11 +470,11 @@ fn write_range(out: &mut String, low: char, high: char) {
     }
 }
 
-/// The characters `test` accepts, as the ranges of a class body.
-fn ranges(test: impl Fn(char) -> bool) -> String {
+/// Ascending characters as the ranges of a class body.
+fn ranges(chars: impl IntoIterator<Item = char>) -> String {
     let mut out = String::new();
     let mut run: Option<(char, char)> = None;
-    for c in ('\0'..=char::MAX).filter(|c| test(*c)) {
+    for c in chars {
         run = match run {
             Some((low, high)) if u32::from(high) + 1 == u32::from(c) => Some((low, c)),
             Some((low, high)) => {
@@ -493,7 +493,7 @@ fn ranges(test: impl Fn(char) -> bool) -> String {
 /// The class body of `pytext`'s table behind `\d`, `\s` or `\w`, built once from the table itself so the crate's
 /// own Unicode tables, whose version and definitions differ from Python's, are never consulted.
 fn table(cell: &'static OnceLock<String>, test: fn(char) -> bool) -> &'static str {
-    cell.get_or_init(|| ranges(test))
+    cell.get_or_init(|| ranges(('\0'..=char::MAX).filter(|c| test(*c))))
 }
 
 static DIGITS: OnceLock<String> = OnceLock::new();
@@ -507,23 +507,28 @@ fn case_changing() -> &'static (String, Vec<char>) {
     CASE_CHANGING.get_or_init(|| {
         let changes = |c: char| pyunicode::to_lower(c) != c || pyunicode::to_upper_astral(c) != c;
         (
-            ranges(changes),
+            ranges(('\0'..=char::MAX).filter(|c| changes(*c))),
             ('\0'..=char::MAX).filter(|c| changes(*c)).collect(),
         )
     })
 }
 
 fn write_item(out: &mut String, item: &ClassItem) {
-    let (cell, test, negated): (_, fn(char) -> bool, _) = match item {
+    let (body, negated) = match item {
         ClassItem::Range(low, high) | ClassItem::FoldedRange(low, high) => {
             return write_range(out, *low, *high);
         }
-        ClassItem::Digit(negated) => (&DIGITS, |c| pytext::decimal_value(c).is_some(), negated),
-        ClassItem::Space(negated) => (&SPACES, pytext::is_space, negated),
-        ClassItem::Word(negated) => (&WORDS, pytext::is_word, negated),
+        ClassItem::Digit(negated) => (
+            DIGITS
+                .get_or_init(|| ranges(pytext::decimal_digits()))
+                .as_str(),
+            negated,
+        ),
+        ClassItem::Space(negated) => (table(&SPACES, pytext::is_space), negated),
+        ClassItem::Word(negated) => (table(&WORDS, pytext::is_word), negated),
     };
     out.push_str(if *negated { "[^" } else { "[" });
-    out.push_str(table(cell, test));
+    out.push_str(body);
     out.push(']');
 }
 
@@ -659,8 +664,9 @@ pub fn compile(pattern: &str) -> Result<Regex, Unsupported> {
     let mut syntax = format!(r"\A(?:{MARK}(?s:.){MARK})*?(?:");
     write_node(&mut syntax, &node, flags);
     syntax.push(')');
-    // Python's parser reaches its recursion limit by 1,324 levels of this syntax, and the crate's compiler stays
-    // within a 1 MiB thread stack up to 1,500.
+    // A repeated group whose alternation branch is a concatenation costs five levels of this syntax, and Python
+    // reaches its recursion limit past 331 of them, 1,659 levels. The crate's compiler stays within a 1 MiB thread
+    // stack up to 2,000.
     let matcher = regex::RegexBuilder::new(&syntax)
         .nest_limit(NEST_LIMIT)
         .build()
@@ -823,6 +829,14 @@ mod tests {
     }
 
     #[test]
+    fn digit_class_lists_every_decimal_digit() {
+        assert_eq!(
+            ranges(pytext::decimal_digits()),
+            ranges(('\0'..=char::MAX).filter(|c| pytext::decimal_value(*c).is_some()))
+        );
+    }
+
+    #[test]
     fn translations_beyond_the_crate_limits_are_refused() {
         let message = |pattern: &str| compile(pattern).err().map(|Unsupported(reason)| reason);
         assert!(compile(r"^\w{504}$").is_ok());
@@ -832,9 +846,16 @@ mod tests {
         std::thread::Builder::new()
             .stack_size(64 << 20)
             .spawn(move || {
-                assert!(compile(&nested(373)).is_ok());
+                assert!(compile(&nested(498)).is_ok());
                 assert_eq!(
-                    message(&nested(374)).as_deref(),
+                    message(&nested(499)).as_deref(),
+                    Some("pattern nested too deeply")
+                );
+                let concatenated =
+                    |depth: usize| format!("{}a{}", "(a|".repeat(depth), "b)*".repeat(depth));
+                assert!(compile(&concatenated(399)).is_ok());
+                assert_eq!(
+                    message(&concatenated(400)).as_deref(),
                     Some("pattern nested too deeply")
                 );
             })

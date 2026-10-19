@@ -253,9 +253,9 @@ recorded decision.
   and `(?i)` on 54, each with a case. The `regex` crate matches a translation that keeps these tables:
   `check-manifest-crate-unicode-classes` pins characters where the crate's own `\w`, `\s`, `\b` and `(?i)` would
   differ. A pattern whose translation exceeds the crate's compiled size limit, such as `^\w{1000}$`, or nests more
-  than 1,500 levels of the crate's syntax, exits 2; Python applied the first and raised `RecursionError` on the
-  second. `check-manifest-decisions.v5.json` records both. A pattern nested near 100,000 groups still overflows
-  the parser's stack and aborts, as before.
+  than 2,000 levels of the crate's syntax, exits 2; Python applied the first and raised `RecursionError` on the
+  second. No pattern Python compiles nests that deeply. `check-manifest-decisions.v6.json` records both. A pattern
+  nested near 100,000 groups still overflows the parser's stack and aborts, as before.
 - A schema or manifest that is not UTF-8 exits 2 with the `UnicodeDecodeError` text. Python raised a traceback.
 - `\d` and `int()` accept the decimal digits of Unicode 16.0, as Python 3.14 does; Python 3.12 lacks the digits
   16.0 added. `rates-decisions.v4.json` records this for the catalog date, price footnotes and long-prompt rows,
