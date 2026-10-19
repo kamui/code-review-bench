@@ -226,6 +226,38 @@ except regrade.FAILURES as error:
     print(f"regrade.py: {error}", file=sys.stderr)
     sys.exit(2)
 """,
+    # `current-grading {inventory,check,status} [--root DIR]` runs the retained current_grading.py, whose `--root`
+    # defaults to the case directory here, as bench-tools reads the current directory. `fingerprints` has no Python
+    # command; it prints what regrade.py reads in process: each selected batch with batch_state's fingerprint and
+    # state, read without checking saved grades.
+    "current-grading": """import argparse, json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv.pop(1))
+sys.argv[0] = "current_grading.py"
+import current_grading
+current_grading.ROOT = Path.cwd()
+parser = argparse.ArgumentParser(description=current_grading.__doc__.splitlines()[0])
+parser.add_argument("operation", choices=("inventory", "check", "status", "fingerprints"))
+parser.add_argument("--root", type=Path, default=current_grading.ROOT)
+parser.add_argument("--current", default=str(current_grading.CURRENT))
+parser.add_argument("--out", type=Path)
+args = parser.parse_args()
+if args.operation != "fingerprints":
+    sys.exit(current_grading.main())
+try:
+    selected, documents = current_grading.load_current(args.root, args.current, grades=False)
+    rows = []
+    for batch in selected["batches"]:
+        fingerprint, state = current_grading.batch_state(batch, selected, documents, args.root)
+        rows.append({**batch, "input_fingerprint": fingerprint, "state": state})
+    print(json.dumps(rows, indent=2))
+except current_grading.Inconsistent as error:
+    print(str(error))
+    sys.exit(1)
+except (current_grading.InputError, OSError) as error:
+    print(f"current_grading.py: {error}", file=sys.stderr)
+    sys.exit(2)
+""",
 }
 DRIVER_ARGUMENTS = {}
 RUST_PROGRAMS = {"roster": ("bench-tools", ["roster"]), "normalize-thermo": ("bench-tools", ["normalize-thermo"]),

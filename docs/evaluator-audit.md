@@ -50,7 +50,7 @@ Four checks cover every selected batch before the draw. They need no sample and 
 
 Draw once, after every selected batch has a current grade and before anyone opens a scorecard or an export built from those grades. For that reason `grades.json` on the main branch stays empty until the draw: the grades are kept on a working branch, as the user [chose](../bench/grading/rulings/cohort-rebuild-audit.v1.md) on 2026-10-04.
 
-1. Build each stratum's population from `grades.json`, the approved impact labels and the control states. Save the populations and the dataset hash that `current_grading.py status` prints.
+1. Build each stratum's population from `grades.json`, the approved impact labels and the control states. Save the populations and the dataset hash that `bench-tools current-grading status` prints.
 2. A unit's id is `<run>/<attempt>#<family>` for a family-review unit, `<run>/<attempt>#<claim id>` for a claim unit and `<run>/<attempt>` for a control-review unit.
 3. Within a stratum, sort units by the SHA-256 of `<seed>:<stratum>:<unit id>`, ties by unit id, and take the first units up to the stratum's size. No unit is balanced or replaced by hand.
 4. A stratum that holds no more units than its size is audited whole. It has no tolerance: every confirmed error is corrected and counted, and no error rate is claimed for it. An empty stratum is recorded as empty. Unused places do not move to another stratum.
