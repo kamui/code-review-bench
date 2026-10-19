@@ -156,9 +156,9 @@ def fake_cell(argv: list) -> int:
             run_cell.now = lambda: stamp
         return real["choose"](run, args)
 
-    def dispatch(run, attempt_id, claim):
+    def dispatch(run, attempt_id, claim, runtime):
         crash("after_claim")
-        return real["dispatch"](run, attempt_id, claim)
+        return real["dispatch"](run, attempt_id, claim, runtime)
 
     def prune(run, attempt_id, target_id):
         crash("before_cleanup")
@@ -172,6 +172,7 @@ def fake_cell(argv: list) -> int:
     run_cell.tool, run_cell.choose, run_cell.dispatch, run_cell.prune, run_cell.check_frozen = tool, choose, dispatch, prune, frozen
     run_cell.check_target = lambda run, target_id: run.target_dir(target_id)
     run_cell.check_dispatch_rates = lambda run, cell: ({"policy": "fixture"}, {"rates": [fixtures.RATE]})
+    run_cell.normalizer_environment = lambda run: {}
     prune_workspace.remove = remove
     with patch.object(sys, "argv", ["run_cell.py", *argv]):
         return run_cell.main()
@@ -885,6 +886,32 @@ class SerialOwnership(QueueFixture):
             self.assertIn(f"the runner files differ from freeze commit {commit}", RUNTIME_PROBLEM(run))
             run.manifest["freeze_commit"] = "0" * 40
             self.assertIn("cannot compare the runner files", RUNTIME_PROBLEM(run))
+
+    def test_a_run_frozen_with_the_rust_normalizer_but_no_pin_is_refused_before_any_launch(self):
+        repo = self.root / "repo"
+        git = ["git", "-C", str(repo), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid"]
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        (repo / "bench/tools").mkdir(parents=True)
+        (repo / "bench/tools/run_cell.py").write_text("frozen\n", encoding="utf-8")
+        subprocess.run([*git, "add", "."], check=True)
+        subprocess.run([*git, "commit", "-qm", "before the Rust normalizers"], check=True)
+        before = subprocess.check_output([*git, "rev-parse", "HEAD"], text=True).strip()
+        (repo / "rust/bench-tools").mkdir(parents=True)
+        (repo / "rust/bench-tools/Cargo.toml").write_text("[package]\n", encoding="utf-8")
+        subprocess.run([*git, "add", "."], check=True)
+        subprocess.run([*git, "commit", "-qm", "the Rust normalizers"], check=True)
+        after = subprocess.check_output([*git, "rev-parse", "HEAD"], text=True).strip()
+        self.enterContext(patch.object(review_queue, "REPO", repo))
+        self.manifest["freeze_commit"] = after
+        (self.run_dir / "manifest.json").write_text(json.dumps(self.manifest), encoding="utf-8")
+        self.assert_blocked(self.command("run"), f"freeze commit {after} has rust/bench-tools, which normalizes its "
+                                                  "reviews, but the run pins no bench-tools runtime")
+        self.assertEqual((self.reviews(), self.launch_records()), ([], []))
+        self.manifest["freeze_commit"] = before
+        (self.run_dir / "manifest.json").write_text(json.dumps(self.manifest), encoding="utf-8")
+        (self.state / "queue.pin.json").unlink(missing_ok=True)
+        code, events, err = self.command("run", "--count", "1")
+        self.assertEqual((code, self.reviews()), (0, ["att-001"]), (events, err))
 
     def test_detached_controller_finishes_the_queue_and_records_where_it_ran(self):
         done = self.controller("run", "--detach")

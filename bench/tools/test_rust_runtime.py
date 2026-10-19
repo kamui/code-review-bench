@@ -355,6 +355,30 @@ class Resolution(Store):
         with self.assertRaisesRegex(rust_runtime.Refused, "no longer hashes to its pin"):
             self.resolve(run_dir)
 
+    def test_a_run_operation_needs_the_run_to_pin_the_executable_it_runs(self):
+        frozen, selected = self.version("frozen"), self.head_version("selected")
+        rust_runtime.select(self.store, "fixture-tool", selected)
+        run_dir = self.root / "2026-01-01-frozen-before"
+        run_dir.mkdir()
+        (run_dir / "manifest.json").write_text(json.dumps({"freeze_commit": "f" * 40}), encoding="utf-8")
+        launched = script(self.root / "launched", "launched")
+        os.environ.update(BENCH_RUST_FIXTURE_TOOL=str(launched), BENCH_RUST_FIXTURE_TOOL_SHA256=rust_runtime.sha256_file(launched))
+        unpinned = f"run 2026-01-01-frozen-before pins no fixture-tool runtime; run it from a checkout of its freeze commit {'f' * 40}"
+        for pins in (None, {"other-tool": selected}):
+            if pins is not None:
+                (run_dir / "runtimes.frozen.json").write_text(json.dumps(pins), encoding="utf-8")
+            with self.assertRaisesRegex(rust_runtime.Refused, unpinned):
+                rust_runtime.for_run("fixture-tool", run_dir, self.store)
+        (run_dir / "runtimes.frozen.json").write_text(json.dumps({"fixture-tool": frozen}), encoding="utf-8")
+        with self.assertRaisesRegex(rust_runtime.Refused, f"{launched} is not the fixture-tool that .*runtimes.frozen.json pins"):
+            rust_runtime.for_run("fixture-tool", run_dir, self.store)
+        for name in ("BENCH_RUST_FIXTURE_TOOL", "BENCH_RUST_FIXTURE_TOOL_SHA256"):
+            os.environ.pop(name)
+        self.assertEqual(rust_runtime.for_run("fixture-tool", run_dir, self.store), self.entry(frozen) / "fixture-tool")
+        launched = self.entry(frozen) / "fixture-tool"
+        os.environ.update(BENCH_RUST_FIXTURE_TOOL=str(launched), BENCH_RUST_FIXTURE_TOOL_SHA256=frozen["sha256"])
+        self.assertEqual(rust_runtime.for_run("fixture-tool", run_dir, self.store), launched)
+
     def test_exec_runs_the_resolved_executable_with_its_arguments_and_exit_code(self):
         program = self.root / "echo-args"
         program.write_text('#!/bin/sh\nprintf "%s|" "$@"\nexit 3\n', encoding="utf-8")

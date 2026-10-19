@@ -325,7 +325,7 @@ def launch(args) -> int:
         reports = [artifact_root / row["path"] for row in report_rows if Path(row["path"]).name == expected_file]
         normalize_command = []
         if normalizer.get("kind") == "thermo":
-            normalize_command = [sys.executable, str(TOOLS / "normalize_thermo.py"), "--artifact-root",
+            normalize_command = [str(prepared["bench_tools"]), "normalize-thermo", "--artifact-root",
                                  str(artifact_root), "--clone", str(clone), "--out", str(attempt / "normalized.json"),
                                  "--arm", "claude-skill"]
         elif normalizer.get("kind") != "native-review":
@@ -333,7 +333,7 @@ def launch(args) -> int:
         elif len(reports) != 1:
             violations.append(f"expected one {expected_file!r} report, found {len(reports)}")
         else:
-            normalize_command = [sys.executable, str(TOOLS / "normalize_review.py"), "--arm", "claude-skill",
+            normalize_command = [str(prepared["bench_tools"]), "normalize-review", "--arm", "claude-skill",
                                  "--native-review", str(reports[0]), "--clone", str(clone),
                                  "--out", str(attempt / "normalized.json")]
         if normalize_command:

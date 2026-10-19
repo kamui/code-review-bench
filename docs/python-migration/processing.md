@@ -6,6 +6,8 @@ This records the processing stage, [#154](https://github.com/kamui/code-review-b
 [#192](https://github.com/kamui/code-review-bench/issues/192), retires modules with no current caller, as
 [processing retirement](processing-retirement.md) records. Slice 1,
 [#193](https://github.com/kamui/code-review-bench/issues/193), adds the crate and ports `roster` and `diff_identity`.
+Slice 2, [#194](https://github.com/kamui/code-review-bench/issues/194), ports the review normalizers and moves their
+runner and dispatch callers, as [the normalizers](#the-review-normalizers) describes.
 Slice 3, [#195](https://github.com/kamui/code-review-bench/issues/195), ports `derive_packet`.
 
 ## The `bench-tools` crate
@@ -37,6 +39,8 @@ python3 bench/tools/rust_runtime.py exec bench-tools -- derive-packet <packet.le
 | --- | --- | --- | --- |
 | `bench/tools/roster.py` | `bench-tools roster` | `bun run roster` in `AGENTS.md`, `README.md` and `bench/README.md` | Deleted with `test_roster.py`, whose cases are in [`roster.v1.json`](../../tools/behavior_contracts/roster.v1.json). |
 | `bench/tools/diff_identity.py` | `bench-tools diff-identity`, `bench_tools::diff_identity` | The CLI in `bench/README.md` | Retained library, below. |
+| `bench/tools/normalize_review.py` | `bench-tools normalize-review`, `bench_tools::normalize_review` | `dispatch.sh`, `claude_skill_runner.py`, `codex_skill_runner.py`, `file_attempt.py --replay` and the `test:bench` script | Retained library, below. `test_normalize_review.py`'s cases are in [`normalize-review.v1.json`](../../tools/behavior_contracts/normalize-review.v1.json), which `test:bench` runs against the retained Python. |
+| `bench/tools/normalize_thermo.py` | `bench-tools normalize-thermo`, `bench_tools::normalize_thermo` | The same skill runners and `file_attempt.py --replay` | Deleted with `test_normalize_thermo.py`, whose cases are in [`normalize-thermo.v1.json`](../../tools/behavior_contracts/normalize-thermo.v1.json). |
 | `bench/tools/derive_packet.py` | `bench-tools derive-packet`, `bench_tools::derive_packet` | `build_packet.py --factual`, through the bridge below; `bench/README.md` | Deleted. Its self-test cases and every target's legacy packet are in [`derive-packet.v1.json`](../../tools/behavior_contracts/derive-packet.v1.json). The imported original is preserved at `artifacts/import-source/bench/tools/derive_packet.py`. |
 
 ## Retained libraries
@@ -47,6 +51,35 @@ and CI runs the corpus against both implementations with a differential. It is r
 | Module | Imported or hashed by | Removal condition | Owner |
 | --- | --- | --- | --- |
 | `bench/tools/diff_identity.py` | `provision.py` imports `identity`; `test_cache_replacements.py` imports it; `grade.runner_files()` hashes it, so a byte change refuses every prepared grading batch | `provision.py` computes diff identity through the Rust runtime ([#157](https://github.com/kamui/code-review-bench/issues/157)) and `grade.runner_files()` no longer hashes `diff_identity.py` ([#156](https://github.com/kamui/code-review-bench/issues/156)) | #157 |
+| `bench/tools/normalize_review.py` | `grade.py` imports `render` for blind grading; `contributor_adapters.collect` calls `from_codex`, `from_claude_builtin` and `from_codex_skill` in process; `grade.runner_files()` hashes it | `grade.render` renders through the Rust runtime and `grade.runner_files()` no longer hashes `normalize_review.py` ([#156](https://github.com/kamui/code-review-bench/issues/156)), and the contributor backend normalizes through it ([#158](https://github.com/kamui/code-review-bench/issues/158)) | #156, #158 |
+
+## The review normalizers
+
+`bench-tools normalize-review` and `bench-tools normalize-thermo` take the arguments of `normalize_review.py` and
+`normalize_thermo.py` and write the same `normalized.json` bytes, stdout and stderr, so a saved `normalize.txt`
+(`dispatch.sh`) or `normalization.txt` (the skill runners) reads as it did. Diagnostics keep the names
+`normalize_review.py:` and `normalize_thermo.py:`. `--timing` stamps `payload_validated_at` from the system clock;
+cargo tests pin that rewrite with a fixed clock, because a corpus cannot.
+
+A review's normalizer runs after the reviewer has returned, so every caller resolves it before a review can start:
+
+- `run_cell.py` resolves the run's pinned `bench-tools` with `rust_runtime.for_run` before it chooses a cell or claims
+  one, dry runs included, and passes it to the dispatch as `BENCH_RUST_BENCH_TOOLS` with its SHA-256.
+- `dispatch.sh` checks that executable and its hash before it makes the fresh home; the skill runners resolve it first in
+  `prepare_attempt`. Either refusal leaves no `timing.json`, so `run_cell.py` releases the claim.
+- `review_queue.py` refuses, before any launch, a run whose `freeze_commit` holds `rust/bench-tools` but whose queue pins
+  no `bench-tools`.
+- `file_attempt.py --replay` runs the `bench-tools` that the run pins, the run being `--run` or `bench/runs/<run-id>`.
+
+A run frozen before this change pins no `bench-tools`. Its own freeze checkout still has the Python normalizers, and
+it runs and replays from there exactly as before. From a checkout after this change, `run_cell.py`, the skill runners
+and `file_attempt.py --replay` refuse such a run, naming its freeze commit, and `review_queue.py` already refuses it
+because its runner files differ from that commit.
+
+The contributor path never reaches this branch: `contributor_adapters.collect` normalizes in process with the retained
+library, and it uses the skill runners only for helpers, never `prepare_attempt` or `launch`.
+`test_contributor.AdapterTests.test_openrouter_adapters_execute_fresh_subprocesses_and_collect_reports` fails if
+collection resolves a Rust runtime or calls either.
 
 ## Temporary bridges
 
@@ -74,7 +107,22 @@ recorded decision.
   the noncharacters, because the crate carries no table of assigned code points.
 - `diff-identity` has no `--self-test`; `cargo test` and the corpus cover it. It accepts options between
   positional arguments, which argparse refuses for some orders.
+- `normalize-review` has no `--self-test`, and options must be spelled in full; argparse also accepted unique prefixes.
 - `derive-packet` has no `--self-test`; `cargo test` and the corpus cover it.
+- Where the normalizers' Python raised a traceback and exited 1, they exit 2 with a message: an input that is not
+  UTF-8, a shape such as a `findings` value that is not a list, an `--out` that cannot be written, a timing sidecar that
+  is not an object, a fenced JSON array whose integer exceeds Python's digit limit, and a Codex bullet whose start or
+  end line exceeds it. The v2 decisions of both normalizer corpora record each case, and the v4 review decisions add
+  the Codex line numbers. In `normalize-review.v1.json` they carry the retained Python's traceback as a
+  `baseline_defect`, so its corpus runs with `--allow-known-defects`.
+- `\d` in the Codex bullet pattern and `\w` in the thermo no-findings statement's `\b` follow Python 3.14, whose
+  Unicode database is 16.0. `pytext` holds both tables, generated from Python 3.14, and `derive-packet` reads the
+  same digit table. Python 3.12 does not match the
+  characters Unicode 16.0 added. The v3 decisions of both normalizer corpora record that difference.
+- `normalize-thermo` resolves a relative missing `--artifact-root` as Python 3.13 and later do, naming the absolute
+  component in the error; Python 3.12 named the relative one. A symbolic link loop in it is an `ELOOP` error, as in
+  Python 3.13 and later; Python 3.12 raised a traceback. Callers pass an absolute root.
+- `--sessions-dir` does not follow symbolic links to directories; Python's `rglob` follows them in some versions.
 - Usage errors print `bench-tools` usage text. Argparse wording is not a contract.
 
 `derive-packet-invalid-utf8` pins one intended change: an input that is not UTF-8 exits 2 with a message naming the
@@ -86,8 +134,9 @@ file. `derive_packet.py` raised an uncaught `UnicodeDecodeError`, exiting 1 with
 that database lacked: the 80 added in Unicode 16.0 on CI's Python 3.12, and 110 on Python 3.10, 30 of which predate
 Unicode 16.0.
 
-Diagnostics keep the Python program names, `roster.py:`, `diff_identity.py:` and `derive_packet.py:`, so saved
-stderr stays identical and the differential compares them byte for byte. Renaming them needs a new decision version.
+Diagnostics keep the Python program names, `roster.py:`, `diff_identity.py:`, `normalize_review.py:`,
+`normalize_thermo.py:` and `derive_packet.py:`, so saved stderr stays identical and the differential compares them
+byte for byte. Renaming them needs a new decision version.
 
 ## Research records
 
@@ -104,12 +153,14 @@ python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select
 python3 bench/tools/rust_runtime.py resolve bench-tools
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/roster.v1.json
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/diff-identity.v1.json --differential MAP
+python3 tools/behavior_contract.py --corpus tools/behavior_contracts/normalize-review.v1.json --differential MAP
+python3 tools/behavior_contract.py --corpus tools/behavior_contracts/normalize-thermo.v1.json
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/derive-packet.v1.json
 (cd bench/tools && RUST_RUNTIME_REQUIRE_BENCH_TOOLS=1 python3 -m unittest -k factual test_build_packet)
 python3 tools/behavior_contract.py --verify-decision-history
 ```
 
 `MAP` is a [command map](contracts/README.md#run-the-usage-corpus) naming the resolved executable, as the
-`Rust runtime` workflow writes it. The `roster` and `derive-packet` corpora run the Rust executable by default; the
-`diff-identity` corpus runs the retained Python library by default. `derive-packet` has no Python implementation
-left to compare with, so it has no differential.
+`Rust runtime` workflow writes it. The `roster`, `normalize-thermo` and `derive-packet` corpora run the Rust
+executable by default; the `diff-identity` and `normalize-review` corpora run the retained Python library by default.
+`derive-packet` has no Python implementation left to compare with, so it has no differential.

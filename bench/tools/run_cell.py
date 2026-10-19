@@ -50,6 +50,11 @@ observation``), the quota note (``--quota``, else ``unknown``), the attempts, sp
 flight at claim time, and the bound reserved. ``--dry-run`` prints that record and claims
 nothing.
 
+Before anything is claimed, including in a dry run, the run's ``runtimes.frozen.json`` must pin the
+``bench-tools`` executable that normalizes each review, and it must resolve as ``rust_runtime.for_run``
+resolves it; the dispatch gets it as ``BENCH_RUST_BENCH_TOOLS`` with its SHA-256. A run frozen before
+the normalizers moved to Rust pins none and is refused, naming the freeze commit to run it from.
+
 Before claiming a real attempt, rates-check-v1 compares the model's frozen dated rate with
 official provider prices. A change or unavailable source refuses dispatch. The verified rate
 is saved to the attempt's rates.json and used for metering; cell.json retains the source hashes.
@@ -130,8 +135,10 @@ import prune_workspace  # noqa: E402
 import skill_provenance
 import rates
 import packet_selection
+import rust_runtime
 
 ATTEMPT = re.compile(r"^att-(\d{3,})$")
+NORMALIZER = "bench-tools"
 SKILL_RUNNERS = {"codex-skill": "codex_skill_runner.py", "claude-skill": "claude_skill_runner.py"}
 
 
@@ -502,7 +509,17 @@ def cache_selection(target_id: str) -> tuple:
     return argv + ["--cache-replacements", str(manifest)], {"path": recorded, "sha256": sha256_file(manifest)}
 
 
-def dispatch(run: Run, attempt_id: str, claim: dict) -> None:
+def normalizer_environment(run: Run) -> dict:
+    """The launch variables of the run's pinned ``bench-tools``, which normalizes each review after it returns."""
+    try:
+        executable = rust_runtime.for_run(NORMALIZER, run.dir)
+    except (rust_runtime.Refused, rust_runtime.InputError) as error:
+        raise Refused(f"the {NORMALIZER} Rust runtime: {error}") from None
+    variable = rust_runtime.variable(NORMALIZER)
+    return {variable: str(executable), variable + "_SHA256": rust_runtime.sha256_file(executable)}
+
+
+def dispatch(run: Run, attempt_id: str, claim: dict, runtime: dict) -> None:
     directory = run.work / attempt_id
     cell = claim["cell"]
     try:
@@ -510,7 +527,7 @@ def dispatch(run: Run, attempt_id: str, claim: dict) -> None:
         target = read_json(target_dir / "target.json")
         arm = read_json(run.arm_file(cell["arm"]))
         entry = run.arm_entry(cell["arm"])
-        env = dict(os.environ)
+        env = {**os.environ, **runtime}
         env["ATTEMPT_BUDGET_USD"] = str(run.attempt_bound(cell["arm"]))
         env["BENCH_ISOLATION"] = arm.get("isolation", {}).get("sandbox", "n/a")
         env["BENCH_NETWORK"] = arm.get("isolation", {}).get("network", "off")
@@ -717,6 +734,7 @@ def claim_and_run(run_dir: Path, work: Path, args) -> dict:
     with locked(work):
         run = Run(run_dir, work)
         check_frozen(run)
+        runtime = normalizer_environment(run)
         claim = choose(run, args)
         billing_mode = run.arm_entry(claim["cell"]["arm"]).get("billing_mode")
         if billing_mode not in ("api", "subscription"):
@@ -741,7 +759,7 @@ def claim_and_run(run_dir: Path, work: Path, args) -> dict:
         (work / attempt_id / "rates.json").write_text(json.dumps(snapshot, indent=2) + "\n", encoding="utf-8")
         (work / attempt_id / "cell.json").write_text(json.dumps(claim, indent=2) + "\n", encoding="utf-8")
     run = Run(run_dir, work)
-    dispatch(run, attempt_id, claim)
+    dispatch(run, attempt_id, claim, runtime)
     record = file(Run(run_dir, work), attempt_id)
     return {"attempt_id": attempt_id, "cell": claim["cell"], "disposition": record["disposition"],
             "priced_total_usd": record["usage"]["priced_total_usd"]}
@@ -874,6 +892,7 @@ def self_test() -> int:
                 provisioned.append(argv[argv.index("--out") + 2:])
                 return subprocess.CompletedProcess(argv, 0, "{}", "")
             assert env["ATTEMPT_BUDGET_USD"] == "5.0", env.get("ATTEMPT_BUDGET_USD")
+            assert env["BENCH_RUST_BENCH_TOOLS"] == runtime["BENCH_RUST_BENCH_TOOLS"], env.get("BENCH_RUST_BENCH_TOOLS")
             if started:
                 (Path(argv[2]) / "timing.json").write_text("{}", encoding="utf-8")
                 return subprocess.CompletedProcess(argv, 1, "", "")
@@ -889,6 +908,7 @@ def self_test() -> int:
             return run
 
         real_tool, real_repo, started, provisioned = tool, REPO, False, []
+        runtime = {"BENCH_RUST_BENCH_TOOLS": "/fixture/bench-tools", "BENCH_RUST_BENCH_TOOLS_SHA256": "0" * 64}
         listing, other = base / "listing.json", base / "other.json"
         listing.write_text(json.dumps({"targets": [{"target": "t1"}]}), encoding="utf-8")
         other.write_text(json.dumps({"targets": [{"target": "t2"}]}), encoding="utf-8")
@@ -918,7 +938,7 @@ def self_test() -> int:
                                              ("review-code", Refused, "no resolved_skill_tree", [])):
                 run = claimed("att-006", kind)
                 try:
-                    dispatch(run, "att-006", {"cell": parse_key("t1/arm-a/3")})
+                    dispatch(run, "att-006", {"cell": parse_key("t1/arm-a/3")}, runtime)
                 except error as caught:
                     assert needle in str(caught) and "claim att-006 released" in str(caught), str(caught)
                 else:
@@ -926,7 +946,7 @@ def self_test() -> int:
                 assert not (work / "att-006").exists() and calls == ran, (kind, calls)
             started = True
             os.environ.update(cache_env)
-            dispatch(claimed("att-006", "codex"), "att-006", {"cell": parse_key("t1/arm-a/3")})
+            dispatch(claimed("att-006", "codex"), "att-006", {"cell": parse_key("t1/arm-a/3")}, runtime)
             assert (work / "att-006" / "cell.json").is_file() and "att-006" in fresh().in_flight()
             assert provisioned[-1] == ["--cache-root", str(base / "cache"), "--cache-replacements", selected["path"]], provisioned
             assert read_json(work / "att-006" / "cell.json")["cache_replacements"] == selected
