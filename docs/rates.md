@@ -12,14 +12,18 @@ Append dated entries for prices that changed:
 bun run rates:refresh
 ```
 
+`rates:check` runs `bench-tools rates check`, the Rust port of `rates.py`'s `check` command; install it once per checkout revision with `python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select` ([Rust runtime](python-migration/runtime.md#running-a-maintained-command)). `rates:refresh` stays in Python until [#160](https://github.com/kamui/code-review-bench/issues/160).
+
 Both commands default to `bench/rates.current.json`. They fetch the [OpenAI standard pricing table](https://developers.openai.com/api/docs/pricing) and [Anthropic model pricing table](https://platform.claude.com/docs/en/about-claude/pricing). They make no model requests and need no credentials. Prices cover standard short-context usage, matching the catalog's existing policy. Batch, flex, priority, long-context premiums, and partner-cloud prices are outside this command's scope.
 
 Use `--model` to select models and `--json` to save the check receipt, including the time, source URLs, hashes, observed prices, and differences:
 
 ```sh
-python3 bench/tools/rates.py check --model gpt-6.1-sol --json
+python3 bench/tools/rust_runtime.py exec bench-tools -- rates check --model gpt-6.1-sol --json
 python3 bench/tools/rates.py refresh --model claude-sonnet-5-5
 ```
+
+`--source openai=URL` or `--source anthropic=URL` reads that provider's page from another URL, such as a saved copy at `file:pricing.md`. The receipt records the URL read.
 
 The command checks only models already in the catalog. Add a model's initial price entry before checking it. The catalog's `billing` field remains for historical compatibility; new runs declare account billing separately. A changed provider table returns exit 1, as does a model selected with `--model` whose prices are missing from its provider table or unsupported. A run over the whole catalog reports such a model as skipped and still checks the others, unless a provider has supported prices for none of its cataloged models, which returns exit 1. Source or file failures return exit 2. A successful check returns 0; differing prices return 1. A successful refresh returns 0.
 
@@ -56,7 +60,7 @@ The `rates-check-v1` policy adds a provider check to current `bench/tools/run_ce
 
 Successful claims save a `rates_check` receipt in `cell.json` and the verified dated entry in the attempt's `rates.json`. Skill runners and `file_attempt.py` receive this snapshot for metering. A later catalog refresh therefore cannot change the prices used by an in-flight attempt. Status, dry runs, and filing previously dispatched attempts do not contact providers.
 
-Frozen runner copies retain their existing behavior. Record adopting this runner change as a versioned deviation when continuing an earlier run; preserve its existing manifest, evidence, and failed attempts. No existing run is rewritten by these commands. External controllers and direct adapter invocations do not inherit the automatic check; invoke `rates.py check` with their selected catalog and model before dispatch, and keep their rates pinned.
+Frozen runner copies retain their existing behavior. Record adopting this runner change as a versioned deviation when continuing an earlier run; preserve its existing manifest, evidence, and failed attempts. No existing run is rewritten by these commands. External controllers and direct adapter invocations do not inherit the automatic check; invoke `bench-tools rates check` with their selected catalog and model before dispatch, and keep their rates pinned.
 
 Verification:
 
