@@ -426,7 +426,11 @@ pub fn run(disk: &mut dyn Disk, roots: &[Vec<u8>], out: &[u8], hash_all: bool) -
         .map(|root| absolute(root))
         .collect::<Result<Vec<_>>>()?;
     let out_absolute = absolute(out)?;
-    if roots.iter().any(|root| is_relative_to(&out_absolute, root)) {
+    let out_resolved = PyPath::new(&crate::pyfs::resolve(out_absolute.as_bytes()));
+    if roots
+        .iter()
+        .any(|root| is_relative_to(&out_absolute, root) || is_relative_to(&out_resolved, root))
+    {
         return Err(violation("write the inventory outside the inspected roots"));
     }
     let inventories = roots
