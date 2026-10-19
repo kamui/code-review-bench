@@ -20,7 +20,7 @@ import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
-DESTINATION = "docs/python-migration/inventory.v3.json.gz"
+DESTINATION = "docs/python-migration/inventory.v4.json.gz"
 SHELL_DIRECTORY = r'\$\(dirname\s+(?:"\$0"|\$0)\)'
 PYTHON_PATH = re.compile(
     rf"(?:{SHELL_DIRECTORY}|\$\{{[A-Za-z_]\w*\}}|\$[A-Za-z_]\w*)?[\w./-]+\.py\b"
@@ -33,8 +33,6 @@ GROUPS = {
     "behavioral-contracts": (151, "behavior_contract"),
     "usage": (152, "codex_usage transcript_usage adapter measure python_core typed_usage verify"),
     "runtime": (153, "rust_runtime"),
-    "storage": (155, "evidence_inventory evidence_store reconcile_evidence recover_evidence "
-                "local_evidence_resolution native_artifacts import_benchmark collect_run"),
     "grading": (156, "attempt_audit audit_log calibration claim_grading claims "
                 "current_grading delegation evaluator_audit export_explorer grade grading_policy grading_profile "
                 "grading_validation methodology packet_selection pre_existing_grading regrade ruling_dossier "
@@ -46,7 +44,7 @@ GROUPS = {
                     "provision review_isolation review_queue run_cell skill_provenance subscription_meters"),
     "contributor": (158, "contributor contributor_adapter_probe contributor_adapters contributor_common "
                    "contributor_openrouter contributor_secrets contributor_submit normalize_review"),
-    "cleanup": (159, "prune_workspace retire_workspace"),
+    "cleanup": (159, "prune_workspace retire_workspace evidence_store native_artifacts evidence_inventory"),
     "retirement": (160, "run_bench_tests select_grading_tests python_inventory check_manifest rates seal"),
 }
 DYNAMIC_ROOTS = {
@@ -64,7 +62,6 @@ DYNAMIC_ROOTS = {
 RESEARCH_GROUPS = {
     152: ["last-push-review-code-2026-10-12/selection/usage.py", "last-push-rulings-2026-10-11/usage.py"],
     153: ["portable-evidence-2026-10-10/freeze_commits.py"],
-    155: ["builtin-review-benchmark-2026-09-24/answers.py"],
     156: ["cohort-rebuild-2026-10-05/regrade/plan.py", "last-push-recut-2026-10-07/stage_edition.py",
           "last-push-review-code-2026-10-12/selection/collect.py", "last-push-review-code-2026-10-12/selection/packets.py",
           "last-push-review-code-2026-10-12/selection/selection.py", "last-push-rulings-2026-10-11/filing/collect.py",
@@ -75,6 +72,7 @@ RESEARCH_GROUPS = {
           "regrade-rulings-2026-10-13/filing/record.py"],
     157: ["last-push-recut-2026-10-07/replacement_runs.py", "last-push-recut-2026-10-07/skill_replacement_runs.py",
           "skill-matrix-2026-10-02/dispatch_serial.py"],
+    160: ["evidence-migration-2026-10-08/restore-local.py"],
 }
 
 
@@ -261,7 +259,7 @@ def census(snapshot):
             if kind != "possible-name-reference":
                 graph[path].add(target)
     for path in sorted(live - py):
-        for target, line, _ in import_edges(path, embedded_imports(snapshot.read(path).decode(errors="replace")), py):
+        for target, line, _ in sorted(import_edges(path, embedded_imports(snapshot.read(path).decode(errors="replace")), py)):
             incoming[target].append({"path": path, "line": line, "kind": "embedded-import-reference"})
             graph[path].add(target)
     siblings = {path: sibling_variables(snapshot.read(path).decode(errors="replace")) for path in live - py}
