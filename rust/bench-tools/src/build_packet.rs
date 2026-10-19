@@ -830,30 +830,64 @@ fn closing_reference(chars: &[char], at: usize) -> Option<Reference> {
     })
 }
 
-/// Code points the toolchain's Unicode 17.0 lowercases that Unicode 16.0, Python 3.14's database, leaves
-/// unassigned, so `str.lower()` keeps them.
-const CASED_AFTER_16: [(u32, u32); 4] = [
-    (0xA7CE, 0xA7CE),
+/// Code points whose casing differs between the toolchain's Unicode 17.0 and Unicode 16.0, Python 3.14's
+/// database: those new in 17.0, which Python leaves unassigned (uncased, not case-ignorable, their own
+/// lowercase), and U+0295, a cased lowercase letter in 16.0 that 17.0 made uncased.
+const CASING_AFTER_16: [(u32, u32); 21] = [
+    (0x295, 0x295),
+    (0x1ACF, 0x1ADD),
+    (0x1AE0, 0x1AEB),
+    (0xA7CE, 0xA7CF),
     (0xA7D2, 0xA7D2),
     (0xA7D4, 0xA7D4),
+    (0xA7F1, 0xA7F1),
+    (0x10EC5, 0x10EC5),
+    (0x10EFA, 0x10EFB),
+    (0x11B60, 0x11B60),
+    (0x11B62, 0x11B64),
+    (0x11B66, 0x11B66),
+    (0x11DD9, 0x11DD9),
     (0x16EA0, 0x16EB8),
+    (0x16EBB, 0x16ED3),
+    (0x16FF2, 0x16FF3),
+    (0x1E6E3, 0x1E6E3),
+    (0x1E6E6, 0x1E6E6),
+    (0x1E6EE, 0x1E6EF),
+    (0x1E6F5, 0x1E6F5),
+    (0x1E6FF, 0x1E6FF),
 ];
 
-/// `str.lower()` as Python 3.14 computes it.
-fn python_lower(text: &str) -> String {
-    let kept = |c: char| {
-        CASED_AFTER_16
-            .iter()
-            .any(|(low, high)| (*low..=*high).contains(&u32::from(c)))
-    };
-    let mut out = String::with_capacity(text.len());
-    let mut start = 0;
-    for (index, c) in text.char_indices().filter(|(_, c)| kept(*c)) {
-        out.push_str(&text[start..index].to_lowercase());
-        out.push(c);
-        start = index + c.len_utf8();
+/// A character with Unicode 16.0's casing properties for `c`, which the toolchain's tables give.
+fn casing_stand_in(c: char) -> char {
+    let point = u32::from(c);
+    if !CASING_AFTER_16
+        .iter()
+        .any(|(low, high)| (*low..=*high).contains(&point))
+    {
+        c
+    } else if point == 0x295 {
+        'a'
+    } else {
+        '0'
     }
-    out.push_str(&text[start..].to_lowercase());
+}
+
+/// `str.lower()` as Python 3.14 computes it: each character's lowercase, with capital sigma's final form
+/// decided by the casing of its neighbors at Unicode 16.0.
+fn python_lower(text: &str) -> String {
+    let stand_ins: String = text.chars().map(casing_stand_in).collect();
+    let lowered = stand_ins.to_lowercase();
+    let mut out = String::with_capacity(lowered.len());
+    let mut at = 0;
+    for (c, stand_in) in text.chars().zip(stand_ins.chars()) {
+        let width: usize = stand_in.to_lowercase().map(char::len_utf8).sum();
+        if c == stand_in {
+            out.push_str(&lowered[at..at + width]);
+        } else {
+            out.push(c);
+        }
+        at += width;
+    }
     out
 }
 
@@ -2893,11 +2927,17 @@ mod tests {
         assert_eq!(
             char::UNICODE_VERSION,
             (17, 0, 0),
-            "recompute CASED_AFTER_16 for this toolchain's Unicode tables"
+            "recompute CASING_AFTER_16 for this toolchain's Unicode tables"
         );
         assert_eq!(python_lower("A\u{3a3}\u{a7ce}"), "a\u{3c2}\u{a7ce}");
+        assert_eq!(python_lower("A\u{3a3}\u{a7cf}"), "a\u{3c2}\u{a7cf}");
         assert_eq!(python_lower("\u{a7ce}\u{3a3}A"), "\u{a7ce}\u{3c3}a");
-        assert_eq!(python_lower("\u{130}X\u{16EB8}"), "i\u{307}x\u{16EB8}");
+        assert_eq!(python_lower("\u{295}\u{3a3}"), "\u{295}\u{3c2}");
+        assert_eq!(python_lower("A\u{3a3}\u{1ad0}b"), "a\u{3c2}\u{1ad0}b");
+        assert_eq!(
+            python_lower("\u{130}X\u{16EB8}\u{3a3}\u{3a3}"),
+            "i\u{307}x\u{16EB8}\u{3c3}\u{3c2}"
+        );
     }
 
     #[test]
