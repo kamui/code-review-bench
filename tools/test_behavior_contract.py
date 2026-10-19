@@ -12,6 +12,7 @@ import copy
 import json
 import errno
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -534,6 +535,187 @@ class ContractTests(unittest.TestCase):
             self.assertEqual(wrong.returncode, 1, wrong.stdout + wrong.stderr)
             self.assertIn("DIFFERENTIAL unknown-is-not-zero", wrong.stdout)
 
+
+    STORAGE_CORPORA = ("evidence-store", "native-artifacts", "evidence-inventory", "import-benchmark")
+    ARCHIVE_WRITER = """import gzip, hashlib, io, json, os, sys, tarfile
+level, variant = int(sys.argv[1]), sys.argv[2]
+data = b"member bytez\\n" if variant == "byte" else b"member bytes\\n"
+raw = io.BytesIO()
+with gzip.GzipFile(filename="", fileobj=raw, mode="wb", mtime=0, compresslevel=level) as packed:
+    with tarfile.open(fileobj=packed, mode="w") as bundle:
+        info = tarfile.TarInfo("bench/a.txt")
+        info.size, info.mode = len(data), 0o600 if variant == "mode" else 0o644
+        bundle.addfile(info, io.BytesIO(data))
+archive = raw.getvalue()
+digest = hashlib.sha256(archive).hexdigest()
+os.mkdir("out")
+with open(f"out/{digest}.tar.gz", "wb") as handle:
+    handle.write(archive)
+named = hashlib.sha256(b"other bytes").hexdigest() if variant == "manifest" else digest
+with open("out/manifest.json", "w") as handle:
+    json.dump({"packages": [{"asset": digest + ".tar.gz", "sha256": named, "bytes": len(archive)}]}, handle, indent=2)
+print(digest)
+"""
+
+    def test_archives_compare_by_members_and_manifests_name_the_written_archive(self):
+        case = {"id": "probe", "program": "writer", "argv": [], "stdin_b64": "", "initial": [],
+                "archives": [{"glob": "out/*.tar.gz", "format": "tar.gz"}], "manifests": ["out/manifest.json"]}
+        def run(level, variant):
+            return contract.execute(dict(case, argv=[str(level), variant]),
+                                    {"writer": [sys.executable, "-c", self.ARCHIVE_WRITER]}, {"snapshot_modes": True})
+        best, fastest = run(9, "same"), run(1, "same")
+        self.assertEqual(best["stdout"], b"<archive 1>\n")
+        self.assertNotIn("inconsistencies", best)
+        self.assertEqual(contract.differential(best, fastest, {"expected": {"stdout": {"mode": "bytes"},
+                                                                          "stderr": {"mode": "bytes"}}}), [])
+        manifest = next(entry for entry in best["filesystem"] if entry["path_b64"] == encoded(b"out/manifest.json"))
+        self.assertIn(b'"bytes": "<archive size>"', contract.decode(manifest["bytes_b64"]))
+        archive = next(entry for entry in best["filesystem"] if entry["kind"] == "archive")
+        self.assertEqual(contract.decode(archive["path_b64"]), b"out/<archive 1>.tar.gz")
+        self.assertEqual([(member["name"], member["mode"]) for member in archive["members"]], [("bench/a.txt", 0o644)])
+        for variant in ("byte", "mode"):
+            with self.subTest(variant=variant):
+                differences = contract.differential(best, run(9, variant), {"expected": {"stdout": {"mode": "bytes"},
+                                                                                         "stderr": {"mode": "bytes"}}})
+                self.assertTrue(any("filesystem effects" in diff for diff in differences), differences)
+        wrong = run(9, "manifest")
+        self.assertTrue(any("differ from the archive written beside it" in issue for issue in wrong["inconsistencies"]))
+        self.assertTrue(any(diff.startswith("consistency:") for diff in contract.compare(
+            {**best, "stdout": {"mode": "bytes", "bytes_b64": encoded(b"<archive 1>\n")},
+             "stderr": {"mode": "bytes", "bytes_b64": ""}}, wrong)))
+
+    def test_special_files_snapshot_without_blocking(self):
+        import threading
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            contract.populate(root, [{"kind": "special", "path_b64": encoded(b"pipe"), "mode": 0o640}])
+            result = []
+            reader = threading.Thread(target=lambda: result.append(contract.snapshot(root)), daemon=True)
+            reader.start()
+            reader.join(5)
+            self.assertFalse(reader.is_alive(), "snapshot blocked on a FIFO")
+            self.assertEqual(result, [[{"path_b64": encoded(b"pipe"), "kind": "special", "mode": 0o640}]])
+
+    def test_steps_share_one_root_with_modes_links_and_removals(self):
+        writer = ("import os, sys\nfrom pathlib import Path\n"
+                  "Path(sys.argv[1]).write_text(' '.join(sorted(os.listdir('.'))))\n")
+        case = {"id": "probe", "program": "writer", "initial": [
+            {"kind": "file", "path_b64": encoded(b"kept"), "bytes_b64": encoded(b"x"), "mode": 0o600},
+            {"kind": "directory", "path_b64": encoded(b"gone")},
+            {"kind": "symlink", "path_b64": encoded(b"link"), "target_b64": encoded(b"kept")}],
+            "steps": [{"argv": ["first"], "stdin_b64": ""}, {"remove": [encoded(b"gone"), encoded(b"first")]},
+                      {"write": [{"kind": "file", "path_b64": encoded(b"kept"), "bytes_b64": encoded(b"y"),
+                                  "mode": 0o640}]},
+                      {"argv": ["second"], "stdin_b64": ""}]}
+        actual = contract.execute(case, {"writer": [sys.executable, "-c", writer]}, {"snapshot_modes": True})
+        first, second = actual["steps"]
+        self.assertEqual(contract.decode(next(e for e in first["filesystem"] if e["path_b64"] == encoded(b"first"))
+                                         ["bytes_b64"]), b".home gone kept link")
+        files = {contract.decode(e["path_b64"]): e for e in second["filesystem"]}
+        self.assertEqual(sorted(files), [b".home", b"kept", b"link", b"second"])
+        self.assertEqual((files[b"kept"]["mode"], contract.decode(files[b"kept"]["bytes_b64"])), (0o640, b"y"))
+        self.assertEqual((files[b"second"]["mode"], files[b".home"]["mode"]), (0o644, 0o755))
+        self.assertEqual(files[b"link"], {"path_b64": encoded(b"link"), "kind": "symlink", "target_b64": encoded(b"kept")})
+        self.assertNotIn("mode", contract.execute(dict(case, steps=case["steps"][:1]),
+                                                  {"writer": [sys.executable, "-c", writer]})["steps"][0]["filesystem"][0])
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "corpus.json"
+            for broken in ({**case, "expected": {}}, {**case, "steps": [{"remove": []}]}):
+                path.write_text(json.dumps({"format": "behavior-contract/1", "decisions": "d.json", "cases": [broken]}))
+                (Path(temporary) / "d.json").write_text(json.dumps({"records": {"probe": decision(broken)}}))
+                with self.assertRaisesRegex(ValueError, "step case"):
+                    contract.load_corpus(path)
+            path.write_text(json.dumps({"format": "behavior-contract/1", "decisions": "d.json", "cases": [],
+                                        "snapshot_mode": True}))
+            with self.assertRaisesRegex(ValueError, "unknown corpus option"):
+                contract.load_corpus(path)
+
+    def test_stub_gh_records_calls_and_injects_faults(self):
+        caller = ("import subprocess, sys\n"
+                  "for args in [['api', 'repos/o/r/releases/tags/evidence-t'],\n"
+                  "             ['api', '--paginate', '--slurp', 'repos/o/r/releases/7/assets?per_page=100'],\n"
+                  "             ['release', 'upload', 'evidence-t', 'a.bin', '--repo', 'o/r'],\n"
+                  "             ['api', 'repos/o/r/releases/assets/101', '-H', 'Accept: application/octet-stream'],\n"
+                  "             ['auth', 'token']]:\n"
+                  "    result = subprocess.run(['gh', *args], capture_output=True)\n"
+                  "    sys.stdout.buffer.write(b'%d %s\\n' % (result.returncode, result.stdout.strip()[:60]))\n")
+        def run(**release):
+            state = {"repository": "o/r", "tag": "evidence-t", "id": 7, **release}
+            case = {"id": "probe", "program": "caller", "argv": [], "stdin_b64": "", "initial": [
+                {"kind": "file", "path_b64": encoded(b"a.bin"), "bytes_b64": encoded(b"0123456789")},
+                {"kind": "file", "path_b64": encoded(b"gh/release.json"), "bytes_b64": encoded(json.dumps(state).encode())}]}
+            actual = contract.execute(case, {"caller": [sys.executable, "-c", caller]}, {"gh_stub_b64": encoded(b"gh")})
+            files = {contract.decode(e["path_b64"]): e for e in actual["filesystem"]}
+            return actual["stdout"].decode().splitlines(), files
+        lines, files = run()
+        self.assertEqual(lines, ['0 {"id": 7, "tag_name": "evidence-t", "draft": false}', "0 [[]]", "0 ",
+                                 "0 0123456789", "2 "])
+        self.assertEqual(contract.decode(files[b"gh/assets/101/a.bin"]["bytes_b64"]), b"0123456789")
+        calls = [json.loads(line) for line in contract.decode(files[b"gh/calls.jsonl"]["bytes_b64"]).splitlines()]
+        self.assertEqual(len(calls), 5)
+        self.assertEqual(calls[2], ["release", "upload", "evidence-t", "a.bin", "--repo", "o/r"])
+        lines, files = run(faults=["partial-upload"], filler_assets=150)
+        self.assertEqual(lines[1][:5], '0 [[{')
+        self.assertEqual(lines[2:4], ["1 ", "1 "])
+        self.assertEqual(contract.decode(files[b"gh/assets/151/a.bin"]["bytes_b64"]), b"01234")
+        lines, files = run(faults=["truncated-download"])
+        self.assertEqual(lines[2:4], ["0 ", "0 01234"])
+        lines, files = run(faults=["lost-upload-response", "oversized-download"])
+        self.assertEqual(lines[2], "1 ")
+        self.assertTrue(lines[3].startswith("0 0123456789\x00"), lines[3])
+        lines, files = run(faults=["rejected-upload"])
+        self.assertEqual(lines[2:4], ["1 ", "1 "])
+        self.assertNotIn(b"gh/assets", files)
+
+    def test_storage_corpora_never_reach_the_network(self):
+        answered = re.compile(r'\["api", "repos/[^/"]+/[^/"]+/releases/tags/[^"/]+"\]'
+                              r'|\["api", "--paginate", "--slurp", "repos/[^/"]+/[^/"]+/releases/\d+/assets\?per_page=100"\]'
+                              r'|\["release", "upload", "[^"]+", "[^"]+", "--repo", "[^/"]+/[^/"]+"\]'
+                              r'|\["api", "repos/[^/"]+/[^/"]+/releases/assets/\d+", "-H", "Accept: application/octet-stream"\]')
+        calls = 0
+        for name in self.STORAGE_CORPORA:
+            corpus = contract.load_corpus(contract.CORPUS.parent / f"{name}.v1.json")
+            self.assertEqual(corpus["gh_stub_b64"], encoded(b"gh"), name)
+            for case in corpus["cases"]:
+                for step in case.get("steps", [case]):
+                    if "argv" not in step:
+                        continue
+                    self.assertFalse(any("://" in str(arg) for arg in step["argv"]), case["id"])
+                    for entry in step["expected"]["filesystem"]:
+                        if contract.decode(entry["path_b64"]) == b"gh/calls.jsonl":
+                            for line in contract.decode(entry["bytes_b64"]).decode().splitlines():
+                                self.assertRegex(line, f"^(?:{answered.pattern})$", case["id"])
+                                calls += 1
+        self.assertGreater(calls, 100)
+
+    def test_storage_corpora_hold_for_python_and_reject_regressions(self):
+        for name in self.STORAGE_CORPORA:
+            with self.subTest(corpus=name):
+                result = self.run_cli("--allow-known-defects", "--corpus", contract.CORPUS.parent / f"{name}.v1.json")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertNotIn("FAIL", result.stdout)
+        tools = contract.REPO / "bench/tools"
+        source = (tools / "evidence_store.py").read_text(encoding="utf-8")
+        before = "if source.name in {'auth.json', '.credentials.json'}:"
+        self.assertIn(before, source)
+        with tempfile.TemporaryDirectory() as temporary:
+            mutant = Path(temporary) / "bench/tools/evidence_store.py"
+            mutant.parent.mkdir(parents=True)
+            (Path(temporary) / "bench/schema").mkdir()
+            mutant.write_text(source.replace(before, "if False:"), encoding="utf-8")
+            (mutant.parent / "check_manifest.py").write_bytes((tools / "check_manifest.py").read_bytes())
+            schema = "bench/schema/evidence-storage.schema.json"
+            (Path(temporary) / schema).write_bytes((contract.REPO / schema).read_bytes())
+            commands = Path(temporary) / "commands.json"
+            commands.write_text(json.dumps({"evidence-store": [sys.executable, str(mutant)],
+                                            "recover-evidence": [sys.executable, str(tools / "recover_evidence.py")],
+                                            "restore-local": contract.default_commands(
+                                                {"cases": [{"program": "restore-local"}]})["restore-local"]}))
+            result = self.run_cli("--allow-known-defects", "--corpus",
+                                  contract.CORPUS.parent / "evidence-store.v1.json", "--implementations", commands)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("FAIL pack-credential-auth-json", result.stdout)
+        self.assertIn("PASS pack-traversal-path", result.stdout)
 
 if __name__ == "__main__":
     unittest.main()
