@@ -11,6 +11,8 @@ import subprocess
 import tempfile
 import unittest
 
+from test_claude_dispatch import fake_bench_tools
+
 
 REPO = Path(__file__).resolve().parents[2]
 DISPATCH = Path(__file__).with_name("dispatch.sh")
@@ -85,6 +87,7 @@ class CodexDispatchTest(unittest.TestCase):
                         "HOME": str(source_home),
                         "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
                         "CODEX_ARGV_CAPTURE": str(capture),
+                        **fake_bench_tools(root),
                     })
                     if name == "explicit":
                         env.update({"BENCH_CODEX": str(pinned_codex),

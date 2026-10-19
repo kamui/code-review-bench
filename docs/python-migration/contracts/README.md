@@ -56,6 +56,9 @@ independent assertions. The harness never obtains expected output from a candida
 
 [`roster.v1.json`](../../../tools/behavior_contracts/roster.v1.json),
 [`diff-identity.v1.json`](../../../tools/behavior_contracts/diff-identity.v1.json),
+[`normalize-review.v1.json`](../../../tools/behavior_contracts/normalize-review.v1.json),
+[`normalize-thermo.v1.json`](../../../tools/behavior_contracts/normalize-thermo.v1.json),
+[`derive-packet.v1.json`](../../../tools/behavior_contracts/derive-packet.v1.json),
 [`check-manifest.v1.json`](../../../tools/behavior_contracts/check-manifest.v1.json),
 [`rates.v1.json`](../../../tools/behavior_contracts/rates.v1.json) and
 [`upstream.v1.json`](../../../tools/behavior_contracts/upstream.v1.json) pin the commands of
@@ -67,27 +70,40 @@ python3 tools/behavior_contract.py --corpus tools/behavior_contracts/diff-identi
 ```
 
 Without `--implementations`, each program runs its maintained implementation. `codex`, `transcript`,
-`diff-identity` and `check-manifest` run their Python scripts; `diff_identity.py` and `check_manifest.py` are retained
-libraries. `rates` and `upstream` run the retained `rates.py` and `upstream.py` through drivers that read the case
-directory as the repository and, for `rates`, take `--source PROVIDER=URL` pages, so no case leaves the host;
-`rates-transport-failure` connects to a closed loopback port. Cases whose Rust behavior was changed on purpose carry
-a `baseline_defect` with Python's output, so pass `--allow-known-defects` when Python is the primary.
-`roster` has no Python
-implementation, so it runs the executable `rust_runtime.resolve("bench-tools")` selects, and the command refuses
+`diff-identity`, `normalize-review` and `check-manifest` run their Python scripts; `diff_identity.py`,
+`normalize_review.py` and `check_manifest.py` are retained libraries. `rates` and `upstream` run the retained
+`rates.py` and `upstream.py` through drivers that read the case directory as the repository and, for `rates`, take
+`--source PROVIDER=URL` pages, so no case leaves the host; `rates-transport-failure` connects to a closed loopback
+port. Cases whose Rust behavior was changed on purpose carry a `baseline_defect` with Python's output, so pass
+`--allow-known-defects` when Python is the primary. `roster`, `normalize-thermo` and `derive-packet` have no Python
+implementation, so they run the executable `rust_runtime.resolve("bench-tools")` selects, and the command refuses
 when none is installed for `HEAD`. A command map for the Rust programs names that executable:
 
 ```json
 {
   "roster": ["/absolute/path/to/bench-tools", "roster"],
   "diff-identity": ["/absolute/path/to/bench-tools", "diff-identity"],
+  "normalize-review": ["/absolute/path/to/bench-tools", "normalize-review"],
+  "normalize-thermo": ["/absolute/path/to/bench-tools", "normalize-thermo"],
+  "derive-packet": ["/absolute/path/to/bench-tools", "derive-packet"],
   "check-manifest": ["/absolute/path/to/bench-tools", "check-manifest"],
   "rates": ["/absolute/path/to/bench-tools", "rates"],
   "upstream": ["/absolute/path/to/bench-tools", "upstream"]
 }
 ```
 
+The normalizer corpora pin `normalized.json` bytes, the stdout and stderr that `dispatch.sh` saves as `normalize.txt`
+and the skill runners as `normalization.txt`, and every exit code. A successful `--timing` stamp depends on the clock,
+so cargo tests pin that rewrite; the corpora pin the sidecar left unchanged by an unresolved result and the failures.
+A `normalize-thermo` diagnostic that names the resolved artifact root holds the run's temporary path, so cargo tests
+pin those too.
+
 The `diff-identity` fixtures are bare repositories whose non-UTF-8 path names exist only inside Git tree objects,
 so they need no `requires` capability. The cases run `git` from the minimal `PATH`.
+
+Each `derive-packet-target-<id>` case holds a target's committed `packet.legacy.md` and expects its committed
+`packet.md`, byte for byte. `test_behavior_contract.py` checks that every target with a legacy packet has such a case
+and that its bytes are the committed files.
 
 ## Fixture format `behavior-contract/1`
 

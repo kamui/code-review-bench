@@ -5,7 +5,10 @@ This records the processing stage, [#154](https://github.com/kamui/code-review-b
 [delivery plan](https://github.com/kamui/code-review-bench/issues/154#issuecomment-6253814508). Slice 0,
 [#192](https://github.com/kamui/code-review-bench/issues/192), retires modules with no current caller, as
 [processing retirement](processing-retirement.md) records. Slice 1,
-[#193](https://github.com/kamui/code-review-bench/issues/193), adds the crate and ports `roster` and `diff_identity`. Slice 5,
+[#193](https://github.com/kamui/code-review-bench/issues/193), adds the crate and ports `roster` and `diff_identity`.
+Slice 2, [#194](https://github.com/kamui/code-review-bench/issues/194), ports the review normalizers and moves their
+runner and dispatch callers, as [the normalizers](#the-review-normalizers) describes.
+Slice 3, [#195](https://github.com/kamui/code-review-bench/issues/195), ports `derive_packet`. Slice 5,
 [#197](https://github.com/kamui/code-review-bench/issues/197), adds the schema validator and ports the read-only
 readers of `rates` and `upstream`.
 
@@ -31,6 +34,7 @@ describes:
 python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select
 bun run roster
 python3 bench/tools/rust_runtime.py exec bench-tools -- diff-identity <repo> <base> <head>
+python3 bench/tools/rust_runtime.py exec bench-tools -- derive-packet <packet.legacy.md> --out <packet.md>
 ```
 
 ## Migrated responsibilities
@@ -39,6 +43,9 @@ python3 bench/tools/rust_runtime.py exec bench-tools -- diff-identity <repo> <ba
 | --- | --- | --- | --- |
 | `bench/tools/roster.py` | `bench-tools roster` | `bun run roster` in `AGENTS.md`, `README.md` and `bench/README.md` | Deleted with `test_roster.py`, whose cases are in [`roster.v1.json`](../../tools/behavior_contracts/roster.v1.json). |
 | `bench/tools/diff_identity.py` | `bench-tools diff-identity`, `bench_tools::diff_identity` | The CLI in `bench/README.md` | Retained library, below. |
+| `bench/tools/normalize_review.py` | `bench-tools normalize-review`, `bench_tools::normalize_review` | `dispatch.sh`, `claude_skill_runner.py`, `codex_skill_runner.py`, `file_attempt.py --replay` and the `test:bench` script | Retained library, below. `test_normalize_review.py`'s cases are in [`normalize-review.v1.json`](../../tools/behavior_contracts/normalize-review.v1.json), which `test:bench` runs against the retained Python. |
+| `bench/tools/normalize_thermo.py` | `bench-tools normalize-thermo`, `bench_tools::normalize_thermo` | The same skill runners and `file_attempt.py --replay` | Deleted with `test_normalize_thermo.py`, whose cases are in [`normalize-thermo.v1.json`](../../tools/behavior_contracts/normalize-thermo.v1.json). |
+| `bench/tools/derive_packet.py` | `bench-tools derive-packet`, `bench_tools::derive_packet` | `build_packet.py --factual`, through the bridge below; `bench/README.md` | Deleted. Its self-test cases and every target's legacy packet are in [`derive-packet.v1.json`](../../tools/behavior_contracts/derive-packet.v1.json). The imported original is preserved at `artifacts/import-source/bench/tools/derive_packet.py`. |
 | `bench/tools/check_manifest.py` | `bench_tools::schema`, `bench-tools check-manifest` | None; its CLI callers stay with #156, below | Retained library, below. |
 | `bench/tools/rates.py`, its `check` command | `bench-tools rates check`, `bench_tools::rates` | `bun run rates:check`; `docs/rates.md` | Retained library, below. `refresh` stays in Python. |
 | `bench/tools/upstream.py`, its `report` command | `bench-tools upstream report`, `bench_tools::upstream`, with the registry checks of `claims.load_registry` in `bench_tools::claims` | `bun run audit:maintainers`; `docs/maintainer-adjudication.md` | Retained library, below. `collect` stays in Python. |
@@ -54,9 +61,49 @@ and CI runs the corpus against both implementations with a differential. It is r
 | Module | Imported or hashed by | Removal condition | Owner |
 | --- | --- | --- | --- |
 | `bench/tools/diff_identity.py` | `provision.py` imports `identity`; `test_cache_replacements.py` imports it; `grade.runner_files()` hashes it, so a byte change refuses every prepared grading batch | `provision.py` computes diff identity through the Rust runtime ([#157](https://github.com/kamui/code-review-bench/issues/157)) and `grade.runner_files()` no longer hashes `diff_identity.py` ([#156](https://github.com/kamui/code-review-bench/issues/156)) | #157 |
+| `bench/tools/normalize_review.py` | `grade.py` imports `render` for blind grading; `contributor_adapters.collect` calls `from_codex`, `from_claude_builtin` and `from_codex_skill` in process; `grade.runner_files()` hashes it | `grade.render` renders through the Rust runtime and `grade.runner_files()` no longer hashes `normalize_review.py` ([#156](https://github.com/kamui/code-review-bench/issues/156)), and the contributor backend normalizes through it ([#158](https://github.com/kamui/code-review-bench/issues/158)) | #156, #158 |
 | `bench/tools/check_manifest.py` | `claims`, `claim_grading`, `current_grading`, `evidence_store`, `file_attempt`, `provision`, `rates`, `reconcile_evidence`, `run_cell` and `upstream` import `validate`; `grade.runner_files()` hashes it. Its CLI runs in `bench/README.md`, `.github/workflows/rates.yml` and `test:bench`'s `--self-test` | No maintained module imports it and `grade.runner_files()` no longer hashes it. The delivery plan leaves `check_manifest` with [#156](https://github.com/kamui/code-review-bench/issues/156), which moves its CLI callers | #156 |
 | `bench/tools/rates.py` | `run_cell` and `contributor_adapters` call `read_catalog` and `inspect`, and `contributor_adapters` calls `latest` and `fetch`; `rates refresh` runs in `rates:refresh` and `.github/workflows/rates.yml` | `rates refresh` and the dispatch check move to Rust ([#160](https://github.com/kamui/code-review-bench/issues/160) owns `rates.yml`) and no module imports `rates` | #160 |
 | `bench/tools/upstream.py` | `claims` imports `validate_assessment` and `route`; `grade.runner_files()` hashes it; `upstream collect` is the documented snapshot capture | `claims` moves to Rust, `collect` has a replacement and `grade.runner_files()` no longer hashes `upstream.py` ([#156](https://github.com/kamui/code-review-bench/issues/156)) | #156 |
+
+## The review normalizers
+
+`bench-tools normalize-review` and `bench-tools normalize-thermo` take the arguments of `normalize_review.py` and
+`normalize_thermo.py` and write the same `normalized.json` bytes, stdout and stderr, so a saved `normalize.txt`
+(`dispatch.sh`) or `normalization.txt` (the skill runners) reads as it did. Diagnostics keep the names
+`normalize_review.py:` and `normalize_thermo.py:`. `--timing` stamps `payload_validated_at` from the system clock;
+cargo tests pin that rewrite with a fixed clock, because a corpus cannot.
+
+A review's normalizer runs after the reviewer has returned, so every caller resolves it before a review can start:
+
+- `run_cell.py` resolves the run's pinned `bench-tools` with `rust_runtime.for_run` before it chooses a cell or claims
+  one, dry runs included, and passes it to the dispatch as `BENCH_RUST_BENCH_TOOLS` with its SHA-256.
+- `dispatch.sh` checks that executable and its hash before it makes the fresh home; the skill runners resolve it first in
+  `prepare_attempt`. Either refusal leaves no `timing.json`, so `run_cell.py` releases the claim.
+- `review_queue.py` refuses, before any launch, a run whose `freeze_commit` holds `rust/bench-tools` but whose queue pins
+  no `bench-tools`.
+- `file_attempt.py --replay` runs the `bench-tools` that the run pins, the run being `--run` or `bench/runs/<run-id>`.
+
+A run frozen before this change pins no `bench-tools`. Its own freeze checkout still has the Python normalizers, and
+it runs and replays from there exactly as before. From a checkout after this change, `run_cell.py`, the skill runners
+and `file_attempt.py --replay` refuse such a run, naming its freeze commit, and `review_queue.py` already refuses it
+because its runner files differ from that commit.
+
+The contributor path never reaches this branch: `contributor_adapters.collect` normalizes in process with the retained
+library, and it uses the skill runners only for helpers, never `prepare_attempt` or `launch`.
+`test_contributor.AdapterTests.test_openrouter_adapters_execute_fresh_subprocesses_and_collect_reports` fails if
+collection resolves a Rust runtime or calls either.
+
+## Temporary bridges
+
+A bridge lets a Python caller run a Rust command until the caller itself moves to Rust.
+
+| Bridge | Removal condition | Owner |
+| --- | --- | --- |
+| `build_packet.py --factual` writes its rendering to a temporary file and runs `bench-tools derive-packet --no-newline-translation` on it, through `rust_runtime.resolve`, so a carriage return in the rendering stays as the in-process call it replaces kept it. It exits 2 when `bench-tools` is not installed for `HEAD`. | `build_packet` moves to Rust and calls `bench_tools::derive_packet::derive` in-process ([#196](https://github.com/kamui/code-review-bench/issues/196)) | #196 |
+
+The `build_packet --factual` tests skip when `bench-tools` is not installed for `HEAD`. The `Rust runtime` workflow
+installs it and sets `RUST_RUNTIME_REQUIRE_BENCH_TOOLS=1`, so they fail there instead of skipping.
 
 ## Behavior the corpora do not pin
 
@@ -70,9 +117,25 @@ recorded decision.
 - A lone surrogate escape such as `"\ud800"` and JSON nested more than 1,000 levels deep are refused, exiting 2.
   Python kept the surrogate, and its own nesting limit depends on its version and stack.
 - `repr` in a diagnostic escapes the non-printable characters Python escapes, except unassigned code points outside
-  the noncharacters, because the crate carries no Unicode tables.
+  the noncharacters, because the crate carries no table of assigned code points.
 - `diff-identity` has no `--self-test`; `cargo test` and the corpus cover it. It accepts options between
   positional arguments, which argparse refuses for some orders.
+- `normalize-review` has no `--self-test`, and options must be spelled in full; argparse also accepted unique prefixes.
+- `derive-packet` has no `--self-test`; `cargo test` and the corpus cover it.
+- Where the normalizers' Python raised a traceback and exited 1, they exit 2 with a message: an input that is not
+  UTF-8, a shape such as a `findings` value that is not a list, an `--out` that cannot be written, a timing sidecar that
+  is not an object, a fenced JSON array whose integer exceeds Python's digit limit, and a Codex bullet whose start or
+  end line exceeds it. The v2 decisions of both normalizer corpora record each case, and the v4 review decisions add
+  the Codex line numbers. In `normalize-review.v1.json` they carry the retained Python's traceback as a
+  `baseline_defect`, so its corpus runs with `--allow-known-defects`.
+- `\d` in the Codex bullet pattern and `\w` in the thermo no-findings statement's `\b` follow Python 3.14, whose
+  Unicode database is 16.0. `pytext` holds both tables, generated from Python 3.14, and `derive-packet` reads the
+  same digit table. Python 3.12 does not match the
+  characters Unicode 16.0 added. The v3 decisions of both normalizer corpora record that difference.
+- `normalize-thermo` resolves a relative missing `--artifact-root` as Python 3.13 and later do, naming the absolute
+  component in the error; Python 3.12 named the relative one. A symbolic link loop in it is an `ELOOP` error, as in
+  Python 3.13 and later; Python 3.12 raised a traceback. Callers pass an absolute root.
+- `--sessions-dir` does not follow symbolic links to directories; Python's `rglob` follows them in some versions.
 - Usage errors print `bench-tools` usage text. Argparse wording is not a contract.
 - `check-manifest` and `bench_tools::schema` refuse with exit 2, as for an unsupported keyword: a schema that is not
   an object, a keyword value of a JSON type the check cannot use, such as `"required": 1`, and `$ref` chains or
@@ -99,8 +162,18 @@ recorded decision.
   `target.json` link that 3.12 drops. Between snapshot files of equal version, such as `snapshot.v1.json` and
   `snapshot.v01.json`, both take the first the directory lists, which no fixture can fix.
 
-Diagnostics keep the Python program names, `roster.py:`, `diff_identity.py:`, `check_manifest.py:`, `rates.py:`
-and `upstream.py:`, so the differential compares them byte for byte. Renaming them needs a new decision version.
+`derive-packet-invalid-utf8` pins one intended change: an input that is not UTF-8 exits 2 with a message naming the
+file. `derive_packet.py` raised an uncaught `UnicodeDecodeError`, exiting 1 with a traceback.
+
+`derive-packet-unicode-16-digit-title` and `derive-packet-unicode-16-digit-duplicate-title` pin another, recorded in
+`derive-packet-decisions.v5.json`: the issue number in the H1 matches the Unicode 16.0 decimal digits, as Python
+3.14's `\d` does. `derive_packet.py` followed the running interpreter's Unicode database, so it missed every digit
+that database lacked: the 80 added in Unicode 16.0 on CI's Python 3.12, and 110 on Python 3.10, 30 of which predate
+Unicode 16.0.
+
+Diagnostics keep the Python program names, `roster.py:`, `diff_identity.py:`, `normalize_review.py:`,
+`normalize_thermo.py:`, `derive_packet.py:`, `check_manifest.py:`, `rates.py:` and `upstream.py:`, so saved stderr
+stays identical and the differential compares them byte for byte. Renaming them needs a new decision version.
 
 ## Research records
 
@@ -117,14 +190,19 @@ python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select
 python3 bench/tools/rust_runtime.py resolve bench-tools
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/roster.v1.json
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/diff-identity.v1.json --differential MAP
+python3 tools/behavior_contract.py --corpus tools/behavior_contracts/normalize-review.v1.json --differential MAP
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/check-manifest.v1.json --differential MAP
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/rates.v1.json --differential MAP
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/upstream.v1.json --differential MAP
+python3 tools/behavior_contract.py --corpus tools/behavior_contracts/normalize-thermo.v1.json
+python3 tools/behavior_contract.py --corpus tools/behavior_contracts/derive-packet.v1.json
+(cd bench/tools && RUST_RUNTIME_REQUIRE_BENCH_TOOLS=1 python3 -m unittest -k factual test_build_packet)
 python3 tools/behavior_contract.py --verify-decision-history
 ```
 
 `MAP` is a [command map](contracts/README.md#run-the-usage-corpus) naming the resolved executable, as the
-`Rust runtime` workflow writes it. The `roster` corpus runs the Rust executable by default; the other corpora run
-the retained Python libraries by default. `rates.py` and `upstream.py` run through drivers in
+`Rust runtime` workflow writes it. The `roster`, `normalize-thermo` and `derive-packet` corpora run the Rust
+executable by default; the other corpora run the retained Python libraries by default. `derive-packet` has no Python
+implementation left to compare with, so it has no differential. `rates.py` and `upstream.py` run through drivers in
 `tools/behavior_contract.py` that point them at the case directory, as the Rust commands default to the current
 directory, and give `rates.py` the `--source` pages.

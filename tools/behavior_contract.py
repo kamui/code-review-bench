@@ -30,7 +30,8 @@ import tempfile
 REPO = Path(__file__).resolve().parents[1]
 CORPUS = REPO / "tools/behavior_contracts/usage.v1.json"
 PYTHON_PROGRAMS = {"codex": "bench/tools/codex_usage.py", "transcript": "bench/tools/transcript_usage.py",
-                   "diff-identity": "bench/tools/diff_identity.py", "check-manifest": "bench/tools/check_manifest.py"}
+                   "diff-identity": "bench/tools/diff_identity.py", "normalize-review": "bench/tools/normalize_review.py",
+                   "check-manifest": "bench/tools/check_manifest.py"}
 # rates.py and upstream.py read the repository that holds them and fetch fixed URLs. These drivers point the
 # retained libraries at the case directory, as the Rust commands default to the current directory, and give
 # rates.py the `--source PROVIDER=URL` pages that `bench-tools rates check` takes.
@@ -61,7 +62,8 @@ claims.load_registry.__defaults__ = (root / "bench/claims/registry.json", root)
 sys.exit(upstream.main())
 """,
 }
-RUST_PROGRAMS = {"roster": ("bench-tools", ["roster"])}
+RUST_PROGRAMS = {"roster": ("bench-tools", ["roster"]), "normalize-thermo": ("bench-tools", ["normalize-thermo"]),
+                 "derive-packet": ("bench-tools", ["derive-packet"])}
 DECISIONS = re.compile(r"(?P<family>.+)-decisions\.v[^/]*\.json")
 
 

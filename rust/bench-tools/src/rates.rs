@@ -8,7 +8,6 @@
 
 use crate::pyjson::{self, Duplicates, Object, Value};
 use crate::pytext::{self, PyPath};
-use crate::pyunicode;
 use crate::schema::{SchemaError, Validator};
 use crate::sha256;
 
@@ -167,7 +166,7 @@ fn check_date(text: &str) -> Result<(), Failure> {
             pytext::repr_str(text)
         ))
     };
-    let digit = |index: usize| chars.get(index).and_then(|c| pyunicode::decimal(*c));
+    let digit = |index: usize| chars.get(index).and_then(|c| pytext::decimal_value(*c));
     let ascii = |index: usize, set: &str| chars.get(index).is_some_and(|c| set.contains(*c));
     let year: Vec<u32> = (0..4)
         .map(digit)
@@ -208,7 +207,7 @@ fn check_date(text: &str) -> Result<(), Failure> {
             total * 10
                 + chars[index]
                     .to_digit(10)
-                    .or_else(|| pyunicode::decimal(chars[index]))
+                    .or_else(|| pytext::decimal_value(chars[index]))
                     .unwrap_or(0)
         })
     };
@@ -465,7 +464,7 @@ fn price(cell: &str) -> Result<f64, String> {
     if let Some(after) = tail.strip_prefix("<sup>") {
         let digits: usize = after
             .chars()
-            .take_while(|c| pyunicode::decimal(*c).is_some())
+            .take_while(|c| pytext::decimal_value(*c).is_some())
             .map(char::len_utf8)
             .sum();
         tail = after[digits..]
@@ -486,7 +485,7 @@ fn long_prompt_row(name: &str) -> bool {
         let after = &name[index + OPEN.len()..];
         let count: usize = after
             .chars()
-            .take_while(|c| *c == ',' || pyunicode::decimal(*c).is_some())
+            .take_while(|c| *c == ',' || pytext::decimal_value(*c).is_some())
             .map(char::len_utf8)
             .sum();
         count > 0 && after[count..].starts_with(" tokens)")

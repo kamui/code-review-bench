@@ -324,7 +324,8 @@ class ContractTests(unittest.TestCase):
         self.assertTrue(any("stderr bytes" in diff for diff in differences), differences)
 
     def test_each_program_defaults_to_its_maintained_implementation(self):
-        corpus = {"cases": [{"program": name} for name in ("codex", "diff-identity", "roster")]}
+        corpus = {"cases": [{"program": name} for name in ("codex", "diff-identity", "roster", "normalize-review",
+                                                           "normalize-thermo")]}
         program = Path(self.enterContext(tempfile.TemporaryDirectory())) / "bench-tools"
         program.write_text("#!/bin/sh\n", encoding="utf-8")
         program.chmod(0o755)
@@ -333,12 +334,14 @@ class ContractTests(unittest.TestCase):
             commands = contract.default_commands(corpus)
         self.assertEqual(commands, {"codex": [sys.executable, str(contract.REPO / "bench/tools/codex_usage.py")],
                                     "diff-identity": [sys.executable, str(contract.REPO / "bench/tools/diff_identity.py")],
-                                    "roster": [str(program), "roster"]})
+                                    "roster": [str(program), "roster"],
+                                    "normalize-review": [sys.executable, str(contract.REPO / "bench/tools/normalize_review.py")],
+                                    "normalize-thermo": [str(program), "normalize-thermo"]})
         store = Path(self.enterContext(tempfile.TemporaryDirectory())) / "store"
         with patch.dict(contract.os.environ, {"BENCH_RUNTIME_STORE": str(store)}):
             contract.os.environ.pop("BENCH_RUST_BENCH_TOOLS", None)
             contract.os.environ.pop("BENCH_RUST_BENCH_TOOLS_SHA256", None)
-            with self.assertRaisesRegex(ValueError, "roster: bench-tools has no selected version.*install --crate rust/bench-tools"):
+            with self.assertRaisesRegex(ValueError, "(roster|normalize-thermo): bench-tools has no selected version.*install --crate rust/bench-tools"):
                 contract.default_commands(corpus)
 
     def test_reader_corpora_hold_for_the_retained_libraries_and_reject_regressions(self):
@@ -389,6 +392,21 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("FAIL diff-identity-manifest", result.stdout)
         self.assertIn("PASS diff-identity-empty", result.stdout)
+
+    def test_derive_packet_corpus_pins_every_committed_legacy_packet(self):
+        corpus = contract.load_corpus(contract.CORPUS.parent / "derive-packet.v1.json")
+        cases = {case["id"]: case for case in corpus["cases"]}
+        legacy = sorted((contract.REPO / "bench/targets").glob("*/packet.legacy.md"))
+        self.assertTrue(legacy)
+        self.assertEqual({f"derive-packet-target-{path.parent.name}" for path in legacy},
+                         {name for name in cases if name.startswith("derive-packet-target-")})
+        for path in legacy:
+            case = cases[f"derive-packet-target-{path.parent.name}"]
+            files = {base64.b64decode(entry["path_b64"]): base64.b64decode(entry["bytes_b64"])
+                     for entry in case["expected"]["filesystem"] if entry["kind"] == "file"}
+            self.assertEqual(case["argv"], ["packet.legacy.md", "--out", "packet.md"])
+            self.assertEqual(files, {b"packet.legacy.md": path.read_bytes(),
+                                     b"packet.md": path.with_name("packet.md").read_bytes()})
 
     def test_corpus_rejects_duplicate_json_keys(self):
         with tempfile.TemporaryDirectory() as temporary:

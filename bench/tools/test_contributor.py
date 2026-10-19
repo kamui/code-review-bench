@@ -18,6 +18,7 @@ import contributor_adapters as adapters
 import contributor_common as common
 import contributor_submit as submit
 import evidence_store
+import rust_runtime
 from contributor_common import command, digest, read, write
 from test_evidence_store import FakeGitHub
 
@@ -759,7 +760,15 @@ else:
                 with patch.object(adapters, "credentials", side_effect=lambda harness, home, env: adapters.secrets.pin(home.parent, harness, ["dummy-adapter-key"])):
                     result = adapters.execute(config, attempt, {"merge_base": "base", "head":"head", "provisioning": {"allowance": "read only", "unavailable": "tests"}}, packet, skill)
                 self.assertEqual(result, 0, (attempt / "stderr.txt").read_text())
-                usage, normalized = adapters.collect(config, attempt)
+                # Collection normalizes in process with the retained library; it never reaches a runner's
+                # pinned bench-tools or its normalize branch.
+                unreachable = AssertionError("the contributor path reached the runner's normalize branch")
+                with patch.object(adapters.codex_skill_runner, "prepare_attempt", side_effect=unreachable), \
+                        patch.object(adapters.codex_skill_runner, "launch", side_effect=unreachable), \
+                        patch.object(adapters.claude_skill_runner, "launch", side_effect=unreachable), \
+                        patch.object(rust_runtime, "resolve", side_effect=unreachable), \
+                        patch.object(rust_runtime, "for_run", side_effect=unreachable):
+                    usage, normalized = adapters.collect(config, attempt)
                 self.assertEqual(usage["priced_total_usd"], .01)
                 self.assertEqual(normalized["parse_status"], "empty")
                 context = read(attempt / "clean-context.json")

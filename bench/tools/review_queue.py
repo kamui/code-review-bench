@@ -48,6 +48,9 @@ and C library, and come from the crate tree at each run's ``freeze_commit``. A l
 executable as ``BENCH_RUST_<NAME>`` with ``BENCH_RUST_<NAME>_SHA256``, and its launch record keeps
 the pins. A missing or changed pinned version blocks the queue: nothing falls back to the store's
 selected version or to Python, and ``rust_runtime.py rollback`` changes only what new runs freeze.
+A run whose ``freeze_commit`` holds ``rust/bench-tools`` normalizes its reviews with that crate's
+executable, so a queue that pins no ``bench-tools`` for it is refused before any launch rather than
+after a review has run.
 
 ``run_cell.py`` keeps the claims, the caps, the filing, the replacement rules and the cleanup. This
 tool decides only whether a launch may start, and it reads progress from the claims and the filed
@@ -182,6 +185,7 @@ RUN_CELL = [sys.executable, str(TOOLS / "run_cell.py")]
 PROC = Path("/proc")
 MARKER = "BENCH_QUEUE_LAUNCH"
 RUNTIME_PATHS = ("bench/tools", "bench/schema", "bench/policies", "docs/clean-context.md", "rust")
+NORMALIZER_CRATE = "rust/bench-tools"
 CLIENT_OF = {"claude-builtin": "claude", "claude-skill": "claude", "review-code": "claude", "codex": "codex", "codex-skill": "codex"}
 MEMORY_FILESYSTEMS = {"tmpfs", "ramfs", "devtmpfs"}
 SNAPSHOT_SECONDS = 1800
@@ -396,6 +400,10 @@ def verify(queue: Queue, runs: list, *, pin: bool) -> dict:
         problem = runtime_problem(run)
         if problem:
             raise Blocked(problem)
+        commit = run.manifest.get("freeze_commit")
+        if run_cell.NORMALIZER not in queue.runtimes and rust_runtime.crate_tree(REPO, commit, NORMALIZER_CRATE):
+            raise Blocked(f"{run.id}: freeze commit {commit} has {NORMALIZER_CRATE}, which normalizes its reviews, "
+                          f"but the run pins no {run_cell.NORMALIZER} runtime")
         for name, (_, receipt) in pinned.items():
             problem = rust_runtime.source_problem(receipt, run.manifest.get("freeze_commit"), REPO)
             if problem:

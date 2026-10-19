@@ -33,6 +33,7 @@ ROOT = Path(__file__).resolve().parent
 
 class RatesTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch.object(run_cell, "normalizer_environment", return_value={}))
         self.temp = tempfile.TemporaryDirectory()
         self.directory = Path(self.temp.name)
         self.catalog = self.directory / "rates.json"

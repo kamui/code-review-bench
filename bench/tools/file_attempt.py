@@ -6,7 +6,7 @@ Usage::
     python3 bench/tools/file_attempt.py --attempt-dir <dir> --clone <clone> --target <target-dir> \\
         --arm bench/arms/<arm>.json --run-id <run> --attempt-id att-NNN --replicate N \\
         --out bench/runs/<run>/attempts/att-NNN [--predecessor att-MMM --retry-reason TEXT] \\
-        [--replacement-index K] [--replay [--audit-allowed-prefix P ...]] [--note TEXT ...] \\
+        [--replacement-index K] [--replay [--run DIR] [--audit-allowed-prefix P ...]] [--note TEXT ...] \\
         (--billing-mode api|subscription | --legacy-rate-billing) \\
         [--archive-root DIR] [--harness-dir DIR] [--rates FILE] \\
         [--expect-cli-version TEXT] [--expect-skill-tree SHA]
@@ -19,8 +19,11 @@ record the return only as ``exit=N``), ``timing.json``, ``tree-before.txt`` and 
 ``audit.json`` and ``normalized.json`` from the wrapper's tail, the native output
 (``artifacts/composition.json`` for review-code, ``payload.json`` for the Claude built-in,
 ``stdout.txt`` for Codex), an optional ``stop.json``, and the fresh ``home/`` holding the
-transcripts. ``--replay`` re-runs ``attempt_audit.py`` and ``normalize_review.py`` in place first
-(the earlier outputs are kept once as ``*.recorded.json``); it never touches ``timing.json``. A
+transcripts. ``--replay`` re-runs ``attempt_audit.py`` and the normalizer in place first
+(the earlier outputs are kept once as ``*.recorded.json``); it never touches ``timing.json``. The
+normalizer is the ``bench-tools`` executable that the run's ``runtimes.frozen.json`` pins, the run
+being ``--run`` or ``bench/runs/<run-id>``. A run that pins none was frozen for the Python
+normalizers, so its replay is refused before anything changes, naming the freeze commit to run it from. A
 ``stop.json`` the wrapper wrote after a zero exit only because its normalizer failed is superseded
 when the replayed normalizer returns ``parsed`` or ``empty``: it moves to ``stop.recorded.json``,
 the attempt is then disposed as below with the stop's instant as the wrapper's recorded end, and
@@ -115,6 +118,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -128,6 +132,7 @@ sys.path.insert(0, str(HERE))
 import check_manifest  # noqa: E402
 import review_isolation  # noqa: E402
 import native_artifacts  # noqa: E402
+import rust_runtime  # noqa: E402
 
 KINDS = ("review-code", "claude-builtin", "claude-skill", "codex", "codex-skill")
 SKILL_RUNNER_KINDS = ("codex-skill", "claude-skill")
@@ -452,8 +457,8 @@ def codex_skill_report(attempt_dir: str, native_file: str = "review.json", stopp
     return report, root, relative.as_posix()
 
 
-def codex_skill_config(run_id: str) -> dict:
-    path = BENCH / "runs" / run_id / "inputs" / "runner.json"
+def codex_skill_config(run_dir: Path) -> dict:
+    path = run_dir / "inputs" / "runner.json"
     return read_json(path) if path.is_file() else {}
 
 
@@ -673,8 +678,12 @@ def archive_transcripts(paths: list, attempt_dir: str, dest: str, out: str) -> d
             "restoration_check": "passed" if ok else "failed"}
 
 
-def replay(kind: str, attempt_dir: str, clone: str, allowed_prefixes: list, enforced: bool, run_id: str):
+def replay(kind: str, attempt_dir: str, clone: str, allowed_prefixes: list, enforced: bool, run_dir: Path):
     """Re-run the audit and the normalizer in place; return the superseded stop record, if any."""
+    try:
+        bench_tools = str(rust_runtime.for_run("bench-tools", run_dir))
+    except (rust_runtime.Refused, rust_runtime.InputError) as error:
+        raise FileError(f"cannot replay the normalizer: {error}") from None
     for name in ("audit.json", "normalized.json"):
         path = os.path.join(attempt_dir, name)
         kept = os.path.join(attempt_dir, name.replace(".json", ".recorded.json"))
@@ -688,19 +697,19 @@ def replay(kind: str, attempt_dir: str, clone: str, allowed_prefixes: list, enfo
     subprocess.run(audit, capture_output=True, text=True, encoding="utf-8")
     if not os.path.exists(os.path.join(attempt_dir, "audit.json")):
         raise FileError(f"attempt_audit.py wrote no audit.json in {attempt_dir}")
-    normalize = [sys.executable, str(HERE / "normalize_review.py"), "--arm", kind, "--clone", clone,
+    normalize = [bench_tools, "normalize-review", "--arm", kind, "--clone", clone,
                  "--out", os.path.join(attempt_dir, "normalized.json")]
     if kind == "review-code":
         normalize += ["--composition", os.path.join(attempt_dir, "artifacts", "composition.json")]
     elif kind == "claude-builtin":
         normalize += ["--payload", os.path.join(attempt_dir, "payload.json")]
     elif kind in SKILL_RUNNER_KINDS:
-        normalizer = codex_skill_config(run_id).get("normalizer", {})
+        normalizer = codex_skill_config(run_dir).get("normalizer", {})
         native_file = normalizer.get("native_file") or (
             "finding-index.json" if normalizer.get("kind") == "thermo" else "review.json")
         native, root, _ = codex_skill_report(attempt_dir, native_file)
         if normalizer.get("kind") == "thermo":
-            normalize = [sys.executable, str(HERE / "normalize_thermo.py"), "--artifact-root", str(root),
+            normalize = [bench_tools, "normalize-thermo", "--artifact-root", str(root),
                          "--clone", clone, "--out", os.path.join(attempt_dir, "normalized.json"), "--arm", kind]
         elif native:
             normalize += ["--native-review", str(native)]
@@ -711,7 +720,7 @@ def replay(kind: str, attempt_dir: str, clone: str, allowed_prefixes: list, enfo
                       "--sessions-dir", os.path.join(attempt_dir, "home", ".codex", "sessions")]
     done = subprocess.run(normalize, capture_output=True, text=True, encoding="utf-8")
     if done.returncode == 2:
-        raise FileError(f"normalize_review.py failed: {done.stderr.strip()}")
+        raise FileError(f"the normalizer failed: {done.stderr.strip()}")
     # A stop the wrapper wrote only because its normalizer failed after a zero exit is superseded
     # when the replayed normalizer parses the same output; it is kept as stop.recorded.json.
     stop_path = os.path.join(attempt_dir, "stop.json")
@@ -738,8 +747,9 @@ def file_attempt(args) -> tuple:
         raise FileError("declare --billing-mode api or subscription; --legacy-rate-billing is only for historical attempts")
     harness_dir = Path(args.harness_dir)
     profile = arm.get("isolation", {}).get("sandbox")
+    run_dir = Path(args.run) if args.run else BENCH / "runs" / args.run_id
     superseded = replay(kind, attempt_dir, clone, args.audit_allowed_prefix or [],
-                        profile == review_isolation.ENFORCED, args.run_id) if args.replay else None
+                        profile == review_isolation.ENFORCED, run_dir) if args.replay else None
 
     dispatch_lines = Path(attempt_dir, "dispatch.txt").read_text(encoding="utf-8").splitlines() \
         if os.path.exists(os.path.join(attempt_dir, "dispatch.txt")) else []
@@ -784,7 +794,7 @@ def file_attempt(args) -> tuple:
     native_path = os.path.join(attempt_dir, native_rel)
     native_root, native_relative = None, None
     if kind in SKILL_RUNNER_KINDS:
-        skill_config = codex_skill_config(args.run_id)
+        skill_config = codex_skill_config(run_dir)
         normalizer = skill_config.get("normalizer", {})
         native_file = normalizer.get("native_file") or (
             "finding-index.json" if normalizer.get("kind") == "thermo" else "review.json")
@@ -1186,13 +1196,27 @@ def self_test() -> int:
         (att / "payload.json").write_text("{}", encoding="utf-8")
         subprocess.run(["git", "-C", str(repo), "checkout", "-q", "review-head"], check=True)
 
+        # The retained Python normalizer stands in for bench-tools, so this self-test needs no Rust build;
+        # the normalize-review corpus holds the two to the same bytes.
+        stand_in = temp / "bench-tools"
+        stand_in.write_text(f"#!/bin/sh\nshift\nexec {shlex.quote(sys.executable)} "
+                            f"{shlex.quote(str(HERE / 'normalize_review.py'))} \"$@\"\n", encoding="utf-8")
+        stand_in.chmod(0o755)
+        pinned_run, unpinned_run = temp / "pinned-run", temp / "unpinned-run"
+        for directory in (pinned_run, unpinned_run):
+            directory.mkdir()
+            (directory / "manifest.json").write_text(json.dumps({"freeze_commit": "f" * 40}), encoding="utf-8")
+        (pinned_run / "runtimes.frozen.json").write_text(json.dumps(
+            {"bench-tools": {"sha256": sha256_file(stand_in), "receipt_sha256": "0" * 64}}), encoding="utf-8")
+        launch = {**os.environ, "BENCH_RUST_BENCH_TOOLS": str(stand_in), "BENCH_RUST_BENCH_TOOLS_SHA256": sha256_file(stand_in)}
+
         def run(out: str, *extra, billing=("--legacy-rate-billing",)):
             return subprocess.run([sys.executable, str(here), "--attempt-dir", str(att), "--clone", str(repo), "--target",
                                    str(temp / "target"), "--arm", str(temp / "arm.json"), "--run-id", "2026-01-01-test",
                                    "--attempt-id", "att-001", "--replicate", "1", "--out", str(temp / out),
                                    "--harness-dir", str(temp / "harness"), "--rates", str(temp / "rates.json"),
                                    "--archive-root", str(temp / "archive"), *billing, *extra],
-                                  capture_output=True, text=True, encoding="utf-8")
+                                  capture_output=True, text=True, encoding="utf-8", env=launch)
 
         done = run("o1")
         assert done.returncode == 0, done
@@ -1343,13 +1367,19 @@ def self_test() -> int:
                                                      "payload_validated_at": None, "completed_at": None}), encoding="utf-8")
         (att / "stop.json").write_text(json.dumps({"stopped_at": "2026-01-01T00:00:07Z", "exit_code": 0,
                                                    "reason": "normalization exit 1: unresolved "}), encoding="utf-8")
-        done = run("o9", "--replay")
+        # A run frozen before the Rust normalizers is replayed from its freeze checkout, never with this one.
+        saved = {path.name: path.read_bytes() for path in att.iterdir() if path.is_file()}
+        done = run("o9", "--replay", "--run", str(unpinned_run))
+        assert done.returncode == 2 and ("pins no bench-tools runtime; run it from a checkout of its freeze commit "
+                                         + "f" * 40) in done.stderr, done
+        assert {path.name: path.read_bytes() for path in att.iterdir() if path.is_file()} == saved
+        done = run("o9", "--replay", "--run", str(pinned_run))
         rec = json.loads((temp / "o9" / "attempt.json").read_text(encoding="utf-8"))
         assert rec["disposition"].startswith("stopped: normalization exit 1"), (done, rec["disposition"])
         assert (att / "stop.json").is_file() and not (att / "stop.recorded.json").exists()
         lines[1]["message"]["content"] = [{"type": "text", "text": "```json\n[]\n```"}]
         (project / "s1" / "subagents" / "agent-a1.jsonl").write_text("".join(json.dumps(l) + "\n" for l in lines), encoding="utf-8")
-        done = run("o9", "--replay")
+        done = run("o9", "--replay", "--run", str(pinned_run))
         rec = json.loads((temp / "o9" / "attempt.json").read_text(encoding="utf-8"))
         assert rec["disposition"] == "valid completed" and rec["normalized"]["parse_status"] == "empty", (done, rec)
         assert rec["timing"] == {"dispatched_at": "2026-01-01T00:00:00Z", "payload_validated_at": None,
@@ -1360,7 +1390,7 @@ def self_test() -> int:
         (att / "stop.recorded.json").unlink()
         (att / "stop.json").write_text(json.dumps({"stopped_at": "2026-01-01T00:01:00Z", "exit_code": 0,
                                                    "reason": "timeout"}), encoding="utf-8")
-        done = run("o10", "--replay")
+        done = run("o10", "--replay", "--run", str(pinned_run))
         rec = json.loads((temp / "o10" / "attempt.json").read_text(encoding="utf-8"))
         assert rec["disposition"] == "stopped: timeout", (done, rec["disposition"])
         # Missing input is exit 2.
@@ -1386,6 +1416,8 @@ def main() -> int:
     parser.add_argument("--retry-reason")
     parser.add_argument("--replacement-index", type=int)
     parser.add_argument("--replay", action="store_true", help="re-run the audit and the normalizer before filing")
+    parser.add_argument("--run", help="the run directory, for its runner.json and the bench-tools a replay runs "
+                        "(default bench/runs/<run-id>)")
     parser.add_argument("--audit-allowed-prefix", nargs="*")
     parser.add_argument("--note", action="append")
     parser.add_argument("--archive-root", default=os.path.join("~", ".t3", "bench-cache", "transcripts"))

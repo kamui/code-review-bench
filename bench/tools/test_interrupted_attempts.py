@@ -23,6 +23,7 @@ import unittest
 from unittest.mock import patch
 
 import file_attempt
+from test_claude_dispatch import fake_bench_tools
 import run_cell
 
 TOOLS = Path(__file__).resolve().parent
@@ -664,7 +665,8 @@ time.sleep(120)
         client.chmod(0o755)
         wrapper = subprocess.Popen(
             [str(TOOLS / "dispatch.sh"), "claude-builtin", str(attempt), str(clone), "main", str(packet), "m-1", "high"],
-            env={**os.environ, "HOME": str(source), "BENCH_CLAUDE": str(client)}, start_new_session=True,
+            env={**os.environ, "HOME": str(source), "BENCH_CLAUDE": str(client), **fake_bench_tools(self.root)},
+            start_new_session=True,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         started = ""
         try:

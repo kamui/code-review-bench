@@ -536,9 +536,9 @@ impl ClassItem {
     fn matches(&self, c: char) -> bool {
         match self {
             Self::Range(low, high) => (*low..=*high).contains(&c),
-            Self::Digit(negated) => pyunicode::decimal(c).is_some() != *negated,
+            Self::Digit(negated) => pytext::decimal_value(c).is_some() != *negated,
             Self::Space(negated) => pytext::is_space(c) != *negated,
-            Self::Word(negated) => pyunicode::is_word(c) != *negated,
+            Self::Word(negated) => pytext::is_word(c) != *negated,
             Self::FoldedRange(low, high) => {
                 (*low..=*high).contains(&c)
                     || (*low..=*high).contains(&pyunicode::to_upper_astral(c))
@@ -645,8 +645,8 @@ impl Regex {
                     stack.push(pc + 1);
                 }
                 Inst::Boundary(negated)
-                    if ((position > 0 && pyunicode::is_word(chars[position - 1]))
-                        != chars.get(position).is_some_and(|c| pyunicode::is_word(*c)))
+                    if ((position > 0 && pytext::is_word(chars[position - 1]))
+                        != chars.get(position).is_some_and(|c| pytext::is_word(*c)))
                         != *negated =>
                 {
                     stack.push(pc + 1);
