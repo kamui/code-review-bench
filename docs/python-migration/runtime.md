@@ -195,8 +195,7 @@ each: the runtime tests with real cargo builds, an install of `usage-pilot`, the
 retained executable, and [`rollback.sh`](runtime-evidence/rollback.sh). It also checks `bench-tools` with
 `cargo fmt`, `clippy` and `cargo test`, installs it, runs its corpora with the retained executable and the
 `diff-identity`, `normalize-review`, `check-manifest`, `rates` and `upstream` differentials against the retained
-Python libraries, runs `roster` on the repository, and runs the `build_packet --factual` tests with the installed
-executable. Merge a change to the
+Python libraries, and runs `roster` on the repository. Merge a change to the
 runtime only after every target's job passes.
 
 | Target | Runner | Local run |

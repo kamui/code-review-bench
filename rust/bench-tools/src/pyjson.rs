@@ -39,6 +39,12 @@ impl Object {
             .map(|position| &self.entries[*position].1)
     }
 
+    pub fn get_mut(&mut self, key: &str) -> Option<&mut Value> {
+        self.index
+            .get(key)
+            .map(|position| &mut self.entries[*position].1)
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (&String, &Value)> {
         self.entries.iter().map(|(key, value)| (key, value))
     }
