@@ -930,6 +930,28 @@ pub fn read_zip<R: Read + Seek>(
     Ok(())
 }
 
+/// A zip archive's member names in central directory order, as `zipfile.ZipFile.namelist` lists them, duplicates
+/// included, after the central directory checks `read_zip` makes. Members are neither read nor checked.
+pub fn zip_names<R: Read + Seek>(
+    mut file: R,
+    limits: &Limits,
+) -> Result<Vec<Vec<u8>>, ArchiveError> {
+    let start = check_zip_end_records(&mut file, limits)?;
+    let config = Config {
+        archive_offset: ArchiveOffset::Known(start),
+    };
+    let archive = ZipArchive::with_config(config, file)?;
+    if archive.len() as u64 > limits.members {
+        return Err(Refusal::TooManyEntries {
+            limit: limits.members,
+        }
+        .into());
+    }
+    (0..archive.len())
+        .map(|index| Ok(archive.by_index_data(index)?.name_raw().to_vec()))
+        .collect()
+}
+
 /// A native scratch archive as `native_artifacts.file_artifacts` writes one: deflate entries named by content hash,
 /// mode 0600 and the 1980-01-01 timestamp.
 pub struct ScratchWriter<W: Write + Seek> {

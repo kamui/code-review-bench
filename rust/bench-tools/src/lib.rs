@@ -14,6 +14,7 @@ pub mod export_explorer;
 pub mod grading_reports;
 pub mod grading_validation;
 pub mod import_benchmark;
+pub mod native_artifacts;
 pub mod normalize_review;
 pub mod normalize_thermo;
 pub mod pre_existing;

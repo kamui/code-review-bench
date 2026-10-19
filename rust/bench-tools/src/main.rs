@@ -6,8 +6,8 @@ use bench_tools::pytext::{self, PyPath};
 use bench_tools::schema::{SchemaError, Validator};
 use bench_tools::{
     archive, build_packet, claims, delegation, derive_packet, diff_identity, evidence,
-    export_explorer, grading_reports, grading_validation, import_benchmark, normalize_thermo, pyfs,
-    pyunicode, pyvalue, rates, roster, ruling, upstream,
+    export_explorer, grading_reports, grading_validation, import_benchmark, native_artifacts,
+    normalize_thermo, pyfs, pyunicode, pyvalue, rates, roster, ruling, upstream,
 };
 use clap::builder::PossibleValuesParser;
 use clap::error::ErrorKind;
@@ -80,6 +80,9 @@ enum Cli {
     /// Derive a time and cost audit log from filed benchmark runs, for estimating later runs.
     #[command(infer_long_args = true)]
     AuditLog(AuditLogArgs),
+    /// Verify, restore or file a skill attempt's native artifacts, as native_artifacts.py does.
+    #[command(subcommand, infer_long_args = true)]
+    NativeArtifacts(NativeArtifactsCommand),
 }
 
 #[derive(Args)]
@@ -423,6 +426,18 @@ enum EvidenceCommand {
         #[arg(long)]
         offline: bool,
     },
+    /// Archive an attempt's transcripts and read the archive back, as file_attempt.archive_transcripts does.
+    #[command(infer_long_args = true)]
+    ArchiveTranscripts {
+        #[arg(long, allow_negative_numbers = true)]
+        attempt_dir: OsString,
+        #[arg(long, allow_negative_numbers = true)]
+        dest: OsString,
+        #[arg(long, allow_negative_numbers = true)]
+        out: OsString,
+        #[arg(value_name = "TRANSCRIPT", allow_negative_numbers = true)]
+        paths: Vec<OsString>,
+    },
     /// Restore a captured local path into NEW_FILE, as restore-local.py does, from the repository.
     #[command(infer_long_args = true)]
     RestoreLocal {
@@ -432,6 +447,39 @@ enum EvidenceCommand {
         original: OsString,
         #[arg(value_name = "NEW_FILE", allow_negative_numbers = true)]
         output: OsString,
+    },
+}
+
+#[derive(Subcommand)]
+enum NativeArtifactsCommand {
+    /// Verify every indexed artifact of a filed attempt against the storage record its attempt.json pins.
+    #[command(infer_long_args = true)]
+    Verify {
+        #[arg(allow_negative_numbers = true)]
+        attempt: OsString,
+        /// Ignored, as native_artifacts.py ignores it for verify.
+        #[arg(long, hide = true, allow_negative_numbers = true)]
+        out: Option<OsString>,
+    },
+    /// Restore a filed attempt's indexed artifacts into the new directory --out.
+    #[command(infer_long_args = true)]
+    Restore {
+        #[arg(allow_negative_numbers = true)]
+        attempt: OsString,
+        #[arg(long, allow_negative_numbers = true)]
+        out: Option<OsString>,
+    },
+    /// File the native tree ROOT that INDEX lists into OUT, and report the storage pin and the unindexed entries.
+    #[command(infer_long_args = true)]
+    File {
+        #[arg(allow_negative_numbers = true)]
+        root: OsString,
+        #[arg(allow_negative_numbers = true)]
+        index: OsString,
+        #[arg(allow_negative_numbers = true)]
+        out: OsString,
+        #[arg(long, allow_negative_numbers = true)]
+        native_relative: Option<OsString>,
     },
 }
 
@@ -1302,9 +1350,80 @@ fn run_evidence(command: EvidenceCommand) -> Result<ExitCode, ExitCode> {
             )
             .map(|()| "Recovery copy verified and restored.".to_string())
         }
+        EvidenceCommand::ArchiveTranscripts {
+            attempt_dir,
+            dest,
+            out,
+            paths,
+        } => {
+            let paths: Vec<Vec<u8>> = paths.into_iter().map(bytes).collect();
+            let home = evidence::transcripts::python_home();
+            evidence::transcripts::archive_transcripts(
+                store.disk,
+                &paths,
+                pytext::os_bytes(&attempt_dir),
+                pytext::os_bytes(&dest),
+                pytext::os_bytes(&out),
+                home.as_deref(),
+            )
+            .map(|archived| archived.json())
+        }
         EvidenceCommand::RestoreLocal { .. } => unreachable!("handled above"),
     };
     evidence_outcome(outcome)
+}
+
+/// `native_artifacts.py COMMAND ...`: the command's line on stdout, or `native_artifacts.py: <error>` on stderr
+/// with exit 1.
+fn run_native_artifacts(command: NativeArtifactsCommand) -> Result<ExitCode, ExitCode> {
+    let path = |value: &OsString| PyPath::new(pytext::os_bytes(value));
+    let mut disk = evidence::System;
+    let outcome = match command {
+        NativeArtifactsCommand::Verify { attempt, .. } => {
+            native_artifacts::verify(&path(&attempt), None)
+                .map(|_| "verify: verified all indexed artifact bytes".to_string())
+        }
+        NativeArtifactsCommand::Restore { attempt, out } => {
+            let Some(out) = out else {
+                return Err(misuse(
+                    "native-artifacts",
+                    ErrorKind::MissingRequiredArgument,
+                    "restore requires --out",
+                ));
+            };
+            native_artifacts::restore(&mut disk, &path(&attempt), &path(&out))
+                .map(|()| "restore: verified all indexed artifact bytes".to_string())
+        }
+        NativeArtifactsCommand::File {
+            root,
+            index,
+            out,
+            native_relative,
+        } => {
+            let relative = native_relative.map(OsString::into_vec);
+            native_artifacts::file_artifacts(
+                &mut disk,
+                &path(&root),
+                &path(&index),
+                &path(&out),
+                relative.as_deref(),
+            )
+            .and_then(|pin| {
+                native_artifacts::unindexed(&path(&root), &path(&index))
+                    .map(|names| native_artifacts::filing_report(pin.as_ref(), &names))
+            })
+        }
+    };
+    match outcome {
+        Ok(line) => {
+            write_stdout(format!("{line}\n").as_bytes())?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(native_artifacts::Error(message)) => {
+            eprintln!("native_artifacts.py: {message}");
+            Err(ExitCode::from(1))
+        }
+    }
 }
 
 /// The `--check` or `--preserve` of `tools/import_benchmark.py`, run in the repository: a refusal is printed after
@@ -1889,6 +2008,7 @@ fn main() -> ExitCode {
             root,
         }) => archive_attempt(&attempt, &archive_dir, &root),
         Cli::AuditLog(arguments) => audit_log(arguments),
+        Cli::NativeArtifacts(command) => run_native_artifacts(command),
     };
     outcome.unwrap_or_else(|code| code)
 }

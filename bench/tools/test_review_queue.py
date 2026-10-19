@@ -36,6 +36,7 @@ CAPTURED = fixtures.CAPTURED
 FAKE = [sys.executable, str(Path(__file__).resolve())]
 # The fixture replaces the freeze-commit comparison; one test exercises the real one.
 RUNTIME_PROBLEM = review_queue.runtime_problem
+SOURCE_PROBLEM = rust_runtime.source_problem
 METERS = subscription_meters.meters
 
 
@@ -182,6 +183,10 @@ def faked() -> dict:
     """What a controller under test replaces: the runner it launches, the meters, and the freeze-commit comparison."""
     return {(review_queue, "RUN_CELL"): [*FAKE, "cell"], (review_queue, "POLL_SECONDS"): 0.02,
             (review_queue, "SCAN_GAP_SECONDS"): 0.01, (review_queue, "runtime_problem"): lambda run: None,
+            # The installed bench-tools that files the fixture's attempts is built from this checkout, not from a
+            # fixture run's freeze commit.
+            (rust_runtime, "source_problem"): lambda receipt, *args: (
+                None if receipt["crate"]["path"] == "rust/bench-tools" else SOURCE_PROBLEM(receipt, *args)),
             (subscription_meters, "meters"): lambda clients, env: json.loads((plan_root() / "meters.json").read_text(encoding="utf-8"))}
 
 
@@ -228,7 +233,8 @@ class QueueFixture(fixtures.Fixture):
         self.spec = {"queue_id": "fixture", "runs": [str(self.run_dir)],
                      "clients": {"claude": {"path": str(client), "sha256": run_cell.sha256_file(client), "version": "9.9.9 (Claude Code)"}},
                      "ceilings_usd": {"claude": 40.0}, "environment": {"BENCH_ARCHIVE_ROOT": str(self.root / "archive")},
-                     "work_root": str(self.root / "work"), "state_dir": str(self.root / "state")}
+                     "work_root": str(self.root / "work"), "state_dir": str(self.root / "state"),
+                     "runtimes": self.runtimes, "runtime_store": str(rust_runtime.located(rust_runtime.default_store()))}
         self.queue = self.root / "queue.json"
         self.queue.write_text(json.dumps(self.spec), encoding="utf-8")
         self.state = self.root / "state"
@@ -904,14 +910,19 @@ class SerialOwnership(QueueFixture):
         self.enterContext(patch.object(review_queue, "REPO", repo))
         self.manifest["freeze_commit"] = after
         (self.run_dir / "manifest.json").write_text(json.dumps(self.manifest), encoding="utf-8")
+        (self.run_dir / "runtimes.frozen.json").unlink()
+        self.queue.write_text(json.dumps({**self.spec, "runtimes": {}}), encoding="utf-8")
         self.assert_blocked(self.command("run"), f"freeze commit {after} has rust/bench-tools, which normalizes its "
                                                   "reviews, but the run pins no bench-tools runtime")
         self.assertEqual((self.reviews(), self.launch_records()), ([], []))
+        # Only the checkout of its freeze commit files such a run; the queue's comparison of the runner files with
+        # that commit, which this fixture replaces, keeps this checkout from launching it.
         self.manifest["freeze_commit"] = before
         (self.run_dir / "manifest.json").write_text(json.dumps(self.manifest), encoding="utf-8")
         (self.state / "queue.pin.json").unlink(missing_ok=True)
         code, events, err = self.command("run", "--count", "1")
-        self.assertEqual((code, self.reviews()), (0, ["att-001"]), (events, err))
+        self.assertEqual(self.reviews(), ["att-001"], (events, err))
+        self.assertIn(f"pins no bench-tools runtime; run it from a checkout of its freeze commit {before}", json.dumps(events))
 
     def test_detached_controller_finishes_the_queue_and_records_where_it_ran(self):
         done = self.controller("run", "--detach")
@@ -1291,12 +1302,14 @@ class RustRuntimes(QueueFixture):
         self.tree = subprocess.check_output([*git, "rev-parse", "HEAD:rust/fixture-tool"], text=True).strip()
         self.store = self.root / "runtime-store"
         self.one, self.two = self.version("one"), self.version("two")
+        installed = rust_runtime.check(rust_runtime.located(rust_runtime.default_store()), "bench-tools", self.runtimes["bench-tools"])
+        self.bench_tools = rust_runtime.pin_of(rust_runtime.retain(self.store, *installed)[0])
         rust_runtime.select(self.store, "fixture-tool", self.one)
         rust_runtime.select(self.store, "fixture-tool", self.two)
         self.manifest["freeze_commit"] = self.commit
         (self.run_dir / "manifest.json").write_text(json.dumps(self.manifest), encoding="utf-8")
         self.freeze(self.run_dir, self.two)
-        self.spec.update(runtimes={"fixture-tool": self.two}, runtime_store=str(self.store))
+        self.spec.update(runtimes={"fixture-tool": self.two, "bench-tools": self.bench_tools}, runtime_store=str(self.store))
         self.queue.write_text(json.dumps(self.spec), encoding="utf-8")
         self.enterContext(patch.object(review_queue, "REPO", self.repo))
         self.enterContext(patch.dict(os.environ, {"FAKE_QUEUE_REPO": str(self.repo)}))
@@ -1311,12 +1324,14 @@ class RustRuntimes(QueueFixture):
     def executable(self, pin: dict) -> Path:
         return self.store / "fixture-tool" / pin["sha256"] / "fixture-tool"
 
-    @staticmethod
-    def freeze(run_dir: Path, pin: dict) -> None:
-        (run_dir / "runtimes.frozen.json").write_text(json.dumps({"fixture-tool": pin}), encoding="utf-8")
+    def freeze(self, run_dir: Path, pin: dict) -> None:
+        (run_dir / "runtimes.frozen.json").write_text(json.dumps({"fixture-tool": pin, "bench-tools": self.bench_tools}),
+                                                      encoding="utf-8")
 
     def used(self) -> list:
-        return [json.loads(line) for line in (self.root / "runtimes.log").read_text(encoding="utf-8").splitlines()]
+        """The fixture tool's launch variables; bench-tools, which files each attempt, is pinned beside it."""
+        return [{name: value for name, value in json.loads(line).items() if not name.startswith("BENCH_RUST_BENCH_TOOLS")}
+                for line in (self.root / "runtimes.log").read_text(encoding="utf-8").splitlines()]
 
     def test_a_launch_runs_the_pinned_executable_and_records_its_pin(self):
         code, events, err = self.command("run", "--count", "1")
@@ -1324,7 +1339,7 @@ class RustRuntimes(QueueFixture):
         self.assertEqual(self.used(), [{"BENCH_RUST_FIXTURE_TOOL": str(self.executable(self.two)),
                                         "BENCH_RUST_FIXTURE_TOOL_SHA256": self.two["sha256"]}])
         self.assertEqual(subprocess.check_output([self.used()[0]["BENCH_RUST_FIXTURE_TOOL"]], text=True), "two\n")
-        self.assertEqual(self.launch_records()[0]["runtimes"], {"fixture-tool": self.two})
+        self.assertEqual(self.launch_records()[0]["runtimes"], {"fixture-tool": self.two, "bench-tools": self.bench_tools})
 
     def test_an_inherited_rust_runtime_variable_never_reaches_a_launch(self):
         inherited = {"BENCH_RUST_FIXTURE_TOOL": "/bin/true", "BENCH_RUST_FIXTURE_TOOL_SHA256": "0" * 64, "BENCH_RUST_OTHER": "/bin/true"}
@@ -1345,7 +1360,7 @@ class RustRuntimes(QueueFixture):
         # A receipt for another target needs a queue pinning it, which would be a new queue, so only ``check`` reads it.
         rewrite(receipt, saved[receipt].replace(rust_runtime.host_target().encode(), b"aarch64-apple-darwin"))
         foreign = {**self.two, "receipt_sha256": rust_runtime.sha256_file(receipt)}
-        self.queue.write_text(json.dumps({**self.spec, "runtimes": {"fixture-tool": foreign}}), encoding="utf-8")
+        self.queue.write_text(json.dumps({**self.spec, "runtimes": {**self.spec["runtimes"], "fixture-tool": foreign}}), encoding="utf-8")
         self.freeze(self.run_dir, foreign)
         self.assert_blocked(self.command("check"), "fixture-tool was built for aarch64-apple-darwin; this host is")
         rewrite(receipt, saved[receipt])
@@ -1446,7 +1461,7 @@ class RustRuntimes(QueueFixture):
         other = self.second_run()
         self.freeze(self.run_dir.parent / other, rust_runtime.current_pin(self.store, "fixture-tool"))
         fresh = {**self.spec, "queue_id": "fixture-rollback", "runs": [str(self.run_dir.parent / other)],
-                 "state_dir": str(self.root / "state-rollback"), "runtimes": {"fixture-tool": self.one}}
+                 "state_dir": str(self.root / "state-rollback"), "runtimes": {"fixture-tool": self.one, "bench-tools": self.bench_tools}}
         self.queue.write_text(json.dumps(fresh), encoding="utf-8")
         code, events, err = self.command("run", "--count", "1")
         self.assertEqual(code, 0, (events, err))

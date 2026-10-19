@@ -8,6 +8,7 @@
 
 pub mod recovery;
 pub mod remote;
+pub mod transcripts;
 
 use crate::archive::{self, ArchiveError, Limits, Refusal};
 use crate::pyjson::{self, Duplicates, Object, Value};
@@ -519,12 +520,12 @@ pub(crate) fn random_name(prefix: &str) -> String {
 }
 
 /// `tempfile.TemporaryDirectory(prefix=..., dir=...)`: a new directory, mode 0700, removed with its contents.
-struct TempDir {
-    path: PyPath,
+pub(crate) struct TempDir {
+    pub(crate) path: PyPath,
 }
 
 impl TempDir {
-    fn new(parent: &PyPath, prefix: &str) -> Result<Self> {
+    pub(crate) fn new(parent: &PyPath, prefix: &str) -> Result<Self> {
         loop {
             let path = parent.join(random_name(prefix).as_bytes());
             match std::fs::DirBuilder::new()
@@ -761,6 +762,20 @@ pub fn verify_remote(store: &mut Store<'_>, manifest: &Value) -> Result<()> {
 /// directory, then linked to its name, never replacing it, and the directory and each of its ancestors synced. An
 /// existing record with the same text is accepted, as `evidence_store.write_new` accepts it.
 pub fn write_new(disk: &mut dyn Disk, path: &PyPath, value: &Value) -> Result<()> {
+    let options = pyjson::Dumps {
+        indent: Some(2),
+        ..pyjson::Dumps::default()
+    };
+    write_new_as(disk, path, value, &options)
+}
+
+/// `write_new` with `json.dumps` options other than `indent=2`.
+pub fn write_new_as(
+    disk: &mut dyn Disk,
+    path: &PyPath,
+    value: &Value,
+    options: &pyjson::Dumps,
+) -> Result<()> {
     let directory = parent(path);
     make_dirs(&directory)?;
     // An interrupted earlier call may have created any of these without syncing its entry.
@@ -768,16 +783,7 @@ pub fn write_new(disk: &mut dyn Disk, path: &PyPath, value: &Value) -> Result<()
         .chain(parents(&directory))
         .map(|ancestor| ancestor.as_bytes().to_vec())
         .collect();
-    let encoded = format!(
-        "{}\n",
-        pyjson::dumps(
-            value,
-            &pyjson::Dumps {
-                indent: Some(2),
-                ..pyjson::Dumps::default()
-            }
-        )
-    );
+    let encoded = format!("{}\n", pyjson::dumps(value, options));
     let same = |path: &PyPath| -> Result<()> {
         match pytext::read_text(path) {
             Ok(existing) if existing == encoded => Ok(()),

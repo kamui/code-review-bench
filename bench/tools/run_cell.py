@@ -676,7 +676,7 @@ def file_claimed(run: Run, attempt_id: str, claim: dict, interrupted: str | None
     argv = [sys.executable, str(TOOLS / "file_attempt.py"), "--attempt-dir", str(directory),
             "--clone", str(directory / "clone"), "--target", str(run.target_dir(cell["target"])),
             "--arm", str(run.arm_file(cell["arm"])), "--run-id", run.id, "--attempt-id", attempt_id,
-            "--replicate", str(cell["replicate"]), "--out", str(run.dir / "attempts" / attempt_id),
+            "--replicate", str(cell["replicate"]), "--out", str(run.dir / "attempts" / attempt_id), "--run", str(run.dir),
             "--expect-cli-version", entry["expected_cli_version"],
             "--note", f"input.md sha256 {claim.get('input_sha256')}; run policy sha256 {claim.get('policy_sha256')} (before path substitution)"]
     if claim.get("cache_replacements"):
