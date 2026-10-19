@@ -7,7 +7,8 @@
 //! `json.JSONDecodeError`. A lone surrogate escape, which Python keeps in a `str`, is refused.
 //!
 //! Writing follows `json.dumps`: `ensure_ascii`, `indent`, `separators` and `sort_keys`, with `float.__repr__`
-//! spelling and `NaN`, `Infinity` and `-Infinity` for non-finite numbers.
+//! spelling and `NaN`, `Infinity` and `-Infinity` for non-finite numbers. [`Value::OsText`] holds a name that is
+//! not UTF-8 and is written with the `\udcXX` escapes of its `surrogateescape` text, which reading refuses.
 
 use crate::pytext;
 use std::collections::{HashMap, HashSet};

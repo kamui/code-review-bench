@@ -124,7 +124,7 @@ under `replay/`, so no case calls `gh` or the network. `build-packet-non-utf8-ou
 | --- | --- | --- |
 | [`evidence-store.v1.json`](../../../tools/behavior_contracts/evidence-store.v1.json) | `evidence-store`, `evidence`, `python-resolve`, `recover-evidence`, `restore-local` | `evidence_store.py` directly; `python-resolve` calls the retained `evidence_store.resolve` as `prune_workspace.py` does. `evidence`, `recover-evidence` and `restore-local` run `bench-tools evidence`, `evidence recover` and `evidence restore-local` |
 | [`native-artifacts.v1.json`](../../../tools/behavior_contracts/native-artifacts.v1.json) | `native-artifacts` | `native_artifacts.py`; its driver adds `file ROOT INDEX OUT [--native-relative PATH]`, which runs `file_artifacts` and prints the pin |
-| [`evidence-inventory.v1.json`](../../../tools/behavior_contracts/evidence-inventory.v1.json) | `evidence-inventory`, `collect-run` | `evidence_inventory.py` directly; `collect_run.py` through a driver that reads the case directory as the repository |
+| [`evidence-inventory.v1.json`](../../../tools/behavior_contracts/evidence-inventory.v1.json) | `evidence-inventory`, `collect-run`, `reconcile-evidence` | `evidence_inventory.py` directly. `collect-run` and `reconcile-evidence` run `bench-tools evidence collect` and `evidence reconcile` in the case directory |
 | [`import-benchmark.v1.json`](../../../tools/behavior_contracts/import-benchmark.v1.json) | `import-benchmark` | `import_benchmark.py --check` through the same kind of driver |
 
 ```sh
@@ -162,10 +162,17 @@ A `shell` step runs one command line with `/bin/sh -c` in the case root, for exa
 refused fetch prints. `fetch-interrupted-*` cases leave the state a crash leaves at each durable step and fetch again.
 `resolve-across-implementations` restores through Rust and then resolves through Python.
 
+[#222](https://github.com/kamui/code-review-bench/issues/222) moves collection, the inventory command and
+reconciliation to `bench-tools evidence`. Map `evidence-inventory` to `bench-tools evidence inventory` to run the
+inventory cases against Rust; `inventory-non-utf8-names` and `inventory-links-special-files-and-hard-links` pin its
+non-UTF-8 names, symlinks, special files and hard links. `reconcile-*` cases compare the gzip reconciliation by its
+decompressed bytes.
+
 Where Python raises a traceback, the case carries it as a `baseline_defect` and expects the intended exit and
 message, so these corpora run with `--allow-known-defects`: `recover-unknown-source`, `recover-changed-manifest`,
 `restore-local-not-published`, `restore-local-mismatched-resolution`, `fetch-archive-truncated-gzip`,
-`collect-run-checksum-mismatch` and `import-check-changed-file`. Each decision records the old and new behavior.
+`import-check-changed-file`, and the `collect-run-*` and `reconcile-*` cases that
+`evidence-inventory-decisions.v3.json` decides. Each decision records the old and new behavior.
 Each observation masks the traceback's frames with `mask_patterns` and pins the terminal exception type and message,
 so an unrelated crash is a failure, not the known defect.
 
@@ -273,8 +280,9 @@ missing `release.json` answers 404; other arguments exit 2.
 
 A case may declare comparisons for outputs that legitimately vary:
 
-- `archives`, glob and `tar.gz` or `zip` format: a matching file is compared by its
-  members' names, sizes, modes and SHA-256 instead of its bytes, and its SHA-256 is
+- `archives`, glob and `tar.gz`, `zip` or `gzip` format: a matching file is compared by its
+  members' names, sizes, modes and SHA-256 instead of its bytes, or a `gzip` file by its decompressed size, SHA-256
+  and bytes, and its SHA-256 is
   replaced by `<archive N>` in every path, file and stream. Restored and pre-existing
   files match no declaration and keep byte comparison.
 - `digests`, globs whose files' SHA-256 is replaced by `<sha256 of PATH>` the same way.

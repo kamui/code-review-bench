@@ -440,7 +440,7 @@ fn read_inventory(path: &PyPath) -> Result<Value> {
     pyjson::loads(&text, Duplicates::KeepLast).map_err(|error| error.to_string())
 }
 
-/// `reconcile_evidence.py --inventory INVENTORY [--root ROOT] --out OUT`: write the gzip-compressed reconciliation
+/// The `reconcile_evidence.py` command: write the gzip-compressed reconciliation
 /// as a new file and return the summary it prints.
 pub fn run(disk: &mut dyn Disk, inventory: &[u8], root: &PyPath, out: &[u8]) -> Result<String> {
     let inventory = read_inventory(&PyPath::new(inventory))?;

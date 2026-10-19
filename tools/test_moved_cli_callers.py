@@ -15,6 +15,9 @@ MOVED = (
     ("bench/tools/evidence_store.py", "fetch", "bench-tools evidence fetch"),
     ("bench/tools/evidence_store.py", "verify", "bench-tools evidence verify"),
     ("bench/tools/recover_evidence.py", "--source", "bench-tools evidence recover"),
+    ("bench/tools/evidence_inventory.py", "--root", "bench-tools evidence inventory"),
+    ("tools/collect_run.py", "--run", "bench-tools evidence collect"),
+    ("bench/tools/reconcile_evidence.py", "--inventory", "bench-tools evidence reconcile"),
 )
 # Frozen runs, imported originals, research records, saved fixture and migration evidence, and the contract
 # decisions that describe superseded behavior keep the commands they recorded.

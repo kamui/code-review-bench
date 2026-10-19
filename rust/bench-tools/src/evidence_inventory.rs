@@ -418,7 +418,7 @@ fn field<'a>(value: &'a Value, key: &str) -> &'a Value {
         .unwrap_or(&Value::Null)
 }
 
-/// `evidence_inventory.py --root ROOT... --out OUT [--hash-all]`: inventory each root, write the result as a new
+/// The `evidence_inventory.py` command: inventory each root, write the result as a new
 /// record and return the summary it prints.
 pub fn run(disk: &mut dyn Disk, roots: &[Vec<u8>], out: &[u8], hash_all: bool) -> Result<String> {
     let roots = roots
