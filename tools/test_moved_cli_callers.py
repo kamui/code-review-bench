@@ -14,6 +14,8 @@ MOVED = (
     ("bench/tools/upstream.py", "report", "bench-tools upstream report"),
     ("bench/tools/evidence_store.py", "fetch", "bench-tools evidence fetch"),
     ("bench/tools/evidence_store.py", "verify", "bench-tools evidence verify"),
+    ("bench/tools/evidence_store.py", "pack", "bench-tools evidence pack"),
+    ("bench/tools/evidence_store.py", "publish", "bench-tools evidence publish"),
     ("bench/tools/recover_evidence.py", "--source", "bench-tools evidence recover"),
     ("bench/tools/native_artifacts.py", "verify", "bench-tools native-artifacts verify"),
     ("bench/tools/native_artifacts.py", "restore", "bench-tools native-artifacts restore"),

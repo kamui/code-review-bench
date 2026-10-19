@@ -1,6 +1,6 @@
 //! Durability and interruption of `import-benchmark --preserve`, through a recording `Disk`.
 
-use bench_tools::evidence::{self, Disk, Error, Remote, Store, System};
+use bench_tools::evidence::{self, Disk, Error, Remote, Store, System, Upload};
 use bench_tools::import_benchmark;
 use bench_tools::pyjson::Value;
 use bench_tools::pytext::PyPath;
@@ -62,6 +62,12 @@ impl Remote for NoRemote {
     }
 
     fn download(&mut self, _: &str, _: &str, _: &mut dyn Write, _: u64) -> Result<(), Error> {
+        Err(Error::Io(
+            "the remote is not reachable in this test".to_string(),
+        ))
+    }
+
+    fn upload(&mut self, _: &str, _: &str, _: &PyPath) -> Result<Upload, Error> {
         Err(Error::Io(
             "the remote is not reachable in this test".to_string(),
         ))

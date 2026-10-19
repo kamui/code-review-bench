@@ -1,7 +1,7 @@
 //! Durability and interruption of evidence restoration, through a recording `Disk` and a fake `Remote`.
 
 use bench_tools::archive::PackageWriter;
-use bench_tools::evidence::{self, Disk, Error, Remote, Store, System};
+use bench_tools::evidence::{self, Disk, Error, Remote, Store, System, Upload};
 use bench_tools::pyjson::{self, Duplicates, Value};
 use bench_tools::pytext::PyPath;
 use bench_tools::sha256;
@@ -127,6 +127,15 @@ impl Remote for FakeRemote {
         }
         destination.write_all(&self.archive).unwrap();
         Ok(())
+    }
+
+    fn upload(
+        &mut self,
+        _repository: &str,
+        _tag: &str,
+        _archive: &PyPath,
+    ) -> Result<Upload, Error> {
+        unreachable!("restoration never uploads")
     }
 }
 

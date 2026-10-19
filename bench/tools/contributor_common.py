@@ -12,8 +12,17 @@ from pathlib import Path
 import subprocess
 import tempfile
 
+import rust_runtime
+
 ROOT = Path(__file__).resolve().parents[2]
 STATE = ROOT / ".bench"
+BENCH_TOOLS = "bench-tools"
+RUNTIMES = "runtimes.frozen.json"
+INSTALL = ("install bench-tools, then retry:\n"
+           "  install rustup: https://rustup.rs\n"
+           "  (cd rust/bench-tools && rustup show && cargo fetch --locked)\n"
+           "  python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select")
+RUNTIME_ERRORS = (rust_runtime.Refused, rust_runtime.InputError, OSError, KeyError, TypeError, ValueError)
 
 
 class Refused(ValueError):
@@ -55,6 +64,16 @@ def write(path, value, *, immutable=False):
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(handle.name, path)
+
+
+def sync_reaching(path):
+    """fsync each directory from ``path``'s parent up, so an entry an interrupted write linked survives a restart."""
+    for directory in Path(path).absolute().parents:
+        descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
 
 @contextmanager
@@ -114,3 +133,51 @@ def run_path(identifier):
     if path.is_symlink() or not path.is_dir():
         raise Refused(f"unknown run {identifier}; use ./bin/bench status")
     return path
+
+
+def selected_runtime():
+    """The selected bench-tools pin, built from this checkout's crate, which a new run freezes."""
+    try:
+        executable = rust_runtime.resolve(BENCH_TOOLS, repo=ROOT)
+        pin = rust_runtime.pin_of(executable.parent)
+        rust_runtime.check(rust_runtime.located(rust_runtime.default_store()), BENCH_TOOLS, pin)
+    except RUNTIME_ERRORS as error:
+        raise Refused(f"{error}; {INSTALL}") from None
+    return pin
+
+
+def frozen_runtime(run, manifest):
+    """The bench-tools pin a run froze. A run prepared before runs pinned one is refused with its source commit."""
+    record = manifest.get("runtimes")
+    if not record:
+        raise Refused(f"{run.name}: runner runtime differs from the frozen run: it pins no {BENCH_TOOLS}; restore source commit {manifest['source_commit']} before resuming or submitting; submit pending runs with different runtimes separately by temporarily excluding their pending entries")
+    path = run / record["path"]
+    if path.is_symlink() or not path.is_file() or digest(path) != record["sha256"]:
+        raise Refused(f"{run.name}: frozen runtime pin changed: {path}")
+    return read(path)[BENCH_TOOLS]
+
+
+def pinned_runtime(run, manifest):
+    """The executable of the bench-tools a run froze, from the store, checked against its executable and receipt
+    hashes. A queue launch's ``BENCH_RUST_BENCH_TOOLS`` override is not consulted, so it cannot skip the receipt check."""
+    pin = frozen_runtime(run, manifest)
+    try:
+        return rust_runtime.check(rust_runtime.located(rust_runtime.default_store()), BENCH_TOOLS, pin)[0]
+    except RUNTIME_ERRORS as error:
+        raise Refused(f"{run.name}: {error}; {INSTALL}") from None
+
+
+def evidence(executable, *arguments):
+    """Run ``bench-tools evidence``. A refusal raises ValueError and an I/O failure OSError, as evidence_store did."""
+    result = subprocess.run([str(executable), "evidence", *map(str, arguments)], capture_output=True,
+                            text=True, errors="replace")
+    if result.returncode:
+        message = (result.stdout + result.stderr).strip().removeprefix("evidence: ")
+        raise (ValueError if result.returncode == 1 else OSError)(message)
+
+
+def pack(executable, selection, output):
+    with tempfile.TemporaryDirectory(prefix="bench-selection-") as temporary:
+        path = Path(temporary) / "selection.json"
+        path.write_text(json.dumps(selection), encoding="utf-8")
+        evidence(executable, "pack", "--selection", path, "--out", output)

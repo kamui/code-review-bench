@@ -3,10 +3,20 @@
 use super::Error;
 use crate::pyjson::{self, Duplicates, Value};
 use crate::pytext;
+use crate::pytext::PyPath;
 use std::io::{Read, Write};
+use std::os::unix::ffi::OsStrExt;
 use std::process::{Command, ExitStatus, Stdio};
 
-/// What `evidence_store.GitHub` does for restoration. Cargo tests substitute a fake; the binary always runs `gh`.
+/// How an upload command ended, once it ran.
+#[derive(Debug)]
+pub enum Upload {
+    Done,
+    /// The command failed, so the server may still have committed the asset; the error is its `CalledProcessError`.
+    Failed(Error),
+}
+
+/// What `evidence_store.GitHub` does. Cargo tests substitute a fake; the binary always runs `gh`.
 pub trait Remote {
     /// The release a tag names, with the assets of every page joined under `assets`.
     fn release(&mut self, repository: &str, tag: &str) -> Result<Value, Error>;
@@ -18,6 +28,8 @@ pub trait Remote {
         destination: &mut dyn Write,
         limit: u64,
     ) -> Result<(), Error>;
+    /// Add `archive` to the release under its file name, never replacing an asset. `Err` means it never ran.
+    fn upload(&mut self, repository: &str, tag: &str, archive: &PyPath) -> Result<Upload, Error>;
 }
 
 /// `gh`, with `evidence_store.GitHub`'s argument lists.
@@ -52,8 +64,13 @@ const SIGNALS: [(i32, &str); 11] = [
 
 /// `str(subprocess.CalledProcessError(status, command))`.
 pub fn called_process_error(command: &[&str], status: ExitStatus) -> String {
-    use std::os::unix::process::ExitStatusExt;
     let listed: Vec<String> = command.iter().map(|part| pytext::repr_str(part)).collect();
+    process_error(&listed, status)
+}
+
+/// `str(subprocess.CalledProcessError(status, command))` for a command whose parts are already quoted.
+fn process_error(listed: &[String], status: ExitStatus) -> String {
+    use std::os::unix::process::ExitStatusExt;
     let command = format!("[{}]", listed.join(", "));
     match (status.code(), status.signal()) {
         (Some(code), _) => format!("Command '{command}' returned non-zero exit status {code}."),
@@ -163,6 +180,28 @@ impl Remote for GitHub {
             return Err(Error::Io(called_process_error(&command, status)));
         }
         Ok(())
+    }
+
+    fn upload(&mut self, repository: &str, tag: &str, archive: &PyPath) -> Result<Upload, Error> {
+        let status = Command::new("gh")
+            .args(["release", "upload", tag])
+            .arg(std::ffi::OsStr::from_bytes(archive.as_bytes()))
+            .args(["--repo", repository])
+            .status()
+            .map_err(|error| spawn_error(&error))?;
+        if status.success() {
+            return Ok(Upload::Done);
+        }
+        let listed = [
+            pytext::repr_str("gh"),
+            pytext::repr_str("release"),
+            pytext::repr_str("upload"),
+            pytext::repr_str(tag),
+            archive.repr(),
+            pytext::repr_str("--repo"),
+            pytext::repr_str(repository),
+        ];
+        Ok(Upload::Failed(Error::Io(process_error(&listed, status))))
     }
 }
 
