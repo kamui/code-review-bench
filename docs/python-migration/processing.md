@@ -20,8 +20,10 @@ explorer export, as [the explorer export](#the-explorer-export) describes. Slice
 
 [`rust/bench-tools`](../../rust/bench-tools) builds one binary, `bench-tools`, with one subcommand per tool and one
 library module per tool in `src/`. Later slices add their tools to it. Its lints, toolchain and release profile are
-those of `rust/usage-pilot`, which stays as pilot evidence. It has no registry dependencies, so an install needs no
-network. Shared modules carry the Python behavior that byte-pinned outputs depend on:
+those of `rust/usage-pilot`, which stays as pilot evidence. It may use pinned registry dependencies through its
+committed `Cargo.lock`; a first install needs the network once to fetch them (`cargo fetch --locked` in
+`rust/bench-tools`, as the README's Run locally steps do). Shared modules carry the Python behavior that byte-pinned
+outputs depend on:
 
 - `pyjson` reads JSON as `json.loads` does and writes it as `json.dumps` does, including `float.__repr__` spelling,
   integers of any length up to Python's 4300-digit limit, key order, and `JSONDecodeError` messages.
