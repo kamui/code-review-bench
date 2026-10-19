@@ -145,6 +145,48 @@ because each helper imports `bench/tools` from its own checkout.
 The three historical helpers keep their inventory v3 class, `active-outside-tooling`, through the census
 directory and docstring rules until the next inventory version narrows those rules.
 
+## Slice 9: queue status, attempt archives and the audit log
+
+[#239](https://github.com/kamui/code-review-bench/issues/239) ports three read-mostly reports. `grading_profile.py`
+is not one of them; it moved to #157.
+
+| Python | Rust | Caller | Python implementation |
+| --- | --- | --- | --- |
+| The `status` heredoc of `bench/tools/regrade_queues.sh` | `bench-tools regrade status QUEUE_DIRECTORY...`, `bench_tools::grading_reports::status` | `regrade_queues.sh status`, through `rust_runtime.py exec` | Removed from the script |
+| `regrade.archive_attempt` | `bench-tools regrade archive-attempt ATTEMPT ARCHIVE_DIR`, through `bench_tools::archive` | None until slice 10 | Retained; `regrade.py` still calls it |
+| `bench/tools/audit_log.py` | `bench-tools audit-log`, with its options and outputs | None outside the docs | Deleted with its `--self-test`, whose fixture is `audit-log-self-test` |
+
+[`regrade-reports.v1.json`](../../tools/behavior_contracts/regrade-reports.v1.json) and
+[`audit-log.v1.json`](../../tools/behavior_contracts/audit-log.v1.json) pin the commands. Each case's expected
+output is the port's; every case where Python 3.12.15 or 3.14.7 printed something else carries Python's output as a
+`baseline_defect` and a decision record. The decided differences:
+
+- An exception the Python did not catch prints `<program>: <type>: <message>` and keeps exit 1, instead of a
+  traceback (`*-missing-batches`, `*-invalid-json`, `*-unhashable-state`, `*-uncaught-error`,
+  `*-uncaught-type-error`, `*-zero-reviews`).
+- Values follow Python 3.14 where versions differ: `sum` (`*-mixed-wall-seconds`, `*-mixed-sum`), hour 24
+  (`*-hour-24`), Unicode 16.0 digits in `float()` (`*-unicode-16-digit-charge`), `repr` of Unicode 15.1 and 16.0
+  characters (`*-unicode-15-1-*`), the absolute path in a missing run's message (`*-missing-run`), and argparse 3.14's
+  `-1e5` (`*-exponent-out`).
+- Refusals: a lone surrogate in JSON, a name that is not UTF-8, an archive tarfile could read but
+  `bench_tools::archive` refuses (`*-plain-tar-refused`), a UTF-16 dispatch record, and in `archive-attempt` a
+  symbolic link, directory or special mode bits before anything is written, so no partial archive is left.
+- `audit-log` parses with clap, as every subcommand does (`audit-log-usage-*`, `*-self-test-removed`,
+  `*-run-after-option`, `*-dot-digit-out`, `*-help*`).
+
+Three decided cases record Python 3.14's wording as the old output, so the deleted Python reproduces them only under
+3.14: `regrade-status-unhashable-state` and `regrade-status-unicode-15-1-queue`, whose 3.12 messages differ, and
+`audit-log-zero-reviews`, where 3.12 says `float division by zero`. CI runs no Python for those programs.
+`summary.md` still says it was derived by `bench/tools/audit_log.py`, byte for byte as before.
+
+Read-only runs on 2026-10-19 compared the port with the removed Python, under Python 3.14.7 and 3.12.15:
+
+- `regrade status` over the 14 saved queues under `.local/regrade` of the regrade worktree: identical output.
+- `audit-log` over the 69 runs under `bench/runs`, with that worktree's 37 local grading archive roots (1,148
+  archives): identical files and stdout, 1,405 attempts in 19 setups and 1,145 grading sessions.
+- `regrade archive-attempt` on the 399 saved attempts that still have a workspace, into scratch directories:
+  identical exit, stdout, receipt and archive members, sizes, modes and SHA-256, 13,391 members in all.
+
 ## Retained after #156
 
 | Module | Kept for | Removed by |

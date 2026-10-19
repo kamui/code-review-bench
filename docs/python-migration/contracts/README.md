@@ -63,8 +63,10 @@ independent assertions. The harness never obtains expected output from a candida
 [`export-explorer.v1.json`](../../../tools/behavior_contracts/export-explorer.v1.json),
 [`check-manifest.v1.json`](../../../tools/behavior_contracts/check-manifest.v1.json),
 [`rates.v1.json`](../../../tools/behavior_contracts/rates.v1.json),
-[`upstream.v1.json`](../../../tools/behavior_contracts/upstream.v1.json) and
-[`archive.v1.json`](../../../tools/behavior_contracts/archive.v1.json) pin the commands of
+[`upstream.v1.json`](../../../tools/behavior_contracts/upstream.v1.json),
+[`archive.v1.json`](../../../tools/behavior_contracts/archive.v1.json),
+[`regrade-reports.v1.json`](../../../tools/behavior_contracts/regrade-reports.v1.json) and
+[`audit-log.v1.json`](../../../tools/behavior_contracts/audit-log.v1.json) pin the commands of
 [`bench-tools`](../processing.md). Select a corpus with `--corpus`:
 
 ```sh
@@ -77,9 +79,10 @@ Without `--implementations`, each program runs its maintained implementation. `c
 `normalize_review.py` and `check_manifest.py` are retained libraries. `rates` and `upstream` run the retained
 `rates.py` and `upstream.py` through drivers that read the case directory as the repository and, for `rates`, take
 `--source PROVIDER=URL` pages, so no case leaves the host; `rates-transport-failure` connects to a closed loopback
-port. Cases whose Rust behavior was changed on purpose carry a `baseline_defect` with Python's output, so pass
+port. `regrade-archive-attempt` runs the retained `regrade.archive_attempt` through a driver that reads the case
+directory as the repository. Cases whose Rust behavior was changed on purpose carry a `baseline_defect` with Python's output, so pass
 `--allow-known-defects` when Python is the primary. `roster`, `normalize-thermo`, `derive-packet`, `build-packet`,
-`export-explorer` and `archive` have no Python implementation, so they run the executable `rust_runtime.resolve("bench-tools")`
+`export-explorer`, `archive`, `regrade-status` and `audit-log` have no Python implementation, so they run the executable `rust_runtime.resolve("bench-tools")`
 selects, and the command refuses when none is installed for `HEAD`. A command map for the Rust programs names that
 executable:
 
@@ -95,7 +98,10 @@ executable:
   "check-manifest": ["/absolute/path/to/bench-tools", "check-manifest"],
   "rates": ["/absolute/path/to/bench-tools", "rates"],
   "upstream": ["/absolute/path/to/bench-tools", "upstream"],
-  "archive": ["/absolute/path/to/bench-tools", "archive"]
+  "archive": ["/absolute/path/to/bench-tools", "archive"],
+  "regrade-status": ["/absolute/path/to/bench-tools", "regrade", "status", "--"],
+  "regrade-archive-attempt": ["/absolute/path/to/bench-tools", "regrade", "archive-attempt"],
+  "audit-log": ["/absolute/path/to/bench-tools", "audit-log"]
 }
 ```
 

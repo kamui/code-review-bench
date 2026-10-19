@@ -190,9 +190,9 @@ lists them. When the Cargo cache lacks one, `rust_runtime.py install` fails and 
 | `equivalent` | 1.0.3 | MIT OR Apache-2.0 | Key comparison for `indexmap` |
 | `memchr` | 2.8.3 | Unlicense OR MIT | Byte search for `zip` |
 | `typed-path` | 0.12.3 | MIT OR Apache-2.0 | Entry path handling for `zip` |
-| `nix` | 0.31.3 | MIT | Unix calls for `zip`, on macOS only |
-| `bitflags` | 2.13.2 | MIT OR Apache-2.0 | Flag types for `nix`, on macOS only |
-| `cfg_aliases` | 0.2.2 | MIT | Build-time configuration for `nix`, on macOS only |
+| `nix` | 0.31.3 | MIT | `statvfs` for `regrade status`'s free space ([#239](https://github.com/kamui/code-review-bench/issues/239)), a direct dependency built with `fs` only, since the crate forbids `unsafe`; on macOS also Unix calls for `zip` |
+| `bitflags` | 2.13.2 | MIT OR Apache-2.0 | Flag types for `nix` |
+| `cfg_aliases` | 0.2.2 | MIT | Build-time configuration for `nix` |
 
 `Cargo.lock` also lists `aho-corasick` 1.1.5 (Unlicense OR MIT), an optional dependency of `regex` that its disabled
 `perf` feature would build.
