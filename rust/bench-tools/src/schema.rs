@@ -470,8 +470,8 @@ mod tests {
             Ok(vec![])
         );
         assert!(validate(r#"{"type": ["string", "bogus"]}"#, "1").is_err());
-        assert_eq!(validate(r#"{"pattern": "(?i)x"}"#, "1"), Ok(vec![]));
-        assert!(validate(r#"{"pattern": "(?i)x"}"#, r#""x""#).is_err());
+        assert_eq!(validate(r#"{"pattern": "(?=x)"}"#, "1"), Ok(vec![]));
+        assert!(validate(r#"{"pattern": "(?=x)"}"#, r#""x""#).is_err());
     }
 
     #[test]

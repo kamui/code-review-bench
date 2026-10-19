@@ -69,7 +69,9 @@ python3 tools/behavior_contract.py --corpus tools/behavior_contracts/diff-identi
 Without `--implementations`, each program runs its maintained implementation. `codex`, `transcript`,
 `diff-identity` and `check-manifest` run their Python scripts; `diff_identity.py` and `check_manifest.py` are retained
 libraries. `rates` and `upstream` run the retained `rates.py` and `upstream.py` through drivers that read the case
-directory as the repository and, for `rates`, take `--source PROVIDER=URL` pages, so no case uses the network.
+directory as the repository and, for `rates`, take `--source PROVIDER=URL` pages, so no case leaves the host;
+`rates-transport-failure` connects to a closed loopback port. Cases whose Rust behavior was changed on purpose carry
+a `baseline_defect` with Python's output, so pass `--allow-known-defects` when Python is the primary.
 `roster` has no Python
 implementation, so it runs the executable `rust_runtime.resolve("bench-tools")` selects, and the command refuses
 when none is installed for `HEAD`. A command map for the Rust programs names that executable:

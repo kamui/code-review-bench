@@ -353,7 +353,7 @@ class ContractTests(unittest.TestCase):
         for program, (module, before, after, case_id) in mutants.items():
             with self.subTest(program=program):
                 corpus = contract.CORPUS.parent / f"{program}.v1.json"
-                result = self.run_cli("--corpus", corpus)
+                result = self.run_cli("--allow-known-defects", "--corpus", corpus)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn(f"PASS {case_id}", result.stdout)
                 source = (tools / module).read_text(encoding="utf-8")

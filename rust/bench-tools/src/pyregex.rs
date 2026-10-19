@@ -1,10 +1,13 @@
 //! `re.search` for the pattern syntax the schemas under `bench/schema` use.
 //!
-//! Supported: literals, `.`, `^`, `$`, groups without `?` flags, alternation, character classes with ranges
-//! and negation, `\d`, `\D`, `\s`, `\S`, the escapes `\n`, `\t`, `\r`, `\f`, `\v`, escaped punctuation, and
-//! the quantifiers `*`, `+`, `?` and `{m,n}`, greedy or lazy, with counts up to 1,000. Matching follows
-//! Python's `str` patterns: `\d` is Unicode category Nd, `\s` is `str.isspace`, `.` excludes a newline and
-//! `$` also matches before a final newline. Anything else is refused rather than read some other way.
+//! Supported: literals, `.`, `^`, `$`, groups without `?`, alternation, character classes with ranges and
+//! negation, `\d`, `\D`, `\s`, `\S`, `\w`, `\W`, `\b`, `\B`, the escapes `\n`, `\t`, `\r`, `\f`, `\v`,
+//! escaped punctuation, the quantifiers `*`, `+`, `?` and `{m,n}`, greedy or lazy, with counts up to 1,000,
+//! and the global flags `(?i)`, `(?m)`, `(?s)`, `(?x)` and `(?u)` at the start. Matching follows Python
+//! 3.14's `str` patterns: `\d` is Unicode category Nd, `\s` is `str.isspace`, `\w` is `str.isalnum` or `_`,
+//! `\B` matches an empty text, `.` excludes a newline and `$` also matches before a final newline unless a
+//! flag changes them, and `(?i)` folds case with `re`'s tables. Anything else is refused rather than read
+//! some other way.
 //!
 //! The matcher simulates the pattern's automaton, so it answers whether a match exists, which is all a
 //! schema `pattern` asks; it reports no groups or positions.
@@ -22,6 +25,17 @@ enum ClassItem {
     Range(char, char),
     Digit(bool),
     Space(bool),
+    Word(bool),
+    /// A range `(?i)` reads outside the Basic Multilingual Plane, where `re` also tries the uppercase.
+    FoldedRange(char, char),
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct Flags {
+    ignore_case: bool,
+    multiline: bool,
+    dot_all: bool,
+    verbose: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -31,6 +45,8 @@ enum Atom {
     Class {
         items: Vec<ClassItem>,
         negated: bool,
+        /// Whether the items test the character's lowercase, as `re` does under `(?i)`.
+        lowered: bool,
     },
 }
 
@@ -39,6 +55,7 @@ enum Node {
     Atom(Atom),
     Start,
     End,
+    Boundary(bool),
     Concat(Vec<Node>),
     Alternation(Vec<Node>),
     Repeat {
@@ -55,17 +72,20 @@ enum Inst {
     Jump(usize),
     Start,
     End,
+    Boundary(bool),
     Match,
 }
 
 #[derive(Clone, Debug)]
 pub struct Regex {
     program: Vec<Inst>,
+    flags: Flags,
 }
 
 struct Parser {
     chars: Vec<char>,
     position: usize,
+    flags: Flags,
 }
 
 impl Parser {
@@ -77,11 +97,11 @@ impl Parser {
         self.chars.get(self.position).copied()
     }
 
-    fn alternation(&mut self) -> Result<Node, Unsupported> {
-        let mut branches = vec![self.sequence()?];
+    fn alternation(&mut self, top: bool) -> Result<Node, Unsupported> {
+        let mut branches = vec![self.sequence(top)?];
         while self.peek() == Some('|') {
             self.position += 1;
-            branches.push(self.sequence()?);
+            branches.push(self.sequence(false)?);
         }
         Ok(if branches.len() == 1 {
             branches.remove(0)
@@ -90,12 +110,25 @@ impl Parser {
         })
     }
 
-    fn sequence(&mut self) -> Result<Node, Unsupported> {
+    /// One branch. Global flags are read only in the pattern's first branch before any item, as Python
+    /// refuses them anywhere else.
+    fn sequence(&mut self, first: bool) -> Result<Node, Unsupported> {
         let mut items: Vec<Node> = Vec::new();
         // Whether the last item can take a quantifier: Python refuses one after nothing, an anchor or another
         // quantifier.
         let mut repeatable = false;
         while let Some(c) = self.peek() {
+            if self.flags.verbose && " \t\n\r\u{b}\u{c}".contains(c) {
+                self.position += 1;
+                continue;
+            }
+            if self.flags.verbose && c == '#' {
+                while self.peek().is_some_and(|c| c != '\n') {
+                    self.position += 1;
+                }
+                self.position = (self.position + 1).min(self.chars.len());
+                continue;
+            }
             match c {
                 '|' | ')' => break,
                 '*' | '+' | '?' => {
@@ -118,9 +151,12 @@ impl Parser {
                 '(' => {
                     self.position += 1;
                     if self.peek() == Some('?') {
+                        if first && items.is_empty() && self.global_flags() {
+                            continue;
+                        }
                         return Err(self.refuse("unsupported group syntax"));
                     }
-                    let inner = self.alternation()?;
+                    let inner = self.alternation(false)?;
                     if self.peek() != Some(')') {
                         return Err(self.refuse("missing )"));
                     }
@@ -143,6 +179,11 @@ impl Parser {
                     items.push(Node::Atom(self.class()?));
                     repeatable = true;
                 }
+                '\\' if matches!(self.chars.get(self.position + 1), Some('b' | 'B')) => {
+                    items.push(Node::Boundary(self.chars[self.position + 1] == 'B'));
+                    self.position += 2;
+                    repeatable = false;
+                }
                 '\\' => {
                     self.position += 1;
                     items.push(Node::Atom(self.escape()?));
@@ -156,6 +197,29 @@ impl Parser {
             }
         }
         Ok(Node::Concat(items))
+    }
+
+    /// Reads `(?flags)` after its `(`, at the `?`, when every flag is one this matcher supports.
+    fn global_flags(&mut self) -> bool {
+        let mut index = self.position + 1;
+        let mut flags = self.flags;
+        while let Some(c) = self.chars.get(index) {
+            match c {
+                'i' => flags.ignore_case = true,
+                'm' => flags.multiline = true,
+                's' => flags.dot_all = true,
+                'x' => flags.verbose = true,
+                'u' => {}
+                ')' if index > self.position + 1 => {
+                    self.position = index + 1;
+                    self.flags = flags;
+                    return true;
+                }
+                _ => return false,
+            }
+            index += 1;
+        }
+        false
     }
 
     fn repeat(
@@ -235,7 +299,8 @@ impl Parser {
         Ok(Some((min, max)))
     }
 
-    /// The escape after a backslash. `\d`, `\s` and their negations become one-item classes.
+    /// The escape after a backslash. `\d`, `\s`, `\w` and their negations become one-item classes; `\b` is a
+    /// backspace, as it is inside a class.
     fn escape(&mut self) -> Result<Atom, Unsupported> {
         let Some(c) = self.peek() else {
             return Err(self.refuse("bad escape (end of pattern)"));
@@ -246,6 +311,9 @@ impl Parser {
             'D' => ClassItem::Digit(true),
             's' => ClassItem::Space(false),
             'S' => ClassItem::Space(true),
+            'w' => ClassItem::Word(false),
+            'W' => ClassItem::Word(true),
+            'b' => return Ok(Atom::Literal('\u{8}')),
             'n' => return Ok(Atom::Literal('\n')),
             't' => return Ok(Atom::Literal('\t')),
             'r' => return Ok(Atom::Literal('\r')),
@@ -260,6 +328,7 @@ impl Parser {
         Ok(Atom::Class {
             items: vec![item],
             negated: false,
+            lowered: false,
         })
     }
 
@@ -301,7 +370,11 @@ impl Parser {
                 _ => return Err(self.refuse("bad character range")),
             }
         }
-        Ok(Atom::Class { items, negated })
+        Ok(Atom::Class {
+            items,
+            negated,
+            lowered: false,
+        })
     }
 
     fn class_member(&mut self) -> Result<ClassItem, Unsupported> {
@@ -320,28 +393,103 @@ impl Parser {
     }
 }
 
-fn emit(node: &Node, program: &mut Vec<Inst>) -> Result<(), Unsupported> {
+const BMP_END: u32 = 0xFFFF;
+
+/// `re`'s `(?i)` form of an atom: a cased literal or a class with a cased member tests the character's
+/// lowercase against the lowercases of its members and their [`pyunicode::case_fixes`].
+fn fold(atom: &Atom) -> Atom {
+    let members = match atom {
+        Atom::Literal(c) if pyunicode::is_cased(*c) => vec![ClassItem::Range(*c, *c)],
+        Atom::Class {
+            items,
+            lowered: false,
+            ..
+        } if items.iter().any(|item| match item {
+            ClassItem::Range(low, high) => {
+                u32::from(*high) > BMP_END || (*low..=*high).any(pyunicode::is_cased)
+            }
+            _ => false,
+        }) =>
+        {
+            items.clone()
+        }
+        _ => return atom.clone(),
+    };
+    let mut basic = vec![false; BMP_END as usize + 1];
+    let mut mark = |c: char| {
+        let lower = pyunicode::to_lower(c);
+        basic[u32::from(lower) as usize] = true;
+        for fix in pyunicode::case_fixes(lower) {
+            basic[*fix as usize] = true;
+        }
+    };
+    let mut items = Vec::new();
+    for item in members {
+        match item {
+            ClassItem::Range(low, high) => {
+                (low..=high)
+                    .take_while(|c| u32::from(*c) <= BMP_END)
+                    .for_each(&mut mark);
+                if u32::from(high) > BMP_END {
+                    items.push(ClassItem::FoldedRange(low, high));
+                }
+            }
+            other => items.push(other),
+        }
+    }
+    let mut start = None;
+    for (point, marked) in basic.iter().chain([&false]).enumerate() {
+        match (marked, start) {
+            (true, None) => start = Some(point),
+            (false, Some(first)) => {
+                let range = |point: usize| {
+                    u32::try_from(point)
+                        .ok()
+                        .and_then(char::from_u32)
+                        .unwrap_or('\0')
+                };
+                items.push(ClassItem::Range(range(first), range(point - 1)));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    Atom::Class {
+        items,
+        negated: matches!(atom, Atom::Class { negated: true, .. }),
+        lowered: true,
+    }
+}
+
+fn emit(node: &Node, flags: Flags, program: &mut Vec<Inst>) -> Result<(), Unsupported> {
     if program.len() > MAX_PROGRAM {
         return Err(Unsupported("pattern too large".to_string()));
     }
     match node {
+        Node::Atom(Atom::Any) if flags.dot_all => program.push(Inst::Atom(Atom::Class {
+            items: Vec::new(),
+            negated: true,
+            lowered: false,
+        })),
+        Node::Atom(atom) if flags.ignore_case => program.push(Inst::Atom(fold(atom))),
         Node::Atom(atom) => program.push(Inst::Atom(atom.clone())),
         Node::Start => program.push(Inst::Start),
         Node::End => program.push(Inst::End),
+        Node::Boundary(negated) => program.push(Inst::Boundary(*negated)),
         Node::Concat(items) => {
             for item in items {
-                emit(item, program)?;
+                emit(item, flags, program)?;
             }
         }
         Node::Alternation(branches) => {
             let mut jumps = Vec::new();
             for (index, branch) in branches.iter().enumerate() {
                 if index + 1 == branches.len() {
-                    emit(branch, program)?;
+                    emit(branch, flags, program)?;
                 } else {
                     let split = program.len();
                     program.push(Inst::Split(split + 1, 0));
-                    emit(branch, program)?;
+                    emit(branch, flags, program)?;
                     jumps.push(program.len());
                     program.push(Inst::Jump(0));
                     let next = program.len();
@@ -355,13 +503,13 @@ fn emit(node: &Node, program: &mut Vec<Inst>) -> Result<(), Unsupported> {
         }
         Node::Repeat { node, min, max } => {
             for _ in 0..*min {
-                emit(node, program)?;
+                emit(node, flags, program)?;
             }
             match max {
                 None => {
                     let split = program.len();
                     program.push(Inst::Split(split + 1, 0));
-                    emit(node, program)?;
+                    emit(node, flags, program)?;
                     program.push(Inst::Jump(split));
                     let end = program.len();
                     program[split] = Inst::Split(split + 1, end);
@@ -371,7 +519,7 @@ fn emit(node: &Node, program: &mut Vec<Inst>) -> Result<(), Unsupported> {
                     for _ in *min..*max {
                         splits.push(program.len());
                         program.push(Inst::Split(0, 0));
-                        emit(node, program)?;
+                        emit(node, flags, program)?;
                     }
                     let end = program.len();
                     for split in splits {
@@ -390,6 +538,11 @@ impl ClassItem {
             Self::Range(low, high) => (*low..=*high).contains(&c),
             Self::Digit(negated) => pyunicode::decimal(c).is_some() != *negated,
             Self::Space(negated) => pytext::is_space(c) != *negated,
+            Self::Word(negated) => pyunicode::is_word(c) != *negated,
+            Self::FoldedRange(low, high) => {
+                (*low..=*high).contains(&c)
+                    || (*low..=*high).contains(&pyunicode::to_upper_astral(c))
+            }
         }
     }
 }
@@ -399,7 +552,14 @@ impl Atom {
         match self {
             Self::Literal(literal) => *literal == c,
             Self::Any => c != '\n',
-            Self::Class { items, negated } => items.iter().any(|item| item.matches(c)) != *negated,
+            Self::Class {
+                items,
+                negated,
+                lowered,
+            } => {
+                let c = if *lowered { pyunicode::to_lower(c) } else { c };
+                items.iter().any(|item| item.matches(c)) != *negated
+            }
         }
     }
 }
@@ -408,15 +568,17 @@ pub fn compile(pattern: &str) -> Result<Regex, Unsupported> {
     let mut parser = Parser {
         chars: pattern.chars().collect(),
         position: 0,
+        flags: Flags::default(),
     };
-    let node = parser.alternation()?;
+    let node = parser.alternation(true)?;
     if parser.position != parser.chars.len() {
         return Err(parser.refuse("unbalanced parenthesis"));
     }
+    let flags = parser.flags;
     let mut program = Vec::new();
-    emit(&node, &mut program)?;
+    emit(&node, flags, &mut program)?;
     program.push(Inst::Match);
-    Ok(Regex { program })
+    Ok(Regex { program, flags })
 }
 
 impl Regex {
@@ -470,14 +632,26 @@ impl Regex {
                     stack.push(*first);
                 }
                 Inst::Jump(target) => stack.push(*target),
-                Inst::Start if position == 0 => stack.push(pc + 1),
+                Inst::Start
+                    if position == 0 || (self.flags.multiline && chars[position - 1] == '\n') =>
+                {
+                    stack.push(pc + 1);
+                }
                 Inst::End
                     if position == chars.len()
+                        || (self.flags.multiline && chars[position] == '\n')
                         || (position + 1 == chars.len() && chars[position] == '\n') =>
                 {
                     stack.push(pc + 1);
                 }
-                Inst::Start | Inst::End => {}
+                Inst::Boundary(negated)
+                    if ((position > 0 && pyunicode::is_word(chars[position - 1]))
+                        != chars.get(position).is_some_and(|c| pyunicode::is_word(*c)))
+                        != *negated =>
+                {
+                    stack.push(pc + 1);
+                }
+                Inst::Start | Inst::End | Inst::Boundary(_) => {}
                 Inst::Match => return true,
             }
         }
@@ -544,10 +718,51 @@ mod tests {
     }
 
     #[test]
+    fn word_classes_and_boundaries_match_as_python_does() {
+        assert!(search(r"^\w+$", "abc_1\u{e9}\u{661}\u{b2}"));
+        assert!(!search(r"^\w+$", "a-b"));
+        assert!(search(r"^\W$", "-"));
+        assert!(!search(r"\W", "x"));
+        assert!(search(r"^[\w-]+$", "a-b"));
+        assert!(search(r"\bcat\b", "a cat."));
+        assert!(!search(r"\bcat\b", "scatter"));
+        assert!(search(r"a\Bb", "ab"));
+        assert!(!search(r"a\Bb", "a b"));
+        assert!(search(r"\B", ""));
+        assert!(!search(r"\b", ""));
+        assert!(search(r"^[\b]$", "\u{8}"));
+    }
+
+    #[test]
+    fn global_flags_match_as_python_does() {
+        assert!(search("(?i)x", "X"));
+        assert!(search("(?i)^[a-z]+$", "AbC"));
+        assert!(search("(?i)k", "\u{212a}"));
+        assert!(search("(?i)\u{131}", "I"));
+        assert!(search("(?i)[^k]", "x"));
+        assert!(!search("(?i)[^k]", "\u{212a}"));
+        assert!(search("(?i)\u{10400}", "\u{10428}"));
+        assert!(search("(?i)[\u{10400}-\u{10410}]", "\u{10428}"));
+        assert!(!search("(?i)1", "x"));
+        assert!(search("(?m)^b$", "a\nb\nc"));
+        assert!(!search("^b$", "a\nb\nc"));
+        assert!(search("(?s)a.b", "a\nb"));
+        assert!(!search("a.b", "a\nb"));
+        assert!(search("(?x) a  b # comment\n c", "abc"));
+        assert!(search("(?x)a\\ b", "a b"));
+        assert!(search("(?x)[ ]", " "));
+        assert!(search("(?x)a *$", "aaa"));
+        assert!(search("(?i)(?m)^A", "x\na"));
+        assert!(search("(?ui)A", "a"));
+    }
+
+    #[test]
     fn unsupported_syntax_is_refused() {
         for pattern in [
-            "(?i)a", r"\w", r"\b", r"\A", r"\1", "*a", "a**", "a*+", "^*", "(a", "a)", "[a",
-            r"[\w]", "[z-a]", r"[a-\d]", "a{2000}", "a{3,1}", r"a\",
+            r"\A", r"\Z", r"\1", "*a", "a**", "a*+", "^*", r"\b*", "(a", "a)", "[a", r"[\B]",
+            "[z-a]", r"[a-\d]", "a{2000}", "a{3,1}", r"a\", "(?=a)", "(?<=a)b", "(?:a)",
+            "(?P<n>a)", "(?i:a)", "(?a)a", "(?L)a", "a(?i)", "a|(?i)b", "((?i)a)", " (?i)a",
+            "(?i)*",
         ] {
             assert!(compile(pattern).is_err(), "{pattern:?}");
         }
