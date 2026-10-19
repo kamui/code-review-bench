@@ -159,7 +159,7 @@ subprocess.run(["python3", str(Path(work) / "validator/tools/grading_validation.
         expected = {
             "bench/tools/diff_identity.py": 157, "bench/tools/compare.py": 157, "bench/tools/normalize_review.py": 158,
             "bench/tools/check_manifest.py": 160, "bench/tools/upstream.py": 156, "tools/export_explorer.py": 156,
-            "bench/tools/rates.py": 160, "bench/tools/methodology.py": 156, "tools/collect_run.py": 155,
+            "bench/tools/rates.py": 160, "bench/tools/methodology.py": 156,
             "bench/tools/rust_runtime.py": 153, "bench/tools/seal.py": 160, "bench/tools/skill_provenance.py": 157,
             "tools/fetch_freeze_commits.py": 157, "tools/usage_pilot/adapter.py": 152,
         }
@@ -171,6 +171,41 @@ subprocess.run(["python3", str(Path(work) / "validator/tools/grading_validation.
         for name in ("roster", "derive_packet", "build_packet", "normalize_thermo", "score", "scoreboard_svg"):
             with self.subTest(name=name), self.assertRaisesRegex(ValueError, "no migration owner"):
                 inventory.responsibility(f"bench/tools/{name}.py")
+
+    def test_storage_modules_belong_to_the_stage_that_removes_them(self):
+        for name in ("evidence_store", "native_artifacts", "evidence_inventory"):
+            with self.subTest(name=name):
+                self.assertEqual(inventory.responsibility(f"bench/tools/{name}.py")["issue"], 159)
+        self.assertNotIn(155, {issue for issue, _ in inventory.GROUPS.values()})
+        self.assertNotIn(155, inventory.RESEARCH_GROUPS)
+        for path in ("bench/tools/recover_evidence.py", "bench/tools/local_evidence_resolution.py",
+                     "bench/tools/reconcile_evidence.py", "tools/collect_run.py", "tools/import_benchmark.py"):
+            with self.subTest(path=path), self.assertRaisesRegex(ValueError, "no migration owner"):
+                inventory.responsibility(path)
+        research = "docs/research/"
+        self.assertEqual(
+            inventory.research_responsibility(research + "evidence-migration-2026-10-08/restore-local.py")["issue"], 160)
+        with self.assertRaisesRegex(ValueError, "no migration owner"):
+            inventory.research_responsibility(research + "builtin-review-benchmark-2026-09-24/answers.py")
+
+    def test_embedded_import_callers_are_in_line_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow = "".join(f"python3 - <<EOF\n  import behavior_contract\n" for n in range(8))
+            sources = {"tools/behavior_contract.py": "import json\n", ".github/workflows/check.yml": workflow,
+                       "bench/import-manifest.json": '{"files":[],"repository":"fixture","revision":"unknown"}'}
+            for path, text in sources.items():
+                target = root / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(text)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(root), "-c", "user.name=Test", "-c", "user.email=test@example.org",
+                            "commit", "-qm", "fixture"], check=True)
+            files = {row["path"]: row for row in inventory.census(inventory.Snapshot("HEAD", root))["python_files"]}
+            lines = [caller["line"] for caller in files["tools/behavior_contract.py"]["callers"]
+                     if caller["kind"] == "embedded-import-reference"]
+            self.assertEqual(lines, list(range(2, 17, 2)))
 
     def test_recut_loader_keeps_only_the_staged_selection_live(self):
         recut = "docs/research/last-push-recut-2026-10-07/"
