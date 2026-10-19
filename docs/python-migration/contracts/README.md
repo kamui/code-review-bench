@@ -165,13 +165,23 @@ ported. [`grading.md`](../grading.md) records the baseline they serve.
   2. applies only the declared normalizations. `clocks` and `identity` rules replace JSON pointers with
      `"<volatile>"` and a decided label. Each `sections` rule orders every run of adjacent Markdown sections under
      its `heading` prefix, such as `### `, by their bytes with tokens masked. Each `tokens` rule names a `prefix`,
-     such as `blind` or `review`, and the `sites` where the run writes its generated tokens: each site is a `glob`
-     and the JSON `pointers` in each matching file. The `<prefix>-<6 to 8 hex>` values at those sites are the run's
-     generated tokens, and every occurrence of one becomes its first-seen ordinal, such as `<blind 1>`, scanning
-     stdout, stderr, then files in path order, in names and contents alike. Every other token-shaped text keeps its
-     bytes, so a changed quote or source byte differs whatever encoding the input used. A missing site, a site
-     holding anything but a token of its prefix, and output text already in a label's form, such as `<blind 2>`,
-     are `consistency:` differences;
+     such as `blind` or `review`, the `sites` where the run writes its generated tokens, and the `references`
+     where it repeats them. Each site is a `glob` and the JSON `pointers` in each matching file; the
+     `<prefix>-<6 to 8 hex>` values there are the run's generated tokens. A reference is one of:
+     - `{"glob", "pointers"}`: the JSON string values at those pointers;
+     - `{"glob", "pointers", "keys": true}`: the keys of the JSON objects at those pointers;
+     - `{"glob", "names": true}`: the names of matching files and directories;
+     - `{"stream": "stdout"}` or `{"stream": "stderr"}`;
+     - `{"glob"}`: the whole bytes of matching files.
+
+     At the sites and references only, each generated token becomes its first-seen ordinal, such as `<blind 1>`,
+     scanning stdout, stderr, then entries in path order, names before contents. Every other byte stays exact,
+     including other occurrences of a generated token, so a changed quote or source byte differs whatever it
+     holds. A whole-file reference must never name a file that carries quotes, source text or evidence; that is
+     the case author's declaration, and the #156 corpora use pointer or key references for those files. A missing
+     site, a site holding anything but a token of its prefix, an unreadable pointer reference, a generated token
+     that the case's inputs already hold (raw, or in any string a JSON input decodes to), and output text already
+     in a label's form, such as `<blind 2>`, are `consistency:` differences;
   3. recomputes every pin over the normalized bytes it names and compares the trees byte for byte. A dropped,
      duplicated or changed section, quote, source byte, credit fact, unresolved state or pin still differs.
 

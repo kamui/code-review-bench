@@ -419,8 +419,9 @@ def execute(case, commands, options=None):
         return {"steps": results} if "steps" in case else results[0]
 
 
-def json_spans(text, pointers):
-    """Character spans of the values at the given RFC 6901 pointers in valid JSON text."""
+def json_spans(text, pointers, keys=()):
+    """Character spans of the values at the given RFC 6901 pointers in valid JSON text, and of each key, as
+    (pointer, key), of the objects at the pointers in keys."""
     spans = {}
 
     def skip(position):
@@ -437,7 +438,10 @@ def json_spans(text, pointers):
             else:
                 while True:
                     if char == "{":
-                        key, position = scanstring(text, skip(position) + 1)
+                        start_key = skip(position)
+                        key, position = scanstring(text, start_key + 1)
+                        if path in keys:
+                            spans[(path, key)] = (start_key, position)
                         child = path + "/" + key.replace("~", "~0").replace("/", "~1")
                         position = skip(position) + 1
                     else:
@@ -614,11 +618,23 @@ def check_structured(case):
         if not re.fullmatch(r"#+ ", rule.get("heading", "")):
             raise ValueError(f"{case['id']}: a section rule names a Markdown heading prefix such as '### '")
     for rule in spec.get("tokens", []):
-        if not isinstance(rule, dict) or set(rule) != {"prefix", "sites"} \
+        if not isinstance(rule, dict) or set(rule) != {"prefix", "sites", "references"} \
                 or not re.fullmatch(r"[a-z]+", str(rule["prefix"])) or not rule["sites"] \
-                or any(set(site) != {"glob", "pointers"} or not site["pointers"] for site in rule["sites"]):
-            raise ValueError(f"{case['id']}: a token rule names a lowercase prefix, such as blind, and its sites, "
-                             "each a glob with the JSON pointers that hold generated tokens")
+                or any(set(site) != {"glob", "pointers"} or not site["pointers"] for site in rule["sites"]) \
+                or not isinstance(rule["references"], list) or not all(map(token_reference, rule["references"])):
+            raise ValueError(f"{case['id']}: a token rule names a lowercase prefix, such as blind, its sites, each "
+                             "a glob with the JSON pointers that hold generated tokens, and its references, each a "
+                             "glob with pointers (and keys: true for object keys), a glob with names: true, a "
+                             "stream, or a glob alone for whole files")
+
+
+def token_reference(reference):
+    fields = set(reference) if isinstance(reference, dict) else None
+    return (fields == {"stream"} and reference["stream"] in ("stdout", "stderr")
+            or fields == {"glob", "names"} and reference["names"] is True
+            or fields in ({"glob", "pointers"}, {"glob", "pointers", "keys"}) and bool(reference["pointers"])
+            and reference.get("keys", True) is True
+            or fields == {"glob"})
 
 
 def pin_base(rule, name):
@@ -682,6 +698,57 @@ def replace_pointers(name, data, values):
     return text.encode("utf-8")
 
 
+def relabel_json(data, values, keys, relabel):
+    """Relabel within the raw JSON strings at the value pointers and within the keys of the objects at the key
+    pointers, leaving every other byte as written."""
+    json_value(data)
+    text = data.decode("utf-8")
+    spans = json_spans(text, {*values, *keys}, set(keys))
+    missing = sorted({*values, *keys} - set(spans))
+    if missing:
+        raise ValueError(f"missing fields {missing}")
+    for at in values:
+        if text[spans[at][0]] != '"':
+            raise ValueError(f"{at} is not a string")
+    for at in keys:
+        if text[spans[at][0]] != "{":
+            raise ValueError(f"{at} is not an object")
+    regions = sorted({span for at, span in spans.items() if at in values or isinstance(at, tuple)})
+    relabeled = [(start, end, relabel(text[start:end].encode("utf-8")).decode("utf-8")) for start, end in regions]
+    for start, end, replacement in reversed(relabeled):
+        text = text[:start] + replacement + text[end:]
+    return text.encode("utf-8")
+
+
+def case_inputs(case):
+    """Every input the case gives its commands, raw and as each string a JSON input decodes to: names and bytes it
+    writes, arguments and stdin."""
+    blobs = []
+    for step in [case, *case.get("steps", [])]:
+        for entry in [*step.get("initial", []), *step.get("write", [])]:
+            blobs += [decode(entry[key]) for key in ("path_b64", "bytes_b64", "target_b64") if key in entry]
+        blobs += [decode(arg["bytes_b64"]) if isinstance(arg, dict) else os.fsencode(arg)
+                  for arg in step.get("argv", [])]
+        blobs.append(decode(step.get("stdin_b64", "")))
+    strings = []
+    def walk(value):
+        if isinstance(value, str):
+            strings.append(value.encode("utf-8", "surrogatepass"))
+        elif isinstance(value, dict):
+            for key, child in value.items():
+                walk(key)
+                walk(child)
+        elif isinstance(value, list):
+            for child in value:
+                walk(child)
+    for blob in blobs:
+        try:
+            walk(json.loads(blob))
+        except (ValueError, RecursionError):
+            continue
+    return blobs + strings
+
+
 def order_sections(data, heading):
     """Sort each run of adjacent sections under one heading level by their bytes with tokens masked."""
     lines = data.splitlines(keepends=True)
@@ -717,10 +784,13 @@ def structured(case, root, actual):
     Every pin the case declares is checked against the bytes it names before anything is normalized. Then only
     the declared normalizations apply: clock fields and runner identity fields take fixed labels, each run of
     dossier sections is ordered by content, and each token the run wrote at a declared site becomes its first-seen
-    ordinal wherever it occurs, scanning stdout, stderr, then files in path order, in names and contents alike.
-    Every other token-shaped text keeps its bytes, and text already in a label's form is an inconsistency, so a
-    changed source or quote cannot match whatever encoding the input used. Last, every pin is recomputed over the
-    normalized bytes it names, so the trees compare byte for byte."""
+    ordinal at that site and at the rule's declared references, scanning stdout, stderr, then entries in path
+    order, names before contents. A reference is a JSON string value or object's keys at a pointer, entry names,
+    a stream, or a whole file; a whole-file reference must never name a file that carries quotes, source text or
+    evidence, so those files declare pointer references. Every other byte stays exact, occurrences of site tokens
+    included. A generated token that the case's inputs already hold, raw or as a decoded JSON string, and text
+    already in a label's form are inconsistencies, since either could make a changed literal look like a reference.
+    Last, every pin is recomputed over the normalized bytes it names, so the trees compare byte for byte."""
     spec = case["structured"]
     entries = {os.fsdecode(decode(entry["path_b64"])): dict(entry) for entry in actual["filesystem"]}
     files = {name: decode(entry["bytes_b64"]) for name, entry in entries.items() if entry["kind"] == "file"}
@@ -750,7 +820,7 @@ def structured(case, root, actual):
     if spec.get("tokens"):
         prefixes = b"|".join(re.escape(rule["prefix"].encode()) for rule in spec["tokens"])
         shape = re.compile(rb"(?<![0-9A-Za-z_-])(" + prefixes + rb")-[0-9a-f]{6,8}(?![0-9A-Za-z_])")
-        generated = set()
+        generated, found = set(), set()
         for rule in spec["tokens"]:
             prefix = rule["prefix"]
             for site in rule["sites"]:
@@ -766,8 +836,14 @@ def structured(case, root, actual):
                             continue
                         if isinstance(value, str) and re.fullmatch(re.escape(prefix) + r"-[0-9a-f]{6,8}", value):
                             generated.add(value.encode("ascii"))
+                            found.add((prefix, name, at))
                         else:
                             issues.append(f"{name}: {at} holds {json.dumps(value)}, not a {prefix} token")
+        inputs = case_inputs(case)
+        for token in sorted(generated):
+            if any(token in blob for blob in inputs):
+                issues.append(f"{token.decode('ascii')}: the run generated a token the case's inputs already hold, "
+                              "so its references cannot be told from literal text")
         taken = re.compile(rb"<(?:" + prefixes + rb") [0-9]+>")
         for where, data in [*streams.items(), *((f"path {name}", os.fsencode(name)) for name in entries),
                             *files.items()]:
@@ -784,14 +860,36 @@ def structured(case, root, actual):
             if key not in ordinals:
                 ordinals[key] = f"<{prefix} {1 + sum(o.startswith(f'<{prefix} ') for o in ordinals.values())}>"
             return ordinals[key].encode("ascii")
-        for stream in ("stdout", "stderr"):
-            streams[stream] = shape.sub(label, streams[stream])
-        renamed = {}
-        for name in sorted(entries, key=masked):
-            new = os.fsdecode(shape.sub(label, os.fsencode(name)))
-            if name in files:
-                files[name] = shape.sub(label, files[name])
-            renamed[name] = new
+        renamed = {name: name for name in entries}
+        for rule in spec["tokens"]:
+            own = re.compile(rb"(?<![0-9A-Za-z_-])(" + re.escape(rule["prefix"].encode()) +
+                             rb")-[0-9a-f]{6,8}(?![0-9A-Za-z_])")
+            def relabel(data, own=own):
+                return own.sub(label, data)
+            references = rule["references"]
+            for stream in ("stdout", "stderr"):
+                if {"stream": stream} in references:
+                    streams[stream] = relabel(streams[stream])
+            def declared(name, *fields):
+                return [reference for reference in references
+                        if set(reference) - {"keys"} == {"glob", *fields} and fnmatch.fnmatchcase(name, reference["glob"])]
+            for name in sorted(entries, key=masked):
+                if declared(name, "names"):
+                    renamed[name] = os.fsdecode(relabel(os.fsencode(renamed[name])))
+                if name not in files:
+                    continue
+                if declared(name):
+                    files[name] = relabel(files[name])
+                    continue
+                at_pointers = declared(name, "pointers")
+                values = [at for prefix, site, at in found if (prefix, site) == (rule["prefix"], name)]
+                values += [at for reference in at_pointers if not reference.get("keys") for at in reference["pointers"]]
+                keys = [at for reference in at_pointers if reference.get("keys") for at in reference["pointers"]]
+                if values or keys:
+                    try:
+                        files[name] = relabel_json(files[name], values, keys, relabel)
+                    except (ValueError, UnicodeError) as error:
+                        issues.append(f"{name}: declared {rule['prefix']} references unreadable: {error}")
         entries = {renamed[name]: entry for name, entry in entries.items()}
         files = {renamed[name]: data for name, data in files.items()}
     final = {}

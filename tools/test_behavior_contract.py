@@ -772,7 +772,7 @@ quotes = [given.replace("blind-abcdef", "<blind 2>") if mutation == "quote-label
           "Leaks the conn" if mutation != "quote" else "Leaks the socket"]
 os.makedirs("out/reviews")
 for blind, quote in zip(blinds, quotes):
-    Path(f"out/reviews/{blind}.md").write_text(f"# Review {blind}\\n\\n{quote}\\n", encoding="utf-8")
+    Path(f"out/reviews/{blind}.md").write_text(f"# Review\\n\\n{quote}\\n", encoding="utf-8")
 source = Path("in/source.go").read_bytes()
 source = {"source": source.replace(b"package main", b"package mains"),
           "source-label": source.replace(b'"review-abcdef"', b'"<review 3>"')}.get(mutation, source)
@@ -809,9 +809,14 @@ print(f"mapped {blinds[0]}")
                            {"glob": "out/receipt.json", "map": "/prepared_files", "base": "record"},
                            {"glob": "out/grades.json"}],
                   "tokens": [{"prefix": "blind", "sites": [{"glob": "out/grades.json",
-                                                            "pointers": ["/reviews/0/token", "/reviews/1/token"]}]},
+                                                            "pointers": ["/reviews/0/token", "/reviews/1/token"]}],
+                              "references": [{"stream": "stdout"}, {"glob": "out/reviews/*.md", "names": True},
+                                             {"glob": "out/verdicts.json", "pointers": ["/reviews"], "keys": True},
+                                             {"glob": "out/receipt.json", "pointers": ["/prepared_files"],
+                                              "keys": True}]},
                              {"prefix": "review", "sites": [{"glob": "out/grades.json",
-                                                             "pointers": ["/links/0", "/links/1", "/links/2"]}]}],
+                                                             "pointers": ["/links/0", "/links/1", "/links/2"]}],
+                              "references": [{"glob": "out/dossier.md"}]}],
                   "clocks": [{"glob": "out/receipt.json", "pointers": ["/mapped_at"]}],
                   "identity": [{"glob": "out/receipt.json", "pointers": ["/runner/mapping"],
                                 "label": "grade-map-runner-identity-v2"}],
@@ -867,12 +872,50 @@ print(f"mapped {blinds[0]}")
                 for left, right in ((first, changed), (changed, first)):
                     self.assertTrue(any("filesystem effects" in d for d in contract.differential(left, right, self.STREAMS)))
 
+    COLLISION_WRITER = """import json, sys
+from pathlib import Path
+token = {"primary": "blind-abcdef", "candidate": "blind-fedcba", "plain": "blind-111111"}[sys.argv[1]]
+mutation = sys.argv[2]
+quote = json.loads(Path("input.json").read_bytes())["quote"]
+quote = quote.replace("blind-abcdef", "blind-fedcba") if mutation == "quote" else quote
+Path("ids.json").write_text(json.dumps({"token": token}))
+Path("quote.txt").write_text(quote)
+Path("source.go").write_text('package main; const quote = "' + quote + '"')
+Path("notes.txt").write_text("minted " + token)
+"""
+
+    def collision_output(self, run, mutation="none"):
+        case = {"id": "probe", "program": "writer", "argv": [run, mutation], "stdin_b64": "",
+                "initial": [{"path_b64": encoded(b"input.json"), "kind": "file",
+                             "bytes_b64": encoded(b'{"quote":"The output must contain blind-\\u0061bcdef."}')}],
+                "structured": {"tokens": [{"prefix": "blind", "sites": [{"glob": "ids.json", "pointers": ["/token"]}],
+                                           "references": []}]}}
+        return contract.execute(case, {"writer": [sys.executable, "-c", self.COLLISION_WRITER]})
+
+    def test_structured_comparison_fails_a_site_token_that_equals_an_input_literal(self):
+        primary, candidate = self.collision_output("primary"), self.collision_output("candidate", "quote")
+        self.assertTrue(any(issue.startswith("blind-abcdef: the run generated a token the case's inputs already hold")
+                            for issue in primary["inconsistencies"]), primary.get("inconsistencies"))
+        for left, right in ((primary, candidate), (candidate, primary)):
+            differences = contract.differential(left, right, self.STREAMS)
+            self.assertTrue(any("consistency: blind-abcdef" in d for d in differences), differences)
+            self.assertTrue(any("filesystem effects" in d for d in differences), differences)
+
+    def test_structured_comparison_keeps_undeclared_bytes_that_hold_a_site_token(self):
+        output = self.collision_output("plain")
+        self.assertNotIn("inconsistencies", output)
+        files = {contract.decode(entry["path_b64"]): contract.decode(entry["bytes_b64"])
+                 for entry in output["filesystem"] if entry["kind"] == "file"}
+        self.assertEqual(files[b"ids.json"], b'{"token": "<blind 1>"}')
+        self.assertEqual(files[b"notes.txt"], b"minted blind-111111")
+
     def test_structured_comparison_fails_a_missing_or_malformed_token_site(self):
         sites = [{"glob": "out/grades.json", "pointers": ["/reviews/0/token", "/reviews/2/token",
                                                           "/reviews/0/families/0/id"]},
                  {"glob": "out/missing.json", "pointers": ["/token"]}]
         case = {"id": "probe", "program": "writer", "argv": ["1", "none"], "stdin_b64": "",
-                "initial": self.GRADING_INPUTS, "structured": {"tokens": [{"prefix": "blind", "sites": sites}]}}
+                "initial": self.GRADING_INPUTS,
+                "structured": {"tokens": [{"prefix": "blind", "sites": sites, "references": []}]}}
         issues = contract.execute(case, {"writer": [sys.executable, "-c", self.GRADING_WRITER]})["inconsistencies"]
         self.assertEqual(len(issues), 3, issues)
         self.assertTrue(any("/reviews/2/token should hold a blind token" in issue for issue in issues))
@@ -893,6 +936,7 @@ print(f"mapped {blinds[0]}")
 
     def test_structured_and_outcome_declarations_are_validated(self):
         base = {"id": "probe", "program": "writer", "argv": [], "stdin_b64": "", "initial": []}
+        sites = [{"glob": "x", "pointers": ["/a"]}]
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "corpus.json"
             for broken, message in (
@@ -900,6 +944,10 @@ print(f"mapped {blinds[0]}")
                     ({**base, "structured": {"pins": [{"glob": "x", "pointer": "/a"}]}}, "pin rule"),
                     ({**base, "structured": {"tokens": ["blind"]}}, "token rule"),
                     ({**base, "structured": {"tokens": [{"prefix": "blind", "sites": [{"glob": "x"}]}]}},
+                     "token rule"),
+                    ({**base, "structured": {"tokens": [{"prefix": "blind", "sites": sites}]}}, "token rule"),
+                    ({**base, "structured": {"tokens": [{"prefix": "blind", "sites": sites,
+                                                         "references": [{"glob": "x", "keys": True}]}]}},
                      "token rule"),
                     ({**base, "structured": {"identity": [{"glob": "x", "pointers": ["/a"]}]}}, "decided label"),
                     ({**base, "structured": {"sections": [{"glob": "x", "heading": "Links"}]}}, "heading prefix"),
