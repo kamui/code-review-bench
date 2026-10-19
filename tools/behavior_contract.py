@@ -3,6 +3,8 @@
 
 Usage: python3 tools/behavior_contract.py [--corpus corpus.json] [--implementations commands.json]
        [--differential commands.json] [--allow-known-defects]
+       python3 tools/behavior_contract.py --real-record [list.json] [--root ROOT] [--implementations commands.json]
+       --differential commands.json
        python3 tools/behavior_contract.py --verify-decision-history
 Inputs: versioned JSON corpus with argv, base64 bytes, filesystem and expectations. Without
 --implementations, each program runs its maintained implementation: the Python script where one is
@@ -25,6 +27,7 @@ from json.scanner import NUMBER_RE
 import math
 import os
 from pathlib import Path
+import posixpath
 import shlex
 import shutil
 import stat
@@ -132,6 +135,58 @@ DRIVER_ARGUMENTS = {"native-artifacts": ["bench/tools"], "restore-local": [
 RUST_PROGRAMS = {"roster": ("bench-tools", ["roster"]), "normalize-thermo": ("bench-tools", ["normalize-thermo"]),
                  "derive-packet": ("bench-tools", ["derive-packet"]), "build-packet": ("bench-tools", ["build-packet"]),
                  "export-explorer": ("bench-tools", ["export-explorer"]), "archive": ("bench-tools", ["archive"])}
+# Python programs that draw blind tokens or shuffles run under ENTROPY_DRIVER, so a recorded expectation is the
+# same on every recording. The grading slices of #156 add their programs here.
+PYTHON_ENTROPY = {}
+ENTROPY_DRIVER = """import hashlib, random, runpy, secrets, sys
+from pathlib import Path
+drawn = 0
+def token_hex(nbytes=None):
+    global drawn
+    count, raw = 32 if nbytes is None else nbytes, b""
+    while len(raw) < count:
+        raw += hashlib.sha256(b"behavior-contract-entropy:%d" % drawn).digest()
+        drawn += 1
+    return raw[:count].hex()
+secrets.token_hex = token_hex
+fixed = random.Random(20261019)
+random.SystemRandom = lambda *args, **kwargs: fixed
+script = sys.argv.pop(1)
+sys.path.insert(0, str(Path(script).parent))
+sys.argv[0] = script
+runpy.run_path(script, run_name="__main__")
+"""
+# Setup programs that are part of a case, not of an implementation, so every command map runs the same one.
+# `fixture-git [--directory DIR] [FILE ...]` commits DIR, by default the case root, with a fixed identity, clock and
+# no compression, removes the config and message, whose bytes depend on the host, rewrites the index from the commit
+# without file timestamps, and writes the commit into each named file in place of FREEZE_PLACEHOLDER. The resulting
+# objects, refs and index are the same bytes on every host until a later command refreshes the index.
+FREEZE_PLACEHOLDER = "<freeze commit>"
+SETUP_PROGRAMS = {"fixture-git": """import os, subprocess, sys
+from pathlib import Path
+fixed = {"GIT_AUTHOR_NAME": "Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.invalid", "GIT_CONFIG_NOSYSTEM": "1",
+         "GIT_COMMITTER_NAME": "Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
+         "GIT_AUTHOR_DATE": "2026-01-01T00:00:00Z", "GIT_COMMITTER_DATE": "2026-01-01T00:00:00Z"}
+environment = {**os.environ, **fixed}
+names, directory = sys.argv[1:], Path(".")
+if names[:1] == ["--directory"]:
+    directory, names = Path(names[1]), names[2:]
+def git(*args):
+    return subprocess.run(["git", "-C", str(directory), "-c", "core.compression=0", "-c",
+                           "core.logAllRefUpdates=false", "-c", "commit.gpgsign=false", *args], env=environment,
+                          check=True, capture_output=True).stdout
+git("init", "-q", "--template=", "-b", "main")
+git("add", "-A")
+git("commit", "-q", "-m", "Freeze the fixture run")
+commit = git("rev-parse", "HEAD").strip()
+for name in ("index", "COMMIT_EDITMSG", "config"):
+    (directory / ".git" / name).unlink(missing_ok=True)
+git("read-tree", "HEAD")
+for name in names:
+    path = Path(name)
+    path.write_bytes(path.read_bytes().replace(%r, commit))
+""" % FREEZE_PLACEHOLDER.encode("ascii")}
+GRADING_OUTCOMES = ("family-outcome", "credit-fact", "unresolved-state", "candidate-state")
 DECISIONS = re.compile(r"(?P<family>.+)-decisions\.v[^/]*\.json")
 
 
@@ -318,6 +373,7 @@ else:
 def execute(case, commands, options=None):
     """Run a case's command, or each of its steps on one shared root, and observe the results."""
     options = options or {}
+    commands = with_setup(commands)
     modes = options.get("snapshot_modes", False)
     with tempfile.TemporaryDirectory(prefix="behavior-contract-") as temporary, \
             tempfile.TemporaryDirectory(prefix="behavior-contract-bin-") as tools:
@@ -431,6 +487,8 @@ def normalize(case, root, actual):
     the archive bytes actually beside it; the size of a declared archive is masked only after that check. Each
     declared storage reference must name, by path and SHA-256, a file written beside its record, checked before
     any digest becomes a label."""
+    if "structured" in case:
+        return structured(case, root, actual)
     declared = ("archives", "digests", "manifests", "references", "volatile", "mask_root", "mask_patterns")
     if not any(key in case for key in declared):
         return actual
@@ -537,6 +595,211 @@ def normalize(case, root, actual):
     return result
 
 
+STRUCTURED = ("pins", "tokens", "clocks", "identity", "sections")
+UNSTRUCTURED = ("archives", "digests", "manifests", "references", "volatile")
+
+
+def check_structured(case):
+    spec = case["structured"]
+    if set(spec) - set(STRUCTURED) or set(UNSTRUCTURED) & set(case):
+        raise ValueError(f"{case['id']}: a structured comparison declares only {', '.join(STRUCTURED)}")
+    for rule in spec.get("pins", []):
+        if set(rule) - {"glob", "base", "map", "pointer", "path"} or ("pointer" in rule) != ("path" in rule) \
+                or "map" in rule and "pointer" in rule:
+            raise ValueError(f"{case['id']}: a pin rule names a glob and at most one of map, or pointer with path")
+    for rule in spec.get("identity", []):
+        if not rule.get("label") or not rule.get("pointers"):
+            raise ValueError(f"{case['id']}: a runner identity rule names its pointers and its decided label")
+    for rule in spec.get("sections", []):
+        if not re.fullmatch(r"#+ ", rule.get("heading", "")):
+            raise ValueError(f"{case['id']}: a section rule names a Markdown heading prefix such as '### '")
+    if any(not re.fullmatch(r"[a-z]+", prefix) for prefix in spec.get("tokens", [])):
+        raise ValueError(f"{case['id']}: a token prefix is lowercase letters, such as blind")
+
+
+def pin_base(rule, name):
+    base = rule.get("base", "")
+    return posixpath.dirname(name) if base == "record" else base
+
+
+def pin_targets(rule, name, raw):
+    """Each (pointer, pinned SHA-256, named path) a JSON record states, by the rule that matched it."""
+    value = json_value(raw)
+    found = []
+    if "pointer" in rule:
+        found.append((rule["pointer"], pointer(value, rule["pointer"]), rule["path"]))
+    elif "map" in rule:
+        members = pointer(value, rule["map"])
+        if not isinstance(members, dict):
+            raise ValueError(f"{rule['map']} is not an object of pins")
+        found += [(rule["map"] + "/" + key.replace("~", "~0").replace("/", "~1"), sha, key)
+                  for key, sha in members.items()]
+    else:
+        def walk(item, path):
+            if isinstance(item, dict):
+                if isinstance(item.get("path"), str) and isinstance(item.get("sha256"), str):
+                    found.append((path + "/sha256", item["sha256"], item["path"]))
+                for key, child in item.items():
+                    walk(child, path + "/" + key.replace("~", "~0").replace("/", "~1"))
+            elif isinstance(item, list):
+                for index, child in enumerate(item):
+                    walk(child, f"{path}/{index}")
+        walk(value, "")
+    base = pin_base(rule, name)
+    result = []
+    for at, sha, path in found:
+        joined = posixpath.normpath(posixpath.join(base, path)) if isinstance(path, str) else None
+        if joined is None or path.startswith("/") or joined == ".." or joined.startswith("../"):
+            raise ValueError(f"{at} names {path!r}, which is outside the case root")
+        result.append((at, sha, joined))
+    return result
+
+
+def pins_of(spec, files):
+    """Every pin the declared rules find, as (record, pointer, SHA-256, target), and the problems reading them."""
+    pins, issues = [], []
+    for rule in spec.get("pins", []):
+        for name in sorted(files):
+            if fnmatch.fnmatchcase(name, rule["glob"]):
+                try:
+                    pins += [(name, *pin) for pin in pin_targets(rule, name, files[name])]
+                except (KeyError, IndexError, TypeError, ValueError, UnicodeError) as error:
+                    issues.append(f"{name}: unreadable pins: {error}")
+    return pins, issues
+
+
+def replace_pointers(name, data, values):
+    text = data.decode("utf-8")
+    spans = json_spans(text, values)
+    if set(spans) != set(values):
+        raise ValueError(f"{name}: missing fields {sorted(set(values) - set(spans))}")
+    for at, (start, end) in sorted(spans.items(), key=lambda item: -item[1][0]):
+        text = text[:start] + json.dumps(values[at]) + text[end:]
+    return text.encode("utf-8")
+
+
+def order_sections(data, heading):
+    """Sort each run of adjacent sections under one heading level by their bytes with tokens masked."""
+    lines = data.splitlines(keepends=True)
+    level = len(heading) - 1
+    result, run, current = [], [], None
+    def flush():
+        result.extend(line for section in sorted(run, key=lambda s: (TOKEN_SHAPE.sub(b"<token>", b"".join(s)),
+                                                                     b"".join(s))) for line in section)
+        run.clear()
+    for line in lines:
+        depth = len(line) - len(line.lstrip(b"#"))
+        if line.startswith(heading.encode("utf-8")):
+            current = [line]
+            run.append(current)
+        elif current is not None and 0 < depth <= level and line[depth:depth + 1] == b" ":
+            current = None
+            flush()
+            result.append(line)
+        elif current is not None:
+            current.append(line)
+        else:
+            result.append(line)
+    flush()
+    return b"".join(result)
+
+
+TOKEN_SHAPE = re.compile(rb"(?<![0-9A-Za-z_-])[a-z]+-[0-9a-f]{6,8}(?![0-9A-Za-z_])")
+
+
+def structured(case, root, actual):
+    """Compare outputs that carry blind tokens, shuffles, clocks or runner identity.
+
+    Every pin the case declares is checked against the bytes it names before anything is normalized. Then only
+    the declared normalizations apply: clock fields and runner identity fields take fixed labels, each run of
+    dossier sections is ordered by content, and each blind token becomes its first-seen ordinal, scanning stdout,
+    stderr, then files in path order, in names and contents alike. Last, every pin is recomputed over the
+    normalized bytes it names, so the trees compare byte for byte."""
+    spec = case["structured"]
+    entries = {os.fsdecode(decode(entry["path_b64"])): dict(entry) for entry in actual["filesystem"]}
+    files = {name: decode(entry["bytes_b64"]) for name, entry in entries.items() if entry["kind"] == "file"}
+    pins, issues = pins_of(spec, files)
+    for name, at, sha, target in pins:
+        if target not in files:
+            issues.append(f"{name}: {at} pins {target}, which was not written")
+        elif sha != hashlib.sha256(files[target]).hexdigest():
+            issues.append(f"{name}: {at} pins {sha} for {target}, whose bytes hash to "
+                          f"{hashlib.sha256(files[target]).hexdigest()}")
+    labels = [(rule, {at: "<volatile>" for at in rule["pointers"]}) for rule in spec.get("clocks", [])]
+    labels += [(rule, dict.fromkeys(rule["pointers"], rule["label"])) for rule in spec.get("identity", [])]
+    for rule, values in labels:
+        for name in sorted(files):
+            if fnmatch.fnmatchcase(name, rule["glob"]):
+                try:
+                    json_value(files[name])
+                    files[name] = replace_pointers(name, files[name], values)
+                except (KeyError, ValueError, UnicodeError) as error:
+                    issues.append(f"{name}: declared fields unreadable: {error}")
+    for rule in spec.get("sections", []):
+        for name in sorted(files):
+            if fnmatch.fnmatchcase(name, rule["glob"]):
+                files[name] = order_sections(files[name], rule["heading"])
+    streams = {"stdout": actual["stdout"], "stderr": actual["stderr"]}
+    ordinals = {}
+    if spec.get("tokens"):
+        shape = re.compile(rb"(?<![0-9A-Za-z_-])(" + b"|".join(re.escape(p.encode()) for p in spec["tokens"])
+                           + rb")-[0-9a-f]{6,8}(?![0-9A-Za-z_])")
+        def masked(name):
+            return shape.sub(b"<token>", os.fsencode(name)), os.fsencode(name)
+        def label(match):
+            prefix = match.group(1).decode("ascii")
+            key = match.group(0)
+            if key not in ordinals:
+                ordinals[key] = f"<{prefix} {1 + sum(o.startswith(f'<{prefix} ') for o in ordinals.values())}>"
+            return ordinals[key].encode("ascii")
+        for stream in ("stdout", "stderr"):
+            streams[stream] = shape.sub(label, streams[stream])
+        renamed = {}
+        for name in sorted(entries, key=masked):
+            new = os.fsdecode(shape.sub(label, os.fsencode(name)))
+            if name in files:
+                files[name] = shape.sub(label, files[name])
+            renamed[name] = new
+        entries = {renamed[name]: entry for name, entry in entries.items()}
+        files = {renamed[name]: data for name, data in files.items()}
+    final = {}
+    repins, problems = pins_of(spec, files)
+    issues += problems
+    def settle(name, open_names):
+        if name not in final:
+            if name in open_names:
+                issues.append(f"{name}: pins form a cycle")
+                return files[name]
+            values = {at: hashlib.sha256(settle(target, open_names | {name})).hexdigest()
+                      for record, at, _sha, target in repins if record == name and target in files}
+            try:
+                final[name] = replace_pointers(name, files[name], values) if values else files[name]
+            except (ValueError, UnicodeError) as error:
+                issues.append(f"{name}: pins unreadable after normalization: {error}")
+                final[name] = files[name]
+        return final[name]
+    roots = sorted({os.fsencode(str(root)), os.fsencode(os.path.realpath(root))}, key=len, reverse=True)
+    def diagnostic(data):
+        if case.get("mask_root"):
+            for prefix in roots:
+                data = data.replace(prefix, b"<root>")
+        for rule in case.get("mask_patterns", []):
+            data = re.sub(rule["pattern"].encode("utf-8"), rule["label"].encode("utf-8"), data)
+        return data
+    filesystem = []
+    for name, entry in entries.items():
+        entry["path_b64"] = base64.b64encode(os.fsencode(name)).decode("ascii")
+        if entry["kind"] == "file":
+            data = settle(name, frozenset())
+            entry.update(bytes_b64=base64.b64encode(data).decode("ascii"), sha256=hashlib.sha256(data).hexdigest())
+        filesystem.append(entry)
+    result = {**actual, "stdout": diagnostic(streams["stdout"]), "stderr": diagnostic(streams["stderr"]),
+              "filesystem": sorted(filesystem, key=lambda item: item["path_b64"])}
+    if issues:
+        result["inconsistencies"] = issues
+    return result
+
+
 def json_value(raw):
     def unique(pairs):
         result = {}
@@ -587,11 +850,28 @@ def compare(expected, actual):
                 raise ValueError(f"unknown comparison mode {spec['mode']}")
         except (ValueError, KeyError, IndexError, TypeError, UnicodeError) as error:
             differences.append(f"{stream} semantic: {error}; actual bytes {raw!r}")
+    differences += outcome_differences(expected.get("outcomes", []), actual["filesystem"])
     if expected["filesystem"] != actual["filesystem"]:
         differences.append("filesystem effects:\n" + "".join(difflib.unified_diff(
             json.dumps(expected["filesystem"], indent=2, sort_keys=True).splitlines(True),
             json.dumps(actual["filesystem"], indent=2, sort_keys=True).splitlines(True),
             fromfile="expected", tofile="actual")))
+    return differences
+
+
+def outcome_differences(outcomes, filesystem):
+    """Each hand-stated grading outcome must hold in the output, whichever implementation wrote it."""
+    files = {os.fsdecode(decode(entry["path_b64"])): entry for entry in filesystem if entry["kind"] == "file"}
+    differences = []
+    for outcome in outcomes:
+        where = f"{outcome['kind']} {outcome['path']}{outcome['pointer']}"
+        try:
+            value = pointer(json_value(decode(files[outcome["path"]]["bytes_b64"])), outcome["pointer"])
+        except (KeyError, IndexError, TypeError, ValueError, UnicodeError) as error:
+            differences.append(f"outcome {where}: unreadable: {error!r}")
+            continue
+        if digest(value) != digest(outcome["value"]):
+            differences.append(f"outcome {where}: expected {json.dumps(outcome['value'])}, actual {json.dumps(value)}")
     return differences
 
 
@@ -613,8 +893,9 @@ def differential_case(case, left, right):
 
 
 def differential(left, right, case):
-    expected = {"exit": left["exit"], "filesystem": left["filesystem"]}
-    errors = []
+    expected = {"exit": left["exit"], "filesystem": left["filesystem"],
+                "outcomes": case.get("expected", {}).get("outcomes", [])}
+    errors = [f"primary consistency: {issue}" for issue in left.get("inconsistencies", [])]
     for stream in ("stdout", "stderr"):
         if case["expected"][stream]["mode"] in ("json", "json-pointers") and left["exit"] == 0:
             try:
@@ -704,7 +985,11 @@ def default_commands(corpus):
     commands = {}
     programs = {step["program"] for case in corpus["cases"] for step in [case, *case.get("steps", [])] if "program" in step}
     for program in sorted(programs):
-        if program in PYTHON_PROGRAMS:
+        if program in SETUP_PROGRAMS:
+            continue
+        if program in PYTHON_ENTROPY:
+            commands[program] = entropy_command(REPO / PYTHON_ENTROPY[program])
+        elif program in PYTHON_PROGRAMS:
             commands[program] = [sys.executable, str(REPO / PYTHON_PROGRAMS[program])]
         elif program in PYTHON_DRIVERS:
             commands[program] = [sys.executable, "-c", PYTHON_DRIVERS[program],
@@ -719,6 +1004,14 @@ def default_commands(corpus):
             except (rust_runtime.Refused, rust_runtime.InputError) as error:
                 raise ValueError(f"{program}: {error}") from None
     return commands
+
+
+def entropy_command(script):
+    return [sys.executable, "-c", ENTROPY_DRIVER, str(script)]
+
+
+def with_setup(commands):
+    return {**commands, **{name: [sys.executable, "-c", source] for name, source in SETUP_PROGRAMS.items()}}
 
 
 def load_decisions(path):
@@ -760,12 +1053,94 @@ def load_corpus(path):
         if "steps" in case and ({"argv", "stdin_b64", "expected", "baseline_defect"} & set(case)
                                 or not any("argv" in step for step in case["steps"])):
             raise ValueError(f"{case['id']}: a step case keeps its commands and expectations in its steps")
+        if "structured" in case:
+            check_structured(case)
+        for step in [case, *case.get("steps", [])]:
+            for outcome in step.get("expected", {}).get("outcomes", []):
+                if set(outcome) != {"kind", "path", "pointer", "value"} or outcome["kind"] not in GRADING_OUTCOMES:
+                    raise ValueError(f"{case['id']}: an outcome states its kind ({', '.join(GRADING_OUTCOMES)}), "
+                                     "path, pointer and value")
         decision = decisions[case["id"]]
         if not decision["reason"] or decision["contract_sha256"] != digest(case):
             raise ValueError(f"{case['id']}: changed contract needs an explicit decision")
     if ids != set(decisions):
         raise ValueError("corpus case ids differ from decisions; removal needs an explicit decision")
     return corpus
+
+
+REAL_RECORD = REPO / "tools/behavior_contracts/grading-real-record.v1.json"
+
+
+def load_real_record(path):
+    listing = json_value(path.read_bytes())
+    if listing.get("format") != "behavior-real-record/1" or set(listing) - {"format", "description", "commands"}:
+        raise ValueError(f"{path}: unsupported real-record list")
+    ids = set()
+    for command in listing["commands"]:
+        if set(command) - {"id", "program", "argv", "outputs", "timeout"} or command["id"] in ids:
+            raise ValueError(f"{path}: each command has a unique id, a program, argv and optional outputs")
+        ids.add(command["id"])
+        for name in [*command.get("outputs", []), *(arg["output"] for arg in command["argv"] if isinstance(arg, dict))]:
+            relative(base64.b64encode(os.fsencode(name)).decode("ascii"))
+    return listing
+
+
+def root_state(root):
+    """What a read-only command must leave unchanged: Git's view of a checkout, or every entry of another root."""
+    inside = subprocess.run(["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"], capture_output=True)
+    if inside.returncode == 0 and inside.stdout.strip() == b"true":
+        return subprocess.run(["git", "-C", str(root), "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+                              capture_output=True, check=True).stdout
+    return json.dumps(snapshot(root), sort_keys=True).encode("ascii")
+
+
+def run_real_record(command, commands, root):
+    """Run one listed command on the checked-out record, with its named outputs in a disposable directory."""
+    with tempfile.TemporaryDirectory(prefix="behavior-contract-real-") as temporary:
+        out, home = Path(temporary) / "out", Path(temporary) / "home"
+        out.mkdir()
+        home.mkdir()
+        argv = [str(out / arg["output"]) if isinstance(arg, dict) else arg for arg in command["argv"]]
+        environment = {"PATH": os.defpath, "HOME": str(home), "LC_ALL": "C.UTF-8", "TZ": "UTC",
+                       "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUTF8": "1"}
+        before = root_state(root)
+        result = subprocess.run([*commands[command["program"]], *argv], cwd=root, capture_output=True,
+                                env=environment, timeout=command.get("timeout", 300))
+        changed = root_state(root) != before
+        outputs = {name: (out / name).read_bytes() if (out / name).is_file() else None
+                   for name in command.get("outputs", [])}
+        return {"exit": result.returncode, "stdout": result.stdout, "stderr": result.stderr, "outputs": outputs,
+                "changed": changed}
+
+
+def real_record_differences(left, right):
+    differences = [f"{side} changed the checked-out record" for side, run in (("primary", left), ("candidate", right))
+                   if run["changed"]]
+    if left["exit"] != right["exit"]:
+        differences.append(f"exit: primary {left['exit']}, candidate {right['exit']}")
+    for stream in ("stdout", "stderr"):
+        if left[stream] != right[stream]:
+            differences.append(f"{stream} bytes: primary {left[stream]!r}, candidate {right[stream]!r}")
+    for name, data in left["outputs"].items():
+        if data != right["outputs"][name]:
+            differences.append(f"output {name}: primary {data!r}, candidate {right['outputs'][name]!r}")
+    return differences
+
+
+def real_record(listing, commands, other, root):
+    if not listing["commands"]:
+        print("real record: no commands are listed")
+        return 0
+    failed = 0
+    for command in listing["commands"]:
+        differences = real_record_differences(run_real_record(command, commands, root),
+                                              run_real_record(command, other, root))
+        if differences:
+            failed += 1
+            print(f"DIFFERENTIAL {command['id']}\n" + "\n".join(differences))
+        else:
+            print(f"PASS {command['id']}")
+    return 1 if failed else 0
 
 
 def main():
@@ -775,12 +1150,22 @@ def main():
     parser.add_argument("--differential", type=Path)
     parser.add_argument("--allow-known-defects", action="store_true")
     parser.add_argument("--verify-decision-history", action="store_true")
+    parser.add_argument("--real-record", type=Path, nargs="?", const=REAL_RECORD)
+    parser.add_argument("--root", type=Path, default=REPO)
     args = parser.parse_args()
     try:
         if args.verify_decision_history:
             verify_decision_history(REPO)
             print("Published decision history verified")
             return 0
+        if args.real_record:
+            if not args.differential:
+                raise ValueError("--real-record compares two implementations; name the second with --differential")
+            listing = load_real_record(args.real_record)
+            commands = (json.loads(args.implementations.read_text(encoding="utf-8")) if args.implementations
+                        else default_commands({"cases": listing["commands"]}))
+            return real_record(listing, commands, json.loads(args.differential.read_text(encoding="utf-8")),
+                               args.root.resolve())
         corpus = load_corpus(args.corpus)
         commands = (json.loads(args.implementations.read_text(encoding="utf-8")) if args.implementations
                     else default_commands(corpus))
