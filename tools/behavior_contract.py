@@ -121,22 +121,14 @@ parser.add_argument("--missing", action="append", default=[])
 args = parser.parse_args()
 collect_run.collect(args.run.resolve(), args.missing)
 """,
-    "import-benchmark": """import sys
-from pathlib import Path
-sys.path.insert(0, sys.argv.pop(1))
-sys.argv[0] = "import_benchmark.py"
-import import_benchmark
-import_benchmark.ROOT = Path.cwd()
-import_benchmark.MANIFEST = import_benchmark.ROOT / "bench/import-manifest.json"
-sys.exit(import_benchmark.main())
-""",
 }
-DRIVER_ARGUMENTS = {"native-artifacts": ["bench/tools"], "collect-run": ["tools"], "import-benchmark": ["tools"]}
+DRIVER_ARGUMENTS = {"native-artifacts": ["bench/tools"], "collect-run": ["tools"]}
 RUST_PROGRAMS = {"roster": ("bench-tools", ["roster"]), "normalize-thermo": ("bench-tools", ["normalize-thermo"]),
                  "derive-packet": ("bench-tools", ["derive-packet"]), "build-packet": ("bench-tools", ["build-packet"]),
                  "export-explorer": ("bench-tools", ["export-explorer"]), "archive": ("bench-tools", ["archive"]),
                  "evidence": ("bench-tools", ["evidence"]), "recover-evidence": ("bench-tools", ["evidence", "recover"]),
-                 "restore-local": ("bench-tools", ["evidence", "restore-local"])}
+                 "restore-local": ("bench-tools", ["evidence", "restore-local"]),
+                 "import-benchmark": ("bench-tools", ["import-benchmark"])}
 # Python programs that draw blind tokens or shuffles run under ENTROPY_DRIVER, so a recorded expectation is the
 # same on every recording. The grading slices of #156 add their programs here.
 PYTHON_ENTROPY = {}

@@ -1159,7 +1159,7 @@ fn run_evidence(command: EvidenceCommand) -> Result<ExitCode, ExitCode> {
     evidence_outcome(outcome)
 }
 
-/// `import_benchmark.py --check` or `--preserve`, run in the repository: a refusal is printed after
+/// The `--check` or `--preserve` of `tools/import_benchmark.py`, run in the repository: a refusal is printed after
 /// `import_benchmark.py: ` on stderr with exit 1, the status Python's traceback had.
 fn run_import_benchmark(arguments: ImportBenchmarkArgs) -> Result<ExitCode, ExitCode> {
     if !arguments.check && arguments.preserve.is_none() {

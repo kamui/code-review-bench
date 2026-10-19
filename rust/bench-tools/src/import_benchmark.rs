@@ -144,7 +144,7 @@ pub fn verify(store: &mut Store<'_>, root: &PyPath, manifest: &Value) -> Result<
     ))
 }
 
-/// `import_benchmark.py --check`.
+/// The `--check` of `tools/import_benchmark.py`.
 pub fn check(store: &mut Store<'_>, root: &PyPath) -> Result<String> {
     let manifest = read_manifest(root)?;
     verify(store, root, &manifest)
@@ -316,7 +316,7 @@ fn replace(disk: &mut dyn Disk, path: &PyPath, text: &str) -> Result<()> {
         .map_err(|error| os_refusal(&error, &directory))
 }
 
-/// `import_benchmark.py --preserve NAME...`: copy each named file's imported bytes, from the current file or Git
+/// The `--preserve NAME...` of `tools/import_benchmark.py`: copy each named file's imported bytes, from the current file or Git
 /// history, under `artifacts/import-source/` and record that copy as its `preserved_path`. The manifest is
 /// replaced only after the new manifest verifies. Returns the summary line.
 pub fn preserve(store: &mut Store<'_>, root: &PyPath, names: &[Vec<u8>]) -> Result<String> {

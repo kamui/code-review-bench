@@ -125,7 +125,7 @@ under `replay/`, so no case calls `gh` or the network. `build-packet-non-utf8-ou
 | [`evidence-store.v1.json`](../../../tools/behavior_contracts/evidence-store.v1.json) | `evidence-store`, `evidence`, `python-resolve`, `recover-evidence`, `restore-local` | `evidence_store.py` directly; `python-resolve` calls the retained `evidence_store.resolve` as `prune_workspace.py` does. `evidence`, `recover-evidence` and `restore-local` run `bench-tools evidence`, `evidence recover` and `evidence restore-local` |
 | [`native-artifacts.v1.json`](../../../tools/behavior_contracts/native-artifacts.v1.json) | `native-artifacts` | `native_artifacts.py`; its driver adds `file ROOT INDEX OUT [--native-relative PATH]`, which runs `file_artifacts` and prints the pin |
 | [`evidence-inventory.v1.json`](../../../tools/behavior_contracts/evidence-inventory.v1.json) | `evidence-inventory`, `collect-run` | `evidence_inventory.py` directly; `collect_run.py` through a driver that reads the case directory as the repository |
-| [`import-benchmark.v1.json`](../../../tools/behavior_contracts/import-benchmark.v1.json) | `import-benchmark` | `import_benchmark.py --check` through the same kind of driver |
+| [`import-benchmark.v1.json`](../../../tools/behavior_contracts/import-benchmark.v1.json) | `import-benchmark` | None since [#223](https://github.com/kamui/code-review-bench/issues/223) deleted `import_benchmark.py`; `bench-tools import-benchmark`. Before that, `import_benchmark.py` ran through the same kind of driver |
 
 ```sh
 python3 tools/behavior_contract.py --allow-known-defects --corpus tools/behavior_contracts/evidence-store.v1.json
@@ -168,6 +168,12 @@ message, so these corpora run with `--allow-known-defects`: `recover-unknown-sou
 `collect-run-checksum-mismatch` and `import-check-changed-file`. Each decision records the old and new behavior.
 Each observation masks the traceback's frames with `mask_patterns` and pins the terminal exception type and message,
 so an unrelated crash is a failure, not the known defect.
+
+[#223](https://github.com/kamui/code-review-bench/issues/223) ports `import_benchmark.py --check` and `--preserve` to
+`bench-tools import-benchmark`. `import-benchmark-decisions.v3.json` records each case where the two differ, every
+other traceback included, with Python's output as its `baseline_defect`. The corpus ran against both, with a
+differential, before the Python was deleted; its expectations are now the gate. The `import-preserve-*` cases that
+recover bytes from Git history hold a small `.git` directory, without config, in their `initial` entries.
 
 ## Grading comparison features
 

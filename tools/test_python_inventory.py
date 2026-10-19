@@ -38,10 +38,10 @@ class InventoryTests(unittest.TestCase):
                 destination = root / path
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text(text)
-            answers = "docs/research/builtin-review-benchmark-2026-09-24/answers.py"
+            loaded = "docs/research/portable-evidence-2026-10-10/freeze_commits.py"
             helper = "docs/research/reference-calibration-2026-10-03/blind_items.py"
-            write("bench/tools/test_answers.py", f'import importlib.util\nSCRIPT = "{answers}"\nMENTION = "record.py"\n')
-            write(answers, "import json\n")
+            write("bench/tools/test_loader.py", f'import importlib.util\nSCRIPT = "{loaded}"\nMENTION = "record.py"\n')
+            write(loaded, "import json\n")
             write(helper, "import json\n")
             write("docs/research/unused/record.py", "import json\n")
             write("docs/nested/workflow.md", "Run [the helper](../research/reference-calibration-2026-10-03/blind_items.py).\n")
@@ -63,7 +63,7 @@ class InventoryTests(unittest.TestCase):
                 write(path, "import json\n")
             write("bench/policies/grading-commands.v1.json", '{"test_kind":"python"}')
             write("bench/tools/regrade_queues.sh", "python3 - <<'PY'\nprint('hello')\nPY\n")
-            write("package.json", '{"scripts":{"x":"python3.12 bench/tools/test_answers.py"}}')
+            write("package.json", '{"scripts":{"x":"python3.12 bench/tools/test_loader.py"}}')
             write("bench/import-manifest.json", '{"files":[],"repository":"fixture","revision":"unknown"}')
             write("bench/runs/frozen/manifest.json", '{"planned_cells":1,"freeze_commit":null}')
             write("bench/runs/frozen/attempts/att-001/attempt.json", '{"disposition":"harness-invalid"}')
@@ -75,8 +75,8 @@ class InventoryTests(unittest.TestCase):
             result = inventory.census(inventory.Snapshot("HEAD", root))
             self.assertEqual(result["tracked_paths"], 26)
             files = {row["path"]: row for row in result["python_files"]}
-            self.assertEqual(files[answers]["class"], "active-outside-tooling")
-            self.assertEqual(files[answers]["callers"][0]["line"], 2)
+            self.assertEqual(files[loaded]["class"], "active-outside-tooling")
+            self.assertEqual(files[loaded]["callers"][0]["line"], 2)
             self.assertNotIn("untracked.py", files)
             self.assertEqual(files[helper]["class"], "active-outside-tooling")
             self.assertEqual(files[helper]["migration"]["issue"], 156)
