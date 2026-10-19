@@ -63,7 +63,8 @@ sys.exit(upstream.main())
 """,
 }
 RUST_PROGRAMS = {"roster": ("bench-tools", ["roster"]), "normalize-thermo": ("bench-tools", ["normalize-thermo"]),
-                 "derive-packet": ("bench-tools", ["derive-packet"]), "build-packet": ("bench-tools", ["build-packet"])}
+                 "derive-packet": ("bench-tools", ["derive-packet"]), "build-packet": ("bench-tools", ["build-packet"]),
+                 "export-explorer": ("bench-tools", ["export-explorer"])}
 DECISIONS = re.compile(r"(?P<family>.+)-decisions\.v[^/]*\.json")
 
 

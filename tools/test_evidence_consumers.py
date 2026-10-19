@@ -111,10 +111,8 @@ class ColdConsumersTest(unittest.TestCase):
                 self.assertEqual((base / 'restored-native/run/scratch/probe.sh').stat().st_mode & 0o777, 0o755)
                 archive = transcript_entries[0]
                 (cold / archive['path']).unlink()
-                with patch.object(export_explorer, 'ROOT', cold):
-                    url = export_explorer.evidence(cold / archive['path'], cold / 'public', archive['sha256'])
-                self.assertIn('/evidence/artifacts/transcripts/', url)
-                self.assertEqual(store.digest(cold / 'public/evidence' / archive['path']), archive['sha256'])
+                export_explorer.restore(cold, [{'path': archive['path'], 'sha256': archive['sha256']}])
+                self.assertEqual(store.digest(cold / archive['path']), archive['sha256'])
                 store.materialize(manifest, cold, [grading_archive], remote=remote)
             with tarfile.open(cold / grading_archive) as bundle:
                 self.assertEqual(bundle.extractfile('work/home/.codex/config.toml').read(), b'model = "fixture"\n')
@@ -181,9 +179,8 @@ class ColdConsumersTest(unittest.TestCase):
                 self.assertEqual(prune_workspace.prune(valid, workspace)['archive'], str(cold / entries[0]['path']))
                 with self.assertRaisesRegex(prune_workspace.Refused, 'did not complete validly'):
                     prune_workspace.prune(failed, workspace.with_name('att-002'))
-                with patch.object(export_explorer, 'ROOT', cold):
-                    export_explorer.evidence(cold / entries[1]['path'], cold / 'public', entries[1]['sha256'])
-                self.assertEqual(store.digest(cold / 'public/evidence' / entries[1]['path']), entries[1]['sha256'])
+                export_explorer.restore(cold, [{'path': entries[1]['path'], 'sha256': entries[1]['sha256']}])
+                self.assertEqual(store.digest(cold / entries[1]['path']), entries[1]['sha256'])
 
                 forget_local_copies()
                 asset = remote_path / remote.assets[0]['name']
@@ -193,8 +190,8 @@ class ColdConsumersTest(unittest.TestCase):
                     collect_run.collect(cold / 'bench/runs/example')
                 with self.assertRaisesRegex(prune_workspace.Refused, 'missing or changed evidence'):
                     prune_workspace.prune(valid, workspace)
-                with patch.object(export_explorer, 'ROOT', cold), self.assertRaisesRegex(store.EvidenceError, 'missing or changed evidence'):
-                    export_explorer.evidence(cold / entries[1]['path'], cold / 'public-changed', entries[1]['sha256'])
+                with self.assertRaisesRegex(store.EvidenceError, 'missing or changed evidence'):
+                    export_explorer.restore(cold, [{'path': entries[1]['path'], 'sha256': entries[1]['sha256']}])
                 asset.write_bytes(published)
                 remote.assets.clear()
                 with self.assertRaisesRegex(store.EvidenceError, 'asset identity changed'):

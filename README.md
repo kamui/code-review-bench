@@ -20,10 +20,12 @@ With an approved client, model credentials, and the target cache ready, run one 
 
 ## Run locally
 
-Install [Bun](https://bun.sh/), Python 3.11 or later, and [GitHub CLI](https://cli.github.com/). Authenticate with `gh auth login` for release downloads:
+Install [Bun](https://bun.sh/), Python 3.11 or later, [GitHub CLI](https://cli.github.com/), and [rustup](https://rustup.rs/). Authenticate with `gh auth login` for release downloads. The explorer export runs the Rust `bench-tools` executable, built once per checkout revision from a clean, committed checkout ([Rust runtime](docs/python-migration/runtime.md#install)):
 
 ```sh
 bun install --frozen-lockfile
+(cd rust/bench-tools && rustup show && cargo fetch --locked)
+python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select
 bun run dev
 ```
 
