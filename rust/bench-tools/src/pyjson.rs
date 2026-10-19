@@ -21,8 +21,25 @@ pub enum Value {
     Int(String),
     Float(f64),
     Str(String),
+    /// A `str` that `os.fsdecode` made from bytes that are not UTF-8, as [`Value::os_text`] builds it.
+    OsText(OsText),
     Array(Vec<Value>),
     Object(Object),
+}
+
+/// Bytes that are not UTF-8, standing for the `str` Python decodes from them with `surrogateescape`: each byte
+/// outside a valid sequence is a lone surrogate U+DC80..U+DCFF, which `json.dumps` writes as `\udcXX`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OsText(Vec<u8>);
+
+impl OsText {
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    fn points(&self) -> Vec<u32> {
+        pytext::surrogateescape(&self.0)
+    }
 }
 
 /// A `dict`: keys are unique and keep the position of their first occurrence.
@@ -566,6 +583,7 @@ fn write_value(
         }),
         Value::Float(number) => out.push_str(&float_repr(*number)),
         Value::Str(text) => write_string(out, text, options.ensure_ascii),
+        Value::OsText(text) => write_points(out, &text.points(), options.ensure_ascii),
         Value::Array(values) if values.is_empty() => out.push_str("[]"),
         Value::Object(object) if object.is_empty() => out.push_str("{}"),
         Value::Array(values) => {
@@ -614,27 +632,54 @@ fn close(out: &mut String, options: &Dumps, level: usize, bracket: char) {
 fn write_string(out: &mut String, text: &str, ensure_ascii: bool) {
     out.push('"');
     for c in text.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{8}' => out.push_str("\\b"),
-            '\u{c}' => out.push_str("\\f"),
-            c if u32::from(c) < 0x20 || (ensure_ascii && !(' '..='~').contains(&c)) => {
-                let mut units = [0u16; 2];
-                for unit in c.encode_utf16(&mut units) {
-                    let _ = write!(out, "\\u{unit:04x}");
-                }
+        write_char(out, c, ensure_ascii);
+    }
+    out.push('"');
+}
+
+/// A string of code points that may hold lone surrogates. `json.dumps` escapes a surrogate under `ensure_ascii`;
+/// without it Python keeps the surrogate, which no UTF-8 text can hold, so it is escaped either way.
+fn write_points(out: &mut String, points: &[u32], ensure_ascii: bool) {
+    out.push('"');
+    for point in points {
+        match char::from_u32(*point) {
+            Some(c) => write_char(out, c, ensure_ascii),
+            None => {
+                let _ = write!(out, "\\u{point:04x}");
             }
-            c => out.push(c),
         }
     }
     out.push('"');
 }
 
+fn write_char(out: &mut String, c: char, ensure_ascii: bool) {
+    match c {
+        '"' => out.push_str("\\\""),
+        '\\' => out.push_str("\\\\"),
+        '\n' => out.push_str("\\n"),
+        '\r' => out.push_str("\\r"),
+        '\t' => out.push_str("\\t"),
+        '\u{8}' => out.push_str("\\b"),
+        '\u{c}' => out.push_str("\\f"),
+        c if u32::from(c) < 0x20 || (ensure_ascii && !(' '..='~').contains(&c)) => {
+            let mut units = [0u16; 2];
+            for unit in c.encode_utf16(&mut units) {
+                let _ = write!(out, "\\u{unit:04x}");
+            }
+        }
+        c => out.push(c),
+    }
+}
+
 impl Value {
+    /// `os.fsdecode(raw)`: a `Str` when the bytes are UTF-8, otherwise their `surrogateescape` text.
+    pub fn os_text(raw: &[u8]) -> Self {
+        match std::str::from_utf8(raw) {
+            Ok(text) => Self::Str(text.to_string()),
+            Err(_) => Self::OsText(OsText(raw.to_vec())),
+        }
+    }
+
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Self::Str(text) => Some(text),
@@ -663,7 +708,7 @@ impl Value {
             Self::Bool(_) => "bool",
             Self::Int(_) => "int",
             Self::Float(_) => "float",
-            Self::Str(_) => "str",
+            Self::Str(_) | Self::OsText(_) => "str",
             Self::Array(_) => "list",
             Self::Object(_) => "dict",
         }
@@ -677,6 +722,7 @@ impl Value {
             Self::Int(digits) => digits != "0",
             Self::Float(number) => *number != 0.0,
             Self::Str(text) => !text.is_empty(),
+            Self::OsText(_) => true,
             Self::Array(values) => !values.is_empty(),
             Self::Object(object) => !object.is_empty(),
         }
@@ -708,6 +754,7 @@ impl Value {
         match (self, other) {
             (Self::Null, Self::Null) => true,
             (Self::Str(left), Self::Str(right)) => left == right,
+            (Self::OsText(left), Self::OsText(right)) => left == right,
             (Self::Float(left), Self::Float(right)) => left == right,
             (Self::Array(left), Self::Array(right)) => {
                 left.len() == right.len() && left.iter().zip(right).all(|(a, b)| a.py_eq(b))
@@ -738,6 +785,7 @@ impl Value {
             Self::Int(digits) => digits.clone(),
             Self::Float(number) => float_repr(*number),
             Self::Str(text) => pytext::repr_str(text),
+            Self::OsText(text) => pytext::repr(&text.points()),
             Self::Array(values) => {
                 let inner: Vec<String> = values.iter().map(Self::py_repr).collect();
                 format!("[{}]", inner.join(", "))
@@ -753,9 +801,11 @@ impl Value {
     }
 
     /// `str(value)`, as an f-string formats it.
+    /// An `OsText` is written as Python writes it to stderr, its surrogates as `\\udcXX`.
     pub fn py_str(&self) -> String {
         match self {
             Self::Str(text) => text.clone(),
+            Self::OsText(text) => pytext::stderr_text(text.as_bytes()),
             _ => self.py_repr(),
         }
     }
@@ -948,6 +998,28 @@ mod tests {
         for (value, expected) in cases {
             assert_eq!(float_repr(value), expected);
         }
+    }
+
+    #[test]
+    fn os_text_is_written_as_python_writes_surrogateescape_text() {
+        let value = Value::Array(vec![
+            Value::os_text(b"a\xffb\xc3\xa9\xee\x80\x80"),
+            Value::os_text(b"x"),
+        ]);
+        assert!(matches!(&value.as_array().unwrap()[1], Value::Str(text) if text == "x"));
+        let options = Dumps {
+            indent: Some(2),
+            ..Dumps::default()
+        };
+        assert_eq!(
+            dumps(&value, &options),
+            "[\n  \"a\\udcffb\\u00e9\\ue000\",\n  \"x\"\n]"
+        );
+        let text = Value::os_text(b"a\xffb\xc3\xa9");
+        assert_eq!(text.py_repr(), "'a\\udcffbé'");
+        assert_eq!(text.type_name(), "str");
+        assert!(text.py_eq(&Value::os_text(b"a\xffb\xc3\xa9")));
+        assert!(!text.py_eq(&Value::Str("a\u{fffd}b\u{e9}".to_string())));
     }
 
     #[test]

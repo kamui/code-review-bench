@@ -5,8 +5,8 @@ use bench_tools::pyjson::{self, Duplicates};
 use bench_tools::pytext::{self, PyPath};
 use bench_tools::schema::{SchemaError, Validator};
 use bench_tools::{
-    archive, build_packet, claims, derive_packet, diff_identity, evidence, export_explorer,
-    normalize_thermo, pyfs, pyunicode, rates, roster, upstream,
+    archive, build_packet, claims, derive_packet, diff_identity, evidence, evidence_inventory,
+    export_explorer, normalize_thermo, pyfs, pyunicode, rates, roster, upstream,
 };
 use clap::builder::PossibleValuesParser;
 use clap::error::ErrorKind;
@@ -330,6 +330,40 @@ enum EvidenceCommand {
         path: Vec<OsString>,
         #[arg(long)]
         offline: bool,
+    },
+    /// Collect portable, checksum-verified transcript references for a completed run into RUN/transcripts.json, as
+    /// tools/collect_run.py did, with the current directory as the repository.
+    #[command(infer_long_args = true)]
+    Collect {
+        #[arg(long, allow_negative_numbers = true)]
+        run: OsString,
+        /// A record directory of the run, such as probes/att-002, whose archive no copy holds; its entry keeps the
+        /// frozen hash with status missing.
+        #[arg(long, value_name = "RECORD", allow_negative_numbers = true)]
+        missing: Vec<OsString>,
+    },
+    /// Reconcile a saved host inventory with evidence identities, as reconcile_evidence.py did; never authorize
+    /// deletion.
+    #[command(infer_long_args = true)]
+    Reconcile {
+        #[arg(long, allow_negative_numbers = true)]
+        inventory: OsString,
+        #[arg(long, allow_negative_numbers = true)]
+        root: Option<OsString>,
+        #[arg(long, allow_negative_numbers = true)]
+        out: OsString,
+    },
+    /// Inventory execution storage without deleting or changing it, as evidence_inventory.py does: every entry that
+    /// is not a directory, including ignored files and symlinks. Classification never authorizes deletion.
+    #[command(infer_long_args = true)]
+    Inventory {
+        #[arg(long, required = true, allow_negative_numbers = true)]
+        root: Vec<OsString>,
+        #[arg(long, allow_negative_numbers = true)]
+        out: OsString,
+        /// Also hash rebuildable and account-state files locally.
+        #[arg(long)]
+        hash_all: bool,
     },
     /// Restore a captured local path into NEW_FILE, as restore-local.py does, from the repository.
     #[command(infer_long_args = true)]
@@ -1072,6 +1106,33 @@ fn run_evidence(command: EvidenceCommand) -> Result<ExitCode, ExitCode> {
     {
         return run_restore_local(&label, &original, &output);
     }
+    if let EvidenceCommand::Inventory {
+        root,
+        out,
+        hash_all,
+    } = command
+    {
+        return run_inventory(&root, &out, hash_all);
+    }
+    if let EvidenceCommand::Reconcile {
+        inventory,
+        root,
+        out,
+    } = command
+    {
+        let root = evidence_root(root.as_deref())?;
+        return report_failure(
+            "reconcile_evidence.py",
+            evidence_inventory::reconcile::run(
+                &mut evidence::System,
+                pytext::os_bytes(&inventory),
+                &root,
+                pytext::os_bytes(&out),
+            )
+            .map(String::into_bytes)
+            .map_err(String::into_bytes),
+        );
+    }
     let mut remote = evidence::GitHub;
     let mut disk = evidence::System;
     let mut store = evidence::Store {
@@ -1140,9 +1201,62 @@ fn run_evidence(command: EvidenceCommand) -> Result<ExitCode, ExitCode> {
             )
             .map(|()| "Recovery copy verified and restored.".to_string())
         }
-        EvidenceCommand::RestoreLocal { .. } => unreachable!("handled above"),
+        EvidenceCommand::Collect { run, missing } => {
+            let root = evidence_root(None)?;
+            let missing: Vec<Vec<u8>> = missing.into_iter().map(bytes).collect();
+            return report_failure(
+                "collect_run.py",
+                evidence::collect::collect(&mut store, &root, pytext::os_bytes(&run), &missing)
+                    .map_err(|failure| failure.message().to_vec()),
+            );
+        }
+        EvidenceCommand::RestoreLocal { .. }
+        | EvidenceCommand::Inventory { .. }
+        | EvidenceCommand::Reconcile { .. } => {
+            unreachable!("handled above")
+        }
     };
     evidence_outcome(outcome)
+}
+
+/// A command whose Python raised a traceback for every failure: its line on stdout, or `PROGRAM: ` and the
+/// exception's message on stderr with exit 1, a byte that is not UTF-8 written as Python writes it there.
+fn report_failure(program: &str, outcome: Result<Vec<u8>, Vec<u8>>) -> Result<ExitCode, ExitCode> {
+    match outcome {
+        Ok(line) => {
+            write_stdout(&[&line[..], b"\n"].concat())?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(message) => {
+            eprintln!("{program}: {}", pytext::stderr_text(&message));
+            Err(ExitCode::from(1))
+        }
+    }
+}
+
+/// `evidence_inventory.main`: the summary on stdout, a violation on stdout with exit 1, and an I/O failure on stderr
+/// with exit 2.
+fn run_inventory(roots: &[OsString], out: &OsStr, hash_all: bool) -> Result<ExitCode, ExitCode> {
+    let roots: Vec<Vec<u8>> = roots.iter().map(|root| bytes(root.clone())).collect();
+    match evidence_inventory::run(
+        &mut evidence::System,
+        &roots,
+        pytext::os_bytes(out),
+        hash_all,
+    ) {
+        Ok(summary) => {
+            write_stdout(format!("{summary}\n").as_bytes())?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(evidence_inventory::Error::Violation(message)) => {
+            write_stdout(&[&b"inventory: "[..], &message, b"\n"].concat())?;
+            Err(ExitCode::from(1))
+        }
+        Err(evidence_inventory::Error::Io(message)) => {
+            eprintln!("inventory: {message}");
+            Err(ExitCode::from(2))
+        }
+    }
 }
 
 /// `restore-local.py ROOT_NAME ORIGINAL_RELATIVE_PATH NEW_FILE`, run in the repository: every refusal is its message
