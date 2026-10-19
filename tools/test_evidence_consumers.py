@@ -42,6 +42,16 @@ def rust_evidence(remote, *arguments):
                               capture_output=True, text=True, env=environment)
 
 
+def native_tools(*arguments):
+    return subprocess.run([str(rust_runtime.resolve('bench-tools')), 'native-artifacts', *map(str, arguments)],
+                          capture_output=True, text=True)
+
+
+def tree(root):
+    return {path.relative_to(root).as_posix(): (path.read_bytes(), path.stat().st_mode & 0o777)
+            for path in root.rglob('*') if path.is_file()}
+
+
 class ColdConsumersTest(unittest.TestCase):
     def test_success_failed_replacement_and_grading_survive_origin_removal(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -83,7 +93,9 @@ class ColdConsumersTest(unittest.TestCase):
             record_path = native_out / 'attempt.json'
             record = store.read(record_path)
             record_path.unlink()
-            pin = native_artifacts.file_artifacts(native_root, index, native_out, 'review.json')
+            filed = native_tools('file', native_root, index, native_out, '--native-relative', 'review.json')
+            self.assertEqual(filed.returncode, 0, filed.stdout + filed.stderr)
+            pin = json.loads(filed.stdout)['pin']
             record_path.write_text(json.dumps({**record, 'native_artifact_storage': pin}))
             grading = base / 'queue/run/target/attempt-1'
             work = grading / 'work'
@@ -130,6 +142,10 @@ class ColdConsumersTest(unittest.TestCase):
                 native_artifacts.verify(native_cold)
                 native_artifacts.restore(native_cold, base / 'restored-native')
                 self.assertEqual((base / 'restored-native/run/scratch/probe.sh').stat().st_mode & 0o777, 0o755)
+                for command in (['verify', native_cold], ['restore', native_cold, '--out', base / 'restored-native-rust']):
+                    done = native_tools(*command)
+                    self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                self.assertEqual(tree(base / 'restored-native-rust'), tree(base / 'restored-native'))
                 archive = transcript_entries[0]
                 (cold / archive['path']).unlink()
                 done = rust_evidence(remote, 'resolve', archive['path'], '--sha256', archive['sha256'], '--root', str(cold))

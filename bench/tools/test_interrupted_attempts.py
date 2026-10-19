@@ -25,10 +25,18 @@ from unittest.mock import patch
 import file_attempt
 from test_claude_dispatch import fake_bench_tools
 import run_cell
+import rust_runtime
 
 TOOLS = Path(__file__).resolve().parent
 ROOT = TOOLS.parents[1]
 RUN_ID = "2026-01-01-interrupted"
+
+
+def bench_tools_pin() -> dict:
+    """The checkout's installed bench-tools, which files attempts, as a frozen run pins it."""
+    rust_runtime.resolve("bench-tools")
+    return rust_runtime.current_pin(rust_runtime.located(rust_runtime.default_store()), "bench-tools")
+
 PROMPT = "`high effort variant`\n\nReview the diff."
 PROMPT_HASH = hashlib.sha256(PROMPT.encode("utf-8")).hexdigest()
 RUBRIC = "You are acting as a reviewer for a proposed code change"
@@ -97,6 +105,8 @@ class Fixture(unittest.TestCase):
                          "caps": {"max_attempts": 4, "replacements": 2, "spend_usd": 50.0, "closeout_reserve_usd": 0.0,
                                   "max_in_flight": 1, "attempt_usd": 5.0}}
         (self.run_dir / "manifest.json").write_text(json.dumps(self.manifest), encoding="utf-8")
+        self.runtimes = {"bench-tools": bench_tools_pin()}
+        (self.run_dir / "runtimes.frozen.json").write_text(json.dumps(self.runtimes), encoding="utf-8")
 
     def clone(self, attempt: Path) -> Path:
         clone = attempt / "clone"
@@ -172,7 +182,7 @@ class Fixture(unittest.TestCase):
             [sys.executable, str(TOOLS / "file_attempt.py"), "--attempt-dir", str(attempt), "--clone", str(attempt / "clone"),
              "--target", str(self.run_dir / "fixture"), "--arm", str(self.root / "bench/arms" / f"{ARMS[harness]['id']}.json"),
              "--run-id", RUN_ID, "--attempt-id", attempt.name, "--replicate", "1", "--out", str(self.run_dir / "attempts" / attempt.name),
-             "--rates", str(attempt / "rates.json"), "--archive-root", str(self.root / "archive"), "--billing-mode", "subscription"],
+             "--run", str(self.run_dir), "--rates", str(attempt / "rates.json"), "--archive-root", str(self.root / "archive"), "--billing-mode", "subscription"],
             capture_output=True, text=True, encoding="utf-8")
 
     def filed(self, attempt: Path, harness: str = "claude") -> dict:
