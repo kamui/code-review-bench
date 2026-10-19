@@ -22,9 +22,6 @@
 use crate::pytext::{self, PyPath};
 use crate::sha256;
 
-pub const USAGE: &str =
-    "usage: bench-tools derive-packet [-h] [--no-newline-translation] --out OUT legacy";
-
 const PREAMBLE: [&str; 3] = [
     "Forge state of the pull request frozen at the cutoff named in section 6; records first",
     "published after the cutoff are omitted. This packet carries facts only. The run supplies its",

@@ -20,10 +20,10 @@ explorer export, as [the explorer export](#the-explorer-export) describes. Slice
 
 [`rust/bench-tools`](../../rust/bench-tools) builds one binary, `bench-tools`, with one subcommand per tool and one
 library module per tool in `src/`. Later slices add their tools to it. Its lints, toolchain and release profile are
-those of `rust/usage-pilot`, which stays as pilot evidence. It may use pinned registry dependencies through its
-committed `Cargo.lock`; a first install needs the network once to fetch them (`cargo fetch --locked` in
-`rust/bench-tools`, as the README's Run locally steps do). Shared modules carry the Python behavior that byte-pinned
-outputs depend on:
+those of `rust/usage-pilot`, which stays as pilot evidence. It may use pinned registry dependencies, listed under
+[registry dependencies](#registry-dependencies), through its committed `Cargo.lock`; a first install needs the network
+once to fetch them (`cargo fetch --locked` in `rust/bench-tools`, as the README's Run locally steps do). Shared modules
+carry the Python behavior that byte-pinned outputs depend on:
 
 - `pyjson` reads JSON as `json.loads` does and writes it as `json.dumps` does, including `float.__repr__` spelling,
   integers of any length up to Python's 4300-digit limit, key order, and `JSONDecodeError` messages. Both halves
@@ -35,7 +35,7 @@ outputs depend on:
   these cases would keep the whole scanner beside the crate.
 - `pytext` holds `surrogateescape` decoding, `str.strip` whitespace, `repr`, `pathlib` path joining, universal
   newlines, and the `OSError` and `UnicodeDecodeError` messages that diagnostics quote.
-- `sha256` implements SHA-256.
+- `sha256` spells the `sha2` crate's SHA-256 digest as `hashlib`'s `hexdigest()` does.
 - `pyregex` is `re.search` for the pattern syntax the schemas use, `pyunicode` holds Python's decimal digits and
   `int(str)`, and `pyfs` holds `Path.resolve`, `relative_to` and directory listing.
 
@@ -43,6 +43,7 @@ Run a subcommand through the pinned executable, as [Rust runtime pinning](runtim
 describes:
 
 ```sh
+(cd rust/bench-tools && cargo fetch --locked)
 python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select
 bun run roster
 python3 bench/tools/rust_runtime.py exec bench-tools -- diff-identity <repo> <base> <head>
@@ -50,6 +51,19 @@ python3 bench/tools/rust_runtime.py exec bench-tools -- derive-packet <packet.le
 python3 bench/tools/rust_runtime.py exec bench-tools -- build-packet --repo <owner/name> --pr <n> ... --out <packet.md>
 bun run data
 ```
+
+### Registry dependencies
+
+The repository owner allowed pinned crates.io dependencies on 2026-10-19 ([#215](https://github.com/kamui/code-review-bench/issues/215)).
+The Rust runtime workflow builds the crate with them on its four targets.
+
+| Crate | Version | License | Purpose |
+| --- | --- | --- | --- |
+| `clap` | 4.6.7 | MIT OR Apache-2.0 | Parses every subcommand's arguments, as [command-line parsing](#command-line-parsing) describes. Features `derive`, `std`, `help`, `usage` and `error-context` only. |
+| `sha2` | 0.11.1 | MIT OR Apache-2.0 | SHA-256 for `bench_tools::sha256`. No default features. |
+
+Their own dependencies in `Cargo.lock` are MIT OR Apache-2.0; `unicode-ident`, which `clap_derive` uses at build
+time, adds Unicode-3.0 for its tables.
 
 ## Migrated responsibilities
 
@@ -179,7 +193,7 @@ recorded decision.
   Python kept the surrogate, and its own nesting limit depends on its version and stack.
 - `diff-identity` has no `--self-test`; `cargo test` and the corpus cover it. It accepts options between
   positional arguments, which argparse refuses for some orders.
-- `normalize-review` has no `--self-test`, and options must be spelled in full; argparse also accepted unique prefixes.
+- `normalize-review` has no `--self-test`.
 - `derive-packet` has no `--self-test`; `cargo test` and the corpus cover it.
 - Where the normalizers' Python raised a traceback and exited 1, they exit 2 with a message: an input that is not
   UTF-8, a shape such as a `findings` value that is not a list, an `--out` that cannot be written, a timing sidecar that
@@ -198,7 +212,8 @@ recorded decision.
 - `build-packet` calls `gh` only without `--replay`, which no case uses. Its argv was compared once against
   `build_packet.py` through a stub `gh` (see #196's pull request); `cargo test` pins the GraphQL and edit-history
   commands.
-- Usage errors print `bench-tools` usage text. Argparse wording is not a contract.
+- Usage errors and help are clap's: `error: ...` and the usage on stderr, exit 2, or help on stdout, exit 0.
+  Argparse wording is not a contract.
 - `check-manifest` and `bench_tools::schema` refuse with exit 2, as for an unsupported keyword: a schema that is not
   an object, a keyword value of a JSON type the check cannot use, such as `"required": 1`, and `$ref` chains or
   nesting deeper than 900 checks. Python raised a traceback, exit 1. A text or object `required` or `enum` is
@@ -278,6 +293,34 @@ Diagnostics keep the Python program names, `roster.py:`, `diff_identity.py:`, `n
 `export_explorer.py:`, so saved stderr stays identical and the differential compares them byte for byte. Renaming them
 needs a new decision version.
 
+## Command-line parsing
+
+`main.rs` parses arguments with `clap`'s derive API ([#215](https://github.com/kamui/code-review-bench/issues/215)).
+Every subcommand expands a unique prefix of a long option, as argparse does, through `infer_long_args`; the top level
+does not. A usage error exits 2 and help exits 0. No corpus reaches the top level, so `tests/cli.rs` pins its exit
+codes; `bench-tools -hx` now prints help, where the hand-written parser called it an unknown command. Each family's
+latest decisions record where clap reads a subcommand's command line differently from the parser it replaced, each
+with its case:
+
+- `*-abbreviated-*`: a unique prefix such as `--ro` runs; before, only `derive-packet` and `build-packet` took one.
+- `*-dot-digit-*`: a dash-led value such as `-.5` is refused, exit 2; `--root=-.5` still works, and `-5` and `-1.5`
+  are still values. `*-exponent-*`: `-1e5` is taken as a value, as Python 3.14 takes it, where it was refused, as
+  Python 3.12 refuses it.
+- `*-double-dash`: a `--` with nothing after it is ignored where it was refused.
+- `normalize-review-arm-checked-when-read` and `thermo-arm-checked-when-read`: `--arm` is checked as it is read, so a
+  later valid `--arm` no longer replaces an invalid one.
+- `build-packet-help-after-unknown-option` and `rates-help-after-extra-argument`: an unknown argument before `-h` is a
+  usage error where help was printed. This holds for every subcommand.
+- `*-help-with-attached-argument`: `-hx` prints help, as argparse does under Python 3.12 and 3.14, where every
+  subcommand but `build-packet` refused it.
+- `build-packet-unicode-16-digit-option-value`: `build-packet` keeps Python 3.14's argparse reading of dash-led option
+  values, which `build-packet-option-values-with-leading-dash` pins: a value that names no option and holds a space or
+  starts with a dash, an optional dot and a decimal digit. `main.rs` attaches such a value to its option with `=`
+  before clap parses. Its digits are `pytext`'s Unicode 16.0 decimal digits, as before; the decision states the
+  impact against Python 3.12 and older.
+- `build-packet-help`, four `build-packet-usage-*` cases, `build-packet-non-utf8-text-option` and
+  `export-explorer-usage-missing-stage` pin clap's wording by prefix; their exit codes are unchanged.
+
 ## Close-out
 
 Each responsibility the v2 inventory assigned to #154 now has one of three outcomes. It is migrated, with its Python
@@ -313,6 +356,7 @@ has `bench/tools/build_packet.py`, such as `1bbc3eed6`, the last main commit tha
 
 ```sh
 cd rust/bench-tools && cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
+(cd rust/bench-tools && cargo fetch --locked)
 python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select
 python3 bench/tools/rust_runtime.py resolve bench-tools
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/roster.v1.json
