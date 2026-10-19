@@ -7,6 +7,7 @@ use crate::pyfs;
 use crate::pyjson::Value;
 use crate::pytext;
 use crate::pyunicode;
+use crate::pyvalue;
 use crate::sha256;
 
 const PIN_FIELDS: [&str; 4] = ["head", "base_sha", "packet_sha256", "diff_manifest_sha256"];
@@ -376,7 +377,7 @@ fn object(entries: Vec<(&str, Value)>) -> Value {
 }
 
 /// The version a snapshot file name carries: `int` of what lies between `snapshot.v` and `.json`.
-fn snapshot_version(name: &[u8]) -> Result<i128, Failure> {
+fn snapshot_version(name: &[u8]) -> Result<String, Failure> {
     let middle = &name[b"snapshot.v".len()..name.len() - b".json".len()];
     let invalid = || {
         Failure(format!(
@@ -385,10 +386,37 @@ fn snapshot_version(name: &[u8]) -> Result<i128, Failure> {
         ))
     };
     let middle = std::str::from_utf8(middle).map_err(|_| invalid())?;
-    pyunicode::parse_int(middle)
-        .map_err(Failure)?
-        .parse::<i128>()
-        .map_err(|_| Failure("snapshot version too large".to_string()))
+    pyunicode::parse_int(middle).map_err(Failure)
+}
+
+/// `version + 1` for the digits [`snapshot_version`] returns, at any length.
+fn next_version(version: &str) -> String {
+    let (negative, magnitude) = match version.strip_prefix('-') {
+        Some(magnitude) => (true, magnitude),
+        None => (false, version),
+    };
+    let (step_from, step_to) = if negative { (b'0', b'9') } else { (b'9', b'0') };
+    let mut digits = magnitude.as_bytes().to_vec();
+    let mut carry = true;
+    for digit in digits.iter_mut().rev() {
+        if *digit == step_from {
+            *digit = step_to;
+        } else {
+            *digit = if negative { *digit - 1 } else { *digit + 1 };
+            carry = false;
+            break;
+        }
+    }
+    if carry {
+        digits.insert(0, b'1');
+    }
+    let digits = String::from_utf8(digits).unwrap_or_default();
+    let digits = digits.trim_start_matches('0');
+    match (negative, digits.is_empty()) {
+        (_, true) => "0".to_string(),
+        (true, false) => format!("-{digits}"),
+        (false, false) => digits.to_string(),
+    }
 }
 
 /// What one `gh api` read returned: its exit status, standard output and standard error, or the message of the
@@ -538,7 +566,7 @@ fn parent(path: &[u8]) -> Vec<u8> {
 }
 
 /// The files directly in `directory` whose names `glob("snapshot.v*.json")` matches, with the version each carries.
-fn snapshot_versions(directory: &[u8]) -> Result<Vec<(i128, Vec<u8>)>, Failure> {
+fn snapshot_versions(directory: &[u8]) -> Result<Vec<(String, Vec<u8>)>, Failure> {
     let mut found = Vec::new();
     for name in pyfs::names(directory) {
         if name.len() < b"snapshot.v.json".len()
@@ -637,9 +665,8 @@ pub fn capture(
     let next = snapshot_versions(&directory)?
         .into_iter()
         .map(|(version, _)| version)
-        .max()
-        .unwrap_or(0)
-        + 1;
+        .max_by(|left, right| pyvalue::compare_integers(left, right))
+        .map_or_else(|| "1".to_string(), |latest| next_version(&latest));
     let path = claims::join(&directory, format!("snapshot.v{next}.json").as_bytes());
     let options = crate::pyjson::Dumps {
         indent: Some(2),
@@ -747,9 +774,11 @@ pub fn report(
             ));
         };
         let directory = repo.path(format!("bench/claims/upstream/{id_text}").as_bytes());
-        let mut latest: Option<(i128, Vec<u8>)> = None;
+        let mut latest: Option<(String, Vec<u8>)> = None;
         for (version, path) in snapshot_versions(&directory)? {
-            if latest.as_ref().is_none_or(|(best, _)| version > *best) {
+            if latest.as_ref().is_none_or(|(best, _)| {
+                pyvalue::compare_integers(&version, best) == std::cmp::Ordering::Greater
+            }) {
                 latest = Some((version, path));
             }
         }
@@ -951,9 +980,34 @@ mod tests {
     }
 
     #[test]
+    fn next_versions_count_past_any_integer_width() {
+        for (from, to) in [
+            ("0", "1"),
+            ("9", "10"),
+            (
+                "170141183460469231731687303715884105727",
+                "170141183460469231731687303715884105728",
+            ),
+            (
+                "999999999999999999999999999999999999999",
+                "1000000000000000000000000000000000000000",
+            ),
+            ("-1", "0"),
+            ("-10", "-9"),
+            ("-200", "-199"),
+        ] {
+            assert_eq!(next_version(from), to, "{from}");
+        }
+    }
+
+    #[test]
     fn snapshot_versions_read_as_int_reads_them() {
-        assert_eq!(snapshot_version(b"snapshot.v12.json"), Ok(12));
-        assert_eq!(snapshot_version(b"snapshot.v 3.json"), Ok(3));
+        assert_eq!(snapshot_version(b"snapshot.v12.json").as_deref(), Ok("12"));
+        assert_eq!(snapshot_version(b"snapshot.v 3.json").as_deref(), Ok("3"));
+        assert_eq!(
+            snapshot_version(b"snapshot.v170141183460469231731687303715884105728.json").as_deref(),
+            Ok("170141183460469231731687303715884105728")
+        );
         assert!(snapshot_version(b"snapshot.v.json").is_err());
         assert_eq!(
             snapshot_version(b"snapshot.v\xff.json"),
