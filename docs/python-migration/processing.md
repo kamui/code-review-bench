@@ -503,6 +503,9 @@ replaced, each with its case:
   starts with a dash, an optional dot and a decimal digit. `main.rs` attaches such a value to its option with `=`
   before clap parses. Its digits are `pytext`'s Unicode 16.0 decimal digits, as before; the decision states the
   impact against Python 3.12 and older.
+- `inventory-dash-led-space-root`, `collect-run-dash-led-space-run` and `reconcile-dash-led-space-paths`: `evidence
+  inventory`, `collect` and `reconcile` take a dash-led value that names no option and holds a space, as argparse
+  does in every version; `main.rs` attaches it as it does for `build-packet`. A dash-led number stays clap's reading.
 - `build-packet-help`, four `build-packet-usage-*` cases, `build-packet-non-utf8-text-option` and
   `export-explorer-usage-missing-stage` pin clap's wording by prefix; their exit codes are unchanged.
 - `archive`, which [#218](https://github.com/kamui/code-review-bench/issues/218) added with a hand-written parser, takes

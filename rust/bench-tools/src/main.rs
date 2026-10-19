@@ -1298,19 +1298,29 @@ fn run_restore_local(
     }
 }
 
-/// argparse reads a dash-led argument as an option's value when it names no option and reads as a negative
-/// number or holds a space; `build-packet-option-values-with-leading-dash` pins that. clap takes only numbers,
-/// so build-packet's arguments attach such a value to its option with `=` before clap parses them.
+/// argparse reads a dash-led argument as an option's value when it names no option and holds a space, and Python
+/// 3.14's also when it reads as a negative number; `build-packet-option-values-with-leading-dash` and
+/// `inventory-dash-led-space-root` pin that. clap takes only numbers, so these commands attach such a value to its
+/// option with `=` before clap parses them. Only build-packet, whose decisions pin Python 3.14, takes the number form.
 fn attach_dash_led_values(arguments: Vec<OsString>) -> Vec<OsString> {
-    if arguments.get(1).map(|name| pytext::os_bytes(name)) != Some(b"build-packet") {
-        return arguments;
-    }
+    let name = |at: usize| arguments.get(at).map(|name| pytext::os_bytes(name));
+    let (path, numbers): (&[&str], bool) = match (name(1), name(2)) {
+        (Some(b"build-packet"), _) => (&["build-packet"], true),
+        (Some(b"evidence"), Some(b"collect")) => (&["evidence", "collect"], false),
+        (Some(b"evidence"), Some(b"inventory")) => (&["evidence", "inventory"], false),
+        (Some(b"evidence"), Some(b"reconcile")) => (&["evidence", "reconcile"], false),
+        _ => return arguments,
+    };
     let mut command = Cli::command();
     command.build();
-    let Some(build_packet) = command.find_subcommand("build-packet") else {
-        return arguments;
-    };
-    let options: Vec<(String, bool)> = build_packet
+    let mut parser = &command;
+    for name in path {
+        let Some(subcommand) = parser.find_subcommand(name) else {
+            return arguments;
+        };
+        parser = subcommand;
+    }
+    let options: Vec<(String, bool)> = parser
         .get_arguments()
         .filter_map(|argument| {
             let takes_value = argument.get_action().takes_values();
@@ -1357,7 +1367,7 @@ fn attach_dash_led_values(arguments: Vec<OsString>) -> Vec<OsString> {
         argument.len() > 1
             && argument[0] == b'-'
             && !names_option(argument)
-            && (negative_number || argument.contains(&b' '))
+            && ((numbers && negative_number) || argument.contains(&b' '))
     };
     let mut attached = Vec::with_capacity(arguments.len());
     let mut rest = arguments.into_iter().peekable();

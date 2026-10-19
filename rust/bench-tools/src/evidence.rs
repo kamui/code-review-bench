@@ -519,6 +519,12 @@ fn random_name(prefix: &str) -> String {
     name
 }
 
+/// A new name in `directory` for a temporary file. It does not include the destination's name, so a destination
+/// whose name is near the filesystem's limit still has one.
+fn temporary_beside(directory: &PyPath) -> PyPath {
+    directory.join(format!(".{}.tmp", random_name("")).as_bytes())
+}
+
 /// `tempfile.TemporaryDirectory(prefix=..., dir=...)`: a new directory, mode 0700, removed with its contents.
 struct TempDir {
     path: PyPath,
@@ -791,16 +797,7 @@ pub fn write_new(disk: &mut dyn Disk, path: &PyPath, value: &Value) -> Result<()
         sync_dirs(disk, &reaching)?;
         return same(path);
     }
-    let name = path
-        .as_bytes()
-        .rsplit(|byte| *byte == b'/')
-        .next()
-        .unwrap_or_default();
-    let temporary = directory.join(
-        [b".", name, b".", random_name("").as_bytes(), b".tmp"]
-            .concat()
-            .as_slice(),
-    );
+    let temporary = temporary_beside(&directory);
     let os_temporary = temporary.to_path_buf();
     let written = (|| -> Result<()> {
         let mut file = disk
@@ -831,16 +828,7 @@ fn through_temporary(
     settle: &mut dyn FnMut(&mut dyn Disk, &Path) -> Result<()>,
 ) -> Result<()> {
     let directory = parent(path);
-    let name = path
-        .as_bytes()
-        .rsplit(|byte| *byte == b'/')
-        .next()
-        .unwrap_or_default();
-    let temporary = directory.join(
-        [b".", name, b".", random_name("").as_bytes(), b".tmp"]
-            .concat()
-            .as_slice(),
-    );
+    let temporary = temporary_beside(&directory);
     let os_temporary = temporary.to_path_buf();
     let written = (|| -> Result<()> {
         let mut file = disk
