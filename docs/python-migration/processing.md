@@ -101,7 +101,7 @@ recorded decision.
   `baseline_defect`, so its corpus runs with `--allow-known-defects`.
 - `\d` in the Codex bullet pattern and `\w` in the thermo no-findings statement's `\b` follow Python 3.14, whose
   Unicode database is 16.0. `pytext` holds both tables, generated from Python 3.14. Python 3.12 does not match the
-  characters Unicode 16.0 added.
+  characters Unicode 16.0 added. The v3 decisions of both normalizer corpora record that difference.
 - `normalize-thermo` resolves a relative missing `--artifact-root` as Python 3.13 and later do, naming the absolute
   component in the error; Python 3.12 named the relative one. A symbolic link loop in it is an `ELOOP` error, as in
   Python 3.13 and later; Python 3.12 raised a traceback. Callers pass an absolute root.
