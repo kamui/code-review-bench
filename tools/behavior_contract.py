@@ -19,6 +19,7 @@ import base64
 import difflib
 import errno
 import fnmatch
+import gzip
 import hashlib
 import io
 import json
@@ -157,18 +158,6 @@ except evidence_store.EvidenceError as error:
     print(f"evidence: {error}")
     sys.exit(1)
 """,
-    "collect-run": """import argparse, sys
-from pathlib import Path
-sys.path.insert(0, sys.argv.pop(1))
-sys.argv[0] = "collect_run.py"
-import collect_run
-collect_run.ROOT = Path.cwd()
-parser = argparse.ArgumentParser(description=collect_run.__doc__)
-parser.add_argument("--run", type=Path, required=True)
-parser.add_argument("--missing", action="append", default=[])
-args = parser.parse_args()
-collect_run.collect(args.run.resolve(), args.missing)
-""",
     # `ruling {check,route,summary,precedents} [--root DIR]` and `ruling dossier DIR`, as bench-tools spells them, run
     # the retained ruling_record.py and ruling_dossier.py. ruling_record.py reads the checkout that holds it, and its
     # functions bind that root as a default argument, so the driver rebinds them to the case directory and runs the
@@ -238,12 +227,14 @@ except regrade.FAILURES as error:
     sys.exit(2)
 """,
 }
-DRIVER_ARGUMENTS = {"collect-run": ["tools"]}
+DRIVER_ARGUMENTS = {}
 RUST_PROGRAMS = {"roster": ("bench-tools", ["roster"]), "normalize-thermo": ("bench-tools", ["normalize-thermo"]),
                  "derive-packet": ("bench-tools", ["derive-packet"]), "build-packet": ("bench-tools", ["build-packet"]),
                  "export-explorer": ("bench-tools", ["export-explorer"]), "archive": ("bench-tools", ["archive"]),
                  "evidence": ("bench-tools", ["evidence"]), "recover-evidence": ("bench-tools", ["evidence", "recover"]),
                  "restore-local": ("bench-tools", ["evidence", "restore-local"]),
+                 "collect-run": ("bench-tools", ["evidence", "collect"]),
+                 "reconcile-evidence": ("bench-tools", ["evidence", "reconcile"]),
                  "native-artifacts": ("bench-tools", ["native-artifacts"]),
                  "archive-transcripts": ("bench-tools", ["evidence", "archive-transcripts"]),
                  "import-benchmark": ("bench-tools", ["import-benchmark"]),
@@ -608,6 +599,10 @@ def archive_members(raw, form):
                 if item.isfile():
                     member["sha256"] = hashlib.sha256(bundle.extractfile(item).read()).hexdigest()
                 members.append(member)
+    elif form == "gzip":
+        data = gzip.decompress(raw)
+        members.append({"size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+                        "bytes_b64": base64.b64encode(data).decode("ascii")})
     elif form == "zip":
         with zipfile.ZipFile(io.BytesIO(raw)) as bundle:
             for item in bundle.infolist():
@@ -641,7 +636,7 @@ def normalize(case, root, actual):
             if fnmatch.fnmatchcase(name, rule["glob"]):
                 try:
                     members = archive_members(raw[name], rule["format"])
-                except (tarfile.TarError, zipfile.BadZipFile, OSError, EOFError, ValueError) as error:
+                except (tarfile.TarError, zipfile.BadZipFile, gzip.BadGzipFile, OSError, EOFError, ValueError) as error:
                     issues.append(f"{name}: unreadable {rule['format']} archive: {error}")
                     members = None
                 archives.append((json.dumps(members, sort_keys=True), name, rule["format"], members))

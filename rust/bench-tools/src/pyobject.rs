@@ -221,7 +221,7 @@ pub fn sorted(mut members: Vec<Value>) -> PyResult<Vec<Value>> {
         return Ok(members);
     }
     let class = |value: &Value| match value {
-        Value::Str(_) => Ok(0),
+        Value::Str(_) | Value::OsText(_) => Ok(0),
         Value::Null => Ok(1),
         Value::Bool(_) | Value::Int(_) | Value::Float(_) => Ok(2),
         Value::Array(_) | Value::Object(_) => Err(Raised::TypeError),
@@ -233,7 +233,10 @@ pub fn sorted(mut members: Vec<Value>) -> PyResult<Vec<Value>> {
         }
     }
     match first {
-        0 => members.sort_by(|left, right| left.as_str().cmp(&right.as_str())),
+        0 => members.sort_by_cached_key(|member| match member {
+            Value::OsText(text) => crate::pytext::surrogateescape(text.as_bytes()),
+            _ => crate::pytext::surrogateescape(member.as_str().unwrap_or_default().as_bytes()),
+        }),
         2 => {
             if members
                 .iter()

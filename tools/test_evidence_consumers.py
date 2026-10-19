@@ -19,22 +19,24 @@ import regrade
 import rust_runtime
 from test_evidence_store import FakeGitHub
 import behavior_contract
-import collect_run
 
 
-def rust_evidence(remote, *arguments):
-    """Run `bench-tools evidence` with the corpora's stub gh answering from the fake release's current assets."""
-    return rust_bench_tools(remote, None, 'evidence', *arguments)
+def rust_evidence(remote, *arguments, cwd=None):
+    """Run `bench-tools evidence` with the corpora's stub gh answering from the fake release's current assets, or
+    from no release when there is no remote."""
+    return rust_bench_tools(remote, cwd, 'evidence', *arguments)
 
 
 def rust_bench_tools(remote, cwd, *arguments):
-    """Run `bench-tools` in `cwd` with the corpora's stub gh answering from the fake release's current assets."""
+    """Run `bench-tools` in `cwd` with the corpora's stub gh answering from the fake release's current assets, or
+    from no release when there is no remote."""
     with tempfile.TemporaryDirectory() as tools:
         tools = Path(tools)
         state = tools / 'state'
         state.mkdir()
-        (state / 'release.json').write_text(json.dumps({'repository': 'owner/canonical', 'tag': 'evidence-fixture', 'id': 42}))
-        for asset in remote.assets:
+        if remote is not None:
+            (state / 'release.json').write_text(json.dumps({'repository': 'owner/canonical', 'tag': 'evidence-fixture', 'id': 42}))
+        for asset in remote.assets if remote is not None else ():
             target = state / 'assets' / str(asset['id']) / asset['name']
             target.parent.mkdir(parents=True)
             shutil.copyfile(remote.root / asset['name'], target)
@@ -44,6 +46,11 @@ def rust_bench_tools(remote, cwd, *arguments):
         environment = {**os.environ, 'PATH': f'{tools}{os.pathsep}{os.environ["PATH"]}', 'CONTRACT_GH_STATE': str(state)}
         return subprocess.run([str(rust_runtime.resolve('bench-tools')), *arguments],
                               capture_output=True, text=True, env=environment, cwd=cwd)
+
+
+def collect(remote, root, run):
+    """`bench-tools evidence collect` for a run of the repository at root."""
+    return rust_evidence(remote, 'collect', '--run', str(run), cwd=root)
 
 
 def native_tools(*arguments):
@@ -79,8 +86,8 @@ class ColdConsumersTest(unittest.TestCase):
                     'replaces': 'att-002' if name == 'att-003' else None, 'usage': {'usd': 1.25},
                     'transcript_archive': {'path': str(archive), 'sha256': store.digest(archive), 'restoration_check': 'passed'}})
                 store.write_new(attempt / 'normalized.json', {'findings': []})
-            with patch.object(collect_run, 'ROOT', origin):
-                collect_run.collect(run)
+            done = collect(None, origin, run)
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
             transcript_entries = store.read(run / 'transcripts.json')
             native_root = base / 'native'
             native_root.mkdir()
@@ -137,8 +144,8 @@ class ColdConsumersTest(unittest.TestCase):
             for path in base.glob('att-*.tar.gz'):
                 path.unlink()
             with patch.object(store, 'GitHub', return_value=remote):
-                with patch.object(collect_run, 'ROOT', cold):
-                    collect_run.collect(cold / 'bench/runs/example')
+                done = collect(remote, cold, cold / 'bench/runs/example')
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
                 self.assertFalse((cold / grading_archive).exists())
                 checked = rust_bench_tools(remote, cold, 'import-benchmark', '--check')
                 self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
@@ -186,8 +193,8 @@ class ColdConsumersTest(unittest.TestCase):
                     'transcript_archive': {'path': str(archive), 'sha256': store.digest(archive), 'restoration_check': 'passed'}})
                 (run / name / 'normalized.json').write_text('{}')
                 (run / name / 'usage-requests.jsonl').write_text('{}\n')
-            with patch.object(collect_run, 'ROOT', origin):
-                collect_run.collect(run)
+            done = collect(None, origin, run)
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
             mapping = (run / 'transcripts.json').read_bytes()
             entries = store.read(run / 'transcripts.json')
             self.assertEqual([entry['path'] for entry in entries], [
@@ -214,8 +221,9 @@ class ColdConsumersTest(unittest.TestCase):
                 for name in ('artifacts', '.cache'):
                     shutil.rmtree(cold / name, ignore_errors=True)
 
-            with patch.object(store, 'GitHub', return_value=remote), patch.object(collect_run, 'ROOT', cold):
-                collect_run.collect(cold / 'bench/runs/example')
+            with patch.object(store, 'GitHub', return_value=remote):
+                done = collect(remote, cold, cold / 'bench/runs/example')
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
                 self.assertEqual((cold / 'bench/runs/example/transcripts.json').read_bytes(), mapping)
                 for entry in entries:
                     self.assertEqual(store.digest(cold / entry['path']), entry['sha256'])
@@ -231,8 +239,9 @@ class ColdConsumersTest(unittest.TestCase):
                 asset = remote_path / remote.assets[0]['name']
                 published = asset.read_bytes()
                 asset.write_bytes(bytes(len(published)))
-                with self.assertRaisesRegex(store.EvidenceError, 'missing or changed evidence'):
-                    collect_run.collect(cold / 'bench/runs/example')
+                done = collect(remote, cold, cold / 'bench/runs/example')
+                self.assertEqual(done.returncode, 1)
+                self.assertRegex(done.stderr, '^collect_run.py: missing or changed evidence: ')
                 with self.assertRaisesRegex(prune_workspace.Refused, 'missing or changed evidence'):
                     prune_workspace.prune(valid, workspace)
                 done = rust_evidence(remote, 'resolve', entries[1]['path'], '--sha256', entries[1]['sha256'], '--root', str(cold))
@@ -240,8 +249,9 @@ class ColdConsumersTest(unittest.TestCase):
                 self.assertRegex(done.stdout, '^evidence: missing or changed evidence: ')
                 asset.write_bytes(published)
                 remote.assets.clear()
-                with self.assertRaisesRegex(store.EvidenceError, 'asset identity changed'):
-                    collect_run.collect(cold / 'bench/runs/example')
+                done = collect(remote, cold, cold / 'bench/runs/example')
+                self.assertEqual((done.returncode, done.stderr),
+                                 (1, 'collect_run.py: published release or asset identity changed\n'))
                 with self.assertRaisesRegex(prune_workspace.Refused, 'asset identity changed'):
                     prune_workspace.prune(valid, workspace)
                 done = rust_evidence(remote, 'resolve', entries[1]['path'], '--root', str(cold))
@@ -275,14 +285,16 @@ class ColdConsumersTest(unittest.TestCase):
             (root / held).parent.mkdir(parents=True)
             (root / held).write_bytes(b'stored once')
             record('probes/att-002', b'stored once', '/gone/checkout/' + held)
-            with patch.object(store, 'GitHub', return_value=remote), patch.object(collect_run, 'ROOT', root):
-                collect_run.collect(run)
-                self.assertEqual([entry['path'] for entry in store.read(run / 'transcripts.json')],
-                                 ['artifacts/transcripts/example-probes/att-009.tar.gz', held])
-                self.assertEqual((root / 'artifacts/transcripts/example-probes/att-009.tar.gz').read_bytes(), b'stored once')
-                record('attempts/att-001', b'stored twice')
-                with self.assertRaisesRegex(ValueError, 'Transcript archive unavailable: artifacts/transcripts/example/att-001.tar.gz'):
-                    collect_run.collect(run)
+            done = collect(remote, root, run)
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertEqual([entry['path'] for entry in store.read(run / 'transcripts.json')],
+                             ['artifacts/transcripts/example-probes/att-009.tar.gz', held])
+            self.assertEqual((root / 'artifacts/transcripts/example-probes/att-009.tar.gz').read_bytes(), b'stored once')
+            record('attempts/att-001', b'stored twice')
+            done = collect(remote, root, run)
+            self.assertEqual(done.returncode, 1)
+            self.assertIn('collect_run.py: Transcript archive unavailable: artifacts/transcripts/example/att-001.tar.gz',
+                          done.stderr)
 
 
 if __name__ == '__main__':
