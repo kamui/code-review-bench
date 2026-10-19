@@ -1936,6 +1936,7 @@ pub fn validate_documents(
         "current claims",
     )?;
     let mut equivalent: Vec<((Value, Value), Value)> = Vec::new();
+    let mut comments: Vec<LinkedComment> = Vec::new();
     for claim in claims.values() {
         let target = item(claim, "target")?;
         let claim_id = item(claim, "id")?.py_str();
@@ -2029,7 +2030,22 @@ pub fn validate_documents(
                 format!("{claim_id}: duplicate source link"),
             )?;
             seen.push(key.clone());
-            if is(item(link, "relation")?, "equivalent") {
+            let is_equivalent = is(item(link, "relation")?, "equivalent");
+            match comments
+                .iter_mut()
+                .find(|comment| pair_same(&comment.key, &key))
+            {
+                Some(comment) => {
+                    comment.claims.push(claim_id.clone());
+                    comment.equivalent |= is_equivalent;
+                }
+                None => comments.push(LinkedComment {
+                    key: key.clone(),
+                    claims: vec![claim_id.clone()],
+                    equivalent: is_equivalent,
+                }),
+            }
+            if is_equivalent {
                 require(
                     !equivalent.iter().any(|(known, _)| pair_same(known, &key)),
                     format!(
@@ -2040,6 +2056,16 @@ pub fn validate_documents(
                 equivalent.push((key, item(claim, "id")?.clone()));
             }
         }
+    }
+    for comment in &comments {
+        require(
+            comment.claims.len() < 2 || !comment.equivalent,
+            format!(
+                "{}: a comment linked to two or more claims ({}) is linked to none of them as equivalent",
+                tuple(&[&comment.key.0, &comment.key.1]),
+                comment.claims.join(", ")
+            ),
+        )?;
     }
     for candidate in unique(
         item(documents.get("candidate"), "candidates")?,
@@ -2183,6 +2209,13 @@ pub fn validate_documents(
         validate_grades(root, documents, selected, &references, &claims)?;
     }
     Ok(())
+}
+
+/// A review comment and the claims that link it, for the owner's 2026-10-11 rule (#256).
+struct LinkedComment {
+    key: (Value, Value),
+    claims: Vec<String>,
+    equivalent: bool,
 }
 
 fn pair_same(left: &(Value, Value), right: &(Value, Value)) -> bool {
