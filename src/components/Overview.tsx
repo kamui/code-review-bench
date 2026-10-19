@@ -4,10 +4,10 @@ import type { CSSProperties, FocusEvent, MouseEvent, ReactNode } from 'react'
 import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react'
 import { linearScale, position, ticks } from '../lib/chart'
 import type { Scale } from '../lib/chart'
-import { bandLabels, detectionLabel, duration, lowerFirst, measured, money, perReview, reading, share } from '../lib/metrics'
+import { bandLabels, detectionLabel, duration, estimatorLabels, lowerFirst, measured, money, perReview, reading, share } from '../lib/metrics'
 import type { DetectionView, Reading, Summary } from '../lib/metrics'
 import { labelSegments, overviewColumns, overviewFirstDirection, overviewKey, overviewOrder } from '../lib/scoring'
-import type { LabelSegment, OverviewColumn, OverviewSort, Scorecard } from '../lib/scoring'
+import type { Band, LabelSegment, OverviewColumn, OverviewSort, Scorecard } from '../lib/scoring'
 import { Mark, reviewColor, setupParts } from './Chart'
 import { segmentClass, segmentLabels, swatch, trueSegments } from './ClaimLabels'
 import { Notes, notesFor, Value } from './Reading'
@@ -32,12 +32,14 @@ function segmentTip(card: Scorecard, segment: LabelSegment, value: number) {
 type Tip = { text: string; left: number; top: number }
 const doubtMeaning = 'Share of admitted reviews with at least one refuted or unproven claim. Hatched: reviews whose only doubt is an unresolved claim.'
 
+const foundLabels: Record<Band, string> = { serious: 'Serious problems found', 'other-material': 'Other material problems found', unknown: 'Unknown-impact problems found', all: 'Known problems found' }
+
 type Heading = { title: string; short: string; hint?: string; note?: string; measure: string; ascending: string; descending: string; ends?: [string, string] }
 
 function headings(detection: DetectionView, claimsMax: number): Record<OverviewColumn, Heading> {
   return {
     setup: { title: 'Setup', short: 'Setup', measure: 'setup name', ascending: 'A to Z', descending: 'Z to A' },
-    detection: { title: 'Detection', note: lowerFirst(bandLabels[detection.band]), short: 'Detection', measure: lowerFirst(detectionLabel(detection)), ascending: 'least first', descending: 'most first', ends: ['0%', '100%'] },
+    detection: { title: foundLabels[detection.band], note: estimatorLabels[detection.estimator], short: foundLabels[detection.band], measure: lowerFirst(detectionLabel(detection)), ascending: 'least first', descending: 'most first', ends: ['0%', '100%'] },
     claims: { title: 'True claims', note: 'per review; number: problems', short: 'Problem claims per review', measure: 'problem claims per review', ascending: 'fewest first', descending: 'most first', ends: ['0', String(claimsMax)] },
     doubt: { title: 'Refuted or unproven', note: 'share of reviews', short: 'Refuted or unproven', hint: doubtMeaning, measure: 'share of reviews with a refuted or unproven claim', ascending: 'fewest first', descending: 'most first', ends: ['0%', '100%'] },
     cost: { title: 'Cost per trial', short: 'Cost per trial', measure: 'cost per scheduled trial', ascending: 'lowest first', descending: 'highest first', note: 'log scale', ends: ['$0.001', '$10'] },
@@ -141,7 +143,7 @@ export function Overview({ summaries, detection, sort, onSort, onSelect }: {
     </ul>
     <Notes notes={notes} />
     <div className="plot-caption">
-      <span>Each column has its own scale; a header sorts by that column. Detection uses the impact band and average chosen above. True claims stack every true label from 0, and the number is problem claims per review. Refuted, unproven and unresolved claims are not drawn there.</span>
+      <span>Each column has its own scale; a header sorts by that column. Problems found uses the impact band and average chosen above. True claims stack every true label from 0, and the number is problem claims per review. Refuted, unproven and unresolved claims are not drawn there.</span>
       <span>Refuted or unproven: {doubtMeaning} An unproven claim is not shown to be false.</span>
       <span>Cost and time use log scales from a marked floor; a value below the floor sits on it. Cost adds every attempt, retries included, per scheduled trial. Time covers completed trials only.</span>
       {rows.some(summary => summary.configuration.billing === 'list-price-equivalent') && <span>* Subscription usage valued at token list prices, not a bill or quota measurement.</span>}
