@@ -6,7 +6,7 @@ use bench_tools::pytext::{self, PyPath};
 use bench_tools::schema::{SchemaError, Validator};
 use bench_tools::{
     archive, build_packet, claims, derive_packet, diff_identity, evidence, export_explorer,
-    normalize_thermo, pyfs, pyunicode, rates, roster, upstream,
+    import_benchmark, normalize_thermo, pyfs, pyunicode, rates, roster, upstream,
 };
 use clap::builder::PossibleValuesParser;
 use clap::error::ErrorKind;
@@ -63,6 +63,20 @@ enum Cli {
     /// restore-local.py did.
     #[command(subcommand, infer_long_args = true)]
     Evidence(EvidenceCommand),
+    /// Verify the imported originals bench/import-manifest.json pins, or preserve them before an intended edit, as
+    /// tools/import_benchmark.py did.
+    #[command(infer_long_args = true)]
+    ImportBenchmark(ImportBenchmarkArgs),
+}
+
+#[derive(Args)]
+struct ImportBenchmarkArgs {
+    /// Verify every imported file and transcript archive against the manifest.
+    #[arg(long)]
+    check: bool,
+    /// Preserve the imported originals of files that are edited here.
+    #[arg(long, num_args = 1.., action = clap::ArgAction::Set, allow_negative_numbers = true)]
+    preserve: Option<Vec<OsString>>,
 }
 
 #[derive(Args)]
@@ -1145,6 +1159,49 @@ fn run_evidence(command: EvidenceCommand) -> Result<ExitCode, ExitCode> {
     evidence_outcome(outcome)
 }
 
+/// `import_benchmark.py --check` or `--preserve`, run in the repository: a refusal is printed after
+/// `import_benchmark.py: ` on stderr with exit 1, the status Python's traceback had.
+fn run_import_benchmark(arguments: ImportBenchmarkArgs) -> Result<ExitCode, ExitCode> {
+    if !arguments.check && arguments.preserve.is_none() {
+        return Err(misuse(
+            "import-benchmark",
+            ErrorKind::MissingRequiredArgument,
+            "provide --check or --preserve",
+        ));
+    }
+    let root = std::env::current_dir()
+        .map(|cwd| PyPath::new(pytext::os_bytes(cwd.as_os_str())))
+        .map_err(|error| {
+            eprintln!("import_benchmark.py: {}", pytext::os_error(&error, b"."));
+            ExitCode::from(1)
+        })?;
+    let mut remote = evidence::GitHub;
+    let mut disk = evidence::System;
+    let mut store = evidence::Store {
+        remote: &mut remote,
+        disk: &mut disk,
+        now: &evidence::now_isoformat,
+        temporary: evidence::system_temp(),
+    };
+    let outcome = match arguments.preserve {
+        Some(names) => {
+            let names: Vec<Vec<u8>> = names.into_iter().map(bytes).collect();
+            import_benchmark::preserve(&mut store, &root, &names)
+        }
+        None => import_benchmark::check(&mut store, &root),
+    };
+    match outcome {
+        Ok(line) => {
+            write_stdout(format!("{line}\n").as_bytes())?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(import_benchmark::Refusal(message)) => {
+            eprintln!("import_benchmark.py: {message}");
+            Err(ExitCode::from(1))
+        }
+    }
+}
+
 /// `restore-local.py ROOT_NAME ORIGINAL_RELATIVE_PATH NEW_FILE`, run in the repository: every refusal is its message
 /// alone on stderr, with exit 1.
 fn run_restore_local(
@@ -1335,6 +1392,7 @@ fn main() -> ExitCode {
         }
         Cli::Archive(ArchiveCommand::CheckScratch { archives }) => check_scratch(&archives),
         Cli::Evidence(command) => run_evidence(command),
+        Cli::ImportBenchmark(arguments) => run_import_benchmark(arguments),
     };
     outcome.unwrap_or_else(|code| code)
 }
