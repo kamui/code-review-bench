@@ -55,6 +55,8 @@ fn help_with_equals_or_dash_is_refused() {
             ("-h=", "''"),
             ("-h-", "'-'"),
             ("-h-x", "'-x'"),
+            ("-hh=1", "'1'"),
+            ("-hhh-x", "'-x'"),
         ] {
             let output = bench_tools(&[command, help]);
             assert_eq!(output.status.code(), Some(2), "{command} {help}");
