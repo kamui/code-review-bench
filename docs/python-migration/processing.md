@@ -430,7 +430,8 @@ the v3 inventory records.
 | `diff_identity`, `normalize_review` | Migrated to `bench-tools`; retained library | #157, #158 |
 | `check_manifest`'s schema validation, `rates check`, `upstream report` | Migrated to `bench-tools`; `check_manifest`, `rates` and `upstream` are retained libraries | #160, #160, #156 |
 | `export_explorer` | Migrated to `bench-tools export-explorer`; the Python front is a temporary bridge | #156 |
-| `rates refresh`, `upstream collect`, evidence restoration during export | Kept in Python as effects, as the delivery plan assigns | #160, #156, #155 |
+| `rates refresh`, evidence restoration during export | Kept in Python as effects, as the delivery plan assigns | #160, #155 |
+| `upstream collect` | Kept in Python as an effect, then migrated to `bench-tools upstream collect` by #235 | None |
 | `score`, `scoreboard_svg` | Retired by #192 | None |
 | `compare` | Retained library with no port | #157 |
 | `methodology`, `collect_run` | Moved by the delivery plan | #156, #155 |

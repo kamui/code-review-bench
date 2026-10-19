@@ -9,7 +9,9 @@ changes no grade, claim decision, ruling or scorecard number. `src/lib/scoring.t
 scorecard arithmetic. Slice 2, [#232](https://github.com/kamui/code-review-bench/issues/232), ports the ruling
 records and delegation routing, as [ruling records and delegation](#ruling-records-and-delegation) describes.
 Slice 3, [#233](https://github.com/kamui/code-review-bench/issues/233), ports the current grading record and packet
-selection, as [slice 3](#slice-3-the-current-grading-record-and-packet-selection) describes.
+selection, as [slice 3](#slice-3-the-current-grading-record-and-packet-selection) describes. Slice 5,
+[#235](https://github.com/kamui/code-review-bench/issues/235), ports the shared claims and upstream collection, as
+[slice 5](#slice-5-shared-claims-and-upstream-collection) describes.
 
 ## The split with #157
 
@@ -42,8 +44,8 @@ implementation.
 
 [The contract reference](contracts/README.md#grading-comparison-features) describes the harness features: the
 structured comparison, hand-stated grading outcomes, the Python entropy driver, the `fixture-git` setup program and
-real-record mode. `grading-real-record.v1.json` lists slice 3's four `current-grading` commands, which the Pages
-build job runs.
+real-record mode. `grading-real-record.v1.json` lists slice 3's four `current-grading` commands and slice 5's
+`claims check` on each tracked registry, which the Pages build job runs.
 
 [`grading_fixture.rs`](../../rust/bench-tools/tests/support/grading_fixture.rs) is the one fixture root. It mirrors
 the cohort of `test_grade.py`: one task, a selected and an unselected arm, an invalid attempt and its replacement, a
@@ -122,8 +124,8 @@ behavior corpora and `tests/ruling_filing.rs` run them. Every tracked record was
 and without `--json`, for the whole record and each of the 6 rounds; `precedents` for each decision type; and
 `dossier` for every directory holding a `summary.json`. All 692 commands gave identical exit status, stdout, stderr
 and sheets under Python 3.12 and 3.14, except four `dossier` runs on research directories whose `summary.json` is not
-a dossier, where the Python crashed and Rust exits 2 as decided. The real-record list slice 3 added runs only
-`current-grading` commands; no `ruling` command repeats this comparison in Pages yet.
+a dossier, where the Python crashed and Rust exits 2 as decided. The real-record list runs only `current-grading`
+and `claims` commands; no `ruling` command repeats this comparison in Pages yet.
 
 ## Replay coverage
 
@@ -222,6 +224,62 @@ both, and the same dataset hash.
 [#256](https://github.com/kamui/code-review-bench/issues/256) added the rule that a comment linked to two or more
 claims has no equivalent link. `current_grading.py` keeps the older rule and stays byte-unchanged as the baseline
 until slice 11 deletes it; `packet_selection.py` stays for #157's callers.
+
+## Slice 5: shared claims and upstream collection
+
+[#235](https://github.com/kamui/code-review-bench/issues/235) ports `claims.py` to `bench_tools::claims`, extending
+the registry checks #197 ported: the inventory, blinded dossiers, the grading context, identity and exposure checks,
+evidence extracts and packets, allowed assignments and `mapping_problems`. It extends `bench_tools::upstream` with
+`validate_assessment`, `route` and `collect`. The commands:
+
+```sh
+python3 bench/tools/rust_runtime.py exec bench-tools -- claims [--registry FILE] check
+python3 bench/tools/rust_runtime.py exec bench-tools -- claims inventory --target TARGET [--pattern RE] [--unlinked]
+python3 bench/tools/rust_runtime.py exec bench-tools -- claims dossier --out FILE --key FILE
+python3 bench/tools/rust_runtime.py exec bench-tools -- claims evidence --out DIR [--extracts FILE] [--target TARGET]
+python3 bench/tools/rust_runtime.py exec bench-tools -- upstream collect (--target TARGET | --all) [--related-pr N]...
+```
+
+Diagnostics keep the program names `claims.py` and `upstream.py`. Dossier tokens and the link shuffle come from
+`/dev/urandom`; cargo tests inject the entropy and check that the shuffle is applied. `collect` runs `gh` with
+`upstream.py`'s argument lists, four reads at a time. `verify:claims` and the commands in
+`docs/claim-adjudication.md` and `docs/maintainer-adjudication.md` moved, and `tools/test_moved_cli_callers.py`
+fails on a current caller of `claims.py check`, `inventory`, `dossier` or `evidence`, or `upstream.py collect`.
+`grade.py prepare --claim-evidence` still imports `claims.py`, until slice 7.
+
+[`claims.v1.json`](../../tools/behavior_contracts/claims.v1.json) pins the four commands on the fixture variants and
+on hand-built records, with dossiers and packets compared structurally. Evidence cases state their claim outcomes
+by hand: the approved packet's sources and withheld records, and no resolved claim for a proposed decision or in the
+`pending`, `proposed` and `disputed-without-ruling` variants. An approved decision without a saved receipt or
+receipt passage is refused. Three mutants of `claims.py` in `test_behavior_contract.py`, a
+shifted quote, a withheld record that keeps its hash and a zeroed source pin, each fail `claims-evidence-approved`.
+[`upstream.v1.json`](../../tools/behavior_contracts/upstream.v1.json) adds 15 `upstream-collect-*` cases against the
+stub `gh`, with failed, undecodable and paged responses injected. `test_behavior_contract.py` checks that every
+recorded call is a paginated GET of the case's repository that the stub answers. The decided differences:
+
+- An exception `claims.py` did not catch, such as a malformed target record's `TypeError` or an invalid
+  `--pattern`, prints `claims.py: <message>`, exit 1, instead of a traceback (`claims-check-uncaught-type-error`,
+  `claims-inventory-invalid-pattern`).
+- `--pattern` compiles through `pyregex`, which refuses lookarounds, back-references and other syntax it does not
+  support, exit 1, where Python's `re` ran them (`claims-inventory-unsupported-pattern`).
+- Values follow Python 3.14 where versions differ: Unicode 16.0 digits in list indexes, attempt numbers and
+  `--related-pr`, word characters for `\b` and case folding for identities (`claims-evidence-unicode-16-*`,
+  `upstream-collect-unicode-16-related-pr`), and dash-led values (`claims-dash-led-*`).
+- `collect` saves a response holding a lone surrogate as an incomplete endpoint, exit 1, where Python saved it
+  (`upstream-collect-lone-surrogate`).
+- Usage errors are clap's (`claims-inventory-missing-target`, `upstream-collect-choice-required`,
+  `upstream-collect-target-and-all`, `upstream-collect-invalid-related-pr`).
+
+#235 says a failed or partial response leaves no snapshot. `upstream.py` saves a failed endpoint as incomplete,
+with its error, and exits 1; only a response that fails snapshot validation, such as another pull request's identity
+or a paged pull-request read, leaves none. The port keeps Python's behavior, which
+[the maintainer workflow](../maintainer-adjudication.md#capture-upstream-evidence) documents.
+
+The Pages build job runs `claims check` on `registry.json` and the four other tracked registries in real-record mode.
+On 2026-10-19, `claims evidence` for each tracked extracts manifest, `evidence-extracts.v1.json` and
+`evidence-extracts.selected-pr.v1.json`, wrote the same 126 packets, byte for byte, with the same stdout, from both
+implementations. `claims.py` and `upstream.py` stay byte-unchanged as baselines until slice 11, with the `upstream`
+and `claims` corpus drivers.
 
 ## Research helpers
 

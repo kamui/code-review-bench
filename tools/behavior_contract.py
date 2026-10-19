@@ -72,6 +72,7 @@ import claims, upstream
 root = Path.cwd()
 upstream.ROOT = claims.ROOT = root
 upstream.report.__defaults__ = (root, ())
+upstream.capture.__defaults__ = (root,)
 claims.load_registry.__defaults__ = (root / "bench/claims/registry.json", root)
 sys.exit(upstream.main())
 """,
@@ -193,6 +194,36 @@ sys.argv = [str(script), *(argv[1:] if argv[:1] == ["check"] else argv)]
 code = compile(script.read_text(encoding="utf-8"), str(script), "exec")
 exec(code, {"__name__": "__main__", "__file__": str(root / "bench/tools/ruling_record.py"), "__builtins__": __builtins__})
 """,
+    # `claims [--root DIR] {check,inventory,dossier,evidence}` runs the retained claims.py. It and the modules it
+    # imports read the checkout that holds them and bind that root as a default argument, so the driver rebinds them to
+    # the case directory, or the `--root` argument before the command word, as bench-tools reads the current directory.
+    "claims": """import sys, types
+from pathlib import Path
+tools = Path(sys.argv.pop(1))
+sys.path.insert(0, str(tools))
+argv, root = sys.argv[1:], Path.cwd()
+for at, argument in enumerate(argv):
+    if argument in ("--", "check", "inventory", "dossier", "evidence"):
+        break
+    if argument == "--root" and at + 1 < len(argv):
+        root = Path(argv[at + 1]).resolve()
+        del argv[at:at + 2]
+        break
+    if argument.startswith("--root="):
+        root = Path(argument.removeprefix("--root=")).resolve()
+        del argv[at]
+        break
+import claims, current_grading, upstream
+for module in (claims, current_grading, upstream):
+    for value in vars(module).values():
+        if isinstance(value, types.FunctionType) and value.__defaults__:
+            value.__defaults__ = tuple(root if default == module.ROOT else default for default in value.__defaults__)
+claims.ROOT = upstream.ROOT = current_grading.ROOT = root
+claims.DEFAULT_REGISTRY = root / "bench/claims/registry.json"
+claims.DEFAULT_EXTRACTS = root / "bench/claims/evidence-extracts.v1.json"
+sys.argv = [str(tools / "claims.py"), *argv]
+sys.exit(claims.main())
+""",
     # grading_validation.py reads inputs.json one directory above its own file, where grade.py copies it into a
     # workspace; `bench-tools grading validate` names that file with --inputs. Pointing the module's __file__ beside
     # the named file makes the retained script read it in place, so the case tree holds no copied tools.
@@ -275,8 +306,8 @@ RUST_PROGRAMS = {"roster": ("bench-tools", ["roster"]), "normalize-thermo": ("be
 # The retained Python each moved program replaced, which a differential runs as the primary.
 PYTHON_COUNTERPARTS = {"native-artifacts": "python-native-artifacts", "archive-transcripts": "python-archive-transcripts"}
 # Python programs that draw blind tokens or shuffles run under ENTROPY_DRIVER, so a recorded expectation is the
-# same on every recording. The grading slices of #156 add their programs here.
-PYTHON_ENTROPY = {}
+# same on every recording. The grading slices of #156 add their programs here, each by its script or its driver.
+PYTHON_ENTROPY = {"claims": "claims"}
 ENTROPY_DRIVER = """import hashlib, random, runpy, secrets, sys
 from pathlib import Path
 drawn = 0
@@ -291,6 +322,11 @@ secrets.token_hex = token_hex
 fixed = random.Random(20261019)
 random.SystemRandom = lambda *args, **kwargs: fixed
 script = sys.argv.pop(1)
+if script == "-c":
+    source = sys.argv.pop(1)
+    sys.argv[0] = "-c"
+    exec(compile(source, "<driver>", "exec"), {"__name__": "__main__", "__builtins__": __builtins__})
+    sys.exit(0)
 sys.path.insert(0, str(Path(script).parent))
 sys.argv[0] = script
 runpy.run_path(script, run_name="__main__")
@@ -450,19 +486,50 @@ def remove(root, paths):
 
 
 # Stands in for `gh` in cases whose corpus names a state directory. It answers only the release reads, upload and
-# asset download that evidence storage runs, records every argument list in calls.jsonl, and takes its release,
-# assets and injected faults from that directory, so no case reaches the network.
-GH_STUB = r"""import json, os, sys
+# asset download that evidence storage runs, and the paginated GET reads of `upstream collect`. It records every
+# argument list in calls.jsonl, and takes its release, assets, upstream responses and injected faults from that
+# directory, so no case reaches the network. `upstream collect` reads four endpoints at a time, so the stub keeps
+# calls.jsonl sorted when it records one of those reads, and the file is the same whatever order they ran in.
+GH_STUB = r"""import fcntl, json, os, sys
 from pathlib import Path
 from urllib.parse import quote
 state = Path(os.environ["CONTRACT_GH_STATE"])
 args = sys.argv[1:]
 state.mkdir(parents=True, exist_ok=True)
-with (state / "calls.jsonl").open("a", encoding="utf-8") as log:
-    log.write(json.dumps(args) + "\n")
+upstream_read = len(args) == 6 and args[:5] == ["api", "--method", "GET", "--paginate", "--slurp"]
+with (state / "calls.jsonl").open("a+", encoding="utf-8") as log:
+    fcntl.flock(log, fcntl.LOCK_EX)
+    if upstream_read:
+        log.seek(0)
+        lines = sorted([*log.read().splitlines(), json.dumps(args)])
+        log.seek(0)
+        log.truncate()
+        log.write("".join(line + "\n" for line in lines))
+    else:
+        log.write(json.dumps(args) + "\n")
 def fail(message, code=1):
     sys.stderr.write(message + "\n")
     sys.exit(code)
+if upstream_read:
+    # upstream.json maps each endpoint to the response its read gets: an exit status, stdout given as JSON pages,
+    # as text or as base64 bytes, and stderr. An endpoint it does not list answers 404.
+    try:
+        responses = json.loads((state / "upstream.json").read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        responses = {}
+    response = responses.get(args[5])
+    if response is None:
+        fail("gh: Not Found (HTTP 404)")
+    if "pages" in response:
+        sys.stdout.write(json.dumps(response["pages"]))
+    elif "stdout_b64" in response:
+        import base64
+        sys.stdout.buffer.write(base64.b64decode(response["stdout_b64"]))
+    else:
+        sys.stdout.write(response.get("stdout", ""))
+    sys.stdout.flush()
+    sys.stderr.write(response.get("stderr", ""))
+    sys.exit(response.get("exit", 0))
 try:
     release = json.loads((state / "release.json").read_text(encoding="utf-8"))
 except FileNotFoundError:
@@ -762,7 +829,7 @@ def normalize(case, root, actual):
     return result
 
 
-STRUCTURED = ("pins", "tokens", "clocks", "identity", "sections")
+STRUCTURED = ("pins", "tokens", "clocks", "identity", "sections", "members")
 UNSTRUCTURED = ("archives", "digests", "manifests", "references", "volatile")
 
 
@@ -780,14 +847,19 @@ def check_structured(case):
     for rule in spec.get("sections", []):
         if not re.fullmatch(r"#+ ", rule.get("heading", "")):
             raise ValueError(f"{case['id']}: a section rule names a Markdown heading prefix such as '### '")
+    for rule in spec.get("members", []):
+        if set(rule) != {"glob", "pointers"} or not rule["pointers"]:
+            raise ValueError(f"{case['id']}: a members rule names a glob and the pointers of the objects to order")
     for rule in spec.get("tokens", []):
         if not isinstance(rule, dict) or set(rule) != {"prefix", "sites", "references"} \
                 or not re.fullmatch(r"[a-z]+", str(rule["prefix"])) or not rule["sites"] \
-                or any(set(site) != {"glob", "pointers"} or not site["pointers"] for site in rule["sites"]) \
+                or any(set(site) - {"keys"} != {"glob", "pointers"} or not site["pointers"]
+                       or site.get("keys", True) is not True for site in rule["sites"]) \
                 or not isinstance(rule["references"], list) or not all(map(token_reference, rule["references"])):
             raise ValueError(f"{case['id']}: a token rule names a lowercase prefix, such as blind, its sites, each "
-                             "a glob with the JSON pointers that hold generated tokens, and its references, each a "
-                             "glob with pointers (and keys: true for object keys), a glob with names: true, a "
+                             "a glob with the JSON pointers that hold generated tokens (and keys: true when the keys "
+                             "of the objects there are the tokens), and its references, each a glob with pointers "
+                             "(and keys: true for object keys), a glob with line_starts, a glob with names: true, a "
                              "stream, or a glob alone for whole files")
 
 
@@ -797,6 +869,8 @@ def token_reference(reference):
             or fields == {"glob", "names"} and reference["names"] is True
             or fields in ({"glob", "pointers"}, {"glob", "pointers", "keys"}) and bool(reference["pointers"])
             and reference.get("keys", True) is True
+            or fields == {"glob", "line_starts"} and bool(reference["line_starts"])
+            and all(isinstance(start, str) and start for start in reference["line_starts"])
             or fields == {"glob"})
 
 
@@ -941,6 +1015,41 @@ def order_sections(data, heading):
 TOKEN_SHAPE = re.compile(rb"(?<![0-9A-Za-z_-])[a-z]+-[0-9a-f]{6,8}(?![0-9A-Za-z_])")
 
 
+def relabel_line_starts(data, starts, shape, label):
+    """Relabel only a token written right after one of the line starts, such as the `### ` of a dossier heading,
+    leaving the rest of each line, which may quote source text, exact."""
+    lines = data.splitlines(keepends=True)
+    for number, line in enumerate(lines):
+        for start in starts:
+            prefix = start.encode("utf-8")
+            if line.startswith(prefix):
+                match = shape.match(line, len(prefix))
+                if match:
+                    lines[number] = line[:match.start()] + shape.sub(label, match.group(0)) + line[match.end():]
+                break
+    return b"".join(lines)
+
+
+def order_members(data, pointers):
+    """Order the members of the objects at the pointers by key, in a file written as `json.dumps(value, indent=2)`
+    and a newline, so an object built in a shuffled order compares by its members. Any other form is refused."""
+    value = json_value(data)
+    if data != (json.dumps(value, indent=2) + "\n").encode("utf-8"):
+        raise ValueError("not written as json.dumps(value, indent=2) and a newline")
+    for at in pointers:
+        parent, key = (None, None) if at == "" else (pointer(value, at.rsplit("/", 1)[0]),
+                                                    at.rsplit("/", 1)[1].replace("~1", "/").replace("~0", "~"))
+        members = value if at == "" else pointer(value, at)
+        if not isinstance(members, dict):
+            raise ValueError(f"{at} is not an object")
+        ordered = dict(sorted(members.items()))
+        if at == "":
+            value = ordered
+        else:
+            parent[int(key) if isinstance(parent, list) else key] = ordered
+    return (json.dumps(value, indent=2) + "\n").encode("utf-8")
+
+
 def structured(case, root, actual):
     """Compare outputs that carry blind tokens, shuffles, clocks or runner identity.
 
@@ -983,7 +1092,7 @@ def structured(case, root, actual):
     if spec.get("tokens"):
         prefixes = b"|".join(re.escape(rule["prefix"].encode()) for rule in spec["tokens"])
         shape = re.compile(rb"(?<![0-9A-Za-z_-])(" + prefixes + rb")-[0-9a-f]{6,8}(?![0-9A-Za-z_])")
-        generated, found = set(), set()
+        generated, found, claimed, unclaimed = set(), set(), {}, {}
         for rule in spec["tokens"]:
             prefix = rule["prefix"]
             for site in rule["sites"]:
@@ -997,11 +1106,27 @@ def structured(case, root, actual):
                         except (KeyError, IndexError, TypeError, ValueError) as error:
                             issues.append(f"{name}: {at} should hold a {prefix} token: {error!r}")
                             continue
-                        if isinstance(value, str) and re.fullmatch(re.escape(prefix) + r"-[0-9a-f]{6,8}", value):
+                        if site.get("keys"):
+                            if not isinstance(value, dict):
+                                issues.append(f"{name}: {at} holds {json.dumps(value)}, not an object of {prefix} tokens")
+                                continue
+                            keyed = [key for key in value if key.startswith(prefix + "-")]
+                            claimed.setdefault((name, at), set()).update(keyed)
+                            unclaimed.setdefault((name, at), set()).update(value)
+                            for key in keyed:
+                                if re.fullmatch(re.escape(prefix) + r"-[0-9a-f]{6,8}", key):
+                                    generated.add(key.encode("ascii"))
+                                    found.add((prefix, name, ("keys", at)))
+                                else:
+                                    issues.append(f"{name}: {at} has the key {json.dumps(key)}, not a {prefix} token")
+                        elif isinstance(value, str) and re.fullmatch(re.escape(prefix) + r"-[0-9a-f]{6,8}", value):
                             generated.add(value.encode("ascii"))
                             found.add((prefix, name, at))
                         else:
                             issues.append(f"{name}: {at} holds {json.dumps(value)}, not a {prefix} token")
+        for (name, at), keys in sorted(unclaimed.items()):
+            for key in sorted(keys - claimed.get((name, at), set())):
+                issues.append(f"{name}: {at} has the key {json.dumps(key)}, which no token rule declares")
         inputs = case_inputs(case)
         for token in sorted(generated):
             if any(token in blob for blob in inputs):
@@ -1044,10 +1169,14 @@ def structured(case, root, actual):
                 if declared(name):
                     files[name] = relabel(files[name])
                     continue
+                for reference in declared(name, "line_starts"):
+                    files[name] = relabel_line_starts(files[name], reference["line_starts"], own, label)
                 at_pointers = declared(name, "pointers")
-                values = [at for prefix, site, at in found if (prefix, site) == (rule["prefix"], name)]
+                sites = [at for prefix, site, at in found if (prefix, site) == (rule["prefix"], name)]
+                values = [at for at in sites if not isinstance(at, tuple)]
                 values += [at for reference in at_pointers if not reference.get("keys") for at in reference["pointers"]]
-                keys = [at for reference in at_pointers if reference.get("keys") for at in reference["pointers"]]
+                keys = [at[1] for at in sites if isinstance(at, tuple)]
+                keys += [at for reference in at_pointers if reference.get("keys") for at in reference["pointers"]]
                 if values or keys:
                     try:
                         files[name] = relabel_json(files[name], values, keys, relabel)
@@ -1055,6 +1184,13 @@ def structured(case, root, actual):
                         issues.append(f"{name}: declared {rule['prefix']} references unreadable: {error}")
         entries = {renamed[name]: entry for name, entry in entries.items()}
         files = {renamed[name]: data for name, data in files.items()}
+    for rule in spec.get("members", []):
+        for name in sorted(files):
+            if fnmatch.fnmatchcase(name, rule["glob"]):
+                try:
+                    files[name] = order_members(files[name], rule["pointers"])
+                except (KeyError, IndexError, TypeError, ValueError, UnicodeError) as error:
+                    issues.append(f"{name}: declared members unreadable: {error}")
     final = {}
     repins, problems = pins_of(spec, files)
     issues += problems
@@ -1143,7 +1279,7 @@ def compare(expected, actual):
                 raise ValueError(f"unknown comparison mode {spec['mode']}")
         except (ValueError, KeyError, IndexError, TypeError, UnicodeError) as error:
             differences.append(f"{stream} semantic: {error}; actual bytes {raw!r}")
-    differences += outcome_differences(expected.get("outcomes", []), actual["filesystem"])
+    differences += outcome_differences(expected.get("outcomes", []), actual)
     if expected["filesystem"] != actual["filesystem"]:
         differences.append("filesystem effects:\n" + "".join(difflib.unified_diff(
             json.dumps(expected["filesystem"], indent=2, sort_keys=True).splitlines(True),
@@ -1152,14 +1288,16 @@ def compare(expected, actual):
     return differences
 
 
-def outcome_differences(outcomes, filesystem):
-    """Each hand-stated grading outcome must hold in the output, whichever implementation wrote it."""
-    files = {os.fsdecode(decode(entry["path_b64"])): entry for entry in filesystem if entry["kind"] == "file"}
+def outcome_differences(outcomes, actual):
+    """Each hand-stated grading outcome must hold in the output, a written file or the JSON a stream printed,
+    whichever implementation wrote it."""
+    files = {os.fsdecode(decode(entry["path_b64"])): entry for entry in actual["filesystem"] if entry["kind"] == "file"}
     differences = []
     for outcome in outcomes:
-        where = f"{outcome['kind']} {outcome['path']}{outcome['pointer']}"
+        where = f"{outcome['kind']} {outcome.get('path') or outcome.get('stream')}{outcome['pointer']}"
         try:
-            value = pointer(json_value(decode(files[outcome["path"]]["bytes_b64"])), outcome["pointer"])
+            raw = actual[outcome["stream"]] if "stream" in outcome else decode(files[outcome["path"]]["bytes_b64"])
+            value = pointer(json_value(raw), outcome["pointer"])
         except (KeyError, IndexError, TypeError, ValueError, UnicodeError) as error:
             differences.append(f"outcome {where}: unreadable: {error!r}")
             continue
@@ -1281,7 +1419,7 @@ def default_commands(corpus):
         if program in SETUP_PROGRAMS:
             continue
         if program in PYTHON_ENTROPY:
-            commands[program] = entropy_command(REPO / PYTHON_ENTROPY[program])
+            commands[program] = entropy_command(PYTHON_ENTROPY[program])
         elif program in PYTHON_PROGRAMS:
             commands[program] = [sys.executable, str(REPO / PYTHON_PROGRAMS[program])]
         elif program in PYTHON_DRIVERS:
@@ -1307,7 +1445,9 @@ def python_commands(corpus):
         driver = PYTHON_COUNTERPARTS.get(program, program)
         if program in SETUP_PROGRAMS:
             continue
-        if driver in PYTHON_DRIVERS:
+        if driver in PYTHON_ENTROPY:
+            commands[program] = entropy_command(PYTHON_ENTROPY[driver])
+        elif driver in PYTHON_DRIVERS:
             commands[program] = [sys.executable, "-c", PYTHON_DRIVERS[driver],
                                  *(str(REPO / path) for path in DRIVER_ARGUMENTS.get(driver, ["bench/tools"]))]
         else:
@@ -1316,8 +1456,12 @@ def python_commands(corpus):
     return commands
 
 
-def entropy_command(script):
-    return [sys.executable, "-c", ENTROPY_DRIVER, str(script)]
+def entropy_command(name):
+    """ENTROPY_DRIVER running a driver of PYTHON_DRIVERS by name, or else a script relative to the repository."""
+    if name in PYTHON_DRIVERS:
+        return [sys.executable, "-c", ENTROPY_DRIVER, "-c", PYTHON_DRIVERS[name],
+                *(str(REPO / path) for path in DRIVER_ARGUMENTS.get(name, ["bench/tools"]))]
+    return [sys.executable, "-c", ENTROPY_DRIVER, str(REPO / name)]
 
 
 def with_setup(commands):
@@ -1367,9 +1511,11 @@ def load_corpus(path):
             check_structured(case)
         for step in [case, *case.get("steps", [])]:
             for outcome in step.get("expected", {}).get("outcomes", []):
-                if set(outcome) != {"kind", "path", "pointer", "value"} or outcome["kind"] not in GRADING_OUTCOMES:
+                if set(outcome) not in ({"kind", "path", "pointer", "value"}, {"kind", "stream", "pointer", "value"}) \
+                        or outcome["kind"] not in GRADING_OUTCOMES \
+                        or outcome.get("stream", "stdout") not in ("stdout", "stderr"):
                     raise ValueError(f"{case['id']}: an outcome states its kind ({', '.join(GRADING_OUTCOMES)}), "
-                                     "path, pointer and value")
+                                     "path or stream, pointer and value")
         decision = decisions[case["id"]]
         if not decision["reason"] or decision["contract_sha256"] != digest(case):
             raise ValueError(f"{case['id']}: changed contract needs an explicit decision")
