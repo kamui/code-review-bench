@@ -35,9 +35,11 @@ outputs depend on:
   these cases would keep the whole scanner beside the crate.
 - `pytext` holds `surrogateescape` decoding, `str.strip` whitespace, `repr`, `pathlib` path joining, universal
   newlines, and the `OSError` and `UnicodeDecodeError` messages that diagnostics quote.
-- `sha256` implements SHA-256.
+- `sha256` implements SHA-256, in one call or incrementally.
 - `pyregex` is `re.search` for the pattern syntax the schemas use, `pyunicode` holds Python's decimal digits and
   `int(str)`, and `pyfs` holds `Path.resolve`, `relative_to` and directory listing.
+- `archive` reads and writes gzip, tar and zip through the registry crates below, as [archives](#archives)
+  describes.
 
 Run a subcommand through the pinned executable, as [Rust runtime pinning](runtime.md#running-a-maintained-command)
 describes:
@@ -50,6 +52,57 @@ python3 bench/tools/rust_runtime.py exec bench-tools -- derive-packet <packet.le
 python3 bench/tools/rust_runtime.py exec bench-tools -- build-packet --repo <owner/name> --pr <n> ... --out <packet.md>
 bun run data
 ```
+
+### Registry crates
+
+[#155](https://github.com/kamui/code-review-bench/issues/155) allows pinned crates.io dependencies. `Cargo.lock` pins
+them, and `cargo fetch --locked` in `rust/bench-tools` puts them in the Cargo cache that the offline install reads.
+When that cache lacks one, `rust_runtime.py install` fails and names the fetch step. Default features are off.
+
+| Crate | Version | License | Features | Purpose | Added by |
+| --- | --- | --- | --- | --- | --- |
+| `flate2` | 1.1.10 | MIT OR Apache-2.0 | `rust_backend` | gzip and deflate | [#218](https://github.com/kamui/code-review-bench/issues/218) |
+| `tar` | 0.4.46 | MIT OR Apache-2.0 | none | tar with PAX, read and write | [#218](https://github.com/kamui/code-review-bench/issues/218) |
+| `zip` | 9.0.5 | MIT | `deflate-flate2` | native scratch archives | [#218](https://github.com/kamui/code-review-bench/issues/218) |
+
+They bring 15 transitive crates: `adler2` 2.0.1 (0BSD OR MIT OR Apache-2.0), `bitflags` 2.13.2, `cfg-if` 1.0.5,
+`crc32fast` 1.5.2, `equivalent` 1.0.3, `filetime` 0.2.29, `hashbrown` 0.17.1, `indexmap` 2.14.2, `libc` 0.2.191,
+`typed-path` 0.12.3 (each MIT OR Apache-2.0), `memchr` 2.8.3 (Unlicense OR MIT), `miniz_oxide` 0.9.1 (MIT OR Zlib OR
+Apache-2.0), `nix` 0.31.3 (MIT), `simd-adler32` 0.3.10 (MIT) and the build-only `cfg_aliases` 0.2.2 (MIT).
+
+### Archives
+
+`bench_tools::archive` wraps the crates in the limits and refusals of #155's
+[delivery plan](https://github.com/kamui/code-review-bench/issues/155#issuecomment-6263888656). Readers stream each
+regular member to a visitor; writers stream each member in.
+
+- Packages are gzip-compressed tar. The writer uses level 9, no file name and modification time 0, as
+  `evidence_store.pack` does, with a PAX `path` record for a name over 100 bytes. Its bytes may differ from Python's,
+  as the storage contract allows for new outer packages.
+- The reader accepts what `tarfile` accepts for a package: PAX and GNU long names, multi-member gzip with zero padding,
+  and regular and contiguous members. It parses nothing after the end marker. It refuses non-regular members by type
+  and mode bits, duplicate names and the changes from Python that
+  [`archive-decisions.v1.json`](../../tools/behavior_contracts/archive-decisions.v1.json) records.
+- Metadata limits come from the package's index, before a crate allocates. The decoded stream may hold the indexed
+  payload plus, per member, its header blocks and up to three extension headers of at most 64 KiB each. A PAX header,
+  GNU long name or GNU long link over 64 KiB is refused from its header. Headers and members are capped by the index's
+  member count. For zip, every end record in the comment window is read first, and an entry count or central
+  directory size over the limit is refused before `ZipArchive` opens.
+- Native scratch archives are zip. The writer names deflate entries by content hash, with mode 0600 and the
+  1980-01-01 timestamp, as `native_artifacts.file_artifacts` does. The reader accepts stored, deflate and zip64
+  entries, and refuses encryption, other methods, duplicate names and entries that are not regular files.
+
+`bench-tools archive check-packages --cache DIR MANIFEST...` checks each cached package as `evidence_store.unpack` does,
+without restoring it: the archive's size and SHA-256, then each member's name, size, mode and SHA-256 against the
+manifest. `bench-tools archive check-scratch ZIP...` checks that each scratch entry hashes to its name. Both print a JSON
+report and exit 1 when an archive fails. The Pages build runs `check-packages` on the 12 packages it restores. A
+one-time check read all 33 published packages, from the 19 manifests in `bench/evidence/manifests/`, after Python's
+`fetch` restored them into a disposable root:
+[`published-packages.2026-10-19.json`](evidence/published-packages.2026-10-19.json).
+
+`tests/python_archives.rs` checks that the retained `evidence_store.py` and `native_artifacts.py` restore what
+`bench_tools::archive` writes, and that it reads what they write. It is deleted with them
+([#159](https://github.com/kamui/code-review-bench/issues/159)).
 
 ## Migrated responsibilities
 
@@ -312,7 +365,7 @@ has `bench/tools/build_packet.py`, such as `1bbc3eed6`, the last main commit tha
 ## Verification
 
 ```sh
-cd rust/bench-tools && cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
+cd rust/bench-tools && cargo fetch --locked && cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
 python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select
 python3 bench/tools/rust_runtime.py resolve bench-tools
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/roster.v1.json
@@ -325,13 +378,15 @@ python3 tools/behavior_contract.py --corpus tools/behavior_contracts/normalize-t
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/derive-packet.v1.json
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/build-packet.v1.json
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/export-explorer.v1.json
+python3 tools/behavior_contract.py --corpus tools/behavior_contracts/archive.v1.json
 python3 tools/behavior_contract.py --verify-decision-history
 ```
 
 `MAP` is a [command map](contracts/README.md#run-the-usage-corpus) naming the resolved executable, as the `Rust
-runtime` workflow writes it. The `roster`, `normalize-thermo`, `derive-packet`, `build-packet` and `export-explorer`
-corpora run the Rust executable by default; the other corpora run the retained Python libraries by default.
-`derive-packet`, `build-packet` and `export-explorer` have no Python implementation left to compare with, so they have
-no differential. The base commit's Python export derived every `export-explorer` expectation except those of decided
+runtime` workflow writes it. The `roster`, `normalize-thermo`, `derive-packet`, `build-packet`, `export-explorer` and
+`archive` corpora run the Rust executable by default; the other corpora run the retained Python libraries by default.
+`derive-packet`, `build-packet` and `export-explorer` have no Python implementation left to compare with, and the
+`archive` commands have no Python counterpart, so they have no differential. Each `archive` decision states what
+Python 3.12 and 3.14 do with its fixture. The base commit's Python export derived every `export-explorer` expectation except those of decided
 changes. `rates.py` and `upstream.py` run through drivers in `tools/behavior_contract.py` that point them at the case
 directory, as the Rust commands default to the current directory, and give `rates.py` the `--source` pages.
