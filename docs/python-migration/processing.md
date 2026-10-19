@@ -140,10 +140,14 @@ each job that fetches installs `bench-tools` first. `prune_workspace.py` still c
 `collect` reads the repository at the current directory, as the corpus driver for `collect_run.py` did. It copies an
 archive through a synced temporary file linked into place, then replaces `transcripts.json` through a synced
 temporary file and a rename that keeps the file's mode; `tests/evidence.rs` interrupts it at each disk effect. Python
-copied in place and rewrote the mapping through any link at its path. `inventory` writes `\udcXX` escapes for
-non-UTF-8 names through `pyjson`'s `OsText`, so its output matches Python's byte for byte, and `retire_workspace.py`
-accepts it as a snapshot. `reconcile` writes gzip at level 9 with no name and a zero time, as Python did, and its JSON
-matches Python's after decompression; it refuses an inventory holding a lone surrogate, which `pyjson` cannot read.
+copied in place and rewrote the mapping through any link at its path. `collect` also hashes the bytes it copies and
+refuses an archive that changed after it verified, where Python copied whatever its second read returned.
+`inventory` writes `\udcXX` escapes for non-UTF-8 names through `pyjson`'s `OsText`, so its output matches Python's
+byte for byte, and `retire_workspace.py` accepts it as a snapshot. It refuses an output that reaches an inspected root
+through a parent traversal or a link, which Python wrote inside the root; `inventory-out-parent-traversal-into-root`
+and `inventory-out-symlinked-parent` pin that. `reconcile` writes gzip at level 9 with no name and a zero time, as
+Python did, and its JSON matches Python's after decompression; it refuses an inventory holding a lone surrogate,
+which `pyjson` cannot read.
 `evidence_inventory.py` stays for `retire_workspace.py` until
 [#159](https://github.com/kamui/code-review-bench/issues/159).
 
