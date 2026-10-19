@@ -36,8 +36,8 @@ Shared modules carry the Python behavior that byte-pinned outputs depend on:
 - `pytext` holds `surrogateescape` decoding, `str.strip` whitespace, `repr`, `pathlib` path joining, universal
   newlines, and the `OSError` and `UnicodeDecodeError` messages that diagnostics quote.
 - `sha256` implements SHA-256, in one call or incrementally.
-- `pyregex` is `re.search` for the pattern syntax the schemas use, `pyunicode` holds Python's decimal digits and
-  `int(str)`, and `pyfs` holds `Path.resolve`, `relative_to` and directory listing.
+- `pyregex` is `re.search` for the pattern syntax the schemas use, matched by the `regex` crate, `pyunicode` holds
+  Python's decimal digits and `int(str)`, and `pyfs` holds `Path.resolve`, `relative_to` and directory listing.
 - `archive` reads and writes gzip, tar and zip through the [registry dependencies](#registry-dependencies), as [archives](#archives)
   describes.
 
@@ -97,6 +97,9 @@ lists them. When the Cargo cache lacks one, `rust_runtime.py install` fails and 
 
 | Crate | Version | License | Purpose |
 | --- | --- | --- | --- |
+| `regex`, with only its `std` feature | 1.13.1 | MIT OR Apache-2.0 | Matches `pyregex`'s translation of a schema pattern ([#215](https://github.com/kamui/code-review-bench/issues/215)) |
+| `regex-automata` | 0.4.18 | MIT OR Apache-2.0 | `regex`'s engines |
+| `regex-syntax` | 0.8.11 | MIT OR Apache-2.0 | `regex`'s parser, without its Unicode tables |
 | `ureq` | 3.4.2 | MIT OR Apache-2.0 | `rates check`'s HTTP client, a direct dependency; built without default features except `rustls` |
 | `ureq-proto` | 0.6.5 | MIT OR Apache-2.0 | HTTP/1.1 protocol state for `ureq` |
 | `http` | 1.5.0 | MIT OR Apache-2.0 | Request, response and status types for `ureq` |
@@ -138,6 +141,9 @@ lists them. When the Cargo cache lacks one, `rust_runtime.py install` fails and 
 | `nix` | 0.31.3 | MIT | Unix calls for `zip`, on macOS only |
 | `bitflags` | 2.13.2 | MIT OR Apache-2.0 | Flag types for `nix`, on macOS only |
 | `cfg_aliases` | 0.2.2 | MIT | Build-time configuration for `nix`, on macOS only |
+
+`Cargo.lock` also lists `aho-corasick` 1.1.5 (Unlicense OR MIT), an optional dependency of `regex` that its disabled
+`perf` feature would build.
 
 ## Migrated responsibilities
 
@@ -298,7 +304,12 @@ recorded decision.
   empty text, which Python 3.12 does not. Every pattern in a tracked `*.schema.json` is inside the syntax.
   `check-manifest-decisions.v3.json` records where the pinned Unicode 16.0 tables differ from an older
   interpreter: `\w` on 5,004 characters against Python 3.12, including the 622 Unicode 15.1 added, `\d` on 80
-  and `(?i)` on 54, each with a case.
+  and `(?i)` on 54, each with a case. The `regex` crate matches a translation that keeps these tables:
+  `check-manifest-crate-unicode-classes` pins characters where the crate's own `\w`, `\s`, `\b` and `(?i)` would
+  differ. A pattern whose translation exceeds the crate's compiled size limit, such as `^\w{1000}$`, or nests more
+  than 2,000 levels of the crate's syntax, exits 2; Python applied the first and raised `RecursionError` on the
+  second. No pattern Python compiles nests that deeply. `check-manifest-decisions.v6.json` records both. A pattern
+  nested near 100,000 groups still overflows the parser's stack and aborts, as before.
 - A schema or manifest that is not UTF-8 exits 2 with the `UnicodeDecodeError` text. Python raised a traceback.
 - `\d` and `int()` accept the decimal digits of Unicode 16.0, as Python 3.14 does; Python 3.12 lacks the digits
   16.0 added. `rates-decisions.v4.json` records this for the catalog date, price footnotes and long-prompt rows,
