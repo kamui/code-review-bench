@@ -100,7 +100,7 @@ Recording a decision, a link or a new causal family in the current records chang
 ```sh
 python3 bench/tools/rust_runtime.py exec bench-tools -- current-grading check
 python3 bench/tools/grade.py invalidate
-python3 bench/tools/methodology.py --out /tmp/current-grading-queue.json
+python3 bench/tools/rust_runtime.py exec bench-tools -- methodology --out /tmp/current-grading-queue.json
 python3 bench/tools/grade.py prepare \
   --run runs/<run> --target <target> \
   --work /tmp/<fresh-grading-workspace> --key /tmp/<private-grading-key>.json
