@@ -288,7 +288,7 @@ the v3 inventory records.
 | `methodology`, `collect_run` | Moved by the delivery plan | #156, #155 |
 | `stage_edition.py` | Retained research record | #156 |
 | `plan.py`, `recut.py` and `verify.py` in `last-push-recut-2026-10-07` | Historical replay, as #192 classified them | None |
-| `builtin-review-benchmark-2026-09-24/answers.py` | Historical replay by role, as #192 classified it. The census still marks it active because `tools/import_benchmark.py` lists its path to copy | #155 |
+| `builtin-review-benchmark-2026-09-24/answers.py` | Historical replay by role, as #192 classified it. The census still marks it active because `tools/import_benchmark.py` lists its path to copy and a fixture in `tools/test_python_inventory.py` names the same path; both must go before it reads as replay | #155 |
 
 ## Research records
 
