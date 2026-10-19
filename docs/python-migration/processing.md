@@ -88,8 +88,8 @@ lists them.
 | `zeroize` | 1.9.1 | Apache-2.0 OR MIT | Clearing secrets for `rustls` and `rustls-pki-types` |
 | `once_cell` | 1.21.4 | MIT OR Apache-2.0 | Lazy statics for `rustls` |
 
-`Cargo.lock` also lists `aho-corasick` 1.1.5 and `memchr` 2.8.3, optional dependencies of `regex` that its disabled
-`perf` feature would build.
+`Cargo.lock` also lists `aho-corasick` 1.1.5 and `memchr` 2.8.3 (both Unlicense OR MIT), optional dependencies of
+`regex` that its disabled `perf` feature would build.
 
 ## Migrated responsibilities
 
