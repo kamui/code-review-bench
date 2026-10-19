@@ -584,6 +584,38 @@ print(digest)
             {**best, "stdout": {"mode": "bytes", "bytes_b64": encoded(b"<archive 1>\n")},
              "stderr": {"mode": "bytes", "bytes_b64": ""}}, wrong)))
 
+    NATIVE_WRITER = """import hashlib, io, json, os, sys, zipfile
+raw = io.BytesIO()
+with zipfile.ZipFile(raw, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=int(sys.argv[1])) as bundle:
+    bundle.writestr("member", b"member bytes")
+archive = raw.getvalue()
+os.mkdir("out")
+with open("out/native-scratch.v1.zip", "wb") as handle:
+    handle.write(archive)
+named = {"label": "<archive 1>", "path": "missing.zip"}.get(sys.argv[2], hashlib.sha256(archive).hexdigest())
+path = "missing.zip" if sys.argv[2] == "path" else "native-scratch.v1.zip"
+with open("out/native-artifact-storage.v1.json", "w") as handle:
+    json.dump({"archive": {"path": path, "sha256": named}}, handle, indent=2)
+"""
+
+    def test_storage_references_name_the_written_archive_before_masking(self):
+        case = {"id": "probe", "program": "writer", "argv": [], "stdin_b64": "", "initial": [],
+                "archives": [{"glob": "out/native-scratch.v1.zip", "format": "zip"}],
+                "references": [{"path": "out/native-artifact-storage.v1.json", "fields": ["archive"]}]}
+        def run(level, variant):
+            return contract.execute(dict(case, argv=[str(level), variant]),
+                                    {"writer": [sys.executable, "-c", self.NATIVE_WRITER]}, {})
+        streams = {"expected": {"stdout": {"mode": "bytes"}, "stderr": {"mode": "bytes"}}}
+        best = run(9, "same")
+        self.assertNotIn("inconsistencies", best)
+        self.assertEqual(contract.differential(best, run(1, "same"), streams), [])
+        for variant in ("label", "path"):
+            with self.subTest(variant=variant):
+                wrong = run(9, variant)
+                self.assertTrue(any("differs from the file written beside it" in issue
+                                    for issue in wrong["inconsistencies"]), wrong.get("inconsistencies"))
+                self.assertTrue(any(diff.startswith("consistency:") for diff in contract.differential(best, wrong, streams)))
+
     def test_special_files_snapshot_without_blocking(self):
         import threading
         with tempfile.TemporaryDirectory() as temporary:
@@ -703,18 +735,25 @@ print(digest)
             mutant.parent.mkdir(parents=True)
             (Path(temporary) / "bench/schema").mkdir()
             mutant.write_text(source.replace(before, "if False:"), encoding="utf-8")
+            known = "raise store.EvidenceError('choose exactly one source name from the recovery index')"
+            recover = (tools / "recover_evidence.py").read_text(encoding="utf-8")
+            self.assertIn(known, recover)
+            (mutant.parent / "recover_evidence.py").write_text(
+                recover.replace(known, "raise RuntimeError('unrelated implementation crash')"), encoding="utf-8")
             (mutant.parent / "check_manifest.py").write_bytes((tools / "check_manifest.py").read_bytes())
             schema = "bench/schema/evidence-storage.schema.json"
             (Path(temporary) / schema).write_bytes((contract.REPO / schema).read_bytes())
             commands = Path(temporary) / "commands.json"
             commands.write_text(json.dumps({"evidence-store": [sys.executable, str(mutant)],
-                                            "recover-evidence": [sys.executable, str(tools / "recover_evidence.py")],
+                                            "recover-evidence": [sys.executable, str(mutant.parent / "recover_evidence.py")],
                                             "restore-local": contract.default_commands(
                                                 {"cases": [{"program": "restore-local"}]})["restore-local"]}))
             result = self.run_cli("--allow-known-defects", "--corpus",
                                   contract.CORPUS.parent / "evidence-store.v1.json", "--implementations", commands)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("FAIL pack-credential-auth-json", result.stdout)
+        self.assertIn("FAIL recover-unknown-source", result.stdout)
+        self.assertIn("KNOWN DEFECT recover-changed-manifest", result.stdout)
         self.assertIn("PASS pack-traversal-path", result.stdout)
 
 if __name__ == "__main__":

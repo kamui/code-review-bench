@@ -423,13 +423,15 @@ def archive_members(raw, form):
 
 
 def normalize(case, root, actual):
-    """Apply the case's declared archive, digest, manifest, volatile and root comparisons.
+    """Apply the case's declared archive, digest, manifest, reference, volatile and root comparisons.
 
     A declared archive is compared by its members, and its SHA-256 and that of each declared digest file are
     replaced everywhere by a label, so an implementation that compresses differently still matches. Restored and
     pre-existing files match no declaration and keep exact byte comparison. Each named evidence manifest must name
-    the archive bytes actually beside it; the size of a declared archive is masked only after that check."""
-    declared = ("archives", "digests", "manifests", "volatile", "mask_root", "mask_patterns")
+    the archive bytes actually beside it; the size of a declared archive is masked only after that check. Each
+    declared storage reference must name, by path and SHA-256, a file written beside its record, checked before
+    any digest becomes a label."""
+    declared = ("archives", "digests", "manifests", "references", "volatile", "mask_root", "mask_patterns")
     if not any(key in case for key in declared):
         return actual
     entries = {os.fsdecode(decode(entry["path_b64"])): dict(entry) for entry in actual["filesystem"]}
@@ -476,6 +478,21 @@ def normalize(case, root, actual):
                               "which differ from the archive written beside it")
             elif entries[asset]["kind"] == "archive":
                 masks.setdefault(name, {})[f"/packages/{index}/bytes"] = "<archive size>"
+    for rule in case.get("references", []):
+        name = rule["path"]
+        if name not in raw:
+            continue
+        try:
+            record = json_value(raw[name])
+            references = {field: record[field] for field in rule["fields"]}
+        except (KeyError, TypeError, ValueError, UnicodeError) as error:
+            issues.append(f"{name}: unreadable storage reference: {error}")
+            continue
+        for field, ref in references.items():
+            target = str(Path(name).parent / str(ref.get("path") if isinstance(ref, dict) else None))
+            if not isinstance(ref, dict) or target not in raw \
+                    or ref.get("sha256") != hashlib.sha256(raw[target]).hexdigest():
+                issues.append(f"{name}: {field} names {ref!r}, which differs from the file written beside it")
     for rule in case.get("volatile", []):
         for pointer in rule["pointers"]:
             masks.setdefault(rule["path"], {})[pointer] = "<volatile>"

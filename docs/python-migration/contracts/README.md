@@ -144,6 +144,8 @@ Where Python raises a traceback, the case carries it as a `baseline_defect` and 
 message, so these corpora run with `--allow-known-defects`: `recover-unknown-source`, `recover-changed-manifest`,
 `restore-local-not-published`, `restore-local-mismatched-resolution`, `fetch-archive-truncated-gzip`,
 `collect-run-checksum-mismatch` and `import-check-changed-file`. Each decision records the old and new behavior.
+Each observation masks the traceback's frames with `mask_patterns` and pins the terminal exception type and message,
+so an unrelated crash is a failure, not the known defect.
 
 ## Fixture format `behavior-contract/1`
 
@@ -193,6 +195,9 @@ A case may declare comparisons for outputs that legitimately vary:
 - `manifests`, evidence manifests whose every package must name the archive beside it by
   asset name, `sha256` and `bytes`, or the case fails with a `consistency:` difference.
   A declared archive's `bytes` is masked only after that check.
+- `references`, a storage record path and its top-level `fields`, each an object whose
+  `path` and `sha256` must name a file written beside the record, or the case fails with
+  a `consistency:` difference. The check runs before any digest becomes a label.
 - `volatile`, a file path and the RFC 6901 pointers of clock fields such as `verified_at`
   and `at`, replaced in place by `"<volatile>"`.
 - `mask_root`, which replaces the absolute case root with `<root>`, and `mask_patterns`,
