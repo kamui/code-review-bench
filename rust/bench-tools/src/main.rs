@@ -1232,6 +1232,7 @@ struct ExportArguments {
     base_path: Option<String>,
     stage: Option<OsString>,
     public: Option<OsString>,
+    restore: bool,
 }
 
 fn parse_export_explorer(arguments: &[OsString]) -> Result<Parsed<ExportArguments>, Misuse> {
@@ -1246,6 +1247,8 @@ fn parse_export_explorer(arguments: &[OsString]) -> Result<Parsed<ExportArgument
             commands.push(bytes.to_vec());
         } else if bytes == b"-h" || bytes == b"--help" {
             return Ok(Parsed::Help);
+        } else if bytes == b"--restore" {
+            parsed.restore = true;
         } else if let Some(value) = option_value("--root", bytes, &mut rest, usage, prog)? {
             parsed.root = Some(value);
         } else if let Some(value) = option_value("--facts", bytes, &mut rest, usage, prog)? {
@@ -1308,6 +1311,9 @@ fn parse_export_explorer(arguments: &[OsString]) -> Result<Parsed<ExportArgument
             ),
         ));
     }
+    if parsed.restore && command != b"evidence" {
+        return Err(misuse(usage, prog, "--restore applies only to evidence"));
+    }
     parsed.command.clone_from(command);
     Ok(Parsed::Run(parsed))
 }
@@ -1337,6 +1343,18 @@ fn run_export_explorer(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
     let outcome = match parsed.command.as_slice() {
         b"evidence" => export_explorer::Facts::read(&path(&parsed.facts))
             .and_then(|facts| export_explorer::evidence(&root, &facts, base_path))
+            .and_then(|listed| {
+                if parsed.restore {
+                    let mut store = evidence::Store {
+                        remote: &mut evidence::GitHub,
+                        disk: &mut evidence::System,
+                        now: &evidence::now_isoformat,
+                        temporary: evidence::system_temp(),
+                    };
+                    export_explorer::restore(&root, &listed, &mut store)?;
+                }
+                Ok(listed)
+            })
             .map(|listed| format!("{}\n", pyjson::dumps(&listed, &pyjson::Dumps::default()))),
         b"stage" => {
             export_explorer::stage(&root, &path(&parsed.facts), base_path, &path(&parsed.stage))
@@ -1802,6 +1820,7 @@ fn run_evidence(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
         remote: &mut remote,
         disk: &mut disk,
         now: &evidence::now_isoformat,
+        temporary: evidence::system_temp(),
     };
     let offline = parsed.flags.contains(&"--offline");
     let manifest = || {
@@ -1889,6 +1908,7 @@ fn run_restore_local(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
         remote: &mut remote,
         disk: &mut disk,
         now: &evidence::now_isoformat,
+        temporary: evidence::system_temp(),
     };
     let text = |value: &OsString| String::from_utf8_lossy(pytext::os_bytes(value)).into_owned();
     match evidence::recovery::restore_local(

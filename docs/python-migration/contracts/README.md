@@ -122,7 +122,7 @@ under `replay/`, so no case calls `gh` or the network. `build-packet-non-utf8-ou
 
 | Corpus | Programs | Python run |
 | --- | --- | --- |
-| [`evidence-store.v1.json`](../../../tools/behavior_contracts/evidence-store.v1.json) | `evidence-store`, `recover-evidence`, `restore-local` | `evidence_store.py` and `recover_evidence.py` directly; `restore-local.py`, the research record, through a driver that preloads the retained `evidence_store` and `local_evidence_resolution` |
+| [`evidence-store.v1.json`](../../../tools/behavior_contracts/evidence-store.v1.json) | `evidence-store`, `evidence`, `python-resolve`, `recover-evidence`, `restore-local` | `evidence_store.py` directly; `python-resolve` calls the retained `evidence_store.resolve` as `prune_workspace.py` does. `evidence`, `recover-evidence` and `restore-local` run `bench-tools evidence`, `evidence recover` and `evidence restore-local` |
 | [`native-artifacts.v1.json`](../../../tools/behavior_contracts/native-artifacts.v1.json) | `native-artifacts` | `native_artifacts.py`; its driver adds `file ROOT INDEX OUT [--native-relative PATH]`, which runs `file_artifacts` and prints the pin |
 | [`evidence-inventory.v1.json`](../../../tools/behavior_contracts/evidence-inventory.v1.json) | `evidence-inventory`, `collect-run` | `evidence_inventory.py` directly; `collect_run.py` through a driver that reads the case directory as the repository |
 | [`import-benchmark.v1.json`](../../../tools/behavior_contracts/import-benchmark.v1.json) | `import-benchmark` | `import_benchmark.py --check` through the same kind of driver |
@@ -140,7 +140,26 @@ releases, oversized and truncated downloads, and existing different manifests, r
 `--offline`, then refuses a corrupted cache. `publish-retry-makes-no-upload` and `publish-lost-upload-response` show
 one upload in the recorded `gh` calls. Each corpus runs a stub `gh`, so `gh/calls.jsonl` records every call;
 `test_behavior_contract.py` checks that each recorded call is one the stub answers and runs every storage corpus
-against the current Python.
+with its maintained implementations.
+
+[#219](https://github.com/kamui/code-review-bench/issues/219) moves fetch, verify, resolution, recovery and local
+restoration to `bench-tools evidence`. A command map value can route a program by its first argument, so
+`evidence-store` can run Rust `fetch` and `verify` against Python `pack` and `publish`:
+
+```json
+{
+  "evidence-store": {
+    "fetch": ["/absolute/path/to/bench-tools", "evidence"],
+    "verify": ["/absolute/path/to/bench-tools", "evidence"],
+    "pack": ["/absolute/path/to/python3", "/absolute/path/to/bench/tools/evidence_store.py"],
+    "publish": ["/absolute/path/to/python3", "/absolute/path/to/bench/tools/evidence_store.py"]
+  }
+}
+```
+
+A `shell` step runs one command line with `/bin/sh -c` in the case root, for example the move-aside commands a
+refused fetch prints. `fetch-interrupted-*` cases leave the state a crash leaves at each durable step and fetch again.
+`resolve-across-implementations` restores through Rust and then resolves through Python.
 
 Where Python raises a traceback, the case carries it as a `baseline_defect` and expects the intended exit and
 message, so these corpora run with `--allow-known-defects`: `recover-unknown-source`, `recover-changed-manifest`,
@@ -174,7 +193,8 @@ Each case defines:
 - Instead of `argv`, `stdin_b64` and `expected`, optional `steps` that share one root, in
   order. A command step holds `argv`, `stdin_b64`, `expected` and optionally `program`; a
   `remove` step deletes the listed paths that exist; a `write` step adds `initial`-style
-  entries, replacing files. Every command step's `expected.filesystem` is the whole tree
+  entries, replacing files; a `shell` step runs its command line with `/bin/sh -c` in the root
+  and must exit 0. Every command step's `expected.filesystem` is the whole tree
   after it. A step case carries no `baseline_defect`.
 
 A corpus may opt in to two settings. `snapshot_modes: true` adds each file's and

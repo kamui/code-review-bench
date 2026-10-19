@@ -41,8 +41,7 @@ CORPUS = REPO / "tools/behavior_contracts/usage.v1.json"
 PYTHON_PROGRAMS = {"codex": "bench/tools/codex_usage.py", "transcript": "bench/tools/transcript_usage.py",
                    "diff-identity": "bench/tools/diff_identity.py", "normalize-review": "bench/tools/normalize_review.py",
                    "check-manifest": "bench/tools/check_manifest.py", "evidence-store": "bench/tools/evidence_store.py",
-                   "evidence-inventory": "bench/tools/evidence_inventory.py",
-                   "recover-evidence": "bench/tools/recover_evidence.py"}
+                   "evidence-inventory": "bench/tools/evidence_inventory.py"}
 # rates.py and upstream.py read the repository that holds them and fetch fixed URLs. These drivers point the
 # retained libraries at the case directory, as the Rust commands default to the current directory, and give
 # rates.py the `--source PROVIDER=URL` pages that `bench-tools rates check` takes.
@@ -95,15 +94,6 @@ except (native_artifacts.ArtifactError, OSError, ValueError, KeyError, zipfile.B
     parser.exit(1, f"native_artifacts.py: {error}\\n")
 print(json.dumps(pin))
 """,
-    # restore-local.py is a research record that imports from the checkout it runs in; preloading the retained
-    # modules makes it use them while it reads the case directory as that checkout.
-    "restore-local": """import runpy, sys
-sys.path.insert(0, sys.argv.pop(1))
-script = sys.argv.pop(1)
-import evidence_store, local_evidence_resolution
-sys.argv[0] = script
-runpy.run_path(script, run_name="__main__")
-""",
     # prune_workspace resolves an archive through the retained evidence_store.resolve; this makes that one call, so
     # a step case can show Python resolving what Rust restored and the reverse.
     "python-resolve": """import sys
@@ -138,13 +128,12 @@ import_benchmark.MANIFEST = import_benchmark.ROOT / "bench/import-manifest.json"
 sys.exit(import_benchmark.main())
 """,
 }
-DRIVER_ARGUMENTS = {"native-artifacts": ["bench/tools"], "restore-local": [
-    "bench/tools", "docs/research/evidence-migration-2026-10-08/restore-local.py"], "collect-run": ["tools"],
-    "import-benchmark": ["tools"]}
+DRIVER_ARGUMENTS = {"native-artifacts": ["bench/tools"], "collect-run": ["tools"], "import-benchmark": ["tools"]}
 RUST_PROGRAMS = {"roster": ("bench-tools", ["roster"]), "normalize-thermo": ("bench-tools", ["normalize-thermo"]),
                  "derive-packet": ("bench-tools", ["derive-packet"]), "build-packet": ("bench-tools", ["build-packet"]),
                  "export-explorer": ("bench-tools", ["export-explorer"]), "archive": ("bench-tools", ["archive"]),
-                 "evidence": ("bench-tools", ["evidence"])}
+                 "evidence": ("bench-tools", ["evidence"]), "recover-evidence": ("bench-tools", ["evidence", "recover"]),
+                 "restore-local": ("bench-tools", ["evidence", "restore-local"])}
 DECISIONS = re.compile(r"(?P<family>.+)-decisions\.v[^/]*\.json")
 
 

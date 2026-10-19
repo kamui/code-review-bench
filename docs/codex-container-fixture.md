@@ -59,7 +59,7 @@ The [v2 admission revalidation](../bench/fixtures/2026-10-11-linux-codex-contain
 The [shared asset manifest](../bench/evidence/manifests/codex-container-2026-10-11-v1.json) pins the immutable release and asset identities. The [cold-restoration receipt](../bench/evidence/receipts/codex-container-2026-10-11-v1-restoration.json) records a remote download into an empty temporary directory and verifies archive bytes and permissions independently of the original workspaces. Restore the payloads before inspecting them:
 
 ```sh
-python3 bench/tools/evidence_store.py fetch \
+python3 bench/tools/rust_runtime.py exec bench-tools -- evidence fetch \
   --manifest bench/evidence/manifests/codex-container-2026-10-11-v1.json
 python3 -m unittest discover -s bench/tools -p test_codex_container_probe.py -v
 bun run verify:import

@@ -36,6 +36,16 @@ fn scratch(label: &str) -> PathBuf {
     std::fs::canonicalize(&path).unwrap()
 }
 
+/// A canonical directory for verify's temporary directories; on macOS the system one lies below a symlink.
+fn scratch_temporary() -> PathBuf {
+    let path = std::env::temp_dir().join(format!(
+        "bench-tools-evidence-temporary-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&path).unwrap();
+    std::fs::canonicalize(&path).unwrap()
+}
+
 fn py(path: &Path) -> PyPath {
     PyPath::new(path.as_os_str().as_bytes())
 }
@@ -187,6 +197,7 @@ fn fetch(
         remote,
         disk,
         now: &fixed_clock,
+        temporary: py(&scratch_temporary()),
     };
     evidence::materialize(&mut store, document, &py(root), None, false).map(|_| ())
 }
@@ -340,6 +351,7 @@ fn receipt(root: &Path, remote: &mut FakeRemote, disk: &mut dyn Disk) -> Result<
         remote,
         disk,
         now: &fixed_clock,
+        temporary: py(&scratch_temporary()),
     };
     evidence::restoration_receipt(
         &mut store,

@@ -87,7 +87,14 @@ impl Disk for System {
     fn sync_dir(&mut self, path: &Path) -> io::Result<()> {
         match File::open(path)?.sync_all() {
             // Some filesystems cannot sync a directory; their entries are as durable as they allow.
-            Err(error) if error.raw_os_error() == Some(22) => Ok(()),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::InvalidInput | io::ErrorKind::Unsupported
+                ) || error.raw_os_error() == Some(25) =>
+            {
+                Ok(())
+            }
             other => other,
         }
     }
@@ -133,6 +140,8 @@ pub struct Store<'a> {
     pub remote: &'a mut dyn Remote,
     pub disk: &'a mut dyn Disk,
     pub now: &'a dyn Fn() -> String,
+    /// Where `verify` makes its empty directories: [`system_temp`], as `tempfile.gettempdir()` chooses.
+    pub temporary: PyPath,
 }
 
 /// `evidence_store.read`: `json.loads(Path(path).read_text(encoding='utf-8'))`.
@@ -532,7 +541,8 @@ impl Drop for TempDir {
     }
 }
 
-fn system_temp() -> PyPath {
+/// `TMPDIR`, else `/tmp`. Like Python's, `verify` refuses a temporary directory below a symlink.
+pub fn system_temp() -> PyPath {
     use std::os::unix::ffi::OsStrExt;
     PyPath::new(std::env::temp_dir().as_os_str().as_bytes())
 }
@@ -729,7 +739,7 @@ fn download_package(
 pub fn verify_remote(store: &mut Store<'_>, manifest: &Value) -> Result<()> {
     let manifest = validate(manifest, true)?;
     for package in &manifest.packages {
-        let temp = TempDir::new(&system_temp(), "evidence-verify-")?;
+        let temp = TempDir::new(&store.temporary, "evidence-verify-")?;
         let archive_path = temp.path.join(package.asset.as_bytes());
         download_package(store, &manifest, package, &archive_path, false)?;
         unpack(
