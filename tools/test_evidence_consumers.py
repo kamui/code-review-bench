@@ -1,6 +1,7 @@
 """Cold retrieval preserves frozen records through the existing evidence consumers."""
 import io
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -15,10 +16,30 @@ import evidence_store as store
 import native_artifacts
 import prune_workspace
 import regrade
+import rust_runtime
 from test_evidence_store import FakeGitHub
+import behavior_contract
 import collect_run
-import export_explorer
 import import_benchmark
+
+
+def rust_evidence(remote, *arguments):
+    """Run `bench-tools evidence` with the corpora's stub gh answering from the fake release's current assets."""
+    with tempfile.TemporaryDirectory() as tools:
+        tools = Path(tools)
+        state = tools / 'state'
+        state.mkdir()
+        (state / 'release.json').write_text(json.dumps({'repository': 'owner/canonical', 'tag': 'evidence-fixture', 'id': 42}))
+        for asset in remote.assets:
+            target = state / 'assets' / str(asset['id']) / asset['name']
+            target.parent.mkdir(parents=True)
+            shutil.copyfile(remote.root / asset['name'], target)
+        (tools / 'gh.py').write_text(behavior_contract.GH_STUB)
+        (tools / 'gh').write_text(f'#!/bin/sh\nexec {sys.executable} {tools / "gh.py"} "$@"\n')
+        (tools / 'gh').chmod(0o755)
+        environment = {**os.environ, 'PATH': f'{tools}{os.pathsep}{os.environ["PATH"]}', 'CONTRACT_GH_STATE': str(state)}
+        return subprocess.run([str(rust_runtime.resolve('bench-tools')), 'evidence', *arguments],
+                              capture_output=True, text=True, env=environment)
 
 
 class ColdConsumersTest(unittest.TestCase):
@@ -111,9 +132,12 @@ class ColdConsumersTest(unittest.TestCase):
                 self.assertEqual((base / 'restored-native/run/scratch/probe.sh').stat().st_mode & 0o777, 0o755)
                 archive = transcript_entries[0]
                 (cold / archive['path']).unlink()
-                export_explorer.restore(cold, [{'path': archive['path'], 'sha256': archive['sha256']}])
+                done = rust_evidence(remote, 'resolve', archive['path'], '--sha256', archive['sha256'], '--root', str(cold))
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
                 self.assertEqual(store.digest(cold / archive['path']), archive['sha256'])
-                store.materialize(manifest, cold, [grading_archive], remote=remote)
+                done = rust_evidence(remote, 'fetch', '--manifest', str(cold / manifest_path.relative_to(origin)),
+                                     '--root', str(cold), '--path', grading_archive)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
             with tarfile.open(cold / grading_archive) as bundle:
                 self.assertEqual(bundle.extractfile('work/home/.codex/config.toml').read(), b'model = "fixture"\n')
                 self.assertEqual(json.load(bundle.extractfile('work/dispatch.json'))['usage']['high'], 2.0)
@@ -179,7 +203,8 @@ class ColdConsumersTest(unittest.TestCase):
                 self.assertEqual(prune_workspace.prune(valid, workspace)['archive'], str(cold / entries[0]['path']))
                 with self.assertRaisesRegex(prune_workspace.Refused, 'did not complete validly'):
                     prune_workspace.prune(failed, workspace.with_name('att-002'))
-                export_explorer.restore(cold, [{'path': entries[1]['path'], 'sha256': entries[1]['sha256']}])
+                done = rust_evidence(remote, 'resolve', entries[1]['path'], '--sha256', entries[1]['sha256'], '--root', str(cold))
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
                 self.assertEqual(store.digest(cold / entries[1]['path']), entries[1]['sha256'])
 
                 forget_local_copies()
@@ -190,14 +215,17 @@ class ColdConsumersTest(unittest.TestCase):
                     collect_run.collect(cold / 'bench/runs/example')
                 with self.assertRaisesRegex(prune_workspace.Refused, 'missing or changed evidence'):
                     prune_workspace.prune(valid, workspace)
-                with self.assertRaisesRegex(store.EvidenceError, 'missing or changed evidence'):
-                    export_explorer.restore(cold, [{'path': entries[1]['path'], 'sha256': entries[1]['sha256']}])
+                done = rust_evidence(remote, 'resolve', entries[1]['path'], '--sha256', entries[1]['sha256'], '--root', str(cold))
+                self.assertEqual((done.returncode, done.stderr), (1, ''))
+                self.assertRegex(done.stdout, '^evidence: missing or changed evidence: ')
                 asset.write_bytes(published)
                 remote.assets.clear()
                 with self.assertRaisesRegex(store.EvidenceError, 'asset identity changed'):
                     collect_run.collect(cold / 'bench/runs/example')
                 with self.assertRaisesRegex(prune_workspace.Refused, 'asset identity changed'):
                     prune_workspace.prune(valid, workspace)
+                done = rust_evidence(remote, 'resolve', entries[1]['path'], '--root', str(cold))
+                self.assertEqual(done.stdout, 'evidence: published release or asset identity changed\n')
             self.assertTrue(clone.is_dir())
             self.assertEqual((cold / 'bench/runs/example/transcripts.json').read_bytes(), mapping)
             self.assertFalse((cold / 'artifacts').exists())

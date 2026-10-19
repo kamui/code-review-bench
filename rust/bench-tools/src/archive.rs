@@ -246,12 +246,23 @@ impl<R: Read> Read for Exact<R> {
 /// Every gzip member in turn, as Python's `gzip` reads them: zero bytes between members are padding.
 pub struct GzipReader<R: BufRead> {
     member: Option<GzDecoder<R>>,
+    trailing_data_ends: bool,
 }
 
 impl<R: BufRead> GzipReader<R> {
     pub fn new(compressed: R) -> Self {
         Self {
             member: Some(GzDecoder::new(compressed)),
+            trailing_data_ends: false,
+        }
+    }
+
+    /// As `new`, except that bytes after a complete member that do not start another member end the stream.
+    /// `tarfile` stops at the tar end marker, so Python's `gzip` never reads such bytes behind a package.
+    pub fn ending_at_trailing_data(compressed: R) -> Self {
+        Self {
+            trailing_data_ends: true,
+            ..Self::new(compressed)
         }
     }
 }
@@ -277,7 +288,13 @@ impl<R: BufRead> Read for GzipReader<R> {
                 }
                 let zeros = available.iter().take_while(|byte| **byte == 0).count();
                 let only_zeros = zeros == available.len();
+                let next = &available[zeros..];
+                let another_member = next.first().is_none_or(|byte| *byte == 0x1f)
+                    && next.get(1).is_none_or(|byte| *byte == 0x8b);
                 rest.consume(zeros);
+                if self.trailing_data_ends && !another_member {
+                    return Ok(0);
+                }
                 if !only_zeros {
                     break;
                 }
@@ -412,7 +429,7 @@ pub fn read_tar_gz<R: Read>(
     visit: impl FnMut(&TarMember, &mut dyn Read) -> Result<(), ArchiveError>,
 ) -> Result<(), ArchiveError> {
     let decoded = Budget {
-        inner: GzipReader::new(BufReader::new(compressed)),
+        inner: GzipReader::ending_at_trailing_data(BufReader::new(compressed)),
         remaining: limits.tar_bytes(),
         limit: limits.tar_bytes(),
     };

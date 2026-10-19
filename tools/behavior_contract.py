@@ -44,8 +44,7 @@ CORPUS = REPO / "tools/behavior_contracts/usage.v1.json"
 PYTHON_PROGRAMS = {"codex": "bench/tools/codex_usage.py", "transcript": "bench/tools/transcript_usage.py",
                    "diff-identity": "bench/tools/diff_identity.py", "normalize-review": "bench/tools/normalize_review.py",
                    "check-manifest": "bench/tools/check_manifest.py", "evidence-store": "bench/tools/evidence_store.py",
-                   "evidence-inventory": "bench/tools/evidence_inventory.py",
-                   "recover-evidence": "bench/tools/recover_evidence.py"}
+                   "evidence-inventory": "bench/tools/evidence_inventory.py"}
 # rates.py and upstream.py read the repository that holds them and fetch fixed URLs. These drivers point the
 # retained libraries at the case directory, as the Rust commands default to the current directory, and give
 # rates.py the `--source PROVIDER=URL` pages that `bench-tools rates check` takes.
@@ -98,14 +97,17 @@ except (native_artifacts.ArtifactError, OSError, ValueError, KeyError, zipfile.B
     parser.exit(1, f"native_artifacts.py: {error}\\n")
 print(json.dumps(pin))
 """,
-    # restore-local.py is a research record that imports from the checkout it runs in; preloading the retained
-    # modules makes it use them while it reads the case directory as that checkout.
-    "restore-local": """import runpy, sys
+    # prune_workspace resolves an archive through the retained evidence_store.resolve; this makes that one call, so
+    # a step case can show Python resolving what Rust restored and the reverse.
+    "python-resolve": """import sys
+from pathlib import Path
 sys.path.insert(0, sys.argv.pop(1))
-script = sys.argv.pop(1)
-import evidence_store, local_evidence_resolution
-sys.argv[0] = script
-runpy.run_path(script, run_name="__main__")
+import evidence_store
+try:
+    print(evidence_store.resolve(Path.cwd(), sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else None))
+except evidence_store.EvidenceError as error:
+    print(f"evidence: {error}")
+    sys.exit(1)
 """,
     "collect-run": """import argparse, sys
 from pathlib import Path
@@ -129,12 +131,12 @@ import_benchmark.MANIFEST = import_benchmark.ROOT / "bench/import-manifest.json"
 sys.exit(import_benchmark.main())
 """,
 }
-DRIVER_ARGUMENTS = {"native-artifacts": ["bench/tools"], "restore-local": [
-    "bench/tools", "docs/research/evidence-migration-2026-10-08/restore-local.py"], "collect-run": ["tools"],
-    "import-benchmark": ["tools"]}
+DRIVER_ARGUMENTS = {"native-artifacts": ["bench/tools"], "collect-run": ["tools"], "import-benchmark": ["tools"]}
 RUST_PROGRAMS = {"roster": ("bench-tools", ["roster"]), "normalize-thermo": ("bench-tools", ["normalize-thermo"]),
                  "derive-packet": ("bench-tools", ["derive-packet"]), "build-packet": ("bench-tools", ["build-packet"]),
-                 "export-explorer": ("bench-tools", ["export-explorer"]), "archive": ("bench-tools", ["archive"])}
+                 "export-explorer": ("bench-tools", ["export-explorer"]), "archive": ("bench-tools", ["archive"]),
+                 "evidence": ("bench-tools", ["evidence"]), "recover-evidence": ("bench-tools", ["evidence", "recover"]),
+                 "restore-local": ("bench-tools", ["evidence", "restore-local"])}
 # Python programs that draw blind tokens or shuffles run under ENTROPY_DRIVER, so a recorded expectation is the
 # same on every recording. The grading slices of #156 add their programs here.
 PYTHON_ENTROPY = {}
@@ -370,6 +372,17 @@ else:
 """
 
 
+def command_for(commands, program, argv):
+    """A program's command prefix. A command map may route a program by its first argument, as
+    {"fetch": [...], "pack": [...]}, while only some of its subcommands have moved to another implementation."""
+    command = commands[program]
+    if isinstance(command, dict):
+        if not argv or argv[0] not in command:
+            raise ValueError(f"{program}: the command map routes no subcommand {argv[:1]}")
+        return command[argv[0]]
+    return command
+
+
 def execute(case, commands, options=None):
     """Run a case's command, or each of its steps on one shared root, and observe the results."""
     options = options or {}
@@ -401,6 +414,10 @@ def execute(case, commands, options=None):
             if "remove" in step:
                 remove(root, step["remove"])
                 continue
+            if "shell" in step:
+                subprocess.run(["/bin/sh", "-c", step["shell"]], cwd=root, env=environment, check=True,
+                               capture_output=True, timeout=10)
+                continue
             if "write" in step:
                 previous_umask = os.umask(0o022) if modes else None
                 try:
@@ -411,7 +428,7 @@ def execute(case, commands, options=None):
                 continue
             argv = [os.fsdecode(decode(arg["bytes_b64"])) if isinstance(arg, dict) else arg
                     for arg in step["argv"]]
-            result = subprocess.run([*commands[step.get("program", case.get("program"))], *argv], cwd=root,
+            result = subprocess.run([*command_for(commands, step.get("program", case.get("program")), argv), *argv], cwd=root,
                                     input=decode(step["stdin_b64"]), capture_output=True,
                                     env=environment, timeout=10, **({"umask": 0o022} if modes else {}))
             results.append(normalize(case, root, {"exit": result.returncode, "stdout": result.stdout,
