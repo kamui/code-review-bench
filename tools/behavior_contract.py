@@ -30,7 +30,37 @@ import tempfile
 REPO = Path(__file__).resolve().parents[1]
 CORPUS = REPO / "tools/behavior_contracts/usage.v1.json"
 PYTHON_PROGRAMS = {"codex": "bench/tools/codex_usage.py", "transcript": "bench/tools/transcript_usage.py",
-                   "diff-identity": "bench/tools/diff_identity.py"}
+                   "diff-identity": "bench/tools/diff_identity.py", "check-manifest": "bench/tools/check_manifest.py"}
+# rates.py and upstream.py read the repository that holds them and fetch fixed URLs. These drivers point the
+# retained libraries at the case directory, as the Rust commands default to the current directory, and give
+# rates.py the `--source PROVIDER=URL` pages that `bench-tools rates check` takes.
+PYTHON_DRIVERS = {
+    "rates": """import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv.pop(1))
+import rates
+rates.BENCH = Path.cwd() / "bench"
+rates.CURRENT = rates.BENCH / "rates.current.json"
+argv = sys.argv[1:]
+while "--source" in argv:
+    at = argv.index("--source")
+    provider, url = argv[at + 1].split("=", 1)
+    rates.SOURCES[provider] = url
+    del argv[at:at + 2]
+sys.argv[1:] = argv
+sys.exit(rates.main())
+""",
+    "upstream": """import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv.pop(1))
+import claims, upstream
+root = Path.cwd()
+upstream.ROOT = claims.ROOT = root
+upstream.report.__defaults__ = (root, ())
+claims.load_registry.__defaults__ = (root / "bench/claims/registry.json", root)
+sys.exit(upstream.main())
+""",
+}
 RUST_PROGRAMS = {"roster": ("bench-tools", ["roster"])}
 DECISIONS = re.compile(r"(?P<family>.+)-decisions\.v[^/]*\.json")
 
@@ -291,6 +321,8 @@ def default_commands(corpus):
     for program in sorted({case["program"] for case in corpus["cases"]}):
         if program in PYTHON_PROGRAMS:
             commands[program] = [sys.executable, str(REPO / PYTHON_PROGRAMS[program])]
+        elif program in PYTHON_DRIVERS:
+            commands[program] = [sys.executable, "-c", PYTHON_DRIVERS[program], str(REPO / "bench/tools")]
         elif program in RUST_PROGRAMS:
             if str(REPO / "bench/tools") not in sys.path:
                 sys.path.insert(0, str(REPO / "bench/tools"))

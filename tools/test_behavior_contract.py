@@ -341,6 +341,37 @@ class ContractTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "roster: bench-tools has no selected version.*install --crate rust/bench-tools"):
                 contract.default_commands(corpus)
 
+    def test_reader_corpora_hold_for_the_retained_libraries_and_reject_regressions(self):
+        tools = contract.REPO / "bench/tools"
+        mutants = {
+            "check-manifest": ("check_manifest.py", "if isinstance(a, bool) or isinstance(b, bool):", "if False:",
+                               "check-manifest-json-equality"),
+            "rates": ("rates.py", "if LONG_PROMPT_ROW.search(name):", "if False:", "rates-anthropic-prompt-tiers"),
+            "upstream": ("upstream.py", 'max(snapshots, key=lambda p: int(p.stem.removeprefix("snapshot.v")))',
+                         "max(snapshots)", "upstream-report"),
+        }
+        for program, (module, before, after, case_id) in mutants.items():
+            with self.subTest(program=program):
+                corpus = contract.CORPUS.parent / f"{program}.v1.json"
+                result = self.run_cli("--corpus", corpus)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(f"PASS {case_id}", result.stdout)
+                source = (tools / module).read_text(encoding="utf-8")
+                self.assertIn(before, source)
+                with tempfile.TemporaryDirectory() as temporary:
+                    (Path(temporary) / module).write_text(source.replace(before, after), encoding="utf-8")
+                    if program in contract.PYTHON_DRIVERS:
+                        # The driver puts its directory first; the mutant's own imports still come from bench/tools.
+                        driver = f"import sys; sys.path.insert(0, {str(tools)!r})\n" + contract.PYTHON_DRIVERS[program]
+                        command = [sys.executable, "-c", driver, temporary]
+                    else:
+                        command = [sys.executable, str(Path(temporary) / module)]
+                    commands = Path(temporary) / "commands.json"
+                    commands.write_text(json.dumps({program: command}), encoding="utf-8")
+                    result = self.run_cli("--corpus", corpus, "--implementations", commands)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(f"FAIL {case_id}", result.stdout)
+
     def test_diff_identity_corpus_holds_for_the_retained_library_and_rejects_byte_order(self):
         corpus = contract.CORPUS.parent / "diff-identity.v1.json"
         result = self.run_cli("--corpus", corpus)

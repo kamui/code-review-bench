@@ -49,6 +49,8 @@ bun run verify:claims
 bun run audit:maintainers
 ```
 
+`audit:maintainers` runs `bench-tools upstream report`, the Rust port of `upstream.py`'s `report` command. It checks the registry as `claims.py` does before reporting. Install it once per checkout revision with `python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select` ([Rust runtime](python-migration/runtime.md#running-a-maintained-command)). Snapshot collection, `upstream.py collect`, stays in Python until [#156](https://github.com/kamui/code-review-bench/issues/156).
+
 The report includes each canonical claim's disposition and route, and the latest retrieval coverage and current reference IDs for all targets. `settled` means the existing saved eligibility decision remains consistent with the recorded assessments; it does not mean a maintainer accepted the claim. `shadow-proposal` requires approval under the current policy. `human-conflict`, `human-boundary` and `needs-evidence-audit` identify exceptional or incomplete cases. Routing is advisory in this stage and never edits decisions.
 
 Blinded dossiers show the separate assessment reasons, while source IDs, quotations and role details remain in the private provenance record. New grading contexts show maintainer disposition without converting unknown into false or making remedy advice mandatory. The claim snapshot already pins the applicable claim version and its archived sources.

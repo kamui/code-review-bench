@@ -54,8 +54,11 @@ independent assertions. The harness never obtains expected output from a candida
 
 ## Run the bench-tools corpora
 
-[`roster.v1.json`](../../../tools/behavior_contracts/roster.v1.json) and
-[`diff-identity.v1.json`](../../../tools/behavior_contracts/diff-identity.v1.json) pin the first commands of
+[`roster.v1.json`](../../../tools/behavior_contracts/roster.v1.json),
+[`diff-identity.v1.json`](../../../tools/behavior_contracts/diff-identity.v1.json),
+[`check-manifest.v1.json`](../../../tools/behavior_contracts/check-manifest.v1.json),
+[`rates.v1.json`](../../../tools/behavior_contracts/rates.v1.json) and
+[`upstream.v1.json`](../../../tools/behavior_contracts/upstream.v1.json) pin the commands of
 [`bench-tools`](../processing.md). Select a corpus with `--corpus`:
 
 ```sh
@@ -63,15 +66,21 @@ python3 tools/behavior_contract.py --corpus tools/behavior_contracts/roster.v1.j
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/diff-identity.v1.json --differential /tmp/rust.json
 ```
 
-Without `--implementations`, each program runs its maintained implementation. `codex`, `transcript` and
-`diff-identity` run their Python scripts; `diff_identity.py` is a retained library. `roster` has no Python
+Without `--implementations`, each program runs its maintained implementation. `codex`, `transcript`,
+`diff-identity` and `check-manifest` run their Python scripts; `diff_identity.py` and `check_manifest.py` are retained
+libraries. `rates` and `upstream` run the retained `rates.py` and `upstream.py` through drivers that read the case
+directory as the repository and, for `rates`, take `--source PROVIDER=URL` pages, so no case uses the network.
+`roster` has no Python
 implementation, so it runs the executable `rust_runtime.resolve("bench-tools")` selects, and the command refuses
 when none is installed for `HEAD`. A command map for the Rust programs names that executable:
 
 ```json
 {
   "roster": ["/absolute/path/to/bench-tools", "roster"],
-  "diff-identity": ["/absolute/path/to/bench-tools", "diff-identity"]
+  "diff-identity": ["/absolute/path/to/bench-tools", "diff-identity"],
+  "check-manifest": ["/absolute/path/to/bench-tools", "check-manifest"],
+  "rates": ["/absolute/path/to/bench-tools", "rates"],
+  "upstream": ["/absolute/path/to/bench-tools", "upstream"]
 }
 ```
 
