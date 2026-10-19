@@ -156,7 +156,8 @@ The contributor CLI runs these commands through each run's pinned `bench-tools`,
 manifest. `run`, `run --resume` and `submit` resolve it before any other effect or paid-work prompt and print the
 install commands when it is missing; filing (`archive_attempt`) and `submit` run only the pinned executable, through
 `rust_runtime.for_run`. A submission takes the one pin its runs share, refuses runs with different pins, and saves the
-pin in its journal when it first packs. A run prepared before this change pins none and is refused with its
+pin in its journal when it first packs. Its public records carry each run's `runtimes.frozen.json` beside the run
+manifest that hashes it. A run prepared before this change pins none and is refused with its
 `source_commit`. `prune_workspace.prune` still runs in process on the retained Python until
 [#159](https://github.com/kamui/code-review-bench/issues/159). `test_contributor.py` runs the CLI on disposable
 repositories with the installed `bench-tools` and the contract harness's stub `gh`.

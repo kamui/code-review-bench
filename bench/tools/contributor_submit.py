@@ -125,8 +125,9 @@ def package(saved, resolved):
             run = common.run_path(row["run_id"])
             destination = building / "bench/contributions" / saved["id"] / run.name
             destination.mkdir(parents=True)
-            for name in ("manifest.json", "pending-created.json"):
+            for name in ("manifest.json", "pending-created.json", common.RUNTIMES):
                 shutil.copy2(run / name, destination / name)
+            common.frozen_runtime(destination, read(destination / "manifest.json"))
             write(destination / "entry.json", row["entry"], immutable=True)
             for attempt in (run / "attempts").iterdir():
                 if attempt.name not in [r["id"] for r in row["entry"]["attempts"]]:

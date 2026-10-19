@@ -859,9 +859,17 @@ class ContributorTests(unittest.TestCase):
             self.assertEqual([package["publication"]["asset_id"] for package in published["packages"]], [101])
             self.assertEqual(read(self.state / "submitted/R1/receipt.json")["pr_url"],
                              "https://github.com/kamui/code-review-bench/pull/999")
+            public = self.root / "public"
+            shutil.copytree(local / "records", public)
+            shutil.rmtree(self.state)
+            published_run = public / "bench/contributions" / saved["id"] / "R1"
+            pin = common.frozen_runtime(published_run, read(published_run / "manifest.json"))
+            self.assertEqual(pin, self.pin)
+            executable, _ = rust_runtime.check(self.store, "bench-tools", pin)
             cold = self.root / "cold"
-            common.evidence(rust_runtime.for_run("bench-tools", self.state / "runs/R1"), "fetch", "--manifest",
-                            local / "records/bench/evidence/manifests" / f"contribution-{saved['id']}.json", "--root", cold)
+            common.evidence(executable, "fetch", "--manifest",
+                            public / "bench/evidence/manifests" / f"contribution-{saved['id']}.json", "--root", cold)
+        self.assertFalse(log.exists(), "the cold fetch ran the newly selected bench-tools")
         self.assertEqual([path.read_text() for path in cold.rglob("stdout.jsonl")], ["original transcript\n"])
 
     def test_a_submission_retry_finishes_recovery_of_records_an_interrupted_run_wrote(self):
