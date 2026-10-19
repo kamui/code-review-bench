@@ -1,0 +1,356 @@
+#[path = "support/grading_fixture.rs"]
+mod grading_fixture;
+
+use bench_tools::pyjson::{self, Dumps, Duplicates, Value};
+use grading_fixture::{Variant, build, initial, setup_steps};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+fn repository() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn canonical(value: &Value) -> String {
+    pyjson::dumps(
+        value,
+        &Dumps {
+            sort_keys: true,
+            ..Dumps::default()
+        },
+    )
+}
+
+/// Each case of a corpus that names a grading fixture, and how its entries differ from the builder's.
+fn drift(corpus: &str, text: &str) -> Vec<String> {
+    let parsed = pyjson::loads(text, Duplicates::Refuse).unwrap();
+    let cases = parsed
+        .as_object()
+        .and_then(|corpus| corpus.get("cases"))
+        .and_then(Value::as_array)
+        .unwrap_or_default();
+    let mut found = Vec::new();
+    for case in cases.iter().filter_map(Value::as_object) {
+        let Some(name) = case.get("fixture").and_then(Value::as_str) else {
+            continue;
+        };
+        let id = case.get("id").and_then(Value::as_str).unwrap_or("?");
+        let Some(variant) = name.strip_prefix("grading/").and_then(Variant::parse) else {
+            found.push(format!("{corpus} {id}: unknown fixture {name}"));
+            continue;
+        };
+        let fixture = build(variant);
+        if case.get("initial").map(canonical) != Some(canonical(&initial(&fixture))) {
+            found.push(format!(
+                "{corpus} {id}: initial entries differ from the {name} fixture"
+            ));
+        }
+        let wanted = setup_steps(&fixture);
+        let steps = case
+            .get("steps")
+            .and_then(Value::as_array)
+            .unwrap_or_default();
+        let leading: Vec<String> = steps
+            .iter()
+            .take(wanted.len())
+            .map(|step| {
+                let kept = step
+                    .as_object()
+                    .into_iter()
+                    .flat_map(|step| step.iter())
+                    .filter(|(field, _)| !matches!(field.as_str(), "stdin_b64" | "expected"))
+                    .map(|(field, value)| (field.clone(), value.clone()));
+                canonical(&Value::Object(kept.collect()))
+            })
+            .collect();
+        if leading != wanted.iter().map(canonical).collect::<Vec<_>>() {
+            found.push(format!(
+                "{corpus} {id}: setup steps differ from the {name} fixture"
+            ));
+        }
+    }
+    found
+}
+
+#[test]
+fn the_builder_writes_the_same_root_on_every_run() {
+    for variant in Variant::ALL {
+        assert_eq!(build(variant), build(variant), "{}", variant.name());
+        assert_eq!(
+            canonical(&initial(&build(variant))),
+            canonical(&initial(&build(variant)))
+        );
+    }
+    assert_eq!(
+        Variant::ALL.map(|variant| Variant::parse(variant.name())),
+        Variant::ALL.map(Some)
+    );
+    let base = build(Variant::Pending);
+    for variant in Variant::ALL.into_iter().skip(1) {
+        assert_ne!(build(variant).files, base.files, "{}", variant.name());
+    }
+}
+
+#[test]
+fn every_corpus_fixture_matches_the_builder() {
+    let directory = repository().join("tools/behavior_contracts");
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(&directory).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        if name.ends_with(".json") && !name.contains("-decisions.") {
+            found.extend(drift(&name, &std::fs::read_to_string(&path).unwrap()));
+        }
+    }
+    assert!(found.is_empty(), "{found:#?}");
+}
+
+fn corpus(case: Value) -> String {
+    pyjson::dumps(
+        &Value::Object(
+            [
+                (
+                    "format".to_string(),
+                    Value::Str("behavior-contract/1".into()),
+                ),
+                ("cases".to_string(), Value::Array(vec![case])),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        &Dumps::default(),
+    )
+}
+
+fn case(fixture: &str, initial: Value, steps: Vec<Value>) -> Value {
+    let mut members = vec![
+        ("id".to_string(), Value::Str("probe".into())),
+        ("fixture".to_string(), Value::Str(fixture.into())),
+        ("initial".to_string(), initial),
+    ];
+    if !steps.is_empty() {
+        members.push(("steps".to_string(), Value::Array(steps)));
+    }
+    Value::Object(members.into_iter().collect())
+}
+
+#[test]
+fn a_drifted_corpus_fixture_fails_the_check() {
+    let fixture = build(Variant::ModifiedClone);
+    let mut steps = setup_steps(&fixture);
+    let command = |argv: &[&str]| {
+        Value::Object(
+            [
+                (
+                    "argv".to_string(),
+                    Value::Array(argv.iter().map(|a| Value::Str((*a).into())).collect()),
+                ),
+                ("stdin_b64".to_string(), Value::Str(String::new())),
+            ]
+            .into_iter()
+            .collect(),
+        )
+    };
+    steps.push(command(&["check"]));
+    let held = corpus(case(
+        "grading/modified-clone",
+        initial(&fixture),
+        steps.clone(),
+    ));
+    assert_eq!(drift("held", &held), Vec::<String>::new());
+
+    let mut changed = fixture.clone();
+    changed
+        .files
+        .get_mut("bench/grading/current/references.json")
+        .unwrap()
+        .push(b' ');
+    let drifted = corpus(case(
+        "grading/modified-clone",
+        initial(&changed),
+        steps.clone(),
+    ));
+    assert_eq!(
+        drift("drifted", &drifted),
+        ["drifted probe: initial entries differ from the grading/modified-clone fixture"]
+    );
+
+    let skipped = corpus(case(
+        "grading/modified-clone",
+        initial(&fixture),
+        steps[1..].to_vec(),
+    ));
+    assert_eq!(
+        drift("skipped", &skipped),
+        ["skipped probe: setup steps differ from the grading/modified-clone fixture"]
+    );
+
+    let unknown = corpus(case("grading/approved", initial(&fixture), vec![]));
+    assert_eq!(
+        drift("unknown", &unknown),
+        ["unknown probe: unknown fixture grading/approved"]
+    );
+}
+
+fn written(variant: Variant) -> tempfile_root::Root {
+    let root = tempfile_root::Root::new(variant.name());
+    for (path, bytes) in &build(variant).files {
+        let target = root.path().join(path);
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(target, bytes).unwrap();
+    }
+    root
+}
+
+/// The retained Python grading check, the baseline every port compares against until #156 slice 11.
+fn current_grading(root: &Path, args: &[&str]) -> (Option<i32>, String) {
+    let output = Command::new("python3")
+        .arg(repository().join("bench/tools/current_grading.py"))
+        .args(args)
+        .arg("--root")
+        .arg(root)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&output.stdout).into_owned()
+        + &String::from_utf8_lossy(&output.stderr);
+    (output.status.code(), text)
+}
+
+fn derive_inventory(root: &Path) -> (Option<i32>, String) {
+    let out = root.join("bench/grading/current/inventory.json");
+    current_grading(root, &["inventory", "--out", out.to_str().unwrap()])
+}
+
+#[test]
+fn the_current_check_reads_each_variant_as_it_is_named() {
+    for variant in [
+        Variant::Pending,
+        Variant::Proposed,
+        Variant::DisputedWithoutRuling,
+    ] {
+        let root = written(variant);
+        assert_eq!(
+            derive_inventory(root.path()).0,
+            Some(0),
+            "{}",
+            variant.name()
+        );
+        let (code, text) = current_grading(root.path(), &["check"]);
+        assert_eq!(
+            (code, text.as_str()),
+            (
+                Some(0),
+                "current evidence valid; 0/2 admitted reviews assessed\n"
+            ),
+            "{}",
+            variant.name()
+        );
+        let (code, status) = current_grading(root.path(), &["status"]);
+        assert_eq!(code, Some(0), "{status}");
+        assert!(status.contains("\"complete\": false"), "{status}");
+    }
+    for (variant, expected) in [
+        (
+            Variant::ApprovedWithoutReceipt,
+            "bench/grading/rulings/receipts/AD-GT-t1-eligibility.md",
+        ),
+        (Variant::StaleFingerprint, "grade fingerprint is stale"),
+    ] {
+        let root = written(variant);
+        assert_eq!(
+            derive_inventory(root.path()).0,
+            Some(0),
+            "{}",
+            variant.name()
+        );
+        let (code, text) = current_grading(root.path(), &["check"]);
+        assert_ne!(code, Some(0), "{}: {text}", variant.name());
+        assert!(text.contains(expected), "{}: {text}", variant.name());
+    }
+    let root = written(Variant::ChangedPinnedFile);
+    let (code, text) = derive_inventory(root.path());
+    assert_ne!(code, Some(0), "{text}");
+    assert!(text.contains("t-grade-1: packet bytes changed"), "{text}");
+}
+
+/// Runs the fixture's setup the way the harness does, with its `fixture-git` program and `write` steps.
+fn set_up(root: &Path, variant: Variant) {
+    for step in build(variant).setup {
+        match step {
+            grading_fixture::Setup::Command { program, argv } => {
+                let source = format!(
+                    "import sys; sys.path.insert(0, {:?}); import behavior_contract; \
+                     exec(behavior_contract.SETUP_PROGRAMS[{program:?}])",
+                    repository().join("tools").to_str().unwrap()
+                );
+                let output = Command::new("python3")
+                    .args(["-c", &source])
+                    .args(&argv)
+                    .current_dir(root)
+                    .output()
+                    .unwrap();
+                assert!(output.status.success(), "{output:?}");
+            }
+            grading_fixture::Setup::Write { path, bytes } => {
+                std::fs::write(root.join(path), bytes).unwrap()
+            }
+        }
+    }
+}
+
+#[test]
+fn the_git_variants_hold_a_frozen_run_and_a_modified_clone() {
+    let root = written(Variant::PacketReplacements);
+    set_up(root.path(), Variant::PacketReplacements);
+    assert_eq!(derive_inventory(root.path()).0, Some(0));
+    let inventory =
+        std::fs::read_to_string(root.path().join("bench/grading/current/inventory.json")).unwrap();
+    assert!(
+        inventory.contains("\"path\": \"bench/targets/t-grade-1/packet.v2.md\""),
+        "{inventory}"
+    );
+    assert_eq!(
+        current_grading(root.path(), &["check"]),
+        (
+            Some(0),
+            "current evidence valid; 0/2 admitted reviews assessed\n".to_string()
+        )
+    );
+
+    let root = written(Variant::ModifiedClone);
+    set_up(root.path(), Variant::ModifiedClone);
+    let status = Command::new("git")
+        .args(["-C", "work/clone", "status", "--porcelain"])
+        .current_dir(root.path())
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&status.stdout), " M main.go\n");
+}
+
+mod tempfile_root {
+    use std::path::{Path, PathBuf};
+
+    pub struct Root(PathBuf);
+
+    impl Root {
+        pub fn new(name: &str) -> Root {
+            let path = std::env::temp_dir().join(format!(
+                "grading-fixture-{name}-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).unwrap();
+            Root(path)
+        }
+
+        pub fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Root {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+}
