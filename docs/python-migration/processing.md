@@ -174,11 +174,15 @@ file. `derive_packet.py` raised an uncaught `UnicodeDecodeError`, exiting 1 with
 that database lacked: the 80 added in Unicode 16.0 on CI's Python 3.12, and 110 on Python 3.10, 30 of which predate
 Unicode 16.0.
 
-`derive-packet-unassigned-path` and `derive-packet-unicode-15-1-path` pin how `repr` quotes text in every
-bench-tools diagnostic, recorded in `derive-packet-decisions.v6.json`: it escapes exactly the code points Python
-3.14's `str.isprintable()` rejects, unassigned ones included. Python escaped the characters its own Unicode database
-lacked, so the Rust output differs on 5,812 code points added in Unicode 15.1 and 16.0 from CI's Python 3.12, and on
-11,130 from Python 3.10.
+`repr` in a bench-tools diagnostic escapes exactly the code points Python 3.14's `str.isprintable()` rejects,
+unassigned ones included. Python escaped the characters its own Unicode database lacked, so the Rust output differs on
+5,812 code points added in Unicode 15.1 and 16.0 from CI's Python 3.12, and on 11,130 from Python 3.10. Each family
+whose diagnostics quote input records this with a U+2EBF0 case: `derive-packet-unicode-15-1-path`,
+`roster-unicode-15-1-arm-kind`, `thermo-unicode-15-1-report-path`, `claude-skill-unicode-15-1-report-status`,
+`check-manifest-unicode-15-1-path`, `rates-unicode-15-1-source-path` and `upstream-unicode-15-1-registry-path`. The
+four whose Python is retained carry Python 3.12's escaped output as their `baseline_defect`. `diff-identity` quotes
+only git's ASCII records and the name `git`, so no input reaches the difference. `derive-packet-unassigned-path` pins
+U+0378, which every Python version escapes.
 
 Diagnostics keep the Python program names, `roster.py:`, `diff_identity.py:`, `normalize_review.py:`,
 `normalize_thermo.py:`, `derive_packet.py:`, `check_manifest.py:`, `rates.py:` and `upstream.py:`, so saved stderr
