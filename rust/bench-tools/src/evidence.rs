@@ -754,13 +754,15 @@ pub fn verify_remote(store: &mut Store<'_>, manifest: &Value) -> Result<()> {
 }
 
 /// `json.dumps(value, indent=2) + '\n'`, written as a new immutable record: to a synced temporary file in the same
-/// directory, then linked to its name, never replacing it, and the directory synced. An existing record with the
-/// same text is accepted, as `evidence_store.write_new` accepts it.
+/// directory, then linked to its name, never replacing it, and the directory and each of its ancestors synced. An
+/// existing record with the same text is accepted, as `evidence_store.write_new` accepts it.
 pub fn write_new(disk: &mut dyn Disk, path: &PyPath, value: &Value) -> Result<()> {
     let directory = parent(path);
-    let mut changed: BTreeSet<Vec<u8>> = make_dirs(&directory)?
-        .iter()
-        .map(|created| parent(created).as_bytes().to_vec())
+    make_dirs(&directory)?;
+    // An interrupted earlier call may have created any of these without syncing its entry.
+    let reaching: BTreeSet<Vec<u8>> = std::iter::once(directory.clone())
+        .chain(parents(&directory))
+        .map(|ancestor| ancestor.as_bytes().to_vec())
         .collect();
     let encoded = format!(
         "{}\n",
@@ -781,7 +783,7 @@ pub fn write_new(disk: &mut dyn Disk, path: &PyPath, value: &Value) -> Result<()
         }
     };
     if exists(path) {
-        sync_dirs(disk, &changed)?;
+        sync_dirs(disk, &reaching)?;
         return same(path);
     }
     let name = path
@@ -811,8 +813,7 @@ pub fn write_new(disk: &mut dyn Disk, path: &PyPath, value: &Value) -> Result<()
     })();
     let _ = std::fs::remove_file(&os_temporary);
     written?;
-    changed.insert(directory.as_bytes().to_vec());
-    sync_dirs(disk, &changed)
+    sync_dirs(disk, &reaching)
 }
 
 /// `evidence_store.restoration_receipt`: verify every package from the remote, then write a new receipt.

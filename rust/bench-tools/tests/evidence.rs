@@ -458,9 +458,17 @@ fn interrupting_verify_receipt_at_download_unpack_or_receipt_write_leaves_no_rec
             "effect {fail_at}: a receipt exists exactly when its synced bytes were linked: {:?}",
             disk.events
         );
-        if !linked {
-            receipt(&root, &mut FakeRemote::new(&archive), &mut System).unwrap();
-            assert!(root.join("receipts/receipt.json").exists());
+        let mut retry_disk = Recording::new(None);
+        receipt(&root, &mut FakeRemote::new(&archive), &mut retry_disk).unwrap();
+        assert!(root.join("receipts/receipt.json").exists());
+        for directory in [root.join("receipts"), root.clone()] {
+            assert!(
+                retry_disk
+                    .events
+                    .contains(&Event::SyncDir(directory.clone())),
+                "effect {fail_at}: the retry reports success without syncing {directory:?}: {:?}",
+                retry_disk.events
+            );
         }
         std::fs::remove_dir_all(&root).unwrap();
     }
