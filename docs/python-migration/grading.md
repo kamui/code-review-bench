@@ -269,11 +269,15 @@ recorded call is a paginated GET of the case's repository that the stub answers.
   (`upstream-collect-lone-surrogate`).
 - Usage errors are clap's (`claims-inventory-missing-target`, `upstream-collect-choice-required`,
   `upstream-collect-target-and-all`, `upstream-collect-invalid-related-pr`).
+- `inventory` and `evidence` validate the current record through the Rust validator, so they refuse a comment
+  linked to two or more claims with an `equivalent` link, #256's rule, where `claims.py` accepted it
+  (`claims-inventory-comment-equivalent-and-related`, `claims-evidence-comment-equivalent-and-related`).
 
 #235 says a failed or partial response leaves no snapshot. `upstream.py` saves a failed endpoint as incomplete,
 with its error, and exits 1; only a response that fails snapshot validation, such as another pull request's identity
 or a paged pull-request read, leaves none. The port keeps Python's behavior, which
-[the maintainer workflow](../maintainer-adjudication.md#capture-upstream-evidence) documents.
+[the maintainer workflow](../maintainer-adjudication.md#capture-upstream-evidence) documents and
+[the #235 clarification](https://github.com/kamui/code-review-bench/issues/235#issuecomment-6279079746) confirms.
 
 The Pages build job runs `claims check` on `registry.json` and the four other tracked registries in real-record mode.
 On 2026-10-19, `claims evidence` for each tracked extracts manifest, `evidence-extracts.v1.json` and
