@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Run language-independent process contracts in disposable directories.
 
-Usage: python3 tools/behavior_contract.py [--implementations commands.json]
+Usage: python3 tools/behavior_contract.py [--corpus corpus.json] [--implementations commands.json]
        [--differential commands.json] [--allow-known-defects]
-Inputs: versioned JSON corpus with argv, base64 bytes, filesystem and expectations.
+       python3 tools/behavior_contract.py --verify-decision-history
+Inputs: versioned JSON corpus with argv, base64 bytes, filesystem and expectations. Without
+--implementations, each program runs its maintained implementation: the Python script where one is
+maintained or retained, otherwise the Rust executable rust_runtime.resolve selects.
 Exit codes: 0 contracts met (or explicitly allowed baseline defects); 1 differences;
 2 invalid inputs or failed execution. Commands are trusted local programs, not sandboxed.
 """
@@ -19,12 +22,17 @@ import math
 import os
 from pathlib import Path
 import subprocess
+import re
 import struct
 import sys
 import tempfile
 
 REPO = Path(__file__).resolve().parents[1]
 CORPUS = REPO / "tools/behavior_contracts/usage.v1.json"
+PYTHON_PROGRAMS = {"codex": "bench/tools/codex_usage.py", "transcript": "bench/tools/transcript_usage.py",
+                   "diff-identity": "bench/tools/diff_identity.py"}
+RUST_PROGRAMS = {"roster": ("bench-tools", ["roster"])}
+DECISIONS = re.compile(r"(?P<family>.+)-decisions\.v[^/]*\.json")
 
 
 def decode(value):
@@ -164,6 +172,10 @@ def compare(expected, actual):
                 wanted = decode(spec["bytes_b64"])
                 if wanted != raw:
                     differences.append(f"{stream} bytes: expected {wanted!r}, actual {raw!r}")
+            elif spec["mode"] == "prefix":
+                wanted = decode(spec["bytes_b64"])
+                if not raw.startswith(wanted):
+                    differences.append(f"{stream} prefix: expected {wanted!r}, actual {raw!r}")
             elif spec["mode"] in ("json", "json-pointers"):
                 value = json_value(raw)
                 if spec["mode"] == "json-pointers":
@@ -204,37 +216,91 @@ def differential(left, right, case):
 def verify_decision_history(repo):
     def git(*args):
         return subprocess.check_output(["git", "-C", str(repo), *args], stderr=subprocess.PIPE)
+    def first_added(path):
+        commits = git("log", "--reverse", "--format=%H", "--diff-filter=A", "HEAD", "--", path).decode().split()
+        return commits[0] if commits else None
     if git("rev-parse", "--is-shallow-repository").strip() != b"false":
         raise ValueError("decision history requires a full git checkout (fetch-depth: 0)")
     directory = "tools/behavior_contracts/"
-    anchors = git("log", "--reverse", "--format=%H", "--diff-filter=A", "HEAD", "--",
-                  directory + "usage-decisions.v2.json").decode().splitlines()
-    if not anchors:
+    names = {Path(path).name for path in git("log", "--format=", "--name-only", "--diff-filter=A", "HEAD", "--",
+                                             directory).decode().splitlines() if path.endswith(".json")}
+    names |= {path.name for path in (repo / directory).glob("*.json")}
+    corpora = {}
+    for name in sorted(names - {"digest-vectors.json"}):
+        if not DECISIONS.fullmatch(name) and (repo / directory / name).is_file():
+            corpus = json_value((repo / directory / name).read_bytes())
+            if isinstance(corpus, dict) and "decisions" in corpus:
+                corpora[name] = corpus["decisions"]
+    families = sorted({match["family"] for name in names if (match := DECISIONS.fullmatch(name))})
+    for family in families:
+        verify_family(repo, directory, family, git, first_added,
+                      [name for name, decisions in corpora.items() if DECISIONS.fullmatch(decisions)
+                       and DECISIONS.fullmatch(decisions)["family"] == family])
+    unknown = sorted(name for name, decisions in corpora.items()
+                     if not (DECISIONS.fullmatch(decisions) and DECISIONS.fullmatch(decisions)["family"] in families))
+    if unknown:
+        raise ValueError(f"{', '.join(unknown)}: corpus must use the latest published decision version")
+
+
+def verify_family(repo, directory, family, git, first_added, corpora):
+    """Each published version of one decision family is unchanged, and the chain from its root is unbroken.
+
+    A family whose v1 is the legacy decisions/1 map anchors every version at the commit that adopted v2;
+    every other version, including a decisions/2 root, is anchored at its own first addition."""
+    pattern = f"{family}-decisions.v*.json"
+    root = directory + f"{family}-decisions.v1.json"
+    root_commit = first_added(root)
+    if root_commit is None:
+        raise ValueError(f"{root}: decision history has no committed first version")
+    legacy = "records" not in json_value(git("show", f"{root_commit}:{root}"))
+    anchor = first_added(directory + f"{family}-decisions.v2.json") if legacy else root_commit
+    if anchor is None:
         raise ValueError("decision history has no committed v2 adoption")
-    anchor = anchors[0]
     releases = {path: anchor for path in git("ls-tree", "-r", "--name-only", anchor, "--", directory).decode().splitlines()
-                if Path(path).match("usage-decisions.v*.json")}
+                if Path(path).match(pattern)}
     for commit in git("log", "--reverse", "--format=%H", "--diff-filter=A", anchor + "..HEAD", "--",
-                      directory + "usage-decisions.v*.json").decode().splitlines():
+                      directory + pattern).decode().splitlines():
         for path in git("diff-tree", "--root", "--no-commit-id", "--name-only", "-r", "--diff-filter=A",
-                        commit, "--", directory + "usage-decisions.v*.json").decode().splitlines():
+                        commit, "--", directory + pattern).decode().splitlines():
             releases.setdefault(path, commit)
     for path, commit in releases.items():
         current = repo / path
         if not current.is_file() or current.read_bytes() != git("show", commit + ":" + path):
             raise ValueError(f"{path}: published decision changed; add a new version superseding it")
-    versions = [directory + f"usage-decisions.v{number}.json" for number in range(1, len(releases) + 1)]
+    versions = [directory + f"{family}-decisions.v{number}.json" for number in range(1, len(releases) + 1)]
     if set(versions) != set(releases):
         raise ValueError("decision history versions must be contiguous")
-    corpus = json_value((repo / directory / "usage.v1.json").read_bytes())
-    if corpus["decisions"] != Path(versions[-1]).name:
-        raise ValueError("corpus must use the latest published decision version")
+    if not corpora:
+        raise ValueError(f"{family}: no corpus uses this decision history")
+    for corpus in corpora:
+        if json_value((repo / directory / corpus).read_bytes())["decisions"] != Path(versions[-1]).name:
+            raise ValueError(f"{corpus}: corpus must use the latest published decision version")
+    if not legacy and "previous" in json_value((repo / versions[0]).read_bytes()):
+        raise ValueError(f"{versions[0]}: a first decision version has no predecessor")
     for number, path in enumerate(versions[1:], 2):
         previous = json_value((repo / path).read_bytes()).get("previous", {})
-        expected_format = "decisions/1" if number == 2 else "decisions/2"
+        expected_format = "decisions/1" if legacy and number == 2 else "decisions/2"
         if previous.get("path") != Path(versions[number - 2]).name or previous.get("format") != expected_format:
             raise ValueError(f"{path}: decision history must retain its immediate predecessor")
     load_decisions(repo / versions[-1])
+
+
+def default_commands(corpus):
+    """The maintained implementation of each program the corpus runs."""
+    commands = {}
+    for program in sorted({case["program"] for case in corpus["cases"]}):
+        if program in PYTHON_PROGRAMS:
+            commands[program] = [sys.executable, str(REPO / PYTHON_PROGRAMS[program])]
+        elif program in RUST_PROGRAMS:
+            if str(REPO / "bench/tools") not in sys.path:
+                sys.path.insert(0, str(REPO / "bench/tools"))
+            import rust_runtime
+            name, arguments = RUST_PROGRAMS[program]
+            try:
+                commands[program] = [str(rust_runtime.resolve(name)), *arguments]
+            except (rust_runtime.Refused, rust_runtime.InputError) as error:
+                raise ValueError(f"{program}: {error}") from None
+    return commands
 
 
 def load_decisions(path):
@@ -293,9 +359,8 @@ def main():
             print("Published decision history verified")
             return 0
         corpus = load_corpus(args.corpus)
-        defaults = {name: [sys.executable, str(REPO / "bench/tools" / f"{name}_usage.py")]
-                    for name in ("codex", "transcript")}
-        commands = json.loads(args.implementations.read_text(encoding="utf-8")) if args.implementations else defaults
+        commands = (json.loads(args.implementations.read_text(encoding="utf-8")) if args.implementations
+                    else default_commands(corpus))
         other = json.loads(args.differential.read_text(encoding="utf-8")) if args.differential else None
         failed = 0
         for case in corpus["cases"]:
