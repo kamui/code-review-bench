@@ -8,6 +8,7 @@ This records the processing stage, [#154](https://github.com/kamui/code-review-b
 [#193](https://github.com/kamui/code-review-bench/issues/193), adds the crate and ports `roster` and `diff_identity`.
 Slice 2, [#194](https://github.com/kamui/code-review-bench/issues/194), ports the review normalizers and moves their
 runner and dispatch callers, as [the normalizers](#the-review-normalizers) describes.
+Slice 3, [#195](https://github.com/kamui/code-review-bench/issues/195), ports `derive_packet`.
 
 ## The `bench-tools` crate
 
@@ -29,6 +30,7 @@ describes:
 python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select
 bun run roster
 python3 bench/tools/rust_runtime.py exec bench-tools -- diff-identity <repo> <base> <head>
+python3 bench/tools/rust_runtime.py exec bench-tools -- derive-packet <packet.legacy.md> --out <packet.md>
 ```
 
 ## Migrated responsibilities
@@ -39,6 +41,7 @@ python3 bench/tools/rust_runtime.py exec bench-tools -- diff-identity <repo> <ba
 | `bench/tools/diff_identity.py` | `bench-tools diff-identity`, `bench_tools::diff_identity` | The CLI in `bench/README.md` | Retained library, below. |
 | `bench/tools/normalize_review.py` | `bench-tools normalize-review`, `bench_tools::normalize_review` | `dispatch.sh`, `claude_skill_runner.py`, `codex_skill_runner.py`, `file_attempt.py --replay` and the `test:bench` script | Retained library, below. `test_normalize_review.py`'s cases are in [`normalize-review.v1.json`](../../tools/behavior_contracts/normalize-review.v1.json), which `test:bench` runs against the retained Python. |
 | `bench/tools/normalize_thermo.py` | `bench-tools normalize-thermo`, `bench_tools::normalize_thermo` | The same skill runners and `file_attempt.py --replay` | Deleted with `test_normalize_thermo.py`, whose cases are in [`normalize-thermo.v1.json`](../../tools/behavior_contracts/normalize-thermo.v1.json). |
+| `bench/tools/derive_packet.py` | `bench-tools derive-packet`, `bench_tools::derive_packet` | `build_packet.py --factual`, through the bridge below; `bench/README.md` | Deleted. Its self-test cases and every target's legacy packet are in [`derive-packet.v1.json`](../../tools/behavior_contracts/derive-packet.v1.json). The imported original is preserved at `artifacts/import-source/bench/tools/derive_packet.py`. |
 
 ## Retained libraries
 
@@ -78,6 +81,17 @@ library, and it uses the skill runners only for helpers, never `prepare_attempt`
 `test_contributor.AdapterTests.test_openrouter_adapters_execute_fresh_subprocesses_and_collect_reports` fails if
 collection resolves a Rust runtime or calls either.
 
+## Temporary bridges
+
+A bridge lets a Python caller run a Rust command until the caller itself moves to Rust.
+
+| Bridge | Removal condition | Owner |
+| --- | --- | --- |
+| `build_packet.py --factual` writes its rendering to a temporary file and runs `bench-tools derive-packet --no-newline-translation` on it, through `rust_runtime.resolve`, so a carriage return in the rendering stays as the in-process call it replaces kept it. It exits 2 when `bench-tools` is not installed for `HEAD`. | `build_packet` moves to Rust and calls `bench_tools::derive_packet::derive` in-process ([#196](https://github.com/kamui/code-review-bench/issues/196)) | #196 |
+
+The `build_packet --factual` tests skip when `bench-tools` is not installed for `HEAD`. The `Rust runtime` workflow
+installs it and sets `RUST_RUNTIME_REQUIRE_BENCH_TOOLS=1`, so they fail there instead of skipping.
+
 ## Behavior the corpora do not pin
 
 These differences from the Python implementations are outside every contract. A caller that relied on one needs a
@@ -90,10 +104,11 @@ recorded decision.
 - A lone surrogate escape such as `"\ud800"` and JSON nested more than 1,000 levels deep are refused, exiting 2.
   Python kept the surrogate, and its own nesting limit depends on its version and stack.
 - `repr` in a diagnostic escapes the non-printable characters Python escapes, except unassigned code points outside
-  the noncharacters, because the crate carries no Unicode tables.
+  the noncharacters, because the crate carries no table of assigned code points.
 - `diff-identity` has no `--self-test`; `cargo test` and the corpus cover it. It accepts options between
   positional arguments, which argparse refuses for some orders.
 - `normalize-review` has no `--self-test`, and options must be spelled in full; argparse also accepted unique prefixes.
+- `derive-packet` has no `--self-test`; `cargo test` and the corpus cover it.
 - Where the normalizers' Python raised a traceback and exited 1, they exit 2 with a message: an input that is not
   UTF-8, a shape such as a `findings` value that is not a list, an `--out` that cannot be written, a timing sidecar that
   is not an object, a fenced JSON array whose integer exceeds Python's digit limit, and a Codex bullet whose start or
@@ -101,7 +116,8 @@ recorded decision.
   the Codex line numbers. In `normalize-review.v1.json` they carry the retained Python's traceback as a
   `baseline_defect`, so its corpus runs with `--allow-known-defects`.
 - `\d` in the Codex bullet pattern and `\w` in the thermo no-findings statement's `\b` follow Python 3.14, whose
-  Unicode database is 16.0. `pytext` holds both tables, generated from Python 3.14. Python 3.12 does not match the
+  Unicode database is 16.0. `pytext` holds both tables, generated from Python 3.14, and `derive-packet` reads the
+  same digit table. Python 3.12 does not match the
   characters Unicode 16.0 added. The v3 decisions of both normalizer corpora record that difference.
 - `normalize-thermo` resolves a relative missing `--artifact-root` as Python 3.13 and later do, naming the absolute
   component in the error; Python 3.12 named the relative one. A symbolic link loop in it is an `ELOOP` error, as in
@@ -109,8 +125,18 @@ recorded decision.
 - `--sessions-dir` does not follow symbolic links to directories; Python's `rglob` follows them in some versions.
 - Usage errors print `bench-tools` usage text. Argparse wording is not a contract.
 
-Diagnostics keep the Python program names, `roster.py:`, `diff_identity.py:`, `normalize_review.py:` and
-`normalize_thermo.py:`, so the differential compares them byte for byte. Renaming them needs a new decision version.
+`derive-packet-invalid-utf8` pins one intended change: an input that is not UTF-8 exits 2 with a message naming the
+file. `derive_packet.py` raised an uncaught `UnicodeDecodeError`, exiting 1 with a traceback.
+
+`derive-packet-unicode-16-digit-title` and `derive-packet-unicode-16-digit-duplicate-title` pin another, recorded in
+`derive-packet-decisions.v5.json`: the issue number in the H1 matches the Unicode 16.0 decimal digits, as Python
+3.14's `\d` does. `derive_packet.py` followed the running interpreter's Unicode database, so it missed every digit
+that database lacked: the 80 added in Unicode 16.0 on CI's Python 3.12, and 110 on Python 3.10, 30 of which predate
+Unicode 16.0.
+
+Diagnostics keep the Python program names, `roster.py:`, `diff_identity.py:`, `normalize_review.py:`,
+`normalize_thermo.py:` and `derive_packet.py:`, so saved stderr stays identical and the differential compares them
+byte for byte. Renaming them needs a new decision version.
 
 ## Research records
 
@@ -129,9 +155,12 @@ python3 tools/behavior_contract.py --corpus tools/behavior_contracts/roster.v1.j
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/diff-identity.v1.json --differential MAP
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/normalize-review.v1.json --differential MAP
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/normalize-thermo.v1.json
+python3 tools/behavior_contract.py --corpus tools/behavior_contracts/derive-packet.v1.json
+(cd bench/tools && RUST_RUNTIME_REQUIRE_BENCH_TOOLS=1 python3 -m unittest -k factual test_build_packet)
 python3 tools/behavior_contract.py --verify-decision-history
 ```
 
 `MAP` is a [command map](contracts/README.md#run-the-usage-corpus) naming the resolved executable, as the
-`Rust runtime` workflow writes it. The `roster` and `normalize-thermo` corpora run the Rust executable by default; the
-`diff-identity` and `normalize-review` corpora run the retained Python library by default.
+`Rust runtime` workflow writes it. The `roster`, `normalize-thermo` and `derive-packet` corpora run the Rust
+executable by default; the `diff-identity` and `normalize-review` corpora run the retained Python library by default.
+`derive-packet` has no Python implementation left to compare with, so it has no differential.
