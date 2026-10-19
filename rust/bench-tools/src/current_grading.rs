@@ -2046,13 +2046,6 @@ pub fn validate_documents(
                 }),
             }
             if is_equivalent {
-                require(
-                    !equivalent.iter().any(|(known, _)| pair_same(known, &key)),
-                    format!(
-                        "{}: conflicting canonical duplicate group",
-                        tuple(&[&key.0, &key.1])
-                    ),
-                )?;
                 equivalent.push((key, item(claim, "id")?.clone()));
             }
         }
