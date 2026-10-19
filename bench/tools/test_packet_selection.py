@@ -27,6 +27,7 @@ import run_cell
 class PacketSelectionTests(unittest.TestCase):
     def setUp(self):
         self.enterContext(patch.object(run_cell, "normalizer_environment", return_value={}))
+        self.enterContext(patch.object(skill.rust_runtime, "for_run", return_value=Path("/fixture/bench-tools")))
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
