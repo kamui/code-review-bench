@@ -143,6 +143,32 @@ from the validation policy at the filing commit.
 Gap for slice 8: v2 and v3 have no replay. The plan's remedy, a fixture case built from the archived key and
 verdicts, has no archive to build from, so slice 8 builds those cases on the fixture root.
 
+## Slice 1: claim grading rules and the blinded validator
+
+[#231](https://github.com/kamui/code-review-bench/issues/231) ports `claim_grading.py` (all but `scoring_items`),
+`pre_existing_grading.py` and `grading_validation.py` to `bench_tools::claim_grading`, `bench_tools::pre_existing`
+and `bench_tools::grading_validation`, and adds `bench-tools grading validate [VERDICTS] --inputs FILE`. Its stdout
+and exit status match the script's; any input it cannot read prints
+`cannot validate: unreadable or malformed JSON input`, exit 1. No caller moves until slice 10, and the three Python
+modules stay as the baseline until slice 11.
+
+- [`grading-validation.v1.json`](../../tools/behavior_contracts/grading-validation.v1.json) covers every message,
+  each verdict contract and safety policy, a duplicate key, non-UTF-8 and non-object input, and the fixture's
+  `pending`, `proposed` and `disputed-without-ruling` variants. Its twelve decided differences are in
+  [the contract reference](contracts/README.md#run-the-grading-validation-corpus). The Rust runtime workflow runs it
+  as primary and with `--differential` on four targets.
+- `rust/bench-tools/tests/claim_grading.rs` states the unresolved outcomes by hand and compares every rule that no
+  command runs yet with the retained Python, including which exception each raises.
+- The Pages build job replays the validator on every restorable archive in the replay inventory: the 333
+  `current-verdicts/v1` archives give byte-identical stdout and exit status from both implementations. The run
+  prints its count per contract and fails when it is zero. v2 and v3 have no archive, as above, so the corpus covers
+  them.
+
+Pending, proposed and disputed-without-ruling inputs stay unresolved in both implementations: no claim is pinned in
+those fixture variants, `pinned-pending` and `pinned-proposed` hold an `unresolved` pin, and the cargo tests check
+that pending and proposed eligibility give `unresolved` recovery. `approved-without-receipt` has no validator case,
+because `current_grading.py` refuses it before validator inputs exist.
+
 ## Research helpers
 
 The audit covered the `DYNAMIC_ROOTS` loaders, `test_last_push_move.py`, `test_regrade_filing.py`,
