@@ -5,15 +5,15 @@ use bench_tools::pyjson::{self, Duplicates};
 use bench_tools::pytext::{self, PyPath};
 use bench_tools::schema::{SchemaError, Validator};
 use bench_tools::{
-    archive, build_packet, claims, derive_packet, diff_identity, export_explorer, normalize_thermo,
-    pyfs, pyunicode, rates, roster, upstream,
+    archive, build_packet, claims, derive_packet, diff_identity, evidence, export_explorer,
+    normalize_thermo, pyfs, pyunicode, rates, roster, upstream,
 };
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: bench-tools {roster,diff-identity,normalize-review,normalize-thermo,derive-packet,build-packet,check-manifest,rates,upstream,export-explorer,archive} ...
+const USAGE: &str = "usage: bench-tools {roster,diff-identity,normalize-review,normalize-thermo,derive-packet,build-packet,check-manifest,rates,upstream,export-explorer,archive,evidence} ...
 
   roster            list the benchmarks the roster has and the ones still missing
   diff-identity     print the changed-file manifest of base..head and its SHA-256
@@ -25,7 +25,8 @@ const USAGE: &str = "usage: bench-tools {roster,diff-identity,normalize-review,n
   rates             check the rate catalog against provider prices (rates check)
   upstream          print the maintainer audit's shadow report (upstream report)
   export-explorer   list, stage or publish the explorer export (tools/export_explorer.py runs it)
-  archive           check cached evidence packages or native scratch archives through bench_tools::archive";
+  archive           check cached evidence packages or native scratch archives through bench_tools::archive
+  evidence          restore, resolve, verify and recover published evidence";
 
 const ARCHIVE_USAGE: &str =
     "usage: bench-tools archive check-packages [-h] --cache CACHE manifests [manifests ...]
@@ -1522,6 +1523,392 @@ fn run_archive(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
     Ok(ExitCode::from(u8::from(failed > 0)))
 }
 
+const EVIDENCE_USAGE: &str =
+    "usage: bench-tools evidence {fetch,verify,resolve,recover,restore-local} ...";
+
+/// One `evidence` subcommand's options: name, whether it takes a value, whether it may repeat, whether required.
+struct EvidenceOption {
+    name: &'static str,
+    value: bool,
+    append: bool,
+    required: bool,
+}
+
+const fn evidence_option(
+    name: &'static str,
+    value: bool,
+    append: bool,
+    required: bool,
+) -> EvidenceOption {
+    EvidenceOption {
+        name,
+        value,
+        append,
+        required,
+    }
+}
+
+struct EvidenceCommand {
+    usage: &'static str,
+    prog: &'static str,
+    description: &'static str,
+    options: &'static [EvidenceOption],
+    positionals: &'static [&'static str],
+}
+
+const FETCH: EvidenceCommand = EvidenceCommand {
+    usage: "usage: bench-tools evidence fetch [-h] --manifest MANIFEST [--root ROOT] [--path PATH] [--offline]",
+    prog: "bench-tools evidence fetch",
+    description: "Restore a published manifest's members under ROOT, through the verified cache in ROOT/.cache/evidence.",
+    options: &[
+        evidence_option("--manifest", true, false, true),
+        evidence_option("--root", true, false, false),
+        evidence_option("--path", true, true, false),
+        evidence_option("--offline", false, false, false),
+    ],
+    positionals: &[],
+};
+
+const VERIFY: EvidenceCommand = EvidenceCommand {
+    usage: "usage: bench-tools evidence verify [-h] --manifest MANIFEST [--receipt RECEIPT]",
+    prog: "bench-tools evidence verify",
+    description: "Download and restore every package of a published manifest in an empty temporary directory; --receipt writes a new cold restoration receipt.",
+    options: &[
+        evidence_option("--manifest", true, false, true),
+        evidence_option("--receipt", true, false, false),
+    ],
+    positionals: &[],
+};
+
+const RESOLVE: EvidenceCommand = EvidenceCommand {
+    usage: "usage: bench-tools evidence resolve [-h] [--sha256 SHA256] [--root ROOT] [--offline] path",
+    prog: "bench-tools evidence resolve",
+    description: "Restore one logical path from the manifests in ROOT/bench/evidence/manifests when it is absent, and check it.",
+    options: &[
+        evidence_option("--sha256", true, false, false),
+        evidence_option("--root", true, false, false),
+        evidence_option("--offline", false, false, false),
+    ],
+    positionals: &["path"],
+};
+
+const RECOVER: EvidenceCommand = EvidenceCommand {
+    usage: "usage: bench-tools evidence recover [-h] --source SOURCE [--root ROOT] [--path PATH] [--offline]",
+    prog: "bench-tools evidence recover",
+    description: "Restore an exact package copy from the recorded recovery release.",
+    options: &[
+        evidence_option("--source", true, false, true),
+        evidence_option("--root", true, false, false),
+        evidence_option("--path", true, true, false),
+        evidence_option("--offline", false, false, false),
+    ],
+    positionals: &[],
+};
+
+const RESTORE_LOCAL_USAGE: &str =
+    "usage: bench-tools evidence restore-local ROOT_NAME ORIGINAL_RELATIVE_PATH NEW_FILE";
+
+#[derive(Default)]
+struct EvidenceArguments {
+    values: HashMap<&'static str, Vec<OsString>>,
+    flags: Vec<&'static str>,
+    positionals: Vec<OsString>,
+}
+
+impl EvidenceArguments {
+    fn last(&self, name: &str) -> Option<&OsString> {
+        self.values.get(name).and_then(|values| values.last())
+    }
+
+    fn text(&self, name: &str) -> Option<String> {
+        self.last(name)
+            .map(|value| String::from_utf8_lossy(pytext::os_bytes(value)).into_owned())
+    }
+
+    fn texts(&self, name: &str) -> Option<Vec<String>> {
+        self.values.get(name).map(|values| {
+            values
+                .iter()
+                .map(|value| String::from_utf8_lossy(pytext::os_bytes(value)).into_owned())
+                .collect()
+        })
+    }
+}
+
+/// argparse's reading of one `evidence` subcommand: unique prefixes of long options, `--name=VALUE`, the last of
+/// a repeated option, and every unrecognized argument reported together.
+fn parse_evidence(
+    command: &EvidenceCommand,
+    arguments: &[OsString],
+) -> Result<Parsed<EvidenceArguments>, Misuse> {
+    let (usage, prog) = (command.usage, command.prog);
+    let mut long_options = vec!["--help"];
+    long_options.extend(command.options.iter().map(|option| option.name));
+    let mut parsed = EvidenceArguments::default();
+    let mut unrecognized_arguments = Vec::new();
+    let mut rest = arguments.iter();
+    let mut options_end = false;
+    while let Some(argument) = rest.next() {
+        let bytes = pytext::os_bytes(argument);
+        if !options_end && bytes == b"--" {
+            options_end = true;
+            continue;
+        }
+        if options_end || !is_option(bytes) {
+            if parsed.positionals.len() < command.positionals.len() {
+                parsed.positionals.push(argument.clone());
+            } else {
+                unrecognized_arguments.push(pytext::stderr_text(bytes));
+            }
+            continue;
+        }
+        let expanded = expand_abbreviation(bytes, &long_options, usage, prog)?;
+        if expanded == b"-h" || expanded == b"--help" {
+            return Ok(Parsed::Help);
+        }
+        let mut matched = false;
+        for option in command.options {
+            if option.value {
+                if let Some(value) = option_value(option.name, &expanded, &mut rest, usage, prog)? {
+                    let values = parsed.values.entry(option.name).or_default();
+                    if !option.append {
+                        values.clear();
+                    }
+                    values.push(value);
+                    matched = true;
+                    break;
+                }
+            } else if expanded == option.name.as_bytes() {
+                parsed.flags.push(option.name);
+                matched = true;
+                break;
+            } else if expanded.starts_with(format!("{}=", option.name).as_bytes()) {
+                return Err(misuse(
+                    usage,
+                    prog,
+                    format!(
+                        "argument {}: ignored explicit argument {}",
+                        option.name,
+                        pytext::repr(&pytext::surrogateescape(&expanded[option.name.len() + 1..]))
+                    ),
+                ));
+            }
+        }
+        if !matched {
+            unrecognized_arguments.push(pytext::stderr_text(bytes));
+        }
+    }
+    let mut missing: Vec<&str> = command
+        .options
+        .iter()
+        .filter(|option| option.required && !parsed.values.contains_key(option.name))
+        .map(|option| option.name)
+        .collect();
+    missing.extend(&command.positionals[parsed.positionals.len()..]);
+    if !missing.is_empty() {
+        return Err(misuse(
+            usage,
+            prog,
+            format!(
+                "the following arguments are required: {}",
+                missing.join(", ")
+            ),
+        ));
+    }
+    if !unrecognized_arguments.is_empty() {
+        return Err(misuse(
+            usage,
+            prog,
+            format!(
+                "unrecognized arguments: {}",
+                unrecognized_arguments.join(" ")
+            ),
+        ));
+    }
+    Ok(Parsed::Run(parsed))
+}
+
+/// `--root ROOT` as `Path(ROOT)`, or `Path.cwd()`.
+fn evidence_root(parsed: &EvidenceArguments) -> Result<PyPath, ExitCode> {
+    match parsed.last("--root") {
+        Some(root) => Ok(PyPath::new(pytext::os_bytes(root))),
+        None => std::env::current_dir()
+            .map(|cwd| PyPath::new(pytext::os_bytes(cwd.as_os_str())))
+            .map_err(|error| {
+                eprintln!("evidence: {}", pytext::os_error(&error, b"."));
+                ExitCode::from(2)
+            }),
+    }
+}
+
+/// How `evidence_store.main` reports an outcome: violations on stdout with exit 1, I/O on stderr with exit 2.
+fn evidence_outcome(outcome: Result<String, evidence::Error>) -> Result<ExitCode, ExitCode> {
+    match outcome {
+        Ok(line) => {
+            write_stdout(format!("{line}\n").as_bytes())?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(evidence::Error::Violation(message)) => {
+            write_stdout(format!("evidence: {message}\n").as_bytes())?;
+            Err(ExitCode::from(1))
+        }
+        Err(evidence::Error::Io(message)) => {
+            eprintln!("evidence: {message}");
+            Err(ExitCode::from(2))
+        }
+    }
+}
+
+fn run_evidence(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
+    let subcommand = arguments.first().map(|first| pytext::os_bytes(first));
+    let command = match subcommand {
+        Some(b"fetch") => &FETCH,
+        Some(b"verify") => &VERIFY,
+        Some(b"resolve") => &RESOLVE,
+        Some(b"recover") => &RECOVER,
+        Some(b"restore-local") => return run_restore_local(&arguments[1..]),
+        Some(b"-h" | b"--help") => {
+            return help(
+                EVIDENCE_USAGE,
+                "Restore, resolve, verify and recover published evidence, as evidence_store.py, recover_evidence.py and restore-local.py did.",
+            );
+        }
+        Some(other) => {
+            return Err(report_misuse(&misuse(
+                EVIDENCE_USAGE,
+                "bench-tools evidence",
+                format!(
+                    "argument command: invalid choice: {} (choose from 'fetch', 'verify', 'resolve', 'recover', 'restore-local')",
+                    pytext::repr(&pytext::surrogateescape(other))
+                ),
+            )));
+        }
+        None => {
+            return Err(report_misuse(&misuse(
+                EVIDENCE_USAGE,
+                "bench-tools evidence",
+                "the following arguments are required: command",
+            )));
+        }
+    };
+    let parsed = match parse_evidence(command, &arguments[1..]) {
+        Ok(Parsed::Run(parsed)) => parsed,
+        Ok(Parsed::Help) => return help(command.usage, command.description),
+        Err(problem) => return Err(report_misuse(&problem)),
+    };
+    let mut remote = evidence::GitHub;
+    let mut disk = evidence::System;
+    let mut store = evidence::Store {
+        remote: &mut remote,
+        disk: &mut disk,
+        now: &evidence::now_isoformat,
+    };
+    let offline = parsed.flags.contains(&"--offline");
+    let manifest = || {
+        PyPath::new(
+            parsed
+                .last("--manifest")
+                .map(|value| pytext::os_bytes(value))
+                .unwrap_or_default(),
+        )
+    };
+    let outcome = match subcommand {
+        Some(b"fetch") => {
+            let root = evidence_root(&parsed)?;
+            evidence::read(&manifest())
+                .and_then(|document| {
+                    evidence::materialize(
+                        &mut store,
+                        &document,
+                        &root,
+                        parsed.texts("--path").as_deref(),
+                        offline,
+                    )
+                })
+                .map(|_| "fetch: verified".to_string())
+        }
+        Some(b"verify") => match parsed.last("--receipt") {
+            Some(receipt) => evidence::restoration_receipt(
+                &mut store,
+                &manifest(),
+                &PyPath::new(pytext::os_bytes(receipt)),
+            )
+            .map(|_| "verify: verified".to_string()),
+            None => evidence::read(&manifest())
+                .and_then(|document| evidence::verify_remote(&mut store, &document))
+                .map(|()| "verify: verified".to_string()),
+        },
+        Some(b"resolve") => {
+            let root = evidence_root(&parsed)?;
+            let name =
+                String::from_utf8_lossy(pytext::os_bytes(&parsed.positionals[0])).into_owned();
+            evidence::resolve(
+                &mut store,
+                &root,
+                &name,
+                parsed.text("--sha256").as_deref(),
+                offline,
+            )
+            .map(|_| "resolve: verified".to_string())
+        }
+        _ => {
+            let root = evidence_root(&parsed)?;
+            let source = parsed.text("--source").unwrap_or_default();
+            evidence::recovery::recover(
+                &mut store,
+                &root,
+                &source,
+                parsed.texts("--path").as_deref(),
+                offline,
+            )
+            .map(|()| "Recovery copy verified and restored.".to_string())
+        }
+    };
+    evidence_outcome(outcome)
+}
+
+/// `restore-local.py ROOT_NAME ORIGINAL_RELATIVE_PATH NEW_FILE`, run in the repository: every refusal is its message
+/// alone on stderr, with exit 1.
+fn run_restore_local(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
+    let [label, original, output] = arguments else {
+        return Err(report_misuse(&misuse(
+            RESTORE_LOCAL_USAGE,
+            "bench-tools evidence restore-local",
+            "give ROOT_NAME, ORIGINAL_RELATIVE_PATH and NEW_FILE",
+        )));
+    };
+    let root = std::env::current_dir()
+        .map(|cwd| PyPath::new(pytext::os_bytes(cwd.as_os_str())))
+        .map_err(|error| {
+            eprintln!("{}", pytext::os_error(&error, b"."));
+            ExitCode::from(1)
+        })?;
+    let mut remote = evidence::GitHub;
+    let mut disk = evidence::System;
+    let mut store = evidence::Store {
+        remote: &mut remote,
+        disk: &mut disk,
+        now: &evidence::now_isoformat,
+    };
+    let text = |value: &OsString| String::from_utf8_lossy(pytext::os_bytes(value)).into_owned();
+    match evidence::recovery::restore_local(
+        &mut store,
+        &root,
+        &text(label),
+        &text(original),
+        pytext::os_bytes(output),
+    ) {
+        Ok(line) => {
+            write_stdout(format!("{line}\n").as_bytes())?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(error) => {
+            eprintln!("{}", error.message());
+            Err(ExitCode::from(1))
+        }
+    }
+}
+
 fn help(usage: &str, description: &str) -> Result<ExitCode, ExitCode> {
     write_stdout(format!("{usage}\n\n{description}\n").as_bytes())?;
     Ok(ExitCode::SUCCESS)
@@ -1549,6 +1936,7 @@ fn main() -> ExitCode {
         Some(b"upstream") => run_upstream(&arguments[1..]),
         Some(b"export-explorer") => run_export_explorer(&arguments[1..]),
         Some(b"archive") => run_archive(&arguments[1..]),
+        Some(b"evidence") => run_evidence(&arguments[1..]),
         Some(b"-h" | b"--help") => help(USAGE, "Deterministic benchmark tools."),
         Some(other) => {
             eprintln!(

@@ -193,6 +193,19 @@ fn multi_member_gzip_with_zero_padding_reads_as_python_gzip_does() {
 }
 
 #[test]
+fn bytes_after_the_last_gzip_member_end_a_package_as_tarfile_never_reads_them() {
+    let compressed = gzip(&tar_of(&[entry(b"bench/a", b'0', 0o644, b"abc")]));
+    let trailing = [compressed.clone(), vec![0; 4], b"trailing bytes".to_vec()].concat();
+    assert_eq!(read_tar(&trailing, &ROOMY).unwrap()[0].1, b"abc");
+    let mut plain = Vec::new();
+    io_error(
+        archive::gzip_reader(&trailing[..], 1 << 20)
+            .read_to_end(&mut plain)
+            .map_err(ArchiveError::Io),
+    );
+}
+
+#[test]
 fn entries_after_the_end_marker_are_never_parsed() {
     let symlink = entry(b"bench/link", b'2', 0o777, b"");
     let tar = [tar_of(&[entry(b"bench/a", b'0', 0o644, b"a")]), symlink].concat();

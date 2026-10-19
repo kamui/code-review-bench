@@ -104,6 +104,18 @@ import evidence_store, local_evidence_resolution
 sys.argv[0] = script
 runpy.run_path(script, run_name="__main__")
 """,
+    # prune_workspace resolves an archive through the retained evidence_store.resolve; this makes that one call, so
+    # a step case can show Python resolving what Rust restored and the reverse.
+    "python-resolve": """import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv.pop(1))
+import evidence_store
+try:
+    print(evidence_store.resolve(Path.cwd(), sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else None))
+except evidence_store.EvidenceError as error:
+    print(f"evidence: {error}")
+    sys.exit(1)
+""",
     "collect-run": """import argparse, sys
 from pathlib import Path
 sys.path.insert(0, sys.argv.pop(1))
@@ -131,7 +143,8 @@ DRIVER_ARGUMENTS = {"native-artifacts": ["bench/tools"], "restore-local": [
     "import-benchmark": ["tools"]}
 RUST_PROGRAMS = {"roster": ("bench-tools", ["roster"]), "normalize-thermo": ("bench-tools", ["normalize-thermo"]),
                  "derive-packet": ("bench-tools", ["derive-packet"]), "build-packet": ("bench-tools", ["build-packet"]),
-                 "export-explorer": ("bench-tools", ["export-explorer"]), "archive": ("bench-tools", ["archive"])}
+                 "export-explorer": ("bench-tools", ["export-explorer"]), "archive": ("bench-tools", ["archive"]),
+                 "evidence": ("bench-tools", ["evidence"])}
 DECISIONS = re.compile(r"(?P<family>.+)-decisions\.v[^/]*\.json")
 
 
@@ -315,6 +328,17 @@ else:
 """
 
 
+def command_for(commands, program, argv):
+    """A program's command prefix. A command map may route a program by its first argument, as
+    {"fetch": [...], "pack": [...]}, while only some of its subcommands have moved to another implementation."""
+    command = commands[program]
+    if isinstance(command, dict):
+        if not argv or argv[0] not in command:
+            raise ValueError(f"{program}: the command map routes no subcommand {argv[:1]}")
+        return command[argv[0]]
+    return command
+
+
 def execute(case, commands, options=None):
     """Run a case's command, or each of its steps on one shared root, and observe the results."""
     options = options or {}
@@ -345,6 +369,10 @@ def execute(case, commands, options=None):
             if "remove" in step:
                 remove(root, step["remove"])
                 continue
+            if "shell" in step:
+                subprocess.run(["/bin/sh", "-c", step["shell"]], cwd=root, env=environment, check=True,
+                               capture_output=True, timeout=10)
+                continue
             if "write" in step:
                 previous_umask = os.umask(0o022) if modes else None
                 try:
@@ -355,7 +383,7 @@ def execute(case, commands, options=None):
                 continue
             argv = [os.fsdecode(decode(arg["bytes_b64"])) if isinstance(arg, dict) else arg
                     for arg in step["argv"]]
-            result = subprocess.run([*commands[step.get("program", case.get("program"))], *argv], cwd=root,
+            result = subprocess.run([*command_for(commands, step.get("program", case.get("program")), argv), *argv], cwd=root,
                                     input=decode(step["stdin_b64"]), capture_output=True,
                                     env=environment, timeout=10, **({"umask": 0o022} if modes else {}))
             results.append(normalize(case, root, {"exit": result.returncode, "stdout": result.stdout,
