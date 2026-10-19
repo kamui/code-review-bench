@@ -81,9 +81,10 @@ recorded decision.
 file. `derive_packet.py` raised an uncaught `UnicodeDecodeError`, exiting 1 with a traceback.
 
 `derive-packet-unicode-16-digit-title` and `derive-packet-unicode-16-digit-duplicate-title` pin another, recorded in
-`derive-packet-decisions.v4.json`: the issue number in the H1 matches the Unicode 16.0 decimal digits, as Python
-3.14's `\d` does. `derive_packet.py` followed the running interpreter's Unicode database, so Python 3.13 and older
-missed the digits added in Unicode 16.0.
+`derive-packet-decisions.v5.json`: the issue number in the H1 matches the Unicode 16.0 decimal digits, as Python
+3.14's `\d` does. `derive_packet.py` followed the running interpreter's Unicode database, so it missed every digit
+that database lacked: the 80 added in Unicode 16.0 on CI's Python 3.12, and 110 on Python 3.10, 30 of which predate
+Unicode 16.0.
 
 Diagnostics keep the Python program names, `roster.py:`, `diff_identity.py:` and `derive_packet.py:`, so saved
 stderr stays identical and the differential compares them byte for byte. Renaming them needs a new decision version.
