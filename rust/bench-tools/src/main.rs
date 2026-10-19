@@ -1212,19 +1212,27 @@ fn run_restore_local(
     }
 }
 
-/// argparse reads a dash-led argument as an option's value when it names no option and reads as a negative
-/// number or holds a space; `build-packet-option-values-with-leading-dash` pins that. clap takes only numbers,
-/// so build-packet's arguments attach such a value to its option with `=` before clap parses them.
+/// argparse reads a dash-led argument as a value when it names no option and reads as a negative number or holds
+/// a space; `build-packet-option-values-with-leading-dash` and `grading-validation`'s `dash-led-*` cases pin that.
+/// clap takes only numbers, so before it parses them, build-packet's and grading validate's arguments attach such
+/// a value to its option with `=`, and grading validate's positional moves after `--`.
 fn attach_dash_led_values(arguments: Vec<OsString>) -> Vec<OsString> {
-    if arguments.get(1).map(|name| pytext::os_bytes(name)) != Some(b"build-packet") {
-        return arguments;
-    }
+    let name = |index: usize| arguments.get(index).map(|name| pytext::os_bytes(name));
+    let path: &[&str] = match (name(1), name(2)) {
+        (Some(b"build-packet"), _) => &["build-packet"],
+        (Some(b"grading"), Some(b"validate")) => &["grading", "validate"],
+        _ => return arguments,
+    };
     let mut command = Cli::command();
     command.build();
-    let Some(build_packet) = command.find_subcommand("build-packet") else {
+    let Some(subcommand) = path
+        .iter()
+        .try_fold(&command, |command, name| command.find_subcommand(name))
+    else {
         return arguments;
     };
-    let options: Vec<(String, bool)> = build_packet
+    let moves_positionals = subcommand.get_positionals().next().is_some();
+    let options: Vec<(String, bool)> = subcommand
         .get_arguments()
         .filter_map(|argument| {
             let takes_value = argument.get_action().takes_values();
@@ -1274,23 +1282,34 @@ fn attach_dash_led_values(arguments: Vec<OsString>) -> Vec<OsString> {
             && (negative_number || argument.contains(&b' '))
     };
     let mut attached = Vec::with_capacity(arguments.len());
-    let mut rest = arguments.into_iter().peekable();
-    while let Some(argument) = rest.next() {
+    let mut positionals = Vec::new();
+    let mut after_separator = None;
+    let mut rest = arguments.into_iter().enumerate().peekable();
+    while let Some((index, argument)) = rest.next() {
         let bytes = pytext::os_bytes(&argument);
         if bytes == b"--" {
-            attached.push(argument);
-            attached.extend(rest);
+            after_separator = Some(rest.map(|(_, argument)| argument).collect::<Vec<_>>());
             break;
         }
-        match rest.next_if(|value| takes_value(bytes) && dash_led_value(pytext::os_bytes(value))) {
-            Some(value) => {
+        match rest
+            .next_if(|(_, value)| takes_value(bytes) && dash_led_value(pytext::os_bytes(value)))
+        {
+            Some((_, value)) => {
                 let mut joined = argument.into_vec();
                 joined.push(b'=');
                 joined.extend_from_slice(pytext::os_bytes(&value));
                 attached.push(OsString::from_vec(joined));
             }
+            None if moves_positionals && index > path.len() && dash_led_value(bytes) => {
+                positionals.push(argument)
+            }
             None => attached.push(argument),
         }
+    }
+    if !positionals.is_empty() || after_separator.is_some() {
+        attached.push(OsString::from("--"));
+        attached.extend(positionals);
+        attached.extend(after_separator.unwrap_or_default());
     }
     attached
 }

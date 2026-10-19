@@ -601,7 +601,7 @@ fn claim_problems(
                 let rulings = get_or(get_or(credits, token, &empty_object)?, key, &empty_list)?;
                 for ruling in py::iterate(rulings)? {
                     let ruling = ruling.as_ref();
-                    let mut entries: Vec<&Value> = Vec::new();
+                    let mut entries = Vec::new();
                     for claim in claim_list {
                         let pre_existing =
                             py::get(ruling, "pre_existing")?.is_some_and(Value::truthy);
@@ -610,17 +610,16 @@ fn claim_problems(
                         } else {
                             ("known_problems", "family")
                         };
-                        let listed = claim
-                            .as_object()
-                            .and_then(|claim| claim.get(list))
-                            .and_then(Value::as_array)
-                            .unwrap_or_default();
-                        for entry in listed {
-                            if py::eq(field(entry, name), py::getitem(ruling, "family")?) {
+                        let Some(listed) = py::get(claim, list)? else {
+                            continue;
+                        };
+                        for entry in py::iterate(listed)? {
+                            if py::eq(py::getitem(&entry, name)?, py::getitem(ruling, "family")?) {
                                 entries.push(entry);
                             }
                         }
                     }
+                    let entries: Vec<&Value> = entries.iter().map(AsRef::as_ref).collect();
                     problems.extend(
                         claim_grading::credit_problems(&entries, ruling)?
                             .iter()
