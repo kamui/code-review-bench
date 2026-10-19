@@ -27,6 +27,8 @@ pub enum Variant {
     ApprovedWithoutReceipt,
     /// A canonical claim's equivalent link whose blind parties disagree, with no after-record.
     DisputedWithoutRuling,
+    /// The same link once the owner ruled: the saved ruling and an after-record that pins the before-record.
+    Ruled,
     /// A saved grade whose input fingerprint no longer matches its inputs.
     StaleFingerprint,
     /// `packet.md` changed after `target.json` pinned it.
@@ -38,11 +40,12 @@ pub enum Variant {
 }
 
 impl Variant {
-    pub const ALL: [Variant; 8] = [
+    pub const ALL: [Variant; 9] = [
         Variant::Pending,
         Variant::Proposed,
         Variant::ApprovedWithoutReceipt,
         Variant::DisputedWithoutRuling,
+        Variant::Ruled,
         Variant::StaleFingerprint,
         Variant::ChangedPinnedFile,
         Variant::ModifiedClone,
@@ -55,6 +58,7 @@ impl Variant {
             Variant::Proposed => "proposed",
             Variant::ApprovedWithoutReceipt => "approved-without-receipt",
             Variant::DisputedWithoutRuling => "disputed-without-ruling",
+            Variant::Ruled => "ruled",
             Variant::StaleFingerprint => "stale-fingerprint",
             Variant::ChangedPinnedFile => "changed-pinned-file",
             Variant::ModifiedClone => "modified-clone",
@@ -407,6 +411,13 @@ fn decision(status: &str, authority: &str, receipt: &str, packet_sha256: &str) -
 
 const RECEIPT: &str = "bench/grading/rulings/receipts/AD-GT-t1-eligibility.md";
 const RECEIPT_SCOPE: &str = "Human approves GT-t1 for eligibility: eligible.";
+const CASE: &str = "bench/grading/rulings/fixture/cases/CL-t-grade-1-close.md";
+const RULE: &str = "bench/grading/rulings/fixture/rule.v1.md";
+const BRIEF: &str = "bench/grading/rulings/fixture/brief.v1.md";
+const INDEX: &str = "bench/grading/rulings/fixture/rulings.index.v1.json";
+pub const RULING: &str = "bench/grading/rulings/fixture/fixture-01.md";
+pub const BEFORE: &str = "bench/grading/rulings/fixture/fixture-01.before.json";
+pub const AFTER: &str = "bench/grading/rulings/fixture/fixture-01.after.json";
 
 /// The fixture root of one variant. Every call returns the same bytes.
 pub fn build(variant: Variant) -> Fixture {
@@ -676,7 +687,7 @@ pub fn build(variant: Variant) -> Fixture {
     );
 
     let mut claims = Vec::new();
-    if variant == Variant::DisputedWithoutRuling {
+    if matches!(variant, Variant::DisputedWithoutRuling | Variant::Ruled) {
         let review = b.pin(&format!("{run_dir}/attempts/att-001/normalized.json"));
         claims.push(o(vec![
             ("id", s("CL-t-grade-1-close")),
@@ -714,36 +725,57 @@ pub fn build(variant: Variant) -> Fixture {
             ("family_id", Value::Null),
         ]));
         b.put(
-            "bench/grading/rulings/fixture/CL-t-grade-1-close.md",
+            CASE,
             b"# CL-t-grade-1-close\n\nDoes item 0 of att-001 name the close race?\n".to_vec(),
         );
         b.put(
-            "bench/grading/rulings/fixture/rule.md",
+            RULE,
             b"# Grouping rule\n\nA link is equivalent when the item names the trigger, mechanism and consequence.\n"
                 .to_vec(),
         );
+        b.put(
+            BRIEF,
+            b"# Brief\n\nAnswer from the case file and the rule alone.\n".to_vec(),
+        );
+        b.put_json(
+            INDEX,
+            &o(vec![
+                ("about", s("No earlier ruling applies to the fixture.")),
+                ("rulings", o(vec![])),
+            ]),
+        );
+        let brief = b.pin(BRIEF);
         let answer = |by: &str, outcome: &str, blind: bool| {
             o(vec![
                 ("by", s(by)),
                 ("model", s("example")),
-                ("family", s("example")),
+                ("family", s(if blind { "example-b" } else { "example-a" })),
+                ("effort", s("high")),
                 ("blind", Value::Bool(blind)),
                 ("exposure", s("none")),
+                ("brief", if blind { brief.clone() } else { Value::Null }),
                 ("written", s("before-question")),
                 ("outcome", s(outcome)),
+                (
+                    "same_fault_as",
+                    if outcome == "same-family" {
+                        s("CL-t-grade-1-close")
+                    } else {
+                        Value::Null
+                    },
+                ),
                 ("clauses", a(vec![])),
-                ("conflict", Value::Null),
                 ("nearest", a(vec![])),
-                ("confidence", s("high")),
-                ("short_of_high", a(vec![])),
-                ("would_settle", Value::Bool(true)),
+                ("conflict", Value::Null),
                 ("rule_gap", Value::Null),
+                ("confidence", s("medium")),
+                ("short_of_high", a(vec![s("no-precedent")])),
+                ("would_settle", Value::Bool(false)),
                 ("reason", s("The case file settles it.")),
-                ("same_fault_as", s("CL-t-grade-1-close")),
             ])
         };
         b.put_json(
-            "bench/grading/rulings/fixture/CL-t-grade-1-close.before.json",
+            BEFORE,
             &o(vec![
                 ("contract", n(2)),
                 ("ruling", s("fixture-01")),
@@ -755,21 +787,15 @@ pub fn build(variant: Variant) -> Fixture {
                 (
                     "case",
                     o(vec![
-                        (
-                            "path",
-                            s("bench/grading/rulings/fixture/CL-t-grade-1-close.md"),
-                        ),
-                        (
-                            "sha256",
-                            s(&b.sha("bench/grading/rulings/fixture/CL-t-grade-1-close.md")),
-                        ),
+                        ("path", s(CASE)),
+                        ("sha256", s(&b.sha(CASE))),
                         ("written_by", s("example")),
                         ("precedents", Value::Null),
                     ]),
                 ),
-                ("rule", b.pin("bench/grading/rulings/fixture/rule.md")),
+                ("rule", b.pin(RULE)),
                 ("clauses", Value::Null),
-                ("rulings", Value::Null),
+                ("rulings", s(INDEX)),
                 ("reviews", Value::Null),
                 (
                     "answers",
@@ -781,6 +807,30 @@ pub fn build(variant: Variant) -> Fixture {
                 ),
             ]),
         );
+        if variant == Variant::Ruled {
+            b.put(
+                RULING,
+                b"# fixture-01\n\nThe owner rules that item 0 of att-001 names the close race: same family.\n"
+                    .to_vec(),
+            );
+            b.put_json(
+                AFTER,
+                &o(vec![
+                    ("contract", n(2)),
+                    ("ruling", s("fixture-01")),
+                    ("before", b.pin(BEFORE)),
+                    ("settled_by", s("owner")),
+                    ("policy", Value::Null),
+                    ("asked", n(1)),
+                    ("outcome", s("same-family")),
+                    ("by_default", Value::Bool(false)),
+                    ("ground", s("Item 0 names the close race.")),
+                    ("miss", Value::Null),
+                    ("lesson", Value::Null),
+                    ("same_fault_as", s("CL-t-grade-1-close")),
+                ]),
+            );
+        }
     }
     b.put_json(
         &format!("{CURRENT}/claims.json"),
