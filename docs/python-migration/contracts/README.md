@@ -140,7 +140,8 @@ releases, oversized and truncated downloads, and existing different manifests, r
 `--offline`, then refuses a corrupted cache. `publish-retry-makes-no-upload` and `publish-lost-upload-response` show
 one upload in the recorded `gh` calls. Each corpus runs a stub `gh`, so `gh/calls.jsonl` records every call;
 `test_behavior_contract.py` checks that each recorded call is one the stub answers and runs every storage corpus
-with its maintained implementations.
+with its default commands: the retained Python for `evidence-store` and `python-resolve`, and `bench-tools` for the
+programs that moved.
 
 [#219](https://github.com/kamui/code-review-bench/issues/219) moves fetch, verify, resolution, recovery and local
 restoration to `bench-tools evidence`. A command map value can route a program by its first argument, so

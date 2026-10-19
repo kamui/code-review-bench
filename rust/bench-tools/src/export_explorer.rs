@@ -17,9 +17,11 @@ use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
+/// Leaves out `evidence --restore`, which only `tools/export_explorer.py` passes, because the export-explorer corpus
+/// pins this text and a new version of its decisions waits on #245's clap port.
 pub const USAGE: &str =
     "usage: bench-tools export-explorer {evidence,stage,publish} [--root ROOT] [--facts FACTS]
-                                    [--base-path BASE_PATH] [--stage STAGE] [--public PUBLIC] [--restore]";
+                                    [--base-path BASE_PATH] [--stage STAGE] [--public PUBLIC]";
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Failure {
