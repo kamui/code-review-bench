@@ -20,7 +20,7 @@ import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
-DESTINATION = "docs/python-migration/inventory.v2.json.gz"
+DESTINATION = "docs/python-migration/inventory.v3.json.gz"
 SHELL_DIRECTORY = r'\$\(dirname\s+(?:"\$0"|\$0)\)'
 PYTHON_PATH = re.compile(
     rf"(?:{SHELL_DIRECTORY}|\$\{{[A-Za-z_]\w*\}}|\$[A-Za-z_]\w*)?[\w./-]+\.py\b"
@@ -31,41 +31,41 @@ REFERENCE = re.compile(
 )
 GROUPS = {
     "behavioral-contracts": (151, "behavior_contract"),
-    "usage": (152, "codex_usage transcript_usage"),
-    "runtime": (153, "seal skill_provenance fetch_freeze_commits rust_runtime"),
-    "processing": (154, "build_packet derive_packet diff_identity normalize_review normalize_thermo "
-                   "compare score scoreboard_svg rates roster upstream export_explorer collect_run methodology"),
+    "usage": (152, "codex_usage transcript_usage adapter measure python_core typed_usage verify"),
+    "runtime": (153, "rust_runtime"),
     "storage": (155, "evidence_inventory evidence_store reconcile_evidence recover_evidence "
-                "local_evidence_resolution native_artifacts import_benchmark"),
-    "grading": (156, "attempt_audit audit_log calibration check_manifest claim_grading claims "
-                "current_grading delegation evaluator_audit grade grading_policy grading_profile "
-                "grading_validation packet_selection pre_existing_grading regrade ruling_dossier "
-                "ruling_record ruling_summary"),
+                "local_evidence_resolution native_artifacts import_benchmark collect_run"),
+    "grading": (156, "attempt_audit audit_log calibration claim_grading claims "
+                "current_grading delegation evaluator_audit export_explorer grade grading_policy grading_profile "
+                "grading_validation methodology packet_selection pre_existing_grading regrade ruling_dossier "
+                "ruling_record ruling_summary upstream"),
     "supervision": (157, "claude_container_controller_v4 claude_container_probe claude_container_probe_v4 "
                     "claude_container_resources claude_fixture_git claude_fixture_git_attack claude_skill_runner "
                     "clean_context codex_container_probe codex_fixture_git codex_grade_dispatch codex_grading "
-                    "codex_skill_runner file_attempt grading_client_probe provision review_isolation "
-                    "review_queue run_cell subscription_meters"),
+                    "codex_skill_runner compare diff_identity fetch_freeze_commits file_attempt grading_client_probe "
+                    "provision review_isolation review_queue run_cell skill_provenance subscription_meters"),
     "contributor": (158, "contributor contributor_adapter_probe contributor_adapters contributor_common "
-                   "contributor_openrouter contributor_secrets contributor_submit"),
+                   "contributor_openrouter contributor_secrets contributor_submit normalize_review"),
     "cleanup": (159, "prune_workspace retire_workspace"),
-    "retirement": (160, "run_bench_tests select_grading_tests python_inventory"),
+    "retirement": (160, "run_bench_tests select_grading_tests python_inventory check_manifest rates seal"),
 }
 DYNAMIC_ROOTS = {
-    "bench/tools/test_packet_replacements.py": ["docs/research/last-push-recut-2026-10-07"],
+    "bench/tools/test_packet_replacements.py": ["docs/research/last-push-recut-2026-10-07/stage_edition.py"],
     "bench/tools/test_review_code_selection.py": ["docs/research/last-push-review-code-2026-10-12/selection"],
     "bench/tools/test_last_push_move.py": ["docs/research/last-push-rulings-2026-10-11/filing",
                                            "docs/research/regrade-rulings-2026-10-13/filing/record.py",
                                            "docs/research/older-problem-activation-2026-10-13/filing/record.py"],
+    "docs/research/last-push-rulings-2026-10-11/filing/move.py": [
+        "docs/research/last-push-recut-2026-10-07/stage_edition.py"],
+    "docs/research/last-push-review-code-2026-10-12/selection/selection.py": [
+        "docs/research/last-push-recut-2026-10-07/stage_edition.py",
+        "docs/research/last-push-rulings-2026-10-11/filing/record.py"],
 }
 RESEARCH_GROUPS = {
     152: ["last-push-review-code-2026-10-12/selection/usage.py", "last-push-rulings-2026-10-11/usage.py"],
     153: ["portable-evidence-2026-10-10/freeze_commits.py"],
-    154: ["builtin-review-benchmark-2026-09-24/answers.py", "last-push-recut-2026-10-07/plan.py",
-          "last-push-recut-2026-10-07/recut.py", "last-push-recut-2026-10-07/stage_edition.py",
-          "last-push-recut-2026-10-07/verify.py"],
-    155: ["last-push-recut-2026-10-07/relocate_transcripts.py"],
-    156: ["cohort-rebuild-2026-10-05/regrade/plan.py",
+    155: ["builtin-review-benchmark-2026-09-24/answers.py"],
+    156: ["cohort-rebuild-2026-10-05/regrade/plan.py", "last-push-recut-2026-10-07/stage_edition.py",
           "last-push-review-code-2026-10-12/selection/collect.py", "last-push-review-code-2026-10-12/selection/packets.py",
           "last-push-review-code-2026-10-12/selection/selection.py", "last-push-rulings-2026-10-11/filing/collect.py",
           "last-push-rulings-2026-10-11/filing/move.py", "last-push-rulings-2026-10-11/filing/packets.py",
@@ -73,8 +73,8 @@ RESEARCH_GROUPS = {
           "older-problem-activation-2026-10-13/filing/receipts.py", "older-problem-activation-2026-10-13/filing/record.py",
           "older-problem-activation-2026-10-13/filing/wordings.py", "reference-calibration-2026-10-03/blind_items.py",
           "regrade-rulings-2026-10-13/filing/record.py"],
-    157: ["last-push-recut-2026-10-07/dispatch_replacements.py", "last-push-recut-2026-10-07/replacement_runs.py",
-          "last-push-recut-2026-10-07/skill_replacement_runs.py", "skill-matrix-2026-10-02/dispatch_serial.py"],
+    157: ["last-push-recut-2026-10-07/replacement_runs.py", "last-push-recut-2026-10-07/skill_replacement_runs.py",
+          "skill-matrix-2026-10-02/dispatch_serial.py"],
 }
 
 

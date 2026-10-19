@@ -155,6 +155,52 @@ subprocess.run(["python3", str(Path(work) / "validator/tools/grading_validation.
             self.assertEqual(files["docs/research/unused/normalize_review.py"]["callers"], [])
             self.assertEqual(files["docs/research/unused/normalize_review.py"]["class"], "historical-replay")
 
+    def test_processing_modules_belong_to_the_stage_that_removes_them(self):
+        expected = {
+            "bench/tools/diff_identity.py": 157, "bench/tools/compare.py": 157, "bench/tools/normalize_review.py": 158,
+            "bench/tools/check_manifest.py": 160, "bench/tools/upstream.py": 156, "tools/export_explorer.py": 156,
+            "bench/tools/rates.py": 160, "bench/tools/methodology.py": 156, "tools/collect_run.py": 155,
+            "bench/tools/rust_runtime.py": 153, "bench/tools/seal.py": 160, "bench/tools/skill_provenance.py": 157,
+            "tools/fetch_freeze_commits.py": 157, "tools/usage_pilot/adapter.py": 152,
+        }
+        for path, issue in expected.items():
+            with self.subTest(path=path):
+                self.assertEqual(inventory.responsibility(path)["issue"], issue)
+        self.assertNotIn(154, {issue for issue, _ in inventory.GROUPS.values()})
+        self.assertNotIn(154, inventory.RESEARCH_GROUPS)
+        for name in ("roster", "derive_packet", "build_packet", "normalize_thermo", "score", "scoreboard_svg"):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "no migration owner"):
+                inventory.responsibility(f"bench/tools/{name}.py")
+
+    def test_recut_loader_keeps_only_the_staged_selection_live(self):
+        recut = "docs/research/last-push-recut-2026-10-07/"
+        filing = "docs/research/last-push-rulings-2026-10-11/filing/"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sources = {
+                "bench/tools/test_packet_replacements.py": "import importlib.util\n",
+                "bench/tools/test_last_push_move.py": "import importlib.util\n",
+                filing + "move.py": "import sys\nimport stage_edition as stage\n",
+                recut + "stage_edition.py": "import json\n",
+                recut + "plan.py": "import json\n",
+                recut + "verify.py": "import json\n",
+                "bench/import-manifest.json": '{"files":[],"repository":"fixture","revision":"unknown"}',
+            }
+            for path, text in sources.items():
+                target = root / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(text)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(root), "-c", "user.name=Test", "-c", "user.email=test@example.org",
+                            "commit", "-qm", "fixture"], check=True)
+            files = {row["path"]: row for row in inventory.census(inventory.Snapshot("HEAD", root))["python_files"]}
+            self.assertEqual(files[recut + "stage_edition.py"]["migration"]["issue"], 156)
+            self.assertIn({"path": filing + "move.py", "line": 1, "kind": "audited-dynamic-file"},
+                          files[recut + "stage_edition.py"]["callers"])
+            for name in ("plan.py", "verify.py"):
+                self.assertEqual(files[recut + name]["class"], "historical-replay")
+
     def test_unknown_maintained_module_requires_assignment(self):
         with self.assertRaisesRegex(ValueError, "no migration owner"):
             inventory.responsibility("tools/unassigned.py")
