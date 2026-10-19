@@ -93,8 +93,8 @@ one-time check read all 33 published packages, from the 19 manifests in `bench/e
 
 | Command | Python it replaces |
 | --- | --- |
-| `evidence fetch --manifest M [--root R] [--path P]... [--offline]` | `evidence_store.py fetch` |
-| `evidence verify --manifest M [--receipt R]` | `evidence_store.py verify` |
+| `evidence fetch --manifest M [--root R] [--path P]... [--offline]` | `evidence_store.py`'s `fetch` |
+| `evidence verify --manifest M [--receipt R]` | `evidence_store.py`'s `verify` |
 | `evidence resolve [--sha256 H] [--root R] [--offline] PATH` | `evidence_store.resolve`, which `export_explorer.py` and `prune_workspace.py` call |
 | `evidence recover --source S [--root R] [--path P]... [--offline]` | `bench/tools/recover_evidence.py` |
 | `evidence restore-local ROOT ORIGINAL OUTPUT` | `local_evidence_resolution`, with the research record `restore-local.py`'s arguments |
