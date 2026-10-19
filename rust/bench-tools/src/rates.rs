@@ -11,8 +11,6 @@ use crate::pytext::{self, PyPath};
 use crate::schema::{SchemaError, Validator};
 use crate::sha256;
 
-pub const USAGE: &str = "usage: bench-tools rates check [-h] [--rates RATES] [--model MODEL] [--json] [--source PROVIDER=URL] [--root ROOT]";
-
 pub const FIELDS: [&str; 5] = [
     "input",
     "output",

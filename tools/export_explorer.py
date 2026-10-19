@@ -51,7 +51,7 @@ def build(root=ROOT, public=None):
         facts = Path(scratch) / "facts.json"
         facts.write_text(json.dumps({"selected": selected, "documents": documents, "status": status}, allow_nan=False),
                          encoding="utf-8")
-        common = ["--root", str(root), "--facts", str(facts), "--base-path", os.environ.get("BASE_PATH", "/")]
+        common = ["--root", str(root), "--facts", str(facts), f"--base-path={os.environ.get('BASE_PATH', '/')}"]
         tool("evidence", "--restore", *common)
         try:
             summary = tool("stage", *common, "--stage", str(stage)).decode("utf-8")
@@ -59,7 +59,7 @@ def build(root=ROOT, public=None):
                 raise current_grading.Inconsistent("current evidence changed during export")
             interrupt = signal.signal(signal.SIGINT, signal.SIG_IGN)
             try:
-                tool("publish", "--stage", str(stage), "--public", str(public))
+                tool("publish", "--stage", str(stage), f"--public={public}")
             finally:
                 signal.signal(signal.SIGINT, interrupt)
         finally:
