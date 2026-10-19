@@ -1395,12 +1395,12 @@ pub(crate) fn parse_float(text: &str) -> Result<f64> {
     let ascii: String = text
         .chars()
         .map(|c| {
-            if pytext::is_space(c) {
+            if c.is_ascii() {
+                c
+            } else if pytext::is_space(c) {
                 ' '
             } else if let Some(digit) = pytext::decimal_value(c) {
                 char::from_digit(digit, 10).unwrap_or('?')
-            } else if c.is_ascii() {
-                c
             } else {
                 '?'
             }
@@ -1424,7 +1424,7 @@ pub(crate) fn parse_float(text: &str) -> Result<f64> {
     if previous == '_' {
         return Err(invalid());
     }
-    let body = cleaned.trim_matches(|c: char| c.is_ascii_whitespace());
+    let body = cleaned.trim_matches([' ', '\t', '\n', '\x0b', '\x0c', '\r']);
     let digits = body.trim_start_matches(['+', '-']);
     let word = digits.to_ascii_lowercase();
     if body.len() - digits.len() > 1
@@ -1633,13 +1633,25 @@ mod tests {
             (".5", 0.5),
             ("5.", 5.0),
             ("\u{a0}1\u{2003}", 1.0),
+            ("\u{b}1.5\u{85}", 1.5),
             ("-Infinity", f64::NEG_INFINITY),
         ] {
             assert_eq!(parse_float(text).unwrap(), value, "{text:?}");
         }
         assert!(parse_float("nan").unwrap().is_nan());
         for text in [
-            "1__0", "_1", "1_", "--1", "1_.5", "1._5", "0x10", "1e_5", "1_e5",
+            "1__0",
+            "_1",
+            "1_",
+            "--1",
+            "1_.5",
+            "1._5",
+            "0x10",
+            "1e_5",
+            "1_e5",
+            "\u{1c}1.5",
+            "1.5\u{1f}",
+            "\u{7f}1",
         ] {
             assert_eq!(
                 parse_float(text).unwrap_err().message(),
