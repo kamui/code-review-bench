@@ -95,6 +95,9 @@ impl Fetch for Network {
         }
         let output = std::process::Command::new("curl")
             .args([
+                // Must stay first: curl reads `.curlrc` unless its first argument disables it, and a config
+                // option such as `output` would write files.
+                "--disable",
                 "--silent",
                 "--show-error",
                 "--fail",
