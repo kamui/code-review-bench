@@ -767,6 +767,12 @@ pub fn file_artifacts(
                 "refusing to change an existing native artifact filing",
             ));
         }
+        // An interrupted filing may have linked its storage record without syncing the entry.
+        let reaching: BTreeSet<Vec<u8>> = std::iter::once(out.clone())
+            .chain(evidence::parents(out))
+            .map(|directory| directory.as_bytes().to_vec())
+            .collect();
+        evidence::sync_dirs(disk, &reaching)?;
         return Ok(Some(pin));
     }
     if archived.is_empty() || exists(&record_path) {

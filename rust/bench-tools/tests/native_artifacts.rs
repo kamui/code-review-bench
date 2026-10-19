@@ -181,7 +181,12 @@ fn an_interrupted_filing_leaves_no_storage_record_and_a_retry_completes_it() {
             "effect {fail_at}: {:?}",
             disk.events.last()
         );
-        assert_eq!(file(&mut System, &base).unwrap(), pin, "effect {fail_at}");
+        let mut retry = Recording::new(None);
+        assert_eq!(file(&mut retry, &base).unwrap(), pin, "effect {fail_at}");
+        assert!(
+            retry.events.contains(&Event::SyncDir(base.join("out"))),
+            "effect {fail_at}: the retry syncs the filing's directory"
+        );
         let pin = pyjson::loads(&pin, Duplicates::KeepLast).unwrap();
         native_artifacts::verify(&py(&base.join("out")), Some(&pin)).unwrap();
     }
