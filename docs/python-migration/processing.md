@@ -26,7 +26,13 @@ committed `Cargo.lock`; a first install needs the network once to fetch them (`c
 outputs depend on:
 
 - `pyjson` reads JSON as `json.loads` does and writes it as `json.dumps` does, including `float.__repr__` spelling,
-  integers of any length up to Python's 4300-digit limit, key order, and `JSONDecodeError` messages.
+  integers of any length up to Python's 4300-digit limit, key order, and `JSONDecodeError` messages. Both halves
+  stay hand-written ([#215](https://github.com/kamui/code-review-bench/issues/215) slice C). `serde_json` 1.0.154
+  refuses `NaN` and `Infinity` and has no option to accept them. Its error messages and positions differ from
+  `JSONDecodeError`'s, which normalize-review notes save. By default it stops at 128 levels of nesting, and its only
+  depth option removes the limit; `pyjson` stops at 1000. It refuses a lone surrogate as `pyjson` does, with another
+  message. Its writer writes `null` for `NaN`, `1.5e-7` for `1.5e-07` and non-ASCII text unescaped. A wrapper for
+  these cases would keep the whole scanner beside the crate.
 - `pytext` holds `surrogateescape` decoding, `str.strip` whitespace, `repr`, `pathlib` path joining, universal
   newlines, and the `OSError` and `UnicodeDecodeError` messages that diagnostics quote.
 - `sha256` implements SHA-256.
