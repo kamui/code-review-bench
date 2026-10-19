@@ -54,8 +54,9 @@ independent assertions. The harness never obtains expected output from a candida
 
 ## Run the bench-tools corpora
 
-[`roster.v1.json`](../../../tools/behavior_contracts/roster.v1.json) and
-[`diff-identity.v1.json`](../../../tools/behavior_contracts/diff-identity.v1.json) pin the first commands of
+[`roster.v1.json`](../../../tools/behavior_contracts/roster.v1.json),
+[`diff-identity.v1.json`](../../../tools/behavior_contracts/diff-identity.v1.json) and
+[`derive-packet.v1.json`](../../../tools/behavior_contracts/derive-packet.v1.json) pin the commands of
 [`bench-tools`](../processing.md). Select a corpus with `--corpus`:
 
 ```sh
@@ -64,19 +65,24 @@ python3 tools/behavior_contract.py --corpus tools/behavior_contracts/diff-identi
 ```
 
 Without `--implementations`, each program runs its maintained implementation. `codex`, `transcript` and
-`diff-identity` run their Python scripts; `diff_identity.py` is a retained library. `roster` has no Python
-implementation, so it runs the executable `rust_runtime.resolve("bench-tools")` selects, and the command refuses
-when none is installed for `HEAD`. A command map for the Rust programs names that executable:
+`diff-identity` run their Python scripts; `diff_identity.py` is a retained library. `roster` and `derive-packet`
+have no Python implementation, so they run the executable `rust_runtime.resolve("bench-tools")` selects, and the
+command refuses when none is installed for `HEAD`. A command map for the Rust programs names that executable:
 
 ```json
 {
   "roster": ["/absolute/path/to/bench-tools", "roster"],
-  "diff-identity": ["/absolute/path/to/bench-tools", "diff-identity"]
+  "diff-identity": ["/absolute/path/to/bench-tools", "diff-identity"],
+  "derive-packet": ["/absolute/path/to/bench-tools", "derive-packet"]
 }
 ```
 
 The `diff-identity` fixtures are bare repositories whose non-UTF-8 path names exist only inside Git tree objects,
 so they need no `requires` capability. The cases run `git` from the minimal `PATH`.
+
+Each `derive-packet-target-<id>` case holds a target's committed `packet.legacy.md` and expects its committed
+`packet.md`, byte for byte. `test_behavior_contract.py` checks that every target with a legacy packet has such a case
+and that its bytes are the committed files.
 
 ## Fixture format `behavior-contract/1`
 

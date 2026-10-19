@@ -12,14 +12,40 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).with_name("build_packet.py")
+sys.path.insert(0, str(SCRIPT.parent))
+import rust_runtime  # noqa: E402
+
+
+def bench_tools() -> str | None:
+    try:
+        return str(rust_runtime.resolve("bench-tools"))
+    except (rust_runtime.Refused, rust_runtime.InputError):
+        return None
+
+
+# CI's Rust runtime job installs bench-tools and sets this, so a missing executable fails there instead of skipping.
+needs_bench_tools = unittest.skipUnless(bench_tools() or os.environ.get("RUST_RUNTIME_REQUIRE_BENCH_TOOLS") == "1",
+                                        "bench-tools is not installed for HEAD")
+
+
+def derive(rendered: bytes) -> bytes:
+    with tempfile.TemporaryDirectory() as temporary:
+        legacy, packet = Path(temporary, "packet.legacy.md"), Path(temporary, "packet.md")
+        legacy.write_bytes(rendered)
+        done = subprocess.run([str(rust_runtime.resolve("bench-tools")), "derive-packet", "--no-newline-translation",
+                               str(legacy), "--out", str(packet)], capture_output=True)
+        assert done.returncode == 0, done
+        return packet.read_bytes()
 FIXTURE = Path(__file__).with_name("test_build_packet_fixture.json")
 
 CUTOFF = "2026-03-10T12:00:00Z"
@@ -769,20 +795,21 @@ class BuildPacketTests(unittest.TestCase):
 
     # --- the factual packet ----------------------------------------------
 
+    @needs_bench_tools
     def test_the_factual_packet_is_the_derived_rendering(self) -> None:
-        sys.path.insert(0, str(SCRIPT.parent))
-        import derive_packet
         for drop in (False, True):
             with self.subTest(closing_reference=not drop):
                 if drop:
                     self.drop_the_closing_reference()
-                rendered = self.build_ok()
+                self.build_ok()
+                rendered = self.out.read_bytes()
                 factual = self.build_ok("--factual")
-                self.assertEqual(factual, derive_packet.derive(rendered))
+                self.assertEqual(self.out.read_bytes(), derive(rendered))
                 for policy in ["## 8. Run conditions", "Posting identity", "review-head", "issues=",
                                "summary.repository_url", "Mandatory note", "issue #124 effort experiment"]:
                     self.assertNotIn(policy, factual)
 
+    @needs_bench_tools
     def test_a_factual_rendering_the_derivation_refuses_writes_nothing(self) -> None:
         self.drop_the_closing_reference()
         self.save_replay(spec_issue=SPEC_ISSUE, spec_issue_comments=SPEC_ISSUE_COMMENTS)
@@ -790,6 +817,25 @@ class BuildPacketTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("expected exactly one", result.stdout)
         self.assertFalse(self.out.exists())
+
+    def test_a_factual_packet_without_bench_tools_exits_two(self) -> None:
+        store = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        environment = {key: value for key, value in os.environ.items() if not key.startswith("BENCH_RUST_")}
+        with patch.dict(os.environ, {**environment, "BENCH_RUNTIME_STORE": str(store)}, clear=True):
+            result = self.run_cli("--factual")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("install --crate rust/bench-tools", result.stderr)
+        self.assertFalse(self.out.exists())
+
+    @needs_bench_tools
+    def test_a_factual_packet_keeps_a_carriage_return(self) -> None:
+        self.pull()["title"] = "Bound the reconnect\rloop"
+        self.build_ok()
+        rendered = self.out.read_bytes()
+        self.assertIn(b"reconnect\rloop", rendered)
+        self.build_ok("--factual")
+        self.assertIn(b"reconnect\rloop", self.out.read_bytes())
+        self.assertEqual(self.out.read_bytes(), derive(rendered))
 
     # --- refusals -------------------------------------------------------
 

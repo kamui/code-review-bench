@@ -31,7 +31,7 @@ REPO = Path(__file__).resolve().parents[1]
 CORPUS = REPO / "tools/behavior_contracts/usage.v1.json"
 PYTHON_PROGRAMS = {"codex": "bench/tools/codex_usage.py", "transcript": "bench/tools/transcript_usage.py",
                    "diff-identity": "bench/tools/diff_identity.py"}
-RUST_PROGRAMS = {"roster": ("bench-tools", ["roster"])}
+RUST_PROGRAMS = {"roster": ("bench-tools", ["roster"]), "derive-packet": ("bench-tools", ["derive-packet"])}
 DECISIONS = re.compile(r"(?P<family>.+)-decisions\.v[^/]*\.json")
 
 
