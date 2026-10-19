@@ -169,7 +169,7 @@ message, so these corpora run with `--allow-known-defects`: `recover-unknown-sou
 Each observation masks the traceback's frames with `mask_patterns` and pins the terminal exception type and message,
 so an unrelated crash is a failure, not the known defect.
 
-[#223](https://github.com/kamui/code-review-bench/issues/223) ports `import_benchmark.py --check` and `--preserve` to
+[#223](https://github.com/kamui/code-review-bench/issues/223) ports the `--check` and `--preserve` of `import_benchmark.py` to
 `bench-tools import-benchmark`. `import-benchmark-decisions.v3.json` records each case where the two differ, every
 other traceback included, with Python's output as its `baseline_defect`. The corpus ran against both, with a
 differential, before the Python was deleted; its expectations are now the gate. The `import-preserve-*` cases that
