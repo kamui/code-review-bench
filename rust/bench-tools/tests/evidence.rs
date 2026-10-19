@@ -314,13 +314,26 @@ fn an_interruption_at_any_disk_effect_leaves_nothing_partial_and_a_retry_complet
         );
         let had_cache = cached.exists();
         let mut retry = FakeRemote::new(&archive);
-        fetch(&root, &document, &mut retry, &mut System).unwrap();
+        let mut retry_disk = Recording::new(None);
+        fetch(&root, &document, &mut retry, &mut retry_disk).unwrap();
         assert_restored(&root);
         assert_eq!(
             retry.downloads.get(),
             u32::from(!had_cache),
             "effect {fail_at}"
         );
+        for directory in std::iter::once(root.clone()).chain(directories(&root)) {
+            if directory.starts_with(root.join(".cache/evidence/")) {
+                continue;
+            }
+            assert!(
+                retry_disk
+                    .events
+                    .contains(&Event::SyncDir(directory.clone())),
+                "effect {fail_at}: the retry reports success without syncing {directory:?}: {:?}",
+                retry_disk.events
+            );
+        }
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

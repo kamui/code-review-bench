@@ -60,7 +60,9 @@ fn text(value: &Value) -> Result<&str> {
 }
 
 /// `recover_evidence.manifest`: the original manifest, retargeted at the recovery release's copies.
-fn recovery_manifest(root: &PyPath, name: &str) -> Result<Value> {
+/// `source` is the raw `--source` bytes; one that is not UTF-8 matches no source, as its `surrogateescape` text
+/// equals no JSON string.
+fn recovery_manifest(root: &PyPath, source: &[u8]) -> Result<Value> {
     let index = read(&root.join(RECOVERY_INDEX.as_bytes()))?;
     if !optional(&index, "schema_version")?
         .is_some_and(|version| version.py_eq(&Value::Int("1".to_string())))
@@ -69,7 +71,10 @@ fn recovery_manifest(root: &PyPath, name: &str) -> Result<Value> {
     }
     let mut records = Vec::new();
     for entry in items(get(&index, "sources")?)? {
-        if get(entry, "name")?.py_eq(&Value::Str(name.to_string())) {
+        let name = get(entry, "name")?;
+        if std::str::from_utf8(source)
+            .is_ok_and(|source| name.py_eq(&Value::Str(source.to_string())))
+        {
             records.push(entry);
         }
     }
@@ -130,11 +135,11 @@ fn recovery_manifest(root: &PyPath, name: &str) -> Result<Value> {
 pub fn recover(
     store: &mut Store<'_>,
     root: &PyPath,
-    name: &str,
-    paths: Option<&[String]>,
+    source: &[u8],
+    paths: Option<&[Vec<u8>]>,
     offline: bool,
 ) -> Result<()> {
-    let manifest = recovery_manifest(root, name)?;
+    let manifest = recovery_manifest(root, source)?;
     materialize(store, &manifest, root, paths, offline)?;
     Ok(())
 }
@@ -262,18 +267,19 @@ fn read_bytes(path: &PyPath) -> Result<Vec<u8>> {
 }
 
 /// `restore-local.py ROOT_NAME ORIGINAL_RELATIVE_PATH NEW_FILE`, run in the repository `root`: restore one captured
-/// original path to a new file, without writing to its original workspace. Returns the line it prints.
+/// original path to a new file, without writing to its original workspace. Returns the line it prints. `label` and
+/// `original` are raw argument bytes; one that is not UTF-8 matches no JSON string, as with `surrogateescape`.
 pub fn restore_local(
     store: &mut Store<'_>,
     root: &PyPath,
-    label: &str,
-    original: &str,
+    label: &[u8],
+    original: &[u8],
     output_name: &[u8],
 ) -> Result<String> {
     let summary = read(&root.join(CAPTURE_SUMMARY.as_bytes()))?;
     let mut roots = Vec::new();
     for row in items(get(&summary, "roots")?)? {
-        if path_name(text(get(row, "root")?)?) == label {
+        if path_name(text(get(row, "root")?)?).as_bytes() == label {
             roots.push(row);
         }
     }
@@ -296,7 +302,10 @@ pub fn restore_local(
     let document = read_gzip_json(&mapping)?;
     let mut rows = Vec::new();
     for row in items(get(&document, "entries")?)? {
-        if get(row, "path")?.py_eq(&Value::Str(original.to_string())) {
+        let path = get(row, "path")?;
+        if std::str::from_utf8(original)
+            .is_ok_and(|original| path.py_eq(&Value::Str(original.to_string())))
+        {
             rows.push(row);
         }
     }

@@ -930,11 +930,14 @@ fn differs_refusal(root: &PyPath, found: &[Differs]) -> Error {
 /// Every requested destination is checked before anything is restored. An existing destination that is not a
 /// regular file is refused as Python refused it; regular files that differ in size, hash or mode are all listed
 /// in one refusal with a command that moves them aside, and nothing is restored.
+///
+/// `paths` are the raw argument bytes, which argparse decodes with `surrogateescape`, so one that is not UTF-8
+/// names no member.
 pub fn materialize(
     store: &mut Store<'_>,
     document: &Value,
     root: &PyPath,
-    paths: Option<&[String]>,
+    paths: Option<&[Vec<u8>]>,
     offline: bool,
 ) -> Result<Vec<PyPath>> {
     let manifest = validate(document, true)?;
@@ -944,19 +947,31 @@ pub fn materialize(
         .flat_map(|package| package.members.iter().map(|member| member.path.as_str()))
         .collect();
     let requested: BTreeSet<&str> = match paths {
-        Some(paths) => paths.iter().map(String::as_str).collect(),
+        Some(paths) => {
+            let mut absent: Vec<Vec<u32>> = paths
+                .iter()
+                .filter(|path| {
+                    std::str::from_utf8(path).map_or(true, |path| !indexed.contains(path))
+                })
+                .map(|path| pytext::surrogateescape(path))
+                .collect();
+            absent.sort();
+            absent.dedup();
+            if !absent.is_empty() {
+                let listed: Vec<String> = absent.iter().map(|path| pytext::repr(path)).collect();
+                return Err(violation(format!(
+                    "paths absent from manifest: [{}]",
+                    listed.join(", ")
+                )));
+            }
+            indexed
+                .iter()
+                .copied()
+                .filter(|member| paths.iter().any(|path| path == member.as_bytes()))
+                .collect()
+        }
         None => indexed.clone(),
     };
-    let absent: Vec<String> = requested
-        .difference(&indexed)
-        .map(|path| pytext::repr_str(path))
-        .collect();
-    if !absent.is_empty() {
-        return Err(violation(format!(
-            "paths absent from manifest: [{}]",
-            absent.join(", ")
-        )));
-    }
     let mut plan: Vec<(&Package, Vec<&Member>)> = Vec::new();
     let mut differs = Vec::new();
     for package in &manifest.packages {
@@ -1002,7 +1017,32 @@ pub fn materialize(
     for (package, missing) in plan {
         restore_package(store, &manifest, package, &missing, root, offline)?;
     }
-    requested.iter().map(|path| confined(root, path)).collect()
+    let destinations: Vec<PyPath> = requested
+        .iter()
+        .map(|path| confined(root, path))
+        .collect::<Result<_>>()?;
+    sync_dirs(store.disk, &settled_directories(root, &destinations))?;
+    Ok(destinations)
+}
+
+/// Every directory from `root` down to each destination, and the cache, so success also settles links an
+/// interrupted earlier fetch made but never synced.
+fn settled_directories(root: &PyPath, destinations: &[PyPath]) -> BTreeSet<Vec<u8>> {
+    let below_root = |path: &PyPath| path.as_bytes().len() >= root.as_bytes().len();
+    let mut directories: BTreeSet<Vec<u8>> = destinations
+        .iter()
+        .flat_map(parents)
+        .filter(below_root)
+        .map(|directory| directory.as_bytes().to_vec())
+        .collect();
+    let cache = root.join(b".cache/evidence");
+    directories.extend(
+        std::iter::once(cache.clone())
+            .chain(parents(&cache))
+            .filter(|directory| below_root(directory) && directory.to_path_buf().is_dir())
+            .map(|directory| directory.as_bytes().to_vec()),
+    );
+    directories
 }
 
 fn restore_package(
@@ -1150,7 +1190,13 @@ pub fn resolve(
                 "locator conflicts with frozen hash: {name}"
             )));
         }
-        materialize(store, document, root, Some(&[name.to_string()]), offline)?;
+        materialize(
+            store,
+            document,
+            root,
+            Some(&[name.as_bytes().to_vec()]),
+            offline,
+        )?;
     }
     let changed = match sha256 {
         _ if !path.is_file() => true,

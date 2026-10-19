@@ -103,11 +103,17 @@ one-time check read all 33 published packages, from the 19 manifests in `bench/e
 `pack` and `publish` stay in `evidence_store.py`. Packages are read through `bench_tools::archive`, so a fetch refuses
 what [archives](#archives) refuses; the evidence-store v3 decisions record each form Python restored. Restoration is
 durable: each downloaded archive and restored member is written to a temporary file in `.cache/evidence`, synced, then
-hard-linked into place, and the directory is synced. A receipt is written to a synced temporary file and linked, so an
+hard-linked into place, and the directory is synced. Before it reports success, `fetch` also syncs every directory
+from the root to each requested file and the cache, so a retry settles links an interrupted fetch made but never
+synced. A receipt is written to a synced temporary file and linked, so an
 interrupted `verify --receipt` leaves no receipt. A fetch checks every requested destination before it restores any:
 a changed regular file is refused with its expected and found size, SHA-256 and mode, and the shell commands that
 move it aside under `.cache/evidence/moved-aside/<found sha256>/`; any other file there is refused as Python refuses
-it. `tests/evidence.rs` injects a failure at each disk effect and checks that a retry restores the package.
+it. `tests/evidence.rs` injects a failure at each disk effect and checks that a retry restores the package and
+syncs every directory it relies on. `--path`, `--source` and `restore-local`'s names keep their argument bytes: one
+that is not UTF-8 names nothing, as argparse's `surrogateescape` text matches no JSON string
+(`fetch-non-utf8-path-names-no-member`). `resolve`, which has no Python command, takes `PATH` and `--sha256` as UTF-8
+only.
 
 `bench-tools export-explorer evidence --restore` resolves each listed file the same way, so `export_explorer.py` no
 longer imports `evidence_store`. `bun run evidence:fetch` and the Pages and rates workflows run `evidence fetch`;

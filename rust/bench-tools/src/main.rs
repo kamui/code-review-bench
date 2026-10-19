@@ -311,13 +311,13 @@ enum EvidenceCommand {
     #[command(infer_long_args = true)]
     Resolve {
         #[arg(long, allow_negative_numbers = true)]
-        sha256: Option<OsString>,
+        sha256: Option<String>,
         #[arg(long, allow_negative_numbers = true)]
         root: Option<OsString>,
         #[arg(long)]
         offline: bool,
         #[arg(allow_negative_numbers = true)]
-        path: OsString,
+        path: String,
     },
     /// Restore an exact package copy from the recorded recovery release.
     #[command(infer_long_args = true)]
@@ -1041,12 +1041,8 @@ fn evidence_root(root: Option<&OsStr>) -> Result<PyPath, ExitCode> {
     }
 }
 
-fn lossy(value: &OsStr) -> String {
-    String::from_utf8_lossy(pytext::os_bytes(value)).into_owned()
-}
-
-fn lossy_paths(paths: &[OsString]) -> Option<Vec<String>> {
-    (!paths.is_empty()).then(|| paths.iter().map(|path| lossy(path)).collect())
+fn raw_paths(paths: Vec<OsString>) -> Option<Vec<Vec<u8>>> {
+    (!paths.is_empty()).then(|| paths.into_iter().map(bytes).collect())
 }
 
 /// How `evidence_store.main` reports an outcome: violations on stdout with exit 1, I/O on stderr with exit 2.
@@ -1098,7 +1094,7 @@ fn run_evidence(command: EvidenceCommand) -> Result<ExitCode, ExitCode> {
                         &mut store,
                         &document,
                         &root,
-                        lossy_paths(&path).as_deref(),
+                        raw_paths(path).as_deref(),
                         offline,
                     )
                 })
@@ -1125,14 +1121,8 @@ fn run_evidence(command: EvidenceCommand) -> Result<ExitCode, ExitCode> {
             path,
         } => {
             let root = evidence_root(root.as_deref())?;
-            evidence::resolve(
-                &mut store,
-                &root,
-                &lossy(&path),
-                sha256.as_deref().map(lossy).as_deref(),
-                offline,
-            )
-            .map(|_| "resolve: verified".to_string())
+            evidence::resolve(&mut store, &root, &path, sha256.as_deref(), offline)
+                .map(|_| "resolve: verified".to_string())
         }
         EvidenceCommand::Recover {
             source,
@@ -1144,8 +1134,8 @@ fn run_evidence(command: EvidenceCommand) -> Result<ExitCode, ExitCode> {
             evidence::recovery::recover(
                 &mut store,
                 &root,
-                &lossy(&source),
-                lossy_paths(&path).as_deref(),
+                pytext::os_bytes(&source),
+                raw_paths(path).as_deref(),
                 offline,
             )
             .map(|()| "Recovery copy verified and restored.".to_string())
@@ -1179,8 +1169,8 @@ fn run_restore_local(
     match evidence::recovery::restore_local(
         &mut store,
         &root,
-        &lossy(label),
-        &lossy(original),
+        pytext::os_bytes(label),
+        pytext::os_bytes(original),
         pytext::os_bytes(output),
     ) {
         Ok(line) => {
