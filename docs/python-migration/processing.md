@@ -116,8 +116,6 @@ recorded decision.
   naming the file. Python exited 1.
 - A lone surrogate escape such as `"\ud800"` and JSON nested more than 1,000 levels deep are refused, exiting 2.
   Python kept the surrogate, and its own nesting limit depends on its version and stack.
-- `repr` in a diagnostic escapes the non-printable characters Python escapes, except unassigned code points outside
-  the noncharacters, because the crate carries no table of assigned code points.
 - `diff-identity` has no `--self-test`; `cargo test` and the corpus cover it. It accepts options between
   positional arguments, which argparse refuses for some orders.
 - `normalize-review` has no `--self-test`, and options must be spelled in full; argparse also accepted unique prefixes.
@@ -175,6 +173,12 @@ file. `derive_packet.py` raised an uncaught `UnicodeDecodeError`, exiting 1 with
 3.14's `\d` does. `derive_packet.py` followed the running interpreter's Unicode database, so it missed every digit
 that database lacked: the 80 added in Unicode 16.0 on CI's Python 3.12, and 110 on Python 3.10, 30 of which predate
 Unicode 16.0.
+
+`derive-packet-unassigned-path` and `derive-packet-unicode-15-1-path` pin how `repr` quotes text in every
+bench-tools diagnostic, recorded in `derive-packet-decisions.v6.json`: it escapes exactly the code points Python
+3.14's `str.isprintable()` rejects, unassigned ones included. Python escaped the characters its own Unicode database
+lacked, so the Rust output differs on 5,812 code points added in Unicode 15.1 and 16.0 from CI's Python 3.12, and on
+11,130 from Python 3.10.
 
 Diagnostics keep the Python program names, `roster.py:`, `diff_identity.py:`, `normalize_review.py:`,
 `normalize_thermo.py:`, `derive_packet.py:`, `check_manifest.py:`, `rates.py:` and `upstream.py:`, so saved stderr
