@@ -54,7 +54,7 @@ A bridge lets a Python caller run a Rust command until the caller itself moves t
 
 | Bridge | Removal condition | Owner |
 | --- | --- | --- |
-| `build_packet.py --factual` writes its rendering to a temporary file and runs `bench-tools derive-packet` on it, through `rust_runtime.resolve`. It exits 2 when `bench-tools` is not installed for `HEAD`, and when the rendering holds a carriage return, which the command's universal-newline reading would turn into a line end; the in-process call it replaces kept that byte. | `build_packet` moves to Rust and calls `bench_tools::derive_packet::derive` in-process ([#196](https://github.com/kamui/code-review-bench/issues/196)) | #196 |
+| `build_packet.py --factual` writes its rendering to a temporary file and runs `bench-tools derive-packet --no-newline-translation` on it, through `rust_runtime.resolve`, so a carriage return in the rendering stays as the in-process call it replaces kept it. It exits 2 when `bench-tools` is not installed for `HEAD`. | `build_packet` moves to Rust and calls `bench_tools::derive_packet::derive` in-process ([#196](https://github.com/kamui/code-review-bench/issues/196)) | #196 |
 
 The `build_packet --factual` tests skip when `bench-tools` is not installed for `HEAD`. The `Rust runtime` workflow
 installs it and sets `RUST_RUNTIME_REQUIRE_BENCH_TOOLS=1`, so they fail there instead of skipping.

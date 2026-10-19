@@ -151,12 +151,14 @@ fn parse_diff_identity(arguments: &[OsString]) -> Result<Parsed<DiffArguments>, 
 struct DeriveArguments {
     legacy: OsString,
     out: OsString,
+    newlines: derive_packet::Newlines,
 }
 
 fn parse_derive_packet(arguments: &[OsString]) -> Result<Parsed<DeriveArguments>, Misuse> {
     let prog = "bench-tools derive-packet";
     let mut legacy = None;
     let mut out = None;
+    let mut newlines = derive_packet::Newlines::Translate;
     let mut rest = arguments.iter();
     let mut options = true;
     while let Some(argument) = rest.next() {
@@ -170,6 +172,8 @@ fn parse_derive_packet(arguments: &[OsString]) -> Result<Parsed<DeriveArguments>
             legacy = Some(argument.clone());
         } else if bytes == b"-h" || bytes == b"--help" {
             return Ok(Parsed::Help);
+        } else if bytes == b"--no-newline-translation" {
+            newlines = derive_packet::Newlines::Keep;
         } else if let Some(value) =
             option_value("--out", bytes, &mut rest, derive_packet::USAGE, prog)?
         {
@@ -180,7 +184,11 @@ fn parse_derive_packet(arguments: &[OsString]) -> Result<Parsed<DeriveArguments>
     }
     match (legacy, out) {
         (Some(legacy), Some(out)) if !legacy.is_empty() && !out.is_empty() => {
-            Ok(Parsed::Run(DeriveArguments { legacy, out }))
+            Ok(Parsed::Run(DeriveArguments {
+                legacy,
+                out,
+                newlines,
+            }))
         }
         _ => Err(misuse(
             derive_packet::USAGE,
@@ -288,7 +296,7 @@ fn run_derive_packet(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
     };
     let legacy = PyPath::new(pytext::os_bytes(&parsed.legacy));
     let out = PyPath::new(pytext::os_bytes(&parsed.out));
-    match derive_packet::derive_file(&legacy, &out) {
+    match derive_packet::derive_file(&legacy, &out, parsed.newlines) {
         Ok(digest) => {
             let mut line = pytext::os_bytes(&parsed.out).to_vec();
             line.extend_from_slice(format!(" sha256 {digest}\n").as_bytes());

@@ -38,14 +38,14 @@ needs_bench_tools = unittest.skipUnless(bench_tools() or os.environ.get("RUST_RU
                                         "bench-tools is not installed for HEAD")
 
 
-def derive(rendered: str) -> str:
+def derive(rendered: bytes) -> bytes:
     with tempfile.TemporaryDirectory() as temporary:
         legacy, packet = Path(temporary, "packet.legacy.md"), Path(temporary, "packet.md")
-        legacy.write_text(rendered, encoding="utf-8")
-        done = subprocess.run([str(rust_runtime.resolve("bench-tools")), "derive-packet", str(legacy), "--out", str(packet)],
-                              capture_output=True)
+        legacy.write_bytes(rendered)
+        done = subprocess.run([str(rust_runtime.resolve("bench-tools")), "derive-packet", "--no-newline-translation",
+                               str(legacy), "--out", str(packet)], capture_output=True)
         assert done.returncode == 0, done
-        return packet.read_text(encoding="utf-8")
+        return packet.read_bytes()
 FIXTURE = Path(__file__).with_name("test_build_packet_fixture.json")
 
 CUTOFF = "2026-03-10T12:00:00Z"
@@ -801,9 +801,10 @@ class BuildPacketTests(unittest.TestCase):
             with self.subTest(closing_reference=not drop):
                 if drop:
                     self.drop_the_closing_reference()
-                rendered = self.build_ok()
+                self.build_ok()
+                rendered = self.out.read_bytes()
                 factual = self.build_ok("--factual")
-                self.assertEqual(factual, derive(rendered))
+                self.assertEqual(self.out.read_bytes(), derive(rendered))
                 for policy in ["## 8. Run conditions", "Posting identity", "review-head", "issues=",
                                "summary.repository_url", "Mandatory note", "issue #124 effort experiment"]:
                     self.assertNotIn(policy, factual)
@@ -826,15 +827,15 @@ class BuildPacketTests(unittest.TestCase):
         self.assertIn("install --crate rust/bench-tools", result.stderr)
         self.assertFalse(self.out.exists())
 
-    def test_a_factual_rendering_with_a_carriage_return_exits_two(self) -> None:
+    @needs_bench_tools
+    def test_a_factual_packet_keeps_a_carriage_return(self) -> None:
         self.pull()["title"] = "Bound the reconnect\rloop"
         self.build_ok()
+        rendered = self.out.read_bytes()
+        self.assertIn(b"reconnect\rloop", rendered)
+        self.build_ok("--factual")
         self.assertIn(b"reconnect\rloop", self.out.read_bytes())
-        self.out.unlink()
-        result = self.run_cli("--factual")
-        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-        self.assertIn("carriage return", result.stderr)
-        self.assertFalse(self.out.exists())
+        self.assertEqual(self.out.read_bytes(), derive(rendered))
 
     # --- refusals -------------------------------------------------------
 

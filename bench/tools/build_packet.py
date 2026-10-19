@@ -82,8 +82,7 @@ passed through ``bench-tools derive-packet``, which removes the run policy exact
 migrated #137 packets, so a fresh target's packet omits the same elements. A rendering the
 derivation refuses is exit ``1`` with its reasons, and nothing is written. The command runs through
 ``rust_runtime.resolve``, which refuses with exit ``2`` when ``bench-tools`` is not installed for
-``HEAD``. A rendering that holds a carriage return is also exit ``2``: ``derive-packet`` reads its
-input with universal newlines, which would change those bytes.
+``HEAD``.
 
 ``--replay DIR`` reads saved forge responses instead of calling ``gh``: ``graphql.json``, plus
 ``edits.json`` when text was edited after the cutoff, ``ref-pr.json`` and ``ref-pr-comments.json``
@@ -882,8 +881,6 @@ def factual(text: str):
 
     A bridge to the Rust command until build_packet itself moves to Rust (#196).
     """
-    if "\r" in text:
-        raise InputError("the rendering holds a carriage return, which derive-packet would read as a line end")
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import rust_runtime
     try:
@@ -893,9 +890,9 @@ def factual(text: str):
     with tempfile.TemporaryDirectory(prefix="build-packet-") as temporary:
         rendered = os.path.join(temporary, "packet.legacy.md")
         derived = os.path.join(temporary, "packet.md")
-        with open(rendered, "w", encoding="utf-8") as handle:
+        with open(rendered, "w", encoding="utf-8", newline="") as handle:
             handle.write(text)
-        command = [executable, "derive-packet", rendered, "--out", derived]
+        command = [executable, "derive-packet", "--no-newline-translation", rendered, "--out", derived]
         done = subprocess.run(command, capture_output=True, text=True, encoding="utf-8")
         if done.returncode == 1:
             print(done.stdout, end="")

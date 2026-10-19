@@ -22,7 +22,8 @@
 use crate::pytext::{self, PyPath};
 use crate::sha256;
 
-pub const USAGE: &str = "usage: bench-tools derive-packet [-h] --out OUT legacy";
+pub const USAGE: &str =
+    "usage: bench-tools derive-packet [-h] [--no-newline-translation] --out OUT legacy";
 
 const PREAMBLE: [&str; 3] = [
     "Forge state of the pull request frozen at the cutoff named in section 6; records first",
@@ -252,14 +253,26 @@ pub fn derive(text: &str) -> Result<String, StructureError> {
     Ok(out.join("\n") + "\n")
 }
 
+/// How the input's line ends are read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Newlines {
+    /// `Path.read_text`'s universal newlines: `\r\n` and `\r` become `\n`.
+    Translate,
+    /// Every byte as written, for a caller whose text already holds the exact line ends.
+    Keep,
+}
+
 /// Derive `legacy` into `out`, returning the derived text's SHA-256. Nothing is written on failure.
-pub fn derive_file(legacy: &PyPath, out: &PyPath) -> Result<String, Failure> {
-    let text = pytext::read_text(legacy).map_err(|error| match error {
-        pytext::ReadError::Os(message) => Failure::Input(InputError(message)),
-        pytext::ReadError::Decode(message) => {
-            Failure::Input(InputError(format!("{}: {message}", legacy.display())))
-        }
+pub fn derive_file(legacy: &PyPath, out: &PyPath, newlines: Newlines) -> Result<String, Failure> {
+    let bytes = std::fs::read(legacy.to_path_buf())
+        .map_err(|error| Failure::Input(InputError(pytext::os_error(&error, legacy.as_bytes()))))?;
+    let text = pytext::decode_utf8(&bytes).map_err(|message| {
+        Failure::Input(InputError(format!("{}: {message}", legacy.display())))
     })?;
+    let text = match newlines {
+        Newlines::Translate => pytext::universal_newlines(&text),
+        Newlines::Keep => text,
+    };
     let derived = derive(&text).map_err(Failure::Structure)?;
     std::fs::write(out.to_path_buf(), derived.as_bytes())
         .map_err(|error| Failure::Input(InputError(pytext::os_error(&error, out.as_bytes()))))?;
