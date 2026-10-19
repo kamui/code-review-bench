@@ -257,10 +257,24 @@ impl ReadError {
 
 /// `Path.read_text(encoding="utf-8")`: strict UTF-8, then universal newlines.
 pub fn read_text(path: &PyPath) -> Result<String, ReadError> {
-    let bytes = std::fs::read(path.to_path_buf())
-        .map_err(|error| ReadError::Os(os_error(&error, path.as_bytes())))?;
+    read_file_text(path.as_bytes())
+}
+
+/// `open(path, encoding="utf-8").read()` for a path given as written, which an `OSError` quotes unchanged.
+pub fn read_file_text(path: &[u8]) -> Result<String, ReadError> {
+    let bytes = std::fs::read(PathBuf::from(std::ffi::OsString::from_vec(path.to_vec())))
+        .map_err(|error| ReadError::Os(os_error(&error, path)))?;
     let text = decode_utf8(&bytes).map_err(ReadError::Decode)?;
     Ok(universal_newlines(&text))
+}
+
+/// `open(path, "w", encoding="utf-8").write(text)`.
+pub fn write_file_text(path: &[u8], text: &str) -> Result<(), String> {
+    std::fs::write(
+        PathBuf::from(std::ffi::OsString::from_vec(path.to_vec())),
+        text,
+    )
+    .map_err(|error| os_error(&error, path))
 }
 
 /// `bytes.decode("utf-8")`, with the message of the `UnicodeDecodeError` it raises.
@@ -297,6 +311,192 @@ pub fn universal_newlines(text: &str) -> String {
 
 pub fn os_bytes(value: &std::ffi::OsStr) -> &[u8] {
     value.as_bytes()
+}
+
+/// `str.splitlines()`: the line boundaries Python recognizes, without the boundaries themselves.
+pub fn splitlines(text: &str) -> Vec<&str> {
+    let mut lines = Vec::new();
+    let mut start = 0;
+    let mut characters = text.char_indices().peekable();
+    while let Some((index, c)) = characters.next() {
+        let boundary = matches!(
+            c,
+            '\n' | '\r'
+                | '\u{b}'
+                | '\u{c}'
+                | '\u{1c}'
+                | '\u{1d}'
+                | '\u{1e}'
+                | '\u{85}'
+                | '\u{2028}'
+                | '\u{2029}'
+        );
+        if !boundary {
+            continue;
+        }
+        lines.push(&text[start..index]);
+        start = index + c.len_utf8();
+        if c == '\r' && characters.peek().is_some_and(|(_, next)| *next == '\n') {
+            characters.next();
+            start += 1;
+        }
+    }
+    if start < text.len() {
+        lines.push(&text[start..]);
+    }
+    lines
+}
+
+/// The components of an absolute path after `os.path.normpath`: empty and `.` parts dropped, `..` removing
+/// the part before it and nothing at the root.
+fn absolute_parts(path: &[u8]) -> Vec<&[u8]> {
+    let mut parts: Vec<&[u8]> = Vec::new();
+    for part in path.split(|byte| *byte == b'/') {
+        match part {
+            b"" | b"." => {}
+            b".." => {
+                parts.pop();
+            }
+            _ => parts.push(part),
+        }
+    }
+    parts
+}
+
+fn current_dir() -> io::Result<Vec<u8>> {
+    std::env::current_dir().map(|path| path.into_os_string().into_vec())
+}
+
+/// `os.path.relpath(path, start)` for an absolute `path`; a relative `start` is taken from the current
+/// directory, as `os.path.abspath` takes it.
+pub fn relpath(path: &str, start: &[u8]) -> io::Result<String> {
+    let mut absolute_start = Vec::new();
+    if !start.starts_with(b"/") {
+        absolute_start = current_dir()?;
+        absolute_start.push(b'/');
+    }
+    absolute_start.extend_from_slice(start);
+    let start = absolute_parts(&absolute_start);
+    let path = absolute_parts(path.as_bytes());
+    let common = start
+        .iter()
+        .zip(&path)
+        .take_while(|(left, right)| left == right)
+        .count();
+    let mut parts: Vec<&[u8]> = vec![b".."; start.len() - common];
+    parts.extend(&path[common..]);
+    if parts.is_empty() {
+        return Ok(".".to_string());
+    }
+    // Every part above the common prefix is `..` or a part of `path`, which is text.
+    Ok(String::from_utf8_lossy(&parts.join(&b'/')).into_owned())
+}
+
+const ENOTDIR: i32 = 20;
+#[cfg(target_os = "macos")]
+const ELOOP: i32 = 62;
+#[cfg(not(target_os = "macos"))]
+const ELOOP: i32 = 40;
+
+enum Pending {
+    Name(Vec<u8>),
+    /// The symbolic link whose target was pushed above this marker is resolved.
+    Resolved(Vec<u8>),
+}
+
+/// `os.path.realpath(path, strict=strict)` as Python 3.13 and later compute it. With `strict`, a missing
+/// component, a file used as a directory or a symbolic link loop is the `OSError` message naming it;
+/// without, the unresolved remainder is kept as written.
+pub fn realpath(path: &[u8], strict: bool) -> Result<Vec<u8>, String> {
+    use std::collections::HashMap;
+    let mut rest: Vec<Pending> = path
+        .split(|byte| *byte == b'/')
+        .rev()
+        .map(|part| Pending::Name(part.to_vec()))
+        .collect();
+    let mut count = rest.len();
+    let mut resolved = if path.starts_with(b"/") {
+        b"/".to_vec()
+    } else {
+        current_dir().map_err(|error| os_error(&error, b"."))?
+    };
+    let mut seen: HashMap<Vec<u8>, Option<Vec<u8>>> = HashMap::new();
+    let failure = |code: i32, at: &[u8]| os_error(&io::Error::from_raw_os_error(code), at);
+    while count > 0 {
+        let name = match rest.pop() {
+            Some(Pending::Name(name)) => name,
+            Some(Pending::Resolved(link)) => {
+                seen.insert(link, Some(resolved.clone()));
+                continue;
+            }
+            None => break,
+        };
+        count -= 1;
+        if name.is_empty() || name == b"." {
+            continue;
+        }
+        if name == b".." {
+            let cut = resolved.iter().rposition(|byte| *byte == b'/').unwrap_or(0);
+            resolved.truncate(cut.max(1));
+            continue;
+        }
+        let mut candidate = resolved.clone();
+        if candidate != b"/" {
+            candidate.push(b'/');
+        }
+        candidate.extend_from_slice(&name);
+        let candidate_path = PathBuf::from(std::ffi::OsString::from_vec(candidate.clone()));
+        let kind = match std::fs::symlink_metadata(&candidate_path) {
+            Ok(metadata) => metadata.file_type(),
+            Err(error) if strict => return Err(os_error(&error, &candidate)),
+            Err(_) => {
+                resolved = candidate;
+                continue;
+            }
+        };
+        if !kind.is_symlink() {
+            if strict && count > 0 && !kind.is_dir() {
+                return Err(failure(ENOTDIR, &candidate));
+            }
+            resolved = candidate;
+            continue;
+        }
+        if let Some(known) = seen.get(&candidate) {
+            match known {
+                Some(target) => {
+                    resolved = target.clone();
+                    continue;
+                }
+                None if strict => return Err(failure(ELOOP, &candidate)),
+                None => {
+                    resolved = candidate;
+                    continue;
+                }
+            }
+        }
+        let target = match std::fs::read_link(&candidate_path) {
+            Ok(target) => target.into_os_string().into_vec(),
+            Err(error) if strict => return Err(os_error(&error, &candidate)),
+            Err(_) => {
+                resolved = candidate;
+                continue;
+            }
+        };
+        if target.starts_with(b"/") {
+            resolved = b"/".to_vec();
+        }
+        seen.insert(candidate.clone(), None);
+        rest.push(Pending::Resolved(candidate));
+        let parts: Vec<&[u8]> = target.split(|byte| *byte == b'/').collect();
+        count += parts.len();
+        rest.extend(
+            parts
+                .into_iter()
+                .rev()
+                .map(|part| Pending::Name(part.to_vec())),
+        );
+    }
+    Ok(resolved)
 }
 
 #[cfg(test)]
@@ -386,5 +586,63 @@ mod tests {
             os_error(&missing, b"bench/arms/x.json"),
             "[Errno 2] No such file or directory: 'bench/arms/x.json'"
         );
+    }
+
+    #[test]
+    fn lines_and_relative_paths_match_python() {
+        assert_eq!(
+            splitlines("a\r\nb\rc\u{2028}d\u{b}e\n\nf"),
+            ["a", "b", "c", "d", "e", "", "f"]
+        );
+        assert_eq!(splitlines("x\n"), ["x"]);
+        assert!(splitlines("").is_empty());
+        assert_eq!(relpath("/c/src/../a.py", b"/c/").unwrap(), "a.py");
+        assert_eq!(relpath("/c", b"/c").unwrap(), ".");
+        assert_eq!(relpath("//d/x", b"/c/e").unwrap(), "../../d/x");
+    }
+
+    #[test]
+    fn realpath_resolves_links_as_python_does() {
+        let root =
+            std::env::temp_dir().join(format!("bench-tools-realpath-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("dir")).unwrap();
+        std::fs::write(root.join("dir/file"), "").unwrap();
+        std::os::unix::fs::symlink("dir", root.join("link")).unwrap();
+        std::os::unix::fs::symlink("loop", root.join("loop")).unwrap();
+        let canonical = std::fs::canonicalize(&root)
+            .unwrap()
+            .into_os_string()
+            .into_vec();
+        let at = |tail: &str| [root.as_os_str().as_bytes(), tail.as_bytes()].concat();
+        let under = |tail: &str| [canonical.as_slice(), tail.as_bytes()].concat();
+        assert_eq!(
+            realpath(&at("/link/./file"), true).unwrap(),
+            under("/dir/file")
+        );
+        assert_eq!(
+            realpath(&at("/link/missing/../x"), false).unwrap(),
+            under("/dir/x")
+        );
+        assert_eq!(realpath(&at("/loop/x"), false).unwrap(), under("/loop/x"));
+        let missing = realpath(&at("/link/missing/deeper"), true).unwrap_err();
+        assert_eq!(
+            missing,
+            format!(
+                "[Errno 2] No such file or directory: {}",
+                repr(&surrogateescape(&under("/dir/missing")))
+            )
+        );
+        assert!(
+            realpath(&at("/dir/file/x"), true)
+                .unwrap_err()
+                .starts_with("[Errno 20] Not a directory")
+        );
+        assert!(
+            realpath(&at("/loop"), true)
+                .unwrap_err()
+                .contains("Too many levels of symbolic links")
+        );
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

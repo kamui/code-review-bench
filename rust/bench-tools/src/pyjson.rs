@@ -51,7 +51,8 @@ impl Object {
         self.entries.is_empty()
     }
 
-    fn insert(&mut self, key: String, value: Value) {
+    /// `dict[key] = value`: a new key goes last, an existing one keeps its position.
+    pub fn insert(&mut self, key: String, value: Value) {
         match self.index.get(&key) {
             Some(position) => self.entries[*position].1 = value,
             None => {
