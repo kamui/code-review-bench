@@ -146,9 +146,14 @@ recorded decision.
   `check-manifest-decisions.v2.json`. `\w`, `\b`, their negations, and the global flags `(?i)`, `(?m)`, `(?s)`,
   `(?x)` and `(?u)` match as Python 3.14 matches them, from tables Python 3.14.7 generated; `\B` matches an
   empty text, which Python 3.12 does not. Every pattern in a tracked `*.schema.json` is inside the syntax.
+  `check-manifest-decisions.v3.json` records where the pinned Unicode 16.0 tables differ from an older
+  interpreter: `\w` on 5,004 characters against Python 3.12, including the 622 Unicode 15.1 added, `\d` on 80
+  and `(?i)` on 54, each with a case.
 - A schema or manifest that is not UTF-8 exits 2 with the `UnicodeDecodeError` text. Python raised a traceback.
 - `\d` and `int()` accept the decimal digits of Unicode 16.0, as Python 3.14 does; Python 3.12 lacks the digits
-  16.0 added. Lower-casing an Anthropic model or a repository name uses Rust's Unicode tables.
+  16.0 added. `rates-decisions.v4.json` records this for the catalog date, price footnotes and long-prompt rows,
+  and `upstream-decisions.v2.json` for snapshot versions. Lower-casing an Anthropic model or a repository name
+  uses Rust's Unicode tables.
 - `rates check` fetches `https` pages with `curl --disable --fail --location --max-time 20`, so no curl
   configuration file applies, and a network or HTTP failure prints curl's message where urllib printed its own;
   both exit 2. `rates-transport-failure` pins this change, decided in `rates-decisions.v2.json`, by connecting to a
