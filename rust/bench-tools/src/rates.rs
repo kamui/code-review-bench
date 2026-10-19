@@ -47,7 +47,7 @@ pub trait Fetch {
     fn fetch(&self, url: &str) -> Result<Vec<u8>, String>;
 }
 
-/// `file:` URLs read a local file, as `urllib` does; other URLs are fetched with `curl`.
+/// `file:` URLs, in any letter case, read a local file, as `urllib` does; other URLs are fetched with `curl`.
 pub struct Network;
 
 fn percent_decode(text: &str) -> Vec<u8> {
@@ -74,7 +74,11 @@ fn percent_decode(text: &str) -> Vec<u8> {
 
 impl Fetch for Network {
     fn fetch(&self, url: &str) -> Result<Vec<u8>, String> {
-        if let Some(rest) = url.strip_prefix("file:") {
+        if let Some(rest) = url
+            .get(..5)
+            .filter(|scheme| scheme.eq_ignore_ascii_case("file:"))
+            .map(|_| &url[5..])
+        {
             let local = match rest.strip_prefix("//") {
                 Some(authority) => {
                     let (host, path) =

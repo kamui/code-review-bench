@@ -89,7 +89,7 @@ recorded decision.
 - `rates check` fetches `https` pages with `curl --disable --fail --location --max-time 20`, so no curl
   configuration file applies, and a network or HTTP failure prints curl's message where urllib printed its own;
   both exit 2. `rates-transport-failure` pins this change, decided in `rates-decisions.v2.json`, by connecting to a
-  closed loopback port. `file:` URLs are read as urllib reads them.
+  closed loopback port. `file:` URLs, in any letter case, are read as urllib reads them.
   `--source PROVIDER=URL` is new. A successful `--json` receipt is outside the corpus because `checked_at` is the
   current time. A date out of range uses Python 3.14's `datetime` wording, and an integer price too large for a
   float exits 2 where Python raised `OverflowError`. `rates refresh` is refused with a pointer to `rates.py`.
