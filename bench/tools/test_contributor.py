@@ -791,8 +791,9 @@ class ContributorTests(unittest.TestCase):
 
         rust_runtime.select(self.store, "bench-tools", self.pin)
         entry = self.store / "bench-tools" / self.pin["sha256"]
-        for number, name in enumerate(("bench-tools", "receipt.json"), 2):
-            with self.subTest(changed=name):
+        launch = {"BENCH_RUST_BENCH_TOOLS": str(entry / "bench-tools"), "BENCH_RUST_BENCH_TOOLS_SHA256": self.pin["sha256"]}
+        for number, (name, override) in enumerate((("bench-tools", {}), ("receipt.json", {}), ("receipt.json", launch)), 2):
+            with self.subTest(changed=name, override=bool(override)):
                 with self.no_charge_run():
                     code, output = self.invoke("run", "review", "--harness", "codex", "--model", "gpt-6.1-sol",
                                                "--tasks", "task-b", "--attempt-usd", "1")
@@ -803,12 +804,18 @@ class ContributorTests(unittest.TestCase):
                 (entry / name).write_bytes(original + b"\n")
                 try:
                     before = self.tree()
-                    with self.no_charge_run():
+                    with self.no_charge_run(), patch.dict(os.environ, override):
                         code, output = self.invoke("run", "--resume", f"R{number}", "--yes")
                     self.assertEqual(code, 1, output)
                     self.assertIn("no longer hashes to its pin", output)
                     self.assertEqual(self.tree(), before)
                     self.assertEqual(len(self.calls), 1, "no review ran with a changed pinned runtime")
+                    with self.stub_gh(), patch.dict(os.environ, override):
+                        code, output = self.invoke("submit", "--yes")
+                    self.assertEqual(code, 1, output)
+                    self.assertIn("no longer hashes to its pin", output)
+                    self.assertEqual(self.tree(), before)
+                    self.assertEqual(self.uploads(), [])
                 finally:
                     (entry / name).write_bytes(original)
 

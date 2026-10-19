@@ -136,13 +136,17 @@ each job that fetches installs `bench-tools` first. `prune_workspace.py` still c
 `pack` keeps Python's selection shape, refusals, part order and messages, and restores each archive before linking it
 into place. `publish` keeps the draft and 1,000-asset checks, never replaces an asset, reads the release after a failed
 upload instead of uploading again, checks the asset's size and identity, and downloads and restores every package
-before it writes the published manifest; an existing published manifest is verified, not uploaded again. Each package
+before it writes the published manifest; an existing published manifest is verified, and its directories synced, not
+uploaded again. `check-package` refuses a directory it cannot list. Each package
 and manifest is written as receipts are: to a synced temporary file, linked to its name without replacing one, and
 the directory synced. `tests/publication.rs` interrupts every disk effect of both commands, and injects a changed
 input, a failed link, a lost upload response, a partial asset, a rejected upload and a corrupted download.
-`evidence-store-decisions.v6.json` records the changes from Python, each with its case: durable writes
-(`publish-leftover-temporary`), `--part-bytes` read with Unicode 16.0 digits (`pack-unicode-16-digit-part-bytes`), and
-a selection holding a lone surrogate escape refused (`pack-lone-surrogate-selection`). A receipt or published manifest
+`evidence-store-decisions.v6.json` and `v7` record the changes from Python, each with its case: durable writes
+(`publish-leftover-temporary`), `--part-bytes` read with Unicode 16.0 digits (`pack-unicode-16-digit-part-bytes`), a
+selection holding a lone surrogate escape refused (`pack-lone-surrogate-selection`), dash-led option values read by
+Python 3.14's argparse rule (`pack-dash-led-out-python-3-14-rule`), and clap's wording for an invalid `--part-bytes`
+(`pack-int-control-whitespace-part-bytes`). `pack` and `publish` attach a dash-led value such as `-١` to its option,
+as `build-packet` does (`pack-unicode-negative-out`, `publish-unicode-negative-out`). A receipt or published manifest
 that cannot be created now names itself, not its temporary file, as `open(path, 'x')` does
 (`verify-receipt-unwritable-directory`, `publish-unwritable-directory`). `pack-restored-by-python` packs and publishes
 through Rust and restores through the retained `evidence_store.resolve`.

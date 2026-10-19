@@ -1268,14 +1268,17 @@ fn run_restore_local(
 }
 
 /// argparse reads a dash-led argument as a value when it names no option and reads as a negative number or holds
-/// a space; `build-packet-option-values-with-leading-dash` and `grading-validation`'s `dash-led-*` cases pin that.
-/// clap takes only numbers, so before it parses them, build-packet's and grading validate's arguments attach such
-/// a value to its option with `=`, and grading validate's positional moves after `--`.
+/// a space; `build-packet-option-values-with-leading-dash`, `grading-validation`'s `dash-led-*` cases and
+/// `pack-unicode-negative-out` pin that. clap takes only numbers, so before it parses them, the arguments of
+/// build-packet, grading validate, evidence pack and evidence publish attach such a value to its option with `=`,
+/// and grading validate's positional moves after `--`.
 fn attach_dash_led_values(arguments: Vec<OsString>) -> Vec<OsString> {
     let name = |index: usize| arguments.get(index).map(|name| pytext::os_bytes(name));
     let path: &[&str] = match (name(1), name(2)) {
         (Some(b"build-packet"), _) => &["build-packet"],
         (Some(b"grading"), Some(b"validate")) => &["grading", "validate"],
+        (Some(b"evidence"), Some(b"pack")) => &["evidence", "pack"],
+        (Some(b"evidence"), Some(b"publish")) => &["evidence", "publish"],
         _ => return arguments,
     };
     let mut command = Cli::command();

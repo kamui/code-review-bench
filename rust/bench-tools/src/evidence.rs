@@ -489,6 +489,22 @@ fn parent(path: &PyPath) -> PyPath {
         .unwrap_or_else(|| PyPath::new(b"."))
 }
 
+/// The directories from `path`'s parent up, each of which an interrupted earlier write may have given an entry it
+/// never synced.
+fn reaching(path: &PyPath) -> BTreeSet<Vec<u8>> {
+    let directory = parent(path);
+    std::iter::once(directory.clone())
+        .chain(parents(&directory))
+        .map(|ancestor| ancestor.as_bytes().to_vec())
+        .collect()
+}
+
+/// Sync the directories that reach an existing record, so a record an interrupted call linked is durable before a
+/// retry reports it.
+fn sync_reaching(disk: &mut dyn Disk, path: &PyPath) -> Result<()> {
+    sync_dirs(disk, &reaching(path))
+}
+
 /// Sync each directory that gained an entry: the parents of new directories and of new links.
 fn sync_dirs(disk: &mut dyn Disk, directories: &BTreeSet<Vec<u8>>) -> Result<()> {
     for directory in directories {
@@ -760,11 +776,7 @@ pub fn verify_remote(store: &mut Store<'_>, manifest: &Value) -> Result<()> {
 pub fn write_new(disk: &mut dyn Disk, path: &PyPath, value: &Value) -> Result<()> {
     let directory = parent(path);
     make_dirs(&directory)?;
-    // An interrupted earlier call may have created any of these without syncing its entry.
-    let reaching: BTreeSet<Vec<u8>> = std::iter::once(directory.clone())
-        .chain(parents(&directory))
-        .map(|ancestor| ancestor.as_bytes().to_vec())
-        .collect();
+    let reaching = reaching(path);
     let encoded = format!(
         "{}\n",
         pyjson::dumps(

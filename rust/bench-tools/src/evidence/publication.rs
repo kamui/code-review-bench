@@ -8,13 +8,15 @@
 use super::{
     ASSET_LIMIT, Disk, Member, Package, Result, Store, TempDir, Upload, archive_failure, array,
     checked_file, digest, exists, field, is_symlink, logical_value, make_dirs, object, open,
-    os_failure, parent, parents, read, unpack, validate, verify_remote, violation, write_new,
+    os_failure, parent, parents, read, sync_reaching, unpack, validate, verify_remote, violation,
+    write_new,
 };
 use crate::archive::PackageWriter;
 use crate::pyjson::{Object, Value};
 use crate::pytext::PyPath;
 use std::collections::{BTreeSet, HashSet};
 use std::io;
+use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::PermissionsExt;
 
 /// `evidence_store.PART_LIMIT`, the default `--part-bytes`.
@@ -306,7 +308,11 @@ pub fn check_package(store: &mut Store<'_>, directory: &PyPath) -> Result<()> {
         .map(|package| package.asset.as_bytes().to_vec())
         .collect();
     expected.insert(b"manifest.json".to_vec());
-    let mut found = crate::pyfs::names(directory.as_bytes());
+    let listing_failure = |error: io::Error| os_failure(&error, directory.as_bytes());
+    let mut found = std::fs::read_dir(directory.to_path_buf())
+        .map_err(listing_failure)?
+        .map(|entry| Ok(entry.map_err(listing_failure)?.file_name().into_vec()))
+        .collect::<Result<Vec<_>>>()?;
     found.sort();
     if let Some(extra) = found.iter().find(|name| !expected.contains(*name)) {
         return Err(violation(format!(
@@ -382,6 +388,7 @@ pub fn publish(
             return Err(violation("refusing to replace a published manifest"));
         }
         verify_remote(store, &existing)?;
+        sync_reaching(store.disk, destination)?;
         return Ok(existing);
     }
     let directory = parent(manifest_path);

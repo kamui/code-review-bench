@@ -148,10 +148,11 @@ def frozen_runtime(run, manifest):
 
 
 def pinned_runtime(run, manifest):
-    """The executable of the bench-tools a run froze, checked against its executable and receipt hashes."""
-    frozen_runtime(run, manifest)
+    """The executable of the bench-tools a run froze, from the store, checked against its executable and receipt
+    hashes. A queue launch's ``BENCH_RUST_BENCH_TOOLS`` override is not consulted, so it cannot skip the receipt check."""
+    pin = frozen_runtime(run, manifest)
     try:
-        return rust_runtime.for_run(BENCH_TOOLS, run)
+        return rust_runtime.check(rust_runtime.located(rust_runtime.default_store()), BENCH_TOOLS, pin)[0]
     except RUNTIME_ERRORS as error:
         raise Refused(f"{run.name}: {error}; {INSTALL}") from None
 

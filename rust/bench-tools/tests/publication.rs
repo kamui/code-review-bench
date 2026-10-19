@@ -208,6 +208,27 @@ fn pack_syncs_each_archive_before_linking_it_and_links_the_manifest_last() {
 }
 
 #[test]
+fn check_package_refuses_a_directory_it_cannot_list() {
+    let root = scratch("unlistable");
+    pack(&root, &mut System).unwrap();
+    let out = root.join("out");
+    std::fs::write(out.join("extra.txt"), b"extra\n").unwrap();
+    std::fs::set_permissions(&out, std::fs::Permissions::from_mode(0o300)).unwrap();
+    let mut store = Store {
+        remote: &mut Release::default(),
+        disk: &mut System,
+        now: &fixed_clock,
+        temporary: py(&root),
+    };
+    let checked = publication::check_package(&mut store, &py(&out));
+    std::fs::set_permissions(&out, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(
+        matches!(&checked, Err(Error::Io(message)) if message.contains("Permission denied")),
+        "{checked:?}"
+    );
+}
+
+#[test]
 fn an_interrupted_pack_leaves_only_synced_whole_files() {
     let total = {
         let root = scratch("pack-count");
@@ -547,8 +568,13 @@ fn an_interrupted_publish_leaves_no_manifest_and_its_retry_uploads_nothing_more(
             linked,
             "effect {fail_at}: a manifest exists exactly when its synced bytes were linked"
         );
-        if !linked {
-            publish(&root, &mut release, &mut System).unwrap();
+        let mut retry = Recording::new(None);
+        publish(&root, &mut release, &mut retry).unwrap();
+        if linked {
+            assert!(
+                retry.events.contains(&Event::SyncDir(root.clone())),
+                "effect {fail_at}: a retry syncs the directory of the manifest it finds"
+            );
         }
         assert_eq!(release.uploads, 1, "effect {fail_at}");
         std::fs::remove_dir_all(&root).unwrap();
