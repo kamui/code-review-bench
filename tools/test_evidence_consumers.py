@@ -20,11 +20,15 @@ import rust_runtime
 from test_evidence_store import FakeGitHub
 import behavior_contract
 import collect_run
-import import_benchmark
 
 
 def rust_evidence(remote, *arguments):
     """Run `bench-tools evidence` with the corpora's stub gh answering from the fake release's current assets."""
+    return rust_bench_tools(remote, None, 'evidence', *arguments)
+
+
+def rust_bench_tools(remote, cwd, *arguments):
+    """Run `bench-tools` in `cwd` with the corpora's stub gh answering from the fake release's current assets."""
     with tempfile.TemporaryDirectory() as tools:
         tools = Path(tools)
         state = tools / 'state'
@@ -38,8 +42,8 @@ def rust_evidence(remote, *arguments):
         (tools / 'gh').write_text(f'#!/bin/sh\nexec {sys.executable} {tools / "gh.py"} "$@"\n')
         (tools / 'gh').chmod(0o755)
         environment = {**os.environ, 'PATH': f'{tools}{os.pathsep}{os.environ["PATH"]}', 'CONTRACT_GH_STATE': str(state)}
-        return subprocess.run([str(rust_runtime.resolve('bench-tools')), 'evidence', *arguments],
-                              capture_output=True, text=True, env=environment)
+        return subprocess.run([str(rust_runtime.resolve('bench-tools')), *arguments],
+                              capture_output=True, text=True, env=environment, cwd=cwd)
 
 
 class ColdConsumersTest(unittest.TestCase):
@@ -124,8 +128,8 @@ class ColdConsumersTest(unittest.TestCase):
                 with patch.object(collect_run, 'ROOT', cold):
                     collect_run.collect(cold / 'bench/runs/example')
                 self.assertFalse((cold / grading_archive).exists())
-                with patch.object(import_benchmark, 'ROOT', cold), patch.object(import_benchmark, 'MANIFEST', cold / 'bench/import-manifest.json'):
-                    import_benchmark.verify()
+                checked = rust_bench_tools(remote, cold, 'import-benchmark', '--check')
+                self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
                 native_cold = cold / native_out.relative_to(origin)
                 native_artifacts.verify(native_cold)
                 native_artifacts.restore(native_cold, base / 'restored-native')

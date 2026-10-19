@@ -90,7 +90,7 @@ python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select
 python3 bench/tools/rust_runtime.py exec bench-tools -- evidence fetch \
   --manifest bench/evidence/manifests/example-v1.json \
   --path artifacts/transcripts/example/att-001.tar.gz
-python3 tools/import_benchmark.py --check
+python3 bench/tools/rust_runtime.py exec bench-tools -- import-benchmark --check
 python3 tools/export_explorer.py
 ```
 
