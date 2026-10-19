@@ -21,10 +21,6 @@ pub struct Arguments {
     pub arm: Arm,
 }
 
-fn word(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
-}
-
 /// One character of a lowercase pattern under `re.IGNORECASE`, which also folds `İ` and `ı` to `i` and `ſ`
 /// to `s`.
 fn folds(c: char, pattern: char) -> bool {
@@ -57,7 +53,7 @@ fn spaces(chars: &[char], at: usize) -> Option<usize> {
 }
 
 fn statement_at(chars: &[char], start: usize) -> bool {
-    if start > 0 && word(chars[start - 1]) {
+    if start > 0 && pytext::is_word(chars[start - 1]) {
         return false;
     }
     let Some(after) = literal(chars, start, "no").and_then(|at| spaces(chars, at)) else {
@@ -77,7 +73,8 @@ fn statement_at(chars: &[char], start: usize) -> bool {
         Some(after),
     ];
     options.into_iter().flatten().any(|at| {
-        literal(chars, at, "findings").is_some_and(|end| chars.get(end).is_none_or(|c| !word(*c)))
+        literal(chars, at, "findings")
+            .is_some_and(|end| chars.get(end).is_none_or(|c| !pytext::is_word(*c)))
     })
 }
 
@@ -312,6 +309,7 @@ mod tests {
             "No fındings",
             "No findingſ",
             "(no findings)",
+            "No findings\u{345}",
         ] {
             assert!(explicit_empty(summary), "{summary:?}");
         }
@@ -324,6 +322,7 @@ mod tests {
             "Nofindings",
             "No code_quality findings",
             "No findingsé",
+            "No findings\u{2160}",
         ] {
             assert!(!explicit_empty(summary), "{summary:?}");
         }

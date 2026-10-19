@@ -679,20 +679,19 @@ pub struct Bullet<'a> {
     pub end: Option<&'a str>,
 }
 
-/// `^- \[(P\d)\] (.+?) — (\S+?):(\d+)(?:-(\d+))?\s*$`, with ASCII digits.
+/// `^- \[(P\d)\] (.+?) — (\S+?):(\d+)(?:-(\d+))?\s*$`.
 pub fn codex_bullet(line: &str) -> Option<Bullet<'_>> {
-    let bytes = line.as_bytes();
-    if !line.starts_with("- [P") || !bytes.get(4).is_some_and(u8::is_ascii_digit) {
-        return None;
-    }
-    let body = line.get(5..)?.strip_prefix("] ")?;
+    let digit = line.strip_prefix("- [P")?.chars().next()?;
+    pytext::decimal_value(digit)?;
+    let priority_end = 4 + digit.len_utf8();
+    let body = line[priority_end..].strip_prefix("] ")?;
     let separator = " \u{2014} ";
     let mut from = body.chars().next()?.len_utf8();
     while let Some(found) = body.get(from..).and_then(|rest| rest.find(separator)) {
         let at = from + found;
         if let Some((path, start, end)) = location(&body[at + separator.len()..]) {
             return Some(Bullet {
-                priority: &line[3..5],
+                priority: &line[3..priority_end],
                 title: &body[..at],
                 path,
                 start,
@@ -710,7 +709,8 @@ fn location(text: &str) -> Option<(&str, &str, Option<&str>)> {
     if core.chars().any(pytext::is_space) {
         return None;
     }
-    let digits = |text: &str| !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit());
+    let digits =
+        |text: &str| !text.is_empty() && text.chars().all(|c| pytext::decimal_value(c).is_some());
     for (colon, _) in core.match_indices(':').filter(|(colon, _)| *colon > 0) {
         let suffix = &core[colon + 1..];
         let (start, end) = match suffix.split_once('-') {
@@ -724,9 +724,14 @@ fn location(text: &str) -> Option<(&str, &str, Option<&str>)> {
     None
 }
 
-/// `int(digits)` for ASCII digits.
+/// `int(digits)` for the digits `\d` matched.
 fn integer(digits: &str) -> Value {
-    let trimmed = digits.trim_start_matches('0');
+    let ascii: String = digits
+        .chars()
+        .filter_map(pytext::decimal_value)
+        .filter_map(|value| char::from_digit(value, 10))
+        .collect();
+    let trimmed = ascii.trim_start_matches('0');
     Value::Int(if trimmed.is_empty() { "0" } else { trimmed }.to_string())
 }
 
@@ -1178,7 +1183,14 @@ mod tests {
             codex_bullet("- [P2]   \u{2014} a:1").map(|bullet| bullet.title),
             Some(" ")
         );
-        assert!(codex_bullet("- [P\u{661}] A \u{2014} a:1").is_none());
+        let bullet = codex_bullet("- [P\u{661}] A \u{2014} a:\u{661}\u{662}-\u{1d7ce}").unwrap();
+        assert_eq!(
+            (bullet.priority, bullet.start, bullet.end),
+            ("P\u{661}", "\u{661}\u{662}", Some("\u{1d7ce}"))
+        );
+        assert!(matches!(integer(bullet.start), Value::Int(digits) if digits == "12"));
+        assert!(codex_bullet("- [P\u{b2}] A \u{2014} a:1").is_none());
+        assert!(codex_bullet("- [P2] A \u{2014} a:\u{b2}").is_none());
         assert_eq!(
             overall_values("\"overall_correctness\": \"x\" \\\"overall_correctness\\\":\\\"y\\\""),
             ["x", "y"]

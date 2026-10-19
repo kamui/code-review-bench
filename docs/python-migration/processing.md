@@ -96,11 +96,12 @@ recorded decision.
 - `normalize-review` has no `--self-test`, and options must be spelled in full; argparse also accepted unique prefixes.
 - Where the normalizers' Python raised a traceback and exited 1, they exit 2 with a message: an input that is not
   UTF-8, a shape such as a `findings` value that is not a list, an `--out` that cannot be written, a timing sidecar that
-  is not an object, and a fenced JSON array whose integer exceeds Python's digit limit.
-- `\d` in the Codex bullet pattern matches ASCII digits only. Python's matches every Unicode decimal digit, a set that
-  depends on its version, so a bullet with other digits is kept raw here.
-- The thermo no-findings statement's `\b` uses Rust's Unicode alphanumeric property, which differs from Python's
-  `str.isalnum` for some combining marks and between Unicode versions.
+  is not an object, and a fenced JSON array whose integer exceeds Python's digit limit. The v2 decisions of both
+  normalizer corpora record each case. In `normalize-review.v1.json` they carry the retained Python's traceback as a
+  `baseline_defect`, so its corpus runs with `--allow-known-defects`.
+- `\d` in the Codex bullet pattern and `\w` in the thermo no-findings statement's `\b` follow Python 3.14, whose
+  Unicode database is 16.0. `pytext` holds both tables, generated from Python 3.14. Python 3.12 does not match the
+  characters Unicode 16.0 added.
 - `normalize-thermo` resolves a relative missing `--artifact-root` as Python 3.13 and later do, naming the absolute
   component in the error; Python 3.12 named the relative one. A symbolic link loop in it is an `ELOOP` error, as in
   Python 3.13 and later; Python 3.12 raised a traceback. Callers pass an absolute root.
