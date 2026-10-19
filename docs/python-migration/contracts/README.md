@@ -115,6 +115,40 @@ and that its bytes are the committed files.
 Each `build-packet` case holds its staging mirror as a bare repository with one pack and its saved forge responses
 under `replay/`, so no case calls `gh` or the network. `build-packet-non-utf8-output-path` requires `non-utf8-paths`.
 
+## Run the storage corpora
+
+[#217](https://github.com/kamui/code-review-bench/issues/217) pins the storage behavior that
+[#155](https://github.com/kamui/code-review-bench/issues/155) ports, against the current Python, before any Rust:
+
+| Corpus | Programs | Python run |
+| --- | --- | --- |
+| [`evidence-store.v1.json`](../../../tools/behavior_contracts/evidence-store.v1.json) | `evidence-store`, `recover-evidence`, `restore-local` | `evidence_store.py` and `recover_evidence.py` directly; `restore-local.py`, the research record, through a driver that preloads the retained `evidence_store` and `local_evidence_resolution` |
+| [`native-artifacts.v1.json`](../../../tools/behavior_contracts/native-artifacts.v1.json) | `native-artifacts` | `native_artifacts.py`; its driver adds `file ROOT INDEX OUT [--native-relative PATH]`, which runs `file_artifacts` and prints the pin |
+| [`evidence-inventory.v1.json`](../../../tools/behavior_contracts/evidence-inventory.v1.json) | `evidence-inventory`, `collect-run` | `evidence_inventory.py` directly; `collect_run.py` through a driver that reads the case directory as the repository |
+| [`import-benchmark.v1.json`](../../../tools/behavior_contracts/import-benchmark.v1.json) | `import-benchmark` | `import_benchmark.py --check` through the same kind of driver |
+
+```sh
+python3 tools/behavior_contract.py --allow-known-defects --corpus tools/behavior_contracts/evidence-store.v1.json
+```
+
+The cases cover `pack`, `publish`, `fetch` (online and `--offline`) and `verify` with and without `--receipt`, recovery,
+local restoration, native `verify`, `restore` and filing, the inventory and transcript collection. They pin each
+refusal #155 names: traversal, `.git`, backslash, absolute and out-of-root paths, symlinked inputs and ancestors,
+special files, credential names, malicious archives, changed and missing files, mismatched hashes, draft and replaced
+releases, oversized and truncated downloads, and existing different manifests, receipts and filings.
+`cold-offline-restoration` publishes, removes the sources, fetches, empties the remote, restores again with
+`--offline`, then refuses a corrupted cache. `publish-retry-makes-no-upload` and `publish-lost-upload-response` show
+one upload in the recorded `gh` calls. Each corpus runs a stub `gh`, so `gh/calls.jsonl` records every call;
+`test_behavior_contract.py` checks that each recorded call is one the stub answers and runs every storage corpus
+against the current Python.
+
+Where Python raises a traceback, the case carries it as a `baseline_defect` and expects the intended exit and
+message, so these corpora run with `--allow-known-defects`: `recover-unknown-source`, `recover-changed-manifest`,
+`restore-local-not-published`, `restore-local-mismatched-resolution`, `fetch-archive-truncated-gzip`,
+`collect-run-checksum-mismatch` and `import-check-changed-file`. Each decision records the old and new behavior.
+Each observation masks the traceback's frames with `mask_patterns` and pins the terminal exception type and message,
+so an unrelated crash is a failure, not the known defect.
+
 ## Fixture format `behavior-contract/1`
 
 The corpus is [`usage.v1.json`](../../../tools/behavior_contracts/usage.v1.json).
@@ -128,14 +162,48 @@ Each case defines:
   before setup. Invalid filename errors produce `SKIP UNAVAILABLE` and the run
   continues. Other filesystem failures remain execution errors.
 - `stdin_b64`, the exact standard input bytes, including empty input.
-- `initial`, a list of `file` or `directory` entries with base64 relative
-  `path_b64`. Files include `bytes_b64`. Parent directories are created.
+- `initial`, a list of `file`, `directory`, `symlink` or `special` entries with base64
+  relative `path_b64`. Files include `bytes_b64`, symlinks `target_b64`; a special entry
+  is a FIFO made with `mkfifo`. Files, directories and FIFOs take an optional `mode`.
+  Parent directories are created.
 - `expected.exit`, the process exit status, and `stdout` and `stderr` comparators.
 - `expected.filesystem`, the complete resulting tree, including directories,
   files with base64 bytes and SHA-256, and symlinks with base64 targets.
 - `derivation`, the independent accounting or protocol argument for the expectation.
 - Optional `baseline_defect`, with an exact `observed` comparator and a resolution link.
+- Instead of `argv`, `stdin_b64` and `expected`, optional `steps` that share one root, in
+  order. A command step holds `argv`, `stdin_b64`, `expected` and optionally `program`; a
+  `remove` step deletes the listed paths that exist; a `write` step adds `initial`-style
+  entries, replacing files. Every command step's `expected.filesystem` is the whole tree
+  after it. A step case carries no `baseline_defect`.
 
+A corpus may opt in to two settings. `snapshot_modes: true` adds each file's and
+directory's permission bits to the snapshot and runs setup and commands with umask 022;
+corpora without it keep their snapshots and digests. `gh_stub_b64` names a state directory
+in each case and puts a stub `gh` first on `PATH`. The stub appends every argument list
+to `calls.jsonl` there and answers only the release reads, upload and asset download of
+evidence storage, from `release.json` (repository, tag, ID, `draft`, `filler_assets` and
+`faults`) and `assets/<id>/<name>`. The faults are `lost-upload-response`,
+`partial-upload`, `rejected-upload`, `truncated-download` and `oversized-download`. A
+missing `release.json` answers 404; other arguments exit 2.
+
+A case may declare comparisons for outputs that legitimately vary:
+
+- `archives`, glob and `tar.gz` or `zip` format: a matching file is compared by its
+  members' names, sizes, modes and SHA-256 instead of its bytes, and its SHA-256 is
+  replaced by `<archive N>` in every path, file and stream. Restored and pre-existing
+  files match no declaration and keep byte comparison.
+- `digests`, globs whose files' SHA-256 is replaced by `<sha256 of PATH>` the same way.
+- `manifests`, evidence manifests whose every package must name the archive beside it by
+  asset name, `sha256` and `bytes`, or the case fails with a `consistency:` difference.
+  A declared archive's `bytes` is masked only after that check.
+- `references`, a storage record path and its top-level `fields`, each an object whose
+  `path` and `sha256` must name a file written beside the record, or the case fails with
+  a `consistency:` difference. The check runs before any digest becomes a label.
+- `volatile`, a file path and the RFC 6901 pointers of clock fields such as `verified_at`
+  and `at`, replaced in place by `"<volatile>"`.
+- `mask_root`, which replaces the absolute case root with `<root>`, and `mask_patterns`,
+  regular expressions over stdout and stderr, such as Python's temporary directory names.
 The runner creates a fresh temporary directory and an empty `.home` for every
 implementation and case. It sets that directory as cwd, gives the process a minimal
 environment without inherited credentials, captures output bytes, and removes the
@@ -143,7 +211,8 @@ root afterward. Commands time out after ten seconds. These are trusted local tes
 programs; the disposable cwd is not an OS sandbox. Commands must not access external
 state or spawn surviving descendants. No model, network, or paid operations belong
 in this corpus. Filesystem comparison covers the disposable tree, not arbitrary
-external effects, permissions, hard-link identity, or file metadata.
+external effects, hard-link identity, or file metadata other than the opted-in
+permission bits. A special file is recorded by kind and mode and never opened.
 
 Paths are relative POSIX bytes, encoded in base64. Absolute paths, NULs, empty
 components, and dot segments are refused. macOS and Linux, including WSL, are the

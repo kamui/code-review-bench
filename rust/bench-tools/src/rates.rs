@@ -46,7 +46,8 @@ pub trait Fetch {
     fn fetch(&self, url: &str) -> Result<Vec<u8>, String>;
 }
 
-/// `file:` URLs, in any letter case, read a local file, as `urllib` does; other URLs are fetched with `curl`.
+/// `file:` URLs, in any letter case, read a local file, as `urllib` does; `http:` and `https:` URLs are fetched with
+/// `ureq`, and other schemes are refused.
 pub struct Network;
 
 fn percent_decode(text: &str) -> Vec<u8> {
@@ -96,34 +97,63 @@ impl Fetch for Network {
             return std::fs::read(PyPath::new(&path).to_path_buf())
                 .map_err(|error| format!("<urlopen error {}>", pytext::os_error(&error, &path)));
         }
-        let output = std::process::Command::new("curl")
-            .args([
-                // Must stay first: curl reads `.curlrc` unless its first argument disables it, and a config
-                // option such as `output` would write files.
-                "--disable",
-                "--silent",
-                "--show-error",
-                "--fail",
-                "--location",
-                "--max-time",
-                "20",
-                "--user-agent",
-                "code-review-bench-rates/1",
-                "--",
-                url,
-            ])
-            .stdin(std::process::Stdio::null())
-            .output()
-            .map_err(|error| format!("cannot run curl: {error}"))?;
-        if output.status.success() {
-            return Ok(output.stdout);
+        let Some(scheme) = url
+            .split_once(':')
+            .map(|(scheme, _)| scheme)
+            .filter(|scheme| {
+                ["http", "https"]
+                    .iter()
+                    .any(|known| scheme.eq_ignore_ascii_case(known))
+            })
+        else {
+            return Err(
+                "<urlopen error unsupported url type: only file, http and https are read>"
+                    .to_string(),
+            );
+        };
+        let url = format!("{}{}", scheme.to_ascii_lowercase(), &url[scheme.len()..]);
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .timeout_global(Some(std::time::Duration::from_secs(20)))
+            .user_agent("code-review-bench-rates/1")
+            .http_status_as_error(false)
+            .build()
+            .into();
+        let mut response = agent.get(&url).call().map_err(urlopen_error)?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(format!(
+                "HTTP Error {}: {}",
+                status.as_u16(),
+                status.canonical_reason().unwrap_or_default()
+            ));
         }
-        let detail = String::from_utf8_lossy(&output.stderr);
-        Err(match pytext::strip(&detail) {
-            "" => format!("curl failed for {url}: {}", output.status),
-            detail => detail.to_string(),
-        })
+        response
+            .body_mut()
+            .with_config()
+            .limit(u64::MAX)
+            .read_to_vec()
+            .map_err(urlopen_error)
     }
+}
+
+/// `URLError`'s text: an operating-system error as Python's `OSError` prints it, a timeout as `socket.timeout` does,
+/// and anything else in `ureq`'s words.
+fn urlopen_error(error: ureq::Error) -> String {
+    let reason = match &error {
+        ureq::Error::Io(io) => match io.raw_os_error() {
+            Some(code) => {
+                let text = io.to_string();
+                let strerror = text
+                    .rfind(" (os error ")
+                    .map_or(text.as_str(), |end| &text[..end]);
+                format!("[Errno {code}] {strerror}")
+            }
+            None => io.to_string(),
+        },
+        ureq::Error::Timeout(_) => "timed out".to_string(),
+        other => other.to_string(),
+    };
+    format!("<urlopen error {reason}>")
 }
 
 fn schema_failure(SchemaError(message): SchemaError) -> Failure {

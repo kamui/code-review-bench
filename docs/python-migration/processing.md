@@ -20,10 +20,10 @@ explorer export, as [the explorer export](#the-explorer-export) describes. Slice
 
 [`rust/bench-tools`](../../rust/bench-tools) builds one binary, `bench-tools`, with one subcommand per tool and one
 library module per tool in `src/`. Later slices add their tools to it. Its lints, toolchain and release profile are
-those of `rust/usage-pilot`, which stays as pilot evidence. It may use pinned registry dependencies through its
-committed `Cargo.lock`; a first install needs the network once to fetch them (`cargo fetch --locked` in
-`rust/bench-tools`, as the README's Run locally steps do). Shared modules carry the Python behavior that byte-pinned
-outputs depend on:
+those of `rust/usage-pilot`, which stays as pilot evidence. It may use pinned registry dependencies, listed under
+[registry dependencies](#registry-dependencies), through its committed `Cargo.lock`; a first install needs the
+network once to fetch them (`cargo fetch --locked` in `rust/bench-tools`, as the README's Run locally steps do).
+Shared modules carry the Python behavior that byte-pinned outputs depend on:
 
 - `pyjson` reads JSON as `json.loads` does and writes it as `json.dumps` does, including `float.__repr__` spelling,
   integers of any length up to Python's 4300-digit limit, key order, and `JSONDecodeError` messages. Both halves
@@ -38,7 +38,7 @@ outputs depend on:
 - `sha256` implements SHA-256, in one call or incrementally.
 - `pyregex` is `re.search` for the pattern syntax the schemas use, `pyunicode` holds Python's decimal digits and
   `int(str)`, and `pyfs` holds `Path.resolve`, `relative_to` and directory listing.
-- `archive` reads and writes gzip, tar and zip through the registry crates below, as [archives](#archives)
+- `archive` reads and writes gzip, tar and zip through the [registry dependencies](#registry-dependencies), as [archives](#archives)
   describes.
 
 Run a subcommand through the pinned executable, as [Rust runtime pinning](runtime.md#running-a-maintained-command)
@@ -52,23 +52,6 @@ python3 bench/tools/rust_runtime.py exec bench-tools -- derive-packet <packet.le
 python3 bench/tools/rust_runtime.py exec bench-tools -- build-packet --repo <owner/name> --pr <n> ... --out <packet.md>
 bun run data
 ```
-
-### Registry crates
-
-[#155](https://github.com/kamui/code-review-bench/issues/155) allows pinned crates.io dependencies. `Cargo.lock` pins
-them, and `cargo fetch --locked` in `rust/bench-tools` puts them in the Cargo cache that the offline install reads.
-When that cache lacks one, `rust_runtime.py install` fails and names the fetch step. Default features are off.
-
-| Crate | Version | License | Features | Purpose | Added by |
-| --- | --- | --- | --- | --- | --- |
-| `flate2` | 1.1.10 | MIT OR Apache-2.0 | `rust_backend` | gzip and deflate | [#218](https://github.com/kamui/code-review-bench/issues/218) |
-| `tar` | 0.4.46 | MIT OR Apache-2.0 | none | tar with PAX, read and write | [#218](https://github.com/kamui/code-review-bench/issues/218) |
-| `zip` | 9.0.5 | MIT | `deflate-flate2` | native scratch archives | [#218](https://github.com/kamui/code-review-bench/issues/218) |
-
-They bring 15 transitive crates: `adler2` 2.0.1 (0BSD OR MIT OR Apache-2.0), `bitflags` 2.13.2, `cfg-if` 1.0.5,
-`crc32fast` 1.5.2, `equivalent` 1.0.3, `filetime` 0.2.29, `hashbrown` 0.17.1, `indexmap` 2.14.2, `libc` 0.2.191,
-`typed-path` 0.12.3 (each MIT OR Apache-2.0), `memchr` 2.8.3 (Unlicense OR MIT), `miniz_oxide` 0.9.1 (MIT OR Zlib OR
-Apache-2.0), `nix` 0.31.3 (MIT), `simd-adler32` 0.3.10 (MIT) and the build-only `cfg_aliases` 0.2.2 (MIT).
 
 ### Archives
 
@@ -104,6 +87,56 @@ one-time check read all 33 published packages, from the 19 manifests in `bench/e
 `tests/python_archives.rs` checks that the retained `evidence_store.py` and `native_artifacts.py` restore what
 `bench_tools::archive` writes, and that it reads what they write. It is deleted with them
 ([#159](https://github.com/kamui/code-review-bench/issues/159)).
+
+## Registry dependencies
+
+The owner allowed pinned crates.io dependencies on 2026-10-19 ([#215](https://github.com/kamui/code-review-bench/issues/215)).
+These are every registry crate the four supported targets build, as `cargo tree --target <target> -e normal,build`
+lists them. When the Cargo cache lacks one, `rust_runtime.py install` fails and names the `cargo fetch --locked` step.
+
+| Crate | Version | License | Purpose |
+| --- | --- | --- | --- |
+| `ureq` | 3.4.2 | MIT OR Apache-2.0 | `rates check`'s HTTP client, a direct dependency; built without default features except `rustls` |
+| `ureq-proto` | 0.6.5 | MIT OR Apache-2.0 | HTTP/1.1 protocol state for `ureq` |
+| `http` | 1.5.0 | MIT OR Apache-2.0 | Request, response and status types for `ureq` |
+| `httparse` | 1.10.1 | MIT OR Apache-2.0 | HTTP response parsing for `ureq-proto` |
+| `bytes` | 1.12.1 | MIT | Byte buffers for `http` |
+| `itoa` | 1.0.18 | MIT OR Apache-2.0 | Integer formatting for `http` |
+| `base64` | 0.23.1 | MIT OR Apache-2.0 | Basic credentials for proxies and URL user info in `ureq` |
+| `percent-encoding` | 2.3.2 | MIT OR Apache-2.0 | URL encoding for `ureq` |
+| `utf8-zero` | 0.8.1 | MIT OR Apache-2.0 | Lossy UTF-8 body decoding in `ureq` |
+| `log` | 0.4.34 | MIT OR Apache-2.0 | Logging facade for `ureq` and `rustls`; nothing installs a logger |
+| `rustls` | 0.23.46 | Apache-2.0 OR ISC OR MIT | TLS for `https` pages |
+| `rustls-webpki` | 0.103.15 | ISC | Certificate verification for `rustls` |
+| `rustls-pki-types` | 1.15.1 | MIT OR Apache-2.0 | Certificate and key types for `rustls` |
+| `webpki-roots` | 1.0.9 | CDLA-Permissive-2.0 | The Mozilla root certificates `https` pages are checked against |
+| `ring` | 0.17.14 | Apache-2.0 AND ISC | Cryptography for `rustls`; its build script compiles C and assembly with the host C compiler |
+| `cc` | 1.9.0 | MIT OR Apache-2.0 | Build-time C compiler driver for `ring` |
+| `find-msvc-tools` | 0.1.15 | MIT OR Apache-2.0 | Build-time dependency of `cc`, used only on Windows |
+| `shlex` | 2.0.1 | MIT OR Apache-2.0 | Build-time flag splitting for `cc` |
+| `getrandom` | 0.2.17 | MIT OR Apache-2.0 | Operating-system randomness for `ring` |
+| `libc` | 0.2.191 | MIT OR Apache-2.0 | System calls for `getrandom`, `tar`, `filetime` and `nix` |
+| `cfg-if` | 1.0.5 | MIT OR Apache-2.0 | Platform selection for `ring`, `getrandom`, `crc32fast`, `filetime` and `nix` |
+| `untrusted` | 0.9.0 | ISC | Safe input parsing for `ring` and `rustls-webpki` |
+| `subtle` | 2.6.1 | BSD-3-Clause | Constant-time comparison for `rustls` |
+| `zeroize` | 1.9.1 | Apache-2.0 OR MIT | Clearing secrets for `rustls` and `rustls-pki-types` |
+| `once_cell` | 1.21.4 | MIT OR Apache-2.0 | Lazy statics for `rustls` |
+| `flate2` | 1.1.10 | MIT OR Apache-2.0 | gzip and deflate for `archive` ([#218](https://github.com/kamui/code-review-bench/issues/218)), a direct dependency; built with `rust_backend` only |
+| `tar` | 0.4.46 | MIT OR Apache-2.0 | tar with PAX for `archive`, a direct dependency; built without default features |
+| `zip` | 9.0.5 | MIT | Native scratch archives for `archive`, a direct dependency; built with `deflate-flate2` only |
+| `miniz_oxide` | 0.9.1 | MIT OR Zlib OR Apache-2.0 | Pure-Rust deflate for `flate2` |
+| `adler2` | 2.0.1 | 0BSD OR MIT OR Apache-2.0 | Adler-32 for `miniz_oxide` |
+| `simd-adler32` | 0.3.10 | MIT | Vectorized Adler-32 for `miniz_oxide` |
+| `crc32fast` | 1.5.2 | MIT OR Apache-2.0 | CRC-32 for `flate2` and `zip` |
+| `filetime` | 0.2.29 | MIT OR Apache-2.0 | File times for `tar` |
+| `indexmap` | 2.14.2 | MIT OR Apache-2.0 | Ordered entry map for `zip` |
+| `hashbrown` | 0.17.1 | MIT OR Apache-2.0 | Hash table for `indexmap` |
+| `equivalent` | 1.0.3 | MIT OR Apache-2.0 | Key comparison for `indexmap` |
+| `memchr` | 2.8.3 | Unlicense OR MIT | Byte search for `zip` |
+| `typed-path` | 0.12.3 | MIT OR Apache-2.0 | Entry path handling for `zip` |
+| `nix` | 0.31.3 | MIT | Unix calls for `zip`, on macOS only |
+| `bitflags` | 2.13.2 | MIT OR Apache-2.0 | Flag types for `nix`, on macOS only |
+| `cfg_aliases` | 0.2.2 | MIT | Build-time configuration for `nix`, on macOS only |
 
 ## Migrated responsibilities
 
@@ -270,10 +303,21 @@ recorded decision.
   16.0 added. `rates-decisions.v4.json` records this for the catalog date, price footnotes and long-prompt rows,
   and `upstream-decisions.v2.json` for snapshot versions. Lower-casing an Anthropic model or a repository name
   uses Rust's Unicode tables.
-- `rates check` fetches `https` pages with `curl --disable --fail --location --max-time 20`, so no curl
-  configuration file applies, and a network or HTTP failure prints curl's message where urllib printed its own;
-  both exit 2. `rates-transport-failure` pins this change, decided in `rates-decisions.v2.json`, by connecting to a
-  closed loopback port. `file:` URLs, in any letter case, are read as urllib reads them.
+- `rates check` fetches `http` and `https` pages with `ureq` over `rustls`, within 20 seconds for the whole request,
+  and checks certificates against the Mozilla roots `webpki-roots` bundles, not the system trust store. An
+  operating-system error and an HTTP error status print as urllib printed them, except that the reason phrase is the
+  standard one for the code; a TLS or name-resolution failure prints ureq's text inside `<urlopen error ...>`. Each
+  exits 2. `rates-transport-failure`, decided in `rates-decisions.v7.json`, pins a refused connection by connecting to
+  a closed loopback port, and `tests/rates_http.rs` pins an HTTP error status, a redirect and a TLS failure. `file:`
+  URLs, in any letter case, are read as urllib reads them. Any other scheme, such as `data:` or `ftp:`, is refused
+  with exit 2, as `rates-unsupported-url-scheme` pins. ureq takes one proxy for every URL, the first set of
+  `ALL_PROXY`, `HTTPS_PROXY` and `HTTP_PROXY` (each before its lower-case name), and tunnels through it with
+  `CONNECT`; urllib chose `http_proxy` or `https_proxy` by scheme and ignored `ALL_PROXY`. A host that sets only
+  `HTTP_PROXY` therefore sends `https` sources through it. ureq is built without its `socks-proxy` feature, but a
+  `socks`, `socks4`, `socks4a`, `socks5` or `socks5h` URL in `ALL_PROXY` or `all_proxy` is still that one proxy, so
+  `HTTPS_PROXY` and `HTTP_PROXY` go unread and no proxy is used: `socks`, `socks4` and `socks5` connect straight to the
+  page's host, and `socks4a` and `socks5h` print `<urlopen error Connection refused>` without connecting. urllib and
+  curl used `https_proxy` there. The v7 decision records this, and `tests/rates_http.rs` pins both cases.
   `--source PROVIDER=URL` is new. A successful `--json` receipt is outside the corpus because `checked_at` is the
   current time. A date out of range uses Python 3.14's `datetime` wording, and an integer price too large for a
   float exits 2 where Python raised `OverflowError`. `rates refresh` is refused with a pointer to `rates.py`.
