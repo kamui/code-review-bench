@@ -530,6 +530,11 @@ fn the_tracked_native_scratch_archives_hold_entries_named_by_their_hash() {
 
 /// Rewrite the end of `bytes` with zip64 end records claiming `entries`.
 fn with_zip64_end(bytes: &[u8], entries: u64) -> Vec<u8> {
+    with_zip64_end_extended(bytes, entries, 0)
+}
+
+/// As `with_zip64_end`, with `extensible` bytes of zip64 extensible data.
+fn with_zip64_end_extended(bytes: &[u8], entries: u64, extensible: usize) -> Vec<u8> {
     let end = *positions(bytes, b"PK\x05\x06").last().unwrap();
     let directory_bytes = u64::from(u32::from_le_bytes(
         bytes[end + 12..end + 16].try_into().unwrap(),
@@ -540,13 +545,14 @@ fn with_zip64_end(bytes: &[u8], entries: u64) -> Vec<u8> {
     let mut out = bytes[..end].to_vec();
     let record_at = out.len() as u64;
     out.extend_from_slice(b"PK\x06\x06");
-    out.extend_from_slice(&44u64.to_le_bytes());
+    out.extend_from_slice(&(44 + extensible as u64).to_le_bytes());
     out.extend_from_slice(&[45, 3, 45, 0]);
     out.extend_from_slice(&[0; 8]);
     out.extend_from_slice(&entries.to_le_bytes());
     out.extend_from_slice(&entries.to_le_bytes());
     out.extend_from_slice(&directory_bytes.to_le_bytes());
     out.extend_from_slice(&directory_start.to_le_bytes());
+    out.extend_from_slice(&vec![b'x'; extensible]);
     out.extend_from_slice(b"PK\x06\x07");
     out.extend_from_slice(&[0; 4]);
     out.extend_from_slice(&record_at.to_le_bytes());
@@ -647,4 +653,34 @@ fn a_bad_zip_crc_is_an_error() {
     let mut bytes = scratch(&[("a", b"payload")]);
     patch(&mut bytes, 14, 16, &[0, 0, 0, 0]);
     io_error(read_zip(&bytes, &ROOMY));
+}
+
+#[test]
+fn a_pax_header_uses_its_last_path_record_without_trailing_slashes_as_tarfile_does() {
+    let mut records = pax_record("path", "bench/first");
+    records.extend(pax_record("path", "bench/second//"));
+    let tar = tar_of(&[pax(b'x', &records), entry(b"short", b'0', 0o644, b"data")]);
+    assert_eq!(
+        read_tar(&gzip(&tar), &ROOMY).unwrap()[0].0.name,
+        b"bench/second"
+    );
+}
+
+#[test]
+fn zip64_extensible_data_over_the_limit_is_refused_before_it_is_read() {
+    let bytes = scratch(&[("a", b"alpha")]);
+    let small = with_zip64_end_extended(&bytes, 1, 16);
+    assert_eq!(read_zip(&small, &ROOMY).unwrap().len(), 1);
+    let large = with_zip64_end_extended(&bytes, 1, 2 * 1024 * 1024);
+    let read = Rc::new(Cell::new(0));
+    let source = Counting {
+        inner: Cursor::new(large),
+        read: read.clone(),
+    };
+    let result = archive::read_zip(source, &ROOMY, |_, _| Ok(()));
+    assert!(matches!(
+        result,
+        Err(ArchiveError::Refused(Refusal::Zip64Extensible { bytes })) if bytes == 2 * 1024 * 1024
+    ));
+    assert!(read.get() < 256 * 1024, "read {} bytes", read.get());
 }

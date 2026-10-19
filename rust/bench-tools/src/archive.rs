@@ -71,6 +71,7 @@ pub enum Refusal {
     TooManyEntries { limit: u64 },
     TooManyBytes { limit: u64 },
     ZipDirectory { entries: u64, bytes: u64 },
+    Zip64Extensible { bytes: u64 },
     Malformed(String),
 }
 
@@ -125,6 +126,10 @@ impl fmt::Display for Refusal {
             Refusal::ZipDirectory { entries, bytes } => write!(
                 f,
                 "zip central directory claims {entries} entries in {bytes} bytes, above its limit"
+            ),
+            Refusal::Zip64Extensible { bytes } => write!(
+                f,
+                "zip64 end record carries {bytes} bytes of extensible data, above {NAME_RECORD_LIMIT}"
             ),
             Refusal::Malformed(message) => write!(f, "malformed archive: {message}"),
         }
@@ -439,13 +444,22 @@ fn read_tar<R: Read>(
         match header[156] {
             b'x' => {
                 let data = record(&mut entry, size)?;
+                let mut path = None;
                 for (keyword, value) in pax_records(&data)? {
                     match keyword {
-                        b"path" if pending.name.is_none() => pending.name = Some(value.to_vec()),
+                        b"path" => path = Some(value),
                         b"size" => pending.pax_size = true,
                         _ if keyword.starts_with(b"GNU.sparse.") => pending.sparse = true,
                         _ => {}
                     }
+                }
+                // tarfile keeps the last path record of a header and strips its trailing slashes.
+                if let (None, Some(path)) = (&pending.name, path) {
+                    let end = path
+                        .iter()
+                        .rposition(|byte| *byte != b'/')
+                        .map_or(0, |at| at + 1);
+                    pending.name = Some(path[..end].to_vec());
                 }
                 pending.headers += 1;
                 continue;
@@ -697,6 +711,9 @@ fn check_zip_end_records<R: Read + Seek>(
             u16_at(record, 8).max(u16_at(record, 10)),
             u32_at(record, 12),
         );
+        let may_be_zip64 = u16_at(record, 10) == 0xFFFF
+            || bytes32 == 0xFFFF_FFFF
+            || u32_at(record, 16) == 0xFFFF_FFFF;
         let position = start + at as u64;
         let mut zip64 = None;
         let mut locator = [0u8; 20];
@@ -712,6 +729,11 @@ fn check_zip_end_records<R: Read + Seek>(
         let mut claims = Vec::new();
         if let Some(end) = zip64 {
             claims.push((u64_at(&end, 24).max(u64_at(&end, 32)), u64_at(&end, 40)));
+            // ZipArchive reads this record's extensible data into memory when the 32-bit record defers to it.
+            let extensible = u64_at(&end, 4).saturating_sub(44);
+            if may_be_zip64 && extensible > NAME_RECORD_LIMIT {
+                return Err(Refusal::Zip64Extensible { bytes: extensible }.into());
+            }
         }
         claims.push((
             if zip64.is_some() && entries32 == 0xFFFF {
