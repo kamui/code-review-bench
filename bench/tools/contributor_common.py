@@ -66,6 +66,16 @@ def write(path, value, *, immutable=False):
         os.replace(handle.name, path)
 
 
+def sync_reaching(path):
+    """fsync each directory from ``path``'s parent up, so an entry an interrupted write linked survives a restart."""
+    for directory in Path(path).absolute().parents:
+        descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+
 @contextmanager
 def lock(path):
     path.parent.mkdir(parents=True, exist_ok=True)

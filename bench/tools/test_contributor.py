@@ -864,6 +864,38 @@ class ContributorTests(unittest.TestCase):
                             local / "records/bench/evidence/manifests" / f"contribution-{saved['id']}.json", "--root", cold)
         self.assertEqual([path.read_text() for path in cold.rglob("stdout.jsonl")], ["original transcript\n"])
 
+    def test_a_submission_retry_finishes_recovery_of_records_an_interrupted_run_wrote(self):
+        self.run_complete("--tasks", "task-a")
+        with self.stub_gh(), patch.object(submit, "create_pr", side_effect=common.Refused("pull request not created")):
+            code, output = self.invoke("submit", "--yes")
+        self.assertEqual(code, 1, output)
+        saved = read(self.state / "submission.json")
+        local = self.state / "submissions" / saved["id"]
+        records = local / "records/bench/evidence"
+        manifest = records / "manifests" / f"contribution-{saved['id']}.json"
+        receipt = records / "receipts" / f"contribution-{saved['id']}.json"
+        original = receipt.read_bytes()
+
+        changed = json.loads(original)
+        changed["manifest_sha256"] = "0" * 64
+        receipt.write_text(json.dumps(changed))
+        with self.stub_gh():
+            code, output = self.invoke("submit", "--yes")
+        self.assertEqual(code, 1, output)
+        self.assertIn(f"restoration receipt does not verify the published manifest: {receipt}", output)
+        receipt.write_bytes(original)
+
+        with self.stub_gh(), patch.object(common, "evidence", wraps=common.evidence) as evidence, \
+             patch.object(common, "sync_reaching", wraps=common.sync_reaching) as synced:
+            code, output = self.invoke("submit", "--yes")
+        self.assertEqual(code, 0, output)
+        self.assertEqual([call.args[1:] for call in evidence.call_args_list],
+                         [("publish", "--manifest", local / "packages/manifest.json", "--out", manifest)],
+                         "publish verifies and syncs the existing manifest")
+        synced.assert_called_once_with(receipt)
+        self.assertEqual(receipt.read_bytes(), original)
+        self.assertEqual(len(self.uploads()), 1)
+
     def test_submission_refuses_runs_with_different_pins_before_packing(self):
         self.run_complete("--tasks", "task-a")
         rust_runtime.select(self.store, "bench-tools", self.wrapper_runtime(self.root / "selected-runtime.log"))

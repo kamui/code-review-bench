@@ -172,6 +172,16 @@ def package(saved, resolved):
     return local
 
 
+def existing_receipt(receipt_path, manifest_path):
+    """Keep a receipt an interrupted run linked: it must verify this manifest, and its directories are synced as
+    bench-tools syncs a record it finds. verify --receipt refuses to replace one, since each names its own time."""
+    receipt, manifest = read(receipt_path), read(manifest_path)
+    if (receipt.get("status") != "verified" or receipt.get("manifest_sha256") != common.digest(manifest_path)
+            or receipt.get("packages") != [package["sha256"] for package in manifest["packages"]]):
+        raise Refused(f"restoration receipt does not verify the published manifest: {receipt_path}")
+    common.sync_reaching(receipt_path)
+
+
 def publish_assets(saved, local, executable):
     try:
         release = api(f"repos/{saved['staging_repository']}/releases/tags/{saved['tag']}")
@@ -188,10 +198,12 @@ def publish_assets(saved, local, executable):
         raise Refused("staging release is a draft; publish it in your fork, then retry ./bin/bench submit")
     manifest_path = local / "records/bench/evidence/manifests" / f"contribution-{saved['id']}.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    if not manifest_path.exists():
-        common.evidence(executable, "publish", "--manifest", local / "packages/manifest.json", "--out", manifest_path)
+    # publish verifies and syncs a manifest an interrupted run already linked, uploading nothing more.
+    common.evidence(executable, "publish", "--manifest", local / "packages/manifest.json", "--out", manifest_path)
     receipt_path = local / "records/bench/evidence/receipts" / f"contribution-{saved['id']}.json"
-    if not receipt_path.exists():
+    if receipt_path.exists():
+        existing_receipt(receipt_path, manifest_path)
+    else:
         common.evidence(executable, "verify", "--manifest", manifest_path, "--receipt", receipt_path)
     saved["status"] = "uploaded"
     saved["manifest"] = str(manifest_path.relative_to(local / "records"))
