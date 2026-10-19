@@ -48,7 +48,7 @@ python3 bench/tools/rust_runtime.py exec bench-tools -- build-packet --repo <own
 | `bench/tools/normalize_review.py` | `bench-tools normalize-review`, `bench_tools::normalize_review` | `dispatch.sh`, `claude_skill_runner.py`, `codex_skill_runner.py`, `file_attempt.py --replay` and the `test:bench` script | Retained library, below. `test_normalize_review.py`'s cases are in [`normalize-review.v1.json`](../../tools/behavior_contracts/normalize-review.v1.json), which `test:bench` runs against the retained Python. |
 | `bench/tools/normalize_thermo.py` | `bench-tools normalize-thermo`, `bench_tools::normalize_thermo` | The same skill runners and `file_attempt.py --replay` | Deleted with `test_normalize_thermo.py`, whose cases are in [`normalize-thermo.v1.json`](../../tools/behavior_contracts/normalize-thermo.v1.json). |
 | `bench/tools/derive_packet.py` | `bench-tools derive-packet`, `bench_tools::derive_packet` | `bench-tools build-packet --factual`, in-process; `bench/README.md` | Deleted. Its self-test cases and every target's legacy packet are in [`derive-packet.v1.json`](../../tools/behavior_contracts/derive-packet.v1.json). The imported original is preserved at `artifacts/import-source/bench/tools/derive_packet.py`. |
-| `bench/tools/build_packet.py` | `bench-tools build-packet`, `bench_tools::build_packet` | `bench/README.md`, `docs/pr-selection.md` | Deleted with `test_build_packet.py` and `test_build_packet_fixture.json`. Every run the tests made, with its replay files and staging mirror, is a case in [`build-packet.v1.json`](../../tools/behavior_contracts/build-packet.v1.json), beside 35 more. The imported originals are preserved under `artifacts/import-source/bench/tools/`. |
+| `bench/tools/build_packet.py` | `bench-tools build-packet`, `bench_tools::build_packet` | `bench/README.md`, `docs/pr-selection.md` | Deleted with `test_build_packet.py` and `test_build_packet_fixture.json`. Every run the tests made, with its replay files and staging mirror, is a case in [`build-packet.v1.json`](../../tools/behavior_contracts/build-packet.v1.json), beside 36 more. The imported originals are preserved under `artifacts/import-source/bench/tools/`. |
 | `bench/tools/check_manifest.py` | `bench_tools::schema`, `bench-tools check-manifest` | None; its CLI callers stay with #156, below | Retained library, below. |
 | `bench/tools/rates.py`, its `check` command | `bench-tools rates check`, `bench_tools::rates` | `bun run rates:check`; `docs/rates.md` | Retained library, below. `refresh` stays in Python. |
 | `bench/tools/upstream.py`, its `report` command | `bench-tools upstream report`, `bench_tools::upstream`, with the registry checks of `claims.load_registry` in `bench_tools::claims` | `bun run audit:maintainers`; `docs/maintainer-adjudication.md` | Retained library, below. `collect` stays in Python. |
@@ -186,15 +186,14 @@ and `build-packet-unicode-16-lowercase-letter` pin one character added in Unicod
 state the impact against Python 3.12 (80 decimal digits, 5,004 word characters, 96 lowercase code points) and Python
 3.10 (110, 9,917 and 510).
 
-`build-packet-decisions.v3.json` also records nine intended changes from `build_packet.py`, each with its case. An
-input that made Python raise an uncaught exception exits 2 and names the exception:
-`build-packet-missing-merged-at`, `build-packet-null-author` and `build-packet-overflowing-cutoff`. A replay file or
-extra section that is not UTF-8 exits 2 naming the file: `build-packet-invalid-utf8-replay` and
-`build-packet-invalid-utf8-extra-section`. A lone surrogate escape and JSON nested deeper than 1,000 levels are
-refused even in a field the packet never renders: `build-packet-lone-surrogate` and
-`build-packet-deeply-nested-replay`. A text option that is not UTF-8 is a usage error:
-`build-packet-non-utf8-text-option`. A record name holding an unassigned code point is printed as is:
-`build-packet-repr-unassigned-code-point`.
+The decisions also record eight intended changes from `build_packet.py`, each with its case. An input that made Python
+raise an uncaught exception exits 2 and names the exception: `build-packet-missing-merged-at`,
+`build-packet-null-author` and `build-packet-overflowing-cutoff`. A replay file or extra section that is not UTF-8
+exits 2 naming the file: `build-packet-invalid-utf8-replay` and `build-packet-invalid-utf8-extra-section`. A lone
+surrogate escape and JSON nested deeper than 1,000 levels are refused even in a field the packet never renders:
+`build-packet-lone-surrogate` and `build-packet-deeply-nested-replay`. A text option that is not UTF-8 is a usage
+error: `build-packet-non-utf8-text-option`. A ninth, `build-packet-repr-unassigned-code-point`, printed a record
+name's unassigned code point as is until #207; v5 supersedes it with Python's escaped bytes.
 
 `build-packet-decisions.v4.json` adds the four `build-packet-unicode-digit-basic-offset-*` cases: a basic offset whose
 hour units are a non-ASCII digit, in `--cutoff`, `--pushed-at`, the forge's `mergedAt` and its force-push event. They
@@ -205,10 +204,11 @@ refuse the result.
 unassigned ones included. Python escaped the characters its own Unicode database lacked, so the Rust output differs on
 5,812 code points added in Unicode 15.1 and 16.0 from CI's Python 3.12, and on 11,130 from Python 3.10. Each family
 whose diagnostics quote input records this with a U+2EBF0 case: `derive-packet-unicode-15-1-path`,
-`roster-unicode-15-1-arm-kind`, `thermo-unicode-15-1-report-path`, `claude-skill-unicode-15-1-report-status`,
-`check-manifest-unicode-15-1-path`, `rates-unicode-15-1-source-path`, `upstream-unicode-15-1-registry-path` and
-`diff-identity-unicode-15-1-git-record`. The five whose Python is retained carry Python 3.12's escaped output as their
-`baseline_defect`. `derive-packet-unassigned-path` pins U+0378, which every Python version escapes.
+`build-packet-unicode-15-1-record-name`, `roster-unicode-15-1-arm-kind`, `thermo-unicode-15-1-report-path`,
+`claude-skill-unicode-15-1-report-status`, `check-manifest-unicode-15-1-path`, `rates-unicode-15-1-source-path`,
+`upstream-unicode-15-1-registry-path` and `diff-identity-unicode-15-1-git-record`. The five whose Python is retained
+carry Python 3.12's escaped output as their `baseline_defect`. `derive-packet-unassigned-path` pins U+0378, which
+every Python version escapes.
 
 Diagnostics keep the Python program names, `roster.py:`, `diff_identity.py:`, `normalize_review.py:`,
 `normalize_thermo.py:`, `derive_packet.py:`, `build_packet:`, `check_manifest.py:`, `rates.py:` and `upstream.py:`,
