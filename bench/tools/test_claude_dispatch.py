@@ -15,8 +15,28 @@ if sys.argv[1:] == ['--version']:
  print('2.1.284 (Claude Code)');sys.exit(0)
 with open(os.environ['CAPTURE'], 'w') as f: json.dump({'args':sys.argv[1:],'home':os.environ['HOME'],'tmpdir':os.environ.get('TMPDIR'),'bytecode':os.environ.get('PYTHONDONTWRITEBYTECODE')}, f)
 if os.environ.get('REVIEWER_RUNS'): subprocess.run(os.environ['REVIEWER_RUNS'], shell=True, check=True)
-sys.exit(23)
+sys.exit(int(os.environ.get('REVIEWER_EXIT', '23')))
 """
+# Records its arguments, writes --out, and prints one line to each stream; FAKE_NORMALIZE_EXIT sets its exit code.
+BENCH_TOOLS = """#!/usr/bin/env python3
+import json,os,sys
+with open(os.environ['NORMALIZE_CAPTURE'], 'a') as f: f.write(json.dumps(sys.argv[1:]) + '\\n')
+out = sys.argv[sys.argv.index('--out') + 1]
+open(out, 'w').write('{"parse_status": "parsed"}\\n')
+print('to stderr', file=sys.stderr, flush=True)
+print('to stdout')
+sys.exit(int(os.environ.get('FAKE_NORMALIZE_EXIT', '0')))
+"""
+
+
+def fake_bench_tools(directory: Path) -> dict:
+    """A stand-in for the run's pinned bench-tools and the launch variables that name it."""
+    executable = directory / 'bench-tools'
+    executable.write_text(BENCH_TOOLS)
+    executable.chmod(0o755)
+    return {'BENCH_RUST_BENCH_TOOLS': str(executable),
+            'BENCH_RUST_BENCH_TOOLS_SHA256': hashlib.sha256(executable.read_bytes()).hexdigest(),
+            'NORMALIZE_CAPTURE': str(directory / 'normalize-argv.jsonl')}
 
 
 class ClaudeDispatchTest(unittest.TestCase):
@@ -40,7 +60,7 @@ class ClaudeDispatchTest(unittest.TestCase):
         self.capture = self.root / 'capture.json'
         self.env = dict(os.environ, HOME=str(source), CAPTURE=str(self.capture), BENCH_CLAUDE=str(executable),
                         BENCH_CLAUDE_SHA256=hashlib.sha256(executable.read_bytes()).hexdigest(),
-                        BENCH_CLAUDE_VERSION='2.1.284 (Claude Code)')
+                        BENCH_CLAUDE_VERSION='2.1.284 (Claude Code)', **fake_bench_tools(self.root))
 
     def git(self, *args):
         subprocess.run(['git', '-C', str(self.clone), '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', *args], check=True)
@@ -82,6 +102,43 @@ class ClaudeDispatchTest(unittest.TestCase):
             self.assertIn('Claude companion file mismatch', result.stderr)
             self.assertFalse(self.capture.exists())
             self.assertFalse((self.root / name / 'home/.claude/.credentials.json').exists())
+
+    def test_a_missing_relative_or_changed_bench_tools_stops_the_dispatch_before_any_setup(self):
+        executable = self.env['BENCH_RUST_BENCH_TOOLS']
+        for name, changes in [('unset', {'BENCH_RUST_BENCH_TOOLS': None}), ('relative', {'BENCH_RUST_BENCH_TOOLS': 'bench-tools'}),
+                              ('missing', {'BENCH_RUST_BENCH_TOOLS': executable + '-gone'}),
+                              ('hash', {'BENCH_RUST_BENCH_TOOLS_SHA256': '0' * 64}), ('no-hash', {'BENCH_RUST_BENCH_TOOLS_SHA256': None})]:
+            with self.subTest(name=name):
+                env = dict(self.env)
+                for key, value in changes.items():
+                    env.pop(key) if value is None else env.update({key: value})
+                result = subprocess.run([str(ROOT / 'bench/tools/dispatch.sh'), 'claude-builtin', str(self.root / name), str(self.clone),
+                                         'main', str(self.packet)], env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn('bench-tools', result.stderr)
+                self.assertFalse((self.root / name).exists())
+                self.assertFalse(self.capture.exists())
+
+    def test_the_pinned_bench_tools_normalizes_the_review_and_its_output_is_saved(self):
+        self.env['REVIEWER_EXIT'] = '0'
+        for name, code in [('parsed', '0'), ('unresolved', '1')]:
+            with self.subTest(name=name):
+                self.env['FAKE_NORMALIZE_EXIT'] = code
+                result = self.invoke(name)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                attempt = self.root / name
+                argv = json.loads((self.root / 'normalize-argv.jsonl').read_text().splitlines()[-1])
+                self.assertEqual(argv, ['normalize-review', '--arm', 'claude-builtin', '--payload', str(attempt / 'payload.json'),
+                                        '--out', str(attempt / 'normalized.json'), '--timing', str(attempt / 'timing.json')])
+                self.assertEqual((attempt / 'normalize.txt').read_text(), 'to stderr\nto stdout\n')
+                timing = json.loads((attempt / 'timing.json').read_text())
+                if code == '0':
+                    self.assertIsNotNone(timing['completed_at'])
+                    self.assertFalse((attempt / 'stop.json').exists())
+                else:
+                    self.assertIsNone(timing['completed_at'])
+                    self.assertEqual(json.loads((attempt / 'stop.json').read_text())['reason'],
+                                     'normalization exit 1: to stderr to stdout ')
 
     def test_reviewer_gets_the_attempt_tmpdir_and_no_bytecode_setting_of_the_dispatcher(self):
         self.env.pop('PYTHONDONTWRITEBYTECODE', None)

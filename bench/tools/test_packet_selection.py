@@ -26,6 +26,7 @@ import run_cell
 
 class PacketSelectionTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch.object(run_cell, "normalizer_environment", return_value={}))
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -294,7 +295,7 @@ class PacketSelectionTests(unittest.TestCase):
                     return subprocess.CompletedProcess(argv, 0, '{}', '')
                 claim = {'cell': {'target': 't1', 'arm': 'test', 'replicate': 1}}
                 with patch.object(run_cell, 'tool', side_effect=tool):
-                    run_cell.dispatch(run_cell.Run(self.run, self.work), kind, claim)
+                    run_cell.dispatch(run_cell.Run(self.run, self.work), kind, claim, {})
                 command = commands[-1]
                 self.assertEqual(command[command.index('--packet') + 1], str(self.packet))
 

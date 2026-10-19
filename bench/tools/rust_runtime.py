@@ -600,6 +600,22 @@ def resolve(name: str, run_dir: Path | None = None, store: Path | None = None, r
     return executable
 
 
+def for_run(name: str, run_dir: Path, store: Path | None = None) -> Path:
+    """The executable a run's own operation runs: its ``runtimes.frozen.json`` pin, found as ``resolve`` finds it.
+
+    A run that pins none was frozen for the Python implementation, so it is refused with the commit to run it from."""
+    frozen = run_dir / "runtimes.frozen.json"
+    pins = read_json(frozen) if frozen.is_file() else {}
+    if name not in pins:
+        manifest = run_dir / "manifest.json"
+        commit = (read_json(manifest).get("freeze_commit") if manifest.is_file() else None) or "unknown"
+        raise Refused(f"run {run_dir.name} pins no {name} runtime; run it from a checkout of its freeze commit {commit}")
+    executable = resolve(name, run_dir, store)
+    if sha256_file(executable) != pins[name].get("sha256"):
+        raise Refused(f"{executable} is not the {name} that {frozen} pins")
+    return executable
+
+
 # --- deviations ---------------------------------------------------------------------------------
 
 def deviation(store: Path, run_dir: Path, name: str, old: str, new: str, notes: dict) -> Path:

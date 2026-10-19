@@ -54,8 +54,10 @@ independent assertions. The harness never obtains expected output from a candida
 
 ## Run the bench-tools corpora
 
-[`roster.v1.json`](../../../tools/behavior_contracts/roster.v1.json) and
-[`diff-identity.v1.json`](../../../tools/behavior_contracts/diff-identity.v1.json) pin the first commands of
+[`roster.v1.json`](../../../tools/behavior_contracts/roster.v1.json),
+[`diff-identity.v1.json`](../../../tools/behavior_contracts/diff-identity.v1.json),
+[`normalize-review.v1.json`](../../../tools/behavior_contracts/normalize-review.v1.json) and
+[`normalize-thermo.v1.json`](../../../tools/behavior_contracts/normalize-thermo.v1.json) pin the commands of
 [`bench-tools`](../processing.md). Select a corpus with `--corpus`:
 
 ```sh
@@ -63,17 +65,26 @@ python3 tools/behavior_contract.py --corpus tools/behavior_contracts/roster.v1.j
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/diff-identity.v1.json --differential /tmp/rust.json
 ```
 
-Without `--implementations`, each program runs its maintained implementation. `codex`, `transcript` and
-`diff-identity` run their Python scripts; `diff_identity.py` is a retained library. `roster` has no Python
-implementation, so it runs the executable `rust_runtime.resolve("bench-tools")` selects, and the command refuses
-when none is installed for `HEAD`. A command map for the Rust programs names that executable:
+Without `--implementations`, each program runs its maintained implementation. `codex`, `transcript`,
+`diff-identity` and `normalize-review` run their Python scripts; `diff_identity.py` and `normalize_review.py` are
+retained libraries. `roster` and `normalize-thermo` have no Python implementation, so they run the executable
+`rust_runtime.resolve("bench-tools")` selects, and the command refuses when none is installed for `HEAD`. A command
+map for the Rust programs names that executable:
 
 ```json
 {
   "roster": ["/absolute/path/to/bench-tools", "roster"],
-  "diff-identity": ["/absolute/path/to/bench-tools", "diff-identity"]
+  "diff-identity": ["/absolute/path/to/bench-tools", "diff-identity"],
+  "normalize-review": ["/absolute/path/to/bench-tools", "normalize-review"],
+  "normalize-thermo": ["/absolute/path/to/bench-tools", "normalize-thermo"]
 }
 ```
+
+The normalizer corpora pin `normalized.json` bytes, the stdout and stderr that `dispatch.sh` saves as `normalize.txt`
+and the skill runners as `normalization.txt`, and every exit code. A successful `--timing` stamp depends on the clock,
+so cargo tests pin that rewrite; the corpora pin the sidecar left unchanged by an unresolved result and the failures.
+A `normalize-thermo` diagnostic that names the resolved artifact root holds the run's temporary path, so cargo tests
+pin those too.
 
 The `diff-identity` fixtures are bare repositories whose non-UTF-8 path names exist only inside Git tree objects,
 so they need no `requires` capability. The cases run `git` from the minimal `PATH`.

@@ -30,8 +30,8 @@ import tempfile
 REPO = Path(__file__).resolve().parents[1]
 CORPUS = REPO / "tools/behavior_contracts/usage.v1.json"
 PYTHON_PROGRAMS = {"codex": "bench/tools/codex_usage.py", "transcript": "bench/tools/transcript_usage.py",
-                   "diff-identity": "bench/tools/diff_identity.py"}
-RUST_PROGRAMS = {"roster": ("bench-tools", ["roster"])}
+                   "diff-identity": "bench/tools/diff_identity.py", "normalize-review": "bench/tools/normalize_review.py"}
+RUST_PROGRAMS = {"roster": ("bench-tools", ["roster"]), "normalize-thermo": ("bench-tools", ["normalize-thermo"])}
 DECISIONS = re.compile(r"(?P<family>.+)-decisions\.v[^/]*\.json")
 
 
