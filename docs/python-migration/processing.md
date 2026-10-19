@@ -372,7 +372,9 @@ replaced, each with its case:
 - `build-packet-help-after-unknown-option` and `rates-help-after-extra-argument`: an unknown argument before `-h` is a
   usage error where help was printed. This holds for every subcommand.
 - `*-help-with-attached-argument`: `-hx` prints help, as argparse does under Python 3.12 and 3.14, where every
-  subcommand but `build-packet` refused it.
+  subcommand but `build-packet` refused it. `*-help-with-equals-or-dash`: `-h` with `=` or `-` attached, such as
+  `-h=1` or `-h-x`, is still refused, exit 2, as argparse refuses it; `main.rs` refuses it when clap would print help,
+  with argparse's message.
 - `build-packet-unicode-16-digit-option-value`: `build-packet` keeps Python 3.14's argparse reading of dash-led option
   values, which `build-packet-option-values-with-leading-dash` pins: a value that names no option and holds a space or
   starts with a dash, an optional dot and a decimal digit. `main.rs` attaches such a value to its option with `=`

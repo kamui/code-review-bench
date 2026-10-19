@@ -34,3 +34,36 @@ fn top_level_exit_codes() {
         );
     }
 }
+
+/// argparse refuses `-h` with `=` or `-` attached in every subcommand, as the replaced parser did.
+#[test]
+fn help_with_equals_or_dash_is_refused() {
+    for command in [
+        "roster",
+        "diff-identity",
+        "normalize-review",
+        "normalize-thermo",
+        "derive-packet",
+        "build-packet",
+        "check-manifest",
+        "rates",
+        "upstream",
+        "export-explorer",
+    ] {
+        for (help, explicit) in [
+            ("-h=1", "'1'"),
+            ("-h=", "''"),
+            ("-h-", "'-'"),
+            ("-h-x", "'-x'"),
+        ] {
+            let output = bench_tools(&[command, help]);
+            assert_eq!(output.status.code(), Some(2), "{command} {help}");
+            assert!(
+                String::from_utf8_lossy(&output.stderr).starts_with(&format!(
+                    "error: argument -h/--help: ignored explicit argument {explicit}\n"
+                )),
+                "{command} {help}"
+            );
+        }
+    }
+}
