@@ -75,6 +75,13 @@ const DECIMAL_ZEROS: [u32; 76] = [
     0x1D7E2, 0x1D7EC, 0x1D7F6, 0x1E140, 0x1E2F0, 0x1E4F0, 0x1E5F1, 0x1E950, 0x1FBF0,
 ];
 
+/// Every character [`decimal_value`] accepts, in ascending order.
+pub fn decimal_digits() -> impl Iterator<Item = char> {
+    DECIMAL_ZEROS
+        .iter()
+        .flat_map(|zero| (*zero..=zero + 9).filter_map(char::from_u32))
+}
+
 /// The value of a character `\d` matches in a Python 3.14 `str` pattern, which `int()` also reads.
 pub fn decimal_value(c: char) -> Option<u32> {
     let point = u32::from(c);
