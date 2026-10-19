@@ -38,6 +38,8 @@ Shared modules carry the Python behavior that byte-pinned outputs depend on:
 - `sha256` spells the `sha2` crate's SHA-256 digest as `hashlib`'s `hexdigest()` does, in one call or incrementally.
 - `pyregex` is `re.search` for the pattern syntax the schemas use, matched by the `regex` crate, `pyunicode` holds
   Python's decimal digits and `int(str)`, and `pyfs` holds `Path.resolve`, `relative_to` and directory listing.
+- `pyobject` holds Python's comparison, membership, indexing, `len`, iteration, `set` and `sorted` on JSON values,
+  failing where Python raises, so rules ported from Python reach the same result on malformed input.
 - `archive` reads and writes gzip, tar and zip through the [registry dependencies](#registry-dependencies), as [archives](#archives)
   describes.
 
@@ -151,6 +153,28 @@ against Rust, with a differential against the retained `native_artifacts.py` and
 `bench_tools::archive` writes, and that it reads what they write. It is deleted with them
 ([#159](https://github.com/kamui/code-review-bench/issues/159)).
 
+### Import verification
+
+[#223](https://github.com/kamui/code-review-bench/issues/223) moves `tools/import_benchmark.py` to
+`bench-tools import-benchmark`, in `bench_tools::import_benchmark`. It reads the repository at its working directory.
+
+- `--check` verifies each entry of `bench/import-manifest.json` at its `preserved_path`, or its path, through
+  `evidence::resolve`, skips entries marked missing, and prints Python's summary line. A refusal lists the failing
+  paths and, for an edited imported file that has no preserved copy and is not under `bench/runs/`, the
+  `bun run import:preserve PATH...` command, the package script that runs `--preserve`.
+- `--preserve PATH...` takes the imported bytes from the current file, or from the oldest commit that holds them,
+  and writes them under `artifacts/import-source/`. The copy is written to a synced temporary file and linked to its
+  name, never replacing a file. The new manifest is checked before it is written, then renamed over the old one in
+  Python's `json.dumps(indent=2)` spelling, keeping its permission bits. `tests/import_benchmark.rs` interrupts each
+  of these steps and retries.
+- `--source`, which extracted the skills repository, is retired; `README.md` names a commit that still has it.
+
+`bun run verify:import` and `.github/workflows/rates.yml` run `--check`. Every refusal prints
+`import_benchmark.py: ` and the message on stderr with exit 1, where Python raised a traceback. The other differences
+are in `import-benchmark-decisions.v3.json`, each with its case. Before the switch, both implementations printed the
+same summary line on this checkout: `Verified copied bytes for 2775 source files and 288 archives; 9 superseded
+source-hash mismatches, 0 unavailable`.
+
 ## Registry dependencies
 
 The owner allowed pinned crates.io dependencies on 2026-10-19 ([#215](https://github.com/kamui/code-review-bench/issues/215)).
@@ -217,9 +241,9 @@ lists them. When the Cargo cache lacks one, `rust_runtime.py install` fails and 
 | `equivalent` | 1.0.3 | MIT OR Apache-2.0 | Key comparison for `indexmap` |
 | `memchr` | 2.8.3 | Unlicense OR MIT | Byte search for `zip` |
 | `typed-path` | 0.12.3 | MIT OR Apache-2.0 | Entry path handling for `zip` |
-| `nix` | 0.31.3 | MIT | Unix calls for `zip`, on macOS only |
-| `bitflags` | 2.13.2 | MIT OR Apache-2.0 | Flag types for `nix`, on macOS only |
-| `cfg_aliases` | 0.2.2 | MIT | Build-time configuration for `nix`, on macOS only |
+| `nix` | 0.31.3 | MIT | `statvfs` for `regrade status`'s free space ([#239](https://github.com/kamui/code-review-bench/issues/239)), a direct dependency built with `fs` only, since the crate forbids `unsafe`; on macOS also Unix calls for `zip` |
+| `bitflags` | 2.13.2 | MIT OR Apache-2.0 | Flag types for `nix` |
+| `cfg_aliases` | 0.2.2 | MIT | Build-time configuration for `nix` |
 
 `Cargo.lock` also lists `aho-corasick` 1.1.5 (Unlicense OR MIT), an optional dependency of `regex` that its disabled
 `perf` feature would build.
@@ -240,6 +264,7 @@ lists them. When the Cargo cache lacks one, `rust_runtime.py install` fails and 
 | `tools/export_explorer.py`, its export | `bench-tools export-explorer evidence`, `stage` and `publish`, `bench_tools::export_explorer` | `bun run data` runs the front below; `.github/workflows/pages.yml` installs `bench-tools`; `src/lib/scoring.test.ts` passes `--root` and `--public` | The Python front, a temporary bridge below. The cases of `test_export_explorer.py` that read the export's internals moved to cargo tests and [`export-explorer.v1.json`](../../tools/behavior_contracts/export-explorer.v1.json); the rest run the front. |
 | `bench/tools/evidence_store.py`, its `fetch` and `verify` commands and `resolve` | `bench-tools evidence fetch`, `verify` and `resolve`, `bench_tools::evidence` | `bun run evidence:fetch`; `.github/workflows/pages.yml` and `rates.yml`; `export_explorer.py` through `export-explorer evidence --restore`; `docs/evidence-storage.md`, `docs/codex-container-fixture.md` | Retained byte-unchanged: `pack` and `publish` stay in Python, and `prune_workspace.py` and `native_artifacts.py` import it. [`evidence-store.v1.json`](../../tools/behavior_contracts/evidence-store.v1.json) runs `fetch` and `verify` against Rust, with a differential against Python in CI. |
 | `bench/tools/native_artifacts.py`, its `verify` and `restore` commands and `file_artifacts`; `file_attempt.archive_transcripts` | `bench-tools native-artifacts verify`, `restore` and `file`, `evidence archive-transcripts` | `file_attempt.py`, below; `bench/README.md`, `docs/evidence-storage.md` | `native_artifacts.py` is retained byte-unchanged for `prune_workspace.py`. `archive_transcripts` is deleted; the corpus keeps its source as a driver. [`native-artifacts.v1.json`](../../tools/behavior_contracts/native-artifacts.v1.json) runs against Rust, with a differential against Python in CI. |
+| `tools/import_benchmark.py`, its `--check` and `--preserve` | `bench-tools import-benchmark`, `bench_tools::import_benchmark` | `bun run verify:import` and `bun run import:preserve`; `.github/workflows/rates.yml`; `tools/test_evidence_consumers.py`; `README.md`, `docs/evidence-storage.md` | Deleted with `test_import_benchmark.py`, whose cases are in [`import-benchmark.v1.json`](../../tools/behavior_contracts/import-benchmark.v1.json); the corpus ran against both before deletion. `--source` is retired. |
 | `bench/tools/recover_evidence.py`, `bench/tools/local_evidence_resolution.py` | `bench-tools evidence recover` and `restore-local`, `bench_tools::evidence::recovery` | `docs/evidence-storage.md` | Deleted with `test_recover_evidence.py` and `test_local_evidence_resolution.py`, whose cases are in the cargo tests and `evidence-store.v1.json`; the corpus ran against both before deletion. |
 
 `tools/test_moved_cli_callers.py` fails when a current file other than the retained module still runs a moved
@@ -527,7 +552,7 @@ the v3 inventory records.
 | `methodology`, `collect_run` | Moved by the delivery plan | #156, #155 |
 | `stage_edition.py` | Retained research record | #156 |
 | `plan.py`, `recut.py` and `verify.py` in `last-push-recut-2026-10-07` | Historical replay, as #192 classified them | None |
-| `builtin-review-benchmark-2026-09-24/answers.py` | Historical replay by role, as #192 classified it. The census still marks it active because `tools/import_benchmark.py` lists its path to copy and a fixture in `tools/test_python_inventory.py` names the same path; both must go before it reads as replay | #155 |
+| `builtin-review-benchmark-2026-09-24/answers.py` | Historical replay by role, as #192 classified it. The census marked it active because `tools/import_benchmark.py` listed its path to copy and a fixture in `tools/test_python_inventory.py` named the same path; [#223](https://github.com/kamui/code-review-bench/issues/223) removed both, so a census at its head reads it as replay | #155 |
 
 ## Research records
 
@@ -562,6 +587,7 @@ python3 tools/behavior_contract.py --corpus tools/behavior_contracts/derive-pack
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/build-packet.v1.json
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/export-explorer.v1.json
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/archive.v1.json
+python3 tools/behavior_contract.py --corpus tools/behavior_contracts/import-benchmark.v1.json
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/evidence-store.v1.json --implementations EVIDENCE_MAP
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/evidence-store.v1.json --allow-known-defects --differential EVIDENCE_MAP
 python3 tools/behavior_contract.py --verify-decision-history
@@ -569,9 +595,10 @@ python3 tools/behavior_contract.py --verify-decision-history
 
 `MAP` is a [command map](contracts/README.md#run-the-usage-corpus) naming the resolved executable, as the `Rust
 runtime` workflow writes it. `EVIDENCE_MAP` also routes `evidence-store`'s `fetch` and `verify` to it, as
-[the storage corpora](contracts/README.md#run-the-storage-corpora) show. The `roster`, `normalize-thermo`, `derive-packet`, `build-packet`, `export-explorer` and
-`archive` corpora run the Rust executable by default; the other corpora run the retained Python libraries by default.
-`derive-packet`, `build-packet` and `export-explorer` have no Python implementation left to compare with, and the
+[the storage corpora](contracts/README.md#run-the-storage-corpora) show. The `roster`, `normalize-thermo`, `derive-packet`, `build-packet`, `export-explorer`,
+`archive` and `import-benchmark` corpora run the Rust executable by default; the other corpora run the retained Python
+libraries by default. `derive-packet`, `build-packet`, `export-explorer` and `import-benchmark` have no Python
+implementation left to compare with, and the
 `archive` commands have no Python counterpart, so they have no differential. Each `archive` decision states what
 Python 3.12 and 3.14 do with its fixture. The base commit's Python export derived every `export-explorer` expectation except those of decided
 changes. `rates.py` and `upstream.py` run through drivers in `tools/behavior_contract.py` that point them at the case

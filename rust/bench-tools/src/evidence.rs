@@ -67,7 +67,7 @@ pub trait Disk {
     fn link(&mut self, from: &Path, to: &Path) -> io::Result<()>;
     /// Flush a directory's entries.
     fn sync_dir(&mut self, path: &Path) -> io::Result<()>;
-    /// Move `from` to `to`, as `os.rename` does.
+    /// Rename `from` over `to`, as `os.replace` does.
     fn rename(&mut self, from: &Path, to: &Path) -> io::Result<()> {
         std::fs::rename(from, to)
     }

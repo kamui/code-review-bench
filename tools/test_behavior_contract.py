@@ -11,10 +11,13 @@ import base64
 import copy
 import json
 import errno
+import io
+import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -376,6 +379,28 @@ class ContractTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertIn(f"FAIL {case_id}", result.stdout)
 
+    def test_ruling_corpus_holds_for_the_retained_libraries_and_rejects_a_dropped_round_reset(self):
+        corpus = contract.CORPUS.parent / "ruling-record.v1.json"
+        result = self.run_cli("--allow-known-defects", "--corpus", corpus)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("PASS ruling-route-asks-trust-miss-in-round", result.stdout)
+        tools = contract.REPO / "bench/tools"
+        before = 'if any(reset["path"] in in_round for reset in running["resets"]):'
+        with tempfile.TemporaryDirectory() as temporary:
+            for module in ("ruling_record.py", "ruling_summary.py", "delegation.py", "ruling_dossier.py"):
+                source = (tools / module).read_text(encoding="utf-8")
+                if module == "delegation.py":
+                    self.assertIn(before, source)
+                    source = source.replace(before, "if False:")
+                (Path(temporary) / module).write_text(source, encoding="utf-8")
+            commands = Path(temporary) / "commands.json"
+            commands.write_text(json.dumps({"ruling": [sys.executable, "-c", contract.PYTHON_DRIVERS["ruling"], temporary]}),
+                                encoding="utf-8")
+            result = self.run_cli("--allow-known-defects", "--corpus", corpus, "--implementations", commands)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("FAIL ruling-route-asks-trust-miss-in-round", result.stdout)
+        self.assertIn("PASS ruling-route-settles-level-1", result.stdout)
+
     def test_diff_identity_corpus_holds_for_the_retained_library_and_rejects_byte_order(self):
         corpus = contract.CORPUS.parent / "diff-identity.v1.json"
         result = self.run_cli("--allow-known-defects", "--corpus", corpus)
@@ -583,6 +608,19 @@ print(digest)
         self.assertTrue(any(diff.startswith("consistency:") for diff in contract.compare(
             {**best, "stdout": {"mode": "bytes", "bytes_b64": encoded(b"<archive 1>\n")},
              "stderr": {"mode": "bytes", "bytes_b64": ""}}, wrong)))
+
+    def test_an_archive_member_name_that_is_not_utf8_is_listed_by_its_bytes(self):
+        raw = io.BytesIO()
+        with tarfile.open(fileobj=raw, mode="w:gz", format=tarfile.PAX_FORMAT) as bundle:
+            for name in ("plain.txt", os.fsdecode(b"review-\xff.md")):
+                info = tarfile.TarInfo(name)
+                info.size = 1
+                bundle.addfile(info, io.BytesIO(b"x"))
+        members = contract.archive_members(raw.getvalue(), "tar.gz")
+        self.assertEqual(members[0]["name"], "plain.txt")
+        self.assertNotIn("name", members[1])
+        self.assertEqual(contract.decode(members[1]["name_b64"]), b"review-\xff.md")
+        self.assertEqual(len(contract.digest(members)), 64)
 
     NATIVE_WRITER = """import hashlib, io, json, os, sys, zipfile
 raw = io.BytesIO()

@@ -5,8 +5,9 @@ use bench_tools::pyjson::{self, Duplicates};
 use bench_tools::pytext::{self, PyPath};
 use bench_tools::schema::{SchemaError, Validator};
 use bench_tools::{
-    archive, build_packet, claims, derive_packet, diff_identity, evidence, export_explorer,
-    native_artifacts, normalize_thermo, pyfs, pyunicode, rates, roster, upstream,
+    archive, build_packet, claims, delegation, derive_packet, diff_identity, evidence,
+    export_explorer, grading_reports, grading_validation, import_benchmark, native_artifacts,
+    normalize_thermo, pyfs, pyunicode, pyvalue, rates, roster, ruling, upstream,
 };
 use clap::builder::PossibleValuesParser;
 use clap::error::ErrorKind;
@@ -14,7 +15,7 @@ use clap::{Args, CommandFactory, Parser, Subcommand};
 use std::ffi::{OsStr, OsString};
 use std::fmt::Display;
 use std::io::Write;
-use std::os::unix::ffi::OsStringExt;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::process::ExitCode;
 
 /// Deterministic benchmark tools.
@@ -63,10 +64,101 @@ enum Cli {
     /// restore-local.py did.
     #[command(subcommand, infer_long_args = true)]
     Evidence(EvidenceCommand),
+    /// Check ruling records, route a ruling, summarize rounds, or check a ruling dossier.
+    #[command(subcommand, infer_long_args = true)]
+    Ruling(RulingCommand),
+    /// Check a grader's output against the rules grading_validation.py applies.
+    #[command(subcommand, infer_long_args = true)]
+    Grading(GradingCommand),
+    /// Verify the imported originals bench/import-manifest.json pins, or preserve them before an intended edit, as
+    /// tools/import_benchmark.py did.
+    #[command(infer_long_args = true)]
+    ImportBenchmark(ImportBenchmarkArgs),
+    /// Report on grading queues or archive a grading attempt, as bench/tools/regrade.py defines them.
+    #[command(subcommand, infer_long_args = true)]
+    Regrade(RegradeCommand),
+    /// Derive a time and cost audit log from filed benchmark runs, for estimating later runs.
+    #[command(infer_long_args = true)]
+    AuditLog(AuditLogArgs),
     /// Verify, restore or file a skill attempt's native artifacts, as native_artifacts.py does.
     #[command(subcommand, infer_long_args = true)]
     NativeArtifacts(NativeArtifactsCommand),
 }
+
+#[derive(Args)]
+struct ImportBenchmarkArgs {
+    /// Verify every imported file and transcript archive against the manifest.
+    #[arg(long)]
+    check: bool,
+    /// Preserve the imported originals of files that are edited here.
+    #[arg(long, num_args = 1.., action = clap::ArgAction::Set, allow_negative_numbers = true)]
+    preserve: Option<Vec<OsString>>,
+}
+
+#[derive(Subcommand)]
+enum RulingCommand {
+    /// Check a before-record, and its after-record when given, and say why the ruling stays with the user.
+    #[command(infer_long_args = true)]
+    Check {
+        #[arg(allow_negative_numbers = true)]
+        before: OsString,
+        #[arg(allow_negative_numbers = true)]
+        after: Option<OsString>,
+        #[arg(long, default_value = ".", allow_negative_numbers = true)]
+        root: OsString,
+    },
+    /// Print whether agents may settle a contract 2 ruling (SETTLE) or the user is asked (ASK), and the question.
+    #[command(infer_long_args = true)]
+    Route {
+        #[arg(allow_negative_numbers = true)]
+        before: OsString,
+        #[arg(long, default_value = delegation::POLICY, allow_negative_numbers = true)]
+        policy: OsString,
+        #[arg(long, default_value = ".", allow_negative_numbers = true)]
+        root: OsString,
+    },
+    /// Summarize every ruling record under docs/research, or one round's.
+    #[command(infer_long_args = true)]
+    Summary {
+        // argparse took --r and --ro for --round before --root existed, so they stay its abbreviations.
+        #[arg(long, aliases = ["r", "ro"], allow_negative_numbers = true)]
+        round: Option<OsString>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value = ".", allow_negative_numbers = true)]
+        root: OsString,
+    },
+    /// Write a new sheet of earlier owner rulings of one decision type.
+    #[command(infer_long_args = true)]
+    Precedents {
+        #[arg(long = "type", value_parser = PossibleValuesParser::new(DECISION_TYPE_NAMES))]
+        kind: String,
+        #[arg(long, allow_negative_numbers = true)]
+        exclude: OsString,
+        #[arg(long, allow_negative_numbers = true)]
+        out: OsString,
+        #[arg(long, default_value = ".", allow_negative_numbers = true)]
+        root: OsString,
+    },
+    /// Refuse a ruling dossier that does not show where a promise comes from and the searches made to find one.
+    #[command(infer_long_args = true)]
+    Dossier {
+        #[arg(allow_negative_numbers = true)]
+        directory: OsString,
+    },
+}
+
+const DECISION_TYPE_NAMES: [&str; 9] = [
+    "pre-existing-admission",
+    "pre-existing-raise",
+    "pre-existing-grouping",
+    "candidate",
+    "recovery",
+    "grouping",
+    "band",
+    "control",
+    "reconciliation",
+];
 
 #[derive(Args)]
 struct RosterArgs {
@@ -391,6 +483,58 @@ enum NativeArtifactsCommand {
     },
 }
 
+#[derive(Subcommand)]
+enum RegradeCommand {
+    /// Print each queue's mapped and planned batches, state, spend, client and runs, then its free space.
+    // `regrade_queues.sh status` passed every argument to Python as a queue directory, `-h` and `--` included.
+    #[command(disable_help_flag = true)]
+    Status {
+        #[arg(
+            required = true,
+            allow_hyphen_values = true,
+            trailing_var_arg = true,
+            value_name = "QUEUE_DIRECTORY"
+        )]
+        queues: Vec<OsString>,
+    },
+    /// Archive an attempt's evidence under ARCHIVE_DIR/<run>/<target>/<attempt>, beside its receipt.
+    #[command(infer_long_args = true)]
+    ArchiveAttempt {
+        #[arg(allow_negative_numbers = true)]
+        attempt: OsString,
+        #[arg(allow_negative_numbers = true)]
+        archive_dir: OsString,
+        #[arg(long, default_value = ".", allow_negative_numbers = true)]
+        root: OsString,
+    },
+}
+
+#[derive(Args)]
+struct AuditLogArgs {
+    #[arg(long, allow_negative_numbers = true)]
+    out: Option<OsString>,
+    /// A regrade.py archive root.
+    #[arg(long, allow_negative_numbers = true)]
+    grading: Vec<OsString>,
+    #[arg(long, default_value = ".", allow_negative_numbers = true)]
+    root: OsString,
+    #[arg(value_name = "RUN", allow_negative_numbers = true)]
+    runs: Vec<OsString>,
+}
+
+#[derive(Subcommand)]
+enum GradingCommand {
+    /// Validate blinded grader output without choosing judgments or accessing an unblinding key.
+    #[command(infer_long_args = true)]
+    Validate {
+        #[arg(default_value = "verdicts.json", allow_negative_numbers = true)]
+        verdicts: OsString,
+        /// The validator inputs grade.py prepares, validator/inputs.json in a grading workspace.
+        #[arg(long, allow_negative_numbers = true)]
+        inputs: OsString,
+    },
+}
+
 /// Prints a parse error or the help clap renders, and exits as it does: 2 for misuse, 0 for help.
 fn report(error: &clap::Error) -> ExitCode {
     if error.print().is_err() {
@@ -400,14 +544,20 @@ fn report(error: &clap::Error) -> ExitCode {
 }
 
 /// A usage error found after parsing, reported with the subcommand's usage, exit 2.
+/// `command` names the subcommand whose usage the error shows, with nested names separated by spaces.
 fn misuse(command: &str, kind: ErrorKind, message: impl Display) -> ExitCode {
     let mut cli = Cli::command();
     cli.build();
-    let error = match cli.find_subcommand_mut(command) {
-        Some(subcommand) => subcommand.error(kind, message),
-        None => cli.error(kind, message),
-    };
-    report(&error)
+    let mut found = &mut cli;
+    for name in command.split(' ') {
+        if found.find_subcommand(name).is_none() {
+            break;
+        }
+        found = found
+            .find_subcommand_mut(name)
+            .expect("the subcommand was just found");
+    }
+    report(&found.error(kind, message))
 }
 
 fn bytes(value: OsString) -> Vec<u8> {
@@ -1048,6 +1198,18 @@ fn check_packages(cache: &OsStr, names: &[OsString]) -> Result<ExitCode, ExitCod
     finish_archive(&archive_report(manifests, "manifests", totals), failed)
 }
 
+fn run_grading_validate(verdicts: &OsStr, inputs: &OsStr) -> Result<ExitCode, ExitCode> {
+    let problems =
+        grading_validation::command(pytext::os_bytes(verdicts), pytext::os_bytes(inputs));
+    let mut output = String::new();
+    for problem in &problems {
+        output.push_str(problem);
+        output.push('\n');
+    }
+    write_stdout(output.as_bytes())?;
+    Ok(ExitCode::from(if problems.is_empty() { 0 } else { 1 }))
+}
+
 fn check_scratch(names: &[OsString]) -> Result<ExitCode, ExitCode> {
     let (mut rows, mut entries, mut failed) = (Vec::new(), 0, 0);
     for name in names {
@@ -1264,6 +1426,49 @@ fn run_native_artifacts(command: NativeArtifactsCommand) -> Result<ExitCode, Exi
     }
 }
 
+/// The `--check` or `--preserve` of `tools/import_benchmark.py`, run in the repository: a refusal is printed after
+/// `import_benchmark.py: ` on stderr with exit 1, the status Python's traceback had.
+fn run_import_benchmark(arguments: ImportBenchmarkArgs) -> Result<ExitCode, ExitCode> {
+    if !arguments.check && arguments.preserve.is_none() {
+        return Err(misuse(
+            "import-benchmark",
+            ErrorKind::MissingRequiredArgument,
+            "provide --check or --preserve",
+        ));
+    }
+    let root = std::env::current_dir()
+        .map(|cwd| PyPath::new(pytext::os_bytes(cwd.as_os_str())))
+        .map_err(|error| {
+            eprintln!("import_benchmark.py: {}", pytext::os_error(&error, b"."));
+            ExitCode::from(1)
+        })?;
+    let mut remote = evidence::GitHub;
+    let mut disk = evidence::System;
+    let mut store = evidence::Store {
+        remote: &mut remote,
+        disk: &mut disk,
+        now: &evidence::now_isoformat,
+        temporary: evidence::system_temp(),
+    };
+    let outcome = match arguments.preserve {
+        Some(names) => {
+            let names: Vec<Vec<u8>> = names.into_iter().map(bytes).collect();
+            import_benchmark::preserve(&mut store, &root, &names)
+        }
+        None => import_benchmark::check(&mut store, &root),
+    };
+    match outcome {
+        Ok(line) => {
+            write_stdout(format!("{line}\n").as_bytes())?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(import_benchmark::Refusal(message)) => {
+            eprintln!("import_benchmark.py: {message}");
+            Err(ExitCode::from(1))
+        }
+    }
+}
+
 /// `restore-local.py ROOT_NAME ORIGINAL_RELATIVE_PATH NEW_FILE`, run in the repository: every refusal is its message
 /// alone on stderr, with exit 1.
 fn run_restore_local(
@@ -1303,19 +1508,268 @@ fn run_restore_local(
     }
 }
 
-/// argparse reads a dash-led argument as an option's value when it names no option and reads as a negative
-/// number or holds a space; `build-packet-option-values-with-leading-dash` pins that. clap takes only numbers,
-/// so build-packet's arguments attach such a value to its option with `=` before clap parses them.
-fn attach_dash_led_values(arguments: Vec<OsString>) -> Vec<OsString> {
-    if arguments.get(1).map(|name| pytext::os_bytes(name)) != Some(b"build-packet") {
-        return arguments;
+/// Python's output so far, then the refusal of what made it raise, exit 2. The Python wrote its traceback and
+/// exited 1; `ruling-record-decisions.v1.json` and `ruling-dossier-decisions.v1.json` record the change.
+fn crashed(program: &str, output: &[u8], raised: &pyvalue::Raised) -> ExitCode {
+    let _ = write_stdout(output);
+    eprintln!("{program}: {}", raised.describe());
+    ExitCode::from(2)
+}
+
+/// `parser.exit(1, f"{error}\n")` for what the Python's ruling commands catch, and a refusal for the rest.
+fn ruling_failed(raised: &pyvalue::Raised) -> ExitCode {
+    match raised.caught() {
+        Some(message) => {
+            eprintln!("{message}");
+            ExitCode::from(1)
+        }
+        None => crashed("ruling_record.py", b"", raised),
     }
+}
+
+fn lines(items: &[String]) -> String {
+    let mut text = items.join("\n");
+    text.push('\n');
+    text
+}
+
+fn run_ruling_check(
+    before: &OsStr,
+    after: Option<&OsStr>,
+    root: &OsStr,
+) -> Result<ExitCode, ExitCode> {
+    let repo = ruling::Repo::new(pytext::os_bytes(root));
+    let before_path = PyPath::new(pytext::os_bytes(before));
+    let mut output = Vec::new();
+    let outcome = (|| -> pyvalue::Py<u8> {
+        let record = ruling::record::read_before(&repo, &before_path)?;
+        let mut problems = ruling::record::faults(&repo, &record)?;
+        let after = match after {
+            Some(path) => repo.load(&PyPath::new(pytext::os_bytes(path)))?,
+            None => bench_tools::pyjson::Value::Null,
+        };
+        if after.truthy() && problems.is_empty() {
+            problems =
+                ruling::record::after_faults(&repo, &record, &after, &before_path, true, None)?;
+        }
+        if !problems.is_empty() {
+            output.extend_from_slice(lines(&problems).as_bytes());
+            return Ok(1);
+        }
+        let stays = ruling::record::reasons(&repo, &record)?;
+        output.extend_from_slice(if stays.is_empty() {
+            b"No recorded reason keeps this with the user. Delegation still needs a policy the user adopted.\n".as_slice()
+        } else {
+            b"Stays with the user:\n".as_slice()
+        });
+        let listed: Vec<String> = stays.iter().map(|reason| format!("- {reason}")).collect();
+        output.extend_from_slice(lines(&listed).as_bytes());
+        if after.truthy() {
+            let mut surprises: Vec<String> = ruling::record::surprises(&repo, &record, &after)?
+                .iter()
+                .map(|surprise| format!("- {surprise}"))
+                .collect();
+            if surprises.is_empty() {
+                surprises.push("- none".into());
+            }
+            output.extend_from_slice(format!("Surprises:\n{}", lines(&surprises)).as_bytes());
+        }
+        Ok(0)
+    })();
+    match outcome {
+        Ok(code) => {
+            write_stdout(&output)?;
+            Ok(ExitCode::from(code))
+        }
+        Err(raised) => Err(crashed("ruling_record.py", &output, &raised)),
+    }
+}
+
+fn run_ruling_route(before: &OsStr, policy: &OsStr, root: &OsStr) -> Result<ExitCode, ExitCode> {
+    let repo = ruling::Repo::new(pytext::os_bytes(root));
+    let before_path = PyPath::new(pytext::os_bytes(before));
+    let outcome = (|| -> pyvalue::Py<(Vec<u8>, u8)> {
+        let record = ruling::record::read_before(&repo, &before_path)?;
+        let mut problems = ruling::record::faults(&repo, &record)?;
+        let two = bench_tools::pyjson::Value::Int("2".into());
+        if !pyvalue::get(&record, "contract")?.py_eq(&two) {
+            problems.push(
+                "`route` needs a contract 2 record, which pins the case file the user is shown"
+                    .into(),
+            );
+        }
+        if !problems.is_empty() {
+            return Ok((lines(&problems).into_bytes(), 1));
+        }
+        let policy_path = repo.root.join(pytext::os_bytes(policy));
+        let routed = delegation::route(&repo, &record, &policy_path, None, Some(&before_path))?;
+        if routed.reasons.is_empty() {
+            return Ok((format!("SETTLE level {}\n", routed.level).into_bytes(), 0));
+        }
+        let listed: Vec<String> = routed
+            .reasons
+            .iter()
+            .map(|reason| format!("- {reason}"))
+            .collect();
+        let question = ruling::record::question(&repo, &record)?;
+        Ok((
+            format!("ASK\n{}\n\n{question}\n", listed.join("\n")).into_bytes(),
+            0,
+        ))
+    })();
+    match outcome {
+        Ok((output, code)) => {
+            write_stdout(&output)?;
+            Ok(ExitCode::from(code))
+        }
+        Err(raised) => Err(ruling_failed(&raised)),
+    }
+}
+
+fn run_ruling_summary(
+    round: Option<&OsStr>,
+    json: bool,
+    root: &OsStr,
+) -> Result<ExitCode, ExitCode> {
+    let repo = ruling::Repo::new(pytext::os_bytes(root));
+    let outcome = (|| -> pyvalue::Py<String> {
+        let pairs = ruling::summary::records(&repo)?;
+        let round = match round.map(|round| round.to_str().ok_or(round)) {
+            None => None,
+            Some(Ok(round)) => Some(round),
+            Some(Err(round)) => {
+                return Err(pyvalue::Raised::Value(format!(
+                    "unknown round: {}",
+                    pytext::stderr_text(pytext::os_bytes(round))
+                )));
+            }
+        };
+        let summary = ruling::summary::summarize(&repo, &pairs, round)?;
+        if json {
+            let options = pyjson::Dumps {
+                ensure_ascii: false,
+                indent: Some(2),
+                ..pyjson::Dumps::default()
+            };
+            Ok(format!(
+                "{}\n",
+                pyjson::dumps(&summary.to_value()?, &options)
+            ))
+        } else {
+            Ok(format!("{}\n", summary.render()?))
+        }
+    })();
+    match outcome {
+        Ok(output) => {
+            write_stdout(output.as_bytes())?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(raised) => Err(ruling_failed(&raised)),
+    }
+}
+
+fn run_ruling_precedents(
+    kind: &str,
+    exclude: &OsStr,
+    out: &OsStr,
+    root: &OsStr,
+) -> Result<ExitCode, ExitCode> {
+    let Some(exclude) = exclude.to_str() else {
+        return Err(misuse(
+            "ruling precedents",
+            ErrorKind::InvalidUtf8,
+            format!(
+                "argument --exclude: not UTF-8 text: {}",
+                pytext::repr(&pytext::surrogateescape(pytext::os_bytes(exclude)))
+            ),
+        ));
+    };
+    let repo = ruling::Repo::new(pytext::os_bytes(root));
+    let out = PyPath::new(pytext::os_bytes(out));
+    let outcome = (|| -> pyvalue::Py<()> {
+        let pairs = ruling::summary::records(&repo)?;
+        let sheet = ruling::summary::precedents(&repo, &pairs, kind, exclude)?;
+        if pyvalue::exists(&out) {
+            return Err(pyvalue::Raised::Value(format!(
+                "refusing to replace {}; save a new sheet",
+                out.display()
+            )));
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(out.to_path_buf())
+            .map_err(|error| pyvalue::Raised::Os(pytext::os_error(&error, out.as_bytes())))?;
+        file.write_all(sheet.as_bytes())
+            .map_err(|error| pyvalue::Raised::Os(pytext::os_error(&error, out.as_bytes())))
+    })();
+    match outcome {
+        Ok(()) => Ok(ExitCode::SUCCESS),
+        Err(raised) => Err(ruling_failed(&raised)),
+    }
+}
+
+fn run_ruling_dossier(directory: &OsStr) -> Result<ExitCode, ExitCode> {
+    let repo = ruling::Repo::new(b".");
+    match ruling::dossier::faults(&repo, &PyPath::new(pytext::os_bytes(directory))) {
+        Ok(problems) if problems.is_empty() => {
+            write_stdout(b"preparation complete; whether each search and reading is right still needs review\n")?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Ok(problems) => {
+            write_stdout(lines(&problems).as_bytes())?;
+            Ok(ExitCode::from(1))
+        }
+        Err(raised) => Err(crashed("ruling_dossier.py", b"", &raised)),
+    }
+}
+
+fn run_ruling(command: RulingCommand) -> Result<ExitCode, ExitCode> {
+    match command {
+        RulingCommand::Check {
+            before,
+            after,
+            root,
+        } => run_ruling_check(&before, after.as_deref(), &root),
+        RulingCommand::Route {
+            before,
+            policy,
+            root,
+        } => run_ruling_route(&before, &policy, &root),
+        RulingCommand::Summary { round, json, root } => {
+            run_ruling_summary(round.as_deref(), json, &root)
+        }
+        RulingCommand::Precedents {
+            kind,
+            exclude,
+            out,
+            root,
+        } => run_ruling_precedents(&kind, &exclude, &out, &root),
+        RulingCommand::Dossier { directory } => run_ruling_dossier(&directory),
+    }
+}
+
+/// argparse reads a dash-led argument as a value when it names no option and reads as a negative number or holds
+/// a space; `build-packet-option-values-with-leading-dash` and `grading-validation`'s `dash-led-*` cases pin that.
+/// clap takes only numbers, so before it parses them, build-packet's and grading validate's arguments attach such
+/// a value to its option with `=`, and grading validate's positional moves after `--`.
+fn attach_dash_led_values(arguments: Vec<OsString>) -> Vec<OsString> {
+    let name = |index: usize| arguments.get(index).map(|name| pytext::os_bytes(name));
+    let path: &[&str] = match (name(1), name(2)) {
+        (Some(b"build-packet"), _) => &["build-packet"],
+        (Some(b"grading"), Some(b"validate")) => &["grading", "validate"],
+        _ => return arguments,
+    };
     let mut command = Cli::command();
     command.build();
-    let Some(build_packet) = command.find_subcommand("build-packet") else {
+    let Some(subcommand) = path
+        .iter()
+        .try_fold(&command, |command, name| command.find_subcommand(name))
+    else {
         return arguments;
     };
-    let options: Vec<(String, bool)> = build_packet
+    let moves_positionals = subcommand.get_positionals().next().is_some();
+    let options: Vec<(String, bool)> = subcommand
         .get_arguments()
         .filter_map(|argument| {
             let takes_value = argument.get_action().takes_values();
@@ -1365,40 +1819,59 @@ fn attach_dash_led_values(arguments: Vec<OsString>) -> Vec<OsString> {
             && (negative_number || argument.contains(&b' '))
     };
     let mut attached = Vec::with_capacity(arguments.len());
-    let mut rest = arguments.into_iter().peekable();
-    while let Some(argument) = rest.next() {
+    let mut positionals = Vec::new();
+    let mut after_separator = None;
+    let mut rest = arguments.into_iter().enumerate().peekable();
+    while let Some((index, argument)) = rest.next() {
         let bytes = pytext::os_bytes(&argument);
         if bytes == b"--" {
-            attached.push(argument);
-            attached.extend(rest);
+            after_separator = Some(rest.map(|(_, argument)| argument).collect::<Vec<_>>());
             break;
         }
-        match rest.next_if(|value| takes_value(bytes) && dash_led_value(pytext::os_bytes(value))) {
-            Some(value) => {
+        match rest
+            .next_if(|(_, value)| takes_value(bytes) && dash_led_value(pytext::os_bytes(value)))
+        {
+            Some((_, value)) => {
                 let mut joined = argument.into_vec();
                 joined.push(b'=');
                 joined.extend_from_slice(pytext::os_bytes(&value));
                 attached.push(OsString::from_vec(joined));
             }
+            None if moves_positionals && index > path.len() && dash_led_value(bytes) => {
+                positionals.push(argument)
+            }
             None => attached.push(argument),
         }
+    }
+    if !positionals.is_empty() || after_separator.is_some() {
+        attached.push(OsString::from("--"));
+        attached.extend(positionals);
+        attached.extend(after_separator.unwrap_or_default());
     }
     attached
 }
 
 /// argparse refuses `-h`, or a run of `h`s such as `-hh`, with an attached argument that starts with `=` or `-`,
-/// such as `-h=1`, `-hh=1` or `-h-x`, exit 2, where clap prints help. The first `-h` before `--` decides, as argparse acts on the first help it reads.
+/// such as `-h=1`, `-hh=1` or `-h-x`, exit 2, where clap prints help. The first `-h` before `--` decides, as argparse acts on the first help it reads;
+/// for `grading`, an earlier `--help` decides first, as `grading-validation`'s `help-before-invalid-short-help` pins.
 fn refuse_help_with_explicit_argument(arguments: &[OsString]) -> Option<ExitCode> {
     let command = arguments
         .get(1)?
         .to_str()
         .filter(|name| !name.starts_with('-'))?;
+    // grading validate's only long options are --inputs and --help, so --h, --he and --hel abbreviate --help.
+    let long_help = |argument: &[u8]| {
+        command == "grading" && matches!(argument, b"--h" | b"--he" | b"--hel" | b"--help")
+    };
     let help = arguments
         .iter()
         .skip(2)
         .map(|argument| pytext::os_bytes(argument))
         .take_while(|argument| *argument != b"--")
-        .find(|argument| argument.starts_with(b"-h"))?;
+        .find(|argument| argument.starts_with(b"-h") || long_help(argument))?;
+    if long_help(help) {
+        return None;
+    }
     let attached = &help[2..];
     let attached = &attached[attached.iter().take_while(|byte| **byte == b'h').count()..];
     let explicit = match attached.first()? {
@@ -1414,6 +1887,75 @@ fn refuse_help_with_explicit_argument(arguments: &[OsString]) -> Option<ExitCode
             pytext::repr(&pytext::surrogateescape(explicit))
         ),
     ))
+}
+
+fn regrade_status(queues: &[OsString]) -> Result<ExitCode, ExitCode> {
+    let queues: Vec<Vec<u8>> = queues
+        .iter()
+        .map(|queue| queue.as_bytes().to_vec())
+        .collect();
+    let mut stdout = std::io::stdout().lock();
+    grading_reports::status(&queues, &mut stdout).map_err(|failure| {
+        eprintln!("regrade_queues.sh: {}", failure.line());
+        ExitCode::from(1)
+    })?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// A failure `regrade.py` or `audit_log.py` caught exits 2 with its message; any other is the last line of the
+/// traceback Python printed, exit 1.
+fn reported(program: &str, failure: &bench_tools::pysemantics::Failure) -> ExitCode {
+    if grading_reports::caught(failure) {
+        eprintln!("{program}: {}", failure.message());
+        ExitCode::from(2)
+    } else {
+        eprintln!("{program}: {}", failure.line());
+        ExitCode::from(1)
+    }
+}
+
+fn absolute(path: &OsStr) -> PyPath {
+    let current = std::env::current_dir().unwrap_or_default();
+    PyPath::new(current.as_os_str().as_bytes()).join(path.as_bytes())
+}
+
+fn archive_attempt(
+    attempt: &OsStr,
+    archive_dir: &OsStr,
+    root: &OsStr,
+) -> Result<ExitCode, ExitCode> {
+    let root =
+        pytext::realpath(PyPath::new(root.as_bytes()).as_bytes(), false).map_err(|message| {
+            eprintln!("regrade.py: {message}");
+            ExitCode::from(2)
+        })?;
+    let receipt = grading_reports::archive_attempt(
+        &PyPath::new(&root),
+        &absolute(attempt),
+        &absolute(archive_dir),
+    )
+    .map_err(|failure| reported("regrade.py", &failure))?;
+    write_stdout(format!("{}\n", pyjson::dumps(&receipt, &pyjson::Dumps::default())).as_bytes())?;
+    Ok(ExitCode::SUCCESS)
+}
+
+fn audit_log(arguments: AuditLogArgs) -> Result<ExitCode, ExitCode> {
+    let Some(out) = arguments.out.filter(|_| !arguments.runs.is_empty()) else {
+        return Err(misuse(
+            "audit-log",
+            ErrorKind::MissingRequiredArgument,
+            "give --out and at least one run directory",
+        ));
+    };
+    let line = grading_reports::audit_log(&grading_reports::AuditLog {
+        root: bytes(arguments.root),
+        out: bytes(out),
+        grading: arguments.grading.into_iter().map(bytes).collect(),
+        runs: arguments.runs.into_iter().map(bytes).collect(),
+    })
+    .map_err(|failure| reported("audit_log.py", &failure))?;
+    write_stdout(format!("{line}\n").as_bytes())?;
+    Ok(ExitCode::SUCCESS)
 }
 
 fn main() -> ExitCode {
@@ -1454,6 +1996,18 @@ fn main() -> ExitCode {
         }
         Cli::Archive(ArchiveCommand::CheckScratch { archives }) => check_scratch(&archives),
         Cli::Evidence(command) => run_evidence(command),
+        Cli::ImportBenchmark(arguments) => run_import_benchmark(arguments),
+        Cli::Ruling(command) => run_ruling(command),
+        Cli::Grading(GradingCommand::Validate { verdicts, inputs }) => {
+            run_grading_validate(&verdicts, &inputs)
+        }
+        Cli::Regrade(RegradeCommand::Status { queues }) => regrade_status(&queues),
+        Cli::Regrade(RegradeCommand::ArchiveAttempt {
+            attempt,
+            archive_dir,
+            root,
+        }) => archive_attempt(&attempt, &archive_dir, &root),
+        Cli::AuditLog(arguments) => audit_log(arguments),
         Cli::NativeArtifacts(command) => run_native_artifacts(command),
     };
     outcome.unwrap_or_else(|code| code)
