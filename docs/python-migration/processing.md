@@ -75,12 +75,15 @@ recorded decision.
 - `diff-identity` has no `--self-test`; `cargo test` and the corpus cover it. It accepts options between
   positional arguments, which argparse refuses for some orders.
 - `derive-packet` has no `--self-test`; `cargo test` and the corpus cover it.
-- `derive-packet` matches the issue number in the H1 with the Unicode 16.0 decimal digits that Python 3.14's `\d`
-  matches. An older Python's `\d` lacks the digits added since its Unicode version.
 - Usage errors print `bench-tools` usage text. Argparse wording is not a contract.
 
 `derive-packet-invalid-utf8` pins one intended change: an input that is not UTF-8 exits 2 with a message naming the
 file. `derive_packet.py` raised an uncaught `UnicodeDecodeError`, exiting 1 with a traceback.
+
+`derive-packet-unicode-16-digit-title` and `derive-packet-unicode-16-digit-duplicate-title` pin another, recorded in
+`derive-packet-decisions.v4.json`: the issue number in the H1 matches the Unicode 16.0 decimal digits, as Python
+3.14's `\d` does. `derive_packet.py` followed the running interpreter's Unicode database, so Python 3.13 and older
+missed the digits added in Unicode 16.0.
 
 Diagnostics keep the Python program names, `roster.py:`, `diff_identity.py:` and `derive_packet.py:`, so saved
 stderr stays identical and the differential compares them byte for byte. Renaming them needs a new decision version.
