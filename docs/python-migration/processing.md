@@ -122,7 +122,34 @@ longer imports `evidence_store`. `bun run evidence:fetch` and the Pages and rate
 each job that fetches installs `bench-tools` first. `prune_workspace.py` still calls the retained
 `evidence_store.resolve`; `resolve-across-implementations` restores a path through Rust and resolves it through Python.
 
-`tests/python_archives.rs` checks that the retained `evidence_store.py` and `native_artifacts.py` restore what
+### Native artifacts and transcript archives
+
+[#221](https://github.com/kamui/code-review-bench/issues/221) moves native artifact storage and transcript archiving
+to `bench-tools`, in `bench_tools::native_artifacts` and `bench_tools::evidence::transcripts`:
+
+| Command | Python it replaces |
+| --- | --- |
+| `native-artifacts verify ATTEMPT` | `native_artifacts.py`'s `verify` |
+| `native-artifacts restore ATTEMPT --out OUT` | `native_artifacts.py`'s `restore` |
+| `native-artifacts file ROOT INDEX OUT [--native-relative R]` | `native_artifacts.file_artifacts` and `unindexed`, which `file_attempt.py` called; it prints `{"pin": ..., "unindexed": [...]}` |
+| `evidence archive-transcripts --attempt-dir A --dest D --out O [PATH]...` | `file_attempt.archive_transcripts` and `recorded_archive_path` |
+
+Filing keeps Python's rules: one zip entry per content hash, modes other than 0644 recorded, a new output directory
+for restoration, and the same refusals of links, special files, unindexed files, changed content, escaping paths and
+changes to an existing filing. A new archived filing is staged and synced, then placed with its storage record linked
+last, so an interruption never leaves a storage record. A retry completes the filing when the names an interruption
+left hold what it would write and refuses them otherwise, as Python refuses any existing name
+(`file-interrupted-before-storage-record`). Transcripts are written to a synced temporary archive and linked; an
+existing archive is kept when its members are the transcripts and refused otherwise, where Python replaced it
+(`archive-transcripts-existing-same`, `-existing-different`). The native-artifacts v4 decisions record each
+deliberate difference. `tests/native_artifacts.rs` interrupts both at each disk effect.
+
+`file_attempt.py` resolves the run's pinned `bench-tools` with `rust_runtime.for_run`, as `--replay` does, and
+refuses a pin without these commands before it files anything, naming the run's freeze commit. The corpus runs
+against Rust, with a differential against the retained `native_artifacts.py` and the former
+`file_attempt.archive_transcripts`, kept in `behavior_contract.py`'s `python-archive-transcripts` driver.
+
+`tests/python_archives.rs` checks that the retained `evidence_store.py` and `native_artifacts.py` can restore what
 `bench_tools::archive` writes, and that it reads what they write. It is deleted with them
 ([#159](https://github.com/kamui/code-review-bench/issues/159)).
 
@@ -236,6 +263,7 @@ lists them. When the Cargo cache lacks one, `rust_runtime.py install` fails and 
 | `bench/tools/upstream.py`, its `report` command | `bench-tools upstream report`, `bench_tools::upstream`, with the registry checks of `claims.load_registry` in `bench_tools::claims` | `bun run audit:maintainers`; `docs/maintainer-adjudication.md` | Retained library, below. `collect` stays in Python. |
 | `tools/export_explorer.py`, its export | `bench-tools export-explorer evidence`, `stage` and `publish`, `bench_tools::export_explorer` | `bun run data` runs the front below; `.github/workflows/pages.yml` installs `bench-tools`; `src/lib/scoring.test.ts` passes `--root` and `--public` | The Python front, a temporary bridge below. The cases of `test_export_explorer.py` that read the export's internals moved to cargo tests and [`export-explorer.v1.json`](../../tools/behavior_contracts/export-explorer.v1.json); the rest run the front. |
 | `bench/tools/evidence_store.py`, its `fetch` and `verify` commands and `resolve` | `bench-tools evidence fetch`, `verify` and `resolve`, `bench_tools::evidence` | `bun run evidence:fetch`; `.github/workflows/pages.yml` and `rates.yml`; `export_explorer.py` through `export-explorer evidence --restore`; `docs/evidence-storage.md`, `docs/codex-container-fixture.md` | Retained byte-unchanged: `pack` and `publish` stay in Python, and `prune_workspace.py` and `native_artifacts.py` import it. [`evidence-store.v1.json`](../../tools/behavior_contracts/evidence-store.v1.json) runs `fetch` and `verify` against Rust, with a differential against Python in CI. |
+| `bench/tools/native_artifacts.py`, its `verify` and `restore` commands and `file_artifacts`; `file_attempt.archive_transcripts` | `bench-tools native-artifacts verify`, `restore` and `file`, `evidence archive-transcripts` | `file_attempt.py`, below; `bench/README.md`, `docs/evidence-storage.md` | `native_artifacts.py` is retained byte-unchanged for `prune_workspace.py`. `archive_transcripts` is deleted; the corpus keeps its source as a driver. [`native-artifacts.v1.json`](../../tools/behavior_contracts/native-artifacts.v1.json) runs against Rust, with a differential against Python in CI. |
 | `tools/import_benchmark.py`, its `--check` and `--preserve` | `bench-tools import-benchmark`, `bench_tools::import_benchmark` | `bun run verify:import` and `bun run import:preserve`; `.github/workflows/rates.yml`; `tools/test_evidence_consumers.py`; `README.md`, `docs/evidence-storage.md` | Deleted with `test_import_benchmark.py`, whose cases are in [`import-benchmark.v1.json`](../../tools/behavior_contracts/import-benchmark.v1.json); the corpus ran against both before deletion. `--source` is retired. |
 | `bench/tools/recover_evidence.py`, `bench/tools/local_evidence_resolution.py` | `bench-tools evidence recover` and `restore-local`, `bench_tools::evidence::recovery` | `docs/evidence-storage.md` | Deleted with `test_recover_evidence.py` and `test_local_evidence_resolution.py`, whose cases are in the cargo tests and `evidence-store.v1.json`; the corpus ran against both before deletion. |
 
@@ -258,6 +286,7 @@ assigns it to that stage.
 | `bench/tools/rates.py` | `run_cell` and `contributor_adapters` call `read_catalog` and `inspect`, and `contributor_adapters` calls `latest` and `fetch`; `rates refresh` runs in `rates:refresh` and `.github/workflows/rates.yml` | `rates refresh` and the dispatch check move to Rust ([#160](https://github.com/kamui/code-review-bench/issues/160) owns `rates.yml`) and no module imports `rates` | #160 |
 | `bench/tools/upstream.py` | `claims` imports `validate_assessment` and `route`; `grade.runner_files()` hashes it; `upstream collect` is the documented snapshot capture | `claims` moves to Rust, `collect` has a replacement and `grade.runner_files()` no longer hashes `upstream.py` ([#156](https://github.com/kamui/code-review-bench/issues/156)) | #156 |
 | `bench/tools/compare.py` | The research run helpers `replacement_runs.py` and `skill_replacement_runs.py`, which `stage_edition.staged_registry()` executes, and `review_code_run.py` call `provisioning_hash` for a run manifest's `provisioning_sha256`; the #156 filing tests reach it through `move.py` and `selection.py`. Its comparison CLI is documented in `bench/README.md` | No current test or command runs those helpers from the current checkout ([#156](https://github.com/kamui/code-review-bench/issues/156)), and another command computes `provisioning_sha256` for new run freezes ([#157](https://github.com/kamui/code-review-bench/issues/157)) | #157 |
+| `bench/tools/native_artifacts.py` | `prune_workspace.py` verifies filings with `verify` before it removes a clone; `grade.runner_files()` hashes `prune_workspace.py` | `prune_workspace.py` verifies through `bench-tools native-artifacts verify` ([#159](https://github.com/kamui/code-review-bench/issues/159)) | #159 |
 | `docs/research/last-push-recut-2026-10-07/stage_edition.py` | The #156 filing scripts `last-push-rulings-2026-10-11/filing/move.py` and `last-push-review-code-2026-10-12/selection/selection.py` import it; `test_packet_replacements.StagedSelectionTests` loads it | A research record, so it is never deleted. It becomes historical replay when no current test or command loads it or those filing scripts ([#156](https://github.com/kamui/code-review-bench/issues/156)) | #156 |
 
 `grade.runner_files()` also hashes 19 files that no #154 responsibility ported, such as `provision.py`, `claims.py`
@@ -298,6 +327,7 @@ A bridge lets a Python caller run a Rust command until the caller itself moves t
 
 | Bridge | Removal condition | Removed by |
 | --- | --- | --- |
+| `bench/tools/file_attempt.py` runs the run's pinned `bench-tools native-artifacts file` and `evidence archive-transcripts`, resolved by `rust_runtime.for_run`, and refuses a pin without them before filing. | Filing moves to Rust ([#157](https://github.com/kamui/code-review-bench/issues/157)) | #157 |
 | `tools/export_explorer.py` loads the current facts with `current_grading.load_current`, writes them to a temporary file with `json.dumps(allow_nan=False)`, restores the evidence with `bench-tools export-explorer evidence --restore`, runs `stage`, checks the dataset hash again, and runs `publish` with `SIGINT` ignored. It exits 2 when `bench-tools` is not installed for `HEAD`. | `load_current` moves to Rust ([#156](https://github.com/kamui/code-review-bench/issues/156)); evidence resolution moved with [#219](https://github.com/kamui/code-review-bench/issues/219) | #156 |
 
 #195's bridge, `build_packet.py --factual` running `bench-tools derive-packet` through `rust_runtime.resolve`, was

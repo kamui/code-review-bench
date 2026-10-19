@@ -181,8 +181,8 @@ every loose file and archived content hash; clone cleanup verifies them again. T
 filing or restore its indexed paths into a new directory:
 
 ```sh
-python3 bench/tools/native_artifacts.py verify bench/runs/<run>/attempts/<attempt>
-python3 bench/tools/native_artifacts.py restore bench/runs/<run>/attempts/<attempt> --out /tmp/restored-artifacts
+python3 bench/tools/rust_runtime.py exec bench-tools -- native-artifacts verify bench/runs/<run>/attempts/<attempt>
+python3 bench/tools/rust_runtime.py exec bench-tools -- native-artifacts restore bench/runs/<run>/attempts/<attempt> --out /tmp/restored-artifacts
 ```
 
 Restoration checks every restored file against the original index before publishing the
@@ -190,9 +190,13 @@ destination. Modified sources and probe scripts remain recoverable. Original wor
 including `clone-work`, follow the existing retention rules. Already-filed loose evidence
 keeps its layout; this does not compact historical artifacts or Git history.
 
-Freeze the new tool and schema with future runners. Adoption by an existing frozen runner
-requires a versioned deviation pinning `native_artifacts.py`, `file_attempt.py`,
-`prune_workspace.py` and `attempt.schema.json`; do not replace its tools silently.
+`file_attempt.py` files the report folder and archives the transcripts with the run's pinned
+`bench-tools` (`native-artifacts file` and `evidence archive-transcripts`). It refuses a run whose
+pinned `bench-tools` lacks those commands before filing anything; file such a run from a checkout
+of its freeze commit. An existing transcript archive is kept when it holds the same transcripts
+and refused otherwise. Adoption by an existing frozen runner requires a versioned deviation pinning
+`bench-tools`, `file_attempt.py`, `prune_workspace.py` and `attempt.schema.json`; do not replace
+its tools silently.
 
 [`runs/2026-09-24-toy/`](runs/2026-09-24-toy/README.md) is the first run: the four-arm shakedown
 on a two-commit fixture, seven attempts, filed after the fact with its deviations stated.

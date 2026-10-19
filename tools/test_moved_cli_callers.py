@@ -15,6 +15,8 @@ MOVED = (
     ("bench/tools/evidence_store.py", "fetch", "bench-tools evidence fetch"),
     ("bench/tools/evidence_store.py", "verify", "bench-tools evidence verify"),
     ("bench/tools/recover_evidence.py", "--source", "bench-tools evidence recover"),
+    ("bench/tools/native_artifacts.py", "verify", "bench-tools native-artifacts verify"),
+    ("bench/tools/native_artifacts.py", "restore", "bench-tools native-artifacts restore"),
     ("tools/import_benchmark.py", "--check", "bench-tools import-benchmark --check"),
     ("tools/import_benchmark.py", "--preserve", "bench-tools import-benchmark --preserve"),
     ("bench/tools/ruling_record.py", "route", "bench-tools ruling route"),
