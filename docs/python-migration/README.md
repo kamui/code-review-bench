@@ -112,7 +112,7 @@ owning implementation later. The inventory's per-module assignment is exhaustive
 an unassigned maintained or active research module fails generation. `RESEARCH_GROUPS`
 assigns each retained research helper explicitly, including usage to #152, freeze-ref
 resolution to #153, grading, calibration and the staged recut selection to #156, run preparation
-and dispatch to #157, and `restore-local.py`, which only decision records name, to #160.
+and dispatch to #157, and `restore-local.py`, which only decision records keep active, to #160.
 
 | Group and issue | Responsibilities and callers | Mutable state and public or serialized contracts | Existing verification |
 | --- | --- | --- | --- |
