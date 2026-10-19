@@ -585,3 +585,73 @@ fn collection_links_a_synced_archive_and_replaces_the_mapping_atomically_at_ever
     }
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+/// The host filesystem, rewriting `source` in place when the first file is created: after collection verified the
+/// archive and opened it for the copy.
+struct ChangesSource {
+    source: PathBuf,
+    changed: bool,
+}
+
+impl Disk for ChangesSource {
+    fn create(&mut self, path: &Path) -> io::Result<File> {
+        if !self.changed {
+            self.changed = true;
+            std::fs::write(&self.source, b"changed archive")?;
+        }
+        System.create(path)
+    }
+
+    fn sync(&mut self, file: &File, path: &Path) -> io::Result<()> {
+        System.sync(file, path)
+    }
+
+    fn link(&mut self, from: &Path, to: &Path) -> io::Result<()> {
+        System.link(from, to)
+    }
+
+    fn sync_dir(&mut self, path: &Path) -> io::Result<()> {
+        System.sync_dir(path)
+    }
+}
+
+#[test]
+fn collection_refuses_an_archive_that_changes_while_it_is_copied() {
+    let root = scratch("collect-changed");
+    let run = root.join("bench/runs/r1");
+    let record = run.join("attempts/att-001/attempt.json");
+    let source = root.join("local-archive/att-001.tar.gz");
+    let archive = root.join("artifacts/transcripts/r1/att-001.tar.gz");
+    let mapping = run.join("transcripts.json");
+    std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+    std::fs::write(&source, b"transcript archive").unwrap();
+    std::fs::write(
+        &record,
+        format!(
+            r#"{{"transcript_archive": {{"path": "local-archive/att-001.tar.gz", "sha256": "{}"}}}}"#,
+            sha256::hex_digest(b"transcript archive")
+        ),
+    )
+    .unwrap();
+    std::fs::write(&mapping, b"[]\n").unwrap();
+    let mut disk = ChangesSource {
+        source: source.clone(),
+        changed: false,
+    };
+    assert_eq!(
+        collect(&root, &mut disk),
+        Err(evidence::collect::Failure::Value(
+            [
+                &b"Transcript checksum mismatch: "[..],
+                record.as_os_str().as_bytes()
+            ]
+            .concat()
+        ))
+    );
+    assert!(disk.changed);
+    assert!(!archive.exists());
+    assert_eq!(std::fs::read(&mapping).unwrap(), b"[]\n");
+    assert_eq!(temporaries(&root), Vec::<PathBuf>::new());
+    std::fs::remove_dir_all(&root).unwrap();
+}

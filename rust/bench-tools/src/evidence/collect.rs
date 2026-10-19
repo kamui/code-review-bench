@@ -3,7 +3,9 @@
 //! `missing` until its archive verifies.
 //!
 //! Unlike the Python, `transcripts.json` is replaced atomically and a copied archive is linked into place from a
-//! synced temporary file, so neither is ever written through a link or left partial.
+//! synced temporary file, so neither is ever written through a link or left partial. The bytes written to that
+//! temporary file are hashed as they are copied, so an archive that changes after it verified is refused as a
+//! checksum mismatch rather than linked.
 
 use super::{
     Store, create_new, logical_path as safe_logical_path, make_dirs, manifests, parents, replace,
@@ -14,7 +16,7 @@ use crate::pyjson::{self, Duplicates, Value};
 use crate::pytext::{self, PyPath};
 use crate::sha256::{self, Sha256};
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 
 /// A failure, as the exception Python raised.
@@ -236,10 +238,10 @@ fn verified_path(
             .concat(),
         ));
     }
+    let mismatch =
+        || Failure::Value([&b"Transcript checksum mismatch: "[..], record.as_bytes()].concat());
     if sha.as_str() != Some(sha256_of(&source)?.as_str()) {
-        return Err(Failure::Value(
-            [&b"Transcript checksum mismatch: "[..], record.as_bytes()].concat(),
-        ));
+        return Err(mismatch());
     }
     let directory = parents(&destination)
         .into_iter()
@@ -249,10 +251,33 @@ fn verified_path(
     if pyfs::resolve(source.as_bytes()) != pyfs::resolve(destination.as_bytes()) {
         let mut file = std::fs::File::open(source.to_path_buf())
             .map_err(|error| other(pytext::os_error(&error, source.as_bytes())))?;
-        create_new(store.disk, &destination, &mut |target| {
-            std::io::copy(&mut file, target).map(|_| ())
-        })
-        .map_err(from_evidence)?;
+        let mut changed = false;
+        let copied = create_new(store.disk, &destination, &mut |target| {
+            let mut hasher = Sha256::new();
+            let mut buffer = vec![0u8; 1024 * 1024];
+            loop {
+                let read = match file.read(&mut buffer) {
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    read => read?,
+                };
+                if read == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..read]);
+                target.write_all(&buffer[..read])?;
+            }
+            changed = sha.as_str() != Some(sha256::hex(&hasher.finalize()).as_str());
+            if changed {
+                return Err(std::io::Error::other(
+                    "the archive changed while it was copied",
+                ));
+            }
+            Ok(())
+        });
+        if changed {
+            return Err(mismatch());
+        }
+        copied.map_err(from_evidence)?;
     }
     Ok(logical)
 }
