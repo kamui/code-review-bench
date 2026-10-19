@@ -11,10 +11,13 @@ import base64
 import copy
 import json
 import errno
+import io
+import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -605,6 +608,19 @@ print(digest)
         self.assertTrue(any(diff.startswith("consistency:") for diff in contract.compare(
             {**best, "stdout": {"mode": "bytes", "bytes_b64": encoded(b"<archive 1>\n")},
              "stderr": {"mode": "bytes", "bytes_b64": ""}}, wrong)))
+
+    def test_an_archive_member_name_that_is_not_utf8_is_listed_by_its_bytes(self):
+        raw = io.BytesIO()
+        with tarfile.open(fileobj=raw, mode="w:gz", format=tarfile.PAX_FORMAT) as bundle:
+            for name in ("plain.txt", os.fsdecode(b"review-\xff.md")):
+                info = tarfile.TarInfo(name)
+                info.size = 1
+                bundle.addfile(info, io.BytesIO(b"x"))
+        members = contract.archive_members(raw.getvalue(), "tar.gz")
+        self.assertEqual(members[0]["name"], "plain.txt")
+        self.assertNotIn("name", members[1])
+        self.assertEqual(contract.decode(members[1]["name_b64"]), b"review-\xff.md")
+        self.assertEqual(len(contract.digest(members)), 64)
 
     NATIVE_WRITER = """import hashlib, io, json, os, sys, zipfile
 raw = io.BytesIO()

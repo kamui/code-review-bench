@@ -6,8 +6,8 @@ use bench_tools::pytext::{self, PyPath};
 use bench_tools::schema::{SchemaError, Validator};
 use bench_tools::{
     archive, build_packet, claims, delegation, derive_packet, diff_identity, evidence,
-    export_explorer, grading_validation, import_benchmark, normalize_thermo, pyfs, pyunicode,
-    pyvalue, rates, roster, ruling, upstream,
+    export_explorer, grading_reports, grading_validation, import_benchmark, normalize_thermo, pyfs,
+    pyunicode, pyvalue, rates, roster, ruling, upstream,
 };
 use clap::builder::PossibleValuesParser;
 use clap::error::ErrorKind;
@@ -15,7 +15,7 @@ use clap::{Args, CommandFactory, Parser, Subcommand};
 use std::ffi::{OsStr, OsString};
 use std::fmt::Display;
 use std::io::Write;
-use std::os::unix::ffi::OsStringExt;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::process::ExitCode;
 
 /// Deterministic benchmark tools.
@@ -74,6 +74,12 @@ enum Cli {
     /// tools/import_benchmark.py did.
     #[command(infer_long_args = true)]
     ImportBenchmark(ImportBenchmarkArgs),
+    /// Report on grading queues or archive a grading attempt, as bench/tools/regrade.py defines them.
+    #[command(subcommand, infer_long_args = true)]
+    Regrade(RegradeCommand),
+    /// Derive a time and cost audit log from filed benchmark runs, for estimating later runs.
+    #[command(infer_long_args = true)]
+    AuditLog(AuditLogArgs),
 }
 
 #[derive(Args)]
@@ -427,6 +433,45 @@ enum EvidenceCommand {
         #[arg(value_name = "NEW_FILE", allow_negative_numbers = true)]
         output: OsString,
     },
+}
+
+#[derive(Subcommand)]
+enum RegradeCommand {
+    /// Print each queue's mapped and planned batches, state, spend, client and runs, then its free space.
+    // `regrade_queues.sh status` passed every argument to Python as a queue directory, `-h` and `--` included.
+    #[command(disable_help_flag = true)]
+    Status {
+        #[arg(
+            required = true,
+            allow_hyphen_values = true,
+            trailing_var_arg = true,
+            value_name = "QUEUE_DIRECTORY"
+        )]
+        queues: Vec<OsString>,
+    },
+    /// Archive an attempt's evidence under ARCHIVE_DIR/<run>/<target>/<attempt>, beside its receipt.
+    #[command(infer_long_args = true)]
+    ArchiveAttempt {
+        #[arg(allow_negative_numbers = true)]
+        attempt: OsString,
+        #[arg(allow_negative_numbers = true)]
+        archive_dir: OsString,
+        #[arg(long, default_value = ".", allow_negative_numbers = true)]
+        root: OsString,
+    },
+}
+
+#[derive(Args)]
+struct AuditLogArgs {
+    #[arg(long, allow_negative_numbers = true)]
+    out: Option<OsString>,
+    /// A regrade.py archive root.
+    #[arg(long, allow_negative_numbers = true)]
+    grading: Vec<OsString>,
+    #[arg(long, default_value = ".", allow_negative_numbers = true)]
+    root: OsString,
+    #[arg(value_name = "RUN", allow_negative_numbers = true)]
+    runs: Vec<OsString>,
 }
 
 #[derive(Subcommand)]
@@ -1725,6 +1770,75 @@ fn refuse_help_with_explicit_argument(arguments: &[OsString]) -> Option<ExitCode
     ))
 }
 
+fn regrade_status(queues: &[OsString]) -> Result<ExitCode, ExitCode> {
+    let queues: Vec<Vec<u8>> = queues
+        .iter()
+        .map(|queue| queue.as_bytes().to_vec())
+        .collect();
+    let mut stdout = std::io::stdout().lock();
+    grading_reports::status(&queues, &mut stdout).map_err(|failure| {
+        eprintln!("regrade_queues.sh: {}", failure.line());
+        ExitCode::from(1)
+    })?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// A failure `regrade.py` or `audit_log.py` caught exits 2 with its message; any other is the last line of the
+/// traceback Python printed, exit 1.
+fn reported(program: &str, failure: &bench_tools::pysemantics::Failure) -> ExitCode {
+    if grading_reports::caught(failure) {
+        eprintln!("{program}: {}", failure.message());
+        ExitCode::from(2)
+    } else {
+        eprintln!("{program}: {}", failure.line());
+        ExitCode::from(1)
+    }
+}
+
+fn absolute(path: &OsStr) -> PyPath {
+    let current = std::env::current_dir().unwrap_or_default();
+    PyPath::new(current.as_os_str().as_bytes()).join(path.as_bytes())
+}
+
+fn archive_attempt(
+    attempt: &OsStr,
+    archive_dir: &OsStr,
+    root: &OsStr,
+) -> Result<ExitCode, ExitCode> {
+    let root =
+        pytext::realpath(PyPath::new(root.as_bytes()).as_bytes(), false).map_err(|message| {
+            eprintln!("regrade.py: {message}");
+            ExitCode::from(2)
+        })?;
+    let receipt = grading_reports::archive_attempt(
+        &PyPath::new(&root),
+        &absolute(attempt),
+        &absolute(archive_dir),
+    )
+    .map_err(|failure| reported("regrade.py", &failure))?;
+    write_stdout(format!("{}\n", pyjson::dumps(&receipt, &pyjson::Dumps::default())).as_bytes())?;
+    Ok(ExitCode::SUCCESS)
+}
+
+fn audit_log(arguments: AuditLogArgs) -> Result<ExitCode, ExitCode> {
+    let Some(out) = arguments.out.filter(|_| !arguments.runs.is_empty()) else {
+        return Err(misuse(
+            "audit-log",
+            ErrorKind::MissingRequiredArgument,
+            "give --out and at least one run directory",
+        ));
+    };
+    let line = grading_reports::audit_log(&grading_reports::AuditLog {
+        root: bytes(arguments.root),
+        out: bytes(out),
+        grading: arguments.grading.into_iter().map(bytes).collect(),
+        runs: arguments.runs.into_iter().map(bytes).collect(),
+    })
+    .map_err(|failure| reported("audit_log.py", &failure))?;
+    write_stdout(format!("{line}\n").as_bytes())?;
+    Ok(ExitCode::SUCCESS)
+}
+
 fn main() -> ExitCode {
     let arguments: Vec<OsString> = std::env::args_os().collect();
     // clap reads `-hx` before a subcommand as `-h` and prints help; the top level has no Python
@@ -1768,6 +1882,13 @@ fn main() -> ExitCode {
         Cli::Grading(GradingCommand::Validate { verdicts, inputs }) => {
             run_grading_validate(&verdicts, &inputs)
         }
+        Cli::Regrade(RegradeCommand::Status { queues }) => regrade_status(&queues),
+        Cli::Regrade(RegradeCommand::ArchiveAttempt {
+            attempt,
+            archive_dir,
+            root,
+        }) => archive_attempt(&attempt, &archive_dir, &root),
+        Cli::AuditLog(arguments) => audit_log(arguments),
     };
     outcome.unwrap_or_else(|code| code)
 }
