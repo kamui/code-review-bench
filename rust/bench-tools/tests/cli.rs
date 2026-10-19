@@ -35,7 +35,7 @@ fn top_level_exit_codes() {
     }
 }
 
-/// argparse refuses `-h` with `=` or `-` attached in every subcommand, as the replaced parser did.
+/// argparse refuses `-h` with `=` or `-` attached in every subcommand, as the replaced parsers did.
 #[test]
 fn help_with_equals_or_dash_is_refused() {
     for command in [
@@ -49,6 +49,7 @@ fn help_with_equals_or_dash_is_refused() {
         "rates",
         "upstream",
         "export-explorer",
+        "archive",
     ] {
         for (help, explicit) in [
             ("-h=1", "'1'"),

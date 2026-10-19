@@ -437,6 +437,11 @@ replaced, each with its case:
   impact against Python 3.12 and older.
 - `build-packet-help`, four `build-packet-usage-*` cases, `build-packet-non-utf8-text-option` and
   `export-explorer-usage-missing-stage` pin clap's wording by prefix; their exit codes are unchanged.
+- `archive`, which [#218](https://github.com/kamui/code-review-bench/issues/218) added with a hand-written parser, takes
+  the same rules through `archive-decisions.v3.json`: `archive-abbreviated-*`, `archive-dot-digit-*`,
+  `archive-exponent-archive`, `archive-help-with-*`, `archive-help-after-unknown-command`, and `archive-help` and
+  `archive-usage-missing-cache` for clap's wording. It has no Python counterpart, so only CI and maintainers see the
+  change; the Pages workflow's `archive check-packages` call parses as before.
 
 ## Close-out
 
