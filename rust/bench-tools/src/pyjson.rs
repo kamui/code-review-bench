@@ -611,6 +611,26 @@ fn close(out: &mut String, options: &Dumps, level: usize, bracket: char) {
     out.push(bracket);
 }
 
+/// `json.dumps(text)` of a string given as code points, such as `os.fsdecode` text whose undecodable bytes
+/// `surrogateescape` maps to lone surrogates, which a Rust `String` cannot hold.
+pub fn ascii_string(points: &[u32]) -> String {
+    let mut out = String::from('"');
+    for point in points {
+        match char::from_u32(*point) {
+            Some(c) => {
+                let mut one = String::new();
+                write_string(&mut one, c.encode_utf8(&mut [0u8; 4]), true);
+                out.push_str(&one[1..one.len() - 1]);
+            }
+            None => {
+                let _ = write!(out, "\\u{point:04x}");
+            }
+        }
+    }
+    out.push('"');
+    out
+}
+
 fn write_string(out: &mut String, text: &str, ensure_ascii: bool) {
     out.push('"');
     for c in text.chars() {

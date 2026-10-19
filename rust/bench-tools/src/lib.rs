@@ -9,6 +9,7 @@ pub mod derive_packet;
 pub mod diff_identity;
 pub mod evidence;
 pub mod export_explorer;
+pub mod native_artifacts;
 pub mod normalize_review;
 pub mod normalize_thermo;
 pub mod pyfs;
