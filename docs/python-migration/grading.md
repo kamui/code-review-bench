@@ -217,11 +217,11 @@ the evidence and freeze-commit fetches. On 2026-10-19 both implementations gave 
 tasks, 198 batches, 623 required reviews and none assessed, every batch `missing` with the same input fingerprint in
 both, and the same dataset hash.
 
-`current-grading check` keeps the Python's rule for a filed claim's comments. The owner
-[ruled on #230](https://github.com/kamui/code-review-bench/issues/230#issuecomment-6274330595) that the stricter
-rule, no equivalent link on a comment of a filed claim, is added after this slice in
-[#256](https://github.com/kamui/code-review-bench/issues/256). `current_grading.py` stays byte-unchanged as the
-baseline until slice 11 deletes it; `packet_selection.py` stays for #157's callers.
+`current-grading check` is stricter than the Python for a filed claim's comments. After the owner
+[ruled on #230](https://github.com/kamui/code-review-bench/issues/230#issuecomment-6274330595),
+[#256](https://github.com/kamui/code-review-bench/issues/256) added the rule that a comment linked to two or more
+claims has no equivalent link. `current_grading.py` keeps the older rule and stays byte-unchanged as the baseline
+until slice 11 deletes it; `packet_selection.py` stays for #157's callers.
 
 ## Research helpers
 
@@ -240,13 +240,12 @@ any of them.
 | `test_review_code_selection.py` | The staged inventory pin, the selection rebuild, the committed `selection.v1.json`, packets and collector labels over the live record | Stays |
 
 No current-record assertion moved in this slice. None fits a fixture case: each compares the live record with a
-helper's output, and the helpers have no port. `current-grading check` covers only their consistency part. Two
-need a later step:
+helper's output, and the helpers have no port. `current-grading check` covers only their consistency part. The
+staged inventory pin's live derivation needs a later step: it is the inventory `current-grading check` compares.
+Since slice 3, the real-record list runs that check in Pages.
 
-- The staged inventory pin's live derivation is the inventory `current-grading check` compares. Since slice 3, the
-  real-record list runs that check in Pages.
-- The rule that a comment of a filed claim has no equivalent link is stricter than `current_grading.py`, which
-  refuses only a comment equivalent to two claims. The owner ruled to add it as a validator rule in #256.
+`current-grading check` also refuses an equivalent link on a comment linked to two or more claims, a rule #256
+added. `current_grading.py` refuses only a comment equivalent to two claims.
 
 Replaying the rebuild assertions at their filing commits, so the loaders could leave, would drop today's guard that
 each later filing stays undoable. That needs the owner's ruling; until then the loaders stay and their helpers stay
