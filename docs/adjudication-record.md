@@ -36,9 +36,9 @@ A decision has two files beside its ruling file.
 - `<ruling>.before.json` holds every party's first answer. The session that asks writes and commits it before it asks the user. Nobody edits it afterwards. The exceptions are two renames of 2026-10-07. Each changed one name in one commit, replaced the pin of every renamed before-record and touched nothing else. The first renamed the field `kind` to `decision_type` in the 23 records saved by then. The second renamed the fact `says_why` to `identifies_cause` in the five before-records and fifteen after-records that held it.
 - `<ruling>.after.json` holds the decision and pins the first file. The session writes it once the decision is made.
 
-Run `python3 bench/tools/ruling_record.py route <ruling>.before.json` before asking. The tool refuses a record that does not follow this page. For a record it accepts, it prints whether the user is asked, why, and the question to show them. See [Routing](#routing).
+Run `python3 bench/tools/rust_runtime.py exec bench-tools -- ruling route <ruling>.before.json` before asking. The tool refuses a record that does not follow this page. For a record it accepts, it prints whether the user is asked, why, and the question to show them. See [Routing](#routing).
 
-Once the decision is made, run `python3 bench/tools/ruling_record.py <ruling>.before.json <ruling>.after.json` to check the pair.
+Once the decision is made, run `python3 bench/tools/rust_runtime.py exec bench-tools -- ruling check <ruling>.before.json <ruling>.after.json` to check the pair.
 
 A record with `"contract": 2` follows this page. A record without `contract` is contract 1. Twenty before-records and all twenty-three after-records saved in the second pass of issue #30 are contract 1. They stay as they were written, and the tool checks them as it did before. A new record is contract 2, before and after. The field lists in the tool are the only definition of the record. This page explains them.
 
@@ -54,7 +54,7 @@ When a saved before-record normalized declared confidence for eligibility, keep 
 | `target` | The pull request, as the round names it, such as `v-django-17914`. |
 | `group` | The one thing decided. For a new candidate it is one candidate of the dossier. |
 | `reconstructed` | `false` when the file was written before the question. `true` when it was built afterwards from saved files. |
-| `dossier` | The directory the facts come from, or null. A new candidate needs one that passes `ruling_dossier.py`. |
+| `dossier` | The directory the facts come from, or null. A new candidate needs one that passes `bench-tools ruling dossier`. |
 | `case` | The neutral file every blind party read: `path`, `sha256`, `written_by` (the model that wrote it) and `precedents`. The user is shown at least what this file holds. `precedents` pins the sheet of the user's earlier rulings that was given with the case, or is null when none was given. |
 | `rule` | The rule text the answers applied, by `path` and `sha256`. |
 | `clauses` | The table that says which rulings each rule was written from, or null for a decision type that has no such table. |
@@ -117,7 +117,7 @@ The tool accepts an after-record whose `settled_by` is `agents` only when the ad
 
 | Cause | What happened | Where the fix goes |
 | --- | --- | --- |
-| `fact-not-fetched` | A fact the decision needed was not in the case file. | The [dossier brief](ruling-dossier-brief.md), then a check in `ruling_dossier.py`. |
+| `fact-not-fetched` | A fact the decision needed was not in the case file. | The [dossier brief](ruling-dossier-brief.md), then a check in `bench-tools ruling dossier`. |
 | `fact-misread` | The fact was in the case file and an agent read it wrongly. | No tool catches it. The blind answers are the check. |
 | `not-shown` | An agent gathered the fact and the question left it out. | The question that `route` prints. |
 | `precedent-not-shown` | The case went to the parties without an earlier ruling that decides it. | The sheet of earlier rulings. |
@@ -171,7 +171,7 @@ The tool refuses an answer that does not follow the definition:
 
 ## Routing
 
-`python3 bench/tools/ruling_record.py route <ruling>.before.json` prints `ASK` or `SETTLE`, then the reasons.
+`python3 bench/tools/rust_runtime.py exec bench-tools -- ruling route <ruling>.before.json` prints `ASK` or `SETTLE`, then the reasons.
 
 The shared policy gate prints `ASK` with the reasons that keep the decision with the user, or `SETTLE` with its earned level. The current candidate and recovery counts remain below level 1, so both types still require the owner.
 
@@ -212,7 +212,7 @@ The tests fail when a round breaks one of these:
 
 ## The summary
 
-Run `python3 bench/tools/ruling_record.py summary` after a round. Add `--round NAME` to show that round, or `--json` for the same results as JSON. The tool reads and checks every record under `docs/research/`. A bad pin or a missing record in a closed round stops it. An unanswered question in an open round is listed as pending.
+Run `python3 bench/tools/rust_runtime.py exec bench-tools -- ruling summary` after a round. Add `--round NAME` to show that round, or `--json` for the same results as JSON. The tool reads and checks every record under `docs/research/`. A bad pin or a missing record in a closed round stops it. An unanswered question in an open round is listed as pending.
 
 The summary lists blind `cannot-tell` answers whose nonempty `clauses` cite only reserving rules: Before 4, Promised 1c, 5, 7b and 8b, and Delivered 2 and 3, including their version 4 names. It includes pending decisions and respects `--round`. This is a diagnostic for inspecting why an assessor withheld an answer, not proof that the reservation caused it or that the answer was wrong. It changes neither routing nor earned trust.
 
@@ -237,7 +237,7 @@ The historical figures in the [plan](https://github.com/kamui/code-review-bench/
 Before preparing a case, run:
 
 ```sh
-python3 bench/tools/ruling_record.py precedents --type recovery --exclude second-15 --out docs/research/<round>/assessors/precedents.v1.md
+python3 bench/tools/rust_runtime.py exec bench-tools -- ruling precedents --type recovery --exclude second-15 --out docs/research/<round>/assessors/precedents.v1.md
 ```
 
 The sheet reads both contracts. It includes earlier rulings of that decision type that the index marks as made under the current reading. Each entry holds the ruling file's title, the outcome, the user's `ground` verbatim or `no reason given`, and `lesson.says` when there is a lesson. It names no assessor, model or grade. The records and ruling files remain the authority.

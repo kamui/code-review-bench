@@ -6,7 +6,8 @@ This records [#156](https://github.com/kamui/code-review-bench/issues/156), part
 Slice 0, [#230](https://github.com/kamui/code-review-bench/issues/230), starts it: the comparisons, the fixture
 root and the replay inventory every later slice runs, and the research-helper audit. It ports no grading code and
 changes no grade, claim decision, ruling or scorecard number. `src/lib/scoring.ts` stays the only owner of
-scorecard arithmetic.
+scorecard arithmetic. Slice 2, [#232](https://github.com/kamui/code-review-bench/issues/232), ports the ruling
+records and delegation routing, as [ruling records and delegation](#ruling-records-and-delegation) describes.
 
 ## The split with #157
 
@@ -62,12 +63,64 @@ same on every run, that every corpus case naming `grading/<variant>` holds those
 
 Limits for later slices:
 
-- `ruling_record.py`'s command line resolves pins against its own checkout. The fixture test calls its checks with
-  the fixture root, so slice 2 settles how ruling commands read one.
 - A command that runs `git status` in the clone rewrites its index with host timestamps, so slice 8's cleanup cases
   need an index the snapshot can compare.
 - The structured comparison orders dossier sections but not JSON members. The dossier's provenance key lists its
   review tokens in shuffle order, so slice 5 either records that order by decision or declares a member ordering.
+
+## Ruling records and delegation
+
+Slice 2 ports `ruling_record.py`, `ruling_summary.py`, `ruling_dossier.py` and `delegation.py` to
+`bench_tools::ruling` (`record`, `summary`, `dossier`) and `bench_tools::delegation`: record checks, routing,
+summaries, precedent sheets, round openings and closed-round pins, trust misses, model replacement, per-round levels
+and the filing check `current_grading` runs through `filing_faults`. `bench-tools ruling` runs them with the Python
+arguments, stdout and exit codes:
+
+```sh
+python3 bench/tools/rust_runtime.py exec bench-tools -- ruling check <ruling>.before.json [<ruling>.after.json]
+python3 bench/tools/rust_runtime.py exec bench-tools -- ruling route <ruling>.before.json [--policy PATH]
+python3 bench/tools/rust_runtime.py exec bench-tools -- ruling summary [--round NAME] [--json]
+python3 bench/tools/rust_runtime.py exec bench-tools -- ruling precedents --type TYPE --exclude GROUP --out SHEET
+python3 bench/tools/rust_runtime.py exec bench-tools -- ruling dossier DIRECTORY
+```
+
+`check` is `ruling_record.py` without a command word. Each command reads the working directory as the repository,
+or `--root DIR`; record paths stay relative to the working directory. Diagnostics keep the program names
+`ruling_record.py` and `ruling_dossier.py`. No command writes a ruling, receipt, record or decision; `precedents`
+writes only a new sheet. The callers in `docs/adjudication-record.md`, `docs/claim-adjudication.md`,
+`docs/ruling-dossier-brief.md` and `docs/ruling-preparation-evidence.md` moved, and
+`tools/test_moved_cli_callers.py` fails on a current caller of the Python command lines.
+
+[`ruling-record.v1.json`](../../tools/behavior_contracts/ruling-record.v1.json) and
+[`ruling-dossier.v1.json`](../../tools/behavior_contracts/ruling-dossier.v1.json) pin the commands. They cover the
+`pending`, `proposed`, `approved-without-receipt`, `disputed-without-ruling` and `ruled` fixture roots, where no command
+resolves a state, and synthetic rounds under an adopted policy v2. `cargo test --test grading_fixture` fails when either
+corpus lacks one of the four unresolved variants. Route settles only an open decision type that
+earned its level in the closed rounds the round's opening pins: level 1 after 15 agreed owner decisions on 4 pull
+requests, level 2 after 30 on 5. It asks for a disputed answer, a credit fact nobody could tell, a changed model in a
+pending record, a miss inside the round, a round with no opening pin and a level-2 history the opening does not pin.
+It never settles a pre-existing decision type, and `summary` refuses an agent settlement of one.
+
+The decisions record each difference from the retained Python:
+
+- an exception the Python command line did not catch, a traceback with exit 1, exits 2 with one line naming its
+  class; usage errors and help are clap's;
+- a record holding a lone surrogate, and a non-UTF-8 `--exclude`, are refused with exit 2;
+- `\d` follows Python 3.14's Unicode 16.0 digits in versioned rule names, round dates and natural ordering, and
+  quoted paths follow its printable characters;
+- `Path.stem`, `**` inside a glob component and `is_file` under an unsearchable directory follow Python 3.14's
+  pathlib.
+
+`tests/ruling_filing.rs` compares `filing_faults` with `delegation.py` for each refusal, since no command reaches it.
+
+The four Python modules stay byte-unchanged as the baseline: `current_grading.py` imports `delegation`, and the
+behavior corpora and `tests/ruling_filing.rs` run them. Every tracked record was compared with the Python on
+2026-10-19: `check` with and without its after-record, and `route`, for each of the 200 before-records; `summary`, with
+and without `--json`, for the whole record and each of the 6 rounds; `precedents` for each decision type; and
+`dossier` for every directory holding a `summary.json`. All 692 commands gave identical exit status, stdout, stderr
+and sheets under Python 3.12 and 3.14, except four `dossier` runs on research directories whose `summary.json` is not
+a dossier, where the Python crashed and Rust exits 2 as decided. Slice 3 adds the real-record list that repeats this
+comparison in Pages.
 
 ## Replay coverage
 
