@@ -7,19 +7,24 @@ grading decision, or publication of benchmark evidence.
 
 ## Reproducible records
 
-[`inventory.v2.json.gz`](inventory.v2.json.gz) contains the census, compressed with
+[`inventory.v3.json.gz`](inventory.v3.json.gz) contains the census, compressed with
 an empty gzip filename and a zero timestamp. Its `source_commit` identifies all
-input bytes. The snapshot commit precedes only the generated inventory artifact.
+input bytes. The snapshot commit precedes only the generated inventory artifact,
+and stays reachable from `main` only through a merge commit; a squash or rebase
+merge would leave `--check` without it.
 [`runtime-observation.v1.json`](runtime-observation.v1.json) is a separate, dated
 observation of this delivery host, not a claim about other hosts or current liveness.
-[`inventory.v1.json.gz`](inventory.v1.json.gz) preserves the earlier census.
+[`inventory.v1.json.gz`](inventory.v1.json.gz) and [`inventory.v2.json.gz`](inventory.v2.json.gz)
+preserve the earlier censuses. v3 records the ownership after [#153](runtime.md) and
+[#154](processing.md#close-out); `--check` verifies v3 only, because the assignment
+tables now describe v3.
 
 Generating or checking the census requires Python 3.11 or later to parse the
 tracked sources, including research modules that use Python 3.11 syntax.
 
 ```sh
 python3 tools/python_inventory.py --check
-gzip -dc docs/python-migration/inventory.v2.json.gz > /tmp/python-inventory.json
+gzip -dc docs/python-migration/inventory.v3.json.gz > /tmp/python-inventory.json
 python3 tools/python_inventory.py --ref HEAD --output /tmp/python-inventory-current.json.gz
 python3 -m unittest discover -s tools -p test_python_inventory.py -v
 ```
@@ -77,14 +82,14 @@ from parameters and exact files for fixed-name loaders. Refresh those rules when
 | `target-or-skill-dependency` | Frozen skill code and target probes or upstream excerpts | Keep the declared target or skill environment. Python remains allowed there. |
 
 Classification is by role, not age. In particular, a research directory is not a
-removal boundary. `test_answers.py` imports the old answer-table implementation and
-`test_dispatch_serial.py` imports the serial dispatcher. The historical tables are
-separate from the current scorecard, whose sole owner remains `src/lib/scoring.ts`.
+removal boundary. `test_dispatch_serial.py` imports the serial dispatcher. The historical answer
+tables are separate from the current scorecard, whose sole owner remains `src/lib/scoring.ts`.
 
 The explicit dynamic loaders in `test_packet_replacements.py`,
-`test_review_code_selection.py`, and `test_last_push_move.py` also retain the recut,
-selection, and filing code. Their local imports extend the closure to
-`stage_edition`, `record`, `move`, and related helpers. `test_regrade_filing.py`
+`test_review_code_selection.py`, and `test_last_push_move.py` also retain the staged
+recut selection and the selection and filing code. Their local imports extend the closure
+to `record`, `move`, and related helpers. `move.py` and `selection.py` import
+`stage_edition` after adding its directory to `sys.path`, which v3 records as audited edges. `test_regrade_filing.py`
 reaches the saved filing and activation implementations through `test_last_push_move`.
 Parameterized directory rules include sibling replay commands as candidates;
 the regrade and activation loaders retain only their named `record.py` files.
@@ -106,15 +111,15 @@ existing issue. Tests are assigned to #151 for contract capture and move with th
 owning implementation later. The inventory's per-module assignment is exhaustive;
 an unassigned maintained or active research module fails generation. `RESEARCH_GROUPS`
 assigns each retained research helper explicitly, including usage to #152, freeze-ref
-resolution to #153, evidence relocation to #155, grading and calibration to #156,
-and run preparation and dispatch to #157.
+resolution to #153, the answer table that `import_benchmark` copies to #155, grading,
+calibration and the staged recut selection to #156, and run preparation and dispatch to #157.
 
 | Group and issue | Responsibilities and callers | Mutable state and public or serialized contracts | Existing verification |
 | --- | --- | --- | --- |
 | Behavioral contracts, #151 | `behavior_contract`; local usage corpus and implementation command maps | Versioned argv, input bytes, disposable roots, exit and output comparisons, filesystem effects, independent expectations and explicit change decisions. Later slices extend the corpus. | `test_behavior_contract.py`; [contract reference](contracts/README.md). |
 | Usage, #152 | `codex_usage`, `transcript_usage`; dispatchers, runners, accounting and explorer consumers | Parse native usage, retain missing versus zero counts, cache categories, failed and replacement usage. Preserve JSON and TSV or CSV field names, cost units, flags, and output ordering. Read-only pilot. | `test_codex_usage.py`, `test_transcript_usage.py`; independent expected outcomes and differentials belong to #151. |
-| Runtime, #153 | `seal`, `skill_provenance`, `fetch_freeze_commits`; run preparation and CI | Freeze commits, run-relative skill pins, SHA-256, exact runtime release provenance, client versions and artifacts, deviations, freeze fetches. Started operations retain their runtime. | `test_skill_provenance.py`, manifest checks, clean-context checks. |
-| Processing, #154 | Packets, diff identity, normalizers, comparisons, legacy scores, SVG, rates, roster, upstream, methodology, explorer export and collection; package scripts, Pages and `dispatch.sh` | Packet and normalized-review schemas, rate catalog append semantics, method/task selection, exports and evidence URLs. Preserve byte hashes and unknown values. `score.py` and historical answer tables do not own the current scorecard kernel. | Per-module tests in the census; `test_export_explorer.py`, `test_collect_run.py`, `test_score_release.py`, `test_rates.py`, web scoring tests. |
+| Runtime, #153 | `rust_runtime`; run preparation and CI. v3 moves `seal` to #160 and `skill_provenance` and `fetch_freeze_commits` to #157 | Freeze commits, run-relative skill pins, SHA-256, exact runtime release provenance, client versions and artifacts, deviations, freeze fetches. Started operations retain their runtime. | `test_skill_provenance.py`, manifest checks, clean-context checks. |
+| Processing, #154 | Packets, diff identity, normalizers, comparisons, legacy scores, SVG, rates, roster, upstream, methodology, explorer export and collection; package scripts, Pages and `dispatch.sh`. Each is now migrated, retired or assigned to a later stage, as [the close-out](processing.md#close-out) lists; v3 assigns no module to #154 | Packet and normalized-review schemas, rate catalog append semantics, method/task selection, exports and evidence URLs. Preserve byte hashes and unknown values. `score.py` and historical answer tables do not own the current scorecard kernel. | Per-module tests in the census; `test_export_explorer.py`, `test_collect_run.py`, `test_score_release.py`, `test_rates.py`, web scoring tests. |
 | Storage, #155 | Evidence inventory, store, resolution, recovery, reconciliation, native artifacts, import verification; all readers and `verify:import` | Manifest logical paths and hashes, canonical release payloads, restoration receipts, missing and superseded evidence, refusal to overwrite changed files. Keep import verification until its replacement works. | Storage and import tests, `bun run verify:import`; [storage contract](../evidence-storage.md). |
 | Grading, #156 | Schemas, audit, claim links, adjudications, calibration, current-grading validation, dossiers, rulings, grading and regrading; current tools and live filing tests | Owner-saved rulings, approved versus pending decisions, authorization, blinded grading, ledgers and reservations, mapping versions, exclusive batch state, transactional filing, quotas and disk reserve. Preserve every schema under `bench/schema`, rubric version, CLI exit status, and recovery protocol consumed by these modules. | Claim, grading, filing and ruling tests listed per module; [adjudication](../claim-adjudication.md), [record](../adjudication-record.md), [readiness](../grading-readiness.md). |
 | Supervision, #157 | Provisioning, clean contexts, run cells, filing, review queues, meters, runner adapters, container and fake-client probes; dispatch scripts and contributor adapters | Claims, attempts, fresh homes, isolation receipts, PID/process lineage, locks, launch and recovery logs, rate limits, client pins, interrupted attempts, replacements, cleanup receipts, caps and authorization. One controller per run. Preserve command flags, environment names, native payloads and exit codes. | Runner, queue, interruption, container, isolation and client tests; [clean contexts](../clean-context.md). |
@@ -126,6 +131,9 @@ and run preparation and dispatch to #157.
 `skill_provenance` and `fetch_freeze_commits` from the runtime group to #157 and #160.
 [Processing retirement](processing-retirement.md) removes `score` and `scoreboard_svg`, keeps
 `compare`, classifies five research helpers, and moves `methodology` to #156 and `collect_run` to #155.
+v3 records both, assigns each retained library to the stage that removes it, as the
+[retained libraries](processing.md#retained-libraries) table lists, and assigns the `tools/usage_pilot`
+modules to #152, which owns the pilot.
 
 Active research helpers carry the responsibility assignments in `RESEARCH_GROUPS`.
 Their tests run on disposable copies because some APIs write whole

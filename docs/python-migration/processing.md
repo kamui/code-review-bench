@@ -12,7 +12,9 @@ Slice 3, [#195](https://github.com/kamui/code-review-bench/issues/195), ports `d
 [#196](https://github.com/kamui/code-review-bench/issues/196), ports `build_packet`. Slice 5,
 [#197](https://github.com/kamui/code-review-bench/issues/197), adds the schema validator and ports the read-only
 readers of `rates` and `upstream`. Slice 6, [#198](https://github.com/kamui/code-review-bench/issues/198), ports the
-explorer export, as [the explorer export](#the-explorer-export) describes.
+explorer export, as [the explorer export](#the-explorer-export) describes. Slice 7,
+[#199](https://github.com/kamui/code-review-bench/issues/199), records the resulting ownership in the
+[v3 inventory](README.md#reproducible-records) and closes the stage, as [the close-out](#close-out) lists.
 
 ## The `bench-tools` crate
 
@@ -61,16 +63,25 @@ command through Python. Frozen runs, imported originals and research records kee
 
 ## Retained libraries
 
-A retained library stays byte-unchanged while a later stage still imports or hashes it. Its CLI callers move to Rust,
-and CI runs the corpus against both implementations with a differential. It is removed once its removal condition holds.
+A retained library stays byte-unchanged while a later stage still imports or hashes it. Where #154 ported it, its CLI
+callers moved to Rust and CI runs the corpus against both implementations with a differential. `compare.py` and
+`stage_edition.py` have no Rust port; [processing retirement](processing-retirement.md) kept them for their callers.
+A retained library is removed by the stage in the last column once its removal condition holds, and the v3 inventory
+assigns it to that stage.
 
-| Module | Imported or hashed by | Removal condition | Owner |
+| Module | Imported or hashed by | Removal condition | Removed by |
 | --- | --- | --- | --- |
 | `bench/tools/diff_identity.py` | `provision.py` imports `identity`; `test_cache_replacements.py` imports it; `grade.runner_files()` hashes it, so a byte change refuses every prepared grading batch | `provision.py` computes diff identity through the Rust runtime ([#157](https://github.com/kamui/code-review-bench/issues/157)) and `grade.runner_files()` no longer hashes `diff_identity.py` ([#156](https://github.com/kamui/code-review-bench/issues/156)) | #157 |
-| `bench/tools/normalize_review.py` | `grade.py` imports `render` for blind grading; `contributor_adapters.collect` calls `from_codex`, `from_claude_builtin` and `from_codex_skill` in process; `grade.runner_files()` hashes it | `grade.render` renders through the Rust runtime and `grade.runner_files()` no longer hashes `normalize_review.py` ([#156](https://github.com/kamui/code-review-bench/issues/156)), and the contributor backend normalizes through it ([#158](https://github.com/kamui/code-review-bench/issues/158)) | #156, #158 |
-| `bench/tools/check_manifest.py` | `claims`, `claim_grading`, `current_grading`, `evidence_store`, `file_attempt`, `provision`, `rates`, `reconcile_evidence`, `run_cell` and `upstream` import `validate`; `grade.runner_files()` hashes it. Its CLI runs in `bench/README.md`, `.github/workflows/rates.yml` and `test:bench`'s `--self-test` | No maintained module imports it and `grade.runner_files()` no longer hashes it. The delivery plan leaves `check_manifest` with [#156](https://github.com/kamui/code-review-bench/issues/156), which moves its CLI callers | #156 |
+| `bench/tools/normalize_review.py` | `grade.py` imports `render` for blind grading; `contributor_adapters.collect` calls `from_codex`, `from_claude_builtin` and `from_codex_skill` in process; `grade.runner_files()` hashes it | `grade.render` renders through the Rust runtime and `grade.runner_files()` no longer hashes `normalize_review.py` ([#156](https://github.com/kamui/code-review-bench/issues/156)), and the contributor backend normalizes through it ([#158](https://github.com/kamui/code-review-bench/issues/158)) | #158 |
+| `bench/tools/check_manifest.py` | `claims`, `claim_grading`, `current_grading`, `evidence_store`, `file_attempt`, `provision`, `rates`, `reconcile_evidence`, `run_cell` and `upstream` import `validate`; `grade.runner_files()` hashes it. Its CLI runs in `bench/README.md`, `.github/workflows/rates.yml` and `test:bench`'s `--self-test` | No maintained module imports it and `grade.runner_files()` no longer hashes it. The delivery plan leaves `check_manifest` with [#156](https://github.com/kamui/code-review-bench/issues/156), which moves its CLI callers and its grading importers; `provision`, `run_cell` and `file_attempt` leave with [#157](https://github.com/kamui/code-review-bench/issues/157), and `rates`, the last importer, with [#160](https://github.com/kamui/code-review-bench/issues/160) | #160 |
 | `bench/tools/rates.py` | `run_cell` and `contributor_adapters` call `read_catalog` and `inspect`, and `contributor_adapters` calls `latest` and `fetch`; `rates refresh` runs in `rates:refresh` and `.github/workflows/rates.yml` | `rates refresh` and the dispatch check move to Rust ([#160](https://github.com/kamui/code-review-bench/issues/160) owns `rates.yml`) and no module imports `rates` | #160 |
 | `bench/tools/upstream.py` | `claims` imports `validate_assessment` and `route`; `grade.runner_files()` hashes it; `upstream collect` is the documented snapshot capture | `claims` moves to Rust, `collect` has a replacement and `grade.runner_files()` no longer hashes `upstream.py` ([#156](https://github.com/kamui/code-review-bench/issues/156)) | #156 |
+| `bench/tools/compare.py` | The research run helpers `replacement_runs.py` and `skill_replacement_runs.py`, which `stage_edition.staged_registry()` executes, and `review_code_run.py` call `provisioning_hash` for a run manifest's `provisioning_sha256`; the #156 filing tests reach it through `move.py` and `selection.py`. Its comparison CLI is documented in `bench/README.md` | No current test or command runs those helpers from the current checkout ([#156](https://github.com/kamui/code-review-bench/issues/156)), and another command computes `provisioning_sha256` for new run freezes ([#157](https://github.com/kamui/code-review-bench/issues/157)) | #157 |
+| `docs/research/last-push-recut-2026-10-07/stage_edition.py` | The #156 filing scripts `last-push-rulings-2026-10-11/filing/move.py` and `last-push-review-code-2026-10-12/selection/selection.py` import it; `test_packet_replacements.StagedSelectionTests` loads it | A research record, so it is never deleted. It becomes historical replay when no current test or command loads it or those filing scripts ([#156](https://github.com/kamui/code-review-bench/issues/156)) | #156 |
+
+`grade.runner_files()` also hashes 19 files that no #154 responsibility ported, such as `provision.py`, `claims.py`
+and `grading-hosts.v1`. All 23 are byte-identical at `bd1fde436`, where the delivery plan was checked, and at the v3
+inventory's source commit. The v3 inventory assigns each Python file to its own stage.
 
 ## The review normalizers
 
@@ -104,9 +115,9 @@ collection resolves a Rust runtime or calls either.
 
 A bridge lets a Python caller run a Rust command until the caller itself moves to Rust.
 
-| Bridge | Removal condition | Owner |
+| Bridge | Removal condition | Removed by |
 | --- | --- | --- |
-| `tools/export_explorer.py` loads the current facts with `current_grading.load_current`, writes them to a temporary file with `json.dumps(allow_nan=False)`, restores the evidence `bench-tools export-explorer evidence` lists through `evidence_store.resolve`, runs `stage`, checks the dataset hash again, and runs `publish` with `SIGINT` ignored. It exits 2 when `bench-tools` is not installed for `HEAD`. | Evidence resolution moves to Rust ([#155](https://github.com/kamui/code-review-bench/issues/155)) and `load_current` moves to Rust ([#156](https://github.com/kamui/code-review-bench/issues/156)) | #155, #156 |
+| `tools/export_explorer.py` loads the current facts with `current_grading.load_current`, writes them to a temporary file with `json.dumps(allow_nan=False)`, restores the evidence `bench-tools export-explorer evidence` lists through `evidence_store.resolve`, runs `stage`, checks the dataset hash again, and runs `publish` with `SIGINT` ignored. It exits 2 when `bench-tools` is not installed for `HEAD`. | Evidence resolution moves to Rust ([#155](https://github.com/kamui/code-review-bench/issues/155)) and `load_current` moves to Rust ([#156](https://github.com/kamui/code-review-bench/issues/156)) | #156 |
 
 #195's bridge, `build_packet.py --factual` running `bench-tools derive-packet` through `rust_runtime.resolve`, was
 removed by #196: `bench-tools build-packet --factual` calls `bench_tools::derive_packet::derive` in-process. It
@@ -259,14 +270,34 @@ Diagnostics keep the Python program names, `roster.py:`, `diff_identity.py:`, `n
 `export_explorer.py:`, so saved stderr stays identical and the differential compares them byte for byte. Renaming them
 needs a new decision version.
 
+## Close-out
+
+Each responsibility the v2 inventory assigned to #154 now has one of three outcomes. It is migrated, with its Python
+deleted or kept as a retained library. It is retired. Or it moved to the later stage named in the last column, which
+the v3 inventory records.
+
+| v2 #154 responsibility | Outcome | v3 owner |
+| --- | --- | --- |
+| `roster`, `normalize_thermo`, `derive_packet`, `build_packet` | Migrated to `bench-tools`; the Python is deleted | None |
+| `diff_identity`, `normalize_review` | Migrated to `bench-tools`; retained library | #157, #158 |
+| `check_manifest`'s schema validation, `rates check`, `upstream report` | Migrated to `bench-tools`; `check_manifest`, `rates` and `upstream` are retained libraries | #160, #160, #156 |
+| `export_explorer` | Migrated to `bench-tools export-explorer`; the Python front is a temporary bridge | #156 |
+| `rates refresh`, `upstream collect`, evidence restoration during export | Kept in Python as effects, as the delivery plan assigns | #160, #156, #155 |
+| `score`, `scoreboard_svg` | Retired by #192 | None |
+| `compare` | Retained library with no port | #157 |
+| `methodology`, `collect_run` | Moved by the delivery plan | #156, #155 |
+| `stage_edition.py` | Retained research record | #156 |
+| `plan.py`, `recut.py` and `verify.py` in `last-push-recut-2026-10-07` | Historical replay, as #192 classified them | None |
+| `builtin-review-benchmark-2026-09-24/answers.py` | Historical replay by role, as #192 classified it. The census still marks it active because `tools/import_benchmark.py` lists its path to copy and a fixture in `tools/test_python_inventory.py` names the same path; both must go before it reads as replay | #155 |
+
 ## Research records
 
-`docs/research/last-push-recut-2026-10-07/plan.py` imports `roster`. It is a saved research record whose derived
+`plan.py` in `docs/research/last-push-recut-2026-10-07` imports `roster`. It is a saved research record whose derived
 `review-plan.v1.json` is already committed, and no test loads it. [Processing retirement](processing-retirement.md#research-helpers)
 classifies it as historical replay. It stays byte-unchanged. Replay it at a commit that has `bench/tools/roster.py`,
-such as the source commit its inventory entry resolves to.
+such as `5922561cf`, the v2 inventory's source commit.
 
-`docs/research/last-push-recut-2026-10-07/recut.py` imports `build_packet` and runs `build_packet.py`. Processing
+`recut.py` in the same directory imports `build_packet` and runs `build_packet.py`. Processing
 retirement classifies it as historical replay too, and it stays byte-unchanged. It now replays only at a commit that
 has `bench/tools/build_packet.py`, such as `1bbc3eed6`, the last main commit that holds it.
 
