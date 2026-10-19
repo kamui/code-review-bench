@@ -1,15 +1,16 @@
 #![forbid(unsafe_code)]
 
 use bench_tools::pytext::{self, PyPath};
-use bench_tools::{diff_identity, roster};
+use bench_tools::{derive_packet, diff_identity, roster};
 use std::ffi::OsString;
 use std::io::Write;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: bench-tools {roster,diff-identity} ...
+const USAGE: &str = "usage: bench-tools {roster,diff-identity,derive-packet} ...
 
   roster          list the benchmarks the roster has and the ones still missing
-  diff-identity   print the changed-file manifest of base..head and its SHA-256";
+  diff-identity   print the changed-file manifest of base..head and its SHA-256
+  derive-packet   write the factual packet derived from a legacy packet";
 
 const DIFF_IDENTITY_USAGE: &str =
     "usage: bench-tools diff-identity [-h] [--expect EXPECT] [--quiet] repo base head";
@@ -147,6 +148,48 @@ fn parse_diff_identity(arguments: &[OsString]) -> Result<Parsed<DiffArguments>, 
     Ok(Parsed::Run(parsed))
 }
 
+struct DeriveArguments {
+    legacy: OsString,
+    out: OsString,
+}
+
+fn parse_derive_packet(arguments: &[OsString]) -> Result<Parsed<DeriveArguments>, Misuse> {
+    let prog = "bench-tools derive-packet";
+    let mut legacy = None;
+    let mut out = None;
+    let mut rest = arguments.iter();
+    let mut options = true;
+    while let Some(argument) = rest.next() {
+        let bytes = pytext::os_bytes(argument);
+        if options && bytes == b"--" {
+            options = false;
+        } else if !options || !is_option(bytes) {
+            if legacy.is_some() {
+                return Err(unrecognized(derive_packet::USAGE, prog, bytes));
+            }
+            legacy = Some(argument.clone());
+        } else if bytes == b"-h" || bytes == b"--help" {
+            return Ok(Parsed::Help);
+        } else if let Some(value) =
+            option_value("--out", bytes, &mut rest, derive_packet::USAGE, prog)?
+        {
+            out = Some(value);
+        } else {
+            return Err(unrecognized(derive_packet::USAGE, prog, bytes));
+        }
+    }
+    match (legacy, out) {
+        (Some(legacy), Some(out)) if !legacy.is_empty() && !out.is_empty() => {
+            Ok(Parsed::Run(DeriveArguments { legacy, out }))
+        }
+        _ => Err(misuse(
+            derive_packet::USAGE,
+            prog,
+            "give the legacy packet and --out",
+        )),
+    }
+}
+
 fn write_stdout(bytes: &[u8]) -> Result<(), ExitCode> {
     let mut stdout = std::io::stdout().lock();
     stdout
@@ -232,6 +275,37 @@ fn run_diff_identity(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
     Ok(ExitCode::from(if mismatch.is_some() { 1 } else { 0 }))
 }
 
+fn run_derive_packet(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
+    let parsed = match parse_derive_packet(arguments) {
+        Ok(Parsed::Run(parsed)) => parsed,
+        Ok(Parsed::Help) => {
+            return help(
+                derive_packet::USAGE,
+                "Derive a factual packet from a legacy #137-style packet by removing its run policy.",
+            );
+        }
+        Err(problem) => return Err(report_misuse(&problem)),
+    };
+    let legacy = PyPath::new(pytext::os_bytes(&parsed.legacy));
+    let out = PyPath::new(pytext::os_bytes(&parsed.out));
+    match derive_packet::derive_file(&legacy, &out) {
+        Ok(digest) => {
+            let mut line = pytext::os_bytes(&parsed.out).to_vec();
+            line.extend_from_slice(format!(" sha256 {digest}\n").as_bytes());
+            write_stdout(&line)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(derive_packet::Failure::Structure(error)) => {
+            write_stdout(format!("{}\n", error.0).as_bytes())?;
+            Ok(ExitCode::from(1))
+        }
+        Err(derive_packet::Failure::Input(error)) => {
+            eprintln!("derive_packet.py: {}", error.0);
+            Err(ExitCode::from(2))
+        }
+    }
+}
+
 fn help(usage: &str, description: &str) -> Result<ExitCode, ExitCode> {
     write_stdout(format!("{usage}\n\n{description}\n").as_bytes())?;
     Ok(ExitCode::SUCCESS)
@@ -250,6 +324,7 @@ fn main() -> ExitCode {
     let outcome = match arguments.first().map(|command| pytext::os_bytes(command)) {
         Some(b"roster") => run_roster(&arguments[1..]),
         Some(b"diff-identity") => run_diff_identity(&arguments[1..]),
+        Some(b"derive-packet") => run_derive_packet(&arguments[1..]),
         Some(b"-h" | b"--help") => help(USAGE, "Deterministic benchmark tools."),
         Some(other) => {
             eprintln!(
