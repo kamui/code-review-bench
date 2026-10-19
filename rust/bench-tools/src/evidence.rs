@@ -6,6 +6,7 @@
 //! restart on a filesystem that honors `fsync`. A destination that exists but differs from the manifest is never
 //! trusted or overwritten: `materialize` lists every such file with a command that moves them aside.
 
+pub mod publication;
 pub mod recovery;
 pub mod remote;
 
@@ -21,7 +22,7 @@ use std::io::{self, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::Path;
 
-pub use remote::{GitHub, Remote};
+pub use remote::{GitHub, Remote, Upload};
 
 /// Python's `bench/schema/evidence-storage.schema.json`, which a cargo test keeps byte-identical.
 pub const SCHEMA: &str = include_str!("evidence/evidence-storage.schema.json");
@@ -798,9 +799,10 @@ pub fn write_new(disk: &mut dyn Disk, path: &PyPath, value: &Value) -> Result<()
     );
     let os_temporary = temporary.to_path_buf();
     let written = (|| -> Result<()> {
+        // Named as `open(path, 'x')` names the record when its directory refuses a new file.
         let mut file = disk
             .create(&os_temporary)
-            .map_err(|error| os_failure(&error, temporary.as_bytes()))?;
+            .map_err(|error| os_failure(&error, path.as_bytes()))?;
         file.write_all(encoded.as_bytes())
             .map_err(|error| os_failure(&error, temporary.as_bytes()))?;
         disk.sync(&file, &os_temporary)
