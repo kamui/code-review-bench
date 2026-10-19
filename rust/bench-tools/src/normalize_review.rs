@@ -725,14 +725,19 @@ fn location(text: &str) -> Option<(&str, &str, Option<&str>)> {
 }
 
 /// `int(digits)` for the digits `\d` matched.
-fn integer(digits: &str) -> Value {
+fn integer(digits: &str) -> Result<Value, String> {
+    if let Some(message) = pyjson::int_digit_limit(digits.chars().count()) {
+        return Err(format!("a bullet's line number cannot be read: {message}"));
+    }
     let ascii: String = digits
         .chars()
         .filter_map(pytext::decimal_value)
         .filter_map(|value| char::from_digit(value, 10))
         .collect();
     let trimmed = ascii.trim_start_matches('0');
-    Value::Int(if trimmed.is_empty() { "0" } else { trimmed }.to_string())
+    Ok(Value::Int(
+        if trimmed.is_empty() { "0" } else { trimmed }.to_string(),
+    ))
 }
 
 fn first_characters(text: &str, count: usize) -> &str {
@@ -764,8 +769,8 @@ pub fn from_codex(
     for line in lines.iter().skip(index + 1) {
         let stripped = pytext::strip(line);
         if let Some(bullet) = codex_bullet(line) {
-            let start = integer(bullet.start);
-            let end = bullet.end.map_or_else(|| start.clone(), integer);
+            let start = integer(bullet.start)?;
+            let end = bullet.end.map_or_else(|| Ok(start.clone()), integer)?;
             items.push(Item {
                 file: relpath(text(bullet.path), clone, "a bullet's path")?,
                 line_start: start,
@@ -1188,7 +1193,7 @@ mod tests {
             (bullet.priority, bullet.start, bullet.end),
             ("P\u{661}", "\u{661}\u{662}", Some("\u{1d7ce}"))
         );
-        assert!(matches!(integer(bullet.start), Value::Int(digits) if digits == "12"));
+        assert!(matches!(integer(bullet.start), Ok(Value::Int(digits)) if digits == "12"));
         assert!(codex_bullet("- [P\u{b2}] A \u{2014} a:1").is_none());
         assert!(codex_bullet("- [P2] A \u{2014} a:\u{b2}").is_none());
         assert_eq!(

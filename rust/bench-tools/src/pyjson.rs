@@ -121,6 +121,13 @@ const INT_MAX_STR_DIGITS: usize = 4300;
 /// Python's own limit depends on its version and stack size; deeper input is refused here.
 const MAX_DEPTH: usize = 1_000;
 
+/// Python's `ValueError` message when `int()` reads more decimal digits than its default limit.
+pub fn int_digit_limit(digits: usize) -> Option<String> {
+    (digits > INT_MAX_STR_DIGITS).then(|| format!(
+        "Exceeds the limit ({INT_MAX_STR_DIGITS} digits) for integer string conversion: value has {digits} digits; use sys.set_int_max_str_digits() to increase the limit"
+    ))
+}
+
 enum Failure {
     /// The scanner found no value here: Python's `StopIteration`, reported as `Expecting value`.
     NoValue(usize),
@@ -282,11 +289,8 @@ impl Parser {
             return Ok((Value::Float(value), index));
         }
         let digits = text.trim_start_matches('-');
-        if digits.len() > INT_MAX_STR_DIGITS {
-            return Err(Failure::Error(ParseError::Value(format!(
-                "Exceeds the limit ({INT_MAX_STR_DIGITS} digits) for integer string conversion: value has {} digits; use sys.set_int_max_str_digits() to increase the limit",
-                digits.len()
-            ))));
+        if let Some(message) = int_digit_limit(digits.len()) {
+            return Err(Failure::Error(ParseError::Value(message)));
         }
         let normalized = if digits == "0" {
             digits.to_string()
