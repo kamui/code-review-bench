@@ -35,7 +35,7 @@ Shared modules carry the Python behavior that byte-pinned outputs depend on:
   these cases would keep the whole scanner beside the crate.
 - `pytext` holds `surrogateescape` decoding, `str.strip` whitespace, `repr`, `pathlib` path joining, universal
   newlines, and the `OSError` and `UnicodeDecodeError` messages that diagnostics quote.
-- `sha256` implements SHA-256, in one call or incrementally.
+- `sha256` spells the `sha2` crate's SHA-256 digest as `hashlib`'s `hexdigest()` does, in one call or incrementally.
 - `pyregex` is `re.search` for the pattern syntax the schemas use, matched by the `regex` crate, `pyunicode` holds
   Python's decimal digits and `int(str)`, and `pyfs` holds `Path.resolve`, `relative_to` and directory listing.
 - `archive` reads and writes gzip, tar and zip through the [registry dependencies](#registry-dependencies), as [archives](#archives)
@@ -45,6 +45,7 @@ Run a subcommand through the pinned executable, as [Rust runtime pinning](runtim
 describes:
 
 ```sh
+(cd rust/bench-tools && cargo fetch --locked)
 python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select
 bun run roster
 python3 bench/tools/rust_runtime.py exec bench-tools -- diff-identity <repo> <base> <head>
@@ -97,6 +98,23 @@ lists them. When the Cargo cache lacks one, `rust_runtime.py install` fails and 
 
 | Crate | Version | License | Purpose |
 | --- | --- | --- | --- |
+| `clap` | 4.6.7 | MIT OR Apache-2.0 | Parses every subcommand's arguments, as [command-line parsing](#command-line-parsing) describes; a direct dependency built with features `derive`, `std`, `help`, `usage` and `error-context` only |
+| `clap_builder` | 4.6.7 | MIT OR Apache-2.0 | The parser behind `clap` |
+| `clap_derive` | 4.6.7 | MIT OR Apache-2.0 | Build-time derive macros for `clap` |
+| `clap_lex` | 1.1.1 | MIT OR Apache-2.0 | Argument lexing for `clap_builder` |
+| `anstyle` | 1.0.14 | MIT OR Apache-2.0 | Text styles for `clap_builder` |
+| `heck` | 0.5.0 | MIT OR Apache-2.0 | Build-time case conversion for `clap_derive` |
+| `proc-macro2` | 1.0.107 | MIT OR Apache-2.0 | Build-time token handling for `clap_derive` |
+| `quote` | 1.0.47 | MIT OR Apache-2.0 | Build-time code generation for `clap_derive` |
+| `syn` | 3.0.9 | MIT OR Apache-2.0 | Build-time Rust parsing for `clap_derive` |
+| `unicode-ident` | 1.0.27 | (MIT OR Apache-2.0) AND Unicode-3.0 | Build-time identifier tables for `proc-macro2` |
+| `sha2` | 0.11.1 | MIT OR Apache-2.0 | SHA-256 for `bench_tools::sha256`; a direct dependency built without default features |
+| `digest` | 0.11.3 | MIT OR Apache-2.0 | Hash traits for `sha2` |
+| `crypto-common` | 0.2.2 | MIT OR Apache-2.0 | Shared cryptographic types for `digest` |
+| `block-buffer` | 0.12.1 | MIT OR Apache-2.0 | Block buffering for `digest` |
+| `hybrid-array` | 0.4.15 | MIT OR Apache-2.0 | Fixed-size arrays for `digest` and `block-buffer` |
+| `typenum` | 1.20.1 | MIT OR Apache-2.0 | Type-level sizes for `hybrid-array` |
+| `cpufeatures` | 0.3.1 | MIT OR Apache-2.0 | Runtime CPU feature detection for `sha2` |
 | `regex`, with only its `std` feature | 1.13.1 | MIT OR Apache-2.0 | Matches `pyregex`'s translation of a schema pattern ([#215](https://github.com/kamui/code-review-bench/issues/215)) |
 | `regex-automata` | 0.4.18 | MIT OR Apache-2.0 | `regex`'s engines |
 | `regex-syntax` | 0.8.11 | MIT OR Apache-2.0 | `regex`'s parser, without its Unicode tables |
@@ -273,7 +291,7 @@ recorded decision.
   Python kept the surrogate, and its own nesting limit depends on its version and stack.
 - `diff-identity` has no `--self-test`; `cargo test` and the corpus cover it. It accepts options between
   positional arguments, which argparse refuses for some orders.
-- `normalize-review` has no `--self-test`, and options must be spelled in full; argparse also accepted unique prefixes.
+- `normalize-review` has no `--self-test`.
 - `derive-packet` has no `--self-test`; `cargo test` and the corpus cover it.
 - Where the normalizers' Python raised a traceback and exited 1, they exit 2 with a message: an input that is not
   UTF-8, a shape such as a `findings` value that is not a list, an `--out` that cannot be written, a timing sidecar that
@@ -292,7 +310,8 @@ recorded decision.
 - `build-packet` calls `gh` only without `--replay`, which no case uses. Its argv was compared once against
   `build_packet.py` through a stub `gh` (see #196's pull request); `cargo test` pins the GraphQL and edit-history
   commands.
-- Usage errors print `bench-tools` usage text. Argparse wording is not a contract.
+- Usage errors and help are clap's: `error: ...` and the usage on stderr, exit 2, or help on stdout, exit 0.
+  Argparse wording is not a contract.
 - `check-manifest` and `bench_tools::schema` refuse with exit 2, as for an unsupported keyword: a schema that is not
   an object, a keyword value of a JSON type the check cannot use, such as `"required": 1`, and `$ref` chains or
   nesting deeper than 900 checks. Python raised a traceback, exit 1. A text or object `required` or `enum` is
@@ -387,6 +406,42 @@ Diagnostics keep the Python program names, `roster.py:`, `diff_identity.py:`, `n
 `normalize_thermo.py:`, `derive_packet.py:`, `build_packet:`, `check_manifest.py:`, `rates.py:`, `upstream.py:` and
 `export_explorer.py:`, so saved stderr stays identical and the differential compares them byte for byte. Renaming them
 needs a new decision version.
+
+## Command-line parsing
+
+`main.rs` parses arguments with `clap`'s derive API ([#215](https://github.com/kamui/code-review-bench/issues/215)).
+Every subcommand expands a unique prefix of a long option, as argparse does, through `infer_long_args`; the top level
+does not. A usage error exits 2 and help exits 0. No corpus reaches the top level, so `tests/cli.rs` pins its exit
+codes as the hand-written parser had them; `main.rs` refuses `bench-tools -hx` before clap, which would print help.
+Each family's latest decisions record where clap reads a subcommand's command line differently from the parser it
+replaced, each with its case:
+
+- `*-abbreviated-*`: a unique prefix such as `--ro` runs; before, only `derive-packet` and `build-packet` took one.
+- `*-dot-digit-*`: a dash-led value such as `-.5` is refused, exit 2; `--root=-.5` still works, and `-5` and `-1.5`
+  are still values. `*-exponent-*`: `-1e5` is taken as a value, as Python 3.14 takes it, where it was refused, as
+  Python 3.12 refuses it.
+- `*-double-dash`: a `--` with nothing after it is ignored where it was refused.
+- `normalize-review-arm-checked-when-read` and `thermo-arm-checked-when-read`: `--arm` is checked as it is read, so a
+  later valid `--arm` no longer replaces an invalid one.
+- `build-packet-help-after-unknown-option` and `rates-help-after-extra-argument`: an unknown argument before `-h` is a
+  usage error where help was printed. This holds for every subcommand.
+- `*-help-with-attached-argument`: `-hx` prints help, as argparse does under Python 3.12 and 3.14, where every
+  subcommand but `build-packet` refused it. `*-help-with-equals-or-dash`: `-h` with `=` or `-` attached, such as
+  `-h=1` or `-h-x`, is still refused, exit 2, as argparse refuses it; `main.rs` refuses it when clap would print help,
+  with argparse's message. Like argparse, it first skips further `h`s, so `-hh=1` is refused and `-hhx` prints help;
+  `build-packet-help-run-with-equals-or-dash` records that `build-packet` printed help for `-hh=1`.
+- `build-packet-unicode-16-digit-option-value`: `build-packet` keeps Python 3.14's argparse reading of dash-led option
+  values, which `build-packet-option-values-with-leading-dash` pins: a value that names no option and holds a space or
+  starts with a dash, an optional dot and a decimal digit. `main.rs` attaches such a value to its option with `=`
+  before clap parses. Its digits are `pytext`'s Unicode 16.0 decimal digits, as before; the decision states the
+  impact against Python 3.12 and older.
+- `build-packet-help`, four `build-packet-usage-*` cases, `build-packet-non-utf8-text-option` and
+  `export-explorer-usage-missing-stage` pin clap's wording by prefix; their exit codes are unchanged.
+- `archive`, which [#218](https://github.com/kamui/code-review-bench/issues/218) added with a hand-written parser, takes
+  the same rules through `archive-decisions.v3.json`: `archive-abbreviated-*`, `archive-dot-digit-*`,
+  `archive-exponent-archive`, `archive-help-with-*`, `archive-help-after-unknown-command`, and `archive-help` and
+  `archive-usage-missing-cache` for clap's wording. It has no Python counterpart, so only CI and maintainers see the
+  change; the Pages workflow's `archive check-packages` call parses as before.
 
 ## Close-out
 
