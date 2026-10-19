@@ -5,9 +5,9 @@ use bench_tools::pyjson::{self, Duplicates};
 use bench_tools::pytext::{self, PyPath};
 use bench_tools::schema::{SchemaError, Validator};
 use bench_tools::{
-    archive, build_packet, claims, derive_packet, diff_identity, evidence, evidence_inventory,
-    export_explorer, grading_validation, normalize_thermo, pyfs, pyunicode, rates, roster,
-    upstream,
+    archive, build_packet, claims, delegation, derive_packet, diff_identity, evidence,
+    evidence_inventory, export_explorer, grading_validation, normalize_thermo, pyfs, pyunicode,
+    pyvalue, rates, roster, ruling, upstream,
 };
 use clap::builder::PossibleValuesParser;
 use clap::error::ErrorKind;
@@ -64,10 +64,78 @@ enum Cli {
     /// restore-local.py did.
     #[command(subcommand, infer_long_args = true)]
     Evidence(EvidenceCommand),
+    /// Check ruling records, route a ruling, summarize rounds, or check a ruling dossier.
+    #[command(subcommand, infer_long_args = true)]
+    Ruling(RulingCommand),
     /// Check a grader's output against the rules grading_validation.py applies.
     #[command(subcommand, infer_long_args = true)]
     Grading(GradingCommand),
 }
+
+#[derive(Subcommand)]
+enum RulingCommand {
+    /// Check a before-record, and its after-record when given, and say why the ruling stays with the user.
+    #[command(infer_long_args = true)]
+    Check {
+        #[arg(allow_negative_numbers = true)]
+        before: OsString,
+        #[arg(allow_negative_numbers = true)]
+        after: Option<OsString>,
+        #[arg(long, default_value = ".", allow_negative_numbers = true)]
+        root: OsString,
+    },
+    /// Print whether agents may settle a contract 2 ruling (SETTLE) or the user is asked (ASK), and the question.
+    #[command(infer_long_args = true)]
+    Route {
+        #[arg(allow_negative_numbers = true)]
+        before: OsString,
+        #[arg(long, default_value = delegation::POLICY, allow_negative_numbers = true)]
+        policy: OsString,
+        #[arg(long, default_value = ".", allow_negative_numbers = true)]
+        root: OsString,
+    },
+    /// Summarize every ruling record under docs/research, or one round's.
+    #[command(infer_long_args = true)]
+    Summary {
+        // argparse took --r and --ro for --round before --root existed, so they stay its abbreviations.
+        #[arg(long, aliases = ["r", "ro"], allow_negative_numbers = true)]
+        round: Option<OsString>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value = ".", allow_negative_numbers = true)]
+        root: OsString,
+    },
+    /// Write a new sheet of earlier owner rulings of one decision type.
+    #[command(infer_long_args = true)]
+    Precedents {
+        #[arg(long = "type", value_parser = PossibleValuesParser::new(DECISION_TYPE_NAMES))]
+        kind: String,
+        #[arg(long, allow_negative_numbers = true)]
+        exclude: OsString,
+        #[arg(long, allow_negative_numbers = true)]
+        out: OsString,
+        #[arg(long, default_value = ".", allow_negative_numbers = true)]
+        root: OsString,
+    },
+    /// Refuse a ruling dossier that does not show where a promise comes from and the searches made to find one.
+    #[command(infer_long_args = true)]
+    Dossier {
+        #[arg(allow_negative_numbers = true)]
+        directory: OsString,
+    },
+}
+
+const DECISION_TYPE_NAMES: [&str; 9] = [
+    "pre-existing-admission",
+    "pre-existing-raise",
+    "pre-existing-grouping",
+    "candidate",
+    "recovery",
+    "grouping",
+    "band",
+    "control",
+    "reconciliation",
+];
 
 #[derive(Args)]
 struct RosterArgs {
@@ -403,14 +471,20 @@ fn report(error: &clap::Error) -> ExitCode {
 }
 
 /// A usage error found after parsing, reported with the subcommand's usage, exit 2.
+/// `command` names the subcommand whose usage the error shows, with nested names separated by spaces.
 fn misuse(command: &str, kind: ErrorKind, message: impl Display) -> ExitCode {
     let mut cli = Cli::command();
     cli.build();
-    let error = match cli.find_subcommand_mut(command) {
-        Some(subcommand) => subcommand.error(kind, message),
-        None => cli.error(kind, message),
-    };
-    report(&error)
+    let mut found = &mut cli;
+    for name in command.split(' ') {
+        if found.find_subcommand(name).is_none() {
+            break;
+        }
+        found = found
+            .find_subcommand_mut(name)
+            .expect("the subcommand was just found");
+    }
+    report(&found.error(kind, message))
 }
 
 fn bytes(value: OsString) -> Vec<u8> {
@@ -1327,6 +1401,247 @@ fn run_restore_local(
     }
 }
 
+/// Python's output so far, then the refusal of what made it raise, exit 2. The Python wrote its traceback and
+/// exited 1; `ruling-record-decisions.v1.json` and `ruling-dossier-decisions.v1.json` record the change.
+fn crashed(program: &str, output: &[u8], raised: &pyvalue::Raised) -> ExitCode {
+    let _ = write_stdout(output);
+    eprintln!("{program}: {}", raised.describe());
+    ExitCode::from(2)
+}
+
+/// `parser.exit(1, f"{error}\n")` for what the Python's ruling commands catch, and a refusal for the rest.
+fn ruling_failed(raised: &pyvalue::Raised) -> ExitCode {
+    match raised.caught() {
+        Some(message) => {
+            eprintln!("{message}");
+            ExitCode::from(1)
+        }
+        None => crashed("ruling_record.py", b"", raised),
+    }
+}
+
+fn lines(items: &[String]) -> String {
+    let mut text = items.join("\n");
+    text.push('\n');
+    text
+}
+
+fn run_ruling_check(
+    before: &OsStr,
+    after: Option<&OsStr>,
+    root: &OsStr,
+) -> Result<ExitCode, ExitCode> {
+    let repo = ruling::Repo::new(pytext::os_bytes(root));
+    let before_path = PyPath::new(pytext::os_bytes(before));
+    let mut output = Vec::new();
+    let outcome = (|| -> pyvalue::Py<u8> {
+        let record = ruling::record::read_before(&repo, &before_path)?;
+        let mut problems = ruling::record::faults(&repo, &record)?;
+        let after = match after {
+            Some(path) => repo.load(&PyPath::new(pytext::os_bytes(path)))?,
+            None => bench_tools::pyjson::Value::Null,
+        };
+        if after.truthy() && problems.is_empty() {
+            problems =
+                ruling::record::after_faults(&repo, &record, &after, &before_path, true, None)?;
+        }
+        if !problems.is_empty() {
+            output.extend_from_slice(lines(&problems).as_bytes());
+            return Ok(1);
+        }
+        let stays = ruling::record::reasons(&repo, &record)?;
+        output.extend_from_slice(if stays.is_empty() {
+            b"No recorded reason keeps this with the user. Delegation still needs a policy the user adopted.\n".as_slice()
+        } else {
+            b"Stays with the user:\n".as_slice()
+        });
+        let listed: Vec<String> = stays.iter().map(|reason| format!("- {reason}")).collect();
+        output.extend_from_slice(lines(&listed).as_bytes());
+        if after.truthy() {
+            let mut surprises: Vec<String> = ruling::record::surprises(&repo, &record, &after)?
+                .iter()
+                .map(|surprise| format!("- {surprise}"))
+                .collect();
+            if surprises.is_empty() {
+                surprises.push("- none".into());
+            }
+            output.extend_from_slice(format!("Surprises:\n{}", lines(&surprises)).as_bytes());
+        }
+        Ok(0)
+    })();
+    match outcome {
+        Ok(code) => {
+            write_stdout(&output)?;
+            Ok(ExitCode::from(code))
+        }
+        Err(raised) => Err(crashed("ruling_record.py", &output, &raised)),
+    }
+}
+
+fn run_ruling_route(before: &OsStr, policy: &OsStr, root: &OsStr) -> Result<ExitCode, ExitCode> {
+    let repo = ruling::Repo::new(pytext::os_bytes(root));
+    let before_path = PyPath::new(pytext::os_bytes(before));
+    let outcome = (|| -> pyvalue::Py<(Vec<u8>, u8)> {
+        let record = ruling::record::read_before(&repo, &before_path)?;
+        let mut problems = ruling::record::faults(&repo, &record)?;
+        let two = bench_tools::pyjson::Value::Int("2".into());
+        if !pyvalue::get(&record, "contract")?.py_eq(&two) {
+            problems.push(
+                "`route` needs a contract 2 record, which pins the case file the user is shown"
+                    .into(),
+            );
+        }
+        if !problems.is_empty() {
+            return Ok((lines(&problems).into_bytes(), 1));
+        }
+        let policy_path = repo.root.join(pytext::os_bytes(policy));
+        let routed = delegation::route(&repo, &record, &policy_path, None, Some(&before_path))?;
+        if routed.reasons.is_empty() {
+            return Ok((format!("SETTLE level {}\n", routed.level).into_bytes(), 0));
+        }
+        let listed: Vec<String> = routed
+            .reasons
+            .iter()
+            .map(|reason| format!("- {reason}"))
+            .collect();
+        let question = ruling::record::question(&repo, &record)?;
+        Ok((
+            format!("ASK\n{}\n\n{question}\n", listed.join("\n")).into_bytes(),
+            0,
+        ))
+    })();
+    match outcome {
+        Ok((output, code)) => {
+            write_stdout(&output)?;
+            Ok(ExitCode::from(code))
+        }
+        Err(raised) => Err(ruling_failed(&raised)),
+    }
+}
+
+fn run_ruling_summary(
+    round: Option<&OsStr>,
+    json: bool,
+    root: &OsStr,
+) -> Result<ExitCode, ExitCode> {
+    let repo = ruling::Repo::new(pytext::os_bytes(root));
+    let outcome = (|| -> pyvalue::Py<String> {
+        let pairs = ruling::summary::records(&repo)?;
+        let round = match round.map(|round| round.to_str().ok_or(round)) {
+            None => None,
+            Some(Ok(round)) => Some(round),
+            Some(Err(round)) => {
+                return Err(pyvalue::Raised::Value(format!(
+                    "unknown round: {}",
+                    pytext::stderr_text(pytext::os_bytes(round))
+                )));
+            }
+        };
+        let summary = ruling::summary::summarize(&repo, &pairs, round)?;
+        if json {
+            let options = pyjson::Dumps {
+                ensure_ascii: false,
+                indent: Some(2),
+                ..pyjson::Dumps::default()
+            };
+            Ok(format!(
+                "{}\n",
+                pyjson::dumps(&summary.to_value()?, &options)
+            ))
+        } else {
+            Ok(format!("{}\n", summary.render()?))
+        }
+    })();
+    match outcome {
+        Ok(output) => {
+            write_stdout(output.as_bytes())?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(raised) => Err(ruling_failed(&raised)),
+    }
+}
+
+fn run_ruling_precedents(
+    kind: &str,
+    exclude: &OsStr,
+    out: &OsStr,
+    root: &OsStr,
+) -> Result<ExitCode, ExitCode> {
+    let Some(exclude) = exclude.to_str() else {
+        return Err(misuse(
+            "ruling precedents",
+            ErrorKind::InvalidUtf8,
+            format!(
+                "argument --exclude: not UTF-8 text: {}",
+                pytext::repr(&pytext::surrogateescape(pytext::os_bytes(exclude)))
+            ),
+        ));
+    };
+    let repo = ruling::Repo::new(pytext::os_bytes(root));
+    let out = PyPath::new(pytext::os_bytes(out));
+    let outcome = (|| -> pyvalue::Py<()> {
+        let pairs = ruling::summary::records(&repo)?;
+        let sheet = ruling::summary::precedents(&repo, &pairs, kind, exclude)?;
+        if pyvalue::exists(&out) {
+            return Err(pyvalue::Raised::Value(format!(
+                "refusing to replace {}; save a new sheet",
+                out.display()
+            )));
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(out.to_path_buf())
+            .map_err(|error| pyvalue::Raised::Os(pytext::os_error(&error, out.as_bytes())))?;
+        file.write_all(sheet.as_bytes())
+            .map_err(|error| pyvalue::Raised::Os(pytext::os_error(&error, out.as_bytes())))
+    })();
+    match outcome {
+        Ok(()) => Ok(ExitCode::SUCCESS),
+        Err(raised) => Err(ruling_failed(&raised)),
+    }
+}
+
+fn run_ruling_dossier(directory: &OsStr) -> Result<ExitCode, ExitCode> {
+    let repo = ruling::Repo::new(b".");
+    match ruling::dossier::faults(&repo, &PyPath::new(pytext::os_bytes(directory))) {
+        Ok(problems) if problems.is_empty() => {
+            write_stdout(b"preparation complete; whether each search and reading is right still needs review\n")?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Ok(problems) => {
+            write_stdout(lines(&problems).as_bytes())?;
+            Ok(ExitCode::from(1))
+        }
+        Err(raised) => Err(crashed("ruling_dossier.py", b"", &raised)),
+    }
+}
+
+fn run_ruling(command: RulingCommand) -> Result<ExitCode, ExitCode> {
+    match command {
+        RulingCommand::Check {
+            before,
+            after,
+            root,
+        } => run_ruling_check(&before, after.as_deref(), &root),
+        RulingCommand::Route {
+            before,
+            policy,
+            root,
+        } => run_ruling_route(&before, &policy, &root),
+        RulingCommand::Summary { round, json, root } => {
+            run_ruling_summary(round.as_deref(), json, &root)
+        }
+        RulingCommand::Precedents {
+            kind,
+            exclude,
+            out,
+            root,
+        } => run_ruling_precedents(&kind, &exclude, &out, &root),
+        RulingCommand::Dossier { directory } => run_ruling_dossier(&directory),
+    }
+}
+
 /// argparse reads a dash-led argument as an option's value when it names no option and holds a space, and Python
 /// 3.14's also when it reads as a negative number; `build-packet-option-values-with-leading-dash`,
 /// `grading-validation`'s `dash-led-*` cases and `inventory-dash-led-space-root` pin that. clap takes only numbers, so
@@ -1510,6 +1825,7 @@ fn main() -> ExitCode {
         }
         Cli::Archive(ArchiveCommand::CheckScratch { archives }) => check_scratch(&archives),
         Cli::Evidence(command) => run_evidence(command),
+        Cli::Ruling(command) => run_ruling(command),
         Cli::Grading(GradingCommand::Validate { verdicts, inputs }) => {
             run_grading_validate(&verdicts, &inputs)
         }
