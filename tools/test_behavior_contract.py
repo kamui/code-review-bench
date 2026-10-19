@@ -359,6 +359,21 @@ class ContractTests(unittest.TestCase):
         self.assertIn("FAIL diff-identity-manifest", result.stdout)
         self.assertIn("PASS diff-identity-empty", result.stdout)
 
+    def test_derive_packet_corpus_pins_every_committed_legacy_packet(self):
+        corpus = contract.load_corpus(contract.CORPUS.parent / "derive-packet.v1.json")
+        cases = {case["id"]: case for case in corpus["cases"]}
+        legacy = sorted((contract.REPO / "bench/targets").glob("*/packet.legacy.md"))
+        self.assertTrue(legacy)
+        self.assertEqual({f"derive-packet-target-{path.parent.name}" for path in legacy},
+                         {name for name in cases if name.startswith("derive-packet-target-")})
+        for path in legacy:
+            case = cases[f"derive-packet-target-{path.parent.name}"]
+            files = {base64.b64decode(entry["path_b64"]): base64.b64decode(entry["bytes_b64"])
+                     for entry in case["expected"]["filesystem"] if entry["kind"] == "file"}
+            self.assertEqual(case["argv"], ["packet.legacy.md", "--out", "packet.md"])
+            self.assertEqual(files, {b"packet.legacy.md": path.read_bytes(),
+                                     b"packet.md": path.with_name("packet.md").read_bytes()})
+
     def test_corpus_rejects_duplicate_json_keys(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "corpus.json"

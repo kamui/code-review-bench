@@ -32,7 +32,7 @@ and sealed under `targets/`, and the first scored run frozen as `runs/2026-09-24
 | `targets/<id>/` | `target.json`, frozen `packet.md`, `register.v<N>.json` (`register.v<N>.json.enc` while sealed), `smoke.json`; a migrated target also keeps `packet.legacy.md` |
 | `arms/<id>.json` | reviewer configurations as data |
 | `roster.json` | the roster: the models benchmarks run against by default, by client, each with its efforts, edited by hand; `bun run roster` prints which method and model combinations are benchmarked and which are `missing` |
-| `tools/` | `dispatch.sh`, `attempt_audit.py`, `normalize_review.py`, `codex_usage.py`, `transcript_usage.py`, `build_packet.py`, `check_manifest.py`, `diff_identity.py`, `derive_packet.py`, `provision.py`, `file_attempt.py`, `seal.py`, `run_cell.py`, `review_queue.py`, `grade.py`, `compare.py` |
+| `tools/` | `dispatch.sh`, `attempt_audit.py`, `normalize_review.py`, `codex_usage.py`, `transcript_usage.py`, `build_packet.py`, `check_manifest.py`, `diff_identity.py`, `provision.py`, `file_attempt.py`, `seal.py`, `run_cell.py`, `review_queue.py`, `grade.py`, `compare.py` |
 | `runs/<date>-<label>/` | frozen manifest, `charges.jsonl`, pre-dispatch probes, attempt records, mappings, results; a fixture run also holds its fixture target |
 | `scoreboard.json` | the earlier scoreboard registry, kept as imported evidence |
 | `SCOREBOARD.md`, `scoreboard/*.svg` | the earlier generated scoreboard and its charts, kept as imported evidence |
@@ -59,15 +59,16 @@ Six targets are migrated from the [#137 qualification grid](../docs/research/one
   diff identity, the packet hashes, provisioning identity, and exposure history.
 - `packet.legacy.md`: the #137 packet byte for byte (its hash is `legacy_packet_sha256`). It carries
   run policy, so no arm receives it.
-- `packet.md`: the factual packet, derived once by `derive_packet.py` from the legacy file (its
-  hash is `packet_sha256`). The derivation removes the experiment label, the preamble, the local
-  branch layout, the posting identity, the diff instruction, the "mandatory note", the guidance
-  instruction, the review-code report vocabulary (the `summary.repository_url` row label and, on
-  the three targets with no originating issue, the two instructions to record `issues=none`) and
-  the whole run-conditions section, and keeps every other byte; it refuses an input whose markers
-  are missing or repeated, or that carries that report vocabulary anywhere else before section 8.
-  A fresh target's packet comes from `build_packet.py --factual`, which passes the rendering through
-  the same derivation, so it omits the same elements.
+- `packet.md`: the factual packet, derived once from the legacy file (its hash is `packet_sha256`)
+  by `derive_packet.py`, now `bench-tools derive-packet`. The derivation removes the experiment
+  label, the preamble, the local branch layout, the posting identity, the diff instruction, the
+  "mandatory note", the guidance instruction, the review-code report vocabulary (the
+  `summary.repository_url` row label and, on the three targets with no originating issue, the two
+  instructions to record `issues=none`) and the whole run-conditions section, and keeps every other
+  byte; it refuses an input whose markers are missing or repeated, or that carries that report
+  vocabulary anywhere else before section 8. A fresh target's packet comes from
+  `build_packet.py --factual`, which passes the rendering through the same derivation, so it omits
+  the same elements.
 - `packet.v2.md`: the packet re-cut at the last push to the pull request, on the sixteen selected
   tasks. No `target.json` pins it. A run pins it through `packet_replacements`, and the registry and
   the current grading records pin it for the ten tasks whose reviews were run again.

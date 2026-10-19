@@ -78,9 +78,11 @@ The strings that name the program rather than the target -- ``--experiment-label
 renders the same bytes it always did and another program states its own.
 
 ``--factual`` writes the suite's factual packet (``bench/`` design §3) instead: the rendered packet
-passed through ``derive_packet.derive``, which removes the run policy exactly as it does for the
+passed through ``bench-tools derive-packet``, which removes the run policy exactly as it does for the
 migrated #137 packets, so a fresh target's packet omits the same elements. A rendering the
-derivation refuses is exit ``1`` with its reasons, and nothing is written.
+derivation refuses is exit ``1`` with its reasons, and nothing is written. The command runs through
+``rust_runtime.resolve``, which refuses with exit ``2`` when ``bench-tools`` is not installed for
+``HEAD``.
 
 ``--replay DIR`` reads saved forge responses instead of calling ``gh``: ``graphql.json``, plus
 ``edits.json`` when text was edited after the cutoff, ``ref-pr.json`` and ``ref-pr-comments.json``
@@ -103,6 +105,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import textwrap
 from datetime import datetime, timezone
 
@@ -480,7 +483,7 @@ def parse_args(argv) -> argparse.Namespace:
     ap.add_argument("--pushed-at-source", default=None, help="where --pushed-at comes from, recorded with the cutoff")
     ap.add_argument("--record", default=None, help="path for a JSON record of the cutoff, its source, the omitted records, the text restored to the cutoff and the draft flag when it changed after the cutoff")
     ap.add_argument("--replay", default=None, help="directory of saved forge responses to read instead of calling gh")
-    ap.add_argument("--factual", action="store_true", help="write the factual packet: the rendering with its run policy removed by derive_packet.py")
+    ap.add_argument("--factual", action="store_true", help="write the factual packet: the rendering with its run policy removed by bench-tools derive-packet")
     ap.add_argument("--out", required=True)
     return ap.parse_args(argv)
 
@@ -838,13 +841,10 @@ def build(a: argparse.Namespace) -> int:
 
     text = packet.text()
     if a.factual:
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        import derive_packet
-        try:
-            text = derive_packet.derive(text)
-        except derive_packet.StructureError as exc:
-            print(exc)
+        derived = factual(text)
+        if derived is None:
             return 1
+        text = derived
 
     directory = os.path.dirname(a.out)
     if directory:
@@ -874,6 +874,33 @@ def build(a: argparse.Namespace) -> int:
     print(f"cutoff source: {cutoff_source}; text restored to the cutoff: {restored}")
     print(f"wrote {a.out}: {len(rows)} files, {len(commits)} commits, {len(revs)} reviews, {n} thread comments, {len(conv)} conversation comments, {len(issues)} issues, ref_pr={a.ref_pr}")
     return 0
+
+
+def factual(text: str):
+    """The rendering with its run policy removed, or None after printing why the derivation refused it.
+
+    A bridge to the Rust command until build_packet itself moves to Rust (#196).
+    """
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import rust_runtime
+    try:
+        executable = str(rust_runtime.resolve("bench-tools"))
+    except (rust_runtime.Refused, rust_runtime.InputError) as exc:
+        raise InputError(str(exc)) from exc
+    with tempfile.TemporaryDirectory(prefix="build-packet-") as temporary:
+        rendered = os.path.join(temporary, "packet.legacy.md")
+        derived = os.path.join(temporary, "packet.md")
+        with open(rendered, "w", encoding="utf-8", newline="") as handle:
+            handle.write(text)
+        command = [executable, "derive-packet", "--no-newline-translation", rendered, "--out", derived]
+        done = subprocess.run(command, capture_output=True, text=True, encoding="utf-8")
+        if done.returncode == 1:
+            print(done.stdout, end="")
+            return None
+        if done.returncode != 0:
+            raise InputError(f"command failed: {' '.join(command)}\n{done.stderr.strip()}")
+        with open(derived, encoding="utf-8", newline="") as handle:
+            return handle.read()
 
 
 def main(argv=None) -> int:
