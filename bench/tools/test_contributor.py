@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -17,12 +20,40 @@ import contributor as cli
 import contributor_adapters as adapters
 import contributor_common as common
 import contributor_submit as submit
-import evidence_store
 import rust_runtime
 from contributor_common import command, digest, read, write
-from test_evidence_store import FakeGitHub
 
 REPOSITORY = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPOSITORY / "tools"))
+import behavior_contract  # noqa: E402
+
+
+@contextlib.contextmanager
+def runtime_store():
+    """A disposable store holding the bench-tools selected for this checkout, selected there too. The contributor
+    CLI runs it as a real executable; CI installs it before the bench tests, as runtime.md describes."""
+    installed = rust_runtime.resolve("bench-tools")
+    with tempfile.TemporaryDirectory(prefix="contributor-runtime-") as temporary:
+        store = Path(temporary)
+        entry = store / "bench-tools" / installed.parent.name
+        entry.mkdir(parents=True)
+        for name in (installed.name, "receipt.json"):
+            shutil.copy2(installed.parent / name, entry / name)
+        pin = rust_runtime.pin_of(entry)
+        rust_runtime.select(store, "bench-tools", pin)
+        clean = {key: value for key, value in os.environ.items() if not key.startswith("BENCH_RUST_")}
+        with patch.dict(os.environ, {**clean, "BENCH_RUNTIME_STORE": str(store)}, clear=True):
+            yield store, pin
+
+
+def crate_tree():
+    """The bytes of rust/bench-tools at HEAD, so a disposable checkout holds the crate the installed runtime was built
+    from and the contributor CLI resolves it for that checkout's HEAD."""
+    return subprocess.run(["git", "-C", str(REPOSITORY), "archive", "HEAD", "rust/bench-tools"], check=True,
+                          capture_output=True).stdout
+
+
+CRATE = crate_tree()
 
 
 def git(root, *arguments):
@@ -43,7 +74,9 @@ class ContributorTests(unittest.TestCase):
         git(self.root, "config", "user.name", "Contributor")
         git(self.root, "config", "user.email", "contributor@example.test")
         (self.root / "source.txt").write_text("base\n")
-        git(self.root, "add", "source.txt")
+        with tarfile.open(fileobj=io.BytesIO(CRATE)) as crate:
+            crate.extractall(self.root, filter="tar")
+        git(self.root, "add", "source.txt", "rust")
         git(self.root, "commit", "-m", "test: create source")
         self.base = git(self.root, "rev-parse", "HEAD")
         (self.root / "source.txt").write_text("head\n")
@@ -77,6 +110,7 @@ class ContributorTests(unittest.TestCase):
         shutil.copy2(REPOSITORY / "bench/contributor-invocation.md", self.root / "bench/contributor-invocation.md")
         self.calls = []
         self.real_subprocess_run = subprocess.run
+        self.store, self.pin = self.enterContext(runtime_store())
 
     def invoke(self, *arguments):
         output = io.StringIO()
@@ -119,6 +153,50 @@ class ContributorTests(unittest.TestCase):
              patch.object(adapters, "collect", side_effect=self.fake_collect), \
              patch.object(subprocess, "run", side_effect=self.fake_provision):
             yield
+
+    @contextlib.contextmanager
+    def stub_gh(self, faults=()):
+        """The contract harness's stub gh first on PATH for bench-tools, serving the staging release that
+        publish_assets names; the contributor's own gh calls are answered in process. Yields the stub's state."""
+        state = self.root / "gh-state"
+        state.mkdir(exist_ok=True)
+        tools = Path(self.enterContext(tempfile.TemporaryDirectory(prefix="contributor-gh-")))
+        (tools / "gh.py").write_text(behavior_contract.GH_STUB, encoding="utf-8")
+        (tools / "gh").write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} {shlex.quote(str(tools / "gh.py"))} "$@"\n')
+        (tools / "gh").chmod(0o755)
+        def api(route):
+            if route == "user":
+                return {"login": "contributor"}
+            if route == "repos/contributor/code-review-bench":
+                return {"fork": True, "parent": {"full_name": submit.BASE}}
+            tag = route.rsplit("/", 1)[1]
+            write(state / "release.json", {"repository": "contributor/code-review-bench", "tag": tag, "id": 7,
+                                           "faults": list(faults)})
+            return {"draft": False}
+        def push_records(saved, local):
+            saved["head"] = self.head
+        with patch.dict(os.environ, {"PATH": f"{tools}{os.pathsep}{os.environ['PATH']}", "CONTRACT_GH_STATE": str(state)}), \
+             patch.object(submit, "api", side_effect=api), patch.object(submit, "push_records", side_effect=push_records), \
+             patch.object(submit, "create_pr", return_value="https://github.com/kamui/code-review-bench/pull/999"):
+            yield state
+
+    def uploads(self):
+        calls = self.root / "gh-state/calls.jsonl"
+        return [line for line in calls.read_text().splitlines() if '"upload"' in line] if calls.exists() else []
+
+    def wrapper_runtime(self, log):
+        """Another bench-tools in the test store: a script that logs each call and runs the installed one."""
+        installed = next(path for path in (self.store / "bench-tools" / self.pin["sha256"]).iterdir() if path.name != "receipt.json")
+        script = f'#!/bin/sh\necho "$@" >> {shlex.quote(str(log))}\nexec {shlex.quote(str(installed))} "$@"\n'.encode()
+        sha = hashlib.sha256(script).hexdigest()
+        receipt = read(installed.parent / "receipt.json")
+        receipt["artifact"].update(sha256=sha, size=len(script))
+        entry = self.store / "bench-tools" / sha
+        entry.mkdir()
+        (entry / receipt["artifact"]["file"]).write_bytes(script)
+        (entry / receipt["artifact"]["file"]).chmod(0o755)
+        write(entry / "receipt.json", receipt)
+        return rust_runtime.pin_of(entry)
 
     def run_complete(self, *extra):
         with self.no_charge_run():
@@ -245,27 +323,24 @@ class ContributorTests(unittest.TestCase):
 
     def test_submission_snapshot_excludes_runs_completed_later_and_recovers_receipts(self):
         self.run_complete("--tasks", "task-a")
-        saved = submit.snapshot()
+        saved, resolved = submit.snapshot()
         self.run_complete("--tasks", "task-b")
-        self.assertEqual([row["run_id"] for row in submit.snapshot()["entries"]], ["R1"])
+        self.assertEqual([row["run_id"] for row in submit.snapshot()[0]["entries"]], ["R1"])
         saved.update(staging_repository="contributor/code-review-bench", login="contributor")
         submit.save(saved)
-        local = submit.package(saved)
-        remote_root = self.root / "remote"
-        remote_root.mkdir()
-        remote = FakeGitHub(remote_root)
-        with patch.object(evidence_store, "GitHub", return_value=remote), patch.object(submit, "api", return_value={"draft": False}):
-            submit.publish_assets(saved, local)
-            submit.publish_assets(saved, local)
-        self.assertEqual(remote.uploads, 1)
-        saved.update(pr_url="https://github.com/kamui/code-review-bench/pull/999", head=self.head)
-        submit.finish(saved)
-        submit.finish(saved)
-        self.assertFalse((self.state / "pending/R1").exists())
-        self.assertTrue((self.state / "pending/R2").exists())
-        self.assertEqual(read(self.state / "submitted/R1/receipt.json")["pr_url"], saved["pr_url"])
-        cold = self.root / "cold"
-        evidence_store.materialize(read(local / "records" / saved["manifest"]), cold, remote=remote)
+        local = submit.package(saved, resolved)
+        with self.stub_gh():
+            submit.publish_assets(saved, local, resolved[1])
+            submit.publish_assets(saved, local, resolved[1])
+            self.assertEqual(len(self.uploads()), 1)
+            saved.update(pr_url="https://github.com/kamui/code-review-bench/pull/999", head=self.head)
+            submit.finish(saved)
+            submit.finish(saved)
+            self.assertFalse((self.state / "pending/R1").exists())
+            self.assertTrue((self.state / "pending/R2").exists())
+            self.assertEqual(read(self.state / "submitted/R1/receipt.json")["pr_url"], saved["pr_url"])
+            cold = self.root / "cold"
+            common.evidence(resolved[1], "fetch", "--manifest", local / "records" / saved["manifest"], "--root", cold)
         payloads = list(cold.rglob("stdout.jsonl"))
         self.assertEqual(len(payloads), 1)
         self.assertEqual(payloads[0].read_text(), "original transcript\n")
@@ -355,10 +430,10 @@ class ContributorTests(unittest.TestCase):
 
     def test_declined_unpublished_selection_can_exclude_an_entry(self):
         self.run_complete("--tasks", "task-a")
-        saved = submit.snapshot()
+        saved, _ = submit.snapshot()
         shutil.rmtree(self.state / "pending/R1")
         self.run_complete("--tasks", "task-b")
-        revised = submit.snapshot()
+        revised, _ = submit.snapshot()
         self.assertNotEqual(saved["id"], revised["id"])
         self.assertEqual([row["run_id"] for row in revised["entries"]], ["R2"])
 
@@ -493,9 +568,9 @@ class ContributorTests(unittest.TestCase):
         with self.no_charge_run(), patch.object(adapters, "execute", side_effect=execute):
             code, output = self.invoke("run", "review", "--harness", "codex", "--model", "gpt-6.1-sol", "--tasks", "task-a", "--attempt-usd", "1", "--yes")
         self.assertEqual(code, 0, output)
-        saved = submit.snapshot()
+        saved, resolved = submit.snapshot()
         saved.update(staging_repository="contributor/code-review-bench", login="contributor")
-        local = submit.package(saved)
+        local = submit.package(saved, resolved)
         manifest = read(local / "packages/manifest.json")
         seen = set()
         for package in manifest["packages"]:
@@ -659,17 +734,141 @@ class ContributorTests(unittest.TestCase):
 
     def test_interrupted_package_build_can_be_retried(self):
         self.run_complete("--tasks", "task-a")
-        saved = submit.snapshot()
+        saved, resolved = submit.snapshot()
         saved.update(staging_repository="contributor/code-review-bench", login="contributor")
-        def fail_during_pack(selection, output):
+        def fail_during_pack(executable, selection, output):
             output.mkdir()
             (output / "partial-archive").write_text("preserved incomplete staging")
             raise OSError("disk write interrupted")
-        with patch.object(evidence_store, "pack", side_effect=fail_during_pack), self.assertRaises(OSError):
-            submit.package(saved)
-        local = submit.package(saved)
+        with patch.object(common, "pack", side_effect=fail_during_pack), self.assertRaises(OSError):
+            submit.package(saved, resolved)
+        local = submit.package(saved, resolved)
         self.assertTrue((local / "packages/manifest.json").is_file())
         self.assertEqual(len(list(local.glob("packages-building-*/partial-archive"))), 1)
+
+    def tree(self):
+        return {path.relative_to(self.state): path.read_bytes() if path.is_file() else None
+                for path in sorted(self.state.rglob("*")) if not path.name.endswith(".lock")}
+
+    def test_missing_bench_tools_refuses_run_resume_and_submit_before_any_side_effect(self):
+        install = ("(cd rust/bench-tools && rustup show && cargo fetch --locked)",
+                   "python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select")
+        self.run_complete("--tasks", "task-a")
+        with self.no_charge_run():
+            code, output = self.invoke("run", "review", "--harness", "codex", "--model", "gpt-6.1-sol", "--tasks", "task-b",
+                                       "--attempt-usd", "1")
+        self.assertEqual(code, 1, output)
+        empty = self.enterContext(tempfile.TemporaryDirectory(prefix="contributor-empty-store-"))
+        before = self.tree()
+        with patch.dict(os.environ, {"BENCH_RUNTIME_STORE": empty}), \
+             patch.object(adapters, "prepare", side_effect=AssertionError("probed a client")):
+            for arguments in (("run", "review", "--harness", "codex", "--model", "gpt-6.1-sol", "--tasks", "task-a"),
+                              ("run", "--resume", "R2"), ("run", "--resume", "R2", "--yes"), ("submit", "--yes")):
+                code, output = self.invoke(*arguments)
+                self.assertEqual(code, 1, output)
+                for step in install:
+                    self.assertIn(step, output, arguments)
+                self.assertNotIn("Type R2", output)
+                self.assertEqual(self.tree(), before, arguments)
+
+    def test_resume_and_filing_run_the_pinned_bench_tools_after_another_is_selected(self):
+        with self.no_charge_run():
+            code, output = self.invoke("run", "review", "--harness", "codex", "--model", "gpt-6.1-sol", "--tasks", "task-a",
+                                       "--attempt-usd", "1")
+        self.assertEqual(code, 1, output)
+        run = self.state / "runs/R1"
+        self.assertEqual(read(run / "runtimes.frozen.json"), {"bench-tools": self.pin})
+        self.assertEqual(read(run / "manifest.json")["runtimes"],
+                         {"path": "runtimes.frozen.json", "sha256": digest(run / "runtimes.frozen.json")})
+        log = self.root / "selected-runtime.log"
+        rust_runtime.select(self.store, "bench-tools", self.wrapper_runtime(log))
+        with self.no_charge_run():
+            code, output = self.invoke("run", "--resume", "R1", "--yes")
+        self.assertEqual(code, 0, output)
+        self.assertTrue((run / "attempts/att-001/transcript-package/manifest.json").is_file())
+        self.assertTrue((self.state / "pending/R1").exists())
+        self.assertFalse(log.exists(), "filing ran the newly selected bench-tools")
+
+        rust_runtime.select(self.store, "bench-tools", self.pin)
+        entry = self.store / "bench-tools" / self.pin["sha256"]
+        for number, name in enumerate(("bench-tools", "receipt.json"), 2):
+            with self.subTest(changed=name):
+                with self.no_charge_run():
+                    code, output = self.invoke("run", "review", "--harness", "codex", "--model", "gpt-6.1-sol",
+                                               "--tasks", "task-b", "--attempt-usd", "1")
+                self.assertEqual(code, 1, output)
+                self.assertEqual(read(self.state / f"runs/R{number}/runtimes.frozen.json"), {"bench-tools": self.pin})
+                original = (entry / name).read_bytes()
+                (entry / name).chmod(0o755)
+                (entry / name).write_bytes(original + b"\n")
+                try:
+                    before = self.tree()
+                    with self.no_charge_run():
+                        code, output = self.invoke("run", "--resume", f"R{number}", "--yes")
+                    self.assertEqual(code, 1, output)
+                    self.assertIn("no longer hashes to its pin", output)
+                    self.assertEqual(self.tree(), before)
+                    self.assertEqual(len(self.calls), 1, "no review ran with a changed pinned runtime")
+                finally:
+                    (entry / name).write_bytes(original)
+
+    def test_runs_prepared_before_runtime_pins_are_refused_with_their_source_commit(self):
+        run = self.run_complete("--tasks", "task-a")
+        manifest = read(run / "manifest.json")
+        del manifest["runtimes"]
+        (run / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        (run / "runtimes.frozen.json").unlink()
+        before = self.tree()
+        for arguments in (("run", "--resume", "R1", "--yes"), ("submit", "--yes")):
+            code, output = self.invoke(*arguments)
+            self.assertEqual(code, 1, output)
+            self.assertIn(f"pins no bench-tools; restore source commit {self.head} before resuming or submitting", output)
+            self.assertEqual(self.tree(), before, arguments)
+
+    def test_submission_packs_publishes_and_resumes_through_its_saved_pin_without_a_second_upload(self):
+        self.run_complete("--tasks", "task-a")
+        with self.stub_gh(faults=("truncated-download",)):
+            code, output = self.invoke("submit", "--yes")
+        self.assertEqual(code, 2, output)
+        self.assertIn("missing or changed evidence", output)
+        saved = read(self.state / "submission.json")
+        local = self.state / "submissions" / saved["id"]
+        self.assertEqual(saved["bench_tools"], self.pin)
+        packages = {path.name: path.read_bytes() for path in (local / "packages").iterdir()}
+        self.assertFalse((local / "records/bench/evidence/manifests" / f"contribution-{saved['id']}.json").exists())
+        self.assertEqual(len(self.uploads()), 1)
+
+        log = self.root / "selected-runtime.log"
+        rust_runtime.select(self.store, "bench-tools", self.wrapper_runtime(log))
+        with self.stub_gh():
+            code, output = self.invoke("submit", "--yes")
+            self.assertEqual(code, 0, output)
+            self.assertFalse(log.exists(), "the retry ran the newly selected bench-tools")
+            self.assertEqual({path.name: path.read_bytes() for path in (local / "packages").iterdir()}, packages)
+            self.assertEqual(len(self.uploads()), 1)
+            published = read(local / "records/bench/evidence/manifests" / f"contribution-{saved['id']}.json")
+            receipt = read(local / "records/bench/evidence/receipts" / f"contribution-{saved['id']}.json")
+            self.assertEqual(receipt["packages"], [package["sha256"] for package in published["packages"]])
+            self.assertEqual([package["publication"]["asset_id"] for package in published["packages"]], [101])
+            self.assertEqual(read(self.state / "submitted/R1/receipt.json")["pr_url"],
+                             "https://github.com/kamui/code-review-bench/pull/999")
+            cold = self.root / "cold"
+            common.evidence(rust_runtime.for_run("bench-tools", self.state / "runs/R1"), "fetch", "--manifest",
+                            local / "records/bench/evidence/manifests" / f"contribution-{saved['id']}.json", "--root", cold)
+        self.assertEqual([path.read_text() for path in cold.rglob("stdout.jsonl")], ["original transcript\n"])
+
+    def test_submission_refuses_runs_with_different_pins_before_packing(self):
+        self.run_complete("--tasks", "task-a")
+        rust_runtime.select(self.store, "bench-tools", self.wrapper_runtime(self.root / "selected-runtime.log"))
+        self.run_complete("--tasks", "task-b")
+        self.assertNotEqual(read(self.state / "runs/R2/runtimes.frozen.json"), {"bench-tools": self.pin})
+        before = self.tree()
+        code, output = self.invoke("submit", "--yes")
+        self.assertEqual(code, 1, output)
+        self.assertIn("selected runs pin different bench-tools runtimes", output)
+        self.assertIn("submit pending runs with different runtimes separately by temporarily excluding their pending entries", output)
+        self.assertEqual(self.tree(), before)
+        self.assertFalse((self.state / "submissions").exists())
 
 
 class AdapterTests(unittest.TestCase):

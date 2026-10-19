@@ -184,6 +184,11 @@ A `shell` step runs one command line with `/bin/sh -c` in the case root, for exa
 refused fetch prints. `fetch-interrupted-*` cases leave the state a crash leaves at each durable step and fetch again.
 `resolve-across-implementations` restores through Rust and then resolves through Python.
 
+[#220](https://github.com/kamui/code-review-bench/issues/220) moves `pack` and `publish` too, so the `Rust runtime`
+workflow routes the whole `evidence-store` program to `bench-tools evidence` and compares it with the retained Python.
+`check-package-*` cases run `bench-tools evidence check-package`, which has no Python command, and
+`pack-restored-by-python` packs and publishes through Rust, then restores through Python's `evidence_store.resolve`.
+
 Where Python raises a traceback, the case carries it as a `baseline_defect` and expects the intended exit and
 message, so these corpora run with `--allow-known-defects`: `recover-unknown-source`, `recover-changed-manifest`,
 `restore-local-not-published`, `restore-local-mismatched-resolution`, `fetch-archive-truncated-gzip`,

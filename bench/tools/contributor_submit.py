@@ -11,7 +11,6 @@ import uuid
 
 import contributor_common as common
 from contributor_common import Refused, command, digest, file_index, lock, read, stamp, verify_index, write
-import evidence_store
 import contributor_secrets as secrets
 
 BASE = "kamui/code-review-bench"
@@ -25,18 +24,33 @@ def api(route):
     return json.loads(gh("api", route))
 
 
-def snapshot():
+def runtime(saved):
+    """The bench-tools that every run of a selection pinned, as the submission saved it when it first packed."""
+    pins = {}
+    for row in saved["entries"]:
+        run = common.run_path(row["run_id"])
+        pins[row["run_id"]] = common.frozen_runtime(run, read(run / "manifest.json"))
+    pin = saved.get("bench_tools") or next(iter(pins.values()))
+    if any(other != pin for other in pins.values()):
+        listed = ", ".join(f"{run_id} pins {other['sha256']}" for run_id, other in pins.items())
+        raise Refused(f"selected runs pin different bench-tools runtimes ({listed}); submit pending runs with different runtimes separately by temporarily excluding their pending entries")
+    first = common.run_path(saved["entries"][0]["run_id"])
+    return pin, common.pinned_runtime(first, read(first / "manifest.json"))
+
+
+def snapshot(resolve=runtime):
+    """The saved or a new selection of pending entries, and its bench-tools, resolved before anything is written."""
     import contributor
     journal = common.STATE / "submission.json"
+    abandoned = None
     if journal.exists():
         saved = read(journal)
         if saved["status"] != "complete":
             excluded = any(not (common.STATE / "pending" / row["run_id"] / "entry.json").exists() for row in saved["entries"])
             if saved["status"] == "selected" and not saved.get("staging_repository") and excluded:
-                saved["status"] = "abandoned-before-publication"
-                write(common.STATE / "submissions" / saved["id"] / "journal.json", saved)
+                abandoned = {**saved, "status": "abandoned-before-publication"}
             else:
-                return saved
+                return saved, resolve(saved)
     pending = common.STATE / "pending"
     selected = []
     for directory in sorted(pending.iterdir()) if pending.exists() else []:
@@ -48,13 +62,16 @@ def snapshot():
         if entry != expected:
             raise Refused(f"pending entry {directory.name} changed or is invalid; inspect its run evidence")
         selected.append({"run_id": directory.name, "entry": entry, "entry_sha256": digest(directory / "entry.json")})
-    if not selected:
-        return None
     identifier = uuid.uuid4().hex
     saved = {"id": identifier, "status": "selected", "created_at": stamp(), "entries": selected,
              "branch": f"contributions/{identifier}", "tag": f"evidence-contribution-{identifier}"}
+    resolved = resolve(saved) if selected else None
+    if abandoned:
+        write(common.STATE / "submissions" / abandoned["id"] / "journal.json", abandoned)
+    if not selected:
+        return None, None
     write(journal, saved)
-    return saved
+    return saved, resolved
 
 
 def validate(saved):
@@ -96,7 +113,8 @@ def ensure_fork(saved):
     save(saved)
 
 
-def package(saved):
+def package(saved, resolved):
+    pin, executable = resolved
     local = common.STATE / "submissions" / saved["id"]
     local.mkdir(parents=True, exist_ok=True)
     selection = []
@@ -138,8 +156,11 @@ def package(saved):
                      "subjects": [row["run_id"] for row in saved["entries"]], "files": selection}
     packages = local / "packages"
     if not packages.exists():
+        if not saved.get("bench_tools"):
+            saved["bench_tools"] = pin
+            save(saved)
         building = local / ("packages-building-" + uuid.uuid4().hex)
-        evidence_store.pack(selection_doc, building)
+        common.pack(executable, selection_doc, building)
         building.rename(packages)
     mapping = {"contract": "contributor-submission/v1", "submission": saved["id"],
                "staging_repository": saved["staging_repository"], "publication": saved.get("publication"),
@@ -151,7 +172,7 @@ def package(saved):
     return local
 
 
-def publish_assets(saved, local):
+def publish_assets(saved, local, executable):
     try:
         release = api(f"repos/{saved['staging_repository']}/releases/tags/{saved['tag']}")
     except Refused:
@@ -168,10 +189,10 @@ def publish_assets(saved, local):
     manifest_path = local / "records/bench/evidence/manifests" / f"contribution-{saved['id']}.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     if not manifest_path.exists():
-        evidence_store.publish(local / "packages/manifest.json", manifest_path)
+        common.evidence(executable, "publish", "--manifest", local / "packages/manifest.json", "--out", manifest_path)
     receipt_path = local / "records/bench/evidence/receipts" / f"contribution-{saved['id']}.json"
     if not receipt_path.exists():
-        evidence_store.restoration_receipt(manifest_path, receipt_path)
+        common.evidence(executable, "verify", "--manifest", manifest_path, "--receipt", receipt_path)
     saved["status"] = "uploaded"
     saved["manifest"] = str(manifest_path.relative_to(local / "records"))
     save(saved)
@@ -270,7 +291,7 @@ def finish(saved):
 
 def submit(yes=False):
     with lock(common.STATE / "submit.lock"):
-        saved = snapshot()
+        saved, resolved = snapshot()
         if not saved:
             print("No pending entries. Nothing submitted.")
             return
@@ -288,9 +309,9 @@ def submit(yes=False):
                 return
         if not saved.get("staging_repository"):
             ensure_fork(saved)
-        local = package(saved)
+        local = package(saved, resolved)
         if not saved.get("pr_url"):
-            publish_assets(saved, local)
+            publish_assets(saved, local, resolved[1])
             validate(saved)
             push_records(saved, local)
             saved["pr_url"] = create_pr(saved, local)

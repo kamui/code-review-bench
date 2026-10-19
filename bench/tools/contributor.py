@@ -10,12 +10,10 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 
 import contributor_adapters as adapters
 import contributor_common as common
 from contributor_common import Refused, command, digest, file_index, lock, read, stamp, verify_index, write
-import evidence_store
 import prune_workspace
 import skill_provenance
 import contributor_secrets as secrets
@@ -97,7 +95,7 @@ def freeze_skill(source_run, destination):
             "source_skill_pin_sha256": digest(destination.parent / "source-skill-pin.json")}
 
 
-def prepare_run(args):
+def prepare_run(args, bench_tools):
     registry = read(common.ROOT / "bench/contributor-profiles.json")
     configurations = configs(args, registry)
     tasks = selected_tasks(args)
@@ -142,6 +140,7 @@ def prepare_run(args):
             for name in ("target.json",):
                 shutil.copy2(target / name, destination / name)
             shutil.copy2(selected[0], destination / "packet.md")
+        write(run / common.RUNTIMES, {common.BENCH_TOOLS: bench_tools}, immutable=True)
         cells = [{"target": task["id"], "configuration": index, "replicate": rep}
                  for index in range(len(configurations)) for rep in range(1, args.repeat + 1) for task in tasks]
         required = sum(configurations[cell["configuration"]]["reserve_usd"] for cell in cells)
@@ -151,6 +150,7 @@ def prepare_run(args):
                     "frozen_at": stamp(), "configurations": configurations, "tasks": tasks, "cells": cells,
                     "budget_usd": budget, "max_attempts": len(cells) + args.replacements,
                     "replacements": args.replacements, "skill_provenance": provenance,
+                    "runtimes": {"path": common.RUNTIMES, "sha256": digest(run / common.RUNTIMES)},
                     "input_index": file_index(inputs)}
         write(run / "manifest.json", manifest, immutable=True)
         write(run / "state.json", {"status": "prepared", "created_at": stamp()})
@@ -187,20 +187,21 @@ def verify_run(run):
             current = common.ROOT / "bench/tools" / Path(row["path"]).name
             if not current.is_file() or digest(current) != row["sha256"]:
                 raise Refused(f"{run.name}: runner runtime differs from the frozen run: {current}; restore source commit {manifest['source_commit']} before resuming or submitting; submit pending runs with different runtimes separately by temporarily excluding their pending entries")
+    common.frozen_runtime(run, manifest)
     for attempt in attempts(run):
         if (attempt / "evidence.json").is_file():
             verify_index(attempt, read(attempt / "evidence.json")["files"])
     return manifest
 
 
-def archive_attempt(run, attempt, record):
+def archive_attempt(run, attempt, record, runtime):
     secrets.audit(attempt)
     archive = attempt / "transcript-package"
     files = secrets.public_index(attempt, exclude=("clone", "clone-cache", "transcript-package", "attempt.json", "evidence.json", "workspace-pruned.json", "usage-requests.jsonl"))
     if not archive.exists():
         selection = {"repository": "kamui/code-review-bench", "tag": "evidence-contributor-local", "subjects": [f"{run.name}/{attempt.name}"],
                      "files": [{"source": str(attempt / row["path"]), "path": f"artifacts/contributions/{run.name}/{attempt.name}/{row['path']}", "kind": "evidence"} for row in files]}
-        evidence_store.pack(selection, archive)
+        common.pack(runtime, selection, archive)
     package = read(archive / "manifest.json")
     expected = {f"artifacts/contributions/{run.name}/{attempt.name}/{row['path']}": row for row in files}
     members = {m["path"]: m for part in package["packages"] for m in part["members"]}
@@ -208,9 +209,7 @@ def archive_attempt(run, attempt, record):
         raise Refused("transcript package does not match credential-audited source evidence")
     if {p.name for p in archive.iterdir()} != {"manifest.json", *(part["asset"] for part in package["packages"])}:
         raise Refused("unexpected file in transcript package")
-    for part in package["packages"]:
-        with tempfile.TemporaryDirectory(prefix="bench-transcript-restore-") as temporary:
-            evidence_store.unpack(archive / part["asset"], part, Path(temporary))
+    common.evidence(runtime, "check-package", archive)
     record["transcript_archive"] = {"path": str(archive / package["packages"][0]["asset"]),
                                      "sha256": package["packages"][0]["sha256"], "restoration_check": "passed"}
     write(attempt / "attempt.json", record, immutable=True)
@@ -221,11 +220,11 @@ def archive_attempt(run, attempt, record):
     write(attempt / "evidence.json", {"files": index}, immutable=True)
 
 
-def finalize_attempt(run, attempt, manifest):
+def finalize_attempt(run, attempt, manifest, runtime):
     if (attempt / "attempt.json").is_file():
         record = read(attempt / "attempt.json")
         if record["disposition"] == "valid completed" and not (attempt / "evidence.json").exists():
-            archive_attempt(run, attempt, record)
+            archive_attempt(run, attempt, record, runtime)
         return record
     claim = read(attempt / "claim.json")
     config = manifest["configurations"][claim["cell"]["configuration"]]
@@ -255,7 +254,7 @@ def finalize_attempt(run, attempt, manifest):
               "cause": cause, "usage": usage, "reserved_usd": claim["reserved_usd"], "predecessor": claim.get("predecessor"),
               "observed": {"tree_identity_before": completion["tree_before"], "tree_identity_after": completion["tree_after"]}}
     if status == "valid completed":
-        archive_attempt(run, attempt, record)
+        archive_attempt(run, attempt, record, runtime)
     else:
         write(attempt / "attempt.json", record, immutable=True)
         seal_attempt(attempt)
@@ -374,7 +373,7 @@ def run_action(run, manifest, rows, replacement_id=None):
     return RunAction(next_step, cells=cells, replacement=replacement)
 
 
-def resume_run(run, args):
+def resume_run(run, args, runtime):
     with lock(run / "run.lock"):
         manifest = verify_run(run)
         if (run / "pending-created.json").is_file():
@@ -387,11 +386,11 @@ def resume_run(run, args):
             raise Refused(action.refusal)
         for attempt in attempts(run):
             if (attempt / "attempt.json").is_file():
-                finalize_attempt(run, attempt, manifest)
+                finalize_attempt(run, attempt, manifest, runtime)
                 secrets.audit(attempt)
                 continue
             if (attempt / "completion.json").is_file():
-                finalize_attempt(run, attempt, manifest)
+                finalize_attempt(run, attempt, manifest, runtime)
             else:
                 secrets.clear(attempt)
                 claim = read(attempt / "claim.json")
@@ -438,7 +437,7 @@ def resume_run(run, args):
                 raise Refused(f"{run.name}/{attempt.name}: provisioning failed before any model call; diagnostics: {attempt / 'prepare.log'}; resolve the cause then replace this attempt")
             adapters.execute(config, attempt, read(target_dir / "target.json"), target_dir / "packet.md",
                              run / "inputs/skill" if manifest["skill_provenance"] else None)
-            result = finalize_attempt(run, attempt, manifest)
+            result = finalize_attempt(run, attempt, manifest, runtime)
             if result["disposition"] != "valid completed":
                 raise Refused(f"{run.name}/{attempt.name}: {result['cause']}; evidence: {attempt}; inspect before replacement")
             done.append(cell)
@@ -539,7 +538,13 @@ def main(argv=None):
             for name in ("cache_root", "cache_replacements"):
                 if getattr(args, name):
                     args.cache_arguments += ["--" + name.replace("_", "-"), str(getattr(args, name).resolve())]
-            target = run_path(args.resume) if args.resume else prepare_run(args)
+            if args.resume:
+                run = run_path(args.resume)
+                runtime = common.pinned_runtime(run, read(run / "manifest.json"))
+                target = run
+            else:
+                target = prepare_run(args, common.selected_runtime())
+                runtime = common.pinned_runtime(target, read(target / "manifest.json"))
             affected = target.name
             if not args.include_partial and not args.yes:
                 if not sys.stdin.isatty():
@@ -547,7 +552,7 @@ def main(argv=None):
                 if input(f"Run {affected} using its frozen paid-work policy? Type {affected}: ") != affected:
                     print(f"{affected}: no paid execution authorized. Next: ./bin/bench run --resume {affected}")
                     return 0
-            resume_run(target, args)
+            resume_run(target, args, runtime)
         return 0
     except KeyboardInterrupt:
         print(f"Interrupted {affected or args.command}; evidence preserved in .bench. Next: ./bin/bench status", file=sys.stderr)
