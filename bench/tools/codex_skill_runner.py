@@ -12,7 +12,8 @@ attempt directory must already exist and must not contain a HOME. The runner che
 the run and arm pins, creates a clean HOME before copying credentials, invokes one
 new Codex CLI ``exec`` root session, and retains its raw output, rollout tree, usage,
 session evidence, and native skill artifacts. It never resumes a session and runs the
-normalizer selected by the frozen ``runner.json``.
+normalizer selected by the frozen ``runner.json`` with the run's pinned ``bench-tools``, which
+is resolved before anything else, so a run that pins none is refused before the review starts.
 
 Exit codes: 0 the session completed and all observed reviewer contexts used the
 pinned model and effort; 1 the session completed with a pin or model-policy
@@ -38,6 +39,7 @@ BENCH = TOOLS.parent
 sys.path.insert(0, str(TOOLS))
 import clean_context  # noqa: E402
 import packet_selection
+import rust_runtime
 
 
 class RunnerError(Exception):
@@ -208,6 +210,10 @@ def rates_for(path: Path, model: str) -> dict:
 def prepare_attempt(args, kind: str) -> dict:
     """Check the frozen run, arm, skill, target and clone pins; write the attempt's input.md."""
     run_dir = Path(args.run).resolve(strict=True)
+    try:
+        bench_tools = rust_runtime.for_run("bench-tools", run_dir)
+    except (rust_runtime.Refused, rust_runtime.InputError) as error:
+        raise RunnerError(f"the bench-tools Rust runtime: {error}") from None
     attempt = Path(args.attempt_dir).resolve(strict=True)
     clone = Path(args.clone).resolve(strict=True)
     packet_path = Path(args.packet).resolve(strict=True)
@@ -302,7 +308,7 @@ def prepare_attempt(args, kind: str) -> dict:
             "entry": entry, "model": model, "effort": effort, "skill_source": skill_source,
             "tree_hash": tree_hash, "runner_config": runner_config, "cache": cache, "work": work,
             "artifact_root": artifact_root, "skill_name": skill_name, "attempt_input": attempt_input,
-            "input_hash": sha256(prompt.encode("utf-8"))}
+            "input_hash": sha256(prompt.encode("utf-8")), "bench_tools": bench_tools}
 
 
 def copy_frozen_skill(prepared: dict) -> Path:
@@ -544,7 +550,7 @@ def launch(args) -> int:
     if report_rows:
         normalizer = runner_config.get("normalizer", {})
         if normalizer.get("kind") == "thermo":
-            normalize_command = [sys.executable, str(TOOLS / "normalize_thermo.py"), "--artifact-root",
+            normalize_command = [str(prepared["bench_tools"]), "normalize-thermo", "--artifact-root",
                                  str(artifact_root), "--clone", str(clone), "--out", str(attempt / "normalized.json")]
         elif normalizer.get("kind") == "codex-skill":
             expected = normalizer.get("native_file")
@@ -553,7 +559,7 @@ def launch(args) -> int:
             if len(reports) != 1:
                 violations.append(f"expected one {expected!r} report, found {len(reports)}")
                 reports = []
-            normalize_command = ([sys.executable, str(TOOLS / "normalize_review.py"), "--arm", "codex-skill",
+            normalize_command = ([str(prepared["bench_tools"]), "normalize-review", "--arm", "codex-skill",
                                   "--native-review", str(reports[0]), "--clone", str(clone),
                                   "--out", str(attempt / "normalized.json")] if reports else [])
         else:

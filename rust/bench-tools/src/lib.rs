@@ -4,6 +4,8 @@
 
 pub mod derive_packet;
 pub mod diff_identity;
+pub mod normalize_review;
+pub mod normalize_thermo;
 pub mod pyjson;
 pub mod pytext;
 pub mod roster;
