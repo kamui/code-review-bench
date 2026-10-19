@@ -101,7 +101,7 @@ modules stay as the baseline until slice 11.
 
 - [`grading-validation.v1.json`](../../tools/behavior_contracts/grading-validation.v1.json) covers every message,
   each verdict contract and safety policy, a duplicate key, non-UTF-8 and non-object input, and the fixture's
-  `pending`, `proposed` and `disputed-without-ruling` variants. Its eleven decided differences are in
+  `pending`, `proposed` and `disputed-without-ruling` variants. Its twelve decided differences are in
   [the contract reference](contracts/README.md#run-the-grading-validation-corpus). The Rust runtime workflow runs it
   as primary and with `--differential` on four targets.
 - `rust/bench-tools/tests/claim_grading.rs` states the unresolved outcomes by hand and compares every rule that no

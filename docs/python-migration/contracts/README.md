@@ -122,12 +122,13 @@ under `replay/`, so no case calls `gh` or the network. `build-packet-non-utf8-ou
 `bench-tools grading validate [VERDICTS] --inputs FILE` ([#231](https://github.com/kamui/code-review-bench/issues/231)).
 Its `grading` program runs the retained `grading_validation.py` through a driver that takes `--inputs`, which must
 name a file called `inputs.json`, and points the script at it as `grade.py prepare`'s `validator/tools/` layout
-does. Eleven cases carry a `baseline_defect`, so pass `--allow-known-defects` when Python is the primary:
+does. Twelve cases carry a `baseline_defect`, so pass `--allow-known-defects` when Python is the primary:
 `non-object-inputs` and `links-not-an-object`, where Python raises an uncaught `AttributeError`; `deep-nesting` and
 `lone-surrogate`, which `pyjson` refuses; `nan-review-tokens`, whose Python line order depends on a `NaN`'s address;
 `unicode-15-1-outcome`, quoted through Python 3.14's `repr`; `dash-led-exponent-path` and
 `dash-led-unicode-16-digit-path`, read as values as Python 3.14's argparse reads them (these three record Python
-3.12's result); and `help`, `missing-inputs-option` and `extra-argument`, which print clap's wording. `dash-led-paths`
+3.12's result); and `help`, `help-before-invalid-short-help`, `missing-inputs-option` and `extra-argument`,
+which print clap's wording. `dash-led-paths`
 pins the dash-led values both Pythons accept. The `fixture-*` cases build on the grading
 fixture's `pending`, `proposed` and `disputed-without-ruling` variants, and two `saved-v1-*` cases hold archived
 validator inputs and verdicts.
