@@ -162,7 +162,8 @@ recorded decision.
 - `upstream report` exits 1 for every failure, as `upstream.py` did, including inputs that made Python raise a
   traceback; the message approximates the traceback's last line. It reads the repository at the current directory
   unless `--root` names another. Listing `bench/targets` follows Python 3.14's glob, which keeps a dangling
-  `target.json` link that 3.12 drops. Between snapshot files of equal version, such as `snapshot.v1.json` and
+  `target.json` link that 3.12 drops. Targets run in the order `pathlib` compares their paths, component by
+  component, so `t-example-1` runs before `t-example-1-b`; `upstream-sibling-target-order` pins it. Between snapshot files of equal version, such as `snapshot.v1.json` and
   `snapshot.v01.json`, both take the first the directory lists, which no fixture can fix.
 
 `derive-packet-invalid-utf8` pins one intended change: an input that is not UTF-8 exits 2 with a message naming the

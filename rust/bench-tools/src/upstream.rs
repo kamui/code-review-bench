@@ -433,7 +433,7 @@ pub fn report(
         .map(|directory| claims::join(&directory, b"target.json"))
         .filter(|path| pyfs::lexists(path))
         .collect();
-    target_paths.sort_by_key(|path| pytext::surrogateescape(path));
+    target_paths.sort_by_cached_key(|path| pytext::path_order(path));
     let mut targets = Vec::new();
     for path in target_paths {
         let target = read(&path)?;
