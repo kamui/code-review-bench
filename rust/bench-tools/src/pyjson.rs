@@ -4,7 +4,8 @@
 //! Reading follows `json.loads` with the C scanner of Python 3.13 and later: `NaN`, `Infinity` and
 //! `-Infinity` are accepted, integers keep every digit up to Python's 4300-digit limit, and a repeated key
 //! keeps its first position and last value, as `dict` does. Error messages and positions are those of
-//! `json.JSONDecodeError`. A lone surrogate escape, which Python keeps in a `str`, is refused.
+//! `json.JSONDecodeError`. A lone surrogate escape, which Python keeps in a `str`, is refused, except by
+//! `loads_surrogateescape`.
 //!
 //! Writing follows `json.dumps`: `ensure_ascii`, `indent`, `separators` and `sort_keys`, with `float.__repr__`
 //! spelling and `NaN`, `Infinity` and `-Infinity` for non-finite numbers.
@@ -143,13 +144,49 @@ enum Failure {
 struct Parser {
     chars: Vec<char>,
     duplicates: Duplicates,
+    surrogateescape: bool,
     depth: usize,
 }
 
 pub fn loads(text: &str, duplicates: Duplicates) -> Result<Value, ParseError> {
+    parse(text, duplicates, false)
+}
+
+/// The first of the 128 code points that stand for the bytes 0x80..=0xFF under `loads_surrogateescape`.
+const ESCAPED_BYTES: u32 = 0x10_FF00;
+
+fn escaped_byte(c: char) -> Option<u8> {
+    u32::from(c)
+        .checked_sub(ESCAPED_BYTES)
+        .and_then(|byte| u8::try_from(byte).ok())
+        .filter(|byte| *byte >= 0x80)
+}
+
+/// `loads` for text `json.dumps` wrote from `os.fsdecode` paths: a lone surrogate U+DC80..U+DCFF, which stands for
+/// a byte `surrogateescape` could not decode, is read as U+10FF80..U+10FFFF, which a Rust `String` can hold, and
+/// `surrogateescape_bytes` maps back to the byte. Other lone surrogates are refused, as `os.fsencode` refuses them,
+/// and so is U+10FF80..U+10FFFF itself, which would otherwise read as a byte.
+pub fn loads_surrogateescape(text: &str, duplicates: Duplicates) -> Result<Value, ParseError> {
+    parse(text, duplicates, true)
+}
+
+/// `os.fsencode(text)` for a string `loads_surrogateescape` read.
+pub fn surrogateescape_bytes(text: &str) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(text.len());
+    for c in text.chars() {
+        match escaped_byte(c) {
+            Some(byte) => bytes.push(byte),
+            None => bytes.extend_from_slice(c.encode_utf8(&mut [0u8; 4]).as_bytes()),
+        }
+    }
+    bytes
+}
+
+fn parse(text: &str, duplicates: Duplicates, surrogateescape: bool) -> Result<Value, ParseError> {
     let mut parser = Parser {
         chars: text.chars().collect(),
         duplicates,
+        surrogateescape,
         depth: 0,
     };
     if parser.chars.first() == Some(&'\u{feff}') {
@@ -386,11 +423,22 @@ impl Parser {
         }
         let mut text = String::with_capacity(points.len());
         for point in points {
+            let escaped = self.surrogateescape && (0xDC80..=0xDCFF).contains(&point);
+            let point = if escaped {
+                ESCAPED_BYTES + point - 0xDC00
+            } else {
+                point
+            };
             let Some(c) = char::from_u32(point) else {
                 return Err(Failure::Error(ParseError::Value(format!(
                     "the string starting at char {begin} holds a lone surrogate \\u{point:04x}"
                 ))));
             };
+            if self.surrogateescape && !escaped && escaped_byte(c).is_some() {
+                return Err(Failure::Error(ParseError::Value(format!(
+                    "the string starting at char {begin} holds U+{point:04X}, which stands for an undecodable byte"
+                ))));
+            }
             text.push(c);
         }
         Ok((text, end))
@@ -520,6 +568,8 @@ pub struct Dumps {
     /// `separators=(item, key)`; the default is `(", ", ": ")`, or `(",", ": ")` with an indent.
     pub separators: Option<(String, String)>,
     pub sort_keys: bool,
+    /// Write U+10FF80..U+10FFFF, as `loads_surrogateescape` reads them, as the lone surrogates they stand for.
+    pub surrogateescape: bool,
 }
 
 impl Default for Dumps {
@@ -529,6 +579,7 @@ impl Default for Dumps {
             indent: None,
             separators: None,
             sort_keys: false,
+            surrogateescape: false,
         }
     }
 }
@@ -565,7 +616,7 @@ fn write_value(
             "-Infinity"
         }),
         Value::Float(number) => out.push_str(&float_repr(*number)),
-        Value::Str(text) => write_string(out, text, options.ensure_ascii),
+        Value::Str(text) => write_string(out, text, options),
         Value::Array(values) if values.is_empty() => out.push_str("[]"),
         Value::Object(object) if object.is_empty() => out.push_str("{}"),
         Value::Array(values) => {
@@ -584,7 +635,7 @@ fn write_value(
             out.push('{');
             for (position, (name, member)) in members.into_iter().enumerate() {
                 separate(out, options, item, level + 1, position == 0);
-                write_string(out, name, options.ensure_ascii);
+                write_string(out, name, options);
                 out.push_str(key);
                 write_value(out, member, options, item, key, level + 1);
             }
@@ -619,7 +670,7 @@ pub fn ascii_string(points: &[u32]) -> String {
         match char::from_u32(*point) {
             Some(c) => {
                 let mut one = String::new();
-                write_string(&mut one, c.encode_utf8(&mut [0u8; 4]), true);
+                write_string(&mut one, c.encode_utf8(&mut [0u8; 4]), &Dumps::default());
                 out.push_str(&one[1..one.len() - 1]);
             }
             None => {
@@ -631,9 +682,13 @@ pub fn ascii_string(points: &[u32]) -> String {
     out
 }
 
-fn write_string(out: &mut String, text: &str, ensure_ascii: bool) {
+fn write_string(out: &mut String, text: &str, options: &Dumps) {
     out.push('"');
     for c in text.chars() {
+        if let Some(byte) = escaped_byte(c).filter(|_| options.surrogateescape) {
+            let _ = write!(out, "\\udc{byte:02x}");
+            continue;
+        }
         match c {
             '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
@@ -642,7 +697,7 @@ fn write_string(out: &mut String, text: &str, ensure_ascii: bool) {
             '\t' => out.push_str("\\t"),
             '\u{8}' => out.push_str("\\b"),
             '\u{c}' => out.push_str("\\f"),
-            c if u32::from(c) < 0x20 || (ensure_ascii && !(' '..='~').contains(&c)) => {
+            c if u32::from(c) < 0x20 || (options.ensure_ascii && !(' '..='~').contains(&c)) => {
                 let mut units = [0u16; 2];
                 for unit in c.encode_utf16(&mut units) {
                     let _ = write!(out, "\\u{unit:04x}");
@@ -787,6 +842,26 @@ mod tests {
 
     fn error(text: &str) -> String {
         loads(text, Duplicates::KeepLast).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn surrogateescape_keeps_undecodable_bytes() {
+        let text = r#"{"a\udcff": ["b\udc80\u00e9"]}"#;
+        let value = loads_surrogateescape(text, Duplicates::KeepLast).unwrap();
+        let Value::Object(object) = &value else {
+            panic!("not an object");
+        };
+        let (key, _) = object.iter().next().unwrap();
+        assert_eq!(surrogateescape_bytes(key), b"a\xff");
+        let options = Dumps {
+            surrogateescape: true,
+            ..Dumps::default()
+        };
+        assert_eq!(dumps(&value, &options), text);
+        assert!(loads(text, Duplicates::KeepLast).is_err());
+        for refused in [r#""\ud800""#, r#""\udc7f""#, r#""\udbff\udf80""#] {
+            assert!(loads_surrogateescape(refused, Duplicates::KeepLast).is_err());
+        }
     }
 
     #[test]

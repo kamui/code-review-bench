@@ -118,7 +118,7 @@ fn file(disk: &mut dyn Disk, base: &Path) -> Result<String, native_artifacts::Er
         &py(&root),
         &py(&index),
         &py(&base.join("out")),
-        Some("run-1/review.json"),
+        Some(b"run-1/review.json"),
     )
     .map(|pin| pyjson::dumps(&pin.expect("scratch files are archived"), &Dumps::default()))
 }

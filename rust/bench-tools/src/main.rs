@@ -1238,8 +1238,7 @@ fn run_native_artifacts(command: NativeArtifactsCommand) -> Result<ExitCode, Exi
             out,
             native_relative,
         } => {
-            // An argument that is not UTF-8 names no indexed path, as argparse's surrogateescape text names none.
-            let relative = native_relative.and_then(|value| value.into_string().ok());
+            let relative = native_relative.map(OsString::into_vec);
             native_artifacts::file_artifacts(
                 &mut disk,
                 &path(&root),

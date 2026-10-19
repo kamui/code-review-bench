@@ -139,7 +139,7 @@ last, so an interruption never leaves a storage record. A retry completes the fi
 left hold what it would write and refuses them otherwise, as Python refuses any existing name
 (`file-interrupted-before-storage-record`). Transcripts are written to a synced temporary archive and linked; an
 existing archive is kept when its members are the transcripts and refused otherwise, where Python replaced it
-(`archive-transcripts-existing-same`, `-existing-different`). The native-artifacts v3 decisions record each
+(`archive-transcripts-existing-same`, `-existing-different`). The native-artifacts v4 decisions record each
 deliberate difference. `tests/native_artifacts.rs` interrupts both at each disk effect.
 
 `file_attempt.py` resolves the run's pinned `bench-tools` with `rust_runtime.for_run`, as `--replay` does, and

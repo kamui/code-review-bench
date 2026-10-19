@@ -42,7 +42,7 @@ impl From<evidence::Error> for Error {
     }
 }
 
-/// An indexed file: its path and its row of the index.
+/// An indexed file: its path, as `pyjson::loads_surrogateescape` reads it, and its row of the index.
 #[derive(Clone, Debug)]
 pub struct Row {
     pub path: String,
@@ -109,10 +109,30 @@ fn digest(path: &PyPath) -> Result<String> {
     hash_stream(&mut file).map_err(|error| os_failure(&error, path))
 }
 
-/// `json.loads(path.read_text())`.
+/// `json.loads(path.read_text())`, keeping the undecodable filename bytes `json.dumps` wrote as lone surrogates.
 fn read_json(path: &PyPath) -> Result<Value> {
     let text = pytext::read_text(path).map_err(|error| fail(error.message()))?;
-    pyjson::loads(&text, Duplicates::KeepLast).map_err(|error| fail(error.to_string()))
+    pyjson::loads_surrogateescape(&text, Duplicates::KeepLast)
+        .map_err(|error| fail(error.to_string()))
+}
+
+/// How `json.dumps(..., indent=2)` writes a record that holds paths `read_json` read.
+fn record_dumps() -> pyjson::Dumps {
+    pyjson::Dumps {
+        indent: Some(2),
+        surrogateescape: true,
+        ..pyjson::Dumps::default()
+    }
+}
+
+/// The bytes an indexed path names on disk: `os.fsencode(name)`.
+fn os_path(name: &str) -> Vec<u8> {
+    pyjson::surrogateescape_bytes(name)
+}
+
+/// `str(name)` as Python writes it to stderr.
+fn shown(name: &str) -> String {
+    pytext::stderr_text(&os_path(name))
 }
 
 /// `value[key]` for a JSON value, with the message of the `KeyError` or `TypeError` Python raises.
@@ -163,7 +183,7 @@ fn relative_path(value: &Value) -> Result<&str> {
     {
         return Err(fail(format!(
             "unsafe artifact path: {}",
-            pytext::repr_str(text)
+            pytext::repr(&pytext::surrogateescape(&os_path(text)))
         )));
     }
     Ok(text)
@@ -192,7 +212,10 @@ pub fn indexed_files(index: &PyPath) -> Result<Vec<Row>> {
     for row in rows {
         let name = relative_path(item(&row, "path")?)?.to_string();
         if !seen.insert(name.clone()) {
-            return Err(fail(format!("duplicate indexed artifact: {name}")));
+            return Err(fail(format!(
+                "duplicate indexed artifact: {}",
+                shown(&name)
+            )));
         }
         files.push(Row { path: name, row });
     }
@@ -201,7 +224,7 @@ pub fn indexed_files(index: &PyPath) -> Result<Vec<Row>> {
 
 /// `native_artifacts.check_file`: a regular, unlinked file of the indexed size and SHA-256.
 fn check_file(path: &PyPath, row: &Row) -> Result<()> {
-    let changed = || fail(format!("artifact differs from index: {}", row.path));
+    let changed = || fail(format!("artifact differs from index: {}", shown(&row.path)));
     let Some(metadata) = lstat(path) else {
         return Err(changed());
     };
@@ -229,7 +252,7 @@ fn inside(path: &PyPath, base: &PyPath) -> bool {
 /// `native_artifacts.check_reference`: the referenced file below `directory`, hashing to its pin.
 fn check_reference(directory: &PyPath, reference: &Value) -> Result<PyPath> {
     let name = item(reference, "path")?;
-    let path = directory.join(relative_path(name)?.as_bytes());
+    let path = directory.join(&os_path(relative_path(name)?));
     let mismatch = || fail(format!("artifact checksum mismatch: {}", name.py_str()));
     if !inside(&path, directory) {
         return Err(mismatch());
@@ -508,7 +531,7 @@ pub fn verify(directory: &PyPath, pin: Option<&Value>) -> Result<Verified> {
         &check_reference(directory, item(&storage, "archive")?)?,
         &blobs,
     )?;
-    let artifact_root = directory.join(relative_path(item(&storage, "artifact_root")?)?.as_bytes());
+    let artifact_root = directory.join(&os_path(relative_path(item(&storage, "artifact_root")?)?));
     if is_symlink(&artifact_root) || !inside(&artifact_root, directory) {
         return Err(fail("native artifact root escapes filed directory"));
     }
@@ -519,15 +542,15 @@ pub fn verify(directory: &PyPath, pin: Option<&Value>) -> Result<Verified> {
         ));
     }
     let archived_set: HashSet<&str> = archived.iter().map(String::as_str).collect();
-    let loose: HashSet<&[u8]> = files
+    let loose: HashSet<Vec<u8>> = files
         .iter()
         .filter(|row| !archived_set.contains(row.path.as_str()))
-        .map(|row| row.path.as_bytes())
+        .map(|row| os_path(&row.path))
         .collect();
-    let found: HashSet<&[u8]> = entries
+    let found: HashSet<Vec<u8>> = entries
         .iter()
         .filter(|entry| entry.metadata.file_type().is_file())
-        .map(|entry| entry.relative.as_slice())
+        .map(|entry| entry.relative.clone())
         .collect();
     if found != loose {
         return Err(fail("loose artifacts differ from indexed file inventory"));
@@ -536,9 +559,9 @@ pub fn verify(directory: &PyPath, pin: Option<&Value>) -> Result<Verified> {
         if archived_set.contains(row.path.as_str()) {
             continue;
         }
-        let path = artifact_root.join(row.path.as_bytes());
+        let path = artifact_root.join(&os_path(&row.path));
         if !inside(&path, &artifact_root) {
-            return Err(fail(format!("artifact escapes root: {}", row.path)));
+            return Err(fail(format!("artifact escapes root: {}", shown(&row.path))));
         }
         check_file(&path, row)?;
     }
@@ -719,7 +742,7 @@ pub fn file_artifacts(
     root: &PyPath,
     index: &PyPath,
     out: &PyPath,
-    native_relative: Option<&str>,
+    native_relative: Option<&[u8]>,
 ) -> Result<Option<Value>> {
     let files = indexed_files(index)?;
     let archived: Vec<String> = {
@@ -729,10 +752,10 @@ pub fn file_artifacts(
             .filter(|name| {
                 let parts: Vec<&str> = name.split('/').collect();
                 parts[..parts.len() - 1].contains(&"scratch")
-                    && Some(name.as_str()) != native_relative
+                    && Some(os_path(name).as_slice()) != native_relative
             })
             .collect();
-        names.sort();
+        names.sort_by_cached_key(|name| pytext::surrogateescape(&os_path(name)));
         names
     };
     let record_path = out.join(b"attempt.json");
@@ -777,10 +800,11 @@ pub fn file_artifacts(
     }
     if archived.is_empty() || exists(&record_path) {
         for row in &files {
-            check_file(&root.join(row.path.as_bytes()), row)?;
-            let target = out.join(&root_name).join(row.path.as_bytes());
+            let path = os_path(&row.path);
+            check_file(&root.join(&path), row)?;
+            let target = out.join(&root_name).join(&path);
             evidence::make_dirs(&evidence::parent(&target))?;
-            copy2(&root.join(row.path.as_bytes()), &target)?;
+            copy2(&root.join(&path), &target)?;
         }
         copy2(index, &out.join(INDEX.as_bytes()))?;
         return Ok(None);
@@ -794,19 +818,19 @@ pub fn file_artifacts(
             "scratch packing requires regular files and directories",
         ));
     }
-    let actual: HashSet<&[u8]> = entries
+    let actual: HashSet<Vec<u8>> = entries
         .iter()
         .filter(|entry| entry.metadata.file_type().is_file())
-        .map(|entry| entry.relative.as_slice())
+        .map(|entry| entry.relative.clone())
         .collect();
-    let listed: HashSet<&[u8]> = files.iter().map(|row| row.path.as_bytes()).collect();
+    let listed: HashSet<Vec<u8>> = files.iter().map(|row| os_path(&row.path)).collect();
     if actual != listed {
         return Err(fail(
             "native artifact tree differs from indexed file inventory",
         ));
     }
     for row in &files {
-        check_file(&root.join(row.path.as_bytes()), row)?;
+        check_file(&root.join(&os_path(&row.path)), row)?;
     }
     evidence::make_dirs(out)?;
     let reserved = [ARCHIVE, STORAGE, INDEX];
@@ -851,7 +875,7 @@ pub fn file_artifacts(
     // The placed names are durable before the storage record that pins them; write_new then syncs `out` and
     // each of its ancestors, which covers the directories this call created.
     sync_dir(disk, out)?;
-    evidence::write_new(disk, &storage_path, &storage)?;
+    evidence::write_new_as(disk, &storage_path, &storage, &record_dumps())?;
     drop(staging);
     Ok(Some(reference(&storage_path)?))
 }
@@ -878,7 +902,7 @@ fn stage(
         let mut writer = ScratchWriter::new(file);
         let mut written = HashSet::new();
         for name in archived {
-            let path = root.join(name.as_bytes());
+            let path = root.join(&os_path(name));
             let metadata =
                 std::fs::metadata(path.to_path_buf()).map_err(|error| os_failure(&error, &path))?;
             let mode = metadata.mode() & 0o777;
@@ -905,9 +929,10 @@ fn stage(
         if archived_set.contains(row.path.as_str()) {
             continue;
         }
-        let target = tree.join(row.path.as_bytes());
+        let path = os_path(&row.path);
+        let target = tree.join(&path);
         evidence::make_dirs(&evidence::parent(&target))?;
-        copy_new(disk, &root.join(row.path.as_bytes()), &target)?;
+        copy_new(disk, &root.join(&path), &target)?;
     }
     sync_tree(disk, &tree)?;
     let storage = Value::Object(
@@ -931,7 +956,12 @@ fn stage(
         .into_iter()
         .collect(),
     );
-    evidence::write_new(disk, &staged.join(STORAGE.as_bytes()), &storage)?;
+    evidence::write_new_as(
+        disk,
+        &staged.join(STORAGE.as_bytes()),
+        &storage,
+        &record_dumps(),
+    )?;
     sync_dir(disk, staged)?;
     Ok(storage)
 }
@@ -954,7 +984,7 @@ pub fn restore(disk: &mut dyn Disk, directory: &PyPath, out: &PyPath) -> Result<
     for name in &archived {
         let row = verified
             .row(name)
-            .ok_or_else(|| fail(pytext::repr_str(name)))?;
+            .ok_or_else(|| fail(pytext::repr(&pytext::surrogateescape(&os_path(name)))))?;
         let sha = item(&row.row, "sha256")?.py_str();
         match by_sha.iter_mut().find(|(known, _)| *known == sha) {
             Some((_, names)) => names.push(name),
@@ -976,7 +1006,7 @@ pub fn restore(disk: &mut dyn Disk, directory: &PyPath, out: &PyPath) -> Result<
         };
         let mut first: Option<PyPath> = None;
         for name in names {
-            let target = staged.join(name.as_bytes());
+            let target = staged.join(&os_path(name));
             let written = (|| -> Result<()> {
                 evidence::make_dirs(&evidence::parent(&target))?;
                 let mut output = disk
@@ -1012,7 +1042,7 @@ pub fn restore(disk: &mut dyn Disk, directory: &PyPath, out: &PyPath) -> Result<
     }
     result.map_err(|error| fail(member_failure(&error, b"")))?;
     for row in &verified.files {
-        check_file(&staged.join(row.path.as_bytes()), row)?;
+        check_file(&staged.join(&os_path(&row.path)), row)?;
     }
     sync_tree(disk, &staged)?;
     disk.rename(&staged.to_path_buf(), &out.to_path_buf())
@@ -1056,8 +1086,13 @@ fn copytree(disk: &mut dyn Disk, source: &PyPath, target: &PyPath) -> Result<()>
 /// Python sorts their text. No link is followed.
 pub fn unindexed(root: &PyPath, index: &PyPath) -> Result<Vec<Vec<u8>>> {
     let files = indexed_files(index)?;
-    let listed: HashSet<&[u8]> = files.iter().map(|row| row.path.as_bytes()).collect();
-    fn walk(directory: &PyPath, prefix: &[u8], listed: &HashSet<&[u8]>, extra: &mut Vec<Vec<u8>>) {
+    let listed: HashSet<Vec<u8>> = files.iter().map(|row| os_path(&row.path)).collect();
+    fn walk(
+        directory: &PyPath,
+        prefix: &[u8],
+        listed: &HashSet<Vec<u8>>,
+        extra: &mut Vec<Vec<u8>>,
+    ) {
         let Ok(entries) = std::fs::read_dir(directory.to_path_buf()) else {
             return;
         };
