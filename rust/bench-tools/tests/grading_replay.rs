@@ -4,9 +4,12 @@
 //! it after restoring the repository evidence and fails when the committed file differs:
 //!
 //! ```sh
-//! cargo test --locked --test grading_replay -- --ignored
+//! cargo test --locked --test grading_replay -- --ignored --exact the_replay_inventory_accounts_for_every_receipt
 //! git diff --exit-code -- docs/python-migration/grading-replay.v1.json
 //! ```
+//!
+//! The same job then replays the blinded validator: each restorable archive's validator inputs and verdicts must give
+//! byte-identical stdout and exit status from the retained `grading_validation.py` and `bench-tools grading validate`.
 
 use bench_tools::archive;
 use bench_tools::pyjson::{self, Dumps, Duplicates, Object, Value};
@@ -191,13 +194,13 @@ fn manifest_members(root: &Path) -> BTreeMap<String, String> {
     members
 }
 
-/// The key, validator inputs and verdicts of an archive, read by hash: the archive must be the manifest's member,
-/// and each file the bytes `evidence.json` lists. `Err` names the first step that failed.
-fn restore(
+/// The bytes of an archive's key, validator inputs and verdicts, read by hash: the archive must be the manifest's
+/// member, and each file the bytes `evidence.json` lists. `Err` names the first step that failed.
+fn restore_bytes(
     root: &Path,
     archive: &Archive,
     members: &BTreeMap<String, String>,
-) -> Result<[Value; 3], String> {
+) -> Result<[Vec<u8>; 3], String> {
     if members.get(&archive.archive) != Some(&archive.archive_sha256) {
         return Err(
             "no evidence manifest lists the archive with the hash evidence.json pins".to_string(),
@@ -230,7 +233,7 @@ fn restore(
         Ok(())
     })
     .map_err(|error| format!("the archive cannot be read: {error}"))?;
-    let mut values = Vec::new();
+    let mut restored = Vec::new();
     for name in [KEY, INPUTS, VERDICTS] {
         let bytes = found
             .remove(name)
@@ -238,6 +241,22 @@ fn restore(
         if Some(&hex_digest(&bytes)) != archive.files.get(name) {
             return Err(format!("{name} differs from the hash evidence.json lists"));
         }
+        restored.push(bytes);
+    }
+    Ok([restored.remove(0), restored.remove(0), restored.remove(0)])
+}
+
+/// The parsed key, validator inputs and verdicts of an archive that `restore_bytes` reads.
+fn restore(
+    root: &Path,
+    archive: &Archive,
+    members: &BTreeMap<String, String>,
+) -> Result<[Value; 3], String> {
+    let mut values = Vec::new();
+    for (name, bytes) in [KEY, INPUTS, VERDICTS]
+        .into_iter()
+        .zip(restore_bytes(root, archive, members)?)
+    {
         let text = String::from_utf8(bytes).map_err(|_| format!("{name} is not UTF-8"))?;
         values.push(
             pyjson::loads(&text, Duplicates::Refuse)
@@ -503,4 +522,93 @@ fn the_replay_inventory_accounts_for_every_receipt() {
     );
     text.push('\n');
     std::fs::write(root.join(OUTPUT), text).unwrap();
+}
+
+/// The retained Python validator as `grade.py prepare` lays it out, and the Rust command, on one archive's validator
+/// inputs and verdicts: each one's stdout and exit status.
+fn validate_both(
+    root: &Path,
+    work: &Path,
+    inputs: &[u8],
+    verdicts: &[u8],
+) -> [(Vec<u8>, Option<i32>); 2] {
+    let tools = work.join("validator/tools");
+    std::fs::create_dir_all(&tools).unwrap();
+    for name in [
+        "grading_validation.py",
+        "claim_grading.py",
+        "pre_existing_grading.py",
+        "check_manifest.py",
+    ] {
+        std::fs::copy(root.join("bench/tools").join(name), tools.join(name)).unwrap();
+    }
+    std::fs::write(work.join("validator/inputs.json"), inputs).unwrap();
+    std::fs::write(work.join("verdicts.json"), verdicts).unwrap();
+    let run = |command: &mut Command| {
+        let output = command
+            .current_dir(work)
+            .env("LANG", "C.UTF-8")
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .output()
+            .unwrap();
+        (output.stdout, output.status.code())
+    };
+    [
+        run(Command::new("python3")
+            .args(["validator/tools/grading_validation.py", "verdicts.json"])),
+        run(Command::new(env!("CARGO_BIN_EXE_bench-tools")).args([
+            "grading",
+            "validate",
+            "verdicts.json",
+            "--inputs",
+            "validator/inputs.json",
+        ])),
+    ]
+}
+
+#[test]
+#[ignore = "needs the restored repository evidence and full history; the Pages build job runs it"]
+fn the_validator_replays_every_restorable_archive_identically() {
+    let root = repository();
+    let value = inventory(&root);
+    let archives = archives(&root);
+    let members = manifest_members(&root);
+    let scratch = Path::new(env!("CARGO_TARGET_TMPDIR")).join("validator-replay");
+    let _ = std::fs::remove_dir_all(&scratch);
+    let mut replays: BTreeMap<String, usize> = BTreeMap::new();
+    let mut differences = Vec::new();
+    for row in field(&value, &["receipts"])
+        .and_then(Value::as_array)
+        .unwrap()
+    {
+        if !field(row, &["restored"]).is_some_and(|restored| restored.py_eq(&Value::Bool(true))) {
+            continue;
+        }
+        let evidence = text(row, &["archive"]).unwrap();
+        let archive = archives
+            .iter()
+            .find(|archive| archive.evidence == evidence)
+            .unwrap();
+        let [_, inputs, verdicts] = restore_bytes(&root, archive, &members).unwrap();
+        let work = scratch.join(replays.values().sum::<usize>().to_string());
+        let [python, rust] = validate_both(&root, &work, &inputs, &verdicts);
+        if python != rust {
+            differences.push(format!(
+                "{evidence}: python exited {:?} with {:?}, rust exited {:?} with {:?}",
+                python.1,
+                String::from_utf8_lossy(&python.0),
+                rust.1,
+                String::from_utf8_lossy(&rust.0)
+            ));
+        }
+        std::fs::remove_dir_all(&work).unwrap();
+        *replays
+            .entry(text(row, &["contract"]).unwrap().to_string())
+            .or_default() += 1;
+    }
+    for (contract, count) in &replays {
+        println!("{contract}: {count} validator replays");
+    }
+    assert!(differences.is_empty(), "{differences:#?}");
+    assert!(replays.values().sum::<usize>() > 0, "an empty replay fails");
 }
