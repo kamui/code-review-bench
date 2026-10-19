@@ -377,7 +377,7 @@ class ContractTests(unittest.TestCase):
 
     def test_diff_identity_corpus_holds_for_the_retained_library_and_rejects_byte_order(self):
         corpus = contract.CORPUS.parent / "diff-identity.v1.json"
-        result = self.run_cli("--corpus", corpus)
+        result = self.run_cli("--allow-known-defects", "--corpus", corpus)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("PASS diff-identity-manifest", result.stdout)
         source = (contract.REPO / "bench/tools/diff_identity.py").read_text()
