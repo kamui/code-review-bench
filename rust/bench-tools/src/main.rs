@@ -5,8 +5,8 @@ use bench_tools::pyjson::{self, Duplicates};
 use bench_tools::pytext::{self, PyPath};
 use bench_tools::schema::{SchemaError, Validator};
 use bench_tools::{
-    archive, build_packet, claims, derive_packet, diff_identity, export_explorer, normalize_thermo,
-    pyfs, pyunicode, rates, roster, upstream,
+    archive, build_packet, claims, derive_packet, diff_identity, evidence, export_explorer,
+    normalize_thermo, pyfs, pyunicode, rates, roster, upstream,
 };
 use clap::builder::PossibleValuesParser;
 use clap::error::ErrorKind;
@@ -59,6 +59,10 @@ enum Cli {
     /// Check cached evidence packages or native scratch archives through bench_tools::archive.
     #[command(subcommand, infer_long_args = true)]
     Archive(ArchiveCommand),
+    /// Restore, resolve, verify and recover published evidence, as evidence_store.py, recover_evidence.py and
+    /// restore-local.py did.
+    #[command(subcommand, infer_long_args = true)]
+    Evidence(EvidenceCommand),
 }
 
 #[derive(Args)]
@@ -256,6 +260,10 @@ struct ExportArgs {
     stage: Option<OsString>,
     #[arg(long, allow_negative_numbers = true)]
     public: Option<OsString>,
+    /// Hidden because the export-explorer corpus pins this command's usage text and only
+    /// tools/export_explorer.py passes it.
+    #[arg(long, hide = true)]
+    restore: bool,
 }
 
 #[derive(Subcommand)]
@@ -273,6 +281,65 @@ enum ArchiveCommand {
     CheckScratch {
         #[arg(required = true, allow_negative_numbers = true)]
         archives: Vec<OsString>,
+    },
+}
+
+#[derive(Subcommand)]
+enum EvidenceCommand {
+    /// Restore a published manifest's members under ROOT, through the verified cache in ROOT/.cache/evidence.
+    #[command(infer_long_args = true)]
+    Fetch {
+        #[arg(long, allow_negative_numbers = true)]
+        manifest: OsString,
+        #[arg(long, allow_negative_numbers = true)]
+        root: Option<OsString>,
+        #[arg(long, allow_negative_numbers = true)]
+        path: Vec<OsString>,
+        #[arg(long)]
+        offline: bool,
+    },
+    /// Download and restore every package of a published manifest in an empty temporary directory; --receipt
+    /// writes a new cold restoration receipt.
+    #[command(infer_long_args = true)]
+    Verify {
+        #[arg(long, allow_negative_numbers = true)]
+        manifest: OsString,
+        #[arg(long, allow_negative_numbers = true)]
+        receipt: Option<OsString>,
+    },
+    /// Restore one logical path from the manifests in ROOT/bench/evidence/manifests when it is absent, and check it.
+    #[command(infer_long_args = true)]
+    Resolve {
+        #[arg(long, allow_negative_numbers = true)]
+        sha256: Option<String>,
+        #[arg(long, allow_negative_numbers = true)]
+        root: Option<OsString>,
+        #[arg(long)]
+        offline: bool,
+        #[arg(allow_negative_numbers = true)]
+        path: String,
+    },
+    /// Restore an exact package copy from the recorded recovery release.
+    #[command(infer_long_args = true)]
+    Recover {
+        #[arg(long, allow_negative_numbers = true)]
+        source: OsString,
+        #[arg(long, allow_negative_numbers = true)]
+        root: Option<OsString>,
+        #[arg(long, allow_negative_numbers = true)]
+        path: Vec<OsString>,
+        #[arg(long)]
+        offline: bool,
+    },
+    /// Restore a captured local path into NEW_FILE, as restore-local.py does, from the repository.
+    #[command(infer_long_args = true)]
+    RestoreLocal {
+        #[arg(value_name = "ROOT_NAME", allow_negative_numbers = true)]
+        label: OsString,
+        #[arg(value_name = "ORIGINAL_RELATIVE_PATH", allow_negative_numbers = true)]
+        original: OsString,
+        #[arg(value_name = "NEW_FILE", allow_negative_numbers = true)]
+        output: OsString,
     },
 }
 
@@ -776,6 +843,13 @@ fn run_export_explorer(arguments: ExportArgs) -> Result<ExitCode, ExitCode> {
             ));
         }
     };
+    if arguments.restore && command != b"evidence" {
+        return Err(misuse(
+            "export-explorer",
+            ErrorKind::ArgumentConflict,
+            "--restore applies only to evidence",
+        ));
+    }
     let missing: Vec<&str> = required
         .iter()
         .filter(|(_, given)| !given)
@@ -808,6 +882,18 @@ fn run_export_explorer(arguments: ExportArgs) -> Result<ExitCode, ExitCode> {
     let outcome = match command {
         b"evidence" => export_explorer::Facts::read(&path(&arguments.facts))
             .and_then(|facts| export_explorer::evidence(&root, &facts, base_path))
+            .and_then(|listed| {
+                if arguments.restore {
+                    let mut store = evidence::Store {
+                        remote: &mut evidence::GitHub,
+                        disk: &mut evidence::System,
+                        now: &evidence::now_isoformat,
+                        temporary: evidence::system_temp(),
+                    };
+                    export_explorer::restore(&root, &listed, &mut store)?;
+                }
+                Ok(listed)
+            })
             .map(|listed| format!("{}\n", pyjson::dumps(&listed, &pyjson::Dumps::default()))),
         b"stage" => export_explorer::stage(
             &root,
@@ -940,6 +1026,162 @@ fn check_scratch(names: &[OsString]) -> Result<ExitCode, ExitCode> {
         ("failed", failed),
     ];
     finish_archive(&archive_report(rows, "archives", totals), failed)
+}
+
+/// `--root ROOT` as `Path(ROOT)`, or `Path.cwd()`.
+fn evidence_root(root: Option<&OsStr>) -> Result<PyPath, ExitCode> {
+    match root {
+        Some(root) => Ok(PyPath::new(pytext::os_bytes(root))),
+        None => std::env::current_dir()
+            .map(|cwd| PyPath::new(pytext::os_bytes(cwd.as_os_str())))
+            .map_err(|error| {
+                eprintln!("evidence: {}", pytext::os_error(&error, b"."));
+                ExitCode::from(2)
+            }),
+    }
+}
+
+fn raw_paths(paths: Vec<OsString>) -> Option<Vec<Vec<u8>>> {
+    (!paths.is_empty()).then(|| paths.into_iter().map(bytes).collect())
+}
+
+/// How `evidence_store.main` reports an outcome: violations on stdout with exit 1, I/O on stderr with exit 2.
+fn evidence_outcome(outcome: Result<String, evidence::Error>) -> Result<ExitCode, ExitCode> {
+    match outcome {
+        Ok(line) => {
+            write_stdout(format!("{line}\n").as_bytes())?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(evidence::Error::Violation(message)) => {
+            write_stdout(format!("evidence: {message}\n").as_bytes())?;
+            Err(ExitCode::from(1))
+        }
+        Err(evidence::Error::Io(message)) => {
+            eprintln!("evidence: {message}");
+            Err(ExitCode::from(2))
+        }
+    }
+}
+
+fn run_evidence(command: EvidenceCommand) -> Result<ExitCode, ExitCode> {
+    if let EvidenceCommand::RestoreLocal {
+        label,
+        original,
+        output,
+    } = command
+    {
+        return run_restore_local(&label, &original, &output);
+    }
+    let mut remote = evidence::GitHub;
+    let mut disk = evidence::System;
+    let mut store = evidence::Store {
+        remote: &mut remote,
+        disk: &mut disk,
+        now: &evidence::now_isoformat,
+        temporary: evidence::system_temp(),
+    };
+    let outcome = match command {
+        EvidenceCommand::Fetch {
+            manifest,
+            root,
+            path,
+            offline,
+        } => {
+            let root = evidence_root(root.as_deref())?;
+            evidence::read(&PyPath::new(pytext::os_bytes(&manifest)))
+                .and_then(|document| {
+                    evidence::materialize(
+                        &mut store,
+                        &document,
+                        &root,
+                        raw_paths(path).as_deref(),
+                        offline,
+                    )
+                })
+                .map(|_| "fetch: verified".to_string())
+        }
+        EvidenceCommand::Verify { manifest, receipt } => {
+            let manifest = PyPath::new(pytext::os_bytes(&manifest));
+            match receipt {
+                Some(receipt) => evidence::restoration_receipt(
+                    &mut store,
+                    &manifest,
+                    &PyPath::new(pytext::os_bytes(&receipt)),
+                )
+                .map(|_| "verify: verified".to_string()),
+                None => evidence::read(&manifest)
+                    .and_then(|document| evidence::verify_remote(&mut store, &document))
+                    .map(|()| "verify: verified".to_string()),
+            }
+        }
+        EvidenceCommand::Resolve {
+            sha256,
+            root,
+            offline,
+            path,
+        } => {
+            let root = evidence_root(root.as_deref())?;
+            evidence::resolve(&mut store, &root, &path, sha256.as_deref(), offline)
+                .map(|_| "resolve: verified".to_string())
+        }
+        EvidenceCommand::Recover {
+            source,
+            root,
+            path,
+            offline,
+        } => {
+            let root = evidence_root(root.as_deref())?;
+            evidence::recovery::recover(
+                &mut store,
+                &root,
+                pytext::os_bytes(&source),
+                raw_paths(path).as_deref(),
+                offline,
+            )
+            .map(|()| "Recovery copy verified and restored.".to_string())
+        }
+        EvidenceCommand::RestoreLocal { .. } => unreachable!("handled above"),
+    };
+    evidence_outcome(outcome)
+}
+
+/// `restore-local.py ROOT_NAME ORIGINAL_RELATIVE_PATH NEW_FILE`, run in the repository: every refusal is its message
+/// alone on stderr, with exit 1.
+fn run_restore_local(
+    label: &OsStr,
+    original: &OsStr,
+    output: &OsStr,
+) -> Result<ExitCode, ExitCode> {
+    let root = std::env::current_dir()
+        .map(|cwd| PyPath::new(pytext::os_bytes(cwd.as_os_str())))
+        .map_err(|error| {
+            eprintln!("{}", pytext::os_error(&error, b"."));
+            ExitCode::from(1)
+        })?;
+    let mut remote = evidence::GitHub;
+    let mut disk = evidence::System;
+    let mut store = evidence::Store {
+        remote: &mut remote,
+        disk: &mut disk,
+        now: &evidence::now_isoformat,
+        temporary: evidence::system_temp(),
+    };
+    match evidence::recovery::restore_local(
+        &mut store,
+        &root,
+        pytext::os_bytes(label),
+        pytext::os_bytes(original),
+        pytext::os_bytes(output),
+    ) {
+        Ok(line) => {
+            write_stdout(format!("{line}\n").as_bytes())?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(error) => {
+            eprintln!("{}", error.message());
+            Err(ExitCode::from(1))
+        }
+    }
 }
 
 /// argparse reads a dash-led argument as an option's value when it names no option and reads as a negative
@@ -1092,6 +1334,7 @@ fn main() -> ExitCode {
             check_packages(&cache, &manifests)
         }
         Cli::Archive(ArchiveCommand::CheckScratch { archives }) => check_scratch(&archives),
+        Cli::Evidence(command) => run_evidence(command),
     };
     outcome.unwrap_or_else(|code| code)
 }

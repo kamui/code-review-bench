@@ -64,7 +64,8 @@ regular member to a visitor; writers stream each member in.
   `evidence_store.pack` does, with a PAX `path` record for a name over 100 bytes. Its bytes may differ from Python's,
   as the storage contract allows for new outer packages.
 - The reader accepts what `tarfile` accepts for a package: PAX and GNU long names, multi-member gzip with zero padding,
-  and regular and contiguous members. It parses nothing after the end marker. It refuses non-regular members by type
+  and regular and contiguous members. It parses nothing after the end marker, and bytes after a gzip member that do
+  not start another member end the stream, as `tarfile` never reads them. It refuses non-regular members by type
   and mode bits, duplicate names and the changes from Python that
   [`archive-decisions.v1.json`](../../tools/behavior_contracts/archive-decisions.v1.json) records.
 - Metadata limits come from the package's index, before a crate allocates. The decoded stream may hold the indexed
@@ -85,6 +86,39 @@ report and exit 1 when an archive fails. The Pages build runs `check-packages` o
 one-time check read all 33 published packages, from the 19 manifests in `bench/evidence/manifests/`, after Python's
 `fetch` restored them into a disposable root:
 [`published-packages.2026-10-19.json`](evidence/published-packages.2026-10-19.json).
+
+### Evidence restoration
+
+[#219](https://github.com/kamui/code-review-bench/issues/219) moves restoration and verification to
+`bench-tools evidence`, in `bench_tools::evidence`:
+
+| Command | Python it replaces |
+| --- | --- |
+| `evidence fetch --manifest M [--root R] [--path P]... [--offline]` | `evidence_store.py`'s `fetch` |
+| `evidence verify --manifest M [--receipt R]` | `evidence_store.py`'s `verify` |
+| `evidence resolve [--sha256 H] [--root R] [--offline] PATH` | `evidence_store.resolve`, which `export_explorer.py` and `prune_workspace.py` call |
+| `evidence recover --source S [--root R] [--path P]... [--offline]` | `bench/tools/recover_evidence.py` |
+| `evidence restore-local ROOT ORIGINAL OUTPUT` | `local_evidence_resolution`, with the research record `restore-local.py`'s arguments |
+
+`pack` and `publish` stay in `evidence_store.py`. Packages are read through `bench_tools::archive`, so a fetch refuses
+what [archives](#archives) refuses; the evidence-store v3 decisions record each form Python restored. Restoration is
+durable: each downloaded archive and restored member is written to a temporary file in `.cache/evidence`, synced, then
+hard-linked into place, and the directory is synced. Before it reports success, `fetch` also syncs every directory
+from the root to each requested file and the cache, so a retry settles links an interrupted fetch made but never
+synced. A receipt is written to a synced temporary file and linked, so an
+interrupted `verify --receipt` leaves no receipt. A fetch checks every requested destination before it restores any:
+a changed regular file is refused with its expected and found size, SHA-256 and mode, and the shell commands that
+move it aside under `.cache/evidence/moved-aside/<found sha256>/`; any other file there is refused as Python refuses
+it. `tests/evidence.rs` injects a failure at each disk effect and checks that a retry restores the package and
+syncs every directory it relies on. `--path`, `--source` and `restore-local`'s names keep their argument bytes: one
+that is not UTF-8 names nothing, as argparse's `surrogateescape` text matches no JSON string
+(`fetch-non-utf8-path-names-no-member`). `resolve`, which has no Python command, takes `PATH` and `--sha256` as UTF-8
+only.
+
+`bench-tools export-explorer evidence --restore` resolves each listed file the same way, so `export_explorer.py` no
+longer imports `evidence_store`. `bun run evidence:fetch` and the Pages and rates workflows run `evidence fetch`;
+each job that fetches installs `bench-tools` first. `prune_workspace.py` still calls the retained
+`evidence_store.resolve`; `resolve-across-implementations` restores a path through Rust and resolves it through Python.
 
 `tests/python_archives.rs` checks that the retained `evidence_store.py` and `native_artifacts.py` restore what
 `bench_tools::archive` writes, and that it reads what they write. It is deleted with them
@@ -177,6 +211,8 @@ lists them. When the Cargo cache lacks one, `rust_runtime.py install` fails and 
 | `bench/tools/rates.py`, its `check` command | `bench-tools rates check`, `bench_tools::rates` | `bun run rates:check`; `docs/rates.md` | Retained library, below. `refresh` stays in Python. |
 | `bench/tools/upstream.py`, its `report` command | `bench-tools upstream report`, `bench_tools::upstream`, with the registry checks of `claims.load_registry` in `bench_tools::claims` | `bun run audit:maintainers`; `docs/maintainer-adjudication.md` | Retained library, below. `collect` stays in Python. |
 | `tools/export_explorer.py`, its export | `bench-tools export-explorer evidence`, `stage` and `publish`, `bench_tools::export_explorer` | `bun run data` runs the front below; `.github/workflows/pages.yml` installs `bench-tools`; `src/lib/scoring.test.ts` passes `--root` and `--public` | The Python front, a temporary bridge below. The cases of `test_export_explorer.py` that read the export's internals moved to cargo tests and [`export-explorer.v1.json`](../../tools/behavior_contracts/export-explorer.v1.json); the rest run the front. |
+| `bench/tools/evidence_store.py`, its `fetch` and `verify` commands and `resolve` | `bench-tools evidence fetch`, `verify` and `resolve`, `bench_tools::evidence` | `bun run evidence:fetch`; `.github/workflows/pages.yml` and `rates.yml`; `export_explorer.py` through `export-explorer evidence --restore`; `docs/evidence-storage.md`, `docs/codex-container-fixture.md` | Retained byte-unchanged: `pack` and `publish` stay in Python, and `prune_workspace.py` and `native_artifacts.py` import it. [`evidence-store.v1.json`](../../tools/behavior_contracts/evidence-store.v1.json) runs `fetch` and `verify` against Rust, with a differential against Python in CI. |
+| `bench/tools/recover_evidence.py`, `bench/tools/local_evidence_resolution.py` | `bench-tools evidence recover` and `restore-local`, `bench_tools::evidence::recovery` | `docs/evidence-storage.md` | Deleted with `test_recover_evidence.py` and `test_local_evidence_resolution.py`, whose cases are in the cargo tests and `evidence-store.v1.json`; the corpus ran against both before deletion. |
 
 `tools/test_moved_cli_callers.py` fails when a current file other than the retained module still runs a moved
 command through Python. Frozen runs, imported originals and research records keep their commands.
@@ -237,7 +273,7 @@ A bridge lets a Python caller run a Rust command until the caller itself moves t
 
 | Bridge | Removal condition | Removed by |
 | --- | --- | --- |
-| `tools/export_explorer.py` loads the current facts with `current_grading.load_current`, writes them to a temporary file with `json.dumps(allow_nan=False)`, restores the evidence `bench-tools export-explorer evidence` lists through `evidence_store.resolve`, runs `stage`, checks the dataset hash again, and runs `publish` with `SIGINT` ignored. It exits 2 when `bench-tools` is not installed for `HEAD`. | Evidence resolution moves to Rust ([#155](https://github.com/kamui/code-review-bench/issues/155)) and `load_current` moves to Rust ([#156](https://github.com/kamui/code-review-bench/issues/156)) | #156 |
+| `tools/export_explorer.py` loads the current facts with `current_grading.load_current`, writes them to a temporary file with `json.dumps(allow_nan=False)`, restores the evidence with `bench-tools export-explorer evidence --restore`, runs `stage`, checks the dataset hash again, and runs `publish` with `SIGINT` ignored. It exits 2 when `bench-tools` is not installed for `HEAD`. | `load_current` moves to Rust ([#156](https://github.com/kamui/code-review-bench/issues/156)); evidence resolution moved with [#219](https://github.com/kamui/code-review-bench/issues/219) | #156 |
 
 #195's bridge, `build_packet.py --factual` running `bench-tools derive-packet` through `rust_runtime.resolve`, was
 removed by #196: `bench-tools build-packet --factual` calls `bench_tools::derive_packet::derive` in-process. It
@@ -397,8 +433,8 @@ unassigned ones included. Python escaped the characters its own Unicode database
 whose diagnostics quote input records this with a U+2EBF0 case: `derive-packet-unicode-15-1-path`,
 `build-packet-unicode-15-1-record-name`, `roster-unicode-15-1-arm-kind`, `thermo-unicode-15-1-report-path`,
 `claude-skill-unicode-15-1-report-status`, `check-manifest-unicode-15-1-path`, `rates-unicode-15-1-source-path`,
-`upstream-unicode-15-1-registry-path`, `diff-identity-unicode-15-1-git-record` and
-`export-explorer-unicode-15-1-adjudication-id`. The five whose Python is retained
+`upstream-unicode-15-1-registry-path`, `diff-identity-unicode-15-1-git-record`,
+`export-explorer-unicode-15-1-adjudication-id` and `fetch-unicode-15-1-path`. The six whose Python is retained
 carry Python 3.12's escaped output as their `baseline_defect`. `derive-packet-unassigned-path` pins U+0378, which
 every Python version escapes.
 
@@ -474,6 +510,11 @@ such as `5922561cf`, the v2 inventory's source commit.
 retirement classifies it as historical replay too, and it stays byte-unchanged. It now replays only at a commit that
 has `bench/tools/build_packet.py`, such as `1bbc3eed6`, the last main commit that holds it.
 
+`restore-local.py` in `docs/research/evidence-migration-2026-10-08` imports `local_evidence_resolution`, and
+`verify-recovery.py` in `docs/research/evidence-completion-2026-10-08` imports `recover_evidence`. Both stay
+byte-unchanged and replay at a commit that holds those modules, such as `198760baf`. `bench-tools evidence
+restore-local` takes `restore-local.py`'s arguments, and `evidence recover` replaces the recovery it checks.
+
 ## Verification
 
 ```sh
@@ -491,11 +532,14 @@ python3 tools/behavior_contract.py --corpus tools/behavior_contracts/derive-pack
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/build-packet.v1.json
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/export-explorer.v1.json
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/archive.v1.json
+python3 tools/behavior_contract.py --corpus tools/behavior_contracts/evidence-store.v1.json --implementations EVIDENCE_MAP
+python3 tools/behavior_contract.py --corpus tools/behavior_contracts/evidence-store.v1.json --allow-known-defects --differential EVIDENCE_MAP
 python3 tools/behavior_contract.py --verify-decision-history
 ```
 
 `MAP` is a [command map](contracts/README.md#run-the-usage-corpus) naming the resolved executable, as the `Rust
-runtime` workflow writes it. The `roster`, `normalize-thermo`, `derive-packet`, `build-packet`, `export-explorer` and
+runtime` workflow writes it. `EVIDENCE_MAP` also routes `evidence-store`'s `fetch` and `verify` to it, as
+[the storage corpora](contracts/README.md#run-the-storage-corpora) show. The `roster`, `normalize-thermo`, `derive-packet`, `build-packet`, `export-explorer` and
 `archive` corpora run the Rust executable by default; the other corpora run the retained Python libraries by default.
 `derive-packet`, `build-packet` and `export-explorer` have no Python implementation left to compare with, and the
 `archive` commands have no Python counterpart, so they have no differential. Each `archive` decision states what

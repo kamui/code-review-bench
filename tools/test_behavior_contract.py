@@ -720,40 +720,45 @@ with open("out/native-artifact-storage.v1.json", "w") as handle:
                                 calls += 1
         self.assertGreater(calls, 100)
 
-    def test_storage_corpora_hold_for_python_and_reject_regressions(self):
+    def storage_commands(self, name):
+        """A storage corpus's default commands. Programs that moved to bench-tools need it installed for HEAD; the
+        Pages build installs it, and the usage-pilot workflow, which does not, skips the corpus."""
+        try:
+            return contract.default_commands(contract.load_corpus(contract.CORPUS.parent / f"{name}.v1.json"))
+        except ValueError as error:
+            self.skipTest(f"{name}: {error}")
+
+    def test_storage_corpora_hold_and_reject_regressions(self):
         for name in self.STORAGE_CORPORA:
             with self.subTest(corpus=name):
+                self.storage_commands(name)
                 result = self.run_cli("--allow-known-defects", "--corpus", contract.CORPUS.parent / f"{name}.v1.json")
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertNotIn("FAIL", result.stdout)
+        commands = self.storage_commands("evidence-store")
         tools = contract.REPO / "bench/tools"
         source = (tools / "evidence_store.py").read_text(encoding="utf-8")
-        before = "if source.name in {'auth.json', '.credentials.json'}:"
-        self.assertIn(before, source)
+        credential = "if source.name in {'auth.json', '.credentials.json'}:"
+        copy = "shutil.copyfileobj(source, target, 1024 * 1024)"
+        self.assertIn(credential, source)
+        self.assertIn(copy, source)
         with tempfile.TemporaryDirectory() as temporary:
             mutant = Path(temporary) / "bench/tools/evidence_store.py"
             mutant.parent.mkdir(parents=True)
             (Path(temporary) / "bench/schema").mkdir()
-            mutant.write_text(source.replace(before, "if False:"), encoding="utf-8")
-            known = "raise store.EvidenceError('choose exactly one source name from the recovery index')"
-            recover = (tools / "recover_evidence.py").read_text(encoding="utf-8")
-            self.assertIn(known, recover)
-            (mutant.parent / "recover_evidence.py").write_text(
-                recover.replace(known, "raise RuntimeError('unrelated implementation crash')"), encoding="utf-8")
+            mutant.write_text(source.replace(credential, "if False:").replace(
+                copy, "raise RuntimeError('unrelated implementation crash')"), encoding="utf-8")
             (mutant.parent / "check_manifest.py").write_bytes((tools / "check_manifest.py").read_bytes())
             schema = "bench/schema/evidence-storage.schema.json"
             (Path(temporary) / schema).write_bytes((contract.REPO / schema).read_bytes())
-            commands = Path(temporary) / "commands.json"
-            commands.write_text(json.dumps({"evidence-store": [sys.executable, str(mutant)],
-                                            "recover-evidence": [sys.executable, str(mutant.parent / "recover_evidence.py")],
-                                            "restore-local": contract.default_commands(
-                                                {"cases": [{"program": "restore-local"}]})["restore-local"]}))
+            mapped = Path(temporary) / "commands.json"
+            mapped.write_text(json.dumps({**commands, "evidence-store": [sys.executable, str(mutant)]}))
             result = self.run_cli("--allow-known-defects", "--corpus",
-                                  contract.CORPUS.parent / "evidence-store.v1.json", "--implementations", commands)
+                                  contract.CORPUS.parent / "evidence-store.v1.json", "--implementations", mapped)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("FAIL pack-credential-auth-json", result.stdout)
-        self.assertIn("FAIL recover-unknown-source", result.stdout)
-        self.assertIn("KNOWN DEFECT recover-changed-manifest", result.stdout)
+        self.assertIn("FAIL fetch-archive-truncated-gzip", result.stdout)
+        self.assertIn("KNOWN DEFECT fetch-existing-changed", result.stdout)
         self.assertIn("PASS pack-traversal-path", result.stdout)
 
     GRADING_WRITER = """import hashlib, json, os, random, sys

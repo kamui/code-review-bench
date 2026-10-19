@@ -1,7 +1,7 @@
 """Export validated per-review facts for the explorer and scorecard from current evidence.
 
-Python loads the current facts and restores missing evidence; `bench-tools export-explorer` writes, checks and
-publishes the export. This front goes once #155 ports evidence resolution and #156 ports `load_current`.
+Python loads the current facts; `bench-tools export-explorer` restores missing evidence, writes, checks and
+publishes the export. This front goes once #156 ports `load_current`.
 """
 
 import argparse
@@ -17,7 +17,6 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "bench" / "tools"))
 import current_grading
-import evidence_store
 import rust_runtime
 
 
@@ -43,12 +42,6 @@ def current(root):
     return selected, documents, current_grading.coverage_status(selected, documents)
 
 
-def restore(root, entries):
-    for entry in entries:
-        if not (root / entry["path"]).is_file():
-            evidence_store.resolve(root, entry["path"], entry["sha256"])
-
-
 def build(root=ROOT, public=None):
     root = Path(root).resolve()
     public = root / "public" if public is None else Path(public)
@@ -59,7 +52,7 @@ def build(root=ROOT, public=None):
         facts.write_text(json.dumps({"selected": selected, "documents": documents, "status": status}, allow_nan=False),
                          encoding="utf-8")
         common = ["--root", str(root), "--facts", str(facts), f"--base-path={os.environ.get('BASE_PATH', '/')}"]
-        restore(root, json.loads(tool("evidence", *common)))
+        tool("evidence", "--restore", *common)
         try:
             summary = tool("stage", *common, "--stage", str(stage)).decode("utf-8")
             if current(root)[2]["dataset_hash"] != status["dataset_hash"]:

@@ -2463,6 +2463,31 @@ pub fn evidence(root: &[u8], facts: &Facts, base_path: &str) -> Result<Value> {
     Ok(Value::Array(exporter.listed))
 }
 
+/// `export-explorer evidence --restore`: each listed file that is not a regular file under `root`, restored through
+/// `bench_tools::evidence::resolve` and checked against its frozen hash, as the Python front restored it.
+pub fn restore(root: &[u8], listed: &Value, store: &mut crate::evidence::Store<'_>) -> Result<()> {
+    let root = PyPath::new(root);
+    for entry in iterate(listed)?.iter() {
+        let path = at(entry, "path")?.py_str();
+        if root.join(path.as_bytes()).is_file() {
+            continue;
+        }
+        let sha256 = match at(entry, "sha256")? {
+            Value::Null => None,
+            other => Some(other.py_str()),
+        };
+        crate::evidence::resolve(store, &root, &path, sha256.as_deref(), false).map_err(
+            |error| match error {
+                crate::evidence::Error::Violation(message) => {
+                    Failure::new("evidence_store.EvidenceError", message)
+                }
+                crate::evidence::Error::Io(message) => Failure::new("OSError", message),
+            },
+        )?;
+    }
+    Ok(())
+}
+
 /// `export-explorer stage`: the export written and checked under `stage`, refused before the facts are read while
 /// an earlier publication's backups remain. Returns the summary line the front prints once it is published.
 pub fn stage(root: &[u8], facts: &[u8], base_path: &str, stage: &[u8]) -> Result<String> {

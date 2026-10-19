@@ -12,9 +12,14 @@ REPO = Path(__file__).resolve().parents[1]
 MOVED = (
     ("bench/tools/rates.py", "check", "bench-tools rates check"),
     ("bench/tools/upstream.py", "report", "bench-tools upstream report"),
+    ("bench/tools/evidence_store.py", "fetch", "bench-tools evidence fetch"),
+    ("bench/tools/evidence_store.py", "verify", "bench-tools evidence verify"),
+    ("bench/tools/recover_evidence.py", "--source", "bench-tools evidence recover"),
 )
-# Frozen runs, imported originals and research records keep the commands they recorded.
-HISTORICAL = ("artifacts/", "bench/runs/", "docs/research/")
+# Frozen runs, imported originals, research records, saved fixture and migration evidence, and the contract
+# decisions that describe superseded behavior keep the commands they recorded.
+HISTORICAL = ("artifacts/", "bench/runs/", "docs/research/", "bench/fixtures/", "docs/python-migration/evidence/",
+              "docs/python-migration/pilot/", "tools/behavior_contracts/")
 
 
 def invocation(module, command):
@@ -61,6 +66,8 @@ class MovedCommands(unittest.TestCase):
         self.assertEqual(scripts["rates:check"], "python3 bench/tools/rust_runtime.py exec bench-tools -- rates check")
         self.assertEqual(scripts["audit:maintainers"],
                          "python3 bench/tools/rust_runtime.py exec bench-tools -- upstream report")
+        self.assertEqual(scripts["evidence:fetch"], "python3 bench/tools/rust_runtime.py exec bench-tools -- evidence fetch "
+                         "--manifest bench/evidence/manifests/repository-payloads-2026-10-08-v1.json")
 
 
 if __name__ == "__main__":
