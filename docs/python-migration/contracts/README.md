@@ -95,7 +95,8 @@ executable:
   "check-manifest": ["/absolute/path/to/bench-tools", "check-manifest"],
   "rates": ["/absolute/path/to/bench-tools", "rates"],
   "upstream": ["/absolute/path/to/bench-tools", "upstream"],
-  "archive": ["/absolute/path/to/bench-tools", "archive"]
+  "archive": ["/absolute/path/to/bench-tools", "archive"],
+  "grading": ["/absolute/path/to/bench-tools", "grading"]
 }
 ```
 
@@ -114,6 +115,24 @@ and that its bytes are the committed files.
 
 Each `build-packet` case holds its staging mirror as a bare repository with one pack and its saved forge responses
 under `replay/`, so no case calls `gh` or the network. `build-packet-non-utf8-output-path` requires `non-utf8-paths`.
+
+## Run the grading validation corpus
+
+[`grading-validation.v1.json`](../../../tools/behavior_contracts/grading-validation.v1.json) pins
+`bench-tools grading validate [VERDICTS] --inputs FILE` ([#231](https://github.com/kamui/code-review-bench/issues/231)).
+Its `grading` program runs the retained `grading_validation.py` through a driver that takes `--inputs`, which must
+name a file called `inputs.json`, and points the script at it as `grade.py prepare`'s `validator/tools/` layout
+does. Nine cases carry a `baseline_defect`, so pass `--allow-known-defects` when Python is the primary:
+`non-object-inputs` and `links-not-an-object`, where Python raises an uncaught `AttributeError`; `deep-nesting` and
+`lone-surrogate`, which `pyjson` refuses; `nan-review-tokens`, whose Python line order depends on a `NaN`'s address;
+`unicode-15-1-outcome`, quoted through Python 3.14's `repr` (its baseline is Python 3.12's); and `help`,
+`missing-inputs-option` and `extra-argument`, which print clap's wording. The `fixture-*` cases build on the grading
+fixture's `pending`, `proposed` and `disputed-without-ruling` variants, and two `saved-v1-*` cases hold archived
+validator inputs and verdicts.
+
+```sh
+python3 tools/behavior_contract.py --allow-known-defects --corpus tools/behavior_contracts/grading-validation.v1.json --differential /tmp/rust.json
+```
 
 ## Run the storage corpora
 
