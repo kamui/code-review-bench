@@ -2,6 +2,7 @@
 
 //! Deterministic benchmark tools, one module per tool, behind the `bench-tools` binary.
 
+pub mod archive;
 pub mod build_packet;
 pub mod claims;
 pub mod derive_packet;
