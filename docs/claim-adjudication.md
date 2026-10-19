@@ -98,7 +98,7 @@ A link is intake evidence. Eligibility is decided once for the canonical claim; 
 Recording a decision, a link or a new causal family in the current records changes the input fingerprint of every selected batch that receives it. A new family changes every selected batch of its task: earlier rejections, quiet reviews and competing configurations included. Grade those batches again:
 
 ```sh
-python3 bench/tools/current_grading.py check
+python3 bench/tools/rust_runtime.py exec bench-tools -- current-grading check
 python3 bench/tools/grade.py invalidate
 python3 bench/tools/methodology.py --out /tmp/current-grading-queue.json
 python3 bench/tools/grade.py prepare \

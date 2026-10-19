@@ -5,9 +5,10 @@ use bench_tools::pyjson::{self, Duplicates};
 use bench_tools::pytext::{self, PyPath};
 use bench_tools::schema::{SchemaError, Validator};
 use bench_tools::{
-    archive, build_packet, claims, delegation, derive_packet, diff_identity, evidence,
-    evidence_inventory, export_explorer, grading_reports, grading_validation, import_benchmark,
-    native_artifacts, normalize_thermo, pyfs, pyunicode, pyvalue, rates, roster, ruling, upstream,
+    archive, build_packet, claims, current_grading, delegation, derive_packet, diff_identity,
+    evidence, evidence_inventory, export_explorer, grading_reports, grading_validation,
+    import_benchmark, native_artifacts, normalize_thermo, pyfs, pyunicode, pyvalue, rates, roster,
+    ruling, upstream,
 };
 use clap::builder::PossibleValuesParser;
 use clap::error::ErrorKind;
@@ -70,6 +71,10 @@ enum Cli {
     /// Check a grader's output against the rules grading_validation.py applies.
     #[command(subcommand, infer_long_args = true)]
     Grading(GradingCommand),
+    /// Inventory and validate the sole-current grading record, as current_grading.py does, or print each selected
+    /// batch's input fingerprint and state.
+    #[command(infer_long_args = true)]
+    CurrentGrading(CurrentGradingArgs),
     /// Verify the imported originals bench/import-manifest.json pins, or preserve them before an intended edit, as
     /// tools/import_benchmark.py did.
     #[command(infer_long_args = true)]
@@ -508,6 +513,21 @@ enum EvidenceCommand {
         #[arg(value_name = "NEW_FILE", allow_negative_numbers = true)]
         output: OsString,
     },
+}
+
+#[derive(Args)]
+struct CurrentGradingArgs {
+    #[arg(value_parser = PossibleValuesParser::new(["inventory", "check", "status", "fingerprints"]))]
+    operation: String,
+    /// The repository whose record is read.
+    #[arg(long, default_value = ".", allow_negative_numbers = true)]
+    root: OsString,
+    /// The current record directory under the root.
+    #[arg(long, default_value = current_grading::CURRENT, allow_negative_numbers = true)]
+    current: OsString,
+    /// Where `inventory` writes the inventory instead of printing it.
+    #[arg(long, allow_negative_numbers = true)]
+    out: Option<OsString>,
 }
 
 #[derive(Subcommand)]
@@ -1922,8 +1942,8 @@ fn run_ruling(command: RulingCommand) -> Result<ExitCode, ExitCode> {
 /// 3.14's also when it reads as a negative number; `build-packet-option-values-with-leading-dash`,
 /// `grading-validation`'s `dash-led-*` cases, `pack-unicode-negative-out` and `inventory-dash-led-space-root` pin
 /// that. clap takes only numbers, so before it parses them, these commands attach such a value to its option with
-/// `=`, and grading validate's positional moves after `--`. Only build-packet, grading validate, evidence pack and
-/// evidence publish, whose decisions pin Python 3.14, take the number form.
+/// `=`, and grading validate's positional moves after `--`. Only build-packet, grading validate, evidence pack,
+/// evidence publish and current-grading, whose decisions pin Python 3.14, take the number form.
 fn attach_dash_led_values(arguments: Vec<OsString>) -> Vec<OsString> {
     let name = |index: usize| arguments.get(index).map(|name| pytext::os_bytes(name));
     let (path, numbers): (&[&str], bool) = match (name(1), name(2)) {
@@ -1934,6 +1954,7 @@ fn attach_dash_led_values(arguments: Vec<OsString>) -> Vec<OsString> {
         (Some(b"evidence"), Some(b"reconcile")) => (&["evidence", "reconcile"], false),
         (Some(b"evidence"), Some(b"pack")) => (&["evidence", "pack"], true),
         (Some(b"evidence"), Some(b"publish")) => (&["evidence", "publish"], true),
+        (Some(b"current-grading"), _) => (&["current-grading"], true),
         _ => return arguments,
     };
     let mut command = Cli::command();
@@ -2134,6 +2155,69 @@ fn audit_log(arguments: AuditLogArgs) -> Result<ExitCode, ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+fn run_current_grading(arguments: CurrentGradingArgs) -> Result<ExitCode, ExitCode> {
+    use current_grading::Failure;
+    let current = pytext::os_bytes(&arguments.current);
+    let outcome = (|| -> current_grading::R<Vec<u8>> {
+        let root = current_grading::Root::new(pytext::os_bytes(&arguments.root))?;
+        let line = |value: &bench_tools::pyjson::Value| {
+            format!("{}\n", current_grading::dumps(value)).into_bytes()
+        };
+        match arguments.operation.as_str() {
+            "inventory" => {
+                let selected = current_grading::inventory(&root)?;
+                match &arguments.out {
+                    Some(out) => {
+                        current_grading::write_out(
+                            pytext::os_bytes(out),
+                            &String::from_utf8_lossy(&line(&selected)),
+                        )?;
+                        Ok(Vec::new())
+                    }
+                    None => Ok(line(&selected)),
+                }
+            }
+            "fingerprints" => Ok(line(&current_grading::fingerprints(&root, current)?)),
+            operation => {
+                let (selected, documents) = current_grading::load_current(&root, current, true)?;
+                let status = current_grading::coverage_status(&selected, &documents)?;
+                if operation == "check" {
+                    let count = |field: &str| {
+                        status
+                            .as_object()
+                            .and_then(|object| object.get(field))
+                            .map(bench_tools::pyjson::Value::py_str)
+                            .unwrap_or_default()
+                    };
+                    Ok(format!(
+                        "current evidence valid; {}/{} admitted reviews assessed\n",
+                        count("assessed_reviews"),
+                        count("required_reviews")
+                    )
+                    .into_bytes())
+                } else {
+                    Ok(line(&status))
+                }
+            }
+        }
+    })();
+    match outcome {
+        Ok(output) => {
+            write_stdout(&output)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(Failure::Inconsistent(mut message)) => {
+            message.push(b'\n');
+            write_stdout(&message)?;
+            Ok(ExitCode::from(1))
+        }
+        Err(Failure::Input(message) | Failure::Crash(message)) => {
+            eprintln!("{}: {message}", current_grading::PROGRAM);
+            Err(ExitCode::from(2))
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let arguments: Vec<OsString> = std::env::args_os().collect();
     // clap reads `-hx` before a subcommand as `-h` and prints help; the top level has no Python
@@ -2185,6 +2269,7 @@ fn main() -> ExitCode {
         }) => archive_attempt(&attempt, &archive_dir, &root),
         Cli::AuditLog(arguments) => audit_log(arguments),
         Cli::NativeArtifacts(command) => run_native_artifacts(command),
+        Cli::CurrentGrading(arguments) => run_current_grading(arguments),
     };
     outcome.unwrap_or_else(|code| code)
 }

@@ -27,12 +27,18 @@ MOVED = (
     ("bench/tools/ruling_record.py", "route", "bench-tools ruling route"),
     ("bench/tools/ruling_record.py", "summary", "bench-tools ruling summary"),
     ("bench/tools/ruling_record.py", "precedents", "bench-tools ruling precedents"),
+    ("bench/tools/current_grading.py", "inventory", "bench-tools current-grading inventory"),
+    ("bench/tools/current_grading.py", "check", "bench-tools current-grading check"),
+    ("bench/tools/current_grading.py", "status", "bench-tools current-grading status"),
 )
 # Retained libraries whose command line moved whole, including the form without a command word.
 MOVED_PROGRAMS = (
     ("bench/tools/ruling_record.py", "bench-tools ruling check"),
     ("bench/tools/ruling_dossier.py", "bench-tools ruling dossier"),
 )
+# Tests of the retained grade.py and regrade.py check those modules' output with the retained current_grading.py,
+# their baseline until #156 slice 11 removes them.
+RETAINED_BASELINE_TESTS = ("bench/tools/test_grade.py", "bench/tools/test_regrade.py")
 # Frozen runs, imported originals, research records, saved rulings, saved fixture and migration evidence, and the
 # contract decisions that describe superseded behavior keep the commands they recorded.
 HISTORICAL = ("artifacts/", "bench/runs/", "docs/research/", "bench/grading/rulings/", "bench/fixtures/",
@@ -86,7 +92,7 @@ class MovedCommands(unittest.TestCase):
         found = []
         for name, text in current_text_files():
             for module, command, replacement in MOVED:
-                if name == module:
+                if name == module or name in RETAINED_BASELINE_TESTS and module == "bench/tools/current_grading.py":
                     continue
                 for number, line in enumerate(text.splitlines(), 1):
                     if invocation(module, command).search(line):
@@ -108,6 +114,8 @@ class MovedCommands(unittest.TestCase):
                          "bench-tools -- import-benchmark --check")
         self.assertEqual(scripts["import:preserve"],
                          "python3 bench/tools/rust_runtime.py exec bench-tools -- import-benchmark --preserve")
+        self.assertEqual(scripts["verify:current"], "bun run evidence:fetch && python3 bench/tools/rust_runtime.py exec "
+                         "bench-tools -- current-grading check && python3 bench/tools/calibration.py check")
         self.assertEqual(scripts["evidence:fetch"], "python3 bench/tools/rust_runtime.py exec bench-tools -- evidence fetch "
                          "--manifest bench/evidence/manifests/repository-payloads-2026-10-08-v1.json")
 

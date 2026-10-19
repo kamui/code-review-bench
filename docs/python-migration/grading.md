@@ -8,6 +8,8 @@ root and the replay inventory every later slice runs, and the research-helper au
 changes no grade, claim decision, ruling or scorecard number. `src/lib/scoring.ts` stays the only owner of
 scorecard arithmetic. Slice 2, [#232](https://github.com/kamui/code-review-bench/issues/232), ports the ruling
 records and delegation routing, as [ruling records and delegation](#ruling-records-and-delegation) describes.
+Slice 3, [#233](https://github.com/kamui/code-review-bench/issues/233), ports the current grading record and packet
+selection, as [slice 3](#slice-3-the-current-grading-record-and-packet-selection) describes.
 
 ## The split with #157
 
@@ -40,7 +42,8 @@ implementation.
 
 [The contract reference](contracts/README.md#grading-comparison-features) describes the harness features: the
 structured comparison, hand-stated grading outcomes, the Python entropy driver, the `fixture-git` setup program and
-real-record mode. `grading-real-record.v1.json` lists no command yet; slice 3 adds the first and runs it in Pages.
+real-record mode. `grading-real-record.v1.json` lists slice 3's four `current-grading` commands, which the Pages
+build job runs.
 
 [`grading_fixture.rs`](../../rust/bench-tools/tests/support/grading_fixture.rs) is the one fixture root. It mirrors
 the cohort of `test_grade.py`: one task, a selected and an unselected arm, an invalid attempt and its replacement, a
@@ -119,8 +122,8 @@ behavior corpora and `tests/ruling_filing.rs` run them. Every tracked record was
 and without `--json`, for the whole record and each of the 6 rounds; `precedents` for each decision type; and
 `dossier` for every directory holding a `summary.json`. All 692 commands gave identical exit status, stdout, stderr
 and sheets under Python 3.12 and 3.14, except four `dossier` runs on research directories whose `summary.json` is not
-a dossier, where the Python crashed and Rust exits 2 as decided. Slice 3 adds the real-record list that repeats this
-comparison in Pages.
+a dossier, where the Python crashed and Rust exits 2 as decided. The real-record list slice 3 added runs only
+`current-grading` commands; no `ruling` command repeats this comparison in Pages yet.
 
 ## Replay coverage
 
@@ -169,6 +172,57 @@ those fixture variants, `pinned-pending` and `pinned-proposed` hold an `unresolv
 that pending and proposed eligibility give `unresolved` recovery. `approved-without-receipt` has no validator case,
 because `current_grading.py` refuses it before validator inputs exist.
 
+## Slice 3: the current grading record and packet selection
+
+[#233](https://github.com/kamui/code-review-bench/issues/233) ports `packet_selection.py` to
+`bench_tools::packet_selection` and `current_grading.py` to `bench_tools::current_grading`: the inventory, pin
+checks, document and grade validation, grading inputs and fingerprints, `load_current`, `control_state`,
+`coverage_status` and `record_lock`. `bench-tools current-grading` runs them:
+
+```sh
+python3 bench/tools/rust_runtime.py exec bench-tools -- current-grading inventory [--out FILE]
+python3 bench/tools/rust_runtime.py exec bench-tools -- current-grading check
+python3 bench/tools/rust_runtime.py exec bench-tools -- current-grading status
+python3 bench/tools/rust_runtime.py exec bench-tools -- current-grading fingerprints
+```
+
+Each reads the working directory as the repository, or `--root DIR`, and the record under `--current DIR`. Stdout,
+stderr and exit codes are the Python's, and diagnostics keep the program name `current_grading.py`. `fingerprints`
+has no Python command: it prints each selected batch with its input fingerprint and state as JSON, for `regrade.py`
+in slice 10, without checking saved grades. The schemas the command validates against are copies of `bench/schema`
+under `rust/bench-tools/src/current_grading/`, and a unit test fails when a copy differs. `verify:current` and the
+commands in `docs/current-grading.md`, `docs/claim-adjudication.md` and `docs/evaluator-audit.md` moved.
+`tools/test_moved_cli_callers.py` fails on a current caller of `inventory`, `check` or `status`, except
+`test_grade.py` and `test_regrade.py`, which check the retained Python `grade.py` and `regrade.py` against their
+baseline.
+
+[`current-grading.v1.json`](../../tools/behavior_contracts/current-grading.v1.json) pins the commands on the nine
+fixture variants and on these cases: a missing attempt record or review, an arm file changed after inventory, a
+frozen run without its Git history, an agent-settled credit whose before-record binds another family, and the
+command line. The decided differences:
+
+- an exception the Python did not catch exits 2 with `current_grading.py: <type>: <message>` instead of a
+  traceback with exit 1; usage errors and help are clap's;
+- a lone surrogate in JSON and a UTF-16 replacement manifest are refused with exit 2;
+- messages follow Python 3.14: `repr` of Unicode 15.1 and 16.0 characters, Unicode 16.0 digits and exponents in
+  dash-led values, and the `TypeError` wording for `in` on a number and for an unhashable set element.
+
+`tests/current_grading.rs` holds the record lock in each implementation while the other waits. No `current-grading`
+command takes the lock, as no `current_grading.py` command does, so this is a cargo test, not a corpus step case.
+Slice 8 adds the writers that take it, with step cases.
+
+The Pages build job runs [`grading-real-record.v1.json`](../../tools/behavior_contracts/grading-real-record.v1.json),
+`check`, `status`, `inventory --out` to a temporary file and `fingerprints`, against the checked-out record after
+the evidence and freeze-commit fetches. On 2026-10-19 both implementations gave identical output on the record: 16
+tasks, 198 batches, 623 required reviews and none assessed, every batch `missing` with the same input fingerprint in
+both, and the same dataset hash.
+
+`current-grading check` keeps the Python's rule for a filed claim's comments. The owner
+[ruled on #230](https://github.com/kamui/code-review-bench/issues/230#issuecomment-6274330595) that the stricter
+rule, no equivalent link on a comment of a filed claim, is added after this slice in
+[#256](https://github.com/kamui/code-review-bench/issues/256). `current_grading.py` stays byte-unchanged as the
+baseline until slice 11 deletes it; `packet_selection.py` stays for #157's callers.
+
 ## Research helpers
 
 The audit covered the `DYNAMIC_ROOTS` loaders, `test_last_push_move.py`, `test_regrade_filing.py`,
@@ -186,13 +240,13 @@ any of them.
 | `test_review_code_selection.py` | The staged inventory pin, the selection rebuild, the committed `selection.v1.json`, packets and collector labels over the live record | Stays |
 
 No current-record assertion moved in this slice. None fits a fixture case: each compares the live record with a
-helper's output, and the helpers have no port. `current_grading.py check` covers only their consistency part. Two
+helper's output, and the helpers have no port. `current-grading check` covers only their consistency part. Two
 need a later step:
 
-- The staged inventory pin's live derivation is the inventory `current_grading.py check` compares. It goes to the
-  real-record list with slice 3's `current-grading check`.
+- The staged inventory pin's live derivation is the inventory `current-grading check` compares. Since slice 3, the
+  real-record list runs that check in Pages.
 - The rule that a comment of a filed claim has no equivalent link is stricter than `current_grading.py`, which
-  refuses only a comment equivalent to two claims. Making it a validator case is a new rule for the owner.
+  refuses only a comment equivalent to two claims. The owner ruled to add it as a validator rule in #256.
 
 Replaying the rebuild assertions at their filing commits, so the loaders could leave, would drop today's guard that
 each later filing stays undoable. That needs the owner's ruling; until then the loaders stay and their helpers stay
@@ -266,6 +320,11 @@ Read-only runs on 2026-10-19 compared the port with the removed Python, under Py
   archives): identical files and stdout, 1,405 attempts in 19 setups and 1,145 grading sessions.
 - `regrade archive-attempt` on the 399 saved attempts that still have a workspace, into scratch directories:
   identical exit, stdout, receipt and archive members, sizes, modes and SHA-256, 13,391 members in all.
+
+The audit-log decisions v1 to v3 cite `bench_tools::pyvalue::fromisoformat`, `python_sum` and `parse_float`, and the
+regrade-reports decisions v1 cite `bench_tools::pyvalue::python_sum`, by that module's name before #249 renamed it
+`bench_tools::pysemantics`. `bench_tools::pyvalue` is now #251's ruling module. The pinned decision files stay
+unchanged.
 
 ## Retained after #156
 

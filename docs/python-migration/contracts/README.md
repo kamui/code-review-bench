@@ -66,6 +66,7 @@ independent assertions. The harness never obtains expected output from a candida
 [`upstream.v1.json`](../../../tools/behavior_contracts/upstream.v1.json),
 [`ruling-record.v1.json`](../../../tools/behavior_contracts/ruling-record.v1.json),
 [`ruling-dossier.v1.json`](../../../tools/behavior_contracts/ruling-dossier.v1.json),
+[`current-grading.v1.json`](../../../tools/behavior_contracts/current-grading.v1.json),
 [`archive.v1.json`](../../../tools/behavior_contracts/archive.v1.json),
 [`regrade-reports.v1.json`](../../../tools/behavior_contracts/regrade-reports.v1.json) and
 [`audit-log.v1.json`](../../../tools/behavior_contracts/audit-log.v1.json) pin the commands of
@@ -83,7 +84,9 @@ Without `--implementations`, each program runs its maintained implementation. `c
 `--source PROVIDER=URL` pages, so no case leaves the host; `rates-transport-failure` connects to a closed loopback
 port. `regrade-archive-attempt` runs the retained `regrade.archive_attempt` through a driver that reads the case
 directory as the repository. `ruling` runs the retained `ruling_record.py` and `ruling_dossier.py` through a driver that
-reads the case directory, or the `--root` argument, as the repository. Cases whose Rust behavior was changed on purpose
+reads the case directory, or the `--root` argument, as the repository. `current-grading` runs the retained
+`current_grading.py` the same way; its `fingerprints` operation, which the Python command line lacks, prints each
+selected batch with `current_grading.batch_state`'s fingerprint and state. Cases whose Rust behavior was changed on purpose
 carry a `baseline_defect` with Python's output, so pass
 `--allow-known-defects` when Python is the primary. `roster`, `normalize-thermo`, `derive-packet`, `build-packet`,
 `export-explorer`, `archive`, `regrade-status` and `audit-log` have no Python implementation, so they run the executable `rust_runtime.resolve("bench-tools")`
@@ -107,6 +110,7 @@ executable:
   "regrade-archive-attempt": ["/absolute/path/to/bench-tools", "regrade", "archive-attempt"],
   "audit-log": ["/absolute/path/to/bench-tools", "audit-log"],
   "ruling": ["/absolute/path/to/bench-tools", "ruling"],
+  "current-grading": ["/absolute/path/to/bench-tools", "current-grading"],
   "grading": ["/absolute/path/to/bench-tools", "grading"]
 }
 ```
@@ -276,8 +280,8 @@ ported. [`grading.md`](../grading.md) records the baseline they serve.
   stderr and each named output byte for byte. An `{"output": NAME}` argument names a file in a disposable
   directory. Every entry below ROOT, tracked, ignored or Git's own, is compared by type, permissions, size, inode
   and change time before and after each run. A run that changes one fails and stops the mode, so no later run
-  reads changed inputs. The list starts empty; #156 slice 3 adds the first commands and runs the mode in the Pages
-  build job.
+  reads changed inputs. #156 slice 3 listed `current-grading check`, `status`, `inventory --out` and
+  `fingerprints`, and the Pages build job runs the mode after its evidence and freeze-commit fetches.
 - **Fixture roots.** A case built from the grading fixture names it with `"fixture": "grading/<variant>"`. Its
   `initial` entries and leading setup steps must equal what
   [`grading_fixture.rs`](../../../rust/bench-tools/tests/support/grading_fixture.rs) builds, or
