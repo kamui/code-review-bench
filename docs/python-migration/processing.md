@@ -86,8 +86,9 @@ regular member to a visitor; writers stream each member in.
 - Metadata limits come from the package's index, before a crate allocates. The decoded stream may hold the indexed
   payload plus, per member, its header blocks and up to three extension headers of at most 64 KiB each. A PAX header,
   GNU long name or GNU long link over 64 KiB is refused from its header. Headers and members are capped by the index's
-  member count. For zip, every end record in the comment window is read first, and an entry count or central
-  directory size over the limit is refused before `ZipArchive` opens.
+  member count. `flate2` refuses a gzip FNAME or FCOMMENT field over 65,535 bytes. For zip, every end record in the
+  comment window is read first, and an entry count, a central directory size or zip64 extensible data over its limit
+  is refused before `ZipArchive` opens.
 - Native scratch archives are zip. The writer names deflate entries by content hash, with mode 0600 and the
   1980-01-01 timestamp, as `native_artifacts.file_artifacts` does. The reader accepts stored, deflate and zip64
   entries, and refuses encryption, other methods, duplicate names and entries that are not regular files.
