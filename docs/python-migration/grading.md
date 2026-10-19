@@ -169,8 +169,9 @@ output is the port's; every case where Python 3.12.15 or 3.14.7 printed somethin
   characters (`*-unicode-15-1-*`), the absolute path in a missing run's message (`*-missing-run`), and argparse 3.14's
   `-1e5` (`*-exponent-out`).
 - Refusals: a lone surrogate in JSON, a name that is not UTF-8, an archive tarfile could read but
-  `bench_tools::archive` refuses (`*-plain-tar-refused`), a UTF-16 dispatch record, and in `archive-attempt` a
-  symbolic link, directory or special mode bits before anything is written, so no partial archive is left.
+  `bench_tools::archive` refuses (`*-plain-tar-refused`), including a directory and a regular member of one name in
+  either order (`audit-log-*-then-*-refused`), a UTF-16 dispatch record, and in `archive-attempt` a symbolic link,
+  directory or special mode bits before anything is written, so no partial archive is left.
 - `audit-log` parses with clap, as every subcommand does (`audit-log-usage-*`, `*-self-test-removed`,
   `*-run-after-option`, `*-dot-digit-out`, `*-help*`).
 

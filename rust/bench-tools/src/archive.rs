@@ -7,7 +7,7 @@
 use flate2::bufread::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::{Compression, GzBuilder};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use zip::read::{ArchiveOffset, Config};
@@ -444,6 +444,12 @@ pub fn read_tar_gz_listing<R: Read>(
 
 type DirectoryVisitor<'a> = &'a mut dyn FnMut(&[u8]);
 
+#[derive(Clone, Copy, PartialEq)]
+enum Listed {
+    Regular,
+    Directory,
+}
+
 fn read_tar_gz_members<R: Read>(
     compressed: R,
     limits: &Limits,
@@ -467,7 +473,7 @@ fn read_tar<R: Read>(
     mut visit: impl FnMut(&TarMember, &mut dyn Read) -> Result<(), ArchiveError>,
 ) -> Result<R, ArchiveError> {
     let mut archive = tar::Archive::new(decoded);
-    let mut names = HashSet::new();
+    let mut names: HashMap<Vec<u8>, Listed> = HashMap::new();
     let mut headers = 0u64;
     let mut members = 0u64;
     let mut pending = Pending::default();
@@ -544,7 +550,12 @@ fn read_tar<R: Read>(
                 .iter()
                 .rposition(|byte| *byte != b'/')
                 .map_or(0, |at| at + 1);
-            listed(&name[..end]);
+            let name = name[..end].to_vec();
+            // tarfile lists a directory added twice; a directory and a regular member of one name are refused.
+            if *names.entry(name.clone()).or_insert(Listed::Directory) != Listed::Directory {
+                return Err(Refusal::Duplicate { name }.into());
+            }
+            listed(&name);
             continue;
         }
         if !matches!(header[156], b'0' | 0 | b'7') || old_directory {
@@ -573,7 +584,7 @@ fn read_tar<R: Read>(
             }
             .into());
         }
-        if !names.insert(name.clone()) {
+        if names.insert(name.clone(), Listed::Regular).is_some() {
             return Err(Refusal::Duplicate { name }.into());
         }
         let member = TarMember { name, size, mode };
