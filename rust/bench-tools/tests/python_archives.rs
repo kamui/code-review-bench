@@ -38,7 +38,7 @@ fn scratch(label: &str) -> PathBuf {
     ));
     let _ = std::fs::remove_dir_all(&path);
     std::fs::create_dir_all(&path).unwrap();
-    path
+    std::fs::canonicalize(&path).unwrap()
 }
 
 fn python(arguments: &[&Path]) -> String {
