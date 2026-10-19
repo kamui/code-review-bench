@@ -7,7 +7,7 @@
 use flate2::bufread::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::{Compression, GzBuilder};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use zip::read::{ArchiveOffset, Config};
@@ -428,12 +428,40 @@ pub fn read_tar_gz<R: Read>(
     limits: &Limits,
     visit: impl FnMut(&TarMember, &mut dyn Read) -> Result<(), ArchiveError>,
 ) -> Result<(), ArchiveError> {
+    read_tar_gz_members(compressed, limits, None, visit)
+}
+
+/// As `read_tar_gz`, except that a directory member is given to `directory` by the name `tarfile` lists, without
+/// its trailing slashes, rather than refused. Directories carry no data and count toward the member limit.
+pub fn read_tar_gz_listing<R: Read>(
+    compressed: R,
+    limits: &Limits,
+    directory: &mut dyn FnMut(&[u8]),
+    visit: impl FnMut(&TarMember, &mut dyn Read) -> Result<(), ArchiveError>,
+) -> Result<(), ArchiveError> {
+    read_tar_gz_members(compressed, limits, Some(directory), visit)
+}
+
+type DirectoryVisitor<'a> = &'a mut dyn FnMut(&[u8]);
+
+#[derive(Clone, Copy, PartialEq)]
+enum Listed {
+    Regular,
+    Directory,
+}
+
+fn read_tar_gz_members<R: Read>(
+    compressed: R,
+    limits: &Limits,
+    directory: Option<DirectoryVisitor>,
+    visit: impl FnMut(&TarMember, &mut dyn Read) -> Result<(), ArchiveError>,
+) -> Result<(), ArchiveError> {
     let decoded = Budget {
         inner: GzipReader::ending_at_trailing_data(BufReader::new(compressed)),
         remaining: limits.tar_bytes(),
         limit: limits.tar_bytes(),
     };
-    let mut rest = read_tar(decoded, limits, visit)?;
+    let mut rest = read_tar(decoded, limits, directory, visit)?;
     io::copy(&mut rest, &mut io::sink())?;
     Ok(())
 }
@@ -441,10 +469,11 @@ pub fn read_tar_gz<R: Read>(
 fn read_tar<R: Read>(
     decoded: R,
     limits: &Limits,
+    mut directory: Option<DirectoryVisitor>,
     mut visit: impl FnMut(&TarMember, &mut dyn Read) -> Result<(), ArchiveError>,
 ) -> Result<R, ArchiveError> {
     let mut archive = tar::Archive::new(decoded);
-    let mut names = HashSet::new();
+    let mut names: HashMap<Vec<u8>, Listed> = HashMap::new();
     let mut headers = 0u64;
     let mut members = 0u64;
     let mut pending = Pending::default();
@@ -506,9 +535,31 @@ fn read_tar<R: Read>(
         if current.pax_size {
             return Err(Refusal::PaxSize { name }.into());
         }
-        let directory = header[156] == 0 && until_nul(&header[..100]).ends_with(b"/");
-        if !matches!(header[156], b'0' | 0 | b'7') || directory {
-            let kind = if directory {
+        let old_directory = header[156] == 0 && until_nul(&header[..100]).ends_with(b"/");
+        if let Some(listed) = directory.as_mut()
+            && (header[156] == b'5' || old_directory)
+        {
+            members += 1;
+            if members > limits.members {
+                return Err(Refusal::TooManyEntries {
+                    limit: limits.members,
+                }
+                .into());
+            }
+            let end = name
+                .iter()
+                .rposition(|byte| *byte != b'/')
+                .map_or(0, |at| at + 1);
+            let name = name[..end].to_vec();
+            // tarfile lists a directory added twice; a directory and a regular member of one name are refused.
+            if *names.entry(name.clone()).or_insert(Listed::Directory) != Listed::Directory {
+                return Err(Refusal::Duplicate { name }.into());
+            }
+            listed(&name);
+            continue;
+        }
+        if !matches!(header[156], b'0' | 0 | b'7') || old_directory {
+            let kind = if old_directory {
                 "directory"
             } else {
                 member_kind(header[156])
@@ -533,7 +584,7 @@ fn read_tar<R: Read>(
             }
             .into());
         }
-        if !names.insert(name.clone()) {
+        if names.insert(name.clone(), Listed::Regular).is_some() {
             return Err(Refusal::Duplicate { name }.into());
         }
         let member = TarMember { name, size, mode };
@@ -877,6 +928,28 @@ pub fn read_zip<R: Read + Seek>(
         io::copy(&mut data, &mut io::sink())?;
     }
     Ok(())
+}
+
+/// A zip archive's member names in central directory order, as `zipfile.ZipFile.namelist` lists them, duplicates
+/// included, after the central directory checks `read_zip` makes. Members are neither read nor checked.
+pub fn zip_names<R: Read + Seek>(
+    mut file: R,
+    limits: &Limits,
+) -> Result<Vec<Vec<u8>>, ArchiveError> {
+    let start = check_zip_end_records(&mut file, limits)?;
+    let config = Config {
+        archive_offset: ArchiveOffset::Known(start),
+    };
+    let archive = ZipArchive::with_config(config, file)?;
+    if archive.len() as u64 > limits.members {
+        return Err(Refusal::TooManyEntries {
+            limit: limits.members,
+        }
+        .into());
+    }
+    (0..archive.len())
+        .map(|index| Ok(archive.by_index_data(index)?.name_raw().to_vec()))
+        .collect()
 }
 
 /// A native scratch archive as `native_artifacts.file_artifacts` writes one: deflate entries named by content hash,

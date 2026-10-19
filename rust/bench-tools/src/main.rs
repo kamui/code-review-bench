@@ -6,8 +6,8 @@ use bench_tools::pytext::{self, PyPath};
 use bench_tools::schema::{SchemaError, Validator};
 use bench_tools::{
     archive, build_packet, claims, delegation, derive_packet, diff_identity, evidence,
-    evidence_inventory, export_explorer, grading_validation, normalize_thermo, pyfs, pyunicode,
-    pyvalue, rates, roster, ruling, upstream,
+    evidence_inventory, export_explorer, grading_reports, grading_validation, import_benchmark,
+    native_artifacts, normalize_thermo, pyfs, pyunicode, pyvalue, rates, roster, ruling, upstream,
 };
 use clap::builder::PossibleValuesParser;
 use clap::error::ErrorKind;
@@ -15,7 +15,7 @@ use clap::{Args, CommandFactory, Parser, Subcommand};
 use std::ffi::{OsStr, OsString};
 use std::fmt::Display;
 use std::io::Write;
-use std::os::unix::ffi::OsStringExt;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::process::ExitCode;
 
 /// Deterministic benchmark tools.
@@ -60,7 +60,7 @@ enum Cli {
     /// Check cached evidence packages or native scratch archives through bench_tools::archive.
     #[command(subcommand, infer_long_args = true)]
     Archive(ArchiveCommand),
-    /// Restore, resolve, verify and recover published evidence, as evidence_store.py, recover_evidence.py and
+    /// Pack, publish, restore, resolve, verify and recover evidence, as evidence_store.py, recover_evidence.py and
     /// restore-local.py did.
     #[command(subcommand, infer_long_args = true)]
     Evidence(EvidenceCommand),
@@ -70,6 +70,29 @@ enum Cli {
     /// Check a grader's output against the rules grading_validation.py applies.
     #[command(subcommand, infer_long_args = true)]
     Grading(GradingCommand),
+    /// Verify the imported originals bench/import-manifest.json pins, or preserve them before an intended edit, as
+    /// tools/import_benchmark.py did.
+    #[command(infer_long_args = true)]
+    ImportBenchmark(ImportBenchmarkArgs),
+    /// Report on grading queues or archive a grading attempt, as bench/tools/regrade.py defines them.
+    #[command(subcommand, infer_long_args = true)]
+    Regrade(RegradeCommand),
+    /// Derive a time and cost audit log from filed benchmark runs, for estimating later runs.
+    #[command(infer_long_args = true)]
+    AuditLog(AuditLogArgs),
+    /// Verify, restore or file a skill attempt's native artifacts, as native_artifacts.py does.
+    #[command(subcommand, infer_long_args = true)]
+    NativeArtifacts(NativeArtifactsCommand),
+}
+
+#[derive(Args)]
+struct ImportBenchmarkArgs {
+    /// Verify every imported file and transcript archive against the manifest.
+    #[arg(long)]
+    check: bool,
+    /// Preserve the imported originals of files that are edited here.
+    #[arg(long, num_args = 1.., action = clap::ArgAction::Set, allow_negative_numbers = true)]
+    preserve: Option<Vec<OsString>>,
 }
 
 #[derive(Subcommand)]
@@ -358,6 +381,32 @@ enum ArchiveCommand {
 
 #[derive(Subcommand)]
 enum EvidenceCommand {
+    /// Pack a selection's files into new packages under OUT, each restored before it is linked into place, and
+    /// write OUT/manifest.json.
+    #[command(infer_long_args = true)]
+    Pack {
+        #[arg(long, allow_negative_numbers = true)]
+        selection: OsString,
+        #[arg(long, allow_negative_numbers = true)]
+        out: OsString,
+        #[arg(long, allow_negative_numbers = true, value_parser = python_int, default_value = "1073741824")]
+        part_bytes: String,
+    },
+    /// Check that DIRECTORY holds exactly a package manifest and its assets, and that every package restores.
+    #[command(infer_long_args = true)]
+    CheckPackage {
+        #[arg(allow_negative_numbers = true)]
+        directory: OsString,
+    },
+    /// Upload each package of MANIFEST that its release lacks, never replacing an asset, download and restore it,
+    /// then write the published manifest to OUT.
+    #[command(infer_long_args = true)]
+    Publish {
+        #[arg(long, allow_negative_numbers = true)]
+        manifest: OsString,
+        #[arg(long, allow_negative_numbers = true)]
+        out: OsString,
+    },
     /// Restore a published manifest's members under ROOT, through the verified cache in ROOT/.cache/evidence.
     #[command(infer_long_args = true)]
     Fetch {
@@ -437,6 +486,18 @@ enum EvidenceCommand {
         #[arg(long)]
         hash_all: bool,
     },
+    /// Archive an attempt's transcripts and read the archive back, as file_attempt.archive_transcripts does.
+    #[command(infer_long_args = true)]
+    ArchiveTranscripts {
+        #[arg(long, allow_negative_numbers = true)]
+        attempt_dir: OsString,
+        #[arg(long, allow_negative_numbers = true)]
+        dest: OsString,
+        #[arg(long, allow_negative_numbers = true)]
+        out: OsString,
+        #[arg(value_name = "TRANSCRIPT", allow_negative_numbers = true)]
+        paths: Vec<OsString>,
+    },
     /// Restore a captured local path into NEW_FILE, as restore-local.py does, from the repository.
     #[command(infer_long_args = true)]
     RestoreLocal {
@@ -447,6 +508,78 @@ enum EvidenceCommand {
         #[arg(value_name = "NEW_FILE", allow_negative_numbers = true)]
         output: OsString,
     },
+}
+
+#[derive(Subcommand)]
+enum NativeArtifactsCommand {
+    /// Verify every indexed artifact of a filed attempt against the storage record its attempt.json pins.
+    #[command(infer_long_args = true)]
+    Verify {
+        #[arg(allow_negative_numbers = true)]
+        attempt: OsString,
+        /// Ignored, as native_artifacts.py ignores it for verify.
+        #[arg(long, hide = true, allow_negative_numbers = true)]
+        out: Option<OsString>,
+    },
+    /// Restore a filed attempt's indexed artifacts into the new directory --out.
+    #[command(infer_long_args = true)]
+    Restore {
+        #[arg(allow_negative_numbers = true)]
+        attempt: OsString,
+        #[arg(long, allow_negative_numbers = true)]
+        out: Option<OsString>,
+    },
+    /// File the native tree ROOT that INDEX lists into OUT, and report the storage pin and the unindexed entries.
+    #[command(infer_long_args = true)]
+    File {
+        #[arg(allow_negative_numbers = true)]
+        root: OsString,
+        #[arg(allow_negative_numbers = true)]
+        index: OsString,
+        #[arg(allow_negative_numbers = true)]
+        out: OsString,
+        #[arg(long, allow_negative_numbers = true)]
+        native_relative: Option<OsString>,
+    },
+}
+
+#[derive(Subcommand)]
+enum RegradeCommand {
+    /// Print each queue's mapped and planned batches, state, spend, client and runs, then its free space.
+    // `regrade_queues.sh status` passed every argument to Python as a queue directory, `-h` and `--` included.
+    #[command(disable_help_flag = true)]
+    Status {
+        #[arg(
+            required = true,
+            allow_hyphen_values = true,
+            trailing_var_arg = true,
+            value_name = "QUEUE_DIRECTORY"
+        )]
+        queues: Vec<OsString>,
+    },
+    /// Archive an attempt's evidence under ARCHIVE_DIR/<run>/<target>/<attempt>, beside its receipt.
+    #[command(infer_long_args = true)]
+    ArchiveAttempt {
+        #[arg(allow_negative_numbers = true)]
+        attempt: OsString,
+        #[arg(allow_negative_numbers = true)]
+        archive_dir: OsString,
+        #[arg(long, default_value = ".", allow_negative_numbers = true)]
+        root: OsString,
+    },
+}
+
+#[derive(Args)]
+struct AuditLogArgs {
+    #[arg(long, allow_negative_numbers = true)]
+    out: Option<OsString>,
+    /// A regrade.py archive root.
+    #[arg(long, allow_negative_numbers = true)]
+    grading: Vec<OsString>,
+    #[arg(long, default_value = ".", allow_negative_numbers = true)]
+    root: OsString,
+    #[arg(value_name = "RUN", allow_negative_numbers = true)]
+    runs: Vec<OsString>,
 }
 
 #[derive(Subcommand)]
@@ -1245,6 +1378,35 @@ fn run_evidence(command: EvidenceCommand) -> Result<ExitCode, ExitCode> {
         temporary: evidence::system_temp(),
     };
     let outcome = match command {
+        EvidenceCommand::Pack {
+            selection,
+            out,
+            part_bytes,
+        } => {
+            let cwd = evidence_root(None)?;
+            evidence::read(&PyPath::new(pytext::os_bytes(&selection)))
+                .and_then(|document| {
+                    evidence::publication::pack(
+                        store.disk,
+                        &document,
+                        &PyPath::new(pytext::os_bytes(&out)),
+                        &part_bytes,
+                        &cwd,
+                    )
+                })
+                .map(|_| "pack: verified".to_string())
+        }
+        EvidenceCommand::CheckPackage { directory } => evidence::publication::check_package(
+            &mut store,
+            &PyPath::new(pytext::os_bytes(&directory)),
+        )
+        .map(|()| "check-package: verified".to_string()),
+        EvidenceCommand::Publish { manifest, out } => evidence::publication::publish(
+            &mut store,
+            &PyPath::new(pytext::os_bytes(&manifest)),
+            &PyPath::new(pytext::os_bytes(&out)),
+        )
+        .map(|_| "publish: verified".to_string()),
         EvidenceCommand::Fetch {
             manifest,
             root,
@@ -1313,6 +1475,24 @@ fn run_evidence(command: EvidenceCommand) -> Result<ExitCode, ExitCode> {
                     .map_err(|failure| failure.message().to_vec()),
             );
         }
+        EvidenceCommand::ArchiveTranscripts {
+            attempt_dir,
+            dest,
+            out,
+            paths,
+        } => {
+            let paths: Vec<Vec<u8>> = paths.into_iter().map(bytes).collect();
+            let home = evidence::transcripts::python_home();
+            evidence::transcripts::archive_transcripts(
+                store.disk,
+                &paths,
+                pytext::os_bytes(&attempt_dir),
+                pytext::os_bytes(&dest),
+                pytext::os_bytes(&out),
+                home.as_deref(),
+            )
+            .map(|archived| archived.json())
+        }
         EvidenceCommand::RestoreLocal { .. }
         | EvidenceCommand::Inventory { .. }
         | EvidenceCommand::Reconcile { .. } => {
@@ -1358,6 +1538,102 @@ fn run_inventory(roots: &[OsString], out: &OsStr, hash_all: bool) -> Result<Exit
         Err(evidence_inventory::Error::Io(message)) => {
             eprintln!("inventory: {message}");
             Err(ExitCode::from(2))
+        }
+    }
+}
+
+/// `native_artifacts.py COMMAND ...`: the command's line on stdout, or `native_artifacts.py: <error>` on stderr
+/// with exit 1.
+fn run_native_artifacts(command: NativeArtifactsCommand) -> Result<ExitCode, ExitCode> {
+    let path = |value: &OsString| PyPath::new(pytext::os_bytes(value));
+    let mut disk = evidence::System;
+    let outcome = match command {
+        NativeArtifactsCommand::Verify { attempt, .. } => {
+            native_artifacts::verify(&path(&attempt), None)
+                .map(|_| "verify: verified all indexed artifact bytes".to_string())
+        }
+        NativeArtifactsCommand::Restore { attempt, out } => {
+            let Some(out) = out else {
+                return Err(misuse(
+                    "native-artifacts",
+                    ErrorKind::MissingRequiredArgument,
+                    "restore requires --out",
+                ));
+            };
+            native_artifacts::restore(&mut disk, &path(&attempt), &path(&out))
+                .map(|()| "restore: verified all indexed artifact bytes".to_string())
+        }
+        NativeArtifactsCommand::File {
+            root,
+            index,
+            out,
+            native_relative,
+        } => {
+            let relative = native_relative.map(OsString::into_vec);
+            native_artifacts::file_artifacts(
+                &mut disk,
+                &path(&root),
+                &path(&index),
+                &path(&out),
+                relative.as_deref(),
+            )
+            .and_then(|pin| {
+                native_artifacts::unindexed(&path(&root), &path(&index))
+                    .map(|names| native_artifacts::filing_report(pin.as_ref(), &names))
+            })
+        }
+    };
+    match outcome {
+        Ok(line) => {
+            write_stdout(format!("{line}\n").as_bytes())?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(native_artifacts::Error(message)) => {
+            eprintln!("native_artifacts.py: {message}");
+            Err(ExitCode::from(1))
+        }
+    }
+}
+
+/// The `--check` or `--preserve` of `tools/import_benchmark.py`, run in the repository: a refusal is printed after
+/// `import_benchmark.py: ` on stderr with exit 1, the status Python's traceback had.
+fn run_import_benchmark(arguments: ImportBenchmarkArgs) -> Result<ExitCode, ExitCode> {
+    if !arguments.check && arguments.preserve.is_none() {
+        return Err(misuse(
+            "import-benchmark",
+            ErrorKind::MissingRequiredArgument,
+            "provide --check or --preserve",
+        ));
+    }
+    let root = std::env::current_dir()
+        .map(|cwd| PyPath::new(pytext::os_bytes(cwd.as_os_str())))
+        .map_err(|error| {
+            eprintln!("import_benchmark.py: {}", pytext::os_error(&error, b"."));
+            ExitCode::from(1)
+        })?;
+    let mut remote = evidence::GitHub;
+    let mut disk = evidence::System;
+    let mut store = evidence::Store {
+        remote: &mut remote,
+        disk: &mut disk,
+        now: &evidence::now_isoformat,
+        temporary: evidence::system_temp(),
+    };
+    let outcome = match arguments.preserve {
+        Some(names) => {
+            let names: Vec<Vec<u8>> = names.into_iter().map(bytes).collect();
+            import_benchmark::preserve(&mut store, &root, &names)
+        }
+        None => import_benchmark::check(&mut store, &root),
+    };
+    match outcome {
+        Ok(line) => {
+            write_stdout(format!("{line}\n").as_bytes())?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(import_benchmark::Refusal(message)) => {
+            eprintln!("import_benchmark.py: {message}");
+            Err(ExitCode::from(1))
         }
     }
 }
@@ -1644,10 +1920,10 @@ fn run_ruling(command: RulingCommand) -> Result<ExitCode, ExitCode> {
 
 /// argparse reads a dash-led argument as an option's value when it names no option and holds a space, and Python
 /// 3.14's also when it reads as a negative number; `build-packet-option-values-with-leading-dash`,
-/// `grading-validation`'s `dash-led-*` cases and `inventory-dash-led-space-root` pin that. clap takes only numbers, so
-/// before it parses them, these commands attach such a value to its option with `=`, and grading validate's
-/// positional moves after `--`. Only build-packet and grading validate, whose decisions pin Python 3.14, take the
-/// number form.
+/// `grading-validation`'s `dash-led-*` cases, `pack-unicode-negative-out` and `inventory-dash-led-space-root` pin
+/// that. clap takes only numbers, so before it parses them, these commands attach such a value to its option with
+/// `=`, and grading validate's positional moves after `--`. Only build-packet, grading validate, evidence pack and
+/// evidence publish, whose decisions pin Python 3.14, take the number form.
 fn attach_dash_led_values(arguments: Vec<OsString>) -> Vec<OsString> {
     let name = |index: usize| arguments.get(index).map(|name| pytext::os_bytes(name));
     let (path, numbers): (&[&str], bool) = match (name(1), name(2)) {
@@ -1656,6 +1932,8 @@ fn attach_dash_led_values(arguments: Vec<OsString>) -> Vec<OsString> {
         (Some(b"evidence"), Some(b"collect")) => (&["evidence", "collect"], false),
         (Some(b"evidence"), Some(b"inventory")) => (&["evidence", "inventory"], false),
         (Some(b"evidence"), Some(b"reconcile")) => (&["evidence", "reconcile"], false),
+        (Some(b"evidence"), Some(b"pack")) => (&["evidence", "pack"], true),
+        (Some(b"evidence"), Some(b"publish")) => (&["evidence", "publish"], true),
         _ => return arguments,
     };
     let mut command = Cli::command();
@@ -1787,6 +2065,75 @@ fn refuse_help_with_explicit_argument(arguments: &[OsString]) -> Option<ExitCode
     ))
 }
 
+fn regrade_status(queues: &[OsString]) -> Result<ExitCode, ExitCode> {
+    let queues: Vec<Vec<u8>> = queues
+        .iter()
+        .map(|queue| queue.as_bytes().to_vec())
+        .collect();
+    let mut stdout = std::io::stdout().lock();
+    grading_reports::status(&queues, &mut stdout).map_err(|failure| {
+        eprintln!("regrade_queues.sh: {}", failure.line());
+        ExitCode::from(1)
+    })?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// A failure `regrade.py` or `audit_log.py` caught exits 2 with its message; any other is the last line of the
+/// traceback Python printed, exit 1.
+fn reported(program: &str, failure: &bench_tools::pysemantics::Failure) -> ExitCode {
+    if grading_reports::caught(failure) {
+        eprintln!("{program}: {}", failure.message());
+        ExitCode::from(2)
+    } else {
+        eprintln!("{program}: {}", failure.line());
+        ExitCode::from(1)
+    }
+}
+
+fn absolute(path: &OsStr) -> PyPath {
+    let current = std::env::current_dir().unwrap_or_default();
+    PyPath::new(current.as_os_str().as_bytes()).join(path.as_bytes())
+}
+
+fn archive_attempt(
+    attempt: &OsStr,
+    archive_dir: &OsStr,
+    root: &OsStr,
+) -> Result<ExitCode, ExitCode> {
+    let root =
+        pytext::realpath(PyPath::new(root.as_bytes()).as_bytes(), false).map_err(|message| {
+            eprintln!("regrade.py: {message}");
+            ExitCode::from(2)
+        })?;
+    let receipt = grading_reports::archive_attempt(
+        &PyPath::new(&root),
+        &absolute(attempt),
+        &absolute(archive_dir),
+    )
+    .map_err(|failure| reported("regrade.py", &failure))?;
+    write_stdout(format!("{}\n", pyjson::dumps(&receipt, &pyjson::Dumps::default())).as_bytes())?;
+    Ok(ExitCode::SUCCESS)
+}
+
+fn audit_log(arguments: AuditLogArgs) -> Result<ExitCode, ExitCode> {
+    let Some(out) = arguments.out.filter(|_| !arguments.runs.is_empty()) else {
+        return Err(misuse(
+            "audit-log",
+            ErrorKind::MissingRequiredArgument,
+            "give --out and at least one run directory",
+        ));
+    };
+    let line = grading_reports::audit_log(&grading_reports::AuditLog {
+        root: bytes(arguments.root),
+        out: bytes(out),
+        grading: arguments.grading.into_iter().map(bytes).collect(),
+        runs: arguments.runs.into_iter().map(bytes).collect(),
+    })
+    .map_err(|failure| reported("audit_log.py", &failure))?;
+    write_stdout(format!("{line}\n").as_bytes())?;
+    Ok(ExitCode::SUCCESS)
+}
+
 fn main() -> ExitCode {
     let arguments: Vec<OsString> = std::env::args_os().collect();
     // clap reads `-hx` before a subcommand as `-h` and prints help; the top level has no Python
@@ -1825,10 +2172,19 @@ fn main() -> ExitCode {
         }
         Cli::Archive(ArchiveCommand::CheckScratch { archives }) => check_scratch(&archives),
         Cli::Evidence(command) => run_evidence(command),
+        Cli::ImportBenchmark(arguments) => run_import_benchmark(arguments),
         Cli::Ruling(command) => run_ruling(command),
         Cli::Grading(GradingCommand::Validate { verdicts, inputs }) => {
             run_grading_validate(&verdicts, &inputs)
         }
+        Cli::Regrade(RegradeCommand::Status { queues }) => regrade_status(&queues),
+        Cli::Regrade(RegradeCommand::ArchiveAttempt {
+            attempt,
+            archive_dir,
+            root,
+        }) => archive_attempt(&attempt, &archive_dir, &root),
+        Cli::AuditLog(arguments) => audit_log(arguments),
+        Cli::NativeArtifacts(command) => run_native_artifacts(command),
     };
     outcome.unwrap_or_else(|code| code)
 }

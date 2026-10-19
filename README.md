@@ -90,13 +90,15 @@ All 2,775 imported files retain their original bytes, with originals of changed 
 
 The app exposes 663 attempts. Additional experiments and superseded records remain saved. The current scorecard excludes earlier grading mappings and results. Generated `public/data/` and `public/evidence/` files are ignored and rebuilt from evidence. Small source records, decisions, indexes and manifests remain in Git. Archives, run stdout logs and upstream research JSON snapshots live in verified GitHub release assets. `bun run evidence:fetch` restores their original paths; development, build and verification commands run it automatically. Run it explicitly before direct Python consumers. The [storage contract](docs/evidence-storage.md) covers selective fetching, offline retrieval, cleanup and recovery; the [relocation receipt](docs/research/repository-storage-2026-10-08/README.md) records the selection.
 
-Imported `bench/README.md` and research documents are historical snapshots. Use this README for current setup. To repeat the import with the original checkout and external archives:
+Imported `bench/README.md` and research documents are historical snapshots. Use this README for current setup. `bun run verify:import` verifies the copied artifacts using only this repository. When it fails because an imported file was edited on purpose, run the `bun run import:preserve` command it prints, which keeps the original bytes under `artifacts/import-source/`.
+
+The importer itself is retired. To repeat the import with the original checkout and external archives, run it from a checkout of `9b2b0ad9f`, a commit that still has `tools/import_benchmark.py`:
 
 ```sh
 python3 tools/import_benchmark.py --source /path/to/skills
 ```
 
-The importer refuses to overwrite modified evidence. `--check` verifies copied artifacts using only this repository.
+It refuses to overwrite modified evidence.
 
 ## Verify and build
 

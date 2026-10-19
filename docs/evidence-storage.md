@@ -15,7 +15,7 @@ Small records stay in Git. Larger payloads live as immutable, content-addressed 
 | Unique artifacts | Diagnostics, reports, scripts, patches and changed/new source that explain the observation. Keep native-artifact indexes, archives and permissions. Classify unindexed scratch explicitly. |
 | Integrity | Logical paths, ownership, byte sizes, hashes, original limitations, manifests and publication/restoration/retirement receipts. |
 
-Use `file_attempt.py`, `regrade.py:archive_attempt`, `native_artifacts.py` and `bench-tools evidence collect` first. Package their existing archives without recompressing or editing the archive bytes. The outer storage package preserves each inner file's SHA-256. Keep relevant `home` sessions and explicit configuration, including `home/.codex/config.toml`, and unique `clone-work` contents. Exclude credentials and unrelated account state. The packer rejects the known `auth.json` and `.credentials.json` filenames, but selection review must also check custom credential locations and archive contents.
+Use `file_attempt.py`, `regrade.py:archive_attempt`, `bench-tools native-artifacts` and `bench-tools evidence collect` first. Package their existing archives without recompressing or editing the archive bytes. The outer storage package preserves each inner file's SHA-256. Keep relevant `home` sessions and explicit configuration, including `home/.codex/config.toml`, and unique `clone-work` contents. Exclude credentials and unrelated account state. The packer rejects the known `auth.json` and `.credentials.json` filenames, but selection review must also check custom credential locations and archive contents.
 
 Do not change frozen `attempt.json` paths, hashes or dispositions to migrate storage. Add mappings instead. Historical missing evidence stays missing; a mismatch retains both expected and available hashes. A replacement run cannot supply the original observation's missing evidence.
 
@@ -63,18 +63,19 @@ Create a selection outside frozen runs. `source` is a local regular file; `path`
 ```
 
 ```sh
-python3 bench/tools/evidence_store.py pack --selection /tmp/selection.json --out /tmp/evidence-package-v1
+python3 bench/tools/rust_runtime.py exec bench-tools -- evidence pack \
+  --selection /tmp/selection.json --out /tmp/evidence-package-v1
 # Create a published evidence release once, before uploading to it.
 gh release create evidence-example-v1 --repo kamui/code-review-bench \
   --title 'Benchmark evidence example v1' --notes 'Immutable benchmark evidence payloads.'
-python3 bench/tools/evidence_store.py publish --manifest /tmp/evidence-package-v1/manifest.json \
-  --out bench/evidence/manifests/example-v1.json
+python3 bench/tools/rust_runtime.py exec bench-tools -- evidence publish \
+  --manifest /tmp/evidence-package-v1/manifest.json --out bench/evidence/manifests/example-v1.json
 python3 bench/tools/rust_runtime.py exec bench-tools -- evidence verify \
   --manifest bench/evidence/manifests/example-v1.json \
   --receipt bench/evidence/receipts/example-v1-restoration.json
 ```
 
-`publish` uploads without clobbering. It downloads each asset into an empty temporary directory, verifies its identity/hash and restores all indexed members before writing the published manifest. A retry verifies existing bytes instead of replacing them. An ambiguous upload triggers a read of the release, not another blind upload. A failed run may leave an uploaded asset, but never a successful publication receipt for unverified bytes.
+`publish` uploads without clobbering. It downloads each asset into an empty temporary directory, verifies its identity/hash and restores all indexed members before writing the published manifest. A retry verifies existing bytes instead of replacing them. An ambiguous upload triggers a read of the release, not another blind upload. A failed run may leave an uploaded asset, but never a successful publication receipt for unverified bytes. `pack` and `publish` write each package and manifest to a synced temporary file and link it to its name without replacing one, so an interrupted run leaves only whole packages and no manifest.
 
 Packages default to at most 1 GiB of uncompressed member bytes. `pack --part-bytes N` can raise that limit below 2 GiB; the compressed asset must also remain below 2 GiB. A single input larger than the selected part size is refused, not silently split or rewritten. Such inputs need an explicit versioned export/chunking design before migration. GitHub permits at most 1,000 assets per release; use another versioned release when full. See [GitHub release limits](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases#storage-and-bandwidth-quotas).
 
@@ -90,13 +91,13 @@ python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select
 python3 bench/tools/rust_runtime.py exec bench-tools -- evidence fetch \
   --manifest bench/evidence/manifests/example-v1.json \
   --path artifacts/transcripts/example/att-001.tar.gz
-python3 tools/import_benchmark.py --check
+python3 bench/tools/rust_runtime.py exec bench-tools -- import-benchmark --check
 python3 tools/export_explorer.py
 ```
 
 Downloads enter ignored `.cache/evidence/`. The tool verifies archive and member hashes, rejects unsafe members/symlinks, restores permissions and materializes the original layout. Each file is synced before it is linked into place, so an interrupted fetch leaves either no file or a complete one. Changed files are never overwritten: before restoring anything, the fetch lists every requested file that differs from the manifest, with its expected and found size, hash and mode, and prints the commands that move each one aside under `.cache/evidence/moved-aside/<found sha256>/`. `--offline` uses already verified local files/cache; a missing or corrupt item fails with a reason. `bench-tools evidence resolve [--sha256 HASH] [--offline] PATH` restores one logical path, refusing a path no manifest names or one whose frozen hash differs. `verify` always reads the remote assets into empty temporary directories, independently of this cache. Missing/deleted/replaced assets fail identity/hash checks.
 
-The collector, import verifier, explorer evidence exporter and review cleanup resolver fetch missing mapped files through these manifests, which needs an authenticated `gh`. The export steps of the Pages workflow have no token, so its build job first fetches the three manifests of the last-push transcript archives, which the export publishes with the reviews of the selected runs. Explorer publishes its existing evidence links after materialization. For native artifacts, fetch the indexed archive first, then use `native_artifacts.py verify` and `restore` as usual. Grading archives retain their existing `evidence.json` hashes. The cold-consumer test exercises successful, failed/replacement and grading fixtures after removing their originating storage, including executable native scratch restoration.
+The collector, import verifier, explorer evidence exporter and review cleanup resolver fetch missing mapped files through these manifests, which needs an authenticated `gh`. The export steps of the Pages workflow have no token, so its build job first fetches the three manifests of the last-push transcript archives, which the export publishes with the reviews of the selected runs. Explorer publishes its existing evidence links after materialization. For native artifacts, fetch the indexed archive first, then use `bench-tools native-artifacts verify` and `restore` as usual. Grading archives retain their existing `evidence.json` hashes. The cold-consumer test exercises successful, failed/replacement and grading fixtures after removing their originating storage, including executable native scratch restoration.
 
 After a verified migration, remove large tracked payloads through an ordinary reviewed commit and add precise ignore entries for their materialized paths. Keep their mappings/manifests. This reduces future checkout size, not old Git history; no history rewrite or LFS migration is part of this workflow. The repository payload migration follows this procedure for the current archives, run stdout logs and upstream research snapshots.
 

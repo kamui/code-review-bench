@@ -14,10 +14,16 @@ MOVED = (
     ("bench/tools/upstream.py", "report", "bench-tools upstream report"),
     ("bench/tools/evidence_store.py", "fetch", "bench-tools evidence fetch"),
     ("bench/tools/evidence_store.py", "verify", "bench-tools evidence verify"),
+    ("bench/tools/evidence_store.py", "pack", "bench-tools evidence pack"),
+    ("bench/tools/evidence_store.py", "publish", "bench-tools evidence publish"),
     ("bench/tools/recover_evidence.py", "--source", "bench-tools evidence recover"),
     ("bench/tools/evidence_inventory.py", "--root", "bench-tools evidence inventory"),
     ("tools/collect_run.py", "--run", "bench-tools evidence collect"),
     ("bench/tools/reconcile_evidence.py", "--inventory", "bench-tools evidence reconcile"),
+    ("bench/tools/native_artifacts.py", "verify", "bench-tools native-artifacts verify"),
+    ("bench/tools/native_artifacts.py", "restore", "bench-tools native-artifacts restore"),
+    ("tools/import_benchmark.py", "--check", "bench-tools import-benchmark --check"),
+    ("tools/import_benchmark.py", "--preserve", "bench-tools import-benchmark --preserve"),
     ("bench/tools/ruling_record.py", "route", "bench-tools ruling route"),
     ("bench/tools/ruling_record.py", "summary", "bench-tools ruling summary"),
     ("bench/tools/ruling_record.py", "precedents", "bench-tools ruling precedents"),
@@ -98,6 +104,10 @@ class MovedCommands(unittest.TestCase):
         self.assertEqual(scripts["rates:check"], "python3 bench/tools/rust_runtime.py exec bench-tools -- rates check")
         self.assertEqual(scripts["audit:maintainers"],
                          "python3 bench/tools/rust_runtime.py exec bench-tools -- upstream report")
+        self.assertEqual(scripts["verify:import"], "bun run evidence:fetch && python3 bench/tools/rust_runtime.py exec "
+                         "bench-tools -- import-benchmark --check")
+        self.assertEqual(scripts["import:preserve"],
+                         "python3 bench/tools/rust_runtime.py exec bench-tools -- import-benchmark --preserve")
         self.assertEqual(scripts["evidence:fetch"], "python3 bench/tools/rust_runtime.py exec bench-tools -- evidence fetch "
                          "--manifest bench/evidence/manifests/repository-payloads-2026-10-08-v1.json")
 

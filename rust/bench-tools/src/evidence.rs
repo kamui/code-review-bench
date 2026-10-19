@@ -7,8 +7,10 @@
 //! trusted or overwritten: `materialize` lists every such file with a command that moves them aside.
 
 pub mod collect;
+pub mod publication;
 pub mod recovery;
 pub mod remote;
+pub mod transcripts;
 
 use crate::archive::{self, ArchiveError, Limits, Refusal};
 use crate::pyjson::{self, Duplicates, Object, Value};
@@ -22,7 +24,7 @@ use std::io::{self, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::Path;
 
-pub use remote::{GitHub, Remote};
+pub use remote::{GitHub, Remote, Upload};
 
 /// Python's `bench/schema/evidence-storage.schema.json`, which a cargo test keeps byte-identical.
 pub const SCHEMA: &str = include_str!("evidence/evidence-storage.schema.json");
@@ -67,7 +69,7 @@ pub trait Disk {
     fn link(&mut self, from: &Path, to: &Path) -> io::Result<()>;
     /// Flush a directory's entries.
     fn sync_dir(&mut self, path: &Path) -> io::Result<()>;
-    /// Rename `from` over `to`, replacing it.
+    /// Rename `from` over `to`, as `os.replace` does.
     fn rename(&mut self, from: &Path, to: &Path) -> io::Result<()> {
         std::fs::rename(from, to)
     }
@@ -486,15 +488,31 @@ pub fn make_dirs(path: &PyPath) -> Result<Vec<PyPath>> {
     Ok(created)
 }
 
-fn parent(path: &PyPath) -> PyPath {
+pub(crate) fn parent(path: &PyPath) -> PyPath {
     parents(path)
         .into_iter()
         .next()
         .unwrap_or_else(|| PyPath::new(b"."))
 }
 
+/// The directories from `path`'s parent up, each of which an interrupted earlier write may have given an entry it
+/// never synced.
+fn reaching(path: &PyPath) -> BTreeSet<Vec<u8>> {
+    let directory = parent(path);
+    std::iter::once(directory.clone())
+        .chain(parents(&directory))
+        .map(|ancestor| ancestor.as_bytes().to_vec())
+        .collect()
+}
+
+/// Sync the directories that reach an existing record, so a record an interrupted call linked is durable before a
+/// retry reports it.
+fn sync_reaching(disk: &mut dyn Disk, path: &PyPath) -> Result<()> {
+    sync_dirs(disk, &reaching(path))
+}
+
 /// Sync each directory that gained an entry: the parents of new directories and of new links.
-fn sync_dirs(disk: &mut dyn Disk, directories: &BTreeSet<Vec<u8>>) -> Result<()> {
+pub(crate) fn sync_dirs(disk: &mut dyn Disk, directories: &BTreeSet<Vec<u8>>) -> Result<()> {
     for directory in directories {
         let path = PyPath::new(directory);
         disk.sync_dir(&path.to_path_buf())
@@ -505,7 +523,7 @@ fn sync_dirs(disk: &mut dyn Disk, directories: &BTreeSet<Vec<u8>>) -> Result<()>
 
 const TEMPORARY_CHARACTERS: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789_";
 
-fn random_name(prefix: &str) -> String {
+pub(crate) fn random_name(prefix: &str) -> String {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let mut hasher = std::hash::RandomState::new().build_hasher();
     hasher.write_u64(COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
@@ -526,12 +544,12 @@ fn temporary_beside(directory: &PyPath) -> PyPath {
 }
 
 /// `tempfile.TemporaryDirectory(prefix=..., dir=...)`: a new directory, mode 0700, removed with its contents.
-struct TempDir {
-    path: PyPath,
+pub(crate) struct TempDir {
+    pub(crate) path: PyPath,
 }
 
 impl TempDir {
-    fn new(parent: &PyPath, prefix: &str) -> Result<Self> {
+    pub(crate) fn new(parent: &PyPath, prefix: &str) -> Result<Self> {
         loop {
             let path = parent.join(random_name(prefix).as_bytes());
             match std::fs::DirBuilder::new()
@@ -768,23 +786,24 @@ pub fn verify_remote(store: &mut Store<'_>, manifest: &Value) -> Result<()> {
 /// directory, then linked to its name, never replacing it, and the directory and each of its ancestors synced. An
 /// existing record with the same text is accepted, as `evidence_store.write_new` accepts it.
 pub fn write_new(disk: &mut dyn Disk, path: &PyPath, value: &Value) -> Result<()> {
+    let options = pyjson::Dumps {
+        indent: Some(2),
+        ..pyjson::Dumps::default()
+    };
+    write_new_as(disk, path, value, &options)
+}
+
+/// `write_new` with `json.dumps` options other than `indent=2`.
+pub fn write_new_as(
+    disk: &mut dyn Disk,
+    path: &PyPath,
+    value: &Value,
+    options: &pyjson::Dumps,
+) -> Result<()> {
     let directory = parent(path);
     make_dirs(&directory)?;
-    // An interrupted earlier call may have created any of these without syncing its entry.
-    let reaching: BTreeSet<Vec<u8>> = std::iter::once(directory.clone())
-        .chain(parents(&directory))
-        .map(|ancestor| ancestor.as_bytes().to_vec())
-        .collect();
-    let encoded = format!(
-        "{}\n",
-        pyjson::dumps(
-            value,
-            &pyjson::Dumps {
-                indent: Some(2),
-                ..pyjson::Dumps::default()
-            }
-        )
-    );
+    let reaching = reaching(path);
+    let encoded = format!("{}\n", pyjson::dumps(value, options));
     let same = |path: &PyPath| -> Result<()> {
         match pytext::read_text(path) {
             Ok(existing) if existing == encoded => Ok(()),
@@ -800,9 +819,10 @@ pub fn write_new(disk: &mut dyn Disk, path: &PyPath, value: &Value) -> Result<()
     let temporary = temporary_beside(&directory);
     let os_temporary = temporary.to_path_buf();
     let written = (|| -> Result<()> {
+        // Named as `open(path, 'x')` names the record when its directory refuses a new file.
         let mut file = disk
             .create(&os_temporary)
-            .map_err(|error| os_failure(&error, temporary.as_bytes()))?;
+            .map_err(|error| os_failure(&error, path.as_bytes()))?;
         file.write_all(encoded.as_bytes())
             .map_err(|error| os_failure(&error, temporary.as_bytes()))?;
         disk.sync(&file, &os_temporary)

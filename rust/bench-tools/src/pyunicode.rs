@@ -345,7 +345,9 @@ pub fn parse_int(text: &str) -> Result<String, String> {
             crate::pytext::repr_str(text)
         )
     };
-    let body = crate::pytext::strip(text);
+    // int() strips str.isspace() except U+001C..U+001F, which CPython leaves to its ASCII-only check.
+    let body =
+        text.trim_matches(|c| crate::pytext::is_space(c) && !('\u{1C}'..='\u{1F}').contains(&c));
     let (negative, body) = match body.chars().next() {
         Some('-') => (true, &body[1..]),
         Some('+') => (false, &body[1..]),
@@ -416,7 +418,21 @@ mod tests {
         ] {
             assert_eq!(parse_int(text).as_deref(), Ok(value), "{text:?}");
         }
-        for text in ["", " ", "_1", "1_", "1__0", "1.0", "0x1", "--1", "+", "1 2"] {
+        assert_eq!(parse_int("\u{85}7\u{3000}").as_deref(), Ok("7"));
+        for text in [
+            "",
+            " ",
+            "_1",
+            "1_",
+            "1__0",
+            "1.0",
+            "0x1",
+            "--1",
+            "+",
+            "1 2",
+            "\u{1C}10\u{1C}",
+            "7\u{1F}",
+        ] {
             assert_eq!(
                 parse_int(text),
                 Err(format!(
