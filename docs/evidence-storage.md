@@ -92,7 +92,7 @@ python3 bench/tools/rust_runtime.py exec bench-tools -- evidence fetch \
   --manifest bench/evidence/manifests/example-v1.json \
   --path artifacts/transcripts/example/att-001.tar.gz
 python3 bench/tools/rust_runtime.py exec bench-tools -- import-benchmark --check
-python3 tools/export_explorer.py
+python3 bench/tools/rust_runtime.py exec bench-tools -- export-explorer
 ```
 
 Downloads enter ignored `.cache/evidence/`. The tool verifies archive and member hashes, rejects unsafe members/symlinks, restores permissions and materializes the original layout. Each file is synced before it is linked into place, so an interrupted fetch leaves either no file or a complete one. Changed files are never overwritten: before restoring anything, the fetch lists every requested file that differs from the manifest, with its expected and found size, hash and mode, and prints the commands that move each one aside under `.cache/evidence/moved-aside/<found sha256>/`. `--offline` uses already verified local files/cache; a missing or corrupt item fails with a reason. `bench-tools evidence resolve [--sha256 HASH] [--offline] PATH` restores one logical path, refusing a path no manifest names or one whose frozen hash differs. `verify` always reads the remote assets into empty temporary directories, independently of this cache. Missing/deleted/replaced assets fail identity/hash checks.

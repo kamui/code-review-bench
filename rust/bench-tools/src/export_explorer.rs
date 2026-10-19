@@ -1,6 +1,5 @@
-//! The explorer export of `tools/export_explorer.py`: per-review facts, their detail files and the evidence
-//! they link, written from the current facts the Python front passes, checked as one export, then moved
-//! into `public/`.
+//! The explorer export that `tools/export_explorer.py` wrote: per-review facts, their detail files and the
+//! evidence they link, written from the current facts, checked as one export, then moved into `public/`.
 //!
 //! Values keep Python's semantics where an output depends on them: `dict` and `set` membership as `==` and
 //! hashing decide it, iteration over the container `json.loads` returned, truthiness, `sum` as Python 3.14
@@ -15,7 +14,7 @@ use crate::pysemantics::{
     str_text, text, unhashable,
 };
 use crate::pytext::{self, PyPath};
-use crate::{pyfs, sha256};
+use crate::{current_grading, pyfs, sha256};
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::io;
@@ -923,7 +922,7 @@ fn transcript_files(bench: &PyPath) -> Vec<PyPath> {
     paths
 }
 
-/// The current facts `export_explorer.py` passes: `load_current`'s selection and documents and their coverage.
+/// The current facts: `load_current`'s selection and documents and their coverage.
 pub struct Facts {
     selected: Value,
     documents: Value,
@@ -931,13 +930,44 @@ pub struct Facts {
 }
 
 impl Facts {
+    /// The facts a file holds, as the removed Python front wrote them for `evidence` and `stage`.
     pub fn read(path: &[u8]) -> std::result::Result<Self, Failure> {
-        let facts = read(&PyPath::new(path))?;
+        Self::of(&read(&PyPath::new(path))?)
+    }
+
+    fn of(facts: &Value) -> std::result::Result<Self, Failure> {
         Ok(Self {
-            selected: at(&facts, "selected")?.clone(),
-            documents: at(&facts, "documents")?.clone(),
-            status: at(&facts, "status")?.clone(),
+            selected: at(facts, "selected")?.clone(),
+            documents: at(facts, "documents")?.clone(),
+            status: at(facts, "status")?.clone(),
         })
+    }
+
+    /// The facts passed through `json.dumps(allow_nan=False)` and `json.loads`, as the Python front's temporary
+    /// file passed them, so a non-finite number, or text that is not UTF-8, is refused with the same message.
+    fn through_file(facts: &Value) -> std::result::Result<Self, Failure> {
+        if let Some(number) = non_finite(facts) {
+            return Err(Failure::new(
+                "ValueError",
+                format!("Out of range float values are not JSON compliant: {number}"),
+            ));
+        }
+        Self::of(&loads(&pyjson::dumps(facts, &pyjson::Dumps::default()))?)
+    }
+}
+
+/// The first non-finite number in the order `json.dumps` writes the value, spelled as `float.__repr__` spells it.
+fn non_finite(value: &Value) -> Option<&'static str> {
+    match value {
+        Value::Float(number) if number.is_nan() => Some("nan"),
+        Value::Float(number) if number.is_infinite() => Some(if number.is_sign_positive() {
+            "inf"
+        } else {
+            "-inf"
+        }),
+        Value::Array(values) => values.iter().find_map(non_finite),
+        Value::Object(object) => object.iter().find_map(|(_, member)| non_finite(member)),
+        _ => None,
     }
 }
 
@@ -1571,8 +1601,13 @@ pub fn restore(root: &[u8], listed: &Value, store: &mut crate::evidence::Store<'
 }
 
 /// `export-explorer stage`: the export written and checked under `stage`, refused before the facts are read while
-/// an earlier publication's backups remain. Returns the summary line the front prints once it is published.
+/// an earlier publication's backups remain. Returns the summary line printed once it is published.
 pub fn stage(root: &[u8], facts: &[u8], base_path: &str, stage: &[u8]) -> Result<String> {
+    reset_stage(stage)?;
+    staged(root, &Facts::read(facts)?, base_path, stage)
+}
+
+fn reset_stage(stage: &[u8]) -> Result<()> {
     let directory = PyPath::new(stage);
     let previous = directory.join(b"previous");
     if exists(&previous) && has_entries(&previous)? {
@@ -1584,10 +1619,12 @@ pub fn stage(root: &[u8], facts: &[u8], base_path: &str, stage: &[u8]) -> Result
     if exists(&directory) {
         remove_tree(&directory)?;
     }
-    make_directories(&directory.join(b"evidence"))?;
-    let facts = Facts::read(facts)?;
+    make_directories(&directory.join(b"evidence"))
+}
+
+fn staged(root: &[u8], facts: &Facts, base_path: &str, stage: &[u8]) -> Result<String> {
     let mut exporter = Exporter::new(root, base_path, Some(stage));
-    let dataset = exporter.write_export(&facts)?;
+    let dataset = exporter.write_export(facts)?;
     exporter.validate(&dataset)?;
     let coverage = at(at(&dataset, "evidence")?, "coverage")?;
     let size = |key: &str| -> Result<usize> { Ok(iterate(at(&dataset, key)?)?.len()) };
@@ -1616,6 +1653,116 @@ impl Moves for System {
 }
 
 const PUBLISHED: [&[u8]; 2] = [b"data", b"evidence"];
+
+/// A failure of the whole export: the export's own, or one the current record raised while it was read.
+pub enum ExportFailure {
+    Export(Failure),
+    Current(current_grading::Failure),
+}
+
+impl From<Failure> for ExportFailure {
+    fn from(failure: Failure) -> Self {
+        Self::Export(failure)
+    }
+}
+
+impl From<current_grading::Failure> for ExportFailure {
+    fn from(failure: current_grading::Failure) -> Self {
+        Self::Current(failure)
+    }
+}
+
+impl ExportFailure {
+    /// The last line of the traceback the Python front printed for the same failure.
+    pub fn line(&self) -> String {
+        match self {
+            Self::Export(failure) => failure.line(),
+            Self::Current(current_grading::Failure::Inconsistent(message)) => format!(
+                "current_grading.Inconsistent: {}",
+                pytext::stderr_text(message)
+            ),
+            Self::Current(current_grading::Failure::Input(message)) => {
+                format!("current_grading.InputError: {message}")
+            }
+            Self::Current(current_grading::Failure::Crash(message)) => message.clone(),
+        }
+    }
+}
+
+/// `load_current(root)` and its coverage, as the facts and the `dataset_hash` they hold.
+fn current(root: &[u8]) -> current_grading::R<(Value, Value)> {
+    let root = current_grading::Root::new(root)?;
+    let (selected, documents) =
+        current_grading::load_current(&root, current_grading::CURRENT.as_bytes(), true)?;
+    let status = current_grading::coverage_status(&selected, &documents)?;
+    let hash = at(&status, "dataset_hash")
+        .map_err(|failure| current_grading::Failure::Crash(failure.line()))?
+        .clone();
+    let documents = Value::Object(
+        documents
+            .kinds
+            .into_iter()
+            .map(|(kind, value)| (kind.to_string(), value))
+            .collect(),
+    );
+    let facts = object(vec![
+        ("selected", selected),
+        ("documents", documents),
+        ("status", status),
+    ]);
+    Ok((facts, hash))
+}
+
+/// The steps `export` takes besides reading and writing files, which tests replace.
+pub struct Effects<'a, 'b> {
+    pub store: &'a mut crate::evidence::Store<'b>,
+    pub moves: &'a mut dyn Moves,
+    /// Runs between staging and reading the record again.
+    pub staged: &'a mut dyn FnMut(),
+}
+
+/// `bench-tools export-explorer`: read the current facts, restore the evidence they link, stage and check the
+/// export under `ROOT/.cache/explorer-export`, read the record again and refuse an export whose dataset changed,
+/// then publish with `SIGINT` blocked until the process exits. Returns the summary line. The stage directory is
+/// removed unless backups that could not be restored remain in it.
+pub fn export(
+    root: &[u8],
+    public: Option<&[u8]>,
+    base_path: &str,
+    effects: Effects<'_, '_>,
+) -> std::result::Result<String, ExportFailure> {
+    let (loaded, hash) = current(root)?;
+    let facts = Facts::through_file(&loaded)?;
+    let directory = PyPath::new(root).join(b".cache/explorer-export");
+    let public = public.map_or_else(|| PyPath::new(root).join(b"public"), PyPath::new);
+    restore(root, &evidence(root, &facts, base_path)?, effects.store)?;
+    let outcome = (|| -> std::result::Result<String, ExportFailure> {
+        reset_stage(directory.as_bytes())?;
+        let summary = staged(root, &facts, base_path, directory.as_bytes())?;
+        (effects.staged)();
+        if !current(root)?.1.py_eq(&hash) {
+            return Err(inconsistent("current evidence changed during export").into());
+        }
+        block_interrupts()?;
+        publish(directory.as_bytes(), public.as_bytes(), effects.moves)?;
+        Ok(summary)
+    })();
+    let previous = directory.join(b"previous");
+    if !exists(&previous) || matches!(has_entries(&previous), Ok(false)) {
+        remove_tree_quietly(&directory);
+    }
+    outcome
+}
+
+/// `signal.signal(SIGINT, SIG_IGN)` as the Python front set it around `publish`. Blocking needs no `unsafe`; a
+/// blocked `SIGINT` stays pending until the process exits, which discards it.
+fn block_interrupts() -> Result<()> {
+    let mut interrupt = nix::sys::signal::SigSet::empty();
+    interrupt.add(nix::sys::signal::Signal::SIGINT);
+    interrupt
+        .thread_block()
+        .map_err(|error| Failure::new("OSError", error.desc()))
+}
 
 /// `export-explorer publish`: replace `public/data` and `public/evidence` with the staged pair, restoring the
 /// previous pair if a move fails. Backups that cannot be restored stay in `stage/previous`.
@@ -1675,6 +1822,47 @@ mod tests {
                 ),
             ),
         ])
+    }
+
+    fn facts(selected: Value) -> Value {
+        object(vec![
+            ("selected", selected),
+            ("documents", object(vec![("note", text("kept"))])),
+            ("status", object(vec![])),
+        ])
+    }
+
+    #[test]
+    fn facts_are_refused_as_the_front_file_refused_them() {
+        for (number, spelled) in [
+            (f64::NAN, "nan"),
+            (f64::INFINITY, "inf"),
+            (f64::NEG_INFINITY, "-inf"),
+        ] {
+            let selected = Value::Array(vec![Value::Float(1.5), Value::Float(number)]);
+            let failure = Facts::through_file(&facts(selected)).err().unwrap();
+            assert_eq!(
+                failure.line(),
+                format!("ValueError: Out of range float values are not JSON compliant: {spelled}")
+            );
+        }
+        let failure = Facts::through_file(&facts(Value::os_text(b"run-\xff")))
+            .err()
+            .unwrap();
+        assert!(
+            failure
+                .line()
+                .starts_with("ValueError: the string starting at char 13 holds a lone surrogate"),
+            "{}",
+            failure.line()
+        );
+        let kept = facts(Value::Array(vec![
+            Value::Float(0.1),
+            Value::Int("9007199254740993".into()),
+        ]));
+        let read = Facts::through_file(&kept).ok().unwrap();
+        assert!(read.selected.py_eq(at(&kept, "selected").unwrap()));
+        assert!(read.documents.py_eq(at(&kept, "documents").unwrap()));
     }
 
     #[test]

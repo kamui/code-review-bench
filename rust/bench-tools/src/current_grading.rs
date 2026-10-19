@@ -514,7 +514,7 @@ fn name_of(path: &[u8]) -> &[u8] {
     }
 }
 
-fn parent_of(path: &PyPath) -> PyPath {
+pub(crate) fn parent_of(path: &PyPath) -> PyPath {
     let bytes = path.as_bytes();
     match bytes.iter().rposition(|byte| *byte == b'/') {
         Some(0) => PyPath::new(b"/"),
@@ -4045,7 +4045,7 @@ pub fn fingerprints(root: &Root, current: &[u8]) -> R<Value> {
 }
 
 /// `Path.mkdir(parents=True, exist_ok=True)`.
-fn make_parents(path: &PyPath) -> R<()> {
+pub(crate) fn make_parents(path: &PyPath) -> R<()> {
     let target = path.to_path_buf();
     match std::fs::create_dir(&target) {
         Ok(()) => Ok(()),

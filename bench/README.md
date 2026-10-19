@@ -43,7 +43,7 @@ with their hashes recorded in the manifests.
 ## Checking a manifest
 
 ```
-python3 bench/tools/check_manifest.py bench/schema/target.schema.json bench/targets/*/target.json
+python3 bench/tools/rust_runtime.py exec bench-tools -- check-manifest bench/schema/target.schema.json bench/targets/*/target.json
 ```
 
 The checker enforces exactly the subset of JSON Schema the schemas use and refuses any other
