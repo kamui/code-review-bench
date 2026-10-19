@@ -38,6 +38,8 @@ Shared modules carry the Python behavior that byte-pinned outputs depend on:
 - `sha256` spells the `sha2` crate's SHA-256 digest as `hashlib`'s `hexdigest()` does, in one call or incrementally.
 - `pyregex` is `re.search` for the pattern syntax the schemas use, matched by the `regex` crate, `pyunicode` holds
   Python's decimal digits and `int(str)`, and `pyfs` holds `Path.resolve`, `relative_to` and directory listing.
+- `pyobject` holds Python's comparison, membership, indexing, `len`, iteration, `set` and `sorted` on JSON values,
+  failing where Python raises, so rules ported from Python reach the same result on malformed input.
 - `archive` reads and writes gzip, tar and zip through the [registry dependencies](#registry-dependencies), as [archives](#archives)
   describes.
 
