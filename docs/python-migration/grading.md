@@ -244,8 +244,8 @@ Diagnostics keep the program names `claims.py` and `upstream.py`. Dossier tokens
 `/dev/urandom`; cargo tests inject the entropy and check that the shuffle is applied. `collect` runs `gh` with
 `upstream.py`'s argument lists, four reads at a time. `verify:claims` and the commands in
 `docs/claim-adjudication.md` and `docs/maintainer-adjudication.md` moved, and `tools/test_moved_cli_callers.py`
-fails on a current caller of `claims.py check`, `inventory`, `dossier` or `evidence`, or `upstream.py collect`.
-`grade.py prepare --claim-evidence` still imports `claims.py`, until slice 7.
+fails on a current caller of `claims.py`'s `check`, `inventory`, `dossier` or `evidence` command, or of
+`upstream.py`'s `collect` command. `grade.py prepare --claim-evidence` still imports `claims.py`, until slice 7.
 
 [`claims.v1.json`](../../tools/behavior_contracts/claims.v1.json) pins the four commands on the fixture variants and
 on hand-built records, with dossiers and packets compared structurally. Evidence cases state their claim outcomes
