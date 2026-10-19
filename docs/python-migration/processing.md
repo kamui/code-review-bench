@@ -298,9 +298,9 @@ needs a new decision version.
 `main.rs` parses arguments with `clap`'s derive API ([#215](https://github.com/kamui/code-review-bench/issues/215)).
 Every subcommand expands a unique prefix of a long option, as argparse does, through `infer_long_args`; the top level
 does not. A usage error exits 2 and help exits 0. No corpus reaches the top level, so `tests/cli.rs` pins its exit
-codes; `bench-tools -hx` now prints help, where the hand-written parser called it an unknown command. Each family's
-latest decisions record where clap reads a subcommand's command line differently from the parser it replaced, each
-with its case:
+codes as the hand-written parser had them; `main.rs` refuses `bench-tools -hx` before clap, which would print help.
+Each family's latest decisions record where clap reads a subcommand's command line differently from the parser it
+replaced, each with its case:
 
 - `*-abbreviated-*`: a unique prefix such as `--ro` runs; before, only `derive-packet` and `build-packet` took one.
 - `*-dot-digit-*`: a dash-led value such as `-.5` is refused, exit 2; `--root=-.5` still works, and `-5` and `-1.5`
