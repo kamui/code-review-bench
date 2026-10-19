@@ -103,11 +103,20 @@ class ClaudeDispatchTest(unittest.TestCase):
             self.assertFalse(self.capture.exists())
             self.assertFalse((self.root / name / 'home/.claude/.credentials.json').exists())
 
-    def test_a_missing_relative_or_changed_bench_tools_stops_the_dispatch_before_any_setup(self):
+    def test_a_missing_relative_unreadable_or_changed_bench_tools_stops_the_dispatch_before_any_setup(self):
         executable = self.env['BENCH_RUST_BENCH_TOOLS']
-        for name, changes in [('unset', {'BENCH_RUST_BENCH_TOOLS': None}), ('relative', {'BENCH_RUST_BENCH_TOOLS': 'bench-tools'}),
-                              ('missing', {'BENCH_RUST_BENCH_TOOLS': executable + '-gone'}),
-                              ('hash', {'BENCH_RUST_BENCH_TOOLS_SHA256': '0' * 64}), ('no-hash', {'BENCH_RUST_BENCH_TOOLS_SHA256': None})]:
+        unreadable = self.root / 'unreadable-bench-tools'
+        unreadable.write_bytes(Path(executable).read_bytes())
+        unreadable.chmod(0o111)
+        digest = self.env['BENCH_RUST_BENCH_TOOLS_SHA256']
+        cases = [('unset', {'BENCH_RUST_BENCH_TOOLS': None}), ('relative', {'BENCH_RUST_BENCH_TOOLS': 'bench-tools'}),
+                 ('missing', {'BENCH_RUST_BENCH_TOOLS': executable + '-gone'}),
+                 ('hash', {'BENCH_RUST_BENCH_TOOLS_SHA256': '0' * 64}), ('no-hash', {'BENCH_RUST_BENCH_TOOLS_SHA256': None}),
+                 ('malformed-hash', {'BENCH_RUST_BENCH_TOOLS_SHA256': digest.upper()})]
+        if os.geteuid() != 0:
+            cases += [('unreadable', {'BENCH_RUST_BENCH_TOOLS': str(unreadable)}),
+                      ('unreadable-no-hash', {'BENCH_RUST_BENCH_TOOLS': str(unreadable), 'BENCH_RUST_BENCH_TOOLS_SHA256': None})]
+        for name, changes in cases:
             with self.subTest(name=name):
                 env = dict(self.env)
                 for key, value in changes.items():
