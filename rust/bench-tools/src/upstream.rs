@@ -9,9 +9,6 @@ use crate::pytext;
 use crate::pyunicode;
 use crate::sha256;
 
-pub const USAGE: &str =
-    "usage: bench-tools upstream report [-h] [--registry REGISTRY] [--root ROOT]";
-
 const PIN_FIELDS: [&str; 4] = ["head", "base_sha", "packet_sha256", "diff_manifest_sha256"];
 
 fn string(value: &str) -> Value {
