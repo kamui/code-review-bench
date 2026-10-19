@@ -5,15 +5,15 @@ use bench_tools::pyjson::{self, Duplicates};
 use bench_tools::pytext::{self, PyPath};
 use bench_tools::schema::{SchemaError, Validator};
 use bench_tools::{
-    build_packet, claims, derive_packet, diff_identity, normalize_thermo, pyfs, pyunicode, rates,
-    roster, upstream,
+    build_packet, claims, derive_packet, diff_identity, export_explorer, normalize_thermo, pyfs,
+    pyunicode, rates, roster, upstream,
 };
 use std::collections::HashMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::io::Write;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: bench-tools {roster,diff-identity,normalize-review,normalize-thermo,derive-packet,build-packet,check-manifest,rates,upstream} ...
+const USAGE: &str = "usage: bench-tools {roster,diff-identity,normalize-review,normalize-thermo,derive-packet,build-packet,check-manifest,rates,upstream,export-explorer} ...
 
   roster            list the benchmarks the roster has and the ones still missing
   diff-identity     print the changed-file manifest of base..head and its SHA-256
@@ -23,7 +23,8 @@ const USAGE: &str = "usage: bench-tools {roster,diff-identity,normalize-review,n
   build-packet      build a phase-1 review packet for one pull request, frozen at a cutoff
   check-manifest    validate JSON documents against a bench schema
   rates             check the rate catalog against provider prices (rates check)
-  upstream          print the maintainer audit's shadow report (upstream report)";
+  upstream          print the maintainer audit's shadow report (upstream report)
+  export-explorer   list, stage or publish the explorer export (tools/export_explorer.py runs it)";
 
 const CHECK_MANIFEST_USAGE: &str =
     "usage: bench-tools check-manifest [-h] schema manifests [manifests ...]";
@@ -1217,6 +1218,143 @@ fn run_build_packet(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
     }
 }
 
+#[derive(Default)]
+struct ExportArguments {
+    command: Vec<u8>,
+    root: Option<OsString>,
+    facts: Option<OsString>,
+    base_path: Option<String>,
+    stage: Option<OsString>,
+    public: Option<OsString>,
+}
+
+fn parse_export_explorer(arguments: &[OsString]) -> Result<Parsed<ExportArguments>, Misuse> {
+    let prog = "bench-tools export-explorer";
+    let usage = export_explorer::USAGE;
+    let mut parsed = ExportArguments::default();
+    let mut commands = Vec::new();
+    let mut rest = arguments.iter();
+    while let Some(argument) = rest.next() {
+        let bytes = pytext::os_bytes(argument);
+        if !is_option(bytes) {
+            commands.push(bytes.to_vec());
+        } else if bytes == b"-h" || bytes == b"--help" {
+            return Ok(Parsed::Help);
+        } else if let Some(value) = option_value("--root", bytes, &mut rest, usage, prog)? {
+            parsed.root = Some(value);
+        } else if let Some(value) = option_value("--facts", bytes, &mut rest, usage, prog)? {
+            parsed.facts = Some(value);
+        } else if let Some(value) = option_value("--base-path", bytes, &mut rest, usage, prog)? {
+            parsed.base_path = Some(
+                value
+                    .to_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| misuse(usage, prog, "argument --base-path: not valid UTF-8"))?,
+            );
+        } else if let Some(value) = option_value("--stage", bytes, &mut rest, usage, prog)? {
+            parsed.stage = Some(value);
+        } else if let Some(value) = option_value("--public", bytes, &mut rest, usage, prog)? {
+            parsed.public = Some(value);
+        } else {
+            return Err(unrecognized(usage, prog, bytes));
+        }
+    }
+    let [command] = commands.as_slice() else {
+        return Err(misuse(
+            usage,
+            prog,
+            "give one command: evidence, stage or publish",
+        ));
+    };
+    let required: &[(&str, bool)] = match command.as_slice() {
+        b"evidence" => &[("--facts", parsed.facts.is_some())],
+        b"stage" => &[
+            ("--facts", parsed.facts.is_some()),
+            ("--stage", parsed.stage.is_some()),
+        ],
+        b"publish" => &[
+            ("--stage", parsed.stage.is_some()),
+            ("--public", parsed.public.is_some()),
+        ],
+        other => {
+            return Err(misuse(
+                usage,
+                prog,
+                format!(
+                    "argument command: invalid choice: {} (choose from 'evidence', 'stage', 'publish')",
+                    pytext::repr(&pytext::surrogateescape(other))
+                ),
+            ));
+        }
+    };
+    let missing: Vec<&str> = required
+        .iter()
+        .filter(|(_, given)| !given)
+        .map(|(name, _)| *name)
+        .collect();
+    if !missing.is_empty() {
+        return Err(misuse(
+            usage,
+            prog,
+            format!(
+                "the following arguments are required: {}",
+                missing.join(", ")
+            ),
+        ));
+    }
+    parsed.command.clone_from(command);
+    Ok(Parsed::Run(parsed))
+}
+
+fn run_export_explorer(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
+    let parsed = match parse_export_explorer(arguments) {
+        Ok(Parsed::Run(parsed)) => parsed,
+        Ok(Parsed::Help) => {
+            return help(
+                export_explorer::USAGE,
+                "List, stage or publish the explorer export from the current facts tools/export_explorer.py writes.",
+            );
+        }
+        Err(problem) => return Err(report_misuse(&problem)),
+    };
+    let root = pyfs::resolve(pytext::os_bytes(
+        parsed.root.as_deref().unwrap_or(OsStr::new(".")),
+    ));
+    let base_path = parsed.base_path.as_deref().unwrap_or("/");
+    let path = |value: &Option<OsString>| {
+        value
+            .as_deref()
+            .map(pytext::os_bytes)
+            .unwrap_or_default()
+            .to_vec()
+    };
+    let outcome = match parsed.command.as_slice() {
+        b"evidence" => export_explorer::Facts::read(&path(&parsed.facts))
+            .and_then(|facts| export_explorer::evidence(&root, &facts, base_path))
+            .map(|listed| format!("{}\n", pyjson::dumps(&listed, &pyjson::Dumps::default()))),
+        b"stage" => {
+            export_explorer::stage(&root, &path(&parsed.facts), base_path, &path(&parsed.stage))
+                .map(|summary| format!("{summary}\n"))
+        }
+        _ => export_explorer::publish(
+            &path(&parsed.stage),
+            &path(&parsed.public),
+            &mut export_explorer::System,
+        )
+        .map(|()| String::new()),
+    };
+    match outcome {
+        Ok(output) => {
+            write_stdout(output.as_bytes())?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(failure) => {
+            eprintln!("export_explorer.py: {}", failure.line());
+            Err(ExitCode::from(1))
+        }
+    }
+}
+
 fn help(usage: &str, description: &str) -> Result<ExitCode, ExitCode> {
     write_stdout(format!("{usage}\n\n{description}\n").as_bytes())?;
     Ok(ExitCode::SUCCESS)
@@ -1242,6 +1380,7 @@ fn main() -> ExitCode {
         Some(b"check-manifest") => run_check_manifest(&arguments[1..]),
         Some(b"rates") => run_rates(&arguments[1..]),
         Some(b"upstream") => run_upstream(&arguments[1..]),
+        Some(b"export-explorer") => run_export_explorer(&arguments[1..]),
         Some(b"-h" | b"--help") => help(USAGE, "Deterministic benchmark tools."),
         Some(other) => {
             eprintln!(
