@@ -32,7 +32,7 @@ and sealed under `targets/`, and the first scored run frozen as `runs/2026-09-24
 | `targets/<id>/` | `target.json`, frozen `packet.md`, `register.v<N>.json` (`register.v<N>.json.enc` while sealed), `smoke.json`; a migrated target also keeps `packet.legacy.md` |
 | `arms/<id>.json` | reviewer configurations as data |
 | `roster.json` | the roster: the models benchmarks run against by default, by client, each with its efforts, edited by hand; `bun run roster` prints which method and model combinations are benchmarked and which are `missing` |
-| `tools/` | `dispatch.sh`, `attempt_audit.py`, `normalize_review.py`, `codex_usage.py`, `transcript_usage.py`, `build_packet.py`, `check_manifest.py`, `diff_identity.py`, `provision.py`, `file_attempt.py`, `seal.py`, `run_cell.py`, `review_queue.py`, `grade.py`, `compare.py` |
+| `tools/` | `dispatch.sh`, `attempt_audit.py`, `normalize_review.py`, `codex_usage.py`, `transcript_usage.py`, `check_manifest.py`, `diff_identity.py`, `provision.py`, `file_attempt.py`, `seal.py`, `run_cell.py`, `review_queue.py`, `grade.py`, `compare.py` |
 | `runs/<date>-<label>/` | frozen manifest, `charges.jsonl`, pre-dispatch probes, attempt records, mappings, results; a fixture run also holds its fixture target |
 | `scoreboard.json` | the earlier scoreboard registry, kept as imported evidence |
 | `SCOREBOARD.md`, `scoreboard/*.svg` | the earlier generated scoreboard and its charts, kept as imported evidence |
@@ -67,8 +67,8 @@ Six targets are migrated from the [#137 qualification grid](../docs/research/one
   instructions to record `issues=none`) and the whole run-conditions section, and keeps every other
   byte; it refuses an input whose markers are missing or repeated, or that carries that report
   vocabulary anywhere else before section 8. A fresh target's packet comes from
-  `build_packet.py --factual`, which passes the rendering through the same derivation, so it omits
-  the same elements.
+  `build_packet.py --factual`, now `bench-tools build-packet --factual`, which passes the rendering
+  through the same derivation, so it omits the same elements.
 - `packet.v2.md`: the packet re-cut at the last push to the pull request, on the sixteen selected
   tasks. No `target.json` pins it. A run pins it through `packet_replacements`, and the registry and
   the current grading records pin it for the ten tasks whose reviews were run again.
