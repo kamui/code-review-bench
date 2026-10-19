@@ -8,6 +8,7 @@
 //! git diff --exit-code -- docs/python-migration/grading-replay.v1.json
 //! ```
 
+use bench_tools::archive;
 use bench_tools::pyjson::{self, Dumps, Duplicates, Object, Value};
 use bench_tools::sha256::hex_digest;
 use std::collections::BTreeMap;
@@ -22,6 +23,9 @@ const KEY: &str = "key.json";
 const INPUTS: &str = "work/validator/inputs.json";
 const VERDICTS: &str = "work/verdicts.json";
 /// `grading_validation.CONTRACT`, which a validator input or policy without `contract` or `verdicts` uses.
+/// `evidence.json` lists each member's hash but not its size, so the decoded stream is bounded by this instead. The
+/// archive itself is checked against its manifest hash before it is read.
+const MEMBER_BYTES_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
 const DEFAULT_CONTRACT: &str = "current-verdicts/v1";
 /// Fields `grade.py map` copies from the key into the receipt, and the key field the receipt's
 /// `runner.prepared` copies.
@@ -209,38 +213,38 @@ fn restore(
     if hex_digest(&bytes) != archive.archive_sha256 {
         return Err("the restored archive differs from its manifest hash".to_string());
     }
-    let scratch = std::env::temp_dir().join(format!("grading-replay-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&scratch);
-    std::fs::create_dir_all(&scratch).unwrap();
-    let status = Command::new("tar")
-        .arg("-xzf")
-        .arg(&path)
-        .arg("-C")
-        .arg(&scratch)
-        .args([KEY, INPUTS, VERDICTS])
-        .status()
-        .unwrap();
-    let result = (|| {
-        if !status.success() {
-            return Err("tar could not extract the key, validator inputs and verdicts".to_string());
+    let mut found: BTreeMap<&str, Vec<u8>> = BTreeMap::new();
+    let limits = archive::Limits {
+        members: archive.files.len() as u64,
+        payload: MEMBER_BYTES_LIMIT,
+    };
+    archive::read_tar_gz(bytes.as_slice(), &limits, |member, data| {
+        if let Some(name) = [KEY, INPUTS, VERDICTS]
+            .into_iter()
+            .find(|name| member.name == name.as_bytes())
+        {
+            let mut content = Vec::new();
+            data.read_to_end(&mut content)?;
+            found.insert(name, content);
         }
-        let mut values = Vec::new();
-        for name in [KEY, INPUTS, VERDICTS] {
-            let bytes =
-                std::fs::read(scratch.join(name)).map_err(|error| format!("{name}: {error}"))?;
-            if Some(&hex_digest(&bytes)) != archive.files.get(name) {
-                return Err(format!("{name} differs from the hash evidence.json lists"));
-            }
-            let text = String::from_utf8(bytes).map_err(|_| format!("{name} is not UTF-8"))?;
-            values.push(
-                pyjson::loads(&text, Duplicates::Refuse)
-                    .map_err(|error| format!("{name}: {error:?}"))?,
-            );
+        Ok(())
+    })
+    .map_err(|error| format!("the archive cannot be read: {error}"))?;
+    let mut values = Vec::new();
+    for name in [KEY, INPUTS, VERDICTS] {
+        let bytes = found
+            .remove(name)
+            .ok_or(format!("{name} is not in the archive"))?;
+        if Some(&hex_digest(&bytes)) != archive.files.get(name) {
+            return Err(format!("{name} differs from the hash evidence.json lists"));
         }
-        Ok([values.remove(0), values.remove(0), values.remove(0)])
-    })();
-    std::fs::remove_dir_all(&scratch).unwrap();
-    result
+        let text = String::from_utf8(bytes).map_err(|_| format!("{name} is not UTF-8"))?;
+        values.push(
+            pyjson::loads(&text, Duplicates::Refuse)
+                .map_err(|error| format!("{name}: {error:?}"))?,
+        );
+    }
+    Ok([values.remove(0), values.remove(0), values.remove(0)])
 }
 
 fn same(left: Option<&Value>, right: Option<&Value>) -> bool {
