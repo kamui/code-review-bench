@@ -5,9 +5,8 @@ part of [#154](https://github.com/kamui/code-review-bench/issues/154). It follow
 [delivery plan](https://github.com/kamui/code-review-bench/issues/154#issuecomment-6253814508).
 It removes modules with no current caller and records classifications. It ports nothing.
 
-The [v2 inventory](README.md) stays as recorded. `python_inventory.py --check` rebuilds v2 with
-today's assignment tables, so those tables stay unchanged until the next census version records
-the changes below.
+The [v2 inventory](README.md) stays as recorded. The v3 inventory, from
+[#199](https://github.com/kamui/code-review-bench/issues/199), records the changes below.
 
 ## Retired modules
 
@@ -60,7 +59,8 @@ The census rules need two changes in the next version. Its loader rule for
 and `verify.py` live; narrow it to `stage_edition.py`. It also misses the `stage_edition` import
 from `move.py` and `selection.py`, because each script inserts the other directory into `sys.path`
 first; record that edge. `stage_edition`'s path references to the two run helpers then keep them
-live too.
+live too. v3 makes both changes. `dispatch_replacements.py` and `relocate_transcripts.py`, which only
+the directory rule kept live, become historical replay with them.
 
 Helper bytes are unchanged.
 

@@ -224,7 +224,7 @@ Python implementations until these stages move them:
 | `fetch_freeze_commits` | #157 | Fetches freeze commits for runs and CI; #157 covers freeze helpers. |
 | `seal` | #160 | No narrower stage names it; #160 resolves every remaining responsibility. |
 
-The v2 census stays as recorded. Its next version records these owners.
+The v2 census stays as recorded. The [v3 census](README.md#reproducible-records) records these owners.
 
 ## Rollback evidence
 
