@@ -15,6 +15,8 @@ MOVED = (
     ("bench/tools/evidence_store.py", "fetch", "bench-tools evidence fetch"),
     ("bench/tools/evidence_store.py", "verify", "bench-tools evidence verify"),
     ("bench/tools/recover_evidence.py", "--source", "bench-tools evidence recover"),
+    ("tools/import_benchmark.py", "--check", "bench-tools import-benchmark --check"),
+    ("tools/import_benchmark.py", "--preserve", "bench-tools import-benchmark --preserve"),
     ("bench/tools/ruling_record.py", "route", "bench-tools ruling route"),
     ("bench/tools/ruling_record.py", "summary", "bench-tools ruling summary"),
     ("bench/tools/ruling_record.py", "precedents", "bench-tools ruling precedents"),
@@ -95,6 +97,10 @@ class MovedCommands(unittest.TestCase):
         self.assertEqual(scripts["rates:check"], "python3 bench/tools/rust_runtime.py exec bench-tools -- rates check")
         self.assertEqual(scripts["audit:maintainers"],
                          "python3 bench/tools/rust_runtime.py exec bench-tools -- upstream report")
+        self.assertEqual(scripts["verify:import"], "bun run evidence:fetch && python3 bench/tools/rust_runtime.py exec "
+                         "bench-tools -- import-benchmark --check")
+        self.assertEqual(scripts["import:preserve"],
+                         "python3 bench/tools/rust_runtime.py exec bench-tools -- import-benchmark --preserve")
         self.assertEqual(scripts["evidence:fetch"], "python3 bench/tools/rust_runtime.py exec bench-tools -- evidence fetch "
                          "--manifest bench/evidence/manifests/repository-payloads-2026-10-08-v1.json")
 
