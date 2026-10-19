@@ -1,4 +1,4 @@
-//! SHA-256 (FIPS 180-4), kept in the crate so an install needs no registry dependency.
+//! SHA-256 (FIPS 180-4).
 
 const K: [u32; 64] = [
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -50,41 +50,92 @@ fn compress(state: &mut [u32; 8], block: &[u8; 64]) {
     }
 }
 
+const INITIAL: [u32; 8] = [
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+];
+
+/// An incremental SHA-256, for data read in chunks.
+#[derive(Clone)]
+pub struct Sha256 {
+    state: [u32; 8],
+    pending: [u8; 64],
+    pending_len: usize,
+    length: u64,
+}
+
+impl Default for Sha256 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Sha256 {
+    pub fn new() -> Self {
+        Self {
+            state: INITIAL,
+            pending: [0; 64],
+            pending_len: 0,
+            length: 0,
+        }
+    }
+
+    pub fn update(&mut self, mut data: &[u8]) {
+        self.length = self.length.wrapping_add(data.len() as u64);
+        if self.pending_len > 0 {
+            let take = data.len().min(64 - self.pending_len);
+            self.pending[self.pending_len..self.pending_len + take].copy_from_slice(&data[..take]);
+            self.pending_len += take;
+            data = &data[take..];
+            if self.pending_len < 64 {
+                return;
+            }
+            let block = self.pending;
+            compress(&mut self.state, &block);
+            self.pending_len = 0;
+        }
+        let (blocks, rest) = data.as_chunks::<64>();
+        for block in blocks {
+            compress(&mut self.state, block);
+        }
+        self.pending[..rest.len()].copy_from_slice(rest);
+        self.pending_len = rest.len();
+    }
+
+    pub fn finalize(mut self) -> [u8; 32] {
+        let mut tail = [0u8; 128];
+        tail[..self.pending_len].copy_from_slice(&self.pending[..self.pending_len]);
+        tail[self.pending_len] = 0x80;
+        let length = if self.pending_len < 56 { 64 } else { 128 };
+        let bits = self.length.wrapping_mul(8);
+        tail[length - 8..length].copy_from_slice(&bits.to_be_bytes());
+        for block in tail[..length].as_chunks::<64>().0 {
+            compress(&mut self.state, block);
+        }
+        let mut out = [0u8; 32];
+        for (bytes, word) in out.as_chunks_mut::<4>().0.iter_mut().zip(self.state) {
+            bytes.copy_from_slice(&word.to_be_bytes());
+        }
+        out
+    }
+}
+
 pub fn digest(data: &[u8]) -> [u8; 32] {
-    let mut state: [u32; 8] = [
-        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
-        0x5be0cd19,
-    ];
-    let (blocks, rest) = data.as_chunks::<64>();
-    for block in blocks {
-        compress(&mut state, block);
-    }
-    let mut tail = [0u8; 128];
-    tail[..rest.len()].copy_from_slice(rest);
-    tail[rest.len()] = 0x80;
-    let length = if rest.len() < 56 { 64 } else { 128 };
-    let bits = (data.len() as u64).wrapping_mul(8);
-    tail[length - 8..length].copy_from_slice(&bits.to_be_bytes());
-    for block in tail[..length].as_chunks::<64>().0 {
-        compress(&mut state, block);
-    }
-    let mut out = [0u8; 32];
-    for (bytes, word) in out.as_chunks_mut::<4>().0.iter_mut().zip(state) {
-        bytes.copy_from_slice(&word.to_be_bytes());
-    }
-    out
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hasher.finalize()
+}
+
+pub fn hex(digest: &[u8; 32]) -> String {
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 pub fn hex_digest(data: &[u8]) -> String {
-    digest(data)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    hex(&digest(data))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::hex_digest;
+    use super::{Sha256, digest, hex_digest};
 
     #[test]
     fn matches_published_vectors_across_padding_boundaries() {
@@ -139,6 +190,18 @@ mod tests {
                 expected,
                 "{length} zero bytes"
             );
+        }
+    }
+
+    #[test]
+    fn incremental_updates_match_the_one_shot_digest_for_every_split() {
+        let data: Vec<u8> = (0..300u32).map(|value| (value * 7 % 251) as u8).collect();
+        for chunk in [1, 3, 55, 56, 63, 64, 65, 127, 128, 300] {
+            let mut hasher = Sha256::new();
+            for part in data.chunks(chunk) {
+                hasher.update(part);
+            }
+            assert_eq!(hasher.finalize(), digest(&data), "chunks of {chunk}");
         }
     }
 }

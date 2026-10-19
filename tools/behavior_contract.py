@@ -131,7 +131,7 @@ DRIVER_ARGUMENTS = {"native-artifacts": ["bench/tools"], "restore-local": [
     "import-benchmark": ["tools"]}
 RUST_PROGRAMS = {"roster": ("bench-tools", ["roster"]), "normalize-thermo": ("bench-tools", ["normalize-thermo"]),
                  "derive-packet": ("bench-tools", ["derive-packet"]), "build-packet": ("bench-tools", ["build-packet"]),
-                 "export-explorer": ("bench-tools", ["export-explorer"])}
+                 "export-explorer": ("bench-tools", ["export-explorer"]), "archive": ("bench-tools", ["archive"])}
 DECISIONS = re.compile(r"(?P<family>.+)-decisions\.v[^/]*\.json")
 
 

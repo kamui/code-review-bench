@@ -5,15 +5,15 @@ use bench_tools::pyjson::{self, Duplicates};
 use bench_tools::pytext::{self, PyPath};
 use bench_tools::schema::{SchemaError, Validator};
 use bench_tools::{
-    build_packet, claims, derive_packet, diff_identity, export_explorer, normalize_thermo, pyfs,
-    pyunicode, rates, roster, upstream,
+    archive, build_packet, claims, derive_packet, diff_identity, export_explorer, normalize_thermo,
+    pyfs, pyunicode, rates, roster, upstream,
 };
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: bench-tools {roster,diff-identity,normalize-review,normalize-thermo,derive-packet,build-packet,check-manifest,rates,upstream,export-explorer} ...
+const USAGE: &str = "usage: bench-tools {roster,diff-identity,normalize-review,normalize-thermo,derive-packet,build-packet,check-manifest,rates,upstream,export-explorer,archive} ...
 
   roster            list the benchmarks the roster has and the ones still missing
   diff-identity     print the changed-file manifest of base..head and its SHA-256
@@ -24,7 +24,12 @@ const USAGE: &str = "usage: bench-tools {roster,diff-identity,normalize-review,n
   check-manifest    validate JSON documents against a bench schema
   rates             check the rate catalog against provider prices (rates check)
   upstream          print the maintainer audit's shadow report (upstream report)
-  export-explorer   list, stage or publish the explorer export (tools/export_explorer.py runs it)";
+  export-explorer   list, stage or publish the explorer export (tools/export_explorer.py runs it)
+  archive           check cached evidence packages or native scratch archives through bench_tools::archive";
+
+const ARCHIVE_USAGE: &str =
+    "usage: bench-tools archive check-packages [-h] --cache CACHE manifests [manifests ...]
+       bench-tools archive check-scratch [-h] archives [archives ...]";
 
 const CHECK_MANIFEST_USAGE: &str =
     "usage: bench-tools check-manifest [-h] schema manifests [manifests ...]";
@@ -1355,6 +1360,168 @@ fn run_export_explorer(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
     }
 }
 
+fn archive_report(rows: Vec<pyjson::Value>, key: &str, totals: Vec<(&str, u64)>) -> Vec<u8> {
+    let mut report = pyjson::Object::default();
+    report.insert(key.to_string(), pyjson::Value::Array(rows));
+    let mut sums = pyjson::Object::default();
+    for (name, value) in totals {
+        sums.insert(name.to_string(), pyjson::Value::Int(value.to_string()));
+    }
+    report.insert("totals".to_string(), pyjson::Value::Object(sums));
+    let options = pyjson::Dumps {
+        indent: Some(2),
+        ..pyjson::Dumps::default()
+    };
+    format!(
+        "{}\n",
+        pyjson::dumps(&pyjson::Value::Object(report), &options)
+    )
+    .into_bytes()
+}
+
+fn archive_row(entries: Vec<(&str, pyjson::Value)>) -> pyjson::Value {
+    let mut row = pyjson::Object::default();
+    for (key, value) in entries {
+        row.insert(key.to_string(), value);
+    }
+    pyjson::Value::Object(row)
+}
+
+fn run_archive(arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
+    let prog = "bench-tools archive";
+    let command = arguments.first().map(|command| pytext::os_bytes(command));
+    if matches!(command, Some(b"-h" | b"--help")) {
+        return help(
+            ARCHIVE_USAGE,
+            "Check archives through bench_tools::archive.",
+        );
+    }
+    let mut cache = None;
+    let mut names = Vec::new();
+    let mut rest = arguments.get(1..).unwrap_or_default().iter();
+    let mut options = true;
+    while let Some(argument) = rest.next() {
+        let bytes = pytext::os_bytes(argument);
+        if !options || !is_option(bytes) {
+            names.push(argument.clone());
+        } else if bytes == b"--" {
+            options = false;
+        } else if bytes == b"-h" || bytes == b"--help" {
+            return help(
+                ARCHIVE_USAGE,
+                "Check archives through bench_tools::archive.",
+            );
+        } else if command == Some(b"check-packages".as_slice())
+            && let Some(value) = option_value("--cache", bytes, &mut rest, ARCHIVE_USAGE, prog)
+                .map_err(|problem| report_misuse(&problem))?
+        {
+            cache = Some(value);
+        } else {
+            return Err(report_misuse(&unrecognized(ARCHIVE_USAGE, prog, bytes)));
+        }
+    }
+    if names.is_empty() {
+        return Err(report_misuse(&misuse(
+            ARCHIVE_USAGE,
+            prog,
+            "give at least one file",
+        )));
+    }
+    let (output, failed) = match command {
+        Some(b"check-packages") => {
+            let Some(cache) = cache else {
+                return Err(report_misuse(&misuse(
+                    ARCHIVE_USAGE,
+                    prog,
+                    "the following arguments are required: --cache",
+                )));
+            };
+            let mut manifests = Vec::new();
+            let (mut packages, mut members, mut bytes, mut failed) = (0, 0, 0, 0);
+            for name in &names {
+                let shown = pytext::stderr_text(pytext::os_bytes(name));
+                let indexed = read_json_document(pytext::os_bytes(name))
+                    .and_then(|manifest| archive::indexed_packages(&manifest))
+                    .map_err(|error| {
+                        eprintln!("archive: {shown}: {error}");
+                        ExitCode::from(2)
+                    })?;
+                let mut rows = Vec::new();
+                for package in &indexed {
+                    let result = archive::check_package(std::path::Path::new(&cache), package);
+                    packages += 1;
+                    members += package.members.len() as u64;
+                    bytes = u64::saturating_add(bytes, package.bytes);
+                    failed += u64::from(result.is_err());
+                    rows.push(archive_row(vec![
+                        ("sha256", pyjson::Value::Str(package.sha256.clone())),
+                        (
+                            "members",
+                            pyjson::Value::Int(package.members.len().to_string()),
+                        ),
+                        ("bytes", pyjson::Value::Int(package.bytes.to_string())),
+                        (
+                            "result",
+                            pyjson::Value::Str(
+                                result.err().unwrap_or_else(|| "verified".to_string()),
+                            ),
+                        ),
+                    ]));
+                }
+                manifests.push(archive_row(vec![
+                    ("manifest", pyjson::Value::Str(shown)),
+                    ("packages", pyjson::Value::Array(rows)),
+                ]));
+            }
+            let totals = vec![
+                ("manifests", names.len() as u64),
+                ("packages", packages),
+                ("members", members),
+                ("bytes", bytes),
+                ("verified", packages - failed),
+                ("failed", failed),
+            ];
+            (archive_report(manifests, "manifests", totals), failed)
+        }
+        Some(b"check-scratch") => {
+            let (mut rows, mut entries, mut failed) = (Vec::new(), 0, 0);
+            for name in &names {
+                let result = archive::check_scratch(std::path::Path::new(name));
+                let count = *result.as_ref().unwrap_or(&0);
+                entries += count;
+                failed += u64::from(result.is_err());
+                rows.push(archive_row(vec![
+                    (
+                        "archive",
+                        pyjson::Value::Str(pytext::stderr_text(pytext::os_bytes(name))),
+                    ),
+                    ("entries", pyjson::Value::Int(count.to_string())),
+                    (
+                        "result",
+                        pyjson::Value::Str(result.err().unwrap_or_else(|| "verified".to_string())),
+                    ),
+                ]));
+            }
+            let totals = vec![
+                ("archives", names.len() as u64),
+                ("entries", entries),
+                ("verified", names.len() as u64 - failed),
+                ("failed", failed),
+            ];
+            (archive_report(rows, "archives", totals), failed)
+        }
+        _ => {
+            return Err(report_misuse(&misuse(
+                ARCHIVE_USAGE,
+                prog,
+                "give check-packages or check-scratch",
+            )));
+        }
+    };
+    write_stdout(&output)?;
+    Ok(ExitCode::from(u8::from(failed > 0)))
+}
+
 fn help(usage: &str, description: &str) -> Result<ExitCode, ExitCode> {
     write_stdout(format!("{usage}\n\n{description}\n").as_bytes())?;
     Ok(ExitCode::SUCCESS)
@@ -1381,6 +1548,7 @@ fn main() -> ExitCode {
         Some(b"rates") => run_rates(&arguments[1..]),
         Some(b"upstream") => run_upstream(&arguments[1..]),
         Some(b"export-explorer") => run_export_explorer(&arguments[1..]),
+        Some(b"archive") => run_archive(&arguments[1..]),
         Some(b"-h" | b"--help") => help(USAGE, "Deterministic benchmark tools."),
         Some(other) => {
             eprintln!(

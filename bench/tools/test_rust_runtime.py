@@ -721,6 +721,25 @@ class RealBuilds(unittest.TestCase):
                          sorted({name for name in rust_runtime.BUILD_ENVIRONMENT if name in os.environ} | {"CARGO_HOME", "PATH"}))
         self.assertFalse(self.store.exists())
 
+    def test_a_registry_dependency_missing_from_the_cargo_cache_names_the_fetch_step(self):
+        manifest = (self.crate / "Cargo.toml").read_text(encoding="utf-8")
+        (self.crate / "Cargo.toml").write_text(manifest + '[dependencies]\ncfg-if = "=1.0.5"\n', encoding="utf-8")
+        (self.crate / "Cargo.lock").write_text(
+            "version = 4\n\n[[package]]\nname = \"cfg-if\"\nversion = \"1.0.5\"\n"
+            "source = \"registry+https://github.com/rust-lang/crates.io-index\"\n"
+            "checksum = \"4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600\"\n\n"
+            "[[package]]\nname = \"fixture-tool\"\nversion = \"0.1.0\"\ndependencies = [\n \"cfg-if\",\n]\n",
+            encoding="utf-8")
+        self.commit("registry dependency")
+        empty = self.root / "empty-cargo-home"
+        empty.mkdir()
+        rustup = os.environ.get("RUSTUP_HOME") or str(Path.home() / ".rustup")
+        with patch.dict(os.environ, {"CARGO_HOME": str(empty), "RUSTUP_HOME": rustup}), \
+                tempfile.TemporaryDirectory(dir=self.root) as scratch:
+            with self.assertRaisesRegex(rust_runtime.InputError, "(?s)cfg-if.*run `cargo fetch --locked` in rust/fixture-tool"):
+                rust_runtime.build(self.crate, self.repo, Path(scratch))
+        self.assertFalse(self.store.exists())
+
     def test_a_build_that_reads_local_files_git_does_not_track_in_the_crate_is_refused(self):
         dependency = self.repo / "rust/sibling"
         (dependency / "src").mkdir(parents=True)
