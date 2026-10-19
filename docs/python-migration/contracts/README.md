@@ -63,7 +63,9 @@ independent assertions. The harness never obtains expected output from a candida
 [`export-explorer.v1.json`](../../../tools/behavior_contracts/export-explorer.v1.json),
 [`check-manifest.v1.json`](../../../tools/behavior_contracts/check-manifest.v1.json),
 [`rates.v1.json`](../../../tools/behavior_contracts/rates.v1.json),
-[`upstream.v1.json`](../../../tools/behavior_contracts/upstream.v1.json) and
+[`upstream.v1.json`](../../../tools/behavior_contracts/upstream.v1.json),
+[`ruling-record.v1.json`](../../../tools/behavior_contracts/ruling-record.v1.json),
+[`ruling-dossier.v1.json`](../../../tools/behavior_contracts/ruling-dossier.v1.json) and
 [`archive.v1.json`](../../../tools/behavior_contracts/archive.v1.json) pin the commands of
 [`bench-tools`](../processing.md). Select a corpus with `--corpus`:
 
@@ -77,7 +79,8 @@ Without `--implementations`, each program runs its maintained implementation. `c
 `normalize_review.py` and `check_manifest.py` are retained libraries. `rates` and `upstream` run the retained
 `rates.py` and `upstream.py` through drivers that read the case directory as the repository and, for `rates`, take
 `--source PROVIDER=URL` pages, so no case leaves the host; `rates-transport-failure` connects to a closed loopback
-port. Cases whose Rust behavior was changed on purpose carry a `baseline_defect` with Python's output, so pass
+port. `ruling` runs the retained `ruling_record.py` and `ruling_dossier.py` through a driver that reads the case
+directory, or the `--root` argument, as the repository. Cases whose Rust behavior was changed on purpose carry a `baseline_defect` with Python's output, so pass
 `--allow-known-defects` when Python is the primary. `roster`, `normalize-thermo`, `derive-packet`, `build-packet`,
 `export-explorer` and `archive` have no Python implementation, so they run the executable `rust_runtime.resolve("bench-tools")`
 selects, and the command refuses when none is installed for `HEAD`. A command map for the Rust programs names that
@@ -95,6 +98,7 @@ executable:
   "check-manifest": ["/absolute/path/to/bench-tools", "check-manifest"],
   "rates": ["/absolute/path/to/bench-tools", "rates"],
   "upstream": ["/absolute/path/to/bench-tools", "upstream"],
+  "ruling": ["/absolute/path/to/bench-tools", "ruling"],
   "archive": ["/absolute/path/to/bench-tools", "archive"],
   "grading": ["/absolute/path/to/bench-tools", "grading"]
 }

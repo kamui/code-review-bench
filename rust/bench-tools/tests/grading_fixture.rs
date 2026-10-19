@@ -104,6 +104,38 @@ fn every_corpus_fixture_matches_the_builder() {
     assert!(found.is_empty(), "{found:#?}");
 }
 
+/// The #156 corpora, each of which must run on the unresolved fixture states, as the delivery plan requires.
+const GRADING_CORPORA: [&str; 2] = ["ruling-record.v1.json", "ruling-dossier.v1.json"];
+
+#[test]
+fn every_grading_corpus_runs_on_each_unresolved_state() {
+    for corpus in GRADING_CORPORA {
+        let text =
+            std::fs::read_to_string(repository().join("tools/behavior_contracts").join(corpus))
+                .unwrap();
+        let parsed = pyjson::loads(&text, Duplicates::Refuse).unwrap();
+        let named: Vec<&str> = parsed
+            .as_object()
+            .and_then(|corpus| corpus.get("cases"))
+            .and_then(Value::as_array)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|case| case.as_object()?.get("fixture")?.as_str())
+            .collect();
+        for variant in [
+            "pending",
+            "proposed",
+            "approved-without-receipt",
+            "disputed-without-ruling",
+        ] {
+            assert!(
+                named.contains(&format!("grading/{variant}").as_str()),
+                "{corpus} has no grading/{variant} case"
+            );
+        }
+    }
+}
+
 fn corpus(case: Value) -> String {
     pyjson::dumps(
         &Value::Object(
