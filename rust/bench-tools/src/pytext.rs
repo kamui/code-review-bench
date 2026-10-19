@@ -18,6 +18,13 @@ pub fn surrogateescape(bytes: &[u8]) -> Vec<u32> {
     points
 }
 
+/// The order `PurePosixPath` objects compare in: component by component, each decoded with `surrogateescape`.
+pub fn path_order(path: &[u8]) -> Vec<Vec<u32>> {
+    path.split(|byte| *byte == b'/')
+        .map(surrogateescape)
+        .collect()
+}
+
 /// How Python writes a `surrogateescape`-decoded string to stderr, whose error handler is `backslashreplace`.
 pub fn stderr_text(bytes: &[u8]) -> String {
     let mut text = String::with_capacity(bytes.len());
@@ -2027,6 +2034,13 @@ mod tests {
         assert!(surrogateescape("\u{e000}".as_bytes()) > surrogateescape(b"\xff"));
         assert!(surrogateescape("\u{20ac}".as_bytes()) < surrogateescape(b"\xe2\x82"));
         assert_eq!(stderr_text(b"a\xffb"), "a\\udcffb");
+    }
+
+    #[test]
+    fn path_order_compares_components_before_separators() {
+        assert!(b"a-b/t".as_slice() < b"a/t".as_slice());
+        assert!(path_order(b"a/t") < path_order(b"a-b/t"));
+        assert!(path_order(b"a/t") < path_order(b"a/t/u"));
     }
 
     #[test]
