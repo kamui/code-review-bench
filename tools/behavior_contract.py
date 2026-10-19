@@ -130,13 +130,30 @@ import_benchmark.ROOT = Path.cwd()
 import_benchmark.MANIFEST = import_benchmark.ROOT / "bench/import-manifest.json"
 sys.exit(import_benchmark.main())
 """,
+    # archive_attempt has no command line; regrade.py calls it in process and stops on the failures it catches.
+    # `ATTEMPT ARCHIVE_DIR` takes both from the case directory, the repository the receipt's paths are relative to,
+    # as `bench-tools regrade archive-attempt` does.
+    "regrade-archive-attempt": """import json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv.pop(1))
+import regrade
+regrade.ROOT = Path.cwd()
+attempt, archives = (Path.cwd() / argument for argument in sys.argv[1:])
+try:
+    print(json.dumps(regrade.archive_attempt(attempt, archives)))
+except regrade.FAILURES as error:
+    print(f"regrade.py: {error}", file=sys.stderr)
+    sys.exit(2)
+""",
 }
 DRIVER_ARGUMENTS = {"native-artifacts": ["bench/tools"], "collect-run": ["tools"], "import-benchmark": ["tools"]}
 RUST_PROGRAMS = {"roster": ("bench-tools", ["roster"]), "normalize-thermo": ("bench-tools", ["normalize-thermo"]),
                  "derive-packet": ("bench-tools", ["derive-packet"]), "build-packet": ("bench-tools", ["build-packet"]),
                  "export-explorer": ("bench-tools", ["export-explorer"]), "archive": ("bench-tools", ["archive"]),
                  "evidence": ("bench-tools", ["evidence"]), "recover-evidence": ("bench-tools", ["evidence", "recover"]),
-                 "restore-local": ("bench-tools", ["evidence", "restore-local"])}
+                 "restore-local": ("bench-tools", ["evidence", "restore-local"]),
+                 "regrade-status": ("bench-tools", ["regrade", "status", "--"]),
+                 "audit-log": ("bench-tools", ["audit-log"])}
 # Python programs that draw blind tokens or shuffles run under ENTROPY_DRIVER, so a recorded expectation is the
 # same on every recording. The grading slices of #156 add their programs here.
 PYTHON_ENTROPY = {}
@@ -485,7 +502,12 @@ def archive_members(raw, form):
     if form == "tar.gz":
         with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as bundle:
             for item in bundle:
-                member = {"name": item.name, "type": item.type.decode("latin-1"), "size": item.size, "mode": item.mode}
+                raw_name = os.fsencode(item.name)
+                try:
+                    name = {"name": raw_name.decode("utf-8")}
+                except UnicodeDecodeError:
+                    name = {"name_b64": base64.b64encode(raw_name).decode("ascii")}
+                member = {**name, "type": item.type.decode("latin-1"), "size": item.size, "mode": item.mode}
                 if item.isfile():
                     member["sha256"] = hashlib.sha256(bundle.extractfile(item).read()).hexdigest()
                 members.append(member)

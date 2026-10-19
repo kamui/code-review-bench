@@ -24,6 +24,10 @@ impl Failure {
     }
 
     /// The last line of the traceback Python printed for the same failure.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
     pub fn line(&self) -> String {
         if self.message.is_empty() {
             self.kind.to_string()
@@ -932,6 +936,522 @@ pub(crate) fn fromisoformat(value: &str) -> Option<(i64, bool)> {
     Some((instant, offset.is_some()))
 }
 
+/// An `int` magnitude in base 2^32, least significant limb first, without leading zero limbs.
+type Binary = Vec<u32>;
+
+fn trimmed(mut magnitude: Binary) -> Binary {
+    while magnitude.last() == Some(&0) {
+        magnitude.pop();
+    }
+    magnitude
+}
+
+fn bit_length(magnitude: &[u32]) -> i64 {
+    magnitude.last().map_or(0, |top| {
+        (magnitude.len() as i64 - 1) * 32 + i64::from(32 - top.leading_zeros())
+    })
+}
+
+fn multiply_add(magnitude: &mut Binary, factor: u32, addend: u32) {
+    let mut carry = u64::from(addend);
+    for limb in magnitude.iter_mut() {
+        let value = u64::from(*limb) * u64::from(factor) + carry;
+        *limb = value as u32;
+        carry = value >> 32;
+    }
+    if carry > 0 {
+        magnitude.push(carry as u32);
+    }
+}
+
+/// Divides in place and returns the remainder.
+fn divide_small(magnitude: &mut Binary, divisor: u64) -> u64 {
+    let mut remainder: u128 = 0;
+    for limb in magnitude.iter_mut().rev() {
+        let current = (remainder << 32) | u128::from(*limb);
+        *limb = (current / u128::from(divisor)) as u32;
+        remainder = current % u128::from(divisor);
+    }
+    *magnitude = trimmed(std::mem::take(magnitude));
+    remainder as u64
+}
+
+fn shifted_left(magnitude: &[u32], bits: i64) -> Binary {
+    let words = (bits / 32) as usize;
+    let shift = (bits % 32) as u32;
+    let mut out = vec![0; words];
+    let mut carry = 0u32;
+    for limb in magnitude {
+        if shift == 0 {
+            out.push(*limb);
+        } else {
+            out.push((limb << shift) | carry);
+            carry = limb >> (32 - shift);
+        }
+    }
+    out.push(carry);
+    trimmed(out)
+}
+
+/// The magnitude shifted right, and whether a nonzero bit was dropped.
+fn shifted_right(magnitude: &[u32], bits: i64) -> (Binary, bool) {
+    let words = (bits / 32) as usize;
+    let shift = (bits % 32) as u32;
+    if words >= magnitude.len() {
+        return (Vec::new(), magnitude.iter().any(|limb| *limb != 0));
+    }
+    let mut lost = magnitude[..words].iter().any(|limb| *limb != 0);
+    if shift > 0 {
+        lost |= magnitude[words] & ((1u32 << shift) - 1) != 0;
+    }
+    let out = (words..magnitude.len())
+        .map(|at| {
+            let low = magnitude[at] >> shift;
+            let high = match magnitude.get(at + 1) {
+                Some(next) if shift > 0 => next << (32 - shift),
+                _ => 0,
+            };
+            low | high
+        })
+        .collect();
+    (trimmed(out), lost)
+}
+
+fn add_binary(left: &[u32], right: &[u32]) -> Binary {
+    let mut out = Vec::with_capacity(left.len().max(right.len()) + 1);
+    let mut carry = 0u64;
+    for at in 0..left.len().max(right.len()) {
+        let sum = u64::from(*left.get(at).unwrap_or(&0))
+            + u64::from(*right.get(at).unwrap_or(&0))
+            + carry;
+        out.push(sum as u32);
+        carry = sum >> 32;
+    }
+    out.push(carry as u32);
+    trimmed(out)
+}
+
+fn compare_binary(left: &[u32], right: &[u32]) -> std::cmp::Ordering {
+    left.len()
+        .cmp(&right.len())
+        .then_with(|| left.iter().rev().cmp(right.iter().rev()))
+}
+
+/// `larger - smaller` for magnitudes with `larger >= smaller`.
+fn subtract_binary(larger: &[u32], smaller: &[u32]) -> Binary {
+    let mut out = Vec::with_capacity(larger.len());
+    let mut borrow = 0i64;
+    for (at, limb) in larger.iter().enumerate() {
+        let mut difference = i64::from(*limb) - i64::from(*smaller.get(at).unwrap_or(&0)) - borrow;
+        borrow = 0;
+        if difference < 0 {
+            difference += 1 << 32;
+            borrow = 1;
+        }
+        out.push(difference as u32);
+    }
+    trimmed(out)
+}
+
+/// A signed exact value: `(-1)^negative * magnitude`.
+#[derive(Clone, Debug, Default)]
+struct Signed {
+    negative: bool,
+    magnitude: Binary,
+}
+
+impl Signed {
+    fn add(&self, other: &Self) -> Self {
+        if self.negative == other.negative {
+            return Self {
+                negative: self.negative,
+                magnitude: add_binary(&self.magnitude, &other.magnitude),
+            };
+        }
+        let (larger, smaller) = if compare_binary(&self.magnitude, &other.magnitude).is_ge() {
+            (self, other)
+        } else {
+            (other, self)
+        };
+        let magnitude = subtract_binary(&larger.magnitude, &smaller.magnitude);
+        Self {
+            negative: larger.negative && !magnitude.is_empty(),
+            magnitude,
+        }
+    }
+
+    fn compare(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        let zero = |value: &Self| value.magnitude.is_empty();
+        match (self.negative && !zero(self), other.negative && !zero(other)) {
+            (false, true) => Ordering::Greater,
+            (true, false) => Ordering::Less,
+            (false, false) => compare_binary(&self.magnitude, &other.magnitude),
+            (true, true) => compare_binary(&other.magnitude, &self.magnitude),
+        }
+    }
+}
+
+impl Big {
+    fn binary(&self) -> Signed {
+        let mut magnitude = Vec::new();
+        for limb in self.limbs.iter().rev() {
+            multiply_add(&mut magnitude, LIMB as u32, *limb);
+        }
+        Signed {
+            negative: self.negative,
+            magnitude: trimmed(magnitude),
+        }
+    }
+
+    fn from_binary(value: &Signed) -> Self {
+        let mut rest = value.magnitude.clone();
+        let mut limbs = Vec::new();
+        while !rest.is_empty() {
+            limbs.push(divide_small(&mut rest, LIMB) as u32);
+        }
+        let mut big = Self {
+            negative: value.negative,
+            limbs,
+        };
+        big.trim();
+        big
+    }
+}
+
+/// A finite float as an exact `mantissa * 2^exponent`.
+fn float_parts(value: f64) -> (Signed, i64) {
+    let bits = value.to_bits();
+    let field = ((bits >> 52) & 0x7ff) as i64;
+    let fraction = bits & ((1 << 52) - 1);
+    let (mantissa, exponent) = if field == 0 {
+        (fraction, -1074)
+    } else {
+        (fraction | (1 << 52), field - 1075)
+    };
+    let magnitude = trimmed(vec![mantissa as u32, (mantissa >> 32) as u32]);
+    (
+        Signed {
+            negative: value.is_sign_negative(),
+            magnitude,
+        },
+        exponent,
+    )
+}
+
+/// `numerator / denominator * 2^exponent`, correctly rounded to a float with ties to even, as Python divides
+/// two `int`s; `None` past the largest float. A zero numerator gives `0.0`.
+fn ratio_to_float(numerator: &Signed, denominator: u64, exponent: i64) -> Option<f64> {
+    if numerator.magnitude.is_empty() {
+        return Some(0.0);
+    }
+    let denominator_bits = i64::from(64 - denominator.leading_zeros());
+    let shift = 56 - (bit_length(&numerator.magnitude) - denominator_bits);
+    let (mut scaled, mut inexact) = if shift >= 0 {
+        (shifted_left(&numerator.magnitude, shift), false)
+    } else {
+        shifted_right(&numerator.magnitude, -shift)
+    };
+    inexact |= divide_small(&mut scaled, denominator) != 0;
+    let quotient = scaled
+        .iter()
+        .rev()
+        .fold(0u128, |acc, limb| (acc << 32) | u128::from(*limb));
+    let length = i64::from(128 - quotient.leading_zeros());
+    let top = exponent - shift + length - 1;
+    let precision = if top >= -1022 { 53 } else { 1075 + top };
+    let drop = length - precision;
+    let sign = if numerator.negative { -1.0 } else { 1.0 };
+    if drop > length + 1 {
+        return Some(sign * 0.0);
+    }
+    let half = 1u128 << (drop - 1);
+    let low = quotient & ((half << 1) - 1);
+    let mut kept = quotient >> drop;
+    if low > half || (low == half && (inexact || kept & 1 == 1)) {
+        kept += 1;
+    }
+    let mut unit = exponent - shift + drop;
+    let bits = if precision == 53 {
+        if kept == 1 << 53 {
+            kept >>= 1;
+            unit += 1;
+        }
+        let biased = unit + 52 + 1023;
+        if biased >= 0x7ff {
+            return None;
+        }
+        ((biased as u64) << 52) | (kept as u64 & ((1 << 52) - 1))
+    } else {
+        kept as u64
+    };
+    Some(sign * f64::from_bits(bits))
+}
+
+fn exact(number: &Number) -> (Signed, i64) {
+    match number {
+        Number::Int(big) => (big.binary(), 0),
+        Number::Float(float) => float_parts(*float),
+    }
+}
+
+const TOO_LARGE_QUOTIENT: &str = "integer division result too large for a float";
+
+impl Number {
+    /// `left - right` for an `int` or `float`.
+    pub(crate) fn subtract(&self, other: &Self) -> Result<Self> {
+        let negated = match other {
+            Self::Int(big) => Self::Int(big.negated()),
+            Self::Float(float) => Self::Float(-float),
+        };
+        self.add(&negated)
+    }
+
+    /// `self / divisor` for a positive `int` divisor, as Python's true division computes it.
+    pub(crate) fn divide(&self, divisor: u64) -> Result<f64> {
+        match self {
+            Self::Float(float) => Ok(float / divisor as f64),
+            Self::Int(big) => ratio_to_float(&big.binary(), divisor, 0)
+                .ok_or_else(|| Failure::new("OverflowError", TOO_LARGE_QUOTIENT)),
+        }
+    }
+
+    /// `float(self)`.
+    pub(crate) fn to_float(&self) -> Result<f64> {
+        match self {
+            Self::Float(float) => Ok(*float),
+            Self::Int(big) => big.to_float(),
+        }
+    }
+
+    /// `self < other`, comparing an `int` and a `float` exactly; false when either is NaN.
+    pub(crate) fn less(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Float(a), Self::Float(b)) => a < b,
+            (Self::Float(a), _) if !a.is_finite() => *a < 0.0 && !a.is_nan(),
+            (_, Self::Float(b)) if !b.is_finite() => *b > 0.0,
+            _ => {
+                let ((left, left_exponent), (right, right_exponent)) = (exact(self), exact(other));
+                let low = left_exponent.min(right_exponent);
+                let scale = |value: Signed, exponent: i64| Signed {
+                    magnitude: shifted_left(&value.magnitude, exponent - low),
+                    negative: value.negative,
+                };
+                scale(left, left_exponent)
+                    .compare(&scale(right, right_exponent))
+                    .is_lt()
+            }
+        }
+    }
+
+    /// `round(self, 6)`, or `round(self, 1)` and so on: a float rounds through its exact decimal value.
+    pub(crate) fn round_digits(&self, digits: usize) -> Self {
+        match self {
+            Self::Float(float) if float.is_finite() => {
+                Self::Float(format!("{float:.digits$}").parse().unwrap_or(*float))
+            }
+            other => other.clone(),
+        }
+    }
+
+    /// `round(self)`: the nearest `int`, ties to even.
+    pub(crate) fn round_integer(&self) -> Result<Self> {
+        match self {
+            Self::Int(big) => Ok(Self::Int(big.clone())),
+            Self::Float(float) if float.is_nan() => Err(Failure::new(
+                "ValueError",
+                "cannot convert float NaN to integer",
+            )),
+            Self::Float(float) if float.is_infinite() => Err(Failure::new(
+                "OverflowError",
+                "cannot convert float infinity to integer",
+            )),
+            Self::Float(float) => Ok(Self::Int(
+                Big::parse(&format!("{:.0}", float.round_ties_even().abs()))
+                    .with_sign(*float < 0.0),
+            )),
+        }
+    }
+}
+
+impl Big {
+    fn negated(&self) -> Self {
+        let mut big = self.clone();
+        big.negative = !big.negative;
+        big.trim();
+        big
+    }
+
+    fn with_sign(mut self, negative: bool) -> Self {
+        self.negative = negative;
+        self.trim();
+        self
+    }
+}
+
+/// `max(values)`: the first of the largest, as Python keeps it when values compare equal.
+pub(crate) fn maximum(values: &[Number]) -> Option<Number> {
+    let mut items = values.iter();
+    let mut best = items.next()?.clone();
+    for item in items {
+        if best.less(item) {
+            best = item.clone();
+        }
+    }
+    Some(best)
+}
+
+/// `statistics.median(values)` of `int`s: the middle value, or the mean of the two middle values as a float.
+pub(crate) fn median(values: &[Number]) -> Result<Number> {
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|left, right| {
+        if left.less(right) {
+            std::cmp::Ordering::Less
+        } else if right.less(left) {
+            std::cmp::Ordering::Greater
+        } else {
+            std::cmp::Ordering::Equal
+        }
+    });
+    let count = sorted.len();
+    if count == 0 {
+        return Err(Failure::new(
+            "statistics.StatisticsError",
+            "no median for empty data",
+        ));
+    }
+    if count % 2 == 1 {
+        return Ok(sorted[count / 2].clone());
+    }
+    Ok(Number::Float(
+        sorted[count / 2 - 1].add(&sorted[count / 2])?.divide(2)?,
+    ))
+}
+
+/// `statistics.mean(values)`: the exact mean, an `int` when every value is one and the mean is whole, else
+/// correctly rounded to a float.
+pub(crate) fn mean(values: &[Number]) -> Result<Number> {
+    let count = values.len() as u64;
+    let floats = values.iter().any(|value| matches!(value, Number::Float(_)));
+    let special: Vec<f64> = values
+        .iter()
+        .filter_map(|value| match value {
+            Number::Float(float) if !float.is_finite() => Some(*float),
+            _ => None,
+        })
+        .collect();
+    if !special.is_empty() {
+        return Ok(Number::Float(special.iter().sum::<f64>() / count as f64));
+    }
+    let parts: Vec<(Signed, i64)> = values.iter().map(exact).collect();
+    let low = parts
+        .iter()
+        .map(|(_, exponent)| *exponent)
+        .min()
+        .unwrap_or(0)
+        .min(0);
+    let total = parts
+        .iter()
+        .fold(Signed::default(), |total, (value, exponent)| {
+            total.add(&Signed {
+                negative: value.negative,
+                magnitude: shifted_left(&value.magnitude, exponent - low),
+            })
+        });
+    if !floats {
+        let mut quotient = total.clone();
+        if divide_small(&mut quotient.magnitude, count) == 0 {
+            return Ok(Number::Int(Big::from_binary(&quotient)));
+        }
+    }
+    ratio_to_float(&total, count, low)
+        .map(Number::Float)
+        .ok_or_else(|| Failure::new("OverflowError", TOO_LARGE_QUOTIENT))
+}
+
+/// `format(value, f".{digits}f")` for an `int` or `float`.
+pub(crate) fn fixed(value: &Number, digits: usize) -> Result<String> {
+    let float = value.to_float()?;
+    Ok(if float.is_nan() {
+        "nan".to_string()
+    } else if float.is_infinite() {
+        if float > 0.0 { "inf" } else { "-inf" }.to_string()
+    } else {
+        format!("{float:.digits$}")
+    })
+}
+
+/// `float(text)`: Unicode decimal digits and whitespace, underscores between digits, `inf` and `nan`.
+pub(crate) fn parse_float(text: &str) -> Result<f64> {
+    let invalid = || {
+        Failure::new(
+            "ValueError",
+            format!(
+                "could not convert string to float: {}",
+                pytext::repr_str(text)
+            ),
+        )
+    };
+    let ascii: String = text
+        .chars()
+        .map(|c| {
+            if pytext::is_space(c) {
+                ' '
+            } else if let Some(digit) = pytext::decimal_value(c) {
+                char::from_digit(digit, 10).unwrap_or('?')
+            } else if c.is_ascii() {
+                c
+            } else {
+                '?'
+            }
+        })
+        .collect();
+    let mut cleaned = String::with_capacity(ascii.len());
+    let mut previous = '\0';
+    for c in ascii.chars() {
+        if c == '_' {
+            if !previous.is_ascii_digit() {
+                return Err(invalid());
+            }
+        } else {
+            if previous == '_' && !c.is_ascii_digit() {
+                return Err(invalid());
+            }
+            cleaned.push(c);
+        }
+        previous = c;
+    }
+    if previous == '_' {
+        return Err(invalid());
+    }
+    let body = cleaned.trim_matches(|c: char| c.is_ascii_whitespace());
+    let digits = body.trim_start_matches(['+', '-']);
+    let word = digits.to_ascii_lowercase();
+    if body.len() - digits.len() > 1
+        || !(matches!(word.as_str(), "inf" | "infinity" | "nan")
+            || digits.bytes().all(|byte| {
+                byte.is_ascii_digit() || matches!(byte, b'.' | b'e' | b'E' | b'+' | b'-')
+            }))
+    {
+        return Err(invalid());
+    }
+    body.parse().map_err(|_| invalid())
+}
+
+/// `float(value)` of a value `json.loads` returned.
+pub(crate) fn to_float(value: &Value) -> Result<f64> {
+    match value {
+        Value::Str(text) => parse_float(text),
+        other => match number(other) {
+            Some(number) => number.to_float(),
+            None => Err(type_error(format!(
+                "float() argument must be a string or a real number, not '{}'",
+                other.type_name()
+            ))),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1008,5 +1528,126 @@ mod tests {
         );
         let huge = format!("1{}", "0".repeat(400));
         assert!(python_sum(&numbers(&["0.5", &huge])).is_err());
+    }
+
+    fn int(digits: &str) -> Number {
+        Number::Int(Big::parse(digits))
+    }
+
+    fn float_of(number: Number) -> f64 {
+        match number {
+            Number::Float(float) => float,
+            Number::Int(big) => panic!("expected a float, got the int {}", big.digits()),
+        }
+    }
+
+    #[test]
+    fn statistics_follow_python() {
+        assert!(
+            matches!(mean(&[int("1"), int("3")]).unwrap(), Number::Int(big) if big.digits() == "2")
+        );
+        assert_eq!(float_of(mean(&[int("1"), int("2")]).unwrap()), 1.5);
+        let two_53 = int("9007199254740992");
+        assert_eq!(
+            float_of(mean(&[Number::Float(0.1), two_53.clone(), int("1")]).unwrap()),
+            3002399751580331.0
+        );
+        assert_eq!(
+            float_of(mean(&[int("1"), Number::Float(f64::from_bits(1))]).unwrap()),
+            0.5
+        );
+        assert_eq!(
+            float_of(mean(&[Number::Float(f64::from_bits(1)), int("0")]).unwrap()),
+            0.0
+        );
+        assert!(float_of(mean(&[Number::Float(f64::INFINITY), int("1")]).unwrap()).is_infinite());
+        assert!(mean(&[int(&format!("1{}", "0".repeat(400))), int("1")]).is_err());
+        assert!(
+            matches!(median(&[int("3"), int("1"), int("2")]).unwrap(), Number::Int(big) if big.digits() == "2")
+        );
+        assert_eq!(float_of(median(&[int("1"), int("2")]).unwrap()), 1.5);
+        assert_eq!(
+            float_of(median(&[int("1152921504606846977"), int("1152921504606846976")]).unwrap()),
+            1.152921504606847e18
+        );
+        assert_eq!(
+            median(&[]).unwrap_err().line(),
+            "statistics.StatisticsError: no median for empty data"
+        );
+        assert!(matches!(
+            maximum(&[int("1"), Number::Float(1.0)]).unwrap(),
+            Number::Int(_)
+        ));
+        assert!(matches!(
+            maximum(&[Number::Float(1.0), int("1")]).unwrap(),
+            Number::Float(_)
+        ));
+        assert!(Number::Float(9007199254740992.0).less(&int("9007199254740993")));
+    }
+
+    #[test]
+    fn integer_division_rounds_as_python() {
+        assert_eq!(
+            int("1152921504606846977").divide(3).unwrap(),
+            3.843071682022823e17
+        );
+        assert_eq!(
+            int("1000000000000000000000000000001").divide(7).unwrap(),
+            1.4285714285714285e29
+        );
+        assert_eq!(int("1").divide(3).unwrap(), 0.3333333333333333);
+        assert!(int(&format!("1{}", "0".repeat(400))).divide(1).is_err());
+    }
+
+    #[test]
+    fn rounding_and_formatting_follow_python() {
+        assert_eq!(float_of(Number::Float(2.675).round_digits(2)), 2.67);
+        assert_eq!(float_of(Number::Float(0.125).round_digits(2)), 0.12);
+        assert!(
+            matches!(Number::Float(2.5).round_integer().unwrap(), Number::Int(big) if big.digits() == "2")
+        );
+        assert!(
+            matches!(Number::Float(-2.5).round_integer().unwrap(), Number::Int(big) if big.digits() == "-2")
+        );
+        assert!(
+            matches!(Number::Float(3.5).round_integer().unwrap(), Number::Int(big) if big.digits() == "4")
+        );
+        assert!(Number::Float(f64::NAN).round_integer().is_err());
+        assert_eq!(fixed(&Number::Float(-0.001), 2).unwrap(), "-0.00");
+        assert_eq!(fixed(&Number::Float(0.125), 2).unwrap(), "0.12");
+        assert_eq!(
+            fixed(&Number::Float(1e16), 2).unwrap(),
+            "10000000000000000.00"
+        );
+        assert_eq!(fixed(&Number::Float(f64::NEG_INFINITY), 2).unwrap(), "-inf");
+    }
+
+    #[test]
+    fn float_text_parses_as_python_3_14() {
+        for (text, value) in [
+            ("1_0.5", 10.5),
+            (" 1.5 ", 1.5),
+            ("\u{661}.5", 1.5),
+            ("\u{10D41}.5", 1.5),
+            ("1e5", 100000.0),
+            (".5", 0.5),
+            ("5.", 5.0),
+            ("\u{a0}1\u{2003}", 1.0),
+            ("-Infinity", f64::NEG_INFINITY),
+        ] {
+            assert_eq!(parse_float(text).unwrap(), value, "{text:?}");
+        }
+        assert!(parse_float("nan").unwrap().is_nan());
+        for text in [
+            "1__0", "_1", "1_", "--1", "1_.5", "1._5", "0x10", "1e_5", "1_e5",
+        ] {
+            assert_eq!(
+                parse_float(text).unwrap_err().message(),
+                format!(
+                    "could not convert string to float: {}",
+                    pytext::repr_str(text)
+                ),
+            );
+        }
     }
 }
