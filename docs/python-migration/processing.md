@@ -128,7 +128,7 @@ ranking. The front passes `--base-path` from `BASE_PATH`, as the Python export r
   it cannot restore in `STAGE/previous`.
 
 Every failure exits 1 with the last line of the traceback `export_explorer.py` printed, after
-`export_explorer.py: `. Usage errors exit 2. `export-explorer-decisions.v2.json` records each change from the Python
+`export_explorer.py: `. Usage errors exit 2. `export-explorer-decisions.v3.json` records each change from the Python
 export with its case:
 
 - `export-explorer-evidence-reads-every-input-first`: every input is read before any evidence is restored, so an
@@ -144,6 +144,8 @@ export with its case:
   non-finite number in them.
 - `export-explorer-stage-unassessed` also records that `bench/runs/*/transcripts.json` is listed as Python 3.14's
   glob lists it, keeping a dangling link that 3.12 dropped.
+- `export-explorer-unicode-15-1-adjudication-id`: a diagnostic quotes input as the `repr` paragraph below
+  describes, which differs from Python 3.12 on characters added in Unicode 15.1 and 16.0.
 
 ## Behavior the corpora do not pin
 
@@ -246,7 +248,8 @@ unassigned ones included. Python escaped the characters its own Unicode database
 whose diagnostics quote input records this with a U+2EBF0 case: `derive-packet-unicode-15-1-path`,
 `build-packet-unicode-15-1-record-name`, `roster-unicode-15-1-arm-kind`, `thermo-unicode-15-1-report-path`,
 `claude-skill-unicode-15-1-report-status`, `check-manifest-unicode-15-1-path`, `rates-unicode-15-1-source-path`,
-`upstream-unicode-15-1-registry-path` and `diff-identity-unicode-15-1-git-record`. The five whose Python is retained
+`upstream-unicode-15-1-registry-path`, `diff-identity-unicode-15-1-git-record` and
+`export-explorer-unicode-15-1-adjudication-id`. The five whose Python is retained
 carry Python 3.12's escaped output as their `baseline_defect`. `derive-packet-unassigned-path` pins U+0378, which
 every Python version escapes.
 
