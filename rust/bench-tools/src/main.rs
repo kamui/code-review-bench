@@ -898,7 +898,20 @@ fn attach_dash_led_values(arguments: Vec<OsString>) -> Vec<OsString> {
 }
 
 fn main() -> ExitCode {
-    let cli = match Cli::try_parse_from(attach_dash_led_values(std::env::args_os().collect())) {
+    let arguments: Vec<OsString> = std::env::args_os().collect();
+    // clap reads `-hx` before a subcommand as `-h` and prints help; the top level has no Python
+    // counterpart, so it keeps the former parser's refusal of an unknown command.
+    if let Some(command) = arguments.get(1).map(|name| pytext::os_bytes(name))
+        && command.len() > 2
+        && command.starts_with(b"-h")
+    {
+        return misuse(
+            "",
+            ErrorKind::InvalidSubcommand,
+            format!("unknown command {}", pytext::stderr_text(command)),
+        );
+    }
+    let cli = match Cli::try_parse_from(attach_dash_led_values(arguments)) {
         Ok(cli) => cli,
         Err(error) => return report(&error),
     };
