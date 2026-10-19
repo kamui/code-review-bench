@@ -382,6 +382,18 @@ def snapshot(repo: Path, tree: str, relative: str, destination: Path) -> set:
     return written
 
 
+def offline_cargo(command: list, env: dict, crate: str) -> str:
+    """Run an offline cargo command. A registry dependency missing from the host's Cargo cache names the fetch step,
+    which is the only one that needs the network."""
+    try:
+        return run(command, CARGO_CWD, env)
+    except InputError as error:
+        if "offline" in str(error).partition(" exited ")[2]:
+            raise InputError(f"{error}\nrun `cargo fetch --locked` in {crate} to fetch its registry dependencies into the "
+                             "Cargo cache, then install again") from None
+        raise
+
+
 def describe(crate_dir: Path, repo: Path, source: Path, host: dict) -> tuple:
     """The committed source and the toolchain a build would use, the files of the crate's snapshot, and the build's
     environment.
@@ -421,8 +433,8 @@ def describe(crate_dir: Path, repo: Path, source: Path, host: dict) -> tuple:
                               "--manifest-path", str(directory / "Cargo.toml")], CARGO_CWD, env).strip())
         if workspace.resolve() != (directory / "Cargo.toml").resolve():
             raise Refused(f"{relative} belongs to the Cargo workspace {workspace}, whose manifest and lockfile its receipt cannot pin")
-    metadata = json.loads(run(["cargo", "metadata", "--offline", "--locked", "--all-features", "--format-version", "1",
-                               "--manifest-path", str(source / "Cargo.toml")], CARGO_CWD, env))
+    metadata = json.loads(offline_cargo(["cargo", "metadata", "--offline", "--locked", "--all-features", "--format-version", "1",
+                                         "--manifest-path", str(source / "Cargo.toml")], env, relative))
     local = sorted(str(package["manifest_path"]) for package in metadata["packages"] if package["source"] is None
                    and Path(package["manifest_path"]).resolve() not in tracked)
     if local:
@@ -461,7 +473,7 @@ def build(crate_dir: Path, repo: Path, scratch: Path) -> tuple:
     command = ["cargo", "build", "--locked", "--offline", "--release", "--target", identity["target"], "--bin", identity["crate"]["bin"]]
     passed = sorted(env)
     env.update(CARGO_TARGET_DIR=str(target_dir), CARGO_ENCODED_RUSTFLAGS="\x1f".join(flags))
-    run([*command, "--manifest-path", str(source / "Cargo.toml")], CARGO_CWD, env)
+    offline_cargo([*command, "--manifest-path", str(source / "Cargo.toml")], env, identity["crate"]["path"])
     executable = target_dir / identity["target"] / "release" / identity["crate"]["bin"]
     read = sorted(consumed_variables(target_dir) & set(env))
     if read:

@@ -5,13 +5,13 @@ use bench_tools::pyjson::{self, Duplicates};
 use bench_tools::pytext::{self, PyPath};
 use bench_tools::schema::{SchemaError, Validator};
 use bench_tools::{
-    build_packet, claims, derive_packet, diff_identity, export_explorer, normalize_thermo, pyfs,
-    pyunicode, rates, roster, upstream,
+    archive, build_packet, claims, derive_packet, diff_identity, export_explorer, normalize_thermo,
+    pyfs, pyunicode, rates, roster, upstream,
 };
 use clap::builder::PossibleValuesParser;
 use clap::error::ErrorKind;
-use clap::{Args, CommandFactory, Parser};
-use std::ffi::OsString;
+use clap::{Args, CommandFactory, Parser, Subcommand};
+use std::ffi::{OsStr, OsString};
 use std::fmt::Display;
 use std::io::Write;
 use std::os::unix::ffi::OsStringExt;
@@ -56,6 +56,9 @@ enum Cli {
     /// List, stage or publish the explorer export from the current facts tools/export_explorer.py writes.
     #[command(infer_long_args = true)]
     ExportExplorer(ExportArgs),
+    /// Check cached evidence packages or native scratch archives through bench_tools::archive.
+    #[command(subcommand, infer_long_args = true)]
+    Archive(ArchiveCommand),
 }
 
 #[derive(Args)]
@@ -253,6 +256,24 @@ struct ExportArgs {
     stage: Option<OsString>,
     #[arg(long, allow_negative_numbers = true)]
     public: Option<OsString>,
+}
+
+#[derive(Subcommand)]
+enum ArchiveCommand {
+    /// Verify each package the manifests index against its cached archive.
+    #[command(infer_long_args = true)]
+    CheckPackages {
+        #[arg(long, allow_negative_numbers = true)]
+        cache: OsString,
+        #[arg(required = true, allow_negative_numbers = true)]
+        manifests: Vec<OsString>,
+    },
+    /// Check that each entry of a native scratch archive hashes to its name.
+    #[command(infer_long_args = true)]
+    CheckScratch {
+        #[arg(required = true, allow_negative_numbers = true)]
+        archives: Vec<OsString>,
+    },
 }
 
 /// Prints a parse error or the help clap renders, and exits as it does: 2 for misuse, 0 for help.
@@ -814,6 +835,113 @@ fn run_export_explorer(arguments: ExportArgs) -> Result<ExitCode, ExitCode> {
     }
 }
 
+fn archive_report(rows: Vec<pyjson::Value>, key: &str, totals: Vec<(&str, u64)>) -> Vec<u8> {
+    let mut report = pyjson::Object::default();
+    report.insert(key.to_string(), pyjson::Value::Array(rows));
+    let mut sums = pyjson::Object::default();
+    for (name, value) in totals {
+        sums.insert(name.to_string(), pyjson::Value::Int(value.to_string()));
+    }
+    report.insert("totals".to_string(), pyjson::Value::Object(sums));
+    let options = pyjson::Dumps {
+        indent: Some(2),
+        ..pyjson::Dumps::default()
+    };
+    format!(
+        "{}\n",
+        pyjson::dumps(&pyjson::Value::Object(report), &options)
+    )
+    .into_bytes()
+}
+
+fn archive_row(entries: Vec<(&str, pyjson::Value)>) -> pyjson::Value {
+    let mut row = pyjson::Object::default();
+    for (key, value) in entries {
+        row.insert(key.to_string(), value);
+    }
+    pyjson::Value::Object(row)
+}
+
+fn finish_archive(output: &[u8], failed: u64) -> Result<ExitCode, ExitCode> {
+    write_stdout(output)?;
+    Ok(ExitCode::from(u8::from(failed > 0)))
+}
+
+fn check_packages(cache: &OsStr, names: &[OsString]) -> Result<ExitCode, ExitCode> {
+    let mut manifests = Vec::new();
+    let (mut packages, mut members, mut bytes, mut failed) = (0, 0, 0, 0);
+    for name in names {
+        let shown = pytext::stderr_text(pytext::os_bytes(name));
+        let indexed = read_json_document(pytext::os_bytes(name))
+            .and_then(|manifest| archive::indexed_packages(&manifest))
+            .map_err(|error| {
+                eprintln!("archive: {shown}: {error}");
+                ExitCode::from(2)
+            })?;
+        let mut rows = Vec::new();
+        for package in &indexed {
+            let result = archive::check_package(std::path::Path::new(&cache), package);
+            packages += 1;
+            members += package.members.len() as u64;
+            bytes = u64::saturating_add(bytes, package.bytes);
+            failed += u64::from(result.is_err());
+            rows.push(archive_row(vec![
+                ("sha256", pyjson::Value::Str(package.sha256.clone())),
+                (
+                    "members",
+                    pyjson::Value::Int(package.members.len().to_string()),
+                ),
+                ("bytes", pyjson::Value::Int(package.bytes.to_string())),
+                (
+                    "result",
+                    pyjson::Value::Str(result.err().unwrap_or_else(|| "verified".to_string())),
+                ),
+            ]));
+        }
+        manifests.push(archive_row(vec![
+            ("manifest", pyjson::Value::Str(shown)),
+            ("packages", pyjson::Value::Array(rows)),
+        ]));
+    }
+    let totals = vec![
+        ("manifests", names.len() as u64),
+        ("packages", packages),
+        ("members", members),
+        ("bytes", bytes),
+        ("verified", packages - failed),
+        ("failed", failed),
+    ];
+    finish_archive(&archive_report(manifests, "manifests", totals), failed)
+}
+
+fn check_scratch(names: &[OsString]) -> Result<ExitCode, ExitCode> {
+    let (mut rows, mut entries, mut failed) = (Vec::new(), 0, 0);
+    for name in names {
+        let result = archive::check_scratch(std::path::Path::new(name));
+        let count = *result.as_ref().unwrap_or(&0);
+        entries += count;
+        failed += u64::from(result.is_err());
+        rows.push(archive_row(vec![
+            (
+                "archive",
+                pyjson::Value::Str(pytext::stderr_text(pytext::os_bytes(name))),
+            ),
+            ("entries", pyjson::Value::Int(count.to_string())),
+            (
+                "result",
+                pyjson::Value::Str(result.err().unwrap_or_else(|| "verified".to_string())),
+            ),
+        ]));
+    }
+    let totals = vec![
+        ("archives", names.len() as u64),
+        ("entries", entries),
+        ("verified", names.len() as u64 - failed),
+        ("failed", failed),
+    ];
+    finish_archive(&archive_report(rows, "archives", totals), failed)
+}
+
 /// argparse reads a dash-led argument as an option's value when it names no option and reads as a negative
 /// number or holds a space; `build-packet-option-values-with-leading-dash` pins that. clap takes only numbers,
 /// so build-packet's arguments attach such a value to its option with `=` before clap parses them.
@@ -960,6 +1088,10 @@ fn main() -> ExitCode {
         Cli::Rates(arguments) => run_rates(arguments),
         Cli::Upstream(arguments) => run_upstream(arguments),
         Cli::ExportExplorer(arguments) => run_export_explorer(arguments),
+        Cli::Archive(ArchiveCommand::CheckPackages { cache, manifests }) => {
+            check_packages(&cache, &manifests)
+        }
+        Cli::Archive(ArchiveCommand::CheckScratch { archives }) => check_scratch(&archives),
     };
     outcome.unwrap_or_else(|code| code)
 }

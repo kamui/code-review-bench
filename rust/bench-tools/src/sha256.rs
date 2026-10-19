@@ -1,17 +1,40 @@
 //! SHA-256 as `hashlib.sha256(data).hexdigest()` spells it.
 
-use sha2::{Digest, Sha256};
+use sha2::Digest;
+
+/// An incremental SHA-256, for data read in chunks.
+#[derive(Clone, Default)]
+pub struct Sha256(sha2::Sha256);
+
+impl Sha256 {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn update(&mut self, data: &[u8]) {
+        self.0.update(data);
+    }
+
+    pub fn finalize(self) -> [u8; 32] {
+        self.0.finalize().into()
+    }
+}
+
+pub fn digest(data: &[u8]) -> [u8; 32] {
+    sha2::Sha256::digest(data).into()
+}
+
+pub fn hex(digest: &[u8; 32]) -> String {
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
 
 pub fn hex_digest(data: &[u8]) -> String {
-    Sha256::digest(data)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    hex(&digest(data))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::hex_digest;
+    use super::{Sha256, digest, hex_digest};
 
     #[test]
     fn matches_published_vectors_across_padding_boundaries() {
@@ -66,6 +89,18 @@ mod tests {
                 expected,
                 "{length} zero bytes"
             );
+        }
+    }
+
+    #[test]
+    fn incremental_updates_match_the_one_shot_digest_for_every_split() {
+        let data: Vec<u8> = (0..300u32).map(|value| (value * 7 % 251) as u8).collect();
+        for chunk in [1, 3, 55, 56, 63, 64, 65, 127, 128, 300] {
+            let mut hasher = Sha256::new();
+            for part in data.chunks(chunk) {
+                hasher.update(part);
+            }
+            assert_eq!(hasher.finalize(), digest(&data), "chunks of {chunk}");
         }
     }
 }
