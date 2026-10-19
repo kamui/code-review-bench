@@ -74,9 +74,10 @@ upstream.report.__defaults__ = (root, ())
 claims.load_registry.__defaults__ = (root / "bench/claims/registry.json", root)
 sys.exit(upstream.main())
 """,
-    # file_artifacts has no command line; file_attempt.py calls it in process. `file` exposes it with the
-    # module's own refusals and exit status, as `bench-tools native-artifacts file` will.
-    "native-artifacts": """import sys
+    # The retained native_artifacts.py, which bench-tools native-artifacts replaced. file_artifacts has no command
+    # line; `file` runs it and unindexed with the module's own refusals and exit status, and prints both as
+    # bench-tools native-artifacts file does.
+    "python-native-artifacts": """import sys
 from pathlib import Path
 sys.path.insert(0, sys.argv.pop(1))
 sys.argv[0] = "native_artifacts.py"
@@ -93,9 +94,56 @@ parser.add_argument("--native-relative")
 args = parser.parse_args(sys.argv[2:])
 try:
     pin = native_artifacts.file_artifacts(args.root, args.index, args.out, args.native_relative)
+    left_out = native_artifacts.unindexed(args.root, args.index)
 except (native_artifacts.ArtifactError, OSError, ValueError, KeyError, zipfile.BadZipFile) as error:
     parser.exit(1, f"native_artifacts.py: {error}\\n")
-print(json.dumps(pin))
+print(json.dumps({"pin": pin, "unindexed": left_out}))
+""",
+    # file_attempt.archive_transcripts and recorded_archive_path as they stood before bench-tools evidence
+    # archive-transcripts replaced them, from a command line with that command's arguments.
+    "python-archive-transcripts": """import argparse, hashlib, json, os, sys, tarfile, tempfile
+from pathlib import Path
+sys.argv.pop(1)
+def sha256_bytes(data):
+    return hashlib.sha256(data).hexdigest()
+def sha256_file(path):
+    with open(path, "rb") as handle:
+        return sha256_bytes(handle.read())
+def recorded_archive_path(dest, out):
+    parts = Path(out).parts
+    for index in range(len(parts) - 2, 0, -1):
+        if parts[index:index + 2] == ("bench", "runs") and Path(dest).is_relative_to(Path(*parts[:index])):
+            return Path(dest).relative_to(Path(*parts[:index])).as_posix()
+    home = os.path.expanduser("~")
+    return dest.replace(home, "~", 1) if dest.startswith(home) else dest
+def archive_transcripts(paths, attempt_dir, dest, out):
+    dest = os.path.abspath(dest)
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    with tarfile.open(dest, "w:gz") as tar:
+        for path in sorted(set(paths)):
+            tar.add(path, arcname=os.path.relpath(path, attempt_dir))
+    ok = True
+    with tempfile.TemporaryDirectory() as scratch:
+        with tarfile.open(dest, "r:gz") as tar:
+            members = tar.getmembers()
+            for member in members:
+                if not member.isfile() or member.name.startswith(("/", "..")):
+                    ok = False
+                    continue
+                data = tar.extractfile(member).read()
+                if sha256_bytes(data) != sha256_file(os.path.join(attempt_dir, member.name)):
+                    ok = False
+            if len(members) != len(set(paths)):
+                ok = False
+    return {"path": recorded_archive_path(dest, out), "sha256": sha256_file(dest),
+            "restoration_check": "passed" if ok else "failed"}
+parser = argparse.ArgumentParser(prog="archive-transcripts")
+parser.add_argument("--attempt-dir", required=True)
+parser.add_argument("--dest", required=True)
+parser.add_argument("--out", required=True)
+parser.add_argument("paths", nargs="*")
+args = parser.parse_args()
+print(json.dumps(archive_transcripts(args.paths, args.attempt_dir, args.dest, args.out)))
 """,
     # prune_workspace resolves an archive through the retained evidence_store.resolve; this makes that one call, so
     # a step case can show Python resolving what Rust restored and the reverse.
@@ -121,14 +169,40 @@ parser.add_argument("--missing", action="append", default=[])
 args = parser.parse_args()
 collect_run.collect(args.run.resolve(), args.missing)
 """,
-    "import-benchmark": """import sys
+    # `ruling {check,route,summary,precedents} [--root DIR]` and `ruling dossier DIR`, as bench-tools spells them, run
+    # the retained ruling_record.py and ruling_dossier.py. ruling_record.py reads the checkout that holds it, and its
+    # functions bind that root as a default argument, so the driver rebinds them to the case directory and runs the
+    # command-line block with `__file__` placed there. `check` is ruling_record.py without a command word.
+    "ruling": """import runpy, sys, types
 from pathlib import Path
-sys.path.insert(0, sys.argv.pop(1))
-sys.argv[0] = "import_benchmark.py"
-import import_benchmark
-import_benchmark.ROOT = Path.cwd()
-import_benchmark.MANIFEST = import_benchmark.ROOT / "bench/import-manifest.json"
-sys.exit(import_benchmark.main())
+tools = Path(sys.argv.pop(1))
+sys.path.insert(0, str(tools))
+argv, root = sys.argv[1:], Path.cwd()
+for at, argument in enumerate(argv):
+    if argument == "--":
+        break
+    if argument == "--root" and at + 1 < len(argv):
+        root = Path(argv[at + 1]).resolve()
+        del argv[at:at + 2]
+        break
+    if argument.startswith("--root="):
+        root = Path(argument.removeprefix("--root=")).resolve()
+        del argv[at]
+        break
+if argv[:1] == ["dossier"]:
+    sys.argv = [str(tools / "ruling_dossier.py"), *argv[1:]]
+    runpy.run_path(sys.argv[0], run_name="__main__")
+    sys.exit(0)
+import delegation, ruling_record, ruling_summary
+for module in (ruling_record, ruling_summary, delegation):
+    for value in vars(module).values():
+        if isinstance(value, types.FunctionType) and value.__defaults__:
+            value.__defaults__ = tuple(root if default is ruling_record.ROOT else default for default in value.__defaults__)
+ruling_record.ROOT = root
+script = tools / "ruling_record.py"
+sys.argv = [str(script), *(argv[1:] if argv[:1] == ["check"] else argv)]
+code = compile(script.read_text(encoding="utf-8"), str(script), "exec")
+exec(code, {"__name__": "__main__", "__file__": str(root / "bench/tools/ruling_record.py"), "__builtins__": __builtins__})
 """,
     # grading_validation.py reads inputs.json one directory above its own file, where grade.py copies it into a
     # workspace; `bench-tools grading validate` names that file with --inputs. Pointing the module's __file__ beside
@@ -148,13 +222,35 @@ grading_validation.__file__ = str(Path(known.inputs).parent / "tools" / "grading
 sys.argv = ["grading_validation.py", *rest]
 sys.exit(grading_validation.main())
 """,
+    # archive_attempt has no command line; regrade.py calls it in process and stops on the failures it catches.
+    # `ATTEMPT ARCHIVE_DIR` takes both from the case directory, the repository the receipt's paths are relative to,
+    # as `bench-tools regrade archive-attempt` does.
+    "regrade-archive-attempt": """import json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv.pop(1))
+import regrade
+regrade.ROOT = Path.cwd()
+attempt, archives = (Path.cwd() / argument for argument in sys.argv[1:])
+try:
+    print(json.dumps(regrade.archive_attempt(attempt, archives)))
+except regrade.FAILURES as error:
+    print(f"regrade.py: {error}", file=sys.stderr)
+    sys.exit(2)
+""",
 }
-DRIVER_ARGUMENTS = {"native-artifacts": ["bench/tools"], "collect-run": ["tools"], "import-benchmark": ["tools"]}
+DRIVER_ARGUMENTS = {"collect-run": ["tools"]}
 RUST_PROGRAMS = {"roster": ("bench-tools", ["roster"]), "normalize-thermo": ("bench-tools", ["normalize-thermo"]),
                  "derive-packet": ("bench-tools", ["derive-packet"]), "build-packet": ("bench-tools", ["build-packet"]),
                  "export-explorer": ("bench-tools", ["export-explorer"]), "archive": ("bench-tools", ["archive"]),
                  "evidence": ("bench-tools", ["evidence"]), "recover-evidence": ("bench-tools", ["evidence", "recover"]),
-                 "restore-local": ("bench-tools", ["evidence", "restore-local"])}
+                 "restore-local": ("bench-tools", ["evidence", "restore-local"]),
+                 "native-artifacts": ("bench-tools", ["native-artifacts"]),
+                 "archive-transcripts": ("bench-tools", ["evidence", "archive-transcripts"]),
+                 "import-benchmark": ("bench-tools", ["import-benchmark"]),
+                 "regrade-status": ("bench-tools", ["regrade", "status", "--"]),
+                 "audit-log": ("bench-tools", ["audit-log"])}
+# The retained Python each moved program replaced, which a differential runs as the primary.
+PYTHON_COUNTERPARTS = {"native-artifacts": "python-native-artifacts", "archive-transcripts": "python-archive-transcripts"}
 # Python programs that draw blind tokens or shuffles run under ENTROPY_DRIVER, so a recorded expectation is the
 # same on every recording. The grading slices of #156 add their programs here.
 PYTHON_ENTROPY = {}
@@ -503,7 +599,12 @@ def archive_members(raw, form):
     if form == "tar.gz":
         with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as bundle:
             for item in bundle:
-                member = {"name": item.name, "type": item.type.decode("latin-1"), "size": item.size, "mode": item.mode}
+                raw_name = os.fsencode(item.name)
+                try:
+                    name = {"name": raw_name.decode("utf-8")}
+                except UnicodeDecodeError:
+                    name = {"name_b64": base64.b64encode(raw_name).decode("ascii")}
+                member = {**name, "type": item.type.decode("latin-1"), "size": item.size, "mode": item.mode}
                 if item.isfile():
                     member["sha256"] = hashlib.sha256(bundle.extractfile(item).read()).hexdigest()
                 members.append(member)
@@ -1168,6 +1269,23 @@ def default_commands(corpus):
                 commands[program] = [str(rust_runtime.resolve(name)), *arguments]
             except (rust_runtime.Refused, rust_runtime.InputError) as error:
                 raise ValueError(f"{program}: {error}") from None
+    return commands
+
+
+def python_commands(corpus):
+    """The default commands with each moved program run by the retained Python it replaced."""
+    commands = {}
+    programs = {step["program"] for case in corpus["cases"] for step in [case, *case.get("steps", [])] if "program" in step}
+    for program in sorted(programs):
+        driver = PYTHON_COUNTERPARTS.get(program, program)
+        if program in SETUP_PROGRAMS:
+            continue
+        if driver in PYTHON_DRIVERS:
+            commands[program] = [sys.executable, "-c", PYTHON_DRIVERS[driver],
+                                 *(str(REPO / path) for path in DRIVER_ARGUMENTS.get(driver, ["bench/tools"]))]
+        else:
+            commands.update({name: command for name, command in default_commands(
+                {"cases": [{"program": program}]}).items()})
     return commands
 
 

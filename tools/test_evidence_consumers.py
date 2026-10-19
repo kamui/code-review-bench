@@ -20,11 +20,15 @@ import rust_runtime
 from test_evidence_store import FakeGitHub
 import behavior_contract
 import collect_run
-import import_benchmark
 
 
 def rust_evidence(remote, *arguments):
     """Run `bench-tools evidence` with the corpora's stub gh answering from the fake release's current assets."""
+    return rust_bench_tools(remote, None, 'evidence', *arguments)
+
+
+def rust_bench_tools(remote, cwd, *arguments):
+    """Run `bench-tools` in `cwd` with the corpora's stub gh answering from the fake release's current assets."""
     with tempfile.TemporaryDirectory() as tools:
         tools = Path(tools)
         state = tools / 'state'
@@ -38,8 +42,18 @@ def rust_evidence(remote, *arguments):
         (tools / 'gh').write_text(f'#!/bin/sh\nexec {sys.executable} {tools / "gh.py"} "$@"\n')
         (tools / 'gh').chmod(0o755)
         environment = {**os.environ, 'PATH': f'{tools}{os.pathsep}{os.environ["PATH"]}', 'CONTRACT_GH_STATE': str(state)}
-        return subprocess.run([str(rust_runtime.resolve('bench-tools')), 'evidence', *arguments],
-                              capture_output=True, text=True, env=environment)
+        return subprocess.run([str(rust_runtime.resolve('bench-tools')), *arguments],
+                              capture_output=True, text=True, env=environment, cwd=cwd)
+
+
+def native_tools(*arguments):
+    return subprocess.run([str(rust_runtime.resolve('bench-tools')), 'native-artifacts', *map(str, arguments)],
+                          capture_output=True, text=True)
+
+
+def tree(root):
+    return {path.relative_to(root).as_posix(): (path.read_bytes(), path.stat().st_mode & 0o777)
+            for path in root.rglob('*') if path.is_file()}
 
 
 class ColdConsumersTest(unittest.TestCase):
@@ -83,7 +97,9 @@ class ColdConsumersTest(unittest.TestCase):
             record_path = native_out / 'attempt.json'
             record = store.read(record_path)
             record_path.unlink()
-            pin = native_artifacts.file_artifacts(native_root, index, native_out, 'review.json')
+            filed = native_tools('file', native_root, index, native_out, '--native-relative', 'review.json')
+            self.assertEqual(filed.returncode, 0, filed.stdout + filed.stderr)
+            pin = json.loads(filed.stdout)['pin']
             record_path.write_text(json.dumps({**record, 'native_artifact_storage': pin}))
             grading = base / 'queue/run/target/attempt-1'
             work = grading / 'work'
@@ -124,12 +140,16 @@ class ColdConsumersTest(unittest.TestCase):
                 with patch.object(collect_run, 'ROOT', cold):
                     collect_run.collect(cold / 'bench/runs/example')
                 self.assertFalse((cold / grading_archive).exists())
-                with patch.object(import_benchmark, 'ROOT', cold), patch.object(import_benchmark, 'MANIFEST', cold / 'bench/import-manifest.json'):
-                    import_benchmark.verify()
+                checked = rust_bench_tools(remote, cold, 'import-benchmark', '--check')
+                self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
                 native_cold = cold / native_out.relative_to(origin)
                 native_artifacts.verify(native_cold)
                 native_artifacts.restore(native_cold, base / 'restored-native')
                 self.assertEqual((base / 'restored-native/run/scratch/probe.sh').stat().st_mode & 0o777, 0o755)
+                for command in (['verify', native_cold], ['restore', native_cold, '--out', base / 'restored-native-rust']):
+                    done = native_tools(*command)
+                    self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                self.assertEqual(tree(base / 'restored-native-rust'), tree(base / 'restored-native'))
                 archive = transcript_entries[0]
                 (cold / archive['path']).unlink()
                 done = rust_evidence(remote, 'resolve', archive['path'], '--sha256', archive['sha256'], '--root', str(cold))

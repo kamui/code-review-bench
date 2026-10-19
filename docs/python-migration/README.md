@@ -144,7 +144,8 @@ behaviors before porting that helper.
 
 `dispatch.sh` is a maintained #157 caller, including inline command validation,
 client hash checks and native review launch. `regrade_queues.sh` is a maintained
-#156 caller, including the inline Python `status` heredoc and the quota exit code 4.
+#156 caller, including the quota exit code 4; its inline Python `status` heredoc became
+`bench-tools regrade status` in #156's slice 9.
 `pages.yml` and `rates.yml` belong to #160 for caller retirement; their underlying
 responsibilities retain the owning slices above. `package.json` delegates data,
 tests, evidence, claims, current grading, imports and rates to Python. These callers

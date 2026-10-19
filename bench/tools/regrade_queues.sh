@@ -49,27 +49,7 @@ run)
 status)
   [ $# -ge 1 ] || { echo "usage: $0 status QUEUE_DIRECTORY..." >&2; exit 2; }
   date -u +"now %FT%TZ"
-  python3 - "$@" <<'PYTHON'
-import json, shutil, sys
-from pathlib import Path
-
-for queue in map(Path, sys.argv[1:]):
-    if not (queue / "status.json").exists():
-        print(f"{queue}: not started")
-        continue
-    status = json.loads((queue / "status.json").read_text())
-    mapped = sum(row["state"] == "mapped" for row in status["batches"])
-    other = sorted({row["state"] for row in status["batches"]} - {"mapped", "pending"})
-    runs = status["invocations"]
-    client = json.loads((queue / "client.json").read_text())["version"] if (queue / "client.json").exists() else "not pinned"
-    spent = "unknown" if status["spentUpperUsd"] is None else f"${status['spentUpperUsd']:.2f}"
-    print(f"{queue}: mapped {mapped} of {status['plannedBatches']} | {status['state']}"
-          + (f" ({status['reason']})" if status["reason"] else "") + (f" | also {', '.join(other)}" if other else "")
-          + f" | spent {spent} of ${status['budgetCapUsd']} at list price | in flight {status['outstandingReservations']}"
-          + f" | client {client} | {len(runs)} run(s), {sum(run.get('wallSeconds', 0) for run in runs) / 3600:.2f} h,"
-          + f" workers {'/'.join(str(run['workers']) for run in runs)}")
-    print(f"    free space: {shutil.disk_usage(queue).free / 2**30:.0f} GiB")
-PYTHON
+  python3 bench/tools/rust_runtime.py exec bench-tools -- regrade status -- "$@"
   ;;
 *)
   sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//' >&2

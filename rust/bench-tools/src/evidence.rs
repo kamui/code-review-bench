@@ -9,6 +9,7 @@
 pub mod publication;
 pub mod recovery;
 pub mod remote;
+pub mod transcripts;
 
 use crate::archive::{self, ArchiveError, Limits, Refusal};
 use crate::pyjson::{self, Duplicates, Object, Value};
@@ -67,6 +68,10 @@ pub trait Disk {
     fn link(&mut self, from: &Path, to: &Path) -> io::Result<()>;
     /// Flush a directory's entries.
     fn sync_dir(&mut self, path: &Path) -> io::Result<()>;
+    /// Rename `from` over `to`, as `os.replace` does.
+    fn rename(&mut self, from: &Path, to: &Path) -> io::Result<()> {
+        std::fs::rename(from, to)
+    }
 }
 
 /// The host filesystem.
@@ -461,7 +466,7 @@ pub fn checked_file(path: &PyPath, sha: &str, bytes: u64, mode: Option<u32>) -> 
 }
 
 /// `Path.mkdir(parents=True, exist_ok=True)`, returning the directories it created, outermost first.
-fn make_dirs(path: &PyPath) -> Result<Vec<PyPath>> {
+pub(crate) fn make_dirs(path: &PyPath) -> Result<Vec<PyPath>> {
     let mut missing = Vec::new();
     for current in std::iter::once(path.clone()).chain(parents(path)) {
         if current.to_path_buf().is_dir() {
@@ -482,7 +487,7 @@ fn make_dirs(path: &PyPath) -> Result<Vec<PyPath>> {
     Ok(created)
 }
 
-fn parent(path: &PyPath) -> PyPath {
+pub(crate) fn parent(path: &PyPath) -> PyPath {
     parents(path)
         .into_iter()
         .next()
@@ -506,7 +511,7 @@ fn sync_reaching(disk: &mut dyn Disk, path: &PyPath) -> Result<()> {
 }
 
 /// Sync each directory that gained an entry: the parents of new directories and of new links.
-fn sync_dirs(disk: &mut dyn Disk, directories: &BTreeSet<Vec<u8>>) -> Result<()> {
+pub(crate) fn sync_dirs(disk: &mut dyn Disk, directories: &BTreeSet<Vec<u8>>) -> Result<()> {
     for directory in directories {
         let path = PyPath::new(directory);
         disk.sync_dir(&path.to_path_buf())
@@ -517,7 +522,7 @@ fn sync_dirs(disk: &mut dyn Disk, directories: &BTreeSet<Vec<u8>>) -> Result<()>
 
 const TEMPORARY_CHARACTERS: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789_";
 
-fn random_name(prefix: &str) -> String {
+pub(crate) fn random_name(prefix: &str) -> String {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let mut hasher = std::hash::RandomState::new().build_hasher();
     hasher.write_u64(COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
@@ -532,12 +537,12 @@ fn random_name(prefix: &str) -> String {
 }
 
 /// `tempfile.TemporaryDirectory(prefix=..., dir=...)`: a new directory, mode 0700, removed with its contents.
-struct TempDir {
-    path: PyPath,
+pub(crate) struct TempDir {
+    pub(crate) path: PyPath,
 }
 
 impl TempDir {
-    fn new(parent: &PyPath, prefix: &str) -> Result<Self> {
+    pub(crate) fn new(parent: &PyPath, prefix: &str) -> Result<Self> {
         loop {
             let path = parent.join(random_name(prefix).as_bytes());
             match std::fs::DirBuilder::new()
@@ -774,19 +779,24 @@ pub fn verify_remote(store: &mut Store<'_>, manifest: &Value) -> Result<()> {
 /// directory, then linked to its name, never replacing it, and the directory and each of its ancestors synced. An
 /// existing record with the same text is accepted, as `evidence_store.write_new` accepts it.
 pub fn write_new(disk: &mut dyn Disk, path: &PyPath, value: &Value) -> Result<()> {
+    let options = pyjson::Dumps {
+        indent: Some(2),
+        ..pyjson::Dumps::default()
+    };
+    write_new_as(disk, path, value, &options)
+}
+
+/// `write_new` with `json.dumps` options other than `indent=2`.
+pub fn write_new_as(
+    disk: &mut dyn Disk,
+    path: &PyPath,
+    value: &Value,
+    options: &pyjson::Dumps,
+) -> Result<()> {
     let directory = parent(path);
     make_dirs(&directory)?;
     let reaching = reaching(path);
-    let encoded = format!(
-        "{}\n",
-        pyjson::dumps(
-            value,
-            &pyjson::Dumps {
-                indent: Some(2),
-                ..pyjson::Dumps::default()
-            }
-        )
-    );
+    let encoded = format!("{}\n", pyjson::dumps(value, options));
     let same = |path: &PyPath| -> Result<()> {
         match pytext::read_text(path) {
             Ok(existing) if existing == encoded => Ok(()),
