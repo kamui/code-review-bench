@@ -9,13 +9,18 @@
 //! flag changes them, and `(?i)` folds case with `re`'s tables. Anything else is refused rather than read
 //! some other way.
 //!
-//! The matcher simulates the pattern's automaton, so it answers whether a match exists, which is all a
-//! schema `pattern` asks; it reports no groups or positions.
+//! The `regex` crate matches a translation of the parsed pattern, so it answers whether a match exists, which is
+//! all a schema `pattern` asks; it reports no groups or positions. A pattern whose translation exceeds the
+//! crate's default compiled size limit, or nests more than 1,500 levels of the crate's syntax, is refused. The
+//! recursive parser runs first, so a pattern nested near 100,000 groups still exhausts the stack.
+
+use std::fmt::Write;
+use std::sync::OnceLock;
 
 use crate::{pytext, pyunicode};
 
 const MAX_REPEAT: u32 = 1_000;
-const MAX_PROGRAM: usize = 100_000;
+const NEST_LIMIT: u32 = 1_500;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Unsupported(pub String);
@@ -66,20 +71,9 @@ enum Node {
 }
 
 #[derive(Clone, Debug)]
-enum Inst {
-    Atom(Atom),
-    Split(usize, usize),
-    Jump(usize),
-    Start,
-    End,
-    Boundary(bool),
-    Match,
-}
-
-#[derive(Clone, Debug)]
 pub struct Regex {
-    program: Vec<Inst>,
-    flags: Flags,
+    matcher: regex::Regex,
+    multiline: bool,
 }
 
 struct Parser {
@@ -461,75 +455,162 @@ fn fold(atom: &Atom) -> Atom {
     }
 }
 
-fn emit(node: &Node, flags: Flags, program: &mut Vec<Inst>) -> Result<(), Unsupported> {
-    if program.len() > MAX_PROGRAM {
-        return Err(Unsupported("pattern too large".to_string()));
+/// Matches one encoded character's marker; see [`Regex::search`].
+const MARK: &str = r"[\n a]";
+
+fn write_char(out: &mut String, c: char) {
+    let _ = write!(out, "\\x{{{:X}}}", u32::from(c));
+}
+
+fn write_range(out: &mut String, low: char, high: char) {
+    write_char(out, low);
+    if high != low {
+        out.push('-');
+        write_char(out, high);
     }
-    match node {
-        Node::Atom(Atom::Any) if flags.dot_all => program.push(Inst::Atom(Atom::Class {
-            items: Vec::new(),
-            negated: true,
+}
+
+/// The characters `test` accepts, as the ranges of a class body.
+fn ranges(test: impl Fn(char) -> bool) -> String {
+    let mut out = String::new();
+    let mut run: Option<(char, char)> = None;
+    for c in ('\0'..=char::MAX).filter(|c| test(*c)) {
+        run = match run {
+            Some((low, high)) if u32::from(high) + 1 == u32::from(c) => Some((low, c)),
+            Some((low, high)) => {
+                write_range(&mut out, low, high);
+                Some((c, c))
+            }
+            None => Some((c, c)),
+        };
+    }
+    if let Some((low, high)) = run {
+        write_range(&mut out, low, high);
+    }
+    out
+}
+
+/// The class body of `pytext`'s table behind `\d`, `\s` or `\w`, built once from the table itself so the crate's
+/// own Unicode tables, whose version and definitions differ from Python's, are never consulted.
+fn table(cell: &'static OnceLock<String>, test: fn(char) -> bool) -> &'static str {
+    cell.get_or_init(|| ranges(test))
+}
+
+static DIGITS: OnceLock<String> = OnceLock::new();
+static SPACES: OnceLock<String> = OnceLock::new();
+static WORDS: OnceLock<String> = OnceLock::new();
+static CASE_CHANGING: OnceLock<(String, Vec<char>)> = OnceLock::new();
+
+/// The characters a `(?i)` atom can treat differently from its plain form: those `to_lower` or
+/// `to_upper_astral` changes. Every other character is its own lowercase, so the plain class decides it.
+fn case_changing() -> &'static (String, Vec<char>) {
+    CASE_CHANGING.get_or_init(|| {
+        let changes = |c: char| pyunicode::to_lower(c) != c || pyunicode::to_upper_astral(c) != c;
+        (
+            ranges(changes),
+            ('\0'..=char::MAX).filter(|c| changes(*c)).collect(),
+        )
+    })
+}
+
+fn write_item(out: &mut String, item: &ClassItem) {
+    let (cell, test, negated): (_, fn(char) -> bool, _) = match item {
+        ClassItem::Range(low, high) | ClassItem::FoldedRange(low, high) => {
+            return write_range(out, *low, *high);
+        }
+        ClassItem::Digit(negated) => (&DIGITS, |c| pytext::decimal_value(c).is_some(), negated),
+        ClassItem::Space(negated) => (&SPACES, pytext::is_space, negated),
+        ClassItem::Word(negated) => (&WORDS, pytext::is_word, negated),
+    };
+    out.push_str(if *negated { "[^" } else { "[" });
+    out.push_str(table(cell, test));
+    out.push(']');
+}
+
+/// The crate class matching the characters [`Atom::matches`] accepts.
+fn write_atom(out: &mut String, atom: &Atom) {
+    match atom {
+        Atom::Literal(c) => write_char(out, *c),
+        Atom::Any => out.push_str(r"[^\n]"),
+        Atom::Class {
+            items,
+            negated,
             lowered: false,
-        })),
-        Node::Atom(atom) if flags.ignore_case => program.push(Inst::Atom(fold(atom))),
-        Node::Atom(atom) => program.push(Inst::Atom(atom.clone())),
-        Node::Start => program.push(Inst::Start),
-        Node::End => program.push(Inst::End),
-        Node::Boundary(negated) => program.push(Inst::Boundary(*negated)),
+        } => {
+            out.push_str(if *negated { "[^" } else { "[" });
+            for item in items {
+                write_item(out, item);
+            }
+            out.push(']');
+        }
+        Atom::Class {
+            items,
+            negated,
+            lowered: true,
+        } => {
+            let (changing, changing_chars) = case_changing();
+            out.push_str("[[");
+            write_atom(
+                out,
+                &Atom::Class {
+                    items: items.clone(),
+                    negated: *negated,
+                    lowered: false,
+                },
+            );
+            let _ = write!(out, "--[{changing}]]");
+            for c in changing_chars.iter().filter(|c| atom.matches(**c)) {
+                write_char(out, *c);
+            }
+            out.push(']');
+        }
+    }
+}
+
+fn write_node(out: &mut String, node: &Node, flags: Flags) {
+    match node {
+        Node::Atom(atom) => {
+            out.push_str(MARK);
+            match atom {
+                Atom::Any if flags.dot_all => out.push_str("(?s:.)"),
+                atom if flags.ignore_case => write_atom(out, &fold(atom)),
+                atom => write_atom(out, atom),
+            }
+            out.push_str(MARK);
+        }
+        Node::Start if flags.multiline => out.push_str("(?m:^)"),
+        Node::Start => out.push_str(r"\A"),
+        Node::End => out.push_str("(?m:$)"),
+        Node::Boundary(false) => out.push_str(r"(?-u:\b)"),
+        Node::Boundary(true) => out.push_str(r"(?-u:\B)"),
         Node::Concat(items) => {
             for item in items {
-                emit(item, flags, program)?;
+                write_node(out, item, flags);
             }
         }
         Node::Alternation(branches) => {
-            let mut jumps = Vec::new();
+            out.push_str("(?:");
             for (index, branch) in branches.iter().enumerate() {
-                if index + 1 == branches.len() {
-                    emit(branch, flags, program)?;
-                } else {
-                    let split = program.len();
-                    program.push(Inst::Split(split + 1, 0));
-                    emit(branch, flags, program)?;
-                    jumps.push(program.len());
-                    program.push(Inst::Jump(0));
-                    let next = program.len();
-                    program[split] = Inst::Split(split + 1, next);
+                if index > 0 {
+                    out.push('|');
                 }
+                write_node(out, branch, flags);
             }
-            let end = program.len();
-            for jump in jumps {
-                program[jump] = Inst::Jump(end);
-            }
+            out.push(')');
         }
         Node::Repeat { node, min, max } => {
-            for _ in 0..*min {
-                emit(node, flags, program)?;
-            }
+            out.push_str("(?:");
+            write_node(out, node, flags);
             match max {
-                None => {
-                    let split = program.len();
-                    program.push(Inst::Split(split + 1, 0));
-                    emit(node, flags, program)?;
-                    program.push(Inst::Jump(split));
-                    let end = program.len();
-                    program[split] = Inst::Split(split + 1, end);
-                }
                 Some(max) => {
-                    let mut splits = Vec::new();
-                    for _ in *min..*max {
-                        splits.push(program.len());
-                        program.push(Inst::Split(0, 0));
-                        emit(node, flags, program)?;
-                    }
-                    let end = program.len();
-                    for split in splits {
-                        program[split] = Inst::Split(split + 1, end);
-                    }
+                    let _ = write!(out, "){{{min},{max}}}");
+                }
+                None => {
+                    let _ = write!(out, "){{{min},}}");
                 }
             }
         }
     }
-    Ok(())
 }
 
 impl ClassItem {
@@ -575,87 +656,56 @@ pub fn compile(pattern: &str) -> Result<Regex, Unsupported> {
         return Err(parser.refuse("unbalanced parenthesis"));
     }
     let flags = parser.flags;
-    let mut program = Vec::new();
-    emit(&node, flags, &mut program)?;
-    program.push(Inst::Match);
-    Ok(Regex { program, flags })
+    let mut syntax = format!(r"\A(?:{MARK}(?s:.){MARK})*?(?:");
+    write_node(&mut syntax, &node, flags);
+    syntax.push(')');
+    // Python's parser reaches its recursion limit by 1,324 levels of this syntax, and the crate's compiler stays
+    // within a 1 MiB thread stack up to 1,500.
+    let matcher = regex::RegexBuilder::new(&syntax)
+        .nest_limit(NEST_LIMIT)
+        .build()
+        .map_err(|error| match error {
+            regex::Error::CompiledTooBig(_) => Unsupported("pattern too large".to_string()),
+            _ => Unsupported("pattern nested too deeply".to_string()),
+        })?;
+    Ok(Regex {
+        matcher,
+        multiline: flags.multiline,
+    })
 }
 
 impl Regex {
     /// Whether `re.search(pattern, text)` finds a match.
+    ///
+    /// The crate has no lookaround and its own word characters, so the text is encoded to let its ASCII
+    /// assertions decide Python's: every character is wrapped in two ASCII markers, `a` beside a Python word
+    /// character, `\n` beside a newline that ends a line for `^` and `$`, and a space otherwise. Between two
+    /// characters the crate's ASCII `\b` then sees exactly Python's word boundary, and `(?m:^)` and `(?m:$)`
+    /// see Python's line ends: every newline under `(?m)`, otherwise only a final one, which `$` stops before.
+    /// The pattern consumes whole wrapped characters from the start, so it is only tried between them.
     pub fn search(&self, text: &str) -> bool {
-        let chars: Vec<char> = text.chars().collect();
-        let size = self.program.len();
-        let mut current: Vec<usize> = Vec::new();
-        let mut seen = vec![usize::MAX; size];
-        for position in 0..=chars.len() {
-            if self.add(0, position, &chars, &mut current, &mut seen) {
-                return true;
-            }
-            let Some(c) = chars.get(position) else {
-                break;
-            };
-            let mut next = Vec::new();
-            for pc in std::mem::take(&mut current) {
-                if let Inst::Atom(atom) = &self.program[pc]
-                    && atom.matches(*c)
-                    && self.add(pc + 1, position + 1, &chars, &mut next, &mut seen)
-                {
-                    return true;
-                }
-            }
-            current = next;
+        let mut encoded = String::with_capacity(text.len() * 3);
+        let mut chars = text.chars().peekable();
+        while let Some(c) = chars.next() {
+            let word = pytext::is_word(c);
+            let line_end = c == '\n' && (self.multiline || chars.peek().is_none());
+            encoded.push(if word {
+                'a'
+            } else if line_end {
+                '\n'
+            } else {
+                ' '
+            });
+            encoded.push(c);
+            encoded.push(if word {
+                'a'
+            } else if c == '\n' && self.multiline {
+                '\n'
+            } else {
+                ' '
+            });
         }
-        false
-    }
-
-    /// Follows the instructions that consume nothing from `pc`, queueing those that consume a character.
-    /// Returns whether a match is reached.
-    fn add(
-        &self,
-        pc: usize,
-        position: usize,
-        chars: &[char],
-        list: &mut Vec<usize>,
-        seen: &mut [usize],
-    ) -> bool {
-        let mut stack = vec![pc];
-        while let Some(pc) = stack.pop() {
-            if seen[pc] == position {
-                continue;
-            }
-            seen[pc] = position;
-            match &self.program[pc] {
-                Inst::Atom(_) => list.push(pc),
-                Inst::Split(first, second) => {
-                    stack.push(*second);
-                    stack.push(*first);
-                }
-                Inst::Jump(target) => stack.push(*target),
-                Inst::Start
-                    if position == 0 || (self.flags.multiline && chars[position - 1] == '\n') =>
-                {
-                    stack.push(pc + 1);
-                }
-                Inst::End
-                    if position == chars.len()
-                        || (self.flags.multiline && chars[position] == '\n')
-                        || (position + 1 == chars.len() && chars[position] == '\n') =>
-                {
-                    stack.push(pc + 1);
-                }
-                Inst::Boundary(negated)
-                    if ((position > 0 && pytext::is_word(chars[position - 1]))
-                        != chars.get(position).is_some_and(|c| pytext::is_word(*c)))
-                        != *negated =>
-                {
-                    stack.push(pc + 1);
-                }
-                Inst::Start | Inst::End | Inst::Boundary(_) => {}
-                Inst::Match => return true,
-            }
-        }
-        false
+        self.matcher.is_match(&encoded)
     }
 }
 
@@ -754,6 +804,43 @@ mod tests {
         assert!(search("(?x)a *$", "aaa"));
         assert!(search("(?i)(?m)^A", "x\na"));
         assert!(search("(?ui)A", "a"));
+    }
+
+    #[test]
+    fn anchors_around_newlines_match_as_python_does() {
+        assert!(search("a$\n", "a\n"));
+        assert!(search("^$", "\n"));
+        assert!(!search("^$", "\n\n"));
+        assert!(!search("a$", "a\n\n"));
+        assert!(search("$\n$", "\n"));
+        assert!(!search("a$b", "a\nb"));
+        assert!(search("(?m)a$\nb", "a\nb"));
+        assert!(search("(?m)^$", "a\n"));
+        assert!(search("(?m)\n^", "\n"));
+        assert!(!search("^\n", ""));
+        assert!(search(r"\bb", "a\nb"));
+        assert!(search("(?s).$", "\n"));
+    }
+
+    #[test]
+    fn translations_beyond_the_crate_limits_are_refused() {
+        let message = |pattern: &str| compile(pattern).err().map(|Unsupported(reason)| reason);
+        assert!(compile(r"^\w{504}$").is_ok());
+        assert_eq!(message(r"^\w{1000}$").as_deref(), Some("pattern too large"));
+        let nested = |depth: usize| format!("{}a{}", "(".repeat(depth), "|b)*".repeat(depth));
+        // An unoptimized build's frames are several times a release build's.
+        std::thread::Builder::new()
+            .stack_size(64 << 20)
+            .spawn(move || {
+                assert!(compile(&nested(373)).is_ok());
+                assert_eq!(
+                    message(&nested(374)).as_deref(),
+                    Some("pattern nested too deeply")
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     #[test]

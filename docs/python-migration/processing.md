@@ -36,8 +36,17 @@ outputs depend on:
 - `pytext` holds `surrogateescape` decoding, `str.strip` whitespace, `repr`, `pathlib` path joining, universal
   newlines, and the `OSError` and `UnicodeDecodeError` messages that diagnostics quote.
 - `sha256` implements SHA-256.
-- `pyregex` is `re.search` for the pattern syntax the schemas use, `pyunicode` holds Python's decimal digits and
-  `int(str)`, and `pyfs` holds `Path.resolve`, `relative_to` and directory listing.
+- `pyregex` is `re.search` for the pattern syntax the schemas use, matched by the `regex` crate, `pyunicode` holds
+  Python's decimal digits and `int(str)`, and `pyfs` holds `Path.resolve`, `relative_to` and directory listing.
+
+| Crate | Version | License | Purpose |
+| --- | --- | --- | --- |
+| `regex`, with only its `std` feature | 1.13.1 | MIT OR Apache-2.0 | Matches `pyregex`'s translation of a schema pattern ([#215](https://github.com/kamui/code-review-bench/issues/215)) |
+| `regex-automata` | 0.4.18 | MIT OR Apache-2.0 | `regex`'s engines |
+| `regex-syntax` | 0.8.11 | MIT OR Apache-2.0 | `regex`'s parser, without its Unicode tables |
+
+`Cargo.lock` also lists `aho-corasick` 1.1.5 and `memchr` 2.8.3, optional dependencies of `regex` that its disabled
+`perf` feature would build.
 
 Run a subcommand through the pinned executable, as [Rust runtime pinning](runtime.md#running-a-maintained-command)
 describes:
@@ -210,7 +219,12 @@ recorded decision.
   empty text, which Python 3.12 does not. Every pattern in a tracked `*.schema.json` is inside the syntax.
   `check-manifest-decisions.v3.json` records where the pinned Unicode 16.0 tables differ from an older
   interpreter: `\w` on 5,004 characters against Python 3.12, including the 622 Unicode 15.1 added, `\d` on 80
-  and `(?i)` on 54, each with a case.
+  and `(?i)` on 54, each with a case. The `regex` crate matches a translation that keeps these tables:
+  `check-manifest-crate-unicode-classes` pins characters where the crate's own `\w`, `\s`, `\b` and `(?i)` would
+  differ. A pattern whose translation exceeds the crate's compiled size limit, such as `^\w{1000}$`, or nests more
+  than 1,500 levels of the crate's syntax, exits 2; Python applied the first and raised `RecursionError` on the
+  second. `check-manifest-decisions.v5.json` records both. A pattern nested near 100,000 groups still overflows
+  the parser's stack and aborts, as before.
 - A schema or manifest that is not UTF-8 exits 2 with the `UnicodeDecodeError` text. Python raised a traceback.
 - `\d` and `int()` accept the decimal digits of Unicode 16.0, as Python 3.14 does; Python 3.12 lacks the digits
   16.0 added. `rates-decisions.v4.json` records this for the catalog date, price footnotes and long-prompt rows,
