@@ -16,6 +16,7 @@ pub mod pyjson;
 pub mod pyregex;
 pub mod pytext;
 pub mod pyunicode;
+pub mod pyvalue;
 pub mod rates;
 pub mod roster;
 pub mod schema;
