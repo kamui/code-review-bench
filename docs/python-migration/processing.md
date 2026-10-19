@@ -10,7 +10,8 @@ Slice 2, [#194](https://github.com/kamui/code-review-bench/issues/194), ports th
 runner and dispatch callers, as [the normalizers](#the-review-normalizers) describes.
 Slice 3, [#195](https://github.com/kamui/code-review-bench/issues/195), ports `derive_packet`. Slice 5,
 [#197](https://github.com/kamui/code-review-bench/issues/197), adds the schema validator and ports the read-only
-readers of `rates` and `upstream`.
+readers of `rates` and `upstream`. Slice 6, [#198](https://github.com/kamui/code-review-bench/issues/198), ports the
+explorer export, as [the explorer export](#the-explorer-export) describes.
 
 ## The `bench-tools` crate
 
@@ -35,6 +36,7 @@ python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select
 bun run roster
 python3 bench/tools/rust_runtime.py exec bench-tools -- diff-identity <repo> <base> <head>
 python3 bench/tools/rust_runtime.py exec bench-tools -- derive-packet <packet.legacy.md> --out <packet.md>
+bun run data
 ```
 
 ## Migrated responsibilities
@@ -49,6 +51,7 @@ python3 bench/tools/rust_runtime.py exec bench-tools -- derive-packet <packet.le
 | `bench/tools/check_manifest.py` | `bench_tools::schema`, `bench-tools check-manifest` | None; its CLI callers stay with #156, below | Retained library, below. |
 | `bench/tools/rates.py`, its `check` command | `bench-tools rates check`, `bench_tools::rates` | `bun run rates:check`; `docs/rates.md` | Retained library, below. `refresh` stays in Python. |
 | `bench/tools/upstream.py`, its `report` command | `bench-tools upstream report`, `bench_tools::upstream`, with the registry checks of `claims.load_registry` in `bench_tools::claims` | `bun run audit:maintainers`; `docs/maintainer-adjudication.md` | Retained library, below. `collect` stays in Python. |
+| `tools/export_explorer.py`, its export | `bench-tools export-explorer evidence`, `stage` and `publish`, `bench_tools::export_explorer` | `bun run data` runs the front below; `.github/workflows/pages.yml` installs `bench-tools`; `src/lib/scoring.test.ts` passes `--root` and `--public` | The Python front, a temporary bridge below. The cases of `test_export_explorer.py` that read the export's internals moved to cargo tests and [`export-explorer.v1.json`](../../tools/behavior_contracts/export-explorer.v1.json); the rest run the front. |
 
 `tools/test_moved_cli_callers.py` fails when a current file other than the retained module still runs a moved
 command through Python. Frozen runs, imported originals and research records keep their commands.
@@ -101,9 +104,41 @@ A bridge lets a Python caller run a Rust command until the caller itself moves t
 | Bridge | Removal condition | Owner |
 | --- | --- | --- |
 | `build_packet.py --factual` writes its rendering to a temporary file and runs `bench-tools derive-packet --no-newline-translation` on it, through `rust_runtime.resolve`, so a carriage return in the rendering stays as the in-process call it replaces kept it. It exits 2 when `bench-tools` is not installed for `HEAD`. | `build_packet` moves to Rust and calls `bench_tools::derive_packet::derive` in-process ([#196](https://github.com/kamui/code-review-bench/issues/196)) | #196 |
+| `tools/export_explorer.py` loads the current facts with `current_grading.load_current`, writes them to a temporary file with `json.dumps(allow_nan=False)`, restores the evidence `bench-tools export-explorer evidence` lists through `evidence_store.resolve`, runs `stage`, checks the dataset hash again, and runs `publish` with `SIGINT` ignored. It exits 2 when `bench-tools` is not installed for `HEAD`. | Evidence resolution moves to Rust ([#155](https://github.com/kamui/code-review-bench/issues/155)) and `load_current` moves to Rust ([#156](https://github.com/kamui/code-review-bench/issues/156)) | #155, #156 |
 
 The `build_packet --factual` tests skip when `bench-tools` is not installed for `HEAD`. The `Rust runtime` workflow
 installs it and sets `RUST_RUNTIME_REQUIRE_BENCH_TOOLS=1`, so they fail there instead of skipping.
+
+## The explorer export
+
+`bench-tools export-explorer` writes the same `public/data` and `public/evidence` bytes as the Python export it
+replaces. `src/lib/scoring.ts` stays the only owner of scorecard arithmetic; the export computes no score, rate or
+ranking. The front passes `--base-path` from `BASE_PATH`, as the Python export read it.
+
+- `evidence` lists every file the export links, with its frozen SHA-256 or null, in the order the export first
+  names it, as JSON on stdout. The front restores the missing ones.
+- `stage` refuses while `STAGE/previous` holds backups, replaces `STAGE`, writes the dataset, the attempt details
+  and the linked evidence, and checks them as `validate_export` did. It prints the summary line the front prints.
+- `publish` moves both directories into `PUBLIC`, restoring the previous pair when a move fails, and keeps backups
+  it cannot restore in `STAGE/previous`.
+
+Every failure exits 1 with the last line of the traceback `export_explorer.py` printed, after
+`export_explorer.py: `. Usage errors exit 2. `export-explorer-decisions.v1.json` records each change from the Python
+export with its case:
+
+- `export-explorer-evidence-reads-every-input-first`: every input is read before any evidence is restored, so an
+  input error is reported before a missing file.
+- `export-explorer-publish-replaces-both`: `SIGINT` is ignored while `publish` runs, where Python restored the
+  previous pair on `KeyboardInterrupt`.
+- `export-explorer-iso-24-midnight`: review times are parsed as Python 3.14's `datetime.fromisoformat` parses them,
+  which differs from Python 3.12 and 3.13 on an hour of 24 and on some malformed times.
+- `export-explorer-mixed-token-sum`: output tokens are summed as Python 3.14's `sum` adds them, which differs from
+  Python 3.12 and 3.13 when an integer follows a float.
+- `export-explorer-unsortable-manifestations`: sorting values that are not all text is refused.
+- `export-explorer-lone-surrogate-facts`: facts with a lone surrogate escape are refused, and the front refuses a
+  non-finite number in them.
+- `export-explorer-stage-unassessed` also records that `bench/runs/*/transcripts.json` is listed as Python 3.14's
+  glob lists it, keeping a dangling link that 3.12 dropped.
 
 ## Behavior the corpora do not pin
 
@@ -177,7 +212,8 @@ that database lacked: the 80 added in Unicode 16.0 on CI's Python 3.12, and 110 
 Unicode 16.0.
 
 Diagnostics keep the Python program names, `roster.py:`, `diff_identity.py:`, `normalize_review.py:`,
-`normalize_thermo.py:`, `derive_packet.py:`, `check_manifest.py:`, `rates.py:` and `upstream.py:`, so saved stderr
+`normalize_thermo.py:`, `derive_packet.py:`, `check_manifest.py:`, `rates.py:`, `upstream.py:` and
+`export_explorer.py:`, so saved stderr
 stays identical and the differential compares them byte for byte. Renaming them needs a new decision version.
 
 ## Research records
@@ -201,13 +237,15 @@ python3 tools/behavior_contract.py --corpus tools/behavior_contracts/rates.v1.js
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/upstream.v1.json --differential MAP
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/normalize-thermo.v1.json
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/derive-packet.v1.json
+python3 tools/behavior_contract.py --corpus tools/behavior_contracts/export-explorer.v1.json
 (cd bench/tools && RUST_RUNTIME_REQUIRE_BENCH_TOOLS=1 python3 -m unittest -k factual test_build_packet)
 python3 tools/behavior_contract.py --verify-decision-history
 ```
 
 `MAP` is a [command map](contracts/README.md#run-the-usage-corpus) naming the resolved executable, as the
-`Rust runtime` workflow writes it. The `roster`, `normalize-thermo` and `derive-packet` corpora run the Rust
-executable by default; the other corpora run the retained Python libraries by default. `derive-packet` has no Python
-implementation left to compare with, so it has no differential. `rates.py` and `upstream.py` run through drivers in
+`Rust runtime` workflow writes it. The `roster`, `normalize-thermo`, `derive-packet` and `export-explorer` corpora run
+the Rust executable by default; the other corpora run the retained Python libraries by default. `derive-packet` and
+`export-explorer` have no Python implementation left to compare with, so they have no differential. The base
+commit's Python export derived every `export-explorer` expectation except those of decided changes. `rates.py` and `upstream.py` run through drivers in
 `tools/behavior_contract.py` that point them at the case directory, as the Rust commands default to the current
 directory, and give `rates.py` the `--source` pages.

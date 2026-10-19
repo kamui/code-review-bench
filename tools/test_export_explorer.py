@@ -1,5 +1,6 @@
-import json
+import os
 from pathlib import Path
+import signal
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
@@ -9,12 +10,20 @@ import current_grading as current
 from test_current_grading import approved, assessed_grade, fixture, save_current, seal, write
 
 
+def published(root):
+    return {path.relative_to(root): path.read_bytes() for path in (root / 'public').rglob('*') if path.is_file()}
+
+
 class ExportTest(unittest.TestCase):
-    def build_fixture(self, root):
-        with patch.object(exporter, 'ROOT', root), patch.object(exporter, 'BENCH', root / 'bench'), \
-                patch.object(exporter, 'PUBLIC', root / 'public'), patch.object(exporter, 'BASE_PATH', '/bench'):
-            exporter.build()
+    def build_fixture(self, root, base_path='/bench'):
+        with patch.dict(os.environ, {'BASE_PATH': base_path}):
+            self.assertEqual(exporter.main(['--root', str(root), '--public', str(root / 'public')]), 0)
         return current.read_json(root / 'public/data/benchmark.json')
+
+    def refused(self, root, pattern):
+        with patch.dict(os.environ, {'BASE_PATH': '/bench'}), self.assertRaisesRegex(exporter.Failed, pattern) as caught:
+            exporter.build(root, root / 'public')
+        self.assertEqual(caught.exception.code, 1)
 
     def test_current_preview_never_opens_grade_releases_or_results(self):
         with TemporaryDirectory() as directory:
@@ -52,6 +61,7 @@ class ExportTest(unittest.TestCase):
             self.assertEqual(detail['items'][0]['assignment'], 'unassessed')
             self.assertEqual(detail['assessment'], {'state': 'unassessed', 'receiptUrl': None, 'verdictsUrl': None})
             self.assertEqual(detail['normalizedUrl'], '/bench/evidence/bench/runs/run/attempts/att-001/normalized.json')
+            self.assertFalse((root / '.cache/explorer-export').exists())
 
     def test_every_exported_family_needs_a_short_label(self):
         with TemporaryDirectory() as directory:
@@ -67,9 +77,9 @@ class ExportTest(unittest.TestCase):
             for labels in ({'GT-t1': ''}, {}):
                 profiles['tasks']['t-example']['labels'] = labels
                 write(root, 'bench/profiles.json', profiles)
-                with self.assertRaisesRegex(ValueError, r'^bench/profiles\.json has no short label for GT-t1, GT-t2$'):
-                    self.build_fixture(root)
+                self.refused(root, r'^export_explorer\.py: ValueError: bench/profiles\.json has no short label for GT-t1, GT-t2$')
                 self.assertEqual((root / 'public/data/benchmark.json').read_bytes(), before)
+                self.assertFalse((root / '.cache/explorer-export').exists())
 
     def test_saved_assessments_are_exported_as_recorded_facts(self):
         with TemporaryDirectory() as directory:
@@ -142,41 +152,6 @@ class ExportTest(unittest.TestCase):
             self.assertEqual([(problem['id'], problem['impact'], problem['admissionUrl']) for problem in exported],
                              [('OP-1', 'other-material', '/bench/evidence/receipt-OP-1-pre-existing-admission.md')])
 
-    def test_native_v2_claims_keep_multiple_matches_and_cause_only_facts(self):
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            selected, documents = fixture(root)
-            assessed_grade(selected, documents, root)
-            review = documents['grade']['batches'][0]['reviews'][0]
-            claim = review['claims'][0]
-            claim.pop('family_id')
-            claim['outcome'] = 'problem'
-            claim['known_problems'] = [
-                {'family_id': identifier, 'says_what': what, 'identifies_cause': 'yes', 'reason': 'Original words'}
-                for identifier, what in [('GT-t1', 'yes'), ('GT-t2', 'no')]]
-            review['families'][0]['cause_only'] = False
-            review['families'].append({'family_id': 'GT-t2', 'outcome': 'missed', 'sufficiency': 'unassessed',
-                                       'claim_ids': [], 'cause_only': True})
-            facts = exporter.assessment(review)
-            self.assertEqual(facts['claims'][0]['nativeOutcome'], 'problem')
-            self.assertEqual(facts['claims'][0]['outcome'], 'eligible')
-            self.assertEqual([entry['familyId'] for entry in facts['claims'][0]['knownProblems']], ['GT-t1', 'GT-t2'])
-            self.assertTrue(facts['families'][1]['causeOnly'])
-            stage = root / 'stage'
-            with patch.object(exporter, 'ROOT', root), patch.object(exporter, 'BASE_PATH', ''):
-                attempt = exporter.export_attempt(root / 'bench/runs/run', selected['attempts'][0], {}, stage, review)
-            detail = current.read_json(stage / attempt['detailUrl'].removeprefix('/'))
-            self.assertEqual(detail['items'][0]['claims'][0]['assignment'], 'problem')
-            self.assertEqual(len(detail['items'][0]['claims'][0]['knownProblems']), 2)
-            for native, category in [('unproven', 'unsupported'), ('outside-this-change', 'scope-excluded'),
-                                     ('minor-defect', 'inconsequential'), ('suggestion', 'advisory')]:
-                claim['outcome'] = native
-                projected = exporter.assessment(review)['claims'][0]
-                self.assertEqual((projected['nativeOutcome'], projected['outcome']), (native, category))
-            for kind in ['improvement', 'outside-supported-use', 'relied-on', 'known-cause']:
-                claim['kind'] = kind
-                self.assertEqual(exporter.assessment(review)['claims'][0]['kind'], kind)
-
     def test_pending_candidates_are_exported_and_keep_an_audited_control_provisional(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -206,34 +181,25 @@ class ExportTest(unittest.TestCase):
                 'claim': 'A retry repeats the write.', 'limits': 'No reproduction was run.',
                 'relevance': 'Could become a new causal family.', 'kind': 'ordinary'}])
 
-    def test_failed_export_keeps_the_previous_complete_files(self):
+    def test_a_failed_stage_keeps_the_previous_complete_files(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             selected, documents = fixture(root)
             self.build_fixture(root)
-            published = {path.relative_to(root): path.read_bytes() for path in (root / 'public').rglob('*') if path.is_file()}
+            before = published(root)
             assessed_grade(selected, documents, root)
             save_current(root, selected, documents)
-            with patch.object(exporter, 'staged_file', side_effect=current.Inconsistent('exported link has no staged file')):
-                with self.assertRaisesRegex(current.Inconsistent, 'no staged file'):
-                    self.build_fixture(root)
-            replace, moves = exporter.os.replace, []
+            tool = exporter.tool
 
-            def stop_last_move(error):
-                def move(source, destination):
-                    moves.append(destination)
-                    if len(moves) == 4:
-                        raise error
-                    replace(source, destination)
-                return move
+            def fail_after_staging(*arguments):
+                output = tool(*arguments)
+                if arguments[0] == 'stage':
+                    raise exporter.Failed(1, 'export_explorer.py: current_grading.Inconsistent: exported link has no staged file')
+                return output
 
-            for error in (OSError('disk full'), KeyboardInterrupt()):
-                moves.clear()
-                with patch.object(exporter.os, 'replace', side_effect=stop_last_move(error)):
-                    with self.assertRaises(type(error)):
-                        self.build_fixture(root)
-                self.assertEqual({path.relative_to(root): path.read_bytes() for path in (root / 'public').rglob('*') if path.is_file()}, published)
-            self.assertEqual({path.relative_to(root): path.read_bytes() for path in (root / 'public').rglob('*') if path.is_file()}, published)
+            with patch.object(exporter, 'tool', side_effect=fail_after_staging):
+                self.refused(root, 'no staged file')
+            self.assertEqual(published(root), before)
             self.assertFalse((root / '.cache/explorer-export').exists())
             self.assertEqual(self.build_fixture(root)['evidence']['coverage']['assessedReviews'], 1)
 
@@ -242,101 +208,61 @@ class ExportTest(unittest.TestCase):
             root = Path(directory)
             selected, documents = fixture(root)
             self.build_fixture(root)
-            before = (root / 'public/data/benchmark.json').read_bytes()
-            write_export = exporter.write_export
+            before = published(root)
+            tool = exporter.tool
 
-            def export_then_grade(stage, selected, documents):
-                dataset = write_export(stage, selected, documents)
-                assessed_grade(selected, documents, root)
-                save_current(root, selected, documents)
-                return dataset
+            def stage_then_grade(*arguments):
+                output = tool(*arguments)
+                if arguments[0] == 'stage':
+                    assessed_grade(selected, documents, root)
+                    save_current(root, selected, documents)
+                return output
 
-            with patch.object(exporter, 'write_export', side_effect=export_then_grade):
+            with patch.object(exporter, 'tool', side_effect=stage_then_grade), patch.dict(os.environ, {'BASE_PATH': '/bench'}):
                 with self.assertRaisesRegex(current.Inconsistent, 'changed during export'):
-                    self.build_fixture(root)
-            self.assertEqual((root / 'public/data/benchmark.json').read_bytes(), before)
+                    exporter.build(root, root / 'public')
+            self.assertEqual(published(root), before)
+            self.assertFalse((root / '.cache/explorer-export').exists())
 
-    def test_interrupted_backup_moves_restore_the_previous_complete_files(self):
-        for name in ('data', 'evidence'):
-            with self.subTest(name=name), TemporaryDirectory() as directory:
-                root = Path(directory)
-                fixture(root)
+    def test_publication_ignores_interrupts_only_while_it_runs(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture(root)
+            handlers = {}
+            tool = exporter.tool
+
+            def record(*arguments):
+                handlers[arguments[0]] = signal.getsignal(signal.SIGINT)
+                return tool(*arguments)
+
+            before = signal.getsignal(signal.SIGINT)
+            with patch.object(exporter, 'tool', side_effect=record):
                 self.build_fixture(root)
-                published = {path.relative_to(root): path.read_bytes() for path in (root / 'public').rglob('*') if path.is_file()}
-                replace = exporter.os.replace
+            self.assertIs(handlers['publish'], signal.SIG_IGN)
+            self.assertIsNot(handlers['stage'], signal.SIG_IGN)
+            self.assertIs(signal.getsignal(signal.SIGINT), before)
 
-                def interrupt_after_backup(source, destination):
-                    replace(source, destination)
-                    if destination.parent.name == 'previous' and destination.name == name:
-                        raise KeyboardInterrupt()
-
-                with patch.object(exporter.os, 'replace', side_effect=interrupt_after_backup):
-                    with self.assertRaises(KeyboardInterrupt):
-                        self.build_fixture(root)
-                self.assertEqual({path.relative_to(root): path.read_bytes() for path in (root / 'public').rglob('*') if path.is_file()}, published)
-                self.assertFalse((root / '.cache/explorer-export').exists())
-
-    def test_failed_backup_moves_preserve_untouched_destinations(self):
-        for name in ('data', 'evidence'):
-            with self.subTest(name=name), TemporaryDirectory() as directory:
-                root = Path(directory)
-                fixture(root)
-                self.build_fixture(root)
-                published = {path.relative_to(root): path.read_bytes() for path in (root / 'public').rglob('*') if path.is_file()}
-                replace = exporter.os.replace
-
-                def fail_backup(source, destination):
-                    if destination.parent.name == 'previous' and destination.name == name:
-                        raise OSError('backup failed')
-                    replace(source, destination)
-
-                with patch.object(exporter.os, 'replace', side_effect=fail_backup):
-                    with self.assertRaisesRegex(OSError, 'backup failed'):
-                        self.build_fixture(root)
-                self.assertEqual({path.relative_to(root): path.read_bytes() for path in (root / 'public').rglob('*') if path.is_file()}, published)
-                self.assertFalse((root / '.cache/explorer-export').exists())
-
-    def test_failed_restoration_keeps_backups_across_builds(self):
+    def test_retained_backups_refuse_every_build_and_stay(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             fixture(root)
             self.build_fixture(root)
-            published = {path.relative_to(root / 'public/evidence'): path.read_bytes()
-                         for path in (root / 'public/evidence').rglob('*') if path.is_file()}
-            replace = exporter.os.replace
-
-            def fail_publication_and_restoration(source, destination):
-                if destination == root / 'public/evidence':
-                    raise OSError('evidence move failed')
-                replace(source, destination)
-
-            with patch.object(exporter.os, 'replace', side_effect=fail_publication_and_restoration):
-                with self.assertRaisesRegex(OSError, 'evidence move failed'):
-                    self.build_fixture(root)
             previous = root / '.cache/explorer-export/previous/evidence'
-            self.assertEqual({path.relative_to(previous): path.read_bytes() for path in previous.rglob('*') if path.is_file()}, published)
-            with self.assertRaisesRegex(current.Inconsistent, 'backups retained'):
-                self.build_fixture(root)
-            self.assertEqual({path.relative_to(previous): path.read_bytes() for path in previous.rglob('*') if path.is_file()}, published)
+            previous.mkdir(parents=True)
+            (previous / 'kept.json').write_text('{}\n', encoding='utf-8')
+            for _ in range(2):
+                self.refused(root, 'backups retained at ' + str(root / '.cache/explorer-export/previous'))
+                self.assertEqual((previous / 'kept.json').read_text(encoding='utf-8'), '{}\n')
 
-    def test_interrupted_first_publication_removes_new_directories(self):
-        for name in ('data', 'evidence'):
-            with self.subTest(name=name), TemporaryDirectory() as directory:
-                root = Path(directory)
-                fixture(root)
-                replace = exporter.os.replace
-
-                def interrupt_after_publication(source, destination):
-                    replace(source, destination)
-                    if destination == root / 'public' / name:
-                        raise KeyboardInterrupt()
-
-                with patch.object(exporter.os, 'replace', side_effect=interrupt_after_publication):
-                    with self.assertRaises(KeyboardInterrupt):
-                        self.build_fixture(root)
-                self.assertFalse((root / 'public/data').exists())
-                self.assertFalse((root / 'public/evidence').exists())
-                self.assertFalse((root / '.cache/explorer-export').exists())
+    def test_non_finite_numbers_in_the_facts_are_refused(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            selected, documents = fixture(root)
+            status = current.coverage_status(selected, documents)
+            with patch.object(exporter, 'current', return_value=(selected, {**documents, 'note': float('nan')}, status)):
+                with self.assertRaisesRegex(ValueError, 'Out of range float values are not JSON compliant'):
+                    exporter.build(root, root / 'public')
+            self.assertFalse((root / 'public').exists())
 
     def test_billing_receipt_is_verified_and_exported_without_repricing(self):
         with TemporaryDirectory() as directory:
@@ -355,7 +281,7 @@ class ExportTest(unittest.TestCase):
             self.assertEqual(detail['billingCorrectionUrl'], '/bench/evidence/bench/billing.json')
             receipt.write_text('{}', encoding='utf-8')
             with self.assertRaisesRegex(current.Inconsistent, 'source hash changed'):
-                self.build_fixture(root)
+                exporter.build(root, root / 'public')
 
     def test_missing_current_inventory_never_falls_back_to_an_archive(self):
         with TemporaryDirectory() as directory:
@@ -364,7 +290,7 @@ class ExportTest(unittest.TestCase):
             (root / 'bench/grading/current/inventory.json').unlink()
             write(root, 'bench/scoreboard.json', {'suites': []})
             with self.assertRaises(current.InputError):
-                self.build_fixture(root)
+                exporter.build(root, root / 'public')
 
     def test_mixed_billing_keeps_the_list_price_marker(self):
         with TemporaryDirectory() as directory:
@@ -402,51 +328,30 @@ class ExportTest(unittest.TestCase):
             self.assertEqual(result['configurations'][0]['skillProvenanceUrl'], '/bench/evidence/bench/skill-provenance.json')
             self.assertEqual(current.read_json(root / 'public/evidence/bench/skill-provenance.json'), {'skills': {}})
 
-    def test_review_duration_uses_the_filed_end_event_and_excludes_retry_gaps(self):
-        record = {'disposition': 'valid completed', 'timing': {
-            'dispatched_at': '2026-09-29T10:00:00Z', 'completed_at': '2026-09-29T10:02:00Z',
-            'payload_validated_at': '2026-09-29T11:00:00Z', 'stopped_at': None}}
-        self.assertEqual(exporter.duration_seconds(record), 120)
-        record['disposition'] = 'harness-invalid'
-        record['timing']['stopped_at'] = '2026-09-29T10:00:30Z'
-        self.assertEqual(exporter.duration_seconds(record), 30)
-        replacement = {'disposition': 'valid completed', 'timing': {
-            'dispatched_at': '2026-09-29T12:00:00Z', 'completed_at': '2026-09-29T12:01:00Z'}}
-        self.assertEqual(exporter.duration_seconds(record) + exporter.duration_seconds(replacement), 90)
-
-    def test_missing_or_invalid_timing_is_unavailable(self):
-        for timing in ({}, {'dispatched_at': 'invalid', 'completed_at': '2026-09-29T10:00:00Z'},
-                       {'dispatched_at': '2026-09-29T10:01:00Z', 'completed_at': '2026-09-29T10:00:00Z'},
-                       {'dispatched_at': '2026-09-29T10:00:00', 'completed_at': '2026-09-29T10:01:00Z'}):
-            with self.subTest(timing=timing):
-                self.assertIsNone(exporter.duration_seconds({'disposition': 'valid completed', 'timing': timing}))
-        instant = '2026-09-29T10:00:00Z'
-        self.assertEqual(exporter.duration_seconds({'disposition': 'valid completed', 'timing': {
-            'dispatched_at': instant, 'completed_at': instant}}), 0)
-
     def test_evidence_urls_respect_site_base_path(self):
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            source = root / 'record.json'
-            source.write_text('{}\n')
-            for base_path in ('', '/code-review-bench'):
-                with self.subTest(base_path=base_path), patch.object(exporter, 'ROOT', root), \
-                        patch.object(exporter, 'PUBLIC', root / 'public'), patch.object(exporter, 'BASE_PATH', base_path):
-                    url = exporter.evidence(source, root / 'public')
-                    self.assertEqual(url, base_path + '/evidence/record.json')
-                    self.assertEqual((root / 'public' / url.removeprefix(base_path + '/')).read_text(), source.read_text())
+        for base_path, prefix in (('/', ''), ('/code-review-bench/', '/code-review-bench')):
+            with self.subTest(base_path=base_path), TemporaryDirectory() as directory:
+                root = Path(directory)
+                fixture(root)
+                url = self.build_fixture(root, base_path)['tasks'][0]['packetUrl']
+                self.assertEqual(url, prefix + '/evidence/bench/targets/t-example/packet.md')
+                self.assertEqual((root / 'public' / url.removeprefix(prefix + '/')).read_bytes(),
+                                 (root / 'bench/targets/t-example/packet.md').read_bytes())
 
     def test_missing_metering_is_not_zero(self):
         with TemporaryDirectory() as directory:
-            path = Path(directory) / 'usage.jsonl'
-            complete = {'usage': {'metering_status': 'complete'}}
-            self.assertIsNone(exporter.usage_tokens(path, complete))
-            path.write_text('{"output_tokens": 7}\n{"output_tokens": 3}\n')
-            self.assertEqual(exporter.usage_tokens(path, complete), 10)
-            self.assertIsNone(exporter.usage_tokens(path, {}))
-            path.write_text('{"output_tokens": 7}\n{}\n')
-            self.assertIsNone(exporter.usage_tokens(path, complete))
-
+            root = Path(directory)
+            _, documents = fixture(root)
+            requests = root / 'bench/runs/run/attempts/att-001/usage-requests.jsonl'
+            for content, tokens in (('{"output_tokens": 7}\n{"output_tokens": 3}\n', 10), ('{"output_tokens": 7}\n{}\n', None),
+                                    ('', None), (None, None)):
+                with self.subTest(content=content):
+                    if content is None:
+                        requests.unlink()
+                    else:
+                        requests.write_text(content, encoding='utf-8')
+                    save_current(root, current.inventory(root), documents)
+                    self.assertEqual(self.build_fixture(root)['attempts'][0]['outputTokens'], tokens)
 
 
 if __name__ == '__main__':
