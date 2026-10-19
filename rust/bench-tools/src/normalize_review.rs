@@ -632,13 +632,7 @@ fn rollouts(root: &PyPath) -> Vec<PyPath> {
             }
         }
     }
-    let key = |path: &PyPath| -> Vec<Vec<u32>> {
-        path.as_bytes()
-            .split(|byte| *byte == b'/')
-            .map(pytext::surrogateescape)
-            .collect()
-    };
-    found.sort_by_key(key);
+    found.sort_by_cached_key(|path| pytext::path_order(path.as_bytes()));
     found
 }
 
