@@ -57,8 +57,11 @@ independent assertions. The harness never obtains expected output from a candida
 [`roster.v1.json`](../../../tools/behavior_contracts/roster.v1.json),
 [`diff-identity.v1.json`](../../../tools/behavior_contracts/diff-identity.v1.json),
 [`normalize-review.v1.json`](../../../tools/behavior_contracts/normalize-review.v1.json),
-[`normalize-thermo.v1.json`](../../../tools/behavior_contracts/normalize-thermo.v1.json) and
-[`derive-packet.v1.json`](../../../tools/behavior_contracts/derive-packet.v1.json) pin the commands of
+[`normalize-thermo.v1.json`](../../../tools/behavior_contracts/normalize-thermo.v1.json),
+[`derive-packet.v1.json`](../../../tools/behavior_contracts/derive-packet.v1.json),
+[`check-manifest.v1.json`](../../../tools/behavior_contracts/check-manifest.v1.json),
+[`rates.v1.json`](../../../tools/behavior_contracts/rates.v1.json) and
+[`upstream.v1.json`](../../../tools/behavior_contracts/upstream.v1.json) pin the commands of
 [`bench-tools`](../processing.md). Select a corpus with `--corpus`:
 
 ```sh
@@ -67,10 +70,14 @@ python3 tools/behavior_contract.py --corpus tools/behavior_contracts/diff-identi
 ```
 
 Without `--implementations`, each program runs its maintained implementation. `codex`, `transcript`,
-`diff-identity` and `normalize-review` run their Python scripts; `diff_identity.py` and `normalize_review.py` are
-retained libraries. `roster`, `normalize-thermo` and `derive-packet` have no Python implementation, so they run the
-executable `rust_runtime.resolve("bench-tools")` selects, and the command refuses when none is installed for `HEAD`.
-A command map for the Rust programs names that executable:
+`diff-identity`, `normalize-review` and `check-manifest` run their Python scripts; `diff_identity.py`,
+`normalize_review.py` and `check_manifest.py` are retained libraries. `rates` and `upstream` run the retained
+`rates.py` and `upstream.py` through drivers that read the case directory as the repository and, for `rates`, take
+`--source PROVIDER=URL` pages, so no case leaves the host; `rates-transport-failure` connects to a closed loopback
+port. Cases whose Rust behavior was changed on purpose carry a `baseline_defect` with Python's output, so pass
+`--allow-known-defects` when Python is the primary. `roster`, `normalize-thermo` and `derive-packet` have no Python
+implementation, so they run the executable `rust_runtime.resolve("bench-tools")` selects, and the command refuses
+when none is installed for `HEAD`. A command map for the Rust programs names that executable:
 
 ```json
 {
@@ -78,7 +85,10 @@ A command map for the Rust programs names that executable:
   "diff-identity": ["/absolute/path/to/bench-tools", "diff-identity"],
   "normalize-review": ["/absolute/path/to/bench-tools", "normalize-review"],
   "normalize-thermo": ["/absolute/path/to/bench-tools", "normalize-thermo"],
-  "derive-packet": ["/absolute/path/to/bench-tools", "derive-packet"]
+  "derive-packet": ["/absolute/path/to/bench-tools", "derive-packet"],
+  "check-manifest": ["/absolute/path/to/bench-tools", "check-manifest"],
+  "rates": ["/absolute/path/to/bench-tools", "rates"],
+  "upstream": ["/absolute/path/to/bench-tools", "upstream"]
 }
 ```
 

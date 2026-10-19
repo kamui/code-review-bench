@@ -650,6 +650,19 @@ impl Value {
         }
     }
 
+    /// `type(value).__name__` of the Python object `json.loads` returns.
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Self::Null => "NoneType",
+            Self::Bool(_) => "bool",
+            Self::Int(_) => "int",
+            Self::Float(_) => "float",
+            Self::Str(_) => "str",
+            Self::Array(_) => "list",
+            Self::Object(_) => "dict",
+        }
+    }
+
     /// `bool(value)`.
     pub fn truthy(&self) -> bool {
         match self {
