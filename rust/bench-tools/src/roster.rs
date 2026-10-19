@@ -16,8 +16,6 @@ use crate::pytext::{self, PyPath};
 
 pub const ROSTER: &str = "bench/roster.json";
 
-pub const USAGE: &str = "usage: bench-tools roster [-h] [--root ROOT]";
-
 pub fn client_of_kind(kind: &str) -> Option<&'static str> {
     match kind {
         "claude-builtin" | "claude-skill" | "review-code" => Some("claude-code"),
