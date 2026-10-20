@@ -302,7 +302,9 @@ ported. [`grading.md`](../grading.md) records the baseline they serve.
   stderr and each named output byte for byte. An `{"output": NAME}` argument names a file in a disposable
   directory. Every entry below ROOT, tracked, ignored or Git's own, is compared by type, permissions, size, inode
   and change time before and after each run. A run that changes one fails and stops the mode, so no later run
-  reads changed inputs. #156 slice 3 listed `current-grading check`, `status`, `inventory --out` and
+  reads changed inputs. Before the first run the mode creates `.cache/current-record.lock`, the file
+  `current_grading.record_lock` creates on first use, if it is absent, and leaves an existing one unchanged, so a
+  command that takes the lock on a fresh checkout does not read as a change. #156 slice 3 listed `current-grading check`, `status`, `inventory --out` and
   `fingerprints`, slice 4 added `methodology --out`, slice 5 added `claims check` on each tracked registry, slice 6 added `calibration check`,
   `calibration queue` and `evaluator-audit check`, and the Pages build job runs the mode after its evidence and freeze-commit fetches.
 - **Fixture roots.** A case built from the grading fixture names it with `"fixture": "grading/<variant>"`. Its
