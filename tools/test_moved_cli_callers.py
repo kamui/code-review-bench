@@ -35,6 +35,14 @@ MOVED = (
     ("bench/tools/claims.py", "inventory", "bench-tools claims inventory"),
     ("bench/tools/claims.py", "dossier", "bench-tools claims dossier"),
     ("bench/tools/claims.py", "evidence", "bench-tools claims evidence"),
+    ("bench/tools/calibration.py", "check", "bench-tools calibration check"),
+    ("bench/tools/calibration.py", "cards", "bench-tools calibration cards"),
+    ("bench/tools/calibration.py", "queue", "bench-tools calibration queue"),
+    ("bench/tools/evaluator_audit.py", "check", "bench-tools evaluator-audit check"),
+    ("bench/tools/evaluator_audit.py", "draw", "bench-tools evaluator-audit draw"),
+    ("bench/tools/evaluator_audit.py", "claims", "bench-tools evaluator-audit claims"),
+    ("bench/tools/evaluator_audit.py", "compare", "bench-tools evaluator-audit compare"),
+    ("bench/tools/evaluator_audit.py", "conclude", "bench-tools evaluator-audit conclude"),
 )
 # Retained libraries whose command line moved whole, including the form without a command word.
 MOVED_PROGRAMS = (
@@ -124,7 +132,8 @@ class MovedCommands(unittest.TestCase):
         self.assertEqual(scripts["import:preserve"],
                          "python3 bench/tools/rust_runtime.py exec bench-tools -- import-benchmark --preserve")
         self.assertEqual(scripts["verify:current"], "bun run evidence:fetch && python3 bench/tools/rust_runtime.py exec "
-                         "bench-tools -- current-grading check && python3 bench/tools/calibration.py check")
+                         "bench-tools -- current-grading check && python3 bench/tools/rust_runtime.py exec bench-tools -- "
+                         "calibration check")
         self.assertEqual(scripts["data"], "bun run evidence:fetch && python3 bench/tools/rust_runtime.py exec bench-tools -- "
                          "export-explorer")
         self.assertEqual(scripts["plan:methodology"], "python3 bench/tools/rust_runtime.py exec bench-tools -- methodology")

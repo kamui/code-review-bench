@@ -13,7 +13,9 @@ selection, as [slice 3](#slice-3-the-current-grading-record-and-packet-selection
 [#234](https://github.com/kamui/code-review-bench/issues/234), moves the explorer export's facts, `methodology` and
 the schema-check callers, as [slice 4](#slice-4-the-explorer-exports-facts-methodology-and-schema-check-callers)
 describes. Slice 5, [#235](https://github.com/kamui/code-review-bench/issues/235), ports the shared claims and
-upstream collection, as [slice 5](#slice-5-shared-claims-and-upstream-collection) describes.
+upstream collection, as [slice 5](#slice-5-shared-claims-and-upstream-collection) describes. Slice 6,
+[#236](https://github.com/kamui/code-review-bench/issues/236), ports the calibration and evaluator audit checks, as
+[slice 6](#slice-6-calibration-and-evaluator-audit-checks) describes.
 
 ## The split with #157
 
@@ -47,7 +49,8 @@ implementation.
 [The contract reference](contracts/README.md#grading-comparison-features) describes the harness features: the
 structured comparison, hand-stated grading outcomes, the Python entropy driver, the `fixture-git` setup program and
 real-record mode. `grading-real-record.v1.json` lists slice 3's four `current-grading` commands, slice 4's
-`methodology` command and slice 5's `claims check` on each tracked registry, which the Pages build job runs.
+`methodology` command, slice 5's `claims check` on each tracked registry and slice 6's `calibration check`,
+`calibration queue` and `evaluator-audit check`, which the Pages build job runs.
 
 [`grading_fixture.rs`](../../rust/bench-tools/tests/support/grading_fixture.rs) is the one fixture root. It mirrors
 the cohort of `test_grade.py`: one task, a selected and an unselected arm, an invalid attempt and its replacement, a
@@ -127,7 +130,7 @@ and without `--json`, for the whole record and each of the 6 rounds; `precedents
 `dossier` for every directory holding a `summary.json`. All 692 commands gave identical exit status, stdout, stderr
 and sheets under Python 3.12 and 3.14, except four `dossier` runs on research directories whose `summary.json` is not
 a dossier, where the Python crashed and Rust exits 2 as decided. The real-record list runs only `current-grading`,
-`methodology` and `claims` commands; no `ruling` command repeats this comparison in Pages yet.
+`methodology`, `claims`, `calibration` and `evaluator-audit` commands; no `ruling` command repeats this comparison in Pages yet.
 
 ## Replay coverage
 
@@ -334,6 +337,55 @@ On 2026-10-19, `claims evidence` for each tracked extracts manifest, `evidence-e
 `evidence-extracts.selected-pr.v1.json`, wrote the same 126 packets, byte for byte, with the same stdout, from both
 implementations. `claims.py` and `upstream.py` stay byte-unchanged as baselines until slice 11, with the `upstream`
 and `claims` corpus drivers.
+
+## Slice 6: calibration and evaluator audit checks
+
+[#236](https://github.com/kamui/code-review-bench/issues/236) ports `calibration.py` to `bench_tools::calibration`
+and every step of `evaluator_audit.py` but `second` to `bench_tools::evaluator_audit`. Both validate through the
+`current_grading` port, whose schemas gain copies of `current-impact-card` and `current-audit`. The commands:
+
+```sh
+python3 bench/tools/rust_runtime.py exec bench-tools -- calibration check|queue [--out FILE]
+python3 bench/tools/rust_runtime.py exec bench-tools -- calibration cards --out DIR --key FILE
+python3 bench/tools/rust_runtime.py exec bench-tools -- evaluator-audit check|draw|compare
+python3 bench/tools/rust_runtime.py exec bench-tools -- evaluator-audit claims --run RUN --target TARGET --out FILE
+python3 bench/tools/rust_runtime.py exec bench-tools -- evaluator-audit conclude --reconciliation FILE
+```
+
+Diagnostics keep the program names `calibration.py` and `evaluator_audit.py`. `second` runs a grading client, so it
+stays `python3 bench/tools/evaluator_audit.py second` until slice 8 moves it. `verify:current` and the commands in
+`docs/current-grading.md`, `docs/impact-calibration.md`, `docs/claim-adjudication.md`,
+`docs/pre-existing-problems.md` and `docs/evaluator-audit.md` moved, and `tools/test_moved_cli_callers.py` fails on
+a current caller of `calibration.py`'s `check`, `cards` or `queue`, or of `evaluator_audit.py`'s `check`, `draw`,
+`claims`, `compare` or `conclude`.
+
+[`calibration.v1.json`](../../tools/behavior_contracts/calibration.v1.json) and
+[`evaluator-audit.v1.json`](../../tools/behavior_contracts/evaluator-audit.v1.json) replay the scenarios of
+`test_calibration.py` and `test_evaluator_audit.py`, the command-line forms, and fixture cases on the `pending`,
+`proposed`, `approved-without-receipt` and `disputed-without-ruling` variants. They include a whole receipt refused as
+a scope (`calibration-whole-receipt-is-not-a-scope`), a family with no card or decision reported
+(`calibration-every-family-needs-one-impact-decision`), a pending candidate keeping an audited-clean control
+provisional (`calibration-provisional-control`), `draw` refusing a second sample for its seed
+(`evaluator-audit-draw-twice`), and `claims`, `compare` and `conclude` refusing once `grades.json` changed after the
+draw (`evaluator-audit-a-batch-graded-again-after-the-draw-is-refused`). Round files are compared with their clock
+fields masked. The decided differences:
+
+- Values follow Python 3.14 where versions differ: Unicode 16.0 word characters in the superseded-seed search and in
+  the blinded cards' private-path check (`calibration-unicode-seed`, `calibration-unicode-exposure`), digits in a
+  second assessment's number (`evaluator-audit-unicode-assessment-number`), and dash-led values (`*-cli-dash-led-*`).
+- An exception the Python did not catch, a pinned receipt that is not UTF-8 or a second-assessment receipt that is
+  not an object, prints `<program>: <class>: <message>`, exit 2, instead of a traceback, exit 1
+  (`calibration-receipt-not-utf8`, `evaluator-audit-receipt-not-an-object`).
+- `evaluator-audit second` is refused as an invalid operation, exit 2 (`evaluator-audit-cli-second-*`).
+- Usage errors and help are clap's (`calibration-cli-*`, `evaluator-audit-cli-*`).
+
+The Pages build job runs `calibration check`, `calibration queue` and `evaluator-audit check` in real-record mode.
+The saved round `evaluator-audit-v1-2026-10-03` cannot be drawn again by either implementation. Its sample pins the
+`grades.json` of [#58](https://github.com/kamui/code-review-bench/pull/58)'s commit `0a35e127e`, whose 199 batches
+were graded under `current-verdicts/v1` and which predates `credits.json`. On 2026-10-19, on a disposable worktree of
+that commit with the round removed and an empty `credits.json` added, `evaluator_audit.py` and `bench-tools` both
+refused `check` and `draw` with the same output, exit 1: 199 batches were not graded under `current-verdicts/v2`.
+`calibration.py` and `evaluator_audit.py` stay byte-unchanged as baselines until slice 11.
 
 ## Research helpers
 
