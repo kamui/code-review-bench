@@ -113,7 +113,7 @@ impl Repository {
         .map(str::to_string)
         .to_vec();
         let mut provenance: Vec<(String, Value)> = Vec::new();
-        let mut identities = BTreeSet::new();
+        let mut identities = self.identities(cases)?;
         for case in cases {
             lines.push(format!(
                 "## {} v{}: {}",
