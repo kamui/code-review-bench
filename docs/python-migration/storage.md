@@ -62,7 +62,7 @@ one-time check read all 33 published packages, from the 19 manifests in `bench/e
 | --- | --- |
 | `evidence fetch --manifest M [--root R] [--path P]... [--offline]` | `evidence_store.py`'s `fetch` |
 | `evidence verify --manifest M [--receipt R]` | `evidence_store.py`'s `verify` |
-| `evidence resolve [--sha256 H] [--root R] [--offline] PATH` | `evidence_store.resolve`, which `export_explorer.py` and `prune_workspace.py` call |
+| `evidence resolve [--sha256 H] [--root R] [--offline] PATH` | `evidence_store.resolve`, which `prune_workspace.py` calls and the deleted `export_explorer.py` called |
 | `evidence recover --source S [--root R] [--path P]... [--offline]` | `bench/tools/recover_evidence.py` |
 | `evidence restore-local ROOT ORIGINAL OUTPUT` | `local_evidence_resolution`, with the research record `restore-local.py`'s arguments |
 
@@ -81,10 +81,10 @@ that is not UTF-8 names nothing, as argparse's `surrogateescape` text matches no
 (`fetch-non-utf8-path-names-no-member`). `resolve`, which has no Python command, takes `PATH` and `--sha256` as UTF-8
 only.
 
-`bench-tools export-explorer evidence --restore` resolves each listed file the same way, so `export_explorer.py` no
-longer imports `evidence_store`. `bun run evidence:fetch` and the Pages and rates workflows run `evidence fetch`;
-each job that fetches installs `bench-tools` first. `prune_workspace.py` still calls the retained
-`evidence_store.resolve`; `resolve-across-implementations` restores a path through Rust and resolves it through Python.
+`bench-tools export-explorer`, and its `evidence --restore`, resolve each linked file the same way. `bun run
+evidence:fetch` and the Pages and rates workflows run `evidence fetch`; each job that fetches installs `bench-tools`
+first. `prune_workspace.py` still calls the retained `evidence_store.resolve`; `resolve-across-implementations`
+restores a path through Rust and resolves it through Python.
 
 ### Evidence packing and publication
 
@@ -234,13 +234,13 @@ the registry dependencies table lists with their other users.
 
 | Python | Rust | Callers moved | Python implementation |
 | --- | --- | --- | --- |
-| `bench/tools/evidence_store.py`, its `pack`, `publish`, `fetch` and `verify` commands and `resolve` | `bench-tools evidence pack`, `check-package`, `publish`, `fetch`, `verify` and `resolve`, `bench_tools::evidence` | `bun run evidence:fetch`; `.github/workflows/pages.yml` and `rates.yml`; `export_explorer.py` through `export-explorer evidence --restore`; `contributor.py` and `contributor_submit.py` through each run's pinned `bench-tools`; `docs/evidence-storage.md`, `docs/codex-container-fixture.md`, `docs/contributing-reviews.md` | Retained byte-unchanged: `prune_workspace.py`, `retire_workspace.py` and `native_artifacts.py` import it. [`evidence-store.v1.json`](../../tools/behavior_contracts/evidence-store.v1.json) runs every command against Rust, with a differential against Python in CI. |
+| `bench/tools/evidence_store.py`, its `pack`, `publish`, `fetch` and `verify` commands and `resolve` | `bench-tools evidence pack`, `check-package`, `publish`, `fetch`, `verify` and `resolve`, `bench_tools::evidence` | `bun run evidence:fetch`; `.github/workflows/pages.yml` and `rates.yml`; `bench-tools export-explorer`; `contributor.py` and `contributor_submit.py` through each run's pinned `bench-tools`; `docs/evidence-storage.md`, `docs/codex-container-fixture.md`, `docs/contributing-reviews.md` | Retained byte-unchanged: `prune_workspace.py`, `retire_workspace.py` and `native_artifacts.py` import it. [`evidence-store.v1.json`](../../tools/behavior_contracts/evidence-store.v1.json) runs every command against Rust, with a differential against Python in CI. |
 | `bench/tools/native_artifacts.py`, its `verify` and `restore` commands and `file_artifacts`; `file_attempt.archive_transcripts` | `bench-tools native-artifacts verify`, `restore` and `file`, `evidence archive-transcripts` | `file_attempt.py`, below; `bench/README.md`, `docs/evidence-storage.md` | `native_artifacts.py` is retained byte-unchanged for `prune_workspace.py`. `archive_transcripts` is deleted; the corpus keeps its source as a driver. [`native-artifacts.v1.json`](../../tools/behavior_contracts/native-artifacts.v1.json) runs against Rust, with a differential against Python in CI. |
 | `tools/import_benchmark.py`, its `--check` and `--preserve` | `bench-tools import-benchmark`, `bench_tools::import_benchmark` | `bun run verify:import` and `bun run import:preserve`; `.github/workflows/rates.yml`; `tools/test_evidence_consumers.py`; `README.md`, `docs/evidence-storage.md` | Deleted with `test_import_benchmark.py`, whose cases are in [`import-benchmark.v1.json`](../../tools/behavior_contracts/import-benchmark.v1.json); the corpus ran against both before deletion. `--source` is retired. |
 | `bench/tools/recover_evidence.py`, `bench/tools/local_evidence_resolution.py` | `bench-tools evidence recover` and `restore-local`, `bench_tools::evidence::recovery` | `docs/evidence-storage.md` | Deleted with `test_recover_evidence.py` and `test_local_evidence_resolution.py`, whose cases are in the cargo tests and `evidence-store.v1.json`; the corpus ran against both before deletion. |
 | `tools/collect_run.py`, `bench/tools/reconcile_evidence.py` | `bench-tools evidence collect` and `reconcile`, `bench_tools::evidence::collect` and `bench_tools::evidence_inventory::reconcile` | `docs/evidence-storage.md`; the collection steps of `tools/test_evidence_consumers.py` | Deleted with `test_collect_run.py` and `test_reconcile_evidence.py`, whose cases are in the cargo tests and [`evidence-inventory.v1.json`](../../tools/behavior_contracts/evidence-inventory.v1.json); the corpus ran against both with a differential before deletion. |
 | `bench/tools/evidence_inventory.py`, its command | `bench-tools evidence inventory`, `bench_tools::evidence_inventory` | `docs/evidence-storage.md` | Retained byte-unchanged: `retire_workspace.py` imports it until #159. `evidence-inventory.v1.json` runs against Rust, with a differential against Python in CI. |
-| `tools/export_explorer.py`'s evidence restoration | `bench-tools export-explorer evidence --restore` ([#219](https://github.com/kamui/code-review-bench/issues/219)) | The export front | The front no longer imports `evidence_store`; it stays as a [processing bridge](processing.md#temporary-bridges) |
+| `tools/export_explorer.py`'s evidence restoration | `bench-tools export-explorer evidence --restore` ([#219](https://github.com/kamui/code-review-bench/issues/219)) | `bench-tools export-explorer`, which [#234](https://github.com/kamui/code-review-bench/issues/234) gave the whole export | Deleted with the front by #234; see [the explorer export](processing.md#the-explorer-export) |
 
 `tools/test_moved_cli_callers.py` fails when a current file other than a retained module still runs a moved command
 through Python.
@@ -272,8 +272,8 @@ A bridge lets a Python caller run a Rust command until the caller itself moves t
 | `contributor.py` and `contributor_submit.py` run `evidence pack`, `check-package` and `publish`, and `evidence verify --receipt`, through the run's pinned `bench-tools` ([#220](https://github.com/kamui/code-review-bench/issues/220)) | The contributor backend moves to Rust | [#158](https://github.com/kamui/code-review-bench/issues/158) |
 | `bench/tools/file_attempt.py` runs the run's pinned `bench-tools native-artifacts file` and `evidence archive-transcripts`, resolved by `rust_runtime.for_run`, and refuses a pin without them before filing. | Filing moves to Rust ([#157](https://github.com/kamui/code-review-bench/issues/157)) | #157 |
 
-`tools/export_explorer.py`, the processing stage's bridge, no longer restores evidence itself; its removal stays with
-[#156](https://github.com/kamui/code-review-bench/issues/156).
+`tools/export_explorer.py`, the processing stage's bridge, was deleted by
+[#234](https://github.com/kamui/code-review-bench/issues/234), part of [#156](https://github.com/kamui/code-review-bench/issues/156).
 
 ## Behavior the corpora do not pin
 

@@ -360,7 +360,9 @@ class ContractTests(unittest.TestCase):
         for program, (module, before, after, case_id) in mutants.items():
             with self.subTest(program=program):
                 corpus = contract.CORPUS.parent / f"{program}.v1.json"
-                result = self.run_cli("--allow-known-defects", "--corpus", corpus)
+                retained = Path(self.enterContext(tempfile.TemporaryDirectory())) / "retained.json"
+                retained.write_text(json.dumps(contract.python_commands(contract.load_corpus(corpus))), encoding="utf-8")
+                result = self.run_cli("--allow-known-defects", "--corpus", corpus, "--implementations", retained)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn(f"PASS {case_id}", result.stdout)
                 source = (tools / module).read_text(encoding="utf-8")
@@ -764,6 +766,53 @@ with open("out/native-artifact-storage.v1.json", "w") as handle:
                                         "snapshot_mode": True}))
             with self.assertRaisesRegex(ValueError, "unknown corpus option"):
                 contract.load_corpus(path)
+
+    def test_a_command_step_carries_its_own_baseline_defect(self):
+        def expected(text):
+            return {"exit": 0, "stdout": {"mode": "bytes", "bytes_b64": encoded(text)},
+                    "stderr": {"mode": "bytes", "bytes_b64": ""},
+                    "filesystem": [{"path_b64": encoded(b".home"), "kind": "directory"}]}
+        known = {"observed": expected(b"old\n"), "resolution": "d.json#probe"}
+        case = {"id": "probe", "program": "printer", "initial": [], "steps": [
+            {"argv": ["same"], "stdin_b64": "", "expected": expected(b"same\n")},
+            {"argv": ["old"], "stdin_b64": "", "expected": expected(b"new\n"), "baseline_defect": known}]}
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            corpus = directory / "corpus.json"
+
+            def save(*cases):
+                corpus.write_text(json.dumps({"format": "behavior-contract/1", "decisions": "d.json", "cases": list(cases)}))
+                (directory / "d.json").write_text(json.dumps({"records": {each["id"]: decision(each) for each in cases}}))
+
+            def program(name, source):
+                path = directory / f"{name}.json"
+                path.write_text(json.dumps({"printer": [sys.executable, "-c", source]}))
+                return path
+
+            primary = program("primary", "import sys\nprint(sys.argv[1])\n")
+            fixed = program("fixed", "import sys\nprint({'old': 'new'}.get(sys.argv[1], sys.argv[1]))\n")
+            other = program("other", "import sys\nprint({'old': 'other'}.get(sys.argv[1], sys.argv[1]))\n")
+            save(case)
+            result = self.run_cli("--corpus", corpus, "--implementations", primary)
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("FAIL probe\nstep 2: stdout bytes", result.stdout)
+            result = self.run_cli("--allow-known-defects", "--corpus", corpus, "--implementations", primary,
+                                  "--differential", fixed)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("KNOWN DEFECT probe: d.json#probe", result.stdout)
+            self.assertIn("APPROVED FIX probe: d.json#probe", result.stdout)
+            result = self.run_cli("--allow-known-defects", "--corpus", corpus, "--implementations", primary,
+                                  "--differential", other)
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("DIFFERENTIAL probe", result.stdout)
+            unrecorded = {**case, "steps": [case["steps"][1], {**case["steps"][0], "argv": ["old"]}]}
+            save(unrecorded)
+            result = self.run_cli("--allow-known-defects", "--corpus", corpus, "--implementations", primary)
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("FAIL probe", result.stdout)
+            save({**case, "steps": [*case["steps"], {"remove": [], "baseline_defect": known}]})
+            with self.assertRaisesRegex(ValueError, "step case"):
+                contract.load_corpus(corpus)
 
     def test_stub_gh_records_calls_and_injects_faults(self):
         caller = ("import subprocess, sys\n"
@@ -1233,9 +1282,9 @@ print(json.dumps({"claims": 2, "first": tokens[0]}))
             listing["commands"].pop()
             self.assertEqual([command["id"] for command in contract.load_real_record(contract.REAL_RECORD)["commands"]],
                              ["current-grading-check", "current-grading-status", "current-grading-inventory",
-                              "current-grading-fingerprints", "claims-check", "claims-check-regrading-v2",
-                              "claims-check-selected-pr-intake-v1", "claims-check-selected-pr-intake-v2",
-                              "claims-check-selected-pr-intake-v3"])
+                              "current-grading-fingerprints", "methodology-queue", "claims-check",
+                              "claims-check-regrading-v2", "claims-check-selected-pr-intake-v1",
+                              "claims-check-selected-pr-intake-v2", "claims-check-selected-pr-intake-v3"])
             for broken in ({**listing, "format": "x"}, {**listing, "commands": listing["commands"] * 2},
                            {**listing, "commands": [{**listing["commands"][0], "outputs": ["../x"]}]}):
                 (root.parent / "list.json").write_text(json.dumps(broken))

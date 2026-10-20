@@ -44,7 +44,8 @@ REPO = Path(__file__).resolve().parents[1]
 CORPUS = REPO / "tools/behavior_contracts/usage.v1.json"
 PYTHON_PROGRAMS = {"codex": "bench/tools/codex_usage.py", "transcript": "bench/tools/transcript_usage.py",
                    "diff-identity": "bench/tools/diff_identity.py", "normalize-review": "bench/tools/normalize_review.py",
-                   "check-manifest": "bench/tools/check_manifest.py", "evidence-store": "bench/tools/evidence_store.py",
+                   "evidence-store": "bench/tools/evidence_store.py",
+                   "python-check-manifest": "bench/tools/check_manifest.py",
                    "evidence-inventory": "bench/tools/evidence_inventory.py"}
 # rates.py and upstream.py read the repository that holds them and fetch fixed URLs. These drivers point the
 # retained libraries at the case directory, as the Rust commands default to the current directory, and give
@@ -261,6 +262,16 @@ except regrade.FAILURES as error:
     # defaults to the case directory here, as bench-tools reads the current directory. `fingerprints` has no Python
     # command; it prints what regrade.py reads in process: each selected batch with batch_state's fingerprint and
     # state, read without checking saved grades.
+    # methodology.py reads the repository that holds it; the driver reads the case directory, as bench-tools
+    # methodology reads the current directory.
+    "methodology": """import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv.pop(1))
+sys.argv[0] = "methodology.py"
+import methodology
+methodology.ROOT = Path.cwd()
+methodology.main()
+""",
     "current-grading": """import argparse, json, sys
 from pathlib import Path
 sys.path.insert(0, sys.argv.pop(1))
@@ -302,9 +313,11 @@ RUST_PROGRAMS = {"roster": ("bench-tools", ["roster"]), "normalize-thermo": ("be
                  "archive-transcripts": ("bench-tools", ["evidence", "archive-transcripts"]),
                  "import-benchmark": ("bench-tools", ["import-benchmark"]),
                  "regrade-status": ("bench-tools", ["regrade", "status", "--"]),
-                 "audit-log": ("bench-tools", ["audit-log"])}
+                 "audit-log": ("bench-tools", ["audit-log"]),
+                 "check-manifest": ("bench-tools", ["check-manifest"])}
 # The retained Python each moved program replaced, which a differential runs as the primary.
-PYTHON_COUNTERPARTS = {"native-artifacts": "python-native-artifacts", "archive-transcripts": "python-archive-transcripts"}
+PYTHON_COUNTERPARTS = {"native-artifacts": "python-native-artifacts", "archive-transcripts": "python-archive-transcripts",
+                       "check-manifest": "python-check-manifest"}
 # Python programs that draw blind tokens or shuffles run under ENTROPY_DRIVER, so a recorded expectation is the
 # same on every recording. The grading slices of #156 add their programs here, each by its script or its driver.
 PYTHON_ENTROPY = {"claims": "claims"}
@@ -1323,6 +1336,38 @@ def differential_case(case, left, right):
             for difference in differential(primary, candidate, step)]
 
 
+def commands_of(case, actual):
+    """Each command a case runs with what it observed: the case itself, or each command step."""
+    if "steps" not in case:
+        return [(case, actual)]
+    return list(zip([step for step in case["steps"] if "argv" in step], actual["steps"]))
+
+
+def explained(case, actual):
+    """The resolutions of the differing commands when each matches its own baseline_defect observation."""
+    resolutions = []
+    for command, observed in commands_of(case, actual):
+        if compare(command["expected"], observed):
+            known = command.get("baseline_defect")
+            if not known or compare(known["observed"], observed):
+                return None
+            resolutions.append(known["resolution"])
+    return ", ".join(resolutions) or None
+
+
+def approved(case, actual, candidate):
+    """The resolutions when each command where the implementations differ is a recorded baseline defect that the
+    primary still shows and the candidate fixes."""
+    resolutions = []
+    for (command, left), (_, right) in zip(commands_of(case, actual), commands_of(case, candidate)):
+        if differential(left, right, command):
+            known = command.get("baseline_defect")
+            if not known or compare(known["observed"], left) or compare(command["expected"], right):
+                return None
+            resolutions.append(known["resolution"])
+    return ", ".join(resolutions) or None
+
+
 def differential(left, right, case):
     expected = {"exit": left["exit"], "filesystem": left["filesystem"],
                 "outcomes": case.get("expected", {}).get("outcomes", [])}
@@ -1450,6 +1495,8 @@ def python_commands(corpus):
         elif driver in PYTHON_DRIVERS:
             commands[program] = [sys.executable, "-c", PYTHON_DRIVERS[driver],
                                  *(str(REPO / path) for path in DRIVER_ARGUMENTS.get(driver, ["bench/tools"]))]
+        elif driver in PYTHON_PROGRAMS:
+            commands[program] = [sys.executable, str(REPO / PYTHON_PROGRAMS[driver])]
         else:
             commands.update({name: command for name, command in default_commands(
                 {"cases": [{"program": program}]}).items()})
@@ -1505,7 +1552,8 @@ def load_corpus(path):
             raise ValueError("duplicate case id")
         ids.add(case["id"])
         if "steps" in case and ({"argv", "stdin_b64", "expected", "baseline_defect"} & set(case)
-                                or not any("argv" in step for step in case["steps"])):
+                                or not any("argv" in step for step in case["steps"])
+                                or any("baseline_defect" in step and "argv" not in step for step in case["steps"])):
             raise ValueError(f"{case['id']}: a step case keeps its commands and expectations in its steps")
         if "structured" in case:
             check_structured(case)
@@ -1645,9 +1693,9 @@ def main():
                 print(f"SKIP UNAVAILABLE {case['id']}: {error}")
                 continue
             differences = compare_case(case, actual)
-            known = case.get("baseline_defect")
-            if differences and args.allow_known_defects and known and not compare(known["observed"], actual):
-                print(f"KNOWN DEFECT {case['id']}: {known['resolution']}\n" + "\n".join(differences))
+            known = explained(case, actual) if differences and args.allow_known_defects else None
+            if known:
+                print(f"KNOWN DEFECT {case['id']}: {known}\n" + "\n".join(differences))
             elif differences:
                 failed += 1
                 print(f"FAIL {case['id']}\n" + "\n".join(differences))
@@ -1657,11 +1705,9 @@ def main():
                 candidate = execute(case, other, corpus)
                 differences = differential_case(case, actual, candidate)
                 if differences:
-                    approved_fix = (args.allow_known_defects and known
-                                    and not compare(known["observed"], actual)
-                                    and not compare(case["expected"], candidate))
-                    if approved_fix:
-                        print(f"APPROVED FIX {case['id']}: {known['resolution']}\n" + "\n".join(differences))
+                    fixed = approved(case, actual, candidate) if args.allow_known_defects else None
+                    if fixed:
+                        print(f"APPROVED FIX {case['id']}: {fixed}\n" + "\n".join(differences))
                     else:
                         failed += 1
                         print(f"DIFFERENTIAL {case['id']}\n" + "\n".join(differences))

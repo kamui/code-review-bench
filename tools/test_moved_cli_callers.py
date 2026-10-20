@@ -40,10 +40,14 @@ MOVED = (
 MOVED_PROGRAMS = (
     ("bench/tools/ruling_record.py", "bench-tools ruling check"),
     ("bench/tools/ruling_dossier.py", "bench-tools ruling dossier"),
+    ("bench/tools/check_manifest.py", "bench-tools check-manifest"),
+    ("bench/tools/methodology.py", "bench-tools methodology"),
+    ("tools/export_explorer.py", "bench-tools export-explorer"),
 )
-# Tests of the retained grade.py and regrade.py check those modules' output with the retained current_grading.py,
-# their baseline until #156 slice 11 removes them.
+# Tests of the retained grade.py and regrade.py check those modules' output with the retained current_grading.py
+# and methodology.py, their baseline until #156 slice 11 removes them.
 RETAINED_BASELINE_TESTS = ("bench/tools/test_grade.py", "bench/tools/test_regrade.py")
+RETAINED_BASELINES = ("bench/tools/current_grading.py", "bench/tools/methodology.py")
 # Frozen runs, imported originals, research records, saved rulings, saved fixture and migration evidence, and the
 # contract decisions that describe superseded behavior keep the commands they recorded.
 HISTORICAL = ("artifacts/", "bench/runs/", "docs/research/", "bench/grading/rulings/", "bench/fixtures/",
@@ -97,13 +101,13 @@ class MovedCommands(unittest.TestCase):
         found = []
         for name, text in current_text_files():
             for module, command, replacement in MOVED:
-                if name == module or name in RETAINED_BASELINE_TESTS and module == "bench/tools/current_grading.py":
+                if name == module or name in RETAINED_BASELINE_TESTS and module in RETAINED_BASELINES:
                     continue
                 for number, line in enumerate(text.splitlines(), 1):
                     if invocation(module, command).search(line):
                         found.append(f"{name}:{number}: runs {Path(module).name} {command}; use {replacement}")
             for module, replacement in MOVED_PROGRAMS:
-                if name == module:
+                if name == module or name in RETAINED_BASELINE_TESTS and module in RETAINED_BASELINES:
                     continue
                 for number, line in enumerate(text.splitlines(), 1):
                     if program_run(module).search(line):
@@ -121,6 +125,11 @@ class MovedCommands(unittest.TestCase):
                          "python3 bench/tools/rust_runtime.py exec bench-tools -- import-benchmark --preserve")
         self.assertEqual(scripts["verify:current"], "bun run evidence:fetch && python3 bench/tools/rust_runtime.py exec "
                          "bench-tools -- current-grading check && python3 bench/tools/calibration.py check")
+        self.assertEqual(scripts["data"], "bun run evidence:fetch && python3 bench/tools/rust_runtime.py exec bench-tools -- "
+                         "export-explorer")
+        self.assertEqual(scripts["plan:methodology"], "python3 bench/tools/rust_runtime.py exec bench-tools -- methodology")
+        self.assertIn("python3 tools/behavior_contract.py --corpus tools/behavior_contracts/check-manifest.v1.json &&",
+                      scripts["test:bench"])
         self.assertEqual(scripts["evidence:fetch"], "python3 bench/tools/rust_runtime.py exec bench-tools -- evidence fetch "
                          "--manifest bench/evidence/manifests/repository-payloads-2026-10-08-v1.json")
 

@@ -78,7 +78,7 @@ python3 bench/tools/regrade.py --authorization <authorization.json> --directory 
 
 The authorization pins these inputs by path and SHA-256, and the controller refuses to start when one changed:
 
-- `sourcePlan`, the current queue from `methodology.py`. It records each batch's input fingerprint and whether its saved grade is `current`, `stale` or `missing`. Remove stale grades with `grade.py invalidate` before planning.
+- `sourcePlan`, the current queue from `bun run plan:methodology`. It records each batch's input fingerprint and whether its saved grade is `current`, `stale` or `missing`. Remove stale grades with `grade.py invalidate` before planning.
 - `executionPlan`, described below.
 - `runnerDeviations`, which must include `bench/tools/regrade.py`. A changed controller therefore needs a new authorization version. Earlier authorizations pin earlier controllers and stay as they are.
 - `cacheReplacements`, optional, pins the versioned replacement-cache manifest used by preflight and preparation.

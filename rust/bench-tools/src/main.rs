@@ -7,8 +7,8 @@ use bench_tools::schema::{SchemaError, Validator};
 use bench_tools::{
     archive, build_packet, claims, current_grading, delegation, derive_packet, diff_identity,
     evidence, evidence_inventory, export_explorer, grading_reports, grading_validation,
-    import_benchmark, native_artifacts, normalize_thermo, pyfs, pyunicode, pyvalue, rates, roster,
-    ruling, upstream,
+    import_benchmark, methodology, native_artifacts, normalize_thermo, pyfs, pyunicode, pyvalue,
+    rates, roster, ruling, upstream,
 };
 use clap::builder::PossibleValuesParser;
 use clap::error::ErrorKind;
@@ -58,7 +58,7 @@ enum Cli {
     /// Check, inventory, blind or package the shared claims, as claims.py does.
     #[command(infer_long_args = true)]
     Claims(ClaimsArgs),
-    /// List, stage or publish the explorer export from the current facts tools/export_explorer.py writes.
+    /// Export the current facts to public/ for the explorer, or list, stage or publish an export from a facts file.
     #[command(infer_long_args = true)]
     ExportExplorer(ExportArgs),
     /// Check cached evidence packages or native scratch archives through bench_tools::archive.
@@ -78,6 +78,9 @@ enum Cli {
     /// batch's input fingerprint and state.
     #[command(infer_long_args = true)]
     CurrentGrading(CurrentGradingArgs),
+    /// Plan the current grading queue without altering saved reviews or grades, as methodology.py does.
+    #[command(infer_long_args = true)]
+    Methodology(MethodologyArgs),
     /// Verify the imported originals bench/import-manifest.json pins, or preserve them before an intended edit, as
     /// tools/import_benchmark.py did.
     #[command(infer_long_args = true)]
@@ -430,8 +433,8 @@ struct ExportArgs {
     stage: Option<OsString>,
     #[arg(long, allow_negative_numbers = true)]
     public: Option<OsString>,
-    /// Hidden because the export-explorer corpus pins this command's usage text and only
-    /// tools/export_explorer.py passes it.
+    /// Hidden because the export-explorer corpus pins this command's usage text and only the removed
+    /// tools/export_explorer.py passed it.
     #[arg(long, hide = true)]
     restore: bool,
 }
@@ -598,6 +601,16 @@ struct CurrentGradingArgs {
     /// Where `inventory` writes the inventory instead of printing it.
     #[arg(long, allow_negative_numbers = true)]
     out: Option<OsString>,
+}
+
+#[derive(Args)]
+struct MethodologyArgs {
+    /// The new file the queue is written to.
+    #[arg(long, required = true, allow_negative_numbers = true)]
+    out: OsString,
+    /// The repository or fixture root holding bench/.
+    #[arg(long, default_value = ".", allow_negative_numbers = true)]
+    root: OsString,
 }
 
 #[derive(Subcommand)]
@@ -1333,6 +1346,9 @@ fn run_build_packet(arguments: BuildPacketArgs) -> Result<ExitCode, ExitCode> {
 }
 
 fn run_export_explorer(arguments: ExportArgs) -> Result<ExitCode, ExitCode> {
+    if arguments.command.is_empty() {
+        return export_current(arguments);
+    }
     let [command] = arguments.command.as_slice() else {
         return Err(misuse(
             "export-explorer",
@@ -1436,6 +1452,95 @@ fn run_export_explorer(arguments: ExportArgs) -> Result<ExitCode, ExitCode> {
         Err(failure) => {
             eprintln!("export_explorer.py: {}", failure.line());
             Err(ExitCode::from(1))
+        }
+    }
+}
+
+/// The whole export, as `tools/export_explorer.py` ran it: `--root` and `--public` only, with the base path from
+/// `BASE_PATH`.
+fn export_current(arguments: ExportArgs) -> Result<ExitCode, ExitCode> {
+    for (name, given) in [
+        ("--facts", arguments.facts.is_some()),
+        ("--base-path", arguments.base_path.is_some()),
+        ("--stage", arguments.stage.is_some()),
+        ("--restore", arguments.restore),
+    ] {
+        if given {
+            return Err(misuse(
+                "export-explorer",
+                ErrorKind::ArgumentConflict,
+                format!("{name} applies only to evidence, stage or publish"),
+            ));
+        }
+    }
+    let base_path = match std::env::var_os("BASE_PATH") {
+        None => "/".to_string(),
+        Some(value) => value.into_string().map_err(|_| {
+            misuse(
+                "export-explorer",
+                ErrorKind::InvalidUtf8,
+                "invalid UTF-8 was detected in one or more arguments",
+            )
+        })?,
+    };
+    let root = pyfs::resolve(
+        arguments
+            .root
+            .as_deref()
+            .map_or(b".".as_slice(), pytext::os_bytes),
+    );
+    let mut store = evidence::Store {
+        remote: &mut evidence::GitHub,
+        disk: &mut evidence::System,
+        now: &evidence::now_isoformat,
+        temporary: evidence::system_temp(),
+    };
+    let outcome = export_explorer::export(
+        &root,
+        arguments.public.as_deref().map(pytext::os_bytes),
+        &base_path,
+        export_explorer::Effects {
+            store: &mut store,
+            moves: &mut export_explorer::System,
+            staged: &mut || {},
+        },
+    );
+    match outcome {
+        Ok(summary) => {
+            write_stdout(format!("{summary}\n").as_bytes())?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(failure) => {
+            eprintln!("export_explorer.py: {}", failure.line());
+            Err(ExitCode::from(1))
+        }
+    }
+}
+
+fn run_methodology(arguments: &MethodologyArgs) -> Result<ExitCode, ExitCode> {
+    use current_grading::Failure;
+    let outcome = (|| -> current_grading::R<String> {
+        let root = current_grading::Root::new(pytext::os_bytes(&arguments.root))?;
+        let result = methodology::plan(&root)?;
+        methodology::save(pytext::os_bytes(&arguments.out), &result)?;
+        methodology::summary(&result)
+    })();
+    match outcome {
+        Ok(summary) => {
+            write_stdout(summary.as_bytes())?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(Failure::Inconsistent(message)) => {
+            eprintln!(
+                "{}: current_grading.Inconsistent: {}",
+                methodology::PROGRAM,
+                pytext::stderr_text(&message)
+            );
+            Err(ExitCode::from(1))
+        }
+        Err(Failure::Input(message) | Failure::Crash(message)) => {
+            eprintln!("{}: {message}", methodology::PROGRAM);
+            Err(ExitCode::from(2))
         }
     }
 }
@@ -2184,8 +2289,8 @@ fn run_ruling(command: RulingCommand) -> Result<ExitCode, ExitCode> {
 /// `grading-validation`'s `dash-led-*` cases, `pack-unicode-negative-out` and `inventory-dash-led-space-root` pin
 /// that. clap takes only numbers, so before it parses them, these commands attach such a value to its option with
 /// `=`, and grading validate's positional moves after `--`. Only build-packet, grading validate, evidence pack,
-/// evidence publish, current-grading, upstream collect and claims, whose decisions pin Python 3.14, take the number
-/// form.
+/// evidence publish, current-grading, methodology, export-explorer, upstream collect and claims, whose decisions pin
+/// Python 3.14, take the number form.
 fn attach_dash_led_values(arguments: Vec<OsString>) -> Vec<OsString> {
     let name = |index: usize| arguments.get(index).map(|name| pytext::os_bytes(name));
     // claims takes --registry and --root before its command word, so its options are those of both levels.
@@ -2210,6 +2315,8 @@ fn attach_dash_led_values(arguments: Vec<OsString>) -> Vec<OsString> {
         (Some(b"evidence"), Some(b"pack")) => (vec!["evidence", "pack"], true),
         (Some(b"evidence"), Some(b"publish")) => (vec!["evidence", "publish"], true),
         (Some(b"current-grading"), _) => (vec!["current-grading"], true),
+        (Some(b"methodology"), _) => (vec!["methodology"], true),
+        (Some(b"export-explorer"), _) => (vec!["export-explorer"], true),
         (Some(b"upstream"), Some(b"collect")) => (vec!["upstream", "collect"], true),
         (Some(b"claims"), _) => (
             std::iter::once("claims").chain(claims_command).collect(),
@@ -2534,6 +2641,7 @@ fn main() -> ExitCode {
         Cli::AuditLog(arguments) => audit_log(arguments),
         Cli::NativeArtifacts(command) => run_native_artifacts(command),
         Cli::CurrentGrading(arguments) => run_current_grading(arguments),
+        Cli::Methodology(arguments) => run_methodology(&arguments),
     };
     outcome.unwrap_or_else(|code| code)
 }

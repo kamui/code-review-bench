@@ -9,9 +9,11 @@ changes no grade, claim decision, ruling or scorecard number. `src/lib/scoring.t
 scorecard arithmetic. Slice 2, [#232](https://github.com/kamui/code-review-bench/issues/232), ports the ruling
 records and delegation routing, as [ruling records and delegation](#ruling-records-and-delegation) describes.
 Slice 3, [#233](https://github.com/kamui/code-review-bench/issues/233), ports the current grading record and packet
-selection, as [slice 3](#slice-3-the-current-grading-record-and-packet-selection) describes. Slice 5,
-[#235](https://github.com/kamui/code-review-bench/issues/235), ports the shared claims and upstream collection, as
-[slice 5](#slice-5-shared-claims-and-upstream-collection) describes.
+selection, as [slice 3](#slice-3-the-current-grading-record-and-packet-selection) describes. Slice 4,
+[#234](https://github.com/kamui/code-review-bench/issues/234), moves the explorer export's facts, `methodology` and
+the schema-check callers, as [slice 4](#slice-4-the-explorer-exports-facts-methodology-and-schema-check-callers)
+describes. Slice 5, [#235](https://github.com/kamui/code-review-bench/issues/235), ports the shared claims and
+upstream collection, as [slice 5](#slice-5-shared-claims-and-upstream-collection) describes.
 
 ## The split with #157
 
@@ -37,15 +39,15 @@ implementation.
   byte-unchanged until slice 10, where `grading_policy.py` and `grading_client_probe.py` change only in how the
   validator is invoked.
 - `claim_grading.scoring_items` has no caller and is not ported.
-- `check_manifest.py`'s command-line callers move to `bench-tools check-manifest` in slice 4; the library stays for
+- `check_manifest.py`'s command-line callers moved to `bench-tools check-manifest` in slice 4; the library stays for
   its importers until #160.
 
 ## Comparison features and fixture root
 
 [The contract reference](contracts/README.md#grading-comparison-features) describes the harness features: the
 structured comparison, hand-stated grading outcomes, the Python entropy driver, the `fixture-git` setup program and
-real-record mode. `grading-real-record.v1.json` lists slice 3's four `current-grading` commands and slice 5's
-`claims check` on each tracked registry, which the Pages build job runs.
+real-record mode. `grading-real-record.v1.json` lists slice 3's four `current-grading` commands, slice 4's
+`methodology` command and slice 5's `claims check` on each tracked registry, which the Pages build job runs.
 
 [`grading_fixture.rs`](../../rust/bench-tools/tests/support/grading_fixture.rs) is the one fixture root. It mirrors
 the cohort of `test_grade.py`: one task, a selected and an unselected arm, an invalid attempt and its replacement, a
@@ -124,8 +126,8 @@ behavior corpora and `tests/ruling_filing.rs` run them. Every tracked record was
 and without `--json`, for the whole record and each of the 6 rounds; `precedents` for each decision type; and
 `dossier` for every directory holding a `summary.json`. All 692 commands gave identical exit status, stdout, stderr
 and sheets under Python 3.12 and 3.14, except four `dossier` runs on research directories whose `summary.json` is not
-a dossier, where the Python crashed and Rust exits 2 as decided. The real-record list runs only `current-grading`
-and `claims` commands; no `ruling` command repeats this comparison in Pages yet.
+a dossier, where the Python crashed and Rust exits 2 as decided. The real-record list runs only `current-grading`,
+`methodology` and `claims` commands; no `ruling` command repeats this comparison in Pages yet.
 
 ## Replay coverage
 
@@ -224,6 +226,54 @@ both, and the same dataset hash.
 [#256](https://github.com/kamui/code-review-bench/issues/256) added the rule that a comment linked to two or more
 claims has no equivalent link. `current_grading.py` keeps the older rule and stays byte-unchanged as the baseline
 until slice 11 deletes it; `packet_selection.py` stays for #157's callers.
+
+## Slice 4: the explorer export's facts, methodology and schema-check callers
+
+[#234](https://github.com/kamui/code-review-bench/issues/234) moves three callers off the Python:
+
+- `bench-tools export-explorer` with no command runs the whole export. It loads the current facts in process
+  through `bench_tools::current_grading::load_current` and `coverage_status`, so the temporary facts file and
+  `tools/export_explorer.py` are gone. `bun run data` runs it through `rust_runtime.py exec`, which prints the
+  install command and exits 1 when no `bench-tools` is selected for `HEAD`, as the processing record explains. [The explorer
+  export](processing.md#the-explorer-export) describes the command and its decisions.
+- `bench_tools::methodology` ports `methodology.plan`. `bench-tools methodology --out FILE [--root DIR]` writes the
+  queue, and `plan:methodology` and `docs/current-grading.md` run it. `methodology.py` stays byte-unchanged as the
+  baseline until slice 11 deletes it. `regrade:methodology` still runs `regrade.py`.
+- `check_manifest.py`'s command line has no caller left: `bench/README.md`, the rates workflow and
+  `docs/current-grading.md` run `bench-tools check-manifest`, and `test:bench` runs
+  [`check-manifest.v1.json`](../../tools/behavior_contracts/check-manifest.v1.json) against Rust in place of
+  `--self-test`. The Rust runtime workflow runs the same corpus with a differential against the retained Python.
+
+`tools/test_moved_cli_callers.py` fails on a current caller of `methodology.py`, `check_manifest.py` or
+`tools/export_explorer.py`, except `test_grade.py` and `test_regrade.py`, which check the retained Python against
+its baseline.
+
+[`methodology.v1.json`](../../tools/behavior_contracts/methodology.v1.json) pins the command on the six fixture
+variants that plan and the two the record refuses, and on `--out` and the command line. The decided differences
+follow slice 3's:
+
+- an exception the Python did not catch prints one line instead of a traceback: an inconsistent record keeps exit 1
+  with `methodology.py: current_grading.Inconsistent: <message>`; an input or output it cannot read or write, such
+  as an `--out` that exists, and any other exception exit 2;
+- usage errors and help are clap's;
+- Python 3.14's readings: `repr` of Unicode 15.1 and 16.0 characters, and a dash-led `--root` in exponent form or
+  led by a Unicode 16.0 digit, which Python 3.12's argparse refused.
+
+[`export-explorer.v1.json`](../../tools/behavior_contracts/export-explorer.v1.json) gains the whole export's cases,
+which agree with the deleted front at the base commit except six decided in `export-explorer-decisions.v7.json`: a
+record the export refuses prints the traceback's last line instead of the traceback, keeping exit 1
+(`*-billing-receipt`, `*-missing-inventory`, `*-unicode-15-1-record`, which also quotes through Python 3.14's
+`repr`); `--r` is ambiguous with the hidden `--restore` (`*-abbreviated-root`); `--facts`, `--base-path`,
+`--stage` or `--restore` without a command is refused (`*-facts-without-command`); and `--public` led by `-` and a
+Unicode 16.0 digit is taken as Python 3.14 took it (`*-unicode-16-digit-public`). Dash-led `--root` and `--public`
+values such as `-.5` and `'-published dir'` agree with the front (`*-dash-led-*`, `*-negative-number-public`).
+`tests/export_explorer.rs` covers what a corpus cannot reach: a record changed after staging, a failed publication,
+`SIGINT` during publication and `BASE_PATH`.
+
+On 2026-10-19, read-only against the checked-out record, `methodology --out` wrote the same queue as
+`methodology.py` under Python 3.12.15 and 3.14.7: 663 selected reviews, 198 batches and 126 shared-claim links. The
+whole export wrote the same `public/` tree as the base commit's front, with `BASE_PATH` unset and set to
+`/code-review-bench/`.
 
 ## Slice 5: shared claims and upstream collection
 
