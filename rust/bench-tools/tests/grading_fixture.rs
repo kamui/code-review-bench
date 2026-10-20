@@ -105,7 +105,7 @@ fn every_corpus_fixture_matches_the_builder() {
 }
 
 /// The #156 corpora, each of which must run on the unresolved fixture states, as the delivery plan requires.
-const GRADING_CORPORA: [&str; 7] = [
+const GRADING_CORPORA: [&str; 8] = [
     "ruling-record.v1.json",
     "ruling-dossier.v1.json",
     "current-grading.v1.json",
@@ -113,6 +113,7 @@ const GRADING_CORPORA: [&str; 7] = [
     "claims.v1.json",
     "calibration.v1.json",
     "evaluator-audit.v1.json",
+    "grade-prepare.v1.json",
 ];
 
 #[test]
@@ -434,4 +435,52 @@ mod tempfile_root {
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }
+}
+
+#[test]
+fn the_grade_prepare_corpus_checks_keys_against_the_published_key_schema() {
+    let schema = "bench/schema/current-grading-key.v1.schema.json";
+    let published = std::fs::read(repository().join(schema)).unwrap();
+    let text = std::fs::read_to_string(
+        repository().join("tools/behavior_contracts/grade-prepare.v1.json"),
+    )
+    .unwrap();
+    let corpus = pyjson::loads(&text, Duplicates::Refuse).unwrap();
+    let mut copies = Vec::new();
+    for case in corpus
+        .as_object()
+        .unwrap()
+        .get("cases")
+        .unwrap()
+        .as_array()
+        .unwrap()
+    {
+        for step in case
+            .as_object()
+            .unwrap()
+            .get("steps")
+            .unwrap()
+            .as_array()
+            .unwrap()
+        {
+            let Some(written) = step.as_object().unwrap().get("write") else {
+                continue;
+            };
+            for entry in written.as_array().unwrap() {
+                let entry = entry.as_object().unwrap();
+                if entry.get("path_b64").and_then(Value::as_str)
+                    == Some(grading_fixture::base64(schema.as_bytes()).as_str())
+                {
+                    copies.push(
+                        entry
+                            .get("bytes_b64")
+                            .and_then(Value::as_str)
+                            .unwrap()
+                            .to_string(),
+                    );
+                }
+            }
+        }
+    }
+    assert_eq!(copies, vec![grading_fixture::base64(&published); 2]);
 }

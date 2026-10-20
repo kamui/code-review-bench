@@ -133,6 +133,37 @@ pub fn lexists(path: &[u8]) -> bool {
     std::fs::symlink_metadata(os(path)).is_ok()
 }
 
+/// `posixpath.normpath`.
+pub fn normpath(path: &[u8]) -> Vec<u8> {
+    if path.is_empty() {
+        return b".".to_vec();
+    }
+    let initial: &[u8] = if path.starts_with(b"//") && !path.starts_with(b"///") {
+        b"//"
+    } else if path.starts_with(b"/") {
+        b"/"
+    } else {
+        b""
+    };
+    let mut parts: Vec<&[u8]> = Vec::new();
+    for part in path.split(|byte| *byte == b'/') {
+        match part {
+            b"" | b"." => {}
+            b".." if !initial.is_empty() && parts.is_empty() => {}
+            b".." if parts.last().is_some_and(|last| *last != b"..") => {
+                parts.pop();
+            }
+            _ => parts.push(part),
+        }
+    }
+    let joined = [initial, &parts.join(&b'/')].concat();
+    if joined.is_empty() {
+        b".".to_vec()
+    } else {
+        joined
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

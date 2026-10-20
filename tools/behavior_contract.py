@@ -225,6 +225,51 @@ claims.DEFAULT_EXTRACTS = root / "bench/claims/evidence-extracts.v1.json"
 sys.argv = [str(tools / "claims.py"), *argv]
 sys.exit(claims.main())
 """,
+    # `grade {prepare,preflight-inputs,check-prepared,dispatch,map} ...` runs the retained grade.py on the case
+    # directory, as bench-tools grade reads the current directory: the driver repoints the checkout paths grade.py
+    # and its imports take from their own files, and their bound defaults, at the case's stand-ins. preflight-inputs
+    # is `preflight --offline`, and `check-prepared --work W --key K [--dispatching]` prints what check_prepared
+    # finds. The harness PATH is fixed, so the case home's bin, where fake clients live, goes first.
+    "python-grade": """import os, sys, types
+from pathlib import Path
+tools = Path(sys.argv.pop(1))
+sys.path.insert(0, str(tools))
+root = Path.cwd()
+import claims, claim_grading, current_grading, provision, upstream, grade
+for module in (claims, current_grading, upstream):
+    for value in vars(module).values():
+        if isinstance(value, types.FunctionType) and value.__defaults__:
+            value.__defaults__ = tuple(root if default == module.ROOT else default for default in value.__defaults__)
+claims.ROOT = upstream.ROOT = current_grading.ROOT = root
+claims.DEFAULT_REGISTRY = root / "bench/claims/registry.json"
+claims.DEFAULT_EXTRACTS = root / "bench/claims/evidence-extracts.v1.json"
+grade.TOOLS, grade.BENCH = root / "bench/tools", root / "bench"
+claim_grading.BENCH = grade.BENCH
+provision.__file__ = str(grade.TOOLS / "provision.py")
+home_bin = Path.home() / "bin"
+if home_bin.is_dir():
+    os.environ["PATH"] = f"{home_bin}{os.pathsep}{os.environ.get('PATH', '')}"
+argv = sys.argv[1:]
+if argv[:1] == ["preflight-inputs"]:
+    argv = ["preflight", "--offline", *argv[1:]]
+elif argv[:1] == ["check-prepared"]:
+    import argparse
+    parser = argparse.ArgumentParser(prog="grade.py check-prepared")
+    parser.add_argument("--work", required=True)
+    parser.add_argument("--key", required=True)
+    parser.add_argument("--dispatching", action="store_true")
+    args = parser.parse_args(argv[1:])
+    try:
+        problems = grade.check_prepared(Path(args.work).resolve(), grade.read_json(args.key), dispatching=args.dispatching)
+    except grade.InputError as error:
+        print(f"grade.py: {error}", file=sys.stderr)
+        sys.exit(2)
+    for problem in problems:
+        print(problem)
+    sys.exit(1 if problems else 0)
+sys.argv = [str(tools / "grade.py"), *argv]
+sys.exit(grade.main())
+""",
     # grading_validation.py reads inputs.json one directory above its own file, where grade.py copies it into a
     # workspace; `bench-tools grading validate` names that file with --inputs. Pointing the module's __file__ beside
     # the named file makes the retained script read it in place, so the case tree holds no copied tools.
@@ -333,13 +378,16 @@ RUST_PROGRAMS = {"roster": ("bench-tools", ["roster"]), "normalize-thermo": ("be
                  "import-benchmark": ("bench-tools", ["import-benchmark"]),
                  "regrade-status": ("bench-tools", ["regrade", "status", "--"]),
                  "audit-log": ("bench-tools", ["audit-log"]),
-                 "check-manifest": ("bench-tools", ["check-manifest"])}
+                 "check-manifest": ("bench-tools", ["check-manifest"]),
+                 "grade": ("bench-tools", ["grade"]),
+                 # No retained counterpart: every command map prepares a v2 key with it for the rows Python runs on.
+                 "rust-grade": ("bench-tools", ["grade"])}
 # The retained Python each moved program replaced, which a differential runs as the primary.
 PYTHON_COUNTERPARTS = {"native-artifacts": "python-native-artifacts", "archive-transcripts": "python-archive-transcripts",
-                       "check-manifest": "python-check-manifest"}
+                       "check-manifest": "python-check-manifest", "grade": "python-grade"}
 # Python programs that draw blind tokens or shuffles run under ENTROPY_DRIVER, so a recorded expectation is the
 # same on every recording. The grading slices of #156 add their programs here, each by its script or its driver.
-PYTHON_ENTROPY = {"claims": "claims"}
+PYTHON_ENTROPY = {"claims": "claims", "python-grade": "python-grade"}
 ENTROPY_DRIVER = """import hashlib, random, runpy, secrets, sys
 from pathlib import Path
 drawn = 0
@@ -393,7 +441,8 @@ for name in names:
     path = Path(name)
     path.write_bytes(path.read_bytes().replace(%r, commit))
 """ % FREEZE_PLACEHOLDER.encode("ascii")}
-GRADING_OUTCOMES = ("family-outcome", "credit-fact", "unresolved-state", "candidate-state")
+GRADING_OUTCOMES = ("family-outcome", "credit-fact", "unresolved-state", "candidate-state", "prepared-review",
+                    "prepared-family")
 DECISIONS = re.compile(r"(?P<family>.+)-decisions\.v[^/]*\.json")
 
 
@@ -744,6 +793,22 @@ def archive_members(raw, form):
     return members
 
 
+def as_executable(case, data):
+    """CPython names itself by argv[0] in its own errors. A macOS framework build's bin/python3 is a stub that
+    execs Resources/Python.app/Contents/MacOS/Python with that path as argv[0] while sys.executable stays the
+    stub, so in a case that masks the interpreter as <python>, the interpreter's own complete path token becomes
+    sys.executable before the case's patterns mask it. Any other bytes, including a longer path sharing that
+    prefix, stay exact."""
+    if not any(rule["label"] == "<python>" for rule in case.get("mask_patterns", [])):
+        return data
+    launched = os.fsencode(sys.orig_argv[0]) if sys.orig_argv else b""
+    executable = os.fsencode(sys.executable)
+    if not os.path.isabs(launched) or launched == executable:
+        return data
+    token = re.compile(rb"(?<!\S)" + re.escape(launched) + rb"(?![^\s:])")
+    return token.sub(lambda _match: executable, data)
+
+
 def normalize(case, root, actual):
     """Apply the case's declared archive, digest, manifest, reference, volatile and root comparisons.
 
@@ -851,6 +916,7 @@ def normalize(case, root, actual):
             entry.update(bytes_b64=base64.b64encode(data).decode("ascii"), sha256=hashlib.sha256(data).hexdigest())
         filesystem.append(entry)
     def diagnostic(data):
+        data = as_executable(case, data)
         for rule in case.get("mask_patterns", []):
             data = re.sub(rule["pattern"].encode("utf-8"), rule["label"].encode("utf-8"), data)
         return rewrite(data)
@@ -861,7 +927,7 @@ def normalize(case, root, actual):
     return result
 
 
-STRUCTURED = ("pins", "tokens", "clocks", "identity", "sections", "members")
+STRUCTURED = ("pins", "tokens", "clocks", "identity", "sections", "lines", "members")
 UNSTRUCTURED = ("archives", "digests", "manifests", "references", "volatile")
 
 
@@ -882,8 +948,12 @@ def check_structured(case):
     for rule in spec.get("members", []):
         if set(rule) != {"glob", "pointers"} or not rule["pointers"]:
             raise ValueError(f"{case['id']}: a members rule names a glob and the pointers of the objects to order")
+    for rule in spec.get("lines", []):
+        if set(rule) != {"glob", "start"} or not isinstance(rule["start"], str) or not rule["start"]:
+            raise ValueError(f"{case['id']}: a lines rule names a glob and the start of the lines to order")
     for rule in spec.get("tokens", []):
-        if not isinstance(rule, dict) or set(rule) != {"prefix", "sites", "references"} \
+        if not isinstance(rule, dict) or set(rule) - {"ordinals"} != {"prefix", "sites", "references"} \
+                or rule.get("ordinals", "sites") != "sites" \
                 or not re.fullmatch(r"[a-z]+", str(rule["prefix"])) or not rule["sites"] \
                 or any(set(site) - {"keys"} != {"glob", "pointers"} or not site["pointers"]
                        or site.get("keys", True) is not True for site in rule["sites"]) \
@@ -892,7 +962,7 @@ def check_structured(case):
                              "a glob with the JSON pointers that hold generated tokens (and keys: true when the keys "
                              "of the objects there are the tokens), and its references, each a glob with pointers "
                              "(and keys: true for object keys), a glob with line_starts, a glob with names: true, a "
-                             "stream, or a glob alone for whole files")
+                             "stream, or a glob alone for whole files, and at most ordinals: sites")
 
 
 def token_reference(reference):
@@ -1062,6 +1132,25 @@ def relabel_line_starts(data, starts, shape, label):
     return b"".join(lines)
 
 
+def order_lines(data, start):
+    """Sort each run of adjacent lines that begin with `start` by their bytes, keeping each line ending in place."""
+    lines = data.splitlines(keepends=True)
+    prefix = start.encode("utf-8")
+    result, run = [], []
+    def flush():
+        bodies = sorted(line.rstrip(b"\r\n") for line in run)
+        result.extend(body + line[len(line.rstrip(b"\r\n")):] for body, line in zip(bodies, run))
+        run.clear()
+    for line in lines:
+        if line.startswith(prefix):
+            run.append(line)
+        else:
+            flush()
+            result.append(line)
+    flush()
+    return b"".join(result)
+
+
 def order_members(data, pointers):
     """Order the members of the objects at the pointers by key, in a file written as `json.dumps(value, indent=2)`
     and a newline, so an object built in a shuffled order compares by its members. Any other form is refused."""
@@ -1086,10 +1175,14 @@ def structured(case, root, actual):
     """Compare outputs that carry blind tokens, shuffles, clocks or runner identity.
 
     Every pin the case declares is checked against the bytes it names before anything is normalized. Then only
-    the declared normalizations apply: clock fields and runner identity fields take fixed labels, each run of
-    dossier sections is ordered by content, and each token the run wrote at a declared site becomes its first-seen
-    ordinal at that site and at the rule's declared references, scanning stdout, stderr, then entries in path
-    order, names before contents. A reference is a JSON string value or object's keys at a pointer, entry names,
+    the declared normalizations apply: with mask_root, the case root in file contents becomes <root>; clock fields
+    and runner identity fields take fixed labels, each run of dossier sections is ordered by content, and each token
+    the run wrote at a declared site becomes its first-seen ordinal at that site and at the rule's declared
+    references, scanning stdout, stderr, then entries in path order, names before contents. A rule with
+    ordinals: sites numbers its tokens first in the order its sites hold them, sites in declared order, files in
+    path order, pointers in declared order and keys in written order, for tokens that every other place holds in
+    an order set by their random values. Each run of adjacent lines a lines rule names is then ordered by its
+    relabeled bytes. A reference is a JSON string value or object's keys at a pointer, entry names,
     a stream, or a whole file; a whole-file reference must never name a file that carries quotes, source text or
     evidence, so those files declare pointer references. Every other byte stays exact, occurrences of site tokens
     included. A generated token that the case's inputs already hold, raw or as a decoded JSON string, and text
@@ -1105,6 +1198,13 @@ def structured(case, root, actual):
         elif sha != hashlib.sha256(files[target]).hexdigest():
             issues.append(f"{name}: {at} pins {sha} for {target}, whose bytes hash to "
                           f"{hashlib.sha256(files[target]).hexdigest()}")
+    roots = sorted({os.fsencode(str(root)), os.fsencode(os.path.realpath(root))}, key=len, reverse=True)
+    def without_root(data):
+        if case.get("mask_root"):
+            for prefix in roots:
+                data = data.replace(prefix, b"<root>")
+        return data
+    files = {name: without_root(data) for name, data in files.items()}
     labels = [(rule, {at: "<volatile>" for at in rule["pointers"]}) for rule in spec.get("clocks", [])]
     labels += [(rule, dict.fromkeys(rule["pointers"], rule["label"])) for rule in spec.get("identity", [])]
     for rule, values in labels:
@@ -1172,14 +1272,30 @@ def structured(case, root, actual):
                 issues.append(f"{where}: already holds {', '.join(held)}, the form of a token label")
         def masked(name):
             return shape.sub(b"<token>", os.fsencode(name)), os.fsencode(name)
-        def label(match):
-            prefix = match.group(1).decode("ascii")
-            key = match.group(0)
-            if key not in generated:
-                return key
+        def number(prefix, key):
             if key not in ordinals:
                 ordinals[key] = f"<{prefix} {1 + sum(o.startswith(f'<{prefix} ') for o in ordinals.values())}>"
             return ordinals[key].encode("ascii")
+        def label(match):
+            key = match.group(0)
+            return number(match.group(1).decode("ascii"), key) if key in generated else key
+        for rule in spec["tokens"]:
+            if rule.get("ordinals") != "sites":
+                continue
+            prefix = rule["prefix"]
+            for site in rule["sites"]:
+                for name in sorted(files):
+                    if not fnmatch.fnmatchcase(name, site["glob"]):
+                        continue
+                    for at in site["pointers"]:
+                        try:
+                            value = pointer(json_value(files[name]), at)
+                        except (KeyError, IndexError, TypeError, ValueError):
+                            continue
+                        for token in (value if site.get("keys") and isinstance(value, dict) else [value]):
+                            if isinstance(token, str) and token.encode("ascii", "replace") in generated \
+                                    and token.startswith(prefix + "-"):
+                                number(prefix, token.encode("ascii"))
         renamed = {name: name for name in entries}
         for rule in spec["tokens"]:
             own = re.compile(rb"(?<![0-9A-Za-z_-])(" + re.escape(rule["prefix"].encode()) +
@@ -1216,6 +1332,10 @@ def structured(case, root, actual):
                         issues.append(f"{name}: declared {rule['prefix']} references unreadable: {error}")
         entries = {renamed[name]: entry for name, entry in entries.items()}
         files = {renamed[name]: data for name, data in files.items()}
+    for rule in spec.get("lines", []):
+        for name in sorted(files):
+            if fnmatch.fnmatchcase(name, rule["glob"]):
+                files[name] = order_lines(files[name], rule["start"])
     for rule in spec.get("members", []):
         for name in sorted(files):
             if fnmatch.fnmatchcase(name, rule["glob"]):
@@ -1239,11 +1359,8 @@ def structured(case, root, actual):
                 issues.append(f"{name}: pins unreadable after normalization: {error}")
                 final[name] = files[name]
         return final[name]
-    roots = sorted({os.fsencode(str(root)), os.fsencode(os.path.realpath(root))}, key=len, reverse=True)
     def diagnostic(data):
-        if case.get("mask_root"):
-            for prefix in roots:
-                data = data.replace(prefix, b"<root>")
+        data = as_executable(case, without_root(data))
         for rule in case.get("mask_patterns", []):
             data = re.sub(rule["pattern"].encode("utf-8"), rule["label"].encode("utf-8"), data)
         return data

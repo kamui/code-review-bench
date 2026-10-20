@@ -27,11 +27,19 @@ pub fn path_order(path: &[u8]) -> Vec<Vec<u32>> {
 
 /// How Python writes a `surrogateescape`-decoded string to stderr, whose error handler is `backslashreplace`.
 pub fn stderr_text(bytes: &[u8]) -> String {
-    let mut text = String::with_capacity(bytes.len());
-    for chunk in bytes.utf8_chunks() {
-        text.push_str(chunk.valid());
-        for byte in chunk.invalid() {
-            let _ = write!(text, "\\udc{byte:02x}");
+    stderr_points(&surrogateescape(bytes))
+}
+
+/// How Python writes a string of [`surrogateescape`] code points to stderr, whose error handler is
+/// `backslashreplace`.
+pub fn stderr_points(points: &[u32]) -> String {
+    let mut text = String::with_capacity(points.len());
+    for point in points {
+        match char::from_u32(*point) {
+            Some(c) => text.push(c),
+            None => {
+                let _ = write!(text, "\\u{point:04x}");
+            }
         }
     }
     text
