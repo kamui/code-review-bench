@@ -274,7 +274,8 @@ impl Repository {
 
     /// The run a registry link's review belongs to.
     fn source_run(&self, link: &Value, target: &str) -> Result<String, Failure> {
-        let (mapping, _item, _grade) = self.source_item(link, target)?;
+        let (mapping, item, _grade) = self.source_item(link, target)?;
+        self.dossier_item(link, item)?;
         Ok(text(index(&mapping, "run_id")?, "run_id")?.to_string())
     }
 
