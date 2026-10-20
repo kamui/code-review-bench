@@ -63,7 +63,7 @@ bun run data
 ## Registry dependencies
 
 The owner allowed pinned crates.io dependencies on 2026-10-19 ([#215](https://github.com/kamui/code-review-bench/issues/215)).
-These are every registry crate the four supported targets build, as `cargo tree --target <target> -e normal,build`
+These are every registry crate the supported targets build, as `cargo tree --target <target> -e normal,build`
 lists them. When the Cargo cache lacks one, `rust_runtime.py install` fails and names the `cargo fetch --locked` step.
 
 | Crate | Version | License | Purpose |

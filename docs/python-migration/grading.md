@@ -166,7 +166,7 @@ modules stay as the baseline until slice 11.
   each verdict contract and safety policy, a duplicate key, non-UTF-8 and non-object input, and the fixture's
   `pending`, `proposed` and `disputed-without-ruling` variants. Its twelve decided differences are in
   [the contract reference](contracts/README.md#run-the-grading-validation-corpus). The Rust runtime workflow runs it
-  as primary and with `--differential` on four targets.
+  as primary and with `--differential` on every supported target.
 - `rust/bench-tools/tests/claim_grading.rs` states the unresolved outcomes by hand and compares every rule that no
   command runs yet with the retained Python, including which exception each raises.
 - The Pages build job replays the validator on every restorable archive in the replay inventory: the 333

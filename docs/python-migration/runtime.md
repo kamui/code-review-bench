@@ -203,7 +203,6 @@ runtime only after every target's job passes.
 | Target | Runner | Local run |
 | --- | --- | --- |
 | `x86_64-unknown-linux-gnu` | `ubuntu-latest` | Linux 6.6 under WSL2, glibc 2.35, Rust 1.99.1, Python 3.14.7 |
-| `aarch64-unknown-linux-gnu` | `ubuntu-24.04-arm` | None |
 | `x86_64-apple-darwin` | `macos-15-intel` | None |
 | `aarch64-apple-darwin` | `macos-latest` | None |
 

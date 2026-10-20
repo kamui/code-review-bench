@@ -4,7 +4,7 @@ Conventions for executable code under a skill's `scripts/` directory and for the
 
 ## Platforms
 
-macOS and Linux, including WSL. Native Windows is out of scope: nothing here is written or tested for it. Git is required everywhere, and on both supported platforms a working `git` implies a working `python3`.
+macOS and x86_64 Linux, including WSL. Linux ARM64 and native Windows are out of scope: nothing here is written or tested for them. Git is required everywhere, and on both supported platforms a working `git` implies a working `python3`.
 
 ## Language
 

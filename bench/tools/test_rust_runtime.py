@@ -73,6 +73,15 @@ class Store(unittest.TestCase):
 
 
 class Checks(Store):
+    def test_a_linux_arm64_host_refuses_a_retained_linux_arm64_binary(self):
+        pin = self.version("linux-arm64", target="aarch64-unknown-linux-gnu")
+        with patch.object(rust_runtime.platform, "system", return_value="Linux"), \
+                patch.object(rust_runtime.platform, "machine", return_value="aarch64"):
+            self.assertIsNone(rust_runtime.host_target())
+            code, out, err = self.cli("verify", "fixture-tool", pin["sha256"])
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("built for aarch64-unknown-linux-gnu; this host is Linux aarch64", err)
+
     def test_a_retained_version_is_read_only_and_runs_from_its_entry(self):
         pin = self.version("one")
         executable, receipt = rust_runtime.check(self.store, "fixture-tool", pin)
