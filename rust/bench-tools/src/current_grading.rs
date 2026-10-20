@@ -1390,7 +1390,7 @@ pub fn verify_pins(root: &Root, value: &Value) -> R<()> {
 }
 
 /// `int(text)` for an item number. The schemas admit only `item-` and ASCII digits, which `$` lets a newline end.
-fn item_number(text: &str) -> R<(bool, String)> {
+pub(crate) fn item_number(text: &str) -> R<(bool, String)> {
     let stripped = pytext::strip(text);
     let (negative, digits) = match stripped.strip_prefix('-') {
         Some(rest) => (true, rest),

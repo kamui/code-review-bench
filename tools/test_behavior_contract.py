@@ -703,6 +703,39 @@ with open("out/native-artifact-storage.v1.json", "w") as handle:
     json.dump({"archive": {"path": path, "sha256": named}}, handle, indent=2)
 """
 
+    def test_framework_interpreter_path_masks_as_the_case_names_python(self):
+        app = "/Library/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python"
+        stub = "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3"
+        case = {"mask_patterns": [{"pattern": "(?:/\\S*/)?python3[.0-9]*(?=[ :])", "label": "<python>"}]}
+        stderr = f"{app}: can't open file 'missing.py': [Errno 2] No such file or directory\n".encode()
+        actual = {"stdout": b"", "stderr": stderr, "filesystem": []}
+        with patch.object(sys, "orig_argv", [app, "tools/behavior_contract.py"]), \
+                patch.object(sys, "executable", stub):
+            result = contract.normalize(case, Path("/nonexistent"), actual)
+        self.assertEqual(result["stderr"], b"<python>: can't open file 'missing.py': [Errno 2] No such file or directory\n")
+
+    def test_framework_interpreter_alias_leaves_a_longer_path_sharing_its_prefix_exact(self):
+        app = "/Library/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python"
+        stub = "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12"
+        case = {"mask_patterns": [{"pattern": "(?:/\\S*/)?python3[.0-9]*(?=[ :])", "label": "<python>"}]}
+        stderr = f"{app}3.13: can't open file 'missing.py'\n".encode()
+        actual = {"stdout": b"", "stderr": stderr, "filesystem": []}
+        with patch.object(sys, "orig_argv", [app, "tools/behavior_contract.py"]), \
+                patch.object(sys, "executable", stub):
+            result = contract.normalize(case, Path("/nonexistent"), actual)
+        self.assertEqual(result["stderr"], stderr)
+
+    def test_framework_interpreter_alias_applies_only_where_the_case_masks_python(self):
+        app = "/Library/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python"
+        stub = "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3"
+        case = {"mask_patterns": [{"pattern": "blind-[0-9a-f]{6}", "label": "blind-<token>"}]}
+        stderr = f"{app}: can't open file 'missing.py'\n".encode()
+        actual = {"stdout": b"", "stderr": stderr, "filesystem": []}
+        with patch.object(sys, "orig_argv", [app, "tools/behavior_contract.py"]), \
+                patch.object(sys, "executable", stub):
+            result = contract.normalize(case, Path("/nonexistent"), actual)
+        self.assertEqual(result["stderr"], stderr)
+
     def test_storage_references_name_the_written_archive_before_masking(self):
         case = {"id": "probe", "program": "writer", "argv": [], "stdin_b64": "", "initial": [],
                 "archives": [{"glob": "out/native-scratch.v1.zip", "format": "zip"}],
@@ -1139,6 +1172,59 @@ print(json.dumps({"claims": 2, "first": tokens[0]}))
         self.assertEqual(contract.outcome_differences([{**outcome, "value": 3}], first),
                          ["outcome family-outcome stdout/claims: expected 3, actual 2"])
 
+    SITES_WRITER = """import json, os, random, sys
+from pathlib import Path
+seed, mutation = int(sys.argv[1]), sys.argv[2]
+rng = random.Random(seed)
+tokens = [f"blind-{rng.getrandbits(24):06x}" for _ in range(3)]
+Path("work").mkdir()
+Path("work/key.json").write_text(json.dumps({"reviews": [{"token": token} for token in tokens],
+                                        "root": os.getcwd()}, indent=2) + "\\n")
+listed = sorted(tokens) if mutation != "drop" else sorted(tokens)[:2]
+Path("prompt.md").write_text("Reviews:\\n" + "".join(f"- `reviews/{token}.md`\\n" for token in listed) + "End.\\n")
+"""
+    SITES = {"tokens": [{"prefix": "blind", "ordinals": "sites",
+                         "sites": [{"glob": "work/key.json", "pointers": ["/reviews/0/token", "/reviews/1/token",
+                                                                          "/reviews/2/token"]}],
+                         "references": [{"glob": "prompt.md", "line_starts": ["- `reviews/"]}]}],
+             "lines": [{"glob": "prompt.md", "start": "- `reviews/"}]}
+
+    def sites_output(self, seed, mutation="none", structured=None):
+        case = {"id": "probe", "program": "writer", "argv": [str(seed), mutation], "stdin_b64": "", "initial": [],
+                "mask_root": True, "structured": structured or self.SITES}
+        return contract.execute(case, {"writer": [sys.executable, "-c", self.SITES_WRITER]})
+
+    def test_structured_comparison_numbers_tokens_by_site_and_orders_declared_lines(self):
+        first, second = self.sites_output(1), self.sites_output(2)
+        self.assertNotIn("inconsistencies", first)
+        self.assertEqual(contract.differential(first, second, self.STREAMS), [])
+        files = {contract.decode(entry["path_b64"]): contract.decode(entry["bytes_b64"])
+                 for entry in first["filesystem"] if entry["kind"] == "file"}
+        self.assertEqual(json.loads(files[b"work/key.json"]), {"reviews": [{"token": f"<blind {n}>"} for n in (1, 2, 3)],
+                                                          "root": "<root>"})
+        self.assertEqual(files[b"prompt.md"], b"Reviews:\n- `reviews/<blind 1>.md`\n- `reviews/<blind 2>.md`\n"
+                                              b"- `reviews/<blind 3>.md`\nEnd.\n")
+        self.assertTrue(any("filesystem effects" in d
+                            for d in contract.differential(first, self.sites_output(2, "drop"), self.STREAMS)))
+        by_scan = copy.deepcopy(self.SITES)
+        del by_scan["tokens"][0]["ordinals"]
+        self.assertTrue(any("filesystem effects" in d for d in contract.differential(
+            self.sites_output(1, structured=by_scan), self.sites_output(2, structured=by_scan), self.STREAMS)))
+
+    def test_grade_runs_the_retained_python_as_the_primary_and_bench_tools_otherwise(self):
+        if str(contract.REPO / "bench/tools") not in sys.path:
+            sys.path.insert(0, str(contract.REPO / "bench/tools"))
+        import rust_runtime
+        corpus = {"cases": [{"program": "grade"}, {"program": "rust-grade"}]}
+        with patch.object(rust_runtime, "resolve", return_value=Path("/store/bench-tools")):
+            self.assertEqual(contract.default_commands(corpus),
+                             {"grade": ["/store/bench-tools", "grade"], "rust-grade": ["/store/bench-tools", "grade"]})
+            self.assertEqual(contract.python_commands(corpus),
+                             {"grade": contract.entropy_command("python-grade"),
+                              "rust-grade": ["/store/bench-tools", "grade"]})
+        self.assertIn("prepared-review", contract.GRADING_OUTCOMES)
+        self.assertIn("prepared-family", contract.GRADING_OUTCOMES)
+
     def test_structured_and_outcome_declarations_are_validated(self):
         base = {"id": "probe", "program": "writer", "argv": [], "stdin_b64": "", "initial": []}
         sites = [{"glob": "x", "pointers": ["/a"]}]
@@ -1156,6 +1242,9 @@ print(json.dumps({"claims": 2, "first": tokens[0]}))
                      "token rule"),
                     ({**base, "structured": {"identity": [{"glob": "x", "pointers": ["/a"]}]}}, "decided label"),
                     ({**base, "structured": {"sections": [{"glob": "x", "heading": "Links"}]}}, "heading prefix"),
+                    ({**base, "structured": {"lines": [{"glob": "x"}]}}, "lines rule"),
+                    ({**base, "structured": {"tokens": [{"prefix": "blind", "sites": sites, "references": [],
+                                                         "ordinals": "order"}]}}, "token rule"),
                     ({**base, "expected": {"outcomes": [{"kind": "score", "path": "g", "pointer": "", "value": 1}]}},
                      "outcome states its kind")):
                 with self.subTest(message=message):

@@ -7,6 +7,7 @@
 
 use super::{Disk, Error, make_dirs, os_failure, parents, random_name, sync_dirs, violation};
 use crate::archive::{self, Limits, PackageWriter};
+use crate::pyfs::normpath;
 use crate::pytext::{self, PyPath};
 use crate::sha256::{self, Sha256};
 use std::collections::{BTreeSet, HashMap};
@@ -41,37 +42,6 @@ fn current_dir() -> Result<Vec<u8>> {
     std::env::current_dir()
         .map(|path| path.as_os_str().as_bytes().to_vec())
         .map_err(|error| Error::Io(pytext::os_error(&error, b".")))
-}
-
-/// `posixpath.normpath`.
-fn normpath(path: &[u8]) -> Vec<u8> {
-    if path.is_empty() {
-        return b".".to_vec();
-    }
-    let initial: &[u8] = if path.starts_with(b"//") && !path.starts_with(b"///") {
-        b"//"
-    } else if path.starts_with(b"/") {
-        b"/"
-    } else {
-        b""
-    };
-    let mut parts: Vec<&[u8]> = Vec::new();
-    for part in path.split(|byte| *byte == b'/') {
-        match part {
-            b"" | b"." => {}
-            b".." if !initial.is_empty() && parts.is_empty() => {}
-            b".." if parts.last().is_some_and(|last| *last != b"..") => {
-                parts.pop();
-            }
-            _ => parts.push(part),
-        }
-    }
-    let joined = [initial, &parts.join(&b'/')].concat();
-    if joined.is_empty() {
-        b".".to_vec()
-    } else {
-        joined
-    }
 }
 
 /// `os.path.abspath`.
