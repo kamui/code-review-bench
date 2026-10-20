@@ -181,10 +181,11 @@ program runs `bench-tools`, and `behavior_contract.python_commands` maps it to t
 `map` on that key. The v1 and v2 key cases also check each key against
 [`current-grading-key.v1.schema.json`](../../../bench/schema/current-grading-key.v1.schema.json).
 
-Five cases carry a `baseline_defect`, so pass `--allow-known-defects` when Python is the primary. The `pending`,
+Nine cases carry a `baseline_defect`, so pass `--allow-known-defects` when Python is the primary. The `pending`,
 `proposed` and `disputed-without-ruling` fixture cases differ only in what decision
 `grade-prepare-runner-identity-v2` lists: `runner_deviation`, the missing `validator/tools/` and the hashes that pin
-them. `grade-prepare-arguments` prints clap's usage. `grade-prepare-unicode-16-digit-source-link` records Python
+them. `grade-prepare-arguments` prints clap's usage, and the four `grade-prepare-*-before-invalid-short-help` cases
+print clap's help. `grade-prepare-unicode-16-digit-source-link` records Python
 3.12's result, as CI runs it, so the differential reports it under Python 3.14.
 
 ```sh
