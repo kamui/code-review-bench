@@ -15,7 +15,9 @@ the schema-check callers, as [slice 4](#slice-4-the-explorer-exports-facts-metho
 describes. Slice 5, [#235](https://github.com/kamui/code-review-bench/issues/235), ports the shared claims and
 upstream collection, as [slice 5](#slice-5-shared-claims-and-upstream-collection) describes. Slice 6,
 [#236](https://github.com/kamui/code-review-bench/issues/236), ports the calibration and evaluator audit checks, as
-[slice 6](#slice-6-calibration-and-evaluator-audit-checks) describes.
+[slice 6](#slice-6-calibration-and-evaluator-audit-checks) describes. Slice 7,
+[#237](https://github.com/kamui/code-review-bench/issues/237), ports grading preparation under runner identity v2, as
+[slice 7](#slice-7-grading-preparation-and-runner-identity-v2) describes.
 
 ## The split with #157
 
@@ -298,7 +300,7 @@ Diagnostics keep the program names `claims.py` and `upstream.py`. Dossier tokens
 `upstream.py`'s argument lists, four reads at a time. `verify:claims` and the commands in
 `docs/claim-adjudication.md` and `docs/maintainer-adjudication.md` moved, and `tools/test_moved_cli_callers.py`
 fails on a current caller of `claims.py`'s `check`, `inventory`, `dossier` or `evidence` command, or of
-`upstream.py`'s `collect` command. `grade.py prepare --claim-evidence` still imports `claims.py`, until slice 7.
+`upstream.py`'s `collect` command. `grade.py prepare --claim-evidence` still imports `claims.py`, until slice 10 moves its caller.
 
 [`claims.v1.json`](../../tools/behavior_contracts/claims.v1.json) pins the four commands on the fixture variants and
 on hand-built records, with dossiers and packets compared structurally. Evidence cases state their claim outcomes
@@ -386,6 +388,52 @@ were graded under `current-verdicts/v1` and which predates `credits.json`. On 20
 that commit with the round removed and an empty `credits.json` added, `evaluator_audit.py` and `bench-tools` both
 refused `check` and `draw` with the same output, exit 1: 199 batches were not graded under `current-verdicts/v2`.
 `calibration.py` and `evaluator_audit.py` stay byte-unchanged as baselines until slice 11.
+
+## Slice 7: grading preparation and runner identity v2
+
+[#237](https://github.com/kamui/code-review-bench/issues/237) ports the preparation half of `grade.py` to
+`bench_tools::grade`: attempt and input checks, review selection with blind tokens from `/dev/urandom` and their
+collision retry, rendering through `bench_tools::normalize_review`, source views without the private attempt
+directory, references, rubric, prompt, claim context and evidence packets, the command policy, cache replacements,
+the remedy policy and `--inventory`. The commands:
+
+```sh
+python3 bench/tools/rust_runtime.py exec bench-tools -- grade prepare --run RUN --target TARGET --work WORK --key KEY [...]
+python3 bench/tools/rust_runtime.py exec bench-tools -- grade preflight-inputs --run RUN --work-root DIR --key-root DIR [--target TARGET]...
+python3 bench/tools/rust_runtime.py exec bench-tools -- grade check-prepared --work WORK --key KEY [--dispatching]
+```
+
+`prepare` takes `grade.py prepare`'s options. `--provision SCRIPT` runs `python3 SCRIPT prepare` into `WORK/clone`,
+the bridge #157 removes; a failed provisioner leaves no `clone`, `clone-cache` or `clone-work` and reports its exit and
+output tail. The key is created with mode 0600 outside WORK, and WORK must be new or empty. `preflight-inputs` makes
+the checks of `grade.py preflight --offline`. `check-prepared` makes `check_prepared`'s checks of a version 1 key.
+
+A Rust-prepared key is version 2, as plan decision 6 gives it. `validator` holds only `inputs.json`, and
+`validator/tools/` is not created, since the validator is part of the executable. `runner_deviation` is
+`{"version": 2, "files", "bench_tools", "execution_policy_sha256", "codex_catalog_sha256"}` with an optional
+`provisioning`: `files` holds the 23 runner files and `rust/bench-tools`, the running executable's SHA-256, and
+`bench_tools` is that executable's `rust_runtime.py` pin. `prepare` and `check-prepared` refuse a receipt that
+`rust_runtime.check` finds incomplete. `check-prepared` refuses a v2 key whose pinned executable or receipt is
+missing, changed or incomplete, one problem naming it, and a changed or deleted `files` entry as a runner change. The
+retained `grade.py map` accepts a v2 key; `grade.py dispatch` refuses it with the runner-changed line after its
+client preflight, before any home, session or charge.
+[`current-grading-key.v1.schema.json`](../../bench/schema/current-grading-key.v1.schema.json) describes both
+versions. It cannot require `bench_tools` for version 2 only; `check-prepared` refuses a version 2 key without a valid pin.
+
+[`grade-prepare.v1.json`](../../tools/behavior_contracts/grade-prepare.v1.json) pins the three commands on the
+fixture variants, with the reviews, items and families each case expects stated by hand, the compatibility rows,
+the refusals and the identity leaks. [`grade-prepare-decisions.v1.json`](../../tools/behavior_contracts/grade-prepare-decisions.v1.json)
+records the decided differences:
+
+- `grade-prepare-runner-identity-v2`, on the `pending`, `proposed` and `disputed-without-ruling` fixture cases: only
+  `runner_deviation`, the missing `validator/tools/` and the hashes that pin them differ.
+- Source views read `\d` from the Unicode 16.0 tables of Python 3.14 (`grade-prepare-unicode-16-digit-source-link`).
+  Python 3.12 (Unicode 15.0) misses the 80 digits Unicode 16.0 added, and Python 3.10 (Unicode 13.0) misses 110; the
+  case records 3.12's result, as CI runs it. Attempt ids are `att-` and ASCII digits, so no saved review changes.
+- Usage errors are clap's, exit 2 (`grade-prepare-arguments`).
+
+No caller moves: `grade.py prepare` stays the production command until slice 10, and slice 11 deletes the Python
+preparation.
 
 ## Research helpers
 
@@ -515,4 +563,4 @@ Rust check by then.
 | `grading_policy.py`'s `validate` runs the pinned `grading validate` | The tool server moves to Rust | #157 |
 | `regrade.py` runs `bench-tools` under its `runtimes` pin | The controller moves to Rust | #157 |
 
-No bridge exists yet; slices 7 to 10 add them.
+Slice 7 adds the first, `grade prepare`'s provisioner; slices 8 to 10 add the rest.

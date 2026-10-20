@@ -15,6 +15,7 @@ pub mod evaluator_audit;
 pub mod evidence;
 pub mod evidence_inventory;
 pub mod export_explorer;
+pub mod grade;
 pub mod grading_reports;
 pub mod grading_validation;
 pub mod import_benchmark;
