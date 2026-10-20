@@ -1403,7 +1403,7 @@ fn item_number(text: &str) -> R<(bool, String)> {
 }
 
 /// `source_item(link, target, root)`: the cohort entry and the original item a link names.
-fn source_item(root: &Root, link: &Value, target: &Value) -> R<(Value, Value)> {
+pub fn source_item(root: &Root, link: &Value, target: &Value) -> R<(Value, Value)> {
     let review = item(link, "review")?;
     let path = root.resolve_pin(review)?;
     let relative = pyfs::relative_to(path.as_bytes(), root.path.as_bytes())

@@ -242,7 +242,8 @@ fn signed(digits: &str) -> (bool, &str) {
     }
 }
 
-fn compare_integers(left: &str, right: &str) -> Ordering {
+/// Orders two integers written as `int` digits with an optional `-`, as Python orders them, at any length.
+pub fn compare_integers(left: &str, right: &str) -> Ordering {
     let ((left_negative, left), (right_negative, right)) = (signed(left), signed(right));
     let magnitude = left.len().cmp(&right.len()).then_with(|| left.cmp(right));
     match (left_negative, right_negative) {

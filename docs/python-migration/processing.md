@@ -144,7 +144,7 @@ lists them. When the Cargo cache lacks one, `rust_runtime.py install` fails and 
 | `bench/tools/build_packet.py` | `bench-tools build-packet`, `bench_tools::build_packet` | `bench/README.md`, `docs/pr-selection.md` | Deleted with `test_build_packet.py` and `test_build_packet_fixture.json`. Every run the tests made, with its replay files and staging mirror, is a case in [`build-packet.v1.json`](../../tools/behavior_contracts/build-packet.v1.json), beside 36 more. The imported originals are preserved under `artifacts/import-source/bench/tools/`. |
 | `bench/tools/check_manifest.py` | `bench_tools::schema`, `bench-tools check-manifest` | `bench/README.md`, `docs/current-grading.md`, `.github/workflows/rates.yml`; `test:bench` runs [`check-manifest.v1.json`](../../tools/behavior_contracts/check-manifest.v1.json) against Rust, which [#234](https://github.com/kamui/code-review-bench/issues/234) moved from the Python CLI | Retained library, below. |
 | `bench/tools/rates.py`, its `check` command | `bench-tools rates check`, `bench_tools::rates` | `bun run rates:check`; `docs/rates.md` | Retained library, below. `refresh` stays in Python. |
-| `bench/tools/upstream.py`, its `report` command | `bench-tools upstream report`, `bench_tools::upstream`, with the registry checks of `claims.load_registry` in `bench_tools::claims` | `bun run audit:maintainers`; `docs/maintainer-adjudication.md` | Retained library, below. `collect` stays in Python. |
+| `bench/tools/upstream.py`, its `report` command | `bench-tools upstream report`, `bench_tools::upstream`, with the registry checks of `claims.load_registry` in `bench_tools::claims` | `bun run audit:maintainers`; `docs/maintainer-adjudication.md` | Retained library, below. `collect` moved to `bench-tools upstream collect` with #235. |
 | `tools/export_explorer.py`, its export | `bench-tools export-explorer`, and its `evidence`, `stage` and `publish`, `bench_tools::export_explorer` | `bun run data`; `.github/workflows/pages.yml` installs `bench-tools`; `src/lib/scoring.test.ts` passes `--root` and `--public` | Deleted with `test_export_explorer.py` by #234, whose cases are in `tests/export_explorer.rs`, the unit tests and [`export-explorer.v1.json`](../../tools/behavior_contracts/export-explorer.v1.json). |
 
 [Storage](storage.md#migrated-responsibilities) lists the responsibilities #155 moved.
@@ -454,7 +454,8 @@ the v3 inventory records.
 | `diff_identity`, `normalize_review` | Migrated to `bench-tools`; retained library | #157, #158 |
 | `check_manifest`'s schema validation, `rates check`, `upstream report` | Migrated to `bench-tools`; `check_manifest`, `rates` and `upstream` are retained libraries | #160, #160, #156 |
 | `export_explorer` | Migrated to `bench-tools export-explorer`; the Python front is a temporary bridge | #156 |
-| `rates refresh`, `upstream collect`, evidence restoration during export | Kept in Python as effects, as the delivery plan assigns | #160, #156, #155 |
+| `rates refresh`, evidence restoration during export | Kept in Python as effects, as the delivery plan assigns | #160, #155 |
+| `upstream collect` | Kept in Python as an effect, then migrated to `bench-tools upstream collect` by #235 | None |
 | `score`, `scoreboard_svg` | Retired by #192 | None |
 | `compare` | Retained library with no port | #157 |
 | `methodology`, `collect_run` | Moved by the delivery plan | #156, #155 |

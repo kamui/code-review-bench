@@ -12,6 +12,7 @@ REPO = Path(__file__).resolve().parents[1]
 MOVED = (
     ("bench/tools/rates.py", "check", "bench-tools rates check"),
     ("bench/tools/upstream.py", "report", "bench-tools upstream report"),
+    ("bench/tools/upstream.py", "collect", "bench-tools upstream collect"),
     ("bench/tools/evidence_store.py", "fetch", "bench-tools evidence fetch"),
     ("bench/tools/evidence_store.py", "verify", "bench-tools evidence verify"),
     ("bench/tools/evidence_store.py", "pack", "bench-tools evidence pack"),
@@ -30,6 +31,10 @@ MOVED = (
     ("bench/tools/current_grading.py", "inventory", "bench-tools current-grading inventory"),
     ("bench/tools/current_grading.py", "check", "bench-tools current-grading check"),
     ("bench/tools/current_grading.py", "status", "bench-tools current-grading status"),
+    ("bench/tools/claims.py", "check", "bench-tools claims check"),
+    ("bench/tools/claims.py", "inventory", "bench-tools claims inventory"),
+    ("bench/tools/claims.py", "dossier", "bench-tools claims dossier"),
+    ("bench/tools/claims.py", "evidence", "bench-tools claims evidence"),
 )
 # Retained libraries whose command line moved whole, including the form without a command word.
 MOVED_PROGRAMS = (

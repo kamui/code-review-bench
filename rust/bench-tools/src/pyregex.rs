@@ -651,10 +651,22 @@ impl Atom {
 }
 
 pub fn compile(pattern: &str) -> Result<Regex, Unsupported> {
+    compile_with(pattern, false)
+}
+
+/// `re.compile(pattern, re.IGNORECASE)`.
+pub fn compile_ignore_case(pattern: &str) -> Result<Regex, Unsupported> {
+    compile_with(pattern, true)
+}
+
+fn compile_with(pattern: &str, ignore_case: bool) -> Result<Regex, Unsupported> {
     let mut parser = Parser {
         chars: pattern.chars().collect(),
         position: 0,
-        flags: Flags::default(),
+        flags: Flags {
+            ignore_case,
+            ..Flags::default()
+        },
     };
     let node = parser.alternation(true)?;
     if parser.position != parser.chars.len() {
