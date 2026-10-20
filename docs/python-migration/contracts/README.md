@@ -129,6 +129,7 @@ executable:
   "evaluator-audit": ["/absolute/path/to/bench-tools", "evaluator-audit"],
   "grading": ["/absolute/path/to/bench-tools", "grading"],
   "grade": ["/absolute/path/to/bench-tools", "grade"],
+  "second-assessment": ["/absolute/path/to/bench-tools", "evaluator-audit", "second"],
   "rust-grade": ["/absolute/path/to/bench-tools", "grade"]
 }
 ```
@@ -200,6 +201,43 @@ corpus = behavior_contract.load_corpus(Path("tools/behavior_contracts/grade-prep
 print(json.dumps(behavior_contract.python_commands(corpus)))
 EOF
 python3 tools/behavior_contract.py --allow-known-defects --corpus tools/behavior_contracts/grade-prepare.v1.json --implementations /tmp/grade-python.json --differential /tmp/rust.json
+```
+
+## Run the grade mapping corpus
+
+[`grade-map.v1.json`](../../../tools/behavior_contracts/grade-map.v1.json) pins `bench-tools grade validate`,
+`inventory`, `map` and `invalidate`, and `bench-tools evaluator-audit second`
+([#238](https://github.com/kamui/code-review-bench/issues/238)). `grade` maps to the `python-grade` driver as in the
+preparation corpus, and `second-assessment` to the `python-second-assessment` driver, which runs the retained
+`evaluator_audit.py`'s `second` on the case directory. `rust-grade` prepares the version 2 keys. A command step's
+`file_size_limit` caps every file the command and its children write at that many bytes, so a write past it fails
+with `EFBIG` in either implementation. A command step's `fail_write_b64` names one root-relative path whose open for
+writing fails with `ENOSPC`, while every other open proceeds: the harness builds a small library with `cc` and
+preloads it into the command and its children (`LD_PRELOAD` on Linux, `DYLD_INSERT_LIBRARIES` on macOS), and skips
+the case as unavailable elsewhere, without a compiler, or when a probe through the harness's own Python shows the
+preload has no effect. `grade-map-write-faults` and
+`grade-map-second-assessment-faults` use these, and a directory in place of a temporary file, to fail each write,
+including between the renames. The 6000-byte step of `grade-map-write-faults` fails `grade map` at `receipt.json`,
+which is larger than the verdicts; the second assessment's receipt is smaller than its assessment, so
+`fail_write_b64` fails it.
+
+Twelve cases carry 28 step `baseline_defect`s, so pass `--allow-known-defects` when Python is the primary: the
+uncaught read and write errors (`grade-map-target-without-head`, `grade-map-write-faults`), the cleanup bridge cases
+(`grade-map-cleanup-bridge-*`), clap's usage and help (`grade-map-arguments-refused` and the five
+`grade-map-*help-before-invalid-short-help` cases) and Python 3.12's result for a Unicode 16.0 digit
+(`grade-map-unicode-16-digit-assessment-number`).
+
+```sh
+python3 tools/behavior_contract.py --corpus tools/behavior_contracts/grade-map.v1.json
+python3 - > /tmp/grade-python.json <<'EOF'
+import json, sys
+from pathlib import Path
+sys.path.insert(0, "tools")
+import behavior_contract
+corpus = behavior_contract.load_corpus(Path("tools/behavior_contracts/grade-map.v1.json"))
+print(json.dumps(behavior_contract.python_commands(corpus)))
+EOF
+python3 tools/behavior_contract.py --allow-known-defects --corpus tools/behavior_contracts/grade-map.v1.json --implementations /tmp/grade-python.json --differential /tmp/rust.json
 ```
 
 ## Run the storage corpora
@@ -374,7 +412,8 @@ Each case defines:
 - `derivation`, the independent accounting or protocol argument for the expectation.
 - Optional `baseline_defect`, with an exact `observed` comparator and a resolution link.
 - Instead of `argv`, `stdin_b64` and `expected`, optional `steps` that share one root, in
-  order. A command step holds `argv`, `stdin_b64`, `expected` and optionally `program`; a
+  order. A command step holds `argv`, `stdin_b64`, `expected` and optionally `program`,
+  `file_size_limit` and `fail_write_b64`; a
   `remove` step deletes the listed paths that exist; a `write` step adds `initial`-style
   entries, replacing files; a `shell` step runs its command line with `/bin/sh -c` in the root
   and must exit 0. Every command step's `expected.filesystem` is the whole tree

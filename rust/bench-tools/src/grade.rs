@@ -5,9 +5,16 @@
 //! The checkout is the working directory: it holds the runner files, policies, Codex catalog and schemas that
 //! `grade.py` reads beside itself, and the default provisioner.
 
+mod filing;
 mod provision;
 mod runtime;
 mod source;
+
+pub use filing::{
+    Mapping, graded_v2, invalidate, inventory, key_counts, key_reviews, map_verdicts,
+    next_assessment, provenance_of, prune_grading, raised_candidates, read_verdicts, resolve,
+    sorted_by, validate,
+};
 
 use crate::claims::{self, Decisions, Repository, blind::Entropy};
 use crate::current_grading::{self as current, Documents, Failure, R, Root};
@@ -148,8 +155,7 @@ fn dumps(value: &Value, ensure_ascii: bool) -> String {
 }
 
 fn write(path: &PyPath, bytes: &[u8]) -> R<()> {
-    std::fs::write(path.to_path_buf(), bytes)
-        .map_err(|error| Failure::Input(pytext::os_error(&error, path.as_bytes())))
+    pytext::write_bytes(path, bytes).map_err(Failure::Input)
 }
 
 fn make_directory(path: &PyPath, parents: bool) -> R<()> {
@@ -463,6 +469,36 @@ pub fn command_policy(
         Value::Str(sha256::hex_digest(allowance.as_bytes())),
     );
     Ok(Value::Object(policy))
+}
+
+/// The runner identity a key or receipt records: the runner files, the `bench-tools` executable and the policies
+/// it pins.
+fn runner_deviation(
+    checkout: &PyPath,
+    pin: Value,
+    execution_policy: &[u8],
+) -> R<Vec<(&'static str, Value)>> {
+    let mut files = Object::default();
+    for (name, sha) in runner_files(checkout)? {
+        files.insert(name.to_string(), Value::Str(sha));
+    }
+    files.insert(
+        EXECUTABLE_ENTRY.to_string(),
+        pyvalue::item(&pin, "sha256")?.clone(),
+    );
+    Ok(vec![
+        ("version", Value::Int(RUNNER_VERSION.to_string())),
+        ("files", Value::Object(files)),
+        ("bench_tools", pin),
+        (
+            "execution_policy_sha256",
+            Value::Str(sha256::hex_digest(execution_policy)),
+        ),
+        (
+            "codex_catalog_sha256",
+            Value::Str(digest(&checkout.join(CODEX_CATALOG))?),
+        ),
+    ])
 }
 
 /// The SHA-256 of each `grade.runner_files()` file in the checkout.
@@ -1291,7 +1327,6 @@ pub fn prepare(
         );
     }
     let pin = runtime::pin(&runner.executable)?;
-    let executable_sha = string(pyvalue::item(&pin, "sha256")?)?.to_string();
     make_directory(&current::parent_of(&key_path), true)?;
     make_directory(&work, true)?;
     provision_clone(runner, options, &directory, &work)?;
@@ -1395,24 +1430,7 @@ pub fn prepare(
         let sha = digest(&work.join(relative.as_bytes()))?;
         prepared.insert(relative, Value::Str(sha));
     }
-    let mut files = Object::default();
-    for (name, sha) in runner_files(&runner.checkout)? {
-        files.insert(name.to_string(), Value::Str(sha));
-    }
-    files.insert(EXECUTABLE_ENTRY.to_string(), Value::Str(executable_sha));
-    let mut deviation = vec![
-        ("version", Value::Int(RUNNER_VERSION.to_string())),
-        ("files", Value::Object(files)),
-        ("bench_tools", pin),
-        (
-            "execution_policy_sha256",
-            Value::Str(sha256::hex_digest(&execution_policy)),
-        ),
-        (
-            "codex_catalog_sha256",
-            Value::Str(digest(&runner.checkout.join(CODEX_CATALOG))?),
-        ),
-    ];
+    let mut deviation = runner_deviation(&runner.checkout, pin, &execution_policy)?;
     if let Some(replacement) = target
         .as_object()
         .and_then(|target| target.get("_cache_replacement"))
