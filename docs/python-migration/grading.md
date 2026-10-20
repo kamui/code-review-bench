@@ -422,9 +422,9 @@ versions. It cannot require `bench_tools` for version 2 only; `check-prepared` r
 
 [`grade-prepare.v1.json`](../../tools/behavior_contracts/grade-prepare.v1.json) pins the three commands on the
 fixture variants, with the reviews, items and families each case expects stated by hand, the compatibility rows,
-the refusals and the identity leaks. [`grade-prepare-decisions.v2.json`](../../tools/behavior_contracts/grade-prepare-decisions.v2.json),
-which carries [v1](../../tools/behavior_contracts/grade-prepare-decisions.v1.json) forward, records the decided
-differences:
+the refusals and the identity leaks. [`grade-prepare-decisions.v3.json`](../../tools/behavior_contracts/grade-prepare-decisions.v3.json),
+which carries [v2](../../tools/behavior_contracts/grade-prepare-decisions.v2.json) and
+[v1](../../tools/behavior_contracts/grade-prepare-decisions.v1.json) forward, records the decided differences:
 
 - `grade-prepare-runner-identity-v2`, on the `pending`, `proposed` and `disputed-without-ruling` fixture cases: only
   `runner_deviation`, the missing `validator/tools/` and the hashes that pin them differ.
@@ -432,6 +432,8 @@ differences:
   Python 3.12 (Unicode 15.0) misses the 80 digits Unicode 16.0 added, and Python 3.10 (Unicode 13.0) misses 110; the
   case records 3.12's result, as CI runs it. Attempt ids are `att-` and ASCII digits, so no saved review changes.
 - Usage errors are clap's, exit 2 (`grade-prepare-arguments`).
+- Help is clap's. An earlier `--help`, or a prefix such as `--hel`, wins over a later `-h=1` and exits 0, as in
+  argparse (`grade-prepare-*-before-invalid-short-help`, [#268](https://github.com/kamui/code-review-bench/issues/268)).
 - A failing provisioner whose output is not UTF-8 crashes `grade.py` with a traceback before its clean-up, leaving
   `clone`, `clone-cache` and `clone-work`. `bench-tools` removes all three and reports the exit and the output tail,
   each undecodable byte written as `\udcXX` (`grade-prepare-provisioner-invalid-output`).

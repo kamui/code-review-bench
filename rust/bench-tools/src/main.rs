@@ -339,9 +339,43 @@ fn source(value: &str) -> Result<(String, String), String> {
         .ok_or_else(|| "expected openai=URL or anthropic=URL".to_string())
 }
 
+#[derive(Clone)]
+enum RatesCommand {
+    Check,
+    Refresh,
+}
+
+/// rates.py's `choices=("check", "refresh")`: argparse refuses another command as it reads it, before a later `--help`.
+#[derive(Clone)]
+struct RatesCommandParser;
+
+impl clap::builder::TypedValueParser for RatesCommandParser {
+    type Value = RatesCommand;
+
+    fn parse_ref(
+        &self,
+        command: &clap::Command,
+        _: Option<&clap::Arg>,
+        value: &OsStr,
+    ) -> Result<RatesCommand, clap::Error> {
+        match pytext::os_bytes(value) {
+            b"check" => Ok(RatesCommand::Check),
+            b"refresh" => Ok(RatesCommand::Refresh),
+            other => Err(command.clone().error(
+                ErrorKind::InvalidValue,
+                format!(
+                    "argument command: invalid choice: {} (choose from 'check')",
+                    pytext::repr(&pytext::surrogateescape(other))
+                ),
+            )),
+        }
+    }
+}
+
 #[derive(Args)]
 struct RatesArgs {
-    command: Option<OsString>,
+    #[arg(value_parser = RatesCommandParser)]
+    command: Option<RatesCommand>,
     #[arg(long, allow_negative_numbers = true)]
     rates: Option<OsString>,
     #[arg(long, allow_negative_numbers = true)]
@@ -1109,9 +1143,9 @@ fn run_check_manifest(arguments: CheckManifestArgs) -> Result<ExitCode, ExitCode
 }
 
 fn run_rates(arguments: RatesArgs) -> Result<ExitCode, ExitCode> {
-    match arguments.command.as_deref().map(pytext::os_bytes) {
-        Some(b"check") => {}
-        Some(b"refresh") => {
+    match arguments.command {
+        Some(RatesCommand::Check) => {}
+        Some(RatesCommand::Refresh) => {
             return Err(misuse(
                 "rates",
                 ErrorKind::InvalidValue,
@@ -1123,16 +1157,6 @@ fn run_rates(arguments: RatesArgs) -> Result<ExitCode, ExitCode> {
                 "rates",
                 ErrorKind::MissingRequiredArgument,
                 "give the command check",
-            ));
-        }
-        Some(other) => {
-            return Err(misuse(
-                "rates",
-                ErrorKind::InvalidValue,
-                format!(
-                    "argument command: invalid choice: {} (choose from 'check')",
-                    pytext::repr(&pytext::surrogateescape(other))
-                ),
             ));
         }
     }
@@ -2555,19 +2579,17 @@ fn attach_dash_led_values(arguments: Vec<OsString>) -> Vec<OsString> {
 }
 
 /// argparse refuses `-h`, or a run of `h`s such as `-hh`, with an attached argument that starts with `=` or `-`,
-/// such as `-h=1`, `-hh=1` or `-h-x`, exit 2, where clap prints help. The first `-h` before `--` decides, as argparse acts on the first help it reads;
-/// for `grading`, `calibration` and `evaluator-audit`, an earlier `--help` decides first, as each family's
+/// such as `-h=1`, `-hh=1` or `-h-x`, exit 2, where clap prints help. The first help before `--` decides, as argparse
+/// acts on the first help it reads, so an earlier `--help` prints help, as each family's
 /// `*-help-before-invalid-short-help` case pins.
 fn refuse_help_with_explicit_argument(arguments: &[OsString]) -> Option<ExitCode> {
     let command = arguments
         .get(1)?
         .to_str()
         .filter(|name| !name.starts_with('-'))?;
-    // No other long option of these commands starts with --h, so --h, --he and --hel abbreviate --help.
-    let long_help = |argument: &[u8]| {
-        matches!(command, "grading" | "calibration" | "evaluator-audit")
-            && matches!(argument, b"--h" | b"--he" | b"--hel" | b"--help")
-    };
+    // clap reached help, so it read each earlier --h, --he or --hel as the unique prefix of --help it is, as argparse
+    // does; a prefix that another long option shares is refused before help.
+    let long_help = |argument: &[u8]| matches!(argument, b"--h" | b"--he" | b"--hel" | b"--help");
     let help = arguments
         .iter()
         .skip(2)
