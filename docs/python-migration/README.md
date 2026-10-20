@@ -19,6 +19,9 @@ and [`inventory.v3.json.gz`](inventory.v3.json.gz) preserve the earlier censuses
 ownership after [#153](runtime.md) and [#154](processing.md#close-out), and v4 the ownership after
 [#155](storage.md#close-out); `--check` verifies v4 only, because the assignment tables now describe v4.
 
+`tools/python_inventory.py` was removed after the v4 census. Its commands in this document run at
+commit `220bcf794`, the last one with the tool.
+
 Generating or checking the census requires Python 3.11 or later to parse the
 tracked sources, including research modules that use Python 3.11 syntax.
 

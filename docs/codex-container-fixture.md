@@ -2,6 +2,8 @@
 
 This dummy-only feasibility gate covers [#37](https://github.com/kamui/code-review-bench/issues/37), part of [#35](https://github.com/kamui/code-review-bench/issues/35). Its entry prerequisite is the passing [Claude v4 receipt](../bench/fixtures/2026-10-06-linux-claude-container-v4/attempt-014-receipt.json). It runs real pinned Codex tools against a local fake Responses provider, with fresh homes and dummy authentication. It makes no live model calls, loads no historical reviews, and changes no benchmark runner or production admission policy. Explicit host execution remains [#61](https://github.com/kamui/code-review-bench/issues/61).
 
+The probe and its tests were removed from `bench/tools/`. The fixture keeps the files it ran in [`source/`](../bench/fixtures/2026-10-11-linux-codex-container/source/). The probe commands below, including the admission revalidation, run at commit `220bcf794`, the last one with the probe.
+
 ## Run
 
 Use Linux x86_64, rootless Podman, Python 3, Git, Bash, ripgrep, bubblewrap, and the exact Codex release's `codex` and adjacent `codex-code-mode-host` binaries. The controller refuses binary mismatches and records every staged executable/library, the default seccomp profile, image identity, kernel, effective limits, configuration, provider requests, native outputs, and thread lineage.
@@ -61,7 +63,6 @@ The [shared asset manifest](../bench/evidence/manifests/codex-container-2026-10-
 ```sh
 python3 bench/tools/rust_runtime.py exec bench-tools -- evidence fetch \
   --manifest bench/evidence/manifests/codex-container-2026-10-11-v1.json
-python3 -m unittest discover -s bench/tools -p test_codex_container_probe.py -v
 bun run verify:import
 ```
 
