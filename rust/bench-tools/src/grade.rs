@@ -1596,10 +1596,11 @@ fn preflight_target(
         b"--cache-root".to_vec(),
         cache_root.clone(),
     ])?;
+    let output = done.output()?;
     if done.code != 0 {
         return inconsistent(format!(
             "pinned source/cache preflight: {}",
-            pytext::strip(&done.output)
+            pytext::strip(&output)
         ));
     }
     let provisioning = pyvalue::item(target, "provisioning")?;
@@ -1665,19 +1666,16 @@ fn provision_clone(runner: &Runner, options: &Options, directory: &PyPath, work:
     }
     let done = provision::run(&command)?;
     if done.code == 0 {
-        return Ok(());
+        return done.output().map(drop);
     }
-    let mut lines = vec![format!(
-        "{} exited {}",
-        pytext::stderr_text(&command.join(&b' ')),
-        done.code
-    )];
-    let stripped: Vec<char> = pytext::strip(&done.output).chars().collect();
-    lines.push(
-        stripped[stripped.len().saturating_sub(2000)..]
-            .iter()
-            .collect(),
-    );
+    let mut lines = vec![
+        format!(
+            "{} exited {}",
+            pytext::stderr_text(&command.join(&b' ')),
+            done.code
+        ),
+        done.tail(2000),
+    ];
     for name in ["clone", "clone-cache", "clone-work"] {
         if let Err(message) = provision::remove_tree(work.join(name.as_bytes()).as_bytes()) {
             lines.push(message);

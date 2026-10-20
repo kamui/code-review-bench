@@ -285,13 +285,59 @@ pub fn remove_tree(path: &[u8]) -> Result<(), String> {
     std::fs::remove_dir_all(&os).map_err(|error| failed(error, &os))
 }
 
-/// What a finished subprocess wrote, as `subprocess.run(..., text=True)` decodes it.
+/// What a finished subprocess wrote, kept as bytes until a caller decodes them.
 pub struct Finished {
     pub code: i32,
-    pub output: String,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
 }
 
-/// Run `command` with its output captured, as `subprocess.run(command, capture_output=True, text=True)` does.
+impl Finished {
+    /// Stdout then stderr as `subprocess.run(..., text=True)` decodes them, which raises on bytes that are not
+    /// UTF-8 whatever the exit.
+    pub fn output(&self) -> R<String> {
+        let decode = |bytes: &[u8]| {
+            pytext::decode_utf8(bytes)
+                .map(|text| pytext::universal_newlines(&text))
+                .map_err(|message| Failure::Crash(format!("UnicodeDecodeError: {message}")))
+        };
+        Ok(decode(&self.stdout)? + &decode(&self.stderr)?)
+    }
+
+    /// The last `limit` characters of the stripped output decoded with `surrogateescape`, as stderr writes them,
+    /// so a failure can be reported whatever bytes the subprocess wrote.
+    pub fn tail(&self, limit: usize) -> String {
+        let mut points = universal_newlines(pytext::surrogateescape(&self.stdout));
+        points.extend(universal_newlines(pytext::surrogateescape(&self.stderr)));
+        let space = |point: &u32| char::from_u32(*point).is_some_and(pytext::is_space);
+        let start = points
+            .iter()
+            .position(|point| !space(point))
+            .unwrap_or(points.len());
+        let end = points
+            .iter()
+            .rposition(|point| !space(point))
+            .map_or(start, |last| last + 1);
+        let stripped = &points[start..end];
+        pytext::stderr_points(&stripped[stripped.len().saturating_sub(limit)..])
+    }
+}
+
+fn universal_newlines(points: Vec<u32>) -> Vec<u32> {
+    let mut translated = Vec::with_capacity(points.len());
+    let mut points = points.into_iter().peekable();
+    while let Some(point) = points.next() {
+        if point == u32::from('\r') {
+            points.next_if_eq(&u32::from('\n'));
+            translated.push(u32::from('\n'));
+        } else {
+            translated.push(point);
+        }
+    }
+    translated
+}
+
+/// Run `command` with its output captured, as `subprocess.run(command, capture_output=True)` does.
 pub fn run(command: &[Vec<u8>]) -> R<Finished> {
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::process::ExitStatusExt;
@@ -305,16 +351,29 @@ pub fn run(command: &[Vec<u8>]) -> R<Finished> {
         .stdin(std::process::Stdio::null())
         .output()
         .map_err(|error| Failure::Input(pytext::os_error(&error, &command[0])))?;
-    let decode = |bytes: &[u8]| {
-        pytext::decode_utf8(bytes)
-            .map(|text| pytext::universal_newlines(&text))
-            .map_err(|message| Failure::Crash(format!("UnicodeDecodeError: {message}")))
-    };
     Ok(Finished {
         code: done
             .status
             .code()
             .unwrap_or_else(|| -done.status.signal().unwrap_or(0)),
-        output: decode(&done.stdout)? + &decode(&done.stderr)?,
+        stdout: done.stdout,
+        stderr: done.stderr,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_failure_tail_renders_undecodable_bytes_as_python_writes_them_to_stderr() {
+        let done = Finished {
+            code: 7,
+            stdout: b"\r\nfetching \xff\r\n".to_vec(),
+            stderr: b"failed\r \xfe ".to_vec(),
+        };
+        assert_eq!(done.tail(2000), "fetching \\udcff\nfailed\n \\udcfe");
+        assert_eq!(done.tail(3), "\n \\udcfe");
+        assert!(done.output().is_err());
+    }
 }
