@@ -2056,11 +2056,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn write_bytes_names_the_file_only_when_opening_it_fails() {
+    fn write_bytes_names_the_file_when_opening_it_fails() {
         assert_eq!(
             write_bytes(&PyPath::new(b"/nonexistent-bench-tools/x"), b"x"),
             Err("[Errno 2] No such file or directory: '/nonexistent-bench-tools/x'".to_string())
         );
+    }
+
+    // macOS has no /dev/full.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn write_bytes_omits_the_file_when_writing_fails() {
         assert_eq!(
             write_bytes(&PyPath::new(b"/dev/full"), b"x"),
             Err("[Errno 28] No space left on device".to_string())
