@@ -703,6 +703,17 @@ with open("out/native-artifact-storage.v1.json", "w") as handle:
     json.dump({"archive": {"path": path, "sha256": named}}, handle, indent=2)
 """
 
+    def test_framework_interpreter_path_masks_as_the_case_names_python(self):
+        app = "/Library/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python"
+        stub = "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3"
+        case = {"mask_patterns": [{"pattern": "(?:/\\S*/)?python3[.0-9]*(?=[ :])", "label": "<python>"}]}
+        stderr = f"{app}: can't open file 'missing.py': [Errno 2] No such file or directory\n".encode()
+        actual = {"stdout": b"", "stderr": stderr, "filesystem": []}
+        with patch.object(sys, "orig_argv", [app, "tools/behavior_contract.py"]), \
+                patch.object(sys, "executable", stub):
+            result = contract.normalize(case, Path("/nonexistent"), actual)
+        self.assertEqual(result["stderr"], b"<python>: can't open file 'missing.py': [Errno 2] No such file or directory\n")
+
     def test_storage_references_name_the_written_archive_before_masking(self):
         case = {"id": "probe", "program": "writer", "argv": [], "stdin_b64": "", "initial": [],
                 "archives": [{"glob": "out/native-scratch.v1.zip", "format": "zip"}],
