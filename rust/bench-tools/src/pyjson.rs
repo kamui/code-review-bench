@@ -4,12 +4,12 @@
 //! Reading follows `json.loads` with the C scanner of Python 3.13 and later: `NaN`, `Infinity` and
 //! `-Infinity` are accepted, integers keep every digit up to Python's 4300-digit limit, and a repeated key
 //! keeps its first position and last value, as `dict` does. Error messages and positions are those of
-//! `json.JSONDecodeError`. A lone surrogate escape, which Python keeps in a `str`, is refused, except by
-//! `loads_surrogateescape`.
+//! `json.JSONDecodeError`. A lone surrogate escape, which Python keeps in a `str`, is refused, except that
+//! `loads_os_text` reads the `os.fsdecode` text of a name that is not UTF-8 as [`Value::OsText`] or [`Key::OsText`].
 //!
 //! Writing follows `json.dumps`: `ensure_ascii`, `indent`, `separators` and `sort_keys`, with `float.__repr__`
-//! spelling and `NaN`, `Infinity` and `-Infinity` for non-finite numbers. [`Value::OsText`] holds a name that is
-//! not UTF-8 and is written with the `\udcXX` escapes of its `surrogateescape` text, which reading refuses.
+//! spelling and `NaN`, `Infinity` and `-Infinity` for non-finite numbers. An `OsText` value or key is written
+//! with the `\udcXX` escapes of its `surrogateescape` text.
 
 use crate::pytext;
 use std::collections::{HashMap, HashSet};
@@ -44,27 +44,98 @@ impl OsText {
     }
 }
 
+/// A `dict` key: a `str`, which may be the `os.fsdecode` text of bytes that are not UTF-8.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Key {
+    Str(String),
+    OsText(OsText),
+}
+
+impl Key {
+    /// `os.fsdecode(raw)`, as [`Value::os_text`] reads it.
+    pub fn os_text(raw: &[u8]) -> Self {
+        match std::str::from_utf8(raw) {
+            Ok(text) => Self::Str(text.to_string()),
+            Err(_) => Self::OsText(OsText(raw.to_vec())),
+        }
+    }
+
+    /// `os.fsencode(key)`. Distinct keys have distinct bytes, because an `OsText` is never UTF-8.
+    pub fn os_bytes(&self) -> &[u8] {
+        match self {
+            Self::Str(text) => text.as_bytes(),
+            Self::OsText(text) => text.as_bytes(),
+        }
+    }
+
+    fn points(&self) -> Vec<u32> {
+        match self {
+            Self::Str(text) => text.chars().map(u32::from).collect(),
+            Self::OsText(text) => text.points(),
+        }
+    }
+
+    /// Python's `str` order, by code point.
+    fn py_cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match (self, other) {
+            (Self::Str(left), Self::Str(right)) => left.cmp(right),
+            _ => self.points().cmp(&other.points()),
+        }
+    }
+
+    fn py_repr(&self) -> String {
+        match self {
+            Self::Str(text) => pytext::repr_str(text),
+            Self::OsText(text) => pytext::repr(&text.points()),
+        }
+    }
+}
+
+impl From<Key> for Value {
+    fn from(key: Key) -> Self {
+        match key {
+            Key::Str(text) => Self::Str(text),
+            Key::OsText(text) => Self::OsText(text),
+        }
+    }
+}
+
 /// A `dict`: keys are unique and keep the position of their first occurrence.
 #[derive(Clone, Debug, Default)]
 pub struct Object {
-    entries: Vec<(String, Value)>,
-    index: HashMap<String, usize>,
+    entries: Vec<(Key, Value)>,
+    /// Each key's position, by its `os.fsencode` bytes, so a `str` finds only a UTF-8 key.
+    index: HashMap<Vec<u8>, usize>,
 }
 
 impl Object {
     pub fn get(&self, key: &str) -> Option<&Value> {
+        self.get_key(key.as_bytes())
+    }
+
+    /// The value at the key whose `os.fsencode` bytes are `raw`.
+    pub fn get_key(&self, raw: &[u8]) -> Option<&Value> {
         self.index
-            .get(key)
+            .get(raw)
             .map(|position| &self.entries[*position].1)
     }
 
     pub fn get_mut(&mut self, key: &str) -> Option<&mut Value> {
         self.index
-            .get(key)
+            .get(key.as_bytes())
             .map(|position| &mut self.entries[*position].1)
     }
 
+    /// The members of an object whose keys are all UTF-8, as every object is except those `loads_os_text`
+    /// reads or `insert_key` builds; [`Object::members`] reads those.
     pub fn iter(&self) -> impl Iterator<Item = (&String, &Value)> {
+        self.entries.iter().map(|(key, value)| match key {
+            Key::Str(text) => (text, value),
+            Key::OsText(_) => panic!("an object with an OsText key is read with Object::members"),
+        })
+    }
+
+    pub fn members(&self) -> impl Iterator<Item = (&Key, &Value)> {
         self.entries.iter().map(|(key, value)| (key, value))
     }
 
@@ -78,10 +149,15 @@ impl Object {
 
     /// `dict[key] = value`: a new key goes last, an existing one keeps its position.
     pub fn insert(&mut self, key: String, value: Value) {
-        match self.index.get(&key) {
+        self.insert_key(Key::Str(key), value);
+    }
+
+    pub fn insert_key(&mut self, key: Key, value: Value) {
+        match self.index.get(key.os_bytes()) {
             Some(position) => self.entries[*position].1 = value,
             None => {
-                self.index.insert(key.clone(), self.entries.len());
+                self.index
+                    .insert(key.os_bytes().to_vec(), self.entries.len());
                 self.entries.push((key, value));
             }
         }
@@ -162,7 +238,7 @@ enum Failure {
 struct Parser {
     chars: Vec<char>,
     duplicates: Duplicates,
-    surrogateescape: bool,
+    os_text: bool,
     depth: usize,
 }
 
@@ -170,41 +246,19 @@ pub fn loads(text: &str, duplicates: Duplicates) -> Result<Value, ParseError> {
     parse(text, duplicates, false)
 }
 
-/// The first of the 128 code points that stand for the bytes 0x80..=0xFF under `loads_surrogateescape`.
-const ESCAPED_BYTES: u32 = 0x10_FF00;
-
-fn escaped_byte(c: char) -> Option<u8> {
-    u32::from(c)
-        .checked_sub(ESCAPED_BYTES)
-        .and_then(|byte| u8::try_from(byte).ok())
-        .filter(|byte| *byte >= 0x80)
-}
-
-/// `loads` for text `json.dumps` wrote from `os.fsdecode` paths: a lone surrogate U+DC80..U+DCFF, which stands for
-/// a byte `surrogateescape` could not decode, is read as U+10FF80..U+10FFFF, which a Rust `String` can hold, and
-/// `surrogateescape_bytes` maps back to the byte. Other lone surrogates are refused, as `os.fsencode` refuses them,
-/// and so is U+10FF80..U+10FFFF itself, which would otherwise read as a byte.
-pub fn loads_surrogateescape(text: &str, duplicates: Duplicates) -> Result<Value, ParseError> {
+/// `loads` for text `json.dumps` wrote from `os.fsdecode` names. A string holding the escapes `\udc80`..`\udcff`,
+/// which stand for bytes `surrogateescape` could not decode, is read as the bytes `os.fsencode` makes of it, an
+/// [`Value::OsText`] or [`Key::OsText`]. Other lone surrogates are refused, as `os.fsencode` refuses them, and so are
+/// escapes of bytes `os.fsdecode` would have decoded, which name the same bytes as other text.
+pub fn loads_os_text(text: &str, duplicates: Duplicates) -> Result<Value, ParseError> {
     parse(text, duplicates, true)
 }
 
-/// `os.fsencode(text)` for a string `loads_surrogateescape` read.
-pub fn surrogateescape_bytes(text: &str) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(text.len());
-    for c in text.chars() {
-        match escaped_byte(c) {
-            Some(byte) => bytes.push(byte),
-            None => bytes.extend_from_slice(c.encode_utf8(&mut [0u8; 4]).as_bytes()),
-        }
-    }
-    bytes
-}
-
-fn parse(text: &str, duplicates: Duplicates, surrogateescape: bool) -> Result<Value, ParseError> {
+fn parse(text: &str, duplicates: Duplicates, os_text: bool) -> Result<Value, ParseError> {
     let mut parser = Parser {
         chars: text.chars().collect(),
         duplicates,
-        surrogateescape,
+        os_text,
         depth: 0,
     };
     if parser.chars.first() == Some(&'\u{feff}') {
@@ -265,7 +319,7 @@ impl Parser {
             None => Err(Failure::NoValue(index)),
             Some('"') => {
                 let (text, end) = self.string(index + 1)?;
-                Ok((Value::Str(text), end))
+                Ok((text.into(), end))
             }
             Some('{') => self.nested(|parser| parser.object(index + 1)),
             Some('[') => self.nested(|parser| parser.array(index + 1)),
@@ -374,7 +428,7 @@ impl Parser {
     }
 
     /// Python's `scanstring`, from the character after the opening quote.
-    fn string(&self, mut end: usize) -> Result<(String, usize), Failure> {
+    fn string(&self, mut end: usize) -> Result<(Key, usize), Failure> {
         let begin = end - 1;
         let length = self.chars.len();
         let mut points: Vec<u32> = Vec::new();
@@ -439,31 +493,34 @@ impl Parser {
             }
             points.push(code);
         }
-        let mut text = String::with_capacity(points.len());
-        for point in points {
-            let escaped = self.surrogateescape && (0xDC80..=0xDCFF).contains(&point);
-            let point = if escaped {
-                ESCAPED_BYTES + point - 0xDC00
-            } else {
-                point
-            };
+        let escaped = |point: u32| self.os_text && (0xDC80..=0xDCFF).contains(&point);
+        let mut bytes = Vec::with_capacity(points.len());
+        for &point in &points {
+            if escaped(point) {
+                bytes.push((point - 0xDC00) as u8);
+                continue;
+            }
             let Some(c) = char::from_u32(point) else {
                 return Err(Failure::Error(ParseError::Value(format!(
                     "the string starting at char {begin} holds a lone surrogate \\u{point:04x}"
                 ))));
             };
-            if self.surrogateescape && !escaped && escaped_byte(c).is_some() {
-                return Err(Failure::Error(ParseError::Value(format!(
-                    "the string starting at char {begin} holds U+{point:04X}, which stands for an undecodable byte"
-                ))));
-            }
-            text.push(c);
+            bytes.extend_from_slice(c.encode_utf8(&mut [0u8; 4]).as_bytes());
         }
-        Ok((text, end))
+        if !points.iter().any(|point| escaped(*point)) {
+            let text = String::from_utf8(bytes).expect("encoded from chars");
+            return Ok((Key::Str(text), end));
+        }
+        if pytext::surrogateescape(&bytes) != points {
+            return Err(Failure::Error(ParseError::Value(format!(
+                "the string starting at char {begin} escapes bytes os.fsdecode would decode"
+            ))));
+        }
+        Ok((Key::OsText(OsText(bytes)), end))
     }
 
     fn object(&mut self, start: usize) -> Result<(Value, usize), Failure> {
-        let mut pairs: Vec<(String, Value)> = Vec::new();
+        let mut pairs: Vec<(Key, Value)> = Vec::new();
         let mut index = self.whitespace(start);
         if self.at(index) == Some('}') {
             return Ok((Value::Object(Object::default()), index + 1));
@@ -496,8 +553,8 @@ impl Parser {
             let mut seen = HashSet::new();
             let mut repeated: Vec<String> = pairs
                 .iter()
-                .filter(|(key, _)| !seen.insert(key.as_str()))
-                .map(|(key, _)| key.clone())
+                .filter(|(key, _)| !seen.insert(key.os_bytes()))
+                .map(|(key, _)| pytext::stderr_text(key.os_bytes()))
                 .collect();
             repeated.sort();
             repeated.dedup();
@@ -505,7 +562,11 @@ impl Parser {
                 return Err(Failure::Error(ParseError::Duplicates(repeated)));
             }
         }
-        Ok((Value::Object(pairs.into_iter().collect()), index + 1))
+        let mut object = Object::default();
+        for (key, value) in pairs {
+            object.insert_key(key, value);
+        }
+        Ok((Value::Object(object), index + 1))
     }
 
     fn array(&mut self, start: usize) -> Result<(Value, usize), Failure> {
@@ -586,8 +647,6 @@ pub struct Dumps {
     /// `separators=(item, key)`; the default is `(", ", ": ")`, or `(",", ": ")` with an indent.
     pub separators: Option<(String, String)>,
     pub sort_keys: bool,
-    /// Write U+10FF80..U+10FFFF, as `loads_surrogateescape` reads them, as the lone surrogates they stand for.
-    pub surrogateescape: bool,
 }
 
 impl Default for Dumps {
@@ -597,7 +656,6 @@ impl Default for Dumps {
             indent: None,
             separators: None,
             sort_keys: false,
-            surrogateescape: false,
         }
     }
 }
@@ -647,14 +705,17 @@ fn write_value(
             close(out, options, level, ']');
         }
         Value::Object(object) => {
-            let mut members: Vec<(&String, &Value)> = object.iter().collect();
+            let mut members: Vec<(&Key, &Value)> = object.members().collect();
             if options.sort_keys {
-                members.sort_by(|left, right| left.0.cmp(right.0));
+                members.sort_by(|left, right| left.0.py_cmp(right.0));
             }
             out.push('{');
             for (position, (name, member)) in members.into_iter().enumerate() {
                 separate(out, options, item, level + 1, position == 0);
-                write_string(out, name, options);
+                match name {
+                    Key::Str(text) => write_string(out, text, options),
+                    Key::OsText(text) => write_points(out, &text.points(), options.ensure_ascii),
+                }
                 out.push_str(key);
                 write_value(out, member, options, item, key, level + 1);
             }
@@ -704,10 +765,6 @@ pub fn ascii_string(points: &[u32]) -> String {
 fn write_string(out: &mut String, text: &str, options: &Dumps) {
     out.push('"');
     for c in text.chars() {
-        if let Some(byte) = escaped_byte(c).filter(|_| options.surrogateescape) {
-            let _ = write!(out, "\\udc{byte:02x}");
-            continue;
-        }
         write_char(out, c, options.ensure_ascii);
     }
     out.push('"');
@@ -750,9 +807,15 @@ fn write_char(out: &mut String, c: char, ensure_ascii: bool) {
 impl Value {
     /// `os.fsdecode(raw)`: a `Str` when the bytes are UTF-8, otherwise their `surrogateescape` text.
     pub fn os_text(raw: &[u8]) -> Self {
-        match std::str::from_utf8(raw) {
-            Ok(text) => Self::Str(text.to_string()),
-            Err(_) => Self::OsText(OsText(raw.to_vec())),
+        Key::os_text(raw).into()
+    }
+
+    /// `os.fsencode(value)` of a `str`.
+    pub fn os_bytes(&self) -> Option<&[u8]> {
+        match self {
+            Self::Str(text) => Some(text.as_bytes()),
+            Self::OsText(text) => Some(text.as_bytes()),
+            _ => None,
         }
     }
 
@@ -837,9 +900,11 @@ impl Value {
             }
             (Self::Object(left), Self::Object(right)) => {
                 left.len() == right.len()
-                    && left
-                        .iter()
-                        .all(|(key, value)| right.get(key).is_some_and(|other| value.py_eq(other)))
+                    && left.members().all(|(key, value)| {
+                        right
+                            .get_key(key.os_bytes())
+                            .is_some_and(|other| value.py_eq(other))
+                    })
             }
             (
                 Self::Bool(_) | Self::Int(_) | Self::Float(_),
@@ -868,8 +933,8 @@ impl Value {
             }
             Self::Object(object) => {
                 let inner: Vec<String> = object
-                    .iter()
-                    .map(|(key, value)| format!("{}: {}", pytext::repr_str(key), value.py_repr()))
+                    .members()
+                    .map(|(key, value)| format!("{}: {}", key.py_repr(), value.py_repr()))
                     .collect();
                 format!("{{{}}}", inner.join(", "))
             }
@@ -896,23 +961,76 @@ mod tests {
     }
 
     #[test]
-    fn surrogateescape_keeps_undecodable_bytes() {
-        let text = r#"{"a\udcff": ["b\udc80\u00e9"]}"#;
-        let value = loads_surrogateescape(text, Duplicates::KeepLast).unwrap();
+    fn os_text_reads_undecodable_bytes() {
+        let text = r#"{"a\udcff": ["b\udc80\u00e9", "\ud83d\ude00"], "c": 1}"#;
+        let value = loads_os_text(text, Duplicates::Refuse).unwrap();
         let Value::Object(object) = &value else {
             panic!("not an object");
         };
-        let (key, _) = object.iter().next().unwrap();
-        assert_eq!(surrogateescape_bytes(key), b"a\xff");
-        let options = Dumps {
-            surrogateescape: true,
+        let keys: Vec<&[u8]> = object.members().map(|(key, _)| key.os_bytes()).collect();
+        assert_eq!(keys, [&b"a\xff"[..], b"c"]);
+        let list = object.get_key(b"a\xff").unwrap().as_array().unwrap();
+        assert_eq!(list[0].os_bytes(), Some(&b"b\x80\xc3\xa9"[..]));
+        assert!(matches!(&list[1], Value::Str(name) if name == "\u{1f600}"));
+        assert_eq!(object.get("c").unwrap().py_repr(), "1");
+        assert_eq!(
+            value.py_repr(),
+            "{'a\\udcff': ['b\\udc80é', '\u{1f600}'], 'c': 1}"
+        );
+        assert!(value.py_eq(&loads_os_text(text, Duplicates::KeepLast).unwrap()));
+        assert_eq!(dumps(&value, &Dumps::default()), text);
+        let unsorted =
+            loads_os_text(r#"{"\ue000": 1, "\udcff": 2, "z": 3}"#, Duplicates::Refuse).unwrap();
+        let sorted = Dumps {
+            sort_keys: true,
             ..Dumps::default()
         };
-        assert_eq!(dumps(&value, &options), text);
+        assert_eq!(
+            dumps(&unsorted, &sorted),
+            r#"{"z": 3, "\udcff": 2, "\ue000": 1}"#
+        );
         assert!(loads(text, Duplicates::KeepLast).is_err());
-        for refused in [r#""\ud800""#, r#""\udc7f""#, r#""\udbff\udf80""#] {
-            assert!(loads_surrogateescape(refused, Duplicates::KeepLast).is_err());
+        assert_eq!(
+            loads_os_text(r#"{"\udcff": 1, "\udcff": 2}"#, Duplicates::Refuse)
+                .unwrap_err()
+                .to_string(),
+            "\\udcff is written more than once"
+        );
+        for (refused, message) in [
+            (
+                r#""\ud800""#,
+                "the string starting at char 0 holds a lone surrogate \\ud800",
+            ),
+            (
+                r#""\udcff\udc7f""#,
+                "the string starting at char 0 holds a lone surrogate \\udc7f",
+            ),
+            (
+                r#""\udcc3\udca9""#,
+                "the string starting at char 0 escapes bytes os.fsdecode would decode",
+            ),
+            (
+                r#""\udcc3\udca9\udcff""#,
+                "the string starting at char 0 escapes bytes os.fsdecode would decode",
+            ),
+        ] {
+            let error = loads_os_text(refused, Duplicates::KeepLast).unwrap_err();
+            assert_eq!(error.to_string(), message);
         }
+        assert_eq!(
+            loads_os_text(r#""\udcc3\u00a9""#, Duplicates::KeepLast)
+                .unwrap()
+                .os_bytes(),
+            Some(&b"\xc3\xc2\xa9"[..])
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Object::members")]
+    fn string_member_iteration_refuses_os_text_keys() {
+        let mut object = Object::default();
+        object.insert_key(Key::os_text(b"\xff"), Value::Null);
+        let _ = object.iter().count();
     }
 
     #[test]
