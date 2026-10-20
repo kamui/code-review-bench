@@ -426,6 +426,10 @@ replaced, each with its case:
   `-h=1` or `-h-x`, is still refused, exit 2, as argparse refuses it; `main.rs` refuses it when clap would print help,
   with argparse's message. Like argparse, it first skips further `h`s, so `-hh=1` is refused and `-hhx` prints help;
   `build-packet-help-run-with-equals-or-dash` records that `build-packet` printed help for `-hh=1`.
+  `*-help-before-invalid-short-help` and `*-help-abbreviation-before-invalid-short-help`: only the first help before
+  `--` decides, as argparse acts on the first help it reads, so `--help -h=1` and `--hel -h=1` print help in every
+  subcommand ([#268](https://github.com/kamui/code-review-bench/issues/268)); before, only `grading`, `calibration`
+  and `evaluator-audit` did.
 - `build-packet-unicode-16-digit-option-value`: `build-packet` keeps Python 3.14's argparse reading of dash-led option
   values, which `build-packet-option-values-with-leading-dash` pins: a value that names no option and holds a space or
   starts with a dash, an optional dot and a decimal digit. `main.rs` attaches such a value to its option with `=`
