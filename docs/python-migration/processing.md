@@ -430,6 +430,9 @@ replaced, each with its case:
   `--` decides, as argparse acts on the first help it reads, so `--help -h=1` and `--hel -h=1` print help in every
   subcommand ([#268](https://github.com/kamui/code-review-bench/issues/268)); before, only `grading`, `calibration`
   and `evaluator-audit` did.
+- `rates-invalid-command-before-help*`: `rates` refuses a command other than `check` or `refresh` as it reads it, as
+  argparse's `choices` does, so an invalid command before `--help` exits 2
+  ([#268](https://github.com/kamui/code-review-bench/issues/268)).
 - `build-packet-unicode-16-digit-option-value`: `build-packet` keeps Python 3.14's argparse reading of dash-led option
   values, which `build-packet-option-values-with-leading-dash` pins: a value that names no option and holds a space or
   starts with a dash, an optional dot and a decimal digit. `main.rs` attaches such a value to its option with `=`
