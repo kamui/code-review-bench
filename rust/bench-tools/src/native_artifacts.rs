@@ -10,7 +10,7 @@
 use crate::archive::{self, ArchiveError, Limits, Refusal, ScratchWriter};
 use crate::evidence::{self, Disk, TempDir};
 use crate::pyfs;
-use crate::pyjson::{self, Duplicates, Object, Value};
+use crate::pyjson::{self, Duplicates, Key, Object, Value};
 use crate::pytext::{self, PyPath};
 use crate::sha256::{self, Sha256};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -42,10 +42,10 @@ impl From<evidence::Error> for Error {
     }
 }
 
-/// An indexed file: its path, as `pyjson::loads_surrogateescape` reads it, and its row of the index.
+/// An indexed file: the bytes its path names on disk, `os.fsencode(path)`, and its row of the index.
 #[derive(Clone, Debug)]
 pub struct Row {
-    pub path: String,
+    pub path: Vec<u8>,
     pub row: Value,
 }
 
@@ -57,7 +57,7 @@ pub struct Verified {
 }
 
 impl Verified {
-    fn row(&self, name: &str) -> Option<&Row> {
+    fn row(&self, name: &[u8]) -> Option<&Row> {
         self.files.iter().find(|row| row.path == name)
     }
 }
@@ -112,27 +112,20 @@ fn digest(path: &PyPath) -> Result<String> {
 /// `json.loads(path.read_text())`, keeping the undecodable filename bytes `json.dumps` wrote as lone surrogates.
 fn read_json(path: &PyPath) -> Result<Value> {
     let text = pytext::read_text(path).map_err(|error| fail(error.message()))?;
-    pyjson::loads_surrogateescape(&text, Duplicates::KeepLast)
-        .map_err(|error| fail(error.to_string()))
+    pyjson::loads_os_text(&text, Duplicates::KeepLast).map_err(|error| fail(error.to_string()))
 }
 
-/// How `json.dumps(..., indent=2)` writes a record that holds paths `read_json` read.
+/// How `json.dumps(..., indent=2)` writes a record.
 fn record_dumps() -> pyjson::Dumps {
     pyjson::Dumps {
         indent: Some(2),
-        surrogateescape: true,
         ..pyjson::Dumps::default()
     }
 }
 
-/// The bytes an indexed path names on disk: `os.fsencode(name)`.
-fn os_path(name: &str) -> Vec<u8> {
-    pyjson::surrogateescape_bytes(name)
-}
-
 /// `str(name)` as Python writes it to stderr.
-fn shown(name: &str) -> String {
-    pytext::stderr_text(&os_path(name))
+fn shown(name: &[u8]) -> String {
+    pytext::stderr_text(name)
 }
 
 /// `value[key]` for a JSON value, with the message of the `KeyError` or `TypeError` Python raises.
@@ -140,7 +133,7 @@ fn item<'a>(value: &'a Value, key: &str) -> Result<&'a Value> {
     match value {
         Value::Object(object) => object.get(key).ok_or_else(|| fail(pytext::repr_str(key))),
         Value::Array(_) => Err(fail("list indices must be integers or slices, not str")),
-        Value::Str(_) => Err(fail("string indices must be integers, not 'str'")),
+        Value::Str(_) | Value::OsText(_) => Err(fail("string indices must be integers, not 'str'")),
         other => Err(fail(format!(
             "'{}' object is not subscriptable",
             other.type_name()
@@ -153,10 +146,17 @@ fn iterate(value: &Value) -> Result<Vec<Value>> {
     match value {
         Value::Array(values) => Ok(values.clone()),
         Value::Object(object) => Ok(object
-            .iter()
-            .map(|(key, _)| Value::Str(key.clone()))
+            .members()
+            .map(|(key, _)| Value::from(key.clone()))
             .collect()),
         Value::Str(text) => Ok(text.chars().map(|c| Value::Str(c.to_string())).collect()),
+        Value::OsText(text) => Ok(pytext::surrogateescape(text.as_bytes())
+            .into_iter()
+            .map(|point| match char::from_u32(point) {
+                Some(c) => Value::Str(c.to_string()),
+                None => Value::os_text(&[(point - 0xDC00) as u8]),
+            })
+            .collect()),
         other => Err(fail(format!(
             "'{}' object is not iterable",
             other.type_name()
@@ -168,25 +168,26 @@ fn unhashable(value: &Value) -> Error {
     fail(format!("unhashable type: '{}'", value.type_name()))
 }
 
-/// `native_artifacts.relative_path`: a relative POSIX path that `pathlib` leaves as written, without `..`.
-fn relative_path(value: &Value) -> Result<&str> {
-    let text = value.as_str().ok_or_else(|| {
+/// `native_artifacts.relative_path`: a relative POSIX path that `pathlib` leaves as written, without `..`, as the
+/// bytes it names on disk.
+fn relative_path(value: &Value) -> Result<&[u8]> {
+    let name = value.os_bytes().ok_or_else(|| {
         fail(format!(
             "argument should be a str or an os.PathLike object where __fspath__ returns a str, not '{}'",
             value.type_name()
         ))
     })?;
-    if text.is_empty()
-        || text.starts_with('/')
-        || text.split('/').any(|part| part == "..")
-        || PyPath::new(text.as_bytes()).as_bytes() != text.as_bytes()
+    if name.is_empty()
+        || name.starts_with(b"/")
+        || name.split(|byte| *byte == b'/').any(|part| part == b"..")
+        || PyPath::new(name).as_bytes() != name
     {
         return Err(fail(format!(
             "unsafe artifact path: {}",
-            pytext::repr(&pytext::surrogateescape(&os_path(text)))
+            pytext::repr(&pytext::surrogateescape(name))
         )));
     }
-    Ok(text)
+    Ok(name)
 }
 
 /// `native_artifacts.indexed_files`: the index's rows by path, in order, each path safe and listed once.
@@ -197,7 +198,7 @@ pub fn indexed_files(index: &PyPath) -> Result<Vec<Row>> {
         Value::Array(values) => values.clone(),
         Value::Object(object) if object.is_empty() => Vec::new(),
         Value::Str(text) if text.is_empty() => Vec::new(),
-        Value::Object(_) | Value::Str(_) => {
+        Value::Object(_) | Value::Str(_) | Value::OsText(_) => {
             return Err(fail("string indices must be integers, not 'str'"));
         }
         other => {
@@ -210,7 +211,7 @@ pub fn indexed_files(index: &PyPath) -> Result<Vec<Row>> {
     let mut files = Vec::with_capacity(rows.len());
     let mut seen = HashSet::new();
     for row in rows {
-        let name = relative_path(item(&row, "path")?)?.to_string();
+        let name = relative_path(item(&row, "path")?)?.to_vec();
         if !seen.insert(name.clone()) {
             return Err(fail(format!(
                 "duplicate indexed artifact: {}",
@@ -252,7 +253,7 @@ fn inside(path: &PyPath, base: &PyPath) -> bool {
 /// `native_artifacts.check_reference`: the referenced file below `directory`, hashing to its pin.
 fn check_reference(directory: &PyPath, reference: &Value) -> Result<PyPath> {
     let name = item(reference, "path")?;
-    let path = directory.join(&os_path(relative_path(name)?));
+    let path = directory.join(relative_path(name)?);
     let mismatch = || fail(format!("artifact checksum mismatch: {}", name.py_str()));
     if !inside(&path, directory) {
         return Err(mismatch());
@@ -325,20 +326,20 @@ fn regular_or_directory(entry: &Entry) -> bool {
 }
 
 /// Python's set of `storage["archived_paths"]`, checked to be distinct indexed file paths.
-fn archived_paths(storage: &Value, files: &[Row]) -> Result<Vec<String>> {
+fn archived_paths(storage: &Value, files: &[Row]) -> Result<Vec<Vec<u8>>> {
     let archived = iterate(item(storage, "archived_paths")?)?;
     if let Some(value) = archived.iter().find(|value| !value.hashable()) {
         return Err(unhashable(value));
     }
-    let names: Option<Vec<String>> = archived
+    let names: Option<Vec<Vec<u8>>> = archived
         .iter()
-        .map(|value| value.as_str().map(str::to_string))
+        .map(|value| value.os_bytes().map(<[u8]>::to_vec))
         .collect();
-    let indexed: HashSet<&str> = files.iter().map(|row| row.path.as_str()).collect();
+    let indexed: HashSet<&[u8]> = files.iter().map(|row| row.path.as_slice()).collect();
     match names {
         Some(names)
             if names.iter().collect::<HashSet<_>>().len() == names.len()
-                && names.iter().all(|name| indexed.contains(name.as_str())) =>
+                && names.iter().all(|name| indexed.contains(name.as_slice())) =>
         {
             Ok(names)
         }
@@ -347,7 +348,7 @@ fn archived_paths(storage: &Value, files: &[Row]) -> Result<Vec<String>> {
 }
 
 /// `storage["modes"]` by archived path, each an `int` from 0 to 0o777.
-fn archived_modes(storage: &Value, archived: &[String]) -> Result<HashMap<String, u32>> {
+fn archived_modes(storage: &Value, archived: &[Vec<u8>]) -> Result<HashMap<Vec<u8>, u32>> {
     let modes = match item(storage, "modes")? {
         Value::Object(object) => object,
         other => {
@@ -357,21 +358,21 @@ fn archived_modes(storage: &Value, archived: &[String]) -> Result<HashMap<String
             )));
         }
     };
-    let archived: HashSet<&str> = archived.iter().map(String::as_str).collect();
+    let archived: HashSet<&[u8]> = archived.iter().map(Vec::as_slice).collect();
     if !modes
-        .iter()
-        .all(|(name, _)| archived.contains(name.as_str()))
+        .members()
+        .all(|(name, _)| archived.contains(name.os_bytes()))
     {
         return Err(fail("archive modes must refer to archived files"));
     }
     let mut found = HashMap::new();
-    for (name, mode) in modes.iter() {
+    for (name, mode) in modes.members() {
         let mode = match mode {
             Value::Int(digits) => digits.parse::<u32>().ok().filter(|mode| *mode <= 0o777),
             _ => None,
         }
         .ok_or_else(|| fail("invalid archived file permissions"))?;
-        found.insert(name.clone(), mode);
+        found.insert(name.os_bytes().to_vec(), mode);
     }
     Ok(found)
 }
@@ -382,14 +383,14 @@ struct Blob {
     size: Value,
 }
 
-fn blobs(verified_files: &[Row], archived: &[String]) -> Result<Vec<Blob>> {
-    let rows: HashMap<&str, &Row> = verified_files
+fn blobs(verified_files: &[Row], archived: &[Vec<u8>]) -> Result<Vec<Blob>> {
+    let rows: HashMap<&[u8], &Row> = verified_files
         .iter()
-        .map(|row| (row.path.as_str(), row))
+        .map(|row| (row.path.as_slice(), row))
         .collect();
     let mut blobs: Vec<Blob> = Vec::new();
     for name in archived {
-        let row = rows[name.as_str()];
+        let row = rows[name.as_slice()];
         let sha = item(&row.row, "sha256")?;
         let size = item(&row.row, "bytes")?;
         if !sha.hashable() {
@@ -404,7 +405,7 @@ fn blobs(verified_files: &[Row], archived: &[String]) -> Result<Vec<Blob>> {
         }
     }
     for name in archived {
-        let row = rows[name.as_str()];
+        let row = rows[name.as_slice()];
         let sha = item(&row.row, "sha256")?;
         let blob = blobs.iter().find(|blob| blob.sha.py_eq(sha));
         if !blob.is_some_and(|blob| {
@@ -531,7 +532,7 @@ pub fn verify(directory: &PyPath, pin: Option<&Value>) -> Result<Verified> {
         &check_reference(directory, item(&storage, "archive")?)?,
         &blobs,
     )?;
-    let artifact_root = directory.join(&os_path(relative_path(item(&storage, "artifact_root")?)?));
+    let artifact_root = directory.join(relative_path(item(&storage, "artifact_root")?)?);
     if is_symlink(&artifact_root) || !inside(&artifact_root, directory) {
         return Err(fail("native artifact root escapes filed directory"));
     }
@@ -541,11 +542,11 @@ pub fn verify(directory: &PyPath, pin: Option<&Value>) -> Result<Verified> {
             "filed artifacts must be regular files and directories",
         ));
     }
-    let archived_set: HashSet<&str> = archived.iter().map(String::as_str).collect();
+    let archived_set: HashSet<&[u8]> = archived.iter().map(Vec::as_slice).collect();
     let loose: HashSet<Vec<u8>> = files
         .iter()
-        .filter(|row| !archived_set.contains(row.path.as_str()))
-        .map(|row| os_path(&row.path))
+        .filter(|row| !archived_set.contains(row.path.as_slice()))
+        .map(|row| row.path.clone())
         .collect();
     let found: HashSet<Vec<u8>> = entries
         .iter()
@@ -556,10 +557,10 @@ pub fn verify(directory: &PyPath, pin: Option<&Value>) -> Result<Verified> {
         return Err(fail("loose artifacts differ from indexed file inventory"));
     }
     for row in &files {
-        if archived_set.contains(row.path.as_str()) {
+        if archived_set.contains(row.path.as_slice()) {
             continue;
         }
-        let path = artifact_root.join(&os_path(&row.path));
+        let path = artifact_root.join(&row.path);
         if !inside(&path, &artifact_root) {
             return Err(fail(format!("artifact escapes root: {}", shown(&row.path))));
         }
@@ -675,6 +676,10 @@ fn holds(record: &Value, key: &str) -> Result<bool> {
         Value::Object(object) => Ok(object.get(key).is_some()),
         Value::Array(values) => Ok(values.iter().any(|value| value.as_str() == Some(key))),
         Value::Str(text) => Ok(text.contains(key)),
+        Value::OsText(text) => Ok(text
+            .as_bytes()
+            .windows(key.len())
+            .any(|window| window == key.as_bytes())),
         other => Err(fail(format!(
             "argument of type '{}' is not iterable",
             other.type_name()
@@ -745,17 +750,17 @@ pub fn file_artifacts(
     native_relative: Option<&[u8]>,
 ) -> Result<Option<Value>> {
     let files = indexed_files(index)?;
-    let archived: Vec<String> = {
-        let mut names: Vec<String> = files
+    let archived: Vec<Vec<u8>> = {
+        let mut names: Vec<Vec<u8>> = files
             .iter()
             .map(|row| row.path.clone())
             .filter(|name| {
-                let parts: Vec<&str> = name.split('/').collect();
-                parts[..parts.len() - 1].contains(&"scratch")
-                    && Some(os_path(name).as_slice()) != native_relative
+                let parts: Vec<&[u8]> = name.split(|byte| *byte == b'/').collect();
+                parts[..parts.len() - 1].contains(&&b"scratch"[..])
+                    && Some(name.as_slice()) != native_relative
             })
             .collect();
-        names.sort_by_cached_key(|name| pytext::surrogateescape(&os_path(name)));
+        names.sort_by_cached_key(|name| pytext::surrogateescape(name));
         names
     };
     let record_path = out.join(b"attempt.json");
@@ -770,7 +775,9 @@ pub fn file_artifacts(
         let recorded = match &record {
             Value::Object(object) => object.get("native_artifact_storage").cloned(),
             Value::Array(_) => return Err(fail("'list' object has no attribute 'get'")),
-            Value::Str(_) => return Err(fail("'str' object has no attribute 'get'")),
+            Value::Str(_) | Value::OsText(_) => {
+                return Err(fail("'str' object has no attribute 'get'"));
+            }
             _ => None,
         };
         let pin = match recorded {
@@ -800,11 +807,10 @@ pub fn file_artifacts(
     }
     if archived.is_empty() || exists(&record_path) {
         for row in &files {
-            let path = os_path(&row.path);
-            check_file(&root.join(&path), row)?;
-            let target = out.join(&root_name).join(&path);
+            check_file(&root.join(&row.path), row)?;
+            let target = out.join(&root_name).join(&row.path);
             evidence::make_dirs(&evidence::parent(&target))?;
-            copy2(&root.join(&path), &target)?;
+            copy2(&root.join(&row.path), &target)?;
         }
         copy2(index, &out.join(INDEX.as_bytes()))?;
         return Ok(None);
@@ -823,14 +829,14 @@ pub fn file_artifacts(
         .filter(|entry| entry.metadata.file_type().is_file())
         .map(|entry| entry.relative.clone())
         .collect();
-    let listed: HashSet<Vec<u8>> = files.iter().map(|row| os_path(&row.path)).collect();
+    let listed: HashSet<Vec<u8>> = files.iter().map(|row| row.path.clone()).collect();
     if actual != listed {
         return Err(fail(
             "native artifact tree differs from indexed file inventory",
         ));
     }
     for row in &files {
-        check_file(&root.join(&os_path(&row.path)), row)?;
+        check_file(&root.join(&row.path), row)?;
     }
     evidence::make_dirs(out)?;
     let reserved = [ARCHIVE, STORAGE, INDEX];
@@ -887,12 +893,12 @@ fn stage(
     root: &PyPath,
     index: &PyPath,
     files: &[Row],
-    archived: &[String],
+    archived: &[Vec<u8>],
     staged: &PyPath,
     root_name: &[u8],
 ) -> Result<Value> {
     copy_new(disk, index, &staged.join(INDEX.as_bytes()))?;
-    let rows: HashMap<&str, &Row> = files.iter().map(|row| (row.path.as_str(), row)).collect();
+    let rows: HashMap<&[u8], &Row> = files.iter().map(|row| (row.path.as_slice(), row)).collect();
     let archive_path = staged.join(ARCHIVE.as_bytes());
     let mut modes = Object::default();
     {
@@ -902,14 +908,14 @@ fn stage(
         let mut writer = ScratchWriter::new(file);
         let mut written = HashSet::new();
         for name in archived {
-            let path = root.join(&os_path(name));
+            let path = root.join(name);
             let metadata =
                 std::fs::metadata(path.to_path_buf()).map_err(|error| os_failure(&error, &path))?;
             let mode = metadata.mode() & 0o777;
             if mode != 0o644 {
-                modes.insert(name.clone(), Value::Int(mode.to_string()));
+                modes.insert_key(Key::os_text(name), Value::Int(mode.to_string()));
             }
-            let sha = item(&rows[name.as_str()].row, "sha256")?.py_str();
+            let sha = item(&rows[name.as_slice()].row, "sha256")?.py_str();
             if written.insert(sha.clone()) {
                 let mut data =
                     File::open(path.to_path_buf()).map_err(|error| os_failure(&error, &path))?;
@@ -924,15 +930,14 @@ fn stage(
     }
     let tree = staged.join(root_name);
     create_dir(&tree)?;
-    let archived_set: HashSet<&str> = archived.iter().map(String::as_str).collect();
+    let archived_set: HashSet<&[u8]> = archived.iter().map(Vec::as_slice).collect();
     for row in files {
-        if archived_set.contains(row.path.as_str()) {
+        if archived_set.contains(row.path.as_slice()) {
             continue;
         }
-        let path = os_path(&row.path);
-        let target = tree.join(&path);
+        let target = tree.join(&row.path);
         evidence::make_dirs(&evidence::parent(&target))?;
-        copy_new(disk, &root.join(&path), &target)?;
+        copy_new(disk, &root.join(&row.path), &target)?;
     }
     sync_tree(disk, &tree)?;
     let storage = Value::Object(
@@ -949,7 +954,7 @@ fn stage(
             ("archive".to_string(), reference(&archive_path)?),
             (
                 "archived_paths".to_string(),
-                Value::Array(archived.iter().cloned().map(Value::Str).collect()),
+                Value::Array(archived.iter().map(|name| Value::os_text(name)).collect()),
             ),
             ("modes".to_string(), Value::Object(modes)),
         ]
@@ -980,11 +985,11 @@ pub fn restore(disk: &mut dyn Disk, directory: &PyPath, out: &PyPath) -> Result<
     copytree(disk, &directory.join(artifact_root.as_bytes()), &staged)?;
     let archived = archived_paths(&verified.storage, &verified.files)?;
     let modes = archived_modes(&verified.storage, &archived)?;
-    let mut by_sha: Vec<(String, Vec<&str>)> = Vec::new();
+    let mut by_sha: Vec<(String, Vec<&[u8]>)> = Vec::new();
     for name in &archived {
         let row = verified
             .row(name)
-            .ok_or_else(|| fail(pytext::repr(&pytext::surrogateescape(&os_path(name)))))?;
+            .ok_or_else(|| fail(pytext::repr(&pytext::surrogateescape(name))))?;
         let sha = item(&row.row, "sha256")?.py_str();
         match by_sha.iter_mut().find(|(known, _)| *known == sha) {
             Some((_, names)) => names.push(name),
@@ -1006,7 +1011,7 @@ pub fn restore(disk: &mut dyn Disk, directory: &PyPath, out: &PyPath) -> Result<
         };
         let mut first: Option<PyPath> = None;
         for name in names {
-            let target = staged.join(&os_path(name));
+            let target = staged.join(name);
             let written = (|| -> Result<()> {
                 evidence::make_dirs(&evidence::parent(&target))?;
                 let mut output = disk
@@ -1042,7 +1047,7 @@ pub fn restore(disk: &mut dyn Disk, directory: &PyPath, out: &PyPath) -> Result<
     }
     result.map_err(|error| fail(member_failure(&error, b"")))?;
     for row in &verified.files {
-        check_file(&staged.join(&os_path(&row.path)), row)?;
+        check_file(&staged.join(&row.path), row)?;
     }
     sync_tree(disk, &staged)?;
     disk.rename(&staged.to_path_buf(), &out.to_path_buf())
@@ -1086,7 +1091,7 @@ fn copytree(disk: &mut dyn Disk, source: &PyPath, target: &PyPath) -> Result<()>
 /// Python sorts their text. No link is followed.
 pub fn unindexed(root: &PyPath, index: &PyPath) -> Result<Vec<Vec<u8>>> {
     let files = indexed_files(index)?;
-    let listed: HashSet<Vec<u8>> = files.iter().map(|row| os_path(&row.path)).collect();
+    let listed: HashSet<Vec<u8>> = files.iter().map(|row| row.path.clone()).collect();
     fn walk(
         directory: &PyPath,
         prefix: &[u8],

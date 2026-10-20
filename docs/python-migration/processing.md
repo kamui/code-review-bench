@@ -34,7 +34,9 @@ Shared modules carry the Python behavior that byte-pinned outputs depend on:
   `JSONDecodeError`'s, which normalize-review notes save. By default it stops at 128 levels of nesting, and its only
   depth option removes the limit; `pyjson` stops at 1000. It refuses a lone surrogate as `pyjson` does, with another
   message. Its writer writes `null` for `NaN`, `1.5e-7` for `1.5e-07` and non-ASCII text unescaped. A wrapper for
-  these cases would keep the whole scanner beside the crate.
+  these cases would keep the whole scanner beside the crate. `loads_os_text` reads a string holding the `\udcXX`
+  escapes that `os.fsdecode` writes for undecodable bytes, value or object key, as an `OsText` holding those bytes,
+  which the writer spells the same way; it refuses escapes for bytes that decode, which `os.fsdecode` never writes.
 - `pytext` holds `surrogateescape` decoding, `str.strip` whitespace, `repr`, `pathlib` path joining, universal
   newlines, and the `OSError` and `UnicodeDecodeError` messages that diagnostics quote.
 - `sha256` spells the `sha2` crate's SHA-256 digest as `hashlib`'s `hexdigest()` does, in one call or incrementally.
