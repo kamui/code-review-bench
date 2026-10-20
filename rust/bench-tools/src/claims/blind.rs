@@ -9,7 +9,7 @@ use super::{
 };
 use crate::pyjson::{self, Duplicates, Value};
 use crate::pytext::{self, PyPath};
-use crate::{pyfs, pyunicode, sha256, upstream};
+use crate::{current_grading, pyfs, pyunicode, sha256, upstream};
 
 /// Where blind tokens and the link shuffle draw their randomness. The command line reads `/dev/urandom`, as
 /// `secrets.token_hex` and `random.SystemRandom` do; tests pass their own bytes.
@@ -88,7 +88,7 @@ impl Repository {
                 }
             }
         }
-        if !copy.py_eq(&expected) {
+        if current_grading::canonical(&copy) != current_grading::canonical(&expected) {
             return fail(
                 "dossier item must preserve the source except for private Markdown link destinations",
             );
