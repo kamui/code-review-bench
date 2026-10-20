@@ -5,10 +5,10 @@ use bench_tools::pyjson::{self, Duplicates};
 use bench_tools::pytext::{self, PyPath};
 use bench_tools::schema::{SchemaError, Validator};
 use bench_tools::{
-    archive, build_packet, claims, current_grading, delegation, derive_packet, diff_identity,
-    evidence, evidence_inventory, export_explorer, grading_reports, grading_validation,
-    import_benchmark, methodology, native_artifacts, normalize_thermo, pyfs, pyunicode, pyvalue,
-    rates, roster, ruling, upstream,
+    archive, build_packet, calibration, claims, current_grading, delegation, derive_packet,
+    diff_identity, evaluator_audit, evidence, evidence_inventory, export_explorer, grading_reports,
+    grading_validation, import_benchmark, methodology, native_artifacts, normalize_thermo, pyfs,
+    pyunicode, pyvalue, rates, roster, ruling, upstream,
 };
 use clap::builder::PossibleValuesParser;
 use clap::error::ErrorKind;
@@ -81,6 +81,13 @@ enum Cli {
     /// Plan the current grading queue without altering saved reviews or grades, as methodology.py does.
     #[command(infer_long_args = true)]
     Methodology(MethodologyArgs),
+    /// Check impact calibration records, write blinded impact cards, or list the decisions still owed, as
+    /// calibration.py does.
+    #[command(infer_long_args = true)]
+    Calibration(CalibrationArgs),
+    /// Check, draw, list claims for, compare or conclude an evaluator audit round, as evaluator_audit.py does.
+    #[command(infer_long_args = true)]
+    EvaluatorAudit(EvaluatorAuditArgs),
     /// Verify the imported originals bench/import-manifest.json pins, or preserve them before an intended edit, as
     /// tools/import_benchmark.py did.
     #[command(infer_long_args = true)]
@@ -601,6 +608,56 @@ struct CurrentGradingArgs {
     /// Where `inventory` writes the inventory instead of printing it.
     #[arg(long, allow_negative_numbers = true)]
     out: Option<OsString>,
+}
+
+#[derive(Args)]
+struct CalibrationArgs {
+    #[arg(value_parser = PossibleValuesParser::new(["check", "cards", "queue"]))]
+    operation: String,
+    /// The repository whose record is read.
+    #[arg(long, default_value = ".", allow_negative_numbers = true)]
+    root: OsString,
+    /// The current record directory under the root.
+    #[arg(long, default_value = current_grading::CURRENT, allow_negative_numbers = true)]
+    current: OsString,
+    /// The new card directory for `cards`, or where `queue` writes the queue instead of printing it.
+    #[arg(long, allow_negative_numbers = true)]
+    out: Option<OsString>,
+    /// The new file `cards` writes the blinding key to.
+    #[arg(long, allow_negative_numbers = true)]
+    key: Option<OsString>,
+}
+
+/// `second` stays with evaluator_audit.py until its assessor moves; `--work`, `--key` and `--assessor` are kept so
+/// abbreviated options resolve as they do there.
+#[derive(Args)]
+struct EvaluatorAuditArgs {
+    #[arg(value_parser = PossibleValuesParser::new(["check", "draw", "claims", "compare", "conclude"]))]
+    operation: String,
+    /// The repository whose record is read.
+    #[arg(long, default_value = ".", allow_negative_numbers = true)]
+    root: OsString,
+    /// The current record directory under the root.
+    #[arg(long, default_value = current_grading::CURRENT, allow_negative_numbers = true)]
+    current: OsString,
+    /// The run whose claim list `claims` writes.
+    #[arg(long, allow_negative_numbers = true)]
+    run: Option<String>,
+    /// The target whose claim list `claims` writes.
+    #[arg(long, allow_negative_numbers = true)]
+    target: Option<String>,
+    /// The new file `claims` writes.
+    #[arg(long, allow_negative_numbers = true)]
+    out: Option<OsString>,
+    #[arg(long, hide = true, allow_negative_numbers = true)]
+    work: Option<OsString>,
+    #[arg(long, hide = true, allow_negative_numbers = true)]
+    key: Option<OsString>,
+    #[arg(long, hide = true, allow_negative_numbers = true)]
+    assessor: Option<OsString>,
+    /// The reconciliation `conclude` records.
+    #[arg(long, allow_negative_numbers = true)]
+    reconciliation: Option<OsString>,
 }
 
 #[derive(Args)]
@@ -2289,8 +2346,8 @@ fn run_ruling(command: RulingCommand) -> Result<ExitCode, ExitCode> {
 /// `grading-validation`'s `dash-led-*` cases, `pack-unicode-negative-out` and `inventory-dash-led-space-root` pin
 /// that. clap takes only numbers, so before it parses them, these commands attach such a value to its option with
 /// `=`, and grading validate's positional moves after `--`. Only build-packet, grading validate, evidence pack,
-/// evidence publish, current-grading, methodology, export-explorer, upstream collect and claims, whose decisions pin
-/// Python 3.14, take the number form.
+/// evidence publish, current-grading, methodology, export-explorer, upstream collect, claims, calibration and
+/// evaluator-audit, whose decisions pin Python 3.14, take the number form.
 fn attach_dash_led_values(arguments: Vec<OsString>) -> Vec<OsString> {
     let name = |index: usize| arguments.get(index).map(|name| pytext::os_bytes(name));
     // claims takes --registry and --root before its command word, so its options are those of both levels.
@@ -2318,6 +2375,8 @@ fn attach_dash_led_values(arguments: Vec<OsString>) -> Vec<OsString> {
         (Some(b"methodology"), _) => (vec!["methodology"], true),
         (Some(b"export-explorer"), _) => (vec!["export-explorer"], true),
         (Some(b"upstream"), Some(b"collect")) => (vec!["upstream", "collect"], true),
+        (Some(b"calibration"), _) => (vec!["calibration"], true),
+        (Some(b"evaluator-audit"), _) => (vec!["evaluator-audit"], true),
         (Some(b"claims"), _) => (
             std::iter::once("claims").chain(claims_command).collect(),
             true,
@@ -2525,6 +2584,117 @@ fn audit_log(arguments: AuditLogArgs) -> Result<ExitCode, ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+fn run_calibration(arguments: &CalibrationArgs) -> Result<ExitCode, ExitCode> {
+    use calibration::Outcome;
+    use current_grading::Failure;
+    let outcome = calibration::run(
+        pytext::os_bytes(&arguments.root),
+        &arguments.operation,
+        pytext::os_bytes(&arguments.current),
+        arguments.out.as_ref().map(|out| pytext::os_bytes(out)),
+        arguments.key.as_ref().map(|key| pytext::os_bytes(key)),
+    );
+    match outcome {
+        Ok(Outcome::Done(output)) => {
+            write_stdout(&output)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Ok(Outcome::Problems(output)) => {
+            write_stdout(&output)?;
+            Ok(ExitCode::from(1))
+        }
+        Ok(Outcome::CardsNeedOutAndKey) => Err(misuse(
+            "calibration",
+            ErrorKind::MissingRequiredArgument,
+            "cards needs --out and --key",
+        )),
+        Err(Failure::Inconsistent(mut message)) => {
+            message.push(b'\n');
+            write_stdout(&message)?;
+            Ok(ExitCode::from(1))
+        }
+        Err(Failure::Input(message) | Failure::Crash(message)) => {
+            eprintln!("{}: {message}", calibration::PROGRAM);
+            Err(ExitCode::from(2))
+        }
+    }
+}
+
+fn run_evaluator_audit(arguments: &EvaluatorAuditArgs) -> Result<ExitCode, ExitCode> {
+    use current_grading::Failure;
+    use evaluator_audit::Done;
+    let required: &[(&str, bool)] = match arguments.operation.as_str() {
+        "claims" => &[
+            ("run", arguments.run.is_some()),
+            ("target", arguments.target.is_some()),
+            ("out", arguments.out.is_some()),
+        ],
+        "conclude" => &[("reconciliation", arguments.reconciliation.is_some())],
+        _ => &[],
+    };
+    let absent: Vec<String> = required
+        .iter()
+        .filter(|(_, given)| !given)
+        .map(|(name, _)| format!("--{name}"))
+        .collect();
+    if !absent.is_empty() {
+        return Err(misuse(
+            "evaluator-audit",
+            ErrorKind::MissingRequiredArgument,
+            format!("{} needs {}", arguments.operation, absent.join(", ")),
+        ));
+    }
+    let root = pytext::os_bytes(&arguments.root);
+    let outcome = evaluator_audit::lock(root).and_then(|_lock| {
+        evaluator_audit::run(
+            &arguments.operation,
+            &evaluator_audit::Arguments {
+                root,
+                current: pytext::os_bytes(&arguments.current),
+                run: arguments.run.as_deref(),
+                target: arguments.target.as_deref(),
+                out: arguments.out.as_ref().map(|out| pytext::os_bytes(out)),
+                reconciliation: arguments
+                    .reconciliation
+                    .as_ref()
+                    .map(|path| pytext::os_bytes(path)),
+            },
+        )
+    });
+    let problems: Vec<Vec<u8>> = match outcome {
+        Ok(Done::Printed(line)) => {
+            write_stdout(format!("{line}\n").as_bytes())?;
+            return Ok(ExitCode::SUCCESS);
+        }
+        Ok(Done::Problems(problems)) => problems.into_iter().map(String::into_bytes).collect(),
+        Err(Failure::Inconsistent(message)) => match std::str::from_utf8(&message) {
+            Ok(text) => pytext::splitlines(text)
+                .into_iter()
+                .map(|line| line.as_bytes().to_vec())
+                .collect(),
+            Err(_) => message
+                .split(|byte| *byte == b'\n')
+                .map(<[u8]>::to_vec)
+                .collect(),
+        },
+        Err(Failure::Input(message) | Failure::Crash(message)) => {
+            let message = ["KeyError: ", "ValueError: "]
+                .iter()
+                .find_map(|class| message.strip_prefix(class))
+                .unwrap_or(&message);
+            eprintln!("{}: {message}", evaluator_audit::PROGRAM);
+            return Err(ExitCode::from(2));
+        }
+    };
+    if problems.is_empty() {
+        return Ok(ExitCode::SUCCESS);
+    }
+    let mut output = problems.join(&b'\n');
+    output.push(b'\n');
+    write_stdout(&output)?;
+    Ok(ExitCode::from(1))
+}
+
 fn run_current_grading(arguments: CurrentGradingArgs) -> Result<ExitCode, ExitCode> {
     use current_grading::Failure;
     let current = pytext::os_bytes(&arguments.current);
@@ -2642,6 +2812,8 @@ fn main() -> ExitCode {
         Cli::NativeArtifacts(command) => run_native_artifacts(command),
         Cli::CurrentGrading(arguments) => run_current_grading(arguments),
         Cli::Methodology(arguments) => run_methodology(&arguments),
+        Cli::Calibration(arguments) => run_calibration(&arguments),
+        Cli::EvaluatorAudit(arguments) => run_evaluator_audit(&arguments),
     };
     outcome.unwrap_or_else(|code| code)
 }

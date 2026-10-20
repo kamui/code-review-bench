@@ -1284,7 +1284,8 @@ print(json.dumps({"claims": 2, "first": tokens[0]}))
                              ["current-grading-check", "current-grading-status", "current-grading-inventory",
                               "current-grading-fingerprints", "methodology-queue", "claims-check",
                               "claims-check-regrading-v2", "claims-check-selected-pr-intake-v1",
-                              "claims-check-selected-pr-intake-v2", "claims-check-selected-pr-intake-v3"])
+                              "claims-check-selected-pr-intake-v2", "claims-check-selected-pr-intake-v3",
+                              "calibration-check", "calibration-queue", "evaluator-audit-check"])
             for broken in ({**listing, "format": "x"}, {**listing, "commands": listing["commands"] * 2},
                            {**listing, "commands": [{**listing["commands"][0], "outputs": ["../x"]}]}):
                 (root.parent / "list.json").write_text(json.dumps(broken))
