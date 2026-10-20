@@ -2479,15 +2479,17 @@ fn attach_dash_led_values(arguments: Vec<OsString>) -> Vec<OsString> {
 
 /// argparse refuses `-h`, or a run of `h`s such as `-hh`, with an attached argument that starts with `=` or `-`,
 /// such as `-h=1`, `-hh=1` or `-h-x`, exit 2, where clap prints help. The first `-h` before `--` decides, as argparse acts on the first help it reads;
-/// for `grading`, an earlier `--help` decides first, as `grading-validation`'s `help-before-invalid-short-help` pins.
+/// for `grading`, `calibration` and `evaluator-audit`, an earlier `--help` decides first, as each family's
+/// `*-help-before-invalid-short-help` case pins.
 fn refuse_help_with_explicit_argument(arguments: &[OsString]) -> Option<ExitCode> {
     let command = arguments
         .get(1)?
         .to_str()
         .filter(|name| !name.starts_with('-'))?;
-    // grading validate's only long options are --inputs and --help, so --h, --he and --hel abbreviate --help.
+    // No other long option of these commands starts with --h, so --h, --he and --hel abbreviate --help.
     let long_help = |argument: &[u8]| {
-        command == "grading" && matches!(argument, b"--h" | b"--he" | b"--hel" | b"--help")
+        matches!(command, "grading" | "calibration" | "evaluator-audit")
+            && matches!(argument, b"--h" | b"--he" | b"--hel" | b"--help")
     };
     let help = arguments
         .iter()
