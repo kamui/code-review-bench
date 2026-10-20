@@ -158,7 +158,7 @@ through `--root`, on a disposable worktree of the commit that filed its receipt.
 refused with identical lines and nothing written but `.cache/current-record.lock`, which both create, or accepted
 with identical lines and records that are equal once the mapping clock, `runner.mapping` and the receipt's own
 digest are masked. The Pages workflow runs it in its own `Mapping replay` job, outside the build job's
-15-minute budget. On 2026-10-20 all 333 v1 replays were refused alike, exit 2: neither filing commit has
+time limit. On 2026-10-20 all 333 v1 replays were refused alike, exit 2: neither filing commit has
 `bench/grading/current/credits.json`, which `grade.py map` reads before it writes and `43bd77593` added later. No
 replay accepted, so the comparison of accepted records runs only in the fixture cases.
 
