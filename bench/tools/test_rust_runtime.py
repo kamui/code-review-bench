@@ -73,6 +73,24 @@ class Store(unittest.TestCase):
 
 
 class Checks(Store):
+    def test_supported_hosts(self):
+        for system, machine, target in (("Linux", "x86_64", "x86_64-unknown-linux-gnu"),
+                                        ("Linux", "aarch64", "aarch64-unknown-linux-gnu"),
+                                        ("Darwin", "arm64", "aarch64-apple-darwin")):
+            with self.subTest(system=system, machine=machine), \
+                    patch.object(rust_runtime.platform, "system", return_value=system), \
+                    patch.object(rust_runtime.platform, "machine", return_value=machine):
+                self.assertEqual(rust_runtime.host_target(), target)
+
+    def test_an_intel_mac_cannot_use_a_retained_runtime(self):
+        pin = self.version("intel-mac", target="x86_64-apple-darwin")
+        with patch.object(rust_runtime.platform, "system", return_value="Darwin"), \
+                patch.object(rust_runtime.platform, "machine", return_value="x86_64"):
+            self.assertIsNone(rust_runtime.host_target())
+            code, out, err = self.cli("verify", "fixture-tool", pin["sha256"])
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("fixture-tool was built for x86_64-apple-darwin; this host is Darwin x86_64", err)
+
     def test_a_retained_version_is_read_only_and_runs_from_its_entry(self):
         pin = self.version("one")
         executable, receipt = rust_runtime.check(self.store, "fixture-tool", pin)

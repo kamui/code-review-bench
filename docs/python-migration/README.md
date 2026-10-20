@@ -210,8 +210,8 @@ their pinned runtime and recovery protocol, without a cross-language side-effect
 
 ## Platforms and container contents
 
-The existing [script policy](../agents/scripts.md) names macOS and Linux, including
-WSL, and Python 3.9+ for the general script contract. Native Windows is outside that
+The existing [script policy](../agents/scripts.md) names macOS on Apple Silicon and Linux on x86_64 or aarch64,
+including WSL, and Python 3.9+ for the general script contract. Native Windows is outside that
 contract. This does not prove that every module runs on Python 3.9. Pages and rates
 CI select Python 3.12 on Ubuntu. Linux namespace, `/proc`, bubblewrap and container
 probes have narrower requirements, as [grading readiness](../grading-readiness.md)
