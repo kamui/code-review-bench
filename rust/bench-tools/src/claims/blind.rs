@@ -89,7 +89,7 @@ impl Repository {
         .map(str::to_string)
         .to_vec();
         let mut provenance: Vec<(String, Value)> = Vec::new();
-        let mut identities: Vec<String> = Vec::new();
+        let mut identities = BTreeSet::new();
         for case in cases {
             lines.push(format!(
                 "## {} v{}: {}",
@@ -180,9 +180,9 @@ impl Repository {
                     get(&document, "arm")?.cloned().unwrap_or(string("")),
                 ] {
                     if let Value::Str(identity) = identity
-                        && !identities.contains(&identity)
+                        && !identity.is_empty()
                     {
-                        identities.push(identity);
+                        identities.insert(identity);
                     }
                 }
                 let token = format!("review-{}", token(entropy)?);
@@ -218,12 +218,8 @@ impl Repository {
             }
         }
         let text = lines.join("\n");
-        let mut leaked: Vec<String> = identities
-            .into_iter()
-            .filter(|identity| !identity.is_empty() && text.contains(identity.as_str()))
-            .collect();
+        let leaked = exposed(&text, &identities);
         if !leaked.is_empty() {
-            leaked.sort();
             return fail(format!(
                 "dossier text exposes reviewer identities: {}",
                 super::list_repr(&leaked)
