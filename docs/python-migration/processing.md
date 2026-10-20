@@ -399,7 +399,7 @@ every Python version escapes.
 
 Diagnostics keep the Python program names, `roster.py:`, `diff_identity.py:`, `normalize_review.py:`,
 `normalize_thermo.py:`, `derive_packet.py:`, `build_packet:`, `check_manifest.py:`, `rates.py:`, `upstream.py:`,
-`export_explorer.py:`, `methodology.py:`, `collect_run.py:`, `reconcile_evidence.py:` and `inventory:`, so saved stderr stays identical and the differential compares them byte for byte. Renaming them
+`export_explorer.py:`, `methodology.py:`, `calibration.py:`, `evaluator_audit.py:`, `collect_run.py:`, `reconcile_evidence.py:` and `inventory:`, so saved stderr stays identical and the differential compares them byte for byte. Renaming them
 needs a new decision version.
 
 ## Command-line parsing
@@ -434,7 +434,8 @@ replaced, each with its case:
 - `inventory-dash-led-space-root`, `collect-run-dash-led-space-run` and `reconcile-dash-led-space-paths`: `evidence
   inventory`, `collect` and `reconcile` take a dash-led value that names no option and holds a space, as argparse
   does in every version; `main.rs` attaches it as it does for `build-packet`. A dash-led number stays clap's reading.
-  `export-explorer`, `current-grading` and `methodology` take both readings, as `build-packet` does
+  `export-explorer`, `current-grading`, `methodology`, `calibration` and `evaluator-audit` take both readings, as
+  `build-packet` does
   (`export-explorer-decisions.v7.json` records the change for `export-explorer-dot-digit-facts`).
 - `build-packet-help`, four `build-packet-usage-*` cases, `build-packet-non-utf8-text-option` and
   `export-explorer-usage-missing-stage` pin clap's wording by prefix; their exit codes are unchanged.

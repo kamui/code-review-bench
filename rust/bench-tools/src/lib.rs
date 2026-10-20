@@ -4,12 +4,14 @@
 
 pub mod archive;
 pub mod build_packet;
+pub mod calibration;
 pub mod claim_grading;
 pub mod claims;
 pub mod current_grading;
 pub mod delegation;
 pub mod derive_packet;
 pub mod diff_identity;
+pub mod evaluator_audit;
 pub mod evidence;
 pub mod evidence_inventory;
 pub mod export_explorer;

@@ -68,6 +68,8 @@ independent assertions. The harness never obtains expected output from a candida
 [`ruling-dossier.v1.json`](../../../tools/behavior_contracts/ruling-dossier.v1.json),
 [`current-grading.v1.json`](../../../tools/behavior_contracts/current-grading.v1.json),
 [`claims.v1.json`](../../../tools/behavior_contracts/claims.v1.json),
+[`calibration.v1.json`](../../../tools/behavior_contracts/calibration.v1.json),
+[`evaluator-audit.v1.json`](../../../tools/behavior_contracts/evaluator-audit.v1.json),
 [`methodology.v1.json`](../../../tools/behavior_contracts/methodology.v1.json),
 [`archive.v1.json`](../../../tools/behavior_contracts/archive.v1.json),
 [`regrade-reports.v1.json`](../../../tools/behavior_contracts/regrade-reports.v1.json) and
@@ -94,7 +96,9 @@ selected batch with `current_grading.batch_state`'s fingerprint and state. `meth
 `methodology.py` through a driver that reads the case directory as the repository. `claims` runs the retained
 `claims.py` under the entropy driver, through a driver that rebinds `claims.py`, `current_grading.py` and `upstream.py`
 to the case directory, or the `--root` argument. `upstream collect` cases run the stub `gh`, which answers each
-paginated read from the case's `gh/upstream.json`. Cases whose Rust behavior was changed on purpose
+paginated read from the case's `gh/upstream.json`. `calibration` and `evaluator-audit` run the retained
+`calibration.py` and `evaluator_audit.py` through drivers that read the case directory, or the `--root` argument,
+as the repository. Cases whose Rust behavior was changed on purpose
 carry a `baseline_defect` with Python's output, so pass
 `--allow-known-defects` when Python is the primary. `roster`, `normalize-thermo`, `derive-packet`, `build-packet`,
 `export-explorer`, `archive`, `regrade-status` and `audit-log` have no Python implementation, so they, and
@@ -121,6 +125,8 @@ executable:
   "current-grading": ["/absolute/path/to/bench-tools", "current-grading"],
   "methodology": ["/absolute/path/to/bench-tools", "methodology"],
   "claims": ["/absolute/path/to/bench-tools", "claims"],
+  "calibration": ["/absolute/path/to/bench-tools", "calibration"],
+  "evaluator-audit": ["/absolute/path/to/bench-tools", "evaluator-audit"],
   "grading": ["/absolute/path/to/bench-tools", "grading"]
 }
 ```
@@ -296,8 +302,11 @@ ported. [`grading.md`](../grading.md) records the baseline they serve.
   stderr and each named output byte for byte. An `{"output": NAME}` argument names a file in a disposable
   directory. Every entry below ROOT, tracked, ignored or Git's own, is compared by type, permissions, size, inode
   and change time before and after each run. A run that changes one fails and stops the mode, so no later run
-  reads changed inputs. #156 slice 3 listed `current-grading check`, `status`, `inventory --out` and
-  `fingerprints`, slice 4 added `methodology --out`, slice 5 added `claims check` on each tracked registry, and the Pages build job runs the mode after its evidence and freeze-commit fetches.
+  reads changed inputs. Before the first run the mode creates `.cache/current-record.lock`, the file
+  `current_grading.record_lock` creates on first use, if it is absent, and leaves an existing one unchanged, so a
+  command that takes the lock on a fresh checkout does not read as a change. #156 slice 3 listed `current-grading check`, `status`, `inventory --out` and
+  `fingerprints`, slice 4 added `methodology --out`, slice 5 added `claims check` on each tracked registry, slice 6 added `calibration check`,
+  `calibration queue` and `evaluator-audit check`, and the Pages build job runs the mode after its evidence and freeze-commit fetches.
 - **Fixture roots.** A case built from the grading fixture names it with `"fixture": "grading/<variant>"`. Its
   `initial` entries and leading setup steps must equal what
   [`grading_fixture.rs`](../../../rust/bench-tools/tests/support/grading_fixture.rs) builds, or

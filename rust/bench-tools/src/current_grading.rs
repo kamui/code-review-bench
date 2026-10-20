@@ -92,7 +92,7 @@ const ADMISSION_FACTS: [&str; 7] = [
     "outcome",
 ];
 
-const SCHEMAS: [(&str, &str); 8] = [
+const SCHEMAS: [(&str, &str); 10] = [
     (
         "current-cohort-input",
         include_str!("current_grading/current-cohort-input.schema.json"),
@@ -124,6 +124,14 @@ const SCHEMAS: [(&str, &str); 8] = [
     (
         "attempt",
         include_str!("current_grading/attempt.schema.json"),
+    ),
+    (
+        "current-impact-card",
+        include_str!("current_grading/current-impact-card.schema.json"),
+    ),
+    (
+        "current-audit",
+        include_str!("current_grading/current-audit.schema.json"),
     ),
 ];
 
@@ -483,7 +491,7 @@ impl Root {
     }
 
     /// `validate_schema(kind, document)`.
-    fn validate_schema(&self, kind: &'static str, document: &Value) -> R<()> {
+    pub(crate) fn validate_schema(&self, kind: &'static str, document: &Value) -> R<()> {
         let name = SCHEMAS
             .iter()
             .map(|(known, _)| *known)
@@ -3136,7 +3144,7 @@ fn validate_advice(review: &Value, claims: &Dict) -> R<()> {
 }
 
 /// A saved v2 claim in the shape the verdict rules of `claim_grading` read.
-fn verdict_claim(claim: &Value) -> R<Value> {
+pub(crate) fn verdict_claim(claim: &Value) -> R<Value> {
     let mut verdict = Object::default();
     verdict.insert("id".into(), item(claim, "id")?.clone());
     verdict.insert(
