@@ -4,7 +4,7 @@ Conventions for executable code under a skill's `scripts/` directory and for the
 
 ## Platforms
 
-macOS and Linux, including WSL. Native Windows is out of scope: nothing here is written or tested for it. Git is required everywhere, and on both supported platforms a working `git` implies a working `python3`.
+macOS on Apple Silicon and Linux on x86_64 or aarch64, including WSL. Native Windows is out of scope: nothing here is written or tested for it. Git is required everywhere, and on both supported platforms a working `git` implies a working `python3`.
 
 ## Language
 
@@ -59,5 +59,5 @@ The named install-alone exception is `review-code-publish` and `implement-publis
 A skill that ships scripts declares it in `SKILL.md` frontmatter with the Agent Skills `compatibility` field:
 
 ```yaml
-compatibility: Requires git and Python 3.9+ on macOS or Linux
+compatibility: Requires git and Python 3.9+ on macOS on Apple Silicon or Linux on x86_64 or aarch64
 ```
