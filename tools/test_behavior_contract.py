@@ -714,6 +714,28 @@ with open("out/native-artifact-storage.v1.json", "w") as handle:
             result = contract.normalize(case, Path("/nonexistent"), actual)
         self.assertEqual(result["stderr"], b"<python>: can't open file 'missing.py': [Errno 2] No such file or directory\n")
 
+    def test_framework_interpreter_alias_leaves_a_longer_path_sharing_its_prefix_exact(self):
+        app = "/Library/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python"
+        stub = "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12"
+        case = {"mask_patterns": [{"pattern": "(?:/\\S*/)?python3[.0-9]*(?=[ :])", "label": "<python>"}]}
+        stderr = f"{app}3.13: can't open file 'missing.py'\n".encode()
+        actual = {"stdout": b"", "stderr": stderr, "filesystem": []}
+        with patch.object(sys, "orig_argv", [app, "tools/behavior_contract.py"]), \
+                patch.object(sys, "executable", stub):
+            result = contract.normalize(case, Path("/nonexistent"), actual)
+        self.assertEqual(result["stderr"], stderr)
+
+    def test_framework_interpreter_alias_applies_only_where_the_case_masks_python(self):
+        app = "/Library/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python"
+        stub = "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3"
+        case = {"mask_patterns": [{"pattern": "blind-[0-9a-f]{6}", "label": "blind-<token>"}]}
+        stderr = f"{app}: can't open file 'missing.py'\n".encode()
+        actual = {"stdout": b"", "stderr": stderr, "filesystem": []}
+        with patch.object(sys, "orig_argv", [app, "tools/behavior_contract.py"]), \
+                patch.object(sys, "executable", stub):
+            result = contract.normalize(case, Path("/nonexistent"), actual)
+        self.assertEqual(result["stderr"], stderr)
+
     def test_storage_references_name_the_written_archive_before_masking(self):
         case = {"id": "probe", "program": "writer", "argv": [], "stdin_b64": "", "initial": [],
                 "archives": [{"glob": "out/native-scratch.v1.zip", "format": "zip"}],

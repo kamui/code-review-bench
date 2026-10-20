@@ -793,15 +793,20 @@ def archive_members(raw, form):
     return members
 
 
-def as_executable(data):
+def as_executable(case, data):
     """CPython names itself by argv[0] in its own errors. A macOS framework build's bin/python3 is a stub that
     execs Resources/Python.app/Contents/MacOS/Python with that path as argv[0] while sys.executable stays the
-    stub, so the interpreter's own path becomes sys.executable before a case's patterns mask it."""
+    stub, so in a case that masks the interpreter as <python>, the interpreter's own complete path token becomes
+    sys.executable before the case's patterns mask it. Any other bytes, including a longer path sharing that
+    prefix, stay exact."""
+    if not any(rule["label"] == "<python>" for rule in case.get("mask_patterns", [])):
+        return data
     launched = os.fsencode(sys.orig_argv[0]) if sys.orig_argv else b""
     executable = os.fsencode(sys.executable)
-    if os.path.isabs(launched) and launched != executable:
-        data = data.replace(launched, executable)
-    return data
+    if not os.path.isabs(launched) or launched == executable:
+        return data
+    token = re.compile(rb"(?<!\S)" + re.escape(launched) + rb"(?![^\s:])")
+    return token.sub(lambda _match: executable, data)
 
 
 def normalize(case, root, actual):
@@ -911,7 +916,7 @@ def normalize(case, root, actual):
             entry.update(bytes_b64=base64.b64encode(data).decode("ascii"), sha256=hashlib.sha256(data).hexdigest())
         filesystem.append(entry)
     def diagnostic(data):
-        data = as_executable(data)
+        data = as_executable(case, data)
         for rule in case.get("mask_patterns", []):
             data = re.sub(rule["pattern"].encode("utf-8"), rule["label"].encode("utf-8"), data)
         return rewrite(data)
@@ -1355,7 +1360,7 @@ def structured(case, root, actual):
                 final[name] = files[name]
         return final[name]
     def diagnostic(data):
-        data = as_executable(without_root(data))
+        data = as_executable(case, without_root(data))
         for rule in case.get("mask_patterns", []):
             data = re.sub(rule["pattern"].encode("utf-8"), rule["label"].encode("utf-8"), data)
         return data
