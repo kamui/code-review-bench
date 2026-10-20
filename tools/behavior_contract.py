@@ -692,8 +692,7 @@ def command_for(commands, program, argv):
     return command
 
 
-# Preloaded into a step's command and its children, so opening one named path for writing fails with ENOSPC, the same
-# operating-system fault in either implementation, while every other open proceeds.
+# ENOSPC comes from the open call itself, so both implementations meet the same operating-system fault.
 FAIL_WRITE_C = r"""#define _GNU_SOURCE
 #include <dlfcn.h>
 #include <errno.h>
@@ -739,7 +738,12 @@ static int refused(int dirfd, const char *path, int flags) {
     return strcmp(resolved, target) == 0;
 }
 
-#define MODE(flags) mode_t mode = 0; if ((flags) & O_CREAT) { va_list args; va_start(args, flags); mode = va_arg(args, int); va_end(args); }
+#ifdef O_TMPFILE
+#define TAKES_MODE(flags) (((flags) & O_CREAT) || ((flags) & O_TMPFILE) == O_TMPFILE)
+#else
+#define TAKES_MODE(flags) ((flags) & O_CREAT)
+#endif
+#define MODE(flags) mode_t mode = 0; if (TAKES_MODE(flags)) { va_list args; va_start(args, flags); mode = va_arg(args, int); va_end(args); }
 #define FAIL(dirfd, path, flags) if (refused(dirfd, path, flags)) { errno = ENOSPC; return -1; }
 
 #ifdef __APPLE__
@@ -763,8 +767,10 @@ def fail_write_library(directory):
     """Build the interposer that fails a step's fail_write_b64 path, and the variable that preloads it."""
     variable = {"linux": "LD_PRELOAD", "darwin": "DYLD_INSERT_LIBRARIES"}.get(sys.platform)
     compiler = shutil.which("cc")
-    if variable is None or compiler is None:
-        raise UnavailableFixture(f"fail_write_b64: needs a C compiler and LD_PRELOAD or DYLD_INSERT_LIBRARIES, not {sys.platform}")
+    if variable is None:
+        raise UnavailableFixture(f"fail_write_b64: needs LD_PRELOAD or DYLD_INSERT_LIBRARIES, not {sys.platform}")
+    if compiler is None:
+        raise UnavailableFixture("fail_write_b64: needs a C compiler on PATH")
     source, library = Path(directory) / "fail-write.c", Path(directory) / "fail-write.so"
     source.write_text(FAIL_WRITE_C, encoding="utf-8")
     subprocess.run([compiler, "-shared", "-fPIC", "-o", str(library), str(source),
