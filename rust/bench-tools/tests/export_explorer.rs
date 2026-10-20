@@ -117,7 +117,8 @@ fn files(directory: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
 
 /// Replace the root's record with the one the assessed case holds, a valid record with another dataset hash.
 fn assess(root: &Path) {
-    let assessed = self::root("export-explorer-current-assessed", "assessed-source");
+    let label = format!("assessed-{}", root.file_name().unwrap().to_str().unwrap());
+    let assessed = self::root("export-explorer-current-assessed", &label);
     for (path, bytes) in files(&assessed) {
         let target = root.join(path);
         std::fs::create_dir_all(target.parent().unwrap()).unwrap();
