@@ -190,9 +190,9 @@ it. No check reads it as permission: the queue still requires the frozen pin.
 
 ## Platform coverage
 
-The [script policy](../agents/scripts.md) supports macOS and Linux. `SUPPORTED_TARGETS` holds one
-target for each of those hosts, and the `Rust runtime` workflow runs on a matching GitHub runner for
-each: the runtime tests with real cargo builds, an install of `usage-pilot`, the corpus with the
+The [script policy](../agents/scripts.md) supports macOS on Apple Silicon and Linux on x86_64 or aarch64.
+`SUPPORTED_TARGETS` holds one target for each of those hosts, and the `Rust runtime` workflow runs on a
+matching GitHub runner for each: the runtime tests with real cargo builds, an install of `usage-pilot`, the corpus with the
 retained executable, and [`rollback.sh`](runtime-evidence/rollback.sh). It also checks `bench-tools` with
 `cargo fmt`, `clippy` and `cargo test`, installs it, runs its corpora with the retained executable and the
 `diff-identity`, `normalize-review`, `check-manifest`, `rates` and `upstream` differentials against the retained
@@ -204,7 +204,6 @@ runtime only after every target's job passes.
 | --- | --- | --- |
 | `x86_64-unknown-linux-gnu` | `ubuntu-latest` | Linux 6.6 under WSL2, glibc 2.35, Rust 1.99.1, Python 3.14.7 |
 | `aarch64-unknown-linux-gnu` | `ubuntu-24.04-arm` | None |
-| `x86_64-apple-darwin` | `macos-15-intel` | None |
 | `aarch64-apple-darwin` | `macos-latest` | None |
 
 Each workflow run records its own results; this table records only where the checks run. Native

@@ -89,7 +89,7 @@ RECEIPT = "rust-runtime-receipt/1"
 DEVIATION = "rust-runtime-deviation/1"
 # The supported hosts of docs/agents/scripts.md; .github/workflows/rust-runtime.yml exercises each one.
 HOST_TARGETS = {("Linux", "x86_64"): "x86_64-unknown-linux-gnu", ("Linux", "aarch64"): "aarch64-unknown-linux-gnu",
-                ("Darwin", "x86_64"): "x86_64-apple-darwin", ("Darwin", "arm64"): "aarch64-apple-darwin"}
+                ("Darwin", "arm64"): "aarch64-apple-darwin"}
 SUPPORTED_TARGETS = frozenset(HOST_TARGETS.values())
 # The only variables a build sees. Any other variable a crate reads is absent, so it reads the same everywhere.
 BUILD_ENVIRONMENT = ("PATH", "HOME", "CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN", "TMPDIR")
