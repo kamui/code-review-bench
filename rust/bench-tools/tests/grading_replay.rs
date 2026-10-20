@@ -10,6 +10,10 @@
 //!
 //! The same job then replays the blinded validator: each restorable archive's validator inputs and verdicts must give
 //! byte-identical stdout and exit status from the retained `grading_validation.py` and `bench-tools grading validate`.
+//! Last it replays the mapping: `grade.py map` and `bench-tools grade map` each map every restorable archive's
+//! workspace and key with a fixture `--assessor`, through `--root`, into a disposable worktree of the commit that
+//! filed its receipt. Both must refuse with identical lines and write nothing, or accept with identical lines and
+//! structurally equal records. A verdict contract no replay accepts must name its fixture case in `FIXTURE_CASES`.
 
 use bench_tools::archive;
 use bench_tools::pyjson::{self, Dumps, Duplicates, Object, Value};
@@ -30,6 +34,15 @@ const VERDICTS: &str = "work/verdicts.json";
 /// archive itself is checked against its manifest hash before it is read.
 const MEMBER_BYTES_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
 const DEFAULT_CONTRACT: &str = "current-verdicts/v1";
+const RECORD_LOCK: &str = ".cache/current-record.lock";
+const MAP_CORPUS: &str = "tools/behavior_contracts/grade-map.v1.json";
+/// The `MAP_CORPUS` case that maps each verdict contract's verdicts in both implementations, for a contract no
+/// archived mapping replay accepts.
+const FIXTURE_CASES: [(&str, &str); 3] = [
+    ("current-verdicts/v1", "grade-map-verdicts-v1"),
+    ("current-verdicts/v2", "grade-map-verdicts-v2"),
+    ("current-verdicts/v3", "grade-map-pending-candidate"),
+];
 /// Fields `grade.py map` copies from the key into the receipt, and the key field the receipt's
 /// `runner.prepared` copies.
 const KEY_FIELDS: [&str; 6] = [
@@ -194,13 +207,14 @@ fn manifest_members(root: &Path) -> BTreeMap<String, String> {
     members
 }
 
-/// The bytes of an archive's key, validator inputs and verdicts, read by hash: the archive must be the manifest's
-/// member, and each file the bytes `evidence.json` lists. `Err` names the first step that failed.
-fn restore_bytes(
+/// The bytes of each archive member `wanted` names, read by hash: the archive must be the manifest's member, and each
+/// file the bytes `evidence.json` lists. `Err` names the first step that failed.
+fn restore_members(
     root: &Path,
     archive: &Archive,
     members: &BTreeMap<String, String>,
-) -> Result<[Vec<u8>; 3], String> {
+    wanted: impl Fn(&str) -> bool,
+) -> Result<BTreeMap<String, Vec<u8>>, String> {
     if members.get(&archive.archive) != Some(&archive.archive_sha256) {
         return Err(
             "no evidence manifest lists the archive with the hash evidence.json pins".to_string(),
@@ -216,34 +230,46 @@ fn restore_bytes(
     if hex_digest(&bytes) != archive.archive_sha256 {
         return Err("the restored archive differs from its manifest hash".to_string());
     }
-    let mut found: BTreeMap<&str, Vec<u8>> = BTreeMap::new();
+    let mut found = BTreeMap::new();
     let limits = archive::Limits {
         members: archive.files.len() as u64,
         payload: MEMBER_BYTES_LIMIT,
     };
     archive::read_tar_gz(bytes.as_slice(), &limits, |member, data| {
-        if let Some(name) = [KEY, INPUTS, VERDICTS]
-            .into_iter()
-            .find(|name| member.name == name.as_bytes())
+        if let Some(name) = std::str::from_utf8(&member.name)
+            .ok()
+            .filter(|name| wanted(name))
         {
             let mut content = Vec::new();
             data.read_to_end(&mut content)?;
-            found.insert(name, content);
+            found.insert(name.to_string(), content);
         }
         Ok(())
     })
     .map_err(|error| format!("the archive cannot be read: {error}"))?;
-    let mut restored = Vec::new();
-    for name in [KEY, INPUTS, VERDICTS] {
-        let bytes = found
-            .remove(name)
-            .ok_or(format!("{name} is not in the archive"))?;
-        if Some(&hex_digest(&bytes)) != archive.files.get(name) {
+    for (name, bytes) in &found {
+        if Some(&hex_digest(bytes)) != archive.files.get(name) {
             return Err(format!("{name} differs from the hash evidence.json lists"));
         }
-        restored.push(bytes);
     }
-    Ok([restored.remove(0), restored.remove(0), restored.remove(0)])
+    Ok(found)
+}
+
+/// The bytes of an archive's key, validator inputs and verdicts, as `restore_members` reads them.
+fn restore_bytes(
+    root: &Path,
+    archive: &Archive,
+    members: &BTreeMap<String, String>,
+) -> Result<[Vec<u8>; 3], String> {
+    let mut found = restore_members(root, archive, members, |name| {
+        [KEY, INPUTS, VERDICTS].contains(&name)
+    })?;
+    let mut take = |name: &str| {
+        found
+            .remove(name)
+            .ok_or(format!("{name} is not in the archive"))
+    };
+    Ok([take(KEY)?, take(INPUTS)?, take(VERDICTS)?])
 }
 
 /// The parsed key, validator inputs and verdicts of an archive that `restore_bytes` reads.
@@ -293,6 +319,13 @@ fn o(members: Vec<(&str, Value)>) -> Value {
 
 fn optional(value: Option<&str>) -> Value {
     value.map_or(Value::Null, s)
+}
+
+fn fixture_case(contract: &str) -> Option<&'static str> {
+    FIXTURE_CASES
+        .iter()
+        .find(|(name, _)| *name == contract)
+        .map(|(_, case)| *case)
 }
 
 fn inventory(root: &Path) -> Value {
@@ -447,13 +480,18 @@ fn inventory(root: &Path) -> Value {
         .iter()
         .filter(|(contract, _)| !validator.contains_key(*contract) || !mapping.contains_key(*contract))
         .map(|(contract, receipts)| {
+            let cover = fixture_case(contract).map_or(String::new(), |case| {
+                format!(" The {case} case in {MAP_CORPUS} maps verdicts of this contract instead.")
+            });
             o(vec![
                 ("contract", s(contract)),
                 ("receipts", n(*receipts)),
                 (
                     "gap",
-                    s("No receipt of this contract has a restorable archive, so no validator or mapping replay \
-                       exists. #156 slice 8 covers it with a fixture case."),
+                    s(&format!(
+                        "No receipt of this contract has a restorable archive, so no validator or mapping replay \
+                         exists.{cover}"
+                    )),
                 ),
             ])
         })
@@ -611,4 +649,357 @@ fn the_validator_replays_every_restorable_archive_identically() {
     }
     assert!(differences.is_empty(), "{differences:#?}");
     assert!(replays.values().sum::<usize>() > 0, "an empty replay fails");
+}
+
+/// The provenance `--assessor` gives each mapping replay, in place of the archived dispatch receipt.
+const REPLAY_ASSESSOR: &str = r#"{"assessor": "replay fixture", "method": "the archived verdicts, replayed", "completed_at": "2026-10-20T00:00:00Z"}"#;
+/// Workspace members a manual assessor's map refuses, which only the archived dispatch left behind.
+const DISPATCH_ONLY: [&str; 2] = ["work/dispatch.json", "work/home/"];
+
+/// A disposable detached worktree of one commit, removed on drop.
+struct Worktree {
+    root: PathBuf,
+    path: PathBuf,
+}
+
+impl Worktree {
+    fn add(root: &Path, path: &Path, commit: &str) -> Worktree {
+        let tree = Worktree {
+            root: root.to_path_buf(),
+            path: path.to_path_buf(),
+        };
+        tree.remove();
+        let added = git(
+            root,
+            &[
+                "worktree",
+                "add",
+                "--quiet",
+                "--detach",
+                &path.to_string_lossy(),
+                commit,
+            ],
+        );
+        assert!(added.is_some(), "cannot add a worktree of {commit}");
+        tree
+    }
+
+    fn remove(&self) {
+        if self.path.exists() {
+            git(
+                &self.root,
+                &[
+                    "worktree",
+                    "remove",
+                    "--force",
+                    &self.path.to_string_lossy(),
+                ],
+            );
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    /// Each file a command added or changed, ignored files included, except the record lock that both
+    /// implementations create before they read anything.
+    fn written(&self) -> BTreeMap<String, Vec<u8>> {
+        git(
+            &self.path,
+            &[
+                "status",
+                "--porcelain=v1",
+                "--ignored",
+                "--untracked-files=all",
+            ],
+        )
+        .unwrap()
+        .lines()
+        .map(|line| line[3..].to_string())
+        .filter(|name| name != RECORD_LOCK)
+        .map(|name| {
+            let bytes = std::fs::read(self.path.join(&name)).unwrap_or_default();
+            (name, bytes)
+        })
+        .collect()
+    }
+
+    fn reset(&self) {
+        assert!(git(&self.path, &["checkout", "--quiet", "--", "."]).is_some());
+        assert!(git(&self.path, &["clean", "-fdxq"]).is_some());
+    }
+}
+
+impl Drop for Worktree {
+    fn drop(&mut self) {
+        self.remove();
+    }
+}
+
+struct Mapped {
+    status: Option<i32>,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    written: BTreeMap<String, Vec<u8>>,
+}
+
+/// One implementation's `map` of an archive's workspace and key into a clean worktree, which it leaves clean again.
+fn map_once(
+    command: &mut Command,
+    tree: &Worktree,
+    scratch: &Path,
+    restored: &BTreeMap<String, Vec<u8>>,
+) -> Mapped {
+    assert!(tree.written().is_empty(), "the worktree is not clean");
+    let work = scratch.join("work");
+    let _ = std::fs::remove_dir_all(&work);
+    for (name, bytes) in restored {
+        if let Some(member) = name.strip_prefix("work/") {
+            let path = work.join(member);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, bytes).unwrap();
+        }
+    }
+    std::fs::write(scratch.join(KEY), &restored[KEY]).unwrap();
+    std::fs::write(scratch.join("assessor.json"), REPLAY_ASSESSOR).unwrap();
+    let output = command
+        .arg("map")
+        .arg("--root")
+        .arg(&tree.path)
+        .arg("--work")
+        .arg(&work)
+        .arg("--key")
+        .arg(scratch.join(KEY))
+        .arg("--assessor")
+        .arg(scratch.join("assessor.json"))
+        .env("LANG", "C.UTF-8")
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .output()
+        .unwrap();
+    let written = tree.written();
+    tree.reset();
+    Mapped {
+        status: output.status.code(),
+        stdout: output.stdout,
+        stderr: output.stderr,
+        written,
+    }
+}
+
+/// A written record with the fields that differ by run masked: the mapping clock, a new candidate's first recorded
+/// time, the receipt's mapping runner identity, and each pin of the receipt's own bytes.
+fn masked(value: &Value, receipt_sha256: &str) -> Value {
+    match value {
+        Value::Object(object) => Value::Object(
+            object
+                .iter()
+                .map(|(key, value)| {
+                    let value = match key.as_str() {
+                        "mapped_at" | "recorded_at" => s("<clock>"),
+                        "runner" => Value::Object(
+                            value
+                                .as_object()
+                                .unwrap()
+                                .iter()
+                                .map(|(key, value)| {
+                                    let value = if key == "mapping" {
+                                        s("<runner>")
+                                    } else {
+                                        masked(value, receipt_sha256)
+                                    };
+                                    (key.clone(), value)
+                                })
+                                .collect(),
+                        ),
+                        _ => masked(value, receipt_sha256),
+                    };
+                    (key.clone(), value)
+                })
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| masked(item, receipt_sha256))
+                .collect(),
+        ),
+        Value::Str(text) if text == receipt_sha256 => s("<receipt>"),
+        other => other.clone(),
+    }
+}
+
+/// `None` when both maps end the same way: refused with identical lines and nothing written, or accepted with
+/// identical lines and structurally equal records.
+fn mapping_difference(python: &Mapped, rust: &Mapped) -> Option<String> {
+    if (&python.status, &python.stdout, &python.stderr)
+        != (&rust.status, &rust.stdout, &rust.stderr)
+    {
+        return Some(format!(
+            "python exited {:?} with {:?} and {:?}, rust exited {:?} with {:?} and {:?}",
+            python.status,
+            String::from_utf8_lossy(&python.stdout),
+            String::from_utf8_lossy(&python.stderr),
+            rust.status,
+            String::from_utf8_lossy(&rust.stdout),
+            String::from_utf8_lossy(&rust.stderr)
+        ));
+    }
+    if python.status != Some(0) {
+        let written: Vec<&String> = python.written.keys().chain(rust.written.keys()).collect();
+        return (!written.is_empty()).then(|| format!("a refused map wrote {written:?}"));
+    }
+    let names = |mapped: &Mapped| mapped.written.keys().cloned().collect::<Vec<_>>();
+    if names(python) != names(rust) {
+        return Some(format!(
+            "python wrote {:?}, rust wrote {:?}",
+            names(python),
+            names(rust)
+        ));
+    }
+    let record = |mapped: &Mapped, name: &str| {
+        let receipt = mapped
+            .written
+            .iter()
+            .find(|(name, _)| name.ends_with("/receipt.json"))
+            .map_or(String::new(), |(_, bytes)| hex_digest(bytes));
+        let bytes = &mapped.written[name];
+        if !name.ends_with(".json") {
+            return Value::Str(hex_digest(bytes));
+        }
+        let parsed = pyjson::loads(&String::from_utf8_lossy(bytes), Duplicates::Refuse).unwrap();
+        masked(&parsed, &receipt)
+    };
+    names(python)
+        .into_iter()
+        .find(|name| !record(python, name).py_eq(&record(rust, name)))
+        .map(|name| format!("{name} differs"))
+}
+
+#[derive(Default)]
+struct MappingCounts {
+    attempted: usize,
+    accepted: usize,
+    refused: usize,
+}
+
+#[test]
+#[ignore = "needs the restored repository evidence and full history; the Pages build job runs it"]
+fn the_mapping_replays_every_restorable_archive_identically() {
+    let root = repository();
+    let value = inventory(&root);
+    let archives = archives(&root);
+    let members = manifest_members(&root);
+    let scratch = Path::new(env!("CARGO_TARGET_TMPDIR")).join("mapping-replay");
+    let mut by_commit: BTreeMap<&str, Vec<(&str, &str)>> = BTreeMap::new();
+    for row in field(&value, &["receipts"])
+        .and_then(Value::as_array)
+        .unwrap()
+    {
+        if let (true, Some(commit)) = (
+            field(row, &["restored"]).is_some_and(|restored| restored.py_eq(&Value::Bool(true))),
+            text(row, &["filed_by"]),
+        ) {
+            by_commit.entry(commit).or_default().push((
+                text(row, &["archive"]).unwrap(),
+                text(row, &["contract"]).unwrap(),
+            ));
+        }
+    }
+    let workers = std::thread::available_parallelism().map_or(1, |count| count.get().min(4));
+    let mut counts: BTreeMap<String, MappingCounts> = BTreeMap::new();
+    let mut differences = Vec::new();
+    for (commit, rows) in &by_commit {
+        let results: Vec<Vec<(&str, &str, Option<String>)>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..workers)
+                .map(|worker| {
+                    let (root, archives, members, scratch) = (&root, &archives, &members, &scratch);
+                    scope.spawn(move || {
+                        let place = scratch.join(format!("{}-{worker}", &commit[..12]));
+                        let tree = Worktree::add(root, &place.join("root"), commit);
+                        rows.iter()
+                            .skip(worker)
+                            .step_by(workers)
+                            .map(|&(evidence, contract)| {
+                                let archive = archives
+                                    .iter()
+                                    .find(|archive| archive.evidence == evidence)
+                                    .unwrap();
+                                let restored = restore_members(root, archive, members, |name| {
+                                    name == KEY
+                                        || (name.starts_with("work/")
+                                            && !DISPATCH_ONLY.iter().any(|skip| {
+                                                name == *skip
+                                                    || (skip.ends_with('/')
+                                                        && name.starts_with(skip))
+                                            }))
+                                })
+                                .unwrap();
+                                let python = map_once(
+                                    Command::new("python3").arg(root.join("bench/tools/grade.py")),
+                                    &tree,
+                                    &place,
+                                    &restored,
+                                );
+                                let rust = map_once(
+                                    Command::new(env!("CARGO_BIN_EXE_bench-tools")).arg("grade"),
+                                    &tree,
+                                    &place,
+                                    &restored,
+                                );
+                                let outcome = mapping_difference(&python, &rust).or_else(|| {
+                                    (python.status == Some(0)).then_some(String::new())
+                                });
+                                (evidence, contract, outcome)
+                            })
+                            .collect()
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .collect()
+        });
+        for (evidence, contract, outcome) in results.into_iter().flatten() {
+            let count = counts.entry(contract.to_string()).or_default();
+            count.attempted += 1;
+            match outcome.as_deref() {
+                None => count.refused += 1,
+                Some("") => count.accepted += 1,
+                Some(difference) => {
+                    differences.push(format!("{evidence} at {commit}: {difference}"))
+                }
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(&scratch);
+    let held = field(&value, &["receipts_by_contract"])
+        .and_then(Value::as_object)
+        .unwrap();
+    let corpus = std::fs::read_to_string(root.join(MAP_CORPUS)).unwrap();
+    let mut gaps = Vec::new();
+    for (contract, _) in held.iter() {
+        let count = counts.remove(contract).unwrap_or_default();
+        println!(
+            "{contract}: {} mapping replays attempted, {} accepted, {} refused with identical lines",
+            count.attempted, count.accepted, count.refused
+        );
+        if count.accepted == 0 {
+            let case = fixture_case(contract);
+            println!(
+                "{contract}: gap, covered by the fixture case {} in {MAP_CORPUS}",
+                case.unwrap_or("(none)")
+            );
+            if !case.is_some_and(|case| corpus.contains(&format!("\"id\": \"{case}\""))) {
+                gaps.push(contract.clone());
+            }
+        }
+    }
+    assert!(differences.is_empty(), "{differences:#?}");
+    assert!(
+        gaps.is_empty(),
+        "contracts without an accepted replay or fixture case: {gaps:?}"
+    );
+    assert!(
+        by_commit.values().map(Vec::len).sum::<usize>() > 0,
+        "an empty replay fails"
+    );
 }

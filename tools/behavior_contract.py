@@ -34,6 +34,8 @@ import shutil
 import stat
 import subprocess
 import re
+import resource
+import signal
 import struct
 import sys
 import tarfile
@@ -270,6 +272,26 @@ elif argv[:1] == ["check-prepared"]:
 sys.argv = [str(tools / "grade.py"), *argv]
 sys.exit(grade.main())
 """,
+    # `second-assessment ...` runs the retained evaluator audit's `second` step on the case directory with the
+    # checkout paths of grade.py and its imports repointed as python-grade repoints them.
+    "python-second-assessment": """import sys, types
+from pathlib import Path
+tools = Path(sys.argv.pop(1))
+sys.path.insert(0, str(tools))
+root = Path.cwd()
+import claims, claim_grading, current_grading, upstream, grade, evaluator_audit
+for module in (claims, current_grading, upstream):
+    for value in vars(module).values():
+        if isinstance(value, types.FunctionType) and value.__defaults__:
+            value.__defaults__ = tuple(root if default == module.ROOT else default for default in value.__defaults__)
+claims.ROOT = upstream.ROOT = current_grading.ROOT = evaluator_audit.ROOT = root
+claims.DEFAULT_REGISTRY = root / "bench/claims/registry.json"
+claims.DEFAULT_EXTRACTS = root / "bench/claims/evidence-extracts.v1.json"
+grade.TOOLS, grade.BENCH = root / "bench/tools", root / "bench"
+claim_grading.BENCH = grade.BENCH
+sys.argv = [Path(evaluator_audit.__file__).name, "second", *sys.argv[1:]]
+sys.exit(evaluator_audit.main())
+""",
     # grading_validation.py reads inputs.json one directory above its own file, where grade.py copies it into a
     # workspace; `bench-tools grading validate` names that file with --inputs. Pointing the module's __file__ beside
     # the named file makes the retained script read it in place, so the case tree holds no copied tools.
@@ -380,11 +402,13 @@ RUST_PROGRAMS = {"roster": ("bench-tools", ["roster"]), "normalize-thermo": ("be
                  "audit-log": ("bench-tools", ["audit-log"]),
                  "check-manifest": ("bench-tools", ["check-manifest"]),
                  "grade": ("bench-tools", ["grade"]),
+                 "second-assessment": ("bench-tools", ["evaluator-audit", "second"]),
                  # No retained counterpart: every command map prepares a v2 key with it for the rows Python runs on.
                  "rust-grade": ("bench-tools", ["grade"])}
 # The retained Python each moved program replaced, which a differential runs as the primary.
 PYTHON_COUNTERPARTS = {"native-artifacts": "python-native-artifacts", "archive-transcripts": "python-archive-transcripts",
-                       "check-manifest": "python-check-manifest", "grade": "python-grade"}
+                       "check-manifest": "python-check-manifest", "grade": "python-grade",
+                       "second-assessment": "python-second-assessment"}
 # Python programs that draw blind tokens or shuffles run under ENTROPY_DRIVER, so a recorded expectation is the
 # same on every recording. The grading slices of #156 add their programs here, each by its script or its driver.
 PYTHON_ENTROPY = {"claims": "claims", "python-grade": "python-grade"}
@@ -668,6 +692,15 @@ def command_for(commands, program, argv):
     return command
 
 
+def file_size_limit(size):
+    """Fail every write past `size` bytes in the command and its children with EFBIG, the same operating-system fault
+    in either implementation. SIGXFSZ would kill the writer instead; an ignored signal stays ignored across exec."""
+    def apply():
+        signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+        resource.setrlimit(resource.RLIMIT_FSIZE, (size, size))
+    return apply
+
+
 def execute(case, commands, options=None):
     """Run a case's command, or each of its steps on one shared root, and observe the results."""
     options = options or {}
@@ -713,9 +746,10 @@ def execute(case, commands, options=None):
                 continue
             argv = [os.fsdecode(decode(arg["bytes_b64"])) if isinstance(arg, dict) else arg
                     for arg in step["argv"]]
+            limit = {"preexec_fn": file_size_limit(step["file_size_limit"])} if "file_size_limit" in step else {}
             result = subprocess.run([*command_for(commands, step.get("program", case.get("program")), argv), *argv], cwd=root,
                                     input=decode(step["stdin_b64"]), capture_output=True,
-                                    env=environment, timeout=10, **({"umask": 0o022} if modes else {}))
+                                    env=environment, timeout=10, **({"umask": 0o022} if modes else {}), **limit)
             results.append(normalize(case, root, {"exit": result.returncode, "stdout": result.stdout,
                                                   "stderr": result.stderr, "filesystem": snapshot(root, modes)}))
         return {"steps": results} if "steps" in case else results[0]
@@ -1694,6 +1728,9 @@ def load_corpus(path):
         if "structured" in case:
             check_structured(case)
         for step in [case, *case.get("steps", [])]:
+            limit = step.get("file_size_limit", 0)
+            if "file_size_limit" in step and ("argv" not in step or type(limit) is not int or limit < 0):
+                raise ValueError(f"{case['id']}: file_size_limit is a command's byte count")
             for outcome in step.get("expected", {}).get("outcomes", []):
                 if set(outcome) not in ({"kind", "path", "pointer", "value"}, {"kind", "stream", "pointer", "value"}) \
                         or outcome["kind"] not in GRADING_OUTCOMES \

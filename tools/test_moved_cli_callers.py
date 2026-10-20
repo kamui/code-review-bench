@@ -41,6 +41,7 @@ MOVED = (
     ("bench/tools/evaluator_audit.py", "check", "bench-tools evaluator-audit check"),
     ("bench/tools/evaluator_audit.py", "draw", "bench-tools evaluator-audit draw"),
     ("bench/tools/evaluator_audit.py", "claims", "bench-tools evaluator-audit claims"),
+    ("bench/tools/evaluator_audit.py", "second", "bench-tools evaluator-audit second"),
     ("bench/tools/evaluator_audit.py", "compare", "bench-tools evaluator-audit compare"),
     ("bench/tools/evaluator_audit.py", "conclude", "bench-tools evaluator-audit conclude"),
 )

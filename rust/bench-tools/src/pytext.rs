@@ -1769,6 +1769,23 @@ pub fn os_error(error: &io::Error, filename: &[u8]) -> String {
     }
 }
 
+/// `str(OSError)` for an error that names no file, such as a failed write to a file already open.
+pub fn os_error_without_file(error: &io::Error) -> String {
+    match error.raw_os_error() {
+        Some(code) => format!("[Errno {code}] {}", strerror(error)),
+        None => error.to_string(),
+    }
+}
+
+/// `Path.write_bytes(data)`: an error opening the file names it; an error writing to it does not.
+pub fn write_bytes(path: &PyPath, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    let mut file = std::fs::File::create(path.to_path_buf())
+        .map_err(|error| os_error(&error, path.as_bytes()))?;
+    file.write_all(bytes)
+        .map_err(|error| os_error_without_file(&error))
+}
+
 fn strerror(error: &io::Error) -> String {
     let text = error.to_string();
     match text.rfind(" (os error ") {
@@ -2037,6 +2054,18 @@ pub fn realpath(path: &[u8], strict: bool) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn write_bytes_names_the_file_only_when_opening_it_fails() {
+        assert_eq!(
+            write_bytes(&PyPath::new(b"/nonexistent-bench-tools/x"), b"x"),
+            Err("[Errno 2] No such file or directory: '/nonexistent-bench-tools/x'".to_string())
+        );
+        assert_eq!(
+            write_bytes(&PyPath::new(b"/dev/full"), b"x"),
+            Err("[Errno 28] No space left on device".to_string())
+        );
+    }
 
     #[test]
     fn surrogate_escape_orders_invalid_bytes_by_code_point() {

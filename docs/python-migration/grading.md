@@ -142,7 +142,7 @@ and the Pages build job fails when the committed file differs.
 
 | Verdict contract | Receipts | Filed by | Validator replays | Mapping replays |
 | --- | --- | --- | --- | --- |
-| `current-verdicts/v1` | 333 | `5521884a8` (325), `8738936bc` (8) | 333 | 333 |
+| `current-verdicts/v1` | 333 | `5521884a8` (325), `8738936bc` (8) | 333 | 333, all refused alike |
 | `current-verdicts/v2` | 29 | `9be17965f` | 0 | 0 |
 | `current-verdicts/v3` | 14 | `3cbcbd061` | 0 | 0 |
 
@@ -152,8 +152,19 @@ lists, and the key's fields equal the receipt's. The 43 v2 and v3 receipts were 
 verdicts. No archive or manifest in the repository holds their key, inputs or verdicts, so their contract comes
 from the validation policy at the filing commit.
 
-Gap for slice 8: v2 and v3 have no replay. The plan's remedy, a fixture case built from the archived key and
-verdicts, has no archive to build from, so slice 8 builds those cases on the fixture root.
+The mapping replay, `the_mapping_replays_every_restorable_archive_identically` in the same file, gives each
+restorable archive's workspace and key to `grade.py map` and to `bench-tools grade map` with a fixture `--assessor`,
+through `--root`, on a disposable worktree of the commit that filed its receipt. Each must end the same way in both:
+refused with identical lines and nothing written but `.cache/current-record.lock`, which both create, or accepted
+with identical lines and records that are equal once the mapping clock, `runner.mapping` and the receipt's own
+digest are masked. On 2026-10-20 all 333 v1 replays were refused alike, exit 2: neither filing commit has
+`bench/grading/current/credits.json`, which `grade.py map` reads before it writes and `43bd77593` added later. No
+replay accepted, so the comparison of accepted records runs only in the fixture cases.
+
+No contract has an accepted replay, and v2 and v3 have no archive to build a case from, so each contract's verdicts
+map in a case of [`grade-map.v1.json`](../../tools/behavior_contracts/grade-map.v1.json) built on the fixture root:
+`grade-map-verdicts-v1`, `grade-map-verdicts-v2` and, for v3, `grade-map-pending-candidate`. The test fails on a
+contract with no accepted replay and no case.
 
 ## Slice 1: claim grading rules and the blinded validator
 
@@ -218,7 +229,7 @@ command line. The decided differences:
 
 `tests/current_grading.rs` holds the record lock in each implementation while the other waits. No `current-grading`
 command takes the lock, as no `current_grading.py` command does, so this is a cargo test, not a corpus step case.
-Slice 8 adds the writers that take it, with step cases.
+Slice 8's `grade map` and `grade invalidate` take it; see below.
 
 The Pages build job runs [`grading-real-record.v1.json`](../../tools/behavior_contracts/grading-real-record.v1.json),
 `check`, `status`, `inventory --out` to a temporary file and `fingerprints`, against the checked-out record after
@@ -355,7 +366,7 @@ python3 bench/tools/rust_runtime.py exec bench-tools -- evaluator-audit conclude
 ```
 
 Diagnostics keep the program names `calibration.py` and `evaluator_audit.py`. `second` runs a grading client, so it
-stays `python3 bench/tools/evaluator_audit.py second` until slice 8 moves it. `verify:current` and the commands in
+stayed in Python until slice 8 moved it. `verify:current` and the commands in
 `docs/current-grading.md`, `docs/impact-calibration.md`, `docs/claim-adjudication.md`,
 `docs/pre-existing-problems.md` and `docs/evaluator-audit.md` moved, and `tools/test_moved_cli_callers.py` fails on
 a current caller of `calibration.py`'s `check`, `cards` or `queue`, or of `evaluator_audit.py`'s `check`, `draw`,
@@ -440,6 +451,51 @@ which carries [v2](../../tools/behavior_contracts/grade-prepare-decisions.v2.jso
 
 No caller moves: `grade.py prepare` stays the production command until slice 10, and slice 11 deletes the Python
 preparation.
+
+## Slice 8: grade mapping, invalidation and second assessments
+
+[#238](https://github.com/kamui/code-review-bench/issues/238) ports the filing half of `grade.py` to
+`bench_tools::grade::filing`, and the `second` step of `evaluator_audit.py` to `bench_tools::evaluator_audit`.
+The commands:
+
+```sh
+python3 bench/tools/rust_runtime.py exec bench-tools -- grade validate --work WORK
+python3 bench/tools/rust_runtime.py exec bench-tools -- grade inventory --work WORK --key KEY --out OUT
+python3 bench/tools/rust_runtime.py exec bench-tools -- grade map --work WORK --key KEY [--assessor FILE] [--safety-checks FILE]... [--root ROOT] [--current DIR]
+python3 bench/tools/rust_runtime.py exec bench-tools -- grade invalidate [--root ROOT] [--current DIR]
+python3 bench/tools/rust_runtime.py exec bench-tools -- evaluator-audit second --work WORK --key KEY [--assessor FILE]
+```
+
+`map` and `invalidate` hold the record lock, `.cache/current-record.lock` under the root, as `grade.py` does.
+`tests/current_grading.rs` starts both commands of each implementation while the other holds the lock and checks
+that they wait. Each refusal writes nothing, a modified clone stops the mapping, a raised candidate stays pending, an
+unresolved claim stays unresolved, and fix sufficiency is never copied from another review. The cleanup after a map runs the checkout's `python3 bench/tools/prune_workspace.py --grading-work WORK
+--target TARGET --receipt RECEIPT --apply`, the bridge [#159](https://github.com/kamui/code-review-bench/issues/159)
+removes; an exit or output outside its contract is a cleanup failure that keeps no grades.
+
+[`grade-map.v1.json`](../../tools/behavior_contracts/grade-map.v1.json) pins the five commands on the fixture
+variants, a Python v1 key mapped in Rust and a Rust v2 key mapped in Python, the refusals, the remedy policy paths of
+`test_remedy_policy.py` for a first and a second grader, and a failed write at each step, including between the
+renames, with the remap after it. [`grade-map-decisions.v1.json`](../../tools/behavior_contracts/grade-map-decisions.v1.json)
+records the decided differences:
+
+- `grade-map-runner-identity-v2`: `runner.mapping` in each receipt the mapping writes is the version 2 runner
+  identity `grade prepare` writes, and each pin of the receipt's SHA-256 changes with it. `runner.prepared` is still
+  copied from the key.
+- A failed read or write the Python did not catch prints `grade.py: <message>`, exit 2, instead of a traceback, exit
+  1 (`grade-map-target-without-head`, `grade-map-write-faults`).
+- The cleanup bridge runs the checkout's `prune_workspace.py` as a command, so a broken script fails the mapping
+  (`grade-map-cleanup-bridge-*`).
+- Assessment numbers read Unicode 16.0 digits, as Python 3.14 does (`grade-map-unicode-16-digit-assessment-number`).
+- Usage errors and help are clap's (`grade-map-arguments-refused`).
+
+[`evaluator-audit-decisions.v3.json`](../../tools/behavior_contracts/evaluator-audit-decisions.v3.json) carries v2
+forward and ends its `evaluator-audit-cli-second-is-not-ported` difference: `bench-tools evaluator-audit second` now
+saves the second assessment, and its help lists `--work`, `--key` and `--assessor`.
+
+`docs/evaluator-audit.md` names `bench-tools evaluator-audit second`, and `tools/test_moved_cli_callers.py` fails on a
+current caller of `evaluator_audit.py`'s `second`. No `grade.py` caller moves: `grade.py` stays the production
+command until slice 10, and slice 11 deletes `grade.py` and `evaluator_audit.py`.
 
 ## Research helpers
 
