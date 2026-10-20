@@ -221,10 +221,11 @@ including between the renames. The 6000-byte step of `grade-map-write-faults` fa
 which is larger than the verdicts; the second assessment's receipt is smaller than its assessment, so
 `fail_write_b64` fails it.
 
-Seven cases carry 23 step `baseline_defect`s, so pass `--allow-known-defects` when Python is the primary: the
+Twelve cases carry 28 step `baseline_defect`s, so pass `--allow-known-defects` when Python is the primary: the
 uncaught read and write errors (`grade-map-target-without-head`, `grade-map-write-faults`), the cleanup bridge cases
-(`grade-map-cleanup-bridge-*`), clap's usage and help (`grade-map-arguments-refused`) and Python 3.12's result for a
-Unicode 16.0 digit (`grade-map-unicode-16-digit-assessment-number`).
+(`grade-map-cleanup-bridge-*`), clap's usage and help (`grade-map-arguments-refused` and the five
+`grade-map-*help-before-invalid-short-help` cases) and Python 3.12's result for a Unicode 16.0 digit
+(`grade-map-unicode-16-digit-assessment-number`).
 
 ```sh
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/grade-map.v1.json
