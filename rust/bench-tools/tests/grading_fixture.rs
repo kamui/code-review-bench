@@ -105,7 +105,7 @@ fn every_corpus_fixture_matches_the_builder() {
 }
 
 /// The #156 corpora, each of which must run on the unresolved fixture states, as the delivery plan requires.
-const GRADING_CORPORA: [&str; 8] = [
+const GRADING_CORPORA: [&str; 9] = [
     "ruling-record.v1.json",
     "ruling-dossier.v1.json",
     "current-grading.v1.json",
@@ -114,6 +114,7 @@ const GRADING_CORPORA: [&str; 8] = [
     "calibration.v1.json",
     "evaluator-audit.v1.json",
     "grade-prepare.v1.json",
+    "grade-map.v1.json",
 ];
 
 #[test]

@@ -126,6 +126,48 @@ jobs:
         with:
           path: dist/client
 
+  mapping-replay:
+    name: Mapping replay
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Select Python regression coverage from the complete PR diff
+        id: selection
+        continue-on-error: true
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: python3 tools/select_grading_tests.py --event-name "$EVENT_NAME" --event-path "$GITHUB_EVENT_PATH" --output "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@v5
+        if: steps.selection.outcome != 'success' || steps.selection.outputs.run != 'false'
+        with:
+          python-version: '3.12'
+      - name: Install rustup when the image has none
+        if: steps.selection.outcome != 'success' || steps.selection.outputs.run != 'false'
+        run: |
+          if ! command -v rustup > /dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+      - name: Install bench-tools, which restores evidence
+        if: steps.selection.outcome != 'success' || steps.selection.outputs.run != 'false'
+        run: |
+          (cd rust/bench-tools && rustup show && rustup default "$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')" && cargo fetch --locked)
+          echo "BENCH_RUNTIME_STORE=$RUNNER_TEMP/rust-runtime-store" >> "$GITHUB_ENV"
+          BENCH_RUNTIME_STORE="$RUNNER_TEMP/rust-runtime-store" python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select
+      - name: Restore repository evidence
+        if: steps.selection.outcome != 'success' || steps.selection.outputs.run != 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 bench/tools/rust_runtime.py exec bench-tools -- evidence fetch --manifest bench/evidence/manifests/repository-payloads-2026-10-08-v1.json
+      - name: Replay the mapping of every restorable archive in both implementations at its filing commit
+        if: steps.selection.outcome != 'success' || steps.selection.outputs.run != 'false'
+        working-directory: rust/bench-tools
+        run: cargo test --locked --test grading_replay -- --ignored --exact the_mapping_replays_every_restorable_archive_identically --nocapture
+
   grading-tests:
     name: Grading regressions (${{ matrix.group }})
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
@@ -242,7 +284,7 @@ jobs:
   deploy:
     # PAGES_PREVIEW_BRANCH names a branch Pages serves in place of main's build; unset it to deploy from main again.
     if: github.event_name != 'pull_request' && vars.PAGES_PREVIEW_BRANCH == ''
-    needs: [build, grading, client]
+    needs: [build, mapping-replay, grading, client]
     runs-on: ubuntu-latest
     permissions:
       pages: write

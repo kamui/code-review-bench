@@ -1,13 +1,14 @@
 //! The evaluator audit's whole-cohort checks, seeded draw, claim lists, comparison and conclusion, ported from
 //! `bench/tools/evaluator_audit.py`, without model calls.
 //!
-//! `second` stays in Python until its grading workspace checks move; every other operation is here. Every record
-//! of a round is written once under `<current>/audit/<seed>/`, and each operation holds the record lock.
+//! Every record of a round is written once under `<current>/audit/<seed>/`, except a second assessment, which is
+//! numbered under `second/` like a current assessment; each operation holds the record lock.
 
 use crate::calibration::{Map, at, each, is, object, sorted, text};
 use crate::claim_grading;
 use crate::claims;
 use crate::current_grading::{self, Documents, Failure, R, Root};
+use crate::grade;
 use crate::grading_validation;
 use crate::pre_existing;
 use crate::pyfs;
@@ -86,6 +87,11 @@ pub struct Arguments<'a> {
     pub target: Option<&'a str>,
     pub out: Option<&'a [u8]>,
     pub reconciliation: Option<&'a [u8]>,
+    /// The checkout whose `bench/tools/prune_workspace.py` cleans a second grader's workspace.
+    pub checkout: &'a [u8],
+    pub work: Option<&'a [u8]>,
+    pub key: Option<&'a [u8]>,
+    pub assessor: Option<&'a [u8]>,
 }
 
 fn lookup<'a>(table: &'a [(&str, &'a str)], key: &Value) -> R<&'a str> {
@@ -2390,6 +2396,246 @@ fn conclude(root: &Root, current_arg: &[u8], reconciliation_path: &[u8]) -> R<Do
 }
 
 /// One operation of `evaluator_audit.py` other than `second`, run under the record lock by the caller.
+fn string_of(value: &Value) -> R<&str> {
+    match value {
+        Value::Str(text) => Ok(text),
+        other => bytes_of(other).map(|_| ""),
+    }
+}
+
+/// `Path.mkdir(parents=True)`, whose `FileExistsError` `main` reports as a record written once.
+fn make_new_dirs(path: &PyPath) -> R<()> {
+    make_dirs(&current_grading::parent_of(path))?;
+    std::fs::create_dir(path.to_path_buf()).map_err(|error| os_failure(&error, path))
+}
+
+const SECOND_CLEANUP: &str =
+    "the verdicts passed every check, but workspace cleanup failed, so nothing was saved: ";
+
+/// `second`: save an independent assessment of a sampled batch, graded blind from the first grader's claim list.
+fn second(root: &Root, current: &[u8], arguments: &Arguments) -> R<Done> {
+    let work = grade::resolve(arguments.work.unwrap_or_default())?;
+    let key = current_grading::read_json(&PyPath::new(arguments.key.unwrap_or_default()))?;
+    let inputs = work.join(b"validator/inputs.json");
+    let legacy = text("legacy");
+    let safety_policy = current_grading::read_json(&inputs)?;
+    let safety_policy = pyvalue::get_or(&safety_policy, "safety_policy", &legacy)?;
+    if !(is(safety_policy, "legacy") || is(safety_policy, grading_validation::NO_SAFETY)) {
+        return Err(Failure::Inconsistent(
+            b"the second grader requires an assessment prepared with --inventory".to_vec(),
+        ));
+    }
+    let (run, target) = (at(&key, "run")?, at(&key, "target")?);
+    let (run_text, target_text) = (string_of(run)?, string_of(target)?);
+    let (directory, sample) = drawn_sample(root, current)?;
+    let first = sampled_grade(&sample, root, run_text, target_text)?;
+    let (selected, documents, fingerprint) =
+        grade::batch_inputs(root, current, run_text, target_text, None)?;
+    let fingerprint = Value::Str(fingerprint);
+    let batch_name = format!("{}/{}", run.py_str(), target.py_str());
+    if !fingerprint.py_eq(at(&key, "input_fingerprint")?) {
+        return Err(Failure::Inconsistent(
+            format!("{batch_name}: the batch's inputs changed since preparation; prepare it again")
+                .into_bytes(),
+        ));
+    }
+    if !at(&first, "input_fingerprint")?.py_eq(&fingerprint) {
+        return Err(Failure::Inconsistent(
+            format!(
+                "{batch_name}: the sampled grade was made from other inputs; grade the batch again and draw a \
+                 fresh sample"
+            )
+            .into_bytes(),
+        ));
+    }
+    let first_receipt =
+        current_grading::read_json(&root.resolve_pin(at(at(&first, "assessor")?, "receipt")?)?)?;
+    let graded_by = at(at(&first_receipt, "provenance")?, "identity")?.clone();
+    let (provenance, mut problems) = grade::provenance_of(&work, &key, arguments.assessor)?;
+    if let Some(provenance) = &provenance
+        && at(provenance, "identity")?.py_eq(&graded_by)
+    {
+        problems.push(format!(
+            "{} produced the grade, so it cannot be the second assessor",
+            graded_by.py_str()
+        ));
+    }
+    let checked = grade::check_attempts(
+        root,
+        &selected,
+        run_text,
+        target_text,
+        &[("the key".to_string(), grade::key_counts(&key)?)],
+    )?;
+    problems.extend(checked.problems);
+    let checkout = PyPath::new(arguments.checkout);
+    problems.extend(grade::check_prepared(
+        &checkout,
+        &work,
+        &key,
+        false,
+        std::path::Path::new(""),
+    )?);
+    if !problems.is_empty() {
+        return Err(Failure::Inconsistent(problems.join("\n").into_bytes()));
+    }
+    let provenance = provenance.expect("a missing provenance comes with a problem");
+    let mut tokens: Vec<(Value, Value)> = Vec::new();
+    for review in each(at(&key, "reviews")?)?.iter() {
+        let attempt = at(review, "attempt_id")?.clone();
+        pyvalue::hashable(&attempt)?;
+        let token = at(review, "token")?.clone();
+        match tokens.iter_mut().find(|(known, _)| known.py_eq(&attempt)) {
+            Some(entry) => entry.1 = token,
+            None => tokens.push((attempt, token)),
+        }
+    }
+    let mut listed = Object::default();
+    if let Value::Object(claims) = claim_list(&first)? {
+        for (attempt, items) in claims.iter() {
+            let attempt = text(attempt);
+            let token = tokens
+                .iter()
+                .find(|(known, _)| known.py_eq(&attempt))
+                .map(|(_, token)| token)
+                .ok_or_else(|| missing(&attempt))?;
+            listed.insert(string_of(token)?.to_string(), items.clone());
+        }
+    }
+    if !pyvalue::get(&current_grading::read_json(&inputs)?, "inventory")?
+        .py_eq(&Value::Object(listed))
+    {
+        return Err(Failure::Inconsistent(
+            format!(
+                "{batch_name}: the workspace was not prepared with the first grader's claim list; write it with \
+                 the claims operation and prepare again with --inventory"
+            )
+            .into_bytes(),
+        ));
+    }
+    let (raw, verdicts, problems) = grade::read_verdicts(&work)?;
+    if !problems.is_empty() {
+        return Err(Failure::Inconsistent(problems.join("\n").into_bytes()));
+    }
+    let batch = directory
+        .join(b"second")
+        .join(&name_of(run)?.into_bytes())
+        .join(target_text.as_bytes());
+    let out = grade::next_assessment(&batch)?;
+    make_new_dirs(&out)?;
+    let saved = (|| -> R<usize> {
+        let verdicts_path = out.join(b"verdicts.json");
+        pytext::write_bytes(&verdicts_path, &raw).map_err(Failure::Input)?;
+        let evidence = [root.pin_file(&verdicts_path)?];
+        let reference = each(at(documents.get("reference"), "targets")?)?
+            .iter()
+            .find(|reference| {
+                pyvalue::get(reference, "target").is_ok_and(|named| named.py_eq(target))
+            })
+            .cloned()
+            .ok_or_else(|| Failure::Crash("StopIteration".into()))?;
+        let families = at(&reference, "families")?;
+        let task = each(at(&selected, "tasks")?)?
+            .iter()
+            .find(|task| pyvalue::get(task, "id").is_ok_and(|id| id.py_eq(target)))
+            .cloned()
+            .ok_or_else(|| Failure::Crash("StopIteration".into()))?;
+        let reviews = at(&key, "reviews")?;
+        let raised = grade::raised_candidates(&verdicts, reviews, &checked.attempts, &task)?;
+        let none = Value::Array(Vec::new());
+        let pre_existing = if pyvalue::get(&first, "verdicts")?.py_eq(&text(pre_existing::CONTRACT))
+        {
+            Some(pyvalue::get_or(&reference, "pre_existing_problems", &none)?)
+        } else {
+            None
+        };
+        let mut graded = Vec::new();
+        for entry in grade::sorted_by(reviews, "attempt_id")? {
+            let verdict = pyvalue::subscript(at(&verdicts, "reviews")?, at(&entry, "token")?)?;
+            let attempt = at(&entry, "attempt_id")?;
+            let facts = checked
+                .attempts
+                .iter()
+                .find(|(name, _)| is(attempt, name))
+                .map(|(_, facts)| facts)
+                .ok_or_else(|| missing(attempt))?;
+            graded.push(grade::graded_v2(
+                &entry,
+                verdict,
+                facts,
+                families,
+                &evidence,
+                &Vec::new(),
+                &[],
+                &raised,
+                pre_existing,
+            )?);
+        }
+        let count = graded.len();
+        let assessment_path = out.join(b"assessment.json");
+        let assessment = object(vec![
+            ("run", run.clone()),
+            ("target", target.clone()),
+            ("reviews", Value::Array(graded)),
+        ]);
+        pytext::write_bytes(
+            &assessment_path,
+            format!("{}\n", current_grading::dumps(&assessment)).as_bytes(),
+        )
+        .map_err(Failure::Input)?;
+        let mut receipt = vec![
+            ("contract", text("evaluator-audit-second/v2")),
+            ("run", run.clone()),
+            ("target", target.clone()),
+            ("input_fingerprint", fingerprint.clone()),
+            ("saved_at", now()),
+            ("provenance", provenance.clone()),
+            ("independent_of", graded_by.clone()),
+            ("verdicts_sha256", text(&crate::sha256::hex_digest(&raw))),
+            (
+                "assessment_sha256",
+                text(&current_grading::file_hash(&assessment_path)?),
+            ),
+            ("prepared_files", at(&key, "prepared_files")?.clone()),
+            ("validator", at(&key, "validator")?.clone()),
+            ("link_disputes", at(&verdicts, "link_disputes")?.clone()),
+            ("new_candidates", at(&verdicts, "new_candidates")?.clone()),
+            ("reviews", grade::key_reviews(&key)?),
+        ];
+        if let Some(policy) = key.as_object().and_then(|key| key.get("remedy_policy")) {
+            receipt.push(("remedy_policy", policy.clone()));
+        }
+        let receipt_path = out.join(b"receipt.json");
+        pytext::write_bytes(
+            &receipt_path,
+            format!("{}\n", current_grading::dumps(&object(receipt))).as_bytes(),
+        )
+        .map_err(Failure::Input)?;
+        grade::prune_grading(
+            &checkout,
+            root,
+            target_text,
+            &work,
+            &receipt_path,
+            SECOND_CLEANUP,
+        )?;
+        Ok(count)
+    })();
+    let count = match saved {
+        Ok(count) => count,
+        Err(failure) => {
+            let _ = std::fs::remove_dir_all(out.to_path_buf());
+            return Err(failure);
+        }
+    };
+    let relative = pyfs::relative_to(out.as_bytes(), root.path.as_bytes())
+        .map_err(|message| Failure::Crash(format!("ValueError: {message}")))?;
+    Ok(Done::Printed(format!(
+        "saved the second assessment of {batch_name}: {count} reviews; evidence {}",
+        pytext::stderr_text(&relative)
+    )))
+}
+
 pub fn run(operation: &str, arguments: &Arguments) -> R<Done> {
     let root = Root::new(arguments.root)?;
     let current = arguments.current;
@@ -2403,6 +2649,7 @@ pub fn run(operation: &str, arguments: &Arguments) -> R<Done> {
             arguments.target.unwrap_or_default(),
             arguments.out.unwrap_or_default(),
         ),
+        "second" => second(&root, current, arguments),
         "compare" => compare(&root, current),
         "conclude" => conclude(&root, current, arguments.reconciliation.unwrap_or_default()),
         other => unreachable!("clap offers no operation {other}"),

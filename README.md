@@ -128,7 +128,7 @@ python3 -m unittest discover -s bench/tools -p 'test_*.py'
 
 ## GitHub Pages
 
-Set **Settings > Pages** to publish through **GitHub Actions**. The [workflow](.github/workflows/pages.yml) runs web and evidence checks, grading regressions, and client compatibility on PRs and pushes to `main`. Deployment requires all three jobs to pass. Manual runs are also available.
+Set **Settings > Pages** to publish through **GitHub Actions**. The [workflow](.github/workflows/pages.yml) runs web and evidence checks, the mapping replay, grading regressions, and client compatibility on PRs and pushes to `main`. Deployment requires all four jobs to pass. Manual runs are also available.
 
 Grading regressions runs the core and historical groups in parallel, each with a 25-minute timeout. Its required check passes only when both groups succeed. On PRs, both groups and the web job compare the complete head with the merge base. They skip expensive regression steps only for changes confined to `src/components/*.tsx`, `src/routes/*.tsx`, their nested directories and CSS files, `src/styles.css`, or static assets under `public/`. The web job skips the broader Python suite, real-record differentials, and grading replay. It retains the migrated-command caller guard because that guard also scans UI files. Evidence, scoring, rendered scorecards, exports, the build, and types still run. Benchmark inputs, policies, prose, workflows, package commands, runtime pins, and unknown paths retain full coverage. Failed or empty change detection also runs the full suite. Main and manual runs always run it.
 
