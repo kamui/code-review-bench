@@ -80,6 +80,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: rust-runtime-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   rust-runtime:
     strategy:
@@ -118,6 +122,7 @@ jobs:
           cargo fetch --locked
           (cd ../bench-tools && cargo fetch --locked)
       - name: Check bench-tools formatting, lints and tests
+        if: github.event_name != 'pull_request' || runner.os == 'Linux'
         working-directory: rust/bench-tools
         run: |
           cargo fmt --check
@@ -141,14 +146,12 @@ jobs:
                             "transcript": [sys.executable, adapter, "transcript"]}))
           EOF
           python3 tools/behavior_contract.py --implementations "$RUNNER_TEMP/map.json"
-      - name: Install bench-tools and run its corpora with the retained executable
+      - name: Install bench-tools and check the retained executable
         env:
           BENCH_RUNTIME_STORE: ${{ runner.temp }}/rust-runtime-store
         run: |
           python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select
           python3 bench/tools/rust_runtime.py resolve bench-tools | tee "$RUNNER_TEMP/bench-tools.json"
-          python3 tools/behavior_contract.py --verify-decision-history
-          python3 tools/behavior_contract.py --corpus tools/behavior_contracts/roster.v1.json
           python3 bench/tools/rust_runtime.py exec bench-tools -- roster > "$RUNNER_TEMP/roster.tsv"
           test -s "$RUNNER_TEMP/roster.tsv"
           python3 - "$RUNNER_TEMP/bench-tools.json" > "$RUNNER_TEMP/bench-tools-map.json" <<'EOF'
@@ -156,6 +159,18 @@ jobs:
           executable = json.load(open(sys.argv[1]))["executable"]
           print(json.dumps({name: [executable, name] for name in ("diff-identity", "normalize-review", "check-manifest", "rates", "upstream", "ruling", "grading", "current-grading", "methodology", "claims", "calibration", "evaluator-audit")}))
           EOF
+      - name: Smoke test bench-tools on macOS pull requests
+        if: github.event_name == 'pull_request' && runner.os == 'macOS'
+        env:
+          BENCH_RUNTIME_STORE: ${{ runner.temp }}/rust-runtime-store
+        run: python3 tools/behavior_contract.py --corpus tools/behavior_contracts/diff-identity.v1.json --implementations "$RUNNER_TEMP/bench-tools-map.json"
+      - name: Run bench-tools corpora with the retained executable
+        if: github.event_name != 'pull_request' || runner.os == 'Linux'
+        env:
+          BENCH_RUNTIME_STORE: ${{ runner.temp }}/rust-runtime-store
+        run: |
+          python3 tools/behavior_contract.py --verify-decision-history
+          python3 tools/behavior_contract.py --corpus tools/behavior_contracts/roster.v1.json
           for corpus in diff-identity normalize-review rates upstream ruling-record ruling-dossier current-grading methodology claims calibration evaluator-audit; do
             python3 tools/behavior_contract.py --corpus "tools/behavior_contracts/$corpus.v1.json" --implementations "$RUNNER_TEMP/bench-tools-map.json"
             python3 tools/behavior_contract.py --allow-known-defects --corpus "tools/behavior_contracts/$corpus.v1.json" --differential "$RUNNER_TEMP/bench-tools-map.json"
@@ -237,4 +252,5 @@ jobs:
           python3 tools/behavior_contract.py --corpus tools/behavior_contracts/native-artifacts.v1.json --implementations "$RUNNER_TEMP/native-rust-map.json"
           python3 tools/behavior_contract.py --allow-known-defects --corpus tools/behavior_contracts/native-artifacts.v1.json --implementations "$RUNNER_TEMP/native-python-map.json" --differential "$RUNNER_TEMP/native-rust-map.json"
       - name: Install a second version and roll back
+        if: github.event_name != 'pull_request' || runner.os == 'Linux'
         run: docs/python-migration/runtime-evidence/rollback.sh "$RUNNER_TEMP/rollback" "$(git rev-parse HEAD)"

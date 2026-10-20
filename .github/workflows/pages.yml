@@ -29,6 +29,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Select Python regression coverage from the complete PR diff
+        id: selection
+        continue-on-error: true
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: python3 tools/select_grading_tests.py --event-name "$EVENT_NAME" --event-path "$GITHUB_EVENT_PATH" --output "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
@@ -70,6 +76,7 @@ jobs:
             bench/evidence/manifests/last-push-skill-transcripts-2026-10-11-v1.json \
             bench/evidence/manifests/last-push-review-code-transcripts-2026-10-12-v1.json
       - name: Compare the current-grading, methodology, claims, calibration and evaluator-audit implementations on the checked-out record
+        if: steps.selection.outcome != 'success' || steps.selection.outputs.run != 'false'
         run: |
           python3 bench/tools/rust_runtime.py resolve bench-tools > "$RUNNER_TEMP/bench-tools.json"
           python3 - "$RUNNER_TEMP/bench-tools.json" > "$RUNNER_TEMP/real-record-map.json" <<'EOF'
@@ -79,10 +86,12 @@ jobs:
           EOF
           python3 tools/behavior_contract.py --real-record --differential "$RUNNER_TEMP/real-record-map.json"
       - name: Check that the grading replay inventory is current
+        if: steps.selection.outcome != 'success' || steps.selection.outputs.run != 'false'
         run: |
           (cd rust/bench-tools && cargo test --locked --test grading_replay -- --ignored --exact the_replay_inventory_accounts_for_every_receipt)
           git diff --exit-code -- docs/python-migration/grading-replay.v1.json
       - name: Replay the blinded validator on every restorable archive in both implementations
+        if: steps.selection.outcome != 'success' || steps.selection.outputs.run != 'false'
         working-directory: rust/bench-tools
         run: cargo test --locked --test grading_replay -- --ignored --exact the_validator_replays_every_restorable_archive_identically --nocapture
       - name: Configure Pages
@@ -96,7 +105,13 @@ jobs:
           bun run verify:current
           bun run verify:claims
       - name: Test scoring and exports
-        run: bun run test:web
+        run: bun run test:web:site
+      - name: Test Python regression tools
+        if: steps.selection.outcome != 'success' || steps.selection.outputs.run != 'false'
+        run: bun run test:web:python
+      - name: Check migrated callers in UI and assets
+        if: steps.selection.outcome == 'success' && steps.selection.outputs.run == 'false'
+        run: python3 -m unittest discover -s tools -p 'test_moved_cli_callers.py' -v
       - name: Build static site
         run: |
           bun run build
@@ -111,9 +126,13 @@ jobs:
         with:
           path: dist/client
 
-  grading:
-    name: Grading regressions
+  grading-tests:
+    name: Grading regressions (${{ matrix.group }})
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [core, historical]
     runs-on: ubuntu-22.04
     timeout-minutes: 25
     env:
@@ -180,7 +199,19 @@ jobs:
         run: test "$(codex --version)" = "codex-cli $CODEX_VERSION"
       - name: Test benchmark tools and provisioning
         if: steps.selection.outcome != 'success' || steps.selection.outputs.run != 'false'
-        run: bun run test:bench
+        run: bun run test:bench:${{ matrix.group }}
+
+  grading:
+    name: Grading regressions
+    if: always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    needs: [grading-tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Require every grading group to pass
+        env:
+          RESULT: ${{ needs.grading-tests.result }}
+        run: test "$RESULT" = success
 
   client:
     name: Client compatibility
@@ -192,30 +223,9 @@ jobs:
       DISABLE_AUTOUPDATER: '1'
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: '1.3.10'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install rustup when the image has none
-        run: |
-          if ! command -v rustup > /dev/null; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
-            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          fi
-      - name: Install bench-tools, which restores evidence
-        run: |
-          (cd rust/bench-tools && rustup show && rustup default "$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')" && cargo fetch --locked)
-          echo "BENCH_RUNTIME_STORE=$RUNNER_TEMP/rust-runtime-store" >> "$GITHUB_ENV"
-          BENCH_RUNTIME_STORE="$RUNNER_TEMP/rust-runtime-store" python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select
-      - name: Restore repository evidence
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python3 bench/tools/rust_runtime.py exec bench-tools -- evidence fetch --manifest bench/evidence/manifests/repository-payloads-2026-10-08-v1.json
       - name: Install sandbox tools
         run: |
           sudo apt-get update
@@ -227,7 +237,7 @@ jobs:
       - name: Verify client version
         run: test "$(claude --version)" = "$CLAUDE_VERSION (Claude Code)"
       - name: Test client against the local fake API
-        run: bun run test:client
+        run: python3 bench/tools/test_grading_client.py
 
   deploy:
     # PAGES_PREVIEW_BRANCH names a branch Pages serves in place of main's build; unset it to deploy from main again.

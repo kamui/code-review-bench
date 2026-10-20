@@ -197,8 +197,14 @@ retained executable, and [`rollback.sh`](runtime-evidence/rollback.sh). It also 
 `cargo fmt`, `clippy` and `cargo test`, installs it, runs its corpora with the retained executable and the
 `diff-identity`, `normalize-review`, `check-manifest`, `rates` and `upstream` differentials against the retained
 Python libraries, and runs `roster` on the repository. The `CI and GitHub Pages` workflow installs `bench-tools` the
-same way for the explorer export. Merge a change to the
-runtime only after every target's job passes.
+same way for the explorer export.
+
+Pull requests run the full suite on Linux targets. On macOS targets they run the
+runtime pinning, retention and rollback tests with real cargo builds, install and exercise
+`usage-pilot`, install `bench-tools`, run `roster`, and run the `diff-identity` corpus. The full
+macOS lint, test, differential and second-version rollback suites run on pushes to `main`.
+This keeps native installation coverage before merge while deferring broader macOS regression
+detection until after merge. Merge a change to the runtime only after every target's job passes.
 
 | Target | Runner | Local run |
 | --- | --- | --- |
