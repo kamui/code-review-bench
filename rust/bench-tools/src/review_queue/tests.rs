@@ -569,11 +569,14 @@ fn a_stored_sign_in_that_cannot_be_read_is_an_input_error() {
 #[test]
 fn no_launch_starts_on_a_meter_reading_older_than_an_hour() {
     let fx = fake();
+    // The first review waits for the release, so the hour passes while it runs and before the next launch.
+    fx.touch("hold", "");
     let waited = Cell::new(false);
     let sleep = |_: f64| {
         if !waited.replace(true) {
             fx.clock.set(fx.clock.get() + 3601.0);
             *fx.meters.borrow_mut() = Err(("offline".into(), false));
+            fx.touch("release", "");
         }
         std::thread::sleep(Duration::from_millis(5));
     };
