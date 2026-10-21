@@ -2348,7 +2348,7 @@ fn file_attempt(arguments: &Arguments) -> Result<(Value, String)> {
             array(violations).first().unwrap_or(&NULL).py_str()
         ));
     }
-    if skill_runner(kind) && audit_missing && !stop.truthy() {
+    if audit_missing && !stop.truthy() {
         problems.push("attempt audit.json is missing".to_string());
     }
     let network = at(&audit, "network_commands");
