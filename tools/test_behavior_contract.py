@@ -371,13 +371,13 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(commands, {"codex": [str(program), "usage", "codex"],
                                     "diff-identity": [sys.executable, str(contract.REPO / "bench/tools/diff_identity.py")],
                                     "roster": [str(program), "roster"],
-                                    "normalize-review": [sys.executable, str(contract.REPO / "bench/tools/normalize_review.py")],
+                                    "normalize-review": [str(program), "normalize-review"],
                                     "normalize-thermo": [str(program), "normalize-thermo"]})
         store = Path(self.enterContext(tempfile.TemporaryDirectory())) / "store"
         with patch.dict(contract.os.environ, {"BENCH_RUNTIME_STORE": str(store)}):
             contract.os.environ.pop("BENCH_RUST_BENCH_TOOLS", None)
             contract.os.environ.pop("BENCH_RUST_BENCH_TOOLS_SHA256", None)
-            with self.assertRaisesRegex(ValueError, "(codex|roster|normalize-thermo): bench-tools has no selected version.*install --crate rust/bench-tools"):
+            with self.assertRaisesRegex(ValueError, "(codex|roster|normalize-review|normalize-thermo): bench-tools has no selected version.*install --crate rust/bench-tools"):
                 contract.default_commands(corpus)
 
     def test_reader_corpora_hold_for_the_retained_libraries_and_reject_regressions(self):

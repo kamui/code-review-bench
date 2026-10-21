@@ -175,7 +175,6 @@ from datetime import datetime, timedelta, timezone
 TOOLS = Path(__file__).resolve().parent
 REPO = TOOLS.parents[1]
 sys.path.insert(0, str(TOOLS))
-import file_attempt  # noqa: E402
 import run_cell  # noqa: E402
 import rust_runtime  # noqa: E402
 import subscription_meters  # noqa: E402
@@ -216,7 +215,7 @@ def stamp(moment: float) -> str:
 
 def write(path: Path, value) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    file_attempt.publish(path, json.dumps(value, indent=2) + "\n")
+    rust_runtime.publish(path, json.dumps(value, indent=2) + "\n")
 
 
 def located(text: str) -> Path:
@@ -312,7 +311,7 @@ def volatile(path: Path) -> str | None:
         kind = filesystem(resolved)
         if kind in MEMORY_FILESYSTEMS:
             return f"{resolved} is on {kind}"
-        file_attempt.publish(resolved / ".persistence-probe", token)
+        rust_runtime.publish(resolved / ".persistence-probe", token)
         kept = (resolved / ".persistence-probe").read_text(encoding="utf-8") == token
         (resolved / ".persistence-probe").unlink()
     except OSError as error:

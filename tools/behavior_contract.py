@@ -42,8 +42,7 @@ import zipfile
 
 REPO = Path(__file__).resolve().parents[1]
 CORPUS = REPO / "tools/behavior_contracts/usage.v1.json"
-PYTHON_PROGRAMS = {"diff-identity": "bench/tools/diff_identity.py", "normalize-review": "bench/tools/normalize_review.py",
-                   "evidence-store": "bench/tools/evidence_store.py",
+PYTHON_PROGRAMS = {"diff-identity": "bench/tools/diff_identity.py", "evidence-store": "bench/tools/evidence_store.py",
                    "python-check-manifest": "bench/tools/check_manifest.py",
                    "evidence-inventory": "bench/tools/evidence_inventory.py"}
 # rates.py reads the repository that holds it and fetches fixed URLs. This driver points the retained library at the
@@ -151,7 +150,8 @@ except evidence_store.EvidenceError as error:
 }
 DRIVER_ARGUMENTS = {}
 RUST_PROGRAMS = {"codex": ("bench-tools", ["usage", "codex"]), "transcript": ("bench-tools", ["usage", "claude"]),
-                 "roster": ("bench-tools", ["roster"]), "normalize-thermo": ("bench-tools", ["normalize-thermo"]),
+                 "roster": ("bench-tools", ["roster"]), "normalize-review": ("bench-tools", ["normalize-review"]),
+                 "normalize-thermo": ("bench-tools", ["normalize-thermo"]),
                  "derive-packet": ("bench-tools", ["derive-packet"]), "build-packet": ("bench-tools", ["build-packet"]),
                  "export-explorer": ("bench-tools", ["export-explorer"]), "archive": ("bench-tools", ["archive"]),
                  "evidence": ("bench-tools", ["evidence"]), "recover-evidence": ("bench-tools", ["evidence", "recover"]),

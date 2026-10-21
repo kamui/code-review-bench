@@ -529,7 +529,7 @@ def launch(args) -> int:
     if not report_rows:
         violations.append("skill produced no native report artifacts")
     if rollouts:
-        audit_command = [sys.executable, str(TOOLS / "attempt_audit.py"), "--arm", "codex-skill",
+        audit_command = [str(prepared["bench_tools"]), "attempt-audit", "--arm", "codex-skill",
                          "--attempt-dir", str(attempt), "--clone", str(clone),
                          *(["--mount-sandbox", str(attempt / "sandbox.json")] if sandbox else []),
                          *(["--allow-network"] if network_allowed else [])]

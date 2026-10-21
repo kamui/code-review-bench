@@ -21,6 +21,9 @@ use crate::{pytext, pyunicode};
 
 const MAX_REPEAT: u32 = 1_000;
 const NEST_LIMIT: u32 = 2_000;
+/// fancy-regex turns on the crate's lazy DFA, which also builds a reverse NFA under this limit. Raising it from the
+/// 10 MiB default keeps the reach the forward NFA had alone.
+const SIZE_LIMIT: usize = 24 << 20;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Unsupported(pub String);
@@ -681,6 +684,7 @@ fn compile_with(pattern: &str, ignore_case: bool) -> Result<Regex, Unsupported> 
     // stack up to 2,000.
     let matcher = regex::RegexBuilder::new(&syntax)
         .nest_limit(NEST_LIMIT)
+        .size_limit(SIZE_LIMIT)
         .build()
         .map_err(|error| match error {
             regex::Error::CompiledTooBig(_) => Unsupported("pattern too large".to_string()),

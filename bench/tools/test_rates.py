@@ -280,6 +280,7 @@ class RatesTests(unittest.TestCase):
         evidence.mkdir(parents=True)
         (evidence / "attempt.json").write_text(json.dumps({"disposition": "stopped"}), encoding="utf-8")
         with patch.object(run_cell, "tool", return_value=subprocess.CompletedProcess([], 0, "", "")) as tool, \
+                patch.object(run_cell, "filing_tool", return_value="bench-tools"), \
                 patch.dict("os.environ", {"BENCH_RATES": "/different/catalog.json"}):
             run_cell.file(run, attempt)
         argv = tool.call_args.args[0]
@@ -287,7 +288,8 @@ class RatesTests(unittest.TestCase):
         self.assertIn("--legacy-rate-billing", argv)
         run.claimed[attempt]["billing_mode"] = "subscription"
         run.arm_entry = lambda arm: {"expected_cli_version": "test", "billing_mode": "api"}
-        with patch.object(run_cell, "tool", return_value=subprocess.CompletedProcess([], 0, "", "")) as tool:
+        with patch.object(run_cell, "tool", return_value=subprocess.CompletedProcess([], 0, "", "")) as tool, \
+                patch.object(run_cell, "filing_tool", return_value="bench-tools"):
             run_cell.file(run, attempt)
         argv = tool.call_args.args[0]
         self.assertEqual(argv[argv.index("--billing-mode") + 1], "subscription")
