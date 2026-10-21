@@ -116,7 +116,8 @@ class ColdConsumersTest(unittest.TestCase):
             store.write_new(work / 'verdicts.json', {'verdicts': []})
             store.write_new(grading / 'reservation.json', {'maxBudgetUsd': 6})
             with patch.object(regrade, 'ROOT', origin):
-                grading_ref = regrade.archive_attempt(grading, origin / 'bench/regrading/fixture')
+                grading_ref = regrade.archive_attempt(rust_runtime.resolve('bench-tools'), grading,
+                                                     origin / 'bench/regrading/fixture')
             grading_archive = store.read(origin / grading_ref['path'])['archive']['path']
             files = [path for path in origin.rglob('*') if path.is_file()]
             frozen = {path.relative_to(origin).as_posix(): path.read_bytes() for path in files}

@@ -1,13 +1,12 @@
 //! `delegation::filing_faults` has no `bench-tools ruling` command, because `current_grading` calls it while it checks
-//! filed decisions. These cases compare it with the retained `delegation.py` on the agent-settled root of the
-//! `ruling-agents-settlement-checks-clean` corpus case.
+//! filed decisions. These cases state its faults on the agent-settled root of the
+//! `ruling-agents-settlement-checks-clean` corpus case, as the retained `delegation.py` gave them before #241 removed it.
 
 use bench_tools::delegation;
 use bench_tools::pyjson::{self, Dumps, Duplicates, Value};
 use bench_tools::ruling::Repo;
 use bench_tools::sha256::hex_digest;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 const BEFORE: &str = "docs/research/current-2026-02-01/rulings/case-1.before.json";
 const AFTER: &str = "docs/research/current-2026-02-01/rulings/case-1.after.json";
@@ -130,28 +129,8 @@ fn rust(root: &Path, decision: &Value, kind: &str) -> String {
     }
 }
 
-fn python(root: &Path, decision: &Value, kind: &str) -> String {
-    let source = "import json, sys\nfrom pathlib import Path\nsys.path.insert(0, sys.argv[1])\nimport delegation\n\
-        try:\n    print(json.dumps(delegation.filing_faults(json.loads(sys.argv[2]), sys.argv[3], Path(sys.argv[4]))), end='')\n\
-        except Exception as error:\n    name = 'OSError' if isinstance(error, OSError) else 'ValueError' if isinstance(error, ValueError) else type(error).__name__\n    print(f'RAISED {name}: {error}', end='')\n";
-    let output = Command::new("python3")
-        .args(["-c", source])
-        .arg(repository().join("bench/tools"))
-        .arg(dumps(decision))
-        .arg(kind)
-        .arg(root)
-        .output()
-        .unwrap();
-    assert!(
-        output.stderr.is_empty(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).unwrap()
-}
-
 #[test]
-fn filing_faults_match_the_retained_python() {
+fn filing_faults_match_the_recorded_outcomes() {
     let root = root();
     let root = root.0.as_path();
     let receipt = json(&std::fs::read_to_string(root.join(delegation::POLICY)).unwrap());
@@ -167,46 +146,74 @@ fn filing_faults_match_the_retained_python() {
     };
     let cases = [
         (credit(""), "recovery", "[]"),
-        (credit(", \"family_id\": \"F2\""), "recovery", ""),
-        (credit(", \"identifies_cause\": \"no\""), "recovery", ""),
-        (credit(", \"reason\": \"Settled.\""), "recovery", ""),
-        (credit(", \"receipt_scope\": \"Adopt\""), "recovery", ""),
-        (credit(", \"target\": \"t-2\""), "recovery", ""),
-        (credit(""), "candidate", ""),
+        (
+            credit(", \"family_id\": \"F2\""),
+            "recovery",
+            r#"["before-record filing does not bind this exact subject, revision and source"]"#,
+        ),
+        (
+            credit(", \"identifies_cause\": \"no\""),
+            "recovery",
+            r#"["credit filing differs from the settled facts"]"#,
+        ),
+        (
+            credit(", \"reason\": \"Settled.\""),
+            "recovery",
+            r#"["reason must say agents settled under policy v2"]"#,
+        ),
+        (
+            credit(", \"receipt_scope\": \"Adopt\""),
+            "recovery",
+            r#"["agent settlement must cite the owner's saved policy adoption"]"#,
+        ),
+        (
+            credit(", \"target\": \"t-2\""),
+            "recovery",
+            r#"["settlement is for another decision type or target"]"#,
+        ),
+        (
+            credit(""),
+            "candidate",
+            r#"["settlement is for another decision type or target", "before-record filing does not bind this exact subject, revision and source", "candidate filing differs from the settled eligibility outcome"]"#,
+        ),
         (
             credit(", \"settlement\": {\"path\": \"missing.json\", \"sha256\": \"0\"}"),
             "recovery",
-            "",
+            r#"["agent-settled current decision needs its pinned after-record"]"#,
         ),
-        (credit(", \"settled_by\": \"owner\""), "recovery", ""),
+        (
+            credit(", \"settled_by\": \"owner\""),
+            "recovery",
+            r#"["a settlement pin or policy adoption receipt requires settled_by agents"]"#,
+        ),
         (
             credit(", \"settled_by\": \"owner\", \"settlement\": null"),
             "recovery",
-            "",
+            r#"["a settlement pin or policy adoption receipt requires settled_by agents"]"#,
         ),
         (
             "{\"settled_by\": \"owner\", \"settlement\": null, \"receipt\": null}".to_string(),
             "recovery",
             "[]",
         ),
-        ("{\"settled_by\": \"agents\"}".to_string(), "recovery", ""),
+        (
+            "{\"settled_by\": \"agents\"}".to_string(),
+            "recovery",
+            r#"["agent-settled current decision needs its pinned after-record"]"#,
+        ),
         (
             credit("").replace("\"review\": \"r1\", ", ""),
             "recovery",
-            "",
+            "RAISED KeyError: 'review'",
         ),
     ];
     for (decision, kind, wanted) in cases {
         let decision = json(&decision);
-        let expected = python(root, &decision, kind);
         assert_eq!(
             rust(root, &decision, kind),
-            expected,
+            wanted,
             "{} {kind}",
             dumps(&decision)
         );
-        if !wanted.is_empty() {
-            assert_eq!(expected, wanted, "{} {kind}", dumps(&decision));
-        }
     }
 }
