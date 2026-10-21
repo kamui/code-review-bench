@@ -9,7 +9,8 @@ use bench_tools::{
     derive_packet, diff_identity, evaluator_audit, evidence, evidence_inventory, export_explorer,
     file_attempt, grade, grading_reports, grading_validation, import_benchmark, methodology,
     native_artifacts, normalize_thermo, packet_selection, provision, pyfs, pyunicode, pyvalue,
-    rates, review_isolation, roster, ruling, skill_provenance, skill_runner, upstream, usage,
+    rates, review_isolation, review_queue, roster, ruling, run_cell, skill_provenance,
+    skill_runner, subscription_meters, upstream, usage,
 };
 use clap::builder::PossibleValuesParser;
 use clap::error::ErrorKind;
@@ -143,6 +144,139 @@ enum Cli {
     /// Launch one skill attempt under its pinned client and normalize what it returns.
     #[command(subcommand, infer_long_args = true)]
     SkillRunner(SkillRunnerCommand),
+    /// Run one cell of a frozen run: check the caps, provision a clone, dispatch the reviewer, file it.
+    #[command(infer_long_args = true)]
+    RunCell(Box<RunCellArgs>),
+    /// Run a pinned queue of frozen runs one review at a time, and report its recovery and status.
+    #[command(subcommand, infer_long_args = true)]
+    Queue(QueueCommand),
+    /// Read the subscription meters of pinned clients, and say whether a reading stops new work.
+    #[command(subcommand, infer_long_args = true)]
+    SubscriptionMeters(MetersCommand),
+}
+
+#[derive(Args)]
+struct QueueArgs {
+    /// The queue file.
+    #[arg(long, allow_negative_numbers = true)]
+    queue: OsString,
+    /// The checkout the runs belong to (default the current directory).
+    #[arg(long, allow_negative_numbers = true)]
+    root: Option<OsString>,
+}
+
+#[derive(Subcommand)]
+enum QueueCommand {
+    /// Print whether the queue may launch, and why not.
+    #[command(infer_long_args = true)]
+    Check(QueueArgs),
+    /// Launch the queue's cells one at a time until it is done, blocked or stopped at the quota.
+    #[command(infer_long_args = true)]
+    Run {
+        #[command(flatten)]
+        queue: QueueArgs,
+        /// Stop after this many launches.
+        #[arg(long)]
+        count: Option<u64>,
+        /// Start the controller in a process group of its own and return.
+        #[arg(long)]
+        detach: bool,
+    },
+    /// Print the status report.
+    #[command(infer_long_args = true)]
+    Status {
+        #[command(flatten)]
+        queue: QueueArgs,
+        /// Save the report under the state directory.
+        #[arg(long)]
+        snapshot: bool,
+        /// Record that a saved snapshot was delivered.
+        #[arg(long, value_name = "SNAPSHOT", allow_negative_numbers = true)]
+        acknowledge: Option<String>,
+        /// --acknowledge: how and to whom the snapshot was delivered.
+        #[arg(long, allow_negative_numbers = true, requires = "acknowledge")]
+        note: Option<String>,
+    },
+    /// Settle what a stopped controller left, and stop.
+    #[command(infer_long_args = true)]
+    Recover(QueueArgs),
+    /// Replace a diagnosed failed attempt on its own frozen run.
+    #[command(infer_long_args = true)]
+    Replace {
+        #[command(flatten)]
+        queue: QueueArgs,
+        /// The run id.
+        #[arg(long, allow_negative_numbers = true)]
+        run: String,
+        /// The failed attempt, att-NNN.
+        #[arg(long, allow_negative_numbers = true)]
+        attempt: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum MetersCommand {
+    /// Print a reading of the pinned clients' meters; exit 1 with the reason when it cannot be read.
+    #[command(infer_long_args = true)]
+    Read {
+        /// The pinned clients as JSON: {"claude": {"path": ..., "version": ...}}.
+        #[arg(long, allow_negative_numbers = true)]
+        clients: String,
+    },
+    /// Read a reading on stdin and print {"stop": reason or null, "sign_in_expiring": bool}; exit 1 with the reason
+    /// when the reading does not say how much of each client's quota is used.
+    #[command(infer_long_args = true)]
+    Stop {
+        #[arg(long, allow_negative_numbers = true)]
+        clients: String,
+        /// The usage percentage at which new work stops.
+        #[arg(long, allow_negative_numbers = true)]
+        percent: f64,
+        /// The moment of the decision, in seconds since 1970.
+        #[arg(long, allow_negative_numbers = true)]
+        moment: f64,
+        /// What must not be running when the sign-in is renewed.
+        #[arg(long, allow_negative_numbers = true)]
+        work: String,
+    },
+}
+
+#[derive(Args)]
+#[command(group = clap::ArgGroup::new("action").required(true).args(["status", "next", "cell", "replace", "file", "release"]))]
+struct RunCellArgs {
+    /// The run directory, bench/runs/<run>.
+    #[arg(long, allow_negative_numbers = true)]
+    run: OsString,
+    /// The run's work directory (default ~/.t3/bench-runs/<run>).
+    #[arg(long, allow_negative_numbers = true)]
+    work: Option<OsString>,
+    #[arg(long)]
+    status: bool,
+    #[arg(long)]
+    next: bool,
+    #[arg(long, allow_negative_numbers = true)]
+    cell: Option<String>,
+    #[arg(long, allow_negative_numbers = true)]
+    replace: Option<String>,
+    #[arg(long, allow_negative_numbers = true)]
+    file: Option<String>,
+    #[arg(long, allow_negative_numbers = true)]
+    release: Option<String>,
+    /// --file: the attempt never returned; --release: the reviewer never started; EVIDENCE is the process-stop
+    /// observation verifying that its processes are gone.
+    #[arg(long, value_name = "EVIDENCE", allow_negative_numbers = true)]
+    interrupted: Option<OsString>,
+    /// --replace: why the predecessor is replaced; --interrupted: what was observed.
+    #[arg(long, allow_negative_numbers = true)]
+    reason: Option<String>,
+    /// --replace: the stopped predecessor was stopped by the harness.
+    #[arg(long)]
+    stopped_by_harness: bool,
+    /// The session quota and reset as last reported, for the dispatch record.
+    #[arg(long, allow_negative_numbers = true)]
+    quota: Option<String>,
+    #[arg(long)]
+    dry_run: bool,
 }
 
 #[derive(Subcommand)]
@@ -3034,6 +3168,302 @@ fn run_skill_runner(command: SkillRunnerCommand) -> Result<ExitCode, ExitCode> {
     Ok(ExitCode::from(outcome.code))
 }
 
+fn run_run_cell(arguments: RunCellArgs) -> Result<ExitCode, ExitCode> {
+    if arguments.interrupted.is_some() && arguments.file.is_none() && arguments.release.is_none() {
+        return Err(misuse(
+            "run-cell",
+            ErrorKind::ArgumentConflict,
+            "--interrupted goes with --file or --release",
+        ));
+    }
+    let resolved =
+        |path: &[u8]| -> std::path::PathBuf { OsString::from_vec(pyfs::resolve(path)).into() };
+    let run_dir = resolved(arguments.run.as_bytes());
+    let work = match &arguments.work {
+        Some(work) => {
+            let work = work.as_bytes();
+            let expanded = match (work.strip_prefix(b"~"), std::env::var_os("HOME")) {
+                (Some(rest), Some(home)) if rest.is_empty() || rest.starts_with(b"/") => {
+                    [home.as_bytes(), rest].concat()
+                }
+                _ => work.to_vec(),
+            };
+            resolved(&expanded)
+        }
+        None => run_cell::default_work(&run_dir),
+    };
+    let action = if arguments.status {
+        run_cell::Action::Status
+    } else if let Some(attempt) = arguments.file {
+        run_cell::Action::File {
+            attempt,
+            interrupted: arguments.interrupted.map(Into::into),
+            reason: arguments.reason,
+        }
+    } else if let Some(attempt) = arguments.release {
+        let Some(evidence) = arguments.interrupted else {
+            return Err(misuse(
+                "run-cell",
+                ErrorKind::MissingRequiredArgument,
+                "--release needs --interrupted",
+            ));
+        };
+        run_cell::Action::Release {
+            attempt,
+            evidence: evidence.into(),
+        }
+    } else {
+        let choice = match (arguments.cell, arguments.replace) {
+            (Some(cell), _) => run_cell::Choice::Cell(cell),
+            (None, Some(attempt)) => run_cell::Choice::Replace {
+                attempt,
+                stopped_by_harness: arguments.stopped_by_harness,
+            },
+            (None, None) => run_cell::Choice::Next,
+        };
+        run_cell::Action::Claim {
+            choice,
+            reason: arguments.reason,
+            quota: arguments.quota,
+            dry_run: arguments.dry_run,
+        }
+    };
+    let executable = std::env::current_exe().map_err(|error| {
+        eprintln!("run-cell: cannot locate this executable: {error}");
+        ExitCode::from(2)
+    })?;
+    let tool = |argv: &[String], env: Option<&[(String, String)]>| skill_runner::run(argv, env);
+    let pinned = |run: &Path, action: &str| file_attempt::check_pin(&run.to_string_lossy(), action);
+    let context = run_cell::Context {
+        run_dir,
+        work,
+        executable,
+        env: run_cell::environment(),
+        tool: &tool,
+        fetch: &rates::Network,
+        pinned: &pinned,
+        now: &run_cell::now_seconds,
+        waiting: &|| {},
+    };
+    match run_cell::command(action, &context) {
+        Ok(printed) => {
+            let mut out = pyjson::dumps(
+                &printed,
+                &pyjson::Dumps {
+                    indent: Some(2),
+                    ..pyjson::Dumps::default()
+                },
+            );
+            out.push('\n');
+            write_stdout(out.as_bytes())?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(run_cell::Failure::Refused(message)) => {
+            write_stdout(format!("refused: {message}\n").as_bytes())?;
+            Ok(ExitCode::from(1))
+        }
+        Err(run_cell::Failure::Input(message)) => {
+            eprintln!("run-cell: {message}");
+            Ok(ExitCode::from(2))
+        }
+    }
+}
+
+fn run_queue(command: QueueCommand) -> Result<ExitCode, ExitCode> {
+    let (arguments, action) = match command {
+        QueueCommand::Check(arguments) => (arguments, review_queue::Action::Check),
+        QueueCommand::Run {
+            queue,
+            count,
+            detach,
+        } => (queue, review_queue::Action::Run { count, detach }),
+        QueueCommand::Status {
+            queue,
+            snapshot,
+            acknowledge,
+            note,
+        } => (
+            queue,
+            review_queue::Action::Status {
+                snapshot,
+                acknowledge: acknowledge.map(|name| (name, note)),
+            },
+        ),
+        QueueCommand::Recover(arguments) => (arguments, review_queue::Action::Recover),
+        QueueCommand::Replace {
+            queue,
+            run,
+            attempt,
+        } => (queue, review_queue::Action::Replace { run, attempt }),
+    };
+    let located = |error: std::io::Error| {
+        eprintln!("queue: cannot locate this executable or the checkout: {error}");
+        ExitCode::from(2)
+    };
+    let root = match arguments.root {
+        Some(root) => std::path::PathBuf::from(root),
+        None => std::env::current_dir().map_err(located)?,
+    };
+    let repo: std::path::PathBuf =
+        OsString::from_vec(pyfs::resolve(root.as_os_str().as_bytes())).into();
+    let executable = std::env::current_exe().map_err(located)?;
+    let tool = |argv: &[String], env: Option<&[(String, String)]>| skill_runner::run(argv, env);
+    let clock = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0.0, |elapsed| elapsed.as_secs_f64())
+    };
+    let sleep = |seconds: f64| std::thread::sleep(std::time::Duration::from_secs_f64(seconds));
+    let effects = review_queue::Effects {
+        repo,
+        env: run_cell::environment(),
+        runner: None,
+        executable,
+        proc_root: "/proc".into(),
+        uid: nix::unistd::getuid().as_raw(),
+        clock: &clock,
+        sleep: &sleep,
+        nap: &sleep,
+        meters: &subscription_meters::meters,
+        tool: &tool,
+        poll_seconds: review_queue::POLL_SECONDS,
+        scan_gap_seconds: review_queue::SCAN_GAP_SECONDS,
+        unreadable_wait_seconds: review_queue::UNREADABLE_WAIT_SECONDS,
+    };
+    let queue = std::path::Path::new(&arguments.queue);
+    match review_queue::command(queue, action, &effects) {
+        Ok(outcome) => {
+            if let Some(printed) = outcome.printed {
+                write_stdout(indented_json(&printed).as_bytes())?;
+            }
+            Ok(ExitCode::from(outcome.code))
+        }
+        Err(review_queue::Failure::Blocked(reasons)) => {
+            let printed = pyjson::Value::Object(
+                [(
+                    "blocked".to_string(),
+                    pyjson::Value::Array(reasons.into_iter().map(pyjson::Value::Str).collect()),
+                )]
+                .into_iter()
+                .collect(),
+            );
+            write_stdout(
+                format!("{}\n", pyjson::dumps(&printed, &pyjson::Dumps::default())).as_bytes(),
+            )?;
+            Ok(ExitCode::from(1))
+        }
+        Err(review_queue::Failure::Refused(message)) => {
+            write_stdout(format!("refused: {message}\n").as_bytes())?;
+            Ok(ExitCode::from(1))
+        }
+        Err(review_queue::Failure::Input(message)) => {
+            eprintln!("queue: {message}");
+            Ok(ExitCode::from(2))
+        }
+    }
+}
+
+fn indented_json(value: &pyjson::Value) -> String {
+    let mut out = pyjson::dumps(
+        value,
+        &pyjson::Dumps {
+            indent: Some(2),
+            ..pyjson::Dumps::default()
+        },
+    );
+    out.push('\n');
+    out
+}
+
+fn run_subscription_meters(command: MetersCommand) -> Result<ExitCode, ExitCode> {
+    let clients = match &command {
+        MetersCommand::Read { clients } | MetersCommand::Stop { clients, .. } => clients,
+    };
+    let parsed = pyjson::loads(clients, Duplicates::KeepLast)
+        .ok()
+        .and_then(|value| match value {
+            pyjson::Value::Object(pins) => pins
+                .iter()
+                .map(|(name, pin)| {
+                    Some(subscription_meters::Pinned {
+                        name: name.clone(),
+                        path: pin.as_object()?.get("path")?.as_str()?.into(),
+                        version: pin.as_object()?.get("version")?.as_str()?.to_string(),
+                    })
+                })
+                .collect::<Option<Vec<_>>>(),
+            _ => None,
+        });
+    let Some(pinned) = parsed else {
+        return Err(misuse(
+            "subscription-meters",
+            ErrorKind::ValueValidation,
+            "--clients is an object of {\"path\": ..., \"version\": ...} pins by client name",
+        ));
+    };
+    let unreadable = |error: subscription_meters::Unreadable| -> Result<ExitCode, ExitCode> {
+        write_stdout(format!("{}\n", error.message).as_bytes())?;
+        Ok(ExitCode::from(1))
+    };
+    match command {
+        MetersCommand::Read { .. } => {
+            match subscription_meters::read(&pinned, &run_cell::environment()) {
+                Ok(usage) => {
+                    write_stdout(indented_json(&usage).as_bytes())?;
+                    Ok(ExitCode::SUCCESS)
+                }
+                Err(error) => unreadable(error),
+            }
+        }
+        MetersCommand::Stop {
+            percent,
+            moment,
+            work,
+            ..
+        } => {
+            let mut raw = String::new();
+            if let Err(error) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut raw) {
+                eprintln!("subscription-meters: cannot read the reading on stdin: {error}");
+                return Ok(ExitCode::from(2));
+            }
+            let usage = match pyjson::loads(&raw, Duplicates::KeepLast) {
+                Ok(usage) => usage,
+                Err(error) => {
+                    eprintln!("subscription-meters: the reading on stdin is not JSON: {error}");
+                    return Ok(ExitCode::from(2));
+                }
+            };
+            let usage = match subscription_meters::checked(&pinned, usage) {
+                Ok(usage) => usage,
+                Err(error) => return unreadable(error),
+            };
+            let stop = match subscription_meters::quota_stop(&usage, percent, moment, &work) {
+                Ok(stop) => stop,
+                Err(message) => {
+                    return unreadable(subscription_meters::Unreadable {
+                        message,
+                        sign_in: false,
+                    });
+                }
+            };
+            let printed: pyjson::Object = [
+                (
+                    "stop".to_string(),
+                    stop.map_or(pyjson::Value::Null, pyjson::Value::Str),
+                ),
+                (
+                    "sign_in_expiring".to_string(),
+                    pyjson::Value::Bool(subscription_meters::sign_in_expiring(&usage, moment)),
+                ),
+            ]
+            .into_iter()
+            .collect();
+            write_stdout(indented_json(&pyjson::Value::Object(printed)).as_bytes())?;
+            Ok(ExitCode::SUCCESS)
+        }
+    }
+}
+
 /// Prints the filing summary, or one `attempt.json <problem>` line per schema problem with exit 1; a refusal is
 /// `file-attempt: <message>` on stderr with exit 2.
 fn run_file_attempt(arguments: FileAttemptArgs) -> Result<ExitCode, ExitCode> {
@@ -4088,6 +4518,9 @@ fn main() -> ExitCode {
         } => run_packet_selection(&run, &target_dir, &root),
         Cli::Provision(command) => run_provision(command),
         Cli::SkillRunner(command) => run_skill_runner(command),
+        Cli::RunCell(arguments) => run_run_cell(*arguments),
+        Cli::Queue(command) => run_queue(command),
+        Cli::SubscriptionMeters(command) => run_subscription_meters(command),
         Cli::CurrentGrading(arguments) => run_current_grading(arguments),
         Cli::Methodology(arguments) => run_methodology(&arguments),
         Cli::Grade(command) => run_grade(command),

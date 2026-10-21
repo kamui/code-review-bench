@@ -305,10 +305,10 @@ pub fn skill_tree_hash(root: &Path) -> R<(String, Vec<Value>)> {
 
 // --- processes -------------------------------------------------------------------------------
 
-struct Ran {
-    code: i32,
-    stdout: String,
-    stderr: String,
+pub struct Ran {
+    pub code: i32,
+    pub stdout: String,
+    pub stderr: String,
 }
 
 fn exit_code(status: ExitStatus) -> i32 {
@@ -327,7 +327,7 @@ fn described(argv: &[String]) -> String {
 }
 
 /// Run `argv` and capture its output, with `env` replacing the environment when given.
-fn run(argv: &[String], env: Option<&[(String, String)]>) -> R<Ran> {
+pub fn run(argv: &[String], env: Option<&[(String, String)]>) -> R<Ran> {
     let mut command = Command::new(&argv[0]);
     command.args(&argv[1..]).stdin(Stdio::null());
     if let Some(env) = env {

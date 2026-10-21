@@ -7,7 +7,7 @@ The [pilot result](pilot/README.md) and its stop recommendation stay unchanged a
 This stage does not claim that the small-CLI target passed.
 
 `bench/tools/rust_runtime.py` builds, retains, selects and checks Rust executables.
-`bench/tools/review_queue.py` refuses a launch whose pinned executable is missing, changed, built
+`bench-tools queue` refuses a launch whose pinned executable is missing, changed, built
 for another host or built from another source. `bench-tools`, the crate of
 [#154](processing.md), holds the first maintained commands, which run as
 [a maintained command](#running-a-maintained-command) does.
@@ -41,7 +41,7 @@ The pin that queues and runs use is the executable's SHA-256 together with the r
    python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select
    ```
 
-`install` needs Python 3.11 or later; the other commands and `review_queue.py` do not.
+`install` needs Python 3.11 or later; the other commands do not.
 After the cleanliness check it creates a private Cargo home for the build. That home holds no
 configuration, only links to the host Cargo home's registry and Git caches and the lock files that
 guard them. It writes the crate's Git tree at `HEAD` into a snapshot directly inside that home,
@@ -116,15 +116,15 @@ python3 bench/tools/rust_runtime.py pin bench-tools > bench/runs/<run>/runtimes.
 
 A run frozen at a commit that has `rust/bench-tools` must pin `bench-tools`, whose `normalize-review` and
 `normalize-thermo` normalize its reviews ([#194](processing.md#the-review-normalizers)). `pin` prints one name; merge
-the objects when a run pins more than one. `run_cell.py`, its `--file` and the skill runners refuse a run
-that pins none before anything is claimed, and `review_queue.py` refuses its queue before any launch. A run frozen
+the objects when a run pins more than one. `bench-tools run-cell`, its `--file` and the skill runners refuse a run
+that pins none before anything is claimed, and `bench-tools queue` refuses its queue before any launch. A run frozen
 earlier pins none and keeps running from its own freeze checkout, with the Python normalizers.
 
 Copy the same object into the queue file as `runtimes`. Set `runtime_store` when the store is not
-the default. Before every launch, `review_queue.py` checks the following:
+the default. Before every launch, `bench-tools queue` checks the following:
 
-- Each run's `runtimes.frozen.json` equals the queue's `runtimes`. A run without the file needs a
-  queue that pins no runtime, so earlier runs and queues behave as before. A run whose `freeze_commit` has
+- Each run's `runtimes.frozen.json` equals the queue's `runtimes`, which must pin `bench-tools`, since it runs
+  the cells. A run without the file runs only from its own freeze checkout. A run whose `freeze_commit` has
   `rust/bench-tools` must pin `bench-tools`.
 - The executable and receipt hash to the pin, and the executable is a regular executable file.
 - The receipt's target is this host's, the host is a supported target (below), and the host has the
@@ -213,7 +213,7 @@ detection until after merge. Merge a change to the runtime only after every targ
 | `aarch64-apple-darwin` | `macos-latest` | None |
 
 Each workflow run records its own results; this table records only where the checks run. Native
-Windows is outside the script policy, and every check refuses an unknown host. `review_queue.py`
+Windows is outside the script policy, and every check refuses an unknown host. `bench-tools queue`
 reads `/proc` and runs only on Linux, so queue pins apply only there. The C library check compares
 the build host's glibc with this host's, which is stricter than the symbol versions the executable
 needs; macOS receipts record no C library.

@@ -3,8 +3,8 @@
 
 One coordinator holds the controller lock and alone writes status, reservations, settlements and current grades.
 Each worker runs one reserved ``grade.py dispatch`` in its own neutral workspace and returns its exit code.
-Preparation, mapping, current-record reads and archives run the ``bench-tools`` the authorization pins under
-``runtimes``, and every ``grade.py`` step receives that executable through ``BENCH_RUST_BENCH_TOOLS``.
+Preparation, mapping, current-record reads, meter readings and archives run the ``bench-tools`` the authorization
+pins under ``runtimes``, and every ``grade.py`` step receives that executable through ``BENCH_RUST_BENCH_TOOLS``.
 """
 
 import argparse
@@ -25,7 +25,6 @@ import time
 import uuid
 
 import rust_runtime
-import subscription_meters
 
 ROOT = Path(__file__).resolve().parents[2]
 TOOLS = ROOT / "bench/tools"
@@ -257,11 +256,36 @@ def client_name(grader):
     return "codex" if grader["model"].startswith("gpt-") else "claude"
 
 
-def read_meters(directory, grader, version, path):
-    """The subscription meters of the queue's pinned client; no model is called."""
+class MetersUnreadable(Exception):
+    pass
+
+
+def metered_clients(directory, grader, version):
     name = client_name(grader)
-    pinned = {name: {"path": str(directory / "client-bin" / name), "version": version}}
-    return subscription_meters.read_meters(pinned, {**os.environ, "PATH": path})
+    return {name: {"path": str(directory / "client-bin" / name), "version": version}}
+
+
+def provider_meters(tools, clients, env):
+    """A reading of the pinned clients' subscription meters; no model is called."""
+    result = subprocess.run([str(tools), "subscription-meters", "read", "--clients", json.dumps(clients)], cwd=ROOT,
+                            capture_output=True, text=True, encoding="utf-8", stdin=subprocess.DEVNULL, env=env)
+    if result.returncode == 1:
+        raise MetersUnreadable(result.stdout.strip())
+    if result.returncode:
+        raise ValueError(f"bench-tools subscription-meters read failed: {(result.stderr or result.stdout).strip()}")
+    return json.loads(result.stdout)
+
+
+def meter_verdict(tools, clients, usage, percent, moment):
+    """{"stop": reason or None, "sign_in_expiring": bool} for a reading of ``clients``."""
+    result = subprocess.run([str(tools), "subscription-meters", "stop", "--clients", json.dumps(clients),
+                             "--percent", str(percent), "--moment", repr(moment), "--work", "grading session"],
+                            cwd=ROOT, input=json.dumps(usage), capture_output=True, text=True, encoding="utf-8")
+    if result.returncode == 1:
+        raise MetersUnreadable(result.stdout.strip())
+    if result.returncode:
+        raise ValueError(f"bench-tools subscription-meters stop failed: {(result.stderr or result.stdout).strip()}")
+    return json.loads(result.stdout)
 
 
 def pin_client(directory, grader, expected=None):
@@ -333,6 +357,7 @@ def execute(authorization_path, directory, limit=None, expected_cli_version=None
     grader = authorization["grader"]
     dispatch_timeout(grader)
     cli_version, client_path = pin_client(directory, grader, expected_cli_version)
+    clients = metered_clients(directory, grader, cli_version)
     workspaces, archives = planned_root(execution["workspaceRoot"]), planned_root(execution["archiveRoot"])
     groups = defaultdict(list)
     for review in plan["reviews"]:
@@ -382,14 +407,17 @@ def execute(authorization_path, directory, limit=None, expected_cli_version=None
         nonlocal read_at
         moment = time.time()
         usage = invocation.get("meters")
-        if (usage is None or moment - read_at > QUOTA_MAX_AGE_SECONDS
-                or subscription_meters.sign_in_expiring(usage, moment)):
-            try:
-                usage = invocation["meters"] = read_meters(directory, grader, cli_version, client_path)
-            except subscription_meters.Unreadable as error:
-                return f"The subscription meters could not be read: {error}"
-            read_at = moment
-        return subscription_meters.quota_stop(usage, stop_percent, moment, "grading session")
+        try:
+            verdict = None
+            if usage is not None and moment - read_at <= QUOTA_MAX_AGE_SECONDS:
+                verdict = meter_verdict(tools, clients, usage, stop_percent, moment)
+            if verdict is None or verdict["sign_in_expiring"]:
+                usage = provider_meters(tools, clients, {**os.environ, "PATH": client_path})
+                verdict = meter_verdict(tools, clients, usage, stop_percent, moment)
+                invocation["meters"], read_at = usage, moment
+        except MetersUnreadable as error:
+            return f"The subscription meters could not be read: {error}"
+        return verdict["stop"]
 
     def within_quota():
         reason = quota()
