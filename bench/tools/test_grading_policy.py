@@ -247,7 +247,7 @@ print("read-only source; private key absent; external network denied; fixture lo
         policy_path.write_text(json.dumps(self.policy))
         policy.probe(self.work)
         process = subprocess.Popen([sys.executable, str(Path(policy.__file__)), "--work", str(self.work),
-                                    "--policy", str(policy_path)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    "--policy", str(policy_path), "--bench-tools", "bench-tools"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE, text=True)
         try:
             with selectors.DefaultSelector() as selector:

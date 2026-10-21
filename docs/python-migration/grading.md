@@ -17,7 +17,9 @@ upstream collection, as [slice 5](#slice-5-shared-claims-and-upstream-collection
 [#236](https://github.com/kamui/code-review-bench/issues/236), ports the calibration and evaluator audit checks, as
 [slice 6](#slice-6-calibration-and-evaluator-audit-checks) describes. Slice 7,
 [#237](https://github.com/kamui/code-review-bench/issues/237), ports grading preparation under runner identity v2, as
-[slice 7](#slice-7-grading-preparation-and-runner-identity-v2) describes.
+[slice 7](#slice-7-grading-preparation-and-runner-identity-v2) describes. Slice 10, [#240](https://github.com/kamui/code-review-bench/issues/240) with
+[#241](https://github.com/kamui/code-review-bench/issues/241), cuts grading over to `bench-tools` and deletes the ported Python, as
+[slice 10](#slice-10-the-cutover-and-the-python-deletion) describes.
 
 ## The split with #157
 
@@ -153,14 +155,14 @@ verdicts. No archive or manifest in the repository holds their key, inputs or ve
 from the validation policy at the filing commit.
 
 The mapping replay, `the_mapping_replays_every_restorable_archive_identically` in the same file, gives each
-restorable archive's workspace and key to `grade.py map` and to `bench-tools grade map` with a fixture `--assessor`,
-through `--root`, on a disposable worktree of the commit that filed its receipt. Each must end the same way in both:
-refused with identical lines and nothing written but `.cache/current-record.lock`, which both create, or accepted
-with identical lines and records that are equal once the mapping clock, `runner.mapping` and the receipt's own
-digest are masked. The Pages workflow runs it in its own `Mapping replay` job, outside the build job's
-time limit. On 2026-10-20 all 333 v1 replays were refused alike, exit 2: neither filing commit has
-`bench/grading/current/credits.json`, which `grade.py map` reads before it writes and `43bd77593` added later. No
-replay accepted, so the comparison of accepted records runs only in the fixture cases.
+restorable archive's workspace and key to `bench-tools grade map` with a fixture `--assessor`, through `--root`,
+on a disposable worktree of the commit that filed its receipt. Each must end with the exit status and lines
+[`grading-replay-expectations.v1.json`](grading-replay-expectations.v1.json) records and write nothing but
+`.cache/current-record.lock`. Those are the outcomes of `grade.py`'s mapping, recorded before slice 10 removed it.
+The Pages workflow runs it in its own `Mapping replay` job, outside the build job's time limit. On 2026-10-20 all
+333 v1 replays were refused, exit 2: neither filing commit has `bench/grading/current/credits.json`, which mapping
+reads before it writes and `43bd77593` added later. No replay accepted, so accepted records are checked only in the
+fixture cases.
 
 No contract has an accepted replay, so each contract's verdicts map in a case of
 [`grade-map.v1.json`](../../tools/behavior_contracts/grade-map.v1.json). v2 and v3 have no archive to build a case
@@ -333,7 +335,7 @@ Diagnostics keep the program names `claims.py` and `upstream.py`. Dossier tokens
 `upstream.py`'s argument lists, four reads at a time. `verify:claims` and the commands in
 `docs/claim-adjudication.md` and `docs/maintainer-adjudication.md` moved, and `tools/test_moved_cli_callers.py`
 fails on a current caller of `claims.py`'s `check`, `inventory`, `dossier` or `evidence` command, or of
-`upstream.py`'s `collect` command. `grade.py prepare --claim-evidence` still imports `claims.py`, until slice 10 moves its caller.
+`upstream.py`'s `collect` command. Slice 10 moved the last importer, preparation's `--claim-evidence`, to `bench-tools grade prepare`.
 
 [`claims.v1.json`](../../tools/behavior_contracts/claims.v1.json) pins the four commands on the fixture variants and
 on hand-built records, with dossiers and packets compared structurally. Evidence cases state their claim outcomes
@@ -436,10 +438,10 @@ python3 bench/tools/rust_runtime.py exec bench-tools -- grade preflight-inputs -
 python3 bench/tools/rust_runtime.py exec bench-tools -- grade check-prepared --work WORK --key KEY [--dispatching]
 ```
 
-`prepare` takes `grade.py prepare`'s options. `--provision SCRIPT` runs `python3 SCRIPT prepare` into `WORK/clone`,
+`prepare` takes the options of `grade.py`'s preparation. `--provision SCRIPT` runs `python3 SCRIPT prepare` into `WORK/clone`,
 the bridge #157 removes; a failed provisioner leaves no `clone`, `clone-cache` or `clone-work` and reports its exit and
 output tail. The key is created with mode 0600 outside WORK, and WORK must be new or empty. `preflight-inputs` makes
-the checks of `grade.py preflight --offline`. `check-prepared` makes `check_prepared`'s checks of a version 1 key.
+the checks `grade.py`'s offline preflight made. `check-prepared` makes `check_prepared`'s checks of a version 1 key.
 
 A Rust-prepared key is version 2, as plan decision 6 gives it. `validator` holds only `inputs.json`, and
 `validator/tools/` is not created, since the validator is part of the executable. `runner_deviation` is
@@ -447,9 +449,9 @@ A Rust-prepared key is version 2, as plan decision 6 gives it. `validator` holds
 `provisioning`: `files` holds the 23 runner files and `rust/bench-tools`, the running executable's SHA-256, and
 `bench_tools` is that executable's `rust_runtime.py` pin. `prepare` and `check-prepared` refuse a receipt that
 `rust_runtime.check` finds incomplete. `check-prepared` refuses a v2 key whose pinned executable or receipt is
-missing, changed or incomplete, one problem naming it, and a changed or deleted `files` entry as a runner change. The
-retained `grade.py map` accepts a v2 key; `grade.py dispatch` refuses it with the runner-changed line after its
-client preflight, before any home, session or charge.
+missing, changed or incomplete, one problem naming it, and a changed or deleted `files` entry as a runner change. Until
+slice 10, `grade.py`'s mapping accepted a v2 key and its dispatch refused one after its client preflight, before any
+home, session or charge.
 [`current-grading-key.v1.schema.json`](../../bench/schema/current-grading-key.v1.schema.json) describes both
 versions. It cannot require `bench_tools` for version 2 only; `check-prepared` refuses a version 2 key without a valid pin.
 
@@ -471,8 +473,7 @@ which carries [v2](../../tools/behavior_contracts/grade-prepare-decisions.v2.jso
   `clone`, `clone-cache` and `clone-work`. `bench-tools` removes all three and reports the exit and the output tail,
   each undecodable byte written as `\udcXX` (`grade-prepare-provisioner-invalid-output`).
 
-No caller moves: `grade.py prepare` stays the production command until slice 10, and slice 11 deletes the Python
-preparation.
+No caller moved in this slice. Slice 10 moved them and removed `grade.py`'s preparation.
 
 ## Slice 8: grade mapping, invalidation and second assessments
 
@@ -517,8 +518,8 @@ forward and ends its `evaluator-audit-cli-second-is-not-ported` difference: `ben
 saves the second assessment, and its help lists `--work`, `--key` and `--assessor`.
 
 `docs/evaluator-audit.md` names `bench-tools evaluator-audit second`, and `tools/test_moved_cli_callers.py` fails on a
-current caller of `evaluator_audit.py`'s `second`. No `grade.py` caller moves: `grade.py` stays the production
-command until slice 10, and slice 11 deletes `grade.py` and `evaluator_audit.py`.
+current caller of `evaluator_audit.py`'s `second`. No `grade.py` caller moved in this slice. Slice 10 moved
+them, removed `grade.py`'s mapping and deleted `evaluator_audit.py`.
 
 ## Research helpers
 
@@ -539,14 +540,16 @@ any of them.
 No current-record assertion moved in this slice. None fits a fixture case: each compares the live record with a
 helper's output, and the helpers have no port. `current-grading check` covers only their consistency part. The
 staged inventory pin's live derivation needs a later step: it is the inventory `current-grading check` compares.
-Since slice 3, the real-record list runs that check in Pages.
+From slice 3 to slice 9, the real-record list ran that check in Pages.
 
 `current-grading check` also refuses an equivalent link on a comment linked to two or more claims, a rule #256
-added. `current_grading.py` refuses only a comment equivalent to two claims.
+added. The deleted `current_grading.py` refused only a comment equivalent to two claims.
 
 Replaying the rebuild assertions at their filing commits, so the loaders could leave, would drop today's guard that
-each later filing stays undoable. That needs the owner's ruling; until then the loaders stay and their helpers stay
-active.
+each later filing stays undoable. That needed the owner's ruling, and the loaders stayed until slice 10. Slice 10
+deleted the four test modules and `test_packet_replacements.py`: they and the helpers they run import `claims.py` and
+`current_grading.py` from the checkout, and those modules are deleted while the helpers stay byte-unchanged. The helpers' dispositions below are as they
+stood before slice 10; since then each one is a historical replay at its commit.
 
 ### Helpers
 
@@ -622,21 +625,44 @@ regrade-reports decisions v1 cite `bench_tools::pyvalue::python_sum`, by that mo
 `bench_tools::pysemantics`. `bench_tools::pyvalue` is now #251's ruling module. The pinned decision files stay
 unchanged.
 
+## Slice 10: the cutover and the Python deletion
+
+[#240](https://github.com/kamui/code-review-bench/issues/240) makes `bench-tools` the grading implementation production runs, and absorbs [#241](https://github.com/kamui/code-review-bench/issues/241). On 2026-10-20 the
+owner dropped byte-exact Python parity for the rest of the migration, so ported Python is deleted rather than kept
+for a final differential, and the mapping replay compares with recorded outcomes only.
+
+- `grade.py` keeps `dispatch`, `dispatch_codex` and online `preflight`. `prepare`, `validate`, `inventory`, `map`,
+  `invalidate` and `preflight --offline` exit 2 and name their `bench-tools grade` replacement. Dispatch refuses a
+  v1 key with "prepared by runner identity v1; prepare the batch again" and runs `bench-tools grade check-prepared
+  --dispatching` through the key's pin before it reads a credential or runs the client.
+- `grade.runner_files()` is the version 2 list: the 15 `bench/tools` files the dispatch path imports or runs, and
+  `rust/bench-tools`.
+- `grading_policy.py`'s `validate` tool and both client probes run the pinned `bench-tools grading validate`,
+  mounted read-only at a fixed path.
+- `regrade.py` requires a `runtimes` pin and runs every `bench-tools` step through it.
+- Deleted with their tests: `claims.py`, `claim_grading.py`, `current_grading.py`, `grading_validation.py`,
+  `pre_existing_grading.py`, `upstream.py`, `delegation.py`, `ruling_record.py`, `ruling_summary.py`,
+  `ruling_dossier.py`, `methodology.py`, `calibration.py` and `evaluator_audit.py`. Also deleted: the four loaders
+  above, `test_packet_replacements.py`, and `test_remedy_policy.py`, whose paths `grade-map.v1.json` and
+  `grading-validation.v1.json` cover.
+- Every grading corpus runs on `bench-tools` only. Decision files are append-only, so `grade-prepare-decisions.v4.json`
+  and `grade-map-decisions.v4.json` record the fixture's new runner stand-ins. Each `baseline_defect` keeps the
+  deleted Python's output as history. The real-record mode and the `historical` test group are gone.
+- `bench-tools grade map` runs `current-grading check`'s validation before it writes, so it also refuses an
+  equivalent link on a comment linked to two or more claims.
+
 ## Retained after #156
 
 | Module | Kept for | Removed by |
 | --- | --- | --- |
 | `packet_selection.py` | `run_cell.py`, `codex_skill_runner.py` | #157 |
 | `grade.py` (dispatch, online preflight) | `regrade.py`, manual dispatch | #157 |
-| `grading_profile.py` | Waits for the shared Rust usage parser | #157 |
 | `check_manifest.py` (library only) | `rates`, `provision`, `run_cell`, `file_attempt`, `evidence_store` | #160 |
 | `normalize_review.py`, `diff_identity.py` | As the processing record lists | #158, #157 |
 | `tools/behavior_contract.py` features added here | The contract harness | #160 |
 | `stage_edition.py` and the other research helpers | Research records | never deleted |
 
-Until slice 11, every Python module in the recurring real-record differential, or imported by the Python grading
-runner, stays as the baseline. `grading_fixture.rs` runs `current_grading.py` as that baseline and moves to the
-Rust check by then.
+Slice 10 deleted every other ported grading module.
 
 ## Bridges
 

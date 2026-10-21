@@ -85,22 +85,14 @@ Without `--implementations`, each program runs its maintained implementation. `c
 `diff-identity` and `normalize-review` run their Python scripts; `diff_identity.py` and `normalize_review.py` are
 retained libraries. Since [#234](https://github.com/kamui/code-review-bench/issues/234), `check-manifest` runs
 `bench-tools`, and `behavior_contract.python_commands` maps it back to the retained `check_manifest.py` for the
-differential. `rates` and `upstream` run the retained
-`rates.py` and `upstream.py` through drivers that read the case directory as the repository and, for `rates`, take
-`--source PROVIDER=URL` pages, so no case leaves the host; `rates-transport-failure` connects to a closed loopback
-port. `regrade-archive-attempt` runs the retained `regrade.archive_attempt` through a driver that reads the case
-directory as the repository. `ruling` runs the retained `ruling_record.py` and `ruling_dossier.py` through a driver that
-reads the case directory, or the `--root` argument, as the repository. `current-grading` runs the retained
-`current_grading.py` the same way; its `fingerprints` operation, which the Python command line lacks, prints each
-selected batch with `current_grading.batch_state`'s fingerprint and state. `methodology` runs the retained
-`methodology.py` through a driver that reads the case directory as the repository. `claims` runs the retained
-`claims.py` under the entropy driver, through a driver that rebinds `claims.py`, `current_grading.py` and `upstream.py`
-to the case directory, or the `--root` argument. `upstream collect` cases run the stub `gh`, which answers each
-paginated read from the case's `gh/upstream.json`. `calibration` and `evaluator-audit` run the retained
-`calibration.py` and `evaluator_audit.py` through drivers that read the case directory, or the `--root` argument,
-as the repository. Cases whose Rust behavior was changed on purpose
-carry a `baseline_defect` with Python's output, so pass
-`--allow-known-defects` when Python is the primary. `roster`, `normalize-thermo`, `derive-packet`, `build-packet`,
+differential. `rates` runs the retained `rates.py` through a driver that reads the case directory as the repository
+and takes `--source PROVIDER=URL` pages, so no case leaves the host; `rates-transport-failure` connects to a closed
+loopback port. Cases whose Rust behavior was changed on purpose carry a `baseline_defect` with Python's output, so
+pass `--allow-known-defects` when Python is the primary. Since [#240](https://github.com/kamui/code-review-bench/issues/240)
+deleted the grading Python, `upstream`, `regrade-archive-attempt`, `ruling`, `current-grading`, `methodology`,
+`claims`, `calibration`, `evaluator-audit`, `grading`, `grade` and `second-assessment` have no Python implementation
+either; their `baseline_defect`s keep the deleted modules' output as history. `upstream collect` cases run the stub
+`gh`, which answers each paginated read from the case's `gh/upstream.json`. These, `roster`, `normalize-thermo`, `derive-packet`, `build-packet`,
 `export-explorer`, `archive`, `regrade-status` and `audit-log` have no Python implementation, so they, and
 `check-manifest`, run the executable `rust_runtime.resolve("bench-tools")` selects, and the command refuses when none is installed for `HEAD`. A command map for the Rust programs names that
 executable:
@@ -129,8 +121,7 @@ executable:
   "evaluator-audit": ["/absolute/path/to/bench-tools", "evaluator-audit"],
   "grading": ["/absolute/path/to/bench-tools", "grading"],
   "grade": ["/absolute/path/to/bench-tools", "grade"],
-  "second-assessment": ["/absolute/path/to/bench-tools", "evaluator-audit", "second"],
-  "rust-grade": ["/absolute/path/to/bench-tools", "grade"]
+  "second-assessment": ["/absolute/path/to/bench-tools", "evaluator-audit", "second"]
 }
 ```
 
@@ -154,64 +145,34 @@ under `replay/`, so no case calls `gh` or the network. `build-packet-non-utf8-ou
 
 [`grading-validation.v1.json`](../../../tools/behavior_contracts/grading-validation.v1.json) pins
 `bench-tools grading validate [VERDICTS] --inputs FILE` ([#231](https://github.com/kamui/code-review-bench/issues/231)).
-Its `grading` program runs the retained `grading_validation.py` through a driver that takes `--inputs`, which must
-name a file called `inputs.json`, and points the script at it as `grade.py prepare`'s `validator/tools/` layout
-does. Thirteen cases carry a `baseline_defect`, so pass `--allow-known-defects` when Python is the primary:
-`non-object-inputs` and `links-not-an-object`, where Python raises an uncaught `AttributeError`; `deep-nesting` and
-`lone-surrogate`, which `pyjson` refuses; `nan-review-tokens`, whose Python line order depends on a `NaN`'s address;
-`unicode-15-1-outcome`, quoted through Python 3.14's `repr`; `dash-led-exponent-path` and
-`dash-led-unicode-16-digit-path`, read as values as Python 3.14's argparse reads them (these three record Python
-3.12's result); and `help`, `help-before-invalid-short-help`, `help-abbreviation-before-invalid-short-help`,
-`missing-inputs-option` and `extra-argument`, which print clap's wording. `dash-led-paths`
-pins the dash-led values both Pythons accept. The `fixture-*` cases build on the grading
+Its `grading` program runs `bench-tools`. Thirteen cases carry a `baseline_defect` with the output of the deleted
+`grading_validation.py`. `dash-led-paths` pins the dash-led values both Pythons accepted. The `fixture-*` cases build on the grading
 fixture's `pending`, `proposed` and `disputed-without-ruling` variants, and two `saved-v1-*` cases hold archived
 validator inputs and verdicts.
 
 ```sh
-python3 tools/behavior_contract.py --allow-known-defects --corpus tools/behavior_contracts/grading-validation.v1.json --differential /tmp/rust.json
+python3 tools/behavior_contract.py --corpus tools/behavior_contracts/grading-validation.v1.json
 ```
 
 ## Run the grade preparation corpus
 
 [`grade-prepare.v1.json`](../../../tools/behavior_contracts/grade-prepare.v1.json) pins `bench-tools grade prepare`,
 `preflight-inputs` and `check-prepared` ([#237](https://github.com/kamui/code-review-bench/issues/237)). Its `grade`
-program runs `bench-tools`, and `behavior_contract.python_commands` maps it to the `python-grade` driver: the retained
-`grade.py` under the entropy driver, with the case directory as the checkout. There `preflight-inputs` is
-`grade.py preflight --offline`, and `check-prepared` prints what `grade.check_prepared` finds. `rust-grade` runs
-`bench-tools` in every map, so the v2 key cases prepare a key with it and then run the retained `grade.py dispatch` and
-`map` on that key. The v1 and v2 key cases also check each key against
-[`current-grading-key.v1.schema.json`](../../../bench/schema/current-grading-key.v1.schema.json).
-
-Ten cases carry a `baseline_defect`, so pass `--allow-known-defects` when Python is the primary. The `pending`,
-`proposed` and `disputed-without-ruling` fixture cases differ only in what decision
-`grade-prepare-runner-identity-v2` lists: `runner_deviation`, the missing `validator/tools/` and the hashes that pin
-them. `grade-prepare-arguments` prints clap's usage, and the four `grade-prepare-*-before-invalid-short-help` cases
-print clap's help. In `grade-prepare-provisioner-invalid-output`, `grade.py` fails to decode the provisioner's
-output, exits 1 with a traceback and leaves the clone directories. `grade-prepare-unicode-16-digit-source-link`
-records Python 3.12's result, as CI runs it, so the differential reports it under Python 3.14.
+program runs `bench-tools`. The v1 and v2 key cases also check each key against
+[`current-grading-key.v1.schema.json`](../../../bench/schema/current-grading-key.v1.schema.json). Ten cases carry a
+`baseline_defect` with the output of the `grade.py` preparation that #240 removed.
 
 ```sh
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/grade-prepare.v1.json
-python3 - > /tmp/grade-python.json <<'EOF'
-import json, sys
-from pathlib import Path
-sys.path.insert(0, "tools")
-import behavior_contract
-corpus = behavior_contract.load_corpus(Path("tools/behavior_contracts/grade-prepare.v1.json"))
-print(json.dumps(behavior_contract.python_commands(corpus)))
-EOF
-python3 tools/behavior_contract.py --allow-known-defects --corpus tools/behavior_contracts/grade-prepare.v1.json --implementations /tmp/grade-python.json --differential /tmp/rust.json
 ```
 
 ## Run the grade mapping corpus
 
 [`grade-map.v1.json`](../../../tools/behavior_contracts/grade-map.v1.json) pins `bench-tools grade validate`,
 `inventory`, `map` and `invalidate`, and `bench-tools evaluator-audit second`
-([#238](https://github.com/kamui/code-review-bench/issues/238)). `grade` maps to the `python-grade` driver as in the
-preparation corpus, and `second-assessment` to the `python-second-assessment` driver, which runs the retained
-`evaluator_audit.py`'s `second` on the case directory. `rust-grade` prepares the version 2 keys. A command step's
+([#238](https://github.com/kamui/code-review-bench/issues/238)). `grade` and `second-assessment` run `bench-tools`. A command step's
 `file_size_limit` caps every file the command and its children write at that many bytes, so a write past it fails
-with `EFBIG` in either implementation. A command step's `fail_write_b64` names one root-relative path whose open for
+with `EFBIG`. A command step's `fail_write_b64` names one root-relative path whose open for
 writing fails with `ENOSPC`, while every other open proceeds: the harness builds a small library with `cc` and
 preloads it into the command and its children (`LD_PRELOAD` on Linux, `DYLD_INSERT_LIBRARIES` on macOS), and skips
 the case as unavailable elsewhere, without a compiler, or when a probe through the harness's own Python shows the
@@ -221,23 +182,10 @@ including between the renames. The 6000-byte step of `grade-map-write-faults` fa
 which is larger than the verdicts; the second assessment's receipt is smaller than its assessment, so
 `fail_write_b64` fails it.
 
-Twelve cases carry 28 step `baseline_defect`s, so pass `--allow-known-defects` when Python is the primary: the
-uncaught read and write errors (`grade-map-target-without-head`, `grade-map-write-faults`), the cleanup bridge cases
-(`grade-map-cleanup-bridge-*`), clap's usage and help (`grade-map-arguments-refused` and the five
-`grade-map-*help-before-invalid-short-help` cases) and Python 3.12's result for a Unicode 16.0 digit
-(`grade-map-unicode-16-digit-assessment-number`).
+Twelve cases carry 28 step `baseline_defect`s with the output of the `grade.py` mapping that #240 removed.
 
 ```sh
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/grade-map.v1.json
-python3 - > /tmp/grade-python.json <<'EOF'
-import json, sys
-from pathlib import Path
-sys.path.insert(0, "tools")
-import behavior_contract
-corpus = behavior_contract.load_corpus(Path("tools/behavior_contracts/grade-map.v1.json"))
-print(json.dumps(behavior_contract.python_commands(corpus)))
-EOF
-python3 tools/behavior_contract.py --allow-known-defects --corpus tools/behavior_contracts/grade-map.v1.json --implementations /tmp/grade-python.json --differential /tmp/rust.json
 ```
 
 ## Run the storage corpora
@@ -364,26 +312,11 @@ ported. [`grading.md`](../grading.md) records the baseline they serve.
   `prepared-family`), a `path` or the `stream` that printed
   JSON, an RFC 6901 `pointer` and a `value`. Every implementation must produce them, including the candidate of a differential, which must also match
   the primary.
-- **Python entropy driver.** A program in `PYTHON_ENTROPY` runs under a driver that replaces `secrets.token_hex`
-  and `random.SystemRandom` with a fixed sequence in the child process, so two recordings of a case are byte
-  identical. The grading slices add their programs, each by its script or by the name of its Python driver;
-  slice 5 adds `claims` and slice 7 `python-grade`.
 - **`fixture-git`.** A setup program every command map runs the same way. `fixture-git [--directory DIR] [FILE ...]`
   commits DIR, by default the case root, with a fixed identity and clock and no compression. It leaves no config or
   message, rewrites the index from the commit without file timestamps, and writes the commit into each named file
   in place of `<freeze commit>`. A command that refreshes the index afterwards, such as `git status`, writes host
   timestamps into it.
-- **Real-record mode.** `--real-record [LIST] --root ROOT --differential MAP` runs each command
-  [`grading-real-record.v1.json`](../../../tools/behavior_contracts/grading-real-record.v1.json) lists against the
-  primary implementation and the candidate on ROOT, by default this checkout. It compares exit status, stdout,
-  stderr and each named output byte for byte. An `{"output": NAME}` argument names a file in a disposable
-  directory. Every entry below ROOT, tracked, ignored or Git's own, is compared by type, permissions, size, inode
-  and change time before and after each run. A run that changes one fails and stops the mode, so no later run
-  reads changed inputs. Before the first run the mode creates `.cache/current-record.lock`, the file
-  `current_grading.record_lock` creates on first use, if it is absent, and leaves an existing one unchanged, so a
-  command that takes the lock on a fresh checkout does not read as a change. #156 slice 3 listed `current-grading check`, `status`, `inventory --out` and
-  `fingerprints`, slice 4 added `methodology --out`, slice 5 added `claims check` on each tracked registry, slice 6 added `calibration check`,
-  `calibration queue` and `evaluator-audit check`, and the Pages build job runs the mode after its evidence and freeze-commit fetches.
 - **Fixture roots.** A case built from the grading fixture names it with `"fixture": "grading/<variant>"`. Its
   `initial` entries and leading setup steps must equal what
   [`grading_fixture.rs`](../../../rust/bench-tools/tests/support/grading_fixture.rs) builds, or

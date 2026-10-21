@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { main as fixturePreview } from '../../tools/fixture_preview'
 import { main as scorecardCommand } from '../../tools/scorecard'
 import { datasetSchema, detailSchema } from './data'
@@ -700,29 +702,93 @@ describe('selection', () => {
 })
 
 describe('export and command line', () => {
-  const python = `
-import sys
-sys.path[:0] = ['tools', 'bench/tools']
-from pathlib import Path
-import current_grading as current
-from test_current_grading import assessed_grade, fixture, save_current, write
-root = Path(sys.argv[1])
-selected, documents = fixture(root)
-if sys.argv[2] == 'single':
-    manifest = current.read_json(root / 'bench/runs/run/manifest.json')
-    manifest['planned_cells'].pop()
-    write(root, 'bench/runs/run/manifest.json', manifest)
-    selected = current.inventory(root)
-assessed_grade(selected, documents, root)
-save_current(root, selected, documents)
-`
+  const benchTools = (root: string, ...args: string[]) => {
+    const run = Bun.spawnSync(['python3', 'bench/tools/rust_runtime.py', 'exec', 'bench-tools', '--', ...args, '--root', root],
+      { stderr: 'pipe', env: { ...process.env, BASE_PATH: '' } })
+    if (run.exitCode !== 0) throw new Error(run.stderr.toString())
+    return run.stdout.toString()
+  }
+
+  async function facts(root: string, mode: 'pending' | 'single') {
+    const write = async (name: string, value: unknown) => {
+      await mkdir(dirname(join(root, name)), { recursive: true })
+      await writeFile(join(root, name), typeof value === 'string' ? value : `${JSON.stringify(value, null, 2)}\n`)
+      return pin(name)
+    }
+    const pin = (name: string) => ({ path: name, sha256: createHash('sha256').update(readFileSync(join(root, name))).digest('hex') })
+    const current = 'bench/grading/current'
+    const packet = await write('bench/targets/t-example/packet.md', 'Frozen task packet\n')
+    const revision = { head: 'a'.repeat(40), base_sha: 'b'.repeat(40), packet_sha256: packet.sha256, diff_manifest_sha256: 'c'.repeat(64) }
+    await write('bench/targets/t-example/target.json', { id: 't-example', ...revision, repo: 'example/repo', pr: 1, shape: 'fixture', language: 'Python' })
+    const arm = await write('bench/arms/high.json', { model: 'example', effort: 'high' })
+    const cells = [{ target: 't-example', arm: 'high', replicate: 1 }, { target: 't-example', arm: 'high', replicate: 2 }]
+    await write('bench/runs/run/manifest.json', { run_id: 'run', arms: [{ id: 'high', arm_file_sha256: arm.sha256, resolved_skill_tree: null }],
+      cohort: [{ target: 't-example', ...revision }], planned_cells: mode === 'single' ? cells.slice(0, 1) : cells })
+    const example: { usage: object } = JSON.parse(await readFile('bench/schema/examples/attempt.example.json', 'utf8'))
+    const payload = await write('bench/runs/run/attempts/att-001/payload.json', { fixture: true })
+    await write('bench/runs/run/attempts/att-001/attempt.json', { ...example, attempt_id: 'att-001', run_id: 'run', cell: cells[0], predecessor: null,
+      retry_reason: null, disposition: 'valid completed', arm_reported_complete: true, native_payload: { path: 'payload.json', sha256: payload.sha256 },
+      phase_reached: 'result', normalized: { path: 'normalized.json', parse_status: 'parsed', reason: null },
+      usage: { ...example.usage, requests: 'usage-requests.jsonl', billing: 'list-price-equivalent', metering_status: 'complete' } })
+    const review = await write('bench/runs/run/attempts/att-001/normalized.json', { parse_status: 'parsed', items: [
+      { claim: 'A write is lost.', proposed_fix: null, consequence: 'Data loss' }] })
+    await write('bench/runs/run/attempts/att-001/usage-requests.jsonl', '{"output_tokens": 3}\n')
+    await write('bench/scoreboard.current.json', { schema_version: 1, contract: 'current-cohort-input/v1', description: 'Selected fixture sources',
+      tasks: [{ id: 't-example', revision }],
+      configurations: [{ id: 'setup', label: 'Setup', short: 'Setup', method: 'codex', version: 'fixture', experimental: false,
+        review_edition: 'builtin', review_change: null, note: 'Fixture' }],
+      sources: [{ run: 'runs/run', arm: 'high', configuration: 'setup', tasks: ['t-example'] }],
+      suites: [{ id: 'suite', title: 'Fixture', tasks: ['t-example'], configurations: ['setup'] }] })
+    const approved = async (subject: string) => {
+      const scope = `Human approves ${subject} for eligibility: eligible.`
+      const receipt = await write(`receipt-${subject}-eligibility.md`, scope)
+      return { id: `AD-${subject}-eligibility`, target: 't-example', revision, subject, dimension: 'eligibility', status: 'approved', outcome: 'eligible',
+        authority: 'human', reason: 'Saved ruling', receipt, receipt_scope: scope, boundary: null, evidence: [receipt], independent_checks: [] }
+    }
+    const decisions = [await approved('GT-t1'), await approved('CL-t1')]
+    await write(`${current}/adjudications.json`, { schema_version: 1, decisions })
+    await write(`${current}/references.json`, { schema_version: 1, targets: [{ target: 't-example', revision, families: [{
+      id: 'GT-t1', title: 'Lost write', obligation: 'Preserve writes', trigger: 'Concurrent writes', mechanism: 'Read/modify/write loses an update',
+      grouping_reason: 'Same shared update mechanism', evidence: [packet],
+      eligibility: { state: 'approved', reason: 'Saved human eligibility ruling', adjudication: 'AD-GT-t1-eligibility' },
+      impact: { band: 'unknown', reason: 'Awaiting calibration', adjudication: null } }],
+      control: { status: 'known-problems', reason: 'Provisional known problem', adjudication: null, evidence: [packet] } }] })
+    await write(`${current}/claims.json`, { schema_version: 1, claims: [{ id: 'CL-t1', target: 't-example', revision,
+      claim: { trigger: 'Concurrent writes', mechanism: 'Lost update', consequence: 'Data loss', change_relation: 'Introduced',
+        settlement_question: 'Does the update serialize?' },
+      evidence: [{ source: packet, stance: 'supports', summary: 'Source shows a shared update' }],
+      links: [{ review, attempt_id: 'att-001', item_id: 'item-0', relation: 'equivalent', reason: 'Same trigger and mechanism' }],
+      adjudication: 'AD-CL-t1-eligibility', family_id: 'GT-t1' }] })
+    await write(`${current}/grades.json`, { schema_version: 1, batches: [] })
+    await write(`${current}/candidates.json`, { schema_version: 1, candidates: [] })
+    await write(`${current}/credits.json`, { schema_version: 1, rulings: [] })
+    await write(`${current}/audits.json`, { state: 'unassessed', evidence: [] })
+    await write(`${current}/validation-policy.json`, { contract: 'fixture/v1', recovery: 'Supported attributable material claim' })
+    await write('bench/import-manifest.json', { revision: 'fixture', files: [], transcripts: [] })
+    await write('bench/profiles.json', { status: 'proposed', tasks: { 't-example': {
+      changeKinds: [], areas: [], technologies: [], concerns: [], findings: {}, labels: { 'GT-t1': 'Write is lost' } } } })
+    await write('bench/skill-provenance.v2.json', { skills: {} })
+    benchTools(root, 'current-grading', 'inventory', '--out', join(root, current, 'inventory.json'))
+    const [{ input_fingerprint: fingerprint }]: [{ input_fingerprint: string }] = JSON.parse(benchTools(root, 'current-grading', 'fingerprints'))
+    const assessment = `${current}/assessments/run/t-example/assessment-1`
+    const verdicts = await write(`${assessment}/verdicts.json`, { reviews: {} })
+    const receipt = await write(`${assessment}/receipt.json`, { input_fingerprint: fingerprint, verdicts_sha256: verdicts.sha256,
+      provenance: { kind: 'manual', identity: 'fixture' } })
+    const anchor = { review, item_id: 'item-0', quote: 'A write is lost.' }
+    await write(`${current}/grades.json`, { schema_version: 1, batches: [{ run: 'runs/run', target: 't-example', reviews: [{
+      attempt_id: 'att-001', state: 'assessed', reason: 'All original allegations examined',
+      claims: [{ id: 'c1', anchor, canonical_id: 'CL-t1', outcome: 'eligible',
+        assessment: { support: 'supported', attribution: 'introduced', reachability: 'reachable', materiality: 'material' },
+        family_id: 'GT-t1', duplicate_group: null, reason: 'Supported introduced loss', evidence: [review] }],
+      families: [{ family_id: 'GT-t1', outcome: 'caught', claim_ids: ['c1'], sufficiency: 'absent', reason: 'No recommendation inventoried yet' }],
+      recommendations: [], remedy_inventory: { state: 'complete', reason: 'No recommendation in this example', anchors: [] }, advice: [] }],
+      input_fingerprint: fingerprint, assessor: { kind: 'manual', receipt, verdicts } }] })
+  }
+
   async function exported(mode: 'pending' | 'single') {
     const root = await mkdtemp(join(tmpdir(), 'scoring-export-'))
-    const facts = Bun.spawnSync(['python3', '-c', python, root, mode], { stderr: 'pipe' })
-    if (facts.exitCode !== 0) throw new Error(facts.stderr.toString())
-    const run = Bun.spawnSync(['python3', 'bench/tools/rust_runtime.py', 'exec', 'bench-tools', '--', 'export-explorer', '--root', root,
-      '--public', join(root, 'public')], { stderr: 'pipe', env: { ...process.env, BASE_PATH: '' } })
-    if (run.exitCode !== 0) throw new Error(run.stderr.toString())
+    await facts(root, mode)
+    benchTools(root, 'export-explorer', '--public', join(root, 'public'))
     const path = join(root, 'public/data/benchmark.json')
     return { root, path, data: datasetSchema.parse(JSON.parse(await readFile(path, 'utf8'))) }
   }

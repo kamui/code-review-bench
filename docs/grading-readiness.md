@@ -46,11 +46,11 @@ Preserve every raw attempt. Mapping can repair a derivation rule and reuse valid
 Run these offline checks:
 
 ```sh
+cargo test --locked --manifest-path rust/bench-tools/Cargo.toml
+python3 tools/behavior_contract.py --corpus tools/behavior_contracts/grade-prepare.v1.json
+python3 tools/behavior_contract.py --corpus tools/behavior_contracts/grade-map.v1.json
 python3 bench/tools/test_grade.py
-python3 bench/tools/test_claim_grading.py
-python3 bench/tools/test_current_grading.py
 python3 bench/tools/test_regrade.py
-python3 bench/tools/test_claims.py
 python3 bench/tools/test_grading_policy.py
 python3 bench/tools/test_grading_client.py
 python3 bench/tools/test_codex_dispatch.py
@@ -77,9 +77,10 @@ python3 bench/tools/regrade.py --authorization <authorization.json> --directory 
 
 The authorization pins these inputs by path and SHA-256, and the controller refuses to start when one changed:
 
-- `sourcePlan`, the current queue from `bun run plan:methodology`. It records each batch's input fingerprint and whether its saved grade is `current`, `stale` or `missing`. Remove stale grades with `grade.py invalidate` before planning.
+- `sourcePlan`, the current queue from `bun run plan:methodology`. It records each batch's input fingerprint and whether its saved grade is `current`, `stale` or `missing`. Remove stale grades with `bench-tools grade invalidate` before planning.
 - `executionPlan`, described below.
 - `runnerDeviations`, which must include `bench/tools/regrade.py`. A changed controller therefore needs a new authorization version. Earlier authorizations pin earlier controllers and stay as they are.
+- `runtimes`, the object `python3 bench/tools/rust_runtime.py pin bench-tools` prints. Every step runs `bench-tools` through it, so a reinstall that changes the store's selection mid-queue changes nothing the queue runs.
 - `cacheReplacements`, optional, pins the versioned replacement-cache manifest used by preflight and preparation.
 - `claimEvidence`, optional: an [extracts manifest](claim-adjudication.md#supply-pinned-evidence-to-graders) that preflight and preparation receive as `--claim-evidence`.
 
@@ -87,7 +88,7 @@ The authorization pins these inputs by path and SHA-256, and the controller refu
 
 The Codex path, which no grading queue uses, sets `budgetCapUsd` to `null`, `budgetPolicy` to `"codex-unbounded"`, and names a pinned `gpt-` grader profile. The controller passes `--allow-unbounded-codex` to preflight and dispatch and omits a dollar reservation. The exclusive attempt claim and failure/restart rules still apply. An outstanding unbounded attempt has an unknown reserved dollar amount, never zero. Finite Codex budget authorizations are refused.
 
-A queue grades every batch with one client. Its first run copies the installed `claude` (or `codex`) executable into the queue directory's `client-bin/`, records the copy's version and SHA-256 and where it came from in `client.json`, and starts every `grade.py` step with a PATH whose first entry is that directory. Every run of the queue checks the copy against the recorded hash and executes it, so a client that updates itself during or between runs, even in place, changes no batch's client. `status.json` records the version with each run. `--expected-cli-version VERSION` or `grader.cliVersion` is optional: when given, it must name the pinned version. A copy that is gone or changed stops the queue before any dispatch; restore it, or remove `client.json` to pin the installed client for the batches left, and record the mixed versions as a deviation.
+A queue grades every batch with one client. Its first run copies the installed `claude` (or `codex`) executable into the queue directory's `client-bin/`, records the copy's version and SHA-256 and where it came from in `client.json`, and starts every `grade.py` and `bench-tools grade` step with a PATH whose first entry is that directory. Every run of the queue checks the copy against the recorded hash and executes it, so a client that updates itself during or between runs, even in place, changes no batch's client. `status.json` records the version with each run. `--expected-cli-version VERSION` or `grader.cliVersion` is optional: when given, it must name the pinned version. A copy that is gone or changed stops the queue before any dispatch; restore it, or remove `client.json` to pin the installed client for the batches left, and record the mixed versions as a deviation.
 
 The controller defaults to a 900-second session limit. Set `grader.timeoutSeconds` to a positive integer in the pinned authorization when a batch needs more time. A changed limit requires a new authorization; preserve timed-out attempts and their usage before starting replacements.
 
@@ -152,15 +153,15 @@ To raise concurrency without losing a grade, set `LIMIT=<n>` so each queue maps 
 
 Renew the Claude sign-in only while no session runs. `grade.py dispatch` copies the credential into each session's fresh home, and a renewal invalidates the copies of sessions that are running: five sessions of the issue 30 rebuild failed this way.
 
-[`plan.py`](research/cohort-rebuild-2026-10-05/regrade/plan.py) sizes the issue 30 regrade and, once the user has approved a ceiling, writes each queue's plans and authorization.
+[`plan.py`](research/cohort-rebuild-2026-10-05/regrade/plan.py) sized the issue 30 regrade and wrote each queue's plans and authorization. It imports the deleted `methodology.py`, so it runs only at its own commit. Write a new authorization by hand from `bun run plan:methodology` and the pins above.
 
 ## Disk space
 
 A grading workspace holds a clone, its restored dependency cache and scratch space; the larger targets take several gibibytes each. Two mechanisms keep them from filling the disk.
 
-`provision.py prepare`, which review and grading preparation both call, estimates the clone and the extracted cache before it writes anything. It refuses, with nothing cloned, unless the workspace's filesystem would still have `BENCH_DISK_RESERVE_GIB` gibibytes free afterwards (default 20). The estimate counts the mirror's objects, the checked-out tree and the extracted archive. It cannot see post-clone steps, builds during a session or other programs, so the reserve has to cover those. Preparations that share a cache root wait for one another, so each one counts the space the previous one took. After a refused or failed `grade.py prepare`, WORK is empty and no key exists: free space, then prepare again.
+`provision.py prepare`, which review and grading preparation both call, estimates the clone and the extracted cache before it writes anything. It refuses, with nothing cloned, unless the workspace's filesystem would still have `BENCH_DISK_RESERVE_GIB` gibibytes free afterwards (default 20). The estimate counts the mirror's objects, the checked-out tree and the extracted archive. It cannot see post-clone steps, builds during a session or other programs, so the reserve has to cover those. Preparations that share a cache root wait for one another, so each one counts the space the previous one took. After a refused or failed `bench-tools grade prepare`, WORK is empty and no key exists: free space, then prepare again.
 
-`grade.py map` removes the workspace's `clone` and `clone-cache` once the provenance and the verdicts pass every check, before it replaces the batch's grades. `clone-work`, `home`, the verdicts, the dispatch record, the prepared inputs and the logs stay, and `workspace-pruned.json` records what was removed and the filesystem's free space before and after. A clone that is not clean at the target's head is kept: mapping stops with exit 2 and replaces nothing, so the same workspace maps again once the clone has been inspected. A later mapping of that workspace needs no clone.
+`bench-tools grade map` removes the workspace's `clone` and `clone-cache` once the provenance and the verdicts pass every check, before it replaces the batch's grades. `clone-work`, `home`, the verdicts, the dispatch record, the prepared inputs and the logs stay, and `workspace-pruned.json` records what was removed and the filesystem's free space before and after. A clone that is not clean at the target's head is kept: mapping stops with exit 2 and replaces nothing, so the same workspace maps again once the clone has been inspected. A later mapping of that workspace needs no clone.
 
 Grade one target at a time, from preparation through mapping, so that at most one clone exists at once. `regrade.py --workers N` is the exception: it keeps at most N unmapped clones from its own launches, prepares them one after another under the same free-space check, and removes each clone when it maps the batch.
 

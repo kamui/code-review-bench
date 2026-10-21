@@ -694,7 +694,7 @@ enum GradeCommand {
         #[arg(long, allow_negative_numbers = true)]
         inventory: Option<OsString>,
     },
-    /// Check every selected batch of a run as `grade.py preflight --offline` does, writing nothing.
+    /// Check every selected batch of a run offline, writing nothing.
     #[command(infer_long_args = true)]
     PreflightInputs {
         #[command(flatten)]

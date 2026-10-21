@@ -8,9 +8,14 @@ import subprocess
 import unittest
 
 REPO = Path(__file__).resolve().parents[1]
-# Retained library, the command that moved out of it, and the command that replaces it.
+# Python program, the command that moved out of it, and the command that replaces it.
 MOVED = (
     ("bench/tools/rates.py", "check", "bench-tools rates check"),
+    ("bench/tools/grade.py", "prepare", "bench-tools grade prepare"),
+    ("bench/tools/grade.py", "validate", "bench-tools grade validate"),
+    ("bench/tools/grade.py", "inventory", "bench-tools grade inventory"),
+    ("bench/tools/grade.py", "map", "bench-tools grade map"),
+    ("bench/tools/grade.py", "invalidate", "bench-tools grade invalidate"),
     ("bench/tools/upstream.py", "report", "bench-tools upstream report"),
     ("bench/tools/upstream.py", "collect", "bench-tools upstream collect"),
     ("bench/tools/evidence_store.py", "fetch", "bench-tools evidence fetch"),
@@ -45,7 +50,7 @@ MOVED = (
     ("bench/tools/evaluator_audit.py", "compare", "bench-tools evaluator-audit compare"),
     ("bench/tools/evaluator_audit.py", "conclude", "bench-tools evaluator-audit conclude"),
 )
-# Retained libraries whose command line moved whole, including the form without a command word.
+# Python programs whose command line moved whole, including the form without a command word.
 MOVED_PROGRAMS = (
     ("bench/tools/ruling_record.py", "bench-tools ruling check"),
     ("bench/tools/ruling_dossier.py", "bench-tools ruling dossier"),
@@ -53,10 +58,6 @@ MOVED_PROGRAMS = (
     ("bench/tools/methodology.py", "bench-tools methodology"),
     ("tools/export_explorer.py", "bench-tools export-explorer"),
 )
-# Tests of the retained grade.py and regrade.py check those modules' output with the retained current_grading.py
-# and methodology.py, their baseline until #156 slice 11 removes them.
-RETAINED_BASELINE_TESTS = ("bench/tools/test_grade.py", "bench/tools/test_regrade.py")
-RETAINED_BASELINES = ("bench/tools/current_grading.py", "bench/tools/methodology.py")
 # Frozen runs, imported originals, research records, saved rulings, saved fixture and migration evidence, and the
 # contract decisions that describe superseded behavior keep the commands they recorded.
 HISTORICAL = ("artifacts/", "bench/runs/", "docs/research/", "bench/grading/rulings/", "bench/fixtures/",
@@ -110,13 +111,13 @@ class MovedCommands(unittest.TestCase):
         found = []
         for name, text in current_text_files():
             for module, command, replacement in MOVED:
-                if name == module or name in RETAINED_BASELINE_TESTS and module in RETAINED_BASELINES:
+                if name == module:
                     continue
                 for number, line in enumerate(text.splitlines(), 1):
                     if invocation(module, command).search(line):
                         found.append(f"{name}:{number}: runs {Path(module).name} {command}; use {replacement}")
             for module, replacement in MOVED_PROGRAMS:
-                if name == module or name in RETAINED_BASELINE_TESTS and module in RETAINED_BASELINES:
+                if name == module:
                     continue
                 for number, line in enumerate(text.splitlines(), 1):
                     if program_run(module).search(line):
@@ -138,9 +139,8 @@ class MovedCommands(unittest.TestCase):
         self.assertEqual(scripts["data"], "bun run evidence:fetch && python3 bench/tools/rust_runtime.py exec bench-tools -- "
                          "export-explorer")
         self.assertEqual(scripts["plan:methodology"], "python3 bench/tools/rust_runtime.py exec bench-tools -- methodology")
-        self.assertIn("bun run test:bench:core", scripts["test:bench"])
         self.assertIn("python3 tools/behavior_contract.py --corpus tools/behavior_contracts/check-manifest.v1.json &&",
-                      scripts["test:bench:core"])
+                      scripts["test:bench"])
         self.assertEqual(scripts["evidence:fetch"], "python3 bench/tools/rust_runtime.py exec bench-tools -- evidence fetch "
                          "--manifest bench/evidence/manifests/repository-payloads-2026-10-08-v1.json")
 

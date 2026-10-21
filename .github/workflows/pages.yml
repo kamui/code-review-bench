@@ -75,22 +75,12 @@ jobs:
             bench/evidence/manifests/last-push-transcripts-2026-10-09-v1.json \
             bench/evidence/manifests/last-push-skill-transcripts-2026-10-11-v1.json \
             bench/evidence/manifests/last-push-review-code-transcripts-2026-10-12-v1.json
-      - name: Compare the current-grading, methodology, claims, calibration and evaluator-audit implementations on the checked-out record
-        if: steps.selection.outcome != 'success' || steps.selection.outputs.run != 'false'
-        run: |
-          python3 bench/tools/rust_runtime.py resolve bench-tools > "$RUNNER_TEMP/bench-tools.json"
-          python3 - "$RUNNER_TEMP/bench-tools.json" > "$RUNNER_TEMP/real-record-map.json" <<'EOF'
-          import json, sys
-          executable = json.load(open(sys.argv[1]))["executable"]
-          print(json.dumps({name: [executable, name] for name in ("current-grading", "methodology", "claims", "calibration", "evaluator-audit")}))
-          EOF
-          python3 tools/behavior_contract.py --real-record --differential "$RUNNER_TEMP/real-record-map.json"
       - name: Check that the grading replay inventory is current
         if: steps.selection.outcome != 'success' || steps.selection.outputs.run != 'false'
         run: |
           (cd rust/bench-tools && cargo test --locked --test grading_replay -- --ignored --exact the_replay_inventory_accounts_for_every_receipt)
           git diff --exit-code -- docs/python-migration/grading-replay.v1.json
-      - name: Replay the blinded validator on every restorable archive in both implementations
+      - name: Replay the blinded validator on every restorable archive against its recorded outcome
         if: steps.selection.outcome != 'success' || steps.selection.outputs.run != 'false'
         working-directory: rust/bench-tools
         run: cargo test --locked --test grading_replay -- --ignored --exact the_validator_replays_every_restorable_archive_identically --nocapture
@@ -163,18 +153,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 bench/tools/rust_runtime.py exec bench-tools -- evidence fetch --manifest bench/evidence/manifests/repository-payloads-2026-10-08-v1.json
-      - name: Replay the mapping of every restorable archive in both implementations at its filing commit
+      - name: Replay the mapping of every restorable archive against its recorded outcome
         if: steps.selection.outcome != 'success' || steps.selection.outputs.run != 'false'
         working-directory: rust/bench-tools
         run: cargo test --locked --test grading_replay -- --ignored --exact the_mapping_replays_every_restorable_archive_identically --nocapture
 
   grading-tests:
-    name: Grading regressions (${{ matrix.group }})
+    name: Grading regression tests
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    strategy:
-      fail-fast: false
-      matrix:
-        group: [core, historical]
     runs-on: ubuntu-22.04
     timeout-minutes: 25
     env:
@@ -241,7 +227,7 @@ jobs:
         run: test "$(codex --version)" = "codex-cli $CODEX_VERSION"
       - name: Test benchmark tools and provisioning
         if: steps.selection.outcome != 'success' || steps.selection.outputs.run != 'false'
-        run: bun run test:bench:${{ matrix.group }}
+        run: bun run test:bench
 
   grading:
     name: Grading regressions
@@ -250,7 +236,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:
-      - name: Require every grading group to pass
+      - name: Require the grading regression tests to pass
         env:
           RESULT: ${{ needs.grading-tests.result }}
         run: test "$RESULT" = success
@@ -268,6 +254,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Install rustup when the image has none
+        run: |
+          if ! command -v rustup > /dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+      - name: Install bench-tools, which serves the blinded grading MCP
+        run: |
+          (cd rust/bench-tools && rustup show && rustup default "$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')" && cargo fetch --locked)
+          echo "BENCH_RUNTIME_STORE=$RUNNER_TEMP/rust-runtime-store" >> "$GITHUB_ENV"
+          BENCH_RUNTIME_STORE="$RUNNER_TEMP/rust-runtime-store" python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select
       - name: Install sandbox tools
         run: |
           sudo apt-get update

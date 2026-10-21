@@ -1,5 +1,5 @@
-//! `grade.py validate`, `inventory`, `map` and `invalidate`, and the assessment steps that the `second` step of
-//! `evaluator_audit.py` shares with `map`, ported from `bench/tools/grade.py`.
+//! `bench-tools grade validate`, `inventory`, `map` and `invalidate`, and the assessment steps that
+//! `bench-tools evaluator-audit second` shares with `map`, ported from `bench/tools/grade.py`.
 
 use super::{
     Runner, abspath, check_attempts, check_prepared, crash, dumps, inconsistent, make_directory,
@@ -121,7 +121,7 @@ pub fn read_verdicts(work: &PyPath) -> R<(Vec<u8>, Value, Vec<String>)> {
     Ok((raw, verdicts, problems))
 }
 
-/// `grade.py validate`.
+/// `bench-tools grade validate`.
 pub fn validate(work: &[u8]) -> R<Vec<u8>> {
     let (_, _, problems) = read_verdicts(&PyPath::new(work))?;
     if problems.is_empty() {
@@ -133,7 +133,7 @@ pub fn validate(work: &[u8]) -> R<Vec<u8>> {
     inconsistent(problems.join("\n"))
 }
 
-/// `grade.py inventory`: each review's item kinds and claim quotes, for a second grader's workspace.
+/// `bench-tools grade inventory`: each review's item kinds and claim quotes, for a second grader's workspace.
 pub fn inventory(checkout: &PyPath, work: &[u8], key: &[u8], out: &[u8]) -> R<Vec<u8>> {
     let work = resolve(work)?;
     let key = current::read_json(&PyPath::new(key))?;
@@ -1246,7 +1246,7 @@ pub fn prune_grading(
     }
 }
 
-/// `grade.py map`'s options.
+/// `bench-tools grade map`'s options.
 pub struct Mapping<'a> {
     pub root: &'a [u8],
     pub current: &'a [u8],
@@ -1299,7 +1299,7 @@ fn next_with<'a>(values: &'a Value, field: &str, wanted: &Value) -> R<&'a Value>
     crash("StopIteration".into())
 }
 
-/// `grade.py map`: file one batch's verdicts as its current grades, or refuse with nothing written.
+/// `bench-tools grade map`: file one batch's verdicts as its current grades, or refuse with nothing written.
 pub fn map_verdicts(runner: &Runner, options: &Mapping) -> R<Vec<u8>> {
     let root = Root::new(options.root)?;
     let work = resolve(options.work)?;
@@ -1637,7 +1637,7 @@ pub fn key_reviews(key: &Value) -> R<Value> {
     Ok(Value::Array(reviews))
 }
 
-/// `grade.py invalidate`: return every stale batch's reviews to the queue.
+/// `bench-tools grade invalidate`: return every stale batch's reviews to the queue.
 pub fn invalidate(root: &[u8], current_arg: &[u8]) -> R<Vec<u8>> {
     let root = Root::new(root)?;
     let (selected, documents) = current::load_current(&root, current_arg, false)?;

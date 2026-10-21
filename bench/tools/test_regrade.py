@@ -3,8 +3,10 @@ from decimal import Decimal
 import fcntl
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -15,11 +17,10 @@ from unittest.mock import Mock, patch
 import uuid
 
 import clean_context
-import methodology
 import regrade
+import rust_runtime
 import subscription_meters
-import test_grade
-from test_grade import MODEL, PROVISION_STUB, SELECTED, claim, item, remedy, review, reviewed
+from test_grade import MODEL, fixture_root, installed_bench_tools
 
 RUN = "runs/cohort"
 INPUT_FINGERPRINTS = regrade.input_fingerprints
@@ -39,28 +40,32 @@ class Crash(BaseException):
 
 
 class Cohort:
-    """A pinned queue under a temporary repository root. ``grade.py`` is replaced by fakes that record every
-    dispatch, how many ran at once and the committed budget each one started under. The provider's meters are
-    replaced by a reading of ``used()`` percent."""
+    """A pinned queue under a temporary repository root. Its steps are replaced by fakes that record every
+    dispatch, how many ran at once and the committed budget each one started under; archives run the bench-tools the
+    authorization pins from the cohort's own store. The provider's meters are replaced by a reading of ``used()``
+    percent."""
 
     def __init__(self, root, cap, jobs=5):
         self.root, self.cap, self.directory = root, cap, root / ".local/queue"
         self.lock, self.barrier = threading.Lock(), None
         self.launched, self.inflight, self.charged, self.exposures, self.peak = [], {}, Decimal(0), [], 0
         self.outcomes, self.preflights, self.preflight_code, self.map_crashes = {}, [], 0, False
-        self.dispatches = []
-        self.commands = []
+        self.dispatches, self.map_threads = [], []
+        self.commands, self.programs = [], []
         self.installed, self.paths = None, []
         self.used, self.sign_in_expires, self.metered = (lambda: 10), None, []
         self.directory.mkdir(parents=True)
         (root / "bench/tools").mkdir(parents=True)
         shutil.copy(regrade.__file__, root / regrade.CONTROLLER)
+        self.store = root / "store"
+        self.tools = rust_runtime.retain(self.store, *installed_bench_tools())[0] / "bench-tools"
         self.jobs = self.build(jobs)
         self.inputs = {(batch["run"], batch["target"]): batch["inputFingerprint"] for batch in self.plan["batches"]}
         self.execution = {"workspaceRoot": ".local/workspaces", "archiveRoot": "archive",
                           "order": [dict(zip(("run", "target"), job)) for job in self.jobs]}
         self.authorization = {"budgetCapUsd": cap, "grader": {"model": MODEL, "effort": "high", "cliVersion": "9.9.9"},
-                              "runnerDeviations": [pin(root, regrade.CONTROLLER)]}
+                              "runnerDeviations": [pin(root, regrade.CONTROLLER)],
+                              "runtimes": {"bench-tools": rust_runtime.pin_of(self.tools.parent)}}
         self.authorize()
 
     def build(self, jobs):
@@ -74,7 +79,7 @@ class Cohort:
                          "record": pin(self.root, f"bench/{RUN}/attempts/{target}/attempt.json", {})} for target in targets]}
         return [(RUN, target) for target in targets]
 
-    def fingerprints(self, batches, current=()):
+    def fingerprints(self, tools, batches, current=()):
         return {batch: self.inputs[batch] for batch in batches}
 
     def authorize(self):
@@ -84,6 +89,7 @@ class Cohort:
 
     def run(self, workers=1, limit=None, expected=None):
         with patch.object(regrade, "ROOT", self.root), patch.object(regrade, "invoke", self.invoke), \
+                patch.dict(os.environ, {"BENCH_RUNTIME_STORE": str(self.store)}), \
                 patch.object(regrade, "input_fingerprints", self.fingerprints), \
                 patch.object(subscription_meters, "meters", self.meters), \
                 patch.object(regrade, "installed_client", self.installed_client), \
@@ -123,8 +129,10 @@ class Cohort:
     def replace(self, target):
         (self.directory / "batches" / Path(RUN).name / target / "attempt-2").mkdir()
 
-    def invoke(self, args, log, path=None):
+    def invoke(self, command, log, tools, path=None):
         log.open("x").close()
+        args = list(command[2:])
+        self.programs.append((args[0], str(command[0]) if command[1] == "grade" else Path(command[1]).name, tools))
         self.commands.append(args)
         self.paths.append(path)
         options, arguments = {}, iter(args[1:])
@@ -197,6 +205,7 @@ class Cohort:
         return outcome["code"]
 
     def map(self, options):
+        self.map_threads.append(threading.current_thread())
         if self.map_crashes:
             raise Crash
         mapping = self.mapped(self.name(options["--key"]))
@@ -205,42 +214,67 @@ class Cohort:
         return 0
 
 
-class SavedCohort(Cohort):
-    """Five single-review runs planned by ``methodology.py`` and graded through the real ``grade.py prepare`` and
-    ``map`` under a fixture root; only the paid session is fake."""
+class FixtureCohort(Cohort):
+    """The grade corpora's fixture batch, planned, prepared, mapped and read through the pinned bench-tools; only the
+    paid session is fake."""
 
     def build(self, jobs):
-        (self.root / "provision_stub.py").write_text(PROVISION_STUB)
+        fixture_root(self.root)
         self.real = regrade.invoke
-        saved = {"att-001": (SELECTED, 1, "valid completed", None, review([item("Races on close", "Hold the lock."), item("Style")]))}
-        self.cohort = test_grade.Cohort(self.root, runs={f"cohort-{index}": saved for index in range(jobs)})
-        self.plan = methodology.plan(self.root)
-        return [(batch["run"], batch["target"]) for batch in self.plan["batches"]]
+        plan = self.root / ".local/plan.json"
+        subprocess.run([self.tools, "methodology", "--root", self.root, "--out", plan], check=True, capture_output=True)
+        self.plan = regrade.read(plan)
+        return [(batch["run"], batch["target"]) for batch in self.plan["batches"] if batch["state"] != "current"]
 
-    def fingerprints(self, batches, current=()):
-        return INPUT_FINGERPRINTS(batches, current)
+    def replan(self):
+        plan = self.root / ".local/replan.json"
+        plan.unlink(missing_ok=True)
+        subprocess.run([self.tools, "methodology", "--root", self.root, "--out", plan], check=True, capture_output=True)
+        self.plan = regrade.read(plan)
 
-    def invoke(self, args, log, path=None):
-        if args[0] == "prepare":
-            return self.real([*args, "--provision", self.root / "provision_stub.py"], log)
-        return self.real(args, log) if args[0] == "map" else super().invoke(args, log, path)
+    def fingerprints(self, tools, batches, current=()):
+        return INPUT_FINGERPRINTS(tools, batches, current)
 
-    def name(self, key):
-        return Path(key).parents[2].name
+    def invoke(self, command, log, tools, path=None):
+        if command[1] == "grade" and command[2] in ("prepare", "map"):
+            self.programs.append((command[2], str(command[0]), tools))
+            return self.real(command, log, tools, path)
+        return super().invoke(command, log, tools, path)
 
     def verdicts(self, name, key):
-        recovered = [claim("c1", "Races on close", family="GT-t1"), claim("c2", "It breaks.", "refuted")]
-        first = recovered if int(name[-1]) % 2 else [claim("c1", "Races on close", "refuted")]
-        fix = remedy("r1", [(1, "Hold the lock.")], ["c1"], [("GT-t1", "partial")] if int(name[-1]) % 2 else [])
-        return {"reviews": {key["reviews"][0]["token"]: reviewed(first, [claim("c3", "Style", "advisory")], recommendations=[fix])},
-                "new_candidates": [], "link_disputes": []}
+        token = {review["attempt_id"]: review["token"] for review in key["reviews"]}
 
-    def graded(self):
-        """Per run: every claim's outcome and family, each family's recovery and the assessor kind."""
-        grades = regrade.read(self.root / "bench/grading/current/grades.json")
-        return {batch["run"]: ([(c["id"], c["outcome"], c["family_id"]) for r in batch["reviews"] for c in r["claims"]],
-                               [(f["family_id"], f["outcome"], f["claim_ids"]) for r in batch["reviews"] for f in r["families"]],
-                               batch["assessor"]["kind"]) for batch in grades["batches"]}
+        def claim(identifier, quote):
+            return {"id": identifier, "quote": quote, "true": "yes", "this_change": "yes", "promised": "no",
+                    "promise_source": [], "delivered": None, "outcome": "suggestion", "kind": "improvement",
+                    "known_problems": [], "canonical_claim_id": None, "duplicate_group": None, "candidate": None,
+                    "open": None, "notes": "Checked against the source.", "evidence": ["Read main.go."],
+                    "pre_existing_problems": [], "pre_existing_candidate": None}
+
+        def reviewed(*items, recommendations=()):
+            return {"items": {str(n): {"kind": "finding" if claims else "not-a-finding",
+                                       "note": "" if claims else "This item makes no claim.", "claims": list(claims)}
+                              for n, claims in enumerate(items, 1)},
+                    "recommendations": list(recommendations), "remedy_inventory": {"state": "complete", "reason": ""}}
+
+        remedy = {"id": "r1", "anchors": [{"item": 1, "quote": "Hold the lock while closing."}],
+                  "addressed_claims": ["c1"], "sufficiency": [],
+                  "safety": {"state": "unassessed", "reason": "Checked the changed path for new harm.", "evidence": []}}
+        first = reviewed([claim("c1", "Races on close"), claim("c2", "It breaks.")], [],
+                         [claim("c3", "Lock order is new")], recommendations=[remedy])
+        return {"reviews": {token["att-001"]: first, token["att-002"]: reviewed([claim("c1", "Leaks the conn")]),
+                            token["att-003"]: reviewed()}, "new_candidates": [], "link_disputes": []}
+
+    def current(self):
+        return subprocess.run([self.tools, "current-grading", "check", "--root", self.root], capture_output=True,
+                              text=True, encoding="utf-8")
+
+    def add_family(self, identifier):
+        path = self.root / "bench/grading/current/references.json"
+        references = regrade.read(path)
+        families = references["targets"][0]["families"]
+        families.append({**families[-1], "id": identifier, "title": f"Title of {identifier}"})
+        path.write_text(json.dumps(references, indent=2) + "\n")
 
 
 class Controller(unittest.TestCase):
@@ -398,6 +432,19 @@ class Controller(unittest.TestCase):
         self.assertEqual((status["invocations"][-1]["workers"], status["invocations"][-1]["peakActive"]), (3, 3))
         self.assertEqual(cohort.preflights[0]["--expected-cli-version"], "9.9.9")
         self.assertEqual(len(cohort.preflights), 1)
+
+    def test_concurrent_runs_map_on_the_controller_thread_and_match_a_sequential_run(self):
+        sequential, concurrent = Cohort(self.root / "one", 100), Cohort(self.root / "three", 100)
+        concurrent.barrier = threading.Barrier(3)
+        self.assertEqual(sequential.run(workers=1), 0, sequential.status())
+        self.assertEqual(concurrent.run(workers=3), 0, concurrent.status())
+        self.assertEqual((sequential.peak, concurrent.peak), (1, 3))
+        self.assertEqual(set(concurrent.map_threads), {threading.main_thread()})
+        self.assertEqual(len(concurrent.map_threads), 5)
+        mapped = {cohort: {path.name: path.read_bytes() for path in (cohort.root / "mapped").iterdir()}
+                  for cohort in (sequential, concurrent)}
+        self.assertEqual(mapped[sequential], mapped[concurrent])
+        self.assertEqual(len(mapped[concurrent]), 5)
 
     def test_replacement_manifest_and_cache_root_reach_preflight_and_preparation(self):
         cohort = Cohort(self.root, 100, jobs=1)
@@ -862,11 +909,11 @@ class Controller(unittest.TestCase):
                 self.assertEqual(len(list(cohort.directory.glob("batches/*/*/attempt-*/reservation.json"))), int(resume))
 
     def test_removing_a_planned_current_grade_requires_a_new_queue(self):
-        cohort = SavedCohort(self.root, 100, jobs=2)
-        self.assertEqual(cohort.run(limit=1), 0, cohort.status())
-        cohort.plan = methodology.plan(self.root)
-        cohort.execution["order"] = [{"run": batch["run"], "target": batch["target"]}
-                                      for batch in cohort.plan["batches"] if batch["state"] != "current"]
+        cohort = FixtureCohort(self.root, 100)
+        self.assertEqual(cohort.run(), 0, cohort.status())
+        cohort.replan()
+        self.assertEqual({batch["state"] for batch in cohort.plan["batches"]}, {"current"})
+        cohort.execution["order"] = []
         cohort.directory = self.root / ".local/replanned-queue"
         cohort.directory.mkdir()
         cohort.authorize()
@@ -876,7 +923,6 @@ class Controller(unittest.TestCase):
             cohort.run()
         self.assertEqual(len(cohort.launched), 1)
         self.assertEqual(list(cohort.directory.glob("batches/*/*/attempt-*/reservation.json")), [])
-
     def test_a_budget_is_never_invented_or_carried_from_an_earlier_contract(self):
         cohort = Cohort(self.root, 100)
         del cohort.authorization["budgetCapUsd"]
@@ -892,14 +938,12 @@ class Controller(unittest.TestCase):
         self.assertFalse((cohort.directory / "status.json").exists())
 
     def test_stale_saved_grades_stop_the_controller_before_any_dispatch(self):
-        cohort = SavedCohort(self.root, 100, jobs=2)
-        self.assertEqual(cohort.run(limit=1), 0, cohort.status())
-        cohort.cohort.load()
-        cohort.cohort.add_family("GT-t3")
+        cohort = FixtureCohort(self.root, 100)
+        self.assertEqual(cohort.run(), 0, cohort.status())
+        cohort.add_family("GT-t3")
         with self.assertRaisesRegex(ValueError, "current evidence: .*grade fingerprint is stale"):
             cohort.run()
         self.assertEqual(len(cohort.launched), 1)
-
     def test_a_second_controller_is_refused_while_one_holds_the_lock(self):
         cohort = Cohort(self.root, 100)
         argv = ["regrade.py", "--authorization", str(self.root / "authorization.json"), "--directory", str(cohort.directory)]
@@ -909,24 +953,51 @@ class Controller(unittest.TestCase):
             self.assertEqual(regrade.main(), 2)
         self.assertEqual(cohort.launched, [])
 
-    def test_sequential_and_concurrent_runs_map_the_same_verdicts_to_the_same_assignments_and_scores(self):
-        sequential, concurrent = SavedCohort(self.root / "one", 100), SavedCohort(self.root / "three", 100)
-        concurrent.barrier = threading.Barrier(3)
-        self.assertEqual(sequential.run(workers=1), 0, sequential.status())
-        self.assertEqual(concurrent.run(workers=3), 0, concurrent.status())
-        self.assertEqual((sequential.peak, concurrent.peak), (1, 3))
-        graded = sequential.graded()
-        self.assertEqual(graded, concurrent.graded())
-        self.assertEqual(len(graded), 5)
-        self.assertEqual(len({json.dumps(claims) for claims, _families, _kind in graded.values()}), 2)
-        self.assertEqual({kind for _claims, _families, kind in graded.values()}, {"dispatch"})
-        for cohort in (sequential, concurrent):
-            done = test_grade.subprocess.run([sys.executable, str(Path(regrade.__file__).with_name("current_grading.py")), "check",
-                                             "--root", str(cohort.root)], capture_output=True, text=True)
-            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-            self.assertEqual({batch["state"] for batch in methodology.plan(cohort.root)["batches"]}, {"current"})
+    def test_every_step_runs_the_pinned_bench_tools_and_maps_a_current_grade(self):
+        cohort = FixtureCohort(self.root, 100)
+        self.assertEqual(cohort.run(), 0, cohort.status())
+        self.assertEqual([(step, program) for step, program, _tools in cohort.programs],
+                         [("preflight", "grade.py"), ("prepare", str(cohort.tools)), ("dispatch", "grade.py"),
+                          ("map", str(cohort.tools))])
+        self.assertEqual({tools for _step, _program, tools in cohort.programs}, {cohort.tools})
+        done = cohort.current()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(done.stdout, "current evidence valid; 2/2 admitted reviews assessed\n")
+        receipt = regrade.read(self.root / cohort.status()["batches"][0]["evidence"]["path"])
+        self.assertIn("key.json", {entry["path"] for entry in receipt["files"]})
 
+    def test_an_authorization_without_a_usable_bench_tools_pin_is_refused_at_every_start(self):
+        cohort = Cohort(self.root, 100, jobs=1)
+        del cohort.authorization["runtimes"]
+        cohort.authorize()
+        with self.assertRaisesRegex(ValueError, "authorization pins no bench-tools runtime"):
+            cohort.run()
+        cohort.authorization["runtimes"] = {"bench-tools": rust_runtime.pin_of(cohort.tools.parent)}
+        cohort.authorize()
+        self.assertEqual(cohort.run(limit=1), 0)
+        cohort.tools.chmod(0o755)
+        with cohort.tools.open("ab") as executable:
+            executable.write(b"\0")
+        with self.assertRaisesRegex(ValueError, "pinned bench-tools is unavailable: .*no longer hashes to its pin"):
+            cohort.run()
+        self.assertEqual(cohort.launched, ["pr-1"])
 
+    def test_a_new_store_selection_changes_nothing_a_queue_runs(self):
+        cohort = Cohort(self.root, 100, jobs=2)
+        self.assertEqual(cohort.run(limit=1), 0)
+        rust_runtime.publish(cohort.store / "bench-tools/selected.json", rust_runtime.dumps(
+            {"pin": {"sha256": "0" * 64, "receipt_sha256": "0" * 64}, "action": "select"}))
+        self.assertEqual(cohort.run(), 0)
+        self.assertEqual({tools for _step, _program, tools in cohort.programs}, {cohort.tools})
+
+    def test_each_step_receives_the_pinned_executable_and_its_digest(self):
+        with tempfile.TemporaryDirectory() as temp:
+            log, tools = Path(temp) / "step.log", Path(temp) / "bench-tools"
+            tools.write_bytes(b"pinned")
+            show = "import os; print(os.environ['BENCH_RUST_BENCH_TOOLS'], os.environ['BENCH_RUST_BENCH_TOOLS_SHA256'])"
+            with patch.object(regrade, "ROOT", Path(temp)):
+                self.assertEqual(regrade.invoke([sys.executable, "-c", show], log, tools), 0)
+            self.assertEqual(log.read_text(), f"{tools} {hashlib.sha256(b'pinned').hexdigest()}\n")
 class RegradingBudget(unittest.TestCase):
     def test_the_meter_module_imports_only_the_standard_library(self):
         tree = ast.walk(ast.parse(Path(subscription_meters.__file__).read_text()))
@@ -978,7 +1049,7 @@ class RegradingBudget(unittest.TestCase):
             (attempt / 'reservation.json').write_text('{}')
             (work / 'dispatch.json').write_text(json.dumps({'usage': {'high': 0.5}}))
             self.assertEqual(regrade.ledger(directory), (regrade.money('0.5'), []))
-            receipt = regrade.read(root / regrade.archive_attempt(attempt, root / 'archive')['path'])
+            receipt = regrade.read(root / regrade.archive_attempt(installed_bench_tools()[0], attempt, root / 'archive')['path'])
             with tarfile.open(root / receipt['archive']['path']) as bundle:
                 member = bundle.getmember('work/dispatch.json')
                 self.assertTrue(member.isfile())
@@ -995,7 +1066,7 @@ class RegradingBudget(unittest.TestCase):
             (work / "clean-context.json").write_text('{"fresh_home":true}')
             (work / "home/.codex/config.toml").write_text('approval_policy = "never"\n')
             (work / "home/.codex/auth.json").write_text('{"fixture":"credential"}')
-            receipt = regrade.read(root / regrade.archive_attempt(attempt, root / "archive")["path"])
+            receipt = regrade.read(root / regrade.archive_attempt(installed_bench_tools()[0], attempt, root / "archive")["path"])
             names = {entry["path"] for entry in receipt["files"]}
             self.assertIn("work/home/.codex/sessions/2026/10/02/rollout-session.jsonl", names)
             self.assertIn("work/home/.codex/config.toml", names)

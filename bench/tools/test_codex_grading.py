@@ -11,6 +11,7 @@ from unittest.mock import patch
 import clean_context
 import codex_grading
 import codex_grade_dispatch
+import rust_runtime
 
 
 class CodexGradingTest(unittest.TestCase):
@@ -24,7 +25,7 @@ class CodexGradingTest(unittest.TestCase):
             policy.write_text("changed source policy")
             with patch.object(clean_context, "__file__", str(policy.parent.parent / "tools/clean_context.py")):
                 config = tomllib.loads(codex_grading.configure_client(
-                    work, execution_policy="frozen policy bytes").read_text())
+                    work, Path(temporary) / "bench-tools", execution_policy="frozen policy bytes").read_text())
             self.assertEqual(config["developer_instructions"], "frozen policy bytes")
 
     def test_production_config_uses_only_the_blinded_server_and_pinned_catalog(self):
@@ -32,7 +33,7 @@ class CodexGradingTest(unittest.TestCase):
             work = Path(temporary)
             clean_context.prepare(work)
             key = work.parent / "private-key.json"
-            config = tomllib.loads(codex_grading.configure_client(work, protected=(key,)).read_text())
+            config = tomllib.loads(codex_grading.configure_client(work, work / "bench-tools", protected=(key,)).read_text())
             self.assertNotIn("model_provider", config)
             self.assertNotIn("model_providers", config)
             self.assertEqual(set(config["mcp_servers"]), {"grading"})
@@ -65,7 +66,7 @@ class CodexGradingTest(unittest.TestCase):
     def test_actual_client_tools_execute_and_native_resource_reads_are_denied(self):
         with tempfile.TemporaryDirectory() as temporary:
             evidence = Path(temporary) / "evidence"
-            receipt = codex_grading.probe(evidence)
+            receipt = codex_grading.probe(rust_runtime.resolve("bench-tools"), evidence)
             self.assertTrue(receipt["all_tools_completed"])
             self.assertTrue(receipt["ambient_markers_absent"])
             self.assertTrue(receipt["ambient_skills_absent"])

@@ -3,8 +3,6 @@
 
 Usage: python3 tools/behavior_contract.py [--corpus corpus.json] [--implementations commands.json]
        [--differential commands.json] [--allow-known-defects]
-       python3 tools/behavior_contract.py --real-record [list.json] [--root ROOT] [--implementations commands.json]
-       --differential commands.json
        python3 tools/behavior_contract.py --verify-decision-history
 Inputs: versioned JSON corpus with argv, base64 bytes, filesystem and expectations. Without
 --implementations, each program runs its maintained implementation: the Python script where one is
@@ -49,9 +47,9 @@ PYTHON_PROGRAMS = {"codex": "bench/tools/codex_usage.py", "transcript": "bench/t
                    "evidence-store": "bench/tools/evidence_store.py",
                    "python-check-manifest": "bench/tools/check_manifest.py",
                    "evidence-inventory": "bench/tools/evidence_inventory.py"}
-# rates.py and upstream.py read the repository that holds them and fetch fixed URLs. These drivers point the
-# retained libraries at the case directory, as the Rust commands default to the current directory, and give
-# rates.py the `--source PROVIDER=URL` pages that `bench-tools rates check` takes.
+# rates.py reads the repository that holds it and fetches fixed URLs. This driver points the retained library at the
+# case directory, as the Rust command defaults to the current directory, and gives rates.py the
+# `--source PROVIDER=URL` pages that `bench-tools rates check` takes.
 PYTHON_DRIVERS = {
     "rates": """import sys
 from pathlib import Path
@@ -67,17 +65,6 @@ while "--source" in argv:
     del argv[at:at + 2]
 sys.argv[1:] = argv
 sys.exit(rates.main())
-""",
-    "upstream": """import sys
-from pathlib import Path
-sys.path.insert(0, sys.argv.pop(1))
-import claims, upstream
-root = Path.cwd()
-upstream.ROOT = claims.ROOT = root
-upstream.report.__defaults__ = (root, ())
-upstream.capture.__defaults__ = (root,)
-claims.load_registry.__defaults__ = (root / "bench/claims/registry.json", root)
-sys.exit(upstream.main())
 """,
     # The retained native_artifacts.py, which bench-tools native-artifacts replaced. file_artifacts has no command
     # line; `file` runs it and unindexed with the module's own refusals and exit status, and prints both as
@@ -162,230 +149,6 @@ except evidence_store.EvidenceError as error:
     print(f"evidence: {error}")
     sys.exit(1)
 """,
-    # `ruling {check,route,summary,precedents} [--root DIR]` and `ruling dossier DIR`, as bench-tools spells them, run
-    # the retained ruling_record.py and ruling_dossier.py. ruling_record.py reads the checkout that holds it, and its
-    # functions bind that root as a default argument, so the driver rebinds them to the case directory and runs the
-    # command-line block with `__file__` placed there. `check` is ruling_record.py without a command word.
-    "ruling": """import runpy, sys, types
-from pathlib import Path
-tools = Path(sys.argv.pop(1))
-sys.path.insert(0, str(tools))
-argv, root = sys.argv[1:], Path.cwd()
-for at, argument in enumerate(argv):
-    if argument == "--":
-        break
-    if argument == "--root" and at + 1 < len(argv):
-        root = Path(argv[at + 1]).resolve()
-        del argv[at:at + 2]
-        break
-    if argument.startswith("--root="):
-        root = Path(argument.removeprefix("--root=")).resolve()
-        del argv[at]
-        break
-if argv[:1] == ["dossier"]:
-    sys.argv = [str(tools / "ruling_dossier.py"), *argv[1:]]
-    runpy.run_path(sys.argv[0], run_name="__main__")
-    sys.exit(0)
-import delegation, ruling_record, ruling_summary
-for module in (ruling_record, ruling_summary, delegation):
-    for value in vars(module).values():
-        if isinstance(value, types.FunctionType) and value.__defaults__:
-            value.__defaults__ = tuple(root if default is ruling_record.ROOT else default for default in value.__defaults__)
-ruling_record.ROOT = root
-script = tools / "ruling_record.py"
-sys.argv = [str(script), *(argv[1:] if argv[:1] == ["check"] else argv)]
-code = compile(script.read_text(encoding="utf-8"), str(script), "exec")
-exec(code, {"__name__": "__main__", "__file__": str(root / "bench/tools/ruling_record.py"), "__builtins__": __builtins__})
-""",
-    # `claims [--root DIR] {check,inventory,dossier,evidence}` runs the retained claims.py. It and the modules it
-    # imports read the checkout that holds them and bind that root as a default argument, so the driver rebinds them to
-    # the case directory, or the `--root` argument before the command word, as bench-tools reads the current directory.
-    "claims": """import sys, types
-from pathlib import Path
-tools = Path(sys.argv.pop(1))
-sys.path.insert(0, str(tools))
-argv, root = sys.argv[1:], Path.cwd()
-for at, argument in enumerate(argv):
-    if argument in ("--", "check", "inventory", "dossier", "evidence"):
-        break
-    if argument == "--root" and at + 1 < len(argv):
-        root = Path(argv[at + 1]).resolve()
-        del argv[at:at + 2]
-        break
-    if argument.startswith("--root="):
-        root = Path(argument.removeprefix("--root=")).resolve()
-        del argv[at]
-        break
-import claims, current_grading, upstream
-for module in (claims, current_grading, upstream):
-    for value in vars(module).values():
-        if isinstance(value, types.FunctionType) and value.__defaults__:
-            value.__defaults__ = tuple(root if default == module.ROOT else default for default in value.__defaults__)
-claims.ROOT = upstream.ROOT = current_grading.ROOT = root
-claims.DEFAULT_REGISTRY = root / "bench/claims/registry.json"
-claims.DEFAULT_EXTRACTS = root / "bench/claims/evidence-extracts.v1.json"
-sys.argv = [str(tools / "claims.py"), *argv]
-sys.exit(claims.main())
-""",
-    # `grade {prepare,preflight-inputs,check-prepared,dispatch,map} ...` runs the retained grade.py on the case
-    # directory, as bench-tools grade reads the current directory: the driver repoints the checkout paths grade.py
-    # and its imports take from their own files, and their bound defaults, at the case's stand-ins. preflight-inputs
-    # is `preflight --offline`, and `check-prepared --work W --key K [--dispatching]` prints what check_prepared
-    # finds. The harness PATH is fixed, so the case home's bin, where fake clients live, goes first.
-    "python-grade": """import os, sys, types
-from pathlib import Path
-tools = Path(sys.argv.pop(1))
-sys.path.insert(0, str(tools))
-root = Path.cwd()
-import claims, claim_grading, current_grading, provision, upstream, grade
-for module in (claims, current_grading, upstream):
-    for value in vars(module).values():
-        if isinstance(value, types.FunctionType) and value.__defaults__:
-            value.__defaults__ = tuple(root if default == module.ROOT else default for default in value.__defaults__)
-claims.ROOT = upstream.ROOT = current_grading.ROOT = root
-claims.DEFAULT_REGISTRY = root / "bench/claims/registry.json"
-claims.DEFAULT_EXTRACTS = root / "bench/claims/evidence-extracts.v1.json"
-grade.TOOLS, grade.BENCH = root / "bench/tools", root / "bench"
-claim_grading.BENCH = grade.BENCH
-provision.__file__ = str(grade.TOOLS / "provision.py")
-home_bin = Path.home() / "bin"
-if home_bin.is_dir():
-    os.environ["PATH"] = f"{home_bin}{os.pathsep}{os.environ.get('PATH', '')}"
-argv = sys.argv[1:]
-if argv[:1] == ["preflight-inputs"]:
-    argv = ["preflight", "--offline", *argv[1:]]
-elif argv[:1] == ["check-prepared"]:
-    import argparse
-    parser = argparse.ArgumentParser(prog="grade.py check-prepared")
-    parser.add_argument("--work", required=True)
-    parser.add_argument("--key", required=True)
-    parser.add_argument("--dispatching", action="store_true")
-    args = parser.parse_args(argv[1:])
-    try:
-        problems = grade.check_prepared(Path(args.work).resolve(), grade.read_json(args.key), dispatching=args.dispatching)
-    except grade.InputError as error:
-        print(f"grade.py: {error}", file=sys.stderr)
-        sys.exit(2)
-    for problem in problems:
-        print(problem)
-    sys.exit(1 if problems else 0)
-sys.argv = [str(tools / "grade.py"), *argv]
-sys.exit(grade.main())
-""",
-    # `second-assessment ...` runs the retained evaluator audit's `second` step on the case directory with the
-    # checkout paths of grade.py and its imports repointed as python-grade repoints them.
-    "python-second-assessment": """import sys, types
-from pathlib import Path
-tools = Path(sys.argv.pop(1))
-sys.path.insert(0, str(tools))
-root = Path.cwd()
-import claims, claim_grading, current_grading, upstream, grade, evaluator_audit
-for module in (claims, current_grading, upstream):
-    for value in vars(module).values():
-        if isinstance(value, types.FunctionType) and value.__defaults__:
-            value.__defaults__ = tuple(root if default == module.ROOT else default for default in value.__defaults__)
-claims.ROOT = upstream.ROOT = current_grading.ROOT = evaluator_audit.ROOT = root
-claims.DEFAULT_REGISTRY = root / "bench/claims/registry.json"
-claims.DEFAULT_EXTRACTS = root / "bench/claims/evidence-extracts.v1.json"
-grade.TOOLS, grade.BENCH = root / "bench/tools", root / "bench"
-claim_grading.BENCH = grade.BENCH
-sys.argv = [Path(evaluator_audit.__file__).name, "second", *sys.argv[1:]]
-sys.exit(evaluator_audit.main())
-""",
-    # grading_validation.py reads inputs.json one directory above its own file, where grade.py copies it into a
-    # workspace; `bench-tools grading validate` names that file with --inputs. Pointing the module's __file__ beside
-    # the named file makes the retained script read it in place, so the case tree holds no copied tools.
-    "grading": """import argparse, sys
-from pathlib import Path
-sys.path.insert(0, sys.argv.pop(1))
-import grading_validation
-if sys.argv[1:2] != ["validate"]:
-    sys.exit("grading: the retained Python implements only validate")
-parser = argparse.ArgumentParser(prog="grading_validation.py", add_help=False)
-parser.add_argument("--inputs", required=True)
-known, rest = parser.parse_known_args(sys.argv[2:])
-if Path(known.inputs).name != "inputs.json":
-    parser.error("grading_validation.py reads only a file named inputs.json")
-grading_validation.__file__ = str(Path(known.inputs).parent / "tools" / "grading_validation.py")
-sys.argv = ["grading_validation.py", *rest]
-sys.exit(grading_validation.main())
-""",
-    # archive_attempt has no command line; regrade.py calls it in process and stops on the failures it catches.
-    # `ATTEMPT ARCHIVE_DIR` takes both from the case directory, the repository the receipt's paths are relative to,
-    # as `bench-tools regrade archive-attempt` does.
-    "regrade-archive-attempt": """import json, sys
-from pathlib import Path
-sys.path.insert(0, sys.argv.pop(1))
-import regrade
-regrade.ROOT = Path.cwd()
-attempt, archives = (Path.cwd() / argument for argument in sys.argv[1:])
-try:
-    print(json.dumps(regrade.archive_attempt(attempt, archives)))
-except regrade.FAILURES as error:
-    print(f"regrade.py: {error}", file=sys.stderr)
-    sys.exit(2)
-""",
-    # `current-grading {inventory,check,status} [--root DIR]` runs the retained current_grading.py, whose `--root`
-    # defaults to the case directory here, as bench-tools reads the current directory. `fingerprints` has no Python
-    # command; it prints what regrade.py reads in process: each selected batch with batch_state's fingerprint and
-    # state, read without checking saved grades.
-    # methodology.py reads the repository that holds it; the driver reads the case directory, as bench-tools
-    # methodology reads the current directory.
-    "methodology": """import sys
-from pathlib import Path
-sys.path.insert(0, sys.argv.pop(1))
-sys.argv[0] = "methodology.py"
-import methodology
-methodology.ROOT = Path.cwd()
-methodology.main()
-""",
-    # calibration.py's `--root` defaults to current_grading.ROOT and evaluator_audit.py's to the repository holding
-    # it; both drivers read the case directory, as bench-tools reads the current directory.
-    "calibration": """import sys
-from pathlib import Path
-sys.path.insert(0, sys.argv.pop(1))
-sys.argv[0] = "calibration.py"
-import current_grading
-current_grading.ROOT = Path.cwd()
-import calibration
-sys.exit(calibration.main())
-""",
-    "evaluator-audit": """import sys
-from pathlib import Path
-sys.path.insert(0, sys.argv.pop(1))
-sys.argv[0] = "evaluator_audit.py"
-import evaluator_audit
-evaluator_audit.ROOT = Path.cwd()
-sys.exit(evaluator_audit.main())
-""",
-    "current-grading": """import argparse, json, sys
-from pathlib import Path
-sys.path.insert(0, sys.argv.pop(1))
-sys.argv[0] = "current_grading.py"
-import current_grading
-current_grading.ROOT = Path.cwd()
-parser = argparse.ArgumentParser(description=current_grading.__doc__.splitlines()[0])
-parser.add_argument("operation", choices=("inventory", "check", "status", "fingerprints"))
-parser.add_argument("--root", type=Path, default=current_grading.ROOT)
-parser.add_argument("--current", default=str(current_grading.CURRENT))
-parser.add_argument("--out", type=Path)
-args = parser.parse_args()
-if args.operation != "fingerprints":
-    sys.exit(current_grading.main())
-try:
-    selected, documents = current_grading.load_current(args.root, args.current, grades=False)
-    rows = []
-    for batch in selected["batches"]:
-        fingerprint, state = current_grading.batch_state(batch, selected, documents, args.root)
-        rows.append({**batch, "input_fingerprint": fingerprint, "state": state})
-    print(json.dumps(rows, indent=2))
-except current_grading.Inconsistent as error:
-    print(str(error))
-    sys.exit(1)
-except (current_grading.InputError, OSError) as error:
-    print(f"current_grading.py: {error}", file=sys.stderr)
-    sys.exit(2)
-""",
 }
 DRIVER_ARGUMENTS = {}
 RUST_PROGRAMS = {"roster": ("bench-tools", ["roster"]), "normalize-thermo": ("bench-tools", ["normalize-thermo"]),
@@ -403,38 +166,15 @@ RUST_PROGRAMS = {"roster": ("bench-tools", ["roster"]), "normalize-thermo": ("be
                  "check-manifest": ("bench-tools", ["check-manifest"]),
                  "grade": ("bench-tools", ["grade"]),
                  "second-assessment": ("bench-tools", ["evaluator-audit", "second"]),
-                 # No retained counterpart: every command map prepares a v2 key with it for the rows Python runs on.
-                 "rust-grade": ("bench-tools", ["grade"])}
+                 "upstream": ("bench-tools", ["upstream"]), "ruling": ("bench-tools", ["ruling"]),
+                 "claims": ("bench-tools", ["claims"]), "grading": ("bench-tools", ["grading"]),
+                 "current-grading": ("bench-tools", ["current-grading"]),
+                 "methodology": ("bench-tools", ["methodology"]), "calibration": ("bench-tools", ["calibration"]),
+                 "evaluator-audit": ("bench-tools", ["evaluator-audit"]),
+                 "regrade-archive-attempt": ("bench-tools", ["regrade", "archive-attempt"])}
 # The retained Python each moved program replaced, which a differential runs as the primary.
 PYTHON_COUNTERPARTS = {"native-artifacts": "python-native-artifacts", "archive-transcripts": "python-archive-transcripts",
-                       "check-manifest": "python-check-manifest", "grade": "python-grade",
-                       "second-assessment": "python-second-assessment"}
-# Python programs that draw blind tokens or shuffles run under ENTROPY_DRIVER, so a recorded expectation is the
-# same on every recording. The grading slices of #156 add their programs here, each by its script or its driver.
-PYTHON_ENTROPY = {"claims": "claims", "python-grade": "python-grade"}
-ENTROPY_DRIVER = """import hashlib, random, runpy, secrets, sys
-from pathlib import Path
-drawn = 0
-def token_hex(nbytes=None):
-    global drawn
-    count, raw = 32 if nbytes is None else nbytes, b""
-    while len(raw) < count:
-        raw += hashlib.sha256(b"behavior-contract-entropy:%d" % drawn).digest()
-        drawn += 1
-    return raw[:count].hex()
-secrets.token_hex = token_hex
-fixed = random.Random(20261019)
-random.SystemRandom = lambda *args, **kwargs: fixed
-script = sys.argv.pop(1)
-if script == "-c":
-    source = sys.argv.pop(1)
-    sys.argv[0] = "-c"
-    exec(compile(source, "<driver>", "exec"), {"__name__": "__main__", "__builtins__": __builtins__})
-    sys.exit(0)
-sys.path.insert(0, str(Path(script).parent))
-sys.argv[0] = script
-runpy.run_path(script, run_name="__main__")
-"""
+                       "check-manifest": "python-check-manifest"}
 # Setup programs that are part of a case, not of an implementation, so every command map runs the same one.
 # `fixture-git [--directory DIR] [FILE ...]` commits DIR, by default the case root, with a fixed identity, clock and
 # no compression, removes the config and message, whose bytes depend on the host, rewrites the index from the commit
@@ -1729,9 +1469,7 @@ def default_commands(corpus):
     for program in sorted(programs):
         if program in SETUP_PROGRAMS:
             continue
-        if program in PYTHON_ENTROPY:
-            commands[program] = entropy_command(PYTHON_ENTROPY[program])
-        elif program in PYTHON_PROGRAMS:
+        if program in PYTHON_PROGRAMS:
             commands[program] = [sys.executable, str(REPO / PYTHON_PROGRAMS[program])]
         elif program in PYTHON_DRIVERS:
             commands[program] = [sys.executable, "-c", PYTHON_DRIVERS[program],
@@ -1756,9 +1494,7 @@ def python_commands(corpus):
         driver = PYTHON_COUNTERPARTS.get(program, program)
         if program in SETUP_PROGRAMS:
             continue
-        if driver in PYTHON_ENTROPY:
-            commands[program] = entropy_command(PYTHON_ENTROPY[driver])
-        elif driver in PYTHON_DRIVERS:
+        if driver in PYTHON_DRIVERS:
             commands[program] = [sys.executable, "-c", PYTHON_DRIVERS[driver],
                                  *(str(REPO / path) for path in DRIVER_ARGUMENTS.get(driver, ["bench/tools"]))]
         elif driver in PYTHON_PROGRAMS:
@@ -1767,14 +1503,6 @@ def python_commands(corpus):
             commands.update({name: command for name, command in default_commands(
                 {"cases": [{"program": program}]}).items()})
     return commands
-
-
-def entropy_command(name):
-    """ENTROPY_DRIVER running a driver of PYTHON_DRIVERS by name, or else a script relative to the repository."""
-    if name in PYTHON_DRIVERS:
-        return [sys.executable, "-c", ENTROPY_DRIVER, "-c", PYTHON_DRIVERS[name],
-                *(str(REPO / path) for path in DRIVER_ARGUMENTS.get(name, ["bench/tools"]))]
-    return [sys.executable, "-c", ENTROPY_DRIVER, str(REPO / name)]
 
 
 def with_setup(commands):
@@ -1845,104 +1573,6 @@ def load_corpus(path):
     return corpus
 
 
-REAL_RECORD = REPO / "tools/behavior_contracts/grading-real-record.v1.json"
-RECORD_LOCK = Path(".cache/current-record.lock")
-
-
-def load_real_record(path):
-    listing = json_value(path.read_bytes())
-    if listing.get("format") != "behavior-real-record/1" or set(listing) - {"format", "description", "commands"}:
-        raise ValueError(f"{path}: unsupported real-record list")
-    ids = set()
-    for command in listing["commands"]:
-        if set(command) - {"id", "program", "argv", "outputs", "timeout"} or command["id"] in ids:
-            raise ValueError(f"{path}: each command has a unique id, a program, argv and optional outputs")
-        ids.add(command["id"])
-        for name in [*command.get("outputs", []), *(arg["output"] for arg in command["argv"] if isinstance(arg, dict))]:
-            relative(base64.b64encode(os.fsencode(name)).decode("ascii"))
-    return listing
-
-
-def root_state(root):
-    """Every entry below root, tracked, ignored or Git's own, by type, permissions, size, inode and change time.
-    Writing a file moves its change time even when its modification time and bytes are put back."""
-    state = []
-    for directory, dirs, files in os.walk(root):
-        for name in dirs + files:
-            path = os.path.join(directory, name)
-            info = os.lstat(path)
-            state.append((os.path.relpath(path, root), info.st_mode, info.st_size, info.st_ino, info.st_mtime_ns,
-                          info.st_ctime_ns))
-    return sorted(state)
-
-
-def establish_record_lock(root):
-    """current_grading.record_lock creates its lock file on first use, which a fresh checkout lacks; creating it
-    before the first snapshot keeps that creation from reading as a change to the record. Opening in append mode
-    leaves an existing lock in place, byte- and inode-unchanged."""
-    path = Path(root).resolve() / RECORD_LOCK
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a"):
-        pass
-
-
-def run_real_record(command, commands, root):
-    """Run one listed command on the checked-out record, with its named outputs in a disposable directory."""
-    with tempfile.TemporaryDirectory(prefix="behavior-contract-real-") as temporary:
-        out, home = Path(temporary) / "out", Path(temporary) / "home"
-        out.mkdir()
-        home.mkdir()
-        argv = [str(out / arg["output"]) if isinstance(arg, dict) else arg for arg in command["argv"]]
-        environment = {"PATH": os.defpath, "HOME": str(home), "LC_ALL": "C.UTF-8", "TZ": "UTC",
-                       "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUTF8": "1"}
-        before = root_state(root)
-        result = subprocess.run([*commands[command["program"]], *argv], cwd=root, capture_output=True,
-                                env=environment, timeout=command.get("timeout", 300))
-        changed = root_state(root) != before
-        outputs = {name: (out / name).read_bytes() if (out / name).is_file() else None
-                   for name in command.get("outputs", [])}
-        return {"exit": result.returncode, "stdout": result.stdout, "stderr": result.stderr, "outputs": outputs,
-                "changed": changed}
-
-
-def real_record_differences(left, right):
-    differences = ["candidate changed the checked-out record"] if right["changed"] else []
-    if left["exit"] != right["exit"]:
-        differences.append(f"exit: primary {left['exit']}, candidate {right['exit']}")
-    for stream in ("stdout", "stderr"):
-        if left[stream] != right[stream]:
-            differences.append(f"{stream} bytes: primary {left[stream]!r}, candidate {right[stream]!r}")
-    for name, data in left["outputs"].items():
-        if data != right["outputs"][name]:
-            differences.append(f"output {name}: primary {data!r}, candidate {right['outputs'][name]!r}")
-    return differences
-
-
-def real_record(listing, commands, other, root):
-    """A command that changes the checkout stops the run, so no later run reads inputs it changed."""
-    if not listing["commands"]:
-        print("real record: no commands are listed")
-        return 0
-    establish_record_lock(root)
-    failed = 0
-    for command in listing["commands"]:
-        primary = run_real_record(command, commands, root)
-        if primary["changed"]:
-            print(f"DIFFERENTIAL {command['id']}\nprimary changed the checked-out record; stopped before the candidate")
-            return 1
-        candidate = run_real_record(command, other, root)
-        differences = real_record_differences(primary, candidate)
-        if candidate["changed"]:
-            print(f"DIFFERENTIAL {command['id']}\n" + "\n".join(differences) + "\nstopped before the next command")
-            return 1
-        if differences:
-            failed += 1
-            print(f"DIFFERENTIAL {command['id']}\n" + "\n".join(differences))
-        else:
-            print(f"PASS {command['id']}")
-    return 1 if failed else 0
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--corpus", type=Path, default=CORPUS)
@@ -1950,22 +1580,12 @@ def main():
     parser.add_argument("--differential", type=Path)
     parser.add_argument("--allow-known-defects", action="store_true")
     parser.add_argument("--verify-decision-history", action="store_true")
-    parser.add_argument("--real-record", type=Path, nargs="?", const=REAL_RECORD)
-    parser.add_argument("--root", type=Path, default=REPO)
     args = parser.parse_args()
     try:
         if args.verify_decision_history:
             verify_decision_history(REPO)
             print("Published decision history verified")
             return 0
-        if args.real_record:
-            if not args.differential:
-                raise ValueError("--real-record compares two implementations; name the second with --differential")
-            listing = load_real_record(args.real_record)
-            commands = (json.loads(args.implementations.read_text(encoding="utf-8")) if args.implementations
-                        else default_commands({"cases": listing["commands"]}))
-            return real_record(listing, commands, json.loads(args.differential.read_text(encoding="utf-8")),
-                               args.root.resolve())
         corpus = load_corpus(args.corpus)
         commands = (json.loads(args.implementations.read_text(encoding="utf-8")) if args.implementations
                     else default_commands(corpus))
