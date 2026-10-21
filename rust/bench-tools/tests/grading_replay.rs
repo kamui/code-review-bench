@@ -45,7 +45,7 @@ const FIXTURE_CASES: [(&str, &str); 3] = [
     ("current-verdicts/v2", "grade-map-verdicts-v2"),
     ("current-verdicts/v3", "grade-map-pending-candidate"),
 ];
-/// Fields `grade.py map` copies from the key into the receipt, and the key field the receipt's
+/// Fields `bench-tools grade map` copies from the key into the receipt, and the key field the receipt's
 /// `runner.prepared` copies.
 const KEY_FIELDS: [&str; 6] = [
     "run",

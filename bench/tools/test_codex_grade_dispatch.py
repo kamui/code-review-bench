@@ -85,13 +85,13 @@ class Session(unittest.TestCase):
                 return subprocess_result(0)
 
             with patch.object(dispatch.subprocess, "run", client), patch.dict(os.environ, OPENAI_API_KEY="ambient-secret"):
-                result = dispatch.run(work, root / "key.json", RATE["model"], "high", 30, user, RATE)
+                result = dispatch.run(work, root / "key.json", RATE["model"], "high", 30, user, RATE, Path("bench-tools"))
             self.assertEqual(result["exit_code"], 0)
             self.assertEqual(result["session_id"], "fresh-session")
             self.assertTrue(result["provider_call_possible"])
             self.assertFalse((work / "home/.codex/auth.json").exists())
             with self.assertRaises(FileExistsError):
-                dispatch.run(work, root / "key.json", RATE["model"], "high", 30, user, RATE)
+                dispatch.run(work, root / "key.json", RATE["model"], "high", 30, user, RATE, Path("bench-tools"))
 
     def test_client_failure_still_removes_credentials(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -105,7 +105,7 @@ class Session(unittest.TestCase):
             (work / "execution-policy.md").write_text("frozen execution policy")
             with patch.object(dispatch.subprocess, "run", side_effect=OSError("client unavailable")):
                 with self.assertRaises(OSError):
-                    dispatch.run(work, root / "key.json", RATE["model"], "high", 30, user, RATE)
+                    dispatch.run(work, root / "key.json", RATE["model"], "high", 30, user, RATE, Path("bench-tools"))
             self.assertFalse((work / "home/.codex/auth.json").exists())
 
     def test_unavailable_transcripts_cannot_prove_zero_charge(self):
@@ -141,7 +141,7 @@ class Session(unittest.TestCase):
                         return subprocess_result(0)
 
                     with patch.object(dispatch.subprocess, "run", client):
-                        result = dispatch.run(work, directory / "key.json", RATE["model"], "high", 30, user, RATE)
+                        result = dispatch.run(work, directory / "key.json", RATE["model"], "high", 30, user, RATE, Path("bench-tools"))
                     self.assertIsNone(result["usage"]["high"])
                     self.assertTrue(result["provider_call_possible"])
                     self.assertFalse((work / "home/.codex/auth.json").exists())
