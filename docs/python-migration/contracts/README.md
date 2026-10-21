@@ -28,7 +28,8 @@ The runner finds corpora and decision versions in the directory and names each t
 `baseline_defect` may appear. `decision-history` replaces `--verify-decision-history`, `digest-vectors` checks
 the canonical bytes vectors, and the `self-check::` tests replace the harness tests. Two `evidence-store` cases,
 `resolve-across-implementations` and `pack-restored-by-python`, still run the retained `evidence_store.py` beside
-`bench-tools`; they go with it. On macOS the `evidence-store`, `evidence-inventory` and `native-artifacts` cases
+`bench-tools`; they go with it. The runner maps `python-native-artifacts` to `bench-tools native-artifacts`, so the
+`native-artifacts` step cases that read a filing across implementations now run Rust on both sides. On macOS the `evidence-store`, `evidence-inventory` and `native-artifacts` cases
 report `SKIP UNAVAILABLE`, because those programs refuse a root below the symlink above every macOS temporary
 directory.
 

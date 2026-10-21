@@ -49,6 +49,12 @@ pub fn list<'a>(value: &'a Value, key: &str) -> Result<&'a [Value], String> {
     }
 }
 
+pub fn required_list<'a>(value: &'a Value, key: &str) -> Result<&'a [Value], String> {
+    field(value, key)?
+        .as_array()
+        .ok_or_else(|| format!("{key} is not a list"))
+}
+
 pub fn keys(value: &Value) -> HashSet<&str> {
     value
         .as_object()

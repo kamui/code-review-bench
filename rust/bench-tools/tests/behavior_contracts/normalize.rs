@@ -2,7 +2,7 @@
 //! archive sizes as labels, evidence manifests and storage references checked against the bytes beside them,
 //! volatile fields, the case root and mask patterns.
 
-use crate::corpus::{field, has, list, string};
+use crate::corpus::{field, has, list, required_list, string};
 use crate::{b64, json, pattern, structured};
 use bench_tools::pyjson::{Object, Value};
 use bench_tools::{pytext, pyvalue, sha256};
@@ -413,7 +413,7 @@ pub fn normalize(case: &Value, root: &Path, observed: Observed) -> Result<Observ
                 .as_object()
                 .ok_or("a storage record is an object")?
                 .clone();
-            list(rule, "fields")?
+            required_list(rule, "fields")?
                 .iter()
                 .map(|key| {
                     let key = key.as_str().ok_or("a reference field is a string")?;
@@ -454,7 +454,7 @@ pub fn normalize(case: &Value, root: &Path, observed: Observed) -> Result<Observ
     }
     for rule in list(case, "volatile")? {
         let name = string(rule, "path")?;
-        for at in list(rule, "pointers")? {
+        for at in required_list(rule, "pointers")? {
             mask(
                 name.as_bytes(),
                 at.as_str()

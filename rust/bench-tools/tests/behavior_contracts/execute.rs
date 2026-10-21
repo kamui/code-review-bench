@@ -548,7 +548,7 @@ pub fn execute(
     let root_dir = Root::create()?;
     let root = root_dir.0.as_path();
     require_capabilities(case, root)?;
-    populate(root, corpus::list(case, "initial")?)?;
+    populate(root, corpus::required_list(case, "initial")?)?;
     let home = root.join(".home");
     std::fs::create_dir(&home).map_err(|error| format!("{}: {error}", home.display()))?;
     let mut environment: Vec<(String, String)> = vec![

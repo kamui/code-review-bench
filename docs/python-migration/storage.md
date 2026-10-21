@@ -260,9 +260,9 @@ cross-implementation cases check that each restores what the other wrote.
 | `bench/tools/native_artifacts.py` | `prune_workspace.py` verifies filings with `verify` before it removes a clone; `grade.runner_files()` hashes `prune_workspace.py` | `prune_workspace.py` verifies through `bench-tools native-artifacts verify` ([#159](https://github.com/kamui/code-review-bench/issues/159)) | #159 |
 | `bench/tools/evidence_inventory.py` | `retire_workspace.py` inventories the workspace, takes Git blob identities and runs Git through it | `retire_workspace.py` moves to Rust and inventories through `bench_tools::evidence_inventory` ([#159](https://github.com/kamui/code-review-bench/issues/159)) | #159 |
 
-The tests of the retained libraries, the `python-resolve` and `python-native-artifacts` corpus drivers and
-`tests/python_archives.rs` call the retained Python to show that both implementations read each other's output. They go
-with the libraries.
+The tests of the retained libraries, the `python-resolve` corpus program and `tests/python_archives.rs` call the
+retained Python to show that both implementations read each other's output. They go with the libraries. Since #160 the
+corpus runner runs `python-native-artifacts` as `bench-tools native-artifacts`.
 
 ## Temporary bridges
 

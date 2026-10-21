@@ -1435,6 +1435,34 @@ fn storage_references(scratch: &Scratch) -> Result<(), Failure> {
             "{variant}: {found:?}"
         );
     }
+    let storage = obj(vec![("path", s("out/native-artifact-storage.v1.json"))]);
+    let rule = |key: &str| {
+        with(
+            &case,
+            vec![
+                ("argv", Value::Array(vec![s("9"), s("same")])),
+                (key, Value::Array(vec![storage.clone()])),
+            ],
+        )
+    };
+    let unfielded = single(&rule("references"), no_options(), scratch, &["native"])?;
+    ensure!(
+        mentions(&unfielded.inconsistencies, "unreadable storage reference"),
+        "a references rule without fields: {:?}",
+        unfielded.inconsistencies
+    );
+    ensure!(
+        single(&rule("volatile"), no_options(), scratch, &["native"]).is_err(),
+        "a volatile rule without pointers ran"
+    );
+    let bare = with(
+        &without(&case, "initial"),
+        vec![("argv", Value::Array(vec![s("9"), s("same")]))],
+    );
+    ensure!(
+        single(&bare, no_options(), scratch, &["native"]).is_err(),
+        "a case without initial ran"
+    );
     Ok(())
 }
 
