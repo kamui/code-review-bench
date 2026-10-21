@@ -130,8 +130,9 @@ describe('current ungraded preview', () => {
       const detail = detailSchema.parse(JSON.parse(await readFile(`public${attempt.detailUrl}`, 'utf8')))
       expect(detail.id).toBe(attempt.id)
       const source = z.object({ usage: z.object({ metering_status: z.string().optional() }) }).parse(await Bun.file(`public${detail.recordUrl}`).json())
-      if (source.usage.metering_status === 'complete') expect(attempt.outputTokens).not.toBeNull()
+      if (source.usage.metering_status === 'complete' && !detail.usageCorrectionUrl) expect(attempt.outputTokens).not.toBeNull()
       else expect(attempt.outputTokens).toBeNull()
+      if (detail.usageCorrectionUrl) expect(attempt.cost).toBeNull()
       for (const url of [detail.recordUrl, detail.normalizedUrl, detail.archiveUrl]) {
         if (url) expect((await Bun.file(`public${url}`).stat()).size).toBeGreaterThan(0)
       }

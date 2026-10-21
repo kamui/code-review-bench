@@ -81,6 +81,7 @@ function InspectionBody({ dataset, configuration, task, initialAttemptId, now }:
           </Stack></Paper><Group gap="xs">
             <Button component="a" href={detail.recordUrl} target="_blank" rel="noreferrer" variant="light" size="xs" leftSection={<FileJson size={14} />}>Attempt record</Button>
             {detail.billingCorrectionUrl && <Button component="a" href={detail.billingCorrectionUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Billing correction</Button>}
+            {detail.usageCorrectionUrl && <Button component="a" href={detail.usageCorrectionUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Usage lower bound</Button>}
             {detail.normalizedUrl && <Button component="a" href={detail.normalizedUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Review JSON</Button>}
             {detail.assessment.receiptUrl && <Button component="a" href={detail.assessment.receiptUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Current assessment receipt</Button>}
             {detail.assessment.verdictsUrl && <Button component="a" href={detail.assessment.verdictsUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Assessor verdicts</Button>}
@@ -147,7 +148,7 @@ function ReviewSummary({ attempt }: { attempt: Attempt }) {
   const facts = attempt.assessment ? reviewFacts(attempt.assessment) : null
   return <Paper withBorder p="md" radius="md"><Group justify="space-between" gap="sm">
     <Badge color={attempt.complete ? 'teal' : 'orange'} variant="light">{attempt.complete ? 'Completed' : attempt.admitted ? 'Incomplete coverage' : 'Stopped / invalid'}</Badge>
-    <Text size="sm">{money(attempt.cost)}{attempt.billing === 'list-price-equivalent' ? ' list-price equivalent' : ''} / {compact(attempt.outputTokens)} output tokens</Text>
+    <Text size="sm">{attempt.cost === null && attempt.costLowerBound !== null ? `≥ ${money(attempt.costLowerBound)}` : money(attempt.cost)}{attempt.billing === 'list-price-equivalent' ? ' list-price equivalent' : ''} / {compact(attempt.outputTokens)} output tokens</Text>
   </Group><Text size="sm" mt="sm">{!facts ? 'Current claim and remedy judgments are unavailable.'
     : `${facts.caught} reference problems found / ${facts.outcomes.refuted.distinct} refuted and ${facts.outcomes.unsupported.distinct} unsupported claims / ${facts.outcomes.inconsequential.distinct} non-material observations`}</Text>
     {attempt.predecessor && <Text size="xs" c="dimmed" mt="xs">Replacement for {attempt.predecessor}. Trial costs include the original attempt.</Text>}
