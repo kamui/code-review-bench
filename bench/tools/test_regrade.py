@@ -50,7 +50,7 @@ class Cohort:
         self.lock, self.barrier = threading.Lock(), None
         self.launched, self.inflight, self.charged, self.exposures, self.peak = [], {}, Decimal(0), [], 0
         self.outcomes, self.preflights, self.preflight_code, self.map_crashes = {}, [], 0, False
-        self.dispatches = []
+        self.dispatches, self.map_threads = [], []
         self.commands, self.programs = [], []
         self.installed, self.paths = None, []
         self.used, self.sign_in_expires, self.metered = (lambda: 10), None, []
@@ -205,6 +205,7 @@ class Cohort:
         return outcome["code"]
 
     def map(self, options):
+        self.map_threads.append(threading.current_thread())
         if self.map_crashes:
             raise Crash
         mapping = self.mapped(self.name(options["--key"]))
@@ -431,6 +432,19 @@ class Controller(unittest.TestCase):
         self.assertEqual((status["invocations"][-1]["workers"], status["invocations"][-1]["peakActive"]), (3, 3))
         self.assertEqual(cohort.preflights[0]["--expected-cli-version"], "9.9.9")
         self.assertEqual(len(cohort.preflights), 1)
+
+    def test_concurrent_runs_map_on_the_controller_thread_and_match_a_sequential_run(self):
+        sequential, concurrent = Cohort(self.root / "one", 100), Cohort(self.root / "three", 100)
+        concurrent.barrier = threading.Barrier(3)
+        self.assertEqual(sequential.run(workers=1), 0, sequential.status())
+        self.assertEqual(concurrent.run(workers=3), 0, concurrent.status())
+        self.assertEqual((sequential.peak, concurrent.peak), (1, 3))
+        self.assertEqual(set(concurrent.map_threads), {threading.main_thread()})
+        self.assertEqual(len(concurrent.map_threads), 5)
+        mapped = {cohort: {path.name: path.read_bytes() for path in (cohort.root / "mapped").iterdir()}
+                  for cohort in (sequential, concurrent)}
+        self.assertEqual(mapped[sequential], mapped[concurrent])
+        self.assertEqual(len(mapped[concurrent]), 5)
 
     def test_replacement_manifest_and_cache_root_reach_preflight_and_preparation(self):
         cohort = Cohort(self.root, 100, jobs=1)
