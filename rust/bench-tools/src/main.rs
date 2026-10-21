@@ -19,7 +19,7 @@ use std::ffi::{OsStr, OsString};
 use std::fmt::Display;
 use std::io::Write;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 /// Deterministic benchmark tools.
@@ -77,7 +77,7 @@ enum Cli {
     /// Check ruling records, route a ruling, summarize rounds, or check a ruling dossier.
     #[command(subcommand, infer_long_args = true)]
     Ruling(RulingCommand),
-    /// Check a grader's output against the rules grading_validation.py applies.
+    /// Check a grader's output against the rules grading_validation.py applies, or serve the grader's tools.
     #[command(subcommand, infer_long_args = true)]
     Grading(GradingCommand),
     /// Inventory and validate the sole-current grading record, as current_grading.py does, or print each selected
@@ -1441,6 +1441,21 @@ enum GradingCommand {
         /// The validator inputs grade.py prepares, validator/inputs.json in a grading workspace.
         #[arg(long, allow_negative_numbers = true)]
         inputs: OsString,
+    },
+    /// Serve the blinded grader's MCP tools for one grading workspace over stdin and stdout.
+    #[command(infer_long_args = true)]
+    Tools {
+        #[arg(long, allow_negative_numbers = true)]
+        work: PathBuf,
+        /// The target's command profile.
+        #[arg(long, allow_negative_numbers = true)]
+        policy: PathBuf,
+        /// A path the sandbox must never mount, such as the private grading key.
+        #[arg(long, allow_negative_numbers = true)]
+        protected: Vec<PathBuf>,
+        /// The pinned bench-tools executable the validate tool runs.
+        #[arg(long, allow_negative_numbers = true)]
+        bench_tools: PathBuf,
     },
 }
 
@@ -4498,6 +4513,23 @@ fn main() -> ExitCode {
         Cli::Grading(GradingCommand::Validate { verdicts, inputs }) => {
             run_grading_validate(&verdicts, &inputs)
         }
+        Cli::Grading(GradingCommand::Tools {
+            work,
+            policy,
+            protected,
+            bench_tools,
+        }) => match bench_tools::grading_tools::serve_command(
+            &work,
+            &policy,
+            &protected,
+            &bench_tools,
+        ) {
+            Ok(()) => Ok(ExitCode::SUCCESS),
+            Err(message) => {
+                eprintln!("bench-tools grading tools: {message}");
+                Err(ExitCode::FAILURE)
+            }
+        },
         Cli::Regrade(RegradeCommand::Status { queues }) => regrade_status(&queues),
         Cli::Regrade(RegradeCommand::ArchiveAttempt {
             attempt,
