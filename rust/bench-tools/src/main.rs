@@ -8,7 +8,7 @@ use bench_tools::{
     archive, build_packet, calibration, claims, current_grading, delegation, derive_packet,
     diff_identity, evaluator_audit, evidence, evidence_inventory, export_explorer, grade,
     grading_reports, grading_validation, import_benchmark, methodology, native_artifacts,
-    normalize_thermo, pyfs, pyunicode, pyvalue, rates, roster, ruling, upstream,
+    normalize_thermo, pyfs, pyunicode, pyvalue, rates, roster, ruling, upstream, usage,
 };
 use clap::builder::PossibleValuesParser;
 use clap::error::ErrorKind;
@@ -58,6 +58,9 @@ enum Cli {
     /// Check, inventory, blind or package the shared claims, as claims.py does.
     #[command(infer_long_args = true)]
     Claims(ClaimsArgs),
+    /// Sum and price the billed usage of Claude transcripts or Codex rollouts.
+    #[command(subcommand, infer_long_args = true)]
+    Usage(UsageCommand),
     /// Export the current facts to public/ for the explorer, or list, stage or publish an export from a facts file.
     #[command(infer_long_args = true)]
     ExportExplorer(ExportArgs),
@@ -413,6 +416,83 @@ enum UpstreamCommand {
         out: Option<OsString>,
         #[arg(long, default_value = ".", allow_negative_numbers = true)]
         root: OsString,
+    },
+}
+
+#[derive(Subcommand)]
+enum UsageCommand {
+    /// Sum the billed usage in Claude Code transcripts, price it, and check it against the session totals.
+    #[command(infer_long_args = true)]
+    Claude {
+        /// One or more transcript JSONL paths to meter.
+        #[arg(allow_negative_numbers = true)]
+        transcripts: Vec<OsString>,
+        /// Transcripts to read only for completion receipts and session totals, such as a subagent's parent.
+        #[arg(long, num_args = 1.., allow_negative_numbers = true)]
+        receipts: Vec<OsString>,
+        /// Dollars per million input and output tokens, e.g. 2,10.
+        #[arg(long, value_name = "IN,OUT", allow_negative_numbers = true)]
+        prices: Option<String>,
+        /// Five-minute cache-write price as a multiple of the input price; also the price of unknown-tier writes.
+        #[arg(long, default_value = "1.25", allow_negative_numbers = true)]
+        cache_write_mult: String,
+        /// One-hour cache-write price as a multiple of the input price.
+        #[arg(
+            long = "cache-write-1h-mult",
+            default_value = "2.0",
+            allow_negative_numbers = true
+        )]
+        cache_write_1h_mult: String,
+        /// Cache-read price as a multiple of the input price.
+        #[arg(long, default_value = "0.1", allow_negative_numbers = true)]
+        cache_read_mult: String,
+        /// Report file; its bytes ÷ 4 come off the output for the production-shaped cost.
+        #[arg(long, value_name = "PATH", allow_negative_numbers = true)]
+        report: Option<OsString>,
+        /// Run timing JSON sidecar with explicit dispatch, validated payload and completion events.
+        #[arg(long, value_name = "PATH", allow_negative_numbers = true)]
+        timing: Option<OsString>,
+        /// Split visible output across text, tool inputs and file writes.
+        #[arg(long)]
+        by_kind: bool,
+        /// Print one Markdown table row of the totals labelled LABEL.
+        #[arg(long, value_name = "LABEL", allow_negative_numbers = true)]
+        row: Option<String>,
+        /// Print the Markdown table header matching --row.
+        #[arg(long)]
+        header: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Sum and price the billed usage in Codex CLI rollout logs.
+    #[command(infer_long_args = true)]
+    Codex {
+        /// Rollout JSONL files.
+        #[arg(allow_negative_numbers = true)]
+        paths: Vec<OsString>,
+        #[arg(long, allow_negative_numbers = true)]
+        sessions_dir: Option<OsString>,
+        /// Root thread id.
+        #[arg(long, allow_negative_numbers = true)]
+        session: Option<String>,
+        /// Dollars per million input and output tokens.
+        #[arg(long, value_name = "IN,OUT", allow_negative_numbers = true)]
+        prices: Option<String>,
+        #[arg(long, default_value = "0.1", allow_negative_numbers = true)]
+        cached_mult: String,
+        #[arg(long, default_value = "1.25", allow_negative_numbers = true)]
+        cache_write_mult: String,
+        /// Price a request whose input exceeds ABOVE tokens at IN and OUT times the prices.
+        #[arg(long, value_name = "ABOVE:IN,OUT", allow_negative_numbers = true)]
+        long_context: Option<String>,
+        #[arg(long, allow_negative_numbers = true)]
+        report: Option<OsString>,
+        #[arg(long, allow_negative_numbers = true)]
+        row: Option<String>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        header: bool,
     },
 }
 
@@ -1264,6 +1344,206 @@ fn run_rates(arguments: RatesArgs) -> Result<ExitCode, ExitCode> {
         .and_then(pyjson::Value::as_array)
         .is_some_and(|changes| !changes.is_empty());
     Ok(ExitCode::from(u8::from(changed)))
+}
+
+fn usage_outcome(outcome: &usage::Outcome) -> Result<ExitCode, ExitCode> {
+    write_stdout(&outcome.stdout)?;
+    if !outcome.stderr.is_empty() {
+        let mut stderr = std::io::stderr().lock();
+        let _ = stderr
+            .write_all(&outcome.stderr)
+            .and_then(|()| stderr.flush());
+    }
+    Ok(ExitCode::from(outcome.code))
+}
+
+fn run_usage(command: UsageCommand) -> Result<ExitCode, ExitCode> {
+    match command {
+        UsageCommand::Claude {
+            transcripts,
+            receipts,
+            prices,
+            cache_write_mult,
+            cache_write_1h_mult,
+            cache_read_mult,
+            report,
+            timing,
+            by_kind,
+            row,
+            header,
+            json,
+        } => {
+            let misused =
+                |message: String| misuse("usage claude", ErrorKind::InvalidValue, message);
+            let multiplier = |name: &str, text: &str| match usage::float(text) {
+                None => Err(misused(format!(
+                    "argument --{name}: not a number: {}",
+                    pytext::repr_str(text)
+                ))),
+                Some(value) if value < 0.0 => Err(misused(format!(
+                    "argument --{name}: must not be negative: {}",
+                    pytext::repr_str(text)
+                ))),
+                Some(value) => Ok(value),
+            };
+            let parsed_prices = match &prices {
+                None => None,
+                Some(text) => {
+                    let invalid = |reason: &str| {
+                        misused(format!(
+                            "argument --prices: {reason}: {}",
+                            pytext::repr_str(text)
+                        ))
+                    };
+                    let parts: Vec<&str> = text.split(',').collect();
+                    if parts.len() != 2 {
+                        return Err(invalid("expected IN,OUT dollars per million tokens"));
+                    }
+                    let values: Option<Vec<f64>> =
+                        parts.iter().map(|part| usage::float(part)).collect();
+                    let values = values.ok_or_else(|| invalid("not numbers"))?;
+                    if values.iter().any(|value| *value < 0.0) {
+                        return Err(invalid("prices must not be negative"));
+                    }
+                    Some((values[0], values[1]))
+                }
+            };
+            let write_5m_mult = multiplier("cache-write-mult", &cache_write_mult)?;
+            let write_1h_mult = multiplier("cache-write-1h-mult", &cache_write_1h_mult)?;
+            let read_mult = multiplier("cache-read-mult", &cache_read_mult)?;
+            if header {
+                write_stdout(usage::header().as_bytes())?;
+                return Ok(ExitCode::SUCCESS);
+            }
+            if transcripts.is_empty() {
+                return Err(misused("at least one transcript path is required".into()));
+            }
+            let Some((input, output)) = parsed_prices else {
+                return Err(misused("--prices IN,OUT is required".into()));
+            };
+            let options = usage::claude::Options {
+                transcripts: transcripts.into_iter().map(bytes).collect(),
+                receipts: receipts.into_iter().map(bytes).collect(),
+                prices: usage::claude::Prices {
+                    input,
+                    output,
+                    write_5m_mult,
+                    write_1h_mult,
+                    read_mult,
+                },
+                report: report.map(bytes),
+                timing: timing.map(bytes),
+                by_kind,
+                output: match row {
+                    Some(label) => usage::claude::Output::Row(label),
+                    None if json => usage::claude::Output::Json,
+                    None => usage::claude::Output::Text,
+                },
+            };
+            usage_outcome(&usage::claude::run(&options))
+        }
+        UsageCommand::Codex {
+            paths,
+            sessions_dir,
+            session,
+            prices,
+            cached_mult,
+            cache_write_mult,
+            long_context,
+            report,
+            row,
+            json,
+            header,
+        } => {
+            let misused = |message: String| misuse("usage codex", ErrorKind::InvalidValue, message);
+            if header {
+                write_stdout(usage::header().as_bytes())?;
+                return Ok(ExitCode::SUCCESS);
+            }
+            let Some(prices) = prices.filter(|prices| !prices.is_empty()) else {
+                return Err(misused("--prices IN,OUT is required".into()));
+            };
+            let pair = |text: &str| -> Option<(f64, f64)> {
+                let (first, second) = text.split_once(',')?;
+                Some((usage::float(first)?, usage::float(second)?))
+            };
+            let (input, output) =
+                pair(&prices).ok_or_else(|| misused("--prices must be IN,OUT".into()))?;
+            let float = |name: &str, text: &str| {
+                usage::float(text).ok_or_else(|| {
+                    misused(format!(
+                        "argument --{name}: invalid float value: {}",
+                        pytext::repr_str(text)
+                    ))
+                })
+            };
+            let cached_mult = float("cached-mult", &cached_mult)?;
+            let write_mult = float("cache-write-mult", &cache_write_mult)?;
+            for (name, value) in [
+                ("input price", input),
+                ("output price", output),
+                ("--cached-mult", cached_mult),
+                ("--cache-write-mult", write_mult),
+            ] {
+                if !value.is_finite() || value < 0.0 {
+                    return Err(misused(format!("{name} must be finite and non-negative")));
+                }
+            }
+            let long_context = match &long_context {
+                None => None,
+                Some(text) => {
+                    let invalid = || misused("--long-context must be ABOVE:IN,OUT".into());
+                    let (above, mults) = text.split_once(':').ok_or_else(invalid)?;
+                    let above = above.parse().map_err(|_| invalid())?;
+                    let (input_mult, output_mult) = pair(mults)
+                        .filter(|(a, b)| {
+                            [a, b]
+                                .iter()
+                                .all(|value| value.is_finite() && **value >= 0.0)
+                        })
+                        .ok_or_else(invalid)?;
+                    Some(usage::codex::LongContext {
+                        above,
+                        input_mult,
+                        output_mult,
+                    })
+                }
+            };
+            let source = match (sessions_dir, session) {
+                (Some(directory), Some(root)) if !directory.is_empty() && !root.is_empty() => {
+                    usage::codex::Source::Session {
+                        sessions_dir: bytes(directory),
+                        root,
+                    }
+                }
+                _ if !paths.is_empty() => {
+                    usage::codex::Source::Paths(paths.into_iter().map(bytes).collect())
+                }
+                _ => {
+                    return Err(misused(
+                        "give rollout paths or --sessions-dir with --session".into(),
+                    ));
+                }
+            };
+            let options = usage::codex::Options {
+                source,
+                prices: usage::codex::Prices {
+                    input,
+                    output,
+                    cached_mult,
+                    write_mult,
+                    long_context,
+                },
+                report: report.map(bytes),
+                output: match row.filter(|label| !label.is_empty()) {
+                    Some(label) => usage::codex::Output::Row(label),
+                    None if json => usage::codex::Output::Json,
+                    None => usage::codex::Output::Text,
+                },
+            };
+            usage_outcome(&usage::codex::run(&options))
+        }
+    }
 }
 
 fn run_upstream(command: UpstreamCommand) -> Result<ExitCode, ExitCode> {
@@ -3119,6 +3399,7 @@ fn main() -> ExitCode {
         Cli::Rates(arguments) => run_rates(arguments),
         Cli::Upstream(command) => run_upstream(command),
         Cli::Claims(arguments) => run_claims(arguments),
+        Cli::Usage(command) => run_usage(command),
         Cli::ExportExplorer(arguments) => run_export_explorer(arguments),
         Cli::Archive(ArchiveCommand::CheckPackages { cache, manifests }) => {
             check_packages(&cache, &manifests)

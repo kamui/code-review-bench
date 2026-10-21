@@ -64,6 +64,28 @@ def write_family_version(directory, family, number, case_id="probe"):
     return path
 
 
+def usage_wrapper(path, commands, outcomes):
+    """A usage meter that answers each case named by its first argument from OUTCOMES, as (exit, stdout, stderr),
+    and runs the bench-tools command in COMMANDS otherwise."""
+    path.write_text("import os, sys\n"
+                    f"commands, outcomes = {commands!r}, {outcomes!r}\n"
+                    "program, args = sys.argv[1], sys.argv[2:]\n"
+                    "if args[0] in outcomes:\n"
+                    "    code, stdout, stderr = outcomes[args[0]]\n"
+                    "    sys.stdout.write(stdout)\n"
+                    "    sys.stderr.write(stderr)\n"
+                    "    sys.exit(code)\n"
+                    "os.execv(commands[program][0], [*commands[program], *args])\n", encoding="utf-8")
+    return {name: [sys.executable, str(path), name] for name in commands}
+
+
+def observed_defects(corpus):
+    """The output the retired Python meters gave for each case they got wrong, keyed by the case's first argument."""
+    return {case["argv"][0]: (case["baseline_defect"]["observed"]["exit"],
+                              json.dumps(case["baseline_defect"]["observed"]["stdout"]["value"]), "")
+            for case in corpus["cases"] if "baseline_defect" in case}
+
+
 def history_repo(root):
     def git(*args):
         return subprocess.check_output(["git", "-C", str(root), "-c", "user.name=kamui",
@@ -84,16 +106,26 @@ class ContractTests(unittest.TestCase):
         return subprocess.run([sys.executable, str(Path(contract.__file__)), *map(str, args)],
                               capture_output=True, text=True, encoding="utf-8", timeout=60)
 
+    def usage_commands(self):
+        """The usage corpus's bench-tools commands, which need bench-tools installed for HEAD."""
+        try:
+            return contract.default_commands(contract.load_corpus(contract.CORPUS))
+        except ValueError as error:
+            self.skipTest(f"usage: {error}")
+
     def test_baseline_independent_and_differential(self):
+        usage = self.usage_commands()
+        self.assertEqual(self.run_cli().returncode, 0)
         with tempfile.TemporaryDirectory() as temporary:
-            commands = Path(temporary) / "commands.json"
-            commands.write_text(json.dumps({name: [sys.executable, str(contract.REPO / "bench/tools" / f"{name}_usage.py")]
-                                           for name in ("codex", "transcript")}), encoding="utf-8")
-            result = self.run_cli("--allow-known-defects", "--differential", commands)
+            root = Path(temporary)
+            commands = root / "commands.json"
+            commands.write_text(json.dumps(usage_wrapper(root / "baseline.py", usage,
+                                                         observed_defects(contract.load_corpus(contract.CORPUS)))))
+            result = self.run_cli("--implementations", commands, "--allow-known-defects")
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("KNOWN DEFECT unknown-is-not-zero", result.stdout)
             self.assertNotIn("FAIL", result.stdout)
-            strict = self.run_cli()
+            strict = self.run_cli("--implementations", commands)
             self.assertEqual(strict.returncode, 1, strict.stderr)
             self.assertIn("FAIL unknown-is-not-zero", strict.stdout)
             self.assertIn("exit: expected 2, actual 0", strict.stdout)
@@ -336,7 +368,7 @@ class ContractTests(unittest.TestCase):
         with patch.dict(contract.os.environ, {"BENCH_RUST_BENCH_TOOLS": str(program),
                                               "BENCH_RUST_BENCH_TOOLS_SHA256": contract.hashlib.sha256(program.read_bytes()).hexdigest()}):
             commands = contract.default_commands(corpus)
-        self.assertEqual(commands, {"codex": [sys.executable, str(contract.REPO / "bench/tools/codex_usage.py")],
+        self.assertEqual(commands, {"codex": [str(program), "usage", "codex"],
                                     "diff-identity": [sys.executable, str(contract.REPO / "bench/tools/diff_identity.py")],
                                     "roster": [str(program), "roster"],
                                     "normalize-review": [sys.executable, str(contract.REPO / "bench/tools/normalize_review.py")],
@@ -345,7 +377,7 @@ class ContractTests(unittest.TestCase):
         with patch.dict(contract.os.environ, {"BENCH_RUNTIME_STORE": str(store)}):
             contract.os.environ.pop("BENCH_RUST_BENCH_TOOLS", None)
             contract.os.environ.pop("BENCH_RUST_BENCH_TOOLS_SHA256", None)
-            with self.assertRaisesRegex(ValueError, "(roster|normalize-thermo): bench-tools has no selected version.*install --crate rust/bench-tools"):
+            with self.assertRaisesRegex(ValueError, "(codex|roster|normalize-thermo): bench-tools has no selected version.*install --crate rust/bench-tools"):
                 contract.default_commands(corpus)
 
     def test_reader_corpora_hold_for_the_retained_libraries_and_reject_regressions(self):
@@ -473,6 +505,7 @@ class ContractTests(unittest.TestCase):
                 contract.load_corpus(path)
 
     def test_unavailable_filesystem_case_continues(self):
+        self.usage_commands()
         original = Path.write_bytes
         def refuse(path, data):
             if path.name == contract.os.fsdecode(b"probe-\xff"):
@@ -493,6 +526,7 @@ class ContractTests(unittest.TestCase):
                 contract.require_capabilities(case, Path(temporary))
 
     def test_escaped_filename_case_reports_unavailable_and_continues(self):
+        self.usage_commands()
         original = contract.os.listdir
         def escaped_names(path):
             return [b"probe-%FF" if name == b"probe-\xff" else name
@@ -532,65 +566,31 @@ class ContractTests(unittest.TestCase):
         for detail in ("primary semantic", "exit: expected 0, actual 9", "stderr bytes", "filesystem effects"):
             self.assertTrue(any(detail in diff for diff in differences), differences)
 
-    def test_duplicate_rules_reject_first_last_and_maximum_mutants(self):
-        cases = contract.load_corpus(contract.CORPUS)["cases"]
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            for program, case_id, before, after in (
-                ("codex", "duplicate-response-last", "usage_by_response[key] = usage",
-                 "usage_by_response.setdefault(key, usage)"),
-                ("codex", "duplicate-response-last", "usage_by_response[key] = usage",
-                 "usage_by_response[key] = {k: max(v, usage_by_response.get(key, {}).get(k, 0)) for k, v in usage.items()}"),
-                ("transcript", "transcript-duplicate-maxima", 'max(turn["output"], int(used.get("output_tokens") or 0))',
-                 'int(used.get("output_tokens") or 0) if turn["lines"] == 1 else turn["output"]'),
-                ("transcript", "transcript-duplicate-maxima", 'max(turn["input"], int(used.get("input_tokens") or 0))',
-                 'int(used.get("input_tokens") or 0)'),
-            ):
-                source = (contract.REPO / "bench/tools" / f"{program}_usage.py").read_text()
-                self.assertIn(before, source)
-                mutant = root / f"{program}_usage.py"
-                mutant.write_text(source.replace(before, after))
-                case = next(case for case in cases if case["id"] == case_id)
-                actual = contract.execute(case, {program: [sys.executable, str(mutant)]})
-                self.assertEqual(actual["exit"], 0, actual["stderr"])
-                differences = contract.compare(case["expected"], actual)
-                self.assertTrue(any("stdout semantic:" in diff for diff in differences), differences)
-
     def test_differential_recognizes_only_independent_defect_fixes(self):
+        usage = self.usage_commands()
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            wrapper = root / "fixed.py"
             corpus = contract.load_corpus(contract.CORPUS)
             defects = [case for case in corpus["cases"] if "baseline_defect" in case]
-            errors = {case["argv"][0]: contract.decode(case["expected"]["stderr"]["bytes_b64"]).decode("utf-8")
+            errors = {case["argv"][0]: (2, "", contract.decode(case["expected"]["stderr"]["bytes_b64"]).decode("utf-8"))
                       for case in defects}
-            source = ("import os, sys\n"
-                      f"errors = {errors!r}\n"
-                      "program, args = sys.argv[1], sys.argv[2:]\n"
-                      "if args[0] in errors:\n"
-                      "    sys.stderr.write(errors[args[0]])\n"
-                      "    sys.exit(2)\n"
-                      f"script = {str(contract.REPO / 'bench/tools')!r} + '/' + program + '_usage.py'\n"
-                      "os.execv(sys.executable, [sys.executable, script, *args])\n")
-            wrapper.write_text(source, encoding="utf-8")
             commands = root / "fixed.json"
-            commands.write_text(json.dumps({name: [sys.executable, str(wrapper), name]
-                                            for name in ("codex", "transcript")}), encoding="utf-8")
-            result = self.run_cli("--allow-known-defects", "--differential", commands)
+            commands.write_text(json.dumps(usage_wrapper(root / "fixed.py", usage, errors)), encoding="utf-8")
+            baseline = root / "baseline.json"
+            baseline.write_text(json.dumps(usage_wrapper(root / "baseline.py", usage, observed_defects(corpus))),
+                                encoding="utf-8")
+            result = self.run_cli("--implementations", baseline, "--allow-known-defects", "--differential", commands)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             for case in defects:
                 self.assertIn("APPROVED FIX " + case["id"], result.stdout)
-            baseline = root / "baseline.json"
-            baseline.write_text(json.dumps({name: [sys.executable, str(contract.REPO / "bench/tools" / f"{name}_usage.py")]
-                                            for name in ("codex", "transcript")}), encoding="utf-8")
             regression = self.run_cli("--implementations", commands, "--allow-known-defects", "--differential", baseline)
             self.assertEqual(regression.returncode, 1, regression.stdout + regression.stderr)
             self.assertIn("DIFFERENTIAL unknown-is-not-zero", regression.stdout)
-            wrapper.write_text(source.replace("sys.exit(2)", "sys.exit(9)"), encoding="utf-8")
-            wrong = self.run_cli("--allow-known-defects", "--differential", commands)
-            self.assertEqual(wrong.returncode, 1, wrong.stdout + wrong.stderr)
-            self.assertIn("DIFFERENTIAL unknown-is-not-zero", wrong.stdout)
-
+            wrong = {argument: (9, stdout, stderr) for argument, (_, stdout, stderr) in errors.items()}
+            commands.write_text(json.dumps(usage_wrapper(root / "fixed.py", usage, wrong)), encoding="utf-8")
+            wrong_result = self.run_cli("--implementations", baseline, "--allow-known-defects", "--differential", commands)
+            self.assertEqual(wrong_result.returncode, 1, wrong_result.stdout + wrong_result.stderr)
+            self.assertIn("DIFFERENTIAL unknown-is-not-zero", wrong_result.stdout)
 
     STORAGE_CORPORA = ("evidence-store", "native-artifacts", "evidence-inventory", "import-benchmark")
     ARCHIVE_WRITER = """import gzip, hashlib, io, json, os, sys, tarfile
@@ -927,7 +927,7 @@ with open("out/native-artifact-storage.v1.json", "w") as handle:
 
     def storage_commands(self, name):
         """A storage corpus's default commands. Programs that moved to bench-tools need it installed for HEAD; the
-        Pages build installs it, and the usage-pilot workflow, which does not, skips the corpus."""
+        Pages build installs it; a checkout without it skips the corpus."""
         try:
             return contract.default_commands(contract.load_corpus(contract.CORPUS.parent / f"{name}.v1.json"))
         except ValueError as error:
