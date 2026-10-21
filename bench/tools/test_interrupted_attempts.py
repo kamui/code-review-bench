@@ -69,6 +69,13 @@ def claude_transcript(stop_reason: str | None = "end_turn", request: str = "r1")
                  reply(request, stop_reason))
 
 
+def session_totals(requests: int = 1) -> str:
+    """The root session's ``cost-state`` record for ``requests`` replies, which metering reconciles against."""
+    return lines({"type": "cost-state", "sessionId": "s1", "modelUsage": {"m-1": {
+        "inputTokens": 10 * requests, "cacheCreationInputTokens": 100 * requests, "cacheReadInputTokens": 1000 * requests,
+        "outputTokens": 50 * requests}}})
+
+
 def rollout(thread: str, parent: str | None, *events: str, input_tokens: int = 1000, snapshots: int = 1) -> str:
     meta = {"id": thread, "base_instructions": {"text": RUBRIC}}
     if parent:
@@ -141,7 +148,7 @@ class Fixture(unittest.TestCase):
             (attempt / "dispatch.txt").write_text("claude 9.9.9 (Claude Code)\nmodel=m-1 effort=high\n" + ended, encoding="utf-8")
             subagents = attempt / "home/.claude/projects/p/s1/subagents"
             subagents.mkdir(parents=True)
-            (attempt / "home/.claude/projects/p/s1.jsonl").write_text("", encoding="utf-8")
+            (attempt / "home/.claude/projects/p/s1.jsonl").write_text(session_totals(), encoding="utf-8")
             (subagents / "agent-a1.jsonl").write_text(claude_transcript(), encoding="utf-8")
             (attempt / "home/.claude/.credentials.json").write_text("{}", encoding="utf-8")
             (attempt / "stdout.jsonl").write_text(lines({"type": "system"}, {"type": "result", "subtype": "success"}), encoding="utf-8")
@@ -235,7 +242,7 @@ class CompleteUsage(Fixture):
     def test_builtin_root_holding_only_its_command_is_complete(self):
         attempt = self.attempt()
         (attempt / "home/.claude/projects/p/s1.jsonl").write_text(
-            lines({"type": "user", "message": {"content": "/code-review main...review-head high"}}), encoding="utf-8")
+            lines({"type": "user", "message": {"content": "/code-review main...review-head high"}}) + session_totals(), encoding="utf-8")
         self.assert_complete(self.filed(attempt), CAPTURED)
 
     def test_audit_invalid_completion_keeps_its_complete_usage(self):
@@ -288,6 +295,17 @@ class UnprovenUsage(Fixture):
                 self.assert_unknown_total(record, CAPTURED)
                 requests = (self.run_dir / "attempts" / attempt.name / "usage-requests.jsonl").read_text(encoding="utf-8")
                 self.assertEqual([json.loads(line)["request_id"] for line in requests.splitlines()], ["r1"])
+
+    def test_requests_the_session_totals_do_not_account_for_leave_the_total_unknown(self):
+        for name, totals, note in (("short", session_totals(2), "m-1 output: the session records 100, the requests 50"),
+                                   ("absent", "", "no session totals to reconcile against")):
+            with self.subTest(totals=name):
+                attempt = self.attempt(f"att-00{len(list(self.work.glob('att-*'))) + 1}")
+                (attempt / "home/.claude/projects/p/s1.jsonl").write_text(totals, encoding="utf-8")
+                record = self.filed(attempt)
+                self.assertEqual(record["disposition"], "valid completed")
+                self.assert_unknown_total(record, CAPTURED)
+                self.assertTrue(any(note in entry for entry in record["notes"]), record["notes"])
 
     def test_missing_child_terminal_evidence_leaves_the_total_unknown(self):
         claude = self.attempt("att-001")
