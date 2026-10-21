@@ -1344,7 +1344,7 @@ pub fn map_verdicts(runner: &Runner, options: &Mapping) -> R<Vec<u8>> {
         "bench_tools",
     )?;
     if preparer.truthy()
-        && let Some(problem) = super::runtime::problem(preparer, &runner.executable)
+        && let Some(problem) = super::runtime::problem(preparer, &runner.executable, "")
     {
         problems.push(problem);
     }

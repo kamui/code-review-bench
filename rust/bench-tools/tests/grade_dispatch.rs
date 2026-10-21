@@ -482,7 +482,7 @@ fn a_changed_pinned_receipt_is_refused_before_the_client() {
         },
         MODEL,
         Some("5"),
-        "no longer hashes to its pin",
+        "the key's pinned bench-tools is unavailable: ",
     );
 }
 

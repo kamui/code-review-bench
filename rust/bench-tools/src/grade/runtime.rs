@@ -190,8 +190,9 @@ pub fn pin(executable: &Path) -> R<Value> {
 }
 
 /// The problem, if any, with a v2 key's pinned executable: `check` on the store that holds the running executable,
-/// without its host checks, and then that the running executable is the pinned one.
-pub fn problem(pinned: &Value, executable: &Path) -> Option<String> {
+/// without its host checks, and then that the running executable is the pinned one. A store failure starts with
+/// `unavailable`.
+pub fn problem(pinned: &Value, executable: &Path, unavailable: &str) -> Option<String> {
     let text = |name: &str| {
         pinned
             .as_object()
@@ -210,7 +211,7 @@ pub fn problem(pinned: &Value, executable: &Path) -> Option<String> {
         ));
     };
     match check(store, NAME, text("sha256"), text("receipt_sha256"), false) {
-        Err(Checked::Refused(why) | Checked::Input(why)) => Some(why),
+        Err(Checked::Refused(why) | Checked::Input(why)) => Some(format!("{unavailable}{why}")),
         Ok(found) if found.executable != executable => Some(format!(
             "the running {NAME} {} is not the pinned executable {}",
             shown(executable),

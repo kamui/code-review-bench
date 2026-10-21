@@ -1849,8 +1849,11 @@ pub fn check_prepared(
     }
     let version = pyvalue::get(deviation, "version")?;
     if pyobject::eq(version, &Value::Int(RUNNER_VERSION.to_string())) {
-        if let Some(problem) = runtime::problem(pyvalue::get(deviation, "bench_tools")?, executable)
-        {
+        if let Some(problem) = runtime::problem(
+            pyvalue::get(deviation, "bench_tools")?,
+            executable,
+            "the key's pinned bench-tools is unavailable: ",
+        ) {
             problems.push(problem);
         }
     } else {
@@ -2010,7 +2013,14 @@ mod tests {
             let store = store(label);
             let key = current_key(&store);
             change(&store);
-            assert_eq!(problems(&store, &key), [expected(&store)], "{label}");
+            assert_eq!(
+                problems(&store, &key),
+                [format!(
+                    "the key's pinned bench-tools is unavailable: {}",
+                    expected(&store)
+                )],
+                "{label}"
+            );
         }
     }
 
@@ -2033,7 +2043,7 @@ mod tests {
                 text(&sha256::hex_digest(minimal.as_bytes())),
             ),
         ]);
-        assert_eq!(runtime::problem(&pin, &store.executable), Some(why));
+        assert_eq!(runtime::problem(&pin, &store.executable, ""), Some(why));
         assert!(runtime::pin(&store.executable).is_err());
     }
 
