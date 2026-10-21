@@ -192,6 +192,8 @@ fn own_record(path: &PyPath) -> R<Option<Value>> {
 struct Journal {
     receipt: Object,
     candidates: Vec<Candidate>,
+    /// The directory whose removal began, which a retry finishes without verifying it again.
+    removing: Option<&'static str>,
 }
 
 fn identity_value(identity: Identity) -> Vec<(&'static str, Value)> {
@@ -219,12 +221,15 @@ impl Journal {
             .as_object()
             .cloned()
             .ok_or_else(|| failed(format!("{JOURNAL} has no receipt")))?;
+        let known = |name: &str| {
+            CANDIDATES
+                .into_iter()
+                .find(|candidate| *candidate == name)
+                .ok_or_else(|| failed(format!("{JOURNAL} names an unknown directory")))
+        };
         let mut candidates = Vec::new();
         for entry in at(&value, "candidates").as_array().unwrap_or_default() {
-            let name = at(entry, "name").as_str().unwrap_or_default();
-            let Some(name) = CANDIDATES.into_iter().find(|candidate| *candidate == name) else {
-                return Err(failed(format!("{JOURNAL} names an unknown directory")));
-            };
+            let name = known(at(entry, "name").as_str().unwrap_or_default())?;
             candidates.push(Candidate {
                 name,
                 identity: Identity {
@@ -233,9 +238,14 @@ impl Journal {
                 },
             });
         }
+        let removing = match at(&value, "removing") {
+            Value::Null => None,
+            name => Some(known(name.as_str().unwrap_or_default())?),
+        };
         Ok(Some(Self {
             receipt,
             candidates,
+            removing,
         }))
     }
 
@@ -252,6 +262,7 @@ impl Journal {
         Value::Object(object(vec![
             ("schema_version", integer(1)),
             ("candidates", Value::Array(candidates)),
+            ("removing", self.removing.map_or(Value::Null, text)),
             ("receipt", Value::Object(self.receipt.clone())),
         ]))
     }
@@ -269,6 +280,12 @@ impl Journal {
             )))
         }
     }
+}
+
+/// The clone must still be clean unless an earlier apply already began removing it.
+fn clone_to_verify(present: &[Candidate], journal: Option<&Journal>) -> bool {
+    present.iter().any(|candidate| candidate.name == "clone")
+        && journal.is_none_or(|journal| journal.removing != Some("clone"))
 }
 
 /// The workspace as verification found it.
@@ -367,7 +384,7 @@ fn commit(
             )));
         }
     }
-    let journal = match &plan.journal {
+    let mut journal = match &plan.journal {
         Some(journal) => journal.clone(),
         None => {
             let mut receipt = plan.receipt(true);
@@ -380,6 +397,7 @@ fn commit(
             let journal = Journal {
                 receipt,
                 candidates: plan.present.clone(),
+                removing: None,
             };
             write(&plan.workspace.join(JOURNAL.as_bytes()), &journal.value())?;
             journal
@@ -388,6 +406,10 @@ fn commit(
     let interrupted = |error: std::io::Error| failed(error.to_string());
     hook(Point::BeforeRemoval).map_err(interrupted)?;
     for candidate in &plan.present {
+        if journal.removing != Some(candidate.name) {
+            journal.removing = Some(candidate.name);
+            write(&plan.workspace.join(JOURNAL.as_bytes()), &journal.value())?;
+        }
         directory
             .remove_tree(
                 candidate.name.as_bytes(),
@@ -623,25 +645,23 @@ fn check_attempt(arguments: &Attempt<'_>) -> R<Checked> {
         return refuse("review clone was not verified unchanged");
     }
     let cell_target = required(at(&record, "cell"), "target", "attempt.json cell")?;
-    match &journal {
-        Some(journal) => journal.covers(&present)?,
-        None => {
-            if present.iter().any(|candidate| candidate.name == "clone") {
-                let target_dir = match arguments.target {
-                    Some(target) => PyPath::new(target),
-                    None => root.join(b"bench/targets").join(cell_target.as_bytes()),
-                };
-                let target = read(&target_dir.join(b"target.json"))?;
-                if arguments.target.is_some() && at(&target, "id").as_str() != Some(cell_target) {
-                    return refuse("explicit target identity differs from the filed attempt");
-                }
-                if !unchanged(
-                    &workspace.join(b"clone"),
-                    required(&target, "head", "target.json")?,
-                )? {
-                    return refuse("clone revision or working tree changed after filing");
-                }
-            }
+    if let Some(journal) = &journal {
+        journal.covers(&present)?;
+    }
+    if clone_to_verify(&present, journal.as_ref()) {
+        let target_dir = match arguments.target {
+            Some(target) => PyPath::new(target),
+            None => root.join(b"bench/targets").join(cell_target.as_bytes()),
+        };
+        let target = read(&target_dir.join(b"target.json"))?;
+        if arguments.target.is_some() && at(&target, "id").as_str() != Some(cell_target) {
+            return refuse("explicit target identity differs from the filed attempt");
+        }
+        if !unchanged(
+            &workspace.join(b"clone"),
+            required(&target, "head", "target.json")?,
+        )? {
+            return refuse("clone revision or working tree changed after filing");
         }
     }
     let mut plan = Plan {
@@ -783,15 +803,13 @@ fn check_grading(arguments: &Grading<'_>) -> R<Checked> {
     if at(arguments.assessment, "verdicts_sha256").as_str() != Some(verdicts.as_str()) {
         return refuse("verdicts changed after mapping");
     }
-    match &journal {
-        Some(journal) => journal.covers(&present)?,
-        None => {
-            if present.iter().any(|candidate| candidate.name == "clone")
-                && !unchanged(&work.join(b"clone"), arguments.head)?
-            {
-                return refuse("clone revision or working tree changed after preparation");
-            }
-        }
+    if let Some(journal) = &journal {
+        journal.covers(&present)?;
+    }
+    if clone_to_verify(&present, journal.as_ref())
+        && !unchanged(&work.join(b"clone"), arguments.head)?
+    {
+        return refuse("clone revision or working tree changed after preparation");
     }
     let mut plan = Plan {
         workspace: work,
@@ -1376,6 +1394,20 @@ mod tests {
     }
 
     #[test]
+    fn a_clone_modified_before_a_retry_is_never_removed() {
+        let review = Review::new();
+        let hook = interrupt(Point::BeforeRemoval, 0);
+        assert!(review.prune_with(true, None, &hook).is_err());
+        assert!(review.workspace.join(JOURNAL).exists());
+        fs::write(review.workspace.join("clone/edit"), "work after filing").unwrap();
+        refused(review.prune(true), "changed after filing");
+        refused(review.prune(false), "changed after filing");
+        assert_eq!(kept(&review.workspace), ["clone", "clone-cache"]);
+        assert!(review.workspace.join("clone/edit").exists());
+        assert!(!review.workspace.join(RECEIPT).exists());
+    }
+
+    #[test]
     fn a_directory_swapped_after_verification_is_never_removed() {
         let review = Review::new();
         let workspace = review.workspace.clone();
@@ -1643,6 +1675,22 @@ mod tests {
             "symlink",
         );
         assert!(graded.work.join("clone-work/keep").exists());
+    }
+
+    #[test]
+    fn a_grading_clone_modified_before_a_retry_is_never_removed() {
+        let graded = Graded::new();
+        let hook = interrupt(Point::BeforeRemoval, 0);
+        assert!(graded.prune(&graded.mapped, true, &hook).is_err());
+        assert!(graded.work.join(JOURNAL).exists());
+        fs::write(graded.work.join("clone/edit"), "work after preparation").unwrap();
+        refused_grading(
+            graded.prune(&graded.mapped, true, &removal::uninterrupted),
+            "changed after preparation",
+        );
+        assert_eq!(kept(&graded.work), ["clone", "clone-cache"]);
+        assert!(graded.work.join("clone/edit").exists());
+        assert!(!graded.work.join(RECEIPT).exists());
     }
 
     #[test]
