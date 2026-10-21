@@ -1786,7 +1786,8 @@ pub fn write_bytes(path: &PyPath, bytes: &[u8]) -> Result<(), String> {
         .map_err(|error| os_error_without_file(&error))
 }
 
-fn strerror(error: &io::Error) -> String {
+/// `OSError.strerror`.
+pub fn strerror(error: &io::Error) -> String {
     let text = error.to_string();
     match text.rfind(" (os error ") {
         Some(end) => text[..end].to_string(),

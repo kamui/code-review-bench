@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -8,8 +9,10 @@ from unittest.mock import patch
 
 import codex_grade_dispatch as dispatch
 import regrade
+import rust_runtime
 
 
+REAL_RUN = subprocess.run
 RATE = {"model": "gpt-6.1-sol", "input": 2, "output": 10, "cache_read": 0.1, "cache_write_5m": 2.5}
 
 
@@ -19,7 +22,8 @@ def rollout(path, tool="mcp__grading__inspect", parent=None, input_tokens=100):
         {"type": "turn_context", "payload": {"model": RATE["model"]}},
         {"type": "response_item", "payload": {"type": "function_call", "name": tool, "arguments": "{}"}},
         {"type": "token_usage_record", "payload": {"response_id": "response-1", "usage": {
-            "input_tokens": input_tokens, "cached_input_tokens": 50, "output_tokens": 20}}},
+            "input_tokens": input_tokens, "cached_input_tokens": 50, "cache_write_input_tokens": 0,
+            "output_tokens": 20, "reasoning_output_tokens": 0}}},
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(row) + "\n" for row in records))
@@ -33,12 +37,12 @@ class Evidence(unittest.TestCase):
             rollout(path)
             with path.open("a") as handle:
                 handle.write(path.read_text().splitlines()[-1] + "\n")
-            result = dispatch.evidence(work, RATE)
+            result = dispatch.evidence(work, RATE, rust_runtime.resolve("bench-tools"))
             self.assertAlmostEqual(result["usage"]["priced_total_usd"], 0.000305)
             self.assertEqual(result["usage"]["requests"], 1)
             self.assertEqual(result["audit_violations"], [])
             rollout(work / "home/.codex/sessions/rollout-child.jsonl", tool="exec_command", parent="fresh-session")
-            result = dispatch.evidence(work, RATE)
+            result = dispatch.evidence(work, RATE, rust_runtime.resolve("bench-tools"))
             self.assertEqual(result["subagents"], 1)
             self.assertIn("grader invoked a tool outside the grading MCP catalog", result["audit_violations"])
 
@@ -46,7 +50,7 @@ class Evidence(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary)
             rollout(work / "home/.codex/sessions/rollout-root.jsonl", input_tokens=272001)
-            result = dispatch.evidence(work, RATE)
+            result = dispatch.evidence(work, RATE, rust_runtime.resolve("bench-tools"))
             self.assertAlmostEqual(result["usage"]["priced_total_usd"], 1.088114)
 
 
@@ -73,6 +77,8 @@ class Session(unittest.TestCase):
             (work / "execution-policy.md").write_text("frozen execution policy")
 
             def client(command, **options):
+                if command[0] != "codex":
+                    return REAL_RUN(command, **options)
                 home = work / "home"
                 self.assertEqual(options["env"]["CODEX_HOME"], str(home / ".codex"))
                 self.assertNotIn("OPENAI_API_KEY", options["env"])
@@ -85,13 +91,13 @@ class Session(unittest.TestCase):
                 return subprocess_result(0)
 
             with patch.object(dispatch.subprocess, "run", client), patch.dict(os.environ, OPENAI_API_KEY="ambient-secret"):
-                result = dispatch.run(work, root / "key.json", RATE["model"], "high", 30, user, RATE, Path("bench-tools"))
+                result = dispatch.run(work, root / "key.json", RATE["model"], "high", 30, user, RATE, rust_runtime.resolve("bench-tools"))
             self.assertEqual(result["exit_code"], 0)
             self.assertEqual(result["session_id"], "fresh-session")
             self.assertTrue(result["provider_call_possible"])
             self.assertFalse((work / "home/.codex/auth.json").exists())
             with self.assertRaises(FileExistsError):
-                dispatch.run(work, root / "key.json", RATE["model"], "high", 30, user, RATE, Path("bench-tools"))
+                dispatch.run(work, root / "key.json", RATE["model"], "high", 30, user, RATE, rust_runtime.resolve("bench-tools"))
 
     def test_client_failure_still_removes_credentials(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -105,7 +111,7 @@ class Session(unittest.TestCase):
             (work / "execution-policy.md").write_text("frozen execution policy")
             with patch.object(dispatch.subprocess, "run", side_effect=OSError("client unavailable")):
                 with self.assertRaises(OSError):
-                    dispatch.run(work, root / "key.json", RATE["model"], "high", 30, user, RATE, Path("bench-tools"))
+                    dispatch.run(work, root / "key.json", RATE["model"], "high", 30, user, RATE, rust_runtime.resolve("bench-tools"))
             self.assertFalse((work / "home/.codex/auth.json").exists())
 
     def test_unavailable_transcripts_cannot_prove_zero_charge(self):
@@ -124,6 +130,8 @@ class Session(unittest.TestCase):
                     (attempt / "reservation.json").write_text('{"maxBudgetUsd":null}')
 
                     def client(command, **options):
+                        if command[0] != "codex":
+                            return REAL_RUN(command, **options)
                         path = work / "home/.codex/sessions/rollout-root.jsonl"
                         rollout(path)
                         if damage == "malformed":
@@ -141,7 +149,7 @@ class Session(unittest.TestCase):
                         return subprocess_result(0)
 
                     with patch.object(dispatch.subprocess, "run", client):
-                        result = dispatch.run(work, directory / "key.json", RATE["model"], "high", 30, user, RATE, Path("bench-tools"))
+                        result = dispatch.run(work, directory / "key.json", RATE["model"], "high", 30, user, RATE, rust_runtime.resolve("bench-tools"))
                     self.assertIsNone(result["usage"]["high"])
                     self.assertTrue(result["provider_call_possible"])
                     self.assertFalse((work / "home/.codex/auth.json").exists())

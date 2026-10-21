@@ -276,7 +276,7 @@ def launch(args) -> int:
         rates = rates_for(Path(args.rates).resolve(), model)
         paths = [str(path) for path in observed["roots"] + observed["subs"]]
         if paths:
-            metered = run([sys.executable, str(TOOLS / "transcript_usage.py"), *paths,
+            metered = run([str(prepared["bench_tools"]), "usage", "claude", *paths,
                            "--prices", f"{rates['input']},{rates['output']}",
                            "--cache-read-mult", f"{rates['cache_read'] / rates['input']:g}",
                            "--cache-write-mult", f"{rates['cache_write_5m'] / rates['input']:g}",

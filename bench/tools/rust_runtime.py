@@ -3,7 +3,7 @@
 
 Usage::
 
-    python3 bench/tools/rust_runtime.py install --crate rust/usage-pilot [--store DIR] [--select]
+    python3 bench/tools/rust_runtime.py install --crate rust/bench-tools [--store DIR] [--select]
     python3 bench/tools/rust_runtime.py restore --receipt RECEIPT --executable FILE [--store DIR]
     python3 bench/tools/rust_runtime.py verify NAME SHA256 [--store DIR]
     python3 bench/tools/rust_runtime.py select NAME SHA256 [--store DIR]

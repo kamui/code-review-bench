@@ -247,15 +247,15 @@ def models_in(paths: list) -> list:
     return sorted(models)
 
 
-def meter(paths: list, rate: dict) -> tuple:
+def meter(tools: Path, paths: list, rate: dict) -> tuple:
     """(usage, problem): the priced total and bounds of the transcripts at the rate entry."""
-    command = [sys.executable, str(TOOLS / "transcript_usage.py"), *map(str, paths), "--prices",
+    command = [str(tools), "usage", "claude", *map(str, paths), "--prices",
                f"{rate['input']},{rate['output']}", "--cache-read-mult", f"{rate['cache_read'] / rate['input']:g}",
                "--cache-write-mult", f"{rate['cache_write_5m'] / rate['input']:g}",
                "--cache-write-1h-mult", f"{rate['cache_write_1h'] / rate['input']:g}", "--json"]
     done = subprocess.run(command, capture_output=True, text=True, encoding="utf-8")
     if done.returncode != 0:
-        return None, f"metering failed (transcript_usage.py exit {done.returncode}): {done.stderr.strip()[:300]}"
+        return None, f"metering failed (bench-tools usage claude exit {done.returncode}): {done.stderr.strip()[:300]}"
     total = json.loads(done.stdout)["total"]
     priced = round(total["cost"], 6)
     bounds = total.get("cost_bounds") or {}
@@ -374,7 +374,7 @@ def dispatch(args) -> list:
     elif not roots + subs:
         meter_problem = "no transcript to meter under home/.claude/projects"
     else:
-        metered, meter_problem = meter(roots + subs, rate)
+        metered, meter_problem = meter(tools, roots + subs, rate)
         usage = metered or usage
     verdicts_present = (work / "verdicts.json").is_file()
     record = {"session_id": session, "cli_version": cli_version, "model": args.model, "effort": args.effort,

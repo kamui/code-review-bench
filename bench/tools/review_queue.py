@@ -39,7 +39,7 @@ take their client from the run's frozen ``inputs/runner.json`` and check no comp
 A queue may also pin Rust executables that ``rust_runtime.py`` retained, by the pins its ``pin``
 command prints, in a store that ``runtime_store`` names (default ``~/.t3/bench-runtime``)::
 
-    "runtimes": {"usage-pilot": {"sha256": "...", "receipt_sha256": "..."}}
+    "runtimes": {"bench-tools": {"sha256": "...", "receipt_sha256": "..."}}
 
 Each run's ``runtimes.frozen.json``, written when the run is frozen, must hold the same pins, and a
 queue pinning none needs runs that froze none, so an unfinished run never moves to another version.

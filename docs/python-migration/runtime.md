@@ -38,7 +38,7 @@ The pin that queues and runs use is the executable's SHA-256 together with the r
 3. From a clean, committed checkout, run:
 
    ```sh
-   python3 bench/tools/rust_runtime.py install --crate rust/usage-pilot --select
+   python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select
    ```
 
 `install` needs Python 3.11 or later; the other commands and `review_queue.py` do not.
@@ -111,7 +111,7 @@ other hosts. Rebuilding offline also needs the locked dependencies in the Cargo 
 Freeze a run's Rust runtimes with the run, as with `clients.frozen.json`:
 
 ```sh
-python3 bench/tools/rust_runtime.py pin usage-pilot > bench/runs/<run>/runtimes.frozen.json
+python3 bench/tools/rust_runtime.py pin bench-tools > bench/runs/<run>/runtimes.frozen.json
 ```
 
 A run frozen at a commit that has `rust/bench-tools` must pin `bench-tools`, whose `normalize-review` and
@@ -179,7 +179,7 @@ possibly successful side effect is therefore never replayed through another impl
 When a run needs another runtime, freeze a new run, or record the change and settle it by hand:
 
 ```sh
-python3 bench/tools/rust_runtime.py deviation --run bench/runs/<run> --name usage-pilot \
+python3 bench/tools/rust_runtime.py deviation --run bench/runs/<run> --name bench-tools \
   --from OLD_SHA256 --to NEW_SHA256 --reason ... --scope ... --validation ... --accounting ...
 ```
 
@@ -192,8 +192,8 @@ it. No check reads it as permission: the queue still requires the frozen pin.
 
 The [script policy](../agents/scripts.md) supports macOS on Apple Silicon and Linux on x86_64 or aarch64.
 `SUPPORTED_TARGETS` holds one target for each of those hosts, and the `Rust runtime` workflow runs on a
-matching GitHub runner for each: the runtime tests with real cargo builds, `cargo fmt`, `clippy` and
-`cargo test` for `usage-pilot`, and [`rollback.sh`](runtime-evidence/rollback.sh). It also checks `bench-tools` with
+matching GitHub runner for each: the runtime tests with real cargo builds and
+[`rollback.sh`](runtime-evidence/rollback.sh). It also checks `bench-tools` with
 `cargo fmt`, `clippy` and `cargo test`, installs it, runs its corpora with the retained executable and the
 `diff-identity`, `normalize-review`, `check-manifest`, `rates` and `upstream` differentials against the retained
 Python libraries, and runs `roster` on the repository. The `CI and GitHub Pages` workflow installs `bench-tools` the
@@ -234,5 +234,5 @@ The v2 census stays as recorded. The [v3 census](README.md#reproducible-records)
 
 ## Rollback evidence
 
-[`runtime-evidence/`](runtime-evidence/) holds a local install of two versions of `usage-pilot`,
-selection, rollback, and corpus runs of both retained executables.
+[`runtime-evidence/`](runtime-evidence/) holds the script that installs two versions of `bench-tools`, selects,
+rolls back and verifies them, and a local run of its earlier `usage-pilot` form with corpus runs of both executables.
