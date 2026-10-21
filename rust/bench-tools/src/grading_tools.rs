@@ -81,7 +81,7 @@ impl Host<'_> {
     }
 }
 
-fn account_home() -> PathBuf {
+pub(crate) fn account_home() -> PathBuf {
     nix::unistd::User::from_uid(nix::unistd::getuid())
         .ok()
         .flatten()

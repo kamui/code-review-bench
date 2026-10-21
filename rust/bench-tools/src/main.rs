@@ -1088,6 +1088,27 @@ struct GradeSources {
     current: OsString,
 }
 
+#[derive(Args)]
+struct GradeClient {
+    #[arg(long, required = true, allow_negative_numbers = true)]
+    model: String,
+    #[arg(long, required = true, allow_negative_numbers = true)]
+    expected_cli_version: String,
+    /// Explicitly authorize a Codex grader, which has no dollar limit.
+    #[arg(long)]
+    allow_unbounded_codex: bool,
+}
+
+impl GradeClient {
+    fn into_client(self) -> grade::dispatch::Client {
+        grade::dispatch::Client {
+            model: self.model,
+            expected_cli_version: self.expected_cli_version,
+            allow_unbounded_codex: self.allow_unbounded_codex,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum GradeCommand {
     /// Build one batch's blind workspace and write its private key outside it.
@@ -1122,6 +1143,46 @@ enum GradeCommand {
         /// A target to check instead of every selected batch of the run.
         #[arg(long, action = clap::ArgAction::Append, allow_negative_numbers = true)]
         target: Vec<OsString>,
+    },
+    /// Check the grader client, its sign-in, pricing and tool enforcement, then every selected batch of a run.
+    #[command(infer_long_args = true)]
+    Preflight {
+        #[command(flatten)]
+        sources: GradeSources,
+        /// The directory each target's workspace would be prepared under.
+        #[arg(long, required = true, allow_negative_numbers = true)]
+        work_root: OsString,
+        /// The directory each target's key would be written under.
+        #[arg(long, required = true, allow_negative_numbers = true)]
+        key_root: OsString,
+        /// A target to check instead of every selected batch of the run.
+        #[arg(long, action = clap::ArgAction::Append, allow_negative_numbers = true)]
+        target: Vec<OsString>,
+        #[command(flatten)]
+        client: GradeClient,
+    },
+    /// Run one prepared batch's grader session and record it in the workspace's dispatch.json.
+    #[command(infer_long_args = true)]
+    Dispatch {
+        #[arg(long, required = true, allow_negative_numbers = true)]
+        work: PathBuf,
+        #[arg(long, required = true, allow_negative_numbers = true)]
+        key: PathBuf,
+        #[command(flatten)]
+        client: GradeClient,
+        #[arg(long, required = true, allow_negative_numbers = true)]
+        effort: String,
+        /// The session's dollar limit: required for Claude, refused for Codex.
+        #[arg(long, allow_negative_numbers = true)]
+        max_budget_usd: Option<f64>,
+        /// The run directory whose charges.jsonl gets the session's charge.
+        #[arg(long, requires = "step", allow_negative_numbers = true)]
+        run: Option<PathBuf>,
+        /// The charge line's step label.
+        #[arg(long, requires = "run", allow_negative_numbers = true)]
+        step: Option<String>,
+        #[arg(long, default_value_t = 5400, allow_negative_numbers = true)]
+        timeout: u64,
     },
     /// Check a prepared workspace against its key.
     #[command(infer_long_args = true)]
@@ -1457,6 +1518,31 @@ enum GradingCommand {
         #[arg(long, allow_negative_numbers = true)]
         bench_tools: PathBuf,
     },
+    /// Run the installed Claude client against a local fake API that calls each grading tool, without a model call.
+    ProbeClaude,
+    /// Run the installed Codex client against a local fake API that calls each grading tool, without a model call.
+    #[command(infer_long_args = true)]
+    ProbeCodex {
+        /// A new directory that keeps the fake API's requests, the client's logs and the receipt.
+        #[arg(long, allow_negative_numbers = true)]
+        evidence_dir: Option<PathBuf>,
+    },
+}
+
+fn grading_probe(
+    failure: &str,
+    receipt: Result<pyjson::Value, String>,
+) -> Result<ExitCode, ExitCode> {
+    match receipt {
+        Ok(receipt) => {
+            println!("{}", pyjson::dumps(&receipt, &pyjson::Dumps::default()));
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(message) => {
+            eprintln!("{failure}: {message}");
+            Err(ExitCode::FAILURE)
+        }
+    }
 }
 
 /// Prints a parse error or the help clap renders, and exits as it does: 2 for misuse, 0 for help.
@@ -4393,6 +4479,49 @@ fn run_grade(command: GradeCommand) -> Result<ExitCode, ExitCode> {
                 )?;
                 Ok(std::mem::take(&mut printed))
             }
+            GradeCommand::Preflight {
+                sources,
+                work_root,
+                key_root,
+                target,
+                client,
+            } => {
+                let targets = target
+                    .iter()
+                    .map(text)
+                    .collect::<current_grading::R<Vec<_>>>()?;
+                grade::dispatch::preflight(
+                    &grade_options(sources),
+                    &targets,
+                    pytext::os_bytes(&work_root),
+                    pytext::os_bytes(&key_root),
+                    &client.into_client(),
+                    &mut runner,
+                    &mut printed,
+                )?;
+                Ok(std::mem::take(&mut printed))
+            }
+            GradeCommand::Dispatch {
+                work,
+                key,
+                client,
+                effort,
+                max_budget_usd,
+                run,
+                step,
+                timeout,
+            } => grade::dispatch::dispatch(
+                &runner,
+                &grade::dispatch::Dispatch {
+                    work,
+                    key,
+                    client: client.into_client(),
+                    effort,
+                    max_budget_usd,
+                    charge: run.zip(step),
+                    timeout,
+                },
+            ),
             GradeCommand::CheckPrepared {
                 work,
                 key,
@@ -4530,6 +4659,16 @@ fn main() -> ExitCode {
                 Err(ExitCode::FAILURE)
             }
         },
+        Cli::Grading(GradingCommand::ProbeClaude) => grading_probe(
+            "client enforcement probe failed",
+            review_isolation::own_executable().and_then(|own| grade::client::probe_claude(&own)),
+        ),
+        Cli::Grading(GradingCommand::ProbeCodex { evidence_dir }) => grading_probe(
+            "Codex grading compatibility probe failed",
+            review_isolation::own_executable().and_then(|own| {
+                grade::client::probe_codex(Path::new("."), &own, evidence_dir.as_deref())
+            }),
+        ),
         Cli::Regrade(RegradeCommand::Status { queues }) => regrade_status(&queues),
         Cli::Regrade(RegradeCommand::ArchiveAttempt {
             attempt,
