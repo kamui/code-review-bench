@@ -70,7 +70,8 @@ Usage is priced from ``bench/rates.json`` by the observed model, with the run's 
 usage claude`` (the built-in's root transcript bills nothing, so only subagent transcripts are
 metered; every transcript is read for completion receipts and session totals) or ``bench-tools usage
 codex``. Per-request records go to ``usage-requests.jsonl``: one line per API request id for Claude,
-with the output a completion receipt repaired, one per ``token_count`` event for Codex. The total is
+with the output a completion receipt repaired and, under ``repaired``, that receipt's transcript line and the
+output it replaced; one per ``token_count`` event for Codex. The total is
 priced only when the capture is proven complete: the native return is recorded and every stream
 shows its own end (Claude: ``stdout.jsonl`` ends with the session's ``result`` record and each
 transcript ends with the model's ``end_turn`` reply or the CLI's API-error notice, with no request
@@ -930,7 +931,9 @@ def file_attempt(args) -> tuple:
     for repair in repairs:
         for row in requests:
             if row["request_id"] == repair["request"] and row["transcript"] == os.path.basename(repair["transcript"]):
+                receipt, line = repair["receipt"].rsplit(":", 1)
                 row["output_tokens"] = repair["output_to"]
+                row["repaired"] = {"receipt": f"{os.path.basename(receipt)}:{line}", "output_from": repair["output_from"]}
     gaps = capture_gaps(harness, attempt_dir, exit_code is not None, transcript_paths,
                         roots if kind == "claude-builtin" else (), {repair["transcript"] for repair in repairs})
     gaps.extend(completeness.get("problems") or [])

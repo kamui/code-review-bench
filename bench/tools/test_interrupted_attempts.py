@@ -245,6 +245,22 @@ class CompleteUsage(Fixture):
             lines({"type": "user", "message": {"content": "/code-review main...review-head high"}}) + session_totals(), encoding="utf-8")
         self.assert_complete(self.filed(attempt), CAPTURED)
 
+    def test_truncated_child_repaired_from_its_receipt_files_the_receipt_output_and_where_it_came_from(self):
+        attempt = self.attempt()
+        partial = reply("r1", None)
+        partial["message"]["usage"]["output_tokens"] = 20
+        (attempt / "home/.claude/projects/p/s1/subagents/agent-a1.jsonl").write_text(
+            lines({"type": "user", "message": {"content": f"Review target: `main...review-head high`\n\n{PROMPT}\n"}}, partial),
+            encoding="utf-8")
+        usage = reply("r1", None)["message"]["usage"]
+        (attempt / "home/.claude/projects/p/s1.jsonl").write_text(lines(
+            {"type": "user", "toolUseResult": {"status": "completed", "agentId": "a1", "usage": usage,
+                                               "content": [{"type": "text", "text": "[]"}]}}) + session_totals(), encoding="utf-8")
+        self.assert_complete(self.filed(attempt), CAPTURED)
+        rows = (self.run_dir / "attempts/att-001/usage-requests.jsonl").read_text(encoding="utf-8").splitlines()
+        self.assertEqual([(row["request_id"], row["output_tokens"], row.get("repaired")) for row in map(json.loads, rows)],
+                         [("r1", 50, {"receipt": "s1.jsonl:1", "output_from": 20})])
+
     def test_audit_invalid_completion_keeps_its_complete_usage(self):
         attempt = self.attempt()
         (attempt / "audit.json").write_text(json.dumps({"violations": ["read outside the clone: /etc/hosts"],
