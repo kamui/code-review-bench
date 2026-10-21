@@ -428,6 +428,53 @@ struct Graded {
 struct Lookups {
     archives: Dict<Value>,
     rulings: Dict<Value>,
+    lower_bounds: Option<LowerBounds>,
+}
+
+/// The usage deviation that exports some filed costs as lower bounds, with its entries by attempt identifier.
+struct LowerBounds {
+    receipt: PyPath,
+    attempts: Dict<Value>,
+}
+
+const LOWER_BOUNDS: &[u8] = b"deviations/usage-lower-bounds.v1.json";
+
+impl LowerBounds {
+    fn read(bench: &PyPath) -> Result<Option<Self>> {
+        let receipt = bench.join(LOWER_BOUNDS);
+        if !exists(&receipt) {
+            return Ok(None);
+        }
+        let mut attempts = Dict::new();
+        for entry in iterate(at(&read(&receipt)?, "attempts")?)?.iter() {
+            if at(entry, "probe")?.truthy() {
+                continue;
+            }
+            let identifier = concat(
+                &concat(at(entry, "run")?, &text("/"))?,
+                at(entry, "attempt")?,
+            )?;
+            attempts.insert(identifier, entry.clone())?;
+        }
+        Ok(Some(Self { receipt, attempts }))
+    }
+
+    /// The entry for an attempt, refused when the filed record no longer holds the cost it names.
+    fn entry(&self, identifier: &Value, usage: &Value) -> Result<Option<&Value>> {
+        let Some(entry) = self.attempts.get(identifier)? else {
+            return Ok(None);
+        };
+        let filed = optional(get(usage, "priced_total_usd")?);
+        if !optional(get(usage, "metering_status")?).py_eq(&text("complete"))
+            || !filed.py_eq(at(entry, "filed_cost_usd")?)
+        {
+            return Err(inconsistent(format!(
+                "{}: the usage deviation names another filed cost",
+                identifier.py_str()
+            )));
+        }
+        Ok(Some(entry))
+    }
 }
 
 impl Exporter {
@@ -605,6 +652,15 @@ impl Exporter {
             Some(correction) => self.evidence(&correction.receipt, None)?,
             None => Value::Null,
         };
+        let usage = at(&record, "usage")?;
+        let lower_bound = match &lookups.lower_bounds {
+            Some(bounds) => bounds.entry(identifier, usage)?.map(|_| &bounds.receipt),
+            None => None,
+        };
+        let usage_url = match lower_bound {
+            Some(receipt) => self.evidence(receipt, None)?,
+            None => Value::Null,
+        };
         let stop = if exists(&stop_path) {
             read(&stop_path)?
         } else {
@@ -642,6 +698,7 @@ impl Exporter {
             ("items", Value::Array(items)),
             ("record", record.clone()),
             ("billingCorrectionUrl", billing_url),
+            ("usageCorrectionUrl", usage_url),
             ("stop", stop),
             (
                 "assessment",
@@ -666,8 +723,15 @@ impl Exporter {
             write_text(&detail_path, &dump(&detail))?;
         }
         let cell = at(&record, "cell")?;
-        let usage = at(&record, "usage")?;
         let requests = join(&directory, at(usage, "requests")?)?;
+        let (cost, output_tokens) = if lower_bound.is_some() {
+            (Value::Null, Value::Null)
+        } else {
+            (
+                optional(get(usage, "priced_total_usd")?),
+                usage_tokens(&requests, &record)?,
+            )
+        };
         let predecessor = match get(&record, "predecessor")? {
             Some(previous) if previous.truthy() => {
                 concat(&concat(&run_name, &text("/"))?, previous)?
@@ -697,18 +761,12 @@ impl Exporter {
                     None => Value::Null,
                 },
             ),
-            (
-                "cost",
-                optional(get(
-                    &get_or(&record, "usage", Value::Object(Object::default()))?,
-                    "priced_total_usd",
-                )?),
-            ),
+            ("cost", cost),
             (
                 "costLowerBound",
                 at(at(usage, "cost_bounds_usd")?, "low")?.clone(),
             ),
-            ("outputTokens", usage_tokens(&requests, &record)?),
+            ("outputTokens", output_tokens),
             ("durationSeconds", duration_seconds(&record)?),
             (
                 "billing",
@@ -1183,7 +1241,11 @@ impl Exporter {
             "skills",
         )?
         .clone();
-        let lookups = Lookups { archives, rulings };
+        let lookups = Lookups {
+            archives,
+            rulings,
+            lower_bounds: LowerBounds::read(&self.bench)?,
+        };
         let all_sources = iterate(at(selected, "sources")?)?;
         let all_cells = iterate(at(selected, "cells")?)?;
         for entry in iterate(at(&registry, "configurations")?)?.iter() {
@@ -1548,6 +1610,7 @@ impl Exporter {
                 "normalizedUrl",
                 "archiveUrl",
                 "billingCorrectionUrl",
+                "usageCorrectionUrl",
             ] {
                 truthy(at(&detail, key)?, &mut links);
             }
@@ -1863,6 +1926,58 @@ mod tests {
         let read = Facts::through_file(&kept).ok().unwrap();
         assert!(read.selected.py_eq(at(&kept, "selected").unwrap()));
         assert!(read.documents.py_eq(at(&kept, "documents").unwrap()));
+    }
+
+    #[test]
+    fn the_usage_deviation_applies_only_to_listed_attempts_at_their_filed_cost() {
+        let bench =
+            std::env::temp_dir().join(format!("bench-tools-lower-bounds-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&bench);
+        let bench_path = PyPath::new(bench.as_os_str().as_bytes());
+        assert!(LowerBounds::read(&bench_path).unwrap().is_none());
+        std::fs::create_dir_all(bench.join("deviations")).unwrap();
+        std::fs::write(
+            bench.join("deviations/usage-lower-bounds.v1.json"),
+            r#"{"attempts": [
+                {"run": "run-a", "attempt": "att-001", "probe": false, "filed_cost_usd": 1.25},
+                {"run": "run-a", "attempt": "att-002", "probe": true, "filed_cost_usd": 2.5}
+            ]}"#,
+        )
+        .unwrap();
+        let bounds = LowerBounds::read(&bench_path).unwrap().unwrap();
+        let usage = |status: &str, cost: f64| {
+            object(vec![
+                ("metering_status", text(status)),
+                ("priced_total_usd", Value::Float(cost)),
+            ])
+        };
+        let listed = text("run-a/att-001");
+        assert!(
+            bounds
+                .entry(&listed, &usage("complete", 1.25))
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            bounds
+                .entry(&text("run-a/att-002"), &usage("complete", 2.5))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            bounds
+                .entry(&text("run-b/att-001"), &usage("complete", 1.25))
+                .unwrap()
+                .is_none()
+        );
+        for changed in [usage("complete", 1.5), usage("incomplete", 1.25)] {
+            let failure = bounds.entry(&listed, &changed).err().unwrap();
+            assert_eq!(
+                failure.line(),
+                "current_grading.Inconsistent: run-a/att-001: the usage deviation names another filed cost"
+            );
+        }
+        std::fs::remove_dir_all(&bench).unwrap();
     }
 
     #[test]

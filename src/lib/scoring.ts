@@ -440,8 +440,11 @@ const usageGap = (ran: Cell[], trials: number, gap: string | null) =>
 function usage(ran: Cell[], gap: string | null, pick: (attempt: Attempt) => number | null) {
   const trials = ran.flatMap(cell => cell.trials), attempts = trials.flatMap(trial => trial.attempts)
   const measured = attempts.flatMap(attempt => pick(attempt) ?? [])
+  const unmeasured = attempts.filter(attempt => pick(attempt) === null)
+  const partial = unmeasured.filter(attempt => attempt.costLowerBound !== null).length, missing = unmeasured.length - partial
   const blocked = usageGap(ran, trials.length, gap)
-    ?? (measured.length < attempts.length ? `${plural(attempts.length - measured.length, 'attempt has', 'attempts have')} no recorded usage.` : null)
+    ?? ([partial ? `${plural(partial, "attempt's usage was", "attempts' usage was")} only partly recorded.` : null,
+      missing ? `${plural(missing, 'attempt has', 'attempts have')} no recorded usage.` : null].filter(Boolean).join(' ') || null)
   return { trials: trials.length, attempts: attempts.length, measuredAttempts: measured.length, total: sum(measured),
     perTrial: gated(blocked, available(sum(measured) / trials.length)) }
 }
