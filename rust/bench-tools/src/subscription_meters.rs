@@ -422,24 +422,39 @@ mod tests {
         let root = std::env::temp_dir().join(format!("meters-codex-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let server = root.join("codex");
-        let script = |limits: &str| {
-            format!(
-                "#!/bin/sh\nread line\necho '{{\"id\": 1, \"result\": {{}}}}'\nread line\nread line\n\
-                 echo '{{\"method\": \"note\"}}'\necho '{{\"id\": 2, \"result\": {{\"ordinaryUsageAllowed\": true, \"rateLimits\": {limits}}}}}'\n\
-                 sleep 30\n"
+        let source = root.join("codex.sh");
+        // A spawn on another test thread holds a copy of this process's open files until it execs, and Linux will
+        // not run a file open for writing (ETXTBSY). Copying in a child keeps every writer of the server out of here.
+        let install = |limits: &str| {
+            std::fs::write(
+                &source,
+                format!(
+                    "#!/bin/sh\nread line\necho '{{\"id\": 1, \"result\": {{}}}}'\nread line\nread line\n\
+                     echo '{{\"method\": \"note\"}}'\necho '{{\"id\": 2, \"result\": {{\"ordinaryUsageAllowed\": true, \"rateLimits\": {limits}}}}}'\n\
+                     sleep 30\n"
+                ),
             )
+            .unwrap();
+            assert!(
+                Command::new("cp")
+                    .arg(&source)
+                    .arg(&server)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            std::fs::set_permissions(&server, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+                .unwrap();
         };
         let pinned = [Pinned {
             name: "codex".into(),
             path: server.clone(),
             version: "0.1.0".into(),
         }];
-        std::fs::write(&server, script(r#"{"primary": {"usedPercent": 7}}"#)).unwrap();
-        std::fs::set_permissions(&server, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .unwrap();
+        install(r#"{"primary": {"usedPercent": 7}}"#);
         let usage = read(&pinned, &[]).unwrap();
         assert_eq!(used(&usage).unwrap(), (vec![], vec![7.0]));
-        std::fs::write(&server, script("{}")).unwrap();
+        install("{}");
         assert_eq!(
             read(&pinned, &[]).unwrap_err().message,
             "no usage window was reported for codex"
