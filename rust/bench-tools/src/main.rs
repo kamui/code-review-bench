@@ -8,9 +8,10 @@ use bench_tools::{
     archive, attempt_audit, build_packet, calibration, claims, current_grading, delegation,
     derive_packet, diff_identity, evaluator_audit, evidence, evidence_inventory, export_explorer,
     file_attempt, grade, grading_reports, grading_validation, import_benchmark, interrupt,
-    methodology, native_artifacts, normalize_thermo, packet_selection, provision, pyfs, pyunicode,
-    pyvalue, rates, regrade, review_isolation, review_queue, roster, ruling, run_cell,
-    skill_provenance, skill_runner, subscription_meters, upstream, usage,
+    methodology, native_artifacts, normalize_thermo, packet_selection, provision, prune_workspace,
+    pyfs, pyunicode, pyvalue, rates, regrade, removal, retire_workspace, review_isolation,
+    review_queue, roster, ruling, run_cell, skill_provenance, skill_runner, subscription_meters,
+    upstream, usage,
 };
 use clap::builder::PossibleValuesParser;
 use clap::error::ErrorKind;
@@ -158,6 +159,57 @@ enum Cli {
     /// Read the subscription meters of pinned clients, and say whether a reading stops new work.
     #[command(subcommand, infer_long_args = true)]
     SubscriptionMeters(MetersCommand),
+    /// Remove a verified review attempt's or grading workspace's clone and clone-cache, leaving
+    /// workspace-pruned.json; without --apply, only check and print what would go.
+    #[command(infer_long_args = true)]
+    PruneWorkspace(PruneWorkspaceArgs),
+    /// Remove a closed workspace whose closure plan, manifest, inventory, restoration receipt and evidence are
+    /// published at a pushed commit, during an exclusive maintenance window; without --apply, only check and write
+    /// the receipt. Linux only.
+    #[command(infer_long_args = true)]
+    RetireWorkspace(RetireWorkspaceArgs),
+}
+
+#[derive(Args)]
+struct RetireWorkspaceArgs {
+    /// The checkout holding the published plan (default the current directory).
+    #[arg(long, allow_negative_numbers = true)]
+    root: Option<OsString>,
+    /// The repository-relative published closure plan.
+    #[arg(long, allow_negative_numbers = true)]
+    plan: String,
+    /// The pushed commit that holds the plan and its evidence.
+    #[arg(long, allow_negative_numbers = true)]
+    shared_commit: String,
+    /// The shared branch the commit must be reachable from.
+    #[arg(long, allow_negative_numbers = true)]
+    shared_branch: String,
+    /// A new receipt path outside the workspace; applying also writes <receipt>.completed.json.
+    #[arg(long, allow_negative_numbers = true)]
+    receipt: OsString,
+    #[arg(long)]
+    apply: bool,
+}
+
+#[derive(Args)]
+struct PruneWorkspaceArgs {
+    /// The filed attempt directory, attempts/<id> in the run.
+    #[arg(long, allow_negative_numbers = true)]
+    attempt: Option<OsString>,
+    /// With --attempt: the attempt's workspace holding clone and clone-cache.
+    #[arg(long, allow_negative_numbers = true)]
+    workspace: Option<OsString>,
+    /// A mapped grading workspace.
+    #[arg(long, allow_negative_numbers = true)]
+    grading_work: Option<OsString>,
+    /// The target directory holding target.json; with --attempt, the one the run resolved for the attempt's cell.
+    #[arg(long, allow_negative_numbers = true)]
+    target: Option<OsString>,
+    /// With --grading-work: the saved assessment receipt.json of its verdicts.
+    #[arg(long, allow_negative_numbers = true)]
+    receipt: Option<OsString>,
+    #[arg(long)]
+    apply: bool,
 }
 
 #[derive(Args)]
@@ -3471,6 +3523,7 @@ fn run_run_cell(arguments: RunCellArgs) -> Result<ExitCode, ExitCode> {
         executable,
         env: run_cell::environment(),
         tool: &tool,
+        prune: &run_cell::apply_prune,
         fetch: &rates::Network,
         pinned: &pinned,
         now: &run_cell::now_seconds,
@@ -3538,7 +3591,6 @@ fn run_queue(command: QueueCommand) -> Result<ExitCode, ExitCode> {
     let repo: std::path::PathBuf =
         OsString::from_vec(pyfs::resolve(root.as_os_str().as_bytes())).into();
     let executable = std::env::current_exe().map_err(located)?;
-    let tool = |argv: &[String], env: Option<&[(String, String)]>| skill_runner::run(argv, env);
     let clock = || {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -3556,7 +3608,7 @@ fn run_queue(command: QueueCommand) -> Result<ExitCode, ExitCode> {
         sleep: &sleep,
         nap: &sleep,
         meters: &subscription_meters::meters,
-        tool: &tool,
+        prune: &run_cell::apply_prune,
         poll_seconds: review_queue::POLL_SECONDS,
         scan_gap_seconds: review_queue::SCAN_GAP_SECONDS,
         unreadable_wait_seconds: review_queue::UNREADABLE_WAIT_SECONDS,
@@ -3735,6 +3787,114 @@ fn run_file_attempt(arguments: FileAttemptArgs) -> Result<ExitCode, ExitCode> {
         expect_cli_version: arguments.expect_cli_version,
         expect_skill_tree: arguments.expect_skill_tree,
     }))
+}
+
+/// Prints the receipt, or `nothing to remove`; a refusal is `cleanup refused: <message>` with exit 1 and an input or
+/// filesystem error `cleanup failed: <message>` with exit 2, both on stdout as prune_workspace.py printed them.
+fn run_prune_workspace(arguments: PruneWorkspaceArgs) -> Result<ExitCode, ExitCode> {
+    let outcome = match arguments {
+        PruneWorkspaceArgs {
+            attempt: Some(attempt),
+            workspace: Some(workspace),
+            grading_work: None,
+            target,
+            receipt: None,
+            apply,
+        } => pytext::realpath(attempt.as_bytes(), false)
+            .map_err(prune_workspace::Failure::Failed)
+            .and_then(|attempt| {
+                prune_workspace::attempt(
+                    &prune_workspace::Attempt {
+                        attempt: &attempt,
+                        workspace: workspace.as_bytes(),
+                        target: target.as_deref().map(OsStrExt::as_bytes),
+                        remote: &std::cell::RefCell::new(evidence::GitHub),
+                    },
+                    apply,
+                    &removal::uninterrupted,
+                )
+                .map(Some)
+            }),
+        PruneWorkspaceArgs {
+            attempt: None,
+            workspace: None,
+            grading_work: Some(work),
+            target: Some(target),
+            receipt: Some(receipt),
+            apply,
+        } => prune_workspace::grading_at(
+            work.as_bytes(),
+            target.as_bytes(),
+            receipt.as_bytes(),
+            apply,
+            &removal::uninterrupted,
+        ),
+        _ => {
+            return Err(misuse(
+                "prune-workspace",
+                ErrorKind::ArgumentConflict,
+                "give --attempt with --workspace [--target], or --grading-work with --target and --receipt",
+            ));
+        }
+    };
+    match outcome {
+        Ok(receipt) => {
+            write_stdout(format!("{}\n", prune_workspace::shown(receipt.as_ref())).as_bytes())?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(failure) => {
+            write_stdout(format!("{}\n", failure.report()).as_bytes())?;
+            Ok(ExitCode::from(match failure {
+                prune_workspace::Failure::Refused(_) => 1,
+                prune_workspace::Failure::Failed(_) => 2,
+            }))
+        }
+    }
+}
+
+fn run_retire_workspace(arguments: RetireWorkspaceArgs) -> Result<ExitCode, ExitCode> {
+    let outcome = retire_workspace::retire(
+        &retire_workspace::Request {
+            root: arguments.root.as_deref().map_or(b".", OsStrExt::as_bytes),
+            plan: &arguments.plan,
+            commit: &arguments.shared_commit,
+            branch: &arguments.shared_branch,
+            receipt: arguments.receipt.as_bytes(),
+            apply: arguments.apply,
+        },
+        &mut retire_workspace::Effects {
+            store: evidence::Store {
+                remote: &mut evidence::GitHub,
+                disk: &mut evidence::System,
+                now: &evidence::now_isoformat,
+                temporary: evidence::system_temp(),
+            },
+            forge: &mut evidence::GitHub,
+            active: &retire_workspace::active_users,
+            hook: &removal::uninterrupted,
+        },
+    );
+    match outcome {
+        Ok(receipt) => {
+            let shown = pyjson::dumps(
+                &receipt,
+                &pyjson::Dumps {
+                    indent: Some(2),
+                    ..Default::default()
+                },
+            );
+            write_stdout(format!("{shown}\n").as_bytes())?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(error @ evidence::Error::Violation(_)) => {
+            write_stdout(format!("{}\n", retire_workspace::report(&error)).as_bytes())?;
+            Ok(ExitCode::from(1))
+        }
+        Err(error) => {
+            eprintln!("{}", retire_workspace::report(&error));
+            Ok(ExitCode::from(2))
+        }
+    }
 }
 
 fn run_attempt_audit(arguments: AttemptAuditArgs) -> Result<ExitCode, ExitCode> {
@@ -4851,6 +5011,8 @@ fn main() -> ExitCode {
         Cli::RunCell(arguments) => run_run_cell(*arguments),
         Cli::Queue(command) => run_queue(command),
         Cli::SubscriptionMeters(command) => run_subscription_meters(command),
+        Cli::PruneWorkspace(arguments) => run_prune_workspace(arguments),
+        Cli::RetireWorkspace(arguments) => run_retire_workspace(arguments),
         Cli::CurrentGrading(arguments) => run_current_grading(arguments),
         Cli::Methodology(arguments) => run_methodology(&arguments),
         Cli::Grade(command) => run_grade(command),

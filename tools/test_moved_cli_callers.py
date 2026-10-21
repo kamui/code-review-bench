@@ -56,6 +56,8 @@ MOVED_PROGRAMS = (
     ("bench/tools/regrade.py", "bench-tools regrade run"),
     ("bench/tools/grading_client_probe.py", "bench-tools grading probe-claude"),
     ("bench/tools/test_grading_client.py", "bench-tools grading probe-claude"),
+    ("bench/tools/prune_workspace.py", "bench-tools prune-workspace"),
+    ("bench/tools/retire_workspace.py", "bench-tools retire-workspace"),
 )
 # Frozen runs, imported originals, research records, saved rulings, saved fixture and migration evidence, and the
 # contract decisions that describe superseded behavior keep the commands they recorded.

@@ -87,7 +87,7 @@ pub struct Arguments<'a> {
     pub target: Option<&'a str>,
     pub out: Option<&'a [u8]>,
     pub reconciliation: Option<&'a [u8]>,
-    /// The checkout whose `bench/tools/prune_workspace.py` cleans a second grader's workspace.
+    /// The checkout whose prepared inputs a second grader's workspace is checked against.
     pub checkout: &'a [u8],
     pub work: Option<&'a [u8]>,
     pub key: Option<&'a [u8]>,
@@ -2611,14 +2611,7 @@ fn second(root: &Root, current: &[u8], arguments: &Arguments) -> R<Done> {
             format!("{}\n", current_grading::dumps(&object(receipt))).as_bytes(),
         )
         .map_err(Failure::Input)?;
-        grade::prune_grading(
-            &checkout,
-            root,
-            target_text,
-            &work,
-            &receipt_path,
-            SECOND_CLEANUP,
-        )?;
+        grade::prune_grading(root, target_text, &work, &receipt_path, SECOND_CLEANUP)?;
         Ok(count)
     })();
     let count = match saved {
