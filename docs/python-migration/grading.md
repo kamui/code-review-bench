@@ -35,7 +35,7 @@ implementation.
 | `attempt_audit.py` | — | The attempt isolation audit |
 | `grading_profile.py` | — | Ports it on the Rust usage parser |
 | `transcript_usage.py`, `codex_usage.py` | — | Proposed: the production usage parser |
-| `packet_selection.py` | Rust port for `current_grading` | Retained library until its callers move |
+| `packet_selection.py` | Rust port for `current_grading` | Deleted by #157 with its last callers |
 
 `delegation.py` and `audit_log.py` stay with #156.
 
@@ -265,7 +265,7 @@ both, and the same dataset hash.
 [ruled on #230](https://github.com/kamui/code-review-bench/issues/230#issuecomment-6274330595),
 [#256](https://github.com/kamui/code-review-bench/issues/256) added the rule that a comment linked to two or more
 claims has no equivalent link. `current_grading.py` keeps the older rule and stays byte-unchanged as the baseline
-until slice 11 deletes it; `packet_selection.py` stays for #157's callers.
+until slice 11 deletes it. #157 deleted `packet_selection.py` with its last callers.
 
 ## Slice 4: the explorer export's facts, methodology and schema-check callers
 
@@ -438,15 +438,15 @@ python3 bench/tools/rust_runtime.py exec bench-tools -- grade preflight-inputs -
 python3 bench/tools/rust_runtime.py exec bench-tools -- grade check-prepared --work WORK --key KEY [--dispatching]
 ```
 
-`prepare` takes the options of `grade.py`'s preparation. `--provision SCRIPT` runs `python3 SCRIPT prepare` into `WORK/clone`,
-the bridge #157 removes; a failed provisioner leaves no `clone`, `clone-cache` or `clone-work` and reports its exit and
+`prepare` takes the options of `grade.py`'s preparation. It runs this executable's `provision prepare` into `WORK/clone`, or
+`python3 SCRIPT prepare` with `--provision SCRIPT`; a failed provisioner leaves no `clone`, `clone-cache` or `clone-work` and reports its exit and
 output tail. The key is created with mode 0600 outside WORK, and WORK must be new or empty. `preflight-inputs` makes
 the checks `grade.py`'s offline preflight made. `check-prepared` makes `check_prepared`'s checks of a version 1 key.
 
 A Rust-prepared key is version 2, as plan decision 6 gives it. `validator` holds only `inputs.json`, and
 `validator/tools/` is not created, since the validator is part of the executable. `runner_deviation` is
 `{"version": 2, "files", "bench_tools", "execution_policy_sha256", "codex_catalog_sha256"}` with an optional
-`provisioning`: `files` holds the 23 runner files and `rust/bench-tools`, the running executable's SHA-256, and
+`provisioning`: `files` holds the runner files `grade::RUNNER_FILES` lists and `rust/bench-tools`, the running executable's SHA-256, and
 `bench_tools` is that executable's `rust_runtime.py` pin. `prepare` and `check-prepared` refuse a receipt that
 `rust_runtime.check` finds incomplete. `check-prepared` refuses a v2 key whose pinned executable or receipt is
 missing, changed or incomplete, one problem naming it, and a changed or deleted `files` entry as a runner change. Until
@@ -655,10 +655,8 @@ for a final differential, and the mapping replay compares with recorded outcomes
 
 | Module | Kept for | Removed by |
 | --- | --- | --- |
-| `packet_selection.py` | `run_cell.py`, `codex_skill_runner.py` | #157 |
 | `grade.py` (dispatch, online preflight) | `regrade.py`, manual dispatch | #157 |
-| `check_manifest.py` (library only) | `rates`, `provision`, `run_cell`, `evidence_store` | #160 |
-| `diff_identity.py` | As the processing record lists | #157 |
+| `check_manifest.py` (library only) | `rates`, `run_cell`, `evidence_store` | #160 |
 | `tools/behavior_contract.py` features added here | The contract harness | #160 |
 | `stage_edition.py` and the other research helpers | Research records | never deleted |
 
@@ -668,10 +666,9 @@ Slice 10 deleted every other ported grading module.
 
 | Bridge | Removal condition | Removed by |
 | --- | --- | --- |
-| `grade prepare` runs `provision.py prepare` | Provisioning moves to Rust | #157 |
 | `grade map` and `evaluator-audit second` run `prune_workspace.py --grading-work` before publishing | Pruning moves to Rust | #159 |
 | `grade.py` dispatch and preflight run `grade check-prepared` and `preflight-inputs` | Dispatch moves to Rust | #157 |
 | `grading_policy.py`'s `validate` runs the pinned `grading validate` | The tool server moves to Rust | #157 |
 | `regrade.py` runs `bench-tools` under its `runtimes` pin | The controller moves to Rust | #157 |
 
-Slice 7 adds the first, `grade prepare`'s provisioner; slices 8 to 10 add the rest.
+Slices 8 to 10 add them. Slice 7 added `grade prepare`'s Python provisioner, which #157 removed.

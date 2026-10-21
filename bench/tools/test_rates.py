@@ -12,6 +12,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).parent))
 import rates
 import run_cell
+import rust_runtime
 
 OPENAI = """### Standard pricing data
 | Model | Short context input | Short context cached input | Short context cache writes | Short context output | Long context input | Long context cached input | Long context cache writes | Long context output |
@@ -33,7 +34,9 @@ ROOT = Path(__file__).resolve().parent
 
 class RatesTests(unittest.TestCase):
     def setUp(self):
-        self.enterContext(patch.object(run_cell, "normalizer_environment", return_value={}))
+        self.enterContext(patch.object(run_cell, "normalizer_environment",
+                                       return_value={rust_runtime.variable(run_cell.NORMALIZER): "bench-tools"}))
+        self.enterContext(patch.object(run_cell, "check_provenance"))
         self.temp = tempfile.TemporaryDirectory()
         self.directory = Path(self.temp.name)
         self.catalog = self.directory / "rates.json"

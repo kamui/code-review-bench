@@ -1,7 +1,7 @@
 """Check that a dispatch resolves the run's pinned bench-tools before anything is claimed or a reviewer starts.
 
-No reviewer is called: a run that pins no bench-tools is refused before its claim, and a pinned one passes the executable
-to the dispatch. The skill runners refuse an unpinned run before they write the attempt's input.
+No reviewer is called: a run that pins no bench-tools, or one that predates ``skill-runner``, is refused before its claim,
+and a pinned one passes the executable to the dispatch.
 """
 from __future__ import annotations
 
@@ -16,8 +16,6 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import claude_skill_runner
-import codex_skill_runner
 import run_cell
 
 FREEZE_COMMIT = "f" * 40
@@ -58,6 +56,7 @@ class Launch(unittest.TestCase):
         run.manifest["caps"] = {"replacements": 0}
         with patch.object(run_cell, "Run", return_value=run), patch.object(run_cell, "check_frozen"), \
                 patch.object(run_cell, "choose", return_value=claim) as choose, patch.object(run_cell, "check_target"), \
+                patch.object(run_cell, "check_provenance"), \
                 patch.object(run_cell, "check_dispatch_rates", return_value=({}, {"rates": []})) as rates, \
                 patch.object(run_cell, "dispatch") as dispatch, \
                 patch.object(run_cell, "file", return_value={"disposition": "valid completed", "usage": {"priced_total_usd": 0}}):
@@ -94,17 +93,16 @@ class Launch(unittest.TestCase):
         with self.assertRaisesRegex(run_cell.Refused, f"{other} is not the bench-tools that .*runtimes.frozen.json pins"):
             self.claim()
 
-    def test_a_skill_runner_refuses_an_unpinned_run_before_it_writes_anything(self):
-        attempt = self.root / "attempt"
-        attempt.mkdir()
-        args = argparse.Namespace(run=str(self.run_dir), attempt_dir=str(attempt), clone=str(self.root / "clone"),
-                                  packet=str(self.root / "packet.md"), arm=str(self.root / "arm.json"), target="fixture")
-        for runner, kind in ((codex_skill_runner, "codex-skill"), (claude_skill_runner, "claude-skill")):
-            with self.subTest(kind=kind), self.assertRaisesRegex(codex_skill_runner.RunnerError,
-                                                                 f"the bench-tools Rust runtime: {self.refusal}"):
-                runner.prepare_attempt(args, kind)
-            self.assertEqual(list(attempt.iterdir()), [])
-
+    def test_a_pinned_bench_tools_without_skill_runner_is_refused_before_its_claim(self):
+        self.executable.write_text('#!/bin/sh\n[ "$1" = skill-runner ] && exit 2\nexit 0\n', encoding="utf-8")
+        self.digest = hashlib.sha256(self.executable.read_bytes()).hexdigest()
+        os.environ["BENCH_RUST_BENCH_TOOLS_SHA256"] = self.digest
+        self.pin()
+        with self.assertRaisesRegex(run_cell.Refused, f"run {self.run_dir.name} pins a bench-tools without `skill-runner`; "
+                                                      f"dispatch it from a checkout of its freeze commit {FREEZE_COMMIT}"):
+            self.claim()
+        self.assertEqual((self.calls["choose"], self.calls["dispatch"]), (0, []))
+        self.assertEqual(self.attempts(), [])
 
 if __name__ == "__main__":
     unittest.main()
