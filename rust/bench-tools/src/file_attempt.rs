@@ -22,7 +22,8 @@
 //! `<archive-root>/<run>/<attempt>.tar.gz` and checked. `attempt.json` is written last and replaced in one step,
 //! so its presence means a finished filing.
 //!
-//! Exit codes: 0 filed; 1 the record does not validate, one line per violation on stdout; 2 an input is missing
+//! Exit codes: 0 filed; 1 the record does not validate, one line per violation on stdout; 2 the run's
+//! `runtimes.frozen.json` does not pin this bench-tools (checked before anything is written), an input is missing
 //! or unreadable, the dispatch neither ended nor has a verified interruption record, or a helper failed.
 
 use crate::evidence::{self, transcripts};
@@ -1822,7 +1823,28 @@ fn skill_runner(kind: Arm) -> bool {
 
 /// Build the record; return it with the output directory.
 #[allow(clippy::too_many_lines)]
+/// Refuses unless this executable is the bench-tools the run's `runtimes.frozen.json` pins.
+fn check_pin(run_dir: &str) -> Result<()> {
+    let frozen = join(run_dir, "runtimes.frozen.json");
+    let pinned = read_json_if(&frozen)?;
+    let pinned = at(at(&pinned, "bench-tools"), "sha256").as_str();
+    let executable = own_executable()?;
+    if pinned == Some(sha256_file(&executable)?.as_str()) {
+        return Ok(());
+    }
+    let manifest = read_json_if(&join(run_dir, "manifest.json"))?;
+    let commit = at(&manifest, "freeze_commit").as_str().unwrap_or("unknown");
+    let problem = match pinned {
+        None => format!("{frozen} pins no bench-tools runtime"),
+        Some(_) => format!("{executable} is not the bench-tools that {frozen} pins"),
+    };
+    refuse(format!(
+        "{problem}; file it from a checkout of its freeze commit {commit}"
+    ))
+}
+
 fn file_attempt(arguments: &Arguments) -> Result<(Value, String)> {
+    check_pin(&arguments.run)?;
     let attempt_dir = abspath(&arguments.attempt_dir)?;
     let clone = abspath(&arguments.clone)?;
     let a = |name: &str| join(&attempt_dir, name);

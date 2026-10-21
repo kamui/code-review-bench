@@ -151,6 +151,16 @@ fn clone(path: &Path) -> (String, String) {
     (base, git(path, &["rev-parse", "HEAD"]))
 }
 
+/// Pins the bench-tools under test in `run_dir`, as a frozen run pins its own.
+fn pin(run_dir: &Path) {
+    static DIGEST: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let digest = DIGEST.get_or_init(|| sha_file(Path::new(env!("CARGO_BIN_EXE_bench-tools"))));
+    write(
+        &run_dir.join("runtimes.frozen.json"),
+        format!(r#"{{"bench-tools": {{"sha256": "{digest}"}}}}"#),
+    );
+}
+
 fn bench(arguments: &[String]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_bench-tools"))
         .args(arguments)
@@ -282,7 +292,7 @@ impl SelfTest {
         selftest.audit(r#"{"violations": [], "guidance_probes": [], "diff_commands": ["git diff main...HEAD"]}"#);
         selftest.parsed();
         write(&att.join("payload.json"), "{}");
-        fs::create_dir_all(root.join("run")).unwrap();
+        pin(&root.join("run"));
         selftest
     }
 
@@ -754,6 +764,42 @@ fn replay_supersedes_only_a_normalization_stop() {
     assert_eq!(text(field(&rec, "disposition")), "stopped: timeout");
 }
 
+#[test]
+fn files_only_with_the_bench_tools_its_run_pins() {
+    let t = SelfTest::new("pin");
+    let run = t.root().join("run");
+    write(&run.join("manifest.json"), r#"{"freeze_commit": "abc123"}"#);
+    let frozen = run.join("runtimes.frozen.json");
+    let pinned = fs::read(&frozen).unwrap();
+    let replay = [("--replay", String::new())];
+    for (pins, problem) in [
+        (
+            Some(r#"{"bench-tools": {"sha256": "0000"}}"#),
+            "is not the bench-tools that",
+        ),
+        (
+            Some(r#"{"normalize-review": {"sha256": "0000"}}"#),
+            "pins no bench-tools runtime",
+        ),
+        (None, "pins no bench-tools runtime"),
+    ] {
+        match pins {
+            Some(pins) => write(&frozen, pins),
+            None => fs::remove_file(&frozen).unwrap(),
+        }
+        let refused = t.file("o1", &replay);
+        let stderr = String::from_utf8_lossy(&refused.stderr);
+        assert_eq!(refused.status.code(), Some(2), "{}", report(&refused));
+        assert!(
+            stderr.contains(problem) && stderr.contains("freeze commit abc123"),
+            "{stderr}"
+        );
+        assert!(!t.root().join("o1").exists() && !t.att.join("audit.recorded.json").exists());
+    }
+    write(&frozen, pinned);
+    t.filed("o1", &[]);
+}
+
 /// A skill runner's report folder: scratch files are packed and restore with their bytes and modes, filing again
 /// verifies what is there, and an entry the index does not list is left out with a note.
 #[test]
@@ -1036,6 +1082,7 @@ impl Fixture {
         let root = temp.0.clone();
         let run_dir = root.join("bench/runs").join(RUN_ID);
         fs::create_dir_all(run_dir.join("fixture")).unwrap();
+        pin(&run_dir);
         let prompt = sha(PROMPT.as_bytes());
         let rubric = sha(RUBRIC.as_bytes());
         write(
