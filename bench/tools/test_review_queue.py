@@ -135,7 +135,7 @@ def fake_cell(argv: list) -> int:
 
     def tool(command: list, env=None) -> subprocess.CompletedProcess:
         name = Path(command[1] if command[0] == sys.executable else command[0]).name
-        if name == "provision.py":
+        if command[1:3] == ["provision", "prepare"]:
             shutil.copytree(plan_root() / "source/clone", command[command.index("--out") + 1], symlinks=True)
             return subprocess.CompletedProcess(command, 0, "{}", "")
         if name == "dispatch.sh":
@@ -171,9 +171,10 @@ def fake_cell(argv: list) -> int:
 
     run_cell.BENCH = plan_root() / "bench"
     run_cell.tool, run_cell.choose, run_cell.dispatch, run_cell.prune, run_cell.check_frozen = tool, choose, dispatch, prune, frozen
-    run_cell.check_target = lambda run, target_id: run.target_dir(target_id)
+    run_cell.check_target = lambda run, target_id, tools: run.target_dir(target_id)
+    run_cell.check_provenance = lambda run, tools: None
     run_cell.check_dispatch_rates = lambda run, cell: ({"policy": "fixture"}, {"rates": [fixtures.RATE]})
-    run_cell.normalizer_environment = lambda run: {}
+    run_cell.normalizer_environment = lambda run: {rust_runtime.variable(run_cell.NORMALIZER): "bench-tools"}
     prune_workspace.remove = remove
     with patch.object(sys, "argv", ["run_cell.py", *argv]):
         return run_cell.main()

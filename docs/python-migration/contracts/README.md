@@ -81,8 +81,8 @@ python3 tools/behavior_contract.py --corpus tools/behavior_contracts/roster.v1.j
 python3 tools/behavior_contract.py --corpus tools/behavior_contracts/diff-identity.v1.json --differential /tmp/rust.json
 ```
 
-Without `--implementations`, each program runs its maintained implementation. `diff-identity` runs its
-Python script; `diff_identity.py` is a retained library. Since [#234](https://github.com/kamui/code-review-bench/issues/234), `check-manifest` runs
+Without `--implementations`, each program runs its maintained implementation. `diff-identity` runs
+`bench-tools`, since #157 deleted `diff_identity.py`. Since [#234](https://github.com/kamui/code-review-bench/issues/234), `check-manifest` runs
 `bench-tools`, and `behavior_contract.python_commands` maps it back to the retained `check_manifest.py` for the
 differential. `rates` runs the retained `rates.py` through a driver that reads the case directory as the repository
 and takes `--source PROVIDER=URL` pages, so no case leaves the host; `rates-transport-failure` connects to a closed

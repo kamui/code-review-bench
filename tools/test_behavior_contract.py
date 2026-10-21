@@ -369,7 +369,7 @@ class ContractTests(unittest.TestCase):
                                               "BENCH_RUST_BENCH_TOOLS_SHA256": contract.hashlib.sha256(program.read_bytes()).hexdigest()}):
             commands = contract.default_commands(corpus)
         self.assertEqual(commands, {"codex": [str(program), "usage", "codex"],
-                                    "diff-identity": [sys.executable, str(contract.REPO / "bench/tools/diff_identity.py")],
+                                    "diff-identity": [str(program), "diff-identity"],
                                     "roster": [str(program), "roster"],
                                     "normalize-review": [str(program), "normalize-review"],
                                     "normalize-thermo": [str(program), "normalize-thermo"]})
@@ -377,7 +377,7 @@ class ContractTests(unittest.TestCase):
         with patch.dict(contract.os.environ, {"BENCH_RUNTIME_STORE": str(store)}):
             contract.os.environ.pop("BENCH_RUST_BENCH_TOOLS", None)
             contract.os.environ.pop("BENCH_RUST_BENCH_TOOLS_SHA256", None)
-            with self.assertRaisesRegex(ValueError, "(codex|roster|normalize-review|normalize-thermo): bench-tools has no selected version.*install --crate rust/bench-tools"):
+            with self.assertRaisesRegex(ValueError, "(codex|diff-identity|roster|normalize-review|normalize-thermo): bench-tools has no selected version.*install --crate rust/bench-tools"):
                 contract.default_commands(corpus)
 
     def test_reader_corpora_hold_for_the_retained_libraries_and_reject_regressions(self):
@@ -447,24 +447,6 @@ class ContractTests(unittest.TestCase):
                         self.assertRegex(line, f"^(?:{read.pattern})$", case["id"])
                         calls += 1
         self.assertGreater(calls, 50)
-
-    def test_diff_identity_corpus_holds_for_the_retained_library_and_rejects_byte_order(self):
-        corpus = contract.CORPUS.parent / "diff-identity.v1.json"
-        result = self.run_cli("--allow-known-defects", "--corpus", corpus)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("PASS diff-identity-manifest", result.stdout)
-        source = (contract.REPO / "bench/tools/diff_identity.py").read_text()
-        before = "rows.sort(key=lambda row: row[1])"
-        self.assertIn(before, source)
-        with tempfile.TemporaryDirectory() as temporary:
-            mutant = Path(temporary) / "diff_identity.py"
-            mutant.write_text(source.replace(before, "rows.sort(key=lambda row: row[1].encode('utf-8', 'surrogateescape'))"))
-            commands = Path(temporary) / "commands.json"
-            commands.write_text(json.dumps({"diff-identity": [sys.executable, str(mutant)]}))
-            result = self.run_cli("--corpus", corpus, "--implementations", commands)
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("FAIL diff-identity-manifest", result.stdout)
-        self.assertIn("PASS diff-identity-empty", result.stdout)
 
     def test_derive_packet_corpus_pins_every_committed_legacy_packet(self):
         corpus = contract.load_corpus(contract.CORPUS.parent / "derive-packet.v1.json")

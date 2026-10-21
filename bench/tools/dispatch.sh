@@ -52,11 +52,11 @@ case "$BENCH_TOOLS_SHA256" in *[!0-9a-f]*) BENCH_TOOLS_SHA256= ;; esac
 BENCH_TOOLS_ACTUAL=$(sha256sum < "$BENCH_TOOLS") || { echo "cannot hash bench-tools executable: $BENCH_TOOLS" >&2; exit 2; }
 [ "${BENCH_TOOLS_ACTUAL%% *}" = "$BENCH_TOOLS_SHA256" ] || { echo "bench-tools executable hash mismatch" >&2; exit 2; }
 mkdir -p "$DIR"; DIR=$(cd "$DIR" && pwd)
-python3 "$(dirname "$0")/clean_context.py" --attempt "$DIR"
+"$BENCH_TOOLS" clean-context prepare --attempt "$DIR"
 mkdir -p "$DIR/tmp"; H="$DIR/home"; CLONE=$(cd "$CLONE" && pwd)
 # Every arm's scratch and private stores land inside the attempt directory, so the read audit's allowed roots cover them.
 TMPDIR="$DIR/tmp"; export TMPDIR
-stamp() { python3 -c 'from datetime import datetime,timezone; print(datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00","Z"))'; }
+stamp() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 tree_id() { { git -C "$CLONE" rev-parse HEAD; git -C "$CLONE" status --porcelain --untracked-files=all; } | sha256sum | cut -d' ' -f1; }
 tree_id > "$DIR/tree-before.txt"
 case "$ARM" in
@@ -75,15 +75,9 @@ case "$ARM" in
       echo "Claude companion file mismatch" >&2; exit 2
     fi
     mkdir -p "$H/.claude"; cp "$HOME/.claude/.credentials.json" "$H/.claude/"
-    python3 - "$HOME/.claude.json" "$H/.claude.json" <<'PY'
-import json, sys
-src = json.load(open(sys.argv[1], encoding="utf-8"))
-keep = {k: src[k] for k in ("oauthAccount", "userID", "installMethod", "autoUpdates", "numStartups") if k in src}
-keep["hasCompletedOnboarding"] = True
-json.dump(keep, open(sys.argv[2], "w", encoding="utf-8"), indent=2)
-PY
+    "$BENCH_TOOLS" clean-context claude-account --source "$HOME/.claude.json" --home "$H"
     [ "$BASE" = "main" ] || { echo "claude-builtin requires the base branch to be named main" >&2; exit 2; }
-    SID=$(python3 -c 'import uuid; print(uuid.uuid4())'); printf '%s\n' "$SID" > "$DIR/session-id.txt"
+    SID=$("$BENCH_TOOLS" clean-context session-id); printf '%s\n' "$SID" > "$DIR/session-id.txt"
     PROMPT="/code-review $BASE...review-head${EFFORT:+ $EFFORT}
 
 $(cat "$PACKET")"
@@ -115,12 +109,13 @@ $(cat "$PACKET")"
       echo "Codex companion file mismatch" >&2; exit 2
     fi
     mkdir -p "$H/.codex"; cp "$HOME/.codex/auth.json" "$H/.codex/"
-    python3 "$(dirname "$0")/clean_context.py" --attempt "$DIR" --configure-codex "$CLONE"
+    "$BENCH_TOOLS" clean-context codex-config --home "$H" --clone "$CLONE" > /dev/null
     { cat "$(dirname "$0")/../policies/empty-harness-v1.md"; printf '\nReview scope: the changes that local branch `review-head` introduces relative to local branch `%s`. Obtain the diff with `git diff %s...review-head`; do not review uncommitted changes.\n\n' "$BASE" "$BASE"; cat "$PACKET"; } > "$DIR/prompt.txt"
     { echo "$CODEX_VERSION"; echo "executable=$CODEX_BIN sha256=$CODEX_SHA256"; echo "model=${MODEL:-<default>} effort=${EFFORT:-<default>}";
       echo "runtime_path=${CODEX_RUNTIME_PATH:-<inherited>}"; } > "$DIR/dispatch.txt"
     mkdir -p "$CLONE-cache" "$CLONE-work"
-    CODEX_WRITABLE_ROOTS=$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "$CLONE-cache" "$CLONE-work")
+    case "$CLONE" in *'"'*|*'\'*) echo "the clone path must not hold a quote or a backslash: $CLONE" >&2; exit 2;; esac
+    CODEX_WRITABLE_ROOTS="[\"$CLONE-cache\", \"$CLONE-work\"]"
     case "${BENCH_NETWORK:-on}" in
       on) CODEX_NETWORK=true ;;
       off) CODEX_NETWORK=false ;;
@@ -141,16 +136,10 @@ $(cat "$PACKET")"
   review-code)
     [ -n "${SKILL_TREE:-}" ] && [ -f "$SKILL_TREE/SKILL.md" ] || { echo "SKILL_TREE must point at a review-code skill tree" >&2; exit 2; }
     mkdir -p "$H/.claude/skills"; cp -r "$SKILL_TREE" "$H/.claude/skills/review-code"; cp "$HOME/.claude/.credentials.json" "$H/.claude/"
-    python3 - "$HOME/.claude.json" "$H/.claude.json" <<'PY'
-import json, sys
-src = json.load(open(sys.argv[1], encoding="utf-8"))
-keep = {k: src[k] for k in ("oauthAccount", "userID", "installMethod", "autoUpdates", "numStartups") if k in src}
-keep["hasCompletedOnboarding"] = True
-json.dump(keep, open(sys.argv[2], "w", encoding="utf-8"), indent=2)
-PY
+    "$BENCH_TOOLS" clean-context claude-account --source "$HOME/.claude.json" --home "$H"
     if [ -n "${SKILL_TREE_ID:-}" ]; then echo "$SKILL_TREE_ID"
     else (cd "$SKILL_TREE" && git rev-parse "HEAD:$(git rev-parse --show-prefix | sed 's,/$,,')" 2>/dev/null || echo unpinned); fi > "$DIR/skill-tree.txt"
-    SID=$(python3 -c 'import uuid; print(uuid.uuid4())'); printf '%s\n' "$SID" > "$DIR/session-id.txt"
+    SID=$("$BENCH_TOOLS" clean-context session-id); printf '%s\n' "$SID" > "$DIR/session-id.txt"
     mkdir -p "$DIR/artifacts"
     REVIEW_CWD=$CLONE
     REVIEW_LOCATION="in the current repository"
@@ -211,11 +200,8 @@ else
   esac
   set -e
   if [ "$NRC" -eq 0 ]; then
-    python3 - "$DIR/timing.json" "$(stamp)" <<'PY'
-import json, sys
-t = json.load(open(sys.argv[1], encoding="utf-8")); t["completed_at"] = sys.argv[2]
-json.dump(t, open(sys.argv[1], "w", encoding="utf-8"), indent=2)
-PY
+    sed "s/\"completed_at\": null/\"completed_at\": \"$(stamp)\"/" "$DIR/timing.json" > "$DIR/timing.json.partial"
+    mv "$DIR/timing.json.partial" "$DIR/timing.json"
   else
     stop "normalization exit $NRC: $(head -c 200 "$DIR/normalize.txt" | tr '\n' ' ')"
   fi

@@ -43,6 +43,40 @@ pub fn split(text: &str) -> Result<Vec<String>, LexError> {
     words(text, true, "")
 }
 
+/// `shlex.split(text, comments=True)`: a `#` outside quotes drops the rest of its line.
+pub fn split_commented(text: &str) -> Result<Vec<String>, LexError> {
+    let mut kept = String::new();
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    let mut comment = false;
+    for c in text.chars() {
+        if comment {
+            if c == '\n' {
+                comment = false;
+                kept.push(c);
+            }
+            continue;
+        }
+        if escaped {
+            escaped = false;
+        } else if c == '\\' && quote != Some('\'') {
+            escaped = true;
+        } else if let Some(open) = quote {
+            if c == open {
+                quote = None;
+            }
+        } else if is_quote(c) {
+            quote = Some(c);
+        } else if c == '#' {
+            comment = true;
+            kept.push(' ');
+            continue;
+        }
+        kept.push(c);
+    }
+    split(&kept)
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum State {
     Space,

@@ -1824,10 +1824,13 @@ fn skill_runner(kind: Arm) -> bool {
     matches!(kind, Arm::ClaudeSkill | Arm::CodexSkill)
 }
 
-/// Build the record; return it with the output directory.
-#[allow(clippy::too_many_lines)]
-/// Refuses unless this executable is the bench-tools the run's `runtimes.frozen.json` pins.
-fn check_pin(run_dir: &str) -> Result<()> {
+/// Refuses unless this executable is the bench-tools the run's `runtimes.frozen.json` pins; `action` names what
+/// the refusal tells the operator to do from the freeze commit instead.
+pub fn check_pin(run_dir: &str, action: &str) -> std::result::Result<(), String> {
+    pinned_here(run_dir, action).map_err(|FileError(message)| message)
+}
+
+fn pinned_here(run_dir: &str, action: &str) -> Result<()> {
     let frozen = join(run_dir, "runtimes.frozen.json");
     let pinned = read_json_if(&frozen)?;
     let pinned = at(at(&pinned, "bench-tools"), "sha256").as_str();
@@ -1842,12 +1845,14 @@ fn check_pin(run_dir: &str) -> Result<()> {
         Some(_) => format!("{executable} is not the bench-tools that {frozen} pins"),
     };
     refuse(format!(
-        "{problem}; file it from a checkout of its freeze commit {commit}"
+        "{problem}; {action} it from a checkout of its freeze commit {commit}"
     ))
 }
 
+/// Build the record; return it with the output directory.
+#[allow(clippy::too_many_lines)]
 fn file_attempt(arguments: &Arguments) -> Result<(Value, String)> {
-    check_pin(&arguments.run)?;
+    pinned_here(&arguments.run, "file")?;
     let attempt_dir = abspath(&arguments.attempt_dir)?;
     let clone = abspath(&arguments.clone)?;
     let a = |name: &str| join(&attempt_dir, name);

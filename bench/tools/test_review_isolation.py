@@ -201,7 +201,8 @@ class NativeIsolation(Boundaries):
 
     @unittest.skipUnless(os.environ.get("BENCH_ISOLATION_TARGETS"), "set BENCH_ISOLATION_TARGETS for frozen-target smoke checks")
     def test_frozen_target_smokes(self):
-        import provision
+        tools = str(rust_runtime.resolve("bench-tools"))
+        cache_root = str(Path.home() / ".t3/bench-cache")
         for name in os.environ["BENCH_ISOLATION_TARGETS"].split(","):
             with self.subTest(target=name):
                 probe = NativeIsolation("test_allowed_shell_and_file_tools")
@@ -209,14 +210,18 @@ class NativeIsolation(Boundaries):
                 try:
                     shutil.rmtree(probe.clone)
                     target_dir = Path(__file__).resolve().parents[1] / "targets" / name
-                    target = provision.load_target(str(target_dir))
-                    prepared = provision.prepare(target, provision.DEFAULT_CACHE_ROOT, str(probe.clone))
-                    self.assertFalse(prepared["failures"], prepared)
-                    config = provision.cache_config(target)
+                    done = subprocess.run([tools, "provision", "prepare", "--target", str(target_dir), "--out", str(probe.clone)],
+                                          capture_output=True, text=True)
+                    self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                    prepared = json.loads(done.stdout)
+                    target = json.loads((target_dir / "target.json").read_text(encoding="utf-8"))
                     env = {key: value for key, value in settings(probe.attempt, probe.clone, target=target_dir)["env"].items()
                            if key != "PATH"}
-                    paths = provision.substitutions(str(probe.clone) + "-cache", provision.DEFAULT_CACHE_ROOT, str(probe.clone), str(probe.clone) + "-work")
-                    smoke = provision.render(config["smoke"][0]["command"], paths)
+                    paths = {"cache": str(probe.clone) + "-cache", "clone": str(probe.clone), "work": str(probe.clone) + "-work",
+                             "cache_root": cache_root}
+                    smoke = target["provisioning"]["cache"]["smoke"][0]["command"]
+                    for key, value in paths.items():
+                        smoke = smoke.replace("{" + key + "}", value)
                     bare = "cd " + shlex.quote(str(probe.clone)) + " && " + smoke
                     command = "cd " + shlex.quote(str(probe.clone)) + " && "
                     command += "".join(k + "=" + shlex.quote(v) + " " for k, v in env.items()) + smoke
@@ -226,7 +231,8 @@ class NativeIsolation(Boundaries):
                     results = probe.run_cli([[call("smoke", "Bash", command=command, timeout=300000),
                                               call("bare_smoke", "Bash", command=bare, timeout=300000),
                                               call("local_base_clone", "Bash", command=clone_command, timeout=300000)]], env)
-                    clean = not provision.git("-C", str(probe.clone), "status", "--porcelain").strip()
+                    clean = not subprocess.run(["git", "-C", str(probe.clone), "status", "--porcelain"], capture_output=True,
+                                               text=True, check=True).stdout.strip()
                     record = {"target": name, "source": "real CLI with local fake API; no model inference", "billed_usd": 0,
                               "prepared": prepared, "command": command, "results": results, "tree_clean_after": clean}
                     if os.environ.get("BENCH_ISOLATION_EVIDENCE"):

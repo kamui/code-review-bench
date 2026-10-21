@@ -3,10 +3,10 @@
 //! executable as its runner (`runner_deviation` version 2), as `grade-prepare-decisions.v1.json` records.
 //!
 //! The checkout is the working directory: it holds the runner files, policies, Codex catalog and schemas that
-//! `grade.py` reads beside itself, and the default provisioner.
+//! `grade.py` reads beside itself.
 
 mod filing;
-mod provision;
+pub(crate) mod provision;
 mod runtime;
 mod source;
 
@@ -32,13 +32,12 @@ pub const RUNNER_VERSION: i64 = 2;
 /// The `runner_deviation.files` entry that holds the executable's SHA-256.
 pub const EXECUTABLE_ENTRY: &str = "rust/bench-tools";
 /// `grade.runner_files()`: the checkout's `bench/tools` files the dispatch path imports or runs, which a key pins.
-pub const RUNNER_FILES: [&str; 8] = [
+pub const RUNNER_FILES: [&str; 7] = [
     "grade.py",
     "rust_runtime.py",
     "grading_policy.py",
     "grading-hosts.v1",
     "grading_client_probe.py",
-    "clean_context.py",
     "codex_grade_dispatch.py",
     "codex_grading.py",
 ];
@@ -71,7 +70,7 @@ pub struct Options {
     pub claim_evidence: Option<Vec<u8>>,
     pub cache_root: Option<Vec<u8>>,
     pub cache_replacements: Option<Vec<u8>>,
-    /// The provisioner script; the checkout's `bench/tools/provision.py` when absent.
+    /// A provisioner script run with python3; this executable's `provision` when absent.
     pub provision: Option<Vec<u8>>,
     pub root: Vec<u8>,
     pub current: Vec<u8>,
@@ -1116,12 +1115,8 @@ pub fn prepare(
     let target_path = directory.join(b"target.json");
     let mut target = current::read_json(&target_path)?;
     if let Some(manifest_path) = &options.cache_replacements
-        && let Err(message) = provision::apply_replacement(
-            &runner.checkout,
-            &mut target,
-            &target_path,
-            &PyPath::new(manifest_path),
-        )?
+        && let Err(message) =
+            provision::apply_replacement(&mut target, &target_path, &PyPath::new(manifest_path))?
     {
         return inconsistent(message);
     }
@@ -1569,7 +1564,7 @@ fn read_inventory(
     Ok(Value::Object(renumbered))
 }
 
-/// `provision.archive_path` and the archive check of the offline preflight, after `provision.py check`.
+/// `provision.archive_path` and the archive check of the offline preflight, after `bench-tools provision check`.
 #[allow(clippy::too_many_arguments)]
 fn preflight_target(
     runner: &Runner,
@@ -1585,20 +1580,15 @@ fn preflight_target(
         Some(root) => root.clone(),
         None => [home(), b"/.t3/bench-cache".to_vec()].concat(),
     };
-    let done = provision::run(&[
-        b"python3".to_vec(),
-        runner
-            .checkout
-            .join(TOOLS)
-            .join(b"provision.py")
-            .as_bytes()
-            .to_vec(),
+    let mut command = provisioner(runner, options);
+    command.extend([
         b"check".to_vec(),
         b"--target".to_vec(),
         directory.as_bytes().to_vec(),
         b"--cache-root".to_vec(),
         cache_root.clone(),
-    ])?;
+    ]);
+    let done = provision::run(&command)?;
     let output = done.output()?;
     if done.code != 0 {
         return inconsistent(format!(
@@ -1641,26 +1631,28 @@ fn preflight_target(
     .into_bytes())
 }
 
+/// `python3 SCRIPT` for `--provision SCRIPT`, otherwise this executable's `provision`.
+fn provisioner(runner: &Runner, options: &Options) -> Vec<Vec<u8>> {
+    use std::os::unix::ffi::OsStrExt;
+    match &options.provision {
+        Some(script) => vec![b"python3".to_vec(), script.clone()],
+        None => vec![
+            runner.executable.as_os_str().as_bytes().to_vec(),
+            b"provision".to_vec(),
+        ],
+    }
+}
+
 /// Run the provisioner into WORK/clone; on failure remove what it left and report its exit and output tail.
 fn provision_clone(runner: &Runner, options: &Options, directory: &PyPath, work: &PyPath) -> R<()> {
-    let script = match &options.provision {
-        Some(script) => script.clone(),
-        None => runner
-            .checkout
-            .join(TOOLS)
-            .join(b"provision.py")
-            .as_bytes()
-            .to_vec(),
-    };
-    let mut command = vec![
-        b"python3".to_vec(),
-        script,
+    let mut command = provisioner(runner, options);
+    command.extend([
         b"prepare".to_vec(),
         b"--target".to_vec(),
         directory.as_bytes().to_vec(),
         b"--out".to_vec(),
         work.join(b"clone").as_bytes().to_vec(),
-    ];
+    ]);
     if let Some(cache_root) = &options.cache_root {
         command.extend([b"--cache-root".to_vec(), cache_root.clone()]);
     }
@@ -1849,8 +1841,7 @@ pub fn check_prepared(
                     pyvalue::item(replacement, "manifest")?,
                     "path",
                 )?)?;
-                match provision::apply_replacement(checkout, &mut target, &target_path, &manifest)?
-                {
+                match provision::apply_replacement(&mut target, &target_path, &manifest)? {
                     Ok(()) => {
                         if !pyobject::eq(pyvalue::item(&target, "_cache_replacement")?, replacement)
                         {

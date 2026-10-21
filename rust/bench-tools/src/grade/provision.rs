@@ -57,15 +57,16 @@ pub fn cache_kind(target: &Value) -> Py<Value> {
     Ok(text(EMPTY_CACHE_KIND))
 }
 
-/// `provision.apply_replacement(target, target_path, manifest_path)`, with the schema `checkout` holds. The
-/// error is the `ProvisionError` message.
+/// `bench/schema/cache-replacements.schema.json`, which a cargo test keeps byte-identical.
+const REPLACEMENTS_SCHEMA: &str = include_str!("cache-replacements.schema.json");
+
+/// `provision.apply_replacement(target, target_path, manifest_path)`. The error is the `ProvisionError` message.
 pub fn apply_replacement(
-    checkout: &PyPath,
     target: &mut Value,
     target_path: &PyPath,
     manifest_path: &PyPath,
 ) -> R<Result<(), String>> {
-    match replace(checkout, target, target_path, manifest_path) {
+    match replace(target, target_path, manifest_path) {
         Ok(Ok(())) => Ok(Ok(())),
         Ok(Err(schema)) => Err(Failure::Crash(format!("SchemaError: {schema}"))),
         Err(
@@ -79,16 +80,13 @@ pub fn apply_replacement(
 }
 
 fn replace(
-    checkout: &PyPath,
     target: &mut Value,
     target_path: &PyPath,
     manifest_path: &PyPath,
 ) -> Py<Result<(), String>> {
     let raw = pyvalue::read_bytes(manifest_path)?;
     let manifest = loads_bytes(&raw)?;
-    let schema_raw =
-        pyvalue::read_bytes(&checkout.join(b"bench/schema/cache-replacements.schema.json"))?;
-    let schema = loads_bytes(&schema_raw)?;
+    let schema = loads_bytes(REPLACEMENTS_SCHEMA.as_bytes())?;
     let problems = match Validator::default().validate(&schema, &manifest) {
         Ok(problems) => problems,
         Err(error) => return Ok(Err(error.0)),
@@ -165,7 +163,10 @@ fn replace(
     };
     let replacement = object(vec![
         ("contract", text("cache-replacements-v1")),
-        ("schema_sha256", text(&sha256::hex_digest(&schema_raw))),
+        (
+            "schema_sha256",
+            text(&sha256::hex_digest(REPLACEMENTS_SCHEMA.as_bytes())),
+        ),
         (
             "manifest",
             object(vec![
@@ -383,5 +384,13 @@ mod tests {
         assert_eq!(done.tail(2000), "fetching \\udcff\nfailed\n \\udcfe");
         assert_eq!(done.tail(3), "\n \\udcfe");
         assert!(done.output().is_err());
+    }
+
+    #[test]
+    fn the_embedded_replacement_schema_matches_the_repository_one() {
+        assert_eq!(
+            REPLACEMENTS_SCHEMA,
+            include_str!("../../../../bench/schema/cache-replacements.schema.json")
+        );
     }
 }

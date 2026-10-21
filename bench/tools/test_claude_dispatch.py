@@ -8,6 +8,8 @@ import sys
 import tempfile
 import unittest
 
+import rust_runtime
+
 ROOT = Path(__file__).resolve().parents[2]
 CLIENT = """#!/usr/bin/env python3
 import os,sys,json,subprocess
@@ -17,9 +19,12 @@ with open(os.environ['CAPTURE'], 'w') as f: json.dump({'args':sys.argv[1:],'home
 if os.environ.get('REVIEWER_RUNS'): subprocess.run(os.environ['REVIEWER_RUNS'], shell=True, check=True)
 sys.exit(int(os.environ.get('REVIEWER_EXIT', '23')))
 """
-# Records its arguments, writes --out, and prints one line to each stream; FAKE_NORMALIZE_EXIT sets its exit code.
+# Hands everything but normalize-review to the installed bench-tools. Normalize records its arguments, writes --out, and
+# prints one line to each stream; FAKE_NORMALIZE_EXIT sets its exit code.
 BENCH_TOOLS = """#!/usr/bin/env python3
 import json,os,sys
+if sys.argv[1] != 'normalize-review':
+ os.execv(os.environ['REAL_BENCH_TOOLS'], ['bench-tools', *sys.argv[1:]])
 with open(os.environ['NORMALIZE_CAPTURE'], 'a') as f: f.write(json.dumps(sys.argv[1:]) + '\\n')
 out = sys.argv[sys.argv.index('--out') + 1]
 open(out, 'w').write('{"parse_status": "parsed"}\\n')
@@ -35,6 +40,7 @@ def fake_bench_tools(directory: Path) -> dict:
     executable.write_text(BENCH_TOOLS)
     executable.chmod(0o755)
     return {'BENCH_RUST_BENCH_TOOLS': str(executable),
+            'REAL_BENCH_TOOLS': str(rust_runtime.resolve('bench-tools')),
             'BENCH_RUST_BENCH_TOOLS_SHA256': hashlib.sha256(executable.read_bytes()).hexdigest(),
             'NORMALIZE_CAPTURE': str(directory / 'normalize-argv.jsonl')}
 

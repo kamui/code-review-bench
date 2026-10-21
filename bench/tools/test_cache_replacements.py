@@ -7,14 +7,11 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
-import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
-import diff_identity
 import grade
-import provision
 from test_grade import RUN, TARGET, fixture_root, installed_bench_tools
 
 PENDING_HEAD, PENDING_DIFF = "1" * 40, "c" * 64
@@ -43,7 +40,7 @@ def cached_fixture(root: Path) -> None:
         subprocess.run(["git", "-C", str(source), *command], check=True)
     head = subprocess.run(["git", "-C", str(source), "rev-parse", "HEAD"], check=True, capture_output=True,
                           text=True).stdout.strip()
-    identity = diff_identity.identity(str(source), "HEAD", "HEAD")[1]
+    identity = bench_tools("diff-identity", "--quiet", source, "HEAD", "HEAD").stdout.strip()
     for name in REVISION_PINS:
         path = root / name
         path.write_text(path.read_text().replace(PENDING_HEAD, head).replace(PENDING_DIFF, identity))
@@ -68,9 +65,9 @@ class Replacements(unittest.TestCase):
         self.target_path = self.directory / "target.json"
         self.original = self.target_path.read_bytes()
         self.cache = self.root / "cache"
-        options = argparse.Namespace(target=str(self.directory), cache_root=str(self.cache), staging=str(self.directory / "source"))
-        self.assertEqual(provision.cmd_mirror(options), 0)
-        self.assertEqual(provision.cmd_cache(options), 0)
+        for command in (["mirror", "--staging", self.directory / "source"], ["cache"]):
+            done = self.provision(*command)
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.receipt = self.cache / "caches" / f"{TARGET}.json"
         receipt = json.loads(self.receipt.read_text())
         self.manifest = self.root / "replacements.json"
@@ -84,8 +81,17 @@ class Replacements(unittest.TestCase):
     def save(self):
         self.manifest.write_text(json.dumps(self.document))
 
-    def target(self):
-        return provision.load_target(str(self.directory), str(self.manifest))
+    def provision(self, command, *extra):
+        return bench_tools("provision", command, "--target", self.directory, "--cache-root", self.cache, *extra)
+
+    def refusal(self) -> str:
+        """Why ``provision check`` refuses the target with the replacement manifest."""
+        done = self.provision("check", "--cache-replacements", self.manifest)
+        self.assertNotEqual(done.returncode, 0, done.stdout)
+        return done.stdout + done.stderr
+
+    def archive(self) -> Path:
+        return self.cache / "archives" / f"{TARGET}.tar.gz"
 
     def prepare(self, *extra):
         return bench_tools("grade", "prepare", "--root", self.root, "--run", RUN, "--target", TARGET,
@@ -123,25 +129,21 @@ class Replacements(unittest.TestCase):
         for entries in variants:
             self.document = dict(original, targets=entries)
             self.save()
-            with self.assertRaises(provision.ProvisionError):
-                self.target()
+            self.refusal()
         self.document = copy.deepcopy(original)
         self.document["targets"][0]["allowance"] = "network"
         self.save()
-        with self.assertRaisesRegex(provision.ProvisionError, "unexpected key"):
-            self.target()
+        self.assertIn("unexpected key", self.refusal())
 
     def test_frozen_target_receipt_and_archive_tampering_are_refused(self):
         self.target_path.write_text(self.target_path.read_text() + "\n")
-        with self.assertRaisesRegex(provision.ProvisionError, "frozen target changed"):
-            self.target()
+        self.assertIn("frozen target changed", self.refusal())
         self.target_path.write_bytes(self.original)
         saved_receipt = self.receipt.read_bytes()
         self.receipt.write_text(self.receipt.read_text() + "\n")
-        with self.assertRaisesRegex(provision.ProvisionError, "build receipt changed"):
-            self.target()
+        self.assertIn("build receipt changed", self.refusal())
         self.receipt.write_bytes(saved_receipt)
-        archive = Path(provision.archive_path(str(self.cache), self.target()))
+        archive = self.archive()
         archive.write_bytes(archive.read_bytes() + b"changed")
         done = self.prepare("--cache-replacements", str(self.manifest))
         self.assertNotEqual(done.returncode, 0)
@@ -156,14 +158,12 @@ class Replacements(unittest.TestCase):
             self.receipt.write_text(json.dumps(receipt))
             self.document["targets"][0]["build_receipt"]["sha256"] = digest(self.receipt)
             self.save()
-            with self.assertRaisesRegex(provision.ProvisionError, "frozen recipe"):
-                self.target()
+            self.assertIn("frozen recipe", self.refusal())
 
     def test_receipt_paths_cannot_leave_manifest_directory(self):
         self.document["targets"][0]["build_receipt"]["path"] = "../receipt.json"
         self.save()
-        with self.assertRaisesRegex(provision.ProvisionError, "relative to"):
-            self.target()
+        self.assertIn("relative to", self.refusal())
 
     def test_replacement_smoke_refuses_missing_or_frozen_output_before_work(self):
         frozen = self.directory / "smoke.json"
@@ -177,9 +177,7 @@ class Replacements(unittest.TestCase):
         marker.write_text("existing scratch")
         for output in [[], ["--out", str(frozen)], ["--out", str(alias)]]:
             with self.subTest(output=output):
-                done = subprocess.run([sys.executable, str(Path(provision.__file__)), "smoke", "--target",
-                                       str(self.directory), "--cache-root", str(self.cache), "--cache-replacements",
-                                       str(self.manifest), *output], capture_output=True, text=True)
+                done = self.provision("smoke", "--cache-replacements", self.manifest, *output)
                 self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
                 self.assertIn("frozen", done.stderr)
                 self.assertEqual(frozen.read_bytes(), original)
@@ -190,9 +188,7 @@ class Replacements(unittest.TestCase):
         frozen.write_text('{"source": "recorded"}\n')
         original = frozen.read_bytes()
         output = self.root / "replacement-smoke.json"
-        done = subprocess.run([sys.executable, str(Path(provision.__file__)), "smoke", "--target",
-                               str(self.directory), "--cache-root", str(self.cache), "--cache-replacements",
-                               str(self.manifest), "--out", str(output)], capture_output=True, text=True)
+        done = self.provision("smoke", "--cache-replacements", self.manifest, "--out", output)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         smoke = json.loads(output.read_text())
         self.assertTrue(smoke["provisioning"]["tree_clean_after"])
@@ -213,8 +209,7 @@ class Replacements(unittest.TestCase):
         with patch.object(grade, "client_preflight", side_effect=AssertionError("client started")), \
                 self.assertRaisesRegex(grade.Inconsistent, "requires --model"):
             grade.preflight(options)
-        archive = Path(provision.archive_path(str(self.cache), self.target()))
-        archive.unlink()
+        self.archive().unlink()
         done = preflight_inputs()
         self.assertNotEqual(done.returncode, 0)
         self.assertIn("archive missing or changed", done.stdout + done.stderr)
