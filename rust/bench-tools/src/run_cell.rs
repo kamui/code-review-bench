@@ -1310,17 +1310,40 @@ fn with(env: &mut Vec<(String, String)>, name: &str, value: String) {
     env.push((name.to_string(), value));
 }
 
-fn dispatch(run: &Run, context: &Context<'_>, attempt: &str, claim: &mut Object) -> R<()> {
-    let directory = run.work.join(attempt);
-    let launched = launch(run, context, &directory, claim);
-    launched.map_err(|error| {
-        // No reviewer was dispatched, so this is no attempt (method §3): release the claim.
-        remove(&directory);
-        error.map(|message| format!("{message}; claim {attempt} released"))
-    })
+struct Launch {
+    command: Vec<String>,
+    env: Vec<(String, String)>,
+    skill_runner: bool,
 }
 
-fn launch(run: &Run, context: &Context<'_>, directory: &Path, claim: &mut Object) -> R<()> {
+fn dispatch(run: &Run, context: &Context<'_>, attempt: &str, claim: &mut Object) -> R<()> {
+    let directory = run.work.join(attempt);
+    // No reviewer was dispatched, so this is no attempt (method §3): release the claim.
+    let release = |error: Failure| {
+        remove(&directory);
+        error.map(|message| format!("{message}; claim {attempt} released"))
+    };
+    let keep = |error: Failure| {
+        error.map(|message| {
+            format!("{message}; claim {attempt} kept for recovery: its reviewer may have started")
+        })
+    };
+    let launch = prepare(run, context, &directory, claim).map_err(release)?;
+    let done = context
+        .run(&launch.command, Some(&launch.env))
+        .map_err(keep)?;
+    // The launch writes timing.json just before it starts the reviewer; a setup error leaves none.
+    if !exists(&directory.join("timing.json")).map_err(keep)? {
+        return Err(release(Failure::Input(format!(
+            "dispatch.sh exit {} before the reviewer started: {}",
+            done.code,
+            pytext::strip(&done.stderr)
+        ))));
+    }
+    record_launch(&directory, claim, &done, launch.skill_runner).map_err(keep)
+}
+
+fn prepare(run: &Run, context: &Context<'_>, directory: &Path, claim: &mut Object) -> R<Launch> {
     let cell = claim.get("cell").cloned().unwrap_or(Value::Null);
     let target_id = get(&cell, "target").py_str();
     let arm_id = get(&cell, "arm").py_str();
@@ -1421,14 +1444,16 @@ fn launch(run: &Run, context: &Context<'_>, directory: &Path, claim: &mut Object
     )?;
     claim.insert("input_sha256".to_string(), text(&input_sha));
     claim.insert("policy_sha256".to_string(), text(&policy_sha));
-    let cell_path = directory.join("cell.json");
-    write(&cell_path, &indented(&Value::Object(claim.clone())))?;
+    write(
+        &directory.join("cell.json"),
+        &indented(&Value::Object(claim.clone())),
+    )?;
     let client = match kind.as_str() {
         "codex-skill" => Some("codex"),
         "claude-skill" => Some("claude"),
         _ => None,
     };
-    let done = if let Some(client) = client {
+    let command = if let Some(client) = client {
         let mut command = context.own(&[
             "skill-runner",
             client,
@@ -1446,14 +1471,14 @@ fn launch(run: &Run, context: &Context<'_>, directory: &Path, claim: &mut Object
             &target_id,
         ]);
         let rates = directory.join("rates.json");
-        if rates.is_file() {
+        if is_file(&rates)? {
             command.extend(["--rates".to_string(), display(&rates)]);
         } else if let Some(rates) = context.set("BENCH_RATES") {
             command.extend(["--rates".to_string(), rates.to_string()]);
         }
-        context.run(&command, Some(&env))?
+        command
     } else {
-        let command = vec![
+        vec![
             display(&run.bench.join("tools").join("dispatch.sh")),
             kind.clone(),
             display(directory),
@@ -1462,15 +1487,22 @@ fn launch(run: &Run, context: &Context<'_>, directory: &Path, claim: &mut Object
             display(&directory.join("input.md")),
             or_empty(get(&arm, "model")),
             or_empty(get(&arm, "effort")),
-        ];
-        context.run(&command, Some(&env))?
+        ]
     };
+    Ok(Launch {
+        command,
+        env,
+        skill_runner: client.is_some(),
+    })
+}
+
+fn record_launch(directory: &Path, claim: &mut Object, done: &Ran, skill_runner: bool) -> R<()> {
     write(
         &directory.join("run-cell.log"),
         &format!("{}{}", done.stdout, done.stderr),
     )?;
     let evidence = directory.join("skill-attempt.json");
-    if client.is_some() && evidence.is_file() {
+    if skill_runner && is_file(&evidence)? {
         let prompt = get(&read_json(&evidence)?, "prompt_sha256").clone();
         if prompt.truthy() {
             claim.insert("input_sha256".to_string(), prompt);
@@ -1478,16 +1510,11 @@ fn launch(run: &Run, context: &Context<'_>, directory: &Path, claim: &mut Object
                 "prompt_source".to_string(),
                 text("runner-assembled input.md"),
             );
-            write(&cell_path, &indented(&Value::Object(claim.clone())))?;
+            write(
+                &directory.join("cell.json"),
+                &indented(&Value::Object(claim.clone())),
+            )?;
         }
-    }
-    if !directory.join("timing.json").is_file() {
-        // The launch writes timing.json just before it starts the reviewer; a setup error leaves none.
-        return input(format!(
-            "dispatch.sh exit {} before the reviewer started: {}",
-            done.code,
-            pytext::strip(&done.stderr)
-        ));
     }
     Ok(())
 }
@@ -2570,6 +2597,88 @@ mod tests {
         let recorded = read_json(&fixture.work.join("att-006/cell.json")).expect("cell.json");
         assert!(get(get(&recorded, "cache_replacements"), "path").py_eq(&text(&resolved)));
         remove(&outside);
+    }
+
+    #[test]
+    fn a_dispatch_that_fails_once_the_reviewer_may_have_started_keeps_its_claim() {
+        let fixture = fixture();
+        fixture.plan(&Plan {
+            third_cell: true,
+            attempt_usd: Some(5.0),
+            ..Plan::default()
+        });
+        fixture.target();
+        let executable = fixture.base.join("bench-tools");
+        put(&executable, "fixture bench-tools");
+        let own = display(&executable);
+        let reviewer_ran = Cell::new(true);
+        let tool = |argv: &[String], _: Option<&[(String, String)]>| {
+            if argv[0] == own && argv[1] == "provision" {
+                return Ok(ran(0, "{}", ""));
+            }
+            if !reviewer_ran.get() {
+                return Err("reading the dispatch output: broken pipe".to_string());
+            }
+            let directory = PathBuf::from(&argv[2]);
+            put(&directory.join("timing.json"), "{}");
+            put(&directory.join("dispatch.txt"), "exit=0\n");
+            put(&directory.join("stdout.txt"), "the review\n");
+            fs::create_dir_all(directory.join("clone")).expect("mkdir");
+            fs::create_dir_all(directory.join("run-cell.log")).expect("mkdir");
+            Ok(ran(0, "the review\n", ""))
+        };
+        let context = fixture.context(&tool, Vec::new());
+        let attempt = fixture.work.join("att-006");
+        for (reviewed, needle, evidence) in [
+            (
+                true,
+                "Is a directory",
+                vec![
+                    "cell.json",
+                    "timing.json",
+                    "dispatch.txt",
+                    "stdout.txt",
+                    "clone",
+                ],
+            ),
+            (false, "broken pipe", vec!["cell.json", "input.md"]),
+        ] {
+            reviewer_ran.set(reviewed);
+            remove(&attempt);
+            fixture.claim("att-006", "t1/arm-a/3", 5.0, "");
+            let mut claim = read_json(&attempt.join("cell.json"))
+                .expect("cell.json")
+                .as_object()
+                .expect("an object")
+                .clone();
+            match dispatch(&fixture.run(), &context, "att-006", &mut claim) {
+                Err(Failure::Input(message)) => assert!(
+                    message.contains(needle)
+                        && message.contains("claim att-006 kept for recovery")
+                        && !message.contains("released"),
+                    "{message}"
+                ),
+                _ => panic!("{needle}: the dispatch did not fail"),
+            }
+            for name in evidence {
+                assert!(attempt.join(name).exists(), "{needle}: {name} was removed");
+            }
+            let run = fixture.run();
+            assert_eq!(run.in_flight(), ["att-006"], "{needle}");
+            assert_eq!(
+                run.spend().expect("spend").in_flight_reserved,
+                5.0,
+                "{needle}"
+            );
+            refused(
+                &run,
+                &Choice::Cell("t1/arm-a/3".into()),
+                None,
+                "already has att-006",
+            );
+            let pick = choose(&run, &Choice::Next, None).expect("a cell");
+            assert_ne!(cell_key(&picked(&pick, "cell")), "t1/arm-a/3");
+        }
     }
 
     #[test]
