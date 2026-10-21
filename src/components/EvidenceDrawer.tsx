@@ -81,6 +81,7 @@ function InspectionBody({ dataset, configuration, task, initialAttemptId, now }:
           </Stack></Paper><Group gap="xs">
             <Button component="a" href={detail.recordUrl} target="_blank" rel="noreferrer" variant="light" size="xs" leftSection={<FileJson size={14} />}>Attempt record</Button>
             {detail.billingCorrectionUrl && <Button component="a" href={detail.billingCorrectionUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Billing correction</Button>}
+            {detail.usageCorrectionUrl && <Button component="a" href={detail.usageCorrectionUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Usage lower bound</Button>}
             {detail.normalizedUrl && <Button component="a" href={detail.normalizedUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Review JSON</Button>}
             {detail.assessment.receiptUrl && <Button component="a" href={detail.assessment.receiptUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Current assessment receipt</Button>}
             {detail.assessment.verdictsUrl && <Button component="a" href={detail.assessment.verdictsUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Assessor verdicts</Button>}
