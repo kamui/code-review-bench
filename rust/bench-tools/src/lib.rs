@@ -40,6 +40,7 @@ pub mod pytext;
 pub mod pyunicode;
 pub mod pyvalue;
 pub mod rates;
+pub mod regrade;
 pub mod review_isolation;
 pub mod review_queue;
 pub mod roster;

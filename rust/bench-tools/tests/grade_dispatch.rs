@@ -3,13 +3,16 @@
 //! bubblewrap, git and ripgrep for the grading tools, and the Codex session the real Codex client for its local
 //! probe, so those are ignored by default and CI's grading job runs them.
 
+#[path = "support/runtime_store.rs"]
+mod runtime_store;
+
 use bench_tools::pyjson::{self, Duplicates, Object, Value};
 use bench_tools::sha256::hex_digest;
+use runtime_store::{built, receipt};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::OnceLock;
 
 const RUN: &str = "runs/2026-01-01-grade-test";
 const TARGET: &str = "t-grade-1";
@@ -144,30 +147,6 @@ fn number(value: &Value) -> f64 {
 fn executable(path: &Path, body: &str) {
     fs::write(path, format!("#!/usr/bin/env python3\n{body}")).unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
-}
-
-/// This build's `bench-tools` and its SHA-256, hashed once per test process.
-fn built() -> &'static (PathBuf, String) {
-    static BUILT: OnceLock<(PathBuf, String)> = OnceLock::new();
-    BUILT.get_or_init(|| {
-        let path = PathBuf::from(env!("CARGO_BIN_EXE_bench-tools"));
-        let sha = hex_digest(&fs::read(&path).unwrap());
-        (path, sha)
-    })
-}
-
-fn receipt(sha: &str, size: u64) -> String {
-    let commit = "0".repeat(40);
-    let zero = "0".repeat(64);
-    format!(
-        r#"{{"schema": "rust-runtime-receipt/1",
- "crate": {{"name": "bench-tools", "bin": "bench-tools", "path": "rust/bench-tools"}},
- "source": {{"revision": "{commit}", "tree": "{commit}", "cargo_toml_sha256": "{zero}",
-  "cargo_lock_sha256": "{zero}", "toolchain_file_sha256": "{zero}"}},
- "toolchain": {{"rustc": {{"release": "1.99.0"}}}}, "target": "x86_64-unknown-linux-gnu",
- "build": {{"command": ["cargo", "build"]}},
- "artifact": {{"sha256": "{sha}", "file": "bench-tools", "size": {size}}}}}"#
-    )
 }
 
 fn base64_decode(text: &str) -> Vec<u8> {

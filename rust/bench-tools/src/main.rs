@@ -9,7 +9,7 @@ use bench_tools::{
     derive_packet, diff_identity, evaluator_audit, evidence, evidence_inventory, export_explorer,
     file_attempt, grade, grading_reports, grading_validation, import_benchmark, methodology,
     native_artifacts, normalize_thermo, packet_selection, provision, pyfs, pyunicode, pyvalue,
-    rates, review_isolation, review_queue, roster, ruling, run_cell, skill_provenance,
+    rates, regrade, review_isolation, review_queue, roster, ruling, run_cell, skill_provenance,
     skill_runner, subscription_meters, upstream, usage,
 };
 use clap::builder::PossibleValuesParser;
@@ -1476,6 +1476,25 @@ enum RegradeCommand {
         archive_dir: OsString,
         #[arg(long, default_value = ".", allow_negative_numbers = true)]
         root: OsString,
+    },
+    /// Grade the queue an authorization pins, in the bench-tools it pins; exit 3 at the budget and 4 at the
+    /// plan's quota, both resumable.
+    #[command(infer_long_args = true)]
+    Run {
+        #[arg(long, allow_negative_numbers = true)]
+        authorization: PathBuf,
+        #[arg(long, allow_negative_numbers = true)]
+        directory: PathBuf,
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Concurrent paid dispatches.
+        #[arg(long, default_value_t = 1)]
+        workers: usize,
+        /// Require this client version; by default the queue pins the client installed at its first run.
+        #[arg(long, allow_negative_numbers = true)]
+        expected_cli_version: Option<String>,
+        #[arg(long, default_value = ".", allow_negative_numbers = true)]
+        root: PathBuf,
     },
 }
 
@@ -4675,6 +4694,21 @@ fn main() -> ExitCode {
             archive_dir,
             root,
         }) => archive_attempt(&attempt, &archive_dir, &root),
+        Cli::Regrade(RegradeCommand::Run {
+            authorization,
+            directory,
+            limit,
+            workers,
+            expected_cli_version,
+            root,
+        }) => Ok(ExitCode::from(regrade::run(&regrade::Options {
+            root,
+            authorization,
+            directory,
+            limit,
+            workers,
+            expected_cli_version,
+        }))),
         Cli::AuditLog(arguments) => audit_log(arguments),
         Cli::NativeArtifacts(command) => run_native_artifacts(command),
         Cli::ReviewIsolation(command) => run_review_isolation(command),
