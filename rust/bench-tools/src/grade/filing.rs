@@ -1,5 +1,5 @@
 //! `bench-tools grade validate`, `inventory`, `map` and `invalidate`, and the assessment steps that
-//! `bench-tools evaluator-audit second` shares with `map`, ported from `bench/tools/grade.py`.
+//! `bench-tools evaluator-audit second` shares with `map`.
 
 use super::{
     Runner, abspath, check_attempts, check_prepared, crash, dumps, inconsistent, make_directory,

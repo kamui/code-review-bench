@@ -8,10 +8,9 @@ from run_bench_tests import test_paths
 
 
 class BenchTestsTest(unittest.TestCase):
-    def test_every_bench_test_but_the_client_suite_is_selected(self):
+    def test_every_bench_test_is_selected(self):
         directory = Path(__file__).resolve().parents[1] / "bench/tools"
-        expected = set(directory.glob("test_*.py")) - {directory / "test_grading_client.py"}
-        self.assertEqual(set(test_paths(directory)), expected)
+        self.assertEqual(set(test_paths(directory)), set(directory.glob("test_*.py")))
 
     def test_cli_runs_the_selected_tests(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -24,7 +23,6 @@ class BenchTestsTest(unittest.TestCase):
             fixture = "import unittest\nclass Fixture(unittest.TestCase):\n    def test_runs(self):\n        self.assertTrue(True)\n"
             for name in ("test_one.py", "test_two.py"):
                 (tests / name).write_text(fixture)
-            (tests / "test_grading_client.py").write_text("raise RuntimeError('separate client suite')\n")
             result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("Ran 2 tests", result.stderr)

@@ -11,11 +11,6 @@ REPO = Path(__file__).resolve().parents[1]
 # Python program, the command that moved out of it, and the command that replaces it.
 MOVED = (
     ("bench/tools/rates.py", "check", "bench-tools rates check"),
-    ("bench/tools/grade.py", "prepare", "bench-tools grade prepare"),
-    ("bench/tools/grade.py", "validate", "bench-tools grade validate"),
-    ("bench/tools/grade.py", "inventory", "bench-tools grade inventory"),
-    ("bench/tools/grade.py", "map", "bench-tools grade map"),
-    ("bench/tools/grade.py", "invalidate", "bench-tools grade invalidate"),
     ("bench/tools/upstream.py", "report", "bench-tools upstream report"),
     ("bench/tools/upstream.py", "collect", "bench-tools upstream collect"),
     ("bench/tools/evidence_store.py", "fetch", "bench-tools evidence fetch"),
@@ -57,6 +52,10 @@ MOVED_PROGRAMS = (
     ("bench/tools/check_manifest.py", "bench-tools check-manifest"),
     ("bench/tools/methodology.py", "bench-tools methodology"),
     ("tools/export_explorer.py", "bench-tools export-explorer"),
+    ("bench/tools/grade.py", "bench-tools grade"),
+    ("bench/tools/regrade.py", "bench-tools regrade run"),
+    ("bench/tools/grading_client_probe.py", "bench-tools grading probe-claude"),
+    ("bench/tools/test_grading_client.py", "bench-tools grading probe-claude"),
 )
 # Frozen runs, imported originals, research records, saved rulings, saved fixture and migration evidence, and the
 # contract decisions that describe superseded behavior keep the commands they recorded.

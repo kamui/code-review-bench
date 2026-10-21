@@ -84,8 +84,7 @@ enum Cli {
     /// batch's input fingerprint and state.
     #[command(infer_long_args = true)]
     CurrentGrading(CurrentGradingArgs),
-    /// Prepare a blind grading workspace and its private key, check prepared inputs offline, or check a prepared
-    /// workspace against its key, as grade.py's prepare half does.
+    /// Prepare, preflight, dispatch, validate, map or invalidate a blind grading batch.
     #[command(subcommand, infer_long_args = true)]
     Grade(GradeCommand),
     /// Plan the current grading queue without altering saved reviews or grades, as methodology.py does.
@@ -103,7 +102,7 @@ enum Cli {
     /// tools/import_benchmark.py did.
     #[command(infer_long_args = true)]
     ImportBenchmark(ImportBenchmarkArgs),
-    /// Report on grading queues or archive a grading attempt, as bench/tools/regrade.py defines them.
+    /// Run a regrading queue, report on grading queues or archive a grading attempt.
     #[command(subcommand, infer_long_args = true)]
     Regrade(RegradeCommand),
     /// Derive a time and cost audit log from filed benchmark runs, for estimating later runs.
@@ -1502,7 +1501,7 @@ enum RegradeCommand {
 struct AuditLogArgs {
     #[arg(long, allow_negative_numbers = true)]
     out: Option<OsString>,
-    /// A regrade.py archive root.
+    /// A grading archive root, as `regrade archive-attempt` writes it.
     #[arg(long, allow_negative_numbers = true)]
     grading: Vec<OsString>,
     #[arg(long, default_value = ".", allow_negative_numbers = true)]
@@ -1518,7 +1517,7 @@ enum GradingCommand {
     Validate {
         #[arg(default_value = "verdicts.json", allow_negative_numbers = true)]
         verdicts: OsString,
-        /// The validator inputs grade.py prepares, validator/inputs.json in a grading workspace.
+        /// The validator inputs `grade prepare` writes, validator/inputs.json in a grading workspace.
         #[arg(long, allow_negative_numbers = true)]
         inputs: OsString,
     },
