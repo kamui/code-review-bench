@@ -148,8 +148,8 @@ existing archive is kept when its members are the transcripts and refused otherw
 (`archive-transcripts-existing-same`, `-existing-different`). The native-artifacts v4 decisions record each
 deliberate difference. `tests/native_artifacts.rs` interrupts both at each disk effect.
 
-`file_attempt.py` resolves the run's pinned `bench-tools` with `rust_runtime.for_run`, as `--replay` does, and
-refuses a pin without these commands before it files anything, naming the run's freeze commit. The corpus runs
+`bench-tools file-attempt` calls both in process since [#157](https://github.com/kamui/code-review-bench/issues/157);
+`run_cell.py --file` refuses a run whose pin lacks `file-attempt`, naming the run's freeze commit. The corpus runs
 against Rust, with a differential against the retained `native_artifacts.py` and the former
 `file_attempt.archive_transcripts`, kept in `behavior_contract.py`'s `python-archive-transcripts` driver.
 
@@ -259,9 +259,9 @@ cross-implementation cases check that each restores what the other wrote.
 | `bench/tools/native_artifacts.py` | `prune_workspace.py` verifies filings with `verify` before it removes a clone; `grade.runner_files()` hashes `prune_workspace.py` | `prune_workspace.py` verifies through `bench-tools native-artifacts verify` ([#159](https://github.com/kamui/code-review-bench/issues/159)) | #159 |
 | `bench/tools/evidence_inventory.py` | `retire_workspace.py` inventories the workspace, takes Git blob identities and runs Git through it | `retire_workspace.py` moves to Rust and inventories through `bench_tools::evidence_inventory` ([#159](https://github.com/kamui/code-review-bench/issues/159)) | #159 |
 
-The tests of the retained libraries, the `python-resolve` and `python-native-artifacts` corpus drivers,
-`file_attempt.py --self-test`'s check that Python restores a Rust filing, and `tests/python_archives.rs` call the
-retained Python to show that both implementations read each other's output. They go with the libraries.
+The tests of the retained libraries, the `python-resolve` and `python-native-artifacts` corpus drivers and
+`tests/python_archives.rs` call the retained Python to show that both implementations read each other's output. They go
+with the libraries.
 
 ## Temporary bridges
 
@@ -270,7 +270,6 @@ A bridge lets a Python caller run a Rust command until the caller itself moves t
 | Bridge | Removal condition | Removed by |
 | --- | --- | --- |
 | `contributor.py` and `contributor_submit.py` run `evidence pack`, `check-package` and `publish`, and `evidence verify --receipt`, through the run's pinned `bench-tools` ([#220](https://github.com/kamui/code-review-bench/issues/220)) | The contributor backend moves to Rust | [#158](https://github.com/kamui/code-review-bench/issues/158) |
-| `bench/tools/file_attempt.py` runs the run's pinned `bench-tools native-artifacts file` and `evidence archive-transcripts`, resolved by `rust_runtime.for_run`, and refuses a pin without them before filing. | Filing moves to Rust ([#157](https://github.com/kamui/code-review-bench/issues/157)) | #157 |
 
 `tools/export_explorer.py`, the processing stage's bridge, was deleted by
 [#234](https://github.com/kamui/code-review-bench/issues/234), part of [#156](https://github.com/kamui/code-review-bench/issues/156).
@@ -328,7 +327,7 @@ the v4 inventory records. The v4 inventory assigns no module to #155.
 | `native_artifacts` | `verify`, `restore` and `file_artifacts` migrated to `bench-tools native-artifacts`; retained library | #159 |
 | `evidence_inventory` | Its command migrated to `bench-tools evidence inventory`; retained library | #159 |
 | `builtin-review-benchmark-2026-09-24/answers.py` | Historical replay. The census kept it active only because `tools/import_benchmark.py` listed its path, which [#223](https://github.com/kamui/code-review-bench/issues/223) removed | None |
-| The evidence parts of `file_attempt.py` | Migrated to `bench-tools evidence archive-transcripts` and `native-artifacts file`; `file_attempt.py` is a temporary bridge | #157 |
+| The evidence parts of `file_attempt.py` | Migrated to `bench-tools evidence archive-transcripts` and `native-artifacts file`; #157 moved filing to `bench-tools file-attempt` and deleted `file_attempt.py` | None |
 | The contributor CLI's packing and publication | Migrated to `bench-tools evidence pack`, `check-package` and `publish`; a temporary bridge | #158 |
 | Evidence restoration in the explorer export, which v3 left in Python for #155 | Migrated to `bench-tools export-explorer evidence --restore`; the front stays with #156 | #156 |
 | `bun run verify:import` and `bun run evidence:fetch` | Run `bench-tools` | None |

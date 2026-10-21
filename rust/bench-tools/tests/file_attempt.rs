@@ -171,12 +171,6 @@ fn report(done: &Output) -> String {
     )
 }
 
-fn attempt_audit_available() -> bool {
-    bench(&["attempt-audit".into(), "--help".into()])
-        .status
-        .success()
-}
-
 /// Every file under `root`, by relative path, with its bytes and permission bits.
 fn tree(root: &Path) -> Vec<(String, Vec<u8>, u32)> {
     use std::os::unix::fs::PermissionsExt;
@@ -701,10 +695,6 @@ fn files_a_builtin_attempt_through_each_disposition() {
 /// parses; an output that still does not parse stays stopped, and a stop for any other reason is never superseded.
 #[test]
 fn replay_supersedes_only_a_normalization_stop() {
-    if !attempt_audit_available() {
-        eprintln!("skipped: this bench-tools has no attempt-audit command");
-        return;
-    }
     let t = SelfTest::new("replay");
     let att = t.att.clone();
     write(

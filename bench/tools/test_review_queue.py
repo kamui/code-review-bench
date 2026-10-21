@@ -141,7 +141,7 @@ def fake_cell(argv: list) -> int:
         if name == "dispatch.sh":
             return review(command)
         done = real["tool"](command, env)
-        if name == "file_attempt.py":
+        if command[1:2] == ["file-attempt"]:
             crash("after_filing")
         return done
 

@@ -140,8 +140,8 @@ lists them. When the Cargo cache lacks one, `rust_runtime.py install` fails and 
 | --- | --- | --- | --- |
 | `bench/tools/roster.py` | `bench-tools roster` | `bun run roster` in `AGENTS.md`, `README.md` and `bench/README.md` | Deleted with `test_roster.py`, whose cases are in [`roster.v1.json`](../../tools/behavior_contracts/roster.v1.json). |
 | `bench/tools/diff_identity.py` | `bench-tools diff-identity`, `bench_tools::diff_identity` | The CLI in `bench/README.md` | Retained library, below. |
-| `bench/tools/normalize_review.py` | `bench-tools normalize-review`, `bench_tools::normalize_review` | `dispatch.sh`, `claude_skill_runner.py`, `codex_skill_runner.py`, `file_attempt.py --replay` and the `test:bench` script | Retained library, below. `test_normalize_review.py`'s cases are in [`normalize-review.v1.json`](../../tools/behavior_contracts/normalize-review.v1.json), which `test:bench` runs against the retained Python. |
-| `bench/tools/normalize_thermo.py` | `bench-tools normalize-thermo`, `bench_tools::normalize_thermo` | The same skill runners and `file_attempt.py --replay` | Deleted with `test_normalize_thermo.py`, whose cases are in [`normalize-thermo.v1.json`](../../tools/behavior_contracts/normalize-thermo.v1.json). |
+| `bench/tools/normalize_review.py` | `bench-tools normalize-review`, `bench_tools::normalize_review` | `dispatch.sh`, `claude_skill_runner.py`, `codex_skill_runner.py`, `bench-tools file-attempt --replay` and the `test:bench` script | Deleted by [#157](https://github.com/kamui/code-review-bench/issues/157) with `file_attempt.py`, its last caller. `test_normalize_review.py`'s cases are in [`normalize-review.v1.json`](../../tools/behavior_contracts/normalize-review.v1.json), which `test:bench` runs against `bench-tools`. |
+| `bench/tools/normalize_thermo.py` | `bench-tools normalize-thermo`, `bench_tools::normalize_thermo` | The same skill runners and `bench-tools file-attempt --replay` | Deleted with `test_normalize_thermo.py`, whose cases are in [`normalize-thermo.v1.json`](../../tools/behavior_contracts/normalize-thermo.v1.json). |
 | `bench/tools/derive_packet.py` | `bench-tools derive-packet`, `bench_tools::derive_packet` | `bench-tools build-packet --factual`, in-process; `bench/README.md` | Deleted. Its self-test cases and every target's legacy packet are in [`derive-packet.v1.json`](../../tools/behavior_contracts/derive-packet.v1.json). The imported original is preserved at `artifacts/import-source/bench/tools/derive_packet.py`. |
 | `bench/tools/build_packet.py` | `bench-tools build-packet`, `bench_tools::build_packet` | `bench/README.md`, `docs/pr-selection.md` | Deleted with `test_build_packet.py` and `test_build_packet_fixture.json`. Every run the tests made, with its replay files and staging mirror, is a case in [`build-packet.v1.json`](../../tools/behavior_contracts/build-packet.v1.json), beside 36 more. The imported originals are preserved under `artifacts/import-source/bench/tools/`. |
 | `bench/tools/check_manifest.py` | `bench_tools::schema`, `bench-tools check-manifest` | `bench/README.md`, `docs/current-grading.md`, `.github/workflows/rates.yml`; `test:bench` runs [`check-manifest.v1.json`](../../tools/behavior_contracts/check-manifest.v1.json) against Rust, which [#234](https://github.com/kamui/code-review-bench/issues/234) moved from the Python CLI | Retained library, below. |
@@ -164,7 +164,6 @@ assigns it to that stage. [Storage](storage.md#retained-libraries) lists the lib
 | Module | Imported or hashed by | Removal condition | Removed by |
 | --- | --- | --- | --- |
 | `bench/tools/diff_identity.py` | `provision.py` imports `identity`; `test_cache_replacements.py` imports it; `grade.runner_files()` hashes it, so a byte change refuses every prepared grading batch | `provision.py` computes diff identity through the Rust runtime ([#157](https://github.com/kamui/code-review-bench/issues/157)) and `grade.runner_files()` no longer hashes `diff_identity.py` ([#156](https://github.com/kamui/code-review-bench/issues/156)) | #157 |
-| `bench/tools/normalize_review.py` | `grade.py` imports `render` for blind grading; `contributor_adapters.collect` calls `from_codex`, `from_claude_builtin` and `from_codex_skill` in process; `grade.runner_files()` hashes it | `grade.render` renders through the Rust runtime and `grade.runner_files()` no longer hashes `normalize_review.py` ([#156](https://github.com/kamui/code-review-bench/issues/156)), and the contributor backend normalizes through it ([#158](https://github.com/kamui/code-review-bench/issues/158)) | #158 |
 | `bench/tools/check_manifest.py` | `claims`, `claim_grading`, `current_grading`, `evidence_store`, `file_attempt`, `provision`, `rates`, `run_cell` and `upstream` import `validate`; `grade.runner_files()` hashes it. #234 moved its CLI callers to `bench-tools check-manifest` | No maintained module imports it and `grade.runner_files()` no longer hashes it. The delivery plan leaves `check_manifest` with [#156](https://github.com/kamui/code-review-bench/issues/156), which moves its grading importers; `provision`, `run_cell` and `file_attempt` leave with [#157](https://github.com/kamui/code-review-bench/issues/157), `evidence_store` with [#159](https://github.com/kamui/code-review-bench/issues/159), and `rates`, the last importer, with [#160](https://github.com/kamui/code-review-bench/issues/160) | #160 |
 | `bench/tools/rates.py` | `run_cell` and `contributor_adapters` call `read_catalog` and `inspect`, and `contributor_adapters` calls `latest` and `fetch`; `rates refresh` runs in `rates:refresh` and `.github/workflows/rates.yml` | `rates refresh` and the dispatch check move to Rust ([#160](https://github.com/kamui/code-review-bench/issues/160) owns `rates.yml`) and no module imports `rates` | #160 |
 | `bench/tools/upstream.py` | `claims` imports `validate_assessment` and `route`; `grade.runner_files()` hashes it; `upstream collect` is the documented snapshot capture | `claims` moves to Rust, `collect` has a replacement and `grade.runner_files()` no longer hashes `upstream.py` ([#156](https://github.com/kamui/code-review-bench/issues/156)) | #156 |
@@ -191,11 +190,12 @@ A review's normalizer runs after the reviewer has returned, so every caller reso
   `prepare_attempt`. Either refusal leaves no `timing.json`, so `run_cell.py` releases the claim.
 - `review_queue.py` refuses, before any launch, a run whose `freeze_commit` holds `rust/bench-tools` but whose queue pins
   no `bench-tools`.
-- `file_attempt.py --replay` runs the `bench-tools` that the run pins, the run being `--run` or `bench/runs/<run-id>`.
+- `bench-tools file-attempt --replay` runs the normalizers in process. `run_cell.py` files through the `bench-tools`
+  that the run pins.
 
 A run frozen before this change pins no `bench-tools`. Its own freeze checkout still has the Python normalizers, and
 it runs and replays from there exactly as before. From a checkout after this change, `run_cell.py`, the skill runners
-and `file_attempt.py --replay` refuse such a run, naming its freeze commit, and `review_queue.py` already refuses it
+and `run_cell.py --file` refuse such a run, naming its freeze commit, and `review_queue.py` already refuses it
 because its runner files differ from that commit.
 
 The contributor path never reaches this branch: `contributor_adapters.collect` normalizes in process with the retained
@@ -206,7 +206,7 @@ collection resolves a Rust runtime or calls either.
 ## Temporary bridges
 
 A bridge lets a Python caller run a Rust command until the caller itself moves to Rust. [Storage](storage.md#temporary-bridges)
-lists the contributor CLI and `file_attempt.py` bridges.
+lists the contributor CLI bridge.
 
 #195's bridge, `build_packet.py --factual` running `bench-tools derive-packet` through `rust_runtime.resolve`, was
 removed by #196: `bench-tools build-packet --factual` calls `bench_tools::derive_packet::derive` in-process. It
@@ -461,7 +461,7 @@ the v3 inventory records.
 | v2 #154 responsibility | Outcome | v3 owner |
 | --- | --- | --- |
 | `roster`, `normalize_thermo`, `derive_packet`, `build_packet` | Migrated to `bench-tools`; the Python is deleted | None |
-| `diff_identity`, `normalize_review` | Migrated to `bench-tools`; retained library | #157, #158 |
+| `diff_identity`, `normalize_review` | Migrated to `bench-tools`; retained library. #157 deleted `normalize_review.py` | #157, #158 |
 | `check_manifest`'s schema validation, `rates check`, `upstream report` | Migrated to `bench-tools`; `check_manifest`, `rates` and `upstream` are retained libraries | #160, #160, #156 |
 | `export_explorer` | Migrated to `bench-tools export-explorer`; the Python front is a temporary bridge | #156 |
 | `rates refresh`, evidence restoration during export | Kept in Python as effects, as the delivery plan assigns | #160, #155 |
