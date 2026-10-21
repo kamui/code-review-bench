@@ -8,7 +8,7 @@ ISSUE = "https://github.com/kamui/code-review-bench/issues/289"
 RECORDED_AT = "2026-10-21T21:00:00Z"
 COLUMNS = ["run", "attempt", "probe", "arm", "cli", "published", "filed_status", "remetered_status", "cause",
            "unfinalized_requests", "filed_cost_usd", "metered_cost_usd", "metered_output", "client_output",
-           "client_cost_usd"]
+           "client_cost_usd", "client_source"]
 
 
 def cause(row):
@@ -44,7 +44,7 @@ def main():
                  "unfinalized_requests": len((row.get("completeness") or {}).get("unfinalized") or []),
                  "filed_cost_usd": row["filed_usd"], "metered_cost_usd": row.get("metered_usd"),
                  "metered_output": (row.get("total") or {}).get("output"), "client_output": client.get("output"),
-                 "client_cost_usd": client.get("cost_usd")}
+                 "client_cost_usd": client.get("cost_usd"), "client_source": client.get("source")}
         table.append(entry)
         if row["filed_status"] == "complete" and status == "incomplete":
             if entry["cause"] == "other" or row["metered_usd"] != row["filed_usd"]:

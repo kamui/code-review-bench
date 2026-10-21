@@ -2,7 +2,8 @@
 
 Writes one JSON line per attempt. Reads each attempt's transcript archive by its frozen hash from the
 given archive roots, or else its local workspace; extracts archives under the scratch directory. Where the
-workspace kept the client's stream-json output, the line also carries the client's exit totals.
+run directory (after `bun run evidence:fetch`) or the workspace kept the client's stream-json output, the
+line also carries the client's exit totals and where they came from.
 
 usage: python3 remeter.py --repo REPO --workspaces ~/.t3/bench-runs --archives DIR [--archives DIR ...]
                           --scratch DIR > remeter.jsonl
@@ -47,9 +48,8 @@ def api_errors_only(path):
     return bool(assistant) and all(notice(r) for r in assistant)
 
 
-def client_result(workspace):
+def client_result(path):
     """The client's last stream-json result event, which holds its exit totals per model."""
-    path = f"{workspace}/stdout.jsonl"
     if not os.path.exists(path):
         return None
     last = None
@@ -106,7 +106,12 @@ def main():
                "cli": observed.get("cli_version"), "models": observed.get("models"),
                "disposition": record.get("disposition"), "filed_status": usage.get("metering_status"),
                "filed_usd": usage.get("priced_total_usd"), "filed_low": (usage.get("cost_bounds_usd") or {}).get("low"),
-               "rates_as_of": usage.get("rates_as_of"), "client": client_result(workspace)}
+               "rates_as_of": usage.get("rates_as_of")}
+        for source in (f"{os.path.dirname(path)}/stdout.jsonl", f"{workspace}/stdout.jsonl"):
+            row["client"] = client_result(source)
+            if row["client"]:
+                row["client"]["source"] = "run" if source.startswith(repo) else "workspace"
+                break
         archive = archives.get((record.get("transcript_archive") or {}).get("sha256"))
         base, row["source"] = workspace, "workspace"
         if archive:

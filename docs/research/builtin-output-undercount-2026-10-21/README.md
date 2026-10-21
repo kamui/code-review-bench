@@ -8,9 +8,9 @@ This directory re-meters every filed Claude attempt, lists the affected ones, an
 
 ## Re-meter
 
-[`remeter.py`](remeter.py) re-meters every Claude attempt and probe under `bench/runs` with `bench-tools usage claude` at its filed rates. It selects transcripts the way filing does: subagent transcripts for `claude-builtin` arms, every transcript otherwise, without transcripts that hold only API error notices. It reads each transcript archive by its frozen hash from release storage, or else the local workspace. [`tabulate.py`](tabulate.py) writes [`remeter.tsv`](remeter.tsv), one row per attempt, and the deviation.
+[`remeter.py`](remeter.py) re-meters every Claude attempt and probe under `bench/runs` with `bench-tools usage claude` at its filed rates. It selects transcripts the way filing does: subagent transcripts for `claude-builtin` arms, every transcript otherwise, without transcripts that hold only API error notices. It reads each transcript archive by its frozen hash from release storage, or else the local workspace. It reads the client's stream-json output from the run directory, after `bun run evidence:fetch`, or else the local workspace. [`tabulate.py`](tabulate.py) writes [`remeter.tsv`](remeter.tsv), one row per attempt, and the deviation.
 
-Run on 2026-10-21 against `main` at `6856236c7`:
+Run on 2026-10-21:
 
 | Filed | Re-metered | Attempts | Cost |
 | --- | --- | ---: | --- |
@@ -56,13 +56,13 @@ The search used saved client output, saved transcripts, the client documentation
 
 | Source | What it covers | Saved at filing | Past attempts | Confirmable without a paid run |
 | --- | --- | --- | --- | --- |
-| Client exit totals: the last `result` event in the workspace's `stdout.jsonl` (`modelUsage[model].outputTokens`, `costUSD`, `total_cost_usd`) | The whole session, subagents included, per model | Yes, in the attempt workspace since 2026-10-02; not in the transcript archive or shared evidence | 99 of the 114 with unfinalized requests | Partly; see below |
+| Client exit totals: the last `result` event in the attempt's `stdout.jsonl` (`modelUsage[model].outputTokens`, `costUSD`, `total_cost_usd`) | The whole session, subagents included, per model | In shared evidence for the 2026-09-29 and 2026-10-02 runs (release storage) and the 2026-10-10 runs (Git); only in local workspaces for the 2026-10-08 runs; not in transcript archives | 111 of the 114 with unfinalized requests | Partly; see below |
 | Transcript session totals | The same partial counts as the requests | Yes | All | Ruled out by #288 |
 | Subscription usage readout | The whole account as a share of plan quota, across concurrent runs | No | None | Not per attempt; `--help` lists no usage or cost command |
 | OpenTelemetry `claude_code.api_request` events (`CLAUDE_CODE_ENABLE_TELEMETRY=1`, `OTEL_LOGS_EXPORTER=console`) | Each request: `output_tokens`, `cost_usd`, `request_id`, `query_source` for subagents ([docs](https://code.claude.com/docs/en/monitoring-usage)) | Only if enabled at dispatch | None | No |
 | Raw API bodies (`OTEL_LOG_RAW_API_BODIES=file:<dir>`) | Each request's response usage as the API returned it | Only if enabled at dispatch | None | No; also writes every prompt to disk |
 
-**Client exit totals.** For all 99 attempts that kept them, the input, cache-read and cache-write counts equal the meter's exactly, and the output count is higher. That agreement supports the claim that the exit totals cover the same requests. They are the client's aggregate, though, and nothing independent confirms that its output count is final. The client's own `costUSD` uses its own prices: it matches repricing at the filed rates for Fable and Opus but not for Sonnet. Use its token counts, not its cost.
+**Client exit totals.** For all 111 attempts that kept them, the input, cache-read and cache-write counts equal the meter's exactly, and the output count is higher. That agreement supports the claim that the exit totals cover the same requests. They are the client's aggregate, though, and nothing independent confirms that its output count is final. The client's own `costUSD` uses its own prices: it matches repricing at the filed rates for Fable and Opus but not for Sonnet. Use its token counts, not its cost.
 
 Repriced at the filed rates, the exit totals would raise the filed costs by run:
 
@@ -75,12 +75,14 @@ Repriced at the filed rates, the exit totals would raise the filed costs by run:
 | 2026-10-10 ce-opus | 4 | $48.2061 | $48.3043 (×1.00) | 1,159,075 → 1,163,989 |
 | 2026-10-10 ce-sonnet | 5 | $12.2741 | $12.3210 (×1.00) | 397,083 → 401,771 |
 | 2026-10-02 ce-opus, ce-sonnet | 2 | $17.7677 | $17.7765 (×1.00) | 395,408 → 395,993 |
+| 2026-09-29 ce-opus | 5 | $44.5075 | $44.6403 (×1.00) | 876,977 → 883,616 |
+| 2026-09-29 ce-sonnet | 7 | $23.2440 | $23.3024 (×1.00) | 731,486 → 737,331 |
 
-Probes are left out of this table; the per-attempt counts are in `remeter.tsv`.
+Probes are left out of this table; the per-attempt counts and the source of each are in `remeter.tsv`. The three attempts with unfinalized requests and no saved exit totals are `2026-09-27-x384-matched-isolation/att-003`, `2026-09-28-sonnet-5-5-rebench/att-047` and `2026-10-12-last-push-claude-review-code-sonnet/att-005`.
 
 ## Recommendation
 
 1. Keep the affected costs as lower bounds now. That is what the deviation does, and it needs no new source.
-2. Adopt the client exit totals as the output count for the 99 attempts that kept them, as a separate owner decision and a new deviation version. Copy each `result` event into the evidence first, since today it lives only in the local workspaces. The 15 older attempts and the 75 side-request attempts stay lower bounds.
+2. Adopt the client exit totals as the output count for the 111 attempts that kept them, as a separate owner decision and a new deviation version. First copy the `result` events of the 88 attempts and probes from the 2026-10-08 runs into shared evidence, since they live only in local workspaces; the others are already shared. The three attempts without exit totals and the 75 side-request attempts stay lower bounds.
 3. For future runs, have filing save the `result` event with the attempt and use its counts when a transcript request is unfinalized, recording the source.
 4. Before relying on the exit totals, confirm them once with a paid probe: one built-in `/code-review` run on the current client with `CLAUDE_CODE_ENABLE_TELEMETRY=1` and `OTEL_LOGS_EXPORTER=console`, comparing the summed `api_request` `output_tokens` with the exit totals. This needs a paid run, so it was not done here.
