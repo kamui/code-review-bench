@@ -148,7 +148,7 @@ function ReviewSummary({ attempt }: { attempt: Attempt }) {
   const facts = attempt.assessment ? reviewFacts(attempt.assessment) : null
   return <Paper withBorder p="md" radius="md"><Group justify="space-between" gap="sm">
     <Badge color={attempt.complete ? 'teal' : 'orange'} variant="light">{attempt.complete ? 'Completed' : attempt.admitted ? 'Incomplete coverage' : 'Stopped / invalid'}</Badge>
-    <Text size="sm">{money(attempt.cost)}{attempt.billing === 'list-price-equivalent' ? ' list-price equivalent' : ''} / {compact(attempt.outputTokens)} output tokens</Text>
+    <Text size="sm">{attempt.cost === null && attempt.costLowerBound !== null ? `≥ ${money(attempt.costLowerBound)}` : money(attempt.cost)}{attempt.billing === 'list-price-equivalent' ? ' list-price equivalent' : ''} / {compact(attempt.outputTokens)} output tokens</Text>
   </Group><Text size="sm" mt="sm">{!facts ? 'Current claim and remedy judgments are unavailable.'
     : `${facts.caught} reference problems found / ${facts.outcomes.refuted.distinct} refuted and ${facts.outcomes.unsupported.distinct} unsupported claims / ${facts.outcomes.inconsequential.distinct} non-material observations`}</Text>
     {attempt.predecessor && <Text size="xs" c="dimmed" mt="xs">Replacement for {attempt.predecessor}. Trial costs include the original attempt.</Text>}
