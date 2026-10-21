@@ -105,7 +105,8 @@ are retained. The next review outcome and elapsed time are supplied with the PR 
 ## Reproduce
 
 `tools/usage_pilot/` was removed with the Python side of the pilot. The steps below run at commit
-`220bcf794`, the last one with it; `cargo test` in `rust/usage-pilot` still runs at any later commit.
+`220bcf794`, the last one with it. `rust/usage-pilot` was later folded into `rust/bench-tools` as
+`bench-tools usage` and removed, so its steps need that commit too.
 
 From `rust/usage-pilot`, run `cargo fetch --locked`, then `cargo build --locked --release --examples --bins`.
 From the repository root:
