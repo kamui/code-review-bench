@@ -1,50 +1,33 @@
 #!/usr/bin/env python3
-"""Exercise frozen packet selection through ``bench-tools packet-selection`` and dispatch without calling a model.
+"""Exercise frozen packet selection through ``bench-tools packet-selection``.
 
 Usage: python3 bench/tools/test_packet_selection.py
 Inputs: disposable git repositories. Exit: 0 on success, 1 on test failure.
 """
 from __future__ import annotations
 
-import argparse
 import copy
 import hashlib
 import json
 from pathlib import Path
-import shutil
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent))
-import run_cell
 import rust_runtime
 
 TOOLS = str(rust_runtime.resolve("bench-tools"))
-CHECKS = ("skill-provenance", "packet-selection")
 
 
 def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def tool_except(fake):
-    """The real tool for bench-tools' read-only checks, ``fake`` for everything else."""
-    real = run_cell.tool
-
-    def tool(argv, env=None):
-        if argv[0] == TOOLS and argv[1] in CHECKS:
-            return real(argv, env)
-        return fake(argv, env)
-    return tool
-
-
 class PacketSelectionTests(unittest.TestCase):
     def setUp(self):
-        self.runtime = {rust_runtime.variable(run_cell.NORMALIZER): TOOLS}
-        self.enterContext(patch.object(run_cell, "normalizer_environment", return_value=self.runtime))
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -55,7 +38,6 @@ class PacketSelectionTests(unittest.TestCase):
         self.target.mkdir(parents=True)
         self.run.mkdir(parents=True)
         self.work.mkdir()
-        shutil.copytree(run_cell.BENCH / 'schema', self.bench / 'schema')
         self.original = self.target / 'packet.md'
         self.original.write_bytes(b'# Original packet\n\n')
         self.packet = self.target / 'packet.v2.md'
@@ -92,8 +74,6 @@ class PacketSelectionTests(unittest.TestCase):
         self.git('config', 'user.name', 'Fixture')
         self.git('config', 'user.email', 'fixture@example.test')
         self.freeze()
-        for module, name, value in ((run_cell, 'BENCH', self.bench), (run_cell, 'REPO', self.root)):
-            self.enterContext(patch.object(module, name, value))
 
     def write(self, path, doc):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -109,81 +89,51 @@ class PacketSelectionTests(unittest.TestCase):
         self.manifest.update(frozen_at='2026-01-01T00:00:00Z', freeze_commit=self.git('rev-parse', 'HEAD'))
         self.write(self.run / 'manifest.json', self.manifest)
 
-    def select(self):
+    def selection(self, env=None):
         self.write(self.run / 'manifest.json', self.manifest)
-        return run_cell.select_packet(TOOLS, run_cell.Run(self.run, self.work), self.target)
+        return subprocess.run([TOOLS, 'packet-selection', '--run', str(self.run), '--target-dir', str(self.target),
+                               '--root', str(self.root)], capture_output=True, text=True, encoding='utf-8', env=env)
 
-    def test_recut_dispatch_records_selection_and_preserves_packet_bytes(self):
-        args = argparse.Namespace(next=True, cell=None, replace=None, dry_run=False, quota=None)
-        calls = []
+    def select(self, env=None):
+        result = self.selection(env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return Path(result.stdout.rstrip('\n'))
 
-        def tool(argv, env=None):
-            calls.append(argv)
-            if Path(argv[0]).name == 'dispatch.sh':
-                Path(argv[2], 'timing.json').write_text('{}', encoding='utf-8')
-            return subprocess.CompletedProcess(argv, 0, '{}', '')
+    def assert_refused(self, message):
+        result = self.selection()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, '')
+        self.assertRegex(result.stderr, message)
 
-        with patch.object(run_cell, 'tool', side_effect=tool_except(tool)), \
-                patch.object(run_cell, 'check_dispatch_rates', return_value=({}, {})), \
-                patch.object(run_cell, 'file', return_value={'disposition': 'valid completed', 'usage': {'priced_total_usd': 0}}):
-            run_cell.claim_and_run(self.run, self.work, args)
-        attempt = self.work / 'att-001'
-        self.assertTrue((attempt / 'input.md').read_bytes().startswith(self.packet.read_bytes()))
-        claim = json.loads((attempt / 'cell.json').read_bytes())
-        self.assertEqual(claim['packet_replacements'], self.manifest['packet_replacements'])
-        self.assertEqual(claim['packet'], self.replacement_doc['targets'][0]['replacement'])
-        self.assertEqual([call[1] if call[0] == TOOLS else Path(call[0]).name for call in calls], ['provision', 'dispatch.sh'])
+    def test_frozen_replacement_is_selected(self):
+        self.assertEqual(self.select(), self.packet)
 
-    def assert_refused_before_claim(self, message):
-        self.write(self.run / 'manifest.json', self.manifest)
-        args = argparse.Namespace(next=True, cell=None, replace=None, dry_run=False, quota=None)
-        launched = []
-        with patch.object(run_cell, 'check_dispatch_rates') as prices, \
-                patch.object(run_cell, 'tool', side_effect=tool_except(lambda argv, env=None: launched.append(argv))):
-            with self.assertRaisesRegex(run_cell.Refused, message):
-                run_cell.claim_and_run(self.run, self.work, args)
-        self.assertFalse((self.work / 'att-001').exists())
-        prices.assert_not_called()
-        self.assertEqual(launched, [])
-
-    def test_changed_arm_file_refuses_before_claim(self):
-        self.write(self.arm_path, {**self.arm, 'effort': 'low'})
-        self.assert_refused_before_claim('arm file test.json no longer hashes to the frozen arm_file_sha256')
-
-    def test_invalid_manifest_arm_refuses_before_claim(self):
-        frozen = copy.deepcopy(self.manifest)
-        for change in ({'billing_mode': 'plan'}, {'arm_file_sha256': 'unpinned'}, {'model': 'another-model'}):
-            with self.subTest(change=change):
-                self.manifest = copy.deepcopy(frozen)
-                self.manifest['arms'][0].update(change)
-                self.assert_refused_before_claim('the manifest does not validate')
-
-    def test_changed_target_refuses_before_claim(self):
+    def test_changed_target_is_refused(self):
         self.target_doc['head'] = 'c' * 40
         self.write(self.target / 'target.json', self.target_doc)
-        self.assert_refused_before_claim('frozen target.json changed')
+        self.assert_refused('frozen target.json changed')
 
-    def test_changed_original_refuses_before_claim(self):
+    def test_changed_original_is_refused(self):
         self.original.write_text('changed', encoding='utf-8')
-        self.assert_refused_before_claim('original packet.md differs')
+        self.assert_refused('original packet.md differs')
 
-    def test_changed_replacement_refuses_before_claim(self):
+    def test_changed_replacement_is_refused(self):
         self.packet.write_text('changed', encoding='utf-8')
-        self.assert_refused_before_claim('replacement packet differs')
+        self.assert_refused('replacement packet differs')
 
-    def test_changed_manifest_refuses_before_claim(self):
+    def test_changed_manifest_is_refused(self):
         self.replacements.write_text('{}', encoding='utf-8')
-        self.assert_refused_before_claim('replacement manifest differs')
+        self.assert_refused('replacement manifest differs')
 
     def test_replacement_must_match_cohort(self):
         self.manifest['cohort'][0]['packet_sha256'] = '0' * 64
         self.freeze()
-        self.assert_refused_before_claim('selected packet differs')
+        self.assert_refused('selected packet differs')
 
     def test_manifest_original_must_match_target_pin(self):
         self.replacement_doc['targets'][0]['original']['sha256'] = '0' * 64
         self.repin()
-        self.assert_refused_before_claim('original packet identity differs')
+        self.assert_refused('original packet identity differs')
 
     def repin(self):
         self.write(self.replacements, self.replacement_doc)
@@ -199,12 +149,12 @@ class PacketSelectionTests(unittest.TestCase):
                     self.manifest[key]['sha256'] = '0' * 64
                 else:
                     self.manifest[key][0]['packet_sha256'] = '0' * 64
-                self.assert_refused_before_claim('differs from freeze_commit')
+                self.assert_refused('differs from freeze_commit')
 
-    def test_removing_frozen_pin_refuses_original_packet_before_claim(self):
+    def test_removing_frozen_pin_refuses_original_packet(self):
         del self.manifest['packet_replacements']
         self.manifest['cohort'][0]['packet_sha256'] = self.target_doc['packet_sha256']
-        self.assert_refused_before_claim('differs from freeze_commit')
+        self.assert_refused('differs from freeze_commit')
 
     def test_legacy_run_without_readable_freeze_remains_supported(self):
         del self.manifest['packet_replacements']
@@ -217,53 +167,27 @@ class PacketSelectionTests(unittest.TestCase):
     def test_duplicate_replacement_is_refused(self):
         self.replacement_doc['targets'] *= 2
         self.repin()
-        self.assert_refused_before_claim('duplicate packet replacement target')
+        self.assert_refused('duplicate packet replacement target')
 
     def test_missing_and_escaping_paths_refuse(self):
         for name in ('missing.md', '../outside.md', '/tmp/outside.md'):
             with self.subTest(name=name):
                 self.replacement_doc['targets'][0]['replacement']['path'] = name
                 self.repin()
-                self.assert_refused_before_claim('No such file|must stay inside')
+                self.assert_refused('No such file|must stay inside')
 
-    def test_legacy_prompt_hash_and_environment_override(self):
+    def test_environment_does_not_override_the_frozen_pin(self):
         del self.manifest['packet_replacements']
         self.manifest['cohort'][0]['packet_sha256'] = self.target_doc['packet_sha256']
         self.freeze()
-        with patch.dict('os.environ', {'BENCH_PACKET_REPLACEMENTS': str(self.replacements)}):
-            self.assertEqual(self.select(), self.original)
-        clone = Path('/fixture/clone')
-        hashes = run_cell.write_input(self.work, self.target, 'Policy\n', clone)
-        expected = ('# Original packet\n\nPolicy\n'
-                    '\nPaths for this attempt: `<clone>` is `/fixture/clone`, `<cache>` is `/fixture/clone-cache`, '
-                    'and the work directory is `/fixture/clone-work`.\n').encode()
-        self.assertEqual((self.work / 'input.md').read_bytes(), expected)
-        self.assertEqual(hashes['input_sha256'], hashlib.sha256(expected).hexdigest())
+        env = {**os.environ, 'BENCH_PACKET_REPLACEMENTS': str(self.replacements)}
+        self.assertEqual(self.select(env), self.original)
 
     def test_unlisted_target_uses_original_pin(self):
         self.replacement_doc['targets'] = []
         self.manifest['cohort'][0]['packet_sha256'] = self.target_doc['packet_sha256']
         self.repin()
         self.assertEqual(self.select(), self.original)
-
-    def test_dispatch_passes_recut_to_each_skill_runner(self):
-        for kind in ('codex-skill', 'claude-skill'):
-            with self.subTest(kind=kind):
-                self.arm['kind'] = kind
-                self.write(self.arm_path, self.arm)
-                attempt = self.work / kind
-                attempt.mkdir()
-                commands = []
-                def tool(argv, env=None):
-                    commands.append(argv)
-                    if argv[1:3] == ['skill-runner', run_cell.SKILL_RUNNERS[kind]]:
-                        (attempt / 'timing.json').write_text('{}', encoding='utf-8')
-                    return subprocess.CompletedProcess(argv, 0, '{}', '')
-                claim = {'cell': {'target': 't1', 'arm': 'test', 'replicate': 1}}
-                with patch.object(run_cell, 'tool', side_effect=tool_except(tool)):
-                    run_cell.dispatch(run_cell.Run(self.run, self.work), kind, claim, self.runtime)
-                command = commands[-1]
-                self.assertEqual(command[command.index('--packet') + 1], str(self.packet))
 
 
 if __name__ == '__main__':

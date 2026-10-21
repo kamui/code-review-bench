@@ -1,4 +1,3 @@
-import ast
 from decimal import Decimal
 import fcntl
 import hashlib
@@ -19,12 +18,12 @@ import uuid
 import codex_grading
 import regrade
 import rust_runtime
-import subscription_meters
 from test_grade import MODEL, fixture_root, installed_bench_tools
 
 RUN = "runs/cohort"
 INPUT_FINGERPRINTS = regrade.input_fingerprints
-METERS = subscription_meters.meters
+PROVIDER_METERS = regrade.provider_meters
+SIGN_IN_MARGIN_SECONDS = 1800
 
 
 def pin(root, relative, value=None):
@@ -91,7 +90,7 @@ class Cohort:
         with patch.object(regrade, "ROOT", self.root), patch.object(regrade, "invoke", self.invoke), \
                 patch.dict(os.environ, {"BENCH_RUNTIME_STORE": str(self.store)}), \
                 patch.object(regrade, "input_fingerprints", self.fingerprints), \
-                patch.object(subscription_meters, "meters", self.meters), \
+                patch.object(regrade, "provider_meters", self.provider_meters), \
                 patch.object(regrade, "installed_client", self.installed_client), \
                 patch.object(regrade, "client_version", lambda executable: Path(executable).read_text()):
             return regrade.execute(self.root / "authorization.json", self.directory, limit, expected, workers=workers)
@@ -102,6 +101,11 @@ class Cohort:
         executable.parent.mkdir(parents=True, exist_ok=True)
         executable.write_text(version)
         return executable
+
+    def provider_meters(self, tools, clients, env):
+        if self.meters is None:
+            return PROVIDER_METERS(tools, clients, env)
+        return self.meters(clients, env)
 
     def meters(self, clients, env):
         """Like the provider, a reading of only the clients asked about, with the sign-in beside Claude's."""
@@ -705,7 +709,8 @@ class Controller(unittest.TestCase):
         self.assertIn("requires investigation", status["reason"])
 
     def test_an_unreadable_meter_stops_launches(self):
-        unreadable = ((Mock(side_effect=OSError("usage endpoint unavailable")), "usage endpoint unavailable"),
+        unavailable = "usage endpoint unavailable"
+        unreadable = ((Mock(side_effect=regrade.MetersUnreadable(unavailable)), unavailable),
                       (lambda: None, "no usage window was reported for claude"))
         for index, (used, detail) in enumerate(unreadable):
             with self.subTest(detail=detail):
@@ -741,9 +746,8 @@ class Controller(unittest.TestCase):
 
     def test_a_missing_stored_sign_in_stops_launches(self):
         cohort = Cohort(self.root, 100, jobs=1)
-        cohort.meters = METERS
-        with patch.object(Path, "home", return_value=self.root / "home"), \
-                patch.object(subscription_meters.urllib.request, "urlopen", side_effect=AssertionError("the provider was called")):
+        cohort.meters = None
+        with patch.dict(os.environ, {"HOME": str(self.root / "home")}):
             self.assertEqual(cohort.run(), 4)
         self.assertEqual((cohort.launched, cohort.preflights), ([], []))
         status = cohort.status()
@@ -752,7 +756,7 @@ class Controller(unittest.TestCase):
                                            r"\.credentials\.json: .*No such file or directory")
 
     def test_the_reading_is_taken_again_after_preparation_and_before_the_reservation(self):
-        margin = subscription_meters.SIGN_IN_MARGIN_SECONDS
+        margin = SIGN_IN_MARGIN_SECONDS
         late = {"a reading that expired over the stop": (regrade.QUOTA_MAX_AGE_SECONDS + 1, 95, None, "Claude usage reached"),
                 "a sign-in that entered its margin": (120, 10, (1000 + margin + 60) * 1000, "sign-in expires")}
         for index, (name, (seconds, percent, expires, reason)) in enumerate(late.items()):
@@ -790,7 +794,7 @@ class Controller(unittest.TestCase):
     def test_an_expiring_claude_sign_in_stops_a_claude_grader_and_is_not_read_for_a_codex_grader(self):
         claude, codex = Cohort(self.root / "claude", 100, jobs=1), self.codex_cohort(self.root / "codex", jobs=1)
         for cohort in (claude, codex):
-            cohort.sign_in_expires = (time.time() + subscription_meters.SIGN_IN_MARGIN_SECONDS - 60) * 1000
+            cohort.sign_in_expires = (time.time() + SIGN_IN_MARGIN_SECONDS - 60) * 1000
         self.assertEqual(claude.run(), 4)
         self.assertEqual(claude.launched, [])
         self.assertEqual(claude.status()["state"], "quota-stopped")
@@ -1001,12 +1005,6 @@ class Controller(unittest.TestCase):
                 self.assertEqual(regrade.invoke([sys.executable, "-c", show], log, tools), 0)
             self.assertEqual(log.read_text(), f"{tools} {hashlib.sha256(b'pinned').hexdigest()}\n")
 class RegradingBudget(unittest.TestCase):
-    def test_the_meter_module_imports_only_the_standard_library(self):
-        tree = ast.walk(ast.parse(Path(subscription_meters.__file__).read_text()))
-        imports = [node for node in tree if isinstance(node, (ast.Import, ast.ImportFrom))]
-        named = {name.name if isinstance(node, ast.Import) else node.module for node in imports for name in node.names}
-        self.assertLessEqual({name.split(".")[0] for name in named}, sys.stdlib_module_names)
-
     def test_pinned_timeout_reaches_dispatch(self):
         import grade
         arguments = regrade.dispatch_arguments(Path("work"), Path("key.json"),

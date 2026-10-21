@@ -85,7 +85,7 @@ from parameters and exact files for fixed-name loaders. Refresh those rules when
 | `target-or-skill-dependency` | Frozen skill code and target probes or upstream excerpts | Keep the declared target or skill environment. Python remains allowed there. |
 
 Classification is by role, not age. In particular, a research directory is not a
-removal boundary. `test_dispatch_serial.py` imports the serial dispatcher. The historical answer
+removal boundary. The historical answer
 tables are separate from the current scorecard, whose sole owner remains `src/lib/scoring.ts`.
 
 The explicit dynamic loaders in `test_packet_replacements.py`,

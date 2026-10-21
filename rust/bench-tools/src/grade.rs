@@ -7,7 +7,7 @@
 
 mod filing;
 pub(crate) mod provision;
-mod runtime;
+pub(crate) mod runtime;
 mod source;
 
 pub use filing::{

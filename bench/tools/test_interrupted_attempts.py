@@ -4,26 +4,19 @@ Every attempt directory is a temporary fixture shaped like the saved built-in at
 """
 from __future__ import annotations
 
-import argparse
-from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
-import fcntl
 import hashlib
-import io
 import json
 import os
 from pathlib import Path
 import signal
 import subprocess
-import sys
 import tempfile
-import threading
 import time
 import unittest
 from unittest.mock import patch
 
 from test_claude_dispatch import fake_bench_tools
-import run_cell
 import rust_runtime
 
 TOOLS = Path(__file__).resolve().parent
@@ -49,6 +42,12 @@ ARMS = {"claude": {"id": "arm-claude", "kind": "claude-builtin", "model": "m-1",
                    "adapter": {"expected_prompt_variants": [PROMPT_HASH]}},
         "codex": {"id": "arm-codex", "kind": "codex", "model": "m-1", "effort": "high",
                   "adapter": {"expected_prompt_variants": [RUBRIC_HASH]}}}
+
+
+def last_output(attempt: Path) -> float | None:
+    """The newest file time among the attempt's ``std*`` streams and its home, as the filer reads it."""
+    return max((path.stat().st_mtime for path in (*attempt.glob("std*"), *(attempt / "home").rglob("*")) if path.is_file()),
+               default=None)
 
 
 def lines(*records) -> str:
@@ -99,9 +98,10 @@ class Fixture(unittest.TestCase):
         self.work = self.root / "work" / RUN_ID
         (self.run_dir / "fixture").mkdir(parents=True)
         (self.root / "bench/arms").mkdir()
+        for name in ("tools", "harness"):
+            (self.root / "bench" / name).symlink_to(TOOLS.parent / name)
         for arm in ARMS.values():
             (self.root / "bench/arms" / f"{arm['id']}.json").write_text(json.dumps(arm), encoding="utf-8")
-        self.enterContext(patch.object(run_cell, "BENCH", self.root / "bench"))
         self.enterContext(patch.dict(os.environ, {"BENCH_ARCHIVE_ROOT": str(self.root / "archive")}))
         self.manifest = {"run_id": RUN_ID, "frozen_at": "2026-01-01T00:00:00Z",
                          "arms": [{"id": arm["id"], "expected_cli_version": "9.9.9", "resolved_skill_tree": None}
@@ -177,7 +177,7 @@ class Fixture(unittest.TestCase):
     def evidence(self, attempt_id: str = "att-001", **changed) -> Path:
         """An observation one second after the attempt's last output, so no test depends on the wall clock."""
         path = self.root / f"process-stop-{len(list(self.root.glob('process-stop-*')))}.json"
-        observed = datetime.fromtimestamp((run_cell.last_output(self.work / "att-001") or 0) + 1, timezone.utc)
+        observed = datetime.fromtimestamp((last_output(self.work / "att-001") or 0) + 1, timezone.utc)
         path.write_text(json.dumps({"run_id": RUN_ID, "attempt_id": attempt_id, "observed_at": observed.isoformat(),
                                     "status": "absent", "verified_by": "fixture: process table of the dispatch host", **changed}),
                         encoding="utf-8")
@@ -197,35 +197,28 @@ class Fixture(unittest.TestCase):
         return json.loads((self.run_dir / "attempts" / attempt.name / "attempt.json").read_text(encoding="utf-8"))
 
     def runner(self, *args: str) -> subprocess.CompletedProcess:
-        """``run_cell.py`` from its command line, in this process so that it reads the fixture's arms."""
-        argv = ["run_cell.py", "--run", str(self.run_dir), "--work", str(self.work), *args]
-        with patch.object(sys, "argv", argv), redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()) as err:
-            code = run_cell.main()
-        return subprocess.CompletedProcess(argv, code, out.getvalue(), err.getvalue())
+        return subprocess.run([str(rust_runtime.resolve("bench-tools")), "run-cell", "--run", str(self.run_dir), "--work", str(self.work), *args],
+                              capture_output=True, text=True, encoding="utf-8")
 
-    def waiting_filer(self, attempt: Path, first, *args: str) -> subprocess.CompletedProcess:
-        """``run_cell.py --file`` started while another filer holds the attempt; ``first`` is that filer's work."""
-        holder = os.open(attempt, os.O_RDONLY)
-        self.addCleanup(os.close, holder)
-        fcntl.flock(holder, fcntl.LOCK_EX)
-        flock, waiting, done = fcntl.flock, threading.Event(), []
+    def status(self) -> dict:
+        done = self.runner("--status")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return json.loads(done.stdout)
 
-        def announce(descriptor, operation):
-            if not operation & fcntl.LOCK_NB:
-                waiting.set()
-            flock(descriptor, operation)
+    def record(self, attempt_id: str) -> dict:
+        return json.loads((self.run_dir / "attempts" / attempt_id / "attempt.json").read_text(encoding="utf-8"))
 
-        with patch.object(run_cell.fcntl, "flock", announce):
-            waiter = threading.Thread(target=lambda: done.append(self.runner("--file", attempt.name, *args)))
-            waiter.start()
-            self.assertTrue(waiting.wait(30), "the second filer never asked for the attempt directory")
-            first()
-            flock(holder, fcntl.LOCK_UN)
-            waiter.join(30)
-        return done[0]
+    def file_failing(self, attempt_id: str, needle: str) -> dict:
+        """``--file`` that files the attempt but fails afterwards; the filed record."""
+        done = self.runner("--file", attempt_id)
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn(needle, done.stderr)
+        return self.record(attempt_id)
 
-    def run_state(self) -> run_cell.Run:
-        return run_cell.Run(self.run_dir, self.work)
+    def close_interruption(self, attempt: Path, evidence: Path, reason: str) -> None:
+        """The interruption record ``--file --interrupted`` writes before it files."""
+        (attempt / "interruption.json").write_text(json.dumps({
+            "reason": reason, "last_output_at": None, "process_stop": json.loads(evidence.read_text(encoding="utf-8"))}), encoding="utf-8")
 
     def assert_unknown_total(self, record: dict, minimum) -> None:
         usage = record["usage"]
@@ -345,14 +338,12 @@ class UnprovenUsage(Fixture):
             lines({"type": "user", "message": {"content": "Review the rest"}}), encoding="utf-8")
         for attempt, child in ((resumed, "agent-a1.jsonl"), (started, "agent-a2.jsonl")):
             with self.subTest(child=child):
-                with self.assertRaisesRegex(run_cell.InputError, "workspace cleanup failed: usage is incomplete"):
-                    run_cell.file(self.run_state(), attempt.name)
-                record = self.run_state().filed[attempt.name]
+                record = self.file_failing(attempt.name, "workspace cleanup failed: usage is incomplete")
                 self.assertEqual(record["disposition"], "valid completed")
                 self.assert_unknown_total(record, CAPTURED)
                 self.assertTrue(any(f"{child} ends without end_turn" in note for note in record["notes"]), record["notes"])
                 self.assertTrue((attempt / "clone").is_dir())
-        self.assertEqual(self.run_state().spend()["attempts"], 10.0)
+        self.assertEqual(self.status()["spend_usd"]["attempts"], 10.0)
 
     def test_child_transcript_holding_no_turn_leaves_the_total_unknown(self):
         for name, child in (("empty", ""), ("queued request", lines({"type": "queue-operation", "operation": "enqueue"}))):
@@ -443,9 +434,7 @@ class UnprovenUsage(Fixture):
         }
         for gap, (attempt, harness, floor) in cases.items():
             with self.subTest(gap=gap):
-                with self.assertRaisesRegex(run_cell.InputError, "workspace cleanup failed: usage is incomplete"):
-                    run_cell.file(self.run_state(), attempt.name)
-                record = self.run_state().filed[attempt.name]
+                record = self.file_failing(attempt.name, "workspace cleanup failed: usage is incomplete")
                 self.assertEqual(record["disposition"], "valid completed")
                 self.assert_unknown_total(record, floor)
                 self.assertTrue(any(f"{gap} but was not captured" in note for note in record["notes"]), record["notes"])
@@ -479,8 +468,8 @@ class UnprovenUsage(Fixture):
                                 record["notes"])
                 requests = (self.run_dir / "attempts" / attempt.name / "usage-requests.jsonl").read_text(encoding="utf-8")
                 self.assertEqual(len(requests.splitlines()), rows)
-        state = self.run_state()
-        self.assertEqual((state.over_reservation(), state.spend()["attempts"]), (["att-002"], round(5.0 + over, 4)))
+        state = self.status()
+        self.assertEqual((state["over_reservation"], state["spend_usd"]["attempts"]), (["att-002"], round(5.0 + over, 4)))
 
     def test_missing_root_rollout_keeps_the_child_requests(self):
         attempt = self.attempt(harness="codex", exit_code=1)
@@ -534,8 +523,8 @@ class InterruptionFiling(Fixture):
         done = self.filer(attempt)
         self.assertEqual(done.returncode, 2, done.stdout)
         self.assertIn("observed_at precedes the attempt's last output", done.stderr)
-        run_cell.close_interruption(self.run_state(), "att-001", str(self.evidence()), "host restarted")
-        later = run_cell.last_output(attempt) + 60
+        self.close_interruption(attempt, self.evidence(), "host restarted")
+        later = last_output(attempt) + 60
         os.utime(attempt / "stdout.jsonl", (later, later))
         done = self.filer(attempt)
         self.assertEqual(done.returncode, 2, done.stdout)
@@ -544,7 +533,7 @@ class InterruptionFiling(Fixture):
 
     def test_filer_refuses_an_interruption_record_for_a_dispatch_that_ended(self):
         attempt = self.interrupted()
-        run_cell.close_interruption(self.run_state(), "att-001", str(self.evidence()), "host restarted")
+        self.close_interruption(attempt, self.evidence(), "host restarted")
         with (attempt / "dispatch.txt").open("a", encoding="utf-8") as handle:
             handle.write("exit=0\n")
         done = self.filer(attempt)
@@ -611,20 +600,6 @@ class InterruptionFiling(Fixture):
         self.assertEqual((again.returncode, json.loads(again.stdout)), (0, json.loads(first.stdout)), again.stderr)
         self.assertEqual((record.read_bytes(), record.stat().st_mtime_ns), before)
 
-    def test_a_filer_that_waited_for_another_returns_the_record_it_filed(self):
-        attempt = self.interrupted()
-        filed = self.run_dir / "attempts/att-001"
-
-        def first():
-            filed.mkdir(parents=True)
-            (filed / "attempt.json").write_text(json.dumps({"disposition": "stopped: filed first", "usage": {"priced_total_usd": None}}),
-                                                encoding="utf-8")
-
-        done = self.waiting_filer(attempt, first, "--interrupted", str(self.evidence()), "--reason", "host restarted")
-        self.assertEqual((done.returncode, json.loads(done.stdout)["disposition"]), (0, "stopped: filed first"), done.stderr)
-        self.assertFalse((attempt / "interruption.json").exists())
-        self.assertTrue((attempt / "home/.claude/.credentials.json").exists())
-
     def test_an_ended_dispatch_is_not_filed_as_an_interruption(self):
         self.attempt()
         done = self.runner("--file", "att-001", "--interrupted", str(self.evidence()), "--reason", "host restarted")
@@ -636,7 +611,7 @@ class InterruptionFiling(Fixture):
         attempt.mkdir(parents=True)
         (attempt / "cell.json").write_text(json.dumps({"cell": {"target": "t-fixture", "arm": "arm-claude", "replicate": 1},
                                                        "reserved_usd": 5.0, "predecessor": None}), encoding="utf-8")
-        self.assertEqual(self.run_state().spend()["in_flight_reserved"], 5.0)
+        self.assertEqual(self.status()["spend_usd"]["in_flight_reserved"], 5.0)
         for name, evidence, needle in (("still running", self.evidence(status="running"), "status is 'running', not 'absent'"),
                                        ("another attempt", self.evidence("att-009"), "not " + RUN_ID + "/att-001"),
                                        ("no observation", self.root / "no-such-evidence.json", "no readable process-stop evidence")):
@@ -647,8 +622,8 @@ class InterruptionFiling(Fixture):
                 self.assertTrue((attempt / "cell.json").is_file())
         done = self.runner("--release", "att-001", "--interrupted", str(self.evidence()))
         self.assertEqual((done.returncode, json.loads(done.stdout)), (0, {"attempt_id": "att-001", "released": True}), done.stderr)
-        state = self.run_state()
-        self.assertEqual((attempt.exists(), state.attempt_ids(), state.spend()["in_flight_reserved"]), (False, [], 0.0))
+        state = self.status()
+        self.assertEqual((attempt.exists(), state["attempts"], state["spend_usd"]["in_flight_reserved"]), (False, 0, 0.0))
 
     def test_a_claim_whose_reviewer_started_or_that_is_filed_is_never_released(self):
         started = self.interrupted()
@@ -741,65 +716,11 @@ time.sleep(120)
 
 
 class Accounting(Fixture):
-    def choose(self, **wanted):
-        return run_cell.choose(self.run_state(), argparse.Namespace(**{"next": False, "cell": None, "replace": None, "reason": None,
-                                                                       "stopped_by_harness": False, **wanted}))
-
-    def file_record(self, attempt_id: str, priced, low=None, disposition: str = "stopped: host restarted", predecessor=None) -> None:
-        directory = self.run_dir / "attempts" / attempt_id
-        directory.mkdir(parents=True)
-        (directory / "attempt.json").write_text(json.dumps({
-            "cell": {"target": "t-fixture", "arm": "arm-claude", "replicate": 1}, "disposition": disposition, "predecessor": predecessor,
-            "usage": {"priced_total_usd": priced, "cost_bounds_usd": {"low": low, "high": None if priced is None else priced}},
-            "timing": {"dispatched_at": "2026-01-01T00:00:00Z", "completed_at": None}}), encoding="utf-8")
-
     def claim(self, attempt_id: str, predecessor=None) -> None:
         (self.work / attempt_id).mkdir(parents=True)
         (self.work / attempt_id / "cell.json").write_text(json.dumps({
             "cell": {"target": "t-fixture", "arm": "arm-claude", "replicate": 1}, "reserved_usd": 5.0, "predecessor": predecessor}),
             encoding="utf-8")
-
-    def test_restart_and_replacement_count_each_reservation_once(self):
-        (self.run_dir / "charges.jsonl").write_text(json.dumps({"at": "2026-01-01", "step": "setup probe", "usd": 1.0}) + "\n", encoding="utf-8")
-        self.claim("att-001")
-        in_flight = {"attempts": 0.0, "charges": 1.0, "in_flight_reserved": 5.0, "total": 6.0}
-        self.assertEqual(self.run_state().spend(), in_flight)
-        with self.assertRaisesRegex(run_cell.Refused, "still in flight"):
-            self.choose(replace="att-001", reason="host restarted", stopped_by_harness=True)
-        self.file_record("att-001", None, low=0.25)
-        unknown = {"attempts": 5.0, "charges": 1.0, "in_flight_reserved": 0.0, "total": 6.0}
-        self.assertEqual(self.run_state().spend(), unknown)
-        self.assertEqual(self.run_state().spend(), unknown)
-        pick = self.choose(replace="att-001", reason="host restarted", stopped_by_harness=True)
-        self.assertEqual((pick["predecessor"], pick["replacement_index"], pick["reserved_usd"], pick["spent_before"]),
-                         ("att-001", 1, 5.0, unknown))
-        self.claim("att-002", predecessor="att-001")
-        replacing = {"attempts": 5.0, "charges": 1.0, "in_flight_reserved": 5.0, "total": 11.0}
-        for _ in range(2):
-            state = self.run_state()
-            self.assertEqual((state.spend(), state.replacements_used(), state.in_flight()), (replacing, 1, ["att-002"]))
-        self.file_record("att-002", 0.4, disposition="valid completed", predecessor="att-001")
-        state = self.run_state()
-        self.assertEqual(state.spend(), {"attempts": 5.4, "charges": 1.0, "in_flight_reserved": 0.0, "total": 6.4})
-        self.assertEqual((state.replacements_used(), state.attempt_ids()), (1, ["att-001", "att-002"]))
-
-    def test_usage_beyond_its_reservation_stops_launches_until_reconciled(self):
-        for name, priced, low, counted in (("priced total", 6.5, 6.5, 6.5), ("captured minimum of an unknown total", None, 6.5, 6.5)):
-            with self.subTest(observed=name):
-                attempt = self.run_dir / "attempts/att-001"
-                if attempt.exists():
-                    (attempt / "attempt.json").unlink()
-                    attempt.rmdir()
-                (self.run_dir / "charges.jsonl").write_text("", encoding="utf-8")
-                self.file_record("att-001", priced, low=low)
-                self.assertEqual(self.run_state().spend()["attempts"], counted)
-                self.assertEqual(json.loads(self.runner("--status").stdout)["over_reservation"], ["att-001"])
-                with self.assertRaisesRegex(run_cell.Refused, "att-001 used more than was reserved"):
-                    self.choose(replace="att-001", reason="host restarted", stopped_by_harness=True)
-                (self.run_dir / "charges.jsonl").write_text(json.dumps({"at": "2026-01-02", "step": "reconcile att-001 with the provider meter",
-                                                                        "usd": 0.0, "reconciles": "att-001"}) + "\n", encoding="utf-8")
-                self.assertEqual(self.run_state().over_reservation(), [])
-                self.assertEqual(self.choose(replace="att-001", reason="host restarted", stopped_by_harness=True)["predecessor"], "att-001")
 
     def test_a_partly_written_record_is_not_a_filed_attempt(self):
         directory = self.run_dir / "attempts/att-001"
@@ -810,8 +731,9 @@ class Accounting(Fixture):
             rust_runtime.publish(directory / "attempt.json", '{"disposition": "valid completed"}')
         self.assertEqual(json.loads((directory / "attempt.json").read_text(encoding="utf-8")), {"disposition": "stopped: earlier filing"})
         (directory / "attempt.json").unlink()
-        state = self.run_state()
-        self.assertEqual((state.filed, state.in_flight()), ({}, ["att-001"]))
+        state = self.status()
+        self.assertEqual((state["filed"], state["in_flight"]), ({"valid completed": 0, "harness-invalid": 0, "stopped": 0, "other": 0},
+                                                                ["att-001"]))
 
     def test_overlapping_publishers_each_leave_a_whole_record(self):
         record = self.root / "attempt.json"
@@ -834,32 +756,17 @@ class FixtureCleanup(Fixture):
     def test_valid_fixture_filed_through_the_runner_prunes_with_its_resolved_target(self):
         attempt = self.attempt()
         self.assertFalse((self.root / "bench/targets").exists())
-        record = run_cell.file(self.run_state(), "att-001")
-        self.assertEqual(record["disposition"], "valid completed")
+        done = self.runner("--file", "att-001")
+        self.assertEqual((done.returncode, json.loads(done.stdout)["disposition"]), (0, "valid completed"), done.stderr)
         receipt = json.loads((attempt / "workspace-pruned.json").read_text(encoding="utf-8"))
         self.assertTrue(receipt["applied"])
         self.assertFalse((attempt / "clone").exists())
         self.assertTrue((attempt / "home").is_dir())
 
-    def test_a_filer_that_waited_keeps_the_first_record_and_prunes(self):
-        attempt = self.attempt()
-        record, first = self.run_dir / "attempts/att-001/attempt.json", []
-
-        def file_first():
-            self.filed(attempt)
-            first.append((record.read_bytes(), record.stat().st_mtime_ns))
-
-        done = self.waiting_filer(attempt, file_first)
-        self.assertEqual((done.returncode, json.loads(done.stdout)["disposition"]), (0, "valid completed"), done.stderr)
-        self.assertEqual((record.read_bytes(), record.stat().st_mtime_ns), first[0])
-        self.assertTrue(json.loads((attempt / "workspace-pruned.json").read_text(encoding="utf-8"))["applied"])
-        self.assertFalse((attempt / "clone").exists())
-
     def test_fixture_that_no_longer_matches_its_target_remains(self):
         attempt = self.attempt()
         (attempt / "clone/untracked.txt").write_text("left by the reviewer\n", encoding="utf-8")
-        with self.assertRaisesRegex(run_cell.InputError, "evidence filed, but workspace cleanup failed: clone revision or working tree changed"):
-            run_cell.file(self.run_state(), "att-001")
+        self.file_failing("att-001", "evidence filed, but workspace cleanup failed: clone revision or working tree changed")
         self.assertTrue((attempt / "clone").is_dir())
         self.assertFalse((attempt / "workspace-pruned.json").exists())
 
@@ -873,20 +780,24 @@ class FixtureCleanup(Fixture):
         (unknown / "stdout.jsonl").unlink()
         for attempt, disposition in ((invalid, "harness-invalid"), (stopped, "stopped")):
             with self.subTest(disposition=disposition):
-                record = run_cell.file(self.run_state(), attempt.name)
+                done = self.runner("--file", attempt.name)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                record = json.loads(done.stdout)
                 self.assertTrue(record["disposition"].startswith(disposition), record["disposition"])
                 self.assertTrue((attempt / "clone").is_dir())
                 self.assertFalse((attempt / "workspace-pruned.json").exists())
-        with self.assertRaisesRegex(run_cell.InputError, "workspace cleanup failed: usage is incomplete"):
-            run_cell.file(self.run_state(), "att-003")
+        self.file_failing("att-003", "workspace cleanup failed: usage is incomplete")
         self.assertTrue((unknown / "clone").is_dir())
         (self.run_dir / "charges.jsonl").write_text(json.dumps({
             "at": "2026-01-02", "step": "unknown usage of att-003 accepted at its reservation", "usd": 0, "reconciles": "att-003"}) + "\n", encoding="utf-8")
-        state = self.run_state()
-        self.assertEqual(state.filed["att-003"]["disposition"], "valid completed")
-        self.assertTrue(run_cell.prune(state, "att-003", "t-fixture")["applied"])
+        self.assertEqual(self.record("att-003")["disposition"], "valid completed")
+        pruned = subprocess.run(["python3", str(TOOLS / "prune_workspace.py"), "--attempt", str(self.run_dir / "attempts/att-003"),
+                                 "--workspace", str(unknown), "--target", str(self.run_dir / "fixture"), "--apply"],
+                                capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(pruned.returncode, 0, pruned.stdout + pruned.stderr)
+        self.assertTrue(json.loads(pruned.stdout)["applied"])
         self.assertFalse((unknown / "clone").exists())
-        self.assertGreaterEqual(self.run_state().spend()["attempts"], 5.0)
+        self.assertGreaterEqual(self.status()["spend_usd"]["attempts"], 5.0)
 
 
 if __name__ == "__main__":
