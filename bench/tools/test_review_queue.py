@@ -141,7 +141,7 @@ def fake_cell(argv: list) -> int:
         if name == "dispatch.sh":
             return review(command)
         done = real["tool"](command, env)
-        if name == "file_attempt.py":
+        if command[1:3] == ["file-attempt", "--attempt-dir"]:
             crash("after_filing")
         return done
 
@@ -1227,10 +1227,10 @@ class Status(QueueFixture):
         clock, naps = [1_800_000_000.0], []
 
         def sleep(_seconds: float) -> None:
-            naps.append(clock[0])
             if not self.reviews():
                 time.sleep(0.02)
                 return
+            naps.append(clock[0])
             clock[0] += 600
             if len(naps) >= 9:
                 (self.root / "release").touch()

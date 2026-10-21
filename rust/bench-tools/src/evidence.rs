@@ -948,18 +948,6 @@ struct Differs {
     mode: u32,
 }
 
-/// `shlex.quote`.
-fn shell_quote(text: &str) -> String {
-    if !text.is_empty()
-        && text
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"@%+=:,./-_".contains(&byte))
-    {
-        return text.to_string();
-    }
-    format!("'{}'", text.replace('\'', "'\"'\"'"))
-}
-
 fn differs_refusal(root: &PyPath, found: &[Differs]) -> Error {
     let aside = root.join(b".cache/evidence/moved-aside");
     let one = found.len() == 1;
@@ -988,13 +976,13 @@ fn differs_refusal(root: &PyPath, found: &[Differs]) -> Error {
                 .join(item.sha256.as_bytes())
                 .join(item.member.path.as_bytes()),
         );
-        let target = shell_quote(&target.display());
+        let target = crate::shlex::quote(&target.display());
         if !directories.contains(&target) {
             directories.push(target.clone());
         }
         moves.push(format!(
             "mv -- {} {target}/",
-            shell_quote(&item.path.display())
+            crate::shlex::quote(&item.path.display())
         ));
     }
     message.push_str(if one {
@@ -1358,12 +1346,5 @@ mod tests {
         assert_eq!(shown("a/b"), ["a", "."]);
         assert_eq!(shown("."), Vec::<String>::new());
         assert_eq!(shown("/"), Vec::<String>::new());
-    }
-
-    #[test]
-    fn shell_quote_matches_shlex() {
-        assert_eq!(shell_quote("/tmp/a-b_c.tar.gz"), "/tmp/a-b_c.tar.gz");
-        assert_eq!(shell_quote("a b"), "'a b'");
-        assert_eq!(shell_quote("it's"), "'it'\"'\"'s'");
     }
 }

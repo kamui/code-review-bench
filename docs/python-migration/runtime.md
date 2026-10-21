@@ -116,7 +116,7 @@ python3 bench/tools/rust_runtime.py pin bench-tools > bench/runs/<run>/runtimes.
 
 A run frozen at a commit that has `rust/bench-tools` must pin `bench-tools`, whose `normalize-review` and
 `normalize-thermo` normalize its reviews ([#194](processing.md#the-review-normalizers)). `pin` prints one name; merge
-the objects when a run pins more than one. `run_cell.py`, the skill runners and `file_attempt.py --replay` refuse a run
+the objects when a run pins more than one. `run_cell.py`, its `--file` and the skill runners refuse a run
 that pins none before anything is claimed, and `review_queue.py` refuses its queue before any launch. A run frozen
 earlier pins none and keeps running from its own freeze checkout, with the Python normalizers.
 

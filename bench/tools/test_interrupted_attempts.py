@@ -22,7 +22,6 @@ import time
 import unittest
 from unittest.mock import patch
 
-import file_attempt
 from test_claude_dispatch import fake_bench_tools
 import run_cell
 import rust_runtime
@@ -178,7 +177,7 @@ class Fixture(unittest.TestCase):
     def evidence(self, attempt_id: str = "att-001", **changed) -> Path:
         """An observation one second after the attempt's last output, so no test depends on the wall clock."""
         path = self.root / f"process-stop-{len(list(self.root.glob('process-stop-*')))}.json"
-        observed = datetime.fromtimestamp((file_attempt.last_output(self.work / "att-001") or 0) + 1, timezone.utc)
+        observed = datetime.fromtimestamp((run_cell.last_output(self.work / "att-001") or 0) + 1, timezone.utc)
         path.write_text(json.dumps({"run_id": RUN_ID, "attempt_id": attempt_id, "observed_at": observed.isoformat(),
                                     "status": "absent", "verified_by": "fixture: process table of the dispatch host", **changed}),
                         encoding="utf-8")
@@ -186,10 +185,10 @@ class Fixture(unittest.TestCase):
 
     def filer(self, attempt: Path, harness: str = "claude") -> subprocess.CompletedProcess:
         return subprocess.run(
-            [sys.executable, str(TOOLS / "file_attempt.py"), "--attempt-dir", str(attempt), "--clone", str(attempt / "clone"),
+            [str(rust_runtime.resolve("bench-tools")), "file-attempt", "--attempt-dir", str(attempt), "--clone", str(attempt / "clone"),
              "--target", str(self.run_dir / "fixture"), "--arm", str(self.root / "bench/arms" / f"{ARMS[harness]['id']}.json"),
              "--run-id", RUN_ID, "--attempt-id", attempt.name, "--replicate", "1", "--out", str(self.run_dir / "attempts" / attempt.name),
-             "--run", str(self.run_dir), "--rates", str(attempt / "rates.json"), "--archive-root", str(self.root / "archive"), "--billing-mode", "subscription"],
+             "--run", str(self.run_dir), "--harness-dir", str(TOOLS.parent / "harness"), "--rates", str(attempt / "rates.json"), "--archive-root", str(self.root / "archive"), "--billing-mode", "subscription"],
             capture_output=True, text=True, encoding="utf-8")
 
     def filed(self, attempt: Path, harness: str = "claude") -> dict:
@@ -536,7 +535,7 @@ class InterruptionFiling(Fixture):
         self.assertEqual(done.returncode, 2, done.stdout)
         self.assertIn("observed_at precedes the attempt's last output", done.stderr)
         run_cell.close_interruption(self.run_state(), "att-001", str(self.evidence()), "host restarted")
-        later = file_attempt.last_output(attempt) + 60
+        later = run_cell.last_output(attempt) + 60
         os.utime(attempt / "stdout.jsonl", (later, later))
         done = self.filer(attempt)
         self.assertEqual(done.returncode, 2, done.stdout)
@@ -807,8 +806,8 @@ class Accounting(Fixture):
         directory.mkdir(parents=True)
         self.claim("att-001")
         (directory / "attempt.json").write_text('{"disposition": "stopped: earlier filing"}', encoding="utf-8")
-        with patch.object(file_attempt.os, "fsync", side_effect=OSError("disk full")), self.assertRaises(OSError):
-            file_attempt.publish(directory / "attempt.json", '{"disposition": "valid completed"}')
+        with patch.object(rust_runtime.os, "fsync", side_effect=OSError("disk full")), self.assertRaises(OSError):
+            rust_runtime.publish(directory / "attempt.json", '{"disposition": "valid completed"}')
         self.assertEqual(json.loads((directory / "attempt.json").read_text(encoding="utf-8")), {"disposition": "stopped: earlier filing"})
         (directory / "attempt.json").unlink()
         state = self.run_state()
@@ -821,14 +820,14 @@ class Accounting(Fixture):
         def overlap(descriptor):
             if not seen:
                 seen.append("staged")
-                file_attempt.publish(record, "second\n")
+                rust_runtime.publish(record, "second\n")
                 seen.append(record.read_text(encoding="utf-8"))
             fsync(descriptor)
 
-        with patch.object(file_attempt.os, "fsync", overlap):
-            file_attempt.publish(record, "first\n")
+        with patch.object(rust_runtime.os, "fsync", overlap):
+            rust_runtime.publish(record, "first\n")
         self.assertEqual((seen[1], record.read_text(encoding="utf-8")), ("second\n", "first\n"))
-        self.assertEqual(list(self.root.glob("attempt.json.*")), [])
+        self.assertEqual(list(self.root.glob(".attempt.json.*")), [])
 
 
 class FixtureCleanup(Fixture):

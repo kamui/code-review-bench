@@ -657,8 +657,8 @@ for a final differential, and the mapping replay compares with recorded outcomes
 | --- | --- | --- |
 | `packet_selection.py` | `run_cell.py`, `codex_skill_runner.py` | #157 |
 | `grade.py` (dispatch, online preflight) | `regrade.py`, manual dispatch | #157 |
-| `check_manifest.py` (library only) | `rates`, `provision`, `run_cell`, `file_attempt`, `evidence_store` | #160 |
-| `normalize_review.py`, `diff_identity.py` | As the processing record lists | #158, #157 |
+| `check_manifest.py` (library only) | `rates`, `provision`, `run_cell`, `evidence_store` | #160 |
+| `diff_identity.py` | As the processing record lists | #157 |
 | `tools/behavior_contract.py` features added here | The contract harness | #160 |
 | `stage_edition.py` and the other research helpers | Research records | never deleted |
 
