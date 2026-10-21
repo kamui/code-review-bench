@@ -139,8 +139,7 @@ class MovedCommands(unittest.TestCase):
         self.assertEqual(scripts["data"], "bun run evidence:fetch && python3 bench/tools/rust_runtime.py exec bench-tools -- "
                          "export-explorer")
         self.assertEqual(scripts["plan:methodology"], "python3 bench/tools/rust_runtime.py exec bench-tools -- methodology")
-        self.assertIn("python3 tools/behavior_contract.py --corpus tools/behavior_contracts/check-manifest.v1.json &&",
-                      scripts["test:bench"])
+        self.assertIn("cargo test --locked --test behavior_contracts -- check-manifest::", scripts["test:bench"])
         self.assertEqual(scripts["evidence:fetch"], "python3 bench/tools/rust_runtime.py exec bench-tools -- evidence fetch "
                          "--manifest bench/evidence/manifests/repository-payloads-2026-10-08-v1.json")
 

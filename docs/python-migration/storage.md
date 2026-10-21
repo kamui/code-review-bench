@@ -151,7 +151,8 @@ deliberate difference. `tests/native_artifacts.rs` interrupts both at each disk 
 `bench-tools file-attempt` calls both in process since [#157](https://github.com/kamui/code-review-bench/issues/157);
 `bench-tools run-cell --file` refuses a run whose pin lacks `file-attempt`, naming the run's freeze commit. The corpus runs
 against Rust, with a differential against the retained `native_artifacts.py` and the former
-`file_attempt.archive_transcripts`, kept in `behavior_contract.py`'s `python-archive-transcripts` driver.
+`file_attempt.archive_transcripts`, kept in the deleted contract harness's `python-archive-transcripts` driver until
+[#160](https://github.com/kamui/code-review-bench/issues/160) moved the corpora to the Rust runner.
 
 `tests/python_archives.rs` checks that the retained `evidence_store.py` and `native_artifacts.py` can restore what
 `bench_tools::archive` writes, and that it reads what they write. It is deleted with them
@@ -357,21 +358,9 @@ such as `9b2b0ad9f`.
 ```sh
 cd rust/bench-tools && cargo fetch --locked && cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
 python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select
-python3 tools/behavior_contract.py --corpus tools/behavior_contracts/archive.v1.json
-python3 tools/behavior_contract.py --corpus tools/behavior_contracts/import-benchmark.v1.json
-python3 tools/behavior_contract.py --corpus tools/behavior_contracts/evidence-store.v1.json --implementations EVIDENCE_MAP
-python3 tools/behavior_contract.py --corpus tools/behavior_contracts/evidence-store.v1.json --allow-known-defects --differential EVIDENCE_MAP
-python3 tools/behavior_contract.py --corpus tools/behavior_contracts/evidence-inventory.v1.json --implementations INVENTORY_MAP
-python3 tools/behavior_contract.py --corpus tools/behavior_contracts/evidence-inventory.v1.json --allow-known-defects --differential INVENTORY_MAP
-python3 tools/behavior_contract.py --corpus tools/behavior_contracts/native-artifacts.v1.json --implementations NATIVE_RUST_MAP
-python3 tools/behavior_contract.py --corpus tools/behavior_contracts/native-artifacts.v1.json --allow-known-defects --implementations NATIVE_PYTHON_MAP --differential NATIVE_RUST_MAP
-python3 tools/behavior_contract.py --verify-decision-history
 bun run verify:import
 ```
 
-The `Rust runtime` workflow writes each map from `behavior_contract.default_commands`, as
-[the storage corpora](contracts/README.md#run-the-storage-corpora) show. `EVIDENCE_MAP` routes every `evidence-store`
-command to `bench-tools evidence`, and `INVENTORY_MAP` routes `evidence-inventory` to `bench-tools evidence inventory`.
-`NATIVE_PYTHON_MAP` comes from `behavior_contract.python_commands`. The `archive` and `import-benchmark` corpora run the
-Rust executable by default. `import_benchmark.py` is deleted and the `archive` commands have no Python counterpart, so
-they have no differential; each `archive` decision states what Python 3.12 and 3.14 do with its fixture.
+`cargo test --locked` runs the storage corpora through the [corpus runner](contracts/README.md#runner-moved) since
+#160, which dropped their differentials against the retained Python. Each `archive` decision states what Python 3.12
+and 3.14 do with its fixture.
