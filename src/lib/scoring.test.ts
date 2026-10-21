@@ -601,6 +601,10 @@ describe('cost and time', () => {
     const both = card(build([pr], { a: [[pr, [partial(1), partial(1), review(pr, [], { cost: null })]]] }), 'a')
     expect(both.cost.perTrial).toEqual({ kind: 'atLeast', value: 2 / 3, reason:
       "2 attempts' usage was only partly recorded. 1 attempt has no recorded usage and is left out, so the true cost may be higher." })
+    const tokens = card(build([pr], { a: [[pr, [failed(pr, { cost: null, costLowerBound: 1, outputTokens: null }),
+      failed(pr, { cost: null, outputTokens: null }), review(pr, [])]]] }), 'a')
+    expect(tokens.tokens.perTrial).toEqual({ kind: 'unavailable',
+      reason: "1 attempt's usage was only partly recorded. 1 attempt has no recorded usage." })
     const unrecorded = card(build([pr], { a: [[pr, [review(pr, [], { cost: null }), failed(pr, { cost: null })]]] }), 'a')
     expect(unrecorded.cost.perTrial).toEqual({ kind: 'unavailable', reason: '2 attempts have no recorded usage.' })
     const waiting = card(build([pr], { a: [[pr, [partial(1), { attempts: [failed(pr)], pending: true }]]] }), 'a')
