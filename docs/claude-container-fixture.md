@@ -4,6 +4,8 @@ This is the dummy-only feasibility gate for [#36](https://github.com/kamui/code-
 
 The separately versioned v4 fixture adds bounded execution from preparation onward, other-UID protected data, an immutable Git command boundary, and independent layer controls. The historical v1–v3 recipes and evidence remain unchanged. Fixture success supplies evidence for #36; downstream production admission and the broader resource/recovery work in #44 remain separate.
 
+The probes and their tests were removed from `bench/tools/`. The v4 fixture keeps the files it ran in [`source/`](../bench/fixtures/2026-10-06-linux-claude-container-v4/source/), and the [Codex fixture's `source/`](../bench/fixtures/2026-10-11-linux-codex-container/source/) keeps the last v1–v3 probe and resource probe. The commands below run at commit `220bcf794`, the last one with the probes.
+
 ## V4 bounded fixture
 
 ```sh
@@ -149,17 +151,16 @@ sudo systemctl set-property --runtime user@1000.service CPUWeight=100
 
 This selects the documented default CPU weight and requests the CPU controller through a setter supported for running units. It changes no CPU quota or persistent configuration and needs no user-manager restart. Noninteractive authorization and passwordless sudo were refused; the user ran the command in an authenticated terminal. CPU then appeared in every system-owned ancestor. Enabling `+cpu` in the user-owned `user@1000.service` and `app.slice` subtrees allowed the bounded probe to run. It observed `cpu.max=200000 100000`, `memory.max=1073741824` and `pids.max=256` inside the container, then verified removal. These observations establish this host's prerequisite only. Inspect the actual ancestry and effective values on another host; do not use cgroups-disabled execution to satisfy this prerequisite.
 
-## Inspect evidence and regression tests
+## Inspect evidence
 
 Each `attempt-NNN.tar.xz` contains the original per-session metadata and logs. The provider request JSON uses nested xz compression; native stream logs and engine inspections use gzip. The manifest records archive hashes and each artifact's original and stored hashes. No native binary or rootfs archive is committed. Full rebuildable workspaces and homes remain at the original paths recorded in the manifest.
 
 ```sh
 tar -xJf bench/fixtures/2026-10-04-linux-claude-container/attempt-010.tar.xz -C /tmp
 python3 -c 'import json,lzma; print(json.dumps(json.loads(lzma.open("/tmp/attempt-010/provider-requests.json.xz").read()), indent=2))'
-python3 -m unittest discover -s bench/tools -p test_claude_container_probe.py -v
 ```
 
-The twelve default regression tests exercise canonical file boundaries, preserved evidence, binary-pin refusal and admission failures for absent tools, nonexecuted shells, leaked dummy data, repository callback execution, missing native catalogs and ineffective negative controls. They make no provider calls and do not require Podman. `bun run test:bench` includes them through the existing test discovery.
+The twelve default regression tests exercise canonical file boundaries, preserved evidence, binary-pin refusal and admission failures for absent tools, nonexecuted shells, leaked dummy data, repository callback execution, missing native catalogs and ineffective negative controls. They made no provider calls and did not require Podman.
 
 The two optional tests run the pinned native client against a local fake provider with dummy authentication. One uses harmless callbacks in user, project and local settings, requires all their markers to remain absent, and verifies that the explicitly supplied callback and a native Read execute. The other runs hook-free native file checks and the policy-removed control, including all four roots, notebook edits and Agent permissions. Both make no paid calls and do not require Podman. The [saved final checks](../bench/fixtures/2026-10-04-linux-claude-container-v3/checks.json) record all fourteen focused tests passing, the broad suite's 525 tests with eighteen skips and the provisioning self-test. They also retain the first broad run's environment failure, before rerunning with the namespaces it requires.
 

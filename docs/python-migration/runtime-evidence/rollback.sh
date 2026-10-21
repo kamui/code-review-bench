@@ -1,6 +1,6 @@
 #!/bin/sh
-# Install two versions of usage-pilot into a new store, select the second, roll back, and run the
-# behavior corpus with each retained executable. Nothing outside SCRATCH is written.
+# Install two versions of usage-pilot into a new store, select the second, roll back, and
+# verify both retained executables. Nothing outside SCRATCH is written.
 # Usage: docs/python-migration/runtime-evidence/rollback.sh SCRATCH COMMIT
 # SCRATCH must not exist. COMMIT is the revision to clone; dependencies must already be fetched.
 set -eu
@@ -13,16 +13,6 @@ git clone -q --no-checkout "$repo" "$scratch/repo"
 cd "$scratch/repo"
 git -c advice.detachedHead=false checkout -q "$commit"
 tool="python3 bench/tools/rust_runtime.py"
-corpus() {
-    python3 - "$1" > "$scratch/map.json" <<'PY'
-import json, os, sys
-adapter = os.path.abspath("tools/usage_pilot/adapter.py")
-print(json.dumps({"codex": [sys.executable, adapter, "codex", "--engine", "rust", "--binary", sys.argv[1]],
-                  "transcript": [sys.executable, adapter, "transcript"]}))
-PY
-    python3 tools/behavior_contract.py --implementations "$scratch/map.json" > "$scratch/corpus.log" 2>&1
-    echo "corpus: $(grep -c '^PASS' "$scratch/corpus.log") passed, $(grep -c '^FAIL' "$scratch/corpus.log" || true) failed"
-}
 usage() {
     "$1" 2>&1 || true
 }
@@ -44,10 +34,6 @@ usage "$store/usage-pilot/$one/usage-pilot"
 usage "$store/usage-pilot/$two/usage-pilot"
 usage "$store/usage-pilot/$one/usage-pilot" | grep -q '"usage-pilot PATH' || { echo "version one lost its message"; exit 1; }
 usage "$store/usage-pilot/$two/usage-pilot" | grep -q 'second version' || { echo "version two lost its message"; exit 1; }
-echo "== corpus, version one"
-corpus "$store/usage-pilot/$one/usage-pilot"
-echo "== corpus, version two"
-corpus "$store/usage-pilot/$two/usage-pilot"
 echo "== rollback"
 $tool rollback usage-pilot --store "$store" > "$scratch/rollback.json"
 python3 -c 'import json, sys; row = json.load(open(sys.argv[1])); print(row["action"], row["pin"]["sha256"], "previous", row["previous"]["sha256"])' "$scratch/rollback.json"

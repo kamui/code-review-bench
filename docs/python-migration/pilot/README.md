@@ -104,6 +104,9 @@ are retained. The next review outcome and elapsed time are supplied with the PR 
 
 ## Reproduce
 
+`tools/usage_pilot/` was removed with the Python side of the pilot. The steps below run at commit
+`220bcf794`, the last one with it; `cargo test` in `rust/usage-pilot` still runs at any later commit.
+
 From `rust/usage-pilot`, run `cargo fetch --locked`, then `cargo build --locked --release --examples --bins`.
 From the repository root:
 
@@ -120,7 +123,7 @@ The measurement runner requires Linux and GNU time. Each output directory must b
 new. [Check logs](evidence/checks-r2.json.gz) cover dev/release arithmetic, seeded
 successes, malformed/truncated inputs, integer bounds, identity collisions and
 timestamp forms, ignored-record payloads, existing usage tests, the corpus and its immutable decision history.
-Strict mypy and import-preservation logs are alongside them. CI repeats the pilot
+Strict mypy and import-preservation logs are alongside them. CI repeated the pilot
 checks on Python 3.12; local measurements use Python 3.14.7. Supported-host binaries,
 runtime provenance and production recovery remain outside this pilot.
 
