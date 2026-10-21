@@ -48,7 +48,6 @@ BENCH = TOOLS.parent
 ROOT = BENCH.parent
 sys.path.insert(0, str(TOOLS))
 import grading_policy  # noqa: E402
-import clean_context  # noqa: E402
 import codex_grade_dispatch  # noqa: E402
 import codex_grading  # noqa: E402
 import rust_runtime  # noqa: E402
@@ -312,7 +311,7 @@ def dispatch(args) -> list:
     if "identifying" not in key:
         raise Inconsistent("the key lists no identities to check the client's start directory against; prepare a fresh workspace")
     try:
-        start = clean_context.neutral_directory()
+        start = Path(codex_grading.clean_context(tools, "neutral-directory"))
     except ValueError as error:
         raise Inconsistent(str(error)) from error
     named = [s for s in key["identifying"] if s in str(start)]
@@ -320,7 +319,7 @@ def dispatch(args) -> list:
         start.rmdir()
         raise Inconsistent("\n".join(f"client start directory names {s!r}; set TMPDIR to a neutral directory" for s in named))
     try:
-        clean_context.prepare(work)
+        codex_grading.clean_context(tools, "prepare", "--attempt", work)
         (work / "grading-mcp.json").write_text(json.dumps({"mcpServers": {"grading": {
             "command": sys.executable, "args": [str(TOOLS / "grading_policy.py"), "--work", str(work),
                                                 "--policy", str(work / "command-policy.json"), "--protected", str(Path(args.key).resolve()),

@@ -96,7 +96,7 @@ class Session(unittest.TestCase):
             self.assertEqual(result["session_id"], "fresh-session")
             self.assertTrue(result["provider_call_possible"])
             self.assertFalse((work / "home/.codex/auth.json").exists())
-            with self.assertRaises(FileExistsError):
+            with self.assertRaisesRegex(ValueError, "File exists"):
                 dispatch.run(work, root / "key.json", RATE["model"], "high", 30, user, RATE, rust_runtime.resolve("bench-tools"))
 
     def test_client_failure_still_removes_credentials(self):

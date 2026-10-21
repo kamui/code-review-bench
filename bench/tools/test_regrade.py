@@ -16,7 +16,7 @@ import unittest
 from unittest.mock import Mock, patch
 import uuid
 
-import clean_context
+import codex_grading
 import regrade
 import rust_runtime
 import subscription_meters
@@ -184,7 +184,7 @@ class Cohort:
                 raise AssertionError(f"{name} waited too long")
             time.sleep(0.01)
         if "crash" not in outcome:
-            clean_context.prepare(work)
+            codex_grading.clean_context(self.tools, "prepare", "--attempt", work)
             (work / "verdicts.json").write_text(json.dumps(self.verdicts(name, key)))
             (work / "dispatch.json").write_text(json.dumps({
                 "session_id": str(uuid.uuid4()), "cli_version": "9.9.9", "model": options["--model"], "effort": "high",
@@ -216,7 +216,7 @@ class Cohort:
 
 class FixtureCohort(Cohort):
     """The grade corpora's fixture batch, planned, prepared, mapped and read through the pinned bench-tools; only the
-    paid session is fake."""
+    provisioner, the fixture's stub, and the paid session are fake."""
 
     def build(self, jobs):
         fixture_root(self.root)
@@ -238,6 +238,8 @@ class FixtureCohort(Cohort):
     def invoke(self, command, log, tools, path=None):
         if command[1] == "grade" and command[2] in ("prepare", "map"):
             self.programs.append((command[2], str(command[0]), tools))
+            if command[2] == "prepare":
+                command = [*command, "--provision", self.root / "bench/tools/provision.py"]
             return self.real(command, log, tools, path)
         return super().invoke(command, log, tools, path)
 

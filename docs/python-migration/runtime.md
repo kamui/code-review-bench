@@ -78,7 +78,7 @@ a sibling path dependency, finds nothing in the snapshot, so `cargo metadata` or
 
 The crate's Git tree then covers every local input that cargo records, and `Cargo.lock` covers
 registry and Git dependencies. A build script or procedural macro that reads a file outside the
-snapshot without declaring it is not detected; `usage-pilot` has neither. The installed toolchain, the
+snapshot without declaring it is not detected; `bench-tools` has neither of its own. The installed toolchain, the
 system linker and Cargo's registry and Git caches are trusted as installed: the receipt records the
 `rustc` and `cargo` identities, but nothing re-verifies those files' contents. The build runs
 `cargo build --locked --offline --release --target <host> --bin <bin>` in a temporary target directory.
@@ -226,7 +226,7 @@ Python implementations until these stages move them:
 
 | Module | Owner | Reason |
 | --- | --- | --- |
-| `skill_provenance` | #157 | A freeze helper for new skill arms; #157 covers provisioning and freeze helpers. |
+| `skill_provenance` | #157 | A freeze helper for new skill arms; #157 ported it to `bench-tools skill-provenance` and deleted the Python. |
 | `fetch_freeze_commits` | #157 | Fetches freeze commits for runs and CI; #157 covers freeze helpers. |
 | `seal` | #160 | No narrower stage names it; #160 resolves every remaining responsibility. |
 

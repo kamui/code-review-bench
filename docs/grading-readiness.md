@@ -58,7 +58,7 @@ python3 bench/tools/test_codex_grade_dispatch.py
 python3 bench/tools/test_codex_grading.py
 python3 bench/tools/test_claude_dispatch.py
 python3 bench/tools/test_prune_workspace.py
-python3 bench/tools/provision.py --self-test
+(cd rust/bench-tools && cargo test --locked provision)
 python3 bench/tools/test_cache_replacements.py
 bun run verify:claims
 ```
@@ -159,7 +159,7 @@ Renew the Claude sign-in only while no session runs. `grade.py dispatch` copies 
 
 A grading workspace holds a clone, its restored dependency cache and scratch space; the larger targets take several gibibytes each. Two mechanisms keep them from filling the disk.
 
-`provision.py prepare`, which review and grading preparation both call, estimates the clone and the extracted cache before it writes anything. It refuses, with nothing cloned, unless the workspace's filesystem would still have `BENCH_DISK_RESERVE_GIB` gibibytes free afterwards (default 20). The estimate counts the mirror's objects, the checked-out tree and the extracted archive. It cannot see post-clone steps, builds during a session or other programs, so the reserve has to cover those. Preparations that share a cache root wait for one another, so each one counts the space the previous one took. After a refused or failed `bench-tools grade prepare`, WORK is empty and no key exists: free space, then prepare again.
+`bench-tools provision prepare`, which review and grading preparation both call, estimates the clone and the extracted cache before it writes anything. It refuses, with nothing cloned, unless the workspace's filesystem would still have `BENCH_DISK_RESERVE_GIB` gibibytes free afterwards (default 20). The estimate counts the mirror's objects, the checked-out tree and the extracted archive. It cannot see post-clone steps, builds during a session or other programs, so the reserve has to cover those. Preparations that share a cache root wait for one another, so each one counts the space the previous one took. After a refused or failed `bench-tools grade prepare`, WORK is empty and no key exists: free space, then prepare again.
 
 `bench-tools grade map` removes the workspace's `clone` and `clone-cache` once the provenance and the verdicts pass every check, before it replaces the batch's grades. `clone-work`, `home`, the verdicts, the dispatch record, the prepared inputs and the logs stay, and `workspace-pruned.json` records what was removed and the filesystem's free space before and after. A clone that is not clean at the target's head is kept: mapping stops with exit 2 and replaces nothing, so the same workspace maps again once the clone has been inspected. A later mapping of that workspace needs no clone.
 

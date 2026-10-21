@@ -16,7 +16,6 @@ import tempfile
 import threading
 import time
 
-import clean_context
 import grading_policy
 
 
@@ -34,8 +33,19 @@ def require(condition, message):
         raise RuntimeError(message)
 
 
-def configure_client(work: Path, bench_tools: Path, protected=(), execution_policy=None) -> Path:
-    config = clean_context.configure_codex(work / "home", work, policy_text=execution_policy)
+def clean_context(bench_tools: Path, *arguments) -> str:
+    """What ``bench-tools clean-context`` printed; its refusal raises ValueError."""
+    done = subprocess.run([str(bench_tools), "clean-context", *map(str, arguments)], capture_output=True, text=True,
+                          encoding="utf-8", stdin=subprocess.DEVNULL)
+    if done.returncode:
+        raise ValueError(done.stderr.strip().removeprefix("clean context refused: ")
+                         or f"bench-tools clean-context exited {done.returncode}")
+    return done.stdout.rstrip("\n")
+
+
+def configure_client(work: Path, bench_tools: Path, protected=(), execution_policy: Path | None = None) -> Path:
+    policy = ["--policy-file", execution_policy] if execution_policy else []
+    config = Path(clean_context(bench_tools, "codex-config", "--home", work / "home", "--clone", work, *policy))
     catalog_path = work / "home/.codex/grading-models.json"
     shutil.copyfile(MODEL_CATALOG, catalog_path)
     settings = [
@@ -91,7 +101,7 @@ def probe(bench_tools: Path, evidence_dir: Path | None = None) -> dict:
             root.mkdir(parents=True, exist_ok=False)
         work = root / "work"
         work.mkdir()
-        clean_context.prepare(work)
+        clean_context(bench_tools, "prepare", "--attempt", work)
         home = work / "home"
         (root / "AGENTS.md").write_text("ANCESTOR-CODEX-GRADING-PROBE-MARKER")
         (work / "AGENTS.md").write_text("AMBIENT-CODEX-GRADING-PROBE-MARKER")
