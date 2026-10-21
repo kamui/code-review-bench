@@ -370,6 +370,11 @@ class Moved(unittest.TestCase):
         self.assertIn("bench-tools grade preflight-inputs", done.stderr)
 
 
+def is_tool_name(text):
+    """Python 3.12's is_file() raises on a name longer than the file system allows, such as a docstring."""
+    return "/" not in text and "\n" not in text and len(text.encode("utf-8")) <= 255
+
+
 def import_closure() -> set:
     """Every bench/tools file grade.py imports or names, transitively."""
     seen, pending = set(), ["grade.py"]
@@ -388,7 +393,7 @@ def import_closure() -> set:
                 candidates = [f"{node.module}.py"]
             elif isinstance(node, ast.Constant) and isinstance(node.value, str):
                 candidates = [node.value]
-            pending += [candidate for candidate in candidates if "/" not in candidate and (TOOLS / candidate).is_file()]
+            pending += [candidate for candidate in candidates if is_tool_name(candidate) and (TOOLS / candidate).is_file()]
     return seen
 
 
