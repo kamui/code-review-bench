@@ -136,7 +136,9 @@
 use crate::grade::runtime::{self as rust_runtime, Checked};
 use crate::normalize_review::{utc_now, utc_stamp};
 use crate::pyjson::{self, Dumps, Duplicates, Object, Value};
-use crate::run_cell::{self, Run, display, get, number, object, read_json, sha256_file, text};
+use crate::run_cell::{
+    self, Run, display, exists, get, is_file, number, object, read_json, sha256_file, text,
+};
 use crate::subscription_meters::{self, Pinned, Unreadable};
 use crate::{evidence, file_attempt, pyfs, pysemantics, pytext, sha256, usage};
 use regex::Regex;
@@ -407,20 +409,12 @@ fn token() -> String {
 }
 
 /// The sorted names in `directory` that start with `prefix` and end with `suffix`, hidden names left out.
-fn listed(directory: &Path, prefix: &str, suffix: &str) -> Vec<String> {
-    let mut found: Vec<String> = fs::read_dir(directory)
-        .map(|entries| {
-            entries
-                .flatten()
-                .filter_map(|entry| entry.file_name().into_string().ok())
-                .filter(|name| {
-                    !name.starts_with('.') && name.starts_with(prefix) && name.ends_with(suffix)
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    found.sort();
-    found
+fn listed(directory: &Path, prefix: &str, suffix: &str) -> Q<Vec<String>> {
+    let mut found = run_cell::names(directory)?;
+    found.retain(|name| {
+        !name.starts_with('.') && name.starts_with(prefix) && name.ends_with(suffix)
+    });
+    Ok(found)
 }
 
 // --- the queue file --------------------------------------------------------------------------
@@ -981,7 +975,7 @@ fn verify(queue: &Queue, runs: &[Run], pin: bool, effects: &Effects<'_>) -> Q<La
         ("runs", Value::Object(pins)),
     ]);
     let pinned = queue.state.join("queue.pin.json");
-    if pinned.is_file() {
+    if is_file(&pinned)? {
         let saved = read_json(&pinned)?;
         let same = ["queue_id", "queue_sha256", "runs"]
             .iter()
@@ -1013,14 +1007,14 @@ fn verify(queue: &Queue, runs: &[Run], pin: bool, effects: &Effects<'_>) -> Q<La
             ));
         };
         let frozen = run.dir.join("clients.frozen.json");
-        if frozen.is_file() && !get(&read_json(&frozen)?, client).py_eq(&pin.value()) {
+        if is_file(&frozen)? && !get(&read_json(&frozen)?, client).py_eq(&pin.value()) {
             return blocked(format!(
                 "{}: the queue's {client} pin differs from the run's clients.frozen.json",
                 run.id
             ));
         }
         let frozen = run.dir.join("runtimes.frozen.json");
-        let saved = if frozen.is_file() {
+        let saved = if is_file(&frozen)? {
             read_json(&frozen)?
         } else {
             Value::Object(Object::default())
@@ -1612,7 +1606,7 @@ fn emit(queue: &Queue, event: Vec<(&str, Value)>) -> Q<()> {
 
 fn launches(queue: &Queue) -> Q<Vec<Value>> {
     let directory = queue.state.join("launches");
-    listed(&directory, "launch-", ".json")
+    listed(&directory, "launch-", ".json")?
         .iter()
         .map(|name| read_json(&directory.join(name)).map_err(Failure::from))
         .collect()
@@ -1930,15 +1924,14 @@ fn unpruned(run: &Run) -> Q<Vec<String>> {
     let mut left = Vec::new();
     for (attempt, record) in &run.filed {
         let workspace = run.work.join(attempt);
-        if !is_valid(record) || !workspace.exists() {
+        if !is_valid(record) || !exists(&workspace)? {
             continue;
         }
         let receipt = workspace.join("workspace-pruned.json");
-        let present = |name: &str| fs::symlink_metadata(workspace.join(name)).is_ok();
-        if !receipt.is_file()
+        if !is_file(&receipt)?
             || !matches!(get(&read_json(&receipt)?, "applied"), Value::Bool(true))
-            || present("clone")
-            || present("clone-cache")
+            || exists(&workspace.join("clone"))?
+            || exists(&workspace.join("clone-cache"))?
         {
             left.push(attempt.clone());
         }
@@ -1955,7 +1948,7 @@ struct Diagnosis {
 fn diagnosis(run: &Run, attempt: &str) -> Q<Option<Diagnosis>> {
     let directory = run.dir.join("deviations");
     let mut found = Vec::new();
-    for name in listed(&directory, "", ".json") {
+    for name in listed(&directory, "", ".json")? {
         let path = directory.join(name);
         let Ok(row) = fs::read(&path)
             .map_err(|_| ())
@@ -2002,18 +1995,16 @@ fn diagnosis(run: &Run, attempt: &str) -> Q<Option<Diagnosis>> {
 }
 
 /// Whether the filed attempt captured a model response: the client and the model had worked before it stopped.
-fn answered(run: &Run, attempt: &str) -> bool {
-    fs::read(
-        run.dir
-            .join("attempts")
-            .join(attempt)
-            .join("usage-requests.jsonl"),
-    )
-    .is_ok_and(|raw| {
-        String::from_utf8_lossy(&raw)
+fn answered(run: &Run, attempt: &str) -> Q<bool> {
+    let requests = run
+        .dir
+        .join("attempts")
+        .join(attempt)
+        .join("usage-requests.jsonl");
+    Ok(is_file(&requests)?
+        && String::from_utf8_lossy(&fs::read(&requests).map_err(os_failure(&requests))?)
             .lines()
-            .any(|line| !pytext::strip(line).is_empty())
-    })
+            .any(|line| !pytext::strip(line).is_empty()))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2048,7 +2039,7 @@ fn verdict(run: &Run, attempt: &str) -> Q<(Verdict, String)> {
         ));
     };
     let arm = arm_of(record);
-    let proven = answered(run, attempt)
+    let proven = answered(run, attempt)?
         || run
             .filed
             .values()
@@ -2233,10 +2224,12 @@ fn settle(
         ]),
     )?;
     let dispatched = directory.join("dispatch.txt");
-    let ended =
-        fs::read(&dispatched).is_ok_and(|raw| ENDED.is_match(&String::from_utf8_lossy(&raw)));
+    let ended = is_file(&dispatched)?
+        && ENDED.is_match(&String::from_utf8_lossy(
+            &fs::read(&dispatched).map_err(os_failure(&dispatched))?,
+        ));
     let shown = display(&evidence);
-    let (action, arguments) = if !directory.join("timing.json").is_file() {
+    let (action, arguments) = if !exists(&directory.join("timing.json"))? {
         (
             "released: no reviewer had started",
             strings(&["--release", attempt, "--interrupted", &shown]),
@@ -2518,7 +2511,7 @@ fn launch(
     let effects = session.effects;
     let directory = queue.state.join("launches");
     fs::create_dir_all(&directory).map_err(os_failure(&directory))?;
-    let used = listed(&directory, "launch-", "")
+    let used = listed(&directory, "launch-", "")?
         .iter()
         .filter_map(|name| {
             name.split('-')
@@ -2849,7 +2842,7 @@ fn report(queue: &Queue, moment: f64, effects: &Effects<'_>) -> Q<Value> {
             ]));
         }
     }
-    let invocations = listed(&queue.state.join("invocations"), "", ".json");
+    let invocations = listed(&queue.state.join("invocations"), "", ".json")?;
     let controller = match invocations.last() {
         None => Value::Null,
         Some(name) => {
@@ -2877,10 +2870,10 @@ fn report(queue: &Queue, moment: f64, effects: &Effects<'_>) -> Q<Value> {
         }
     };
     let status = queue.state.join("status");
-    let saved = listed(&status, "", ".json");
+    let saved = listed(&status, "", ".json")?;
     let mut acknowledged = BTreeSet::new();
     let receipts = status.join("acknowledged.jsonl");
-    if receipts.is_file() {
+    if is_file(&receipts)? {
         let raw = fs::read(&receipts).map_err(os_failure(&receipts))?;
         for line in String::from_utf8_lossy(&raw).lines() {
             if pytext::strip(line).is_empty() {
@@ -2933,7 +2926,7 @@ fn report(queue: &Queue, moment: f64, effects: &Effects<'_>) -> Q<Value> {
         ("controller", controller),
         (
             "quota",
-            if quota.is_file() {
+            if is_file(&quota)? {
                 read_json(&quota)?
             } else {
                 Value::Null
@@ -2966,7 +2959,7 @@ fn snapshot(
     effects: &Effects<'_>,
 ) -> Q<Option<PathBuf>> {
     let directory = queue.state.join("status");
-    let saved = listed(&directory, "", ".json");
+    let saved = listed(&directory, "", ".json")?;
     if due_only && let Some(newest) = saved.last() {
         let at = get(&read_json(&directory.join(newest))?, "at").py_str();
         let newest = moment_of(&at).ok_or_else(|| {

@@ -382,17 +382,49 @@ fn attempt_number(name: &str) -> Option<u64> {
         .then(|| digits.parse().ok())?
 }
 
-fn names(directory: &Path) -> Vec<String> {
-    let mut found: Vec<String> = fs::read_dir(directory)
-        .map(|entries| {
-            entries
-                .flatten()
-                .filter_map(|entry| entry.file_name().into_string().ok())
-                .collect()
-        })
-        .unwrap_or_default();
+/// As Python's `is_file` and `exists` read a path: only a missing one is absent, and any other error is raised.
+pub(crate) fn missing(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+    )
+}
+
+pub(crate) fn is_file(path: &Path) -> R<bool> {
+    match fs::metadata(path) {
+        Ok(metadata) => Ok(metadata.is_file()),
+        Err(error) if missing(&error) => Ok(false),
+        Err(error) => Err(os_error(path)(error)),
+    }
+}
+
+pub(crate) fn exists(path: &Path) -> R<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if missing(&error) => Ok(false),
+        Err(error) => Err(os_error(path)(error)),
+    }
+}
+
+/// The sorted entry names of `directory`; only a missing directory lists as empty.
+pub(crate) fn names(directory: &Path) -> R<Vec<String>> {
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if missing(&error) => return Ok(Vec::new()),
+        Err(error) => return Err(os_error(directory)(error)),
+    };
+    let mut found = Vec::new();
+    for entry in entries {
+        if let Ok(name) = entry
+            .map_err(os_error(directory))?
+            .file_name()
+            .into_string()
+        {
+            found.push(name);
+        }
+    }
     found.sort();
-    found
+    Ok(found)
 }
 
 fn cell_key(cell: &Value) -> String {
@@ -460,22 +492,22 @@ impl Run {
         };
         let mut filed = BTreeMap::new();
         let attempts = dir.join("attempts");
-        for name in names(&attempts) {
+        for name in names(&attempts)? {
             let record = attempts.join(&name).join("attempt.json");
-            if record.is_file() {
+            if is_file(&record)? {
                 filed.insert(name, read_json(&record)?);
             }
         }
         let mut claimed = BTreeMap::new();
-        for name in names(work) {
+        for name in names(work)? {
             let cell = work.join(&name).join("cell.json");
-            if attempt_number(&name).is_some() && cell.is_file() {
+            if attempt_number(&name).is_some() && is_file(&cell)? {
                 claimed.insert(name, read_json(&cell)?);
             }
         }
         let mut charges = Vec::new();
         let path = dir.join("charges.jsonl");
-        if path.is_file() {
+        if is_file(&path)? {
             for (index, line) in read_text(&path)?.lines().enumerate() {
                 if pytext::strip(line).is_empty() {
                     continue;
@@ -558,7 +590,7 @@ impl Run {
             self.dir.join("fixture"),
         ] {
             let path = candidate.join("target.json");
-            if path.is_file() && pyvalue_is(get(&read_json(&path)?, "id"), target) {
+            if is_file(&path)? && pyvalue_is(get(&read_json(&path)?, "id"), target) {
                 return Ok(candidate);
             }
         }
@@ -992,15 +1024,15 @@ fn choose(run: &Run, choice: &Choice, reason: Option<&str>) -> R<Object> {
     .collect())
 }
 
-fn next_attempt_id(run: &Run) -> String {
+fn next_attempt_id(run: &Run) -> R<String> {
     let used = run
         .attempt_ids()
         .into_iter()
-        .chain(names(&run.work))
+        .chain(names(&run.work)?)
         .filter_map(|name| attempt_number(&name))
         .max()
         .unwrap_or(0);
-    format!("att-{:03}", used + 1)
+    Ok(format!("att-{:03}", used + 1))
 }
 
 /// The run policy for one target, with placeholders unsubstituted: identical for every arm.
@@ -1494,7 +1526,7 @@ fn close_interruption(
     let Some(reason) = reason.filter(|reason| !pytext::strip(reason).is_empty()) else {
         return refuse("--interrupted needs --reason");
     };
-    if !directory.join("timing.json").is_file() {
+    if !is_file(&directory.join("timing.json"))? {
         return refuse(format!(
             "{attempt}: no reviewer was started, so there is no attempt to file"
         ));
@@ -1536,14 +1568,14 @@ fn release(run: &Run, attempt: &str, evidence: &Path) -> R<()> {
             run.work.display()
         ));
     }
-    if directory.join("timing.json").is_file() {
+    if exists(&directory.join("timing.json"))? {
         return refuse(format!(
             "{attempt}: a reviewer was started, so the attempt is filed, not released"
         ));
     }
     verified_stop(run, attempt, evidence)?;
     remove(&directory);
-    if directory.exists() {
+    if exists(&directory)? {
         return input(format!(
             "{attempt}: the claim directory could not be removed"
         ));
@@ -1607,7 +1639,7 @@ fn file(
     };
     let filed = run.dir.join("attempts").join(attempt).join("attempt.json");
     let (_held, waited) = filing(&run.work.join(attempt), context.waiting)?;
-    let record = if (interrupted.is_some() || waited) && filed.is_file() {
+    let record = if (interrupted.is_some() || waited) && is_file(&filed)? {
         read_json(&filed)?
     } else {
         file_claimed(run, context, attempt, claim, interrupted, reason)?
@@ -1633,7 +1665,7 @@ fn file_claimed(
 ) -> R<Value> {
     let directory = run.work.join(attempt);
     let dispatched = directory.join("dispatch.txt");
-    let ended = dispatched.is_file()
+    let ended = is_file(&dispatched)?
         && read_text(&dispatched)?.lines().any(|line| {
             let digits = line
                 .strip_prefix("exit=")
@@ -1719,7 +1751,7 @@ fn file_claimed(
         push(&mut argv, &["--expect-skill-tree", &tree.py_str()]);
     }
     let rates = directory.join("rates.json");
-    let rates = if rates.is_file() {
+    let rates = if is_file(&rates)? {
         display(&rates)
     } else {
         context.set("BENCH_RATES").map_or_else(
@@ -1870,7 +1902,7 @@ fn claim_and_run(
     }
     claim.insert("billing_mode".to_string(), billing_mode.clone());
     let target_dir = check_target(&run, context, &get(&cell, "target").py_str())?;
-    let attempt = next_attempt_id(&run);
+    let attempt = next_attempt_id(&run)?;
     let kind = if get(&Value::Object(claim.clone()), "predecessor").truthy() {
         format!(
             "replacement {} of {}",
@@ -2193,7 +2225,7 @@ mod tests {
         assert_eq!(cell_key(&picked(&pick, "cell")), "t1/arm-b/1");
         assert!(matches!(picked(&pick, "predecessor"), Value::Null));
         assert!(picked(&pick, "reserved_usd").py_eq(&Value::Float(2.0)));
-        assert_eq!(next_attempt_id(&run), "att-001");
+        assert_eq!(next_attempt_id(&run).unwrap(), "att-001");
         refused(
             &run,
             &Choice::Cell("t1/arm-c/1".into()),
@@ -2222,7 +2254,7 @@ mod tests {
         );
         let run = fixture.run();
         assert_eq!(run.in_flight(), ["att-003"]);
-        assert_eq!(next_attempt_id(&run), "att-004");
+        assert_eq!(next_attempt_id(&run).unwrap(), "att-004");
         assert_eq!(
             run.spend().expect("spend"),
             Spend {
@@ -2538,6 +2570,53 @@ mod tests {
         let recorded = read_json(&fixture.work.join("att-006/cell.json")).expect("cell.json");
         assert!(get(get(&recorded, "cache_replacements"), "path").py_eq(&text(&resolved)));
         remove(&outside);
+    }
+
+    #[test]
+    fn unreadable_attempt_state_is_an_error_not_an_empty_run() {
+        let fixture = fixture();
+        fixture.file_record("att-001", "t1/arm-b/1", "valid completed", "1.5", "");
+        fixture.claim("att-002", "t1/arm-a/1", 5.0, "");
+        let context = fixture.context(&unused_tool, Vec::new());
+        for (directory, mode) in [
+            (fixture.run_dir.join("attempts"), 0o111),
+            (fixture.run_dir.join("attempts/att-001"), 0o000),
+            (fixture.work.clone(), 0o111),
+            (fixture.work.join("att-002"), 0o000),
+        ] {
+            let chmod = |mode| {
+                fs::set_permissions(&directory, fs::Permissions::from_mode(mode)).expect("chmod");
+            };
+            chmod(mode);
+            if fs::read_dir(&directory).is_ok() {
+                // A privileged user reads past the mode, so there is no denial to observe.
+                chmod(0o755);
+                return;
+            }
+            let claim = Action::Claim {
+                choice: Choice::Next,
+                reason: None,
+                quota: None,
+                dry_run: false,
+            };
+            for (what, result) in [
+                ("status", command(Action::Status, &context)),
+                ("claim", command(claim, &context)),
+            ] {
+                match result {
+                    Err(Failure::Input(message)) => assert!(
+                        message.contains("[Errno 13] Permission denied"),
+                        "{what}: {message}"
+                    ),
+                    _ => panic!("{what} read {} as empty", directory.display()),
+                }
+            }
+            chmod(0o755);
+        }
+        assert!(
+            !fixture.work.join("att-003").exists(),
+            "nothing was claimed"
+        );
     }
 
     #[test]

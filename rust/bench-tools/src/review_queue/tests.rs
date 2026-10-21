@@ -1,6 +1,7 @@
 use super::*;
 use crate::skill_runner::Ran as ToolRan;
 use std::cell::{Cell, RefCell};
+use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 
 const RUNNER: &str = include_str!("fake-run-cell.sh");
@@ -467,7 +468,7 @@ fn a_full_pass_files_each_cell_once_and_every_run_takes_one_valid_review_before_
         assert_eq!(get(get(record, "observation"), "status").py_str(), "absent");
         assert_eq!(get(record, "exit").py_str(), "0");
     }
-    let invocation = listed(&fx.state.join("invocations"), "", ".json");
+    let invocation = listed(&fx.state.join("invocations"), "", ".json").expect("invocations");
     let saved = read_json(&fx.state.join("invocations").join(&invocation[0])).expect("record");
     assert_eq!(get(&saved, "outcome").py_str(), "exit 0");
     assert_eq!(fx.run(None), 0);
@@ -972,7 +973,8 @@ fn a_runner_killed_before_the_reviewer_started_releases_its_claim_and_the_cell_r
         .find(|line| line.contains("--release"))
         .expect("a release");
     assert!(release.contains("--release att-001 --interrupted "));
-    let evidence = listed(&fx.state.join("recoveries"), "run-a-att-001-", ".json");
+    let evidence =
+        listed(&fx.state.join("recoveries"), "run-a-att-001-", ".json").expect("recoveries");
     assert_eq!(evidence.len(), 1);
     let saved = read_json(&fx.state.join("recoveries").join(&evidence[0])).expect("evidence");
     assert_eq!(get(&saved, "status").py_str(), "absent");
@@ -1003,6 +1005,83 @@ fn a_runner_killed_before_the_reviewer_started_releases_its_claim_and_the_cell_r
         ]
     );
     assert_eq!(fx.lines("filed.log").len(), 4);
+}
+
+/// A directory whose mode denies listing it, restored on drop so a failed test leaves no undeletable files.
+struct Denied<'a>(&'a Path);
+
+impl Drop for Denied<'_> {
+    fn drop(&mut self) {
+        let _ = fs::set_permissions(self.0, fs::Permissions::from_mode(0o755));
+    }
+}
+
+/// None when a privileged user reads past the mode, so there is no denial to observe.
+fn deny(directory: &Path, mode: u32) -> Option<Denied<'_>> {
+    fs::set_permissions(directory, fs::Permissions::from_mode(mode)).expect("chmod");
+    let denied = Denied(directory);
+    fs::read_dir(directory).is_err().then_some(denied)
+}
+
+fn permission_denied(result: Result<Outcome, Failure>, what: &str) {
+    match result {
+        Err(Failure::Input(message)) => assert!(
+            message.contains("[Errno 13] Permission denied"),
+            "{what}: {message}"
+        ),
+        Err(failure) => panic!("{what}: {failure:?}"),
+        Ok(outcome) => panic!(
+            "{what} read unreadable state as empty: exit {}",
+            outcome.code
+        ),
+    }
+}
+
+#[test]
+fn an_unreadable_launch_listing_is_an_error_not_an_empty_queue() {
+    let fx = fake();
+    assert_eq!(fx.run(Some(1)), 0);
+    let launched = fx.launched();
+    let launches = fx.state.join("launches");
+    let Some(denied) = deny(&launches, 0o111) else {
+        return;
+    };
+    permission_denied(
+        fx.command(Action::Status {
+            snapshot: false,
+            acknowledge: None,
+        }),
+        "status",
+    );
+    permission_denied(
+        fx.command(Action::Run {
+            count: None,
+            detach: false,
+        }),
+        "run",
+    );
+    drop(denied);
+    assert_eq!(fx.launched(), launched, "nothing launched");
+}
+
+#[test]
+fn an_unreadable_claim_is_never_released() {
+    let fx = fake();
+    fx.touch("crash", "before_review");
+    fx.assert_blocked(fx.run(None), "run-cell exit 9 and filed no attempt");
+    let claim = fx.work(RUN_A).join("att-001");
+    let Some(denied) = deny(&claim, 0o000) else {
+        return;
+    };
+    permission_denied(fx.command(Action::Recover), "recover");
+    drop(denied);
+    assert!(
+        !fx.lines("calls.log")
+            .iter()
+            .any(|line| line.contains("--release")),
+        "released"
+    );
+    assert_eq!(fx.open(RUN_A).in_flight(), ["att-001"]);
 }
 
 #[test]
@@ -1624,6 +1703,7 @@ fn snapshots_are_saved_every_thirty_minutes_while_one_review_runs() {
     assert_eq!(code(outcome), 0, "{:?}", fx.events());
     let directory = fx.state.join("status");
     let saved: Vec<Value> = listed(&directory, "", ".json")
+        .expect("snapshots")
         .iter()
         .map(|name| read_json(&directory.join(name)).expect("snapshot"))
         .collect();
