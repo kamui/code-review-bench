@@ -66,7 +66,8 @@ class CodexGradingTest(unittest.TestCase):
     def test_actual_client_tools_execute_and_native_resource_reads_are_denied(self):
         with tempfile.TemporaryDirectory() as temporary:
             evidence = Path(temporary) / "evidence"
-            receipt = codex_grading.probe(rust_runtime.resolve("bench-tools"), evidence)
+            bench_tools = rust_runtime.resolve("bench-tools")
+            receipt = codex_grading.probe(bench_tools, evidence)
             self.assertTrue(receipt["all_tools_completed"])
             self.assertTrue(receipt["ambient_markers_absent"])
             self.assertTrue(receipt["ambient_skills_absent"])
@@ -82,7 +83,7 @@ class CodexGradingTest(unittest.TestCase):
             self.assertFalse((evidence / "work/home/.codex/auth.json").exists())
             rate = {"model": codex_grading.MODEL, "input": 0.1, "output": 0.5,
                     "cache_read": 0.01, "cache_write_5m": 0.125}
-            result = codex_grade_dispatch.evidence(evidence / "work", rate)
+            result = codex_grade_dispatch.evidence(evidence / "work", rate, bench_tools)
             self.assertEqual(result["audit_violations"], [])
             self.assertEqual(result["models_observed"], [codex_grading.MODEL])
             self.assertEqual(result["subagents"], 0)

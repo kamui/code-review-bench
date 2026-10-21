@@ -489,7 +489,7 @@ def launch(args) -> int:
     try:
         rates = rates_for(Path(args.rates).resolve(), model)
         if root_id:
-            usage_result = run([sys.executable, str(TOOLS / "codex_usage.py"), "--sessions-dir", str(sessions),
+            usage_result = run([str(prepared["bench_tools"]), "usage", "codex", "--sessions-dir", str(sessions),
                                 "--session", root_id, "--prices", f"{rates['input']},{rates['output']}",
                                 "--cached-mult", f"{rates['cache_read'] / rates['input']:g}",
                                 "--cache-write-mult", f"{rates['cache_write_5m'] / rates['input']:g}", "--json"])

@@ -39,3 +39,4 @@ pub mod ruling;
 pub mod schema;
 pub mod sha256;
 pub mod upstream;
+pub mod usage;

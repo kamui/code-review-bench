@@ -12,12 +12,12 @@ Production commands, frozen evidence, and imported originals remain unchanged.
 From the repository root, run:
 
 ```sh
-python3 tools/behavior_contract.py --allow-known-defects
+python3 tools/behavior_contract.py
 python3 -m unittest discover -s tools -p test_behavior_contract.py -v
-python3 -m unittest discover -s bench/tools -p 'test_*usage.py' -v
-python3 bench/tools/codex_usage.py --self-test
-python3 bench/tools/transcript_usage.py --self-test
 ```
+
+The corpus runs `bench-tools usage codex` and `bench-tools usage claude` from the selected runtime.
+They resolve every recorded baseline defect, so the corpus passes without `--allow-known-defects`.
 
 The corpus command exits 0 only if every case meets its independent expectation
 or exactly matches its separately saved baseline defect observation, except cases
@@ -32,8 +32,8 @@ binary. Each program receives the fixture's argv after its command prefix.
 
 ```json
 {
-  "codex": ["/absolute/path/to/usage-pilot", "codex"],
-  "transcript": ["/absolute/path/to/usage-pilot", "transcript"]
+  "codex": ["/absolute/path/to/bench-tools", "usage", "codex"],
+  "transcript": ["/absolute/path/to/bench-tools", "usage", "claude"]
 }
 ```
 
@@ -43,9 +43,9 @@ python3 tools/behavior_contract.py --allow-known-defects --differential /tmp/can
 ```
 
 The first command tests independent expectations. The second additionally compares
-current Python with the candidate on separate roots. Differential agreement cannot
+the selected `bench-tools` with the candidate on separate roots. Differential agreement cannot
 establish correctness or suppress an independent failure. With `--allow-known-defects`,
-a candidate that meets the independent expectation while Python exactly matches the
+a candidate that meets the independent expectation while the primary exactly matches the
 recorded baseline observation produces `APPROVED FIX`, its resolution link, and the
 actual diff. Other differences still fail, including a candidate that regresses from
 a fixed primary implementation to the old defect. Full successful JSON
