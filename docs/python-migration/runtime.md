@@ -192,16 +192,16 @@ it. No check reads it as permission: the queue still requires the frozen pin.
 
 The [script policy](../agents/scripts.md) supports macOS on Apple Silicon and Linux on x86_64 or aarch64.
 `SUPPORTED_TARGETS` holds one target for each of those hosts, and the `Rust runtime` workflow runs on a
-matching GitHub runner for each: the runtime tests with real cargo builds, an install of `usage-pilot`, the corpus with the
-retained executable, and [`rollback.sh`](runtime-evidence/rollback.sh). It also checks `bench-tools` with
+matching GitHub runner for each: the runtime tests with real cargo builds, `cargo fmt`, `clippy` and
+`cargo test` for `usage-pilot`, and [`rollback.sh`](runtime-evidence/rollback.sh). It also checks `bench-tools` with
 `cargo fmt`, `clippy` and `cargo test`, installs it, runs its corpora with the retained executable and the
 `diff-identity`, `normalize-review`, `check-manifest`, `rates` and `upstream` differentials against the retained
 Python libraries, and runs `roster` on the repository. The `CI and GitHub Pages` workflow installs `bench-tools` the
 same way for the explorer export.
 
 Pull requests run the full suite on Linux targets. On macOS targets they run the
-runtime pinning, retention and rollback tests with real cargo builds, install and exercise
-`usage-pilot`, install `bench-tools`, run `roster`, and run the `diff-identity` corpus. The full
+runtime pinning, retention and rollback tests with real cargo builds, install `bench-tools`,
+run `roster`, and run the `diff-identity` corpus. The full
 macOS lint, test, differential and second-version rollback suites run on pushes to `main`.
 This keeps native installation coverage before merge while deferring broader macOS regression
 detection until after merge. Merge a change to the runtime only after every target's job passes.
