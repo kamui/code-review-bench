@@ -5,7 +5,8 @@
 //! `exit=N` when the wrapper ends), `native-return.json`, `timing.json`, `tree-before.txt` and `tree-after.txt`,
 //! `audit.json` and `normalized.json`, the native output, an optional `stop.json`, and the fresh `home/` holding
 //! the transcripts. `--replay` re-runs `bench-tools attempt-audit` and the normalizer in place first (the earlier
-//! outputs are kept once as `*.recorded.json`). A `stop.json` the wrapper wrote after a zero exit only because its
+//! outputs are kept once as `*.recorded.json`); an audit that exits other than 0 or 1 leaves no `audit.json`, so the
+//! attempt files invalid. A `stop.json` the wrapper wrote after a zero exit only because its
 //! normalizer failed is superseded when the replayed normalizer returns `parsed` or `empty`.
 //!
 //! A dispatch that never ended has no `exit=N` line and is filed only with an `interruption.json` whose
@@ -1510,6 +1511,10 @@ fn replay(
             copy2(&path, &kept)?;
         }
     }
+    let audit_path = join(attempt_dir, "audit.json");
+    if exists(&audit_path) {
+        remove(&audit_path)?;
+    }
     let mut audit = Command::new(own_executable()?);
     audit.args([
         "attempt-audit",
@@ -1530,13 +1535,11 @@ fn replay(
             .arg("--isolation-settings")
             .arg(join(attempt_dir, "isolation-settings.json"));
     }
-    audit
+    let audited = audit
         .output()
         .map_err(|error| FileError(format!("cannot run attempt-audit: {error}")))?;
-    if !exists(&join(attempt_dir, "audit.json")) {
-        return refuse(format!(
-            "attempt-audit wrote no audit.json in {attempt_dir}"
-        ));
+    if !matches!(audited.status.code(), Some(0 | 1)) && exists(&audit_path) {
+        remove(&audit_path)?;
     }
     let normalized = join(attempt_dir, "normalized.json");
     let path = |name: &str| Some(join(attempt_dir, name).into_bytes());
