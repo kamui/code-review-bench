@@ -1,18 +1,14 @@
 from __future__ import annotations
 
-import argparse
 import json
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent))
 import rates
-import run_cell
-import rust_runtime
 
 OPENAI = """### Standard pricing data
 | Model | Short context input | Short context cached input | Short context cache writes | Short context output | Long context input | Long context cached input | Long context cache writes | Long context output |
@@ -34,9 +30,6 @@ ROOT = Path(__file__).resolve().parent
 
 class RatesTests(unittest.TestCase):
     def setUp(self):
-        self.enterContext(patch.object(run_cell, "normalizer_environment",
-                                       return_value={rust_runtime.variable(run_cell.NORMALIZER): "bench-tools"}))
-        self.enterContext(patch.object(run_cell, "check_provenance"))
         self.temp = tempfile.TemporaryDirectory()
         self.directory = Path(self.temp.name)
         self.catalog = self.directory / "rates.json"
@@ -178,125 +171,6 @@ class RatesTests(unittest.TestCase):
         result = self.command("check")
         self.assertEqual(result.returncode, 1)
         self.assertIn("missing required", result.stdout)
-
-    def make_run(self):
-        run_dir = self.directory / "run"
-        run_dir.mkdir()
-        (run_dir / "manifest.json").write_text(json.dumps({
-            "arms": [{"id": "test", "billing_mode": "subscription"}],
-            "rates": [{"model": MODEL, "as_of": self.row["as_of"]}]}), encoding="utf-8")
-        arm_path = self.directory / "arm.json"
-        arm_path.write_text(json.dumps({"model": MODEL}), encoding="utf-8")
-        run = run_cell.Run(run_dir, self.directory / "work")
-        run.arm_file = lambda arm: arm_path
-        return run
-
-    def test_dispatch_checks_frozen_price_even_when_latest_catalog_price_matches(self):
-        self.row["output"] = 9
-        self.write_catalog()
-        doc = json.loads(self.catalog.read_text(encoding="utf-8"))
-        doc["rates"].append({**self.row, "as_of": "2026-02-01", "output": 10})
-        self.catalog.write_text(json.dumps(doc), encoding="utf-8")
-        run = self.make_run()
-        with patch.dict("os.environ", {"BENCH_RATES": str(self.catalog)}), patch.dict(rates.SOURCES, self.sources):
-            with self.assertRaisesRegex(run_cell.Refused, "freeze a new run"):
-                run_cell.check_dispatch_rates(run, {"arm": "test"})
-
-    def test_dispatch_snapshot_matches_checked_pin(self):
-        run = self.make_run()
-        with patch.dict("os.environ", {"BENCH_RATES": str(self.catalog)}), patch.dict(rates.SOURCES, self.sources):
-            report, snapshot = run_cell.check_dispatch_rates(run, {"arm": "test"})
-        self.assertEqual(snapshot["rates"], [self.row])
-        self.assertEqual(report["changes"], [])
-        self.assertEqual(report["rate_pin"]["as_of"], self.row["as_of"])
-
-    def test_failed_check_stops_before_claim_or_dispatch(self):
-        run = self.make_run()
-        run.manifest["caps"] = {"replacements": 0}
-        run.expected_duration = lambda arm: {}
-        work = self.directory / "work"
-        claim = {"cell": {"arm": "test", "target": "fixture"}, "predecessor": None}
-        args = argparse.Namespace(dry_run=False, quota=None)
-        with patch.object(run_cell, "Run", return_value=run), patch.object(run_cell, "check_frozen"), \
-                patch.object(run_cell, "choose", return_value=claim), patch.object(run_cell, "check_target"), \
-                patch.object(run_cell, "check_dispatch_rates", side_effect=run_cell.Refused("price changed")), \
-                patch.object(run_cell, "dispatch") as dispatch:
-            with self.assertRaisesRegex(run_cell.Refused, "price changed"):
-                run_cell.claim_and_run(run.dir, work, args)
-        self.assertFalse((work / "att-001").exists())
-        dispatch.assert_not_called()
-
-    def test_missing_or_invalid_billing_stops_before_claim_or_price_check(self):
-        run = self.make_run()
-        work = self.directory / "work"
-        for mode in (None, "api-dollars"):
-            run.manifest["arms"][0]["billing_mode"] = mode
-            for dry_run in (True, False):
-                claim = {"cell": {"arm": "test", "target": "fixture"}, "predecessor": None}
-                args = argparse.Namespace(dry_run=dry_run, quota=None)
-                with self.subTest(mode=mode, dry_run=dry_run), \
-                        patch.object(run_cell, "Run", return_value=run), patch.object(run_cell, "check_frozen"), \
-                        patch.object(run_cell, "choose", return_value=claim), \
-                        patch.object(run_cell, "check_dispatch_rates") as prices, \
-                        patch.object(run_cell, "dispatch") as dispatch:
-                    with self.assertRaisesRegex(run_cell.Refused, "declare billing_mode"):
-                        run_cell.claim_and_run(run.dir, work, args)
-                self.assertFalse((work / "att-001").exists())
-                prices.assert_not_called()
-                dispatch.assert_not_called()
-
-    def test_successful_claim_saves_receipt_and_rate_snapshot(self):
-        run = self.make_run()
-        run.manifest["caps"] = {"replacements": 0}
-        run.expected_duration = lambda arm: {}
-        work = self.directory / "work"
-        claim = {"cell": {"arm": "test", "target": "fixture"}, "predecessor": None}
-        args = argparse.Namespace(dry_run=False, quota=None)
-        record = {"disposition": "valid completed", "usage": {"priced_total_usd": 1}}
-        with patch.object(run_cell, "Run", return_value=run), patch.object(run_cell, "check_frozen"), \
-                patch.object(run_cell, "choose", return_value=claim), patch.object(run_cell, "check_target"), \
-                patch.object(run_cell, "dispatch") as dispatch, patch.object(run_cell, "file", return_value=record), \
-                patch.dict("os.environ", {"BENCH_RATES": str(self.catalog)}), patch.dict(rates.SOURCES, self.sources):
-            result = run_cell.claim_and_run(run.dir, work, args)
-        directory = work / result["attempt_id"]
-        snapshot = json.loads((directory / "rates.json").read_text(encoding="utf-8"))
-        receipt = json.loads((directory / "cell.json").read_text(encoding="utf-8"))["rates_check"]
-        self.assertEqual(snapshot["rates"], [self.row])
-        self.assertEqual(receipt["policy"], "rates-check-v1")
-        self.assertEqual(json.loads((directory / "cell.json").read_text())["billing_mode"], "subscription")
-        self.assertEqual(receipt["prices"][MODEL]["output"], snapshot["rates"][0]["output"])
-        dispatch.assert_called_once()
-
-    def test_filing_uses_snapshot_after_catalog_override_changes(self):
-        run = self.make_run()
-        attempt = "att-001"
-        directory = run.work / attempt
-        directory.mkdir(parents=True)
-        snapshot = directory / "rates.json"
-        snapshot.write_text(json.dumps({"schema_version": 1, "rates": [self.row]}), encoding="utf-8")
-        (directory / "dispatch.txt").write_text("exit=0\n", encoding="utf-8")
-        run.claimed[attempt] = {"cell": {"arm": "test", "target": "fixture", "replicate": 1}}
-        run.arm_entry = lambda arm: {"expected_cli_version": "test"}
-        run.target_dir = lambda target: self.directory
-        run.arm_file("test").write_text(json.dumps({"kind": "codex", "model": MODEL}), encoding="utf-8")
-        evidence = run.dir / "attempts" / attempt
-        evidence.mkdir(parents=True)
-        (evidence / "attempt.json").write_text(json.dumps({"disposition": "stopped"}), encoding="utf-8")
-        with patch.object(run_cell, "tool", return_value=subprocess.CompletedProcess([], 0, "", "")) as tool, \
-                patch.object(run_cell, "filing_tool", return_value="bench-tools"), \
-                patch.dict("os.environ", {"BENCH_RATES": "/different/catalog.json"}):
-            run_cell.file(run, attempt)
-        argv = tool.call_args.args[0]
-        self.assertEqual(argv[argv.index("--rates") + 1], str(snapshot))
-        self.assertIn("--legacy-rate-billing", argv)
-        run.claimed[attempt]["billing_mode"] = "subscription"
-        run.arm_entry = lambda arm: {"expected_cli_version": "test", "billing_mode": "api"}
-        with patch.object(run_cell, "tool", return_value=subprocess.CompletedProcess([], 0, "", "")) as tool, \
-                patch.object(run_cell, "filing_tool", return_value="bench-tools"):
-            run_cell.file(run, attempt)
-        argv = tool.call_args.args[0]
-        self.assertEqual(argv[argv.index("--billing-mode") + 1], "subscription")
-        self.assertNotIn("--legacy-rate-billing", argv)
 
 
 if __name__ == "__main__":

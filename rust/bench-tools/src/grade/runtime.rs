@@ -189,9 +189,8 @@ pub fn pin(executable: &Path) -> R<Value> {
     ))
 }
 
-/// The problem, if any, with a v2 key's pinned executable: `rust_runtime.check` on the store that holds the running
-/// executable, without its host checks, and then that the running executable is the pinned
-/// one.
+/// The problem, if any, with a v2 key's pinned executable: `check` on the store that holds the running executable,
+/// without its host checks, and then that the running executable is the pinned one.
 pub fn problem(pinned: &Value, executable: &Path) -> Option<String> {
     let text = |name: &str| {
         pinned
@@ -200,7 +199,6 @@ pub fn problem(pinned: &Value, executable: &Path) -> Option<String> {
             .and_then(Value::as_str)
             .unwrap_or("")
     };
-    let (sha, receipt_sha) = (text("sha256"), text("receipt_sha256"));
     let Some(store) = executable
         .parent()
         .and_then(Path::parent)
@@ -211,16 +209,59 @@ pub fn problem(pinned: &Value, executable: &Path) -> Option<String> {
             shown(executable)
         ));
     };
-    let directory: PathBuf = store.join(NAME).join(sha);
+    match check(store, NAME, text("sha256"), text("receipt_sha256"), false) {
+        Err(Checked::Refused(why) | Checked::Input(why)) => Some(why),
+        Ok(found) if found.executable != executable => Some(format!(
+            "the running {NAME} {} is not the pinned executable {}",
+            shown(executable),
+            shown(&found.executable)
+        )),
+        Ok(_) => None,
+    }
+}
+
+/// Why `check` turned a pinned runtime down.
+#[derive(Debug)]
+pub enum Checked {
+    /// The pinned entry is missing, changed or does not suit this host.
+    Refused(String),
+    /// The pin itself is not a runtime name and a SHA-256.
+    Input(String),
+}
+
+/// A pinned executable that hashes to its pin, with its receipt.
+pub struct Runtime {
+    pub executable: PathBuf,
+    pub receipt: Value,
+}
+
+/// `rust_runtime.check`: the pinned executable once it and its receipt hash to the pin and, with `here`, it suits
+/// this host.
+pub fn check(
+    store: &Path,
+    name: &str,
+    sha: &str,
+    receipt_sha: &str,
+    here: bool,
+) -> Result<Runtime, Checked> {
+    let refuse = |why: String| Err(Checked::Refused(why));
+    if !is_name(name) || !is_hex(sha, 64..=64) {
+        return Err(Checked::Input(format!(
+            "{} is not a runtime name or {} is not a SHA-256",
+            pytext::repr_str(name),
+            pytext::repr_str(sha)
+        )));
+    }
+    let directory: PathBuf = store.join(name).join(sha);
     let receipt_path = directory.join("receipt.json");
     let shown_receipt = shown(&receipt_path);
     let raw = match std::fs::read(&receipt_path) {
         Ok(raw) => raw,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Some(format!("{shown_receipt} is missing"));
+            return refuse(format!("{shown_receipt} is missing"));
         }
         Err(error) => {
-            return Some(format!(
+            return refuse(format!(
                 "{shown_receipt} cannot be read: {}",
                 pytext::os_error(&error, bytes(&receipt_path))
             ));
@@ -231,46 +272,166 @@ pub fn problem(pinned: &Value, executable: &Path) -> Option<String> {
         .and_then(|text| pyvalue::loads(&text).ok())
         .filter(|value| value.as_object().is_some())
     else {
-        return Some(format!("{shown_receipt} is not a JSON object"));
+        return refuse(format!("{shown_receipt} is not a JSON object"));
     };
     if sha256::hex_digest(&raw) != receipt_sha {
-        return Some(format!("{shown_receipt} no longer hashes to its pin"));
+        return refuse(format!("{shown_receipt} no longer hashes to its pin"));
     }
     if let Some(problem) = receipt_problem(&receipt) {
-        return Some(format!("{shown_receipt}: {problem}"));
+        return refuse(format!("{shown_receipt}: {problem}"));
     }
     let (crate_name, artifact, file) = receipt_names(&receipt);
-    if crate_name != Some(NAME) || artifact != Some(sha) {
-        return Some(format!(
-            "{shown_receipt} describes {} {}, not the pinned {NAME}",
+    if crate_name != Some(name) || artifact != Some(sha) {
+        return refuse(format!(
+            "{shown_receipt} describes {} {}, not the pinned {name}",
             crate_name.unwrap_or("None"),
             artifact.unwrap_or("None")
         ));
     }
-    let pinned_executable = directory.join(file.unwrap_or(""));
-    let shown_executable = shown(&pinned_executable);
-    if std::fs::symlink_metadata(&pinned_executable).map_or(true, |found| !found.is_file()) {
-        return Some(format!(
-            "the pinned {NAME} executable {shown_executable} is missing"
+    if here && let Some(problem) = host_problem(name, &receipt) {
+        return refuse(problem);
+    }
+    let executable = directory.join(file.unwrap_or(""));
+    let shown_executable = shown(&executable);
+    if std::fs::symlink_metadata(&executable).map_or(true, |found| !found.is_file()) {
+        return refuse(format!(
+            "the pinned {name} executable {shown_executable} is missing"
         ));
     }
-    if digest(&pinned_executable).as_deref() != Some(sha) {
-        return Some(format!(
-            "the pinned {NAME} executable {shown_executable} no longer hashes to its pin"
+    if digest(&executable).as_deref() != Some(sha) {
+        return refuse(format!(
+            "the pinned {name} executable {shown_executable} no longer hashes to its pin"
         ));
     }
-    if !PyPath::new(bytes(&pinned_executable)).is_file() || !executable_bit(&pinned_executable) {
-        return Some(format!(
-            "the pinned {NAME} executable {shown_executable} is not executable"
+    if !PyPath::new(bytes(&executable)).is_file() || !executable_bit(&executable) {
+        return refuse(format!(
+            "the pinned {name} executable {shown_executable} is not executable"
         ));
     }
-    if pinned_executable != executable {
+    Ok(Runtime {
+        executable,
+        receipt,
+    })
+}
+
+/// `rust_runtime.HOST_TARGETS` for this build's platform.
+fn host_target() -> Option<&'static str> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => Some("x86_64-unknown-linux-gnu"),
+        ("linux", "aarch64") => Some("aarch64-unknown-linux-gnu"),
+        ("macos", "aarch64") => Some("aarch64-apple-darwin"),
+        _ => None,
+    }
+}
+
+/// The C library this host runs, as `platform.libc_ver` names glibc; none elsewhere.
+fn host_libc() -> (Option<String>, Option<String>) {
+    let reported = std::process::Command::new("getconf")
+        .arg("GNU_LIBC_VERSION")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|done| done.status.success())
+        .map(|done| String::from_utf8_lossy(&done.stdout).trim().to_string());
+    match reported.as_deref().and_then(|text| text.split_once(' ')) {
+        Some(("glibc", version)) => (Some("glibc".into()), Some(version.to_string())),
+        _ => (None, None),
+    }
+}
+
+fn version_numbers(text: &str) -> Vec<u64> {
+    text.split(|c: char| !c.is_ascii_digit())
+        .filter(|part| !part.is_empty())
+        .map(|part| part.parse().unwrap_or(u64::MAX))
+        .collect()
+}
+
+/// Why the receipt's executable may not run on this host.
+fn host_problem(name: &str, receipt: &Value) -> Option<String> {
+    let field = |value: &Value, key: &str| -> Value {
+        value
+            .as_object()
+            .and_then(|object| object.get(key))
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
+    let target = field(receipt, "target").py_str();
+    let host = host_target();
+    if Some(target.as_str()) != host {
+        let here = host.map_or_else(
+            || format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
+            str::to_string,
+        );
         return Some(format!(
-            "the running {NAME} {} is not the pinned executable {shown_executable}",
-            shown(executable)
+            "{name} was built for {target}; this host is {here}"
         ));
     }
-    None
+    let built = field(receipt, "libc");
+    let built_name = field(&built, "name");
+    if !built_name.truthy() {
+        return None;
+    }
+    let built_version = field(&built, "version");
+    let (libc, version) = host_libc();
+    let older = version_numbers(version.as_deref().unwrap_or(""))
+        < version_numbers(
+            &built_version
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_default(),
+        );
+    (libc.as_deref() != built_name.as_str() || older).then(|| {
+        format!(
+            "{name} links {} {}; this host has {} {}",
+            built_name.py_str(),
+            built_version.py_str(),
+            libc.as_deref().unwrap_or("None"),
+            version.as_deref().unwrap_or("None")
+        )
+    })
+}
+
+/// The tree at `path` in `commit`, or None when the commit or the path is not there.
+pub fn crate_tree(repo: &Path, commit: &str, path: &str) -> Option<String> {
+    let done = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["rev-parse", "--verify", "--quiet"])
+        .arg(format!("{commit}^{{commit}}:{path}"))
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    done.status
+        .success()
+        .then(|| String::from_utf8_lossy(&done.stdout).trim().to_string())
+}
+
+/// Why the executable was not built from the crate tree at `freeze_commit`.
+pub fn source_problem(receipt: &Value, freeze_commit: Option<&str>, repo: &Path) -> Option<String> {
+    let Some(commit) = freeze_commit.filter(|commit| !commit.is_empty()) else {
+        return Some("the manifest has no freeze_commit to compare the crate with".into());
+    };
+    let field = |outer: &str, inner: &str| {
+        receipt
+            .as_object()
+            .and_then(|receipt| receipt.get(outer))
+            .and_then(Value::as_object)
+            .and_then(|found| found.get(inner))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+    };
+    let path = field("crate", "path");
+    let Some(tree) = crate_tree(repo, commit, path) else {
+        return Some(format!("freeze commit {commit} has no crate {path}"));
+    };
+    let built = field("source", "tree");
+    (tree != built).then(|| {
+        format!(
+            "{} was built from crate tree {built}; freeze commit {commit} has {tree}",
+            field("crate", "name")
+        )
+    })
 }
 
 fn executable_bit(path: &Path) -> bool {

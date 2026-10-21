@@ -297,7 +297,7 @@ fn records(path: &str) -> Result<Vec<Value>> {
 
 /// Replace `path` in one step, so a reader never finds a partly written record. Each call stages in a file of its
 /// own, so overlapping publishers of one path cannot write through each other.
-fn publish(path: &str, content: &str) -> std::io::Result<()> {
+pub(crate) fn publish(path: &str, content: &str) -> std::io::Result<()> {
     let partial = format!("{path}.{}.partial", evidence::random_name(""));
     let staged = (|| {
         let mut handle = OpenOptions::new()
@@ -339,7 +339,7 @@ fn mtime(metadata: &fs::Metadata) -> f64 {
 }
 
 /// The epoch time of the newest file among the attempt's `std*` streams and its home, or None.
-fn last_output(attempt_dir: &str) -> Option<f64> {
+pub(crate) fn last_output(attempt_dir: &str) -> Option<f64> {
     fn walk(directory: &Path, newest: &mut Option<f64>) {
         let Ok(entries) = fs::read_dir(directory) else {
             return;
@@ -388,7 +388,7 @@ fn timestamp(value: &Value) -> Option<(f64, bool)> {
 
 /// Why a process-stop observation does not verify that this attempt's processes had stopped. An absence observed
 /// before `last_output` was written says nothing about the process that wrote it.
-fn process_stop_problems(
+pub(crate) fn process_stop_problems(
     evidence: &Value,
     run_id: &str,
     attempt_id: &str,
@@ -1927,7 +1927,7 @@ fn file_attempt(arguments: &Arguments) -> Result<(Value, String)> {
     } else if matches!(exit_code, Value::Null) {
         return refuse(format!(
             "{attempt_dir}/dispatch.txt has no exit= line, so the dispatch did not end; an observed interruption is \
-             filed with run_cell.py --file {} --interrupted",
+             filed with bench-tools run-cell --file {} --interrupted",
             arguments.attempt_id
         ));
     }
@@ -3006,5 +3006,44 @@ mod tests {
             bench_default("/x/bench/runs/r-1/", "harness"),
             "/x/bench/harness"
         );
+    }
+
+    #[test]
+    fn a_run_runs_only_on_the_bench_tools_it_pins_and_a_refusal_names_its_freeze_commit() {
+        let base = std::env::temp_dir().join(crate::evidence::random_name("pin-"));
+        fs::create_dir_all(&base).expect("mkdir");
+        let run = base.to_string_lossy().into_owned();
+        fs::write(
+            base.join("manifest.json"),
+            format!(r#"{{"freeze_commit": "{}"}}"#, "f".repeat(40)),
+        )
+        .expect("write");
+        let frozen = format!("{run}/runtimes.frozen.json");
+        let pin = |digest: &str| {
+            fs::write(
+                &frozen,
+                format!(r#"{{"bench-tools": {{"sha256": "{digest}"}}}}"#),
+            )
+            .expect("write");
+        };
+        let freeze = "f".repeat(40);
+        assert_eq!(
+            check_pin(&run, "dispatch"),
+            Err(format!(
+                "{frozen} pins no bench-tools runtime; dispatch it from a checkout of its freeze commit {freeze}"
+            ))
+        );
+        pin(&"0".repeat(64));
+        let executable = own_executable().expect("the test binary");
+        assert_eq!(
+            check_pin(&run, "file"),
+            Err(format!(
+                "{executable} is not the bench-tools that {frozen} pins; file it from a checkout of its freeze \
+                 commit {freeze}"
+            ))
+        );
+        pin(&sha256_file(&executable).expect("sha"));
+        assert_eq!(check_pin(&run, "dispatch"), Ok(()));
+        fs::remove_dir_all(&base).expect("cleanup");
     }
 }

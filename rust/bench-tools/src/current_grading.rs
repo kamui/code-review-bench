@@ -559,7 +559,7 @@ fn concat_text(left: &str, right: &Value) -> R<String> {
 
 /// The attempts of a run that one diagnosis in `deviations/` keeps as their cell's result, each with its cause.
 ///
-/// A diagnosis is a JSON object with `predecessor`, `cause` and `reason`, read as `review_queue.py` reads it: a
+/// A diagnosis is a JSON object with `predecessor`, `cause` and `reason`, read as `bench-tools queue` reads it: a
 /// file that is not such an object is passed over. An attempt with two diagnoses, with a cause the queue replaces
 /// or with no reason is not kept, and neither is one whose cause or reason is not text.
 pub fn kept_stops(run_dir: &PyPath) -> R<Vec<(String, String)>> {

@@ -149,7 +149,7 @@ existing archive is kept when its members are the transcripts and refused otherw
 deliberate difference. `tests/native_artifacts.rs` interrupts both at each disk effect.
 
 `bench-tools file-attempt` calls both in process since [#157](https://github.com/kamui/code-review-bench/issues/157);
-`run_cell.py --file` refuses a run whose pin lacks `file-attempt`, naming the run's freeze commit. The corpus runs
+`bench-tools run-cell --file` refuses a run whose pin lacks `file-attempt`, naming the run's freeze commit. The corpus runs
 against Rust, with a differential against the retained `native_artifacts.py` and the former
 `file_attempt.archive_transcripts`, kept in `behavior_contract.py`'s `python-archive-transcripts` driver.
 

@@ -185,20 +185,24 @@ def main() -> int:
     parser.add_argument("--attempt", type=Path)
     parser.add_argument("--workspace", type=Path)
     parser.add_argument("--grading-work", type=Path)
-    parser.add_argument("--target", type=Path, help="with --grading-work: the target directory holding target.json")
+    parser.add_argument("--target", type=Path, help="the target directory holding target.json; with --attempt, the one the run "
+                        "resolved for the attempt's cell")
     parser.add_argument("--receipt", type=Path, help="with --grading-work: the saved assessment receipt.json of its verdicts")
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args()
     grading = (args.grading_work, args.target, args.receipt)
-    if (args.attempt is None) != (args.workspace is None) or len({value is None for value in grading}) != 1 \
-            or (args.attempt is None) == (args.grading_work is None):
-        parser.error("give --attempt with --workspace, or --grading-work with --target and --receipt")
+    if args.attempt is not None:
+        valid = args.workspace is not None and args.grading_work is None and args.receipt is None
+    else:
+        valid = args.workspace is None and None not in grading
+    if not valid:
+        parser.error("give --attempt with --workspace [--target], or --grading-work with --target and --receipt")
     try:
         if args.grading_work:
             receipt = prune_grading(args.grading_work, read(args.target / "target.json")["head"],
                                     read(args.receipt), apply=args.apply)
         else:
-            receipt = prune(args.attempt.resolve(), args.workspace, apply=args.apply)
+            receipt = prune(args.attempt.resolve(), args.workspace, apply=args.apply, target_dir=args.target)
         print(json.dumps(receipt, indent=2) if receipt else "nothing to remove")
         return 0
     except Refused as error:

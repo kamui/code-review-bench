@@ -17,7 +17,7 @@ are converted under `targets/` (step 3); their truncated mirrors are rebuilt and
 dependency caches are built and archived with hashes, and every `smoke.json` is measured on this
 machine (step 4). The four arms are data under `arms/`, and the shakedown is filed as the run
 `runs/2026-09-24-toy/` with attempt records, a mapping and computed results (step 5). Step 6 added
-`run_cell.py`, `score.py` and `compare.py`, the four fresh targets hunted, adjudicated, provisioned
+`run_cell.py` (now `bench-tools run-cell`), `score.py` and `compare.py`, the four fresh targets hunted, adjudicated, provisioned
 and sealed under `targets/`, and the first scored run frozen as `runs/2026-09-24-builtin-baseline/`
 (manifest, sealed order, charges and pre-dispatch probes); no scored cell has been dispatched.
 
@@ -32,7 +32,7 @@ and sealed under `targets/`, and the first scored run frozen as `runs/2026-09-24
 | `targets/<id>/` | `target.json`, frozen `packet.md`, `register.v<N>.json` (`register.v<N>.json.enc` while sealed), `smoke.json`; a migrated target also keeps `packet.legacy.md` |
 | `arms/<id>.json` | reviewer configurations as data |
 | `roster.json` | the roster: the models benchmarks run against by default, by client, each with its efforts, edited by hand; `bun run roster` prints which method and model combinations are benchmarked and which are `missing` |
-| `tools/` | `dispatch.sh`, `check_manifest.py`, `seal.py`, `run_cell.py`, `review_queue.py`, `grade.py`, `compare.py`; provisioning, the skill runners, clean context, skill provenance, packet selection, filing, the attempt audit, review isolation and normalization run in `bench-tools` |
+| `tools/` | `dispatch.sh`, `check_manifest.py`, `seal.py`, `grade.py`, `compare.py`; running cells and queues, provisioning, the skill runners, clean context, skill provenance, packet selection, filing, the attempt audit, review isolation and normalization run in `bench-tools` |
 | `runs/<date>-<label>/` | frozen manifest, `charges.jsonl`, pre-dispatch probes, attempt records, mappings, results; a fixture run also holds its fixture target |
 | `scoreboard.json` | the earlier scoreboard registry, kept as imported evidence |
 | `SCOREBOARD.md`, `scoreboard/*.svg` | the earlier generated scoreboard and its charts, kept as imported evidence |
@@ -189,9 +189,9 @@ destination. Modified sources and probe scripts remain recoverable. Original wor
 including `clone-work`, follow the existing retention rules. Already-filed loose evidence
 keeps its layout; this does not compact historical artifacts or Git history.
 
-`bench-tools file-attempt` files the report folder and archives the transcripts. `run_cell.py`
-runs the run's pinned `bench-tools` and refuses a run whose pin lacks `file-attempt` before filing
-anything; file such a run from a checkout of its freeze commit. An existing transcript archive is kept when it holds the same transcripts
+`bench-tools file-attempt` files the report folder and archives the transcripts. `bench-tools run-cell`
+refuses to file a run that pins another `bench-tools` before filing anything; file such a run from a
+checkout of its freeze commit. An existing transcript archive is kept when it holds the same transcripts
 and refused otherwise. Adoption by an existing frozen runner requires a versioned deviation pinning
 `bench-tools`, `prune_workspace.py` and `attempt.schema.json`; do not replace
 its tools silently.
@@ -201,7 +201,17 @@ on a two-commit fixture, seven attempts, filed after the fact with its deviation
 
 ## Running, scoring and comparing
 
-`run_cell.py` runs one cell of a frozen run: `--next` takes the first cell of the sealed order with
+`bench-tools run-cell` runs one cell of a frozen run with the `bench-tools` the run pins:
+
+```sh
+python3 bench/tools/rust_runtime.py exec bench-tools --run bench/runs/<run> -- run-cell --run bench/runs/<run> --next
+```
+
+A run frozen before `run-cell` moved to Rust pins no `bench-tools`, which `rust_runtime.py` refuses,
+or one without `run-cell`, which answers `unrecognized subcommand 'run-cell'`. Run it from a checkout
+of its freeze commit; `bench-tools queue` refuses its queue, naming that commit.
+
+`--next` takes the first cell of the sealed order with
 no attempt, `--cell` names one, and `--replace att-NNN --reason ...` re-runs the cell of a
 harness-invalid attempt. It refuses a manifest without `frozen_at`, an arm file that no longer
 matches its frozen hash, a packet or diff identity that disagrees with the cohort, and any dispatch
@@ -233,8 +243,8 @@ attempt. `--release att-NNN --interrupted EVIDENCE` removes it on the same obser
 
 ### Running a queue of runs
 
-`review_queue.py` runs several frozen runs one review at a time and keeps the record a restart
-needs. `run_cell.py` still owns the claims, the caps, the filing, the replacement rules and the
+`bench-tools queue` runs several frozen runs one review at a time and keeps the record a restart
+needs. `bench-tools run-cell`, from each run's pin, still owns the claims, the caps, the filing, the replacement rules and the
 cleanup; the queue decides only whether the next launch may start. A queue file names the runs
 in dispatch order, the pinned client executables and each client's spend ceiling:
 
@@ -249,11 +259,11 @@ in dispatch order, the pinned client executables and each client's spend ceiling
 ```
 
 ```sh
-python3 bench/tools/review_queue.py check --queue QUEUE.json
-python3 bench/tools/review_queue.py run --queue QUEUE.json [--count N] [--detach]
-python3 bench/tools/review_queue.py status --queue QUEUE.json [--snapshot]
-python3 bench/tools/review_queue.py recover --queue QUEUE.json
-python3 bench/tools/review_queue.py replace --queue QUEUE.json --run RUN_ID --attempt att-NNN
+python3 bench/tools/rust_runtime.py exec bench-tools -- queue check --queue QUEUE.json
+python3 bench/tools/rust_runtime.py exec bench-tools -- queue run --queue QUEUE.json [--count N] [--detach]
+python3 bench/tools/rust_runtime.py exec bench-tools -- queue status --queue QUEUE.json [--snapshot]
+python3 bench/tools/rust_runtime.py exec bench-tools -- queue recover --queue QUEUE.json
+python3 bench/tools/rust_runtime.py exec bench-tools -- queue replace --queue QUEUE.json --run RUN_ID --attempt att-NNN
 ```
 
 The first `run` pins the queue file and each manifest by hash in the state directory
@@ -282,7 +292,7 @@ marker saved as `queue_launch_marker` in the claim to that launch, regardless
 of wall-clock changes. Runners frozen before this field was added leave claims without it.
 Such a claim matches only an ended launch that explicitly names its attempt. An unfinished
 legacy launch remains unknown; observe its processes and release or file the claim through
-`run_cell.py` with your own interruption evidence before queue recovery. Keep the frozen runner
+`bench-tools run-cell` with your own interruption evidence before queue recovery. Keep the frozen runner
 and claim unchanged.
 
 After a restart, `run` and
@@ -293,7 +303,7 @@ processes block the queue, and so does a launch the controller cannot see into: 
 PID namespace or user, a missing launch record, or a process of this user, not older than the
 launch, that it still cannot inspect after five seconds of reading the process table again. The
 refusal names that process, its state, its start time and the error. Observe such a
-launch where it ran, or file the claim with `run_cell.py --file --interrupted` and an
+launch where it ran, or file the claim with `bench-tools run-cell --file --interrupted` and an
 observation of your own. A launch record that names no boot is unknown wherever it is observed,
 and no command clears it: filing its claim leaves the record blocking the queue. A free lock, a
 stale heartbeat, a missing PID and a zombie wrapper are never read as absence, and the tool
@@ -325,7 +335,7 @@ diagnosis for it: a JSON file with `predecessor`, `reason` and `cause`.
 
 | `cause` | Effect |
 | --- | --- |
-| `harness-invalid`, `harness-stop` | `replace` runs `run_cell.py --replace` on the same frozen run |
+| `harness-invalid`, `harness-stop` | `replace` runs `bench-tools run-cell --replace` on the same frozen run |
 | `transient-capacity` | replaced when a call succeeded first, in that attempt or in a valid review of the arm; otherwise the arm stops |
 | `setup-rejection` | the arm stops: the queue skips its remaining cells and goes on with the others |
 | `skill-timeout` | the attempt stays as the cell's result |

@@ -656,7 +656,7 @@ for a final differential, and the mapping replay compares with recorded outcomes
 | Module | Kept for | Removed by |
 | --- | --- | --- |
 | `grade.py` (dispatch, online preflight) | `regrade.py`, manual dispatch | #157 |
-| `check_manifest.py` (library only) | `rates`, `run_cell`, `evidence_store` | #160 |
+| `check_manifest.py` (library only) | `rates`, `evidence_store` | #160 |
 | `tools/behavior_contract.py` features added here | The contract harness | #160 |
 | `stage_edition.py` and the other research helpers | Research records | never deleted |
 

@@ -163,8 +163,8 @@ assigns it to that stage. [Storage](storage.md#retained-libraries) lists the lib
 
 | Module | Imported or hashed by | Removal condition | Removed by |
 | --- | --- | --- | --- |
-| `bench/tools/check_manifest.py` | `claims`, `claim_grading`, `current_grading`, `evidence_store`, `file_attempt`, `provision`, `rates`, `run_cell` and `upstream` imported `validate`; `evidence_store`, `rates` and `run_cell` still do. `grade.runner_files()` stopped hashing it when #157 deleted `review_isolation.py`. #234 moved its CLI callers to `bench-tools check-manifest` | No maintained module imports it and `grade.runner_files()` no longer hashes it. The delivery plan leaves `check_manifest` with [#156](https://github.com/kamui/code-review-bench/issues/156), which moves its grading importers; `provision`, `run_cell` and `file_attempt` leave with [#157](https://github.com/kamui/code-review-bench/issues/157), `evidence_store` with [#159](https://github.com/kamui/code-review-bench/issues/159), and `rates`, the last importer, with [#160](https://github.com/kamui/code-review-bench/issues/160) | #160 |
-| `bench/tools/rates.py` | `run_cell` and `contributor_adapters` call `read_catalog` and `inspect`, and `contributor_adapters` calls `latest` and `fetch`; `rates refresh` runs in `rates:refresh` and `.github/workflows/rates.yml` | `rates refresh` and the dispatch check move to Rust ([#160](https://github.com/kamui/code-review-bench/issues/160) owns `rates.yml`) and no module imports `rates` | #160 |
+| `bench/tools/check_manifest.py` | `claims`, `claim_grading`, `current_grading`, `evidence_store`, `file_attempt`, `provision`, `rates`, `run_cell` and `upstream` imported `validate`; `evidence_store` and `rates` still do. `grade.runner_files()` stopped hashing it when #157 deleted `review_isolation.py`. #234 moved its CLI callers to `bench-tools check-manifest` | No maintained module imports it and `grade.runner_files()` no longer hashes it. The delivery plan leaves `check_manifest` with [#156](https://github.com/kamui/code-review-bench/issues/156), which moves its grading importers; `provision`, `run_cell` and `file_attempt` leave with [#157](https://github.com/kamui/code-review-bench/issues/157), `evidence_store` with [#159](https://github.com/kamui/code-review-bench/issues/159), and `rates`, the last importer, with [#160](https://github.com/kamui/code-review-bench/issues/160) | #160 |
+| `bench/tools/rates.py` | `contributor_adapters` calls `read_catalog`, `inspect`, `latest` and `fetch`; `rates refresh` runs in `rates:refresh` and `.github/workflows/rates.yml` | `rates refresh` and the dispatch check move to Rust ([#160](https://github.com/kamui/code-review-bench/issues/160) owns `rates.yml`) and no module imports `rates` | #160 |
 | `bench/tools/upstream.py` | `claims` imports `validate_assessment` and `route`; `grade.runner_files()` hashes it; `upstream collect` is the documented snapshot capture | `claims` moves to Rust, `collect` has a replacement and `grade.runner_files()` no longer hashes `upstream.py` ([#156](https://github.com/kamui/code-review-bench/issues/156)) | #156 |
 | `bench/tools/compare.py` | The research run helpers `replacement_runs.py` and `skill_replacement_runs.py`, which `stage_edition.staged_registry()` executes, and `review_code_run.py` call `provisioning_hash` for a run manifest's `provisioning_sha256`; the #156 filing tests reach it through `move.py` and `selection.py`. Its comparison CLI is documented in `bench/README.md` | No current test or command runs those helpers from the current checkout ([#156](https://github.com/kamui/code-review-bench/issues/156)), and another command computes `provisioning_sha256` for new run freezes ([#157](https://github.com/kamui/code-review-bench/issues/157)) | #157 |
 | `docs/research/last-push-recut-2026-10-07/stage_edition.py` | The #156 filing scripts `last-push-rulings-2026-10-11/filing/move.py` and `last-push-review-code-2026-10-12/selection/selection.py` import it; `test_packet_replacements.StagedSelectionTests` loads it | A research record, so it is never deleted. It becomes historical replay when no current test or command loads it or those filing scripts ([#156](https://github.com/kamui/code-review-bench/issues/156)) | #156 |
@@ -183,18 +183,18 @@ cargo tests pin that rewrite with a fixed clock, because a corpus cannot.
 
 A review's normalizer runs after the reviewer has returned, so every caller resolves it before a review can start:
 
-- `run_cell.py` resolves the run's pinned `bench-tools` with `rust_runtime.for_run` before it chooses a cell or claims
-  one, dry runs included, and passes it to the dispatch as `BENCH_RUST_BENCH_TOOLS` with its SHA-256.
+- `bench-tools run-cell` checks that it is the `bench-tools` the run pins before it chooses a cell or claims one, dry
+  runs included, and passes itself to the dispatch as `BENCH_RUST_BENCH_TOOLS` with its SHA-256.
 - `dispatch.sh` checks that executable and its hash before it makes the fresh home; `bench-tools skill-runner` checks the run's
-  pin before it makes one. Either refusal leaves no `timing.json`, so `run_cell.py` releases the claim.
-- `review_queue.py` refuses, before any launch, a run whose `freeze_commit` holds `rust/bench-tools` but whose queue pins
+  pin before it makes one. Either refusal leaves no `timing.json`, so `bench-tools run-cell` releases the claim.
+- `bench-tools queue` refuses, before any launch, a run whose `freeze_commit` holds `rust/bench-tools` but whose queue pins
   no `bench-tools`.
-- `bench-tools file-attempt --replay` runs the normalizers in process. `run_cell.py` files through the `bench-tools`
+- `bench-tools file-attempt --replay` runs the normalizers in process. `bench-tools run-cell` files through the `bench-tools`
   that the run pins.
 
 A run frozen before this change pins no `bench-tools`. Its own freeze checkout still has the Python normalizers, and
-it runs and replays from there exactly as before. From a checkout after this change, `run_cell.py`, the skill runners
-and `run_cell.py --file` refuse such a run, naming its freeze commit, and `review_queue.py` already refuses it
+it runs and replays from there exactly as before. From a checkout after this change, `bench-tools run-cell`, the skill runners
+and `bench-tools run-cell --file` refuse such a run, naming its freeze commit, and `bench-tools queue` already refuses it
 because its runner files differ from that commit.
 
 The contributor path never reaches this branch: `contributor_adapters.collect` normalizes in process with the retained

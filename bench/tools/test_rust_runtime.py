@@ -352,8 +352,7 @@ class Resolution(Store):
         with self.assertRaisesRegex(rust_runtime.Refused, "not the absolute path"):
             self.resolve()
         self.assertEqual(rust_runtime.variable("fixture-tool"), "BENCH_RUST_FIXTURE_TOOL")
-        import review_queue
-        self.assertEqual(rust_runtime.variable("bench-tools"), review_queue.runtime_variable("bench-tools"))
+        self.assertEqual(rust_runtime.variable("bench-tools"), "BENCH_RUST_BENCH_TOOLS")
 
     def test_a_run_uses_its_frozen_pin_and_never_the_selection(self):
         frozen, selected = self.version("frozen"), self.head_version("selected")
@@ -441,11 +440,11 @@ class Resolution(Store):
 
 
 class Interpreter(unittest.TestCase):
-    def test_queue_commands_load_without_tomllib_and_only_install_needs_it(self):
+    def test_runtime_commands_load_without_tomllib_and_only_install_needs_it(self):
         # Python 3.10 has no tomllib; a None entry in sys.modules makes its import fail the same way.
         probe = (
             "import sys; sys.modules['tomllib'] = None\n"
-            "import review_queue, rust_runtime\n"
+            "import rust_runtime\n"
             "from pathlib import Path\n"
             "try:\n"
             "    rust_runtime.describe(Path('.'), rust_runtime.REPO, Path('/nonexistent'), {})\n"
