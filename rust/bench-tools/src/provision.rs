@@ -9,7 +9,9 @@
 //! `provisioning.cache` in `target.json` describes the dependency cache: `kind`, `build` (run once, online, in a
 //! scratch clone at the head), `post_clone` (run offline in every attempt clone, which must stay clean), `env`
 //! and `smoke` (named commands at the `head`, the `base` or `both`). Commands run through `sh -c` with
-//! `{cache}`, `{clone}`, `{work}` and `{cache_root}` substituted. `cache` archives the built cache to
+//! `{cache}`, `{clone}` and `{work}` substituted, inside the [`crate::provision_sandbox`] profile, which the cache
+//! receipt, `prepare`'s record and `smoke.json` record; only build steps share the host network.
+//! `cache` archives the built cache to
 //! `<cache-root>/archives/<id>.tar.gz` and prints its `dependency_identity` entry. `prepare` clones, checks the
 //! archive against the hash `target.json` records, restores it into `<out>-cache` and runs the post-clone steps.
 //! `smoke` measures provisioning and the smoke checks and writes `smoke.json`.
@@ -22,6 +24,7 @@
 //! revision is missing or a git command failed.
 
 use crate::grade::provision::{apply_replacement, remove_tree};
+use crate::provision_sandbox::{Network, Sandbox};
 use crate::pyjson::{self, Dumps, Object, Value};
 use crate::pytext::{self, PyPath};
 use std::ffi::OsStr;
@@ -408,31 +411,46 @@ fn make_clone(target: &Target, cache_root: &Path, out: &Path) -> P<Vec<String>> 
 
 struct Substitutions {
     cache: PathBuf,
-    cache_root: PathBuf,
     clone: PathBuf,
     work: PathBuf,
 }
 
 impl Substitutions {
+    /// An attempt clone's paths: its cache and working directory sit beside it.
+    fn for_clone(clone: &Path) -> Self {
+        let suffixed = |suffix: &str| PathBuf::from(format!("{}{suffix}", clone.display()));
+        Self {
+            cache: suffixed("-cache"),
+            clone: clone.to_path_buf(),
+            work: suffixed("-work"),
+        }
+    }
+
     fn render(&self, command: &str) -> String {
         let mut text = command.to_string();
         for (key, value) in [
             ("cache", &self.cache),
             ("clone", &self.clone),
             ("work", &self.work),
-            ("cache_root", &self.cache_root),
         ] {
             text = text.replace(&format!("{{{key}}}"), &value.to_string_lossy());
         }
         text
     }
 
-    fn environment(&self, cache: &Cache) -> Vec<(String, String)> {
-        cache
+    /// The sandbox for one phase, writing only this clone, its working directory and its cache.
+    fn sandbox(&self, cache: &Cache, network: Network) -> P<Sandbox> {
+        let environment: Vec<(String, String)> = cache
             .env
             .iter()
             .map(|(key, value)| (key.clone(), self.render(value)))
-            .collect()
+            .collect();
+        let writable: Vec<PathBuf> = [&self.clone, &self.work, &self.cache]
+            .into_iter()
+            .filter(|path| path.is_dir())
+            .cloned()
+            .collect();
+        Sandbox::new(network, &writable, &environment)
     }
 }
 
@@ -449,19 +467,28 @@ fn universal_newlines(raw: &[u8]) -> String {
         .replace('\r', "\n")
 }
 
-/// Run one command through `sh -c` with `environment` added to this process's.
-fn shell(command: &str, cwd: &Path, environment: &[(String, String)]) -> P<Ran> {
-    use std::os::unix::process::ExitStatusExt;
+/// Run one of the provisioner's own commands, such as archiving or restoring the cache, through `sh -c`.
+fn shell(command: &str, cwd: &Path) -> P<Ran> {
     let started = std::time::Instant::now();
     let done = Command::new("sh")
         .args(["-c", command])
         .current_dir(cwd)
-        .envs(environment.iter().map(|(key, value)| (key, value)))
         .stdin(Stdio::null())
         .output()
         .map_err(|error| format!("cannot run sh: {}", pytext::os_error(&error, b"sh")))?;
+    Ok(ran(&done, started))
+}
+
+/// Run one recipe step in `sandbox`.
+fn step_in(sandbox: &Sandbox, command: &str, cwd: &Path) -> P<Ran> {
+    let started = std::time::Instant::now();
+    Ok(ran(&sandbox.run(command, cwd)?, started))
+}
+
+fn ran(done: &std::process::Output, started: std::time::Instant) -> Ran {
+    use std::os::unix::process::ExitStatusExt;
     let stdout = universal_newlines(&done.stdout);
-    Ok(Ran {
+    Ran {
         code: done
             .status
             .code()
@@ -469,7 +496,7 @@ fn shell(command: &str, cwd: &Path, environment: &[(String, String)]) -> P<Ran> 
         duration: crate::usage::round_to(started.elapsed().as_secs_f64(), 2),
         output: stdout.clone() + &universal_newlines(&done.stderr),
         stdout,
-    })
+    }
 }
 
 fn platform_record() -> String {
@@ -763,24 +790,29 @@ fn build_cache(
 ) -> P<Result<Value, Vec<String>>> {
     let substitutions = Substitutions {
         cache: cache.to_path_buf(),
-        cache_root: options.cache_root.clone(),
         clone: scratch.to_path_buf(),
         work: work.to_path_buf(),
     };
-    let environment = substitutions.environment(config);
+    let sandbox = if config.build.is_empty() {
+        None
+    } else {
+        Some(substitutions.sandbox(config, Network::Shared)?)
+    };
     let started = now();
     let mut steps = Vec::new();
-    for command in &config.build {
-        let rendered = substitutions.render(command);
-        let ran = shell(&rendered, scratch, &environment)?;
-        let mut entry = step(command, &ran);
-        entry.push(("output_tail", text(&tail(&ran.output, 20))));
-        steps.push(object(entry));
-        if ran.code != 0 {
-            return Ok(Err(vec![
-                format!("build step failed (exit {}): {rendered}", ran.code),
-                tail(&ran.output, 20),
-            ]));
+    if let Some(sandbox) = &sandbox {
+        for command in &config.build {
+            let rendered = substitutions.render(command);
+            let ran = step_in(sandbox, &rendered, scratch)?;
+            let mut entry = step(command, &ran);
+            entry.push(("output_tail", text(&tail(&ran.output, 20))));
+            steps.push(object(entry));
+            if ran.code != 0 {
+                return Ok(Err(vec![
+                    format!("build step failed (exit {}): {rendered}", ran.code),
+                    tail(&ran.output, 20),
+                ]));
+            }
         }
     }
     let mut archive_record = Value::Null;
@@ -793,7 +825,7 @@ fn build_cache(
             crate::shlex::quote(&archive.to_string_lossy()),
             crate::shlex::quote(&target.id)
         );
-        let ran = shell(&command, scratch, &environment)?;
+        let ran = shell(&command, scratch)?;
         if ran.code != 0 {
             return Ok(Err(vec![
                 format!("archive failed (exit {})", ran.code),
@@ -818,6 +850,10 @@ fn build_cache(
         ("finished_at", text(&now())),
         ("platform", text(&platform_record())),
         ("cache", text(&cache.to_string_lossy())),
+        (
+            "sandbox",
+            sandbox.as_ref().map_or(Value::Null, Sandbox::receipt),
+        ),
         ("build", Value::Array(steps)),
         ("archive", archive_record),
     ])))
@@ -898,7 +934,6 @@ fn restore_cache(target: &Target, config: &Cache, cache_root: &Path, dest: &Path
             crate::shlex::quote(&archive.to_string_lossy())
         ),
         dest,
-        &[],
     )?;
     if ran.code != 0 {
         let failure = format!(
@@ -1043,6 +1078,8 @@ struct Prepared {
     recipe: String,
     duration: f64,
     tree_clean_after: Option<bool>,
+    /// The post-clone steps' sandbox receipt; null when there were none.
+    sandbox: Value,
     steps: Vec<Value>,
     failures: Vec<String>,
 }
@@ -1056,6 +1093,7 @@ impl Prepared {
                 "tree_clean_after",
                 self.tree_clean_after.map_or(Value::Null, Value::Bool),
             ),
+            ("sandbox", self.sandbox.clone()),
             ("steps", Value::Array(self.steps.clone())),
             (
                 "failures",
@@ -1100,6 +1138,7 @@ fn prepare_locked(target: &Target, cache_root: &Path, out: &Path, base: bool) ->
         },
         duration: 0.0,
         tree_clean_after: None,
+        sandbox: Value::Null,
         steps: Vec::new(),
         failures,
     };
@@ -1109,15 +1148,8 @@ fn prepare_locked(target: &Target, cache_root: &Path, out: &Path, base: bool) ->
     if base {
         git_in(out, &["checkout", "-q", &target.base_branch])?;
     }
-    let suffixed = |suffix: &str| PathBuf::from(format!("{}{suffix}", out.display()));
-    let substitutions = Substitutions {
-        cache: suffixed("-cache"),
-        cache_root: cache_root.to_path_buf(),
-        clone: out.to_path_buf(),
-        work: suffixed("-work"),
-    };
+    let substitutions = Substitutions::for_clone(out);
     make_directories(&substitutions.work)?;
-    let environment = substitutions.environment(&config);
     let mut total = 0.0;
     if !config.build.is_empty() {
         let (restore, failures) = restore_cache(target, &config, cache_root, &substitutions.cache)?;
@@ -1135,17 +1167,21 @@ fn prepare_locked(target: &Target, cache_root: &Path, out: &Path, base: bool) ->
             return Ok(record);
         }
     }
-    for command in &config.post_clone {
-        let ran = shell(&substitutions.render(command), out, &environment)?;
-        total += ran.duration;
-        record.steps.push(object(step(command, &ran)));
-        if ran.code != 0 {
-            record.failures.push(format!(
-                "post-clone step failed (exit {}): {command}\n{}",
-                ran.code,
-                tail(&ran.output, 10)
-            ));
-            break;
+    if !config.post_clone.is_empty() {
+        let sandbox = substitutions.sandbox(&config, Network::Off)?;
+        record.sandbox = sandbox.receipt();
+        for command in &config.post_clone {
+            let ran = step_in(&sandbox, &substitutions.render(command), out)?;
+            total += ran.duration;
+            record.steps.push(object(step(command, &ran)));
+            if ran.code != 0 {
+                record.failures.push(format!(
+                    "post-clone step failed (exit {}): {command}\n{}",
+                    ran.code,
+                    tail(&ran.output, 10)
+                ));
+                break;
+            }
         }
     }
     record.duration = crate::usage::round_to(total, 2);
@@ -1173,25 +1209,24 @@ pub fn prepare_command(options: &Options, out: &Path) -> P<Outcome> {
     })
 }
 
-fn smoke_checks(config: &Cache, cache_root: &Path, revisions: &[(&str, PathBuf)]) -> P<Vec<Value>> {
+/// The smoke checks, and the receipt of the sandbox they ran in at the head; null when there were none.
+fn smoke_checks(config: &Cache, revisions: &[(&str, PathBuf)]) -> P<(Vec<Value>, Value)> {
+    if config.smoke.is_empty() {
+        return Ok((Vec::new(), Value::Null));
+    }
+    let mut sandboxes = Vec::new();
+    for (revision, clone) in revisions {
+        let substitutions = Substitutions::for_clone(clone);
+        let sandbox = substitutions.sandbox(config, Network::Off)?;
+        sandboxes.push((*revision, clone, substitutions, sandbox));
+    }
     let mut checks = Vec::new();
     for item in &config.smoke {
-        for (revision, clone) in revisions
+        for (revision, clone, substitutions, sandbox) in sandboxes
             .iter()
-            .filter(|(revision, _)| item.revision == *revision || item.revision == "both")
+            .filter(|(revision, ..)| item.revision == *revision || item.revision == "both")
         {
-            let suffixed = |suffix: &str| PathBuf::from(format!("{}{suffix}", clone.display()));
-            let substitutions = Substitutions {
-                cache: suffixed("-cache"),
-                cache_root: cache_root.to_path_buf(),
-                clone: clone.clone(),
-                work: suffixed("-work"),
-            };
-            let ran = shell(
-                &substitutions.render(&item.command),
-                clone,
-                &substitutions.environment(config),
-            )?;
+            let ran = step_in(sandbox, &substitutions.render(&item.command), clone)?;
             // The result line of a test runner is on stdout; stderr carries warnings that would hide it.
             let last = Some(tail(&ran.stdout, 1))
                 .filter(|line| !line.is_empty())
@@ -1214,7 +1249,10 @@ fn smoke_checks(config: &Cache, cache_root: &Path, revisions: &[(&str, PathBuf)]
             ]));
         }
     }
-    Ok(checks)
+    let head = sandboxes
+        .first()
+        .map_or(Value::Null, |(.., sandbox)| sandbox.receipt());
+    Ok((checks, head))
 }
 
 pub fn smoke(options: &Options, out: Option<&Path>) -> P<Outcome> {
@@ -1264,7 +1302,7 @@ pub fn smoke(options: &Options, out: Option<&Path>) -> P<Outcome> {
     }
     make_directories(&scratch_root)?;
     let measured_at = now();
-    type Measured = Result<(Vec<Prepared>, Vec<Value>), Vec<String>>;
+    type Measured = Result<(Vec<Prepared>, (Vec<Value>, Value)), Vec<String>>;
     let measured = (|| -> P<Measured> {
         let mut records = Vec::new();
         for (revision, clone) in &revisions {
@@ -1278,15 +1316,12 @@ pub fn smoke(options: &Options, out: Option<&Path>) -> P<Outcome> {
             }
             records.push(record);
         }
-        Ok(Ok((
-            records,
-            smoke_checks(&config, cache_root, &revisions)?,
-        )))
+        Ok(Ok((records, smoke_checks(&config, &revisions)?)))
     })();
     for path in &paths {
         remove(path)?;
     }
-    let (records, checks) = match measured? {
+    let (records, (checks, checks_sandbox)) = match measured? {
         Ok(measured) => measured,
         Err(lines) => return Ok(Outcome::lines(&lines, 1)),
     };
@@ -1349,7 +1384,7 @@ pub fn smoke(options: &Options, out: Option<&Path>) -> P<Outcome> {
         .collect();
     let count = checks.len();
     let mut smoke = object(vec![
-        ("schema_version", Value::Int("1".to_string())),
+        ("schema_version", Value::Int("2".to_string())),
         ("target", text(&target.id)),
         ("source", text("measured")),
         ("measured_at", text(&measured_at)),
@@ -1363,8 +1398,10 @@ pub fn smoke(options: &Options, out: Option<&Path>) -> P<Outcome> {
                     "tree_clean_after",
                     head.tree_clean_after.map_or(Value::Null, Value::Bool),
                 ),
+                ("sandbox", head.sandbox.clone()),
             ]),
         ),
+        ("sandbox", checks_sandbox),
         ("checks", Value::Array(checks)),
         (
             "notes",

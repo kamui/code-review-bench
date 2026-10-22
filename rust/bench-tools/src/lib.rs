@@ -35,6 +35,7 @@ pub mod normalize_thermo;
 pub mod packet_selection;
 pub mod pre_existing;
 pub mod provision;
+pub mod provision_sandbox;
 pub mod prune_workspace;
 pub mod pyfs;
 pub mod pyjson;

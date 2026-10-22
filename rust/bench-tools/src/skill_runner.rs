@@ -423,7 +423,7 @@ fn configure_cross_model_review(clone: &Path, runner: &Value) -> R<()> {
     Ok(())
 }
 
-fn mise_paths() -> R<String> {
+pub fn mise_paths() -> R<String> {
     if review_isolation::which("mise").is_none() {
         return Ok(String::new());
     }
