@@ -27,8 +27,8 @@ pub mod graphql;
 pub mod probe;
 
 use crate::build_packet::{
-    BASE_MOVED_BEFORE_MERGE, MERGE_BASE_ROW, MERGED_ROW, NOT_MERGED, STATE_ROW, THREAD_RESOLVED,
-    THREAD_STATE_UNKNOWN, THREAD_UNRESOLVED,
+    BASE_MOVED_BEFORE_MERGE, BASE_MOVED_SINCE_BRANCHING, MERGE_BASE_ROW, MERGED_ROW, NOT_MERGED,
+    STATE_ROW, THREAD_RESOLVED, THREAD_STATE_UNKNOWN, THREAD_UNRESOLVED,
 };
 use crate::provision::{self, Target};
 use crate::pyjson::{self, Dumps, Duplicates, Value};
@@ -428,8 +428,6 @@ pub struct Setup {
     /// The packet the attempt dispatches, which must state what the capture holds.
     pub packet: Option<PathBuf>,
 }
-
-const BASE_MOVED_SINCE_BRANCHING: &str = "the base branch moved after the head branched from it";
 
 /// `packet` as the capture holds its pull request: open and unmerged, as every capture's pull request stood at
 /// its cutoff, with a moved base branch's note naming no merge, and with each review thread's fetch-time

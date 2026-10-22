@@ -86,6 +86,8 @@ pub(crate) const MERGED_ROW: &str = "| `merged` |";
 pub(crate) const NOT_MERGED: &str = "**`false`** (not merged)";
 pub(crate) const MERGE_BASE_ROW: &str = "| Merge-base |";
 pub(crate) const BASE_MOVED_BEFORE_MERGE: &str = "the base branch moved before the merge";
+pub(crate) const BASE_MOVED_SINCE_BRANCHING: &str =
+    "the base branch moved after the head branched from it";
 /// Prose this builder writes that says the pull request merged.
 #[cfg(test)]
 pub(crate) const MERGE_PROSE: [&str; 4] = [
@@ -2530,6 +2532,21 @@ fn record_value(
     )
 }
 
+/// The merge-base row, which names a merge only when the pull request merged.
+fn merge_base_row(merge_base: &str, base_sha: &str, merged: bool) -> String {
+    let note = if merge_base == base_sha {
+        " (identical to the base SHA)".to_string()
+    } else {
+        let moved = if merged {
+            BASE_MOVED_BEFORE_MERGE
+        } else {
+            BASE_MOVED_SINCE_BRANCHING
+        };
+        format!(" (**differs from the base SHA**: {moved}; review against the merge-base)")
+    };
+    format!("{MERGE_BASE_ROW} `{merge_base}`{note} |")
+}
+
 struct Counts {
     reviews: usize,
     thread_comments: usize,
@@ -2596,14 +2613,8 @@ impl Rendering<'_> {
             "| Base SHA (as recorded on the pull request) | `{}` |",
             a.base_sha
         ));
-        let merge_note = if a.merge_base == a.base_sha {
-            " (identical to the base SHA)".to_string()
-        } else {
-            format!(
-                " (**differs from the base SHA**: {BASE_MOVED_BEFORE_MERGE}; review against the merge-base)"
-            )
-        };
-        w(format!("{MERGE_BASE_ROW} `{}`{merge_note} |", a.merge_base));
+        let merged = item(p, "merged")?.truthy();
+        w(merge_base_row(&a.merge_base, &a.base_sha, merged));
         w(format!(
             "| Diff | {} files, +{} / \u{2212}{}, {} commits |",
             self.rows.len(),
@@ -2612,7 +2623,6 @@ impl Rendering<'_> {
             self.commits.len()
         ));
         w(format!("{STATE_ROW} `{}` |", item(p, "state")?.py_str()));
-        let merged = item(p, "merged")?.truthy();
         let merged_cell = if merged {
             format!("**`true`** (merged {})", item(p, "mergedAt")?.py_str())
         } else {
@@ -3042,6 +3052,23 @@ mod tests {
         assert_eq!(dedent("    a\nb\n"), "    a\nb\n");
         assert_eq!(dedent("  \ta\n  \tb"), "a\nb");
         assert_eq!(dedent("  a\n\tb"), "  a\n\tb");
+    }
+
+    #[test]
+    fn a_moved_base_names_a_merge_only_for_a_merged_pull_request() {
+        let moved = "| Merge-base | `m` (**differs from the base SHA**: the base branch moved";
+        assert_eq!(
+            merge_base_row("m", "b", true),
+            format!("{moved} before the merge; review against the merge-base) |")
+        );
+        assert_eq!(
+            merge_base_row("m", "b", false),
+            format!("{moved} after the head branched from it; review against the merge-base) |")
+        );
+        assert_eq!(
+            merge_base_row("m", "m", false),
+            "| Merge-base | `m` (identical to the base SHA) |"
+        );
     }
 
     #[test]
