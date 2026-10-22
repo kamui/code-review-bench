@@ -45,25 +45,26 @@ def names(doc: str) -> set[str]:
     return {"/".join(parts[:end]) for end in range(2 if parts[0] == "docs" else 1, len(parts) + 1)}
 
 
-def read_docs(docs: list[str], root: Path) -> set[str]:
-    """The docs another tracked file names, counting every file except Markdown prose as a possible reader."""
+def named_doc(docs: list[str], root: Path) -> tuple[str, str] | None:
+    """A changed doc and another tracked file that names it, counting every file except Markdown prose as a reader."""
     wanted = set().union(*map(names, docs))
     found = subprocess.run(
         ["git", "grep", "-l", "-z", "-I", "-F", *(arg for name in wanted for arg in ("-e", name)),
          "--", ".", ":(exclude,glob)**/*.md"],
         cwd=root, capture_output=True)
     if found.returncode == 1:
-        return set()
+        return None
     found.check_returncode()
     mention = re.compile(r"(?<![A-Za-z0-9_.-])("
                          + "|".join(map(re.escape, sorted(wanted, key=len, reverse=True)))
                          + r")/?(?![A-Za-z0-9_./-])")
-    read = set()
     for reader in found.stdout.decode("utf-8", "surrogateescape").split("\0"):
         if reader:
             named = set(mention.findall((root / reader).read_text(encoding="utf-8", errors="replace")))
-            read.update(doc for doc in docs if doc != reader and names(doc) & named)
-    return read
+            for doc in docs:
+                if doc != reader and names(doc) & named:
+                    return doc, reader
+    return None
 
 
 def selection(event_name: str, event: dict, root: Path = ROOT) -> tuple[frozenset[str], str]:
@@ -80,11 +81,13 @@ def selection(event_name: str, event: dict, root: Path = ROOT) -> tuple[frozense
         return JOBS, "Empty change detection retains full coverage"
     docs = [path for path in paths if is_doc(path)]
     jobs = frozenset().union(*(jobs_reading(path) for path in paths if not is_doc(path)))
-    read = read_docs(docs, root) if docs and jobs != JOBS else set()
-    if read:
-        jobs = JOBS
-    return jobs, (f"{len(paths)} changed paths, {len(docs)} of them docs and {len(read)} of those read, "
-                  f"select {', '.join(sorted(jobs)) or 'no gated job'}")
+    reason = f"{len(paths)} changed paths"
+    if docs and jobs != JOBS:
+        named = named_doc(docs, root)
+        reason += f", where {named[1]} names {named[0]}," if named else f", including {len(docs)} docs no other file names,"
+        if named:
+            jobs = JOBS
+    return jobs, f"{reason} select {', '.join(sorted(jobs)) or 'no gated job'}"
 
 
 def main() -> None:
