@@ -53,7 +53,7 @@ python3 bench/tools/rust_runtime.py exec bench-tools -- grading probe-claude
 (cd rust/bench-tools && cargo test --locked --test dispatch)
 (cd rust/bench-tools && cargo test --locked --lib prune_workspace)
 (cd rust/bench-tools && cargo test --locked provision)
-python3 bench/tools/test_cache_replacements.py
+(cd rust/bench-tools && cargo test --locked --test cache_replacements)
 bun run verify:claims
 ```
 
