@@ -127,9 +127,11 @@ pub fn seal(
     Ok(hash)
 }
 
-/// Decrypt `sealed` to `out` when the plaintext hashes to `expected`; whether it did.
+/// Decrypt `sealed` to `out` when the plaintext hashes to `expected`; whether it did. Once `stopped` is true, `out`
+/// is left as it was.
 pub fn open(
     launch: &dyn Fn() -> Command,
+    stopped: &dyn Fn() -> bool,
     key: &Path,
     sealed: &Path,
     out: &Path,
@@ -157,6 +159,9 @@ pub fn open(
             if found != expected {
                 return Ok(false);
             }
+            if stopped() {
+                return Err(format!("stopped; {} not written", out.display()));
+            }
             fs::rename(&partial, out).map_err(failed(out))?;
             Ok(true)
         });
@@ -170,6 +175,10 @@ mod tests {
 
     fn launch() -> Command {
         Command::new("openssl")
+    }
+
+    fn running() -> bool {
+        false
     }
 
     fn scratch() -> PathBuf {
@@ -200,14 +209,17 @@ mod tests {
         let cipher = fs::read(&sealed).expect("read");
         assert!(!cipher.windows(5).any(|window| window == b"GT-x1"));
         let opened = base.join("opened.json");
-        assert_eq!(open(&launch, &key, &sealed, &opened, &hash), Ok(true));
+        assert_eq!(
+            open(&launch, &running, &key, &sealed, &opened, &hash),
+            Ok(true)
+        );
         assert_eq!(
             fs::read(&opened).expect("read"),
             fs::read(&plain).expect("read")
         );
         let bad = base.join("bad.json");
         assert_eq!(
-            open(&launch, &key, &sealed, &bad, &"0".repeat(64)),
+            open(&launch, &running, &key, &sealed, &bad, &"0".repeat(64)),
             Ok(false)
         );
         assert!(!bad.exists());
@@ -216,11 +228,27 @@ mod tests {
         // A wrong key fails openssl, or passes CBC padding and then fails the hash check.
         for name in ["wrong.json", "opened.json"] {
             assert_ne!(
-                open(&launch, &other, &sealed, &base.join(name), &hash),
+                open(&launch, &running, &other, &sealed, &base.join(name), &hash),
                 Ok(true)
             );
         }
         assert!(!base.join("wrong.json").exists());
+        let stopped = || true;
+        assert!(
+            open(
+                &launch,
+                &stopped,
+                &key,
+                &sealed,
+                &base.join("late.json"),
+                &hash
+            )
+            .is_err()
+        );
+        assert!(
+            !base.join("late.json").exists(),
+            "a stop before the move writes nothing"
+        );
         assert_eq!(
             fs::read(&opened).expect("read"),
             fs::read(&plain).expect("read"),

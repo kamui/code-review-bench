@@ -2143,7 +2143,8 @@ fn run_seal(command: SealCommand) -> Result<ExitCode, ExitCode> {
             key: given,
         } => {
             let key = key(given)?;
-            if !seal::open(&launch, &key, &sealed, &out, &sha256).map_err(refused)? {
+            let stopped = || held.received().is_some();
+            if !seal::open(&launch, &stopped, &key, &sealed, &out, &sha256).map_err(refused)? {
                 write_stdout(
                     format!(
                         "{}: plaintext SHA-256 does not match {sha256}; {} not written\n",

@@ -1649,6 +1649,34 @@ fn a_group_is_the_launchs_while_its_wrapper_or_a_marked_member_lives() {
 }
 
 #[test]
+fn a_reviewer_naming_the_canonical_attempt_directory_ties_the_group_to_the_launch() {
+    let fx = fake();
+    let real = fx.base.join("real-work/att-007");
+    fs::create_dir_all(&real).expect("mkdir");
+    std::os::unix::fs::symlink(fx.base.join("real-work"), fx.base.join("linked-work"))
+        .expect("symlink");
+    fx.process(300, "S", 1, 100, 80, "HOME=/h");
+    fx.process(
+        301,
+        "S",
+        1,
+        100,
+        81,
+        &format!("HOME={}/home", real.display()),
+    );
+    let seen = observed(
+        &fx,
+        launch_evidence("m1"),
+        Some(&fx.base.join("linked-work/att-007")),
+    );
+    assert_eq!(status_of(&seen), "running", "{seen:?}");
+    assert_eq!(
+        get(&seen, "reason").py_str(),
+        "live processes of the launch: [300, 301]"
+    );
+}
+
+#[test]
 fn a_launch_this_process_cannot_attribute_is_unknown() {
     let fx = fake();
     let unknown = |pairs: Vec<(&str, Value)>, reason: &str| {

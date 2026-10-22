@@ -1255,6 +1255,13 @@ fn scan(
     }
     if let Some(directory) = attempt_dir {
         needles.push(directory.as_os_str().as_bytes().to_vec());
+        // The reviewer's home, temporary directory and working directory are canonical paths, which a work root
+        // with a symbolic link or `..` in it does not spell the same way.
+        if let Ok(canonical) = fs::canonicalize(directory)
+            && canonical != directory
+        {
+            needles.push(canonical.into_os_string().into_vec());
+        }
     }
     let recorded = integer(get(evidence, "pid")).filter(|pid| *pid != 0);
     let wrapper = match recorded {
