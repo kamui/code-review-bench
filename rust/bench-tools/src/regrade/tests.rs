@@ -41,6 +41,10 @@ struct Script {
     version: &'static str,
     /// When the stored Claude sign-in expires, in milliseconds since 1970.
     expires: Option<f64>,
+    /// The cache-replacement manifest digest prepare pins, in place of the digest of the manifest it was given.
+    prepared_manifest: Option<&'static str>,
+    /// After this step runs, overwrite the file with these contents.
+    rewrite_after: Option<(&'static str, PathBuf, &'static str)>,
 }
 
 impl Default for Script {
@@ -58,6 +62,8 @@ impl Default for Script {
             preflight_code: 0,
             version: "1.2.3",
             expires: None,
+            prepared_manifest: None,
+            rewrite_after: None,
         }
     }
 }
@@ -101,6 +107,35 @@ impl Fake {
             object.insert("claude_sign_in_expires_at".into(), Value::Float(expires));
         }
         reading
+    }
+
+    fn prepare(&self, args: &[String]) -> std::io::Result<i32> {
+        let argument = |name: &str| {
+            let at = args.iter().position(|arg| arg == name)?;
+            Some(PathBuf::from(&args[at + 1]))
+        };
+        std::fs::create_dir_all(argument("--work").unwrap()).unwrap();
+        let target = argument("--target").unwrap();
+        let mut key = json(&format!(
+            r#"{{"input_fingerprint": "fp-{}"}}"#,
+            target.display()
+        ));
+        if let (Some(manifest), Value::Object(object)) =
+            (argument("--cache-replacements"), &mut key)
+        {
+            let sha256 = match self.script.lock().unwrap().prepared_manifest {
+                Some(sha256) => sha256.to_string(),
+                None => digest(&manifest).unwrap(),
+            };
+            object.insert(
+                "runner_deviation".into(),
+                json(&format!(
+                    r#"{{"provisioning": {{"manifest": {{"sha256": "{sha256}"}}}}}}"#
+                )),
+            );
+        }
+        write(&argument("--key").unwrap(), &dumps(&key));
+        Ok(0)
     }
 
     fn dispatch(&self, args: &[String]) -> std::io::Result<i32> {
@@ -188,25 +223,19 @@ impl Effects for Fake {
             .collect();
         self.calls.lock().unwrap().push(args.clone());
         assert_eq!(args[0], "grade");
-        match args[1].as_str() {
+        let code = match args[1].as_str() {
             "preflight" => Ok(self.script.lock().unwrap().preflight_code),
-            "prepare" => {
-                let argument = |name: &str| {
-                    let at = args.iter().position(|arg| arg == name).unwrap();
-                    PathBuf::from(&args[at + 1])
-                };
-                std::fs::create_dir_all(argument("--work")).unwrap();
-                let target = argument("--target");
-                write(
-                    &argument("--key"),
-                    &format!(r#"{{"input_fingerprint": "fp-{}"}}"#, target.display()),
-                );
-                Ok(0)
-            }
+            "prepare" => self.prepare(&args),
             "dispatch" => self.dispatch(&args),
             "map" => Ok(self.script.lock().unwrap().map_code),
             other => panic!("unexpected step {other}"),
+        };
+        if let Some((step, path, contents)) = &self.script.lock().unwrap().rewrite_after
+            && step == &args[1]
+        {
+            write(path, contents);
         }
+        code
     }
 
     fn fingerprints(&self) -> R<Value> {
@@ -334,6 +363,36 @@ impl Bench {
         }
     }
 
+    /// Pin a cache-replacement manifest in the authorization, and a cache root in the execution plan when given.
+    fn replace_cache(&self, cache_root: Option<&str>) {
+        write(&self.root.join(REPLACEMENTS), r#"{"targets": []}"#);
+        if let Some(cache_root) = cache_root {
+            let path = self.root.join("execution.json");
+            let mut execution = read_json(&path).unwrap();
+            if let Value::Object(object) = &mut execution {
+                object.insert("cacheRoot".into(), string(cache_root));
+            }
+            write(&path, &dumps(&execution));
+        }
+        let path = self.root.join("authorization.json");
+        let mut authorization = read_json(&path).unwrap();
+        if let Value::Object(object) = &mut authorization {
+            object.insert(
+                "executionPlan".into(),
+                json(&pin(&self.root, "execution.json")),
+            );
+            object.insert(
+                "cacheReplacements".into(),
+                json(&pin(&self.root, REPLACEMENTS)),
+            );
+        }
+        write(&path, &dumps(&authorization));
+    }
+
+    fn reservations(&self) -> Vec<PathBuf> {
+        reservations(&self.directory).unwrap()
+    }
+
     fn script(&self) -> std::sync::MutexGuard<'_, Script> {
         self.fake.script.lock().unwrap()
     }
@@ -399,6 +458,8 @@ impl Bench {
 }
 
 const CLAUDE: &str = r#""budgetCapUsd": 20, "grader": {"model": "claude-test", "effort": "high"}"#;
+
+const REPLACEMENTS: &str = "cache-replacements.json";
 
 fn states(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
     pairs
@@ -982,4 +1043,112 @@ fn a_zero_charge_proof_settles_a_reservation_only_before_the_session_starts() {
             );
         }
     }
+}
+
+fn argument(call: &[String], name: &str) -> String {
+    call[call.iter().position(|arg| arg == name).unwrap() + 1].clone()
+}
+
+#[test]
+fn the_replacement_manifest_and_cache_root_reach_preflight_and_preparation() {
+    let bench = Bench::new(&["t1"], CLAUDE);
+    bench.replace_cache(Some(".local/replacement-cache"));
+    assert_eq!(bench.run(), Ok(0));
+    let calls = [
+        &bench.fake.calls("preflight")[0],
+        &bench.fake.calls("prepare")[0],
+    ];
+    for call in calls {
+        assert_eq!(
+            argument(call, "--cache-replacements"),
+            bench.root.join(REPLACEMENTS).display().to_string()
+        );
+        assert_eq!(
+            argument(call, "--cache-root"),
+            bench
+                .root
+                .join(".local/replacement-cache")
+                .display()
+                .to_string()
+        );
+    }
+    write(&bench.root.join(REPLACEMENTS), "changed");
+    assert_eq!(
+        bench.run().unwrap_err(),
+        format!("pinned input changed: {REPLACEMENTS}")
+    );
+}
+
+#[test]
+fn a_replacement_changed_after_preflight_reserves_and_dispatches_nothing() {
+    let bench = Bench::new(&["t1"], CLAUDE);
+    bench.replace_cache(None);
+    bench.script().rewrite_after = Some((
+        "preflight",
+        bench.root.join(REPLACEMENTS),
+        r#"{"targets": ["changed"]}"#,
+    ));
+    assert_eq!(bench.run(), Ok(2));
+    assert!(bench.dispatched().is_empty());
+    assert!(bench.reservations().is_empty());
+    assert!(
+        reason(&bench).contains("pinned input changed"),
+        "{}",
+        reason(&bench)
+    );
+}
+
+#[test]
+fn a_prepared_key_must_pin_the_authorized_replacement_before_reserving() {
+    let bench = Bench::new(&["t1"], CLAUDE);
+    bench.replace_cache(None);
+    bench.script().prepared_manifest =
+        Some("0000000000000000000000000000000000000000000000000000000000000000");
+    assert_eq!(bench.run(), Ok(2));
+    assert!(bench.dispatched().is_empty());
+    assert!(bench.reservations().is_empty());
+    assert!(
+        reason(&bench).contains("prepared cache replacement differs from authorization"),
+        "{}",
+        reason(&bench)
+    );
+}
+
+#[test]
+fn an_existing_key_must_pin_the_authorized_replacement_on_restart() {
+    let bench = Bench::new(&["t1"], CLAUDE);
+    bench.replace_cache(None);
+    let attempt = bench.attempt("t1", 1);
+    write(
+        &attempt.join("key.json"),
+        r#"{"input_fingerprint": "fp-t1"}"#,
+    );
+    assert_eq!(bench.run(), Ok(2));
+    assert!(bench.fake.calls("prepare").is_empty());
+    assert!(bench.dispatched().is_empty());
+    assert!(!attempt.join("reservation.json").exists());
+    assert!(
+        reason(&bench).contains("prepared cache replacement differs from authorization"),
+        "{}",
+        reason(&bench)
+    );
+}
+
+#[test]
+fn a_manifest_changed_during_preparation_reserves_nothing() {
+    let bench = Bench::new(&["t1"], CLAUDE);
+    bench.replace_cache(None);
+    bench.script().rewrite_after = Some((
+        "prepare",
+        bench.root.join(REPLACEMENTS),
+        r#"{"targets": ["changed"]}"#,
+    ));
+    assert_eq!(bench.run(), Ok(2));
+    assert!(bench.dispatched().is_empty());
+    assert!(bench.reservations().is_empty());
+    assert!(
+        reason(&bench).contains("pinned input changed"),
+        "{}",
+        reason(&bench)
+    );
 }
