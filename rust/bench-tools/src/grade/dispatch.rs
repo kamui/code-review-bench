@@ -589,18 +589,50 @@ fn session(
         exited: false,
     };
     let deadline = Instant::now() + Duration::from_secs(timeout);
-    loop {
-        if let Some(status) = group.child.try_wait().map_err(failed)? {
+    let ended = poll(
+        || held.received(),
+        || group.child.try_wait(),
+        || Instant::now() >= deadline,
+        || std::thread::sleep(Duration::from_millis(20)),
+    )
+    .map_err(failed)?;
+    match ended {
+        Ended::Exited(status) => {
             group.exited = true;
-            return Ok(Some(crate::child::exit_code(status)));
+            Ok(Some(crate::child::exit_code(status)))
         }
-        if let Some(signal) = held.received() {
-            return Err(stopped(signal));
+        Ended::Stopped(signal) => Err(stopped(signal)),
+        Ended::TimedOut => Ok(None),
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum Ended<S> {
+    Exited(S),
+    Stopped(Signal),
+    TimedOut,
+}
+
+/// Wait for the client to exit, a held signal to arrive or the time to run out. Each round reads the signal before
+/// it checks for an exit, so a client that exited before the signal arrived counts as finished and keeps its receipt.
+fn poll<S>(
+    mut received: impl FnMut() -> Option<Signal>,
+    mut exited: impl FnMut() -> std::io::Result<Option<S>>,
+    mut expired: impl FnMut() -> bool,
+    mut pause: impl FnMut(),
+) -> std::io::Result<Ended<S>> {
+    loop {
+        let signal = received();
+        if let Some(status) = exited()? {
+            return Ok(Ended::Exited(status));
         }
-        if Instant::now() >= deadline {
-            return Ok(None);
+        if let Some(signal) = signal {
+            return Ok(Ended::Stopped(signal));
         }
-        std::thread::sleep(Duration::from_millis(20));
+        if expired() {
+            return Ok(Ended::TimedOut);
+        }
+        pause();
     }
 }
 
@@ -1159,4 +1191,49 @@ pub fn preflight(
         .into_bytes(),
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Ended, poll};
+    use nix::sys::signal::Signal;
+    use std::cell::Cell;
+
+    #[test]
+    fn a_client_that_exits_just_before_a_stop_signal_counts_as_finished() {
+        let checks = Cell::new(0);
+        let ended = poll(
+            || (checks.get() > 0).then_some(Signal::SIGINT),
+            || {
+                checks.set(checks.get() + 1);
+                Ok((checks.get() > 1).then_some(0))
+            },
+            || false,
+            || {},
+        );
+        assert_eq!(ended.unwrap(), Ended::Exited(0));
+    }
+
+    #[test]
+    fn a_stop_signal_while_the_client_runs_stops_the_session() {
+        let ended = poll(
+            || Some(Signal::SIGTERM),
+            || Ok(None::<i32>),
+            || false,
+            || {},
+        );
+        assert_eq!(ended.unwrap(), Ended::Stopped(Signal::SIGTERM));
+    }
+
+    #[test]
+    fn a_client_still_running_at_the_deadline_times_out() {
+        let rounds = Cell::new(0);
+        let ended = poll(
+            || None,
+            || Ok(None::<i32>),
+            || rounds.get() == 2,
+            || rounds.set(rounds.get() + 1),
+        );
+        assert_eq!(ended.unwrap(), Ended::TimedOut);
+    }
 }
