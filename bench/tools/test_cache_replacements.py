@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Exercise frozen-cache replacement, offline preparation and dispatch input gates."""
 
-import argparse
+import base64
 import copy
 import hashlib
 import json
@@ -9,14 +9,30 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
 
-import grade
-from test_grade import RUN, TARGET, fixture_root, installed_bench_tools
+import rust_runtime
+
+CORPUS = Path(__file__).resolve().parents[2] / "tools/behavior_contracts/grade-prepare.v1.json"
+RUN, TARGET = "runs/2026-01-01-grade-test", "t-grade-1"
 
 PENDING_HEAD, PENDING_DIFF = "1" * 40, "c" * 64
 REVISION_PINS = ("bench/targets/" + TARGET + "/target.json", "bench/scoreboard.current.json",
                  "bench/runs/" + RUN.removeprefix("runs/") + "/manifest.json", "bench/grading/current/references.json")
+
+
+def fixture_root(root: Path) -> None:
+    """The ``grading/pending`` fixture root of the grade corpora: its initial files and its leading setup writes."""
+    case = next(case for case in json.loads(CORPUS.read_text(encoding="utf-8"))["cases"]
+                if case.get("fixture") == "grading/pending")
+    entries = list(case["initial"])
+    for step in case["steps"]:
+        if "write" not in step:
+            break
+        entries += step["write"]
+    for entry in entries:
+        path = root / base64.b64decode(entry["path_b64"]).decode()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(base64.b64decode(entry["bytes_b64"]))
 
 
 def digest(path):
@@ -24,7 +40,7 @@ def digest(path):
 
 
 def bench_tools(*argv) -> subprocess.CompletedProcess:
-    return subprocess.run([str(installed_bench_tools()[0]), *map(str, argv)], capture_output=True, text=True)
+    return subprocess.run([str(rust_runtime.resolve("bench-tools")), *map(str, argv)], capture_output=True, text=True)
 
 
 def cached_fixture(root: Path) -> None:
@@ -198,19 +214,18 @@ class Replacements(unittest.TestCase):
         self.assertEqual(self.target_path.read_bytes(), self.original)
 
     def test_offline_queue_checks_real_inputs_without_client_or_credentials(self):
-        def preflight_inputs():
-            return bench_tools("grade", "preflight-inputs", "--root", self.root, "--run", RUN,
+        def preflight(command, *extra):
+            return bench_tools("grade", command, "--root", self.root, "--run", RUN,
                                "--work-root", self.root / "neutral/work", "--key-root", self.root / "neutral/keys",
-                               "--cache-root", self.cache, "--cache-replacements", self.manifest)
-        done = preflight_inputs()
+                               "--cache-root", self.cache, "--cache-replacements", self.manifest, *extra)
+        done = preflight("preflight-inputs")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertFalse((self.root / "neutral").exists())
-        options = argparse.Namespace(offline=False, model=None, expected_cli_version=None)
-        with patch.object(grade, "client_preflight", side_effect=AssertionError("client started")), \
-                self.assertRaisesRegex(grade.Inconsistent, "requires --model"):
-            grade.preflight(options)
+        done = preflight("preflight", "--expected-cli-version", "9.9.9")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("--model", done.stderr)
         self.archive().unlink()
-        done = preflight_inputs()
+        done = preflight("preflight-inputs")
         self.assertNotEqual(done.returncode, 0)
         self.assertIn("archive missing or changed", done.stdout + done.stderr)
 

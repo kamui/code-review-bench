@@ -15,7 +15,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'bench/tools'))
 import evidence_store as store
 import native_artifacts
 import prune_workspace
-import regrade
 import rust_runtime
 from test_evidence_store import FakeGitHub
 
@@ -157,9 +156,11 @@ class ColdConsumersTest(unittest.TestCase):
             store.write_new(work / 'dispatch.json', {'exit_code': 0, 'usage': {'high': 2.0}})
             store.write_new(work / 'verdicts.json', {'verdicts': []})
             store.write_new(grading / 'reservation.json', {'maxBudgetUsd': 6})
-            with patch.object(regrade, 'ROOT', origin):
-                grading_ref = regrade.archive_attempt(rust_runtime.resolve('bench-tools'), grading,
-                                                     origin / 'bench/regrading/fixture')
+            archived = subprocess.run([str(rust_runtime.resolve('bench-tools')), 'regrade', 'archive-attempt', str(grading),
+                                       str(origin / 'bench/regrading/fixture'), '--root', str(origin)],
+                                      cwd=origin, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+            self.assertEqual(archived.returncode, 0, archived.stdout + archived.stderr)
+            grading_ref = json.loads(archived.stdout)
             grading_archive = store.read(origin / grading_ref['path'])['archive']['path']
             files = [path for path in origin.rglob('*') if path.is_file()]
             frozen = {path.relative_to(origin).as_posix(): path.read_bytes() for path in files}
