@@ -84,8 +84,8 @@ fn standing(text: &str, needle: &str) -> bool {
 }
 
 impl Task {
-    /// Reads `target.json`, the forge capture under `forge/` when the target has one, and the packet's title row
-    /// and links.
+    /// Reads `target.json`, the forge capture under `forge/` when the target has one, and the packet's title row,
+    /// in straight or curly quotes, and links.
     pub fn load(target: &[u8], packet: &[u8]) -> Result<Task, String> {
         let directory = PyPath::new(target);
         let record = read_json(&directory.join(b"target.json"))?;
@@ -126,8 +126,12 @@ impl Task {
             .map_err(|error| format!("packet {}: {}", packet.display(), error.message()))?;
         titles.extend(text.lines().find_map(|line| {
             let row = line.strip_prefix("| Pull request |")?;
-            let (_, quoted) = row.split_once(" \"")?;
-            Some(words(quoted.rsplit_once("\" |")?.0))
+            [("\"", "\""), ("\u{201c}", "\u{201d}")]
+                .iter()
+                .find_map(|(open, close)| {
+                    let (_, quoted) = row.split_once(&format!(" {open}"))?;
+                    Some(words(quoted.rsplit_once(&format!("{close} |"))?.0))
+                })
         }));
         let mut links: Vec<_> = linked_urls(&text).filter_map(parts).collect();
         links.sort();
