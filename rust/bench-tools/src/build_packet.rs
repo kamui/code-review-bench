@@ -93,9 +93,11 @@ pub(crate) const BASE_MOVED_SINCE_BRANCHING: &str =
 pub(crate) const MERGE_PROSE: [&str; 4] = [
     BASE_MOVED_BEFORE_MERGE,
     MERGE_INSTANT,
-    "retrospective review",
-    "when the reviewed pull request merged",
+    RETROSPECTIVE_REVIEW,
+    CLOSED_WHEN_MERGED,
 ];
+const RETROSPECTIVE_REVIEW: &str = "retrospective review";
+const CLOSED_WHEN_MERGED: &str = "when the reviewed pull request merged";
 const MERGE_INSTANT: &str = "the merge instant";
 const LAST_PUSH: &str = "the last push";
 const OPENING: &str = "the pull request's opening";
@@ -2629,14 +2631,16 @@ impl Rendering<'_> {
             NOT_MERGED.to_string()
         };
         let stance = if merged {
-            "the target is merged, so this is a **retrospective review with publication disabled**"
+            format!(
+                "the target is merged, so this is a **{RETROSPECTIVE_REVIEW} with publication disabled**"
+            )
         } else {
-            "the target is not merged and this run does not publish, so this is a **review frozen at the cutoff with publication disabled**"
+            "the target is not merged and this run does not publish, so this is a **review frozen at the cutoff with publication disabled**".to_string()
         };
         let merged_note = if merged {
-            "The target is merged; this is a retrospective review."
+            format!("The target is merged; this is a {RETROSPECTIVE_REVIEW}.")
         } else {
-            "The target is not merged; this review is frozen at the cutoff."
+            "The target is not merged; this review is frozen at the cutoff.".to_string()
         };
         w(format!("{MERGED_ROW} {merged_cell} |"));
         w(format!(
@@ -2844,7 +2848,7 @@ impl Rendering<'_> {
                 vec![
                     ("execution_note", a.execution_note.as_str()),
                     ("newest", newest.as_str()),
-                    ("merged_note", merged_note),
+                    ("merged_note", merged_note.as_str()),
                     ("subagent_model", a.subagent_model.as_str()),
                 ],
             )
@@ -2900,7 +2904,7 @@ impl Rendering<'_> {
                 "## 4. Originating reference `#{n}` (a pull request, closed unmerged), verbatim\n"
             ));
             w(format!(
-                "Title: **{}**  \nOpened {} by `{}`; state `{}`, not merged; closed {} when the reviewed pull request merged.\n",
+                "Title: **{}**  \nOpened {} by `{}`; state `{}`, not merged; closed {} {CLOSED_WHEN_MERGED}.\n",
                 reference.title.py_str(),
                 head_of(&reference.created_at, 10)?,
                 reference.author.py_str(),
