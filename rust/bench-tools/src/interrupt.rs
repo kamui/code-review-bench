@@ -151,10 +151,19 @@ impl Held {
             .arg(name);
         command
     }
-}
 
-impl Drop for Held {
-    fn drop(&mut self) {
+    /// Stop noting signals and return the first held signal that arrived. Dropping the guard then ends the process
+    /// by that signal; without one, a held signal arriving later stays blocked until exit and never ends it.
+    pub fn finish(&mut self) -> Option<Signal> {
+        self.stop_watching();
+        let received = self.received();
+        if received.is_none() {
+            self.blocked.clear();
+        }
+        received
+    }
+
+    fn stop_watching(&mut self) {
         self.state.closing.store(true, Ordering::SeqCst);
         if let Some((close, watcher)) = self.watcher.take() {
             if !watcher.is_finished() {
@@ -162,6 +171,12 @@ impl Drop for Held {
             }
             let _ = watcher.join();
         }
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        self.stop_watching();
         if let Some(signal) = self.received() {
             let _ = set(&[signal]).thread_unblock();
             let _ = raise(signal);

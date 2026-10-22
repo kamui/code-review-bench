@@ -4,13 +4,26 @@ use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::process::ExitStatusExt;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 fn timeout(seconds: &str, script: &str) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_bench-tools"));
     command.args(["timeout", seconds, "sh", "-c", script]);
     command
+}
+
+fn wait_within(child: &mut Child, limit: Duration) -> Option<ExitStatus> {
+    let started = Instant::now();
+    while started.elapsed() < limit {
+        if let Some(status) = child.try_wait().unwrap() {
+            return Some(status);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    None
 }
 
 #[test]
@@ -35,6 +48,13 @@ fn the_deadline_ends_the_whole_process_group_with_124() {
 }
 
 #[test]
+fn the_deadline_ends_a_stopped_command() {
+    let mut child = timeout("1", "kill -STOP $$").spawn().unwrap();
+    let status = wait_within(&mut child, Duration::from_secs(20));
+    assert_eq!(status.and_then(|status| status.code()), Some(124));
+}
+
+#[test]
 fn a_stop_signal_reaches_the_group_and_then_ends_bench_tools_by_that_signal() {
     let started = Instant::now();
     let mut child = timeout("60", "echo ready; sleep 30 & wait")
@@ -50,6 +70,29 @@ fn a_stop_signal_reaches_the_group_and_then_ends_bench_tools_by_that_signal() {
         Signal::SIGTERM,
     )
     .unwrap();
+    assert_eq!(child.wait().unwrap().signal(), Some(Signal::SIGTERM as i32));
+    stdout.read_to_end(&mut Vec::new()).unwrap();
+    assert!(started.elapsed() < Duration::from_secs(20));
+}
+
+#[test]
+fn a_stop_signal_reaches_the_group_when_the_command_exits_before_it_is_forwarded() {
+    let started = Instant::now();
+    let mut child = timeout("60", "sleep 30 & echo ready; read line")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    stdout.read_line(&mut line).unwrap();
+    assert_eq!(line, "ready\n");
+    kill(
+        Pid::from_raw(i32::try_from(child.id()).unwrap()),
+        Signal::SIGTERM,
+    )
+    .unwrap();
+    drop(child.stdin.take());
     assert_eq!(child.wait().unwrap().signal(), Some(Signal::SIGTERM as i32));
     stdout.read_to_end(&mut Vec::new()).unwrap();
     assert!(started.elapsed() < Duration::from_secs(20));

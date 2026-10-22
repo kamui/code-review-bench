@@ -20,7 +20,7 @@ pub fn run(executable: &Path, seconds: u64, command: &[OsString]) -> Result<i32,
     let [program, arguments @ ..] = command else {
         return Err("timeout needs a command".to_string());
     };
-    let held = interrupt::hold(executable)?;
+    let mut held = interrupt::hold(executable)?;
     let mut child = held
         .released(Path::new(program), &program.to_string_lossy())
         .args(arguments)
@@ -36,19 +36,31 @@ pub fn run(executable: &Path, seconds: u64, command: &[OsString]) -> Result<i32,
             break status;
         }
         if !forwarded && let Some(signal) = held.received() {
-            let _ = killpg(group, signal);
+            signal_group(group, signal);
             forwarded = true;
         }
         if !timed_out && deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            let _ = killpg(group, Signal::SIGTERM);
+            signal_group(group, Signal::SIGTERM);
             timed_out = true;
         }
         std::thread::sleep(Duration::from_millis(20));
     };
+    if let Some(signal) = held.finish()
+        && !forwarded
+    {
+        signal_group(group, signal);
+    }
     if timed_out {
         return Ok(TIMED_OUT);
     }
     Ok(status
         .code()
         .unwrap_or_else(|| 128 + status.signal().unwrap_or(0)))
+}
+
+/// Send `signal` to `group` and then SIGCONT, as GNU `timeout` does: a stopped process keeps `signal` pending until
+/// it continues.
+fn signal_group(group: Pid, signal: Signal) {
+    let _ = killpg(group, signal);
+    let _ = killpg(group, Signal::SIGCONT);
 }
