@@ -1043,7 +1043,9 @@ pub fn sandbox_command(
         "/tmp".to_string(),
     ]);
     if let Some(gate) = gate {
-        prefix.extend(gate.namespace_arguments(&readwrite));
+        let covered: Vec<String> = hidden.iter().cloned().chain(["/tmp".to_string()]).collect();
+        let reshown: Vec<String> = shown.iter().chain(&readwrite).cloned().collect();
+        prefix.extend(gate.namespace_arguments(&readwrite, &covered, &reshown));
     }
     prefix.extend([
         "--chdir".to_string(),
@@ -2990,6 +2992,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("{window:?} not in {prefix:?}"))
         };
         at(&["--unshare-net"]);
+        at(&["--seccomp"]);
         assert!(at(&["--tmpfs", "/run"]) < at(&["--ro-bind", &tools_text, &tools_text]));
         assert!(!prefix.iter().any(|part| part == "/run/user"));
         assert!(
