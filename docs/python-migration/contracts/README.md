@@ -7,6 +7,32 @@ to `bench/tools/codex_usage.py` and `bench/tools/transcript_usage.py`.
 Production commands, frozen evidence, and imported originals remain unchanged.
 #152 owns the typed Python and Rust pilot and the recorded baseline defects' resolutions.
 
+## Runner moved
+
+Since [#160](https://github.com/kamui/code-review-bench/issues/160), a Rust runner,
+[`behavior_contracts`](../../../rust/bench-tools/tests/behavior_contracts/main.rs), runs every corpus in
+`tools/behavior_contracts/` against the built `bench-tools`, one disposable root per case. It replaced
+`tools/behavior_contract.py`, `tools/test_behavior_contract.py` and `tools/behavior_contracts/check-digest.mjs`,
+which are deleted. The run commands in the sections below record the deleted harness.
+
+```sh
+cd rust/bench-tools
+cargo test --locked --test behavior_contracts
+cargo test --locked --test behavior_contracts -- usage::
+cargo test --locked --test behavior_contracts -- --exact decision-history digest-vectors
+```
+
+The runner finds corpora and decision versions in the directory and names each test `CORPUS::CASE`. A filter that selects no test fails the run when no Rust test name could match it, for example `no-such-corpus::` or `--exact decision-histroy`. Cargo passes the same filter to every test binary, so a filter that could name a Rust test, such as `provision`, may select nothing here without failing. The runner has no
+`--implementations`, `--differential` or `--allow-known-defects`: every case runs `bench-tools`, and a
+`baseline_defect` is a saved observation that never passes a case. The loader still checks where a
+`baseline_defect` may appear. `decision-history` replaces `--verify-decision-history`, `digest-vectors` checks
+the canonical bytes vectors, and the `self-check::` tests replace the harness tests. Two `evidence-store` cases,
+`resolve-across-implementations` and `pack-restored-by-python`, still run the retained `evidence_store.py` beside
+`bench-tools`; they go with it. The runner maps `python-native-artifacts` to `bench-tools native-artifacts`, so the
+`native-artifacts` step cases that read a filing across implementations now run Rust on both sides. On macOS the `evidence-store`, `evidence-inventory` and `native-artifacts` cases
+report `SKIP UNAVAILABLE`, because those programs refuse a root below the symlink above every macOS temporary
+directory.
+
 ## Run the usage corpus
 
 From the repository root, run:
@@ -195,7 +221,7 @@ python3 tools/behavior_contract.py --corpus tools/behavior_contracts/grade-map.v
 | Corpus | Programs | Python run |
 | --- | --- | --- |
 | [`evidence-store.v1.json`](../../../tools/behavior_contracts/evidence-store.v1.json) | `evidence-store`, `evidence`, `python-resolve`, `recover-evidence`, `restore-local` | `evidence_store.py` directly; `python-resolve` calls the retained `evidence_store.resolve` as `prune_workspace.py` does. `evidence`, `recover-evidence` and `restore-local` run `bench-tools evidence`, `evidence recover` and `evidence restore-local` |
-| [`native-artifacts.v1.json`](../../../tools/behavior_contracts/native-artifacts.v1.json) | `native-artifacts`, `archive-transcripts`, `python-native-artifacts` | `native_artifacts.py` through the `python-native-artifacts` driver, which adds `file ROOT INDEX OUT [--native-relative PATH]`: it runs `file_artifacts` and `unindexed` and prints both. `archive-transcripts` runs the former `file_attempt.archive_transcripts` through the `python-archive-transcripts` driver. Since [#221](https://github.com/kamui/code-review-bench/issues/221), `native-artifacts` and `archive-transcripts` default to `bench-tools`, and `behavior_contract.python_commands` maps them back to those drivers for the differential; step cases run `python-native-artifacts` beside Rust to check each reads the other's filing |
+| [`native-artifacts.v1.json`](../../../tools/behavior_contracts/native-artifacts.v1.json) | `native-artifacts`, `archive-transcripts`, `python-native-artifacts` | None since [#160](https://github.com/kamui/code-review-bench/issues/160): the [runner](#runner-moved) runs every case against `bench-tools` only. It maps `python-native-artifacts` to `bench-tools native-artifacts` and `archive-transcripts` to `bench-tools evidence archive-transcripts`, so the step cases that read one filing with another program run Rust on both sides. Before that, the harness ran `native_artifacts.py` through a `python-native-artifacts` driver that added `file ROOT INDEX OUT [--native-relative PATH]`, and from [#221](https://github.com/kamui/code-review-bench/issues/221) mapped both programs back to their Python drivers for the differential |
 | [`evidence-inventory.v1.json`](../../../tools/behavior_contracts/evidence-inventory.v1.json) | `evidence-inventory`, `collect-run`, `reconcile-evidence` | `evidence_inventory.py` directly. `collect-run` and `reconcile-evidence` run `bench-tools evidence collect` and `evidence reconcile` in the case directory |
 | [`import-benchmark.v1.json`](../../../tools/behavior_contracts/import-benchmark.v1.json) | `import-benchmark` | None since [#223](https://github.com/kamui/code-review-bench/issues/223) deleted `import_benchmark.py`; `bench-tools import-benchmark`. Before that, `import_benchmark.py` ran through the same kind of driver |
 
@@ -452,7 +478,7 @@ The v2 records explicitly adopt canonical bytes v1; accounting expectations are
 retained, and the non-UTF-8 case explicitly pins rendered output bytes.
 
 Published decision files are immutable. `bun run test:web` runs the Git-history
-check and the JavaScript digest vectors before the rest of the suite. The history
+check and the digest vectors before the rest of the suite. The history
 check covers every decision family, each named `<area>-decisions.v<N>.json`, on its own.
 In the `usage` family, whose v1 is the legacy map, it anchors all existing versions at
 the first commit that adds v2. A family whose v1 already holds `records`, such as
@@ -467,7 +493,7 @@ full Git history; CI uses `fetch-depth: 0`. A source archive alone cannot establ
 publication history, so run this gate in the full checkout before publication:
 
 ```sh
-python3 tools/behavior_contract.py --verify-decision-history
+(cd rust/bench-tools && cargo test --locked --test behavior_contracts -- --exact decision-history)
 ```
 
 There is no golden update command. An approved behavior change requires a new
@@ -475,7 +501,7 @@ version with its authority, old and new behavior, rationale, compatibility impac
 and resolving issue in the reason. Matching a port is not authority. Earlier
 expectations remain available at their original git revision. The open entries in
 `defects.md` must retain their separate `baseline_defect` cases and independent
-expectations; the harness tests enforce that relationship.
+expectations; the runner's `self-check::open-defects` enforces that relationship.
 
 ### Canonical bytes v1
 
@@ -497,19 +523,17 @@ Lengths and counts are unsigned ASCII decimal with no leading zeros except zero.
 
 This encoding distinguishes `1` from `1.0`, preserves integers above 2^53, and avoids
 serializer-dependent exponent spellings. `digest-vectors.json` pins nine byte/hash
-vectors, including `4e-5`, negative zero, Unicode and nested objects. Python harness
-tests and the independent JavaScript encoder check those same vectors:
+vectors, including `4e-5`, negative zero, Unicode and nested objects. The runner's
+`digest-vectors` test checks them:
 
 ```sh
-bun tools/behavior_contracts/check-digest.mjs
+(cd rust/bench-tools && cargo test --locked --test behavior_contracts -- --exact digest-vectors)
 ```
 
-The negative CLI exercises in `test_behavior_contract.py` run deliberately wrong
-local programs. They detect a changed JSON count, a removed newline in a hashed
-file, and a duplicated publication journal entry. Diagnostics print actual semantic
-diffs or expected and actual bytes and filesystem entries, including hashes.
-Invalid primary JSON produces a per-case `DIFFERENTIAL` diagnostic and exit 1;
-it does not abort the remaining cases as an input error.
+The runner's `self-check::wrong-outputs` runs deliberately wrong local programs. It
+detects a changed JSON count, a removed newline in a hashed file, and a duplicated
+publication journal entry. Diagnostics print actual semantic diffs or expected and
+actual bytes and filesystem entries, including hashes.
 The synthetic journal proves effect multiplicity detection without remote publication.
 It does not claim to test a real remote service.
 

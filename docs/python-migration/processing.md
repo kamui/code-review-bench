@@ -491,24 +491,10 @@ has `bench/tools/build_packet.py`, such as `1bbc3eed6`, the last main commit tha
 cd rust/bench-tools && cargo fetch --locked && cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
 python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select
 python3 bench/tools/rust_runtime.py resolve bench-tools
-python3 tools/behavior_contract.py --corpus tools/behavior_contracts/roster.v1.json
-python3 tools/behavior_contract.py --corpus tools/behavior_contracts/diff-identity.v1.json --differential MAP
-python3 tools/behavior_contract.py --corpus tools/behavior_contracts/normalize-review.v1.json --differential MAP
-python3 tools/behavior_contract.py --corpus tools/behavior_contracts/check-manifest.v1.json
-python3 tools/behavior_contract.py --corpus tools/behavior_contracts/check-manifest.v1.json --implementations PYTHON_MAP --differential MAP
-python3 tools/behavior_contract.py --corpus tools/behavior_contracts/rates.v1.json --differential MAP
-python3 tools/behavior_contract.py --corpus tools/behavior_contracts/upstream.v1.json --differential MAP
-python3 tools/behavior_contract.py --corpus tools/behavior_contracts/normalize-thermo.v1.json
-python3 tools/behavior_contract.py --corpus tools/behavior_contracts/derive-packet.v1.json
-python3 tools/behavior_contract.py --corpus tools/behavior_contracts/build-packet.v1.json
-python3 tools/behavior_contract.py --corpus tools/behavior_contracts/export-explorer.v1.json
-python3 tools/behavior_contract.py --verify-decision-history
 ```
 
-`MAP` is a [command map](contracts/README.md#run-the-usage-corpus) naming the resolved executable, as the `Rust
-runtime` workflow writes it. The `roster`, `normalize-thermo`, `derive-packet`, `build-packet` and `export-explorer`
-corpora run the Rust executable by default; the other corpora run the retained Python libraries by default.
-`derive-packet`, `build-packet` and `export-explorer` have no Python implementation left to compare with, so they
-have no differential. [Storage](storage.md#verification) lists the storage corpora. The base commit's Python export derived every `export-explorer` expectation except those of decided
-changes. `rates.py` and `upstream.py` run through drivers in `tools/behavior_contract.py` that point them at the case
-directory, as the Rust commands default to the current directory, and give `rates.py` the `--source` pages.
+`cargo test --locked` runs every processing corpus and the decision history through the
+[corpus runner](contracts/README.md#runner-moved) since [#160](https://github.com/kamui/code-review-bench/issues/160).
+Before that, the deleted `tools/behavior_contract.py` ran them, with differentials against the retained Python.
+[Storage](storage.md#verification) lists the storage corpora. The base commit's Python export derived every
+`export-explorer` expectation except those of decided changes.

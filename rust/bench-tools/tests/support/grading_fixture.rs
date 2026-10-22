@@ -11,7 +11,7 @@ pub const RUN: &str = "2026-01-01-grade-test";
 pub const TARGET: &str = "t-grade-1";
 pub const SELECTED: &str = "codex-high";
 pub const OTHER: &str = "codex-low";
-/// `behavior_contract.FREEZE_PLACEHOLDER`, which the harness's `fixture-git` replaces with the commit it makes.
+/// `fixture_git::FREEZE_PLACEHOLDER`, which the corpus runner's `fixture-git` replaces with the commit it makes.
 pub const FREEZE: &str = "<freeze commit>";
 const HEAD: &str = "1111111111111111111111111111111111111111";
 const DIFF: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
