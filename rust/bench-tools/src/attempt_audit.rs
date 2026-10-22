@@ -2375,7 +2375,7 @@ pub fn run(options: &Options) -> Result<(String, bool), String> {
         report.insert(key.to_string(), value);
     }
     if context.frozen_forge {
-        report.insert("forge_calls".to_string(), network::forge_calls(&attempt)?);
+        report.insert("forge_calls".to_string(), network::forge_calls(&attempt));
     }
     let mut flags = network::Flags::default();
     if let Some((gate, task)) = &gate {

@@ -66,7 +66,8 @@
 //! be prepared, or a setup error, which leaves no `timing.json`. Then `bench-tools file-attempt` files the record
 //! with the manifest's pinned CLI version and skill tree. `--file` repeats only that last step for an attempt whose
 //! dispatch has ended. A valid completed attempt's clone and cache are then pruned against the target directory
-//! the run resolved, so a fixture target is pruned like a registered one.
+//! the run resolved, so a fixture target is pruned like a registered one. An attempt with an audit flag awaiting a
+//! ruling keeps them until it is filed again with the ruling.
 //!
 //! `--file att-NNN --interrupted EVIDENCE --reason TEXT` files an attempt whose dispatch never ended. EVIDENCE is a
 //! JSON observation that the attempt's processes are gone: `run_id`, `attempt_id`, `observed_at`, `status` and
@@ -1704,7 +1705,9 @@ fn file(
     } else {
         file_claimed(run, context, attempt, claim, interrupted, reason)?
     };
-    if pyvalue_is(get(&record, "disposition"), "valid completed") {
+    if pyvalue_is(get(&record, "disposition"), "valid completed")
+        && !prune_workspace::awaits_ruling(&record)
+    {
         prune(
             run,
             context.prune,
@@ -3004,6 +3007,43 @@ mod tests {
                 display(&fixture.base.join("bench/targets/t1")),
             ]]
         );
+    }
+
+    #[test]
+    fn an_attempt_with_a_flag_awaiting_a_ruling_keeps_its_clone() {
+        let fixture = fixture();
+        let attempt = started(&fixture, true);
+        let holder = File::open(&attempt).expect("open");
+        holder.lock().expect("lock");
+        let first = || {
+            fixture.file_record(
+                "att-001",
+                "t1/arm-a/1",
+                "valid completed",
+                "0.1",
+                r#", "audit": {"flags": [{"id": "flag-a", "ruling": null}]}"#,
+            );
+            holder.unlock().expect("unlock");
+        };
+        let pruned = RefCell::new(0);
+        let prune = |_: &prune_workspace::Attempt<'_>| {
+            *pruned.borrow_mut() += 1;
+            Ok(())
+        };
+        let mut context = fixture.context(&unused_tool, Vec::new());
+        context.prune = &prune;
+        context.waiting = &first;
+        let filed = command(
+            Action::File {
+                attempt: "att-001".into(),
+                interrupted: None,
+                reason: None,
+            },
+            &context,
+        )
+        .expect("filed");
+        assert!(get(&filed, "disposition").py_eq(&text("valid completed")));
+        assert_eq!(*pruned.borrow(), 0);
     }
 
     #[test]

@@ -494,6 +494,16 @@ pub struct Attempt<'a> {
 }
 
 /// Prune a review attempt, or report what pruning would remove.
+/// Whether a filed record holds an audit flag that no ruling has settled. Its clone stays, because filing the
+/// attempt again with the ruling reads the clone.
+pub fn awaits_ruling(record: &Value) -> bool {
+    at(at(record, "audit"), "flags")
+        .as_array()
+        .unwrap_or_default()
+        .iter()
+        .any(|flag| matches!(at(flag, "ruling"), Value::Null))
+}
+
 pub fn attempt(arguments: &Attempt<'_>, apply: bool, hook: Hook<'_>) -> R<Value> {
     let check = || check_attempt(arguments);
     Ok(run(check(), &check, apply, false, hook)?.unwrap_or(Value::Null))
@@ -607,6 +617,9 @@ fn check_attempt(arguments: &Attempt<'_>) -> R<Checked> {
     let record = read(&attempt.join(b"attempt.json"))?;
     if at(&record, "disposition").as_str() != Some("valid completed") {
         return refuse("attempt did not complete validly");
+    }
+    if awaits_ruling(&record) {
+        return refuse("an audit flag awaits a ruling in the run's leak-rulings.json");
     }
     let storage = at(&record, "native_artifact_storage");
     if storage.truthy() {
@@ -1215,6 +1228,13 @@ mod tests {
                 "transcript_archive",
                 json(r#"{"path": "x", "sha256": "0", "restoration_check": "failed"}"#),
                 "restoration",
+            ),
+            (
+                "audit",
+                json(
+                    r#"{"flags": [{"id": "flag-a", "ruling": {"outcome": "no-leak"}}, {"id": "flag-b", "ruling": null}]}"#,
+                ),
+                "awaits a ruling",
             ),
         ] {
             set(&mut record, key, value);

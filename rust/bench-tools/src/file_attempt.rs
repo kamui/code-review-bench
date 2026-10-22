@@ -10,8 +10,8 @@
 //! normalizer failed is superseded when the replayed normalizer returns `parsed` or `empty`. An attempt with a
 //! frozen forge files its `forge.json` and its call log, `forge-log/calls.jsonl`, as `forge-calls.jsonl`. An attempt
 //! behind the network gate files `network/requests.jsonl` and `network/gate.json` as `network-requests.jsonl` and
-//! `network-gate.json`, and replays its audit under the gated rules when its arm's `isolation.network` is `gated`
-//! or the run's runner pins the `bwrap-v2` sandbox.
+//! `network-gate.json`, and replays its audit under the gated rules when its arm's `isolation.network` is `gated`,
+//! the run's runner pins the `bwrap-v2` sandbox, or its `sandbox.json` records a gated network.
 //!
 //! The record's audit section lists each flag the gated audit raised with the ruling that `<run>/leak-rulings.json`
 //! records for the attempt, or null. A flag awaiting a ruling adds a note; a ruling of `leak` voids the attempt.
@@ -1511,10 +1511,14 @@ struct RuledFlags {
     leaks: Vec<String>,
 }
 
-/// Whether the attempt ran behind the network gate, as its arm or the run's frozen runner pins.
-fn gated(arm: &Value, run: &str) -> Result<bool> {
+/// Whether the attempt ran behind the network gate: its arm or the run's frozen runner pins the gate, or its sandbox
+/// receipt records it, as the skill runner's own audit reads it.
+fn gated(arm: &Value, run: &str, attempt_dir: &str) -> Result<bool> {
     let runner = read_json_if(&join(run, "inputs/runner.json"))?;
-    Ok(is(at(at(arm, "isolation"), "network"), "gated") || is(at(&runner, "sandbox"), "bwrap-v2"))
+    let sandbox = read_json_if(&join(attempt_dir, "sandbox.json"))?;
+    Ok(is(at(at(arm, "isolation"), "network"), "gated")
+        || is(at(&runner, "sandbox"), "bwrap-v2")
+        || is(at(&sandbox, "network"), "gated"))
 }
 
 /// Pairs each flag in `audit` with this attempt's ruling in `<run>/leak-rulings.json`. Refuses a malformed file
@@ -1528,7 +1532,10 @@ fn ruled_flags(audit: &Value, run: &str, attempt_id: &str) -> Result<RuledFlags>
         if !at(&file, "schema_version").py_eq(&int(1)) {
             return refuse(format!("{path}: schema_version must be 1"));
         }
-        for ruling in array(at(&file, "rulings")) {
+        let Some(listed) = at(&file, "rulings").as_array() else {
+            return refuse(format!("{path}: rulings must be a list"));
+        };
+        for ruling in listed {
             let (Some(attempt), Some(flag)) =
                 (at(ruling, "attempt").as_str(), at(ruling, "flag").as_str())
             else {
@@ -2008,7 +2015,7 @@ fn file_attempt(arguments: &Arguments) -> Result<(Value, String)> {
     }
     let profile = at(at(&arm, "isolation"), "sandbox").clone();
     let superseded = if arguments.replay {
-        let gated = gated(&arm, &arguments.run)?;
+        let gated = gated(&arm, &arguments.run, &attempt_dir)?;
         replay(kind, &attempt_dir, &clone, arguments, &profile, gated)?
     } else {
         Value::Null

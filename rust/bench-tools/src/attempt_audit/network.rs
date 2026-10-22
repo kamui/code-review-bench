@@ -547,11 +547,21 @@ fn origin_target(url: &str) -> Option<String> {
     )
 }
 
-/// The frozen forge's call log, one command per call, when the attempt served a forge.
-pub fn forge_calls(attempt: &PyPath) -> Result<Value, String> {
+/// The frozen forge's call log, one command per call, when the attempt served a forge. A log the audit cannot read
+/// is reported as such: the audit of an attempt without the gate never depended on it.
+pub fn forge_calls(attempt: &PyPath) -> Value {
     let log = attempt.join(crate::frozen_forge::LOG.as_bytes());
     let calls = if log.is_file() {
-        records(&log)?
+        match records(&log) {
+            Ok(calls) => calls,
+            Err(error) => {
+                return record([
+                    ("log", Value::Str(super::lossy(log.as_bytes()))),
+                    ("calls", Value::Null),
+                    ("unreadable", Value::Str(error)),
+                ]);
+            }
+        }
     } else {
         Vec::new()
     };
@@ -571,8 +581,8 @@ pub fn forge_calls(attempt: &PyPath) -> Result<Value, String> {
                 .to_string()
         })
         .collect();
-    Ok(record([
+    record([
         ("log", Value::Str(super::lossy(log.as_bytes()))),
         ("calls", strings(&commands)),
-    ]))
+    ])
 }

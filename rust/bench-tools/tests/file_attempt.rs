@@ -836,6 +836,10 @@ fn files_the_gate_log_and_each_flags_ruling() {
             ]),
             "more than once",
         ),
+        (
+            r#"{"schema_version": 1, "ruling": [{"attempt": "att-001", "flag": "flag-bbb", "outcome": "leak", "ruled_by": "owner", "ground": null}]}"#.to_string(),
+            "rulings must be a list",
+        ),
     ] {
         write(&run, content);
         let done = t.file("gate", &[t.archive()]);
@@ -898,6 +902,25 @@ fn replay_audits_a_gated_arm_under_the_gate() {
     assert!(has_note(&rec, "raised 1 flag(s)"), "{rec:?}");
 
     arm(r#"{"network": "on"}"#);
+    write(
+        &t.att.join("sandbox.json"),
+        r#"{"profile": "bwrap-v2", "network": "gated"}"#,
+    );
+    let rec = t.filed("receipt", &[replay.clone(), t.archive()]);
+    assert_eq!(
+        text(field(&rec, "disposition")),
+        "valid completed",
+        "{rec:?}"
+    );
+    assert!(
+        read(&t.att.join("audit.json"))
+            .as_object()
+            .unwrap()
+            .get("flags")
+            .is_some()
+    );
+
+    fs::remove_file(t.att.join("sandbox.json")).unwrap();
     fs::remove_file(t.att.join("audit.recorded.json")).unwrap();
     let rec = t.filed("ungated", &[replay, t.archive()]);
     assert!(
