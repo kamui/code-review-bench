@@ -512,7 +512,7 @@ fn line_around(text: &str, at: usize) -> &str {
 struct Later {
     records: Vec<Record>,
     words: Vec<Vec<Word>>,
-    /// Each phrase's first position in each record that holds it.
+    /// Every position of each phrase, as (record, word position), in record order.
     phrases: HashMap<String, Vec<(usize, usize)>>,
     /// Each identifier's first byte offset in each record that holds it.
     identifiers: HashMap<String, Vec<(usize, usize)>>,
@@ -526,10 +526,10 @@ impl Later {
         for (index, record) in records.iter().enumerate() {
             let found = words(&record.text);
             for (position, window) in windows(&found, rule.phrase_words) {
-                let places = phrases.entry(phrase(window)).or_default();
-                if places.last().is_none_or(|(last, _)| *last != index) {
-                    places.push((index, position));
-                }
+                phrases
+                    .entry(phrase(window))
+                    .or_default()
+                    .push((index, position));
             }
             for (offset, token) in tokens(&record.text) {
                 if code_like(token) {
@@ -1023,6 +1023,90 @@ fn review_file(review: &Value, item: usize) -> String {
         .to_string()
 }
 
+/// A run of a finding's words that each cited later record holds word for word.
+struct Span {
+    text: String,
+    words: usize,
+    /// The first (record, word position) of each record that holds the run.
+    places: Vec<(usize, usize)>,
+}
+
+/// One span per later occurrence's run of matching windows, so no span joins words from separate sources.
+fn supported_spans(
+    overlap: &Overlap,
+    distinctive: &[usize],
+    later: &Later,
+    rule: Rule,
+) -> Vec<Span> {
+    let width = rule.phrase_words;
+    let found = &overlap.words;
+    let mut alignments: BTreeMap<(usize, usize), Vec<(usize, usize)>> = BTreeMap::new();
+    for &position in distinctive {
+        let key = phrase(&found[position..position + width]);
+        for &(record, at) in later.phrases.get(&key).into_iter().flatten() {
+            alignments
+                .entry((record, at + found.len() - position))
+                .or_default()
+                .push((position, at));
+        }
+    }
+    let mut runs: Vec<(usize, usize, usize, usize)> = Vec::new();
+    for (&(record, _), starts) in &alignments {
+        let held = &later.words[record];
+        let first = runs.len();
+        for &(position, at) in starts {
+            match runs[first..].last_mut() {
+                Some((start, end, _, from))
+                    if position <= *end
+                        && found[*start].segment == found[position].segment
+                        && held[*from].segment == held[at].segment =>
+                {
+                    *end = position + width;
+                }
+                _ => runs.push((position, position + width, record, at)),
+            }
+        }
+    }
+    let inside_longer = |&(start, end, record, _): &(usize, usize, usize, usize)| {
+        runs.iter()
+            .any(|&(other_start, other_end, other_record, _)| {
+                other_record == record
+                    && other_start <= start
+                    && end <= other_end
+                    && (other_start, other_end) != (start, end)
+            })
+    };
+    let mut kept: Vec<(usize, usize, usize, usize)> = runs
+        .iter()
+        .copied()
+        .filter(|run| !inside_longer(run))
+        .collect();
+    kept.sort_unstable();
+    let mut spans: Vec<Span> = Vec::new();
+    for (start, end, record, at) in kept {
+        let text = overlap.text[found[start].start..found[end - 1].end].to_string();
+        let index = match spans.iter().position(|span| span.text == text) {
+            Some(index) => index,
+            None => {
+                spans.push(Span {
+                    text,
+                    words: end - start,
+                    places: Vec::new(),
+                });
+                spans.len() - 1
+            }
+        };
+        let places = &mut spans[index].places;
+        if places.iter().all(|(held, _)| *held != record) {
+            places.push((record, at));
+        }
+    }
+    for span in &mut spans {
+        span.places.sort_unstable();
+    }
+    spans
+}
+
 /// The flag a finding earns once the clone's text is set aside, if any.
 fn judge(
     overlap: &Overlap,
@@ -1049,56 +1133,24 @@ fn judge(
     if distinctive.is_empty() && shared.len() < rule.identifiers {
         return None;
     }
-    let mut spans: Vec<(usize, usize)> = Vec::new();
-    for position in &distinctive {
-        let end = position + rule.phrase_words;
-        match spans.last_mut() {
-            Some((first, last))
-                if *position <= *last
-                    && overlap.words[*first].segment == overlap.words[*position].segment =>
-            {
-                *last = (*last).max(end)
-            }
-            _ => spans.push((*position, end)),
-        }
-    }
-    let mut quoted = HashSet::new();
-    let phrases: Vec<Value> = spans
-        .iter()
-        .filter(|(start, end)| quoted.insert(phrase(&overlap.words[*start..*end])))
-        .map(|(start, end)| {
-            let words = &overlap.words[*start..*end];
-            let key = phrase(&words[..rule.phrase_words]);
-            let references = later
-                .phrases
-                .get(&key)
-                .map(|places| {
-                    places
-                        .iter()
-                        .map(|(record, position)| {
-                            let held = &later.words[*record];
-                            let mut length = 0;
-                            while length < words.len()
-                                && position + length < held.len()
-                                && held[position + length].text == words[length].text
-                            {
-                                length += 1;
-                            }
-                            let body = &later.records[*record].text;
-                            later.reference(
-                                *record,
-                                &body[held[*position].start..held[position + length - 1].end],
-                            )
-                        })
-                        .collect()
+    let phrases: Vec<Value> = supported_spans(overlap, &distinctive, later, rule)
+        .into_iter()
+        .map(|span| {
+            let references = span
+                .places
+                .iter()
+                .map(|(record, at)| {
+                    let held = &later.words[*record];
+                    let body = &later.records[*record].text;
+                    later.reference(
+                        *record,
+                        &body[held[*at].start..held[at + span.words - 1].end],
+                    )
                 })
-                .unwrap_or_default();
+                .collect();
             object(vec![
-                (
-                    "text",
-                    string(&overlap.text[words[0].start..words[words.len() - 1].end]),
-                ),
-                ("words", Value::Int(words.len().to_string())),
+                ("text", string(&span.text)),
+                ("words", Value::Int(span.words.to_string())),
                 ("later", Value::Array(references)),
             ])
         })
@@ -1179,6 +1231,115 @@ mod tests {
                 .into_iter()
                 .collect();
         assert_eq!(found, ["SSLContext", "getValue", "ssl_context", "x_y_z"]);
+    }
+
+    /// A reported phrase: its text, its word count and each citation's (record id, excerpt).
+    type Reported = (String, String, Vec<(String, String)>);
+
+    fn reported(finding: &str, later: &[(&str, &str)]) -> Vec<Reported> {
+        let rule = Rule {
+            phrase_words: 3,
+            identifiers: 2,
+        };
+        let records = later
+            .iter()
+            .map(|(id, text)| Record {
+                source: "conversation_comment".into(),
+                id: (*id).into(),
+                url: String::new(),
+                author: String::new(),
+                published: String::new(),
+                text: (*text).into(),
+            })
+            .collect();
+        let later = Later::new(records, rule);
+        let found = words(finding);
+        let phrases = windows(&found, rule.phrase_words)
+            .filter(|(_, window)| later.phrases.contains_key(&phrase(window)))
+            .map(|(position, _)| position)
+            .collect();
+        let overlap = Overlap {
+            attempt: 0,
+            item: 0,
+            claim: finding.into(),
+            file: String::new(),
+            words: found,
+            text: finding.into(),
+            phrases,
+            identifiers: Vec::new(),
+        };
+        let attempt = Attempt {
+            id: "r/att-001".into(),
+            dir: PathBuf::new(),
+            target: "z-demo-7".into(),
+            packet: PathBuf::from("packet.v2.md"),
+        };
+        let flag = judge(&overlap, &attempt, &later, &Seen::default(), rule).unwrap();
+        array(&flag, "phrases")
+            .iter()
+            .map(|found| {
+                let cited = array(found, "later")
+                    .iter()
+                    .map(|place| {
+                        (
+                            text(place, "id").unwrap().to_string(),
+                            text(place, "excerpt").unwrap().to_string(),
+                        )
+                    })
+                    .collect();
+                (
+                    text(found, "text").unwrap().to_string(),
+                    field(found, "words").unwrap().py_str(),
+                    cited,
+                )
+            })
+            .collect()
+    }
+
+    fn cite(id: &str, excerpt: &str) -> (String, String) {
+        (id.to_string(), excerpt.to_string())
+    }
+
+    #[test]
+    fn matches_from_adjacent_records_stay_separate_phrases() {
+        let found = reported(
+            "alpha beta gamma delta epsilon zeta",
+            &[
+                ("A", "alpha beta gamma delta"),
+                ("B", "gamma delta epsilon zeta"),
+            ],
+        );
+        assert_eq!(
+            found,
+            [
+                (
+                    "alpha beta gamma delta".to_string(),
+                    "4".to_string(),
+                    vec![cite("A", "alpha beta gamma delta")]
+                ),
+                (
+                    "gamma delta epsilon zeta".to_string(),
+                    "4".to_string(),
+                    vec![cite("B", "gamma delta epsilon zeta")]
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_repeated_prefix_cites_the_occurrence_that_holds_the_whole_phrase() {
+        let found = reported(
+            "alpha beta gamma delta epsilon",
+            &[("A", "alpha beta gamma stop. Alpha beta gamma delta epsilon")],
+        );
+        assert_eq!(
+            found,
+            [(
+                "alpha beta gamma delta epsilon".to_string(),
+                "5".to_string(),
+                vec![cite("A", "Alpha beta gamma delta epsilon")]
+            )]
+        );
     }
 
     #[test]
