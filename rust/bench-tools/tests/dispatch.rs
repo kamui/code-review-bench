@@ -11,7 +11,7 @@ use std::process::{Command, Output};
 
 const DISPATCH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../bench/tools/dispatch.sh");
 
-const AMBIENT: [&str; 20] = [
+const AMBIENT: [&str; 21] = [
     "BENCH_NETWORK",
     "BENCH_EXECUTION_POLICY",
     "BENCH_FORGE_CAPTURES_SHA256",
@@ -32,6 +32,7 @@ const AMBIENT: [&str; 20] = [
     "REVIEWER_RUNS",
     "REVIEWER_EXIT",
     "FAKE_NORMALIZE_EXIT",
+    "BENCH_TASK_PACKET",
 ];
 
 const CLAUDE_VERSION: &str = "2.1.284 (Claude Code)";
@@ -48,10 +49,11 @@ exit "${{REVIEWER_EXIT:-23}}"
     )
 }
 
-/// Hands every command but `normalize-review` and `network-gate` to the real bench-tools. The gate needs bwrap, so the
-/// stand-in runs the reviewer directly.
+/// Hands every command but `normalize-review` and `network-gate` to the real bench-tools, saving `attempt-audit`'s
+/// arguments. The gate needs bwrap, so the stand-in runs the reviewer directly.
 const BENCH_TOOLS: &str = r#"#!/bin/sh
 if [ "$1" = network-gate ]; then shift 5; exec "$@"; fi
+if [ "$1" = attempt-audit ]; then printf '%s\n' "$@" > "$AUDIT_CAPTURE"; fi
 [ "$1" = normalize-review ] || exec "$REAL_BENCH_TOOLS" "$@"
 printf '%s\n' "$@" > "$NORMALIZE_CAPTURE"
 while [ $# -gt 1 ]; do
@@ -145,7 +147,8 @@ impl Fixture {
                 "BENCH_RUST_BENCH_TOOLS_SHA256",
                 file_sha256(&self.bench_tools),
             )
-            .env("NORMALIZE_CAPTURE", self.root.join("normalize-argv"));
+            .env("NORMALIZE_CAPTURE", self.root.join("normalize-argv"))
+            .env("AUDIT_CAPTURE", self.root.join("audit-argv"));
         for (name, value) in vars {
             match value {
                 Some(value) => command.env(name, value),
@@ -393,6 +396,35 @@ fn the_pinned_bench_tools_normalizes_the_review_and_its_output_is_saved() {
                 "{name}"
             );
         }
+    }
+}
+
+#[test]
+fn the_gated_audit_reads_the_task_packet_that_filing_replays() {
+    let mut claude = claude("audit-packet");
+    let target = claude.fixture.root.join("target");
+    write(&target.join("target.json"), r#"{"id": "t1"}"#);
+    let task_packet = claude.fixture.root.join("packet.v2.md");
+    write(&task_packet, "Task packet.\n");
+    claude.set("REVIEWER_EXIT", Some("0"));
+    claude.set("BENCH_NETWORK", Some("gated"));
+    claude.set("BENCH_TARGET_DIR", Some(s(&target)));
+    claude.set(
+        "REVIEWER_RUNS",
+        Some(r#"[ -z "${BENCH_TASK_PACKET+set}" ] || { echo 'the reviewer sees BENCH_TASK_PACKET' >&2; exit 1; }"#),
+    );
+    let packet_file = claude.fixture.packet.clone();
+    for (name, set, read) in [
+        ("task-packet", Some(s(&task_packet)), &task_packet),
+        ("packet-file", None, &packet_file),
+    ] {
+        claude.set("BENCH_TASK_PACKET", set);
+        let output = claude.invoke(name);
+        assert_eq!(output.status.code(), Some(0), "{name}: {}", both(&output));
+        let argv = fs::read_to_string(claude.fixture.root.join("audit-argv")).unwrap();
+        let argv: Vec<&str> = argv.lines().collect();
+        let at = argv.iter().position(|arg| *arg == "--packet").unwrap();
+        assert_eq!(argv[at + 1], s(read), "{name}: {argv:?}");
     }
 }
 
