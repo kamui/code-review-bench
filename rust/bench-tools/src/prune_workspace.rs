@@ -493,7 +493,6 @@ pub struct Attempt<'a> {
     pub remote: &'a RefCell<dyn evidence::Remote + 'a>,
 }
 
-/// Prune a review attempt, or report what pruning would remove.
 /// Whether a filed record holds an audit flag that no ruling has settled. Its clone stays, because filing the
 /// attempt again with the ruling reads the clone.
 pub fn awaits_ruling(record: &Value) -> bool {
@@ -504,6 +503,7 @@ pub fn awaits_ruling(record: &Value) -> bool {
         .any(|flag| matches!(at(flag, "ruling"), Value::Null))
 }
 
+/// Prune a review attempt, or report what pruning would remove.
 pub fn attempt(arguments: &Attempt<'_>, apply: bool, hook: Hook<'_>) -> R<Value> {
     let check = || check_attempt(arguments);
     Ok(run(check(), &check, apply, false, hook)?.unwrap_or(Value::Null))
