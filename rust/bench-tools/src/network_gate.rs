@@ -2213,10 +2213,9 @@ mod tests {
     #[test]
     fn stop_refuses_a_log_that_failed_a_write() {
         let attempt = attempt_dir();
-        fs::create_dir_all(attempt.join("network")).unwrap();
-        std::os::unix::fs::symlink("/dev/full", attempt.join("network/requests.jsonl")).unwrap();
         let gate =
             Gate::start_with(&attempt, Path::new("/bench-tools"), Upstream::public()).unwrap();
+        *lock(&gate.shared.log) = fs::File::open(attempt.join("network/requests.jsonl")).unwrap();
         let (_, reply) = connect_through(&gate, "github.com:443");
         assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
         let error = gate.stop().unwrap_err();

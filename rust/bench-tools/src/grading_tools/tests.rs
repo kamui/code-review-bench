@@ -18,13 +18,15 @@ fn fixture(label: &str) -> Fixture {
         std::process::id()
     ));
     let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let root = resolve(&root);
     let work = root.join("work");
     fs::create_dir_all(work.join("clone")).unwrap();
     fs::write(work.join("clone/file.txt"), "original").unwrap();
     let private = root.join("private-key");
     fs::write(&private, "PRIVATE").unwrap();
     Fixture {
-        work: resolve(&work),
+        work,
         root,
         private,
     }
