@@ -1969,7 +1969,7 @@ fn load_mount(path: &[u8]) -> Result<(), String> {
     let text = pytext::read_file_text(path).map_err(|error| error.message().to_string())?;
     let mount = pyjson::loads(&text, Duplicates::KeepLast).map_err(|error| error.to_string())?;
     let profile = member(&mount, "profile").cloned().unwrap_or(Value::Null);
-    if profile.as_str() != Some("bwrap-v1") {
+    if !matches!(profile.as_str(), Some("bwrap-v1" | "bwrap-v2")) {
         return Err(format!(
             "unknown mount sandbox profile {}",
             profile.py_repr()
