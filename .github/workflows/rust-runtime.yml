@@ -2,44 +2,8 @@ name: Rust runtime
 
 on:
   pull_request:
-    paths:
-      - 'rust/**'
-      - 'bench/tools/rust_runtime.py'
-      - 'bench/tools/test_rust_runtime.py'
-      - 'bench/tools/check_manifest.py'
-      - 'bench/tools/rates.py'
-      - 'bench/tools/evidence_store.py'
-      - 'bench/tools/evidence_inventory.py'
-      - 'bench/tools/regrade.py'
-      - 'bench/schema/**'
-      - 'bench/roster.json'
-      - 'bench/rates.current.json'
-      - 'bench/scoreboard.current.json'
-      - 'bench/arms/**'
-      - 'bench/harness/**'
-      - 'tools/behavior_contracts/**'
-      - 'docs/python-migration/runtime-evidence/rollback.sh'
-      - '.github/workflows/rust-runtime.yml'
   push:
     branches: [main]
-    paths:
-      - 'rust/**'
-      - 'bench/tools/rust_runtime.py'
-      - 'bench/tools/test_rust_runtime.py'
-      - 'bench/tools/check_manifest.py'
-      - 'bench/tools/rates.py'
-      - 'bench/tools/evidence_store.py'
-      - 'bench/tools/evidence_inventory.py'
-      - 'bench/tools/regrade.py'
-      - 'bench/schema/**'
-      - 'bench/roster.json'
-      - 'bench/rates.current.json'
-      - 'bench/scoreboard.current.json'
-      - 'bench/arms/**'
-      - 'bench/harness/**'
-      - 'tools/behavior_contracts/**'
-      - 'docs/python-migration/runtime-evidence/rollback.sh'
-      - '.github/workflows/rust-runtime.yml'
 
 permissions:
   contents: read
@@ -49,7 +13,42 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  changes:
+    name: Rust runtime changes
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.diff.outputs.rust }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check whether the Rust runtime is affected
+        id: diff
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          RANGE: ${{ github.event_name == 'pull_request' && '...' || '..' }}
+          RUST_RUNTIME_PATHS: |-
+            ^rust/
+            ^bench/tools/(rust_runtime|test_rust_runtime|check_manifest|rates|evidence_store|evidence_inventory|regrade)\.py$
+            ^bench/schema/
+            ^bench/(roster|rates\.current|scoreboard\.current)\.json$
+            ^bench/arms/
+            ^bench/harness/
+            ^tools/behavior_contracts/
+            ^docs/python-migration/runtime-evidence/rollback\.sh$
+            ^\.github/workflows/rust-runtime\.yml$
+        run: |
+          rust=true
+          if git cat-file -e "$BASE^{commit}" 2> /dev/null; then
+            changed=$(git diff --no-renames --name-only "$BASE$RANGE$HEAD")
+            grep -qE -f <(printf '%s\n' "$RUST_RUNTIME_PATHS") <<< "$changed" || rust=false
+          fi
+          echo "rust=$rust" >> "$GITHUB_OUTPUT"
+
   rust-runtime:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -111,3 +110,17 @@ jobs:
       - name: Install a second version and roll back
         if: github.event_name != 'pull_request' || runner.os == 'Linux'
         run: docs/python-migration/runtime-evidence/rollback.sh "$RUNNER_TEMP/rollback" "$(git rev-parse HEAD)"
+
+  required:
+    name: Rust runtime required
+    needs: [changes, rust-runtime]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the Rust runtime jobs to pass or be skipped
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          RUNTIME: ${{ needs.rust-runtime.result }}
+        run: |
+          test "$CHANGES" = success
+          test "$RUNTIME" = success || test "$RUNTIME" = skipped
