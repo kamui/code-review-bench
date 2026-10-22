@@ -31,8 +31,9 @@ A receipt holds no absolute path, so it stays valid when a store moves to anothe
 The pin that queues and runs use is the executable's SHA-256 together with the receipt's SHA-256.
 
 Beside the entries, `selected.json` names the version new operations take, `selections.jsonl` keeps every selection,
-and `launcher` links the entry most recently installed or restored that has the `runtime` commands. The launcher resolves every other
-command, so a rollback to a version from before these commands still runs.
+and `launcher` links the selected entry when it has the `runtime` commands. Only `select`, `rollback` and
+`install --select` move it. The launcher resolves every other command, so a rollback to a version from before these
+commands still runs, and an entry that was only installed or restored never handles a command.
 
 ## Install
 
@@ -48,9 +49,10 @@ command, so a rollback to a version from before these commands still runs.
 
 `install` needs no Python. The launcher runs it with this checkout's own installer,
 `cargo run --locked --offline -- runtime install` in `rust/bench-tools`, the way it once ran `rust_runtime.py` from
-the checkout. That build is only
-the installer: it lands in the crate's ignored `target/`, is never retained or selected, and runs no other command.
-The installer builds the executable it retains separately, as follows.
+the checkout. It builds that installer first and, when the offline build fails, names `cargo fetch --locked` as the
+step that fetches missing locked dependencies. That build is only the installer: it lands in the crate's ignored
+`target/`, is never retained or selected, and runs no other command. The installer builds the executable it retains
+separately, as follows.
 
 After the cleanliness check it creates a private Cargo home for the build. That home holds no
 configuration, only links to the host Cargo home's registry and Git caches and the lock files that
@@ -111,12 +113,14 @@ installed:
 
 ```sh
 BENCH_RUNTIME_STORE=OTHER ENTRY/bench-tools runtime restore --receipt ENTRY/receipt.json --executable ENTRY/bench-tools
+BENCH_RUNTIME_STORE=OTHER ENTRY/bench-tools runtime select SHA256
 ```
 
-`restore` accepts the executable only when it hashes to the receipt. A rebuild from the receipt's
-revision with the same toolchain can also be restored this way. On this host, two checkouts at
-different paths produced the same executable hash; that is an observation, not a guarantee for
-other hosts. Rebuilding offline also needs the locked dependencies in the Cargo registry cache.
+`restore` accepts the executable only when it hashes to the receipt. It retains the entry without selecting it;
+`select` makes it the selection and the launcher. A rebuild from the receipt's revision with the same toolchain can
+also be restored this way. On this host, two checkouts at different paths produced the same executable hash; that is
+an observation, not a guarantee for other hosts. Rebuilding offline also needs the locked dependencies in the Cargo
+registry cache.
 
 ## Freezing and running
 

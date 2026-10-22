@@ -5,9 +5,9 @@
 //! The store (`BENCH_RUNTIME_STORE`, else `~/.t3/bench-runtime`) keeps each built executable under
 //! `bench-tools/<sha256>/` beside its `receipt.json`. Entries are never overwritten or removed, so every retained
 //! version stays runnable offline for rollback. `selected.json` names the version new operations take; `select`
-//! and `rollback` change only that file and append to `selections.jsonl`. `launcher` links the entry most recently
-//! installed or restored that has these commands, which `bench/tools/bench-tools` runs to resolve every other
-//! command, so a rollback to a version from before them still runs.
+//! and `rollback` rewrite it, append to `selections.jsonl` and move `launcher` to the selected entry when it has
+//! these commands. `bench/tools/bench-tools` runs `launcher` to resolve every other command, so a rollback to a
+//! version from before them still runs, and an entry that was only installed or restored never handles a command.
 //!
 //! `install` builds the crate's Git tree at `HEAD` from a snapshot inside a private Cargo home that holds no
 //! configuration, with the toolchain `rust-toolchain.toml` pins, `cargo build --locked --offline --release` for this
@@ -1076,8 +1076,9 @@ fn retain(store: &Path, executable: &Path, receipt: &Value) -> R<(PathBuf, bool)
     Ok((target, true))
 }
 
-/// Point `launcher` at a retained entry whose executable runs these commands, so `bench/tools/bench-tools` resolves
-/// with it. An entry from before them is retained and runnable, but never the launcher.
+/// Point `launcher` at the selected entry when its executable runs these commands, so `bench/tools/bench-tools`
+/// resolves with it. A selected entry from before them keeps the previous launcher, which resolves to it. An entry
+/// that is only retained never becomes the launcher, so it never handles a frozen run's commands.
 fn adopt_launcher(store: &Path, directory: &Path, file: &str) -> R<bool> {
     let executable = directory.join(file);
     let capable = Command::new(&executable)
@@ -1113,9 +1114,17 @@ fn selected(store: &Path) -> R<Option<Value>> {
     }
 }
 
-/// Record `pin` as the selection; the caller holds the store's lock.
+/// Record `pin` as the selection and move the launcher to it; the caller holds the store's lock.
 fn publish_selection(store: &Path, pin: &Value, action: &str) -> R<Value> {
-    check(store, pin, true)?;
+    let found = check(store, pin, true)?;
+    let directory = entry(store, field_text(pin, &["sha256"]).unwrap_or(""))?;
+    let file = field_text(&found.receipt, &["artifact", "file"]).unwrap_or(NAME);
+    let row = record_selection(store, pin, action)?;
+    adopt_launcher(store, &directory, file)?;
+    Ok(row)
+}
+
+fn record_selection(store: &Path, pin: &Value, action: &str) -> R<Value> {
     let current = selected(store)?;
     let previous = current
         .as_ref()
@@ -1332,7 +1341,7 @@ pub fn deviation(store: &Path, run: &Path, old: &str, new: &str, notes: &Notes<'
 
 // --- commands ---------------------------------------------------------------------------------------------------
 
-/// `install`: build the checkout's crate, retain it, make it the launcher and, with `select`, the selection.
+/// `install`: build the checkout's crate, retain it and, with `select`, make it the selection and the launcher.
 pub fn install(store: &Path, checkout: &Path, select_it: bool) -> R<Value> {
     let host = build_environment()?;
     let scratch = temporary_directory(&std::env::temp_dir(), "rust-runtime-build-")?;
@@ -1341,19 +1350,22 @@ pub fn install(store: &Path, checkout: &Path, select_it: bool) -> R<Value> {
     });
     let _ = fs::remove_dir_all(&scratch);
     let ((directory, added), receipt) = built?;
-    let file = field_text(&receipt, &["artifact", "file"]).unwrap_or(NAME);
-    let launcher = adopt_launcher(store, &directory, file)?;
     let pin = pin_of(&directory)?;
     let mut result = vec![
         ("retained", text(shown(&directory))),
         ("added", Value::Bool(added)),
-        ("launcher", Value::Bool(launcher)),
         ("pin", pin.clone()),
     ];
     if select_it {
         let sha = field_text(&pin, &["sha256"]).unwrap_or("");
         result.push(("selected", select(store, sha)?));
     }
+    let file = field_text(&receipt, &["artifact", "file"]).unwrap_or(NAME);
+    let launcher = directory.file_name().is_some_and(|sha| {
+        fs::read_link(store.join(NAME).join(LAUNCHER))
+            .is_ok_and(|target| target == Path::new(sha).join(file))
+    });
+    result.push(("launcher", Value::Bool(launcher)));
     Ok(object(result))
 }
 
@@ -1362,12 +1374,9 @@ pub fn install(store: &Path, checkout: &Path, select_it: bool) -> R<Value> {
 pub fn restore(store: &Path, receipt: &Path, executable: &Path) -> R<Value> {
     let receipt = read_json(receipt)?;
     let (directory, added) = retain(store, executable, &receipt)?;
-    let file = field_text(&receipt, &["artifact", "file"]).unwrap_or(NAME);
-    let launcher = adopt_launcher(store, &directory, file)?;
     Ok(object(vec![
         ("retained", text(shown(&directory))),
         ("added", Value::Bool(added)),
-        ("launcher", Value::Bool(launcher)),
         ("pin", pin_of(&directory)?),
     ]))
 }
@@ -1442,9 +1451,9 @@ mod tests {
             source_overrides("replace = {}\n[package]\npatches = 1\n"),
             ["replace"]
         );
-        assert!(
-            source_overrides("[package]\nname = \"patch\"\n[dependencies]\npatchy = \"1\"\n")
-                .is_empty()
+        assert_eq!(
+            source_overrides("[package]\nname = \"patch\"\n[dependencies]\npatchy = \"1\"\n"),
+            [] as [&str; 0]
         );
     }
 

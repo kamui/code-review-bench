@@ -9,7 +9,7 @@ use bench_tools::sha256::hex_digest;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 const CHANNEL: &str = include_str!("../rust-toolchain.toml");
 
@@ -201,10 +201,54 @@ impl Fixture {
         all.extend(arguments);
         self.runtime(&all)
     }
+
+    /// Commit this checkout's `bench/tools/bench-tools` into the repository and return a way to run it.
+    fn launcher_script(&self) -> impl Fn(&[&str]) -> Output + '_ {
+        let script = self.repo.join("bench/tools/bench-tools");
+        fs::create_dir_all(script.parent().unwrap()).unwrap();
+        fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bench/tools/bench-tools"),
+            &script,
+        )
+        .unwrap();
+        self.commit("the launcher");
+        move |arguments| {
+            Command::new(&script)
+                .args(arguments)
+                .current_dir(&self.root)
+                .env("BENCH_RUNTIME_STORE", &self.store)
+                .env_remove("BENCH_RUST_BENCH_TOOLS")
+                .env_remove("BENCH_RUST_BENCH_TOOLS_SHA256")
+                .output()
+                .unwrap()
+        }
+    }
 }
 
 fn mode(path: &Path) -> u32 {
     fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+/// Retain and select `executable` in `store` by running it, as a store with no launcher yet takes its first entry.
+fn restore_and_select(executable: &Path, sha: &str, receipt: &Path, store: &Path) {
+    for arguments in [
+        vec![
+            "restore".as_ref(),
+            "--receipt".as_ref(),
+            receipt.as_os_str(),
+            "--executable".as_ref(),
+            executable.as_os_str(),
+        ],
+        vec!["select".as_ref(), std::ffi::OsStr::new(sha)],
+    ] {
+        let done = Command::new(executable)
+            .arg("runtime")
+            .args(&arguments)
+            .env("BENCH_RUNTIME_STORE", store)
+            .output()
+            .unwrap();
+        assert!(done.status.success(), "{}", text(&done));
+    }
 }
 
 #[test]
@@ -324,7 +368,7 @@ fn a_run_executes_exactly_its_frozen_pin_and_refuses_a_run_that_pins_none() {
             "{}",
             text(&refused)
         );
-        assert!(stdout(&refused).is_empty());
+        assert_eq!(stdout(&refused), "");
     }
 
     let changed = pin_one.replace(&json_field(&pin_one, "receipt_sha256"), &"0".repeat(64));
@@ -429,7 +473,8 @@ fn an_entry_is_never_replaced_and_a_wrong_hash_is_never_retained() {
         receipt
     );
 
-    // Another store takes the copied entry; a stand-in without these commands is retained but never the launcher.
+    // Another store takes the copied entry; selecting it makes it the launcher, and a selected stand-in without these
+    // commands never becomes the launcher.
     let elsewhere = Fixture {
         root: fixture.root.join("elsewhere"),
         repo: fixture.repo.clone(),
@@ -442,11 +487,9 @@ fn an_entry_is_never_replaced_and_a_wrong_hash_is_never_retained() {
         "--executable",
         &executable,
     ]);
-    assert!(
-        stdout(&restored).contains("\"launcher\": true"),
-        "{}",
-        text(&restored)
-    );
+    assert!(restored.status.success(), "{}", text(&restored));
+    let selected = elsewhere.runtime(&["select", &sha]);
+    assert!(selected.status.success(), "{}", text(&selected));
     let script = "#!/bin/sh\nexit 3\n";
     let stand_in_sha = hex_digest(script.as_bytes());
     let stand_in = copy("stand-in", script);
@@ -462,11 +505,9 @@ fn an_entry_is_never_replaced_and_a_wrong_hash_is_never_retained() {
         "--executable",
         &stand_in,
     ]);
-    assert!(
-        stdout(&retained).contains("\"launcher\": false"),
-        "{}",
-        text(&retained)
-    );
+    assert!(retained.status.success(), "{}", text(&retained));
+    let selected = elsewhere.runtime(&["select", &stand_in_sha]);
+    assert!(selected.status.success(), "{}", text(&selected));
     assert_eq!(
         fs::read_link(elsewhere.store.join("bench-tools/launcher")).unwrap(),
         Path::new(&sha).join("bench-tools")
@@ -485,7 +526,7 @@ fn install_refuses_what_a_receipt_cannot_restore() {
             "{expected}: {}",
             text(&done)
         );
-        assert!(fixture.entries().is_empty());
+        assert_eq!(fixture.entries(), [] as [String; 0]);
     };
 
     fs::write(crate_dir.join("src/extra.rs"), "\n").unwrap();
@@ -558,7 +599,7 @@ fn a_build_that_reads_the_environment_or_an_untracked_file_is_refused() {
             "{expected}: {}",
             text(&done)
         );
-        assert!(fixture.entries().is_empty());
+        assert_eq!(fixture.entries(), [] as [String; 0]);
     };
     fs::write(
         crate_dir.join("src/main.rs"),
@@ -640,24 +681,7 @@ fn a_runtime_deviation_records_both_identities_once() {
 #[test]
 fn the_launcher_script_names_the_install_step_and_runs_a_runs_pin_through_the_store() {
     let fixture = Fixture::new("script");
-    let script = fixture.repo.join("bench/tools/bench-tools");
-    fs::create_dir_all(script.parent().unwrap()).unwrap();
-    fs::copy(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bench/tools/bench-tools"),
-        &script,
-    )
-    .unwrap();
-    fixture.commit("the launcher");
-    let launch = |arguments: &[&str]| {
-        Command::new(&script)
-            .args(arguments)
-            .current_dir(&fixture.root)
-            .env("BENCH_RUNTIME_STORE", &fixture.store)
-            .env_remove("BENCH_RUST_BENCH_TOOLS")
-            .env_remove("BENCH_RUST_BENCH_TOOLS_SHA256")
-            .output()
-            .unwrap()
-    };
+    let launch = fixture.launcher_script();
     let empty = launch(&["roster"]);
     assert_eq!(empty.status.code(), Some(1), "{}", text(&empty));
     assert!(
@@ -672,20 +696,8 @@ fn the_launcher_script_names_the_install_step_and_runs_a_runs_pin_through_the_st
     let receipt = fixture.root.join("receipt.json");
     let size = fs::metadata(built).unwrap().len();
     fs::write(&receipt, runtime_store::receipt(sha, size)).unwrap();
-    // A store with no launcher yet takes an entry from the copied executable itself.
-    let restored = Command::new(built)
-        .args(["runtime", "restore", "--receipt"])
-        .arg(&receipt)
-        .arg("--executable")
-        .arg(built)
-        .env("BENCH_RUNTIME_STORE", &fixture.store)
-        .output()
-        .unwrap();
-    assert!(
-        stdout(&restored).contains("\"launcher\": true"),
-        "{}",
-        text(&restored)
-    );
+    // A store with no launcher yet takes and selects an entry through the copied executable itself.
+    restore_and_select(built, sha, &receipt, &fixture.store);
     let selected = launch(&["runtime", "select", sha]);
     assert!(selected.status.success(), "{}", text(&selected));
 
@@ -706,4 +718,172 @@ fn the_launcher_script_names_the_install_step_and_runs_a_runs_pin_through_the_st
     let refused = launch(&["--run", unpinned.to_str().unwrap(), "runtime", "list"]);
     assert_eq!(refused.status.code(), Some(1), "{}", text(&refused));
     assert!(stderr(&refused).contains("pins no bench-tools runtime"));
+}
+
+fn linked(fixture: &Fixture) -> PathBuf {
+    fs::read_link(fixture.store.join("bench-tools/launcher")).unwrap()
+}
+
+#[test]
+fn an_install_without_select_leaves_the_launcher_and_a_selection_moves_it() {
+    let fixture = Fixture::new("install-launcher");
+    let one = fixture.install(true);
+    assert_eq!(linked(&fixture), Path::new(&one).join("bench-tools"));
+
+    fixture.version("two");
+    let installed = fixture.runtime(&["install"]);
+    assert!(installed.status.success(), "{}", text(&installed));
+    assert!(
+        stdout(&installed).contains("\"launcher\": false"),
+        "{}",
+        text(&installed)
+    );
+    let two = json_field(&stdout(&installed), "sha256");
+    assert_eq!(linked(&fixture), Path::new(&one).join("bench-tools"));
+
+    let selected = fixture.runtime(&["select", &two]);
+    assert!(selected.status.success(), "{}", text(&selected));
+    assert_eq!(linked(&fixture), Path::new(&two).join("bench-tools"));
+    let rolled = fixture.runtime(&["rollback"]);
+    assert!(rolled.status.success(), "{}", text(&rolled));
+    assert_eq!(linked(&fixture), Path::new(&one).join("bench-tools"));
+}
+
+#[test]
+fn a_restored_entry_is_not_the_launcher_until_it_is_selected() {
+    let fixture = Fixture::new("restore-launcher");
+    let one = fixture.install(true);
+    fixture.version("two");
+    let elsewhere = Fixture {
+        root: fixture.root.join("elsewhere"),
+        repo: fixture.repo.clone(),
+        store: fixture.root.join("elsewhere/store"),
+    };
+    let two = elsewhere.install(false);
+    let entry = elsewhere.store.join("bench-tools").join(&two);
+    let restored = fixture.runtime(&[
+        "restore",
+        "--receipt",
+        entry.join("receipt.json").to_str().unwrap(),
+        "--executable",
+        entry.join("bench-tools").to_str().unwrap(),
+    ]);
+    assert!(restored.status.success(), "{}", text(&restored));
+    assert_eq!(linked(&fixture), Path::new(&one).join("bench-tools"));
+
+    let selected = fixture.runtime(&["select", &two]);
+    assert!(selected.status.success(), "{}", text(&selected));
+    assert_eq!(linked(&fixture), Path::new(&two).join("bench-tools"));
+}
+
+#[test]
+fn a_frozen_run_and_rollback_never_run_on_an_unselected_entry() {
+    let fixture = Fixture::new("unselected");
+    let launch = fixture.launcher_script();
+    let (built, sha) = runtime_store::built();
+    let receipt = fixture.root.join("receipt.json");
+    fs::write(
+        &receipt,
+        runtime_store::receipt(sha, fs::metadata(built).unwrap().len()),
+    )
+    .unwrap();
+    restore_and_select(built, sha, &receipt, &fixture.store);
+
+    // The fixture crate answers `runtime --help`, so an unselected entry of it could pass for a launcher.
+    let installed = fixture.runtime(&["install"]);
+    assert!(installed.status.success(), "{}", text(&installed));
+    let output = stdout(&installed);
+    let pins = format!(
+        r#"{{"bench-tools": {{"receipt_sha256": "{}", "sha256": "{}"}}}}"#,
+        json_field(&output, "receipt_sha256"),
+        json_field(&output, "sha256")
+    );
+    let run = fixture.run_dir("frozen", Some(&pins));
+    let ran = launch(&["--run", run.to_str().unwrap(), "--", "0", "a"]);
+    assert_eq!(ran.status.code(), Some(0), "{}", text(&ran));
+    assert_eq!(stdout(&ran), "one 0 a\n", "{}", text(&ran));
+
+    let rolled = launch(&["runtime", "rollback"]);
+    assert_eq!(rolled.status.code(), Some(1), "{}", text(&rolled));
+    assert!(
+        stderr(&rolled).contains("no previously selected version"),
+        "{}",
+        text(&rolled)
+    );
+    assert_eq!(stdout(&rolled), "");
+}
+
+/// The `"name": {...}` object field of a selection row, or `null`.
+fn row_object(row: &str, name: &str) -> String {
+    let key = format!("\"{name}\": ");
+    let start = row
+        .find(&key)
+        .unwrap_or_else(|| panic!("no {name} in {row}"))
+        + key.len();
+    let rest = &row[start..];
+    if rest.starts_with("null") {
+        return "null".to_string();
+    }
+    rest[..=rest.find('}').unwrap()].to_string()
+}
+
+#[test]
+fn concurrent_selects_and_rollbacks_leave_an_unbroken_selection_chain() {
+    let fixture = Fixture::new("concurrent");
+    let one = fixture.install(true);
+    fixture.version("two");
+    let two = fixture.install(true);
+    let children: Vec<_> = (0..24)
+        .map(|index| {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_bench-tools"));
+            command.arg("runtime");
+            match index % 3 {
+                0 => command.args(["select", one.as_str()]),
+                1 => command.args(["select", two.as_str()]),
+                _ => command.arg("rollback"),
+            };
+            command
+                .current_dir(&fixture.repo)
+                .env("BENCH_RUNTIME_STORE", &fixture.store)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap()
+        })
+        .collect();
+    for child in children {
+        let done = child.wait_with_output().unwrap();
+        assert!(done.status.success(), "{}", text(&done));
+    }
+    let history = fs::read_to_string(fixture.store.join("bench-tools/selections.jsonl")).unwrap();
+    let rows: Vec<&str> = history.lines().collect();
+    assert!(rows.len() > 2, "{history}");
+    for pair in rows.windows(2) {
+        assert_eq!(
+            row_object(pair[1], "previous"),
+            row_object(pair[0], "pin"),
+            "{history}"
+        );
+    }
+    let last = row_object(rows[rows.len() - 1], "pin");
+    let selected = fs::read_to_string(fixture.store.join("bench-tools/selected.json")).unwrap();
+    assert!(
+        selected.contains(&format!("\"sha256\": \"{}\"", json_field(&last, "sha256"))),
+        "{selected}\n{history}"
+    );
+}
+
+#[test]
+fn an_installer_that_does_not_build_names_the_fetch_step() {
+    let fixture = Fixture::new("bootstrap");
+    let launch = fixture.launcher_script();
+    fs::write(fixture.crate_dir().join("src/main.rs"), "fn main() {\n").unwrap();
+    let refused = launch(&["runtime", "install", "--select"]);
+    assert_eq!(refused.status.code(), Some(1), "{}", text(&refused));
+    assert!(
+        stderr(&refused).contains("run `cargo fetch --locked` in rust/bench-tools"),
+        "{}",
+        text(&refused)
+    );
+    assert_eq!(fixture.entries(), [] as [String; 0]);
 }
