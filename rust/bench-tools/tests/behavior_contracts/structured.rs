@@ -508,7 +508,6 @@ fn wants_keys(value: &Value) -> bool {
         .is_some_and(Value::truthy)
 }
 
-#[allow(clippy::too_many_lines)]
 fn tokens(
     case: &Value,
     rules: &[Value],

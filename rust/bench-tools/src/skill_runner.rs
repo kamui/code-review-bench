@@ -581,7 +581,6 @@ fn check_inputs(run_dir: &Path) -> R<()> {
 }
 
 /// Check the frozen run, arm, skill, target and clone pins; write the attempt's `input.md`.
-#[allow(clippy::too_many_lines)]
 fn prepare_attempt(arguments: &Arguments, client: Client) -> R<Prepared> {
     let run_dir = strict(&arguments.run)?;
     file_attempt::check_pin(&run_dir.to_string_lossy(), "launch")?;
@@ -1202,7 +1201,6 @@ mod codex {
 
     /// The rollouts under `sessions`: one fresh root, every child descended from it through a spawn call that forked
     /// no context and kept the pinned model and effort, and a turn context for every session.
-    #[allow(clippy::too_many_lines)]
     fn load_rollouts(sessions: &Path, model: &str, effort: &str) -> R<Rollouts> {
         let paths: Vec<PathBuf> = descendants(sessions)
             .into_iter()
@@ -1385,7 +1383,6 @@ mod codex {
         })
     }
 
-    #[allow(clippy::too_many_lines)]
     pub(super) fn launch(prepared: &Prepared, rates_path: &Path) -> R<Outcome> {
         let (attempt, clone) = (&prepared.attempt, &prepared.clone);
         let (model, effort) = (prepared.model.as_str(), prepared.effort.as_str());
@@ -2224,7 +2221,6 @@ mod claude {
         Ok(result)
     }
 
-    #[allow(clippy::too_many_lines)]
     pub(super) fn launch(prepared: &Prepared, rates_path: &Path) -> R<Outcome> {
         let (attempt, clone) = (&prepared.attempt, &prepared.clone);
         let (model, effort) = (prepared.model.as_str(), prepared.effort.as_str());

@@ -2677,7 +2677,10 @@ fn has_exactly(value: &Value, fields: &[&str]) -> R<bool> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input the caller already holds; a one-off parameter struct would not simplify the call"
+)]
 fn validate_review_v1(
     root: &Root,
     review: &Value,
@@ -3191,7 +3194,10 @@ pub(crate) fn verdict_claim(claim: &Value) -> R<Value> {
 /// One review graded under verdict contract v2: every claim satisfies the ordered questions, the saved rulings on
 /// its canonical claims and on single comments hold, and each known problem's recovery and fix sufficiency are the
 /// ones the claims and recommendations give.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input the caller already holds; a one-off parameter struct would not simplify the call"
+)]
 fn validate_review_v2(
     root: &Root,
     review: &Value,
