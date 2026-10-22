@@ -529,7 +529,10 @@ fn too_broad(entry: &str, denied: &[String]) -> bool {
     entry.trim_end_matches('/').is_empty()
         || path.components().any(|part| part == Component::ParentDir)
         || real == Path::new("/")
-        || denied.iter().any(|directory| real == Path::new(directory))
+        || denied
+            .iter()
+            .map(Path::new)
+            .any(|directory| real == directory || real == resolve(directory))
 }
 
 /// The settings an isolated attempt runs under, with `hook` as the executable its file-tool hook runs.
@@ -992,5 +995,17 @@ mod tests {
         for entry in ["/usr", "/home/user", "/proc/self"] {
             assert!(!too_broad(entry, &denied), "{entry:?}");
         }
+        let root = resolve(&std::env::temp_dir().join(format!(
+            "review-isolation-denied-link-{}",
+            std::process::id()
+        )));
+        let homes = root.join("var/home");
+        std::fs::create_dir_all(&homes).unwrap();
+        let link = root.join("home");
+        std::os::unix::fs::symlink(&homes, &link).unwrap();
+        let denied = [text(&link)];
+        assert!(too_broad(&text(&homes), &denied));
+        assert!(!too_broad(&text(&homes.join("user")), &denied));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }
