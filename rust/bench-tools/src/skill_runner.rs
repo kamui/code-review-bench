@@ -471,12 +471,12 @@ fn review(
         .envs(env.iter().cloned())
         .spawn()
         .map_err(|error| format!("{}: {error}", command[0]))?;
-    let deadline = Instant::now() + Duration::from_secs(timeout);
+    let deadline = Instant::now().checked_add(Duration::from_secs(timeout));
     loop {
         if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
             return Ok(exit_code(status));
         }
-        if Instant::now() >= deadline {
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             let _ = child.kill();
             let _ = child.wait();
             return Ok(124);
@@ -489,7 +489,7 @@ fn timeout_seconds(runner: &Value) -> R<u64> {
     let value = match get(runner, "timeout_seconds") {
         Value::Null => return Ok(5400),
         Value::Int(digits) => digits.parse::<i64>().ok(),
-        Value::Float(number) => Some(number.trunc() as i64),
+        Value::Float(number) if number.is_finite() => Some(number.trunc() as i64),
         Value::Str(digits) => pytext::strip(digits).parse::<i64>().ok(),
         _ => None,
     };
@@ -2906,6 +2906,34 @@ mod tests {
             .err()
             .unwrap();
         assert!(error.contains("unknown sandbox profile"), "{error}");
+    }
+
+    #[test]
+    fn a_non_finite_timeout_is_refused_and_a_huge_one_never_expires() {
+        let runner = |timeout: &str| {
+            pyjson::loads(
+                &format!("{{\"timeout_seconds\": {timeout}}}"),
+                Duplicates::KeepLast,
+            )
+            .unwrap()
+        };
+        for refused in ["NaN", "Infinity", "-Infinity"] {
+            assert_eq!(
+                timeout_seconds(&runner(refused)).unwrap_err(),
+                "timeout_seconds must be an integer"
+            );
+        }
+        assert_eq!(timeout_seconds(&runner("90.9")).unwrap(), 90);
+        let huge = timeout_seconds(&runner("1e300")).unwrap();
+        let root = std::env::temp_dir().join(crate::evidence::random_name("timeout-"));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("input"), "").unwrap();
+        let command = ["/usr/bin/true".to_string()];
+        assert_eq!(
+            review(&command, &root, &root.join("input"), &root, &[], huge).unwrap(),
+            0
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
