@@ -1666,6 +1666,7 @@ fn replay(
     profile: &Value,
     gated: bool,
 ) -> Result<Value> {
+    let packet = gated.then(|| selected_packet(arguments)).transpose()?;
     for name in ["audit", "normalized"] {
         let path = join(attempt_dir, &format!("{name}.json"));
         let kept = join(attempt_dir, &format!("{name}.recorded.json"));
@@ -1697,14 +1698,14 @@ fn replay(
             .arg("--isolation-settings")
             .arg(join(attempt_dir, "isolation-settings.json"));
     }
-    if gated {
+    if let Some(packet) = packet {
         audit
             .arg("--network-gate")
             .arg(join(attempt_dir, "network/gate.json"))
             .arg("--target")
             .arg(&arguments.target)
             .arg("--packet")
-            .arg(selected_packet(arguments)?);
+            .arg(packet);
     }
     let audited = audit
         .output()

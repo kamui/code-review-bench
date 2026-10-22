@@ -45,7 +45,8 @@ pub struct Task {
     numbers: Vec<String>,
     /// The pull request's titles (the capture's and the packet's) and each linked issue's, as words.
     titles: Vec<Vec<String>>,
-    /// The pages the packet links on hosts the gate allows, as [`parts`] reads them.
+    /// The pages the packet links, as [`parts`] reads them. A link the gate refuses never matches: such a URL
+    /// raises `blocked-host` first.
     links: Vec<(String, Vec<String>)>,
 }
 
@@ -121,18 +122,14 @@ impl Task {
             }
         }
         let packet = PyPath::new(packet);
-        let text =
-            pytext::read_text(&packet).map_err(|error| format!("packet: {}", error.message()))?;
+        let text = pytext::read_text(&packet)
+            .map_err(|error| format!("packet {}: {}", packet.display(), error.message()))?;
         titles.extend(text.lines().find_map(|line| {
             let row = line.strip_prefix("| Pull request |")?;
             let (_, quoted) = row.split_once(" \"")?;
             Some(words(quoted.rsplit_once("\" |")?.0))
         }));
-        let mut links: Vec<_> = linked_urls(&text)
-            .filter_map(|url| Some((parts(url)?, origin_target(url)?)))
-            .filter(|((host, _), target)| network_gate::refusal(host, Some(target)).is_none())
-            .map(|(link, _)| link)
-            .collect();
+        let mut links: Vec<_> = linked_urls(&text).filter_map(parts).collect();
         links.sort();
         links.dedup();
         numbers.sort();
@@ -220,7 +217,8 @@ fn under(host: &str, domain: &str) -> bool {
         .is_some_and(|rest| rest.is_empty() || rest.ends_with('.'))
 }
 
-/// The `http` and `https` URLs in `text`, each ending before whitespace or Markdown or HTML punctuation.
+/// The `http` and `https` URLs in `text`, each ending before whitespace or Markdown or HTML punctuation, without
+/// the sentence punctuation or emphasis marks that follow a URL in prose.
 fn linked_urls(text: &str) -> impl Iterator<Item = &str> {
     text.match_indices("http").filter_map(|(at, _)| {
         let rest = &text[at..];
@@ -231,7 +229,8 @@ fn linked_urls(text: &str) -> impl Iterator<Item = &str> {
         let end = after
             .find(|c: char| c.is_whitespace() || "()<>[]\"'`|\\".contains(c))
             .unwrap_or(after.len());
-        (end > 0).then(|| &rest[..scheme + end])
+        let url = after[..end].trim_end_matches(['.', ',', ';', ':', '!', '?', '*', '_', '~']);
+        (!url.is_empty()).then(|| &rest[..scheme + url.len()])
     })
 }
 
