@@ -83,15 +83,33 @@ fn arguments(args: &[OsString]) -> Result<Arguments, String> {
 }
 
 impl Arguments {
+    fn hits(&self, filter: &str, name: &str) -> bool {
+        if self.exact {
+            name == filter
+        } else {
+            name.contains(filter)
+        }
+    }
+
     fn selects(&self, name: &str) -> bool {
-        let hit = |filter: &String| {
-            if self.exact {
-                name == filter
-            } else {
-                name.contains(filter.as_str())
-            }
-        };
-        (self.filters.is_empty() || self.filters.iter().any(hit)) && !self.skip.iter().any(hit)
+        (self.filters.is_empty() || self.filters.iter().any(|filter| self.hits(filter, name)))
+            && !self.skip.iter().any(|filter| self.hits(filter, name))
+    }
+
+    /// Filters that select none of `names`. Cargo passes one filter to every test binary, so a filter that could
+    /// name a Rust test, such as `provision` or `grade::tests`, may rightly select nothing here; only a filter that
+    /// no Rust test path can match, such as one with a `-`, is a mistake.
+    fn unmatched<'a>(&'a self, names: &[&str]) -> Vec<&'a str> {
+        self.filters
+            .iter()
+            .filter(|filter| {
+                !filter
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b':')
+                    && !names.iter().any(|name| self.hits(filter, name))
+            })
+            .map(String::as_str)
+            .collect()
     }
 }
 
@@ -297,6 +315,15 @@ fn main() -> ExitCode {
                 }
             }
         }
+    }
+    let names: Vec<&str> = tests.iter().map(|test| test.name.as_str()).collect();
+    let unmatched = parsed.unmatched(&names);
+    if !unmatched.is_empty() {
+        eprintln!(
+            "behavior_contracts: no test matches {}",
+            unmatched.join(", ")
+        );
+        return ExitCode::from(2);
     }
     tests.retain(|test| parsed.selects(&test.name));
     if parsed.list {

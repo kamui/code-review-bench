@@ -64,6 +64,7 @@ pub fn checks() -> Vec<(&'static str, Check)> {
         ("structured-declarations", structured_declarations),
         ("hand-stated-outcomes", hand_stated_outcomes),
         ("fixture-git", fixture_git),
+        ("empty-selection", empty_selection),
     ]
 }
 
@@ -2590,5 +2591,32 @@ fn fixture_git(scratch: &Scratch) -> Result<(), Failure> {
             .is_some_and(|stamps| stamps.iter().all(|byte| *byte == 0)),
         "the index keeps file timestamps"
     );
+    Ok(())
+}
+
+fn empty_selection(_: &Scratch) -> Result<(), Failure> {
+    let exe = std::env::current_exe().map_err(|error| format!("current executable: {error}"))?;
+    for (args, selects) in [
+        (&["no-such-corpus::"][..], false),
+        (&["--exact", "decision-histroy"], false),
+        (&["--exact", "decision-history", "decision-histroy"], false),
+        (&["diff-identity::", "no-such-corpus::"], false),
+        (&["--exact", "decision-history"], true),
+        (&["provision"], true),
+        (&["grade::tests::provision"], true),
+    ] {
+        let output = Command::new(&exe)
+            .arg("--list")
+            .args(args)
+            .output()
+            .map_err(|error| format!("{}: {error}", exe.display()))?;
+        let refused = String::from_utf8_lossy(&output.stderr).contains("no test matches");
+        ensure!(
+            output.status.success() == selects && refused != selects,
+            "{args:?} exited {} with {:?}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     Ok(())
 }

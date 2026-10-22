@@ -22,7 +22,7 @@ cargo test --locked --test behavior_contracts -- usage::
 cargo test --locked --test behavior_contracts -- --exact decision-history digest-vectors
 ```
 
-The runner finds corpora and decision versions in the directory and names each test `CORPUS::CASE`. It has no
+The runner finds corpora and decision versions in the directory and names each test `CORPUS::CASE`. A filter that selects no test fails the run when no Rust test name could match it, for example `no-such-corpus::` or `--exact decision-histroy`. Cargo passes the same filter to every test binary, so a filter that could name a Rust test, such as `provision`, may select nothing here without failing. The runner has no
 `--implementations`, `--differential` or `--allow-known-defects`: every case runs `bench-tools`, and a
 `baseline_defect` is a saved observation that never passes a case. The loader still checks where a
 `baseline_defect` may appear. `decision-history` replaces `--verify-decision-history`, `digest-vectors` checks
