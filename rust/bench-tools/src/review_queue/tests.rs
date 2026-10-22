@@ -1,6 +1,8 @@
 use super::*;
-use crate::skill_runner::Ran as ToolRan;
+use crate::prune_workspace;
 use std::cell::{Cell, RefCell};
+use std::ffi::OsStr;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 
@@ -218,20 +220,15 @@ impl Fixture {
         ]
     }
 
-    fn cleanup(&self, argv: &[String]) -> Result<ToolRan, String> {
-        self.append("tools.log", &argv.join(" "));
+    fn cleanup(
+        &self,
+        arguments: &prune_workspace::Attempt<'_>,
+    ) -> Result<(), prune_workspace::Failure> {
+        let workspace = PathBuf::from(OsStr::from_bytes(arguments.workspace));
+        self.append("tools.log", &format!("prune {}", display(&workspace)));
         if let Some(why) = self.cleanup_refusal.borrow().clone() {
-            return Ok(ToolRan {
-                code: 1,
-                stdout: format!("cleanup refused: {why}\n"),
-                stderr: String::new(),
-            });
+            return Err(prune_workspace::Failure::Refused(why));
         }
-        let at = argv
-            .iter()
-            .position(|arg| arg == "--workspace")
-            .expect("a workspace");
-        let workspace = PathBuf::from(&argv[at + 1]);
         let _ = fs::remove_file(workspace.join("clone-cache"));
         let _ = fs::remove_dir_all(workspace.join("clone"));
         fs::write(
@@ -239,11 +236,7 @@ impl Fixture {
             r#"{"applied": true}"#,
         )
         .expect("write");
-        Ok(ToolRan {
-            code: 0,
-            stdout: String::new(),
-            stderr: String::new(),
-        })
+        Ok(())
     }
 
     fn with<T>(&self, sleep: &dyn Fn(f64), body: impl FnOnce(&Effects<'_>) -> T) -> T {
@@ -260,7 +253,7 @@ impl Fixture {
                 sign_in: *sign_in,
             }),
         };
-        let tool = |argv: &[String], _: Option<&[(String, String)]>| self.cleanup(argv);
+        let prune = |arguments: &prune_workspace::Attempt<'_>| self.cleanup(arguments);
         let effects = Effects {
             repo: self.base.clone(),
             env: self.env(),
@@ -272,7 +265,7 @@ impl Fixture {
             sleep,
             nap: &nap,
             meters: &meters,
-            tool: &tool,
+            prune: &prune,
             poll_seconds: 0.01,
             scan_gap_seconds: 0.01,
             unreadable_wait_seconds: if self.real_proc { 5.0 } else { 0.0 },
@@ -662,8 +655,7 @@ fn incomplete_cleanup_of_a_valid_review_blocks_the_next_launch_until_it_is_prune
     *fx.cleanup_refusal.borrow_mut() = None;
     assert_eq!(fx.run(Some(1)), 0);
     let calls = fx.lines("tools.log");
-    assert!(calls[1].contains(&format!("--workspace {}", display(&workspace))));
-    assert!(calls[1].ends_with("--apply"));
+    assert_eq!(calls[1], format!("prune {}", display(&workspace)));
     assert_eq!(fx.launched().len(), 2);
 }
 

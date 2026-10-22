@@ -791,7 +791,7 @@ class FixtureCleanup(Fixture):
         (self.run_dir / "charges.jsonl").write_text(json.dumps({
             "at": "2026-01-02", "step": "unknown usage of att-003 accepted at its reservation", "usd": 0, "reconciles": "att-003"}) + "\n", encoding="utf-8")
         self.assertEqual(self.record("att-003")["disposition"], "valid completed")
-        pruned = subprocess.run(["python3", str(TOOLS / "prune_workspace.py"), "--attempt", str(self.run_dir / "attempts/att-003"),
+        pruned = subprocess.run([str(rust_runtime.resolve("bench-tools")), "prune-workspace", "--attempt", str(self.run_dir / "attempts/att-003"),
                                  "--workspace", str(unknown), "--target", str(self.run_dir / "fixture"), "--apply"],
                                 capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(pruned.returncode, 0, pruned.stdout + pruned.stderr)

@@ -294,14 +294,6 @@ pub struct Finished {
 }
 
 impl Finished {
-    pub fn stdout(&self) -> &[u8] {
-        &self.stdout
-    }
-
-    pub fn stderr(&self) -> &[u8] {
-        &self.stderr
-    }
-
     /// Stdout then stderr as `subprocess.run(..., text=True)` decodes them, which raises on bytes that are not
     /// UTF-8 whatever the exit.
     pub fn output(&self) -> R<String> {

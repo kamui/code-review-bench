@@ -27,8 +27,9 @@ The runner finds corpora and decision versions in the directory and names each t
 `baseline_defect` is a saved observation that never passes a case. The loader still checks where a
 `baseline_defect` may appear. `decision-history` replaces `--verify-decision-history`, `digest-vectors` checks
 the canonical bytes vectors, and the `self-check::` tests replace the harness tests. Two `evidence-store` cases,
-`resolve-across-implementations` and `pack-restored-by-python`, still run the retained `evidence_store.py` beside
-`bench-tools`; they go with it. The runner maps `python-native-artifacts` to `bench-tools native-artifacts`, so the
+`resolve-across-implementations` and `pack-restored-by-python`, have a `python-resolve` step that ran
+`evidence_store.py`. [#159](https://github.com/kamui/code-review-bench/issues/159) deleted it, so both report
+`SKIP UNAVAILABLE`. The runner maps `python-native-artifacts` to `bench-tools native-artifacts`, so the
 `native-artifacts` step cases that read a filing across implementations now run Rust on both sides. On macOS the `evidence-store`, `evidence-inventory` and `native-artifacts` cases
 report `SKIP UNAVAILABLE`, because those programs refuse a root below the symlink above every macOS temporary
 directory.
@@ -220,7 +221,7 @@ python3 tools/behavior_contract.py --corpus tools/behavior_contracts/grade-map.v
 
 | Corpus | Programs | Python run |
 | --- | --- | --- |
-| [`evidence-store.v1.json`](../../../tools/behavior_contracts/evidence-store.v1.json) | `evidence-store`, `evidence`, `python-resolve`, `recover-evidence`, `restore-local` | `evidence_store.py` directly; `python-resolve` calls the retained `evidence_store.resolve` as `prune_workspace.py` does. `evidence`, `recover-evidence` and `restore-local` run `bench-tools evidence`, `evidence recover` and `evidence restore-local` |
+| [`evidence-store.v1.json`](../../../tools/behavior_contracts/evidence-store.v1.json) | `evidence-store`, `evidence`, `python-resolve`, `recover-evidence`, `restore-local` | `evidence_store.py` directly; `python-resolve` called `evidence_store.resolve` as `prune_workspace.py` did, and is unavailable since #159. `evidence`, `recover-evidence` and `restore-local` run `bench-tools evidence`, `evidence recover` and `evidence restore-local` |
 | [`native-artifacts.v1.json`](../../../tools/behavior_contracts/native-artifacts.v1.json) | `native-artifacts`, `archive-transcripts`, `python-native-artifacts` | None since [#160](https://github.com/kamui/code-review-bench/issues/160): the [runner](#runner-moved) runs every case against `bench-tools` only. It maps `python-native-artifacts` to `bench-tools native-artifacts` and `archive-transcripts` to `bench-tools evidence archive-transcripts`, so the step cases that read one filing with another program run Rust on both sides. Before that, the harness ran `native_artifacts.py` through a `python-native-artifacts` driver that added `file ROOT INDEX OUT [--native-relative PATH]`, and from [#221](https://github.com/kamui/code-review-bench/issues/221) mapped both programs back to their Python drivers for the differential |
 | [`evidence-inventory.v1.json`](../../../tools/behavior_contracts/evidence-inventory.v1.json) | `evidence-inventory`, `collect-run`, `reconcile-evidence` | `evidence_inventory.py` directly. `collect-run` and `reconcile-evidence` run `bench-tools evidence collect` and `evidence reconcile` in the case directory |
 | [`import-benchmark.v1.json`](../../../tools/behavior_contracts/import-benchmark.v1.json) | `import-benchmark` | None since [#223](https://github.com/kamui/code-review-bench/issues/223) deleted `import_benchmark.py`; `bench-tools import-benchmark`. Before that, `import_benchmark.py` ran through the same kind of driver |

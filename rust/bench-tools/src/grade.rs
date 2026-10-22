@@ -35,7 +35,6 @@ const FAMILY_FIELDS: [&str; 5] = ["id", "title", "obligation", "trigger", "mecha
 const QUOTABLE: [&str; 3] = ["claim", "consequence", "proposed_fix"];
 const MISSING_FAULT: &str = "Missing pre-existing fault:";
 const EVIDENCE_CONTRACT: &str = "claim-evidence-v2";
-const TOOLS: &[u8] = b"bench/tools";
 const PROFILES: &[u8] = b"bench/policies/grading-commands.v1.json";
 const EXECUTION_POLICY: &[u8] = b"bench/policies/empty-harness-v1.md";
 const CODEX_CATALOG: &[u8] = b"bench/harness/codex-grading-models.v1.json";

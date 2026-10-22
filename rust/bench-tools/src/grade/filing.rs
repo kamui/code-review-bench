@@ -10,7 +10,10 @@ use crate::current_grading::{self as current, Documents, Failure, R, Root};
 use crate::pyjson::{Object, Value};
 use crate::pytext::{self, PyPath};
 use crate::pyvalue::{self, Raised};
-use crate::{claim_grading, grading_validation, pre_existing, pyfs, pyobject, pyunicode, sha256};
+use crate::{
+    claim_grading, grading_validation, pre_existing, prune_workspace, pyfs, pyobject, pyunicode,
+    removal, sha256,
+};
 use std::cmp::Ordering;
 
 const RECEIPT_CONTRACT: &str = "current-assessment-receipt/v1";
@@ -1188,10 +1191,8 @@ pub fn next_assessment(directory: &PyPath) -> R<PyPath> {
     Ok(directory.join(format!("assessment-{}", highest + 1).as_bytes()))
 }
 
-/// `prune_workspace.prune_grading(work, head, receipt, apply=True)`, run through `prune_workspace.py --grading-work`
-/// until #159 moves cleanup here. `failed` begins the message of a cleanup that fails.
+/// Prune a mapped grading workspace's clone and cache. `failed` begins the message of a cleanup that fails.
 pub fn prune_grading(
-    checkout: &PyPath,
     root: &Root,
     target: &str,
     work: &PyPath,
@@ -1201,52 +1202,15 @@ pub fn prune_grading(
     let directory = root.path.join(b"bench/targets").join(target.as_bytes());
     let facts = current::read_json(&directory.join(b"target.json"))?;
     pyvalue::get(&facts, "head")?;
-    let command = vec![
-        b"python3".to_vec(),
-        checkout
-            .join(super::TOOLS)
-            .join(b"prune_workspace.py")
-            .as_bytes()
-            .to_vec(),
-        b"--grading-work".to_vec(),
-        work.as_bytes().to_vec(),
-        b"--target".to_vec(),
-        directory.as_bytes().to_vec(),
-        b"--receipt".to_vec(),
-        receipt.as_bytes().to_vec(),
-        b"--apply".to_vec(),
-    ];
-    let cleanup = |message: &str| Failure::Input(format!("{failed}{message}"));
-    let done = match provision::run(&command) {
-        Ok(done) => done,
-        Err(Failure::Input(message)) => return Err(cleanup(&message)),
-        Err(other) => return Err(other),
-    };
-    let reported = |prefix: &str| {
-        done.stdout()
-            .strip_prefix(prefix.as_bytes())
-            .map(|rest| rest.strip_suffix(b"\n").unwrap_or(rest))
-            .and_then(|rest| std::str::from_utf8(rest).ok())
-    };
-    let outcome = match done.code {
-        0 => Some(Ok(())),
-        1 => reported("cleanup refused: ").map(|message| Err(cleanup(message))),
-        2 => reported("cleanup failed: ").map(|message| Err(cleanup(message))),
-        _ => None,
-    };
-    match outcome {
-        Some(outcome) => {
-            use std::io::Write;
-            let _ = std::io::stderr().write_all(done.stderr());
-            outcome
-        }
-        None => Err(cleanup(&format!(
-            "{} exited {}\n{}",
-            pytext::stderr_text(&command.join(&b' ')),
-            done.code,
-            done.tail(2000)
-        ))),
-    }
+    prune_workspace::grading_at(
+        work.as_bytes(),
+        directory.as_bytes(),
+        receipt.as_bytes(),
+        true,
+        &removal::uninterrupted,
+    )
+    .map(drop)
+    .map_err(|failure| Failure::Input(format!("{failed}{}", failure.message())))
 }
 
 /// `bench-tools grade map`'s options.
@@ -1550,14 +1514,7 @@ pub fn map_verdicts(runner: &Runner, options: &Mapping) -> R<Vec<u8>> {
             }
             other => other?,
         }
-        prune_grading(
-            &runner.checkout,
-            &root,
-            target_text,
-            &work,
-            &receipt_path,
-            MAP_CLEANUP,
-        )?;
+        prune_grading(&root, target_text, &work, &receipt_path, MAP_CLEANUP)?;
         Ok((updated, grades))
     })();
     let (updated, grades) = match filed {

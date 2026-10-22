@@ -125,7 +125,7 @@ The [completion inventory](research/evidence-completion-2026-10-08/README.md) re
 
 ## Retire a closed workspace
 
-`prune_workspace.py` keeps its existing valid-only rule and removes only verified unchanged clones/caches. Prefer it before inventory/capture. The separate `retire_workspace.py` can retire an entire closed workspace, including a failed attempt, under a stricter capture contract. It never treats archive presence as investigation closure.
+`bench-tools prune-workspace` keeps its existing valid-only rule and removes only verified unchanged clones/caches. Prefer it before inventory/capture. The separate `bench-tools retire-workspace` can retire an entire closed workspace, including a failed attempt, under a stricter capture contract. It never treats archive presence as investigation closure.
 
 Schedule an exclusive operator maintenance window: stop dispatchers, graders, editors and other writers that can access the candidate. The tool checks same-user processes through Linux `/proc`, serializes retirement operations, and repeats snapshot/activity checks after remote verification and immediately before removal. These checks do not lock out a new unrelated writer. The maintenance window is a required operational precondition, not a claim that process scans eliminate races. Retirement currently refuses hosts without `/proc`; packaging and retrieval also work on macOS.
 
@@ -152,9 +152,9 @@ Plan fields:
 | `classifications` | Optional map from unknown relative path to `{class, reason, sha256}` |
 
 ```sh
-python3 bench/tools/retire_workspace.py --plan bench/evidence/retirements/example-v1.json \
+python3 bench/tools/rust_runtime.py exec bench-tools -- retire-workspace --plan bench/evidence/retirements/example-v1.json \
   --shared-commit <pushed-sha> --shared-branch <branch> --receipt /tmp/example-dry-run.json
-python3 bench/tools/retire_workspace.py --plan bench/evidence/retirements/example-v1.json \
+python3 bench/tools/rust_runtime.py exec bench-tools -- retire-workspace --plan bench/evidence/retirements/example-v1.json \
   --shared-commit <pushed-sha> --shared-branch <branch> --receipt /tmp/example-removal.json --apply
 ```
 

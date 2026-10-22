@@ -7,6 +7,8 @@
 //! trusted or overwritten: `materialize` lists every such file with a command that moves them aside.
 
 pub mod collect;
+#[cfg(test)]
+pub mod fake;
 pub mod publication;
 pub mod recovery;
 pub mod remote;

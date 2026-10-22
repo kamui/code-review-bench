@@ -260,8 +260,8 @@ pub struct Effects<'a> {
     /// Waits between two readings of the process table; the wait is measured by the monotonic clock.
     pub nap: &'a dyn Fn(f64),
     pub meters: Meters<'a>,
-    /// Runs a helper; the cleanup of a filed valid attempt runs through it.
-    pub tool: run_cell::Tool<'a>,
+    /// Prunes a filed valid attempt's clone and cache.
+    pub prune: run_cell::Prune<'a>,
     pub poll_seconds: f64,
     pub scan_gap_seconds: f64,
     pub unreadable_wait_seconds: f64,
@@ -2423,7 +2423,7 @@ fn assess(queue: &Queue, launcher: &Launcher, act: bool, effects: &Effects<'_>) 
             let pruned = if act {
                 run_cell::filing(&run.work.join(&attempt), &|| {}).and_then(|_held| {
                     let target = get(get(&run.filed[&attempt], "cell"), "target").py_str();
-                    run_cell::prune(run, effects.tool, &attempt, &target)
+                    run_cell::prune(run, effects.prune, &attempt, &target)
                 })
             } else {
                 Err(run_cell::Failure::Input(format!(

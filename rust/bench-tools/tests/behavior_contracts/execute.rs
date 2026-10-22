@@ -397,31 +397,6 @@ fn run_child(command: &mut Command, stdin: Vec<u8>, timeout: Duration) -> Result
     })
 }
 
-/// `evidence_store.resolve` from the retained Python, which `prune_workspace.py` still calls, so a step can show it
-/// resolving what bench-tools stored. No bench-tools command prints the resolved path.
-const PYTHON_RESOLVE: &str = "import sys
-from pathlib import Path
-sys.path.insert(0, sys.argv.pop(1))
-import evidence_store
-try:
-    print(evidence_store.resolve(Path.cwd(), sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else None))
-except evidence_store.EvidenceError as error:
-    print(f\"evidence: {error}\")
-    sys.exit(1)
-";
-
-fn python_resolve() -> Result<Vec<OsString>, Failure> {
-    let python = which("python3")
-        .ok_or_else(|| Failure::Unavailable("python-resolve: needs python3 on PATH".to_string()))?;
-    let tools = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bench/tools");
-    Ok(vec![
-        python.into_os_string(),
-        "-c".into(),
-        PYTHON_RESOLVE.into(),
-        tools.into_os_string(),
-    ])
-}
-
 /// The command line that runs a corpus program against the built bench-tools.
 fn command_for(program: &str, exe: &Path) -> Option<Vec<OsString>> {
     let words: &[&str] = match program {
@@ -636,7 +611,10 @@ pub fn execute(
             {
                 line.clone()
             } else if program == "python-resolve" {
-                python_resolve()?
+                return Err(Failure::Unavailable(
+                    "python-resolve: evidence_store.py was deleted with its last caller"
+                        .to_string(),
+                ));
             } else {
                 command_for(program, &scratch.executable)
                     .ok_or_else(|| format!("no command for program {program}"))?

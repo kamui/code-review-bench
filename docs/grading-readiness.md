@@ -52,7 +52,7 @@ cargo test --locked --manifest-path rust/bench-tools/Cargo.toml
 python3 bench/tools/rust_runtime.py exec bench-tools -- grading probe-claude
 python3 bench/tools/test_codex_dispatch.py
 python3 bench/tools/test_claude_dispatch.py
-python3 bench/tools/test_prune_workspace.py
+(cd rust/bench-tools && cargo test --locked --lib prune_workspace)
 (cd rust/bench-tools && cargo test --locked provision)
 python3 bench/tools/test_cache_replacements.py
 bun run verify:claims
@@ -163,9 +163,9 @@ Grade one target at a time, from preparation through mapping, so that at most on
 A workspace that never reaches a mapping keeps its clone: an unfinished, failed, rejected or refused session. It counts against the free space until someone inspects and removes it. For a workspace whose assessment was saved but whose clone remains, preview the same verified cleanup against the saved receipt, then apply it:
 
 ```sh
-python3 bench/tools/prune_workspace.py --grading-work <work> --target bench/targets/<target> \
+python3 bench/tools/rust_runtime.py exec bench-tools -- prune-workspace --grading-work <work> --target bench/targets/<target> \
   --receipt bench/grading/current/assessments/<run>/<target>/assessment-<N>/receipt.json
-python3 bench/tools/prune_workspace.py --grading-work <work> --target bench/targets/<target> \
+python3 bench/tools/rust_runtime.py exec bench-tools -- prune-workspace --grading-work <work> --target bench/targets/<target> \
   --receipt bench/grading/current/assessments/<run>/<target>/assessment-<N>/receipt.json --apply
 ```
 
