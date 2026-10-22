@@ -6,6 +6,7 @@ use crate::pyjson::Value;
 use crate::pytext::{self, PyPath};
 use crate::{pyvalue, sha256};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 pub const NAME: &str = "bench-tools";
 const INSTALL: &str =
@@ -19,8 +20,15 @@ fn shown(path: &Path) -> String {
     pytext::stderr_text(bytes(path))
 }
 
+/// The file's SHA-256; the running executable is hashed once per process, since a debug build hashes slowly.
 fn digest(path: &Path) -> Option<String> {
-    std::fs::read(path).ok().map(|raw| sha256::hex_digest(&raw))
+    static RUNNING: OnceLock<Option<String>> = OnceLock::new();
+    let hashed = |path: &Path| std::fs::read(path).ok().map(|raw| sha256::hex_digest(&raw));
+    let running = std::env::current_exe().and_then(|own| own.canonicalize());
+    match (path.canonicalize(), running) {
+        (Ok(found), Ok(own)) if found == own => RUNNING.get_or_init(|| hashed(&own)).clone(),
+        _ => hashed(path),
+    }
 }
 
 const RECEIPT: &str = "rust-runtime-receipt/1";

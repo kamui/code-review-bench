@@ -1338,6 +1338,16 @@ pub fn map_verdicts(runner: &Runner, options: &Mapping) -> R<Vec<u8>> {
         false,
         &runner.executable,
     )?);
+    let empty = Value::Object(Object::default());
+    let preparer = pyvalue::get(
+        pyvalue::get_or(&key, "runner_deviation", &empty)?,
+        "bench_tools",
+    )?;
+    if preparer.truthy()
+        && let Some(problem) = super::runtime::problem(preparer, &runner.executable, "")
+    {
+        problems.push(problem);
+    }
     if !problems.is_empty() {
         return inconsistent(problems.join("\n"));
     }
