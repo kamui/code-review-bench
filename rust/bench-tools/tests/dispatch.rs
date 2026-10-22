@@ -641,6 +641,10 @@ fn the_review_code_prompt_allows_forge_reads_only_under_the_open_network_policy(
             ],
             prepared,
         );
+        if code != 2 && stderr(&output).contains("required executable is missing") {
+            eprintln!("skipped {name}: {}", stderr(&output));
+            continue;
+        }
         assert_eq!(
             output.status.code(),
             Some(code),
