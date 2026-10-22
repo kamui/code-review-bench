@@ -148,6 +148,15 @@ describe('scorecard page on the fixture', () => {
     expect(tasks).toContain('href="/#scorecard"')
   })
 
+  test('notes the CE peer once in the method list and on each CE overview and table row, and never for a built-in', () => {
+    const scorecardPage = text(markup(fixture, 'scorecard'))
+    expect(scorecardPage).toContain('/ce-code-review')
+    const ce = fixture.configurations.filter(configuration => configuration.method === 'ce-code-review')
+    const overviewRows = ce.filter(configuration => !configuration.experimental).length
+    expect(scorecardPage.match(/Cross-model peer off \(single provider\)/g)?.length).toBe(1 + overviewRows + ce.length)
+    expect(scorecardPage).not.toContain('Cross-model peer none')
+  })
+
   test('derives the hero counts from the whole export, experiments included', () => {
     expect(rendered).toContain('PR tasks 6 provisional problems 10 review methods 2 models tested 4')
   })

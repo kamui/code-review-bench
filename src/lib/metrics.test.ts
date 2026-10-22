@@ -99,7 +99,8 @@ describe('scorecard display', () => {
 
   test('names the recorded conditions that differ between compared setups', () => {
     expect(conditionDifferences([configuration('steady'), configuration('selective')]).map(row => [row.name, row.values.map(item => item.value)])).toEqual([
-      ['Client', ['claude-code 2.1.284', 'codex-cli 0.159.0']], ['Network access', ['off', 'on']], ['Sandbox', ['n/a', 'workspace-write']]])
+      ['Client', ['claude-code 2.1.284', 'codex-cli 0.159.0']], ['Network access', ['off', 'on']], ['Sandbox', ['n/a', 'workspace-write']],
+      ['Cross-model peer', ['none', 'off (single provider)']]])
     expect(conditionDifferences([configuration('steady'), configuration('silent')])).toEqual([])
     expect(conditionDifferences([setup('a', false, { conditions: [{ name: 'Client', values: ['x'] }] }), setup('b')]).map(row => row.values.map(item => item.value)))
       .toEqual([['x', 'unrecorded']])

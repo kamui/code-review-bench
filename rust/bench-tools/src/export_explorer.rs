@@ -903,12 +903,14 @@ fn recorded(values: Vec<Value>) -> Result<Value> {
     }))
 }
 
-/// `conditions`: the recorded comparison conditions of a configuration.
+/// `conditions`: the recorded comparison conditions of a configuration. The cross-model peer row appears only
+/// when the registry entry records it.
 fn conditions(
     arms: &[Value],
     records: &[Value],
     effort: &Value,
     billing: &Dict<()>,
+    peer: Option<&Value>,
 ) -> Result<Value> {
     let mut isolation = Vec::new();
     for arm in arms {
@@ -942,7 +944,7 @@ fn conditions(
             Value::Null
         });
     }
-    let rows = vec![
+    let mut rows = vec![
         ("Client", recorded(clients)?),
         ("Reasoning effort", recorded(vec![effort.clone()])?),
         ("Network access", recorded(field("network")?)?),
@@ -953,6 +955,9 @@ fn conditions(
             recorded(billing.keys().cloned().collect())?,
         ),
     ];
+    if let Some(peer) = peer {
+        rows.push(("Cross-model peer", recorded(vec![peer.clone()])?));
+    }
     Ok(Value::Array(
         rows.into_iter()
             .map(|(name, values)| object(vec![("name", text(name)), ("values", values)]))
@@ -1360,7 +1365,13 @@ impl Exporter {
                     "unrecorded"
                 }),
             )?;
-            let row_conditions = conditions(&arms, &records, &effort, &billing)?;
+            let row_conditions = conditions(
+                &arms,
+                &records,
+                &effort,
+                &billing,
+                get(entry, "cross_model_peer")?,
+            )?;
             configurations.push(object(vec![
                 ("id", entry_id.clone()),
                 ("label", at(entry, "label")?.clone()),
@@ -2193,5 +2204,26 @@ mod tests {
             assert!(!base.join("public/evidence").exists());
             std::fs::remove_dir_all(&base).unwrap();
         }
+    }
+
+    #[test]
+    fn the_cross_model_peer_row_follows_the_registry_entry() {
+        let names = |peer: Option<&Value>| -> Vec<String> {
+            let rows = conditions(&[], &[], &text("high"), &Dict::new(), peer).unwrap();
+            rows.as_array()
+                .unwrap()
+                .iter()
+                .map(|row| at(row, "name").unwrap().py_str())
+                .collect()
+        };
+        assert!(!names(None).contains(&"Cross-model peer".to_string()));
+        let peer = text("off (single provider)");
+        let rows = conditions(&[], &[], &text("high"), &Dict::new(), Some(&peer)).unwrap();
+        let last = rows.as_array().unwrap().last().unwrap().clone();
+        assert!(last.py_eq(&object(vec![
+            ("name", text("Cross-model peer")),
+            ("values", Value::Array(vec![peer.clone()])),
+        ])));
+        assert_eq!(names(Some(&peer)).len(), names(None).len() + 1);
     }
 }
