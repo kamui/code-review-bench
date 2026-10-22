@@ -793,6 +793,8 @@ mod tests {
     #[test]
     fn exposure_follows_the_sandbox_lists() {
         let root = std::env::temp_dir().join(format!("review-isolation-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let root = resolve(&root);
         let clone = root.join("clone");
         std::fs::create_dir_all(&clone).unwrap();
         let outside = root.join("outside");
