@@ -122,8 +122,12 @@ impl Drop for Fixture {
 
 impl Fixture {
     fn new(label: &str) -> Self {
-        let base =
-            std::env::temp_dir().join(format!("bench-tools-retire-{}-{label}", std::process::id()));
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let serial = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let base = std::env::temp_dir().join(format!(
+            "bench-tools-retire-{label}-{}-{serial}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let base = std::fs::canonicalize(&base).unwrap();
