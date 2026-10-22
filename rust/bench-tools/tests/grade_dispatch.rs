@@ -61,7 +61,6 @@ json.dump({"assessor": "fixture assessor", "method": "Hand-written synthetic ver
 /// Logs every start, so a refusal can show the client never ran. The probe sends what the local probe API
 /// expects; the session calls the grading server's validate tool once, as a grader would.
 const CLAUDE_STUB: &str = r#"import json, os, pathlib, subprocess, sys
-INTERRUPT_AFTER = "import os, signal, sys, time\nclient, dispatch = map(int, sys.argv[1:])\nwhile True:\n    try:\n        os.kill(client, 0)\n    except ProcessLookupError:\n        break\n    time.sleep(0.001)\nos.kill(dispatch, signal.SIGINT)\n"
 argv = sys.argv[1:]
 with open(pathlib.Path(__file__).with_name("claude.log"), "a") as log:
     log.write(json.dumps(argv) + "\n")
@@ -102,8 +101,6 @@ if os.environ.get("STUB_PAUSE"):
     pids.with_suffix(".tmp").rename(pids)
     while not pids.with_name("resume").exists():
         time.sleep(0.05)
-if os.environ.get("STUB_INTERRUPT_AFTER"):
-    subprocess.Popen([sys.executable, "-c", INTERRUPT_AFTER, str(os.getpid()), str(os.getppid())])
 session, model = argv[argv.index("--session-id") + 1], os.environ.get("STUB_MODEL", argv[argv.index("--model") + 1])
 (work / "verdicts.json").write_text(os.environ.get("STUB_VERDICTS", "{}"))
 requests = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}},
@@ -131,7 +128,6 @@ project.mkdir(parents=True)
 /// Hands `--version` and the local probe to the real Codex client, and fakes the session. The client runs in a
 /// cleared environment, so the real client's path, the log and the session's behavior are written into the script.
 const CODEX_STUB: &str = r#"import json, os, pathlib, subprocess, sys, time
-INTERRUPT_AFTER = "import os, signal, sys, time\nclient, dispatch = map(int, sys.argv[1:])\nwhile True:\n    try:\n        os.kill(client, 0)\n    except ProcessLookupError:\n        break\n    time.sleep(0.001)\nos.kill(dispatch, signal.SIGINT)\n"
 argv = sys.argv[1:]
 with open(LOG, "a") as log:
     log.write(json.dumps(argv) + "\n")
@@ -155,8 +151,6 @@ if MODE == "fail":
     sys.exit(3)
 if MODE == "hang":
     time.sleep(60)
-if MODE == "interrupt-after":
-    subprocess.Popen([sys.executable, "-c", INTERRUPT_AFTER, str(os.getpid()), str(os.getppid())])
 pathlib.Path("verdicts.json").write_text("{}")
 model = argv[argv.index("--model") + 1]
 rows = [{"type": "session_meta", "payload": {"id": "fresh-session"}},
@@ -487,6 +481,22 @@ impl Bench {
         let id = Pid::from_raw(i32::try_from(dispatch.id()).unwrap());
         kill(id, Signal::SIGINT).unwrap();
         (dispatch.wait_with_output().unwrap(), read_json(pids))
+    }
+
+    /// Run `argv` until dispatch pauses after its session, send SIGINT to it, then let it finish. The client has
+    /// exited and dispatch has written no record when the signal arrives.
+    fn interrupt_after_session(&self, argv: &[&str], extra: &[(&str, &str)]) -> Output {
+        let paused = self.root.join("paused");
+        let pause = [("BENCH_PAUSE_AFTER_SESSION", paused.to_str().unwrap())];
+        let dispatch = in_session(self.prepared(argv, &[extra, &pause].concat()), &paused);
+        assert!(!self.work.join("dispatch.json").exists());
+        kill(
+            Pid::from_raw(i32::try_from(dispatch.id()).unwrap()),
+            Signal::SIGINT,
+        )
+        .unwrap();
+        fs::remove_file(&paused).unwrap();
+        dispatch.wait_with_output().unwrap()
     }
 
     /// The interrupted dispatch died by SIGINT, stopped its client's process group, removed the copied
@@ -1158,10 +1168,9 @@ fn an_interrupt_ignored_by_a_background_job_leaves_the_session_to_finish() {
 fn an_interrupt_just_after_a_claude_session_waits_for_its_record_and_charge() {
     let bench = bench("claude-after");
     let temporary = Outside::new("claude-after");
-    let done = bench.dispatch(&[
-        ("TMPDIR", temporary.0.to_str().unwrap()),
-        ("STUB_INTERRUPT_AFTER", "1"),
-    ]);
+    let tmpdir = temporary.0.to_str().unwrap();
+    let argv = bench.dispatch_argv(MODEL, Some("5"));
+    let done = bench.interrupt_after_session(&argv, &[("TMPDIR", tmpdir)]);
     assert_eq!(done.status.signal(), Some(2), "{}", output_text(&done));
     assert!(bench.work.join("dispatch.json").is_file());
     assert_eq!(bench.charges().len(), 2);
@@ -1172,8 +1181,9 @@ fn an_interrupt_just_after_a_claude_session_waits_for_its_record_and_charge() {
 #[test]
 #[ignore = "needs bubblewrap, git, ripgrep and the Codex client"]
 fn an_interrupt_just_after_a_codex_session_waits_for_its_record_and_charge() {
-    let (bench, version) = codex_bench("codex-after", "interrupt-after");
-    let done = bench.codex(&["--allow-unbounded-codex"], &version);
+    let (bench, version) = codex_bench("codex-after", "clean");
+    let argv = bench.codex_argv(&["--allow-unbounded-codex"], &version);
+    let done = bench.interrupt_after_session(&argv, &[]);
     assert_eq!(done.status.signal(), Some(2), "{}", output_text(&done));
     assert!(bench.work.join("dispatch.json").is_file());
     assert_eq!(bench.charges().len(), 2);
