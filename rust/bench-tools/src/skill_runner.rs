@@ -1596,7 +1596,10 @@ mod codex {
         }
         let (executable, executable_hash) = pinned_client(&prepared.runner, "codex", "Codex")?;
         let path = |path: &Path| path.to_string_lossy().into_owned();
-        let (cache, work) = (path(&prepared.cache), path(&prepared.work));
+        let mut writable = vec![path(&prepared.cache), path(&prepared.work)];
+        if attempt.join("forge").is_dir() {
+            writable.push(path(&attempt.join("forge-log")));
+        }
         let mut command: Vec<String> = vec![
             path(&executable),
             "exec".into(),
@@ -1607,14 +1610,11 @@ mod codex {
             model.into(),
             "--sandbox".into(),
             "workspace-write".into(),
-            "--add-dir".into(),
-            cache.clone(),
-            "--add-dir".into(),
-            work.clone(),
-            "--strict-config".into(),
-            "--cd".into(),
-            path(clone),
         ];
+        for root in &writable {
+            command.extend(["--add-dir".to_string(), root.clone()]);
+        }
+        command.extend(["--strict-config".into(), "--cd".into(), path(clone)]);
         for setting in [
             format!("model_reasoning_effort=\"{effort}\""),
             format!("review_model=\"{model}\""),
@@ -1627,7 +1627,7 @@ mod codex {
             "apps._default.enabled=false".into(),
             format!(
                 "sandbox_workspace_write.writable_roots={}",
-                compact(&texts(&[cache, work]))
+                compact(&texts(&writable))
             ),
         ] {
             command.extend(["-c".to_string(), setting]);

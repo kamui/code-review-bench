@@ -621,6 +621,7 @@ pub fn probe(options: &Probe) -> R<(Value, bool)> {
         .map_err(|error| error.to_string())?;
     for scratch in [
         out.join("clone"),
+        out.join("clone-work"),
         out.join("forge"),
         out.join("tmp"),
         out.join("home"),
