@@ -1045,7 +1045,7 @@ pub fn sandbox_command(
     if let Some(gate) = gate {
         let covered: Vec<String> = hidden.iter().cloned().chain(["/tmp".to_string()]).collect();
         let reshown: Vec<String> = shown.iter().chain(&readwrite).cloned().collect();
-        prefix.extend(gate.namespace_arguments(&readwrite, &covered, &reshown));
+        prefix.extend(gate.namespace_arguments(&readwrite, &covered, &reshown)?);
     }
     prefix.extend([
         "--chdir".to_string(),

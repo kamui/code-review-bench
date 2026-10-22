@@ -561,6 +561,8 @@ struct Shared {
     resolve: Resolve,
     private: bool,
     log: Mutex<fs::File>,
+    /// The first failed log write, which makes `Gate::stop` refuse the attempt.
+    log_error: Mutex<Option<io::Error>>,
     stop: AtomicBool,
     active: AtomicUsize,
     tunnels: AtomicU64,
@@ -608,6 +610,7 @@ impl Shared {
             resolve: upstream.resolve,
             private: upstream.private,
             log: Mutex::new(log),
+            log_error: Mutex::new(None),
             stop: AtomicBool::new(false),
             active: AtomicUsize::new(0),
             tunnels: AtomicU64::new(0),
@@ -653,7 +656,9 @@ impl Shared {
             .collect();
         let mut out = pyjson::dumps(&Value::Object(line), &Dumps::default());
         out.push('\n');
-        let _ = lock(&self.log).write_all(out.as_bytes());
+        if let Err(error) = lock(&self.log).write_all(out.as_bytes()) {
+            lock(&self.log_error).get_or_insert(error);
+        }
     }
 
     fn decision(&self, tunnel: u64, event: &str, host: &str, port: u16, extra: Vec<(&str, Value)>) {
@@ -1309,21 +1314,37 @@ fn socket_paths(table: &str) -> Vec<PathBuf> {
         .collect()
 }
 
-/// The host's Unix sockets that still exist, each under its parent's real path, so a socket named through a
-/// symlink such as `/var/run` is matched against the directory it is in.
-fn host_sockets() -> Vec<PathBuf> {
-    let table = fs::read_to_string("/proc/net/unix").unwrap_or_default();
-    let mut sockets: Vec<PathBuf> = socket_paths(&table)
-        .into_iter()
-        .filter_map(|path| {
-            let parent = fs::canonicalize(path.parent()?).ok()?;
-            Some(parent.join(path.file_name()?))
-        })
-        .filter(|path| fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_socket()))
-        .collect();
+/// The host's Unix sockets in a `/proc/net/unix` table that still exist, each under its parent's real path, so a
+/// socket named through a symlink such as `/var/run` is matched against the directory it is in. Refuses a socket
+/// with a second hard link: the table lists only the bound name, and the other can be anywhere on its filesystem.
+fn host_sockets(table: &str) -> R<Vec<PathBuf>> {
+    let mut sockets = Vec::new();
+    for path in socket_paths(table) {
+        let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+            continue;
+        };
+        let Ok(parent) = fs::canonicalize(parent) else {
+            continue;
+        };
+        let path = parent.join(name);
+        let Ok(meta) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !meta.file_type().is_socket() {
+            continue;
+        }
+        if meta.nlink() > 1 {
+            return Err(format!(
+                "host socket {} has {} hard links, and the gate cannot find the others to cover them",
+                path.display(),
+                meta.nlink()
+            ));
+        }
+        sockets.push(path);
+    }
     sockets.sort();
     sockets.dedup();
-    sockets
+    Ok(sockets)
 }
 
 fn identity(path: &Path) -> Option<(u64, u64)> {
@@ -1459,18 +1480,19 @@ impl Gate {
     /// bwrap arguments that cut the network and show the gate, after the arguments that lay out the filesystem.
     /// `writable` lists where the sandbox shows the attempt read-write, so the log is shown read-only there too.
     /// Every host Unix socket the layout leaves visible, outside `hidden` or inside `shown`, is covered with an
-    /// empty file. A socket made after the gate starts stays reachable.
+    /// empty file. A socket made after the gate starts, or moved from the name it was bound to, stays reachable.
     pub fn namespace_arguments(
         &self,
         writable: &[String],
         hidden: &[String],
         shown: &[String],
-    ) -> Vec<String> {
+    ) -> R<Vec<String>> {
         let mut arguments: Vec<String> =
             vec!["--seccomp".to_string(), self.filter.as_raw_fd().to_string()];
         let within =
             |socket: &Path, dirs: &[String]| dirs.iter().any(|dir| socket.starts_with(dir));
-        for socket in host_sockets() {
+        let table = fs::read_to_string("/proc/net/unix").unwrap_or_default();
+        for socket in host_sockets(&table)? {
             if (!within(&socket, hidden) || within(&socket, shown))
                 && !socket.starts_with(&self.dir)
             {
@@ -1503,7 +1525,7 @@ impl Gate {
         for (name, value) in Self::environment() {
             arguments.extend(["--setenv".to_string(), name, value]);
         }
-        arguments
+        Ok(arguments)
     }
 
     /// The bridge that runs the reviewer's command inside the namespace; the command follows it.
@@ -1561,13 +1583,19 @@ impl Gate {
     }
 
     /// Stop serving, write `<attempt>/network/gate.json` and remove the host directory. Refuses when the network
-    /// directory or log at the attempt's path is no longer the one the gate wrote.
+    /// directory or log at the attempt's path is no longer the one the gate wrote, or when a log write failed.
     pub fn stop(mut self) -> R<()> {
         self.halt();
         let log = self.network.join("requests.jsonl");
         if [identity(&self.network), identity(&log)] != self.written {
             return Err(format!(
                 "{} is no longer the gate's log: the attempt was renamed or replaced while the reviewer ran",
+                log.display()
+            ));
+        }
+        if let Some(error) = lock(&self.shared.log_error).as_ref() {
+            return Err(format!(
+                "{}: {error}; the request log is incomplete",
                 log.display()
             ));
         }
@@ -1682,8 +1710,9 @@ fn splice(tcp: TcpStream, socket: &Path) {
     let _ = outbound.join();
 }
 
-/// Run `command` in a new network namespace whose only exit is a gate for `attempt`, with the rest of the
-/// filesystem as it is; the built-in arms in `bench/tools/dispatch.sh` use this. Returns the command's exit code.
+/// Run `command` in a new network namespace whose only exit is a gate for `attempt`, and a new PID namespace so it
+/// cannot read host command lines, with the rest of the filesystem as it is; the built-in arms in
+/// `bench/tools/dispatch.sh` use this. Returns the command's exit code.
 pub fn run(attempt: &Path, command: &[OsString]) -> R<i32> {
     if command.is_empty() {
         return Err("run needs a command".into());
@@ -1699,9 +1728,18 @@ pub fn run(attempt: &Path, command: &[OsString]) -> R<i32> {
         .filter(|dir| Path::new(dir).is_dir())
         .map(ToString::to_string)
         .collect();
-    let mut arguments: Vec<String> = ["--dev-bind", "/", "/", "--unshare-net", "--die-with-parent"]
-        .map(String::from)
-        .to_vec();
+    let mut arguments: Vec<String> = [
+        "--dev-bind",
+        "/",
+        "/",
+        "--proc",
+        "/proc",
+        "--unshare-net",
+        "--unshare-pid",
+        "--die-with-parent",
+    ]
+    .map(String::from)
+    .to_vec();
     for dir in &hidden {
         arguments.extend(["--tmpfs".to_string(), dir.clone()]);
     }
@@ -1718,7 +1756,7 @@ pub fn run(attempt: &Path, command: &[OsString]) -> R<i32> {
             shown.push(text);
         }
     }
-    arguments.extend(gate.namespace_arguments(&[attempt_text], &hidden, &shown));
+    arguments.extend(gate.namespace_arguments(&[attempt_text], &hidden, &shown)?);
     let mut arguments: Vec<OsString> = arguments.into_iter().map(OsString::from).collect();
     arguments.extend([
         OsString::from("--chdir"),
@@ -2071,6 +2109,24 @@ mod tests {
     }
 
     #[test]
+    fn a_host_socket_with_a_second_hard_link_is_refused() {
+        let attempt = fs::canonicalize(attempt_dir()).unwrap();
+        let bound = attempt.join("host.sock");
+        // Closed, so a test reading the live /proc/net/unix at the same time never sees the second link.
+        drop(UnixListener::bind(&bound).unwrap());
+        let table = format!(
+            "Num       RefCount Protocol Flags    Type St Inode Path\n\
+             0000000000000000: 00000002 00000000 00010000 0001 01 20021 {}\n",
+            bound.display()
+        );
+        assert_eq!(host_sockets(&table).unwrap(), std::slice::from_ref(&bound));
+        fs::hard_link(&bound, attempt.join("alias.sock")).unwrap();
+        let error = host_sockets(&table).unwrap_err();
+        assert!(error.contains("host.sock has 2 hard links"), "{error}");
+        fs::remove_dir_all(&attempt).unwrap();
+    }
+
+    #[test]
     fn the_namespace_masks_host_sockets_and_refuses_vsock() {
         let usable = crate::review_isolation::which("bwrap").is_some()
             && crate::review_isolation::which("python3").is_some()
@@ -2089,7 +2145,10 @@ mod tests {
         let attempt_text = attempt.to_string_lossy().into_owned();
         let output = Command::new("bwrap")
             .args(["--dev-bind", "/", "/", "--unshare-net", "--tmpfs", "/run"])
-            .args(gate.namespace_arguments(&[attempt_text], &["/run".to_string()], &[]))
+            .args(
+                gate.namespace_arguments(&[attempt_text], &["/run".to_string()], &[])
+                    .unwrap(),
+            )
             .args(["--", "python3", "-I", "-c"])
             .arg(
                 "import socket, sys\n\
@@ -2131,5 +2190,20 @@ mod tests {
         assert!(!moved.join("network/gate.json").exists());
         fs::remove_dir_all(&attempt).unwrap();
         fs::remove_dir_all(&moved).unwrap();
+    }
+
+    #[test]
+    fn stop_refuses_a_log_that_failed_a_write() {
+        let attempt = attempt_dir();
+        fs::create_dir_all(attempt.join("network")).unwrap();
+        std::os::unix::fs::symlink("/dev/full", attempt.join("network/requests.jsonl")).unwrap();
+        let gate =
+            Gate::start_with(&attempt, Path::new("/bench-tools"), Upstream::public()).unwrap();
+        let (_, reply) = connect_through(&gate, "github.com:443");
+        assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
+        let error = gate.stop().unwrap_err();
+        assert!(error.contains("the request log is incomplete"), "{error}");
+        assert!(!attempt.join("network/gate.json").exists());
+        fs::remove_dir_all(&attempt).unwrap();
     }
 }
