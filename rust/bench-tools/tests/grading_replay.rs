@@ -702,6 +702,7 @@ impl Worktree {
             ],
         );
         assert!(added.is_some(), "cannot add a worktree of {commit}");
+        assert!(tree.written().is_empty(), "the worktree is not clean");
         tree
     }
 
@@ -769,7 +770,6 @@ fn map_once(
     scratch: &Path,
     restored: &BTreeMap<String, Vec<u8>>,
 ) -> Mapped {
-    assert!(tree.written().is_empty(), "the worktree is not clean");
     let work = scratch.join("work");
     let _ = std::fs::remove_dir_all(&work);
     for (name, bytes) in restored {
@@ -796,7 +796,10 @@ fn map_once(
         .output()
         .unwrap();
     let written = tree.written();
-    tree.reset();
+    if !written.is_empty() {
+        tree.reset();
+        assert!(tree.written().is_empty(), "the worktree is not clean");
+    }
     Mapped {
         status: output.status.code(),
         stdout: output.stdout,
