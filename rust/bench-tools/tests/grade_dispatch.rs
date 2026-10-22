@@ -67,6 +67,9 @@ with open(pathlib.Path(__file__).with_name("claude.log"), "a") as log:
 if argv == ["--version"]:
     print("9.9.9 (Claude Code)")
     sys.exit(0)
+if argv == ["--help"]:
+    print("  --effort <level>    Effort level for the current session\n                      (low, medium, high, xhigh, max)")
+    sys.exit(0)
 server = json.loads(pathlib.Path(argv[argv.index("--mcp-config") + 1]).read_text())["mcpServers"]["grading"]
 work = pathlib.Path(server["args"][server["args"].index("--work") + 1])
 if os.environ.get("ANTHROPIC_API_KEY") == "local-probe-only":
@@ -123,6 +126,17 @@ lines = [{"type": "user", "cwd": str(cwd), "message": {"role": "user", "content"
 project = home / ".claude" / "projects" / "-work"
 project.mkdir(parents=True)
 (project / (session + ".jsonl")).write_text("".join(json.dumps(line) + "\n" for line in lines))
+"#;
+
+/// Answers `--version` alone, as the pinned version, and logs every start.
+const CODEX_VERSION_STUB: &str = r#"import json, pathlib, sys
+argv = sys.argv[1:]
+with open(pathlib.Path(__file__).with_name("codex.log"), "a") as log:
+    log.write(json.dumps(argv) + "\n")
+if argv == ["--version"]:
+    print("codex-cli 0.160.0")
+    sys.exit(0)
+sys.exit(1)
 "#;
 
 /// Hands `--version` and the local probe to the real Codex client, and fakes the session. The client runs in a
@@ -577,10 +591,16 @@ impl Bench {
     }
 
     fn assert_refused_before_the_client(&self, done: &Output, message: &str) {
+        self.assert_refused_after(done, message, &[]);
+    }
+
+    /// Refused once the client answered only `checks`: no probe, session, fresh home, record or charge.
+    fn assert_refused_after(&self, done: &Output, message: &str, checks: &[&str]) {
         assert_eq!(done.status.code(), Some(1), "{}", output_text(done));
         let stdout = String::from_utf8_lossy(&done.stdout);
         assert!(stdout.contains(message), "{message:?} not in {stdout}");
-        assert!(self.client_starts().is_empty(), "a client started");
+        let starts: Vec<String> = self.client_starts().iter().map(dumps).collect();
+        assert_eq!(starts, checks, "the client ran more than its checks");
         assert!(!self.work.join("home").exists() && !self.work.join("dispatch.json").exists());
         assert_eq!(self.charges().len(), 1);
     }
@@ -801,6 +821,49 @@ fn codex_refuses_models_without_a_pinned_tool_profile() {
         &[],
     );
     bench.assert_refused_before_the_client(&done, "no pinned grading tool profile");
+}
+
+/// `argv` with its `--effort` value replaced by `effort`.
+fn with_effort<'a>(mut argv: Vec<&'a str>, effort: &'a str) -> Vec<&'a str> {
+    let at = argv.iter().position(|arg| *arg == "--effort").unwrap() + 1;
+    argv[at] = effort;
+    argv
+}
+
+#[test]
+fn an_effort_the_claude_client_does_not_offer_is_refused_before_the_session() {
+    let bench = bench("claude-effort");
+    let done = bench.command(
+        &with_effort(bench.dispatch_argv(MODEL, Some("5")), "ultra"),
+        &[],
+    );
+    bench.assert_refused_after(
+        &done,
+        &format!(
+            "effort 'ultra' is not supported for {MODEL}; supported: low, medium, high, xhigh, max; \
+             dispatch refused before payment"
+        ),
+        &[r#"["--version"]"#, r#"["--help"]"#],
+    );
+}
+
+#[test]
+fn an_effort_the_codex_catalog_does_not_offer_the_model_is_refused_before_the_session() {
+    let bench = bench("codex-effort");
+    executable(&bench.bin.join("codex"), CODEX_VERSION_STUB);
+    let mut argv = with_effort(
+        bench.codex_argv(&["--allow-unbounded-codex"], "0.160.0"),
+        "ultra",
+    );
+    let at = argv.iter().position(|arg| *arg == CODEX_MODEL).unwrap();
+    argv[at] = "gpt-6-luna";
+    let done = bench.command(&argv, &[]);
+    bench.assert_refused_after(
+        &done,
+        "effort 'ultra' is not supported for gpt-6-luna; supported: low, medium, high, xhigh, max; \
+         dispatch refused before payment",
+        &[r#"["--version"]"#],
+    );
 }
 
 #[test]

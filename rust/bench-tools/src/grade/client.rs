@@ -1232,6 +1232,40 @@ fn pinned_version(client: &str, label: &str, expected: &str) -> S<String> {
     }
 }
 
+/// The efforts the installed Claude client lists for its `--effort` option in `claude --help`.
+pub fn claude_efforts() -> S<Vec<String>> {
+    let mut command = Command::new("claude");
+    command.arg("--help");
+    match crate::child::run(&mut command, Duration::from_secs(15)) {
+        Ok(ran) if ran.code == Some(0) => efforts_in_help(&String::from_utf8_lossy(&ran.stdout))
+            .ok_or_else(|| "the Claude client's help lists no --effort levels".to_string()),
+        _ => Err("cannot read the Claude client's help".to_string()),
+    }
+}
+
+/// The parenthesized list of the help's `--effort` entry, which runs from its line up to the next option.
+fn efforts_in_help(help: &str) -> Option<Vec<String>> {
+    let mut lines = help
+        .lines()
+        .map(str::trim)
+        .skip_while(|line| !line.starts_with("--effort "));
+    let first = lines.next()?;
+    let entry = std::iter::once(first)
+        .chain(lines.take_while(|line| !line.starts_with('-')))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let (_, listed) = entry.split_once('(')?;
+    let (listed, _) = listed.split_once(')')?;
+    let efforts: Vec<String> = listed
+        .split(',')
+        .map(|effort| effort.trim().to_string())
+        .collect();
+    efforts
+        .iter()
+        .all(|effort| !effort.is_empty() && effort.chars().all(|c| c.is_ascii_alphanumeric()))
+        .then_some(efforts)
+}
+
 fn read_json(path: &Path) -> Option<Value> {
     std::fs::read(path).ok().and_then(|raw| parse(&raw).ok())
 }
