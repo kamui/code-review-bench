@@ -52,15 +52,31 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # One runner per entry of rust_runtime.SUPPORTED_TARGETS.
+        # A runner for every entry of rust_runtime.SUPPORTED_TARGETS. Each Linux target splits into
+        # parallel parts to shorten the slowest job; macOS keeps one job.
         include:
           - runner: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            part: contracts
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            part: tests
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            part: runtime
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+            part: contracts
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            part: tests
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            part: runtime
           - runner: macos-latest
             target: aarch64-apple-darwin
-    name: rust-runtime (${{ matrix.target }})
+            part: all
+    name: rust-runtime (${{ matrix.target }}, ${{ matrix.part }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     steps:
@@ -84,18 +100,39 @@ jobs:
           test "$(rustc -vV | sed -n 's/^host: //p')" = "${{ matrix.target }}"
           cargo fetch --locked
       - name: Check bench-tools formatting, lints and tests
-        if: github.event_name != 'pull_request' || runner.os == 'Linux'
+        if: matrix.part == 'all' && github.event_name != 'pull_request'
         working-directory: rust/bench-tools
         run: |
           cargo fmt --check
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked
+      - name: Check bench-tools formatting, lints and tests other than the behavior contracts
+        if: matrix.part == 'tests'
+        working-directory: rust/bench-tools
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
+          # cargo cannot exclude one test target, so name every other target `cargo test` runs.
+          selection=$(cargo metadata --locked --no-deps --format-version 1 | jq -r '
+            .packages[] | select(.name == "bench-tools") | .targets[]
+            | select(.test and .name != "behavior_contracts")
+            | if .kind[0] == "lib" then "--lib" else "--\(.kind[0])=\(.name)" end')
+          mapfile -t targets <<< "$selection"
+          cargo test --locked "${targets[@]}"
+          # --doc cannot be combined with other target selections.
+          cargo test --locked --doc
+      - name: Run the behavior contracts
+        if: matrix.part == 'contracts'
+        working-directory: rust/bench-tools
+        run: cargo test --locked --test behavior_contracts
       - name: Check pinning, retention and rollback
+        if: matrix.part == 'runtime' || matrix.part == 'all'
         working-directory: bench/tools
         env:
           RUST_RUNTIME_REQUIRE_CARGO: '1'
         run: python3 -m unittest test_rust_runtime -v
       - name: Install bench-tools and check the retained executable
+        if: matrix.part == 'runtime' || matrix.part == 'all'
         env:
           BENCH_RUNTIME_STORE: ${{ runner.temp }}/rust-runtime-store
         run: |
@@ -104,11 +141,11 @@ jobs:
           python3 bench/tools/rust_runtime.py exec bench-tools -- roster > "$RUNNER_TEMP/roster.tsv"
           test -s "$RUNNER_TEMP/roster.tsv"
       - name: Smoke test the behavior contracts on macOS pull requests
-        if: github.event_name == 'pull_request' && runner.os == 'macOS'
+        if: matrix.part == 'all' && github.event_name == 'pull_request'
         working-directory: rust/bench-tools
         run: 'cargo test --locked --test behavior_contracts -- diff-identity::'
       - name: Install a second version and roll back
-        if: github.event_name != 'pull_request' || runner.os == 'Linux'
+        if: matrix.part == 'runtime' || (matrix.part == 'all' && github.event_name != 'pull_request')
         run: docs/python-migration/runtime-evidence/rollback.sh "$RUNNER_TEMP/rollback" "$(git rev-parse HEAD)"
 
   required:

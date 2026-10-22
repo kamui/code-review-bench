@@ -199,7 +199,9 @@ matching GitHub runner for each: the runtime tests with real cargo builds and
 Python libraries, and runs `roster` on the repository. The `CI and GitHub Pages` workflow installs `bench-tools` the
 same way for the explorer export.
 
-Pull requests run the full suite on Linux targets. On macOS targets they run the
+Pull requests run the full suite on Linux targets, where each target splits it into three parallel
+jobs: the behavior contracts; formatting, Clippy and every other test; and the runtime tests, install and
+rollback. On macOS targets they run the
 runtime pinning, retention and rollback tests with real cargo builds, install `bench-tools`,
 run `roster`, and run the `diff-identity` corpus. The full
 macOS lint, test, differential and second-version rollback suites run on pushes to `main`.
