@@ -550,20 +550,22 @@ fn stopped(signal: Signal) -> Failure {
     input(format!("stopped by {signal}"))
 }
 
-fn hold() -> R<interrupt::Held> {
-    interrupt::hold().map_err(|error| input(format!("cannot hold the stop signals: {error}")))
+fn hold(runner: &Runner) -> R<interrupt::Held> {
+    interrupt::hold(&runner.executable)
+        .map_err(|error| input(format!("cannot hold the stop signals: {error}")))
 }
 
 /// `client` from `PATH`, started so that it begins with no stop signals held.
-fn released(runner: &Runner, client: &str) -> R<Command> {
+fn released(held: &interrupt::Held, client: &str) -> R<Command> {
     let program = review_isolation::which(client)
         .ok_or_else(|| input(format!("cannot run {client}: not found on PATH")))?;
-    Ok(interrupt::released(&runner.executable, &program, client))
+    Ok(held.released(&program, client))
 }
 
 /// Run the `client` session with stdin from `stdin` and its output into new files, killing its process group
 /// once `timeout` passes or a held signal arrives.
 fn session(
+    held: &interrupt::Held,
     client: &str,
     command: &mut Command,
     stdin: &Path,
@@ -572,7 +574,7 @@ fn session(
     timeout: u64,
 ) -> R<Option<i32>> {
     let failed = |error: std::io::Error| input(format!("cannot run {client}: {error}"));
-    if let Some(signal) = interrupt::received() {
+    if let Some(signal) = held.received() {
         return Err(stopped(signal));
     }
     let child = command
@@ -592,7 +594,7 @@ fn session(
             group.exited = true;
             return Ok(Some(crate::child::exit_code(status)));
         }
-        if let Some(signal) = interrupt::received() {
+        if let Some(signal) = held.received() {
             return Err(stopped(signal));
         }
         if Instant::now() >= deadline {
@@ -619,7 +621,7 @@ fn dispatch_claude(runner: &Runner, options: &Dispatch) -> R<Outcome> {
     let home = work.join("home");
     let credentials = home.join(".claude/.credentials.json");
     let session_id = clean_context::uuid4().map_err(input)?;
-    let held = hold()?;
+    let held = hold(runner)?;
     let start = start_directory(&key)?;
     let sign_in = SignIn {
         credentials: credentials.clone(),
@@ -693,7 +695,7 @@ fn dispatch_claude(runner: &Runner, options: &Dispatch) -> R<Outcome> {
             ("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS", "0".into()),
             ("ENABLE_TOOL_SEARCH", "false".into()),
         ];
-        let mut version = released(runner, "claude")?;
+        let mut version = released(&held, "claude")?;
         version
             .arg("--version")
             .current_dir(&work)
@@ -715,7 +717,7 @@ fn dispatch_claude(runner: &Runner, options: &Dispatch) -> R<Outcome> {
             File::create(work.join(name)).map_err(|error| input(shown(&error, &work.join(name))))
         };
         let (stdout, stderr) = (output("stdout.txt")?, output("stderr.txt")?);
-        let mut command = released(runner, "claude")?;
+        let mut command = released(&held, "claude")?;
         command
             .args([
                 "-p",
@@ -736,6 +738,7 @@ fn dispatch_claude(runner: &Runner, options: &Dispatch) -> R<Outcome> {
             .current_dir(&start)
             .envs(environment);
         let exit = session(
+            &held,
             "claude",
             &mut command,
             &work.join("prompt.md"),
@@ -746,7 +749,6 @@ fn dispatch_claude(runner: &Runner, options: &Dispatch) -> R<Outcome> {
         Ok((dispatched_at, exit))
     })();
     drop(sign_in);
-    drop(held);
     let (dispatched_at, exit_code) = ran?;
     let completed_at = now();
 
@@ -837,6 +839,7 @@ fn dispatch_claude(runner: &Runner, options: &Dispatch) -> R<Outcome> {
             ]),
         )?;
     }
+    drop(held);
 
     let mut reasons = Vec::new();
     match exit_code {
@@ -931,7 +934,12 @@ fn codex_result(work: &Path, rate: &Value, exit_code: Option<i32>) -> Value {
 }
 
 /// Run the Codex session with a copied sign-in that is removed however the session ends.
-fn run_codex(runner: &Runner, work: &Path, options: &Dispatch) -> R<Option<i32>> {
+fn run_codex(
+    runner: &Runner,
+    held: &interrupt::Held,
+    work: &Path,
+    options: &Dispatch,
+) -> R<Option<i32>> {
     let home = work.join("home");
     let credentials = home.join(".codex/auth.json");
     let user_home = client::user_home();
@@ -947,7 +955,6 @@ fn run_codex(runner: &Runner, work: &Path, options: &Dispatch) -> R<Option<i32>>
         Some(&work.join("execution-policy.md")),
     )
     .map_err(input)?;
-    let _held = hold()?;
     let _sign_in = SignIn {
         credentials: credentials.clone(),
         start: None,
@@ -968,7 +975,7 @@ fn run_codex(runner: &Runner, work: &Path, options: &Dispatch) -> R<Option<i32>>
                 .map_err(|error| input(shown(&error, &work.join(name))))
         };
         let (stdout, stderr) = (created("stdout.jsonl")?, created("stderr.txt")?);
-        let mut command = released(runner, "codex")?;
+        let mut command = released(held, "codex")?;
         command
             .args(["exec", "--skip-git-repo-check", "--ignore-rules", "--json"])
             .args(["--model", &options.client.model, "-c"])
@@ -988,6 +995,7 @@ fn run_codex(runner: &Runner, work: &Path, options: &Dispatch) -> R<Option<i32>>
             .env("CODEX_HOME", home.join(".codex"))
             .env("TMPDIR", &tmp);
         session(
+            held,
             "codex",
             &mut command,
             &work.join("prompt.md"),
@@ -1023,7 +1031,8 @@ fn dispatch_codex(runner: &Runner, options: &Dispatch) -> R<Outcome> {
         ),
     )?;
     let rate = rate_for(runner, &options.client.model)?.unwrap_or(Value::Null);
-    let exit_code = run_codex(runner, &work, options)?;
+    let held = hold(runner)?;
+    let exit_code = run_codex(runner, &held, &work, options)?;
     let mut result = codex_result(&work, &rate, exit_code);
     let problems = problems_after(runner, &work, &key);
     if let Value::Object(entries) = &mut result
@@ -1098,6 +1107,7 @@ fn dispatch_codex(runner: &Runner, options: &Dispatch) -> R<Outcome> {
             ]),
         )?;
     }
+    drop(held);
     if !reasons.is_empty() {
         return Ok(Err(reasons));
     }

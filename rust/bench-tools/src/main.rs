@@ -4623,6 +4623,12 @@ fn main() -> ExitCode {
     {
         return interrupt::exec_released(&arguments[2..]);
     }
+    if arguments
+        .get(1)
+        .is_some_and(|first| first == interrupt::PROBE)
+    {
+        return interrupt::exec_probe(&arguments[2..]);
+    }
     // clap reads `-hx` before a subcommand as `-h` and prints help; the top level has no Python
     // counterpart, so it keeps the former parser's refusal of an unknown command.
     if let Some(command) = arguments.get(1).map(|name| pytext::os_bytes(name))
