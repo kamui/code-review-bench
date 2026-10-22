@@ -65,6 +65,7 @@ pub fn checks() -> Vec<(&'static str, Check)> {
         ("structured-declarations", structured_declarations),
         ("hand-stated-outcomes", hand_stated_outcomes),
         ("fixture-git", fixture_git),
+        ("no-python", no_python),
         ("empty-selection", empty_selection),
     ]
 }
@@ -2565,6 +2566,91 @@ fn same(left: &[Observed], right: &[Observed]) -> bool {
                 && left.inconsistencies == right.inconsistencies
                 && expectation(left, &[]).py_eq(&expectation(right, &[]))
         })
+}
+
+const NO_PYTHON_STEP: &str = r#"command -v python3 > found
+python3 shell.py a b > ran
+python3 python.py 2> refused; echo $? >> refused
+python3 missing.py 2> missing; echo $? >> missing
+printf '{"a": [1, 2], "b": {"c": "x"}}' > in.json
+contract-json edit in.json --to out.json --newline set /b/d '"y"' insert /a/0 0 delete /a/2 text /b/c "$(printf '\303\251')"
+contract-json edit in.json delete /missing 2> /dev/null; echo $? > status
+contract-json text out.json /b/c > text
+"#;
+
+/// The loader refuses a shell step that names a Python interpreter, and every step finds the runner's `python3` and
+/// `contract-json` first on `PATH`: that `python3` runs only a shell script, and `contract-json` writes JSON as
+/// Python's `json.dumps(value, indent=2)` does.
+fn no_python(scratch: &Scratch) -> Result<(), Failure> {
+    let temp = Temp::new()?;
+    let command = obj(vec![
+        ("argv", Value::Array(Vec::new())),
+        ("stdin_b64", s("")),
+    ]);
+    let probe = |shell: &str, initial: Vec<Value>| {
+        obj(vec![
+            ("id", s("probe")),
+            ("program", s("writer")),
+            ("initial", Value::Array(initial)),
+            (
+                "steps",
+                Value::Array(vec![obj(vec![("shell", s(shell))]), command.clone()]),
+            ),
+            ("derivation", s("Synthetic local negative demonstration")),
+        ])
+    };
+    for (shell, named) in [
+        ("python3 -c 'print(1)'", true),
+        ("/usr/bin/python3.12 x.py", true),
+        ("x=$(env python x.py)", true),
+        ("rm -r python-restored python3-cache", false),
+    ] {
+        let path = save(&temp.0, &[probe(shell, Vec::new())], Vec::new())?;
+        if named {
+            refused(&path, &["must not run a Python interpreter"], shell)?;
+        } else {
+            corpus::load(&path).map_err(|error| format!("{shell}: {error}"))?;
+        }
+    }
+    let case = probe(
+        NO_PYTHON_STEP,
+        vec![
+            file(b"python.py", b"print(1)\n"),
+            file(b"shell.py", b"#!/bin/sh\necho ran \"$@\"\n"),
+        ],
+    );
+    let results = observe(&case, no_options(), scratch, &["noop"])?;
+    let [result] = results.as_slice() else {
+        return Err(Failure::Error(format!(
+            "{} results for one command",
+            results.len()
+        )));
+    };
+    let found = files(result);
+    let python3 = format!("{}\n", scratch.bin.join("python3").display());
+    for (path, wanted) in [
+        ("found", python3.as_str()),
+        ("ran", "ran a b\n"),
+        (
+            "refused",
+            "python3: behavior contracts run no Python: python.py\n127\n",
+        ),
+        ("missing", "python3: cannot open missing.py\n2\n"),
+        (
+            "out.json",
+            "{\n  \"a\": [\n    0,\n    1\n  ],\n  \"b\": {\n    \"c\": \"\\u00e9\",\n    \"d\": \"y\"\n  }\n}\n",
+        ),
+        ("status", "1\n"),
+        ("text", "\u{e9}\n"),
+    ] {
+        let data = named(&found, path)?;
+        ensure!(
+            data == wanted.as_bytes(),
+            "{path}: {:?}",
+            String::from_utf8_lossy(data)
+        );
+    }
+    Ok(())
 }
 
 fn fixture_git(scratch: &Scratch) -> Result<(), Failure> {
