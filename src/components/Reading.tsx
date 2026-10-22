@@ -1,10 +1,16 @@
 import { Table, Text, VisuallyHidden } from '@mantine/core'
-import { reasonCounts } from '../lib/metrics'
+import { peerLabel, reasonCounts } from '../lib/metrics'
+import type { Configuration } from '../lib/data'
 import type { Reading } from '../lib/metrics'
 
 export type Cell = string | Reading
 export type Note = ReturnType<typeof reasonCounts>[number]
 export type Column<Row> = { label: string; value: (row: Row) => Cell }
+
+export function PeerNote({ configurations, className }: { configurations: Configuration[]; className: string }) {
+  const label = peerLabel(configurations)
+  return label && <span className={className}>{label}</span>
+}
 
 export const notesFor = (cells: Cell[]): Note[] => reasonCounts(cells.map(cell => typeof cell === 'string' ? null : cell.reason ?? cell.annotation ?? null))
 
