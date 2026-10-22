@@ -24,6 +24,7 @@ pub mod grading_reports;
 pub mod grading_tools;
 pub mod grading_validation;
 pub mod import_benchmark;
+pub mod interrupt;
 pub mod methodology;
 pub mod native_artifacts;
 pub mod normalize_review;

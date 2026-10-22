@@ -8,11 +8,15 @@ mod runtime_store;
 
 use bench_tools::pyjson::{self, Duplicates, Object, Value};
 use bench_tools::sha256::hex_digest;
+use nix::sys::signal::{Signal, kill};
+use nix::unistd::Pid;
 use runtime_store::{built, receipt};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::time::{Duration, Instant};
 
 const RUN: &str = "runs/2026-01-01-grade-test";
 const TARGET: &str = "t-grade-1";
@@ -54,6 +58,14 @@ if os.environ.get("ANTHROPIC_API_KEY") == "local-probe-only":
     sys.exit(0)
 prompt = sys.stdin.read()
 home, cwd = pathlib.Path(os.environ["HOME"]), pathlib.Path.cwd()
+if os.environ.get("STUB_HANG"):
+    import signal, time
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    held = sorted(int(held) for held in signal.pthread_sigmask(signal.SIG_BLOCK, []))
+    pids = pathlib.Path(__file__).with_name("claude.pids")
+    pids.with_suffix(".tmp").write_text(json.dumps({"client": os.getpid(), "child": child.pid, "cwd": str(cwd), "held": held}))
+    pids.with_suffix(".tmp").rename(pids)
+    time.sleep(30)
 session, model = argv[argv.index("--session-id") + 1], os.environ.get("STUB_MODEL", argv[argv.index("--model") + 1])
 (work / "verdicts.json").write_text(os.environ.get("STUB_VERDICTS", "{}"))
 requests = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}},
@@ -92,6 +104,14 @@ auth = home / "auth.json"
 pathlib.Path(os.environ["TMPDIR"], "stub.json").write_text(json.dumps({
     "argv": argv, "prompt": prompt, "cwd": os.getcwd(), "environment": sorted(os.environ),
     "auth_mode": auth.stat().st_mode & 0o777, "auth": auth.read_text()}))
+if MODE == "interrupt":
+    import signal, subprocess
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    held = sorted(int(held) for held in signal.pthread_sigmask(signal.SIG_BLOCK, []))
+    pids = pathlib.Path(LOG).with_name("codex.pids")
+    pids.with_suffix(".tmp").write_text(json.dumps({"client": os.getpid(), "child": child.pid, "cwd": os.getcwd(), "held": held}))
+    pids.with_suffix(".tmp").rename(pids)
+    time.sleep(30)
 if MODE == "fail":
     sys.exit(3)
 if MODE == "hang":
@@ -247,21 +267,8 @@ fn bench(label: &str) -> Bench {
     fs::write(entry.join("receipt.json"), receipt(sha, size)).unwrap();
 
     let (work, key) = (root.join("work"), root.join("keys/key.json"));
-    let stub = root.join("provision_stub.py");
-    fs::write(&stub, PROVISION_STUB).unwrap();
-    let prepared = Command::new(&tools)
-        .args(["grade", "prepare", "--root"])
-        .arg(&root)
-        .args(["--run", RUN, "--target", TARGET, "--work"])
-        .arg(&work)
-        .arg("--key")
-        .arg(&key)
-        .arg("--provision")
-        .arg(&stub)
-        .current_dir(repository())
-        .output()
-        .unwrap();
-    assert!(prepared.status.success(), "{}", output_text(&prepared));
+    fs::write(root.join("provision_stub.py"), PROVISION_STUB).unwrap();
+    prepare(&tools, &root, &work, &key);
 
     let (bin, home) = (root.join("bin"), root.join("userhome"));
     fs::create_dir(&bin).unwrap();
@@ -301,6 +308,22 @@ fn bench(label: &str) -> Bench {
     }
 }
 
+fn prepare(tools: &Path, root: &Path, work: &Path, key: &Path) {
+    let prepared = Command::new(tools)
+        .args(["grade", "prepare", "--root"])
+        .arg(root)
+        .args(["--run", RUN, "--target", TARGET, "--work"])
+        .arg(work)
+        .arg("--key")
+        .arg(key)
+        .arg("--provision")
+        .arg(root.join("provision_stub.py"))
+        .current_dir(repository())
+        .output()
+        .unwrap();
+    assert!(prepared.status.success(), "{}", output_text(&prepared));
+}
+
 /// A directory outside every repository, for a client start directory: the client probe refuses one inside a
 /// repository, and this checkout's `target` is inside one.
 struct Outside(PathBuf);
@@ -331,6 +354,10 @@ fn output_text(output: &Output) -> String {
 
 impl Bench {
     fn command(&self, argv: &[&str], extra: &[(&str, &str)]) -> Output {
+        self.prepared(argv, extra).output().unwrap()
+    }
+
+    fn prepared(&self, argv: &[&str], extra: &[(&str, &str)]) -> Command {
         let mut command = Command::new(&self.tools);
         command.args(argv).current_dir(repository());
         for (name, _) in std::env::vars_os() {
@@ -345,10 +372,10 @@ impl Bench {
         for (name, value) in extra {
             command.env(name, value);
         }
-        command.output().unwrap()
+        command
     }
 
-    fn dispatch_as(&self, model: &str, budget: Option<&str>, extra: &[(&str, &str)]) -> Output {
+    fn dispatch_argv<'a>(&'a self, model: &'a str, budget: Option<&'a str>) -> Vec<&'a str> {
         let (work, key) = (self.work.to_str().unwrap(), self.key.to_str().unwrap());
         let run = self.run_dir.to_str().unwrap();
         let mut argv = vec![
@@ -359,14 +386,18 @@ impl Bench {
             argv.extend(["--max-budget-usd", budget]);
         }
         argv.extend(["--run", run, "--step", "grading t-grade-1"]);
-        self.command(&argv, extra)
+        argv
+    }
+
+    fn dispatch_as(&self, model: &str, budget: Option<&str>, extra: &[(&str, &str)]) -> Output {
+        self.command(&self.dispatch_argv(model, budget), extra)
     }
 
     fn dispatch(&self, extra: &[(&str, &str)]) -> Output {
         self.dispatch_as(MODEL, Some("5"), extra)
     }
 
-    fn codex(&self, extra_argv: &[&str], version: &str) -> Output {
+    fn codex_argv<'a>(&'a self, extra_argv: &[&'a str], version: &'a str) -> Vec<&'a str> {
         let (work, key) = (self.work.to_str().unwrap(), self.key.to_str().unwrap());
         let run = self.run_dir.to_str().unwrap();
         let mut argv = vec!["grade", "dispatch", "--work", work, "--key", key];
@@ -380,7 +411,73 @@ impl Bench {
             "grading t-grade-1",
         ]);
         argv.extend(extra_argv);
-        self.command(&argv, &[])
+        argv
+    }
+
+    fn codex(&self, extra_argv: &[&str], version: &str) -> Output {
+        self.command(&self.codex_argv(extra_argv, version), &[])
+    }
+
+    /// Prepare the same batch again in a fresh workspace, and dispatch there from now on.
+    fn prepare_again(&mut self) {
+        (self.work, self.key) = (self.root.join("work-2"), self.root.join("keys/key-2.json"));
+        prepare(&self.tools, &self.root, &self.work, &self.key);
+    }
+
+    /// Start a dispatch, send SIGINT to it alone once the fake client has written `pids`, and return how the
+    /// dispatch ended with what the client wrote.
+    fn interrupt(&self, argv: &[&str], extra: &[(&str, &str)], pids: &Path) -> (Output, Value) {
+        let mut dispatch = self
+            .prepared(argv, extra)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let started = Instant::now();
+        while !pids.exists() {
+            if let Some(status) = dispatch.try_wait().unwrap() {
+                panic!("dispatch ended before the session: {status}");
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(120),
+                "no session started"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let id = Pid::from_raw(i32::try_from(dispatch.id()).unwrap());
+        kill(id, Signal::SIGINT).unwrap();
+        (dispatch.wait_with_output().unwrap(), read_json(pids))
+    }
+
+    /// The interrupted dispatch died by SIGINT, stopped its client's process group, removed the copied
+    /// `sign_in` and the start directory, filed nothing and charged nothing.
+    fn assert_interrupted(&self, done: &Output, pids: &Value, sign_in: &str, start: Option<&Path>) {
+        assert_eq!(done.status.signal(), Some(2), "{}", output_text(done));
+        assert_eq!(
+            dumps(get(pids, "held")),
+            "[]",
+            "the client inherited held signals"
+        );
+        for name in ["client", "child"] {
+            let pid = Pid::from_raw(i32::try_from(number(get(pids, name)) as i64).unwrap());
+            let started = Instant::now();
+            while kill(pid, None).is_ok() {
+                assert!(
+                    started.elapsed() < Duration::from_secs(10),
+                    "the {name} still runs"
+                );
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+        assert!(
+            !self.work.join("home").join(sign_in).exists(),
+            "{sign_in} left on disk"
+        );
+        if let Some(start) = start {
+            assert!(!start.exists(), "{} left on disk", start.display());
+        }
+        assert!(!self.work.join("dispatch.json").exists());
+        assert_eq!(self.charges().len(), 1);
     }
 
     fn key_document(&self) -> Value {
@@ -840,13 +937,18 @@ fn codex_bench(label: &str, mode: &str) -> (Bench, String) {
         .last()
         .unwrap()
         .to_string();
+    codex_stub(&bench, mode);
+    (bench, version)
+}
+
+fn codex_stub(bench: &Bench, mode: &str) {
+    let real = bench_tools::review_isolation::which("codex").expect("the Codex client");
     let header = format!(
         "REAL = {:?}\nLOG = {:?}\nMODE = {mode:?}\n",
         real.to_str().unwrap(),
         bench.bin.join("codex.log").to_str().unwrap()
     );
     executable(&bench.bin.join("codex"), &(header + CODEX_STUB));
-    (bench, version)
 }
 
 #[test]
@@ -911,4 +1013,39 @@ fn a_failed_or_interrupted_codex_session_removes_the_sign_in_and_proves_no_charg
         ));
         assert_eq!(bench.charges().len(), 1);
     }
+}
+
+#[test]
+#[ignore = "needs bubblewrap, git and ripgrep"]
+fn an_interrupted_claude_session_is_stopped_and_its_sign_in_removed() {
+    let mut bench = bench("claude-interrupt");
+    let temporary = Outside::new("claude-interrupt");
+    let tmpdir = temporary.0.to_str().unwrap();
+    let pids = bench.bin.join("claude.pids");
+    let argv = bench.dispatch_argv(MODEL, Some("5"));
+    let (done, seen) = bench.interrupt(&argv, &[("TMPDIR", tmpdir), ("STUB_HANG", "1")], &pids);
+    let start = PathBuf::from(str_of(&seen, "cwd"));
+    assert_eq!(start.parent(), Some(temporary.0.as_path()));
+    bench.assert_interrupted(&done, &seen, ".claude/.credentials.json", Some(&start));
+
+    bench.prepare_again();
+    let again = bench.dispatch(&[("TMPDIR", tmpdir)]);
+    assert_eq!(again.status.code(), Some(0), "{}", output_text(&again));
+    assert_eq!(bench.charges().len(), 2);
+}
+
+#[test]
+#[ignore = "needs bubblewrap, git, ripgrep and the Codex client"]
+fn an_interrupted_codex_session_is_stopped_and_its_sign_in_removed() {
+    let (mut bench, version) = codex_bench("codex-interrupt", "interrupt");
+    let pids = bench.bin.join("codex.pids");
+    let argv = bench.codex_argv(&["--allow-unbounded-codex"], &version);
+    let (done, seen) = bench.interrupt(&argv, &[], &pids);
+    bench.assert_interrupted(&done, &seen, ".codex/auth.json", None);
+
+    codex_stub(&bench, "clean");
+    bench.prepare_again();
+    let again = bench.codex(&["--allow-unbounded-codex"], &version);
+    assert_eq!(again.status.code(), Some(0), "{}", output_text(&again));
+    assert_eq!(bench.charges().len(), 2);
 }

@@ -7,10 +7,10 @@ use bench_tools::schema::{SchemaError, Validator};
 use bench_tools::{
     archive, attempt_audit, build_packet, calibration, claims, current_grading, delegation,
     derive_packet, diff_identity, evaluator_audit, evidence, evidence_inventory, export_explorer,
-    file_attempt, grade, grading_reports, grading_validation, import_benchmark, methodology,
-    native_artifacts, normalize_thermo, packet_selection, provision, pyfs, pyunicode, pyvalue,
-    rates, regrade, review_isolation, review_queue, roster, ruling, run_cell, skill_provenance,
-    skill_runner, subscription_meters, upstream, usage,
+    file_attempt, grade, grading_reports, grading_validation, import_benchmark, interrupt,
+    methodology, native_artifacts, normalize_thermo, packet_selection, provision, pyfs, pyunicode,
+    pyvalue, rates, regrade, review_isolation, review_queue, roster, ruling, run_cell,
+    skill_provenance, skill_runner, subscription_meters, upstream, usage,
 };
 use clap::builder::PossibleValuesParser;
 use clap::error::ErrorKind;
@@ -4617,6 +4617,12 @@ fn run_grade(command: GradeCommand) -> Result<ExitCode, ExitCode> {
 
 fn main() -> ExitCode {
     let arguments: Vec<OsString> = std::env::args_os().collect();
+    if arguments
+        .get(1)
+        .is_some_and(|first| first == interrupt::RELEASE)
+    {
+        return interrupt::exec_released(&arguments[2..]);
+    }
     // clap reads `-hx` before a subcommand as `-h` and prints help; the top level has no Python
     // counterpart, so it keeps the former parser's refusal of an unknown command.
     if let Some(command) = arguments.get(1).map(|name| pytext::os_bytes(name))

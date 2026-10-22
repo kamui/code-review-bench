@@ -13,13 +13,16 @@ use crate::current_grading::{self as current, Failure, R};
 use crate::grading_tools::{self, Host, Refusal, Tools};
 use crate::pyjson::{self, Dumps, Object, Value};
 use crate::pytext::{self, PyPath};
-use crate::{attempt_audit, clean_context, review_isolation, sha256, usage};
+use crate::{attempt_audit, clean_context, interrupt, review_isolation, sha256, usage};
+use nix::sys::signal::{Signal, killpg};
+use nix::unistd::Pid;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
 
 const ALLOWED_TOOLS: [&str; 6] = [
     "mcp__grading__inspect",
@@ -511,20 +514,92 @@ fn start_directory(key: &Value) -> R<PathBuf> {
     Ok(start)
 }
 
-/// Run `command` with stdin from `stdin` and its output into new files, killing it once `timeout` passes.
+/// The copied sign-in and the client's start directory, removed however the dispatch ends.
+struct SignIn {
+    credentials: PathBuf,
+    start: Option<PathBuf>,
+}
+
+impl Drop for SignIn {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.credentials);
+        if let Some(start) = &self.start {
+            let _ = std::fs::remove_dir_all(start);
+        }
+    }
+}
+
+/// A client session leading its own process group, which is killed whole unless the client exited.
+struct Group {
+    child: Child,
+    exited: bool,
+}
+
+impl Drop for Group {
+    fn drop(&mut self) {
+        if !self.exited {
+            if let Ok(id) = i32::try_from(self.child.id()) {
+                let _ = killpg(Pid::from_raw(id), Signal::SIGKILL);
+            }
+            let _ = self.child.wait();
+        }
+    }
+}
+
+fn stopped(signal: Signal) -> Failure {
+    input(format!("stopped by {signal}"))
+}
+
+fn hold() -> R<interrupt::Held> {
+    interrupt::hold().map_err(|error| input(format!("cannot hold the stop signals: {error}")))
+}
+
+/// `client` from `PATH`, started so that it begins with no stop signals held.
+fn released(runner: &Runner, client: &str) -> R<Command> {
+    let program = review_isolation::which(client)
+        .ok_or_else(|| input(format!("cannot run {client}: not found on PATH")))?;
+    Ok(interrupt::released(&runner.executable, &program, client))
+}
+
+/// Run the `client` session with stdin from `stdin` and its output into new files, killing its process group
+/// once `timeout` passes or a held signal arrives.
 fn session(
+    client: &str,
     command: &mut Command,
     stdin: &Path,
     stdout: File,
     stderr: File,
     timeout: u64,
-) -> std::io::Result<Option<i32>> {
-    let mut child = command
-        .stdin(File::open(stdin)?)
+) -> R<Option<i32>> {
+    let failed = |error: std::io::Error| input(format!("cannot run {client}: {error}"));
+    if let Some(signal) = interrupt::received() {
+        return Err(stopped(signal));
+    }
+    let child = command
+        .stdin(File::open(stdin).map_err(failed)?)
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr))
-        .spawn()?;
-    crate::child::wait(&mut child, Duration::from_secs(timeout))
+        .process_group(0)
+        .spawn()
+        .map_err(failed)?;
+    let mut group = Group {
+        child,
+        exited: false,
+    };
+    let deadline = Instant::now() + Duration::from_secs(timeout);
+    loop {
+        if let Some(status) = group.child.try_wait().map_err(failed)? {
+            group.exited = true;
+            return Ok(Some(crate::child::exit_code(status)));
+        }
+        if let Some(signal) = interrupt::received() {
+            return Err(stopped(signal));
+        }
+        if Instant::now() >= deadline {
+            return Ok(None);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 type Outcome = Result<String, Vec<String>>;
@@ -544,7 +619,12 @@ fn dispatch_claude(runner: &Runner, options: &Dispatch) -> R<Outcome> {
     let home = work.join("home");
     let credentials = home.join(".claude/.credentials.json");
     let session_id = clean_context::uuid4().map_err(input)?;
+    let held = hold()?;
     let start = start_directory(&key)?;
+    let sign_in = SignIn {
+        credentials: credentials.clone(),
+        start: Some(start.clone()),
+    };
     let ran = (|| -> R<(String, Option<i32>)> {
         clean_context::prepare(&work).map_err(input)?;
         let mcp = object(vec![(
@@ -613,7 +693,7 @@ fn dispatch_claude(runner: &Runner, options: &Dispatch) -> R<Outcome> {
             ("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS", "0".into()),
             ("ENABLE_TOOL_SEARCH", "false".into()),
         ];
-        let mut version = Command::new("claude");
+        let mut version = released(runner, "claude")?;
         version
             .arg("--version")
             .current_dir(&work)
@@ -635,7 +715,7 @@ fn dispatch_claude(runner: &Runner, options: &Dispatch) -> R<Outcome> {
             File::create(work.join(name)).map_err(|error| input(shown(&error, &work.join(name))))
         };
         let (stdout, stderr) = (output("stdout.txt")?, output("stderr.txt")?);
-        let mut command = Command::new("claude");
+        let mut command = released(runner, "claude")?;
         command
             .args([
                 "-p",
@@ -656,19 +736,17 @@ fn dispatch_claude(runner: &Runner, options: &Dispatch) -> R<Outcome> {
             .current_dir(&start)
             .envs(environment);
         let exit = session(
+            "claude",
             &mut command,
             &work.join("prompt.md"),
             stdout,
             stderr,
             options.timeout,
-        )
-        .map_err(|error| input(format!("cannot run claude: {error}")))?;
+        )?;
         Ok((dispatched_at, exit))
     })();
-    if credentials.exists() {
-        let _ = std::fs::remove_file(&credentials);
-    }
-    let _ = std::fs::remove_dir_all(&start);
+    drop(sign_in);
+    drop(held);
     let (dispatched_at, exit_code) = ran?;
     let completed_at = now();
 
@@ -858,18 +936,23 @@ fn run_codex(runner: &Runner, work: &Path, options: &Dispatch) -> R<Option<i32>>
     let credentials = home.join(".codex/auth.json");
     let user_home = client::user_home();
     clean_context::prepare(work).map_err(input)?;
-    let ran = (|| -> R<Option<i32>> {
-        client::configure_codex(
-            &runner.checkout.to_path_buf(),
-            work,
-            &runner.executable,
-            &[
-                review_isolation::resolve(&options.key),
-                review_isolation::resolve(&user_home),
-            ],
-            Some(&work.join("execution-policy.md")),
-        )
-        .map_err(input)?;
+    client::configure_codex(
+        &runner.checkout.to_path_buf(),
+        work,
+        &runner.executable,
+        &[
+            review_isolation::resolve(&options.key),
+            review_isolation::resolve(&user_home),
+        ],
+        Some(&work.join("execution-policy.md")),
+    )
+    .map_err(input)?;
+    let _held = hold()?;
+    let _sign_in = SignIn {
+        credentials: credentials.clone(),
+        start: None,
+    };
+    (|| -> R<Option<i32>> {
         let source = read_bytes(&user_home.join(".codex/auth.json"))?;
         exclusive(&credentials, 0o600)
             .and_then(|mut file| file.write_all(&source))
@@ -885,7 +968,7 @@ fn run_codex(runner: &Runner, work: &Path, options: &Dispatch) -> R<Option<i32>>
                 .map_err(|error| input(shown(&error, &work.join(name))))
         };
         let (stdout, stderr) = (created("stdout.jsonl")?, created("stderr.txt")?);
-        let mut command = Command::new("codex");
+        let mut command = released(runner, "codex")?;
         command
             .args(["exec", "--skip-git-repo-check", "--ignore-rules", "--json"])
             .args(["--model", &options.client.model, "-c"])
@@ -905,16 +988,14 @@ fn run_codex(runner: &Runner, work: &Path, options: &Dispatch) -> R<Option<i32>>
             .env("CODEX_HOME", home.join(".codex"))
             .env("TMPDIR", &tmp);
         session(
+            "codex",
             &mut command,
             &work.join("prompt.md"),
             stdout,
             stderr,
             options.timeout,
         )
-        .map_err(|error| input(format!("cannot run codex: {error}")))
-    })();
-    let _ = std::fs::remove_file(&credentials);
-    ran
+    })()
 }
 
 fn dispatch_codex(runner: &Runner, options: &Dispatch) -> R<Outcome> {
