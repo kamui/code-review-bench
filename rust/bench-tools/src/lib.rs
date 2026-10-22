@@ -17,6 +17,7 @@ pub mod diff_identity;
 pub mod evaluator_audit;
 pub mod evidence;
 pub mod evidence_inventory;
+pub mod execution_policy;
 pub mod export_explorer;
 pub mod file_attempt;
 pub mod forge_capture;
