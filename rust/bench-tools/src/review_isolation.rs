@@ -483,7 +483,8 @@ fn list<I: IntoIterator<Item = String>>(items: I) -> Value {
 /// through the directory holding it. Every top-level directory is either a system one the sandbox already reads or
 /// one `denyRead` covers, so an entry for `/` or a top-level directory would only re-open what the attempt must not
 /// read. Each entry is resolved, so a symlink or a `..` can't stand for a broader directory. A home holding a `..`
-/// gets no entry for the directory holding its parent, since its written grandparent need not be that directory.
+/// gets no entry for the directory holding its parent, since its written grandparent need not be that directory, and
+/// a relative home gets none, since it would resolve against this process's working directory.
 fn venv_runtime(clone: &Path) -> Result<Vec<String>, String> {
     let venv = suffixed(clone, "-cache").join("venv/pyvenv.cfg");
     if !venv.is_file() {
@@ -494,8 +495,8 @@ fn venv_runtime(clone: &Path) -> Result<Vec<String>, String> {
     let mut entries = Vec::new();
     for line in config.lines() {
         let (key, value) = line.split_once('=').unwrap_or((line, ""));
-        if key.trim() == "home" {
-            let home = PathBuf::from(value.trim());
+        let home = PathBuf::from(value.trim());
+        if key.trim() == "home" && home.is_absolute() {
             let holder = home
                 .components()
                 .all(|part| part != Component::ParentDir)
@@ -941,6 +942,14 @@ mod tests {
                     .iter()
                     .all(|entry| !forbidden.contains(&resolve(Path::new(entry)))),
                 "{home}: {entries:?}"
+            );
+        }
+        for home in ["bin", "py/bin", "a/py/bin"] {
+            std::fs::write(&config, format!("home = {home}\n")).unwrap();
+            assert_eq!(
+                venv_runtime(&clone).unwrap(),
+                Vec::<String>::new(),
+                "{home}"
             );
         }
         let top: PathBuf = root.components().take(2).collect();
