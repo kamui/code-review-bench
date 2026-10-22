@@ -334,7 +334,7 @@ fn text_or_empty(value: &Value) -> Result<&str, PyError> {
 
 /// Microseconds since 0001-01-01T00:00:00Z.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct Instant(i64);
+pub(crate) struct Instant(i64);
 
 enum InstantError {
     /// `ValueError`, with its message.
@@ -554,6 +554,11 @@ fn parse_instant(value: Option<&Value>) -> Result<Instant, InstantError> {
     parse_instant_text(text)
 }
 
+/// A timezone-aware ISO-8601 instant, or `None` for any other text.
+pub(crate) fn instant(text: &str) -> Option<Instant> {
+    parse_instant_text(text).ok()
+}
+
 fn parse_instant_text(text: &str) -> Result<Instant, InstantError> {
     let raw = pytext::strip(text);
     let chars: Vec<char> = raw.chars().collect();
@@ -590,7 +595,7 @@ fn parse_instant_text(text: &str) -> Result<Instant, InstantError> {
 }
 
 /// `render_instant(moment)`: ISO-8601 in UTC with a `Z`.
-fn render_instant(moment: Instant) -> String {
+pub(crate) fn render_instant(moment: Instant) -> String {
     let days = moment.0.div_euclid(MICROS_PER_DAY);
     let rest = moment.0.rem_euclid(MICROS_PER_DAY);
     let (year, month, day) = from_ordinal(days + 1);
@@ -884,7 +889,7 @@ fn python_lower(text: &str) -> String {
 }
 
 /// The issues a pull request body closes by keyword, each as owner/name#number, sorted.
-fn closing_references(body: Option<&Value>, repo: &str) -> Vec<String> {
+pub(crate) fn closing_references(body: Option<&Value>, repo: &str) -> Vec<String> {
     let text = match body {
         Some(Value::Str(text)) => text.as_str(),
         _ => "",
@@ -1067,7 +1072,11 @@ fn read_json(source: &str, raw: &str) -> Result<Value, Failure> {
 }
 
 /// The parsed body of one forge call, replayed from a saved response when asked.
-fn forge(replay: Option<&[u8]>, name: &str, command: &[String]) -> Result<Value, Failure> {
+pub(crate) fn forge(
+    replay: Option<&[u8]>,
+    name: &str,
+    command: &[String],
+) -> Result<Value, Failure> {
     match replay {
         Some(directory) => {
             let path = path_join(directory, name.as_bytes());
@@ -1284,7 +1293,7 @@ fn first_element(value: &Value) -> Result<Value, PyError> {
 }
 
 /// The title the pull request carried at the cutoff, and whether a later rename replaced it.
-fn title_at(pull: &Value, cutoff: Instant) -> Result<(Value, bool), Failure> {
+pub(crate) fn title_at(pull: &Value, cutoff: Instant) -> Result<(Value, bool), Failure> {
     if get(pull, "timelineItems")?.is_none() {
         return Ok((item(pull, "title")?.clone(), false));
     }
@@ -1306,7 +1315,7 @@ fn title_at(pull: &Value, cutoff: Instant) -> Result<(Value, bool), Failure> {
 }
 
 /// Whether the pull request was a draft at the cutoff, and whether the forge reports another flag now.
-fn draft_at(pull: &Value, cutoff: Instant) -> Result<(Value, bool), Failure> {
+pub(crate) fn draft_at(pull: &Value, cutoff: Instant) -> Result<(Value, bool), Failure> {
     let reported = item(pull, "isDraft")?.clone();
     if get(pull, "timelineItems")?.is_none() {
         return Ok((reported, false));
@@ -1486,45 +1495,10 @@ impl Provenance {
             .iter()
             .find(|(key, _)| key.py_eq(&id))
             .and_then(|(_, history)| history.as_ref());
-        let Some(history @ Value::Object(_)) = history else {
-            return Ok(None);
-        };
-        let Some(Value::Array(edits)) = get(history, "nodes")? else {
-            return Ok(None);
-        };
-        let counted = get(history, "totalCount")?
-            .is_some_and(|total| total.py_eq(&Value::Int(edits.len().to_string())));
-        if !counted {
-            return Ok(None);
-        }
-        let mut dated = Vec::new();
-        for edit in edits {
-            let Ok(edited_at) = get(edit, "editedAt") else {
-                return Ok(None);
-            };
-            match parse_instant(edited_at) {
-                Ok(moment) => dated.push((moment, edit)),
-                Err(InstantError::Value(_)) => return Ok(None),
-                Err(InstantError::Overflow) => return Err(overflow().into()),
-            }
-        }
-        let mut standing: Vec<(Instant, &Value)> = dated
-            .into_iter()
-            .filter(|(when, _)| *when <= self.cutoff)
-            .collect();
-        standing.sort_by_key(|pair| pair.0);
-        let Some((when, edit)) = standing.last() else {
-            return Ok(None);
-        };
-        if standing.len() > 1 && standing[standing.len() - 2].0 == *when {
-            return Ok(None);
-        }
-        if !matches!(get(edit, "deletedAt")?, None | Some(Value::Null)) {
-            return Ok(None);
-        }
-        match get(edit, "diff")? {
-            Some(Value::Str(text)) => Ok(Some((*when, text.clone()))),
-            _ => Ok(None),
+        match revision_at(history, self.cutoff) {
+            Ok(revision) => Ok(Some(revision)),
+            Err(Unestablished::Reason(_)) => Ok(None),
+            Err(Unestablished::Overflow) => Err(overflow().into()),
         }
     }
 
@@ -1549,6 +1523,59 @@ impl Provenance {
                 .collect::<Vec<_>>()
                 .join("\n"),
         ))
+    }
+}
+
+pub(crate) enum Unestablished {
+    /// Why the history does not establish the text at the cutoff.
+    Reason(&'static str),
+    Overflow,
+}
+
+/// The revision of a `userContentEdits` history that stood at the cutoff, as (instant, text).
+pub(crate) fn revision_at(
+    history: Option<&Value>,
+    cutoff: Instant,
+) -> Result<(Instant, String), Unestablished> {
+    let reason = |text| Err(Unestablished::Reason(text));
+    let Some(history @ Value::Object(_)) = history else {
+        return reason("the forge returned no edit history");
+    };
+    let Ok(Some(Value::Array(edits))) = get(history, "nodes") else {
+        return reason("the edit history lists no revisions");
+    };
+    let counted = matches!(get(history, "totalCount"), Ok(Some(total)) if total.py_eq(&Value::Int(edits.len().to_string())));
+    if !counted {
+        return reason("the edit history is incomplete");
+    }
+    let mut dated = Vec::new();
+    for edit in edits {
+        let Ok(edited_at) = get(edit, "editedAt") else {
+            return reason("a revision is not an object");
+        };
+        match parse_instant(edited_at) {
+            Ok(moment) => dated.push((moment, edit)),
+            Err(InstantError::Value(_)) => return reason("a revision is undated"),
+            Err(InstantError::Overflow) => return Err(Unestablished::Overflow),
+        }
+    }
+    let mut standing: Vec<(Instant, &Value)> = dated
+        .into_iter()
+        .filter(|(when, _)| *when <= cutoff)
+        .collect();
+    standing.sort_by_key(|pair| pair.0);
+    let Some((when, edit)) = standing.last() else {
+        return reason("no revision is dated at or before the cutoff");
+    };
+    if standing.len() > 1 && standing[standing.len() - 2].0 == *when {
+        return reason("two revisions share the instant that stood at the cutoff");
+    }
+    if !matches!(get(edit, "deletedAt"), Ok(None | Some(Value::Null))) {
+        return reason("the revision that stood at the cutoff is a deletion");
+    }
+    match get(edit, "diff") {
+        Ok(Some(Value::Str(text))) => Ok((*when, text.clone())),
+        _ => reason("the revision that stood at the cutoff has no text"),
     }
 }
 
@@ -1953,8 +1980,27 @@ fn login_or_ghost(value: &Value) -> Result<String, PyError> {
     }
 }
 
-/// Build the packet; on success, the three report lines for stdout.
-pub fn build(a: &Arguments) -> Result<Vec<u8>, Failure> {
+struct Prepared {
+    text: String,
+    cutoff: String,
+    cutoff_is: Option<&'static str>,
+    cutoff_source: String,
+    omissions: Omissions,
+    provenance: Provenance,
+    title: (Value, bool),
+    draft: (Value, bool),
+    files: usize,
+    commits: usize,
+    issues: usize,
+    counts: Counts,
+}
+
+/// The packet text `build` writes, without writing it.
+pub fn render(a: &Arguments) -> Result<String, Failure> {
+    prepare(a).map(|prepared| prepared.text)
+}
+
+fn prepare(a: &Arguments) -> Result<Prepared, Failure> {
     if a.repo.matches('/').count() != 1 {
         return Err(input(format!(
             "--repo must be owner/name: {}",
@@ -2270,7 +2316,38 @@ pub fn build(a: &Arguments) -> Result<Vec<u8>, Failure> {
     if a.factual {
         text = derive_packet::derive(&text).map_err(|error| Failure::Refused(error.0))?;
     }
+    Ok(Prepared {
+        text,
+        cutoff,
+        cutoff_is,
+        cutoff_source,
+        omissions,
+        provenance,
+        title: (title, title_restored),
+        draft: (draft, draft_restored),
+        files: rows.len(),
+        commits: commits.len(),
+        issues: issues.len(),
+        counts,
+    })
+}
 
+/// Build the packet; on success, the three report lines for stdout.
+pub fn build(a: &Arguments) -> Result<Vec<u8>, Failure> {
+    let Prepared {
+        text,
+        cutoff,
+        cutoff_is,
+        cutoff_source,
+        omissions,
+        provenance,
+        title: (title, title_restored),
+        draft: (draft, draft_restored),
+        files,
+        commits,
+        issues,
+        counts,
+    } = prepare(a)?;
     let directory = dirname(&a.out);
     if !directory.is_empty() {
         makedirs(directory).map_err(|(error, failed)| {
@@ -2328,12 +2405,12 @@ pub fn build(a: &Arguments) -> Result<Vec<u8>, Failure> {
     stdout.extend_from_slice(
         format!(
             ": {} files, {} commits, {} reviews, {} thread comments, {} conversation comments, {} issues, ref_pr={}\n",
-            rows.len(),
-            commits.len(),
+            files,
+            commits,
             counts.reviews,
             counts.thread_comments,
             counts.conversation,
-            issues.len(),
+            issues,
             a.ref_pr.as_deref().unwrap_or("None")
         )
         .as_bytes(),
