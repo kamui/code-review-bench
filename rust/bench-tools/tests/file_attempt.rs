@@ -704,6 +704,32 @@ fn files_a_builtin_attempt_through_each_disposition() {
 /// A replay supersedes a stop the wrapper wrote only for a failed normalization, once the replayed normalizer
 /// parses; an output that still does not parse stays stopped, and a stop for any other reason is never superseded.
 #[test]
+fn files_a_frozen_forge_receipt_and_call_log() {
+    let t = SelfTest::new("frozen-forge");
+    let root = t.root().to_path_buf();
+    write(&t.att.join("forge.json"), r#"{"target": "t1"}"#);
+    fs::create_dir_all(t.att.join("forge-log")).unwrap();
+    let log = r#"{"tool": "gh", "argv": ["pr", "view", "1"], "exit": 0}"#.to_string() + "\n";
+    write(&t.att.join("forge-log/calls.jsonl"), &log);
+    let done = t.file("forge", &[t.archive()]);
+    assert!(done.status.success(), "{}", report(&done));
+    assert_eq!(
+        fs::read_to_string(root.join("forge/forge-calls.jsonl")).unwrap(),
+        log
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("forge/forge.json")).unwrap(),
+        r#"{"target": "t1"}"#
+    );
+    fs::remove_dir_all(t.att.join("forge-log")).unwrap();
+    fs::remove_file(t.att.join("forge.json")).unwrap();
+    let done = t.file("forge", &[t.archive()]);
+    assert!(done.status.success(), "{}", report(&done));
+    assert!(!root.join("forge/forge-calls.jsonl").exists());
+    assert!(!root.join("forge/forge.json").exists());
+}
+
+#[test]
 fn replay_supersedes_only_a_normalization_stop() {
     let t = SelfTest::new("replay");
     let att = t.att.clone();

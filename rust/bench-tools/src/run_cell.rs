@@ -12,8 +12,10 @@
 //! Before a dispatch: the manifest must validate and carry `frozen_at`; every arm file must still hash to its
 //! `arm_file_sha256`; the selected packet must match the cohort hash and the target must match its diff identity.
 //! A `packet_replacements` pin in the frozen manifest selects a re-cut packet after checking the original packet,
-//! target and replacement manifest hashes. Then, under a lock on the work directory, the cell is chosen and
-//! checked against the caps (design §4, method §3):
+//! target and replacement manifest hashes. A `forge_captures` pin gives each attempt a frozen forge after its
+//! clone is made (`bench-tools frozen-forge setup`), and puts the forge's stand-in `gh` first on the reviewer's
+//! `PATH`. Then, under a lock on the work directory, the cell is chosen and checked against the caps (design §4,
+//! method §3):
 //!
 //! - `--next` takes the first `sealed_order` cell with no attempt; `--cell` names a planned cell with no attempt.
 //!   A cell with an attempt is only ever re-run by `--replace`.
@@ -1446,6 +1448,41 @@ fn prepare(run: &Run, context: &Context<'_>, directory: &Path, claim: &mut Objec
             pytext::strip(&prepared.stdout),
             pytext::strip(&prepared.stderr)
         ));
+    }
+    if let Some(pin) = run
+        .manifest
+        .as_object()
+        .and_then(|manifest| manifest.get("forge_captures"))
+    {
+        let captures = context.repo().join(get(pin, "path").py_str());
+        let setup = context.own(&[
+            "frozen-forge",
+            "setup",
+            "--target",
+            &display(&target_dir),
+            "--attempt",
+            &display(directory),
+            "--clone",
+            &display(&clone),
+            "--captures",
+            &display(&captures),
+            "--captures-sha256",
+            &get(pin, "sha256").py_str(),
+        ]);
+        let served = context.run(&setup, None)?;
+        if served.code != 0 {
+            return input(format!(
+                "frozen forge setup failed: {}",
+                pytext::strip(&served.stderr)
+            ));
+        }
+        claim.insert("forge_captures".to_string(), pin.clone());
+        let path = env
+            .iter()
+            .find(|(key, _)| key == "PATH")
+            .map_or_else(String::new, |(_, value)| format!(":{value}"));
+        let bin = display(&directory.join("forge").join("bin"));
+        with(&mut env, "PATH", format!("{bin}{path}"));
     }
     let (input_sha, policy_sha) = write_input(
         directory,
@@ -3345,6 +3382,80 @@ mod tests {
             );
             assert!(get(&recorded, "packet").py_eq(&json(&packet)));
         }
+    }
+
+    #[test]
+    fn a_forge_capture_pin_sets_up_the_frozen_forge_before_each_launch() {
+        let fixture = fixture();
+        fixture.target();
+        let pin = r#"{"path": "bench/forge-captures.v1.json", "sha256": "4444444444444444444444444444444444444444444444444444444444444444"}"#;
+        let path = fixture.run_dir.join("manifest.json");
+        let Value::Object(mut manifest) = read_json(&path).expect("manifest") else {
+            panic!("not an object")
+        };
+        manifest.insert("forge_captures".to_string(), json(pin));
+        put(&path, &indented(&Value::Object(manifest)));
+        put(&fixture.base.join("bench-tools"), "fixture bench-tools");
+        let own = display(&fixture.base.join("bench-tools"));
+        let setup = RefCell::new(Vec::<String>::new());
+        let launched = RefCell::new(None::<String>);
+        let setup_code = Cell::new(0);
+        let tool = |argv: &[String], env: Option<&[(String, String)]>| {
+            if argv[0] == own && argv[1] == "provision" {
+                return Ok(ran(0, "{}", ""));
+            }
+            if argv[0] == own && argv[1] == "frozen-forge" {
+                *setup.borrow_mut() = argv.to_vec();
+                return Ok(ran(setup_code.get(), "", "no capture of t1\n"));
+            }
+            let env = env.expect("the launch environment");
+            *launched.borrow_mut() = env
+                .iter()
+                .find(|(key, _)| key == "PATH")
+                .map(|(_, value)| value.clone());
+            put(&PathBuf::from(&argv[2]).join("timing.json"), "{}");
+            Ok(ran(0, "", ""))
+        };
+        let context = fixture.context(&tool, vec![("PATH".to_string(), "/usr/bin".to_string())]);
+        arm_file(&fixture.base, "arm-a", "codex", 2.0);
+        let claim = || -> Object {
+            [("cell".to_string(), parse_key("t1/arm-a/1").expect("key"))]
+                .into_iter()
+                .collect()
+        };
+        fixture.claim("att-001", "t1/arm-a/1", 5.0, "");
+        dispatch(&fixture.run(), &context, "att-001", &mut claim()).expect("dispatched");
+        let directory = fixture.work.join("att-001");
+        let argv = setup.borrow().clone();
+        assert_eq!(argv[2], "setup");
+        assert_eq!(after(&argv, "--attempt"), display(&directory));
+        assert_eq!(after(&argv, "--clone"), display(&directory.join("clone")));
+        assert_eq!(
+            after(&argv, "--captures"),
+            display(&fixture.base.join("bench/forge-captures.v1.json"))
+        );
+        assert_eq!(after(&argv, "--captures-sha256"), "4".repeat(64));
+        assert_eq!(
+            launched.borrow().as_deref(),
+            Some(format!("{}:/usr/bin", display(&directory.join("forge/bin"))).as_str())
+        );
+        let recorded = read_json(&directory.join("cell.json")).expect("cell.json");
+        assert!(get(&recorded, "forge_captures").py_eq(&json(pin)));
+
+        setup_code.set(2);
+        *launched.borrow_mut() = None;
+        fixture.claim("att-002", "t1/arm-a/1", 5.0, "");
+        let failed = dispatch(&fixture.run(), &context, "att-002", &mut claim());
+        let Err(Failure::Input(message)) = failed else {
+            panic!("a failed setup is not refused")
+        };
+        assert!(
+            message.contains("frozen forge setup failed: no capture of t1")
+                && message.contains("claim att-002 released"),
+            "{message}"
+        );
+        assert!(launched.borrow().is_none());
+        assert!(!fixture.work.join("att-002").exists());
     }
 
     #[test]

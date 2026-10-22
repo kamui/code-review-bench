@@ -338,6 +338,13 @@ fn text_or_empty(value: &Value) -> Result<&str, PyError> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Instant(i64);
 
+impl Instant {
+    /// Whole seconds from `self` to `later`.
+    pub(crate) fn seconds_until(self, later: Self) -> i64 {
+        (later.0 - self.0).div_euclid(1_000_000)
+    }
+}
+
 enum InstantError {
     /// `ValueError`, with its message.
     Value(String),

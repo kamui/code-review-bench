@@ -1,0 +1,214 @@
+{
+  "schema_version": 1,
+  "description": "The forge and remote calls each frozen skill and built-in review makes, as `bench-tools frozen-forge probe` runs them. A command runs through `sh -c` in the attempt's clone; `{{name}}` stands for a shell-quoted value of the target. `expect` is `answer` (exit 0, answered from the frozen forge), `checks` (`gh pr checks`: exit 0, 1 or 8, or no checks reported), `refusal` (a nonzero exit, as the forge itself would refuse it, for `reason`) or `origin-branch` (exit 0 exactly when the upstream holds a branch named as the head branch); it may differ for a pull request from a fork (`cross_repository`) and one from a branch of the same repository (`same_repository`).",
+  "arm_kinds": {
+    "claude-skill": ["ce-code-review", "thermo-nuclear-code-quality-review"],
+    "codex-skill": ["ce-code-review", "thermo-nuclear-code-quality-review"],
+    "review-code": ["review-code"],
+    "claude-builtin": ["claude-code-review"],
+    "codex": ["codex-review"]
+  },
+  "sources": {
+    "ce-code-review": {
+      "tree": "bench/runs/2026-10-10-last-push-claude-ce-opus/inputs/skill",
+      "calls": [
+        {
+          "id": "ce-pr-state",
+          "source": "references/scope.md:33",
+          "command": "gh pr view {{number}} --json state,title,body,files",
+          "expect": "answer"
+        },
+        {
+          "id": "ce-pr-state-url",
+          "source": "references/scope.md:33 (a URL argument)",
+          "command": "gh pr view {{url}} --json state,title,body,files",
+          "expect": "answer"
+        },
+        {
+          "id": "ce-pr-metadata",
+          "source": "references/scope.md:46",
+          "command": "gh pr view {{number}} --json title,body,baseRefName,headRefName,headRefOid,isCrossRepository,url,files,reviews,comments --jq '{title, body, baseRefName, headRefName, headRefOid, isCrossRepository, url, files: [.files[].path], hasPriorComments: ((.reviews | map(select(.state != \"APPROVED\" or .body != \"\")) | length) > 0 or (.comments | length) > 0)}'",
+          "expect": "answer"
+        },
+        {
+          "id": "ce-pr-diff",
+          "source": "references/scope.md:63",
+          "command": "gh pr diff {{number}} --color=never",
+          "expect": "answer"
+        },
+        {
+          "id": "ce-fetch-head",
+          "source": "references/scope.md:67",
+          "command": "git fetch --no-tags origin {{head_ref}}:refs/review/pr-{{number}}-head",
+          "expect": {
+            "same_repository": "answer",
+            "cross_repository": "origin-branch"
+          },
+          "reason": "a fork's head branch is not on the upstream repository, so the fetch finds only an upstream branch of the same name; the skill then omits PR_HEAD_REF, because that commit is not headRefOid"
+        },
+        {
+          "id": "ce-fetch-base",
+          "source": "references/scope.md:69",
+          "command": "git fetch --no-tags origin {{base_ref}} && git rev-parse FETCH_HEAD",
+          "expect": "answer"
+        },
+        {
+          "id": "ce-branch-pr",
+          "source": "references/scope.md:82",
+          "command": "gh pr view {{head_ref}} --json baseRefName,url,headRefName",
+          "expect": "answer"
+        },
+        {
+          "id": "ce-fetch-branch",
+          "source": "references/scope.md:83",
+          "command": "git fetch --no-tags origin {{head_ref}}",
+          "expect": {
+            "same_repository": "answer",
+            "cross_repository": "origin-branch"
+          },
+          "reason": "a fork's head branch is not on the upstream repository, so the fetch finds only an upstream branch of the same name"
+        },
+        {
+          "id": "ce-current-pr",
+          "source": "references/scope.md:97",
+          "command": "gh pr view --json baseRefName,url",
+          "expect": "answer"
+        },
+        {
+          "id": "ce-prior-bodies",
+          "source": "references/personas/previous-comments-reviewer.md:14",
+          "command": "gh pr view {{number}} --json reviews,comments --jq '.reviews[].body, .comments[].body'",
+          "expect": "answer"
+        },
+        {
+          "id": "ce-review-comments",
+          "source": "references/personas/previous-comments-reviewer.md:18",
+          "command": "gh api repos/{owner}/{repo}/pulls/{{number}}/comments --jq '.[] | {path: .path, line: .line, body: .body, created_at: .created_at, user: .user.login}'",
+          "expect": "answer"
+        }
+      ]
+    },
+    "thermo-nuclear-code-quality-review": {
+      "tree": "bench/runs/2026-10-10-last-push-claude-thermo-opus/inputs/skill",
+      "calls": []
+    },
+    "review-code": {
+      "tree": "bench/runs/2026-10-12-last-push-claude-review-code-sonnet/inputs/skill",
+      "calls": [
+        {
+          "id": "rc-forge-packet",
+          "source": "references/targets.md:14",
+          "command": "python3 {{skill}}/scripts/forge_packet.py fetch --repo {{repository}} --pr {{number}} --dir \"$(mktemp -d)\"",
+          "expect": "answer"
+        },
+        {
+          "id": "rc-root",
+          "source": "scripts/forge_packet.py:760 ROOT_QUERY, run at :970",
+          "command": "gh api graphql -f owner={{owner}} -f name={{name}} -F number={{number}} -f query={{query:ROOT_QUERY}}",
+          "expect": "answer"
+        },
+        {
+          "id": "rc-continuation-reviews",
+          "source": "scripts/forge_packet.py:770 pr_continuation_query, run at :937",
+          "command": "gh api graphql -f owner={{owner}} -f name={{name}} -F number={{number}} -f after={{cursor:reviews}} -f query={{query:pr_continuation_query(\"reviews\")}}",
+          "expect": "answer"
+        },
+        {
+          "id": "rc-continuation-threads",
+          "source": "scripts/forge_packet.py:770 pr_continuation_query, run at :937",
+          "command": "gh api graphql -f owner={{owner}} -f name={{name}} -F number={{number}} -f after={{cursor:reviewThreads}} -f query={{query:pr_continuation_query(\"reviewThreads\")}}",
+          "expect": "answer"
+        },
+        {
+          "id": "rc-continuation-comments",
+          "source": "scripts/forge_packet.py:770 pr_continuation_query, run at :937",
+          "command": "gh api graphql -f owner={{owner}} -f name={{name}} -F number={{number}} -f after={{cursor:comments}} -f query={{query:pr_continuation_query(\"comments\")}}",
+          "expect": "answer"
+        },
+        {
+          "id": "rc-continuation-closing",
+          "source": "scripts/forge_packet.py:770 pr_continuation_query, run at :937",
+          "command": "gh api graphql -f owner={{owner}} -f name={{name}} -F number={{number}} -f after={{cursor:closingIssuesReferences}} -f query={{query:pr_continuation_query(\"closingIssuesReferences\")}}",
+          "expect": "answer"
+        },
+        {
+          "id": "rc-thread-comments",
+          "source": "scripts/forge_packet.py:766 THREAD_COMMENTS_QUERY, run at :944",
+          "command": "gh api graphql -f thread={{thread}} -f after={{cursor:thread-comments}} -f query={{query:THREAD_COMMENTS_QUERY}}",
+          "expect": "answer"
+        },
+        {
+          "id": "rc-issue",
+          "source": "scripts/forge_packet.py:763 ISSUE_QUERY, run at :985",
+          "command": "gh api graphql -f owner={{issue_owner}} -f name={{issue_name}} -F issue={{issue}} -f query={{query:ISSUE_QUERY}}",
+          "expect": "answer"
+        },
+        {
+          "id": "rc-issue-comments",
+          "source": "scripts/forge_packet.py:764 ISSUE_COMMENTS_QUERY, run at :941",
+          "command": "gh api graphql -f owner={{issue_owner}} -f name={{issue_name}} -F issue={{issue}} -f after={{cursor:issue-comments}} -f query={{query:ISSUE_COMMENTS_QUERY}}",
+          "expect": "answer"
+        },
+        {
+          "id": "rc-pr-checks",
+          "source": "references/targets.md:19",
+          "command": "gh pr checks {{number}}",
+          "expect": "checks"
+        },
+        {
+          "id": "rc-branch-base",
+          "source": "references/targets.md:42",
+          "command": "gh pr view review-head --json state,baseRefName,url",
+          "expect": "answer"
+        },
+        {
+          "id": "rc-origin-head",
+          "source": "references/targets.md:43",
+          "command": "git rev-parse --abbrev-ref origin/HEAD",
+          "expect": "answer"
+        },
+        {
+          "id": "rc-origin-base",
+          "source": "references/targets.md:45",
+          "command": "git rev-parse --verify origin/{{base_ref}}",
+          "expect": "answer"
+        }
+      ]
+    },
+    "claude-code-review": {
+      "tree": "bench/harness/claude-code.json (the built-in /code-review prompt; Phase 0)",
+      "calls": [
+        {
+          "id": "cb-upstream-diff",
+          "source": "Phase 0: git diff @{upstream}...HEAD",
+          "command": "git diff @{upstream}...HEAD --stat",
+          "expect": "refusal",
+          "reason": "review-head tracks refs/pull/<n>/head, which no remote-tracking branch stores, as after `gh pr checkout`; the prompt then falls back to the main range"
+        },
+        {
+          "id": "cb-range-diff",
+          "source": "Phase 0 with the range argument dispatch.sh passes",
+          "command": "git diff {{local_base}}...review-head --stat",
+          "expect": "answer"
+        }
+      ]
+    },
+    "codex-review": {
+      "tree": "bench/tools/dispatch.sh (codex review with the run's stdin prompt)",
+      "calls": [
+        {
+          "id": "cx-range-diff",
+          "source": "dispatch.sh codex prompt: git diff <base>...review-head",
+          "command": "git diff {{local_base}}...review-head --stat",
+          "expect": "answer"
+        },
+        {
+          "id": "cx-upstream-merge-base",
+          "source": "codex review's base-branch prompt: git merge-base HEAD \"$(git rev-parse --abbrev-ref \"<branch>@{upstream}\")\"",
+          "command": "git merge-base HEAD \"$(git rev-parse --abbrev-ref {{local_base}}@{upstream})\"",
+          "expect": "answer"
+        }
+      ]
+    }
+  }
+}
