@@ -573,10 +573,13 @@ impl Drop for TempDir {
     }
 }
 
-/// `TMPDIR`, else `/tmp`. Like Python's, `verify` refuses a temporary directory below a symlink.
+/// `TMPDIR`, else `/tmp`, with its links resolved: `verify` refuses a temporary directory below a symlink, and
+/// macOS's is below `/var`, a link to `/private/var`.
 pub fn system_temp() -> PyPath {
     use std::os::unix::ffi::OsStrExt;
-    PyPath::new(std::env::temp_dir().as_os_str().as_bytes())
+    let temp = std::env::temp_dir();
+    let temp = temp.as_os_str().as_bytes();
+    PyPath::new(&pytext::realpath(temp, false).unwrap_or_else(|_| temp.to_vec()))
 }
 
 /// `tarfile.open(archive, 'r:gz')` reports a bad gzip magic number or compression method, which Python's `gzip`
