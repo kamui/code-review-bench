@@ -1218,16 +1218,31 @@ fn forward(shared: &Shared, tunnel: u64, mut client: UnixStream, head: &Head, re
 
 // --- the namespace ------------------------------------------------------------------------------
 
-/// The audit architecture and `socket` syscall numbers the vsock filter checks.
+/// What the vsock filter checks on one architecture: its audit value and its syscall numbers, x32's included.
+struct SeccompAbi {
+    arch: u32,
+    socket: &'static [u32],
+    io_uring_setup: &'static [u32],
+}
+
 #[cfg(target_arch = "x86_64")]
-const SECCOMP_ABI: Option<(u32, &[u32])> = Some((0xC000_003E, &[41, 0x4000_0029]));
+const SECCOMP_ABI: Option<SeccompAbi> = Some(SeccompAbi {
+    arch: 0xC000_003E,
+    socket: &[41, 0x4000_0029],
+    io_uring_setup: &[425, 0x4000_01A9],
+});
 #[cfg(target_arch = "aarch64")]
-const SECCOMP_ABI: Option<(u32, &[u32])> = Some((0xC000_00B7, &[198]));
+const SECCOMP_ABI: Option<SeccompAbi> = Some(SeccompAbi {
+    arch: 0xC000_00B7,
+    socket: &[198],
+    io_uring_setup: &[425],
+});
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-const SECCOMP_ABI: Option<(u32, &[u32])> = None;
+const SECCOMP_ABI: Option<SeccompAbi> = None;
 
 /// A classic BPF seccomp program for `bwrap --seccomp` that fails `socket(AF_VSOCK, ...)`. A network namespace does
-/// not scope vsock, and on WSL it reaches the Windows host's services. Other ABIs, such as 32-bit x86, get ENOSYS
+/// not scope vsock, and on WSL it reaches the Windows host's services. `io_uring_setup` fails with ENOSYS because an
+/// io_uring socket operation is not a `socket` syscall the filter can see. Other ABIs, such as 32-bit x86, get ENOSYS
 /// for every call, since their socket calls cannot all be checked.
 fn vsock_filter() -> R<Vec<u8>> {
     const LOAD: u16 = 0x20;
@@ -1241,16 +1256,18 @@ fn vsock_filter() -> R<Vec<u8>> {
     const NUMBER: u32 = 0;
     const ARCH: u32 = 4;
     const FIRST_ARGUMENT: u32 = 16;
-    let (arch, calls) =
-        SECCOMP_ABI.ok_or("the vsock filter has no syscall table for this architecture")?;
-    let count = u8::try_from(calls.len()).map_err(|error| error.to_string())?;
+    let abi = SECCOMP_ABI.ok_or("the vsock filter has no syscall table for this architecture")?;
+    let count = u8::try_from(abi.socket.len()).map_err(|error| error.to_string())?;
     let mut program: Vec<(u16, u8, u8, u32)> = vec![
         (LOAD, 0, 0, ARCH),
-        (JUMP_IF_EQUAL, 1, 0, arch),
+        (JUMP_IF_EQUAL, 1, 0, abi.arch),
         (RETURN, 0, 0, ERRNO | ENOSYS),
         (LOAD, 0, 0, NUMBER),
     ];
-    for (index, call) in (0..count).zip(calls) {
+    for call in abi.io_uring_setup {
+        program.extend([(JUMP_IF_EQUAL, 0, 1, *call), (RETURN, 0, 0, ERRNO | ENOSYS)]);
+    }
+    for (index, call) in (0..count).zip(abi.socket) {
         program.push((JUMP_IF_EQUAL, count - index, 0, *call));
     }
     program.extend([
@@ -2080,7 +2097,11 @@ mod tests {
                  try:\n    unix.connect(sys.argv[1]); print('connected')\n\
                  except OSError as error: print(type(error).__name__)\n\
                  try:\n    socket.socket(40, socket.SOCK_STREAM); print('vsock')\n\
-                 except OSError as error: print(error.errno)\n",
+                 except OSError as error: print(error.errno)\n\
+                 import ctypes\n\
+                 libc = ctypes.CDLL(None, use_errno=True)\n\
+                 ring = libc.syscall(425, 1, ctypes.create_string_buffer(120))\n\
+                 print('io_uring' if ring >= 0 else ctypes.get_errno())\n",
             )
             .arg(&host)
             .output()
@@ -2089,7 +2110,7 @@ mod tests {
         fs::remove_dir_all(&attempt).unwrap();
         assert_eq!(
             String::from_utf8_lossy(&output.stdout),
-            "ConnectionRefusedError\n97\n",
+            "ConnectionRefusedError\n97\n38\n",
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
