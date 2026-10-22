@@ -444,7 +444,7 @@ pub fn probe(options: &Probe) -> R<(Value, bool)> {
                 .map(PathBuf::from)
                 .collect();
             let (prefix, receipt) =
-                skill_runner::sandbox_command("bwrap-v1", &out, &clone, &readonly, &[])?;
+                skill_runner::sandbox_command("bwrap-v1", &out, &clone, &readonly, &[], None)?;
             (with_runtime(forge_path), prefix, receipt)
         }
         "review-code" => {
