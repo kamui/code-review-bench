@@ -1685,7 +1685,7 @@ enum ReviewIsolationCommand {
         out: OsString,
         #[arg(long, default_value = review_isolation::PROFILES[0], value_parser = PossibleValuesParser::new(review_isolation::PROFILES))]
         profile: String,
-        /// The target whose offline cache environment the shell gets; claude-strict-v2 requires it.
+        /// The target whose offline cache environment the shell gets; claude-strict-v2 and claude-strict-v3 require it.
         #[arg(long, allow_negative_numbers = true)]
         target: Option<OsString>,
     },

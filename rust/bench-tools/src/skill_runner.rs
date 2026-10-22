@@ -8,6 +8,9 @@
 //! artifacts. It never resumes a session, and normalizes the native report with this bench-tools. When
 //! `runner.json` sets `cross_model_review_mode` to `off`, the runner writes that setting to CE's local config in the
 //! clone and excludes the file from Git before it records the clone's tree identity.
+//! `runner.json` must record the manifest's execution policy version as `execution_policy` (none for version 1),
+//! and version 2 needs the `bwrap-v2` sandbox; `sandbox.json` records the version. The invocation's `{MODEL}` and
+//! `{EFFORT}` are the arm's.
 //!
 //! Codex runs with project documents and apps off and every skill but the frozen one disabled. Claude runs in
 //! `--safe-mode`, which disables CLAUDE.md discovery, installed skills, plugins, hooks, MCP servers and custom
