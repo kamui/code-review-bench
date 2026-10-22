@@ -445,12 +445,14 @@ fn bytecode_left_in_the_clone_changes_the_tree_identity_and_python_b_leaves_none
 /// The captures hash the fixtures' frozen forges record.
 const FORGE_PIN: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 
-/// The receipt, stand-in `gh` and origin `frozen-forge setup` leaves in `attempt` for target `t1`.
+/// The receipt, stand-in `gh` and origin `frozen-forge setup` leaves in `attempt` for target `t1` after checking
+/// `packet`.
 fn prepare_forge(attempt: &Path, clone: &Path, packet: &Path) {
     write(
         &attempt.join("forge.json"),
         &format!(
-            r#"{{"target": "t1", "captures": {{"sha256": "{FORGE_PIN}"}}, "packet": {{"sha256": "{}"}}}}"#,
+            r#"{{"target": "t1", "captures": {{"sha256": "{FORGE_PIN}"}}, "packet": {{"path": "{}", "sha256": "{}"}}}}"#,
+            s(packet),
             file_sha256(packet)
         ),
     );
@@ -462,16 +464,16 @@ fn prepare_forge(attempt: &Path, clone: &Path, packet: &Path) {
 
 impl Claude {
     /// With the clone inside the attempt, as `run-cell` lays it out, which isolation settings require, and with
-    /// the receipt, stand-in `gh` and origin `frozen-forge setup` leaves when `forge` is set.
-    fn review_code(&self, name: &str, vars: Vars, forge: bool) -> Output {
+    /// the receipt, stand-in `gh` and origin `frozen-forge setup` leaves after checking `checked`, if given.
+    fn review_code(&self, name: &str, vars: Vars, checked: Option<&Path>) -> Output {
         let attempt = self.fixture.attempt(name);
         let clone = attempt.join("clone");
         fs::create_dir_all(&clone).unwrap();
         fs::create_dir_all(attempt.join("clone-work")).unwrap();
         git(&clone, &["init", "-q", "-b", "main"]);
         git(&clone, &["commit", "--allow-empty", "-qm", "fixture"]);
-        if forge {
-            prepare_forge(&attempt, &clone, &self.fixture.packet);
+        if let Some(checked) = checked {
+            prepare_forge(&attempt, &clone, checked);
         }
         let mut all = borrowed(&self.vars);
         all.extend(vars);
@@ -509,6 +511,9 @@ fn the_review_code_prompt_allows_forge_reads_only_under_the_open_network_policy(
     let v3 = Some("claude-strict-v3");
     let pin = Some(FORGE_PIN);
     let other_captures = "d".repeat(64);
+    let dispatched = Some(claude.fixture.packet.as_path());
+    let earlier = claude.fixture.root.join("earlier-packet.md");
+    write(&earlier, "The packet setup checked.\n");
     let profile = "execution policy 2 needs review-code under claude-strict-v3";
     for (name, policy, isolation, network, prepared, pinned, code, present, absent) in [
         (
@@ -516,7 +521,7 @@ fn the_review_code_prompt_allows_forge_reads_only_under_the_open_network_policy(
             None,
             None,
             "gated",
-            false,
+            None,
             None,
             23,
             vec![closed, forge],
@@ -527,7 +532,7 @@ fn the_review_code_prompt_allows_forge_reads_only_under_the_open_network_policy(
             Some("2"),
             v3,
             "gated",
-            true,
+            dispatched,
             pin,
             23,
             vec![open_forge],
@@ -538,7 +543,7 @@ fn the_review_code_prompt_allows_forge_reads_only_under_the_open_network_policy(
             Some("2"),
             v3,
             "gated",
-            true,
+            dispatched,
             None,
             2,
             vec!["execution policy 2 needs BENCH_FORGE_CAPTURES_SHA256"],
@@ -549,7 +554,7 @@ fn the_review_code_prompt_allows_forge_reads_only_under_the_open_network_policy(
             Some("2"),
             v3,
             "gated",
-            false,
+            None,
             pin,
             2,
             vec!["frozen-forge check: no frozen forge was set up"],
@@ -560,10 +565,21 @@ fn the_review_code_prompt_allows_forge_reads_only_under_the_open_network_policy(
             Some("2"),
             v3,
             "gated",
-            true,
+            dispatched,
             Some(other_captures.as_str()),
             2,
             vec!["set up from other captures than the run pins"],
+            vec![],
+        ),
+        (
+            "policy-2-other-packet",
+            Some("2"),
+            v3,
+            "gated",
+            Some(earlier.as_path()),
+            pin,
+            2,
+            vec!["does not start with the packet the frozen forge checked"],
             vec![],
         ),
         (
@@ -571,7 +587,7 @@ fn the_review_code_prompt_allows_forge_reads_only_under_the_open_network_policy(
             Some("2"),
             v2,
             "gated",
-            true,
+            dispatched,
             pin,
             2,
             vec![profile],
@@ -582,7 +598,7 @@ fn the_review_code_prompt_allows_forge_reads_only_under_the_open_network_policy(
             Some("2"),
             None,
             "gated",
-            true,
+            dispatched,
             pin,
             2,
             vec![profile],
@@ -593,7 +609,7 @@ fn the_review_code_prompt_allows_forge_reads_only_under_the_open_network_policy(
             Some("2"),
             v3,
             "on",
-            true,
+            dispatched,
             pin,
             2,
             vec!["execution policy 2 needs BENCH_NETWORK=gated"],
@@ -604,7 +620,7 @@ fn the_review_code_prompt_allows_forge_reads_only_under_the_open_network_policy(
             Some("3"),
             None,
             "gated",
-            false,
+            None,
             None,
             2,
             vec!["BENCH_EXECUTION_POLICY must be 1 or 2"],
@@ -671,7 +687,7 @@ fn claude_strict_v3_runs_only_behind_the_gate() {
             ("BENCH_ISOLATION", Some("claude-strict-v3")),
             ("BENCH_NETWORK", Some("on")),
         ],
-        false,
+        None,
     );
     assert_eq!(output.status.code(), Some(2), "{}", both(&output));
     assert!(
