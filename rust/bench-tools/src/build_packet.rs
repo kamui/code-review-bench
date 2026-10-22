@@ -77,6 +77,8 @@ query($owner:String!,$name:String!,$number:Int!){
 const EDITS_QUERY_BEFORE: &str = "query{ nodes(ids:";
 const EDITS_QUERY_AFTER: &str = "){ id ... on Comment{ userContentEdits(first:100){ totalCount nodes{ editedAt deletedAt diff } } } } }";
 
+/// A thread's state in the packet when the source holds no resolution, as a frozen capture does.
+pub(crate) const THREAD_STATE_UNKNOWN: &str = " \u{b7} thread resolution unknown";
 const LAST_PUSH: &str = "the last push";
 const OPENING: &str = "the pull request's opening";
 
@@ -2746,13 +2748,13 @@ impl Rendering<'_> {
                 let path = item(thread, "path")?.py_str();
                 let line = item_or(thread, "originalLine", "line")?.py_str();
                 let commit = short_oid(item(comment, "originalCommit")?)?;
-                let resolved = if item(thread, "isResolved")?.truthy() {
-                    "resolved"
-                } else {
-                    "unresolved"
+                let state = match item(thread, "isResolved")? {
+                    Value::Null => THREAD_STATE_UNKNOWN,
+                    resolved if resolved.truthy() => " \u{b7} thread resolved",
+                    _ => " \u{b7} thread unresolved",
                 };
                 w(format!(
-                    "**{thread_comments}.** {created} \u{b7} `{author}` \u{b7} `{path}:{line}` \u{b7} on commit `{commit}` \u{b7} thread {resolved}\n"
+                    "**{thread_comments}.** {created} \u{b7} `{author}` \u{b7} `{path}:{line}` \u{b7} on commit `{commit}`{state}\n"
                 ));
                 w(fence(item(comment, "body")?)? + "\n");
             }

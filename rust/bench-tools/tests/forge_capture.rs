@@ -122,7 +122,8 @@ fn pull_response(reviews: usize) -> String {
             "submittedAt":"2024-01-05T00:00:00Z","lastEditedAt":null,"commit":{{"oid":"{HEAD}"}}}},
           {{"id":"R2","fullDatabaseId":2,"author":{{"login":"bob"}},"state":"APPROVED","body":"After the fix in deadbeefcafe.",
             "submittedAt":"2024-01-12T00:00:00Z","lastEditedAt":null,"commit":{{"oid":"{HEAD}"}}}}]}},
-        "reviewThreads":{{"totalCount":0,"nodes":[]}},
+        "reviewThreads":{{"totalCount":1,"nodes":[{{"id":"T1","isResolved":true,"path":"a.py","comments":{{"totalCount":1,"nodes":[
+          {{"id":"RC1","fullDatabaseId":5,"author":{{"login":"bob"}},"body":"Rename this.","createdAt":"2024-01-05T00:00:00Z","lastEditedAt":null}}]}}}}]}},
         "comments":{{"totalCount":1,"nodes":[
           {{"id":"C2","fullDatabaseId":3,"author":{{"login":"carol"}},"body":"Merged.","createdAt":"2024-02-01T00:00:00Z","lastEditedAt":null}}]}}
         }}}}}}}}"#
@@ -209,6 +210,16 @@ fn fetch_freezes_the_pull_request_at_the_cutoff() {
         at(&restored[0], &["text_as_of"]).py_str(),
         "2024-01-01T00:00:00Z"
     );
+    let thread = &at(&pull, &["reviewThreads", "nodes"]).as_array().unwrap()[0];
+    assert!(matches!(at(thread, &["isResolved"]), Value::Null));
+    let resolution = at(&provenance, &["restored"])
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|record| at(record, &["field"]).py_str() == "isResolved")
+        .expect("the fetched thread state is recorded");
+    assert_eq!(at(resolution, &["record"]).py_str(), "review thread T1");
+    assert!(at(resolution, &["at_fetch"]).truthy());
 
     let checked = fixture.run(&["check"]);
     assert!(checked.status.success(), "{}", stderr(&checked));
@@ -224,7 +235,13 @@ fn check_reports_later_dates_excluded_commits_and_stated_facts() {
     let captured = std::fs::read_to_string(&graphql).unwrap();
     let tampered = captured
         .replace("2024-01-05T00:00:00Z", "2024-01-11T00:00:00Z")
-        .replace("Before the cutoff.", "See deadbeefcafe.");
+        .replace("Before the cutoff.", "See deadbeefcafe.")
+        .replace("\"isResolved\": null", "\"isResolved\": true")
+        .replacen(
+            "\"nameWithOwner\": \"o/r\",",
+            "\"nameWithOwner\": \"o/r\", \"description\": \"Later text.\",",
+            1,
+        );
     write(&graphql, &tampered);
     let packet = fixture.task().join("packet.v2.md");
     let stated = std::fs::read_to_string(&packet)
@@ -241,6 +258,8 @@ fn check_reports_later_dates_excluded_commits_and_stated_facts() {
         "abbreviates excluded commit",
         "packet.v2.md differs from its pin",
         "the packet states the head",
+        "reviewThreads[0].isResolved is set",
+        "graphql.json.data.repository.description is not a field the capture query requests",
     ] {
         assert!(
             report.contains(expected),
@@ -275,5 +294,48 @@ fn fetch_refuses_an_incomplete_connection_and_a_task_without_a_cutoff() {
         stderr(&missing).contains("holds no last-push cutoff"),
         "{}",
         stderr(&missing)
+    );
+}
+
+#[test]
+fn fetch_refuses_a_saved_response_with_fields_the_query_does_not_request() {
+    let fixture = Fixture::new("unrequested");
+    let response = pull_response(2).replacen(
+        r#""id":"PR_7","#,
+        r#""id":"PR_7","reactionGroups":[{"content":"THUMBS_UP","reactors":{"nodes":[{"login":"later"}]}}],"#,
+        1,
+    );
+    write(&fixture.replay.join("graphql.json"), &response);
+    let output = fixture.fetch();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output)
+            .contains("pullRequest.reactionGroups is not a field the capture query requests"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!fixture.task().join("forge").exists());
+}
+
+#[test]
+fn check_fails_when_the_named_mirrors_lack_a_generated_packet_mirror() {
+    let fixture = Fixture::new("mirrors");
+    let packet = fixture.task().join("packet.v2.md");
+    write(
+        &packet,
+        "# Task\n\n## 6. Prior review state through the frozen cutoff `2024-01-10T00:00:00Z`\n",
+    );
+    assert!(fixture.fetch().status.success());
+
+    let unchecked = fixture.run(&["check"]);
+    assert!(unchecked.status.success(), "{}", stderr(&unchecked));
+
+    let absent = fixture.root.join("no-mirrors");
+    let output = fixture.run(&["check", "--mirrors", absent.to_str().unwrap()]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("--mirrors holds no mirror at"),
+        "{}",
+        stderr(&output)
     );
 }

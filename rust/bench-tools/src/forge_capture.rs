@@ -55,9 +55,10 @@ const PULL_FIELDS: &str = "id fullDatabaseId number url title body state merged 
       commit{oid} originalCommit{oid} replyTo{ id fullDatabaseId } pullRequestReview{ id fullDatabaseId submittedAt } } } } }
   comments(first:100){ totalCount nodes{ id fullDatabaseId url author{login} authorAssociation body createdAt lastEditedAt } }";
 
-const UNDATED: [&str; 6] = [
+const UNDATED: [&str; 7] = [
     "authorAssociation: each author's association with the repository when the capture was fetched",
-    "isResolved and isOutdated on review threads: their state when the capture was fetched",
+    "isResolved on review threads: null, because the forge records no time a thread was resolved, so its state at the cutoff cannot be established; restored holds the state when the capture was fetched",
+    "isOutdated on review threads: its state when the capture was fetched",
     "headRefName, headRepository, headRepositoryOwner, isCrossRepository and maintainerCanModify: their values when the capture was fetched",
     "author logins, user logins, and label colors and descriptions: their values when the capture was fetched",
     "diffHunk, position, line and startLine on review comments and threads: the forge's values when the capture was fetched",
@@ -265,6 +266,177 @@ fn issue_query() -> String {
         "query($owner:String!,$name:String!,$number:Int!){{ repository(owner:$owner,name:$name){{ url nameWithOwner \
          issue(number:$number){{ {ISSUE_FIELDS} }} }} }}"
     )
+}
+
+/// The fields a query selects, by response key; a leaf field has no selection.
+#[derive(Default)]
+struct Selection {
+    fields: Vec<(String, Option<Selection>)>,
+    fragments: Vec<(String, Selection)>,
+}
+
+enum Token {
+    Name(String),
+    Colon,
+    Open,
+    Close,
+    Spread,
+}
+
+/// The query's tokens, without its arguments.
+fn tokens(query: &str) -> Vec<Token> {
+    let mut found = Vec::new();
+    let mut chars = query.chars().peekable();
+    while let Some(next) = chars.next() {
+        match next {
+            '(' => {
+                for skipped in chars.by_ref() {
+                    if skipped == ')' {
+                        break;
+                    }
+                }
+            }
+            '{' => found.push(Token::Open),
+            '}' => found.push(Token::Close),
+            ':' => found.push(Token::Colon),
+            '.' => {
+                while chars.next_if_eq(&'.').is_some() {}
+                found.push(Token::Spread);
+            }
+            first if first.is_alphanumeric() || first == '_' => {
+                let mut name = first.to_string();
+                while let Some(more) = chars.next_if(|more| more.is_alphanumeric() || *more == '_')
+                {
+                    name.push(more);
+                }
+                found.push(Token::Name(name));
+            }
+            _ => {}
+        }
+    }
+    found
+}
+
+fn selection<'a>(
+    tokens: &mut std::iter::Peekable<impl Iterator<Item = &'a Token>>,
+) -> Result<Selection, Failure> {
+    let malformed = || input("the capture query does not parse");
+    let mut parsed = Selection::default();
+    loop {
+        match tokens.next() {
+            None | Some(Token::Close) => return Ok(parsed),
+            Some(Token::Spread) => match (tokens.next(), tokens.next(), tokens.next()) {
+                (Some(Token::Name(on)), Some(Token::Name(kind)), Some(Token::Open))
+                    if on == "on" =>
+                {
+                    parsed.fragments.push((kind.clone(), selection(tokens)?));
+                }
+                _ => return Err(malformed()),
+            },
+            Some(Token::Name(key)) => {
+                if tokens
+                    .next_if(|next| matches!(next, Token::Colon))
+                    .is_some()
+                    && !matches!(tokens.next(), Some(Token::Name(_)))
+                {
+                    return Err(malformed());
+                }
+                let sub = match tokens.next_if(|next| matches!(next, Token::Open)) {
+                    Some(_) => Some(selection(tokens)?),
+                    None => None,
+                };
+                parsed.fields.push((key.clone(), sub));
+            }
+            Some(Token::Colon | Token::Open) => return Err(malformed()),
+        }
+    }
+}
+
+fn parse(query: &str) -> Result<Selection, Failure> {
+    selection(&mut tokens(query).iter().peekable())
+}
+
+fn take(selection: Selection, key: &str) -> Result<Selection, Failure> {
+    selection
+        .fields
+        .into_iter()
+        .find(|(name, _)| name == key)
+        .and_then(|(_, sub)| sub)
+        .ok_or_else(|| input(format!("the capture query selects no {key}")))
+}
+
+/// The shapes of graphql.json and issues.json: exactly what the capture's queries request.
+fn schemas() -> Result<(Selection, Selection), Failure> {
+    let graphql = Selection {
+        fields: vec![("data".into(), Some(take(parse(&pull_query())?, "query")?))],
+        fragments: Vec::new(),
+    };
+    let issue = take(
+        take(take(parse(&issue_query())?, "query")?, "repository")?,
+        "issue",
+    )?;
+    let entry = Selection {
+        fields: vec![("repository".into(), None), ("issue".into(), Some(issue))],
+        fragments: Vec::new(),
+    };
+    let issues = Selection {
+        fields: vec![("issues".into(), Some(entry))],
+        fragments: Vec::new(),
+    };
+    Ok((graphql, issues))
+}
+
+/// Report each field the capture holds that its query does not request, and each value of the wrong shape.
+fn unrequested(value: &Value, selection: &Selection, place: &str, problems: &mut Vec<String>) {
+    match value {
+        Value::Null => {}
+        Value::Array(members) => {
+            for (index, member) in members.iter().enumerate() {
+                unrequested(member, selection, &format!("{place}[{index}]"), problems);
+            }
+        }
+        Value::Object(members) => {
+            let kind = text(value, "__typename");
+            let fields: Vec<&(String, Option<Selection>)> = selection
+                .fields
+                .iter()
+                .chain(
+                    selection
+                        .fragments
+                        .iter()
+                        .filter(|(on, _)| Some(on.as_str()) == kind)
+                        .flat_map(|(_, fragment)| fragment.fields.iter()),
+                )
+                .collect();
+            for (key, member) in members.iter() {
+                let path = format!("{place}.{key}");
+                match fields.iter().find(|(name, _)| name == key) {
+                    None => {
+                        problems.push(format!("{path} is not a field the capture query requests"))
+                    }
+                    Some((_, Some(sub))) => unrequested(member, sub, &path, problems),
+                    Some((_, None)) if matches!(member, Value::Object(_) | Value::Array(_)) => {
+                        problems.push(format!(
+                            "{path} holds structure where the query requests a scalar"
+                        ));
+                    }
+                    Some((_, None)) => {}
+                }
+            }
+        }
+        _ => problems.push(format!(
+            "{place} is a scalar where the query requests fields"
+        )),
+    }
+}
+
+/// The capture's fields that its queries do not request.
+fn unrequested_in(graphql: &Value, issues: &Value) -> Result<Vec<String>, Failure> {
+    let (graphql_schema, issues_schema) = schemas()?;
+    let mut problems = Vec::new();
+    unrequested(graphql, &graphql_schema, "graphql.json", &mut problems);
+    unrequested(issues, &issues_schema, "issues.json", &mut problems);
+    Ok(problems)
 }
 
 /// Refuse a response that is an error or leaves a connection unfinished.
@@ -651,6 +823,16 @@ impl Freeze {
                 }
             }
             threads.retain(|thread| !nodes(thread, "comments").is_empty());
+            for thread in threads.iter_mut() {
+                let record = format!("review thread {}", identity(thread).py_str());
+                self.restore(
+                    &record,
+                    "isResolved",
+                    &Value::Null,
+                    field(thread, "isResolved").unwrap_or(&Value::Null),
+                );
+                set(thread, "isResolved", Value::Null);
+            }
         }
         if let Some(comments) = nodes_mut(pull, "comments") {
             *comments = self.records(
@@ -1025,15 +1207,21 @@ pub fn fetch(root: &Path, id: &str, replay: Option<&Path>) -> Result<String, Fai
         ),
         ("notes", Value::Array(freeze.notes)),
     ]);
+    let graphql = object(vec![("data", object(vec![("repository", repository)]))]);
+    let issues = object(vec![("issues", kept_issues)]);
+    let unrequested = unrequested_in(&graphql, &issues)?;
+    if !unrequested.is_empty() {
+        return Err(refuse(format!(
+            "{id}: the forge response holds what the capture query does not request: {}",
+            unrequested.join("; ")
+        )));
+    }
     let forge = task.dir.join("forge");
     std::fs::create_dir_all(&forge)
         .map_err(|error| input(format!("{}: {error}", forge.display())))?;
     for (name, value) in [
-        (
-            "graphql.json",
-            object(vec![("data", object(vec![("repository", repository)]))]),
-        ),
-        ("issues.json", object(vec![("issues", kept_issues)])),
+        ("graphql.json", graphql),
+        ("issues.json", issues),
         ("provenance.json", provenance),
     ] {
         let path = forge.join(name);
@@ -1196,6 +1384,7 @@ fn check_one(
     for (name, value) in [("graphql.json", &graphql), ("issues.json", &issues)] {
         walk(value, name, cut.at, &task.negative, &mut problems);
     }
+    problems.extend(unrequested_in(&graphql, &issues)?);
     let pull = field(&graphql, "data")
         .and_then(|data| field(data, "repository"))
         .and_then(|repository| field(repository, "pullRequest"))
@@ -1212,6 +1401,13 @@ fn check_one(
     ] {
         if !field(&pull, key).is_some_and(|found| found.py_eq(&expected)) {
             problems.push(format!("pullRequest.{key} is not {}", expected.py_str()));
+        }
+    }
+    for (index, thread) in nodes(&pull, "reviewThreads").iter().enumerate() {
+        if !matches!(field(thread, "isResolved"), None | Some(Value::Null)) {
+            problems.push(format!(
+                "reviewThreads[{index}].isResolved is set; the forge cannot establish a thread's state at the cutoff"
+            ));
         }
     }
     let last = nodes(&pull, "commits")
@@ -1241,10 +1437,11 @@ fn check_one(
         };
         let mirror = mirrors.join(format!("{id}.git"));
         if !mirror.is_dir() {
-            return Ok(format!(
-                "capture checked; packet rebuild not checked (no mirror at {})",
+            fail(format!(
+                "the packet rebuild is not checked: --mirrors holds no mirror at {}",
                 mirror.display()
             ));
+            return Ok("capture checked; packet rebuild not checked".into());
         }
         let arguments = rebuild_arguments(&task, &cut, &mirror, &forge);
         match build_packet::render(&arguments) {
@@ -1310,15 +1507,26 @@ fn rebuild_arguments(task: &Task, cut: &Cutoff, mirror: &Path, forge: &Path) -> 
 }
 
 /// The first line where the rebuilt packet and the pinned one differ, other than the merge state the capture
-/// rolls back.
+/// rolls back and the thread resolution it cannot establish.
 fn packet_difference(rebuilt: &str, pinned: &str) -> Option<String> {
     let rebuilt: Vec<&str> = rebuilt.split('\n').collect();
     let pinned: Vec<&str> = pinned.split('\n').collect();
     let merge_state =
         |line: &str| line.starts_with("| `state` |") || line.starts_with("| `merged` |");
+    let thread_state = |rebuilt: &str, pinned: &str| {
+        rebuilt
+            .strip_suffix(build_packet::THREAD_STATE_UNKNOWN)
+            .and_then(|shared| pinned.strip_prefix(shared))
+            .is_some_and(|state| {
+                [" \u{b7} thread resolved", " \u{b7} thread unresolved"].contains(&state)
+            })
+    };
     for index in 0..rebuilt.len().max(pinned.len()) {
         let (left, right) = (rebuilt.get(index).copied(), pinned.get(index).copied());
-        if left == right || (left.is_some_and(merge_state) && right.is_some_and(merge_state)) {
+        if left == right
+            || (left.is_some_and(merge_state) && right.is_some_and(merge_state))
+            || matches!((left, right), (Some(left), Some(right)) if thread_state(left, right))
+        {
             continue;
         }
         return Some(format!(
