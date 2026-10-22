@@ -31,9 +31,16 @@ const SYSTEM_PATH: [&str; 6] = [
     "/sbin",
     "/bin",
 ];
-/// What offline steps add. Playwright's install script downloads browsers, which an unconfined post-clone step
-/// skipped only because the host's `~/.cache/ms-playwright` already held them (j-trpc-5017).
-const OFFLINE: [(&str, &str); 1] = [("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", "1")];
+/// What offline steps add: they turn off install-time checks that need a download or the registry, which unconfined
+/// post-clone steps met through the host's network and caches. Playwright's install script downloads browsers
+/// (j-trpc-5017 found them in `~/.cache/ms-playwright`). pnpm 11 checks the lockfile against the workspace's
+/// `trustPolicy` and `minimumReleaseAge` using registry metadata (r-base-ui-5460 used `~/.cache/pnpm`); the build
+/// step that filled the store from the same lockfile ran those checks online.
+const OFFLINE: [(&str, &str); 3] = [
+    ("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", "1"),
+    ("pnpm_config_trust_policy", "off"),
+    ("pnpm_config_minimum_release_age", "0"),
+];
 /// mise's installs, uv's Pythons (a uv virtualenv links its interpreter there) and bun, under the home.
 const HOME_TOOLCHAINS: [&str; 3] = [".local/share/mise", ".local/share/uv", ".bun"];
 /// Executables shown by themselves: uv sits in `~/.local/bin` beside the clients' launchers.
@@ -406,5 +413,11 @@ mod tests {
         let (code, seen) = output(&shared, interfaces, &root.0);
         assert_eq!(code, 0, "{seen}");
         assert_eq!(seen.split_whitespace().count(), host.lines().count() - 2);
+        let skips = |sandbox: &Sandbox| {
+            output(sandbox, "env", &root.0)
+                .1
+                .contains("pnpm_config_trust_policy=off")
+        };
+        assert!(skips(&offline) && !skips(&shared));
     }
 }

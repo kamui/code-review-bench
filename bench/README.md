@@ -157,8 +157,9 @@ system read-only and hides every home directory, the host home, `/mnt`, `/run` a
 tmpfs mounts. Each step can write only its clone, `{work}` and `{cache}`, and sees uv, bun and the mise
 toolchains read-only. It starts from an empty environment plus `HOME`, `USER`, `LOGNAME`, `LANG`,
 `LC_ALL`, `LC_CTYPE`, `TZ`, a set `PATH` and `TMPDIR`, and the recipe's `env`. Build steps share the host
-network; `post_clone` and `smoke` steps get their own empty network namespace and
-`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`, since Playwright's install script cannot download browsers offline. The cache receipt,
+network. `post_clone` and `smoke` steps get their own empty network namespace and settings that turn off
+install-time checks needing the network: `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`, and pnpm 11's
+`trustPolicy` and `minimumReleaseAge` lockfile checks, which the online build step already ran. The cache receipt,
 `prepare`'s record and `smoke.json` record the sandbox each phase ran in. The six
 migrated targets use a uv-built relocatable Python 3.13 virtualenv (requests; its dev requirements
 pin a pytest that cannot import under 3.14), a corepack-managed pnpm store whose launcher links
