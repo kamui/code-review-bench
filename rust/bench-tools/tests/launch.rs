@@ -603,8 +603,8 @@ fn prepare_restores_only_the_recorded_cache_archive_into_its_own_copy() {
     }
     let provisioned = Provisioned::new("cache");
     let cache_config = r#"{"kind": "test",
-        "build": ["mkdir -p {cache}/store {cache}/ro/sub && printf hi > {cache}/store/f && printf r > {cache}/ro/sub/g && ln -s store {cache}/inside && chmod 555 {cache}/ro/sub {cache}/ro", "test -f {clone}/f.txt && test ! -e {cache}/../../mirrors"],
-        "post_clone": ["test -f {cache}/store/f && printf x > {work}/marker && test \"$BENCH_TEST_ENV\" = {cache}/store && printf w > {cache}/store/written"],
+        "build": ["mkdir -p {cache}/store {cache}/ro/sub && printf hi > {cache}/store/f && printf r > {cache}/ro/sub/g && ln -s store {cache}/inside && chmod 555 {cache}/ro/sub {cache}/ro", "test -f {clone}/f.txt && test ! -e {cache}/../../mirrors && printf e > $HOME/.cache/prisma/engine"],
+        "post_clone": ["test -f {cache}/store/f && printf x > {work}/marker && test \"$BENCH_TEST_ENV\" = {cache}/store && printf w > {cache}/store/written && test \"$(cat $HOME/.cache/prisma/engine)\" = e"],
         "env": {"BENCH_TEST_ENV": "{cache}/store"},
         "smoke": [{"name": "read", "command": "cat $BENCH_TEST_ENV/f", "revision": "head"}]}"#;
     provisioned.set_target(&format!(r#", "provisioning": {{"cache": {cache_config}}}"#));
@@ -635,6 +635,17 @@ fn prepare_restores_only_the_recorded_cache_archive_into_its_own_copy() {
         "provision-bwrap-v1"
     );
     assert_eq!(text(field(&receipt, "sandbox.network")), "shared");
+    assert_eq!(
+        fs::read_to_string(cache.join("caches/t-1/home/.cache/prisma/engine")).unwrap(),
+        "e",
+        "a build step's download cache is kept in the archived cache"
+    );
+    assert_eq!(
+        field(&receipt, "sandbox.home_caches")
+            .as_array()
+            .map(<[Value]>::len),
+        Some(1)
+    );
     assert!(
         !cache.join("scratch/t-1-cache").exists(),
         "the scratch clone must be removed"

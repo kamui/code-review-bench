@@ -450,7 +450,8 @@ impl Substitutions {
             .filter(|path| path.is_dir())
             .cloned()
             .collect();
-        Sandbox::new(network, &writable, &environment)
+        let cache = Some(self.cache.as_path()).filter(|cache| cache.is_dir());
+        Sandbox::new(network, &writable, cache, &environment)
     }
 }
 
@@ -793,14 +794,14 @@ fn build_cache(
         clone: scratch.to_path_buf(),
         work: work.to_path_buf(),
     };
-    let sandbox = if config.build.is_empty() {
+    let mut sandbox = if config.build.is_empty() {
         None
     } else {
         Some(substitutions.sandbox(config, Network::Shared)?)
     };
     let started = now();
     let mut steps = Vec::new();
-    if let Some(sandbox) = &sandbox {
+    if let Some(sandbox) = &mut sandbox {
         for command in &config.build {
             let rendered = substitutions.render(command);
             let ran = step_in(sandbox, &rendered, scratch)?;
@@ -814,6 +815,7 @@ fn build_cache(
                 ]));
             }
         }
+        sandbox.drop_empty_home_caches(cache);
     }
     let mut archive_record = Value::Null;
     if !config.build.is_empty() {

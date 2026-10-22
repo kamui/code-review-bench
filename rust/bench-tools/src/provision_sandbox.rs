@@ -6,7 +6,8 @@
 //! shown read-only. Steps start from an empty environment plus [`INHERITED`], [`OFFLINE`] when offline and the
 //! recipe's `env`, so host credential variables stay out. The vsock filter and the host Unix socket masks come from
 //! the network gate. Build steps share the host network, since they download dependencies; post-clone and smoke
-//! steps get their own empty network namespace and a private copy of each [`SEEDED`] cache.
+//! steps get their own empty network namespace. Each [`HOME_CACHES`] download cache lives in the task cache, so the
+//! online build fills it, the archive keeps it and offline steps read it from the restored cache.
 
 use crate::network_gate;
 use crate::pyjson::Value;
@@ -41,9 +42,10 @@ const OFFLINE: [(&str, &str); 3] = [
     ("pnpm_config_trust_policy", "off"),
     ("pnpm_config_minimum_release_age", "0"),
 ];
-/// Host download caches, under the home, that offline steps get a private writable copy of. Prisma's install script
-/// generates a client in the clone from cached engines and updates their timestamps (j-trpc-5017's examples).
-const SEEDED: [&str; 1] = [".cache/prisma"];
+/// Download caches under the home that install scripts fill online and need again offline. Each is shown from
+/// `{cache}/home/<path>`, so it is archived and hashed with the task cache instead of read from the host. Prisma's
+/// install script downloads its engines here and generates a client in the clone from them (j-trpc-5017's examples).
+const HOME_CACHES: [&str; 1] = [".cache/prisma"];
 /// mise's installs, uv's Pythons (a uv virtualenv links its interpreter there) and bun, under the home. Only uv's
 /// `python` directory: its data directory also holds `uv auth login` credentials.
 const HOME_TOOLCHAINS: [&str; 3] = [".local/share/mise", ".local/share/uv/python", ".bun"];
@@ -65,9 +67,9 @@ pub struct Sandbox {
     readwrite: Vec<String>,
     masks: Vec<String>,
     environment: Vec<(String, String)>,
-    /// Each seeded cache's private copy and the host path it is shown at.
-    seeded: Vec<(String, String)>,
-    /// A private directory holding the vsock filter and the seeded copies, removed on drop.
+    /// Each home cache's directory in the task cache and the path it is shown at.
+    home_caches: Vec<(PathBuf, String)>,
+    /// A private directory holding the vsock filter, removed on drop.
     private: PathBuf,
 }
 
@@ -81,17 +83,24 @@ fn set(environment: &mut Vec<(String, String)>, name: &str, value: String) {
 }
 
 impl Sandbox {
-    /// A sandbox that can write only `readwrite`, with `recipe` over the host's [`INHERITED`] variables.
-    pub fn new(network: Network, readwrite: &[PathBuf], recipe: &[(String, String)]) -> P<Self> {
+    /// A sandbox that can write only `readwrite`, with `recipe` over the host's [`INHERITED`] variables. With a task
+    /// `cache`, it shows the [`HOME_CACHES`] kept there; a build makes them, and offline phases use the restored ones.
+    pub fn new(
+        network: Network,
+        readwrite: &[PathBuf],
+        cache: Option<&Path>,
+        recipe: &[(String, String)],
+    ) -> P<Self> {
         let host: Vec<(String, String)> = std::env::vars_os()
             .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
             .collect();
-        Self::for_host(network, readwrite, recipe, &host)
+        Self::for_host(network, readwrite, cache, recipe, &host)
     }
 
     fn for_host(
         network: Network,
         readwrite: &[PathBuf],
+        cache: Option<&Path>,
         recipe: &[(String, String)],
         host: &[(String, String)],
     ) -> P<Self> {
@@ -187,7 +196,20 @@ impl Sandbox {
                 .map_err(|error| {
                     format!("cannot make the provisioning sandbox directory: {error}")
                 })?;
-        let mut sandbox = Self {
+        let mut home_caches = Vec::new();
+        if let (Some(home), Some(cache)) = (&home, cache) {
+            for path in HOME_CACHES {
+                let kept = cache.join("home").join(path);
+                if network == Network::Shared {
+                    std::fs::create_dir_all(&kept)
+                        .map_err(|error| format!("cannot make {}: {error}", kept.display()))?;
+                }
+                if kept.is_dir() {
+                    home_caches.push((kept, home.join(path).to_string_lossy().into_owned()));
+                }
+            }
+        }
+        let sandbox = Self {
             bwrap,
             network,
             hidden,
@@ -195,26 +217,27 @@ impl Sandbox {
             readwrite,
             masks,
             environment,
-            seeded: Vec::new(),
+            home_caches,
             private,
         };
         network_gate::write_vsock_filter(&sandbox.filter())?;
-        if network == Network::Off
-            && let Some(home) = &home
-        {
-            for (index, path) in SEEDED.iter().enumerate() {
-                let source = home.join(path);
-                if source.is_dir() {
-                    let copy = sandbox.private.join(format!("seed-{index}"));
-                    seed(&source, &copy)?;
-                    sandbox.seeded.push((
-                        copy.to_string_lossy().into_owned(),
-                        source.to_string_lossy().into_owned(),
-                    ));
+        Ok(sandbox)
+    }
+
+    /// After a build, remove the home caches its steps left empty, so the archive holds only the ones in use.
+    pub fn drop_empty_home_caches(&mut self, cache: &Path) {
+        let root = cache.join("home");
+        self.home_caches.retain(|(kept, _)| {
+            let empty = std::fs::read_dir(kept).is_ok_and(|mut entries| entries.next().is_none());
+            if empty {
+                for directory in kept.ancestors().take_while(|path| path.starts_with(&root)) {
+                    if std::fs::remove_dir(directory).is_err() {
+                        break;
+                    }
                 }
             }
-        }
-        Ok(sandbox)
+            !empty
+        });
     }
 
     fn filter(&self) -> PathBuf {
@@ -248,8 +271,12 @@ impl Sandbox {
         for path in &self.readwrite {
             arguments.extend(["--bind".to_string(), path.clone(), path.clone()]);
         }
-        for (copy, shown) in &self.seeded {
-            arguments.extend(["--bind".to_string(), copy.clone(), shown.clone()]);
+        for (kept, shown) in &self.home_caches {
+            arguments.extend([
+                "--bind".to_string(),
+                kept.to_string_lossy().into_owned(),
+                shown.clone(),
+            ]);
         }
         arguments.extend(self.masks.iter().cloned());
         arguments.extend([
@@ -298,13 +325,22 @@ impl Sandbox {
                 ("readonly", texts(&self.readonly)),
                 ("readwrite", texts(&self.readwrite)),
                 (
-                    "seeded",
-                    texts(
-                        &self
-                            .seeded
+                    "home_caches",
+                    Value::Array(
+                        self.home_caches
                             .iter()
-                            .map(|(_, shown)| shown.clone())
-                            .collect::<Vec<_>>(),
+                            .map(|(kept, shown)| {
+                                Value::Object(
+                                    [
+                                        ("path", Value::Str(shown.clone())),
+                                        ("cache", Value::Str(kept.to_string_lossy().into_owned())),
+                                    ]
+                                    .into_iter()
+                                    .map(|(key, value)| (key.to_string(), value))
+                                    .collect(),
+                                )
+                            })
+                            .collect(),
                     ),
                 ),
                 (
@@ -338,24 +374,6 @@ impl Drop for Sandbox {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.private);
     }
-}
-
-fn seed(source: &Path, copy: &Path) -> P<()> {
-    let done = Command::new("cp")
-        .args(["-a", "--reflink=auto"])
-        .arg(source)
-        .arg(copy)
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|error| format!("cannot run cp: {error}"))?;
-    if !done.status.success() {
-        return Err(format!(
-            "cannot copy {} for the sandbox: {}",
-            source.display(),
-            String::from_utf8_lossy(&done.stderr).trim()
-        ));
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -416,8 +434,14 @@ mod tests {
         .map(|(name, value)| (name.to_string(), value))
         .to_vec();
         let recipe = [("RECIPE_VALUE".to_string(), "kept".to_string())];
-        let sandbox =
-            Sandbox::for_host(Network::Off, std::slice::from_ref(&clone), &recipe, &host).unwrap();
+        let sandbox = Sandbox::for_host(
+            Network::Off,
+            std::slice::from_ref(&clone),
+            None,
+            &recipe,
+            &host,
+        )
+        .unwrap();
         let sibling = root.0.join("sibling/clone/answer.txt");
         let (code, seen) = output(
             &sandbox,
@@ -462,36 +486,83 @@ mod tests {
     }
 
     #[test]
-    fn an_offline_step_writes_only_a_private_copy_of_a_seeded_cache() {
+    fn a_home_cache_comes_from_the_task_cache_and_never_from_the_host() {
         if which("bwrap").is_none() {
             return;
         }
-        let root = scratch("provision-seed-");
-        let engine = root.0.join("home/.cache/prisma/engine");
-        std::fs::create_dir_all(engine.parent().unwrap()).unwrap();
-        std::fs::write(&engine, "engine").unwrap();
+        let root = scratch("provision-home-cache-");
+        let host_engine = root.0.join("home/.cache/prisma/engine");
+        std::fs::create_dir_all(host_engine.parent().unwrap()).unwrap();
+        std::fs::write(&host_engine, "host engine").unwrap();
         let clone = root.0.join("clone");
-        std::fs::create_dir_all(&clone).unwrap();
+        let cache = root.0.join("cache");
+        for path in [&clone, &cache] {
+            std::fs::create_dir_all(path).unwrap();
+        }
         let host = [(
             "HOME".to_string(),
             root.0.join("home").to_string_lossy().into_owned(),
         )];
-        let sandbox =
-            Sandbox::for_host(Network::Off, std::slice::from_ref(&clone), &[], &host).unwrap();
+        let writable = [clone.clone(), cache.clone()];
+        let read = "cat $HOME/.cache/prisma/engine 2>/dev/null; echo";
+        let mut build =
+            Sandbox::for_host(Network::Shared, &writable, Some(&cache), &[], &host).unwrap();
         let (code, seen) = output(
-            &sandbox,
-            "cat $HOME/.cache/prisma/engine > copied && printf changed > $HOME/.cache/prisma/engine",
+            &build,
+            &format!("{read}; printf built > $HOME/.cache/prisma/engine"),
             &clone,
         );
-        assert_eq!(code, 0, "{seen}");
+        assert_eq!((code, seen.as_str()), (0, "\n"));
+        build.drop_empty_home_caches(&cache);
         assert_eq!(
-            std::fs::read_to_string(clone.join("copied")).unwrap(),
-            "engine"
+            std::fs::read_to_string(cache.join("home/.cache/prisma/engine")).unwrap(),
+            "built"
         );
-        assert_eq!(std::fs::read_to_string(&engine).unwrap(), "engine");
-        let private = sandbox.private.clone();
-        drop(sandbox);
-        assert!(!private.exists(), "the private copy must be removed");
+        let shown = Value::Str(host_engine.parent().unwrap().to_string_lossy().into_owned());
+        let listed = |sandbox: &Sandbox| match sandbox.receipt() {
+            Value::Object(fields) => match fields.get("home_caches") {
+                Some(Value::Array(items)) => items
+                    .iter()
+                    .filter_map(|item| item.as_object()?.get("path").cloned())
+                    .collect::<Vec<_>>(),
+                _ => Vec::new(),
+            },
+            _ => Vec::new(),
+        };
+        assert!(listed(&build).iter().any(|path| path.py_eq(&shown)));
+
+        let offline = Sandbox::for_host(Network::Off, &writable, Some(&cache), &[], &host).unwrap();
+        assert_eq!(output(&offline, read, &clone), (0, "built\n".to_string()));
+        assert_eq!(
+            std::fs::read_to_string(&host_engine).unwrap(),
+            "host engine"
+        );
+
+        let unused = root.0.join("unused");
+        std::fs::create_dir_all(&unused).unwrap();
+        let mut build = Sandbox::for_host(
+            Network::Shared,
+            std::slice::from_ref(&unused),
+            Some(&unused),
+            &[],
+            &host,
+        )
+        .unwrap();
+        build.drop_empty_home_caches(&unused);
+        assert!(
+            !unused.join("home").exists(),
+            "an unused home cache leaves no trace"
+        );
+        assert!(listed(&build).is_empty());
+        let offline = Sandbox::for_host(
+            Network::Off,
+            std::slice::from_ref(&unused),
+            None,
+            &[],
+            &host,
+        )
+        .unwrap();
+        assert_eq!(output(&offline, read, &unused), (0, "\n".to_string()));
     }
 
     #[test]
@@ -501,12 +572,13 @@ mod tests {
         }
         let root = scratch("provision-network-");
         let interfaces = "tail -n +3 /proc/net/dev | cut -d: -f1 | tr -d ' ' | sort | tr '\\n' ' '";
-        let offline = Sandbox::new(Network::Off, std::slice::from_ref(&root.0), &[]).unwrap();
+        let offline = Sandbox::new(Network::Off, std::slice::from_ref(&root.0), None, &[]).unwrap();
         assert_eq!(
             output(&offline, interfaces, &root.0),
             (0, "lo ".to_string())
         );
-        let shared = Sandbox::new(Network::Shared, std::slice::from_ref(&root.0), &[]).unwrap();
+        let shared =
+            Sandbox::new(Network::Shared, std::slice::from_ref(&root.0), None, &[]).unwrap();
         let host = std::fs::read_to_string("/proc/net/dev").unwrap();
         let (code, seen) = output(&shared, interfaces, &root.0);
         assert_eq!(code, 0, "{seen}");
