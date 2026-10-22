@@ -272,7 +272,7 @@ fn iso_utc(seconds: i64) -> String {
 }
 
 /// The failure lines of the leak, history and diff-identity checks; empty when everything holds.
-fn checks(
+pub(crate) fn checks(
     repo: &Path,
     target: &Target,
     base_ref: &str,
@@ -334,7 +334,7 @@ fn checks(
     failures
 }
 
-fn mirror_path(cache_root: &Path, target: &Target) -> PathBuf {
+pub(crate) fn mirror_path(cache_root: &Path, target: &Target) -> PathBuf {
     cache_root
         .join("mirrors")
         .join(format!("{}.git", target.id))

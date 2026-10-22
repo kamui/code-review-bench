@@ -79,6 +79,22 @@ const EDITS_QUERY_AFTER: &str = "){ id ... on Comment{ userContentEdits(first:10
 
 /// A thread's state in the packet when the source holds no resolution, as a frozen capture does.
 pub(crate) const THREAD_STATE_UNKNOWN: &str = " \u{b7} thread resolution unknown";
+pub(crate) const THREAD_RESOLVED: &str = " \u{b7} thread resolved";
+pub(crate) const THREAD_UNRESOLVED: &str = " \u{b7} thread unresolved";
+pub(crate) const STATE_ROW: &str = "| `state` |";
+pub(crate) const MERGED_ROW: &str = "| `merged` |";
+pub(crate) const NOT_MERGED: &str = "**`false`** (not merged)";
+pub(crate) const MERGE_BASE_ROW: &str = "| Merge-base |";
+pub(crate) const BASE_MOVED_BEFORE_MERGE: &str = "the base branch moved before the merge";
+/// Prose this builder writes that says the pull request merged.
+#[cfg(test)]
+pub(crate) const MERGE_PROSE: [&str; 4] = [
+    BASE_MOVED_BEFORE_MERGE,
+    MERGE_INSTANT,
+    "retrospective review",
+    "when the reviewed pull request merged",
+];
+const MERGE_INSTANT: &str = "the merge instant";
 const LAST_PUSH: &str = "the last push";
 const OPENING: &str = "the pull request's opening";
 
@@ -337,6 +353,13 @@ fn text_or_empty(value: &Value) -> Result<&str, PyError> {
 /// Microseconds since 0001-01-01T00:00:00Z.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Instant(i64);
+
+impl Instant {
+    /// Whole seconds from `self` to `later`.
+    pub(crate) fn seconds_until(self, later: Self) -> i64 {
+        (later.0 - self.0).div_euclid(1_000_000)
+    }
+}
 
 enum InstantError {
     /// `ValueError`, with its message.
@@ -2052,7 +2075,7 @@ fn prepare(a: &Arguments) -> Result<Prepared, Failure> {
     };
     let (cutoff_at, cutoff_is, cutoff_source) = if let Some(raw) = cutoff_given {
         let cutoff_at = instant_option("--cutoff", raw)?;
-        let cutoff_is = (Some(cutoff_at) == merged_at).then_some("the merge instant");
+        let cutoff_is = (Some(cutoff_at) == merged_at).then_some(MERGE_INSTANT);
         (cutoff_at, cutoff_is, "given as --cutoff".to_string())
     } else {
         let mut pushed = None;
@@ -2574,11 +2597,13 @@ impl Rendering<'_> {
             a.base_sha
         ));
         let merge_note = if a.merge_base == a.base_sha {
-            " (identical to the base SHA)"
+            " (identical to the base SHA)".to_string()
         } else {
-            " (**differs from the base SHA**: the base branch moved before the merge; review against the merge-base)"
+            format!(
+                " (**differs from the base SHA**: {BASE_MOVED_BEFORE_MERGE}; review against the merge-base)"
+            )
         };
-        w(format!("| Merge-base | `{}`{merge_note} |", a.merge_base));
+        w(format!("{MERGE_BASE_ROW} `{}`{merge_note} |", a.merge_base));
         w(format!(
             "| Diff | {} files, +{} / \u{2212}{}, {} commits |",
             self.rows.len(),
@@ -2586,12 +2611,12 @@ impl Rendering<'_> {
             self.dels,
             self.commits.len()
         ));
-        w(format!("| `state` | `{}` |", item(p, "state")?.py_str()));
+        w(format!("{STATE_ROW} `{}` |", item(p, "state")?.py_str()));
         let merged = item(p, "merged")?.truthy();
         let merged_cell = if merged {
             format!("**`true`** (merged {})", item(p, "mergedAt")?.py_str())
         } else {
-            "**`false`** (not merged)".to_string()
+            NOT_MERGED.to_string()
         };
         let stance = if merged {
             "the target is merged, so this is a **retrospective review with publication disabled**"
@@ -2603,7 +2628,7 @@ impl Rendering<'_> {
         } else {
             "The target is not merged; this review is frozen at the cutoff."
         };
-        w(format!("| `merged` | {merged_cell} |"));
+        w(format!("{MERGED_ROW} {merged_cell} |"));
         w(format!(
             "| `isDraft` | `{}` |",
             if self.draft.truthy() { "true" } else { "false" }
@@ -2750,8 +2775,8 @@ impl Rendering<'_> {
                 let commit = short_oid(item(comment, "originalCommit")?)?;
                 let state = match item(thread, "isResolved")? {
                     Value::Null => THREAD_STATE_UNKNOWN,
-                    resolved if resolved.truthy() => " \u{b7} thread resolved",
-                    _ => " \u{b7} thread unresolved",
+                    resolved if resolved.truthy() => THREAD_RESOLVED,
+                    _ => THREAD_UNRESOLVED,
                 };
                 w(format!(
                     "**{thread_comments}.** {created} \u{b7} `{author}` \u{b7} `{path}:{line}` \u{b7} on commit `{commit}`{state}\n"
