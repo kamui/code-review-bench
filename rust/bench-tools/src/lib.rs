@@ -64,5 +64,6 @@ pub mod shlex;
 pub mod skill_provenance;
 pub mod skill_runner;
 pub mod subscription_meters;
+pub mod timeout;
 pub mod upstream;
 pub mod usage;
