@@ -89,7 +89,7 @@ fn spawn_error(error: &std::io::Error) -> Error {
 }
 
 /// `json.loads(subprocess.check_output(command, text=True, encoding='utf-8'))`.
-fn api(arguments: &[&str]) -> Result<Value, Error> {
+pub(crate) fn api(arguments: &[&str]) -> Result<Value, Error> {
     let output = Command::new("gh")
         .args(arguments)
         .stdin(Stdio::inherit())

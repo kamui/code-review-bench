@@ -89,10 +89,12 @@
 
 use crate::file_attempt;
 use crate::normalize_review::utc_stamp;
+use crate::prune_workspace;
 use crate::pyfs;
 use crate::pyjson::{self, Dumps, Duplicates, Object, Value};
 use crate::pytext::{self, PyPath};
 use crate::rates;
+use crate::removal;
 use crate::schema::{SchemaError, Validator};
 use crate::sha256;
 use crate::skill_runner::Ran;
@@ -137,6 +139,16 @@ fn input<T>(message: impl Into<String>) -> R<T> {
 /// Runs a helper and captures its output; `env` replaces the environment when given.
 pub type Tool<'a> = &'a dyn Fn(&[String], Option<&[(String, String)]>) -> Result<Ran, String>;
 
+/// Prunes a filed valid attempt's clone and cache; production applies [`prune_workspace::attempt`].
+pub type Prune<'a> =
+    &'a dyn Fn(&prune_workspace::Attempt<'_>) -> Result<(), prune_workspace::Failure>;
+
+pub fn apply_prune(
+    arguments: &prune_workspace::Attempt<'_>,
+) -> Result<(), prune_workspace::Failure> {
+    prune_workspace::attempt(arguments, true, &removal::uninterrupted).map(drop)
+}
+
 /// What one invocation acts on, and the effects a test replaces.
 pub struct Context<'a> {
     pub run_dir: PathBuf,
@@ -146,6 +158,7 @@ pub struct Context<'a> {
     /// The environment the command was started with.
     pub env: Vec<(String, String)>,
     pub tool: Tool<'a>,
+    pub prune: Prune<'a>,
     pub fetch: &'a dyn rates::Fetch,
     /// Refuses unless the run pins `executable`; the text names what to do from the freeze commit.
     pub pinned: &'a dyn Fn(&Path, &str) -> Result<(), String>,
@@ -1609,39 +1622,22 @@ fn release(run: &Run, attempt: &str, evidence: &Path) -> R<()> {
 }
 
 /// Prune a filed valid attempt's clone and cache against the target directory the run resolved.
-pub(crate) fn prune(run: &Run, tool: Tool<'_>, attempt: &str, target: &str) -> R<()> {
-    let failed = |error: String| {
-        Failure::Input(format!(
-            "{attempt}: evidence filed, but workspace cleanup failed: {error}"
-        ))
-    };
+pub(crate) fn prune(run: &Run, prune: Prune<'_>, attempt: &str, target: &str) -> R<()> {
     let target_dir = run.target_dir(target)?;
-    let argv = vec![
-        "python3".to_string(),
-        display(&run.bench.join("tools").join("prune_workspace.py")),
-        "--attempt".to_string(),
-        display(&run.dir.join("attempts").join(attempt)),
-        "--workspace".to_string(),
-        display(&run.work.join(attempt)),
-        "--target".to_string(),
-        display(&target_dir),
-        "--apply".to_string(),
-    ];
-    let done = tool(&argv, None).map_err(failed)?;
-    if done.code != 0 {
-        let out = pytext::strip(&done.stdout);
-        let reason = ["cleanup refused: ", "cleanup failed: "]
-            .iter()
-            .find_map(|prefix| out.strip_prefix(prefix))
-            .unwrap_or(out);
-        let detail = if reason.is_empty() {
-            pytext::strip(&done.stderr)
-        } else {
-            reason
-        };
-        return Err(failed(detail.to_string()));
-    }
-    Ok(())
+    let attempt_dir = run.dir.join("attempts").join(attempt);
+    let workspace = run.work.join(attempt);
+    prune(&prune_workspace::Attempt {
+        attempt: attempt_dir.as_os_str().as_bytes(),
+        workspace: workspace.as_os_str().as_bytes(),
+        target: Some(target_dir.as_os_str().as_bytes()),
+        remote: &std::cell::RefCell::new(crate::evidence::GitHub),
+    })
+    .map_err(|failure| {
+        Failure::Input(format!(
+            "{attempt}: evidence filed, but workspace cleanup failed: {}",
+            failure.message()
+        ))
+    })
 }
 
 fn file(
@@ -1672,7 +1668,7 @@ fn file(
     if pyvalue_is(get(&record, "disposition"), "valid completed") {
         prune(
             run,
-            context.tool,
+            context.prune,
             attempt,
             &get(get(claim, "cell"), "target").py_str(),
         )?;
@@ -2027,6 +2023,15 @@ mod tests {
         fs::write(path, text).expect("write");
     }
 
+    fn unused_prune(
+        arguments: &prune_workspace::Attempt<'_>,
+    ) -> Result<(), prune_workspace::Failure> {
+        panic!(
+            "nothing is pruned in this test: {:?}",
+            String::from_utf8_lossy(arguments.workspace)
+        )
+    }
+
     fn unused_tool(argv: &[String], _: Option<&[(String, String)]>) -> Result<Ran, String> {
         panic!("no tool runs in this test: {argv:?}")
     }
@@ -2174,6 +2179,7 @@ mod tests {
                 executable: self.base.join("bench-tools"),
                 env,
                 tool,
+                prune: &unused_prune,
                 fetch: &Offline,
                 pinned: &pinned,
                 now: &noon,
@@ -2920,12 +2926,18 @@ mod tests {
             fixture.file_record("att-001", "t1/arm-a/1", "valid completed", "0.1", "");
             holder.unlock().expect("unlock");
         };
-        let calls = RefCell::new(Vec::<Vec<String>>::new());
-        let tool = |argv: &[String], _: Option<&[(String, String)]>| {
-            calls.borrow_mut().push(argv.to_vec());
-            Ok(ran(0, "{}", ""))
+        let calls = RefCell::new(Vec::<[String; 3]>::new());
+        let prune = |arguments: &prune_workspace::Attempt<'_>| {
+            let shown = |bytes: &[u8]| String::from_utf8_lossy(bytes).into_owned();
+            calls.borrow_mut().push([
+                shown(arguments.attempt),
+                shown(arguments.workspace),
+                shown(arguments.target.expect("a target")),
+            ]);
+            Ok(())
         };
-        let mut context = fixture.context(&tool, Vec::new());
+        let mut context = fixture.context(&unused_tool, Vec::new());
+        context.prune = &prune;
         context.waiting = &first;
         let record = fixture.run_dir.join("attempts/att-001/attempt.json");
         let filed = command(
@@ -2945,18 +2957,13 @@ mod tests {
         );
         let calls = calls.borrow();
         assert_eq!(calls.len(), 1, "{calls:?}");
-        let prune = &calls[0];
-        assert!(
-            prune[1].ends_with("bench/tools/prune_workspace.py"),
-            "{prune:?}"
-        );
-        let target = prune
-            .iter()
-            .position(|a| a == "--target")
-            .expect("--target");
         assert_eq!(
-            prune[target + 1],
-            display(&fixture.base.join("bench/targets/t1"))
+            calls[..],
+            [[
+                display(&fixture.run_dir.join("attempts/att-001")),
+                display(&fixture.work.join("att-001")),
+                display(&fixture.base.join("bench/targets/t1")),
+            ]]
         );
     }
 
@@ -2965,14 +2972,13 @@ mod tests {
         let fixture = fixture();
         let attempt = started(&fixture, true);
         fixture.file_record("att-001", "t1/arm-a/1", "valid completed", "0.1", "");
-        let tool = |_: &[String], _: Option<&[(String, String)]>| {
-            Ok(ran(
-                1,
-                "cleanup refused: clone revision or working tree changed after preparation\n",
-                "",
+        let prune = |_: &prune_workspace::Attempt<'_>| {
+            Err(prune_workspace::Failure::Refused(
+                "clone revision or working tree changed after preparation".into(),
             ))
         };
-        let context = fixture.context(&tool, Vec::new());
+        let mut context = fixture.context(&unused_tool, Vec::new());
+        context.prune = &prune;
         // Under --interrupted an already filed record is returned as it stands, without a prune.
         let filed = command(
             Action::File {
@@ -2988,7 +2994,8 @@ mod tests {
         let holder = File::open(&attempt).expect("open");
         holder.lock().expect("lock");
         let release = || holder.unlock().expect("unlock");
-        let mut context = fixture.context(&tool, Vec::new());
+        let mut context = fixture.context(&unused_tool, Vec::new());
+        context.prune = &prune;
         context.waiting = &release;
         match file(&fixture.run(), &context, "att-001", None, None) {
             Err(Failure::Input(message)) => assert_eq!(

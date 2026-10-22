@@ -67,7 +67,7 @@ fn parts(path: &[u8]) -> Vec<&[u8]> {
 }
 
 /// `PurePath.is_relative_to`, which compares parts without touching the filesystem.
-fn is_relative_to(path: &PyPath, base: &PyPath) -> bool {
+pub(crate) fn is_relative_to(path: &PyPath, base: &PyPath) -> bool {
     let (inner, outer) = (parts(path.as_bytes()), parts(base.as_bytes()));
     path.as_bytes().starts_with(b"/") == base.as_bytes().starts_with(b"/")
         && inner.len() >= outer.len()
@@ -154,7 +154,7 @@ fn tracked(root: &PyPath) -> Result<(Index, Option<String>)> {
 }
 
 /// The SHA-256 of a file and its Git blob SHA-1, with `size` as the blob header's length.
-fn identities(path: &[u8], size: u64) -> Result<(String, String)> {
+pub(crate) fn identities(path: &[u8], size: u64) -> Result<(String, String)> {
     let mut file = std::fs::File::open(PyPath::new(path).to_path_buf())
         .map_err(|error| os_failure(&error, path))?;
     let mut sha = Sha256::new();
@@ -263,17 +263,18 @@ fn object(pairs: Vec<(&str, Value)>) -> Value {
     )
 }
 
-/// The names of `directory` split as `os.walk` splits them, into directories, following links, and the rest;
-/// `None` when it cannot be listed, which `os.walk` skips silently.
-fn scan(directory: &PyPath) -> Option<Names> {
+/// The names of `directory` split as `os.walk` splits them, into directories, following links, and the rest. A
+/// directory that cannot be listed is an error: retirement must never read it as empty.
+fn scan(directory: &PyPath) -> Result<Names> {
     let (mut dirs, mut files) = (Vec::new(), Vec::new());
-    for entry in std::fs::read_dir(directory.to_path_buf()).ok()? {
-        let name = pytext::os_bytes(&entry.ok()?.file_name()).to_vec();
+    let unreadable = |error: std::io::Error| os_failure(&error, directory.as_bytes());
+    for entry in std::fs::read_dir(directory.to_path_buf()).map_err(unreadable)? {
+        let name = pytext::os_bytes(&entry.map_err(unreadable)?.file_name()).to_vec();
         let is_dir = std::fs::metadata(directory.join(&name).to_path_buf())
             .is_ok_and(|metadata| metadata.is_dir());
         if is_dir { &mut dirs } else { &mut files }.push(name);
     }
-    Some((dirs, files))
+    Ok((dirs, files))
 }
 
 fn sorted(mut names: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
@@ -313,9 +314,7 @@ pub fn inventory(root: &[u8], hash_all: bool) -> Result<Value> {
     let mut totals: BTreeMap<&str, u64> = BTreeMap::new();
     let mut pending = vec![root.clone()];
     while let Some(current) = pending.pop() {
-        let Some((dirs, files)) = scan(&current) else {
-            continue;
-        };
+        let (dirs, files) = scan(&current)?;
         let (links, dirs): (Vec<Vec<u8>>, Vec<Vec<u8>>) = dirs
             .into_iter()
             .partition(|name| is_symlink(current.join(name).as_bytes()));
