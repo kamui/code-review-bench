@@ -28,6 +28,7 @@ pub mod import_benchmark;
 pub mod interrupt;
 pub mod methodology;
 pub mod native_artifacts;
+pub mod network_gate;
 pub mod normalize_review;
 pub mod normalize_thermo;
 pub mod packet_selection;
