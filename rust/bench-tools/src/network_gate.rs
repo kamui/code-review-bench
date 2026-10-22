@@ -1347,6 +1347,42 @@ fn host_sockets(table: &str) -> R<Vec<PathBuf>> {
     Ok(sockets)
 }
 
+/// bwrap arguments that cover with an empty file every host Unix socket a sandbox would still see: one outside
+/// `hidden`, or inside `shown`, except under `keep`.
+pub fn socket_masks(hidden: &[String], shown: &[String], keep: Option<&Path>) -> R<Vec<String>> {
+    let within = |socket: &Path, dirs: &[String]| dirs.iter().any(|dir| socket.starts_with(dir));
+    let table = fs::read_to_string("/proc/net/unix").unwrap_or_default();
+    let mut arguments = Vec::new();
+    for socket in host_sockets(&table)? {
+        if (!within(&socket, hidden) || within(&socket, shown))
+            && !keep.is_some_and(|keep| socket.starts_with(keep))
+        {
+            arguments.extend([
+                "--ro-bind".to_string(),
+                "/dev/null".to_string(),
+                socket.to_string_lossy().into_owned(),
+            ]);
+        }
+    }
+    Ok(arguments)
+}
+
+/// Write the vsock filter to `path`, for `bwrap --seccomp`.
+pub fn write_vsock_filter(path: &Path) -> R<()> {
+    fs::write(path, vsock_filter()?).map_err(|error| format!("{}: {error}", path.display()))
+}
+
+/// Open `path` without close-on-exec, so `bwrap` inherits the descriptor.
+pub fn inheritable(path: &Path) -> R<fs::File> {
+    let file = fs::File::open(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    nix::fcntl::fcntl(
+        &file,
+        nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::empty()),
+    )
+    .map_err(|error| format!("{}: {error}", path.display()))?;
+    Ok(file)
+}
+
 fn identity(path: &Path) -> Option<(u64, u64)> {
     fs::metadata(path).ok().map(|meta| (meta.dev(), meta.ino()))
 }
@@ -1355,7 +1391,7 @@ fn identity(path: &Path) -> Option<(u64, u64)> {
 
 /// Where the gate's socket directory goes. Not `TMPDIR`: the dispatcher points it into the attempt, and a Unix
 /// socket path is limited to 108 bytes.
-fn runtime_dir() -> PathBuf {
+pub fn runtime_dir() -> PathBuf {
     std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .filter(|dir| dir.is_absolute() && dir.is_dir())
@@ -1408,13 +1444,8 @@ impl Gate {
             fs::write(&path, &pem).map_err(failed(&path))?;
         }
         let filter_path = dir.join(FILTER_FILE);
-        fs::write(&filter_path, vsock_filter()?).map_err(failed(&filter_path))?;
-        let filter = fs::File::open(&filter_path).map_err(failed(&filter_path))?;
-        nix::fcntl::fcntl(
-            &filter,
-            nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::empty()),
-        )
-        .map_err(|error| format!("{}: {error}", filter_path.display()))?;
+        write_vsock_filter(&filter_path)?;
+        let filter = inheritable(&filter_path)?;
         let written = [identity(&network), identity(&log_path)];
         let socket = dir.join(SOCKET);
         let listener = UnixListener::bind(&socket).map_err(failed(&socket))?;
@@ -1489,20 +1520,7 @@ impl Gate {
     ) -> R<Vec<String>> {
         let mut arguments: Vec<String> =
             vec!["--seccomp".to_string(), self.filter.as_raw_fd().to_string()];
-        let within =
-            |socket: &Path, dirs: &[String]| dirs.iter().any(|dir| socket.starts_with(dir));
-        let table = fs::read_to_string("/proc/net/unix").unwrap_or_default();
-        for socket in host_sockets(&table)? {
-            if (!within(&socket, hidden) || within(&socket, shown))
-                && !socket.starts_with(&self.dir)
-            {
-                arguments.extend([
-                    "--ro-bind".to_string(),
-                    "/dev/null".to_string(),
-                    socket.to_string_lossy().into_owned(),
-                ]);
-            }
-        }
+        arguments.extend(socket_masks(hidden, shown, Some(&self.dir))?);
         let network = self.network.to_string_lossy().into_owned();
         let attempt = self
             .network
