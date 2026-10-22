@@ -199,13 +199,13 @@ matching GitHub runner for each: the runtime tests with real cargo builds and
 Python libraries, and runs `roster` on the repository. The `CI and GitHub Pages` workflow installs `bench-tools` the
 same way for the explorer export.
 
-Each Linux target splits its checks into three parallel jobs: the behavior contracts; formatting, Clippy
-and every other test; and the runtime tests, install and rollback. Pull requests run the full suite on
-Linux targets. On macOS targets they run the
+The x86_64 Linux target splits its checks into three parallel jobs: the behavior contracts; formatting,
+Clippy and every other test; and the runtime tests, install and rollback. Pull requests run the full suite
+on x86_64 Linux. On aarch64 Linux and macOS they run the
 runtime pinning, retention and rollback tests with real cargo builds, install `bench-tools`,
 run `roster`, and run the `diff-identity` corpus. The full
-macOS lint, test, differential and second-version rollback suites run on pushes to `main`.
-This keeps native installation coverage before merge while deferring broader macOS regression
+aarch64 Linux and macOS lint, test, differential and second-version rollback suites run on pushes to `main`.
+This keeps native installation coverage before merge while deferring broader aarch64 regression
 detection until after merge. Merge a change to the runtime only after every target's job passes.
 
 | Target | Runner | Local run |
