@@ -562,8 +562,9 @@ fn claude_strict_v3_passes_bash_to_the_gate_and_reads_its_ca() {
     receipt_for(&closed, &std::fs::read_to_string(&out).unwrap());
     assert!(at(&settings, &["sandbox", "network", "allowedDomains"]).py_eq(&Value::Array(vec![])));
     assert!(!readable(&settings));
-    assert!(
-        review_isolation::verify_evidence(&closed.attempt, review_isolation::ENFORCED).is_empty()
+    assert_eq!(
+        review_isolation::verify_evidence(&closed.attempt, review_isolation::ENFORCED),
+        [] as [String; 0]
     );
 
     let open = Attempt::new("strict-v3");
@@ -574,7 +575,10 @@ fn claude_strict_v3_passes_bash_to_the_gate_and_reads_its_ca() {
             .py_eq(&Value::Array(vec![string("*")]))
     );
     assert!(readable(&settings));
-    assert!(review_isolation::verify_evidence(&open.attempt, review_isolation::GATED).is_empty());
+    assert_eq!(
+        review_isolation::verify_evidence(&open.attempt, review_isolation::GATED),
+        [] as [String; 0]
+    );
 
     let mut closed_off = settings.clone();
     if let Value::Object(config) = &mut closed_off
