@@ -3,6 +3,7 @@
 //! reviewer identity or a private path.
 
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 
 use super::{
     Decisions, Failure, Repository, fail, get, index, iterate, object, pinned, read, string, text,
@@ -32,7 +33,10 @@ impl Entropy for SystemEntropy {
 fn token(entropy: &mut dyn Entropy) -> Result<String, Failure> {
     let mut bytes = [0u8; 4];
     entropy.fill(&mut bytes)?;
-    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+    Ok(bytes.iter().fold(String::new(), |mut out, byte| {
+        let _ = write!(out, "{byte:02x}");
+        out
+    }))
 }
 
 /// A uniform integer below `bound`, by rejection.

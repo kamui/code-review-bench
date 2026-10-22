@@ -47,6 +47,7 @@ use crate::schema::Validator;
 use crate::sha256;
 use crate::usage;
 use std::collections::HashSet;
+use std::fmt::Write as _;
 use std::fs::{self, FileTimes, OpenOptions};
 use std::io::Write as _;
 use std::os::unix::fs::MetadataExt;
@@ -2809,10 +2810,10 @@ fn file_attempt(arguments: &Arguments) -> Result<(Value, String)> {
     } else if exists(&o(&native_name)) {
         remove(&o(&native_name))?;
     }
-    let lines: String = requests
-        .iter()
-        .map(|row| format!("{}\n", pyjson::dumps(row, &Dumps::default())))
-        .collect();
+    let lines: String = requests.iter().fold(String::new(), |mut out, row| {
+        let _ = writeln!(out, "{}", pyjson::dumps(row, &Dumps::default()));
+        out
+    });
     fs::write(o("usage-requests.jsonl"), lines).map_err(|error| {
         FileError(format!(
             "cannot write {}: {error}",
@@ -3030,10 +3031,10 @@ pub fn command(arguments: &Arguments) -> Outcome {
         return failed(&format!("cannot write {path}: {error}"));
     }
     if !problems.is_empty() {
-        let lines: String = problems
-            .iter()
-            .map(|problem| format!("attempt.json {problem}\n"))
-            .collect();
+        let lines: String = problems.iter().fold(String::new(), |mut out, problem| {
+            let _ = writeln!(out, "attempt.json {problem}");
+            out
+        });
         return Outcome {
             code: 1,
             stdout: lines.into_bytes(),
@@ -3089,8 +3090,8 @@ mod tests {
 
     #[test]
     fn ranges_need_a_right_side_and_a_free_start() {
-        assert!(pairs("echo a..").is_empty());
-        assert!(pairs("echo ..").is_empty());
+        assert_eq!(pairs("echo a.."), [] as [(String, String); 0]);
+        assert_eq!(pairs("echo .."), [] as [(String, String); 0]);
         assert_eq!(pairs("echo -x..y"), [pair("-x", "y")]);
         assert_eq!(pairs("a..b c..d"), [pair("a", "b"), pair("c", "d")]);
         assert_eq!(pairs("v1.2..v1.3"), [pair("v1.2", "v1.3")]);
@@ -3158,7 +3159,10 @@ mod tests {
             ("verified_by", text("ps")),
             ("observed_at", text("2026-01-01T00:00:10Z")),
         ]);
-        assert!(process_stop_problems(&good, "r", "a", Some(1_767_225_605.0)).is_empty());
+        assert_eq!(
+            process_stop_problems(&good, "r", "a", Some(1_767_225_605.0)),
+            [] as [String; 0]
+        );
         assert_eq!(
             process_stop_problems(&good, "r", "a", Some(1_767_225_611.0)),
             ["observed_at precedes the attempt's last output"]

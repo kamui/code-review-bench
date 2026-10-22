@@ -503,7 +503,7 @@ fn quota_at_the_stop_ends_the_queue_without_a_launch() {
         r#"{"at": "2027-01-15T08:00:00Z", "claude": {"five_hour": {"utilization": 95}}}"#,
     ));
     assert_eq!(fx.run(None), 0);
-    assert!(fx.launched().is_empty());
+    assert_eq!(fx.launched(), [] as [String; 0]);
     let last = fx.events().pop().expect("an event");
     assert_eq!(
         get(&last, "stopped").py_str(),
@@ -521,7 +521,7 @@ fn a_claude_sign_in_about_to_expire_stops_the_queue() {
         (START + 1799.0) * 1000.0
     )));
     assert_eq!(fx.run(None), 0);
-    assert!(fx.launched().is_empty());
+    assert_eq!(fx.launched(), [] as [String; 0]);
     assert!(
         get(&fx.events().pop().expect("an event"), "stopped")
             .py_str()
@@ -540,7 +540,7 @@ fn meters_that_are_silent_or_unreadable_start_no_launch() {
         "the subscription meters could not be read, and no launch starts on a reading older than 3600 s: \
          the meter service refused",
     );
-    assert!(fx.launched().is_empty());
+    assert_eq!(fx.launched(), [] as [String; 0]);
 }
 
 #[test]
@@ -556,7 +556,7 @@ fn a_stored_sign_in_that_cannot_be_read_is_an_input_error() {
         "{:?}",
         failed.err()
     );
-    assert!(fx.launched().is_empty());
+    assert_eq!(fx.launched(), [] as [String; 0]);
 }
 
 #[test]
@@ -743,7 +743,7 @@ fn a_second_controller_is_refused_while_the_first_holds_the_queue() {
         refused.err()
     );
     drop(held);
-    assert!(fx.launched().is_empty());
+    assert_eq!(fx.launched(), [] as [String; 0]);
     assert_eq!(fx.run(Some(1)), 0);
 }
 
@@ -798,7 +798,7 @@ fn a_client_that_no_longer_hashes_to_its_pin_or_differs_from_the_frozen_pin_is_r
         blocked_before_launch(&fx),
         ["run-b: the queue's claude pin differs from the run's clients.frozen.json"]
     );
-    assert!(fx.launched().is_empty());
+    assert_eq!(fx.launched(), [] as [String; 0]);
 }
 
 #[test]
@@ -922,7 +922,7 @@ fn runner_files_that_differ_from_the_freeze_commit_are_refused_and_name_it() {
             "run-a: the runner files differ from freeze commit {head}"
         )]
     );
-    assert!(fx.launched().is_empty());
+    assert_eq!(fx.launched(), [] as [String; 0]);
 }
 
 #[test]
@@ -1196,7 +1196,7 @@ fn a_claim_that_no_launch_record_names_is_never_filed_by_the_queue() {
              claim, so nothing says where its processes ran",
         );
     }
-    assert!(fx.lines("calls.log").is_empty());
+    assert_eq!(fx.lines("calls.log"), [] as [String; 0]);
 }
 
 #[test]
@@ -1882,7 +1882,7 @@ fn a_surviving_reviewer_child_blocks_every_restart_and_is_settled_once_it_is_gon
         .expect("stat")
         .expect("alive");
     assert!(!alive.ended(), "the queue never signals a process");
-    assert!(fx.lines("filed.log").is_empty());
+    assert_eq!(fx.lines("filed.log"), [] as [String; 0]);
     Command::new("kill")
         .args(["-9", &survivor.to_string()])
         .status()

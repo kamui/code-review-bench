@@ -9,6 +9,7 @@ use crate::pyjson::{self, Duplicates, Object, Value};
 use crate::pytext::{self, PyPath};
 use crate::schema::{SchemaError, Validator};
 use crate::sha256;
+use std::fmt::Write as _;
 
 pub const FIELDS: [&str; 5] = [
     "input",
@@ -969,11 +970,12 @@ pub fn render(report: &Value) -> String {
                     .map(Value::py_str)
                     .unwrap_or_default()
             };
-            out.push_str(&format!(
-                "{model} {name}: {} -> {} USD per million tokens\n",
+            let _ = writeln!(
+                out,
+                "{model} {name}: {} -> {} USD per million tokens",
                 part("saved"),
                 part("current")
-            ));
+            );
         }
     }
     for (model, reason) in field("unsupported")
@@ -981,7 +983,7 @@ pub fn render(report: &Value) -> String {
         .into_iter()
         .flat_map(Object::iter)
     {
-        out.push_str(&format!("{model} skipped: {}\n", reason.py_str()));
+        let _ = writeln!(out, "{model} skipped: {}", reason.py_str());
     }
     let count = |key: &str| {
         field(key)
@@ -989,12 +991,13 @@ pub fn render(report: &Value) -> String {
             .map_or(0, <[Value]>::len)
     };
     let refreshed = field("refreshed").is_some_and(Value::truthy);
-    out.push_str(&format!(
-        "{} models checked; {} changed{}\n",
+    let _ = writeln!(
+        out,
+        "{} models checked; {} changed{}",
         count("models"),
         count("changes"),
         if refreshed { "; catalog refreshed" } else { "" }
-    ));
+    );
     out
 }
 
@@ -1025,7 +1028,7 @@ mod tests {
             prices,
             vec![("gpt-6.1-sol".to_string(), [2.0, 10.0, 0.1, 2.5, 2.5])]
         );
-        assert!(unsupported.is_empty());
+        assert_eq!(unsupported, [] as [(String, String); 0]);
         let models = vec!["claude-opus-5-5".to_string()];
         let (prices, _) = parse_prices("anthropic", ANTHROPIC, &models).unwrap();
         assert_eq!(
@@ -1041,7 +1044,7 @@ mod tests {
             prices,
             vec![("claude-haiku-5-5".to_string(), [0.1, 0.5, 0.01, 0.125, 0.2])]
         );
-        assert!(unsupported.is_empty());
+        assert_eq!(unsupported, [] as [(String, String); 0]);
         let duplicated = format!("{ANTHROPIC}{}\n", ANTHROPIC.lines().last().unwrap());
         let models = vec!["claude-opus-5-5".to_string()];
         assert_eq!(

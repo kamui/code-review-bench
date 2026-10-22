@@ -485,7 +485,7 @@ fn codex_skill_root_only_rollout_needs_no_builtin_rubric_marker() {
     let done = a.audit("codex-skill", records, None, None);
     assert_eq!(code(&done), 0, "{done:?}");
     let report = report(&done);
-    assert!(list(&report, "violations").is_empty());
+    assert_eq!(list(&report, "violations"), [] as [String; 0]);
     assert_eq!(field(&report, "rubric_markers").unwrap().py_str(), "0");
     assert_eq!(
         list(&report, "diff_commands"),
@@ -676,7 +676,7 @@ fn a_search_ending_in_go_without_offline_controls_is_one_network_capable_violati
         list(&found, "violations"),
         [format!("network-capable command: {first}")]
     );
-    assert!(list(&found, "confined_requests").is_empty());
+    assert_eq!(list(&found, "confined_requests"), [] as [String; 0]);
     assert!(!field(&found, "network_allowed").unwrap().truthy());
     let offline = search(&a, "GOPROXY=off GOTOOLCHAIN=local go version");
     assert_eq!(
@@ -782,7 +782,7 @@ fn guidance_in_an_ancestor_of_the_clone_is_a_violation_once_it_exists_and_is_pro
     let done = a.audit("codex", probes(), None, None);
     let found = report(&done);
     assert_eq!(code(&done), 0, "{}", String::from_utf8_lossy(&done.stderr));
-    assert!(list(&found, "violations").is_empty());
+    assert_eq!(list(&found, "violations"), [] as [String; 0]);
     assert_eq!(
         list(&found, "guidance_probes"),
         [
@@ -873,7 +873,7 @@ fn enforced_settings_confine_requests_the_sandbox_denies() {
         Some(&secret),
         &denial,
     );
-    assert!(list(&found, "violations").is_empty());
+    assert_eq!(list(&found, "violations"), [] as [String; 0]);
     assert_eq!(
         list(&found, "confined_requests"),
         [
@@ -890,7 +890,7 @@ fn allowed_network_makes_a_toolchain_command_a_request() {
     let a = Bench::new();
     let (rc, found) = a.allowed_network("toolchain", "go list -m all; npm install");
     assert_eq!(rc, 0);
-    assert!(list(&found, "violations").is_empty());
+    assert_eq!(list(&found, "violations"), [] as [String; 0]);
     assert!(field(&found, "network_allowed").unwrap().truthy());
     assert_eq!(
         list(&found, "confined_requests"),
@@ -989,7 +989,7 @@ fn enforced_settings_keep_reachable_requests_as_violations() {
         Some(&secret),
         "",
     );
-    assert!(list(&found, "confined_requests").is_empty());
+    assert_eq!(list(&found, "confined_requests"), [] as [String; 0]);
     let violations = list(&found, "violations");
     assert_eq!(violations.len(), 4, "{violations:?}");
     assert_eq!(a.bash(&[&format!("cat {secret}")]), reads(&secret));
@@ -1431,7 +1431,7 @@ fn a_tool_named_outside_command_position_is_listed_and_is_no_violation() {
         ],
         None,
     );
-    assert!(list(&listed, "violations").is_empty());
+    assert_eq!(list(&listed, "violations"), [] as [String; 0]);
     assert_eq!(
         mentions(&listed),
         [
@@ -1454,7 +1454,7 @@ fn a_tool_named_outside_command_position_is_listed_and_is_no_violation() {
         None,
     );
     assert_eq!(list(&both, "violations").len(), 1);
-    assert!(mentions(&both).is_empty());
+    assert_eq!(mentions(&both), [] as [(Vec<String>, String); 0]);
     let unset = format!(
         "cat > notes.txt <<EOF\nran `go version`\nEOF\necho '{OFFLINE} go vet ./src/ passed'"
     );
@@ -1488,16 +1488,19 @@ fn a_tool_named_outside_command_position_is_listed_and_is_no_violation() {
         ],
         None,
     );
-    assert!(mentions(&named).is_empty());
+    assert_eq!(mentions(&named), [] as [(Vec<String>, String); 0]);
     // A tool in the value of an assignment before a command is read with that command, an accepted limit: it is
     // listed and is no violation.
     let swallowed = "x=$(gh pr view 1) timeout -s KILL 5 pnpm build";
     let found = report_of(&mut a, &[swallowed], None);
-    assert!(list(&found, "violations").is_empty());
+    assert_eq!(list(&found, "violations"), [] as [String; 0]);
     assert_eq!(mentions(&found), [mention(&["gh"], swallowed)]);
     // Where the settings confine the network a mention shows nothing.
     let settings = a.settings(None, &[]);
-    assert!(mentions(&report_of(&mut a, &[run], Some(&settings))).is_empty());
+    assert_eq!(
+        mentions(&report_of(&mut a, &[run], Some(&settings))),
+        [] as [(Vec<String>, String); 0]
+    );
     // A request the operator allowed is still read for the other tools its call names.
     let (rc, allowed) = a.allowed_network("mention", &format!("pnpm install && {piped}"));
     assert_eq!(rc, 0);
@@ -1510,7 +1513,7 @@ fn a_tool_named_outside_command_position_is_listed_and_is_no_violation() {
     let (rc, allowed) = a.allowed_network("named-alike", "pip3 install requests");
     assert_eq!(rc, 0);
     assert_eq!(list(&allowed, "confined_requests").len(), 1);
-    assert!(mentions(&allowed).is_empty());
+    assert_eq!(mentions(&allowed), [] as [(Vec<String>, String); 0]);
 }
 
 #[test]

@@ -337,7 +337,7 @@ fn scan_of_a_clean_review_exits_zero() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(flags(&report).is_empty());
+    assert_eq!(flags(&report), [] as [(String, String, String); 0]);
 }
 
 #[test]

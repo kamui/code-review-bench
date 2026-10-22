@@ -28,6 +28,7 @@ use crate::provision_sandbox::{Network, Sandbox};
 use crate::pyjson::{self, Dumps, Object, Value};
 use crate::pytext::{self, PyPath};
 use std::ffi::OsStr;
+use std::fmt::Write as _;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -48,7 +49,10 @@ pub struct Outcome {
 impl Outcome {
     fn lines(lines: &[String], code: u8) -> Self {
         Self {
-            stdout: lines.iter().map(|line| format!("{line}\n")).collect(),
+            stdout: lines.iter().fold(String::new(), |mut out, line| {
+                let _ = writeln!(out, "{line}");
+                out
+            }),
             code,
         }
     }
@@ -1470,9 +1474,15 @@ mod tests {
     fn the_space_refusal_keeps_the_reserve_beyond_the_estimate() {
         let gib = 1u64 << 30;
         let out = Path::new("/out");
-        assert!(!space_refusal(10 * gib, 6 * gib, 5 * gib, out).is_empty());
-        assert!(space_refusal(11 * gib, 6 * gib, 5 * gib, out).is_empty());
-        assert!(!space_refusal(gib, 2 * gib, 0, out).is_empty());
+        assert_ne!(
+            space_refusal(10 * gib, 6 * gib, 5 * gib, out),
+            [] as [String; 0]
+        );
+        assert_eq!(
+            space_refusal(11 * gib, 6 * gib, 5 * gib, out),
+            [] as [String; 0]
+        );
+        assert_ne!(space_refusal(gib, 2 * gib, 0, out), [] as [String; 0]);
     }
 
     #[test]

@@ -8,6 +8,7 @@
 use crate::{b64, json};
 use bench_tools::pyjson::{self, Duplicates, Value};
 use std::ffi::OsString;
+use std::fmt::Write as _;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -59,7 +60,7 @@ fn quote(text: &str) -> String {
         if byte.is_ascii_alphanumeric() || b"_.-~".contains(&byte) {
             out.push(char::from(byte));
         } else {
-            out.push_str(&format!("%{byte:02X}"));
+            let _ = write!(out, "%{byte:02X}");
         }
     }
     out
@@ -87,7 +88,10 @@ fn record(state: &Path, args: &[OsString], upstream_read: bool) -> Result<(), Ex
         lines.push(&line);
         lines.sort_unstable();
         log.set_len(0).map_err(io)?;
-        let text: String = lines.iter().map(|line| format!("{line}\n")).collect();
+        let text: String = lines.iter().fold(String::new(), |mut out, line| {
+            let _ = writeln!(out, "{line}");
+            out
+        });
         log.write_all(text.as_bytes()).map_err(io)?;
     } else {
         log.write_all(format!("{line}\n").as_bytes()).map_err(io)?;
