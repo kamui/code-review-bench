@@ -20,6 +20,7 @@ pub mod evidence_inventory;
 pub mod export_explorer;
 pub mod file_attempt;
 pub mod forge_capture;
+pub mod freeze_commits;
 pub mod frozen_forge;
 pub mod grade;
 pub mod grading_reports;

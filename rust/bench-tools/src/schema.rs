@@ -1,10 +1,10 @@
-//! Validate a document against a schema as `bench/tools/check_manifest.py` does.
+//! Validate a document against a bench schema.
 //!
-//! The keywords are those `check_manifest.py` supports: `type`, `const`, `enum`, `required`, `properties`,
+//! The keywords are those the bench schemas use: `type`, `const`, `enum`, `required`, `properties`,
 //! `additionalProperties`, `items`, `pattern`, `minimum`, local `$ref` into `$defs`, and the annotations
 //! `$id`, `$schema`, `title` and `description`. Any other keyword is refused when its schema is visited.
-//! As in Python, a keyword is read only when the document reaches it, violations are reported in the
-//! same order and wording, and a `$ref` replaces the other keywords of its schema.
+//! A keyword is read only when the document reaches it, violations are reported in the order and wording of the
+//! retired Python validator, and a `$ref` replaces the other keywords of its schema.
 //!
 //! Refused where Python would raise a traceback or read the value another way: a schema that is not an
 //! object, a keyword whose value has a JSON type the check cannot use, a `pattern` outside

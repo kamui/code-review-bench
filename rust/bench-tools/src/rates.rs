@@ -38,7 +38,7 @@ pub enum Failure {
     Input(String),
 }
 
-/// Reads a provider's pricing page. The error is the message `rates.py` prints after `rates.py: `.
+/// Reads a provider's pricing page. The error is the message printed after `rates.py: `.
 pub trait Fetch {
     fn fetch(&self, url: &str) -> Result<Vec<u8>, String>;
 }

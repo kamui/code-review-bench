@@ -7,10 +7,10 @@ use bench_tools::schema::{SchemaError, Validator};
 use bench_tools::{
     archive, attempt_audit, build_packet, calibration, claims, current_grading, delegation,
     derive_packet, diff_identity, evaluator_audit, evidence, evidence_inventory, export_explorer,
-    file_attempt, grade, grading_reports, grading_validation, import_benchmark, interrupt,
-    methodology, native_artifacts, normalize_thermo, packet_selection, provision, prune_workspace,
-    pyfs, pyunicode, pyvalue, rates, regrade, removal, retire_workspace, review_isolation,
-    review_queue, roster, ruling, run_cell, seal, skill_provenance, skill_runner,
+    file_attempt, freeze_commits, grade, grading_reports, grading_validation, import_benchmark,
+    interrupt, methodology, native_artifacts, normalize_thermo, packet_selection, provision,
+    prune_workspace, pyfs, pyunicode, pyvalue, rates, regrade, removal, retire_workspace,
+    review_isolation, review_queue, roster, ruling, run_cell, seal, skill_provenance, skill_runner,
     subscription_meters, upstream, usage,
 };
 use clap::builder::PossibleValuesParser;
@@ -53,9 +53,16 @@ enum Cli {
     /// Validate a bench manifest against its schema, as check_manifest.py does.
     #[command(infer_long_args = true)]
     CheckManifest(CheckManifestArgs),
-    /// Check or refresh dated standard, short-context prices from official provider Markdown.
+    /// Check dated standard, short-context prices against official provider Markdown.
     #[command(infer_long_args = true)]
     Rates(RatesArgs),
+    /// Fetch the freeze commit of every run that pins re-cut packets and is missing from this clone.
+    #[command(infer_long_args = true)]
+    FetchFreezeCommits {
+        /// The checkout whose bench/runs are read.
+        #[arg(long, default_value = ".", allow_negative_numbers = true)]
+        root: PathBuf,
+    },
     /// Seal evaluator-only truth as ciphertext, and open it again with a hash check.
     #[command(subcommand, infer_long_args = true)]
     Seal(SealCommand),
@@ -897,7 +904,7 @@ impl clap::builder::TypedValueParser for RatesCommandParser {
             other => Err(command.clone().error(
                 ErrorKind::InvalidValue,
                 format!(
-                    "argument command: invalid choice: {} (choose from 'check', 'refresh')",
+                    "argument command: invalid choice: {} (choose from 'check')",
                     pytext::repr(&pytext::surrogateescape(other))
                 ),
             )),
@@ -5304,6 +5311,19 @@ fn main() -> ExitCode {
         Cli::CheckManifest(arguments) => run_check_manifest(arguments),
         Cli::Rates(arguments) => run_rates(arguments),
         Cli::Seal(command) => run_seal(command),
+        Cli::FetchFreezeCommits { root } => match freeze_commits::fetch(&root) {
+            Ok((summary, absent)) => {
+                for commit in &absent {
+                    eprintln!("freeze commit {commit} could not be fetched");
+                }
+                write_stdout(summary.as_bytes())
+                    .map(|()| ExitCode::from(u8::from(!absent.is_empty())))
+            }
+            Err(error) => {
+                eprintln!("bench-tools fetch-freeze-commits: {error}");
+                Err(ExitCode::from(2))
+            }
+        },
         Cli::Upstream(command) => run_upstream(command),
         Cli::Claims(arguments) => run_claims(arguments),
         Cli::Usage(command) => run_usage(command),
