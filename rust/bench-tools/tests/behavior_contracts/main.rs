@@ -23,6 +23,7 @@ mod writers;
 use bench_tools::pyjson::Value;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
+use std::fmt::Write as _;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -197,7 +198,10 @@ fn digest_vectors(directory: &Path) -> Result<(), String> {
         let name = corpus::string(vector, "name")?;
         let mut bytes = Vec::new();
         json::canonical(value, &mut bytes)?;
-        let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+        let hex: String = bytes.iter().fold(String::new(), |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        });
         if hex != corpus::string(vector, "canonical_hex")? {
             return Err(format!("{name}: canonical bytes {hex}"));
         }

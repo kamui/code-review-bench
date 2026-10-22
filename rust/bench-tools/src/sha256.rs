@@ -1,6 +1,7 @@
 //! SHA-256 as `hashlib.sha256(data).hexdigest()` spells it.
 
 use sha2::Digest;
+use std::fmt::Write as _;
 
 /// An incremental SHA-256, for data read in chunks.
 #[derive(Clone, Default)]
@@ -25,7 +26,10 @@ pub fn digest(data: &[u8]) -> [u8; 32] {
 }
 
 pub fn hex(digest: &[u8; 32]) -> String {
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+    digest.iter().fold(String::new(), |mut out, byte| {
+        let _ = write!(out, "{byte:02x}");
+        out
+    })
 }
 
 pub fn hex_digest(data: &[u8]) -> String {

@@ -12,6 +12,7 @@
 
 use crate::pyjson::{self, Dumps, Duplicates, Object, Value};
 use crate::pytext::{self, PyPath};
+use std::fmt::Write as _;
 
 pub const PROGRAM: &str = "normalize_review.py";
 
@@ -862,7 +863,7 @@ pub fn render(doc: &Value) -> Result<String, String> {
             let end = field("line_end")?;
             let mut suffix = format!(":{}", start.py_str());
             if end.truthy() && !end.py_eq(start) {
-                suffix.push_str(&format!("-{}", end.py_str()));
+                let _ = write!(suffix, "-{}", end.py_str());
             }
             location = match location {
                 Value::Str(path) => Value::Str(path + &suffix),

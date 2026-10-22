@@ -13,6 +13,7 @@ use crate::pysemantics::{
 };
 use crate::pytext::{self, PyPath};
 use crate::sha256;
+use std::fmt::Write as _;
 use std::io::{self, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 
@@ -670,10 +671,10 @@ pub fn audit_log(arguments: &AuditLog) -> Result<String> {
     let out = PyPath::new(&arguments.out);
     make_directories(&out)?;
     let lines = |values: &[Value]| -> String {
-        values
-            .iter()
-            .map(|value| format!("{}\n", pyjson::dumps(value, &pyjson::Dumps::default())))
-            .collect()
+        values.iter().fold(String::new(), |mut out, value| {
+            let _ = writeln!(out, "{}", pyjson::dumps(value, &pyjson::Dumps::default()));
+            out
+        })
     };
     write_text(&out.join(b"reviews.jsonl"), &lines(&rows))?;
     write_text(&out.join(b"charges.jsonl"), &lines(&charges))?;

@@ -24,6 +24,7 @@ use super::{
 use crate::pyjson::{self, Duplicates, Object, Value};
 use crate::pytext;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::fmt::Write as _;
 use std::os::unix::ffi::OsStrExt;
 
 const PROGRAM: &str = "transcript_usage";
@@ -197,7 +198,10 @@ fn meter(options: &Options) -> Result<Outcome, String> {
             lines.extend(block_lines(&total, prices, report_tokens, options.by_kind));
             lines.push(String::new());
             lines.extend(timing.lines());
-            lines.iter().map(|line| format!("{line}\n")).collect()
+            lines.iter().fold(String::new(), |mut out, line| {
+                let _ = writeln!(out, "{line}");
+                out
+            })
         }
     };
     Ok(Outcome::success(stdout.into_bytes()))
@@ -1349,7 +1353,7 @@ fn block_lines(
         thousands(usage.cache_write_1h)
     );
     if unknown > 0 {
-        tiers.push_str(&format!(", unknown tier {}", thousands(unknown)));
+        let _ = write!(tiers, ", unknown tier {}", thousands(unknown));
     }
     let mut lines = vec![
         usage.label.clone(),
@@ -1507,12 +1511,13 @@ fn cost_cell(summary: &CostSummary, prices: &Prices, bold: bool) -> String {
         estimate
     };
     if summary.unknown > 0 {
-        cell.push_str(&format!(
+        let _ = write!(
+            cell,
             " (unknown tier at ×{}; {:.2}–{:.2})",
             general(prices.write_5m_mult),
             summary.low,
             summary.high
-        ));
+        );
     }
     cell
 }
@@ -1521,16 +1526,17 @@ fn row_line(usage: &Usage, label: &str, prices: &Prices, shaped_tokens: Option<u
     let unknown = usage.cache_write_unknown();
     let mut cache_write = thousands(usage.cache_write);
     if usage.cache_write_1h > 0 || unknown > 0 {
-        cache_write.push_str(&format!(
+        let _ = write!(
+            cache_write,
             " (5m {}, 1h {}",
             thousands(usage.cache_write_5m),
             thousands(usage.cache_write_1h)
-        ));
-        cache_write.push_str(&if unknown > 0 {
-            format!(", unknown {})", thousands(unknown))
+        );
+        if unknown > 0 {
+            let _ = write!(cache_write, ", unknown {})", thousands(unknown));
         } else {
-            ")".to_string()
-        });
+            cache_write.push(')');
+        }
     }
     let (report_output, shaped_cost) = match shaped_tokens {
         Some(tokens) => {

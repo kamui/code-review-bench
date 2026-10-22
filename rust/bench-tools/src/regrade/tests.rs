@@ -811,7 +811,7 @@ fn failing_steps_stop_the_queue() {
     bench.script().preflight_code = 5;
     assert_eq!(bench.run(), Ok(5));
     assert_eq!(reason(&bench), format!("Queue preflight failed for {RUN}"));
-    assert!(bench.fake.calls("prepare").is_empty());
+    assert_eq!(bench.fake.calls("prepare"), [] as [Vec<String>; 0]);
     let bench = Bench::new(&["t1"], CLAUDE);
     bench.script().map_code = 1;
     assert_eq!(bench.run(), Ok(1));
@@ -1089,8 +1089,8 @@ fn a_replacement_changed_after_preflight_reserves_and_dispatches_nothing() {
         r#"{"targets": ["changed"]}"#,
     ));
     assert_eq!(bench.run(), Ok(2));
-    assert!(bench.dispatched().is_empty());
-    assert!(bench.reservations().is_empty());
+    assert_eq!(bench.dispatched(), [] as [String; 0]);
+    assert_eq!(bench.reservations(), [] as [PathBuf; 0]);
     assert!(
         reason(&bench).contains("pinned input changed"),
         "{}",
@@ -1105,8 +1105,8 @@ fn a_prepared_key_must_pin_the_authorized_replacement_before_reserving() {
     bench.script().prepared_manifest =
         Some("0000000000000000000000000000000000000000000000000000000000000000");
     assert_eq!(bench.run(), Ok(2));
-    assert!(bench.dispatched().is_empty());
-    assert!(bench.reservations().is_empty());
+    assert_eq!(bench.dispatched(), [] as [String; 0]);
+    assert_eq!(bench.reservations(), [] as [PathBuf; 0]);
     assert!(
         reason(&bench).contains("prepared cache replacement differs from authorization"),
         "{}",
@@ -1124,8 +1124,8 @@ fn an_existing_key_must_pin_the_authorized_replacement_on_restart() {
         r#"{"input_fingerprint": "fp-t1"}"#,
     );
     assert_eq!(bench.run(), Ok(2));
-    assert!(bench.fake.calls("prepare").is_empty());
-    assert!(bench.dispatched().is_empty());
+    assert_eq!(bench.fake.calls("prepare"), [] as [Vec<String>; 0]);
+    assert_eq!(bench.dispatched(), [] as [String; 0]);
     assert!(!attempt.join("reservation.json").exists());
     assert!(
         reason(&bench).contains("prepared cache replacement differs from authorization"),
@@ -1144,8 +1144,8 @@ fn a_manifest_changed_during_preparation_reserves_nothing() {
         r#"{"targets": ["changed"]}"#,
     ));
     assert_eq!(bench.run(), Ok(2));
-    assert!(bench.dispatched().is_empty());
-    assert!(bench.reservations().is_empty());
+    assert_eq!(bench.dispatched(), [] as [String; 0]);
+    assert_eq!(bench.reservations(), [] as [PathBuf; 0]);
     assert!(
         reason(&bench).contains("pinned input changed"),
         "{}",

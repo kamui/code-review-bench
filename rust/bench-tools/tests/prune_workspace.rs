@@ -214,6 +214,6 @@ fn mixed_or_missing_arguments_are_misuse() {
             String::from_utf8_lossy(&output.stderr).contains("give --attempt with --workspace"),
             "{arguments:?}: {output:?}"
         );
-        assert!(output.stdout.is_empty());
+        assert_eq!(output.stdout, [] as [u8; 0]);
     }
 }

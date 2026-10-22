@@ -2158,7 +2158,10 @@ mod tests {
                 publish_with(&base, Box::new(move |call, _, _| call == failing_call)).unwrap_err();
             assert_eq!(failure.kind, "OSError");
             assert_eq!(tree(&base.join("public")), published, "call {failing_call}");
-            assert!(tree(&base.join("stage/previous")).is_empty());
+            assert_eq!(
+                tree(&base.join("stage/previous")),
+                [] as [(String, Vec<u8>); 0]
+            );
             std::fs::remove_dir_all(&base).unwrap();
         }
     }

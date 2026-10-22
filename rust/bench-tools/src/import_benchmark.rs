@@ -8,6 +8,7 @@ use crate::evidence::{self, Disk, Store};
 use crate::pyjson::{self, Duplicates, Object, Value};
 use crate::pytext::{self, PyPath};
 use std::collections::{BTreeSet, HashMap};
+use std::fmt::Write as _;
 use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Stdio};
@@ -121,10 +122,11 @@ pub fn verify(store: &mut Store<'_>, root: &PyPath, manifest: &Value) -> Result<
             errors.join(", ")
         );
         if !editable.is_empty() {
-            message.push_str(&format!(
+            let _ = write!(
+                message,
                 "\nTo keep an intended edit, preserve the imported bytes: {PRESERVE_COMMAND} {}",
                 editable.join(" ")
-            ));
+            );
         }
         return Err(Refusal(message));
     }

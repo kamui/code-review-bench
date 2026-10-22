@@ -2174,7 +2174,7 @@ mod tests {
             ["a", "b", "c", "d", "e", "", "f"]
         );
         assert_eq!(splitlines("x\n"), ["x"]);
-        assert!(splitlines("").is_empty());
+        assert_eq!(splitlines(""), [] as [&str; 0]);
         assert_eq!(relpath("/c/src/../a.py", b"/c/").unwrap(), "a.py");
         assert_eq!(relpath("/c", b"/c").unwrap(), ".");
         assert_eq!(relpath("//d/x", b"/c/e").unwrap(), "../../d/x");

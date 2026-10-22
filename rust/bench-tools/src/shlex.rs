@@ -213,7 +213,7 @@ mod tests {
         );
         assert_eq!(split(r#"x'' '' "\$a\q""#).unwrap(), ["x", "", r"\$a\q"]);
         assert_eq!(split("  a#b  ").unwrap(), ["a#b"]);
-        assert!(split(" \t\n").unwrap().is_empty());
+        assert_eq!(split(" \t\n").unwrap(), [] as [String; 0]);
         assert_eq!(split("'open"), Err(LexError::NoClosingQuotation));
         assert_eq!(split("end\\"), Err(LexError::NoEscapedCharacter));
         assert_eq!(

@@ -493,7 +493,7 @@ fn claude_web_tools_and_the_gate_log_are_recorded_and_flagged() {
     let (code, report) = fixture.gated("review-code", &attempt);
 
     assert_eq!(code, 0, "{}", json(&report));
-    assert!(texts(get(&report, "violations")).is_empty());
+    assert_eq!(texts(get(&report, "violations")), [] as [String; 0]);
     for command in NETWORK_COMMANDS {
         assert!(
             texts(get(&report, "confined_requests"))
@@ -585,7 +585,7 @@ fn claude_web_tools_and_the_gate_log_are_recorded_and_flagged() {
             "https://github.com/grpc/grpc-go/issues/7365"
         ]
     );
-    assert!(texts(get(&searches[1], "result_urls")).is_empty());
+    assert_eq!(texts(get(&searches[1], "result_urls")), [] as [String; 0]);
     let gate = get(&report, "network_gate");
     assert_eq!(
         [
@@ -649,7 +649,7 @@ fn codex_web_search_and_the_gate_log_are_recorded_and_flagged() {
     let (code, report) = fixture.gated("codex-skill", &attempt);
 
     assert_eq!(code, 0, "{}", json(&report));
-    assert!(texts(get(&report, "violations")).is_empty());
+    assert_eq!(texts(get(&report, "violations")), [] as [String; 0]);
     assert_eq!(
         texts(get(&report, "confined_requests")).len(),
         NETWORK_COMMANDS.len()

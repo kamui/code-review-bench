@@ -15,6 +15,7 @@ use crate::{
     removal, sha256,
 };
 use std::cmp::Ordering;
+use std::fmt::Write as _;
 
 const RECEIPT_CONTRACT: &str = "current-assessment-receipt/v1";
 /// `sorted(codex_grading.AUX_TOOL_NAMES)`.
@@ -1635,17 +1636,19 @@ pub fn invalidate(root: &[u8], current_arg: &[u8]) -> R<Vec<u8>> {
     }
     let mut printed = String::new();
     for batch in &stale {
-        printed.push_str(&format!(
-            "invalidated {}/{}: {} reviews return to the queue\n",
+        let _ = writeln!(
+            printed,
+            "invalidated {}/{}: {} reviews return to the queue",
             pyvalue::item(batch, "run")?.py_str(),
             pyvalue::item(batch, "target")?.py_str(),
             pyvalue::length(pyvalue::item(batch, "reviews")?)?
-        ));
+        );
     }
-    printed.push_str(&format!(
-        "{} stale batch(es) invalidated; {remain} remain current\n",
+    let _ = writeln!(
+        printed,
+        "{} stale batch(es) invalidated; {remain} remain current",
         stale.len()
-    ));
+    );
     Ok(printed.into_bytes())
 }
 

@@ -1,4 +1,5 @@
 use bench_tools::pyjson::{self, Duplicates, Value};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -142,10 +143,10 @@ impl Case {
         let path = self.directory.join(name);
         std::fs::write(
             &path,
-            lines
-                .iter()
-                .map(|line| format!("{line}\n"))
-                .collect::<String>(),
+            lines.iter().fold(String::new(), |mut out, line| {
+                let _ = writeln!(out, "{line}");
+                out
+            }),
         )
         .unwrap();
         path
@@ -267,7 +268,7 @@ fn a_final_end_turn_does_not_hide_an_earlier_unfinished_request() {
     );
     let parent = case.write("parent.jsonl", &[session(15, 7)]);
     let data = meter(&[agent], &[parent]);
-    assert!(refusals(&data).is_empty());
+    assert_eq!(refusals(&data), [] as [String; 0]);
     let unfinalized = at(&data, &["completeness", "unfinalized"])
         .as_array()
         .unwrap();

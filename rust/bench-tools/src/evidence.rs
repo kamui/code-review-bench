@@ -20,6 +20,7 @@ use crate::pytext::{self, PyPath};
 use crate::schema::Validator;
 use crate::sha256::{self, Sha256};
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::fmt::Write as _;
 use std::fs::File;
 use std::hash::{BuildHasher, Hasher};
 use std::io::{self, Read, Write};
@@ -963,7 +964,8 @@ fn differs_refusal(root: &PyPath, found: &[Differs]) -> Error {
     let mut directories = Vec::new();
     let mut moves = Vec::new();
     for item in found {
-        message.push_str(&format!(
+        let _ = write!(
+            message,
             "\n  {}: expected {} bytes, sha256 {}, mode {:04o}; found {} bytes, sha256 {}, mode {:04o}",
             item.path.display(),
             item.member.bytes,
@@ -972,7 +974,7 @@ fn differs_refusal(root: &PyPath, found: &[Differs]) -> Error {
             item.bytes,
             item.sha256,
             item.mode
-        ));
+        );
         let target = parent(
             &aside
                 .join(item.sha256.as_bytes())
@@ -992,7 +994,7 @@ fn differs_refusal(root: &PyPath, found: &[Differs]) -> Error {
     } else {
         "\nMove them aside under their SHA-256, then fetch again:\n  "
     });
-    message.push_str(&format!("mkdir -p -- {}", directories.join(" ")));
+    let _ = write!(message, "mkdir -p -- {}", directories.join(" "));
     for command in moves {
         message.push_str(" &&\n  ");
         message.push_str(&command);

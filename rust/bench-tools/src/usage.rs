@@ -5,6 +5,7 @@ pub mod claude;
 pub mod codex;
 
 use crate::pyjson::Value;
+use std::fmt::Write as _;
 
 /// What one meter run prints and exits with.
 pub struct Outcome {
@@ -273,7 +274,7 @@ pub fn utc_isoformat(micros: i64) -> String {
         seconds % 60
     );
     if fraction != 0 {
-        out.push_str(&format!(".{fraction:06}"));
+        let _ = write!(out, ".{fraction:06}");
     }
     out.push_str("+00:00");
     out

@@ -2,6 +2,7 @@
 
 use super::{Ran, Served, compact, get, graphql, text};
 use crate::pyjson::{self, Duplicates, Object, Value};
+use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -788,12 +789,13 @@ fn pr_checks(served: &Served, cwd: &Path, words: &[String]) -> Result<Ran, Strin
         ));
     }
     rows.sort_by(|left, right| left.0.cmp(&right.0));
-    let out: String = rows
-        .iter()
-        .map(|(name, bucket, elapsed, url, description)| {
-            format!("{name}\t{bucket}\t{elapsed}\t{url}\t{description}\n")
-        })
-        .collect();
+    let out: String = rows.iter().fold(
+        String::new(),
+        |mut out, (name, bucket, elapsed, url, description)| {
+            let _ = writeln!(out, "{name}\t{bucket}\t{elapsed}\t{url}\t{description}");
+            out
+        },
+    );
     let code = if rows.iter().any(|row| matches!(row.1, "fail" | "cancel")) {
         1
     } else if rows.iter().any(|row| row.1 == "pending") {

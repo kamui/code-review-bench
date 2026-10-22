@@ -24,6 +24,7 @@
 
 use crate::sha256;
 use std::ffi::OsString;
+use std::fmt::Write as _;
 use std::fs::{self, DirBuilder, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
@@ -57,7 +58,10 @@ pub fn keygen(key: &Path) -> Result<bool, String> {
     fs::File::open("/dev/urandom")
         .and_then(|mut source| source.read_exact(&mut random))
         .map_err(|error| format!("cannot read /dev/urandom: {error}"))?;
-    let hex: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+    let hex: String = random.iter().fold(String::new(), |mut out, byte| {
+        let _ = write!(out, "{byte:02x}");
+        out
+    });
     OpenOptions::new()
         .write(true)
         .create_new(true)

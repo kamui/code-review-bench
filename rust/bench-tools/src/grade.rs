@@ -25,6 +25,7 @@ use crate::pyvalue::{self, Raised};
 use crate::{grading_validation, normalize_review, pre_existing, pyfs, pyobject, sha256};
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 use std::path::Path;
 
 pub const PROGRAM: &str = "grade.py";
@@ -666,7 +667,11 @@ fn claim_context(
             if pyobject::eq(relation, &text("equivalent")) {
                 append(&mut context.matches, token, &number, text(&id));
             }
-            context.text += &format!("\n{id} {}: {token} item {number}\n", relation.py_str());
+            let _ = write!(
+                context.text,
+                "\n{id} {}: {token} item {number}\n",
+                relation.py_str()
+            );
         }
     }
     let mut ruled = Vec::new();
@@ -735,7 +740,8 @@ fn claim_context(
             } else {
                 "not ruled".to_string()
             };
-            context.text += &format!(
+            let _ = write!(
+                context.text,
                 "\n{token} item {number}, {}: says what goes wrong, {}; identifies the cause as a fault, {cause}.\n",
                 subject.py_str(),
                 says_what.py_str()
@@ -1153,7 +1159,8 @@ pub fn prepare(
                edit_verdicts with the exact text to replace; send the whole file again only when most of it \
                changes.\n";
     if let Some(inventory) = &inventory {
-        prompt += &format!(
+        let _ = write!(
+            prompt,
             "\n\n## Claims to grade\n\n```json\n{}\n```\n",
             dumps(inventory, false)
         );
@@ -1168,7 +1175,8 @@ pub fn prepare(
         if listed_ids {
             prompt += "\nWhere an item lists ids, give its claims those ids, in that order.\n";
             if v3 {
-                prompt += &format!(
+                let _ = write!(
+                    prompt,
                     "\nWhen a review's text states a pre-existing fault that this list does not record, note it as \
                      a concern about the list, with the evidence: write it in that item's note after the words \
                      \"{MISSING_FAULT}\".\n"
@@ -1474,10 +1482,10 @@ fn blind_token(entropy: &mut dyn Entropy) -> R<String> {
         .map_err(|failure| Failure::Input(failure.0))?;
     Ok(format!(
         "blind-{}",
-        bytes
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
+        bytes.iter().fold(String::new(), |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        })
     ))
 }
 

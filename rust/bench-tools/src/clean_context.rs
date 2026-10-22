@@ -2,6 +2,7 @@
 //! instructions and skills out of its session.
 
 use crate::pyjson::{self, Dumps, Object, Value};
+use std::fmt::Write as _;
 use std::io::Write;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
@@ -51,7 +52,10 @@ pub fn uuid4() -> Result<String, String> {
         .map_err(|error| format!("/dev/urandom: {error}"))?;
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    let hex: String = bytes.iter().fold(String::new(), |mut out, byte| {
+        let _ = write!(out, "{byte:02x}");
+        out
+    });
     Ok(format!(
         "{}-{}-{}-{}-{}",
         &hex[..8],

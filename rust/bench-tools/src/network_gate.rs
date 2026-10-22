@@ -1889,7 +1889,7 @@ mod tests {
             "GET /kamui/code-review-bench HTTP/1.1\r\nHost: raw.githubusercontent.com\r\n\r\n",
         );
         assert_eq!(fed.refused.map(|refusal| refusal.status), Some(421));
-        assert!(fed.forward.is_empty());
+        assert_eq!(fed.forward, [] as [u8; 0]);
         for request in [
             "GET https://github.com/ HTTP/1.1\r\nHost: pypi.org\r\n\r\n",
             "GET / HTTP/1.1\r\n\r\n",
@@ -2106,7 +2106,7 @@ mod tests {
         let dir = gate.dir().to_path_buf();
         drop(gate);
         assert!(!dir.exists());
-        assert!(server.join().unwrap().is_empty());
+        assert_eq!(server.join().unwrap(), [] as [u8; 0]);
         fs::remove_dir_all(&attempt).unwrap();
     }
 
