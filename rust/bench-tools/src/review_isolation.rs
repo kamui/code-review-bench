@@ -112,7 +112,7 @@ pub fn prepare_runtime_cache(clone: &Path) -> Result<(), String> {
 
 /// Point the clone's `.git/FETCH_HEAD` at the attempt's work directory, so a fetch from a frozen forge's `origin`
 /// can record what it fetched while the clone stays read-only. A plain `git fetch origin` writes nothing else
-/// there: setup already fetched every ref the forge holds, and they never move.
+/// there: setup already fetched every branch the forge holds, and its refs never move.
 fn relocate_fetch_head(clone: &Path) -> Result<(), String> {
     let git_dir = Command::new("git")
         .arg("-C")
