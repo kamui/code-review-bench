@@ -92,8 +92,9 @@ fn decoded(bytes: &[u8]) -> Py<String> {
 }
 
 /// The run manifest at the run's `freeze_commit`, through `git show`, or `None` when the run has no freeze commit
-/// or Git cannot show it. A shown manifest is kept for the process, since the current record selects a packet for
-/// every attempt of a run.
+/// or Git cannot show it. The current record selects a packet for every attempt of a run, so the process keeps each
+/// root and spec's `git show` result, a failure included, and never retries a failed show. An error running Git or
+/// decoding its output is raised and not kept.
 pub fn frozen_manifest(run_dir: &PyPath, manifest: &Value, root: &PyPath) -> Py<Option<Value>> {
     let freeze = pyvalue::get(manifest, "freeze_commit")?;
     if !freeze.truthy() {
