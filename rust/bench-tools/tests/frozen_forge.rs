@@ -633,3 +633,84 @@ fn setup_refuses_a_packet_that_states_a_thread_resolution() {
         sha256(&unknown)
     );
 }
+
+/// The bwrap arguments that give a command the write policy of `settings`, as Claude's sandbox applies it on
+/// Linux: a read-only root, each `allowWrite` path writable, and each `denyWrite` path read-only again.
+fn write_policy(settings: &Value) -> Vec<String> {
+    let paths = |key: &str| -> Vec<String> {
+        let filesystem = settings.as_object().unwrap().get("sandbox").unwrap();
+        let filesystem = filesystem.as_object().unwrap().get("filesystem").unwrap();
+        let list = filesystem.as_object().unwrap().get(key).unwrap();
+        list.as_array().unwrap().iter().map(Value::py_str).collect()
+    };
+    let mut arguments: Vec<String> = ["--ro-bind", "/", "/", "--dev", "/dev"]
+        .map(str::to_string)
+        .to_vec();
+    for path in paths("allowWrite") {
+        if Path::new(&path).exists() {
+            arguments.extend(["--bind".to_string(), path.clone(), path]);
+        }
+    }
+    for path in paths("denyWrite") {
+        arguments.extend(["--ro-bind".to_string(), path.clone(), path]);
+    }
+    arguments
+}
+
+#[test]
+fn a_fetch_from_origin_works_under_the_strict_write_policy() {
+    if !Command::new("bwrap")
+        .args(["--ro-bind", "/", "/", "true"])
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        eprintln!("skipped: bwrap cannot run here");
+        return;
+    }
+    let fixture = Fixture::new("strict-fetch");
+    let attempt = fixture.attempt("att-001");
+    let clone = attempt.join("clone");
+    for name in ["clone-work", "tmp", "artifacts"] {
+        std::fs::create_dir_all(attempt.join(name)).unwrap();
+    }
+    let out = attempt.join("isolation-settings.json");
+    let written = bench(&[
+        "review-isolation",
+        "settings",
+        "--attempt",
+        attempt.to_str().unwrap(),
+        "--clone",
+        clone.to_str().unwrap(),
+        "--out",
+        out.to_str().unwrap(),
+    ]);
+    if text(&written.stderr).contains("required executable is missing") {
+        eprintln!("skipped: {}", text(&written.stderr));
+        return;
+    }
+    assert!(written.status.success(), "{}", text(&written.stderr));
+    let settings = pyjson::loads(
+        &std::fs::read_to_string(&out).unwrap(),
+        Duplicates::KeepLast,
+    )
+    .unwrap();
+    let sandboxed = |command: &str| {
+        Command::new("bwrap")
+            .args(write_policy(&settings))
+            .args(["--chdir", clone.to_str().unwrap(), "sh", "-c", command])
+            .output()
+            .unwrap()
+    };
+
+    let fetched = sandboxed(
+        "git fetch origin && git fetch --no-tags origin trunk && git rev-parse FETCH_HEAD",
+    );
+    assert!(fetched.status.success(), "{}", text(&fetched.stderr));
+    assert_eq!(text(&fetched.stdout).trim(), fixture.base);
+    let written = sandboxed("echo changed > a.txt");
+    assert!(!written.status.success());
+    assert_ne!(
+        std::fs::read_to_string(clone.join("a.txt")).unwrap(),
+        "changed\n"
+    );
+}
