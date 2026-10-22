@@ -153,7 +153,8 @@ impl Fixture {
         .unwrap();
         std::fs::write(
             target.join("packet.v2.md"),
-            "**1.** 2024-01-04T00:00:00Z \u{b7} `reviewer` \u{b7} `a.txt:1` \u{b7} on commit `HEAD` \u{b7} thread unresolved\n",
+            "| `state` | `MERGED` |\n| `merged` | **`true`** (merged 2024-02-01T00:00:00Z) |\n\
+             **1.** 2024-01-04T00:00:00Z \u{b7} `reviewer` \u{b7} `a.txt:1` \u{b7} on commit `HEAD` \u{b7} thread unresolved\n",
         )
         .unwrap();
         let captures = root.join("bench/forge-captures.v1.json");
@@ -598,25 +599,32 @@ fn the_probe_runs_an_inventory_and_reports_each_call() {
 }
 
 #[test]
-fn setup_refuses_a_packet_that_states_a_thread_resolution() {
+fn setup_refuses_a_packet_that_states_a_thread_resolution_or_a_merge() {
     let fixture = Fixture::new("packet");
     let pinned = fixture.target.join("packet.v2.md");
-    let stated = fixture.clone("att-001");
-    let refused = fixture.setup(&stated, &["--packet", pinned.to_str().unwrap()]);
-    assert_eq!(refused.status.code(), Some(2), "{}", text(&refused.stdout));
-    assert!(
-        text(&refused.stderr).contains("does not state what the capture holds"),
-        "{}",
-        text(&refused.stderr)
-    );
-    assert!(!stated.join("forge").exists());
+    let v2 = std::fs::read_to_string(&pinned).unwrap();
+    let threads_unknown = v2.replace("thread unresolved", "thread resolution unknown");
+    let merged = fixture.target.join("packet.merged.md");
+    std::fs::write(&merged, &threads_unknown).unwrap();
+    for (name, stated) in [("att-001", &pinned), ("att-003", &merged)] {
+        let attempt = fixture.clone(name);
+        let refused = fixture.setup(&attempt, &["--packet", stated.to_str().unwrap()]);
+        assert_eq!(refused.status.code(), Some(2), "{}", text(&refused.stdout));
+        assert!(
+            text(&refused.stderr).contains("does not state what the capture holds"),
+            "{}",
+            text(&refused.stderr)
+        );
+        assert!(!attempt.join("forge").exists());
+    }
 
     let unknown = fixture.target.join("packet.v3.md");
     std::fs::write(
         &unknown,
-        std::fs::read_to_string(&pinned)
-            .unwrap()
-            .replace("thread unresolved", "thread resolution unknown"),
+        threads_unknown.replace("`MERGED`", "`OPEN`").replace(
+            "**`true`** (merged 2024-02-01T00:00:00Z)",
+            "**`false`** (not merged)",
+        ),
     )
     .unwrap();
     let attempt = fixture.clone("att-002");

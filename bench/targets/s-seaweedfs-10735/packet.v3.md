@@ -16,8 +16,8 @@ policy (branch layout, execution allowance, what is unavailable) separately.
 | Base SHA (as recorded on the pull request) | `db5a086d048c5c2d6e51e82bb070d20df04d688d` |
 | Merge-base | `db5a086d048c5c2d6e51e82bb070d20df04d688d` (identical to the base SHA) |
 | Diff | 2 files, +160 / −0, 2 commits |
-| `state` | `MERGED` |
-| `merged` | **`true`** (merged 2026-08-13T17:53:33Z) |
+| `state` | `OPEN` |
+| `merged` | **`false`** (not merged) |
 | `isDraft` | `false` |
 | Originating issue(s) | none — the PR body carries no closing reference |
 

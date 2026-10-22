@@ -1511,8 +1511,9 @@ fn rebuild_arguments(task: &Task, cut: &Cutoff, mirror: &Path, forge: &Path) -> 
 fn packet_difference(rebuilt: &str, pinned: &str) -> Option<String> {
     let rebuilt: Vec<&str> = rebuilt.split('\n').collect();
     let pinned: Vec<&str> = pinned.split('\n').collect();
-    let merge_state =
-        |line: &str| line.starts_with("| `state` |") || line.starts_with("| `merged` |");
+    let merge_state = |line: &str| {
+        line.starts_with(build_packet::STATE_ROW) || line.starts_with(build_packet::MERGED_ROW)
+    };
     let thread_state = |rebuilt: &str, pinned: &str| {
         rebuilt
             .strip_suffix(build_packet::THREAD_STATE_UNKNOWN)

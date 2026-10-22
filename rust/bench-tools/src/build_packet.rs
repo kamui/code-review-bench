@@ -81,6 +81,9 @@ const EDITS_QUERY_AFTER: &str = "){ id ... on Comment{ userContentEdits(first:10
 pub(crate) const THREAD_STATE_UNKNOWN: &str = " \u{b7} thread resolution unknown";
 pub(crate) const THREAD_RESOLVED: &str = " \u{b7} thread resolved";
 pub(crate) const THREAD_UNRESOLVED: &str = " \u{b7} thread unresolved";
+pub(crate) const STATE_ROW: &str = "| `state` |";
+pub(crate) const MERGED_ROW: &str = "| `merged` |";
+pub(crate) const NOT_MERGED: &str = "**`false`** (not merged)";
 const LAST_PUSH: &str = "the last push";
 const OPENING: &str = "the pull request's opening";
 
@@ -2595,12 +2598,12 @@ impl Rendering<'_> {
             self.dels,
             self.commits.len()
         ));
-        w(format!("| `state` | `{}` |", item(p, "state")?.py_str()));
+        w(format!("{STATE_ROW} `{}` |", item(p, "state")?.py_str()));
         let merged = item(p, "merged")?.truthy();
         let merged_cell = if merged {
             format!("**`true`** (merged {})", item(p, "mergedAt")?.py_str())
         } else {
-            "**`false`** (not merged)".to_string()
+            NOT_MERGED.to_string()
         };
         let stance = if merged {
             "the target is merged, so this is a **retrospective review with publication disabled**"
@@ -2612,7 +2615,7 @@ impl Rendering<'_> {
         } else {
             "The target is not merged; this review is frozen at the cutoff."
         };
-        w(format!("| `merged` | {merged_cell} |"));
+        w(format!("{MERGED_ROW} {merged_cell} |"));
         w(format!(
             "| `isDraft` | `{}` |",
             if self.draft.truthy() { "true" } else { "false" }

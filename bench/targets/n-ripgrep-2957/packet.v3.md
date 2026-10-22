@@ -16,8 +16,8 @@ policy (branch layout, execution allowance, what is unavailable) separately.
 | Base SHA (as recorded on the pull request) | `79cbe89deb1151e703f4d91b19af9cdcc128b765` |
 | Merge-base | `79cbe89deb1151e703f4d91b19af9cdcc128b765` (identical to the base SHA) |
 | Diff | 2 files, +29 / −4, 2 commits |
-| `state` | `MERGED` |
-| `merged` | **`true`** (merged 2024-12-31T13:23:13Z) |
+| `state` | `OPEN` |
+| `merged` | **`false`** (not merged) |
 | `isDraft` | `false` |
 | Originating issue(s) | [`BurntSushi/ripgrep#2956`](https://github.com/BurntSushi/ripgrep/issues/2956) — "Can't source zsh completions directly" (closing reference in the PR body) |
 

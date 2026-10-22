@@ -1,5 +1,5 @@
-use super::{Capture, graphql, read_json, sha256_file, unknown_thread_states};
-use crate::build_packet::{THREAD_RESOLVED, THREAD_UNRESOLVED};
+use super::{Capture, cutoff_packet, graphql, read_json, sha256_file};
+use crate::build_packet::{MERGED_ROW, NOT_MERGED, STATE_ROW, THREAD_RESOLVED, THREAD_UNRESOLVED};
 use crate::pyjson::{Object, Value};
 use std::path::Path;
 
@@ -259,7 +259,7 @@ fn serves_an_originating_issue_from_issues_json() {
 }
 
 #[test]
-fn each_forge_packet_is_its_capture_packet_with_thread_states_unknown() {
+fn each_forge_packet_is_its_capture_packet_as_at_the_cutoff() {
     let pinned = |entry: &Value, key: &str| {
         let pin = at(entry, key);
         let path = repo().join(at(pin, "path").py_str());
@@ -281,11 +281,18 @@ fn each_forge_packet_is_its_capture_packet_with_thread_states_unknown() {
         assert_eq!(at(row, "target").py_str(), at(entry, "target").py_str());
         assert!(at(row, "replacement.derived_from").py_eq(at(entry, "packet")));
         let packet = pinned(row, "replacement");
-        assert_eq!(packet, unknown_thread_states(&pinned(entry, "packet")));
+        assert_eq!(packet, cutoff_packet(&pinned(entry, "packet")));
+        let open = [
+            format!("{STATE_ROW} `OPEN` |"),
+            format!("{MERGED_ROW} {NOT_MERGED} |"),
+        ];
         assert!(
-            !packet
-                .lines()
-                .any(|line| line.ends_with(THREAD_RESOLVED) || line.ends_with(THREAD_UNRESOLVED)),
+            !packet.lines().any(|line| {
+                line.ends_with(THREAD_RESOLVED)
+                    || line.ends_with(THREAD_UNRESOLVED)
+                    || ((line.starts_with(STATE_ROW) || line.starts_with(MERGED_ROW))
+                        && !open.iter().any(|row| row == line))
+            }),
             "{}",
             at(row, "target").py_str()
         );
