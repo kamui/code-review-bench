@@ -302,8 +302,17 @@ impl Replacements {
         both(&done)
     }
 
+    /// The archive `provision cache` wrote, at the hash-keyed name its receipt records.
     fn archive(&self) -> PathBuf {
-        self.cache.join("archives").join(format!("{TARGET}.tar.gz"))
+        let archive = PathBuf::from(text(field(&read(&self.receipt), "archive.path")));
+        assert_eq!(
+            archive,
+            self.cache.join("archives").join(format!(
+                "{TARGET}.{}.tar.gz",
+                text(field(&read(&self.receipt), "archive.sha256"))
+            ))
+        );
+        archive
     }
 
     fn prepare(&self, extra: &[&str]) -> Output {
@@ -599,7 +608,15 @@ fn offline_queue_checks_real_inputs_without_client_or_credentials() {
     let done = preflight("preflight", &["--expected-cli-version", "9.9.9"]);
     assert_eq!(done.status.code(), Some(2), "{}", both(&done));
     assert!(stderr(&done).contains("--model"), "{}", both(&done));
-    fs::remove_file(f.archive()).unwrap();
+    let per_task = f.cache.join("archives").join(format!("{TARGET}.tar.gz"));
+    fs::rename(f.archive(), &per_task).unwrap();
+    let done = preflight("preflight-inputs", &[]);
+    assert!(
+        done.status.success(),
+        "the per-task archive is the fallback: {}",
+        both(&done)
+    );
+    fs::remove_file(&per_task).unwrap();
     let done = preflight("preflight-inputs", &[]);
     assert_ne!(done.status.code(), Some(0), "{}", both(&done));
     assert!(
