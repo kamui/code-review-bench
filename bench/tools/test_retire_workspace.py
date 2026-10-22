@@ -14,8 +14,16 @@ import evidence_inventory as inventory
 import evidence_store as store
 import retire_workspace as retire
 import rust_runtime
-import regrade
 from test_evidence_store import FakeGitHub
+
+
+def accounting(queue):
+    """What the regrade ledger reads for each reservation under ``queue``: the reservation, its priced receipt and its
+    zero-charge proof, or None for an absent file."""
+    return [tuple(path.read_bytes() if path.exists() else None
+                  for path in (reservation, reservation.parent / 'work/dispatch.json',
+                               reservation.parent / 'budget-resolution.json'))
+            for reservation in sorted(queue.glob('batches/*/*/attempt-*/reservation.json'))]
 
 
 class PublishedGitHub(FakeGitHub):
@@ -163,12 +171,12 @@ class RetirementTest(unittest.TestCase):
         attempt.mkdir(parents=True)
         (attempt / 'work').symlink_to(self.work, target_is_directory=True)
         store.write_new(attempt / 'reservation.json', {'maxBudgetUsd': 6})
-        before = regrade.ledger(self.queue)
-        self.assertEqual(before, (regrade.Decimal('2.5'), []))
+        before = accounting(self.queue)
+        self.assertEqual(json.loads(before[0][1])['usage']['high'], 2.5)
         with self.assertRaisesRegex(store.EvidenceError, 'workspace-dependent accounting'):
             self.run_retirement(apply=True)
         self.assertTrue((self.work / 'dispatch.json').exists())
-        self.assertEqual(regrade.ledger(self.queue), before)
+        self.assertEqual(accounting(self.queue), before)
         self.assertFalse((self.base / 'receipt.json').exists())
 
     def test_symlinks_at_each_ledger_path_component_cannot_bypass_accounting(self):
@@ -186,12 +194,12 @@ class RetirementTest(unittest.TestCase):
                 linked.symlink_to(moved, target_is_directory=True)
                 self.plan['accounting_roots'] = [str(queue)]
                 self.save_plan()
-                before = regrade.ledger(queue)
-                self.assertEqual(before, (regrade.Decimal('2.5'), []))
+                before = accounting(queue)
+                self.assertEqual(json.loads(before[0][1])['usage']['high'], 2.5)
                 with self.assertRaisesRegex(store.EvidenceError, 'workspace-dependent accounting'):
                     self.run_retirement(apply=True)
                 self.assertTrue((self.work / 'dispatch.json').exists())
-                self.assertEqual(regrade.ledger(queue), before)
+                self.assertEqual(accounting(queue), before)
 
     def test_external_dispatch_links_preserve_the_priced_ledger(self):
         persistent = self.base / 'persistent-dispatch.json'
@@ -214,12 +222,12 @@ class RetirementTest(unittest.TestCase):
                 store.write_new(attempt / 'reservation.json', {'maxBudgetUsd': 6})
                 self.plan['accounting_roots'] = [str(queue)]
                 self.save_plan()
-                before = regrade.ledger(queue)
-                self.assertEqual(before, (regrade.Decimal('2.5'), []))
+                before = accounting(queue)
+                self.assertEqual(json.loads(before[0][1])['usage']['high'], 2.5)
                 with self.assertRaisesRegex(store.EvidenceError, 'workspace-dependent accounting'):
                     self.run_retirement(apply=True)
                 self.assertTrue(self.work.exists())
-                self.assertEqual(regrade.ledger(queue), before)
+                self.assertEqual(accounting(queue), before)
 
     def test_noncanonical_workspace_root_is_refused_before_removal(self):
         pivot = self.base / 'pivot'
@@ -254,11 +262,11 @@ class RetirementTest(unittest.TestCase):
         evidence = self.work / 'stderr.log'
         resolution = {'chargeUpperUsd': 0, 'evidence': [{'path': str(evidence), 'sha256': store.digest(evidence)}]}
         store.write_new(attempt / 'budget-resolution.json', resolution)
-        before = regrade.ledger(self.queue)
-        self.assertEqual(before, (regrade.Decimal(0), []))
+        before = accounting(self.queue)
+        self.assertEqual((before[0][1], json.loads(before[0][2])['chargeUpperUsd']), (None, 0))
         with self.assertRaisesRegex(store.EvidenceError, 'workspace-dependent accounting'):
             self.run_retirement(apply=True)
-        self.assertEqual(regrade.ledger(self.queue), before)
+        self.assertEqual(accounting(self.queue), before)
         resolution['evidence'][0]['path'] = 'relative-to-another-controller-checkout.log'
         (attempt / 'budget-resolution.json').write_text(json.dumps(resolution))
         with self.assertRaisesRegex(store.EvidenceError, 'original controller checkout'):

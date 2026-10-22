@@ -7,10 +7,10 @@ use bench_tools::schema::{SchemaError, Validator};
 use bench_tools::{
     archive, attempt_audit, build_packet, calibration, claims, current_grading, delegation,
     derive_packet, diff_identity, evaluator_audit, evidence, evidence_inventory, export_explorer,
-    file_attempt, grade, grading_reports, grading_validation, import_benchmark, methodology,
-    native_artifacts, normalize_thermo, packet_selection, provision, pyfs, pyunicode, pyvalue,
-    rates, review_isolation, review_queue, roster, ruling, run_cell, skill_provenance,
-    skill_runner, subscription_meters, upstream, usage,
+    file_attempt, grade, grading_reports, grading_validation, import_benchmark, interrupt,
+    methodology, native_artifacts, normalize_thermo, packet_selection, provision, pyfs, pyunicode,
+    pyvalue, rates, regrade, review_isolation, review_queue, roster, ruling, run_cell,
+    skill_provenance, skill_runner, subscription_meters, upstream, usage,
 };
 use clap::builder::PossibleValuesParser;
 use clap::error::ErrorKind;
@@ -19,7 +19,7 @@ use std::ffi::{OsStr, OsString};
 use std::fmt::Display;
 use std::io::Write;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 /// Deterministic benchmark tools.
@@ -77,15 +77,14 @@ enum Cli {
     /// Check ruling records, route a ruling, summarize rounds, or check a ruling dossier.
     #[command(subcommand, infer_long_args = true)]
     Ruling(RulingCommand),
-    /// Check a grader's output against the rules grading_validation.py applies.
+    /// Check a grader's output against the rules grading_validation.py applies, or serve the grader's tools.
     #[command(subcommand, infer_long_args = true)]
     Grading(GradingCommand),
     /// Inventory and validate the sole-current grading record, as current_grading.py does, or print each selected
     /// batch's input fingerprint and state.
     #[command(infer_long_args = true)]
     CurrentGrading(CurrentGradingArgs),
-    /// Prepare a blind grading workspace and its private key, check prepared inputs offline, or check a prepared
-    /// workspace against its key, as grade.py's prepare half does.
+    /// Prepare, preflight, dispatch, validate, map or invalidate a blind grading batch.
     #[command(subcommand, infer_long_args = true)]
     Grade(GradeCommand),
     /// Plan the current grading queue without altering saved reviews or grades, as methodology.py does.
@@ -103,7 +102,7 @@ enum Cli {
     /// tools/import_benchmark.py did.
     #[command(infer_long_args = true)]
     ImportBenchmark(ImportBenchmarkArgs),
-    /// Report on grading queues or archive a grading attempt, as bench/tools/regrade.py defines them.
+    /// Run a regrading queue, report on grading queues or archive a grading attempt.
     #[command(subcommand, infer_long_args = true)]
     Regrade(RegradeCommand),
     /// Derive a time and cost audit log from filed benchmark runs, for estimating later runs.
@@ -1118,6 +1117,27 @@ struct GradeSources {
     current: OsString,
 }
 
+#[derive(Args)]
+struct GradeClient {
+    #[arg(long, required = true, allow_negative_numbers = true)]
+    model: String,
+    #[arg(long, required = true, allow_negative_numbers = true)]
+    expected_cli_version: String,
+    /// Explicitly authorize a Codex grader, which has no dollar limit.
+    #[arg(long)]
+    allow_unbounded_codex: bool,
+}
+
+impl GradeClient {
+    fn into_client(self) -> grade::dispatch::Client {
+        grade::dispatch::Client {
+            model: self.model,
+            expected_cli_version: self.expected_cli_version,
+            allow_unbounded_codex: self.allow_unbounded_codex,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum GradeCommand {
     /// Build one batch's blind workspace and write its private key outside it.
@@ -1152,6 +1172,46 @@ enum GradeCommand {
         /// A target to check instead of every selected batch of the run.
         #[arg(long, action = clap::ArgAction::Append, allow_negative_numbers = true)]
         target: Vec<OsString>,
+    },
+    /// Check the grader client, its sign-in, pricing and tool enforcement, then every selected batch of a run.
+    #[command(infer_long_args = true)]
+    Preflight {
+        #[command(flatten)]
+        sources: GradeSources,
+        /// The directory each target's workspace would be prepared under.
+        #[arg(long, required = true, allow_negative_numbers = true)]
+        work_root: OsString,
+        /// The directory each target's key would be written under.
+        #[arg(long, required = true, allow_negative_numbers = true)]
+        key_root: OsString,
+        /// A target to check instead of every selected batch of the run.
+        #[arg(long, action = clap::ArgAction::Append, allow_negative_numbers = true)]
+        target: Vec<OsString>,
+        #[command(flatten)]
+        client: GradeClient,
+    },
+    /// Run one prepared batch's grader session and record it in the workspace's dispatch.json.
+    #[command(infer_long_args = true)]
+    Dispatch {
+        #[arg(long, required = true, allow_negative_numbers = true)]
+        work: PathBuf,
+        #[arg(long, required = true, allow_negative_numbers = true)]
+        key: PathBuf,
+        #[command(flatten)]
+        client: GradeClient,
+        #[arg(long, required = true, allow_negative_numbers = true)]
+        effort: String,
+        /// The session's dollar limit: required for Claude, refused for Codex.
+        #[arg(long, allow_negative_numbers = true)]
+        max_budget_usd: Option<f64>,
+        /// The run directory whose charges.jsonl gets the session's charge.
+        #[arg(long, requires = "step", allow_negative_numbers = true)]
+        run: Option<PathBuf>,
+        /// The charge line's step label.
+        #[arg(long, requires = "run", allow_negative_numbers = true)]
+        step: Option<String>,
+        #[arg(long, default_value_t = 5400, allow_negative_numbers = true)]
+        timeout: u64,
     },
     /// Check a prepared workspace against its key.
     #[command(infer_long_args = true)]
@@ -1446,6 +1506,25 @@ enum RegradeCommand {
         #[arg(long, default_value = ".", allow_negative_numbers = true)]
         root: OsString,
     },
+    /// Grade the queue an authorization pins, in the bench-tools it pins; exit 3 at the budget and 4 at the
+    /// plan's quota, both resumable.
+    #[command(infer_long_args = true)]
+    Run {
+        #[arg(long, allow_negative_numbers = true)]
+        authorization: PathBuf,
+        #[arg(long, allow_negative_numbers = true)]
+        directory: PathBuf,
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Concurrent paid dispatches.
+        #[arg(long, default_value_t = 1)]
+        workers: usize,
+        /// Require this client version; by default the queue pins the client installed at its first run.
+        #[arg(long, allow_negative_numbers = true)]
+        expected_cli_version: Option<String>,
+        #[arg(long, default_value = ".", allow_negative_numbers = true)]
+        root: PathBuf,
+    },
 }
 
 #[derive(Args)]
@@ -1468,10 +1547,50 @@ enum GradingCommand {
     Validate {
         #[arg(default_value = "verdicts.json", allow_negative_numbers = true)]
         verdicts: OsString,
-        /// The validator inputs grade.py prepares, validator/inputs.json in a grading workspace.
+        /// The validator inputs `grade prepare` writes, validator/inputs.json in a grading workspace.
         #[arg(long, allow_negative_numbers = true)]
         inputs: OsString,
     },
+    /// Serve the blinded grader's MCP tools for one grading workspace over stdin and stdout.
+    #[command(infer_long_args = true)]
+    Tools {
+        #[arg(long, allow_negative_numbers = true)]
+        work: PathBuf,
+        /// The target's command profile.
+        #[arg(long, allow_negative_numbers = true)]
+        policy: PathBuf,
+        /// A path the sandbox must never mount, such as the private grading key.
+        #[arg(long, allow_negative_numbers = true)]
+        protected: Vec<PathBuf>,
+        /// The pinned bench-tools executable the validate tool runs.
+        #[arg(long, allow_negative_numbers = true)]
+        bench_tools: PathBuf,
+    },
+    /// Run the installed Claude client against a local fake API that calls each grading tool, without a model call.
+    ProbeClaude,
+    /// Run the installed Codex client against a local fake API that calls each grading tool, without a model call.
+    #[command(infer_long_args = true)]
+    ProbeCodex {
+        /// A new directory that keeps the fake API's requests, the client's logs and the receipt.
+        #[arg(long, allow_negative_numbers = true)]
+        evidence_dir: Option<PathBuf>,
+    },
+}
+
+fn grading_probe(
+    failure: &str,
+    receipt: Result<pyjson::Value, String>,
+) -> Result<ExitCode, ExitCode> {
+    match receipt {
+        Ok(receipt) => {
+            println!("{}", pyjson::dumps(&receipt, &pyjson::Dumps::default()));
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(message) => {
+            eprintln!("{failure}: {message}");
+            Err(ExitCode::FAILURE)
+        }
+    }
 }
 
 /// Prints a parse error or the help clap renders, and exits as it does: 2 for misuse, 0 for help.
@@ -4448,6 +4567,49 @@ fn run_grade(command: GradeCommand) -> Result<ExitCode, ExitCode> {
                 )?;
                 Ok(std::mem::take(&mut printed))
             }
+            GradeCommand::Preflight {
+                sources,
+                work_root,
+                key_root,
+                target,
+                client,
+            } => {
+                let targets = target
+                    .iter()
+                    .map(text)
+                    .collect::<current_grading::R<Vec<_>>>()?;
+                grade::dispatch::preflight(
+                    &grade_options(sources),
+                    &targets,
+                    pytext::os_bytes(&work_root),
+                    pytext::os_bytes(&key_root),
+                    &client.into_client(),
+                    &mut runner,
+                    &mut printed,
+                )?;
+                Ok(std::mem::take(&mut printed))
+            }
+            GradeCommand::Dispatch {
+                work,
+                key,
+                client,
+                effort,
+                max_budget_usd,
+                run,
+                step,
+                timeout,
+            } => grade::dispatch::dispatch(
+                &runner,
+                &grade::dispatch::Dispatch {
+                    work,
+                    key,
+                    client: client.into_client(),
+                    effort,
+                    max_budget_usd,
+                    charge: run.zip(step),
+                    timeout,
+                },
+            ),
             GradeCommand::CheckPrepared {
                 work,
                 key,
@@ -4525,6 +4687,18 @@ fn run_grade(command: GradeCommand) -> Result<ExitCode, ExitCode> {
 
 fn main() -> ExitCode {
     let arguments: Vec<OsString> = std::env::args_os().collect();
+    if arguments
+        .get(1)
+        .is_some_and(|first| first == interrupt::RELEASE)
+    {
+        return interrupt::exec_released(&arguments[2..]);
+    }
+    if arguments
+        .get(1)
+        .is_some_and(|first| first == interrupt::PROBE)
+    {
+        return interrupt::exec_probe(&arguments[2..]);
+    }
     // clap reads `-hx` before a subcommand as `-h` and prints help; the top level has no Python
     // counterpart, so it keeps the former parser's refusal of an unknown command.
     if let Some(command) = arguments.get(1).map(|name| pytext::os_bytes(name))
@@ -4568,12 +4742,54 @@ fn main() -> ExitCode {
         Cli::Grading(GradingCommand::Validate { verdicts, inputs }) => {
             run_grading_validate(&verdicts, &inputs)
         }
+        Cli::Grading(GradingCommand::Tools {
+            work,
+            policy,
+            protected,
+            bench_tools,
+        }) => match bench_tools::grading_tools::serve_command(
+            &work,
+            &policy,
+            &protected,
+            &bench_tools,
+        ) {
+            Ok(()) => Ok(ExitCode::SUCCESS),
+            Err(message) => {
+                eprintln!("bench-tools grading tools: {message}");
+                Err(ExitCode::FAILURE)
+            }
+        },
+        Cli::Grading(GradingCommand::ProbeClaude) => grading_probe(
+            "client enforcement probe failed",
+            review_isolation::own_executable().and_then(|own| grade::client::probe_claude(&own)),
+        ),
+        Cli::Grading(GradingCommand::ProbeCodex { evidence_dir }) => grading_probe(
+            "Codex grading compatibility probe failed",
+            review_isolation::own_executable().and_then(|own| {
+                grade::client::probe_codex(Path::new("."), &own, evidence_dir.as_deref())
+            }),
+        ),
         Cli::Regrade(RegradeCommand::Status { queues }) => regrade_status(&queues),
         Cli::Regrade(RegradeCommand::ArchiveAttempt {
             attempt,
             archive_dir,
             root,
         }) => archive_attempt(&attempt, &archive_dir, &root),
+        Cli::Regrade(RegradeCommand::Run {
+            authorization,
+            directory,
+            limit,
+            workers,
+            expected_cli_version,
+            root,
+        }) => Ok(ExitCode::from(regrade::run(&regrade::Options {
+            root,
+            authorization,
+            directory,
+            limit,
+            workers,
+            expected_cli_version,
+        }))),
         Cli::AuditLog(arguments) => audit_log(arguments),
         Cli::NativeArtifacts(command) => run_native_artifacts(command),
         Cli::ReviewIsolation(command) => run_review_isolation(command),

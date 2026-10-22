@@ -4,7 +4,7 @@ import unittest
 
 
 def test_paths(directory: Path) -> list[Path]:
-    return [path for path in sorted(directory.glob("test_*.py")) if path.name != "test_grading_client.py"]
+    return sorted(directory.glob("test_*.py"))
 
 
 def main() -> int:

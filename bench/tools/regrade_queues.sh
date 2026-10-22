@@ -4,7 +4,7 @@
 #   bench/tools/regrade_queues.sh run LOGS WORKERS AUTHORIZATION=QUEUE_DIRECTORY...
 #   bench/tools/regrade_queues.sh status QUEUE_DIRECTORY...
 #
-# `run` starts regrade.py for each queue in the order given and stops at the first queue that does not finish.
+# `run` starts `bench-tools regrade run` for each queue in the order given and stops at the first queue that does not finish.
 # Each controller run gets its own log under LOGS, and LOGS/driver.log gets one line when a queue starts and one
 # when it ends. Set LIMIT=N to map at most N batches of each queue and stop: run again with more WORKERS to
 # raise concurrency on the batches that are left. A rerun resumes every queue from its directory.
@@ -36,8 +36,8 @@ run)
     count=$(find "$logs" -maxdepth 1 -name "$name-*.log" | wc -l)
     log=$logs/$name-$((count + 1)).log
     echo "$(date -u +%FT%TZ) start $queue workers=$workers${LIMIT:+ limit=$LIMIT} -> $log" >> "$logs/driver.log"
-    python3 bench/tools/regrade.py --authorization "$authorization" --directory "$queue" --workers "$workers" \
-      ${LIMIT:+--limit "$LIMIT"} > "$log" 2>&1
+    python3 bench/tools/rust_runtime.py exec bench-tools -- regrade run --authorization "$authorization" \
+      --directory "$queue" --workers "$workers" ${LIMIT:+--limit "$LIMIT"} > "$log" 2>&1
     code=$?
     echo "exit=$code" >> "$log"
     echo "$(date -u +%FT%TZ) end $queue exit=$code" >> "$logs/driver.log"

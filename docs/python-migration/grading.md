@@ -237,8 +237,8 @@ in slice 10, without checking saved grades. The schemas the command validates ag
 under `rust/bench-tools/src/current_grading/`, and a unit test fails when a copy differs. `verify:current` and the
 commands in `docs/current-grading.md`, `docs/claim-adjudication.md` and `docs/evaluator-audit.md` moved.
 `tools/test_moved_cli_callers.py` fails on a current caller of `inventory`, `check` or `status`, except
-`test_grade.py` and `test_regrade.py`, which check the retained Python `grade.py` and `regrade.py` against their
-baseline.
+`test_grade.py` and `test_regrade.py`, which checked the retained Python `grade.py` and `regrade.py` against their
+baseline until #157 deleted them with that Python.
 
 [`current-grading.v1.json`](../../tools/behavior_contracts/current-grading.v1.json) pins the commands on the nine
 fixture variants and on these cases: a missing attempt record or review, an arm file changed after inventory, a
@@ -285,8 +285,8 @@ until slice 11 deletes it. #157 deleted `packet_selection.py` with its last call
   `--self-test`. The Rust runtime workflow runs the same corpus with a differential against the retained Python.
 
 `tools/test_moved_cli_callers.py` fails on a current caller of `methodology.py`, `check_manifest.py` or
-`tools/export_explorer.py`, except `test_grade.py` and `test_regrade.py`, which check the retained Python against
-its baseline.
+`tools/export_explorer.py`, except `test_grade.py` and `test_regrade.py`, which checked the retained Python against
+its baseline until #157 deleted them.
 
 [`methodology.v1.json`](../../tools/behavior_contracts/methodology.v1.json) pins the command on the six fixture
 variants that plan and the two the record refuses, and on `--out` and the command line. The decided differences
