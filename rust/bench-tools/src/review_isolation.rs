@@ -10,7 +10,7 @@ use crate::pyjson::{self, Dumps, Object, Value};
 use crate::{pyfs, sha256, shlex};
 use std::collections::HashSet;
 use std::os::unix::ffi::OsStrExt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 pub const PROFILES: [&str; 2] = ["claude-strict-v1", "claude-strict-v2"];
@@ -482,7 +482,8 @@ fn list<I: IntoIterator<Item = String>>(items: I) -> Value {
 /// configured home. That home may be a symlink to the versioned install, and the sandbox exposes a symlink only
 /// through the directory holding it. Every top-level directory is either a system one the sandbox already reads or
 /// one `denyRead` covers, so an entry for `/` or a top-level directory would only re-open what the attempt must not
-/// read.
+/// read. Each entry is resolved, so a symlink or a `..` can't stand for a broader directory. A home holding a `..`
+/// gets no entry for the directory holding its parent, since its written grandparent need not be that directory.
 fn venv_runtime(clone: &Path) -> Result<Vec<String>, String> {
     let venv = suffixed(clone, "-cache").join("venv/pyvenv.cfg");
     if !venv.is_file() {
@@ -495,23 +496,39 @@ fn venv_runtime(clone: &Path) -> Result<Vec<String>, String> {
         let (key, value) = line.split_once('=').unwrap_or((line, ""));
         if key.trim() == "home" {
             let home = PathBuf::from(value.trim());
-            let resolved = resolve(&home);
+            let holder = home
+                .components()
+                .all(|part| part != Component::ParentDir)
+                .then(|| home.parent().and_then(Path::parent).map(resolve))
+                .flatten();
+            let parent = resolve(&home).parent().map(Path::to_path_buf);
             entries.extend(
-                [home.parent().and_then(Path::parent), resolved.parent()]
+                [holder, parent]
                     .into_iter()
                     .flatten()
                     .filter(|directory| {
                         directory
                             .components()
-                            .filter(|part| matches!(part, std::path::Component::Normal(_)))
+                            .filter(|part| matches!(part, Component::Normal(_)))
                             .count()
                             > 1
                     })
-                    .map(text),
+                    .map(|directory| text(&directory)),
             );
         }
     }
     Ok(entries)
+}
+
+/// Whether an `allowRead` entry could re-open every path or a whole `denied` directory. The sandbox applies the
+/// narrower of two overlapping read rules, so only an entry beneath a denied directory re-opens part of it.
+fn too_broad(entry: &str, denied: &[String]) -> bool {
+    let path = Path::new(entry);
+    let real = resolve(path);
+    entry.trim_end_matches('/').is_empty()
+        || path.components().any(|part| part == Component::ParentDir)
+        || real == Path::new("/")
+        || denied.iter().any(|directory| real == Path::new(directory))
 }
 
 /// The settings an isolated attempt runs under, with `hook` as the executable its file-tool hook runs.
@@ -583,12 +600,9 @@ pub fn settings(
         .collect();
     allow_read.sort();
     allow_read.dedup();
-    if let Some(entry) = allow_read
-        .iter()
-        .find(|entry| entry.trim_end_matches('/').is_empty())
-    {
+    if let Some(entry) = allow_read.iter().find(|entry| too_broad(entry, &denied)) {
         return Err(format!(
-            "allowRead would hold {entry:?}, which covers every path"
+            "allowRead would hold {entry:?}, which could re-open every path or a denied directory"
         ));
     }
     Ok(object([
@@ -906,5 +920,68 @@ mod tests {
             ]
         );
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_venv_home_never_declares_a_broader_directory_than_it_resolves_to() {
+        let root =
+            std::env::temp_dir().join(format!("review-isolation-broad-{}", std::process::id()));
+        let clone = root.join("clone");
+        let venv = root.join("clone-cache/venv");
+        std::fs::create_dir_all(&clone).unwrap();
+        std::fs::create_dir_all(&venv).unwrap();
+        let root = resolve(&root);
+        let config = venv.join("pyvenv.cfg");
+        let forbidden = ["/home/user", "/home", "/"].map(PathBuf::from);
+        for home in ["/home/user/../bin", "/home/user/x/../../bin"] {
+            std::fs::write(&config, format!("home = {home}\n")).unwrap();
+            let entries = venv_runtime(&clone).unwrap();
+            assert!(
+                entries
+                    .iter()
+                    .all(|entry| !forbidden.contains(&resolve(Path::new(entry)))),
+                "{home}: {entries:?}"
+            );
+        }
+        let top: PathBuf = root.components().take(2).collect();
+        for target in [Path::new("/"), &top] {
+            let link = root.join("link");
+            std::os::unix::fs::symlink(target, &link).unwrap();
+            std::fs::write(
+                &config,
+                format!("home = {}\n", link.join("py/bin").display()),
+            )
+            .unwrap();
+            let entries = venv_runtime(&clone).unwrap();
+            assert!(
+                entries
+                    .iter()
+                    .all(|entry| *entry != text(&link) && *entry != text(target)),
+                "{}: {entries:?}",
+                target.display()
+            );
+            std::fs::remove_file(&link).unwrap();
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn allow_read_refuses_an_entry_that_could_reopen_a_denied_directory() {
+        let denied = ["/home".to_string(), "/proc".to_string()];
+        for entry in [
+            "",
+            "/",
+            "//",
+            "/home",
+            "/home/",
+            "/proc",
+            "/home/user/..",
+            "/usr/../home/user",
+        ] {
+            assert!(too_broad(entry, &denied), "{entry:?}");
+        }
+        for entry in ["/usr", "/home/user", "/proc/self"] {
+            assert!(!too_broad(entry, &denied), "{entry:?}");
+        }
     }
 }
