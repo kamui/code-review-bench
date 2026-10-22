@@ -34,7 +34,7 @@ impl Fixture {
             &task.join("target.json"),
             &format!(
                 r#"{{"id":"{TASK}","repo":"o/r","pr":7,"head":"{HEAD}","merge_base":"{BASE}","base_sha":"{BASE}",
-                "negative_shas":["{EXCLUDED}"],"originating_issue":"o/r#3"}}"#
+                "negative_shas":[{{"sha":"{EXCLUDED}","reason":"the fix"}}],"originating_issue":"o/r#3"}}"#
             ),
         );
         write(

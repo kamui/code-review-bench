@@ -185,7 +185,8 @@ fn task(root: &Path, id: &str) -> Result<Task, Failure> {
         .and_then(Value::as_array)
         .unwrap_or(&[])
         .iter()
-        .filter_map(|sha| sha.as_str().map(str::to_lowercase))
+        .filter_map(|entry| field(entry, "sha").and_then(Value::as_str))
+        .map(str::to_lowercase)
         .collect();
     Ok(Task {
         id: required("id")?,
