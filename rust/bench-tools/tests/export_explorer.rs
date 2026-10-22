@@ -313,3 +313,32 @@ fn the_command_reads_the_base_path_from_the_environment() {
     assert_eq!(files(&root.join("public")), before);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn every_exported_data_file_carries_the_canary() {
+    let root = root("export-explorer-current-unassessed", "canary");
+    let output = command(&root, None);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let data: BTreeMap<PathBuf, Vec<u8>> = files(&root.join("public/data"))
+        .into_iter()
+        .filter(|(path, _)| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .collect();
+    assert!(data.contains_key(Path::new("benchmark.json")));
+    assert!(data.keys().any(|path| path.starts_with("attempts")));
+    for (path, bytes) in &data {
+        assert!(
+            String::from_utf8_lossy(bytes).contains(bench_tools::leak_check::CANARY),
+            "{} has no canary",
+            path.display()
+        );
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
