@@ -164,6 +164,15 @@ fn dns_name(host: &str) -> bool {
         && host.len() <= 253
 }
 
+/// Whether a URL's `host` is an IP literal: a bracketed IPv6 address, or a name whose last label `getaddrinfo`
+/// reads as a number, as [`dns_name`] refuses.
+pub fn address_literal(host: &str) -> bool {
+    let last = host.rsplit('.').next().unwrap_or_default();
+    host.starts_with('[')
+        || (!last.is_empty() && last.bytes().all(|byte| byte.is_ascii_digit()))
+        || last.starts_with("0x")
+}
+
 /// Whether the proxy may connect to `address`: no loopback, private, link-local, shared (100.64/10), unspecified,
 /// multicast, broadcast, documentation or reserved address, so a public name cannot reach the host's services.
 fn public(address: IpAddr) -> bool {
@@ -1849,9 +1858,18 @@ mod tests {
             "[::1]",
         ] {
             assert!(!dns_name(host), "{host}");
+            assert_eq!(address_literal(host), host != "a..b", "{host}");
         }
         assert!(dns_name("pypi.org"));
         assert!(dns_name("1password.com"));
+        for host in [
+            "pypi.org",
+            "1password.com",
+            "b\u{fc}cher.example",
+            "localhost",
+        ] {
+            assert!(!address_literal(host), "{host}");
+        }
         for address in [
             "127.0.0.1",
             "10.1.2.3",
