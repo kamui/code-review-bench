@@ -153,7 +153,8 @@ impl Fixture {
         .unwrap();
         std::fs::write(
             target.join("packet.v2.md"),
-            "| `state` | `MERGED` |\n| `merged` | **`true`** (merged 2024-02-01T00:00:00Z) |\n\
+            "| Merge-base | `base` (**differs from the base SHA**: the base branch moved before the merge; review against the merge-base) |\n\
+             | `state` | `MERGED` |\n| `merged` | **`true`** (merged 2024-02-01T00:00:00Z) |\n\
              **1.** 2024-01-04T00:00:00Z \u{b7} `reviewer` \u{b7} `a.txt:1` \u{b7} on commit `HEAD` \u{b7} thread unresolved\n",
         )
         .unwrap();
@@ -606,7 +607,17 @@ fn setup_refuses_a_packet_that_states_a_thread_resolution_or_a_merge() {
     let threads_unknown = v2.replace("thread unresolved", "thread resolution unknown");
     let merged = fixture.target.join("packet.merged.md");
     std::fs::write(&merged, &threads_unknown).unwrap();
-    for (name, stated) in [("att-001", &pinned), ("att-003", &merged)] {
+    let open = threads_unknown.replace("`MERGED`", "`OPEN`").replace(
+        "**`true`** (merged 2024-02-01T00:00:00Z)",
+        "**`false`** (not merged)",
+    );
+    let merge_prose = fixture.target.join("packet.merge-prose.md");
+    std::fs::write(&merge_prose, &open).unwrap();
+    for (name, stated) in [
+        ("att-001", &pinned),
+        ("att-003", &merged),
+        ("att-004", &merge_prose),
+    ] {
         let attempt = fixture.clone(name);
         let refused = fixture.setup(&attempt, &["--packet", stated.to_str().unwrap()]);
         assert_eq!(refused.status.code(), Some(2), "{}", text(&refused.stdout));
@@ -621,9 +632,9 @@ fn setup_refuses_a_packet_that_states_a_thread_resolution_or_a_merge() {
     let unknown = fixture.target.join("packet.v3.md");
     std::fs::write(
         &unknown,
-        threads_unknown.replace("`MERGED`", "`OPEN`").replace(
-            "**`true`** (merged 2024-02-01T00:00:00Z)",
-            "**`false`** (not merged)",
+        open.replace(
+            "the base branch moved before the merge",
+            "the base branch moved after the head branched from it",
         ),
     )
     .unwrap();

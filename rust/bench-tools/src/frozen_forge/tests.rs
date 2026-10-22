@@ -1,5 +1,7 @@
 use super::{Capture, cutoff_packet, graphql, read_json, sha256_file};
-use crate::build_packet::{MERGED_ROW, NOT_MERGED, STATE_ROW, THREAD_RESOLVED, THREAD_UNRESOLVED};
+use crate::build_packet::{
+    MERGE_PROSE, MERGED_ROW, NOT_MERGED, STATE_ROW, THREAD_RESOLVED, THREAD_UNRESOLVED,
+};
 use crate::pyjson::{Object, Value};
 use std::path::Path;
 
@@ -292,6 +294,7 @@ fn each_forge_packet_is_its_capture_packet_as_at_the_cutoff() {
                     || line.ends_with(THREAD_UNRESOLVED)
                     || ((line.starts_with(STATE_ROW) || line.starts_with(MERGED_ROW))
                         && !open.iter().any(|row| row == line))
+                    || MERGE_PROSE.iter().any(|prose| line.contains(prose))
             }),
             "{}",
             at(row, "target").py_str()

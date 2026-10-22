@@ -84,6 +84,17 @@ pub(crate) const THREAD_UNRESOLVED: &str = " \u{b7} thread unresolved";
 pub(crate) const STATE_ROW: &str = "| `state` |";
 pub(crate) const MERGED_ROW: &str = "| `merged` |";
 pub(crate) const NOT_MERGED: &str = "**`false`** (not merged)";
+pub(crate) const MERGE_BASE_ROW: &str = "| Merge-base |";
+pub(crate) const BASE_MOVED_BEFORE_MERGE: &str = "the base branch moved before the merge";
+/// Prose this builder writes that says the pull request merged.
+#[cfg(test)]
+pub(crate) const MERGE_PROSE: [&str; 4] = [
+    BASE_MOVED_BEFORE_MERGE,
+    MERGE_INSTANT,
+    "retrospective review",
+    "when the reviewed pull request merged",
+];
+const MERGE_INSTANT: &str = "the merge instant";
 const LAST_PUSH: &str = "the last push";
 const OPENING: &str = "the pull request's opening";
 
@@ -2064,7 +2075,7 @@ fn prepare(a: &Arguments) -> Result<Prepared, Failure> {
     };
     let (cutoff_at, cutoff_is, cutoff_source) = if let Some(raw) = cutoff_given {
         let cutoff_at = instant_option("--cutoff", raw)?;
-        let cutoff_is = (Some(cutoff_at) == merged_at).then_some("the merge instant");
+        let cutoff_is = (Some(cutoff_at) == merged_at).then_some(MERGE_INSTANT);
         (cutoff_at, cutoff_is, "given as --cutoff".to_string())
     } else {
         let mut pushed = None;
@@ -2586,11 +2597,13 @@ impl Rendering<'_> {
             a.base_sha
         ));
         let merge_note = if a.merge_base == a.base_sha {
-            " (identical to the base SHA)"
+            " (identical to the base SHA)".to_string()
         } else {
-            " (**differs from the base SHA**: the base branch moved before the merge; review against the merge-base)"
+            format!(
+                " (**differs from the base SHA**: {BASE_MOVED_BEFORE_MERGE}; review against the merge-base)"
+            )
         };
-        w(format!("| Merge-base | `{}`{merge_note} |", a.merge_base));
+        w(format!("{MERGE_BASE_ROW} `{}`{merge_note} |", a.merge_base));
         w(format!(
             "| Diff | {} files, +{} / \u{2212}{}, {} commits |",
             self.rows.len(),
