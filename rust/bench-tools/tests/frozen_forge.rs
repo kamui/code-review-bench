@@ -648,21 +648,31 @@ fn check_accepts_only_an_attempt_set_up_from_the_pinned_captures_with_the_dispat
     assert!(served.status.success(), "{}", text(&served.stderr));
     let checked = check(&attempt, &pinned, &packet);
     assert!(checked.status.success(), "{}", text(&checked.stderr));
+    let mismatch = "is neither the packet the frozen forge checked";
+    let later = std::fs::read_to_string(fixture.target.join("packet.v2.md")).unwrap();
+    refused(
+        &check(&attempt, &pinned, &fixture.target.join("packet.v2.md")),
+        mismatch,
+    );
+    refused(&check(&attempt, &"0".repeat(64), &packet), "other captures");
     let input = attempt.join("input.md");
-    std::fs::write(&input, format!("{cutoff}\n\nRun policy.\n")).unwrap();
+    let generated = format!("{cutoff}\n\nRun policy.\n");
+    std::fs::write(&input, &generated).unwrap();
+    refused(&check(&attempt, &pinned, &input), mismatch);
+    std::fs::write(
+        attempt.join("cell.json"),
+        format!(r#"{{"input_sha256": "{}"}}"#, sha256(&input)),
+    )
+    .unwrap();
     let checked = check(&attempt, &pinned, &input);
     assert!(checked.status.success(), "{}", text(&checked.stderr));
-    refused(&check(&attempt, &"0".repeat(64), &packet), "other captures");
-    let later = fixture.target.join("packet.v2.md");
-    refused(
-        &check(&attempt, &pinned, &later),
-        "does not start with the packet the frozen forge checked",
-    );
-    std::fs::write(&input, format!("{cutoff}Merged later.\n")).unwrap();
-    refused(
-        &check(&attempt, &pinned, &input),
-        "does not start with the packet the frozen forge checked",
-    );
+    for appended in [
+        format!("{generated}\n{later}"),
+        format!("{cutoff}\n\n{later}"),
+    ] {
+        std::fs::write(&input, appended).unwrap();
+        refused(&check(&attempt, &pinned, &input), mismatch);
+    }
 
     let elsewhere = unchecked.join("forge/origin.git");
     git(

@@ -768,7 +768,7 @@ fn prepare_attempt(arguments: &Arguments, client: Client) -> R<Prepared> {
             get(get(&manifest, "forge_captures"), "sha256")
                 .as_str()
                 .unwrap_or_default(),
-            &packet_path,
+            &frozen_forge::Dispatched::Packet(&packet_path),
         )?;
     }
     let sibling = |suffix: &str| {
@@ -3610,7 +3610,7 @@ mod tests {
                 (
                     &zeros,
                     &fixture.target.join("packet.md"),
-                    "does not start with the packet the frozen forge checked",
+                    "is neither the packet the frozen forge checked",
                 ),
             ] {
                 let error = fixture

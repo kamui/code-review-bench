@@ -492,7 +492,7 @@ enum FrozenForgeCommand {
         /// The capture manifest's SHA-256 the run pins.
         #[arg(long, allow_negative_numbers = true)]
         captures_sha256: String,
-        /// The text the launcher gives the reviewer, which must start with the packet setup checked.
+        /// The text the launcher gives the reviewer: the packet setup checked, or run-cell's input.md from it.
         #[arg(long, allow_negative_numbers = true)]
         packet: OsString,
     },
@@ -3591,7 +3591,7 @@ fn run_frozen_forge(command: FrozenForgeCommand) -> Result<ExitCode, ExitCode> {
             Path::new(&clone),
             Path::new(&target),
             &captures_sha256,
-            Path::new(&packet),
+            &frozen_forge::Dispatched::Prompt(Path::new(&packet)),
         ) {
             Ok(()) => Ok(ExitCode::SUCCESS),
             Err(error) => {

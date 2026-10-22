@@ -579,7 +579,7 @@ fn the_review_code_prompt_allows_forge_reads_only_under_the_open_network_policy(
             Some(earlier.as_path()),
             pin,
             2,
-            vec!["does not start with the packet the frozen forge checked"],
+            vec!["is neither the packet the frozen forge checked"],
             vec![],
         ),
         (
