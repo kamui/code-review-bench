@@ -38,6 +38,7 @@ pub fn checks() -> Vec<(&'static str, Check)> {
         ("active-history", active_history),
         ("decision-families", decision_families),
         ("shallow-history", shallow_history),
+        ("non-object-root", non_object_root),
         ("prefix", prefix),
         ("gh-upstream", gh_upstream),
         ("upstream-offline", upstream_offline),
@@ -803,6 +804,57 @@ fn history_repo(root: &Path) -> Result<PathBuf, Failure> {
     decision_version(&directory, 2)?;
     commit(root, "test(bench): adopt decision history")?;
     Ok(directory)
+}
+
+/// A legacy first version is a decisions/1 map; any other JSON value fails the chain, whatever the second holds.
+fn non_object_root(_: &Scratch) -> Result<(), Failure> {
+    for (root_json, recorded) in [
+        ("[]", true),
+        ("[]", false),
+        (r#"["probe"]"#, true),
+        (r#""probe""#, true),
+        (r#""records""#, true),
+        ("1", true),
+        ("null", true),
+    ] {
+        let temp = Temp::new()?;
+        let root = temp.0.as_path();
+        git(root, &["init", "-q", "--initial-branch=main"])?;
+        let directory = root.join("tools/behavior_contracts");
+        std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+        let v1 = directory.join("usage-decisions.v1.json");
+        put(&v1, root_json)?;
+        let records = if recorded {
+            obj(vec![(
+                "probe",
+                decision(
+                    &probe_case(),
+                    "version 2",
+                    Some(s(&json::digest(&probe_case())?)),
+                )?,
+            )])
+        } else {
+            obj(vec![])
+        };
+        write_json(
+            &directory.join("usage-decisions.v2.json"),
+            &obj(vec![
+                ("previous", predecessor(&v1, "decisions/1")?),
+                ("records", records),
+            ]),
+        )?;
+        write_json(
+            &directory.join("usage.v1.json"),
+            &obj(vec![("decisions", s("usage-decisions.v2.json"))]),
+        )?;
+        commit(root, "test(bench): adopt decision history")?;
+        history_refused(
+            root,
+            &["previous decisions are not an object"],
+            &format!("a {root_json} first version"),
+        )?;
+    }
+    Ok(())
 }
 
 fn history_refused(root: &Path, needles: &[&str], what: &str) -> Result<(), Failure> {
