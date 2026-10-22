@@ -480,6 +480,19 @@ enum FrozenForgeCommand {
         #[arg(long, allow_negative_numbers = true)]
         packet: Option<OsString>,
     },
+    /// Refuse an attempt whose frozen forge setup did not prepare from the run's captures with a checked packet.
+    #[command(infer_long_args = true)]
+    Check {
+        #[arg(long, allow_negative_numbers = true)]
+        target: OsString,
+        #[arg(long, allow_negative_numbers = true)]
+        attempt: OsString,
+        #[arg(long, allow_negative_numbers = true)]
+        clone: OsString,
+        /// The capture manifest's SHA-256 the run pins.
+        #[arg(long, allow_negative_numbers = true)]
+        captures_sha256: String,
+    },
     /// The stand-in gh a reviewer runs; its shim passes the forge directory.
     Gh {
         #[arg(long)]
@@ -3564,6 +3577,24 @@ fn run_frozen_forge(command: FrozenForgeCommand) -> Result<ExitCode, ExitCode> {
                 }
             }
         }
+        FrozenForgeCommand::Check {
+            target,
+            attempt,
+            clone,
+            captures_sha256,
+        } => match frozen_forge::check_prepared(
+            Path::new(&attempt),
+            Path::new(&clone),
+            Path::new(&target),
+            &captures_sha256,
+            None,
+        ) {
+            Ok(()) => Ok(ExitCode::SUCCESS),
+            Err(error) => {
+                eprintln!("frozen-forge check: {error}");
+                Ok(ExitCode::from(2))
+            }
+        },
         FrozenForgeCommand::Setup {
             target,
             attempt,
