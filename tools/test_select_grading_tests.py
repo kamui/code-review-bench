@@ -63,9 +63,8 @@ class GradingSelectionTest(unittest.TestCase):
         for paths, jobs in ((("tools/test_export.py",), {"build"}),
                             (("tools/run_bench_tests.py",), {"build", "grading-tests"}),
                             (("tools/fetch_freeze_commits.py",), {"build", "grading-tests"}),
-                            (("bench/tools/grade.py", "bench/tools/test_grade.py"), {"grading-tests"}),
-                            (("tools/test_export.py", "bench/tools/grade.py", "src/routes/index.tsx"),
-                             {"build", "grading-tests"})):
+                            (("bench/tools/grade.py", "bench/tools/test_grade.py"), {"build", "grading-tests"}),
+                            (("tools/test_export.py", "src/routes/index.tsx"), {"build"})):
             with self.subTest(paths=paths):
                 self.assertEqual(self.selected(*paths), jobs)
 
@@ -98,7 +97,7 @@ class GradingSelectionTest(unittest.TestCase):
         self.assertEqual(selection("pull_request", self.event(), self.root)[0], set())
 
     def test_doc_alongside_a_tool_selects_only_the_tool_jobs(self):
-        self.assertEqual(self.selected("docs/unread.md", "bench/tools/grade.py"), {"grading-tests"})
+        self.assertEqual(self.selected("docs/unread.md", "bench/tools/grade.py"), {"build", "grading-tests"})
 
     def test_doc_named_by_a_fixture_or_record_runs_every_job(self):
         self.write("bench/fixtures/case.json", '{"path": "docs/unread.md"}')

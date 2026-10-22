@@ -30,12 +30,10 @@ def jobs_reading(path: str) -> frozenset[str]:
     parent, name = str(PurePosixPath(path).parent), PurePosixPath(path).name
     if unrelated(path):
         return frozenset()
-    if path in BENCH_TEST_DRIVERS:
-        return frozenset({"build", "grading-tests"})
     if parent == "tools" and name.startswith("test_") and name.endswith(".py"):
         return frozenset({"build"})
-    if parent == "bench/tools" and name.endswith(".py") and path != RUNTIME:
-        return frozenset({"grading-tests"})
+    if path in BENCH_TEST_DRIVERS or parent == "bench/tools" and name.endswith(".py") and path != RUNTIME:
+        return frozenset({"build", "grading-tests"})
     return JOBS
 
 
