@@ -19,7 +19,7 @@ Use `bench-tools file-attempt`, `bench-tools regrade archive-attempt`, `bench-to
 
 Do not change frozen `attempt.json` paths, hashes or dispositions to migrate storage. Add mappings instead. Historical missing evidence stays missing; a mismatch retains both expected and available hashes. A replacement run cannot supply the original observation's missing evidence.
 
-A record can name its transcript archive by a home-relative or absolute path, which only the originating checkout resolves. `python3 bench/tools/rust_runtime.py exec bench-tools -- evidence collect --run bench/runs/<run>` maps each attempt and probe record of a run in `bench/runs/<run>/transcripts.json`: the record, the archive's repository path, the frozen hash and `verified`. The repository path is the one the record holds, or the one it names under `artifacts/transcripts/` in its originating checkout. When neither the checkout nor release storage has that path and release storage holds exactly one archive with the frozen hash, the collector maps the record to the stored path. A record that names any other path gets `artifacts/transcripts/<run>/`, and the collector copies the archive there. The collector reads the archive from this checkout or from release storage and refuses a missing one or a changed hash. `bench-tools file-attempt` records an archive filed inside the checkout that holds the record by its repository path, so a new record resolves in any checkout. The [2026-10-10 inventory](research/portable-evidence-2026-10-10/README.md) lists the references mapped this way.
+A record can name its transcript archive by a home-relative or absolute path, which only the originating checkout resolves. `bench/tools/bench-tools evidence collect --run bench/runs/<run>` maps each attempt and probe record of a run in `bench/runs/<run>/transcripts.json`: the record, the archive's repository path, the frozen hash and `verified`. The repository path is the one the record holds, or the one it names under `artifacts/transcripts/` in its originating checkout. When neither the checkout nor release storage has that path and release storage holds exactly one archive with the frozen hash, the collector maps the record to the stored path. A record that names any other path gets `artifacts/transcripts/<run>/`, and the collector copies the archive there. The collector reads the archive from this checkout or from release storage and refuses a missing one or a changed hash. `bench-tools file-attempt` records an archive filed inside the checkout that holds the record by its repository path, so a new record resolves in any checkout. The [2026-10-10 inventory](research/portable-evidence-2026-10-10/README.md) lists the references mapped this way.
 
 When no copy holds a record's archive, `--missing <record>` writes its entry with the frozen hash and status `missing`. Later collections keep that entry until the archive verifies. The collector refuses every other archive it cannot verify, and consumers read `verified` entries only.
 
@@ -30,10 +30,10 @@ When no copy holds a record's archive, `--missing <record>` writes its entry wit
 Run from outside the storage being inspected, with a new output file:
 
 ```sh
-python3 bench/tools/rust_runtime.py exec bench-tools -- evidence inventory \
+bench/tools/bench-tools evidence inventory \
   --root "$HOME/.t3/bench-runs" --root "$HOME/.t3/bench-cache" \
   --out /tmp/bench-storage-inventory.json
-python3 bench/tools/rust_runtime.py exec bench-tools -- evidence inventory \
+bench/tools/bench-tools evidence inventory \
   --root /absolute/path/to/a/worktree --out /tmp/worktree-inventory.json
 ```
 
@@ -63,14 +63,14 @@ Create a selection outside frozen runs. `source` is a local regular file; `path`
 ```
 
 ```sh
-python3 bench/tools/rust_runtime.py exec bench-tools -- evidence pack \
+bench/tools/bench-tools evidence pack \
   --selection /tmp/selection.json --out /tmp/evidence-package-v1
 # Create a published evidence release once, before uploading to it.
 gh release create evidence-example-v1 --repo kamui/code-review-bench \
   --title 'Benchmark evidence example v1' --notes 'Immutable benchmark evidence payloads.'
-python3 bench/tools/rust_runtime.py exec bench-tools -- evidence publish \
+bench/tools/bench-tools evidence publish \
   --manifest /tmp/evidence-package-v1/manifest.json --out bench/evidence/manifests/example-v1.json
-python3 bench/tools/rust_runtime.py exec bench-tools -- evidence verify \
+bench/tools/bench-tools evidence verify \
   --manifest bench/evidence/manifests/example-v1.json \
   --receipt bench/evidence/receipts/example-v1-restoration.json
 ```
@@ -83,16 +83,16 @@ Commit and push the manifest, restoration receipt, mappings and small records. O
 
 ## Retrieve from another checkout
 
-Install Python 3.11+, GitHub CLI and rustup, then authenticate `gh` for API downloads. Retrieval runs the Rust `bench-tools` executable; install it once per checkout revision ([Rust runtime](python-migration/runtime.md#install)). `bun run evidence:fetch` retrieves the repository payload manifest before direct Python consumer commands. Development, build and verification package commands do this automatically. Inspect `bench/evidence/manifests/*.json`, then select a logical path or omit `--path` to fetch the whole manifest:
+Install GitHub CLI and rustup, then authenticate `gh` for API downloads. Retrieval runs the Rust `bench-tools` executable; install it once per checkout revision ([Rust runtime](python-migration/runtime.md#install)). `bun run evidence:fetch` retrieves the repository payload manifest before direct consumer commands. Development, build and verification package commands do this automatically. Inspect `bench/evidence/manifests/*.json`, then select a logical path or omit `--path` to fetch the whole manifest:
 
 ```sh
 (cd rust/bench-tools && rustup show && cargo fetch --locked)
-python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select
-python3 bench/tools/rust_runtime.py exec bench-tools -- evidence fetch \
+bench/tools/bench-tools runtime install --select
+bench/tools/bench-tools evidence fetch \
   --manifest bench/evidence/manifests/example-v1.json \
   --path artifacts/transcripts/example/att-001.tar.gz
-python3 bench/tools/rust_runtime.py exec bench-tools -- import-benchmark --check
-python3 bench/tools/rust_runtime.py exec bench-tools -- export-explorer
+bench/tools/bench-tools import-benchmark --check
+bench/tools/bench-tools export-explorer
 ```
 
 Downloads enter ignored `.cache/evidence/`. The tool verifies archive and member hashes, rejects unsafe members/symlinks, restores permissions and materializes the original layout. Each file is synced before it is linked into place, so an interrupted fetch leaves either no file or a complete one. Changed files are never overwritten: before restoring anything, the fetch lists every requested file that differs from the manifest, with its expected and found size, hash and mode, and prints the commands that move each one aside under `.cache/evidence/moved-aside/<found sha256>/`. `--offline` uses already verified local files/cache; a missing or corrupt item fails with a reason. `bench-tools evidence resolve [--sha256 HASH] [--offline] PATH` restores one logical path, refusing a path no manifest names or one whose frozen hash differs. `verify` always reads the remote assets into empty temporary directories, independently of this cache. Missing/deleted/replaced assets fail identity/hash checks.
@@ -152,9 +152,9 @@ Plan fields:
 | `classifications` | Optional map from unknown relative path to `{class, reason, sha256}` |
 
 ```sh
-python3 bench/tools/rust_runtime.py exec bench-tools -- retire-workspace --plan bench/evidence/retirements/example-v1.json \
+bench/tools/bench-tools retire-workspace --plan bench/evidence/retirements/example-v1.json \
   --shared-commit <pushed-sha> --shared-branch <branch> --receipt /tmp/example-dry-run.json
-python3 bench/tools/rust_runtime.py exec bench-tools -- retire-workspace --plan bench/evidence/retirements/example-v1.json \
+bench/tools/bench-tools retire-workspace --plan bench/evidence/retirements/example-v1.json \
   --shared-commit <pushed-sha> --shared-branch <branch> --receipt /tmp/example-removal.json --apply
 ```
 
@@ -173,7 +173,7 @@ If an asset is lost, recover its exact bytes from the retained copy, publish und
 The original local capture, pilot and Git fallback packages have exact copies in the separate `evidence-recovery-2026-10-08-v1` release. The small [recovery index](../bench/evidence/recovery/2026-10-08-v1.json) pins their new asset identities and reuses the original manifests, including every member hash and permission. To recover one source package set, use:
 
 ```sh
-python3 bench/tools/rust_runtime.py exec bench-tools -- evidence recover --source local-capture-2026-10-08-v1
+bench/tools/bench-tools evidence recover --source local-capture-2026-10-08-v1
 ```
 
 Use `--path <logical-member>` for selective retrieval and `--offline` for a verified local cache. The other source names are `local-pilot-2026-10-08-v1` and `local-git-fallbacks-2026-10-08-v1`. This recovery release shares the repository and GitHub account with the originals. It covers individual asset or release loss; an independently administered copy is still needed to cover repository, account or provider loss. The [recovery exercise](research/evidence-completion-2026-10-08/recovery-verification.json) downloaded and checked every member while deliberately refusing the original releases.

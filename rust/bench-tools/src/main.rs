@@ -184,6 +184,81 @@ enum Cli {
     /// the receipt. Linux only.
     #[command(infer_long_args = true)]
     RetireWorkspace(RetireWorkspaceArgs),
+    /// Build, retain, select and run pinned bench-tools executables in the runtime store
+    /// (BENCH_RUNTIME_STORE, else ~/.t3/bench-runtime). bench/tools/bench-tools runs every command through it.
+    #[command(subcommand)]
+    Runtime(RuntimeCommand),
+}
+
+#[derive(Subcommand)]
+enum RuntimeCommand {
+    /// Build the checkout's rust/bench-tools from its tree at HEAD, retain it and make it the launcher.
+    Install {
+        /// The checkout (default the one holding the current directory).
+        #[arg(long)]
+        checkout: Option<PathBuf>,
+        /// Also make it the version new operations take.
+        #[arg(long)]
+        select: bool,
+    },
+    /// Retain an executable copied from elsewhere, only when it hashes to its receipt.
+    Restore {
+        #[arg(long)]
+        receipt: PathBuf,
+        #[arg(long)]
+        executable: PathBuf,
+    },
+    /// Check a retained version against its pin and this host.
+    Verify { sha256: String },
+    /// Make a retained version the one new operations take.
+    Select { sha256: String },
+    /// Select the version the current selection replaced.
+    Rollback,
+    /// Print the selected version's pin, as runtimes.frozen.json and a queue's runtimes hold it.
+    Pin,
+    /// List the retained versions and the selection.
+    List,
+    /// Print the executable an operation runs.
+    Resolve {
+        /// The checkout whose HEAD the selected version must be built from (default the one holding the current
+        /// directory).
+        #[arg(long)]
+        checkout: Option<PathBuf>,
+        /// Resolve the run's runtimes.frozen.json pin instead of the selection.
+        #[arg(long)]
+        run: Option<PathBuf>,
+    },
+    /// Run the resolved executable with COMMAND, replacing this process.
+    Exec {
+        #[arg(long)]
+        checkout: Option<PathBuf>,
+        #[arg(long)]
+        run: Option<PathBuf>,
+        #[arg(
+            required = true,
+            trailing_var_arg = true,
+            allow_hyphen_values = true,
+            value_name = "COMMAND"
+        )]
+        command: Vec<OsString>,
+    },
+    /// Record a required runtime change in a run's deviations/, with both identities.
+    Deviation {
+        #[arg(long)]
+        run: PathBuf,
+        #[arg(long = "from")]
+        old: String,
+        #[arg(long = "to")]
+        new: String,
+        #[arg(long)]
+        reason: String,
+        #[arg(long)]
+        scope: String,
+        #[arg(long)]
+        validation: String,
+        #[arg(long)]
+        accounting: String,
+    },
 }
 
 #[derive(Args)]
@@ -4243,6 +4318,96 @@ fn run_prune_workspace(arguments: PruneWorkspaceArgs) -> Result<ExitCode, ExitCo
     }
 }
 
+fn run_runtime(command: RuntimeCommand) -> Result<ExitCode, ExitCode> {
+    use bench_tools::runtime_store::{self as store, Failure};
+    let place = store::default_store();
+    let checkout = |given: Option<PathBuf>| given.map_or_else(store::current_checkout, Ok);
+    let outcome = match command {
+        RuntimeCommand::Install {
+            checkout: given,
+            select,
+        } => checkout(given).and_then(|root| store::install(&place, &root, select)),
+        RuntimeCommand::Restore {
+            receipt,
+            executable,
+        } => store::restore(&place, &receipt, &executable),
+        RuntimeCommand::Verify { sha256 } => store::verify(&place, &sha256),
+        RuntimeCommand::Select { sha256 } => store::select(&place, &sha256),
+        RuntimeCommand::Rollback => store::rollback(&place),
+        RuntimeCommand::Pin => store::pin(&place),
+        RuntimeCommand::List => store::list(&place),
+        RuntimeCommand::Resolve {
+            checkout: given,
+            run,
+        } => checkout(given)
+            .and_then(|root| store::resolve(&place, &root, run.as_deref()))
+            .map(|executable| {
+                let mut shown = pyjson::Object::default();
+                shown.insert(
+                    "executable".to_string(),
+                    pyjson::Value::Str(executable.display().to_string()),
+                );
+                pyjson::Value::Object(shown)
+            }),
+        RuntimeCommand::Exec {
+            checkout: given,
+            run,
+            command,
+        } => Err(match checkout(given) {
+            Ok(root) => store::exec(&place, &root, run.as_deref(), &command),
+            Err(failure) => failure,
+        }),
+        RuntimeCommand::Deviation {
+            run,
+            old,
+            new,
+            reason,
+            scope,
+            validation,
+            accounting,
+        } => store::deviation(
+            &place,
+            &pytext_resolved(&run),
+            &old,
+            &new,
+            &store::Notes {
+                reason: &reason,
+                scope: &scope,
+                validation: &validation,
+                accounting: &accounting,
+            },
+        )
+        .map(|recorded| {
+            let mut shown = pyjson::Object::default();
+            shown.insert(
+                "recorded".to_string(),
+                pyjson::Value::Str(recorded.display().to_string()),
+            );
+            pyjson::Value::Object(shown)
+        }),
+    };
+    match outcome {
+        Ok(result) => {
+            print!("{}", store::dumps(&result));
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(Failure::Refused(message)) => {
+            eprintln!("bench-tools runtime: {message}");
+            Err(ExitCode::from(1))
+        }
+        Err(Failure::Input(message)) => {
+            eprintln!("bench-tools runtime: {message}");
+            Err(ExitCode::from(2))
+        }
+    }
+}
+
+fn pytext_resolved(path: &Path) -> PathBuf {
+    PathBuf::from(OsStr::from_bytes(&pyfs::resolve(
+        path.as_os_str().as_bytes(),
+    )))
+}
+
 fn run_retire_workspace(arguments: RetireWorkspaceArgs) -> Result<ExitCode, ExitCode> {
     let outcome = retire_workspace::retire(
         &retire_workspace::Request {
@@ -5423,6 +5588,7 @@ fn main() -> ExitCode {
         Cli::SubscriptionMeters(command) => run_subscription_meters(command),
         Cli::PruneWorkspace(arguments) => run_prune_workspace(arguments),
         Cli::RetireWorkspace(arguments) => run_retire_workspace(arguments),
+        Cli::Runtime(command) => run_runtime(command),
         Cli::CurrentGrading(arguments) => run_current_grading(arguments),
         Cli::Methodology(arguments) => run_methodology(&arguments),
         Cli::Grade(command) => run_grade(command),

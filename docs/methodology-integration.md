@@ -27,7 +27,7 @@ The rubric-v2 explorer references contain 17 problems, including the three appro
 For each run and target, prepare a fresh full grading with the revised reference version when applicable:
 
 ```sh
-python3 bench/tools/rust_runtime.py exec bench-tools -- grade prepare \
+bench/tools/bench-tools grade prepare \
   --run bench/runs/<run> --target <target> \
   --work <new-private-workspace> --key <new-private-key> \
   --rubric-version 2 --register-version <next-version> \

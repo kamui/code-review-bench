@@ -707,7 +707,7 @@ describe('selection', () => {
 
 describe('export and command line', () => {
   const benchTools = (root: string, ...args: string[]) => {
-    const run = Bun.spawnSync(['python3', 'bench/tools/rust_runtime.py', 'exec', 'bench-tools', '--', ...args, '--root', root],
+    const run = Bun.spawnSync(['bench/tools/bench-tools', ...args, '--root', root],
       { stderr: 'pipe', env: { ...process.env, BASE_PATH: '' } })
     if (run.exitCode !== 0) throw new Error(run.stderr.toString())
     return run.stdout.toString()

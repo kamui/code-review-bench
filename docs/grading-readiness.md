@@ -8,12 +8,12 @@ The runner can also dispatch a Codex session. No grading queue uses it; the [eva
 
 Codex grading uses `codex exec` with six confined grading MCP tools and three MCP resource metadata helpers. The sole grading server advertises no resources and refuses every resource method. Native shell, editing, clock, search and delegation tools are absent. A pinned model catalog changes tool metadata while preserving the installed client's native model prompts. Pass `--allow-unbounded-codex` to preflight and dispatch, and omit `--max-budget-usd`. This mode requires explicit authorization without a dollar cap and uses the saved ChatGPT login. It does not fall back to Claude. Usage is recorded in list-price equivalents because ChatGPT usage consumes quota rather than API dollars.
 
-Codex CLI 0.160.0 has no dollar-budget option. Its experimental rollout token budget is checked after a response, and ChatGPT plan authentication [does not support `max_output_tokens`](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations). A bounded Codex reservation is refused. `python3 bench/tools/rust_runtime.py exec bench-tools -- grading probe-codex` verifies the installed client's actual tool catalog, all six grading operations, resource refusals and empty context against a local fake API without a paid call. Dispatch repeats this probe and the filesystem confinement probe before allocating its fresh home or copying credentials.
+Codex CLI 0.160.0 has no dollar-budget option. Its experimental rollout token budget is checked after a response, and ChatGPT plan authentication [does not support `max_output_tokens`](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations). A bounded Codex reservation is refused. `bench/tools/bench-tools grading probe-codex` verifies the installed client's actual tool catalog, all six grading operations, resource refusals and empty context against a local fake API without a paid call. Dispatch repeats this probe and the filesystem confinement probe before allocating its fresh home or copying credentials.
 
 Run the queue preflight with neutral output paths and the approved model and client version:
 
 ```sh
-python3 bench/tools/rust_runtime.py exec bench-tools -- grade preflight \
+bench/tools/bench-tools grade preflight \
   --run runs/<run> --work-root /tmp/grading-work --key-root /tmp/grading-keys \
   --model claude-opus-5-5 --expected-cli-version 2.1.286 --cache-root <cache-root>
 ```
@@ -22,7 +22,7 @@ Omit `--target` to check every selected batch of the run, or repeat it for a sel
 
 For input-only validation without starting any client, run `bench-tools grade preflight-inputs` with the same options except `--model` and `--expected-cli-version`. This still checks the selected batches, references, claims, evidence packets, mirrors and archive hashes. Its result explicitly leaves client compatibility, credentials, pricing and dispatch enforcement unchecked. The controller never uses this mode, and paid dispatch repeats its client and enforcement gates.
 
-If an original cache was deleted, rebuild the frozen recipe and save its build receipt separately. Use a new [cache replacement manifest](../bench/schema/cache-replacements.schema.json) with the frozen `target.json` hash, original and replacement archive hashes, and a hashed build receipt path relative to the manifest. Pass `--cache-replacements <manifest>` to preflight, preparation or `bench-tools provision smoke` (`python3 bench/tools/rust_runtime.py exec bench-tools -- provision smoke`). The manifest changes only the archive identity in memory. It cannot change revisions, recipes, allowances or command profiles. A missing target, duplicate entry, changed target or receipt, unsuccessful build, different recipe or archive mismatch is refused. Rebuilt dependencies can differ where the frozen recipe has version ranges; record their versions and verify focused behavior before calibration.
+If an original cache was deleted, rebuild the frozen recipe and save its build receipt separately. Use a new [cache replacement manifest](../bench/schema/cache-replacements.schema.json) with the frozen `target.json` hash, original and replacement archive hashes, and a hashed build receipt path relative to the manifest. Pass `--cache-replacements <manifest>` to preflight, preparation or `bench-tools provision smoke` (`bench/tools/bench-tools provision smoke`). The manifest changes only the archive identity in memory. It cannot change revisions, recipes, allowances or command profiles. A missing target, duplicate entry, changed target or receipt, unsuccessful build, different recipe or archive mismatch is refused. Rebuilt dependencies can differ where the frozen recipe has version ranges; record their versions and verify focused behavior before calibration.
 
 Preparation embeds the replacement manifest and receipt bytes, their hashes and the schema hash in the private key's `runner_deviation.provisioning`. They stay outside the grader's inputs. Dispatch refuses a changed replacement selection; mapping and the controller's evidence archive preserve the preparation snapshot. Frozen target files, reviews and earlier mappings remain immutable.
 
@@ -31,7 +31,7 @@ Replacement smoke runs require `--out` pointing to a separate receipt, outside t
 Prepare each batch with the same cache selection. The rubric and grader template are the ones `bench/grading/current/validation-policy.json` pins; earlier templates and frozen runners remain unchanged. The private key pins the batch's input fingerprint, a blinded validator snapshot and the hashes of its code, source items, canonical constraints, command policy and runner deviation. Keep that key outside the workspace.
 
 ```sh
-python3 bench/tools/rust_runtime.py exec bench-tools -- grade dispatch \
+bench/tools/bench-tools grade dispatch \
   --work /tmp/grading-work/<target> --key /tmp/grading-keys/<target>.json \
   --model claude-opus-5-5 --expected-cli-version 2.1.286 --effort high \
   --max-budget-usd <authorized-reservation> --run bench/runs/<run> --step '<charge-label>'
@@ -49,7 +49,7 @@ Run these offline checks:
 cargo test --locked --manifest-path rust/bench-tools/Cargo.toml
 (cd rust/bench-tools && cargo test --locked --test behavior_contracts -- grade-prepare:: grade-map::)
 (cd rust/bench-tools && cargo test --locked --test grading_sandbox --test grade_dispatch -- --ignored)
-python3 bench/tools/rust_runtime.py exec bench-tools -- grading probe-claude
+bench/tools/bench-tools grading probe-claude
 (cd rust/bench-tools && cargo test --locked --test dispatch)
 (cd rust/bench-tools && cargo test --locked --lib prune_workspace)
 (cd rust/bench-tools && cargo test --locked provision)
@@ -64,7 +64,7 @@ The ignored sandbox and dispatch tests and the client probe require Linux namesp
 `bench-tools regrade run` grades every batch of a pinned plan that awaits grading, under one authorization:
 
 ```sh
-python3 bench/tools/rust_runtime.py exec bench-tools -- regrade run --authorization <authorization.json> --directory <queue-directory> --workers 3
+bench/tools/bench-tools regrade run --authorization <authorization.json> --directory <queue-directory> --workers 3
 ```
 
 `--workers` is the number of paid sessions that may run at once. It defaults to 1. Each batch still gets its own neutral workspace, home, session and context receipt, and the grader, rubric, registry and reference settings are the same for every batch. Concurrency shortens wall time. It does not change the tokens a batch uses.
@@ -73,7 +73,7 @@ The authorization pins these inputs by path and SHA-256, and the controller refu
 
 - `sourcePlan`, the current queue from `bun run plan:methodology`. It records each batch's input fingerprint and whether its saved grade is `current`, `stale` or `missing`. Remove stale grades with `bench-tools grade invalidate` before planning.
 - `executionPlan`, described below.
-- `runtimes`, required: the object `python3 bench/tools/rust_runtime.py pin bench-tools` prints. The controller is that `bench-tools`: started from another installed one, it hands the run to the pinned one, and every step runs the pinned one, so a reinstall that changes the store's selection mid-queue changes nothing the queue runs. A changed controller therefore needs a new authorization version. Earlier authorizations pin `bench/tools/regrade.py` under `runnerDeviations` and stay as they are; they run only at their own commit.
+- `runtimes`, required: the object `bench/tools/bench-tools runtime pin` prints. The controller is that `bench-tools`: started from another installed one, it hands the run to the pinned one, and every step runs the pinned one, so a reinstall that changes the store's selection mid-queue changes nothing the queue runs. A changed controller therefore needs a new authorization version. Earlier authorizations pin `bench/tools/regrade.py` under `runnerDeviations` and stay as they are; they run only at their own commit.
 - `runnerDeviations`, optional: further files pinned by path and SHA-256.
 - `cacheReplacements`, optional, pins the versioned replacement-cache manifest used by preflight and preparation.
 - `claimEvidence`, optional: an [extracts manifest](claim-adjudication.md#supply-pinned-evidence-to-graders) that preflight and preparation receive as `--claim-evidence`.
@@ -141,7 +141,7 @@ nohup bench/tools/regrade_queues.sh run <logs> <workers> <authorization.json>=<q
 bench/tools/regrade_queues.sh status <queue-directory> ...
 ```
 
-`run` starts `bench-tools regrade run` for each queue in the order given and stops at the first queue that does not finish. Each controller run has its own log under `<logs>`, and `<logs>/driver.log` gets a line when a queue starts and ends. A rerun resumes every queue from its directory. Exit 4 means a queue stopped at the plan's quota, and `driver.log` says so; run the same command again once the meters allow. `status` calls no model: it prints each queue's mapped and planned batches, state, spend at list price, sessions in flight, pinned client, wall time and free disk space from the saved files. It runs `bench-tools regrade status`; install it once per checkout revision with `python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select` ([Rust runtime](python-migration/runtime.md#running-a-maintained-command)).
+`run` starts `bench-tools regrade run` for each queue in the order given and stops at the first queue that does not finish. Each controller run has its own log under `<logs>`, and `<logs>/driver.log` gets a line when a queue starts and ends. A rerun resumes every queue from its directory. Exit 4 means a queue stopped at the plan's quota, and `driver.log` says so; run the same command again once the meters allow. `status` calls no model: it prints each queue's mapped and planned batches, state, spend at list price, sessions in flight, pinned client, wall time and free disk space from the saved files. It runs `bench-tools regrade status`; install it once per checkout revision with `bench/tools/bench-tools runtime install --select` ([Rust runtime](python-migration/runtime.md#running-a-maintained-command)).
 
 To raise concurrency without losing a grade, set `LIMIT=<n>` so each queue maps at most that many batches and stops, read the plan's usage meter, then run again with more workers on the batches left. The controller records the workers of each run in `status.json`.
 
@@ -162,9 +162,9 @@ Grade one target at a time, from preparation through mapping, so that at most on
 A workspace that never reaches a mapping keeps its clone: an unfinished, failed, rejected or refused session. It counts against the free space until someone inspects and removes it. For a workspace whose assessment was saved but whose clone remains, preview the same verified cleanup against the saved receipt, then apply it:
 
 ```sh
-python3 bench/tools/rust_runtime.py exec bench-tools -- prune-workspace --grading-work <work> --target bench/targets/<target> \
+bench/tools/bench-tools prune-workspace --grading-work <work> --target bench/targets/<target> \
   --receipt bench/grading/current/assessments/<run>/<target>/assessment-<N>/receipt.json
-python3 bench/tools/rust_runtime.py exec bench-tools -- prune-workspace --grading-work <work> --target bench/targets/<target> \
+bench/tools/bench-tools prune-workspace --grading-work <work> --target bench/targets/<target> \
   --receipt bench/grading/current/assessments/<run>/<target>/assessment-<N>/receipt.json --apply
 ```
 

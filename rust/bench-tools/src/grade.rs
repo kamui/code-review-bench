@@ -1917,7 +1917,7 @@ mod tests {
         receipt: PathBuf,
     }
 
-    /// An installed entry as `rust_runtime.py install` lays it out: `<store>/bench-tools/<sha>/bench-tools`.
+    /// An installed entry as `bench-tools runtime install` lays it out: `<store>/bench-tools/<sha>/bench-tools`.
     fn store(label: &str) -> Store {
         store_of(label, b"#!/bin/sh\n")
     }
@@ -2032,7 +2032,7 @@ mod tests {
     }
 
     #[test]
-    fn an_incomplete_receipt_is_refused_as_rust_runtime_check_refuses_it() {
+    fn an_incomplete_receipt_is_refused_as_the_runtime_check_refuses_it() {
         let store = store("incomplete");
         let sha = sha256::hex_digest(b"#!/bin/sh\n");
         let minimal = format!(

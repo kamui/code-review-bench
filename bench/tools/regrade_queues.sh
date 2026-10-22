@@ -36,7 +36,7 @@ run)
     count=$(find "$logs" -maxdepth 1 -name "$name-*.log" | wc -l)
     log=$logs/$name-$((count + 1)).log
     echo "$(date -u +%FT%TZ) start $queue workers=$workers${LIMIT:+ limit=$LIMIT} -> $log" >> "$logs/driver.log"
-    python3 bench/tools/rust_runtime.py exec bench-tools -- regrade run --authorization "$authorization" \
+    bench/tools/bench-tools regrade run --authorization "$authorization" \
       --directory "$queue" --workers "$workers" ${LIMIT:+--limit "$LIMIT"} > "$log" 2>&1
     code=$?
     echo "exit=$code" >> "$log"
@@ -49,7 +49,7 @@ run)
 status)
   [ $# -ge 1 ] || { echo "usage: $0 status QUEUE_DIRECTORY..." >&2; exit 2; }
   date -u +"now %FT%TZ"
-  python3 bench/tools/rust_runtime.py exec bench-tools -- regrade status -- "$@"
+  bench/tools/bench-tools regrade status -- "$@"
   ;;
 *)
   sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//' >&2

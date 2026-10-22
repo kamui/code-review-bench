@@ -8,12 +8,12 @@ The default selection includes built-in Claude Code and Codex reviews and `ce-co
 
 ## Run locally
 
-Install [Bun](https://bun.sh/), Python 3.11 or later, [GitHub CLI](https://cli.github.com/), and [rustup](https://rustup.rs/). Authenticate with `gh auth login` for release downloads. The explorer export runs the Rust `bench-tools` executable, built once per checkout revision from a clean, committed checkout ([Rust runtime](docs/python-migration/runtime.md#install)):
+Install [Bun](https://bun.sh/), [GitHub CLI](https://cli.github.com/), and [rustup](https://rustup.rs/). Authenticate with `gh auth login` for release downloads. The explorer export runs the Rust `bench-tools` executable, built once per checkout revision from a clean, committed checkout ([Rust runtime](docs/python-migration/runtime.md#install)):
 
 ```sh
 bun install --frozen-lockfile
 (cd rust/bench-tools && rustup show && cargo fetch --locked)
-python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select
+bench/tools/bench-tools runtime install --select
 bun run dev
 ```
 
@@ -106,23 +106,19 @@ bun run preview
 
 Build before type checking to generate TanStack route types. `bun run test` runs:
 
-- `test:web` for scoring, rendered scorecards, and exports.
-- `test:bench` for benchmark tools and provisioning. It requires Linux namespaces, bubblewrap, ripgrep, and Go.
-- `test:client` for Claude Code 2.1.287 against a local fake API, using a dummy key and no paid requests.
+- `test:web` for scoring, rendered scorecards, exports, and repository tools.
+- `test:bench` for the manifest, review normalization and usage corpora.
+- `test:client` for Claude Code 2.1.287 against a local fake API, using a dummy key and no paid requests. It requires Linux namespaces, bubblewrap, ripgrep, and Go.
 
-Sandbox checks fail if enforcement is unavailable. Optional reviewer integration checks require explicit enablement. App builds and exploration make no paid review requests. Run the original Python suite separately with:
-
-```sh
-python3 -m unittest discover -s bench/tools -p 'test_*.py'
-```
+Sandbox checks fail if enforcement is unavailable. Optional reviewer integration checks require explicit enablement. App builds and exploration make no paid review requests.
 
 ## GitHub Pages
 
 Set **Settings > Pages** to publish through **GitHub Actions**. The [workflow](.github/workflows/pages.yml) runs web and evidence checks, the mapping replay, grading regressions, and client compatibility on PRs and pushes to `main`. Deployment requires all four jobs to pass. Manual runs are also available.
 
-Grading regressions runs the Python bench tests with a 25-minute timeout. On PRs, the web, mapping replay, grading regression and client jobs each compare the complete head with the merge base, and [`tools/select_grading_tests.py`](tools/select_grading_tests.py) skips a job's expensive steps when no changed path can affect them. UI files (`src/components/*.tsx`, `src/routes/*.tsx`, their nested directories and CSS files, `src/styles.css`), static assets under `public/`, `.github/workflows/rust-runtime.yml`, and docs that no other tracked file names skip every gated step. A doc is a file under `docs/` or a Markdown file at the root. Any tracked file except Markdown counts as naming a doc when it holds the doc's path or a directory below `docs/` that contains it. Python tests in `tools/` select only the web job. `tools/run_bench_tests.py`, `tools/fetch_freeze_commits.py`, and Python directly in `bench/tools/` except `rust_runtime.py` select the web job and grading regressions, because the web job's tests import from `bench/tools/`. When the web job skips its Python suite and grading replay, it still runs the migrated-command caller guard, which scans every tracked file. Evidence, scoring, rendered scorecards, exports, the build, and types always run. Every other path, including the crate, benchmark inputs, workflows, package commands, runtime pins, and unknown paths, retains full coverage. Failed or empty change detection also runs every step. Main and manual runs always run them.
+Grading regressions runs the bench tests with a 25-minute timeout. On PRs, the web, mapping replay, grading regression and client jobs each compare the complete head with the merge base, and [`tools/select_grading_tests.ts`](tools/select_grading_tests.ts) skips a job's expensive steps when no changed path can affect them. UI files (`src/components/*.tsx`, `src/routes/*.tsx`, their nested directories and CSS files, `src/styles.css`), static assets under `public/`, `.github/workflows/rust-runtime.yml`, and docs that no other tracked file names skip every gated step. A doc is a file under `docs/` or a Markdown file at the root. Any tracked file except Markdown counts as naming a doc when it holds the doc's path or a directory below `docs/` that contains it. Tests in `tools/` (`tools/*.test.ts`) select only the web job. When the web job skips its repository tool tests and grading replay, it still runs the migrated-command caller guard, which scans every tracked file. Evidence, scoring, rendered scorecards, exports, the build, and types always run. Every other path, including the crate, benchmark inputs, workflows, package commands, runtime pins, and unknown paths, retains full coverage. Failed or empty change detection also runs every step. Main and manual runs always run them.
 
-`python3 tools/run_bench_tests.py` runs every bench test module except the client suite. `bun run test:bench` adds the CLI self-tests and three behavior-contract corpora. `bun run test:web` likewise preserves both `test:web:site` and `test:web:python`.
+`bun run test:bench` runs three behavior-contract corpora. `bun run test:web` runs both `test:web:site` and `test:web:tools`, the `tools/` tests. `tools/without-python.sh` runs a command with no Python on `PATH`; CI runs the corpora, the install, a [fake-client cell](tools/fake-client-cell.sh), the export and the scorecard that way.
 
 The build prerenders the home page and publishes `dist/client`, including data and evidence. The workflow reads the Pages base path for repository URLs or custom domains. To build for the repository path locally:
 
@@ -136,7 +132,7 @@ CI sets `BENCH_DISK_RESERVE_GIB=0` for temporary grading fixtures. Low-space tes
 
 Read the [clean-context policy](docs/clean-context.md) and [Python CLI workflows](bench/README.md) before preparing a run. Use a new manifest and preserve prior results. Fresh reviews need pinned clients, credentials, sandbox support, and task runtimes. Historical `/review-code` runs also need pinned Git objects from the skills repository.
 
-1. Run `bun run roster` to check [the roster](bench/roster.json) and identify missing combinations. It runs the Rust `bench-tools` executable; install it once per checkout revision with `python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select` ([Rust runtime](docs/python-migration/runtime.md#running-a-maintained-command)). Cover every roster model whose client supports the method. Built-in reviews stay within their vendor's client; compare vendors using the same frozen skill.
+1. Run `bun run roster` to check [the roster](bench/roster.json) and identify missing combinations. It runs the Rust `bench-tools` executable; install it once per checkout revision with `bench/tools/bench-tools runtime install --select` ([Rust runtime](docs/python-migration/runtime.md#running-a-maintained-command)). Cover every roster model whose client supports the method. Built-in reviews stay within their vendor's client; compare vendors using the same frozen skill.
 2. Start each review with a fresh session and isolated home. Exclude inherited history and ambient instructions, skills, memories, and configuration. Include only the selected skill, pinned task, common execution policy, and native client instructions. Policy changes start a separate cohort.
 3. Declare each arm's `billing_mode` as `subscription` or `api` before freezing. The owner's Claude Max account uses `subscription`; costs are list-price equivalents, not invoices or quota measurements. Check prices with `bun run rates:check` and append changes with `bun run rates:refresh`. Dispatch verifies frozen prices and saves a snapshot. See [rates and billing](docs/rates.md).
 4. Grade with Claude Opus 5.5 at high effort. Pin the model, effort, and verified client version in the authorization. Follow [grading readiness](docs/grading-readiness.md) and [claim adjudication](docs/claim-adjudication.md).
