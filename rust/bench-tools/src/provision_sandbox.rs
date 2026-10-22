@@ -67,6 +67,8 @@ pub struct Sandbox {
     readwrite: Vec<String>,
     masks: Vec<String>,
     environment: Vec<(String, String)>,
+    /// The task cache's `home` directory, holding each home cache.
+    cache_home: Option<PathBuf>,
     /// Each home cache's directory in the task cache and the path it is shown at.
     home_caches: Vec<(PathBuf, String)>,
     /// A private directory holding the vsock filter, removed on drop.
@@ -196,10 +198,14 @@ impl Sandbox {
                 .map_err(|error| {
                     format!("cannot make the provisioning sandbox directory: {error}")
                 })?;
+        let cache_home = cache.map(|cache| cache.join("home"));
         let mut home_caches = Vec::new();
-        if let (Some(home), Some(cache)) = (&home, cache) {
+        // bwrap can make a bind's mount point only inside a tmpfs, and the home is one only when it exists.
+        if let (Some(home), Some(cache_home)) =
+            (home.as_ref().filter(|home| home.is_dir()), &cache_home)
+        {
             for path in HOME_CACHES {
-                let kept = cache.join("home").join(path);
+                let kept = cache_home.join(path);
                 if network == Network::Shared {
                     std::fs::create_dir_all(&kept)
                         .map_err(|error| format!("cannot make {}: {error}", kept.display()))?;
@@ -217,6 +223,7 @@ impl Sandbox {
             readwrite,
             masks,
             environment,
+            cache_home,
             home_caches,
             private,
         };
@@ -225,12 +232,14 @@ impl Sandbox {
     }
 
     /// After a build, remove the home caches its steps left empty, so the archive holds only the ones in use.
-    pub fn drop_empty_home_caches(&mut self, cache: &Path) {
-        let root = cache.join("home");
+    pub fn drop_empty_home_caches(&mut self) {
+        let Some(root) = &self.cache_home else {
+            return;
+        };
         self.home_caches.retain(|(kept, _)| {
             let empty = std::fs::read_dir(kept).is_ok_and(|mut entries| entries.next().is_none());
             if empty {
-                for directory in kept.ancestors().take_while(|path| path.starts_with(&root)) {
+                for directory in kept.ancestors().take_while(|path| path.starts_with(root)) {
                     if std::fs::remove_dir(directory).is_err() {
                         break;
                     }
@@ -513,7 +522,7 @@ mod tests {
             &clone,
         );
         assert_eq!((code, seen.as_str()), (0, "\n"));
-        build.drop_empty_home_caches(&cache);
+        build.drop_empty_home_caches();
         assert_eq!(
             std::fs::read_to_string(cache.join("home/.cache/prisma/engine")).unwrap(),
             "built"
@@ -548,7 +557,7 @@ mod tests {
             &host,
         )
         .unwrap();
-        build.drop_empty_home_caches(&unused);
+        build.drop_empty_home_caches();
         assert!(
             !unused.join("home").exists(),
             "an unused home cache leaves no trace"
@@ -563,6 +572,23 @@ mod tests {
         )
         .unwrap();
         assert_eq!(output(&offline, read, &unused), (0, "\n".to_string()));
+
+        let missing = [(
+            "HOME".to_string(),
+            "/nonexistent-provision-home".to_string(),
+        )];
+        let build = Sandbox::for_host(
+            Network::Shared,
+            std::slice::from_ref(&unused),
+            Some(&unused),
+            &[],
+            &missing,
+        )
+        .unwrap();
+        assert_eq!(
+            output(&build, "echo ran", &unused),
+            (0, "ran\n".to_string())
+        );
     }
 
     #[test]

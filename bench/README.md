@@ -159,10 +159,10 @@ toolchains read-only. It starts from an empty environment plus `HOME`, `USER`, `
 `LC_ALL`, `LC_CTYPE`, `TZ`, a set `PATH` and `TMPDIR`, and the recipe's `env`. Build steps share the host
 network. `post_clone` and `smoke` steps get their own empty network namespace, settings that turn off
 install-time checks needing the network (`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`, and pnpm 11's
-`trustPolicy` and `minimumReleaseAge` lockfile checks, which the online build step already ran). Every
-phase sees `~/.cache/prisma` from `{cache}/home/.cache/prisma`, never the host's: the online build downloads
+`trustPolicy` and `minimumReleaseAge` lockfile checks, which the online build step already ran). A
+phase sees `~/.cache/prisma` only from `{cache}/home/.cache/prisma`, never the host's: the online build downloads
 Prisma's engines there, the archive keeps them, and each clone's install script generates its client from
-its own restore. The cache receipt, `prepare`'s record and `smoke.json` record the sandbox each phase ran in. The six
+its own restore. A build that leaves it empty leaves no `home` directory in the archive. The cache receipt, `prepare`'s record and `smoke.json` record the sandbox each phase ran in. The six
 migrated targets use a uv-built relocatable Python 3.13 virtualenv (requests; its dev requirements
 pin a pytest that cannot import under 3.14), a corepack-managed pnpm store whose launcher links
 each clone makes after its restore (trpc), an npm cache (graphql-js), a Go module and build cache

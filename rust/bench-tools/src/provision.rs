@@ -815,7 +815,7 @@ fn build_cache(
                 ]));
             }
         }
-        sandbox.drop_empty_home_caches(cache);
+        sandbox.drop_empty_home_caches();
     }
     let mut archive_record = Value::Null;
     if !config.build.is_empty() {
