@@ -2161,10 +2161,20 @@ mod tests {
         let gate =
             Gate::start_with(&attempt, Path::new("/bench-tools"), Upstream::public()).unwrap();
         let attempt_text = attempt.to_string_lossy().into_owned();
+        // Hidden as `run` hides them: masking another test's /tmp socket that has just gone makes bwrap recreate
+        // its directory on the host (#349).
+        let hidden: Vec<String> = RUN_HIDDEN
+            .iter()
+            .filter(|dir| Path::new(dir).is_dir())
+            .map(ToString::to_string)
+            .collect();
+        let attempt_only = std::slice::from_ref(&attempt_text);
         let output = Command::new("bwrap")
-            .args(["--dev-bind", "/", "/", "--unshare-net", "--tmpfs", "/run"])
+            .args(["--dev-bind", "/", "/", "--unshare-net"])
+            .args(hidden.iter().flat_map(|dir| ["--tmpfs", dir]))
+            .args(["--bind", &attempt_text, &attempt_text])
             .args(
-                gate.namespace_arguments(&[attempt_text], &["/run".to_string()], &[])
+                gate.namespace_arguments(attempt_only, &hidden, attempt_only)
                     .unwrap(),
             )
             .args(["--", "python3", "-I", "-c"])
