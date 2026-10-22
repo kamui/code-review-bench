@@ -40,9 +40,20 @@ impl From<&str> for Failure {
     }
 }
 
-/// The directory that holds the `gh` stub, the fault library and the bench-tools store entry for the whole run.
+/// `grade prepare --provision SCRIPT` runs `python3 SCRIPT`. A case's provisioner is a shell script, and no case
+/// runs Python, so this `python3` runs only a script that starts `#!/bin/sh`.
+const PYTHON3: &str = r#"#!/bin/sh
+[ -f "$1" ] || { echo "python3: cannot open $1" >&2; exit 2; }
+[ "$(head -n 1 "$1")" = '#!/bin/sh' ] && exec /bin/sh "$@"
+echo "python3: behavior contracts run no Python: $*" >&2
+exit 127
+"#;
+
+/// The directory that holds the `gh` stub, the fault library and the bench-tools store entry for the whole run,
+/// and `bin`, which every step's `PATH` puts ahead of `/bin` and `/usr/bin`.
 pub struct Scratch {
     pub tools: PathBuf,
+    pub bin: PathBuf,
     pub executable: PathBuf,
 }
 
@@ -51,21 +62,35 @@ impl Scratch {
         let tools =
             std::env::temp_dir().join(format!("behavior-contract-bin-{}", std::process::id()));
         make_private_dir(&tools)?;
+        let bin = tools.join("bin");
+        make_private_dir(&bin)?;
         let quoted = bench_tools::shlex::quote(
             &std::env::current_exe()
                 .map_err(|error| format!("current executable: {error}"))?
                 .to_string_lossy(),
         );
-        let stub = tools.join("gh");
-        std::fs::write(
-            &stub,
-            format!("#!/bin/sh\nexec {quoted} --contract-gh-stub \"$@\"\n"),
-        )
-        .map_err(|error| format!("gh stub: {error}"))?;
-        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
-            .map_err(|error| format!("gh stub: {error}"))?;
+        for (path, body) in [
+            (
+                tools.join("gh"),
+                format!("#!/bin/sh\nexec {quoted} --contract-gh-stub \"$@\"\n"),
+            ),
+            (
+                bin.join("contract-json"),
+                format!("#!/bin/sh\nexec {quoted} --contract-json \"$@\"\n"),
+            ),
+            (bin.join("python3"), PYTHON3.to_string()),
+        ] {
+            let fail = |error: std::io::Error| format!("{}: {error}", path.display());
+            std::fs::write(&path, body).map_err(fail)?;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .map_err(fail)?;
+        }
         let executable = install(&tools)?;
-        Ok(Self { tools, executable })
+        Ok(Self {
+            tools,
+            bin,
+            executable,
+        })
     }
 }
 
@@ -527,7 +552,10 @@ pub fn execute(
     let home = root.join(".home");
     std::fs::create_dir(&home).map_err(|error| format!("{}: {error}", home.display()))?;
     let mut environment: Vec<(String, String)> = vec![
-        ("PATH".into(), "/bin:/usr/bin".into()),
+        (
+            "PATH".into(),
+            format!("{}:/bin:/usr/bin", scratch.bin.display()),
+        ),
         ("HOME".into(), home.to_string_lossy().into_owned()),
         ("LC_ALL".into(), "C.UTF-8".into()),
         ("TZ".into(), "UTC".into()),
@@ -536,7 +564,7 @@ pub fn execute(
     ];
     if has(&options.options, "gh_stub_b64") {
         let state = relative(field(&options.options, "gh_stub_b64")?)?;
-        environment[0].1 = format!("{}:/bin:/usr/bin", scratch.tools.display());
+        environment[0].1 = format!("{}:{}", scratch.tools.display(), environment[0].1);
         environment.push((
             "CONTRACT_GH_STATE".into(),
             root.join(os(&state)).to_string_lossy().into_owned(),

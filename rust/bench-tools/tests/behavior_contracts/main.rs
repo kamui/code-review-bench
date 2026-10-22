@@ -11,6 +11,7 @@ mod corpus;
 mod execute;
 #[path = "../support/fixture_git.rs"]
 mod fixture_git;
+mod fixture_json;
 mod gh_stub;
 mod history;
 mod json;
@@ -224,6 +225,7 @@ fn self_role(args: &[OsString]) -> Option<i32> {
         "--contract-file-size-limit" => execute::file_size_limit_role(rest),
         "--contract-fail-write-probe" => execute::fail_write_probe_role(rest),
         "--contract-writer" => writers::role(rest),
+        "--contract-json" => fixture_json::role(rest),
         _ => return None,
     })
 }

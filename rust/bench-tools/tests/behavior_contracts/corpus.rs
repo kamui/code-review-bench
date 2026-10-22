@@ -260,6 +260,11 @@ fn check_case(case: &Value) -> Result<(), String> {
             }
             relative(target)?;
         }
+        if has(step, "shell") && names_python(string(step, "shell")?) {
+            return Err(format!(
+                "{id}: a shell step must not run a Python interpreter"
+            ));
+        }
         let outcomes = match step.as_object().and_then(|object| object.get("expected")) {
             Some(expected) => list(expected, "outcomes")?,
             None => &[],
@@ -285,6 +290,18 @@ fn check_case(case: &Value) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Whether a word of a shell script names a Python interpreter, by name or path: `python`, `python3`,
+/// `/usr/bin/python3.12`.
+fn names_python(script: &str) -> bool {
+    script
+        .split(|c: char| c.is_whitespace() || ";&|()`\"'<>=".contains(c))
+        .filter_map(|word| word.rsplit('/').next())
+        .any(|name| {
+            name.strip_prefix("python")
+                .is_some_and(|rest| rest.chars().all(|c| c.is_ascii_digit() || c == '.'))
+        })
 }
 
 fn nonempty(value: Option<&Value>) -> bool {

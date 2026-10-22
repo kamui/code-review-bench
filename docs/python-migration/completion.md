@@ -47,6 +47,13 @@ CI's `Rust runtime` workflow runs the corpora that way, and its x86_64 runtime j
 `verify:import`, `verify:current` and `verify:claims` pass, and `rollback.sh` installed a second version and rolled
 back on disposable stores in 120.7 s.
 
+The corpus totals above still ran the host's `python3`: the runner set `PATH` to `/bin:/usr/bin`, where
+`tools/without-python.sh` removes nothing. 29 grade-map and grade-prepare cases edited fixtures with it, and 40 cases'
+`grade prepare --provision` steps ran a Python provisioner stub with it. Since
+[#348](https://github.com/kamui/code-review-bench/issues/348) every step finds the runner's own `python3` first on
+`PATH`. It runs only a script whose first line is `#!/bin/sh`, as the stubs now are, and refuses any other; the loader
+also refuses a `shell` step that names a Python interpreter.
+
 A fresh `run-cell --next` claim is not part of this evidence: before it dispatches, rates-check-v1 compares the frozen
 price with the providers' live pricing pages, which a fixture cannot answer. The cell is dispatched through the
 same `dispatch.sh` that `run-cell` launches and filed through `run-cell` itself.
@@ -63,7 +70,7 @@ records cite as evidence, kept byte-unchanged with them.
 | Review and grading targets | Tasks whose code is Python. The review sandbox and the grading sandbox expose the host's `python3` (Python 3.10 on the grading runner) so reviewers and graders can run a target's tests. It is a target language, not the engine. |
 | Skills | Skill scripts are standard-library Python by the [script policy](../agents/scripts.md). `frozen-forge probe` evaluates a frozen skill's own `scripts/forge_packet.py` with `python3 -I` to read its queries. |
 | Historical replay | A run frozen before it pinned `bench-tools` runs from a checkout of its freeze commit, with that commit's Python. `grade --provision SCRIPT` runs a recorded Python provisioner for such replays. Frozen runs, imported originals, saved fixtures and research records keep their Python byte-unchanged. |
-| Optional probes and tests | Provisioning records `python3 --version` in a reviewer's platform line when one exists. The tests' stand-in clients, provisioner and probes are POSIX `sh` or the standard-library Rust program [`tests/support/stand_in/main.rs`](../../rust/bench-tools/tests/support/stand_in/main.rs), so no CI job installs Python. `grade prepare --provision` still names `python3`, so `grade_dispatch` puts a `python3` on `PATH` that hands the shell provisioner to `sh`. The tests that still run Python are listed below. |
+| Optional probes and tests | Provisioning records `python3 --version` in a reviewer's platform line when one exists. The tests' stand-in clients, provisioner and probes are POSIX `sh` or the standard-library Rust program [`tests/support/stand_in/main.rs`](../../rust/bench-tools/tests/support/stand_in/main.rs), so no CI job installs Python. `grade prepare --provision` still names `python3`, so `grade_dispatch` and the corpus runner put a `python3` on `PATH` that hands a shell provisioner to `sh`. The tests that still run Python are listed below. |
 
 ### Python in tests
 
@@ -76,7 +83,6 @@ Each of these runs the host's `python3`. On CI it comes with the runner image; n
 | `tests/review_isolation.rs`: `settings_name_this_executable_as_the_hook_and_verify` | Target toolchains. The review sandbox's settings expose `python3`, `node` and `go` for targets, so the test skips on a host that lacks any of them. |
 | `tests/review_isolation_cli.rs`: `native_shell_filesystem_and_network_denials`, `worker_inherits_file_hook` | Target Python. They run `python3` inside the review sandbox, which exposes it for Python targets, and check Python's own errors. They run only with `BENCH_ISOLATION_CLI` set, never on CI. |
 | `src/network_gate.rs`: `the_namespace_masks_host_sockets_and_refuses_vsock` | An exception. The probe opens an `AF_VSOCK` socket and calls `io_uring_setup`. The standard library cannot make either call without `unsafe`, which the crate forbids, and no POSIX tool makes them. The test skips without `python3`. |
-| `tools/behavior_contracts/grade-prepare.v1.json` (3 cases), `grade-map.v1.json` (26 cases) | An exception. Their `shell` steps edit fixture JSON with `python3`. The corpus runner sets `PATH` to `/bin:/usr/bin`, so these steps use the host's Python even under `tools/without-python.sh`. Each saved case is pinned by a decision record, so rewriting a step needs a new decision version for that case. |
 
 ## Remaining limitations
 
