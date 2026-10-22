@@ -44,8 +44,9 @@ const OFFLINE: [(&str, &str); 3] = [
 /// Host download caches, under the home, that offline steps get a private writable copy of. Prisma's install script
 /// generates a client in the clone from cached engines and updates their timestamps (j-trpc-5017's examples).
 const SEEDED: [&str; 1] = [".cache/prisma"];
-/// mise's installs, uv's Pythons (a uv virtualenv links its interpreter there) and bun, under the home.
-const HOME_TOOLCHAINS: [&str; 3] = [".local/share/mise", ".local/share/uv", ".bun"];
+/// mise's installs, uv's Pythons (a uv virtualenv links its interpreter there) and bun, under the home. Only uv's
+/// `python` directory: its data directory also holds `uv auth login` credentials.
+const HOME_TOOLCHAINS: [&str; 3] = [".local/share/mise", ".local/share/uv/python", ".bun"];
 /// Executables shown by themselves: uv sits in `~/.local/bin` beside the clients' launchers.
 const EXECUTABLES: [&str; 2] = ["uv", "bun"];
 
@@ -394,6 +395,11 @@ mod tests {
         for (path, content) in [
             (home.join(".claude/.credentials.json"), "claude secret"),
             (home.join(".codex/auth.json"), "codex secret"),
+            (
+                home.join(".local/share/uv/credentials/credentials.toml"),
+                "uv secret",
+            ),
+            (home.join(".local/share/uv/python/marker"), "uv python"),
             (root.0.join("sibling/clone/answer.txt"), "sibling answer"),
         ] {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -416,7 +422,7 @@ mod tests {
         let (code, seen) = output(
             &sandbox,
             &format!(
-                "cat $HOME/.claude/.credentials.json $HOME/.codex/auth.json {} 2>/dev/null; env; printf x > planted; mkdir -p {sibling_dir} && printf y > {sibling_dir}/planted",
+                "cat $HOME/.claude/.credentials.json $HOME/.codex/auth.json $HOME/.local/share/uv/credentials/credentials.toml {} 2>/dev/null; cat $HOME/.local/share/uv/python/marker; env; printf x > planted; mkdir -p {sibling_dir} && printf y > {sibling_dir}/planted",
                 sibling.display(),
                 sibling_dir = root.0.join("sibling").display()
             ),
@@ -426,12 +432,17 @@ mod tests {
         for secret in [
             "claude secret",
             "codex secret",
+            "uv secret",
             "sibling answer",
             "canary-key",
             "canary-token",
         ] {
             assert!(!seen.contains(secret), "{secret} leaked: {seen}");
         }
+        assert!(
+            seen.contains("uv python"),
+            "uv's Pythons stay visible: {seen}"
+        );
         assert!(seen.contains("RECIPE_VALUE=kept"), "{seen}");
         assert!(seen.contains("LANG=C.UTF-8"), "{seen}");
         assert!(clone.join("planted").is_file(), "the clone stays writable");
