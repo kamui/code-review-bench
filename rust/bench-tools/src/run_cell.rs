@@ -734,7 +734,6 @@ impl Run {
                 && get(timing, "completed_at").truthy()
                 && let (Some(start), Some(end)) = (moment("dispatched_at"), moment("completed_at"))
             {
-                #[allow(clippy::cast_precision_loss)]
                 seconds.push((end - start) as f64 / 1e6);
             }
         }
@@ -1568,7 +1567,6 @@ fn close_interruption(
         }
     }
     let last_output_at = match last_output {
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         Some(moment) if moment > 0.0 => text(&utc_stamp(moment.floor() as u64)),
         _ => Value::Null,
     };

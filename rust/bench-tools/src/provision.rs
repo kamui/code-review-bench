@@ -996,8 +996,10 @@ fn space_refusal(free: u64, needed: u64, reserve: u64, out: &Path) -> Vec<String
 fn free_space(path: &Path) -> P<u64> {
     let stats =
         nix::sys::statvfs::statvfs(path).map_err(|error| format!("{}: {error}", path.display()))?;
-    // statvfs reports 32-bit counts on macOS.
-    #[allow(clippy::useless_conversion)]
+    #[allow(
+        clippy::useless_conversion,
+        reason = "statvfs reports 32-bit counts on macOS"
+    )]
     Ok(u64::from(stats.blocks_available()) * u64::from(stats.fragment_size()))
 }
 
@@ -1027,7 +1029,6 @@ fn space_failures(
             .parent()
             .map_or_else(|| PathBuf::from("/"), Path::to_path_buf);
     }
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let reserve = (reserve * GIB) as u64;
     Ok(space_refusal(
         free_space(&existing)?,

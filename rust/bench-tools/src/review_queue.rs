@@ -375,7 +375,6 @@ fn tail(text: &str, count: usize) -> &str {
 
 /// `datetime.fromtimestamp(moment, timezone.utc).isoformat(timespec="seconds")` with `Z`.
 fn stamp(moment: f64) -> String {
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     utc_stamp(moment.max(0.0).floor() as u64)
 }
 
@@ -392,7 +391,6 @@ fn now_micros() -> i64 {
 }
 
 fn moment_of(stamp: &str) -> Option<f64> {
-    #[allow(clippy::cast_precision_loss)]
     usage::timestamp_micros(&stamp.replace('Z', "+00:00")).map(|micros| micros as f64 / 1e6)
 }
 
@@ -1211,7 +1209,6 @@ fn started_at(proc_root: &Path, start_ticks: i64) -> String {
     let (Some(uptime), Some(per_second)) = (uptime, ticks) else {
         return "at an unknown time".to_string();
     };
-    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
     let micros = now_micros() - ((uptime - start_ticks as f64 / per_second as f64) * 1e6) as i64;
     let millis = micros.div_euclid(1000);
     let seconds = u64::try_from(millis.div_euclid(1000)).unwrap_or(0);
@@ -2849,7 +2846,6 @@ fn report(queue: &Queue, moment: f64, effects: &Effects<'_>) -> Q<Value> {
             let last = read_json(&queue.state.join("invocations").join(name))?;
             let beat = moment_of(&get(&last, "heartbeat_at").py_str()).unwrap_or(moment);
             let ended = get(&last, "ended_at");
-            #[allow(clippy::cast_possible_truncation)]
             let age = (moment - beat).round_ties_even() as i64;
             object(vec![
                 ("invocation", get(&last, "invocation_id").clone()),

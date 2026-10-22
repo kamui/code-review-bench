@@ -633,7 +633,6 @@ fn review_path(value: &Value) -> R<&Value> {
     pyvalue::item(pyvalue::item(value, "review")?, "path").map_err(caught)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn claim_context(
     root: &Root,
     checkout: &PyPath,
@@ -1565,7 +1564,10 @@ fn read_inventory(
 }
 
 /// `provision.archive_path` and the archive check of the offline preflight, after `bench-tools provision check`.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input the caller already holds; a one-off parameter struct would not simplify the call"
+)]
 fn preflight_target(
     runner: &Runner,
     options: &Options,

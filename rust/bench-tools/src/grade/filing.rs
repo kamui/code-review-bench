@@ -814,7 +814,10 @@ fn candidate_id(candidates: &Candidates, claim: &Value, field: &str) -> R<Value>
 /// `graded_v2(entry, verdict, facts, families, evidence, checks, check_pins, candidates, pre_existing)`: one
 /// review's current grade under verdict contract v2, or v3 when `pre_existing` lists the target's pre-existing
 /// problems.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input the caller already holds; a one-off parameter struct would not simplify the call"
+)]
 pub fn graded_v2(
     entry: &Value,
     verdict: &Value,
