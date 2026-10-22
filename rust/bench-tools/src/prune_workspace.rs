@@ -1,9 +1,13 @@
 //! `bench-tools prune-workspace`: remove the reproducible `clone` and `clone-cache` of a review attempt or a grading
-//! workspace once its evidence is verified, and leave `workspace-pruned.json` naming what went.
+//! workspace once its evidence is verified, and an attempt's frozen `forge`, and leave `workspace-pruned.json`
+//! naming what went.
 //!
 //! A review attempt is pruned only when it was filed `valid completed`, its native artifacts and transcript archive
 //! verify, its clone was observed unchanged and is still at the target's head with a clean tree, and its usage is
-//! metered or a line of the run's `charges.jsonl` reconciles it. A grading workspace is pruned only when the saved
+//! metered or a line of the run's `charges.jsonl` reconciles it. Its `forge` goes only when its bench-tools copy is
+//! the runtime the run's `runtimes.frozen.json` pins and its served capture files are the target's: `frozen-forge
+//! setup` rebuilds the rest from those pins and the mirror, and its `origin.git` borrows the clone's objects.
+//! `forge.json` and `forge-log` beside it stay. A grading workspace is pruned only when the saved
 //! assessment receipt names its verdicts and, for a dispatched session, its clean, priced exit. Everything else in the
 //! workspace stays.
 //!
@@ -23,7 +27,9 @@ use std::cell::RefCell;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-const CANDIDATES: [&str; 2] = ["clone", "clone-cache"];
+/// What pruning can remove: a grading workspace's first two, and a review attempt's frozen forge too.
+const CANDIDATES: [&str; 3] = ["clone", "clone-cache", "forge"];
+const GRADING: usize = 2;
 const RECEIPT: &str = "workspace-pruned.json";
 const JOURNAL: &str = "workspace-pruning.json";
 
@@ -186,9 +192,9 @@ struct Candidate {
     identity: Identity,
 }
 
-fn candidates(workspace: &PyPath) -> R<Vec<Candidate>> {
+fn candidates(workspace: &PyPath, names: &[&'static str]) -> R<Vec<Candidate>> {
     let mut found = Vec::new();
-    for name in CANDIDATES {
+    for &name in names {
         match lstat(&workspace.join(name.as_bytes()))? {
             None => {}
             Some((_, Kind::Symlink)) => return refuse("clone or cache is a symlink"),
@@ -303,10 +309,32 @@ impl Journal {
     }
 }
 
-/// The clone must still be clean unless an earlier apply already began removing it.
-fn clone_to_verify(present: &[Candidate], journal: Option<&Journal>) -> bool {
-    present.iter().any(|candidate| candidate.name == "clone")
-        && journal.is_none_or(|journal| journal.removing != Some("clone"))
+/// `name` must still be what it was verified as unless an earlier apply already began removing it.
+fn to_verify(name: &str, present: &[Candidate], journal: Option<&Journal>) -> bool {
+    present.iter().any(|candidate| candidate.name == name)
+        && journal.is_none_or(|journal| journal.removing != Some(name))
+}
+
+/// Refuses a frozen forge that holds anything its pins cannot rebuild: a bench-tools copy other than the runtime
+/// the run pins, or a served file other than the target's capture.
+fn forge_rebuildable(forge: &PyPath, run: &PyPath, target_dir: &PyPath) -> R<()> {
+    let frozen = run.join(b"runtimes.frozen.json");
+    let pinned = read(&frozen)?;
+    let pinned = at(at(&pinned, "bench-tools"), "sha256").as_str();
+    if pinned != Some(digest(&forge.join(b"bench-tools"))?.as_str()) {
+        return refuse(
+            "the frozen forge's bench-tools is not the runtime runtimes.frozen.json pins",
+        );
+    }
+    for name in crate::frozen_forge::SERVED {
+        let source = target_dir.join(b"forge").join(name.as_bytes());
+        if digest(&forge.join(name.as_bytes()))? != digest(&source)? {
+            return refuse(format!(
+                "the frozen forge's {name} differs from the target's capture"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// The workspace as verification found it.
@@ -644,7 +672,7 @@ fn check_attempt(arguments: &Attempt<'_>) -> R<Checked> {
         return refuse("workspace identity differs from the filed attempt");
     }
     let (workspace, identity) = open_workspace(&given)?;
-    let present = candidates(&workspace)?;
+    let present = candidates(&workspace, &CANDIDATES)?;
     let journal = Journal::read(&workspace)?;
     if present.is_empty()
         && journal.is_none()
@@ -679,11 +707,11 @@ fn check_attempt(arguments: &Attempt<'_>) -> R<Checked> {
     if let Some(journal) = &journal {
         journal.covers(&present)?;
     }
-    if clone_to_verify(&present, journal.as_ref()) {
-        let target_dir = match arguments.target {
-            Some(target) => PyPath::new(target),
-            None => root.join(b"bench/targets").join(cell_target.as_bytes()),
-        };
+    let target_dir = match arguments.target {
+        Some(target) => PyPath::new(target),
+        None => root.join(b"bench/targets").join(cell_target.as_bytes()),
+    };
+    if to_verify("clone", &present, journal.as_ref()) {
         let target = read(&target_dir.join(b"target.json"))?;
         if arguments.target.is_some() && at(&target, "id").as_str() != Some(cell_target) {
             return refuse("explicit target identity differs from the filed attempt");
@@ -694,6 +722,9 @@ fn check_attempt(arguments: &Attempt<'_>) -> R<Checked> {
         )? {
             return refuse("clone revision or working tree changed after filing");
         }
+    }
+    if to_verify("forge", &present, journal.as_ref()) {
+        forge_rebuildable(&workspace.join(b"forge"), run, &target_dir)?;
     }
     let mut plan = Plan {
         workspace,
@@ -795,7 +826,7 @@ pub fn grading_at(
 
 fn check_grading(arguments: &Grading<'_>) -> R<Checked> {
     let (work, identity) = open_workspace(&PyPath::new(arguments.work))?;
-    let present = candidates(&work)?;
+    let present = candidates(&work, &CANDIDATES[..GRADING])?;
     let journal = Journal::read(&work)?;
     if present.is_empty() && journal.is_none() {
         return Ok(Checked::Done(own_record(&work.join(RECEIPT.as_bytes()))?));
@@ -837,7 +868,7 @@ fn check_grading(arguments: &Grading<'_>) -> R<Checked> {
     if let Some(journal) = &journal {
         journal.covers(&present)?;
     }
-    if clone_to_verify(&present, journal.as_ref())
+    if to_verify("clone", &present, journal.as_ref())
         && !unchanged(&work.join(b"clone"), arguments.head)?
     {
         return refuse("clone revision or working tree changed after preparation");
@@ -1096,6 +1127,90 @@ mod tests {
             }
             assert!(self.scratch.0.join("transcript.tar.gz").exists());
             assert!(self.attempt.join("normalized.json").exists());
+        }
+    }
+
+    /// A frozen forge as `frozen-forge setup` leaves it, read-only, with the run's pinned runtime and the target's
+    /// capture.
+    fn forge(review: &Review, runtime: &[u8]) {
+        let root = &review.scratch.0;
+        let capture = root.join("bench/targets/task/forge");
+        fs::create_dir_all(&capture).unwrap();
+        let forge = review.workspace.join("forge");
+        fs::create_dir_all(forge.join("bin")).unwrap();
+        fs::create_dir_all(forge.join("origin.git/objects/info")).unwrap();
+        for name in crate::frozen_forge::SERVED {
+            fs::write(capture.join(name), format!("{{\"{name}\": 1}}")).unwrap();
+            fs::copy(capture.join(name), forge.join(name)).unwrap();
+        }
+        fs::write(forge.join("bench-tools"), runtime).unwrap();
+        fs::write(forge.join("bin/gh"), "#!/bin/sh\n").unwrap();
+        for file in ["bench-tools", "bin/gh", "graphql.json", "issues.json"] {
+            fs::set_permissions(forge.join(file), fs::Permissions::from_mode(0o444)).unwrap();
+        }
+        fs::write(
+            root.join("bench/runs/run/runtimes.frozen.json"),
+            format!(
+                r#"{{"bench-tools": {{"sha256": "{}"}}}}"#,
+                sha256::hex_digest(b"pinned runtime")
+            ),
+        )
+        .unwrap();
+        fs::write(review.workspace.join("forge.json"), "{}").unwrap();
+        fs::create_dir_all(review.workspace.join("forge-log")).unwrap();
+        fs::write(review.workspace.join("forge-log/calls.jsonl"), "{}\n").unwrap();
+    }
+
+    #[test]
+    fn a_frozen_forge_goes_only_when_its_pins_rebuild_it() {
+        let review = Review::new();
+        forge(&review, b"another runtime");
+        refused(
+            review.prune(true),
+            "is not the runtime runtimes.frozen.json pins",
+        );
+        let forge_dir = review.workspace.join("forge");
+        fs::set_permissions(
+            forge_dir.join("bench-tools"),
+            fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        fs::write(forge_dir.join("bench-tools"), b"pinned runtime").unwrap();
+        fs::set_permissions(
+            forge_dir.join("issues.json"),
+            fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        fs::write(forge_dir.join("issues.json"), "{}").unwrap();
+        refused(
+            review.prune(true),
+            "the frozen forge's issues.json differs from the target's capture",
+        );
+        assert_eq!(kept(&review.workspace), ["clone", "clone-cache", "forge"]);
+
+        fs::copy(
+            review
+                .scratch
+                .0
+                .join("bench/targets/task/forge/issues.json"),
+            forge_dir.join("issues.json"),
+        )
+        .unwrap();
+        let receipt = review.prune(true).unwrap();
+        assert_eq!(kept(&review.workspace), [] as [&str; 0]);
+        let paths: Vec<String> = at(&receipt, "paths")
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(Value::py_str)
+            .collect();
+        assert!(
+            paths.iter().any(|path| path.ends_with("/forge")),
+            "{paths:?}"
+        );
+        review.retained();
+        for kept in ["forge.json", "forge-log/calls.jsonl"] {
+            assert!(review.workspace.join(kept).is_file(), "{kept}");
         }
     }
 
