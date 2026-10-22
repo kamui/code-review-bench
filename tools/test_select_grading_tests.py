@@ -45,13 +45,20 @@ class GradingSelectionTest(unittest.TestCase):
         self.write("src/styles.css")
         self.write("public/icon.svg")
         self.write("src/components/newline\nchart.tsx")
+        self.write(".github/workflows/rust-runtime.yml")
+        self.commit()
+        self.assertFalse(selection("pull_request", self.event(), self.root)[0])
+
+    def test_rust_runtime_workflow_alone_skips(self):
+        self.write(".github/workflows/rust-runtime.yml")
         self.commit()
         self.assertFalse(selection("pull_request", self.event(), self.root)[0])
 
     def test_relevant_and_unknown_paths_run(self):
         for path in ("bench/tools/grade.py", "tools/export_explorer.py", "docs/research/input.md",
                      "docs/clean-context.md", "README.md", "package.json", "bun.lock",
-                     ".github/workflows/pages.yml", "src/lib/scoring.ts", "new-file",
+                     ".github/workflows/pages.yml", ".github/workflows/rates.yml", "src/lib/scoring.ts",
+                     "new-file",
                      "src/components/unknown.py", "public/client-pin.json"):
             with self.subTest(path=path):
                 self.write(path, path)

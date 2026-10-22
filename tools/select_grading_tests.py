@@ -8,11 +8,12 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 UI_PREFIXES = ("src/components/", "src/routes/")
 ASSET_SUFFIXES = {".css", ".svg", ".png", ".jpg", ".jpeg", ".webp", ".ico", ".woff", ".woff2"}
+UNRELATED_FILES = {"src/styles.css", ".github/workflows/rust-runtime.yml"}
 
 
 def unrelated(path: str) -> bool:
     return (path.startswith(UI_PREFIXES) and Path(path).suffix in {".tsx", ".css"}
-            or path == "src/styles.css"
+            or path in UNRELATED_FILES
             or path.startswith("public/") and Path(path).suffix in ASSET_SUFFIXES)
 
 
@@ -31,7 +32,7 @@ def selection(event_name: str, event: dict, root: Path = ROOT) -> tuple[bool, st
     relevant = [path for path in paths if not unrelated(path)]
     if relevant:
         return True, f"Full coverage for {len(relevant)} relevant or unknown paths"
-    return False, "Complete PR diff contains only UI or asset paths"
+    return False, "Complete PR diff contains only UI, asset or Rust runtime workflow paths"
 
 
 def main() -> None:
