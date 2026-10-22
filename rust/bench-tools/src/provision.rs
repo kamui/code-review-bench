@@ -153,6 +153,36 @@ fn string_field(value: &Value, key: &str) -> String {
     field(value, key).map_or_else(String::new, Value::py_str)
 }
 
+/// What a run manifest's cohort entry records as `provisioning_sha256`: the SHA-256 of the target's `provisioning`
+/// block without `platform`, a measurement record carrying a timestamp, as canonical JSON.
+pub fn provisioning_hash(target_dir: &Path) -> P<Outcome> {
+    let path = target_dir.join("target.json");
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|error| format!("{}: {}", path.display(), os_failure(&path)(error)))?;
+    let value = pyjson::loads(&raw, pyjson::Duplicates::KeepLast)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    let Some(Value::Object(provisioning)) = field(&value, "provisioning") else {
+        return Err(format!("{}: provisioning is not an object", path.display()));
+    };
+    let block: Object = provisioning
+        .iter()
+        .filter(|(key, _)| *key != "platform")
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    let canonical = pyjson::dumps(
+        &Value::Object(block),
+        &Dumps {
+            separators: Some((",".to_string(), ":".to_string())),
+            sort_keys: true,
+            ..Dumps::default()
+        },
+    );
+    Ok(Outcome {
+        stdout: format!("{}\n", crate::sha256::hex_digest(canonical.as_bytes())),
+        code: 0,
+    })
+}
+
 /// Read `<target_dir>/target.json`, applying a replacement manifest's archive hash in memory.
 pub fn load_target(target_dir: &Path, replacements: Option<&Path>) -> P<Target> {
     let path = target_dir.join("target.json");
@@ -1443,6 +1473,40 @@ mod tests {
         assert!(!space_refusal(10 * gib, 6 * gib, 5 * gib, out).is_empty());
         assert!(space_refusal(11 * gib, 6 * gib, 5 * gib, out).is_empty());
         assert!(!space_refusal(gib, 2 * gib, 0, out).is_empty());
+    }
+
+    #[test]
+    fn the_provisioning_hash_is_canonical_json_without_the_platform_measurement() {
+        let base = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target/provision-tests")
+            .join(crate::evidence::random_name("h-"));
+        let hash = |name: &str, provisioning: &str| {
+            let directory = base.join(name);
+            std::fs::create_dir_all(&directory).expect("mkdir");
+            std::fs::write(
+                directory.join("target.json"),
+                format!("{{\"provisioning\": {provisioning}}}"),
+            )
+            .expect("write");
+            provisioning_hash(&directory).expect("hash").stdout
+        };
+        let expected = "d6939a82601798707002d0e5d8535d4bc56c748cffa79e6b7d346b8e87c16fd6\n";
+        assert_eq!(
+            hash(
+                "a",
+                r#"{"recipe": "r", "allowance": "Run tests.", "unavailable": "caf\u00e9", "platform": "at 12:00"}"#
+            ),
+            expected
+        );
+        assert_eq!(
+            hash(
+                "b",
+                r#"{"unavailable": "café", "platform": "at 13:00", "allowance": "Run tests.", "recipe": "r"}"#
+            ),
+            expected
+        );
+        assert!(provisioning_hash(&base.join("missing")).is_err());
+        std::fs::remove_dir_all(&base).expect("cleanup");
     }
 
     #[test]
