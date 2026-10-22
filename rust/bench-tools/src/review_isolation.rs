@@ -476,6 +476,44 @@ fn list<I: IntoIterator<Item = String>>(items: I) -> Value {
     Value::Array(items.into_iter().map(Value::Str).collect())
 }
 
+/// The directories the dependency cache's virtualenv needs readable to run its interpreter.
+///
+/// A relocatable virtualenv in the dependency cache runs an interpreter installed outside it, found through its
+/// configured home. That home may be a symlink to the versioned install, and the sandbox exposes a symlink only
+/// through the directory holding it. Every top-level directory is either a system one the sandbox already reads or
+/// one `denyRead` covers, so an entry for `/` or a top-level directory would only re-open what the attempt must not
+/// read.
+fn venv_runtime(clone: &Path) -> Result<Vec<String>, String> {
+    let venv = suffixed(clone, "-cache").join("venv/pyvenv.cfg");
+    if !venv.is_file() {
+        return Ok(Vec::new());
+    }
+    let config =
+        std::fs::read_to_string(&venv).map_err(|error| format!("{}: {error}", venv.display()))?;
+    let mut entries = Vec::new();
+    for line in config.lines() {
+        let (key, value) = line.split_once('=').unwrap_or((line, ""));
+        if key.trim() == "home" {
+            let home = PathBuf::from(value.trim());
+            let resolved = resolve(&home);
+            entries.extend(
+                [home.parent().and_then(Path::parent), resolved.parent()]
+                    .into_iter()
+                    .flatten()
+                    .filter(|directory| {
+                        directory
+                            .components()
+                            .filter(|part| matches!(part, std::path::Component::Normal(_)))
+                            .count()
+                            > 1
+                    })
+                    .map(text),
+            );
+        }
+    }
+    Ok(entries)
+}
+
 /// The settings an isolated attempt runs under, with `hook` as the executable its file-tool hook runs.
 pub fn settings(
     attempt: &Path,
@@ -517,26 +555,7 @@ pub fn settings(
         };
         runtime.push(text(exposed));
     }
-    // A relocatable virtualenv in the dependency cache runs an interpreter installed outside it, found through its
-    // configured home. That home may be a symlink to the versioned install, and the sandbox exposes a symlink only
-    // through the directory holding it.
-    let venv = suffixed(clone, "-cache").join("venv/pyvenv.cfg");
-    if venv.is_file() {
-        let config = std::fs::read_to_string(&venv)
-            .map_err(|error| format!("{}: {error}", venv.display()))?;
-        for line in config.lines() {
-            let (key, value) = line.split_once('=').unwrap_or((line, ""));
-            if key.trim() == "home" {
-                let home = PathBuf::from(value.trim());
-                let grand = home
-                    .parent()
-                    .and_then(Path::parent)
-                    .unwrap_or(Path::new(""));
-                runtime.push(text(grand));
-                runtime.push(text(resolve(&home).parent().unwrap_or(Path::new("/"))));
-            }
-        }
-    }
+    runtime.extend(venv_runtime(clone)?);
     let command = shlex::join(&[
         text(hook),
         "review-isolation".to_string(),
@@ -564,6 +583,14 @@ pub fn settings(
         .collect();
     allow_read.sort();
     allow_read.dedup();
+    if let Some(entry) = allow_read
+        .iter()
+        .find(|entry| entry.trim_end_matches('/').is_empty())
+    {
+        return Err(format!(
+            "allowRead would hold {entry:?}, which covers every path"
+        ));
+    }
     Ok(object([
         ("env", Value::Object(shell_env)),
         (
@@ -833,6 +860,51 @@ mod tests {
             );
         }
         assert!(!strict.exposes_with(&text(&outside), &built_in));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_venv_home_never_declares_the_root() {
+        let root =
+            std::env::temp_dir().join(format!("review-isolation-venv-{}", std::process::id()));
+        let clone = root.join("clone");
+        let venv = root.join("clone-cache/venv");
+        let install = root.join("python/3.12.15");
+        std::fs::create_dir_all(&clone).unwrap();
+        std::fs::create_dir_all(&venv).unwrap();
+        std::fs::create_dir_all(install.join("bin")).unwrap();
+        std::os::unix::fs::symlink(&install, root.join("python/3.12")).unwrap();
+        let root = resolve(&root);
+        let outside = root.join("outside");
+        std::fs::write(&outside, "canary").unwrap();
+        let config = venv.join("pyvenv.cfg");
+        for home in ["/usr/bin", "/bin"] {
+            std::fs::write(&config, format!("home = {home}\nversion = 3.12.15\n")).unwrap();
+            let entries = venv_runtime(&clone).unwrap();
+            assert!(
+                entries
+                    .iter()
+                    .all(|entry| !entry.trim_end_matches('/').is_empty()),
+                "{home}: {entries:?}"
+            );
+            let declared = ReadBoundary {
+                deny_read: Vec::new(),
+                allow_read: entries.into_iter().chain([text(&clone)]).collect(),
+            };
+            assert!(declared.exposes_with(&text(&outside), &[]), "{home}");
+        }
+        std::fs::write(
+            &config,
+            format!("home = {}\n", root.join("python/3.12/bin").display()),
+        )
+        .unwrap();
+        assert_eq!(
+            venv_runtime(&clone).unwrap(),
+            [
+                text(&root.join("python")),
+                text(&root.join("python/3.12.15"))
+            ]
+        );
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
