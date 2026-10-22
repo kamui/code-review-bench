@@ -433,12 +433,7 @@ fn commit(
             write(&plan.workspace.join(JOURNAL.as_bytes()), &journal.value())?;
         }
         directory
-            .remove_tree(
-                candidate.name.as_bytes(),
-                candidate.identity,
-                &mut |_, _| Ok(()),
-                hook,
-            )
+            .remove_tree(candidate.name.as_bytes(), candidate.identity, None, hook)
             .map_err(Failure::Failed)?;
     }
     hook(Point::BeforeReceipt).map_err(interrupted)?;
@@ -639,6 +634,7 @@ fn check_attempt(arguments: &Attempt<'_>) -> R<Checked> {
     let present = candidates(&workspace)?;
     let journal = Journal::read(&workspace)?;
     if present.is_empty()
+        && journal.is_none()
         && let Some(receipt) = own_record(&workspace.join(RECEIPT.as_bytes()))?
     {
         return Ok(Checked::Done(Some(receipt)));
@@ -1400,6 +1396,63 @@ mod tests {
         assert!(review.workspace.join("clone/.git/HEAD").exists());
         assert!(locked.join("untracked").exists());
         assert!(!review.workspace.join(RECEIPT).exists());
+    }
+
+    #[test]
+    fn files_their_owner_cannot_read_are_still_pruned() {
+        let review = Review::new();
+        let clone = review.workspace.join("clone");
+        fs::write(clone.join(".git/info/exclude"), "unreadable\n").unwrap();
+        for (path, mode) in [
+            (review.workspace.join("clone-cache/unreadable"), 0o000),
+            (review.workspace.join("clone-cache/write-only"), 0o200),
+            (clone.join("unreadable"), 0o000),
+        ] {
+            fs::write(&path, "private").unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+        }
+        assert!(at(&review.prune(true).unwrap(), "applied").truthy());
+        assert!(kept(&review.workspace).is_empty());
+        review.retained();
+    }
+
+    #[test]
+    fn a_hard_link_to_an_unreadable_file_is_pruned_and_its_target_kept() {
+        let review = Review::new();
+        let outside = review.scratch.0.join("outside");
+        fs::write(&outside, "outside the workspace").unwrap();
+        fs::hard_link(&outside, review.workspace.join("clone-cache/linked")).unwrap();
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o000)).unwrap();
+        let result = review.prune(true);
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(at(&result.unwrap(), "applied").truthy());
+        assert!(kept(&review.workspace).is_empty());
+        assert_eq!(
+            fs::read_to_string(&outside).unwrap(),
+            "outside the workspace"
+        );
+        review.retained();
+    }
+
+    #[test]
+    fn a_retry_after_the_receipt_is_written_removes_the_journal() {
+        let review = Review::new();
+        let journal = review.workspace.join(JOURNAL);
+        let saved = review.scratch.0.join("saved-journal");
+        let (from, to) = (journal.clone(), saved.clone());
+        let keep = move |at: Point| {
+            if at == Point::BeforeReceipt {
+                fs::copy(&from, &to)?;
+            }
+            Ok(())
+        };
+        let receipt = dumps(&review.prune_with(true, None, &keep).unwrap());
+        let written = fs::read(review.workspace.join(RECEIPT)).unwrap();
+        fs::copy(&saved, &journal).unwrap();
+        assert_eq!(dumps(&review.prune(true).unwrap()), receipt);
+        assert!(!journal.exists());
+        assert_eq!(fs::read(review.workspace.join(RECEIPT)).unwrap(), written);
+        assert_eq!(dumps(&review.prune(true).unwrap()), receipt);
     }
 
     #[test]

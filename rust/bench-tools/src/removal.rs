@@ -59,6 +59,13 @@ pub enum Entry<'a> {
 /// error stops the removal.
 pub type Check<'a> = &'a mut dyn FnMut(&[u8], Entry<'_>) -> Result<(), String>;
 
+fn reborrow<'a>(check: &'a mut Option<Check<'_>>) -> Option<Check<'a>> {
+    match check {
+        Some(check) => Some(&mut **check),
+        None => None,
+    }
+}
+
 /// Called at each [`Point`]; an error stops the removal there. Production passes [`uninterrupted`].
 pub type Hook<'a> = &'a dyn Fn(Point) -> std::io::Result<()>;
 
@@ -182,12 +189,13 @@ impl Directory {
         }
     }
 
-    /// Remove the directory `name` and everything below it, once it is checked to still be `expected`.
+    /// Remove the directory `name` and everything below it, once it is checked to still be `expected`. Without a
+    /// `check`, no file is opened, so a file its owner cannot read is still removed.
     pub fn remove_tree(
         &self,
         name: &[u8],
         expected: Identity,
-        check: Check<'_>,
+        check: Option<Check<'_>>,
         hook: Hook<'_>,
     ) -> Result<(), String> {
         let stat = stat::fstatat(
@@ -210,7 +218,7 @@ impl Directory {
         name: &[u8],
         stat: &FileStat,
         relative: &[u8],
-        check: Check<'_>,
+        mut check: Option<Check<'_>>,
         hook: Hook<'_>,
     ) -> Result<(), String> {
         let path = self.path.join(OsStr::from_bytes(name));
@@ -271,10 +279,18 @@ impl Directory {
                         child_path.display()
                     ));
                 }
-                directory.remove_directory(&child, &child_stat, &below, &mut *check, hook)?;
+                directory.remove_directory(
+                    &child,
+                    &child_stat,
+                    &below,
+                    reborrow(&mut check),
+                    hook,
+                )?;
                 continue;
             }
-            directory.check_entry(&child, &child_stat, &below, &mut *check)?;
+            if let Some(check) = reborrow(&mut check) {
+                directory.check_entry(&child, &child_stat, &below, check)?;
+            }
             directory.unlink_checked(&child, &child_stat)?;
             hook(Point::Removed).map_err(|error| error.to_string())?;
         }
@@ -388,9 +404,9 @@ mod tests {
         let result = parent.remove_tree(
             b"tree",
             identity(&tree),
-            &mut |_, _| {
+            Some(&mut |_, _| {
                 fs::rename(&substitute, tree.join("checked")).map_err(|error| error.to_string())
-            },
+            }),
             &uninterrupted,
         );
         let kept = match &result {
@@ -417,12 +433,8 @@ mod tests {
         fs::write(locked.join("unchecked"), "kept").unwrap();
         for mode in [0o000, 0o300, 0o600] {
             fs::set_permissions(&locked, fs::Permissions::from_mode(mode)).unwrap();
-            let result = parent.remove_tree(
-                b"tree",
-                identity(&base.join("tree")),
-                &mut |_, _| Ok(()),
-                &uninterrupted,
-            );
+            let result =
+                parent.remove_tree(b"tree", identity(&base.join("tree")), None, &uninterrupted);
             fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
             assert!(
                 matches!(&result, Err(message) if message.contains("Permission denied")),
@@ -435,12 +447,8 @@ mod tests {
         }
         fs::set_permissions(locked.join("unchecked"), fs::Permissions::from_mode(0o444)).unwrap();
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
-        let result = parent.remove_tree(
-            b"tree",
-            identity(&base.join("tree")),
-            &mut |_, _| Ok(()),
-            &uninterrupted,
-        );
+        let result =
+            parent.remove_tree(b"tree", identity(&base.join("tree")), None, &uninterrupted);
         let left = fs::symlink_metadata(base.join("tree")).is_ok();
         fs::remove_dir_all(&base).unwrap();
         assert_eq!(result, Ok(()));

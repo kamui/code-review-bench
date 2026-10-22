@@ -899,7 +899,7 @@ fn remove(
                 .remove_tree(
                     name,
                     identity,
-                    &mut |relative, entry| captured(&files, relative, entry),
+                    Some(&mut |relative, entry| captured(&files, relative, entry)),
                     hook,
                 )
                 .map_err(failed)?;

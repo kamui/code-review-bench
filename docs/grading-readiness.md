@@ -52,7 +52,7 @@ cargo test --locked --manifest-path rust/bench-tools/Cargo.toml
 python3 bench/tools/rust_runtime.py exec bench-tools -- grading probe-claude
 python3 bench/tools/test_codex_dispatch.py
 python3 bench/tools/test_claude_dispatch.py
-python3 bench/tools/test_prune_workspace.py
+(cd rust/bench-tools && cargo test --locked --lib prune_workspace)
 (cd rust/bench-tools && cargo test --locked provision)
 python3 bench/tools/test_cache_replacements.py
 bun run verify:claims
