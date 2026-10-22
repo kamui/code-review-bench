@@ -56,6 +56,7 @@ pub mod review_queue;
 pub mod roster;
 pub mod ruling;
 pub mod run_cell;
+pub mod runtime_store;
 pub mod schema;
 pub mod seal;
 pub mod sha256;

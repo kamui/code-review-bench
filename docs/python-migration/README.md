@@ -5,6 +5,12 @@ part of [#149](https://github.com/kamui/code-review-bench/issues/149).
 It assigns migration work. It authorizes no port, dispatch, cleanup, runtime change,
 grading decision, or publication of benchmark evidence.
 
+**Note, 2026-10-22:** `bench/tools/rust_runtime.py` was replaced by `bench-tools runtime` and the launcher
+`bench/tools/bench-tools` ([runtime](runtime.md), [#160](https://github.com/kamui/code-review-bench/issues/160)).
+The `python3 bench/tools/rust_runtime.py ...` command lines in this directory's records are historical; run
+`bench/tools/bench-tools COMMAND` or `bench/tools/bench-tools runtime ...` today. The
+[completion report](completion.md) lists the Python that remains.
+
 ## Reproducible records
 
 [`inventory.v4.json.gz`](inventory.v4.json.gz) contains the census, compressed with

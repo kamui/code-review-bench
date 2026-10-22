@@ -39,7 +39,7 @@ The explorer displays the skill version when established and its release date. W
 Capture provenance before freezing each new skill arm:
 
 ```sh
-python3 bench/tools/rust_runtime.py exec bench-tools -- skill-provenance collect \
+bench/tools/bench-tools skill-provenance collect \
   --repository /path/to/upstream --revision <full-commit> \
   --skill-path skills/<skill> --frozen bench/runs/<run>/inputs/skill \
   --benchmark-tree <resolved-skill-tree> \

@@ -1,5 +1,6 @@
 //! The runner identity of a Rust-prepared key: the running `bench-tools` executable as an installed entry of a
-//! `bench/tools/rust_runtime.py` store, `<store>/bench-tools/<sha256>/<file>` beside its `receipt.json`.
+//! runtime store, `<store>/bench-tools/<sha256>/<file>` beside its `receipt.json`, and the checks
+//! [`crate::runtime_store`] runs on every pinned entry.
 
 use crate::current_grading::{Failure, R};
 use crate::pyjson::Value;
@@ -9,8 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 pub const NAME: &str = "bench-tools";
-const INSTALL: &str =
-    "python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select";
+use crate::runtime_store::INSTALL;
 
 fn bytes(path: &Path) -> &[u8] {
     pytext::os_bytes(path.as_os_str())
@@ -31,7 +31,7 @@ fn digest(path: &Path) -> Option<String> {
     }
 }
 
-const RECEIPT: &str = "rust-runtime-receipt/1";
+pub const RECEIPT: &str = "rust-runtime-receipt/1";
 
 fn is_name(text: &str) -> bool {
     let mut chars = text.chars();
@@ -56,9 +56,8 @@ fn relative(path: &str) -> bool {
             .all(|part| part != std::path::Component::ParentDir)
 }
 
-/// `rust_runtime.receipt_problem`: why the receipt is not complete and portable. A missing or mistyped field is
-/// named by its path rather than by Python's exception repr.
-fn receipt_problem(receipt: &Value) -> Option<String> {
+/// Why the receipt is not complete and portable. A missing or mistyped field is named by its path.
+pub fn receipt_problem(receipt: &Value) -> Option<String> {
     let malformed = |path: &[&str]| format!("a field is missing or malformed: {}", path.join("."));
     let field = |path: &[&str]| -> Result<&Value, String> {
         path.iter().try_fold(receipt, |value, key| {
@@ -146,7 +145,7 @@ fn receipt_names(receipt: &Value) -> (Option<&str>, Option<&str>, Option<&str>) 
     )
 }
 
-/// The pin `rust_runtime.pin_of` gives the running executable's store entry, `{"sha256", "receipt_sha256"}`.
+/// The pin of the running executable's store entry, `{"sha256", "receipt_sha256"}`.
 pub fn pin(executable: &Path) -> R<Value> {
     let refuse = |why: &str| {
         Failure::Input(format!(
@@ -244,8 +243,7 @@ pub struct Runtime {
     pub receipt: Value,
 }
 
-/// `rust_runtime.check`: the pinned executable once it and its receipt hash to the pin and, with `here`, it suits
-/// this host.
+/// The pinned executable once it and its receipt hash to the pin and, with `here`, it suits this host.
 pub fn check(
     store: &Path,
     name: &str,
@@ -323,8 +321,15 @@ pub fn check(
     })
 }
 
-/// `rust_runtime.HOST_TARGETS` for this build's platform.
-fn host_target() -> Option<&'static str> {
+/// The supported hosts of docs/agents/scripts.md; .github/workflows/rust-runtime.yml exercises each one.
+pub const SUPPORTED_TARGETS: [&str; 3] = [
+    "aarch64-apple-darwin",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-gnu",
+];
+
+/// The target of this build's platform, when it is a supported host.
+pub fn host_target() -> Option<&'static str> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("linux", "x86_64") => Some("x86_64-unknown-linux-gnu"),
         ("linux", "aarch64") => Some("aarch64-unknown-linux-gnu"),
@@ -334,7 +339,7 @@ fn host_target() -> Option<&'static str> {
 }
 
 /// The C library this host runs, as `platform.libc_ver` names glibc; none elsewhere.
-fn host_libc() -> (Option<String>, Option<String>) {
+pub fn host_libc() -> (Option<String>, Option<String>) {
     let reported = std::process::Command::new("getconf")
         .arg("GNU_LIBC_VERSION")
         .stdin(std::process::Stdio::null())

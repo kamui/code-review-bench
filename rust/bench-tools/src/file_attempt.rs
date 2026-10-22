@@ -3067,6 +3067,8 @@ pub fn bench_default(run: &str, name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
 
     fn pairs(command: &str) -> Vec<(String, String)> {
         ranges(command)
@@ -3232,6 +3234,80 @@ mod tests {
         );
         pin(&sha256_file(&executable).expect("sha"));
         assert_eq!(check_pin(&run, "dispatch"), Ok(()));
+        fs::remove_dir_all(&base).expect("cleanup");
+    }
+
+    fn publish_directory(label: &str) -> PathBuf {
+        let base = std::env::temp_dir().join(format!(
+            "file-attempt-publish-{label}-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).expect("directory");
+        base
+    }
+
+    fn staged_files(directory: &Path) -> Vec<String> {
+        fs::read_dir(directory)
+            .expect("listing")
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".partial"))
+            .collect()
+    }
+
+    #[test]
+    fn a_publish_that_cannot_stage_keeps_the_earlier_record() {
+        if nix::unistd::geteuid().is_root() {
+            return;
+        }
+        let base = publish_directory("kept");
+        let record = base.join("attempt.json");
+        fs::write(&record, "{\"disposition\": \"stopped: earlier filing\"}")
+            .expect("earlier record");
+        fs::set_permissions(&base, fs::Permissions::from_mode(0o555)).expect("read-only");
+        let published = publish(
+            record.to_str().expect("path"),
+            "{\"disposition\": \"valid completed\"}\n",
+        );
+        fs::set_permissions(&base, fs::Permissions::from_mode(0o755)).expect("writable");
+        assert!(published.is_err());
+        assert_eq!(
+            fs::read_to_string(&record).expect("record"),
+            "{\"disposition\": \"stopped: earlier filing\"}"
+        );
+        assert_eq!(staged_files(&base), [] as [String; 0]);
+        fs::remove_dir_all(&base).expect("cleanup");
+    }
+
+    #[test]
+    fn overlapping_publishers_each_leave_a_whole_record() {
+        let base = publish_directory("overlap");
+        let record = base.join("attempt.json");
+        let path = record.to_str().expect("path").to_string();
+        let whole = |writer: usize, round: usize| format!("{writer} {round}\n").repeat(4096);
+        std::thread::scope(|scope| {
+            for writer in 0..8 {
+                let path = &path;
+                scope.spawn(move || {
+                    for round in 0..25 {
+                        publish(path, &whole(writer, round)).expect("publish");
+                    }
+                });
+            }
+            scope.spawn(|| {
+                for _ in 0..200 {
+                    if let Ok(found) = fs::read_to_string(&record) {
+                        let first = found.lines().next().unwrap_or_default().to_string();
+                        assert_eq!(found, format!("{first}\n").repeat(4096));
+                    }
+                }
+            });
+        });
+        let found = fs::read_to_string(&record).expect("record");
+        let first = found.lines().next().expect("a line").to_string();
+        assert_eq!(found, format!("{first}\n").repeat(4096));
+        assert_eq!(staged_files(&base), [] as [String; 0]);
         fs::remove_dir_all(&base).expect("cleanup");
     }
 }
