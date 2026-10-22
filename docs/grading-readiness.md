@@ -47,8 +47,6 @@ Run these offline checks:
 
 ```sh
 cargo test --locked --manifest-path rust/bench-tools/Cargo.toml
-python3 tools/behavior_contract.py --corpus tools/behavior_contracts/grade-prepare.v1.json
-python3 tools/behavior_contract.py --corpus tools/behavior_contracts/grade-map.v1.json
 python3 bench/tools/test_grade.py
 python3 bench/tools/test_regrade.py
 python3 bench/tools/test_grading_policy.py

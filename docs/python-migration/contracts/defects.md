@@ -30,8 +30,8 @@ below remain reproducible there. The corpus and its saved observations are uncha
 - Status: open, production unchanged by #151. The exact observed result is retained
   separately under `baseline_defect.observed`; it does not replace `expected`.
 
-Run `python3 tools/behavior_contract.py` to see the actual mismatch. The explicit
-`--allow-known-defects` mode recognizes only that recorded baseline result.
+The [corpus runner](README.md#runner-moved)'s `self-check::open-defects` checks that this recorded
+baseline result still fails the independent expectation. No runner mode accepts it as a pass.
 
 ## U2: Transcript truncation is accepted
 

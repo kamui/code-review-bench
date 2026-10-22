@@ -1,3 +1,5 @@
+#[path = "support/fixture_git.rs"]
+mod fixture_git;
 #[path = "support/grading_fixture.rs"]
 mod grading_fixture;
 
@@ -344,23 +346,14 @@ fn the_ruling_reader_reads_the_disputed_and_the_ruled_link() {
     assert!(root.path().join(grading_fixture::RULING).is_file());
 }
 
-/// Runs the fixture's setup the way the harness does, with its `fixture-git` program and `write` steps.
+/// Runs the fixture's setup the way the corpus runner does, with its `fixture-git` program and `write` steps.
 fn set_up(root: &Path, variant: Variant) {
     for step in build(variant).setup {
         match step {
             grading_fixture::Setup::Command { program, argv } => {
-                let source = format!(
-                    "import sys; sys.path.insert(0, {:?}); import behavior_contract; \
-                     exec(behavior_contract.SETUP_PROGRAMS[{program:?}])",
-                    repository().join("tools").to_str().unwrap()
-                );
-                let output = Command::new("python3")
-                    .args(["-c", &source])
-                    .args(&argv)
-                    .current_dir(root)
-                    .output()
-                    .unwrap();
-                assert!(output.status.success(), "{output:?}");
+                assert_eq!(program, "fixture-git");
+                let argv: Vec<std::ffi::OsString> = argv.iter().map(Into::into).collect();
+                fixture_git::run(root, &argv, None).unwrap();
             }
             grading_fixture::Setup::Write { path, bytes } => {
                 std::fs::write(root.join(path), bytes).unwrap()

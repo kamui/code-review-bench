@@ -18,7 +18,49 @@ import prune_workspace
 import regrade
 import rust_runtime
 from test_evidence_store import FakeGitHub
-import behavior_contract
+
+
+# The release routes of the corpora's gh stub, answering from release.json and the assets stored beside it.
+GH_STUB = r"""import json, os, sys
+from pathlib import Path
+from urllib.parse import quote
+state = Path(os.environ["CONTRACT_GH_STATE"])
+args = sys.argv[1:]
+def fail(message, code=1):
+    sys.stderr.write(message + "\n")
+    sys.exit(code)
+try:
+    release = json.loads((state / "release.json").read_text(encoding="utf-8"))
+except FileNotFoundError:
+    fail("HTTP 404: Not Found")
+routes = f"repos/{release['repository']}/releases/"
+stored = state / "assets"
+def assets():
+    found = []
+    if stored.is_dir():
+        for directory in sorted(stored.iterdir(), key=lambda path: int(path.name)):
+            for file in sorted(directory.iterdir()):
+                found.append({"id": int(directory.name), "name": file.name, "size": file.stat().st_size})
+    return found
+if args == ["api", routes + "tags/" + quote(release["tag"], safe="")]:
+    print(json.dumps({"id": release["id"], "tag_name": release["tag"], "draft": release.get("draft", False)}))
+elif args == ["api", "--paginate", "--slurp", routes + f"{release['id']}/assets?per_page=100"]:
+    listed = assets()
+    print(json.dumps([listed[at:at + 100] for at in range(0, len(listed), 100)] or [[]]))
+elif args[:2] == ["release", "upload"] and len(args) == 6 and args[2] == release["tag"] and args[4:] == ["--repo", release["repository"]]:
+    if any(asset["name"] == Path(args[3]).name for asset in assets()):
+        fail("asset under the same name already exists")
+    target = stored / str(max([100] + [asset["id"] for asset in assets()]) + 1) / Path(args[3]).name
+    target.parent.mkdir(parents=True)
+    target.write_bytes(Path(args[3]).read_bytes())
+elif len(args) == 4 and args[0] == "api" and args[1].startswith(routes + "assets/") and args[2:] == ["-H", "Accept: application/octet-stream"]:
+    matches = [stored / str(asset["id"]) / asset["name"] for asset in assets() if routes + f"assets/{asset['id']}" == args[1]]
+    if not matches:
+        fail("HTTP 404: Not Found")
+    sys.stdout.buffer.write(matches[0].read_bytes())
+else:
+    fail("contract gh stub: unsupported arguments", 2)
+"""
 
 
 def rust_evidence(remote, *arguments, cwd=None):
@@ -40,7 +82,7 @@ def rust_bench_tools(remote, cwd, *arguments):
             target = state / 'assets' / str(asset['id']) / asset['name']
             target.parent.mkdir(parents=True)
             shutil.copyfile(remote.root / asset['name'], target)
-        (tools / 'gh.py').write_text(behavior_contract.GH_STUB)
+        (tools / 'gh.py').write_text(GH_STUB)
         (tools / 'gh').write_text(f'#!/bin/sh\nexec {sys.executable} {tools / "gh.py"} "$@"\n')
         (tools / 'gh').chmod(0o755)
         environment = {**os.environ, 'PATH': f'{tools}{os.pathsep}{os.environ["PATH"]}', 'CONTRACT_GH_STATE': str(state)}
