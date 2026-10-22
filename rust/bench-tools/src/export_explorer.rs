@@ -14,7 +14,7 @@ use crate::pysemantics::{
     str_text, text, unhashable,
 };
 use crate::pytext::{self, PyPath};
-use crate::{current_grading, pyfs, sha256};
+use crate::{current_grading, leak_check, pyfs, sha256};
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::io;
@@ -694,6 +694,7 @@ impl Exporter {
         };
         let observed = count(items.len());
         let detail = object(vec![
+            ("canary", text(leak_check::CANARY)),
             ("id", identifier.clone()),
             ("items", Value::Array(items)),
             ("record", record.clone()),
@@ -1494,6 +1495,7 @@ impl Exporter {
         }
         let dataset = object(vec![
             ("schemaVersion", Value::Int("5".to_string())),
+            ("canary", text(leak_check::CANARY)),
             ("release", text("Current v1 preview")),
             ("revision", at(&imported, "revision")?.clone()),
             (

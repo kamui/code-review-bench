@@ -26,6 +26,7 @@ pub mod grading_tools;
 pub mod grading_validation;
 pub mod import_benchmark;
 pub mod interrupt;
+pub mod leak_check;
 pub mod methodology;
 pub mod native_artifacts;
 pub mod network_gate;
