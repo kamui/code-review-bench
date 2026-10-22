@@ -1501,7 +1501,7 @@ enum RegradeCommand {
 struct AuditLogArgs {
     #[arg(long, allow_negative_numbers = true)]
     out: Option<OsString>,
-    /// A grading archive root, as `regrade archive-attempt` writes it.
+    /// A regrade.py archive root.
     #[arg(long, allow_negative_numbers = true)]
     grading: Vec<OsString>,
     #[arg(long, default_value = ".", allow_negative_numbers = true)]
