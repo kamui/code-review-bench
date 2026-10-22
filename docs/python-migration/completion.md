@@ -63,7 +63,20 @@ records cite as evidence, kept byte-unchanged with them.
 | Review and grading targets | Tasks whose code is Python. The review sandbox and the grading sandbox expose the host's `python3` (Python 3.10 on the grading runner) so reviewers and graders can run a target's tests. It is a target language, not the engine. |
 | Skills | Skill scripts are standard-library Python by the [script policy](../agents/scripts.md). `frozen-forge probe` evaluates a frozen skill's own `scripts/forge_packet.py` with `python3 -I` to read its queries. |
 | Historical replay | A run frozen before it pinned `bench-tools` runs from a checkout of its freeze commit, with that commit's Python. `grade --provision SCRIPT` runs a recorded Python provisioner for such replays. Frozen runs, imported originals, saved fixtures and research records keep their Python byte-unchanged. |
-| Optional probes and test doubles | Provisioning records `python3 --version` in a reviewer's platform line when one exists. The network-gate test uses `python3` as its in-sandbox probe and skips without it. The ignored `grade_dispatch` tests, which the Pages grading regression job runs, write their fake Claude and Codex clients as Python scripts, so that job keeps `setup-python`. The `dispatch` tests run `python3` as a reviewer's command inside the sandbox. |
+| Optional probes and tests | Provisioning records `python3 --version` in a reviewer's platform line when one exists. The tests' stand-in clients, provisioner and probes are POSIX `sh` or the standard-library Rust program [`tests/support/stand_in/main.rs`](../../rust/bench-tools/tests/support/stand_in/main.rs), so no CI job installs Python. `grade prepare --provision` still names `python3`, so `grade_dispatch` puts a `python3` on `PATH` that hands the shell provisioner to `sh`. The tests that still run Python are listed below. |
+
+### Python in tests
+
+Each of these runs the host's `python3`. On CI it comes with the runner image; no job installs one.
+
+| Test | Why it stays |
+| --- | --- |
+| `tests/dispatch.rs`: `bytecode_left_in_the_clone_changes_the_tree_identity_and_python_b_leaves_none` | Target Python. A reviewer's command imports a Python target's module in the clone, to show the bytecode it leaves there. |
+| `tests/grading_sandbox.rs`, the Python-target cases | Target Python. The grading sandbox exposes the host's Python for Python targets; `the_namespace_blocks_reads_writes_and_external_network_and_allows_loopback` runs `/usr/bin/python3` inside it by absolute path. |
+| `tests/review_isolation.rs`: `settings_name_this_executable_as_the_hook_and_verify` | Target toolchains. The review sandbox's settings expose `python3`, `node` and `go` for targets, so the test skips on a host that lacks any of them. |
+| `tests/review_isolation_cli.rs`: `native_shell_filesystem_and_network_denials`, `worker_inherits_file_hook` | Target Python. They run `python3` inside the review sandbox, which exposes it for Python targets, and check Python's own errors. They run only with `BENCH_ISOLATION_CLI` set, never on CI. |
+| `src/network_gate.rs`: `the_namespace_masks_host_sockets_and_refuses_vsock` | An exception. The probe opens an `AF_VSOCK` socket and calls `io_uring_setup`. The standard library cannot make either call without `unsafe`, which the crate forbids, and no POSIX tool makes them. The test skips without `python3`. |
+| `tools/behavior_contracts/grade-prepare.v1.json` (3 cases), `grade-map.v1.json` (26 cases) | An exception. Their `shell` steps edit fixture JSON with `python3`. The corpus runner sets `PATH` to `/bin:/usr/bin`, so these steps use the host's Python even under `tools/without-python.sh`. Each saved case is pinned by a decision record, so rewriting a step needs a new decision version for that case. |
 
 ## Remaining limitations
 

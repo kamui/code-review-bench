@@ -5,6 +5,8 @@
 
 #[path = "support/runtime_store.rs"]
 mod runtime_store;
+#[path = "support/stand_in.rs"]
+mod stand_in;
 
 use bench_tools::pyjson::{self, Duplicates, Object, Value};
 use bench_tools::sha256::hex_digest;
@@ -23,160 +25,21 @@ const TARGET: &str = "t-grade-1";
 const MODEL: &str = "claude-sonnet-5";
 const CODEX_MODEL: &str = "gpt-6.1-sol";
 
-const PROVISION_STUB: &str = r#"import argparse, os
-parser = argparse.ArgumentParser()
-parser.add_argument("command"); parser.add_argument("--target"); parser.add_argument("--out"); parser.add_argument("--cache-root")
-args = parser.parse_args()
-os.makedirs(args.out)
-os.makedirs(args.out + "-cache")
+/// Makes `--out` and its `-cache` sibling, as the provisioner that `grade prepare --provision` runs would.
+const PROVISIONER: &str = r#"set -eu
+out=
+while [ "$#" -gt 0 ]; do
+    case $1 in
+        --out) out=$2; shift 2 ;;
+        *) shift ;;
+    esac
+done
+mkdir -p "$(dirname "$out")"
+mkdir "$out" "$out-cache"
 "#;
 
-/// Hand-written verdicts for the prepared batch, as the grade-map corpus writes them, and their assessor.
-const VERDICTS: &str = r#"import json, sys
-key_path, work, assessor_path = sys.argv[1:]
-token = {r["attempt_id"]: r["token"] for r in json.load(open(key_path))["reviews"]}
-def claim(identifier="c1", quote="Races on close"):
-    return {"id": identifier, "quote": quote, "true": "yes", "this_change": "yes", "promised": "no",
-            "promise_source": [], "delivered": None, "outcome": "suggestion", "kind": "improvement",
-            "known_problems": [], "canonical_claim_id": None, "duplicate_group": None, "candidate": None,
-            "open": None, "notes": "Checked against the source.", "evidence": ["Read main.go."],
-            "pre_existing_problems": [], "pre_existing_candidate": None}
-def reviewed(*items, recommendations=()):
-    return {"items": {str(n): {"kind": "finding" if claims else "not-a-finding",
-                               "note": "" if claims else "This item makes no claim.", "claims": list(claims)}
-                      for n, claims in enumerate(items, 1)},
-            "recommendations": list(recommendations), "remedy_inventory": {"state": "complete", "reason": ""}}
-remedy = {"id": "r1", "anchors": [{"item": 1, "quote": "Hold the lock while closing."}], "addressed_claims": ["c1"],
-          "sufficiency": [], "safety": {"state": "unassessed", "reason": "Checked the changed path for new harm.",
-                                        "evidence": []}}
-verdicts = {"reviews": {token["att-001"]: reviewed([claim(), claim("c2", "It breaks.")], [], [claim("c3", "Lock order is new")],
-                                                   recommendations=[remedy]),
-                        token["att-002"]: reviewed([claim(quote="Leaks the conn")]),
-                        token["att-003"]: reviewed()}, "new_candidates": [], "link_disputes": []}
-json.dump(verdicts, open(work + "/verdicts.json", "w"), indent=2)
-json.dump({"assessor": "fixture assessor", "method": "Hand-written synthetic verdicts",
-           "completed_at": "2026-01-02T00:10:00Z"}, open(assessor_path, "w"), indent=2)
-"#;
-
-/// Logs every start, so a refusal can show the client never ran. The probe sends what the local probe API
-/// expects; the session calls the grading server's validate tool once, as a grader would.
-const CLAUDE_STUB: &str = r#"import json, os, pathlib, subprocess, sys
-argv = sys.argv[1:]
-with open(pathlib.Path(__file__).with_name("claude.log"), "a") as log:
-    log.write(json.dumps(argv) + "\n")
-if argv == ["--version"]:
-    print("9.9.9 (Claude Code)")
-    sys.exit(0)
-if argv == ["--help"]:
-    print("  --effort <level>    Effort level for the current session\n                      (low, medium, high, xhigh, max)")
-    sys.exit(0)
-server = json.loads(pathlib.Path(argv[argv.index("--mcp-config") + 1]).read_text())["mcpServers"]["grading"]
-work = pathlib.Path(server["args"][server["args"].index("--work") + 1])
-if os.environ.get("ANTHROPIC_API_KEY") == "local-probe-only":
-    import urllib.request
-    names = ("inspect", "run", "write_scratch", "write_verdicts", "edit_verdicts", "validate")
-    tools = [{"name": "mcp__grading__" + name} for name in names]
-    (work / "clone-work/probe.txt").write_text("scratch probe")
-    (work / "verdicts.json").write_text('{"reason": "The review holds no items."}')
-    results = [{"type": "tool_result", "tool_use_id": "probe-" + name,
-                "content": json.dumps({"exit_code": 0}) if name in ("run", "validate") else "focused inspection"} for name in names]
-    for index in range(7):
-        body = {"tools": tools, "messages": [{"content": results if index else "probe"}]}
-        request = urllib.request.Request(os.environ["ANTHROPIC_BASE_URL"] + "/v1/messages", json.dumps(body).encode(), {"Content-Type": "application/json"})
-        urllib.request.urlopen(request).read()
-    print("{}")
-    sys.exit(0)
-prompt = sys.stdin.read()
-home, cwd = pathlib.Path(os.environ["HOME"]), pathlib.Path.cwd()
-if os.environ.get("STUB_HANG"):
-    import signal, time
-    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
-    held = sorted(int(held) for held in signal.pthread_sigmask(signal.SIG_BLOCK, []))
-    pids = pathlib.Path(__file__).with_name("claude.pids")
-    pids.with_suffix(".tmp").write_text(json.dumps({"client": os.getpid(), "child": child.pid, "cwd": str(cwd), "held": held}))
-    pids.with_suffix(".tmp").rename(pids)
-    time.sleep(30)
-if os.environ.get("STUB_PAUSE"):
-    import signal, time
-    ignored = [int(number) for number in (signal.SIGHUP, signal.SIGINT) if signal.getsignal(number) == signal.SIG_IGN]
-    pids = pathlib.Path(__file__).with_name("claude.pids")
-    pids.with_suffix(".tmp").write_text(json.dumps({"client": os.getpid(), "ignored": ignored}))
-    pids.with_suffix(".tmp").rename(pids)
-    while not pids.with_name("resume").exists():
-        time.sleep(0.05)
-session, model = argv[argv.index("--session-id") + 1], os.environ.get("STUB_MODEL", argv[argv.index("--model") + 1])
-(work / "verdicts.json").write_text(os.environ.get("STUB_VERDICTS", "{}"))
-requests = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}},
-            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "validate", "arguments": {}}}]
-served = subprocess.run([server["command"], *server["args"]], input="".join(json.dumps(r) + "\n" for r in requests),
-                        capture_output=True, text=True, env={**os.environ, **server.get("env", {})})
-validated = [json.loads(line) for line in served.stdout.splitlines() if line.strip()][-1]["result"]
-pathlib.Path(os.environ["TMPDIR"], "stub.json").write_text(json.dumps({
-    "credentials_seen": (home / ".claude" / ".credentials.json").is_file(), "argv": argv, "prompt": prompt, "cwd": str(cwd),
-    "wait_ceiling": os.environ.get("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"),
-    "config_directory": os.environ.get("CLAUDE_CONFIG_DIR"),
-    "credential_sections": list(json.loads((home / ".claude/.credentials.json").read_text())),
-    "credential_mode": (home / ".claude/.credentials.json").stat().st_mode & 0o777, "validated": validated}))
-usage = {"input_tokens": 10, "cache_creation_input_tokens": 100, "cache_read_input_tokens": 1000, "output_tokens": 50,
-         "cache_creation": {"ephemeral_5m_input_tokens": 100, "ephemeral_1h_input_tokens": 0}}
-read = {"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": os.environ.get("STUB_READ", str(work / "references.json"))}}
-lines = [{"type": "user", "cwd": str(cwd), "message": {"role": "user", "content": prompt}},
-         {"type": "assistant", "cwd": str(cwd), "requestId": "r1", "timestamp": "2026-01-01T00:00:01Z",
-          "message": {"model": model, "usage": usage, "content": [read]}}]
-project = home / ".claude" / "projects" / "-work"
-project.mkdir(parents=True)
-(project / (session + ".jsonl")).write_text("".join(json.dumps(line) + "\n" for line in lines))
-"#;
-
-/// Answers `--version` alone, as the pinned version, and logs every start.
-const CODEX_VERSION_STUB: &str = r#"import json, pathlib, sys
-argv = sys.argv[1:]
-with open(pathlib.Path(__file__).with_name("codex.log"), "a") as log:
-    log.write(json.dumps(argv) + "\n")
-if argv == ["--version"]:
-    print("codex-cli 0.160.0")
-    sys.exit(0)
-sys.exit(1)
-"#;
-
-/// Hands `--version` and the local probe to the real Codex client, and fakes the session. The client runs in a
-/// cleared environment, so the real client's path, the log and the session's behavior are written into the script.
-const CODEX_STUB: &str = r#"import json, os, pathlib, subprocess, sys, time
-argv = sys.argv[1:]
-with open(LOG, "a") as log:
-    log.write(json.dumps(argv) + "\n")
-if argv == ["--version"] or "BENCH_CODEX_GRADING_PROBE_KEY" in os.environ:
-    os.execv(REAL, [REAL, *argv])
-prompt = sys.stdin.read()
-home = pathlib.Path(os.environ["CODEX_HOME"])
-auth = home / "auth.json"
-pathlib.Path(os.environ["TMPDIR"], "stub.json").write_text(json.dumps({
-    "argv": argv, "prompt": prompt, "cwd": os.getcwd(), "environment": sorted(os.environ),
-    "auth_mode": auth.stat().st_mode & 0o777, "auth": auth.read_text()}))
-if MODE == "interrupt":
-    import signal
-    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
-    held = sorted(int(held) for held in signal.pthread_sigmask(signal.SIG_BLOCK, []))
-    pids = pathlib.Path(LOG).with_name("codex.pids")
-    pids.with_suffix(".tmp").write_text(json.dumps({"client": os.getpid(), "child": child.pid, "cwd": os.getcwd(), "held": held}))
-    pids.with_suffix(".tmp").rename(pids)
-    time.sleep(30)
-if MODE == "fail":
-    sys.exit(3)
-if MODE == "hang":
-    time.sleep(60)
-pathlib.Path("verdicts.json").write_text("{}")
-model = argv[argv.index("--model") + 1]
-rows = [{"type": "session_meta", "payload": {"id": "fresh-session"}},
-        {"type": "turn_context", "payload": {"model": model}},
-        {"type": "response_item", "payload": {"type": "function_call", "name": "mcp__grading__inspect", "arguments": "{}"}},
-        {"type": "token_usage_record", "payload": {"response_id": "response-1", "usage": {
-            "input_tokens": 100, "cached_input_tokens": 50, "cache_write_input_tokens": 0, "output_tokens": 20,
-            "reasoning_output_tokens": 0}}}]
-sessions = home / "sessions"
-sessions.mkdir(parents=True, exist_ok=True)
-(sessions / "rollout-root.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
-"#;
+/// `grade prepare` runs a `--provision` script as `python3 SCRIPT`; this `python3` runs the shell provisioner.
+const INTERPRETER: &str = "#!/bin/sh\nexec sh \"$@\"\n";
 
 fn repository() -> PathBuf {
     fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")).unwrap()
@@ -214,7 +77,7 @@ fn number(value: &Value) -> f64 {
 }
 
 fn executable(path: &Path, body: &str) {
-    fs::write(path, format!("#!/usr/bin/env python3\n{body}")).unwrap();
+    fs::write(path, body).unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
@@ -316,12 +179,14 @@ fn bench(label: &str) -> Bench {
     fs::write(entry.join("receipt.json"), receipt(sha, size)).unwrap();
 
     let (work, key) = (root.join("work"), root.join("keys/key.json"));
-    fs::write(root.join("provision_stub.py"), PROVISION_STUB).unwrap();
+    fs::write(root.join("provisioner.sh"), PROVISIONER).unwrap();
+    fs::create_dir(root.join("interpreter")).unwrap();
+    executable(&root.join("interpreter/python3"), INTERPRETER);
     prepare(&tools, &root, &work, &key);
 
     let (bin, home) = (root.join("bin"), root.join("userhome"));
     fs::create_dir(&bin).unwrap();
-    executable(&bin.join("claude"), CLAUDE_STUB);
+    stand_in::install(&bin, "claude");
     fs::create_dir_all(home.join(".claude")).unwrap();
     fs::write(
         home.join(".claude/.credentials.json"),
@@ -366,8 +231,16 @@ fn prepare(tools: &Path, root: &Path, work: &Path, key: &Path) {
         .arg("--key")
         .arg(key)
         .arg("--provision")
-        .arg(root.join("provision_stub.py"))
+        .arg(root.join("provisioner.sh"))
         .current_dir(repository())
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                root.join("interpreter").display(),
+                std::env::var("PATH").unwrap()
+            ),
+        )
         .output()
         .unwrap();
     assert!(prepared.status.success(), "{}", output_text(&prepared));
@@ -850,7 +723,7 @@ fn an_effort_the_claude_client_does_not_offer_is_refused_before_the_session() {
 #[test]
 fn an_effort_the_codex_catalog_does_not_offer_the_model_is_refused_before_the_session() {
     let bench = bench("codex-effort");
-    executable(&bench.bin.join("codex"), CODEX_VERSION_STUB);
+    codex_stand_in(&bench, &[("mode", "version")]);
     let mut argv = with_effort(
         bench.codex_argv(&["--allow-unbounded-codex"], "0.160.0"),
         "ultra",
@@ -1083,12 +956,21 @@ fn codex_bench(label: &str, mode: &str) -> (Bench, String) {
 
 fn codex_stub(bench: &Bench, mode: &str) {
     let real = bench_tools::review_isolation::which("codex").expect("the Codex client");
-    let header = format!(
-        "REAL = {:?}\nLOG = {:?}\nMODE = {mode:?}\n",
-        real.to_str().unwrap(),
-        bench.bin.join("codex.log").to_str().unwrap()
-    );
-    executable(&bench.bin.join("codex"), &(header + CODEX_STUB));
+    codex_stand_in(bench, &[("real", real.to_str().unwrap()), ("mode", mode)]);
+}
+
+/// The stand-in installed as `codex`, with the settings it reads from `codex.json` beside it.
+fn codex_stand_in(bench: &Bench, settings: &[(&str, &str)]) {
+    let settings = settings
+        .iter()
+        .map(|(name, value)| (name.to_string(), Value::Str(value.to_string())))
+        .collect();
+    fs::write(
+        bench.bin.join("codex.json"),
+        dumps(&Value::Object(settings)),
+    )
+    .unwrap();
+    stand_in::install(&bench.bin, "codex");
 }
 
 #[test]
@@ -1253,17 +1135,92 @@ fn an_interrupt_just_after_a_codex_session_waits_for_its_record_and_charge() {
     assert!(!bench.work.join("home/.codex/auth.json").exists());
 }
 
+/// Hand-written verdicts for the prepared batch, as the grade-map corpus writes them, and their assessor.
+fn write_verdicts(key: &Path, work: &Path, assessor: &Path) {
+    let key = read_json(key);
+    let token = |attempt: &str| {
+        let reviews = get(&key, "reviews").as_array().unwrap();
+        let review = reviews
+            .iter()
+            .rfind(|review| str_of(review, "attempt_id") == attempt)
+            .unwrap();
+        str_of(review, "token").to_string()
+    };
+    let claim = |identifier: &str, quote: &str| {
+        format!(
+            r#"{{"id": "{identifier}", "quote": "{quote}", "true": "yes", "this_change": "yes", "promised": "no",
+                "promise_source": [], "delivered": null, "outcome": "suggestion", "kind": "improvement",
+                "known_problems": [], "canonical_claim_id": null, "duplicate_group": null, "candidate": null,
+                "open": null, "notes": "Checked against the source.", "evidence": ["Read main.go."],
+                "pre_existing_problems": [], "pre_existing_candidate": null}}"#
+        )
+    };
+    let reviewed = |items: &[Vec<String>], recommendations: &str| {
+        let items: Vec<String> = items
+            .iter()
+            .enumerate()
+            .map(|(index, claims)| {
+                let (kind, note) = if claims.is_empty() {
+                    ("not-a-finding", "This item makes no claim.")
+                } else {
+                    ("finding", "")
+                };
+                format!(
+                    r#""{}": {{"kind": "{kind}", "note": "{note}", "claims": [{}]}}"#,
+                    index + 1,
+                    claims.join(", ")
+                )
+            })
+            .collect();
+        format!(
+            r#"{{"items": {{{}}}, "recommendations": [{recommendations}],
+                "remedy_inventory": {{"state": "complete", "reason": ""}}}}"#,
+            items.join(", ")
+        )
+    };
+    let remedy = r#"{"id": "r1", "anchors": [{"item": 1, "quote": "Hold the lock while closing."}],
+        "addressed_claims": ["c1"], "sufficiency": [],
+        "safety": {"state": "unassessed", "reason": "Checked the changed path for new harm.", "evidence": []}}"#;
+    let first = reviewed(
+        &[
+            vec![claim("c1", "Races on close"), claim("c2", "It breaks.")],
+            vec![],
+            vec![claim("c3", "Lock order is new")],
+        ],
+        remedy,
+    );
+    let verdicts = format!(
+        r#"{{"reviews": {{"{}": {first}, "{}": {}, "{}": {}}}, "new_candidates": [], "link_disputes": []}}"#,
+        token("att-001"),
+        token("att-002"),
+        reviewed(&[vec![claim("c1", "Leaks the conn")]], ""),
+        token("att-003"),
+        reviewed(&[], ""),
+    );
+    let indented = |text: &str| {
+        let options = pyjson::Dumps {
+            indent: Some(2),
+            ..Default::default()
+        };
+        pyjson::dumps(&loads(text), &options)
+    };
+    fs::write(work.join("verdicts.json"), indented(&verdicts)).unwrap();
+    fs::write(
+        assessor,
+        indented(
+            r#"{"assessor": "fixture assessor", "method": "Hand-written synthetic verdicts",
+                "completed_at": "2026-01-02T00:10:00Z"}"#,
+        ),
+    )
+    .unwrap();
+}
+
 #[test]
 fn a_batch_maps_only_with_the_build_that_prepared_it() {
     let bench = bench("map-pin");
     fs::remove_dir_all(bench.work.join("clone")).unwrap();
     let assessor = bench.root.join("assessor.json");
-    let written = Command::new("python3")
-        .args(["-c", VERDICTS])
-        .args([&bench.key, &bench.work, &assessor])
-        .output()
-        .unwrap();
-    assert!(written.status.success(), "{}", output_text(&written));
+    write_verdicts(&bench.key, &bench.work, &assessor);
     let grades = bench.root.join("bench/grading/current/grades.json");
     let before = fs::read(&grades).unwrap();
     let map = |tools: &Path| {
