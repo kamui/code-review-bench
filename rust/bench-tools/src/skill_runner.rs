@@ -558,6 +558,7 @@ struct Prepared {
     prompt: String,
     tools: PathBuf,
     target_dir: PathBuf,
+    packet: PathBuf,
 }
 
 fn strict(path: &Path) -> R<PathBuf> {
@@ -805,6 +806,7 @@ fn prepare_attempt(arguments: &Arguments, client: Client) -> R<Prepared> {
         prompt,
         tools,
         target_dir,
+        packet: packet_path,
     })
 }
 
@@ -1191,6 +1193,8 @@ fn audit_command(prepared: &Prepared, sandbox: &Value, network: bool) -> Vec<Str
                 .into_owned(),
             "--target".to_string(),
             prepared.target_dir.to_string_lossy().into_owned(),
+            "--packet".to_string(),
+            prepared.packet.to_string_lossy().into_owned(),
         ]);
     }
     command
@@ -3056,6 +3060,7 @@ mod tests {
             prompt: String::new(),
             tools: PathBuf::from("/bench-tools"),
             target_dir: PathBuf::from("/bench/targets/t-1"),
+            packet: PathBuf::from("/bench/targets/t-1/packet.v2.md"),
         };
         let receipt = |network: &str| object(vec![("network", text(network))]);
         let gated = audit_command(&prepared, &receipt("gated"), false);
@@ -3064,6 +3069,8 @@ mod tests {
             "/a/network/gate.json".to_string(),
             "--target".to_string(),
             "/bench/targets/t-1".to_string(),
+            "--packet".to_string(),
+            "/bench/targets/t-1/packet.v2.md".to_string(),
         ]));
         for sandbox in [receipt("shared"), Value::Null] {
             let command = audit_command(&prepared, &sandbox, true);
