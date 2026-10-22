@@ -153,7 +153,10 @@ fn a_fresh_attempt_records_an_empty_home_and_a_unique_context() {
         let attempt = temp.0.join(name);
         fs::create_dir(&attempt).unwrap();
         let receipt = clean_context::prepare(&attempt).unwrap();
-        assert!(entries(Path::new(text(field(&receipt, "home")))).is_empty());
+        assert_eq!(
+            entries(Path::new(text(field(&receipt, "home")))),
+            [] as [String; 0]
+        );
         let saved = parse(&fs::read_to_string(attempt.join("clean-context.json")).unwrap());
         assert!(saved.py_eq(&receipt));
         contexts.push(text(field(&receipt, "context_id")).to_string());
@@ -202,7 +205,7 @@ fn the_neutral_directory_is_fresh_and_outside_every_repository() {
     assert!(made.status.success(), "{}", both(&made));
     let directory = PathBuf::from(stdout(&made).trim_end());
     assert_eq!(directory.parent().unwrap(), temp.0);
-    assert!(entries(&directory).is_empty());
+    assert_eq!(entries(&directory), [] as [String; 0]);
     git(&temp.0, &["init", "-q"]);
     let refused = neutral();
     assert_eq!(refused.status.code(), Some(2));
@@ -784,7 +787,7 @@ fn a_skill_runner_refuses_a_run_it_is_not_pinned_by_before_it_writes_anything() 
                 message.contains("launch it from a checkout of its freeze commit ffff"),
                 "{message}"
             );
-            assert!(entries(&attempt).is_empty());
+            assert_eq!(entries(&attempt), [] as [String; 0]);
         }
     }
 }

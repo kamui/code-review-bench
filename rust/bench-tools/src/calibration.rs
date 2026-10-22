@@ -11,6 +11,7 @@ use crate::pyjson::{Object, Value};
 use crate::pytext::{self, PyPath};
 use crate::pyvalue;
 use std::borrow::Cow;
+use std::fmt::Write as _;
 
 pub const PROGRAM: &str = "calibration.py";
 const CARDS: &str = "impact-cards";
@@ -1153,9 +1154,10 @@ pub fn run(
             "calibration records valid; {bands}/{families_total} families have an approved impact band"
         );
         if labels_total > 0 {
-            line.push_str(&format!(
+            let _ = write!(
+                line,
                 "; {labels}/{labels_total} pre-existing problems have an approved impact label"
-            ));
+            );
         }
         line.push('\n');
         return Ok(Outcome::Done(line.into_bytes()));

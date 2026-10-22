@@ -3,6 +3,7 @@
 
 use bench_tools::pyjson::{self, Dumps, Duplicates, Value};
 use bench_tools::sha256;
+use std::fmt::Write as _;
 use std::fs::{self, FileTimes};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -49,7 +50,10 @@ fn quoted(text: &str) -> String {
 }
 
 fn lines(records: &[String]) -> String {
-    records.iter().map(|record| format!("{record}\n")).collect()
+    records.iter().fold(String::new(), |mut out, record| {
+        let _ = writeln!(out, "{record}");
+        out
+    })
 }
 
 /// The value at a dotted path, or null.

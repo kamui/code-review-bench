@@ -525,7 +525,7 @@ fn a_rejected_upload_fails_with_its_command_and_writes_nothing() {
         publish(&root, &mut release, &mut System).err(),
         Some(Error::Io("upload failed".to_string()))
     );
-    assert!(release.assets.is_empty());
+    assert_eq!(release.assets, [] as [(u64, String, Vec<u8>); 0]);
     assert!(!root.join("published.json").exists());
 }
 

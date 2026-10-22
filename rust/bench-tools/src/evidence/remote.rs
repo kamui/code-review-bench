@@ -4,6 +4,7 @@ use super::Error;
 use crate::pyjson::{self, Duplicates, Value};
 use crate::pytext;
 use crate::pytext::PyPath;
+use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::process::{Command, ExitStatus, Stdio};
@@ -42,7 +43,7 @@ pub fn quote(text: &str) -> String {
         if byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-' | b'~') {
             quoted.push(char::from(byte));
         } else {
-            quoted.push_str(&format!("%{byte:02X}"));
+            let _ = write!(quoted, "%{byte:02X}");
         }
     }
     quoted

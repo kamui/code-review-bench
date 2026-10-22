@@ -37,7 +37,7 @@ use crate::pytext;
 use crate::pyunicode;
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsStr;
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::io::{self, Write as _};
 use std::os::unix::ffi::OsStrExt;
 use std::process::{Command, Stdio};
@@ -633,7 +633,7 @@ pub(crate) fn render_instant(moment: Instant) -> String {
         seconds % 60
     );
     if micro != 0 {
-        text.push_str(&format!(".{micro:06}"));
+        let _ = write!(text, ".{micro:06}");
     }
     text.push('Z');
     text

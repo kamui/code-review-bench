@@ -17,6 +17,7 @@ use crate::pytext::{self, PyPath};
 use crate::pyunicode;
 use crate::pyvalue;
 use std::cmp::Ordering;
+use std::fmt::Write as _;
 
 pub const PROGRAM: &str = "evaluator_audit.py";
 const CREDITS: [(&str, &str); 3] = [
@@ -884,15 +885,16 @@ fn cohort_problems(selected: &Value, documents: &Documents, root: &Root) -> R<Ve
                 if !matches {
                     let mut line = format!("{unit}: holds {}", at(claim, "outcome")?.py_str());
                     if !named {
-                        line.push_str(&format!(" with no entry for {}", family.py_str()));
+                        let _ = write!(line, " with no entry for {}", family.py_str());
                     }
-                    line.push_str(&format!(
+                    let _ = write!(
+                        line,
                         ", and {} is saved as {}",
                         at(case, "id")?.py_str(),
                         at(&pinned, "outcome")?.py_str()
-                    ));
+                    );
                     if family.truthy() {
-                        line.push_str(&format!(" for {}", family.py_str()));
+                        let _ = write!(line, " for {}", family.py_str());
                     }
                     problems.push(line);
                 }

@@ -5,6 +5,7 @@ use crate::{b64, json};
 use bench_tools::pyjson::{Object, Value};
 use bench_tools::sha256::hex_digest;
 use std::ffi::{OsStr, OsString};
+use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::process::Command;
@@ -483,10 +484,13 @@ fn grading(args: &[&str]) -> Result<(), String> {
     }
     let turn = usize::try_from(seed).map_err(|error| error.to_string())? % links.len();
     links.rotate_left(turn);
-    let sections: String = links
-        .iter()
-        .map(|(review, relation, reason)| format!("### {review} ({relation})\n\n{reason}\n\n"))
-        .collect();
+    let sections: String =
+        links
+            .iter()
+            .fold(String::new(), |mut out, (review, relation, reason)| {
+                let _ = write!(out, "### {review} ({relation})\n\n{reason}\n\n");
+                out
+            });
     write(
         "out/dossier.md",
         format!("# Dossier\n\n## CL-1 v1\n\n{sections}## CL-2 v1\n\nNo links.\n"),
@@ -551,10 +555,10 @@ fn keyed(args: &[&str]) -> Result<(), String> {
             indented(&key)
         },
     )?;
-    let dossier: String = blinds
-        .iter()
-        .map(|token| format!("### {token}\n\nQuotes blind-abcdef.\n\n"))
-        .collect();
+    let dossier: String = blinds.iter().fold(String::new(), |mut out, token| {
+        let _ = write!(out, "### {token}\n\nQuotes blind-abcdef.\n\n");
+        out
+    });
     write("dossier.md", dossier)?;
     println!(
         "{}",
@@ -591,9 +595,9 @@ fn sites(args: &[&str]) -> Result<(), String> {
     if mutation == "drop" {
         listed.pop();
     }
-    let lines: String = listed
-        .iter()
-        .map(|token| format!("- `reviews/{token}.md`\n"))
-        .collect();
+    let lines: String = listed.iter().fold(String::new(), |mut out, token| {
+        let _ = writeln!(out, "- `reviews/{token}.md`");
+        out
+    });
     write("prompt.md", format!("Reviews:\n{lines}End.\n"))
 }

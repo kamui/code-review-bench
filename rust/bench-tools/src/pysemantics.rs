@@ -7,6 +7,7 @@ use crate::pyjson::{self, Duplicates, Object, Value};
 use crate::pytext::{self, PyPath};
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::io;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -494,7 +495,7 @@ impl Big {
         }
         out.push_str(&last.to_string());
         for limb in rest.iter().rev() {
-            out.push_str(&format!("{limb:09}"));
+            let _ = write!(out, "{limb:09}");
         }
         out
     }

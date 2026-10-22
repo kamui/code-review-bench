@@ -107,7 +107,7 @@ fn rollouts_are_sorted_and_an_unreadable_directory_is_an_error() {
     use std::os::unix::fs::PermissionsExt;
     let scratch = Scratch::new("client-test-").expect("scratch");
     let sessions = scratch.0.join("sessions");
-    assert!(rollouts(&sessions).expect("missing").is_empty());
+    assert_eq!(rollouts(&sessions).expect("missing"), [] as [PathBuf; 0]);
     for name in ["b/rollout-2.jsonl", "a/rollout-1.jsonl", "a/other.jsonl"] {
         let path = sessions.join(name);
         std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");

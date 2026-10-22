@@ -4,6 +4,7 @@ use crate::corpus::{field, has, list, string};
 use crate::normalize::{Kind, Observed};
 use crate::{b64, json};
 use bench_tools::pyjson::{Object, Value};
+use std::fmt::Write as _;
 
 /// Python's `repr` of bytes, so a stream difference shows every byte.
 fn repr(data: &[u8]) -> String {
@@ -21,7 +22,9 @@ fn repr(data: &[u8]) -> String {
             b'\r' => out.push_str("\\r"),
             _ if char::from(byte) == quote => out.extend(['\\', quote]),
             0x20..=0x7e => out.push(char::from(byte)),
-            _ => out.push_str(&format!("\\x{byte:02x}")),
+            _ => {
+                let _ = write!(out, "\\x{byte:02x}");
+            }
         }
     }
     out.push(quote);
@@ -76,11 +79,12 @@ fn unified_diff(expected: &str, actual: &str) -> String {
         let hunk = &lines[start..end];
         let removed = hunk.iter().filter(|line| line.0 != '+').count();
         let added = hunk.iter().filter(|line| line.0 != '-').count();
-        out.push_str(&format!(
-            "@@ -{},{removed} +{},{added} @@\n",
+        let _ = writeln!(
+            out,
+            "@@ -{},{removed} +{},{added} @@",
             before + 1,
             after + 1
-        ));
+        );
         for (mark, line) in hunk {
             out.push(*mark);
             out.push_str(line);

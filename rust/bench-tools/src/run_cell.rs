@@ -2877,7 +2877,10 @@ mod tests {
                 &fixture.run_dir.join("charges.jsonl"),
                 "{\"at\": \"2026-01-02\", \"step\": \"reconcile\", \"usd\": 0.0, \"reconciles\": \"att-001\"}\n",
             );
-            assert!(fixture.run().over_reservation().expect("over").is_empty());
+            assert_eq!(
+                fixture.run().over_reservation().expect("over"),
+                [] as [String; 0]
+            );
             let pick = choose(
                 &fixture.run(),
                 &replace("att-001", true),
@@ -3287,7 +3290,7 @@ mod tests {
             assert_eq!(names(), ["skill-provenance"]);
             fixture.priced(Some("api-dollars"), &current);
             refused(&context, dry_run, "the manifest does not validate");
-            assert!(names().is_empty());
+            assert_eq!(names(), [] as [String; 0]);
         }
         fixture.priced(Some("subscription"), &current);
         arm_file(&fixture.base, "arm-a", "codex", 3.0);
@@ -3297,7 +3300,7 @@ mod tests {
             false,
             "arm file arm-a.json no longer hashes to the frozen arm_file_sha256",
         );
-        assert!(names().is_empty());
+        assert_eq!(names(), [] as [String; 0]);
 
         let catalog = fixture.priced(Some("subscription"), &[rate("2026-01-01", 9)]);
         let mut context = fixture.context(&tool, vec![("BENCH_RATES".into(), display(&catalog))]);

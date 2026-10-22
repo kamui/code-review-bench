@@ -1432,7 +1432,7 @@ mod tests {
             fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
         }
         assert!(at(&review.prune(true).unwrap(), "applied").truthy());
-        assert!(kept(&review.workspace).is_empty());
+        assert_eq!(kept(&review.workspace), [] as [&str; 0]);
         review.retained();
     }
 
@@ -1446,7 +1446,7 @@ mod tests {
         let result = review.prune(true);
         fs::set_permissions(&outside, fs::Permissions::from_mode(0o644)).unwrap();
         assert!(at(&result.unwrap(), "applied").truthy());
-        assert!(kept(&review.workspace).is_empty());
+        assert_eq!(kept(&review.workspace), [] as [&str; 0]);
         assert_eq!(
             fs::read_to_string(&outside).unwrap(),
             "outside the workspace"

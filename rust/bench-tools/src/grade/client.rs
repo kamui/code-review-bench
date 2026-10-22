@@ -5,6 +5,7 @@ use crate::grading_tools::{self, Host, Refusal, Tools};
 use crate::pyjson::{self, Dumps, Duplicates, Object, Value};
 use crate::{clean_context, review_isolation, sha256, usage};
 use regex::Regex;
+use std::fmt::Write as _;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::os::unix::fs::DirBuilderExt;
@@ -669,16 +670,15 @@ fn claude_reply(exercise: Option<&(String, Value)>, stream: bool) -> (&'static s
         ]),
         object(vec![("type", text("message_stop"))]),
     ]);
-    let payload: String = events
-        .iter()
-        .map(|event| {
-            format!(
-                "event: {}\ndata: {}\n\n",
-                get_str(event, "type").unwrap_or(""),
-                json(event)
-            )
-        })
-        .collect();
+    let payload: String = events.iter().fold(String::new(), |mut out, event| {
+        let _ = write!(
+            out,
+            "event: {}\ndata: {}\n\n",
+            get_str(event, "type").unwrap_or(""),
+            json(event)
+        );
+        out
+    });
     ("text/event-stream", payload.into_bytes())
 }
 
@@ -848,8 +848,10 @@ fn codex_reply(index: usize, exercise: Option<&(String, Value)>) -> Vec<u8> {
     ];
     events
         .iter()
-        .map(|event| format!("data: {}\n\n", json(event)))
-        .collect::<String>()
+        .fold(String::new(), |mut out, event| {
+            let _ = write!(out, "data: {}\n\n", json(event));
+            out
+        })
         .into_bytes()
 }
 

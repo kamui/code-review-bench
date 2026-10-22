@@ -78,6 +78,7 @@
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fmt::Write as _;
 use std::os::unix::fs::MetadataExt;
 use std::sync::LazyLock;
 
@@ -2394,22 +2395,23 @@ pub fn run(options: &Options) -> Result<(String, bool), String> {
     let stdout = if options.json {
         format!("{}\n", indented(&report))
     } else {
-        let mut out: String = violations
-            .iter()
-            .map(|violation| format!("{violation}\n"))
-            .collect();
-        out.push_str(&format!(
-            "{} commands, {} file-tool paths, {} diff commands, {} violations, {} confined requests, {} network mentions -> {}\n",
+        let mut out: String = violations.iter().fold(String::new(), |mut out, violation| {
+            let _ = writeln!(out, "{violation}");
+            out
+        });
+        let _ = writeln!(
+            out,
+            "{} commands, {} file-tool paths, {} diff commands, {} violations, {} confined requests, {} network mentions -> {}",
             commands.len(),
             reads.len(),
             diffs.len(),
             violations.len(),
             requests.len(),
             mentions.len(),
-            audit_path.display(),
-        ));
+            audit_path.display()
+        );
         if gate.is_some() {
-            out.push_str(&format!("{} flags for a person to rule on\n", flags.len()));
+            let _ = writeln!(out, "{} flags for a person to rule on", flags.len());
         }
         out
     };

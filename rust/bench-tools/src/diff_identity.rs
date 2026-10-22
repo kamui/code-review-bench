@@ -180,7 +180,7 @@ mod tests {
         assert_eq!(digest, sha256::hex_digest(&render(&rows)));
         let (empty, same) =
             identity(repo.as_os_str(), OsStr::new(&head), OsStr::new(&head)).unwrap();
-        assert!(empty.is_empty());
+        assert_eq!(empty, [] as [Row; 0]);
         assert_eq!(
             same,
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"

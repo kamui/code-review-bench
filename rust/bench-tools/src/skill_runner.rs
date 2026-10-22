@@ -31,6 +31,7 @@ use crate::review_isolation::{self, resolve};
 use crate::sha256;
 use crate::usage;
 use std::ffi::OsStr;
+use std::fmt::Write as _;
 use std::fs;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
@@ -405,7 +406,7 @@ fn configure_cross_model_review(clone: &Path, runner: &Value) -> R<()> {
     if !excluded.is_empty() && !excluded.ends_with('\n') {
         excluded.push('\n');
     }
-    excluded.push_str(&format!("/{CE_LOCAL_CONFIG}\n"));
+    let _ = writeln!(excluded, "/{CE_LOCAL_CONFIG}");
     write(&exclude, &excluded)?;
     let status = git(
         clone,
@@ -2793,7 +2794,7 @@ mod claude {
                 get(&observed.agent_calls[0], "subagent_type"),
                 Value::Null
             ));
-            assert!(home.violations().is_empty());
+            assert_eq!(home.violations(), [] as [String; 0]);
         }
 
         #[test]
@@ -2815,7 +2816,7 @@ mod claude {
                     assistant("<synthetic>", "null", "[]"),
                 ],
             );
-            assert!(home.violations().is_empty());
+            assert_eq!(home.violations(), [] as [String; 0]);
         }
 
         #[test]
@@ -2862,12 +2863,16 @@ mod claude {
         #[test]
         fn mentions_of_the_peer_are_not_invocations() {
             let report = "cd /run; python3 - <<'E'\nnotes = ['cross-model-adversarial-review.sh not run']\nE\ncat > brief.json <<'EOF'\n{\"constraints\": [\"do not run codex\"]}\nEOF";
-            assert!(peer_invocations(report).is_empty());
-            assert!(
-                peer_invocations("rg -n cross-model-adversarial-review.sh references").is_empty()
+            assert_eq!(peer_invocations(report), [] as [String; 0]);
+            assert_eq!(
+                peer_invocations("rg -n cross-model-adversarial-review.sh references"),
+                [] as [String; 0]
             );
-            assert!(peer_invocations("echo 'claude code harness' > note.txt").is_empty());
-            assert!(peer_invocations("ls # codex exec -").is_empty());
+            assert_eq!(
+                peer_invocations("echo 'claude code harness' > note.txt"),
+                [] as [String; 0]
+            );
+            assert_eq!(peer_invocations("ls # codex exec -"), [] as [String; 0]);
         }
     }
 }
@@ -2929,13 +2934,13 @@ mod tests {
             ),
             ["/srv/u/runs/att-001"]
         );
-        assert!(
+        assert_eq!(
             hidden_aliases(
                 Path::new("/home/u/runs/att-001"),
                 &hidden(&["/home", "/mnt"]),
                 "29 1 8:48 / / rw - ext4 /dev/sdd rw\n"
-            )
-            .is_empty()
+            ),
+            [] as [String; 0]
         );
         assert_eq!(unescape_mount(r"/a\040b\\c"), r"/a b\c");
     }
