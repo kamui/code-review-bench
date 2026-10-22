@@ -13,6 +13,9 @@ use std::ffi::OsStr;
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static ASIDE: AtomicU64 = AtomicU64::new(0);
 
 /// A file's device and inode, which a path swapped after verification cannot keep.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -211,11 +214,14 @@ impl Directory {
         hook: Hook<'_>,
     ) -> Result<(), String> {
         let path = self.path.join(OsStr::from_bytes(name));
-        if stat.st_mode & 0o700 != 0o700 {
+        if stat.st_mode & 0o500 != 0o500 {
+            return Err(failure(Errno::EACCES, &path));
+        }
+        if stat.st_mode & 0o200 == 0 {
             stat::fchmodat(
                 &self.fd,
                 OsStr::from_bytes(name),
-                Mode::from_bits_truncate(stat.st_mode | 0o700),
+                Mode::from_bits_truncate(stat.st_mode | 0o200),
                 FchmodatFlags::NoFollowSymlink,
             )
             .map_err(|errno| failure(errno, &path))?;
@@ -269,13 +275,7 @@ impl Directory {
                 continue;
             }
             directory.check_entry(&child, &child_stat, &below, &mut *check)?;
-            directory.still(&child, &child_stat)?;
-            unistd::unlinkat(
-                &directory.fd,
-                OsStr::from_bytes(&child),
-                UnlinkatFlags::NoRemoveDir,
-            )
-            .map_err(|errno| failure(errno, &child_path))?;
+            directory.unlink_checked(&child, &child_stat)?;
             hook(Point::Removed).map_err(|error| error.to_string())?;
         }
         drop(directory);
@@ -283,6 +283,40 @@ impl Directory {
         unistd::unlinkat(&self.fd, OsStr::from_bytes(name), UnlinkatFlags::RemoveDir)
             .map_err(|errno| failure(errno, &path))?;
         hook(Point::Removed).map_err(|error| error.to_string())
+    }
+
+    /// Unlink `name` only if it is still the entry `stat` describes. It is first renamed to a name of its own, so
+    /// one renamed into its place meanwhile is what gets checked and is kept, under the reported name.
+    fn unlink_checked(&self, name: &[u8], stat: &FileStat) -> Result<(), String> {
+        let path = self.path.join(OsStr::from_bytes(name));
+        let aside = format!(
+            ".bench-tools-removing-{}-{}",
+            std::process::id(),
+            ASIDE.fetch_add(1, Ordering::Relaxed)
+        );
+        let aside_path = self.path.join(&aside);
+        if self.entry(aside.as_bytes())?.is_some() {
+            return Err(format!(
+                "{} already exists; nothing is removed in its place",
+                aside_path.display()
+            ));
+        }
+        fcntl::renameat(
+            &self.fd,
+            OsStr::from_bytes(name),
+            &self.fd,
+            OsStr::new(&aside),
+        )
+        .map_err(|errno| failure(errno, &path))?;
+        if self.entry(aside.as_bytes())? != Some((Identity::of(stat), Kind::of(stat))) {
+            return Err(format!(
+                "{} changed during removal; what replaced it is kept at {}",
+                path.display(),
+                aside_path.display()
+            ));
+        }
+        unistd::unlinkat(&self.fd, OsStr::new(&aside), UnlinkatFlags::NoRemoveDir)
+            .map_err(|errno| failure(errno, &aside_path))
     }
 
     /// `name` must still be the entry `stat` describes, so one renamed into its place while it was checked stays.
@@ -359,12 +393,57 @@ mod tests {
             },
             &uninterrupted,
         );
-        let kept = fs::read_to_string(base.join("tree/checked"));
+        let kept = match &result {
+            Err(message) => message
+                .split_once("; what replaced it is kept at ")
+                .map(|(_, aside)| fs::read_to_string(aside)),
+            Ok(()) => None,
+        };
         fs::remove_dir_all(&base).unwrap();
-        assert!(
-            matches!(&result, Err(message) if message.contains("changed during removal")),
+        assert_eq!(
+            kept.map(Result::unwrap).as_deref(),
+            Some("never verified"),
             "{result:?}"
         );
-        assert_eq!(kept.unwrap(), "never verified");
+    }
+
+    #[test]
+    fn an_unreadable_directory_is_refused_and_a_read_only_one_is_removed() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = scratch("unreadable");
+        let parent = Directory::open(&base, identity(&base)).unwrap();
+        let locked = base.join("tree/locked");
+        fs::create_dir(&locked).unwrap();
+        fs::write(locked.join("unchecked"), "kept").unwrap();
+        for mode in [0o000, 0o300, 0o600] {
+            fs::set_permissions(&locked, fs::Permissions::from_mode(mode)).unwrap();
+            let result = parent.remove_tree(
+                b"tree",
+                identity(&base.join("tree")),
+                &mut |_, _| Ok(()),
+                &uninterrupted,
+            );
+            fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+            assert!(
+                matches!(&result, Err(message) if message.contains("Permission denied")),
+                "{mode:o}: {result:?}"
+            );
+            assert_eq!(
+                fs::read_to_string(locked.join("unchecked")).unwrap(),
+                "kept"
+            );
+        }
+        fs::set_permissions(locked.join("unchecked"), fs::Permissions::from_mode(0o444)).unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
+        let result = parent.remove_tree(
+            b"tree",
+            identity(&base.join("tree")),
+            &mut |_, _| Ok(()),
+            &uninterrupted,
+        );
+        let left = fs::symlink_metadata(base.join("tree")).is_ok();
+        fs::remove_dir_all(&base).unwrap();
+        assert_eq!(result, Ok(()));
+        assert!(!left);
     }
 }

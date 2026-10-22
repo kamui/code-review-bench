@@ -20,6 +20,7 @@ use crate::pyjson::{self, Dumps, Object, Value};
 use crate::pytext::{self, PyPath};
 use crate::removal::{self, Directory, Hook, Identity, Kind, Point};
 use std::cell::RefCell;
+use std::io::Write;
 use std::process::{Command, Stdio};
 
 const CANDIDATES: [&str; 2] = ["clone", "clone-cache"];
@@ -125,14 +126,20 @@ fn lstat(path: &PyPath) -> R<Option<(Identity, Kind)>> {
 
 /// `git -C clone ARGS`, stripped; a failing command is an input error.
 fn git(clone: &PyPath, arguments: &[&str]) -> R<String> {
+    git_reporting(clone, arguments).map(|(stdout, _)| stdout)
+}
+
+/// [`git`], and whether git wrote anything to stderr, which it passes on.
+fn git_reporting(clone: &PyPath, arguments: &[&str]) -> R<(String, bool)> {
     let output = Command::new("git")
         .arg("-C")
         .arg(clone.to_path_buf())
         .args(arguments)
         .stdin(Stdio::null())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::piped())
         .output()
         .map_err(|error| failed(pytext::os_error(&error, b"git")))?;
+    let _ = std::io::stderr().write_all(&output.stderr);
     if !output.status.success() {
         let shown = clone.display();
         let command: Vec<&str> = ["git", "-C", &shown]
@@ -145,13 +152,27 @@ fn git(clone: &PyPath, arguments: &[&str]) -> R<String> {
         )));
     }
     let stdout = pytext::decode_utf8(&output.stdout).map_err(failed)?;
-    Ok(pytext::strip(&stdout).to_string())
+    Ok((
+        pytext::strip(&stdout).to_string(),
+        !output.stderr.is_empty(),
+    ))
 }
 
 /// The clone is still at `head` with nothing changed, added or removed.
 fn unchanged(clone: &PyPath, head: &str) -> R<bool> {
-    Ok(git(clone, &["rev-parse", "HEAD"])? == head
-        && git(clone, &["status", "--porcelain", "--untracked-files=all"])?.is_empty())
+    if git(clone, &["rev-parse", "HEAD"])? != head {
+        return Ok(false);
+    }
+    // git status exits 0 after only warning about a directory it cannot read.
+    let (status, warned) =
+        git_reporting(clone, &["status", "--porcelain", "--untracked-files=all"])?;
+    if warned {
+        return Err(failed(format!(
+            "git status warned about {}, so it cannot show the clone is clean",
+            clone.display()
+        )));
+    }
+    Ok(status.is_empty())
 }
 
 fn free_bytes(path: &PyPath) -> R<u64> {
@@ -1359,6 +1380,25 @@ mod tests {
         fs::set_permissions(&review.workspace, fs::Permissions::from_mode(0o755)).unwrap();
         assert!(matches!(result, Err(Failure::Failed(_))), "{result:?}");
         assert_eq!(kept(&review.workspace), ["clone", "clone-cache"]);
+        assert!(!review.workspace.join(RECEIPT).exists());
+    }
+
+    #[test]
+    fn an_unreadable_directory_in_the_clone_is_an_error_and_nothing_is_removed() {
+        let review = Review::new();
+        let locked = review.workspace.join("clone/locked");
+        fs::create_dir(&locked).unwrap();
+        fs::write(locked.join("untracked"), "work after filing").unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        let result = review.prune(true);
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(
+            matches!(&result, Err(Failure::Failed(message)) if message.contains("git status warned")),
+            "{result:?}"
+        );
+        assert_eq!(kept(&review.workspace), ["clone", "clone-cache"]);
+        assert!(review.workspace.join("clone/.git/HEAD").exists());
+        assert!(locked.join("untracked").exists());
         assert!(!review.workspace.join(RECEIPT).exists());
     }
 
