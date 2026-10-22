@@ -5,8 +5,8 @@ The first stage of [the maintainer evidence contract](adr/0004-maintainer-eviden
 ## Capture upstream evidence
 
 ```sh
-python3 bench/tools/rust_runtime.py exec bench-tools -- upstream collect --all
-python3 bench/tools/rust_runtime.py exec bench-tools -- upstream collect --target s-seaweedfs-10735 --related-pr 10745
+bench/tools/bench-tools upstream collect --all
+bench/tools/bench-tools upstream collect --target s-seaweedfs-10735 --related-pr 10745
 ```
 
 The collector performs GET requests only through `gh api`. It saves the PR body, conversation comments, inline comments and review records with all returned pages. Each capture creates a new `bench/claims/upstream/<target>/snapshot.v<N>.json`, with the frozen target revision, reviewer cutoff, retrieval timestamp and endpoint coverage. It never replaces an earlier snapshot or modifies the reviewer packet. Follow-up PRs require explicit selection and stay in the same repository.
@@ -49,7 +49,7 @@ bun run verify:claims
 bun run audit:maintainers
 ```
 
-`audit:maintainers` runs `bench-tools upstream report`, the Rust port of `upstream.py`'s `report` command, and `verify:claims` runs `bench-tools claims check`. The report checks the registry as `claims check` does before reporting. Install it once per checkout revision with `python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select` ([Rust runtime](python-migration/runtime.md#running-a-maintained-command)).
+`audit:maintainers` runs `bench-tools upstream report`, the Rust port of `upstream.py`'s `report` command, and `verify:claims` runs `bench-tools claims check`. The report checks the registry as `claims check` does before reporting. Install it once per checkout revision with `bench/tools/bench-tools runtime install --select` ([Rust runtime](python-migration/runtime.md#running-a-maintained-command)).
 
 The report includes each canonical claim's disposition and route, and the latest retrieval coverage and current reference IDs for all targets. `settled` means the existing saved eligibility decision remains consistent with the recorded assessments; it does not mean a maintainer accepted the claim. `shadow-proposal` requires approval under the current policy. `human-conflict`, `human-boundary` and `needs-evidence-audit` identify exceptional or incomplete cases. Routing is advisory in this stage and never edits decisions.
 

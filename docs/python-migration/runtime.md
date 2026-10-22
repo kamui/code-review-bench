@@ -6,15 +6,16 @@ part of [#149](https://github.com/kamui/code-review-bench/issues/149). It procee
 The [pilot result](pilot/README.md) and its stop recommendation stay unchanged as historical evidence.
 This stage does not claim that the small-CLI target passed.
 
-`bench/tools/rust_runtime.py` builds, retains, selects and checks Rust executables.
-`bench-tools queue` refuses a launch whose pinned executable is missing, changed, built
-for another host or built from another source. `bench-tools`, the crate of
-[#154](processing.md), holds the first maintained commands, which run as
+`bench-tools runtime` builds, retains, selects and checks Rust executables, and `bench/tools/bench-tools`, a POSIX
+shell launcher, runs every maintained command through it. They replaced `bench/tools/rust_runtime.py` on 2026-10-22
+([#160](https://github.com/kamui/code-review-bench/issues/160)); stores that Python tool wrote keep working unchanged.
+`bench-tools queue` refuses a launch whose pinned executable is missing, changed, built for another host or built
+from another source. `bench-tools`, the crate of [#154](processing.md), holds the maintained commands, which run as
 [a maintained command](#running-a-maintained-command) does.
 
 ## What a receipt pins
 
-Each retained version is `<store>/<name>/<sha256>/`, holding the executable and `receipt.json`.
+Each retained version is `<store>/bench-tools/<sha256>/`, holding the executable and `receipt.json`.
 Both files are read-only. The tool never overwrites or removes an entry. The receipt records:
 
 - `crate`: name, version, binary, and the crate path relative to the repository.
@@ -29,6 +30,10 @@ Both files are read-only. The tool never overwrites or removes an entry. The rec
 A receipt holds no absolute path, so it stays valid when a store moves to another directory or host.
 The pin that queues and runs use is the executable's SHA-256 together with the receipt's SHA-256.
 
+Beside the entries, `selected.json` names the version new operations take, `selections.jsonl` keeps every selection,
+and `launcher` links the entry most recently installed or restored that has the `runtime` commands. The launcher resolves every other
+command, so a rollback to a version from before these commands still runs.
+
 ## Install
 
 1. Install rustup. The crate's `rust-toolchain.toml` names the toolchain; `rustup show` in the
@@ -38,10 +43,15 @@ The pin that queues and runs use is the executable's SHA-256 together with the r
 3. From a clean, committed checkout, run:
 
    ```sh
-   python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select
+   bench/tools/bench-tools runtime install --select
    ```
 
-`install` needs Python 3.11 or later; the other commands do not.
+`install` needs no Python. The launcher runs it with this checkout's own installer,
+`cargo run --locked --offline -- runtime install` in `rust/bench-tools`, the way it once ran `rust_runtime.py` from
+the checkout. That build is only
+the installer: it lands in the crate's ignored `target/`, is never retained or selected, and runs no other command.
+The installer builds the executable it retains separately, as follows.
+
 After the cleanliness check it creates a private Cargo home for the build. That home holds no
 configuration, only links to the host Cargo home's registry and Git caches and the lock files that
 guard them. It writes the crate's Git tree at `HEAD` into a snapshot directly inside that home,
@@ -55,7 +65,8 @@ its workspace search at its home. The build therefore reads configuration only f
 only an administrator can write, and from the private home, which holds none. Cargo configuration
 saved to the checkout, the host Cargo home, the temporary directory or a parent of the snapshot, and a
 workspace `Cargo.toml` saved in a parent of the snapshot, cannot change the executable during an
-install, even when removed before it ends. Configuration in those places is ignored, not refused. A
+install, even when removed before it ends. Configuration in those places is ignored, not refused; it can
+change only the installer build, never the retained executable. A
 later `rustup override` or toolchain change cannot switch the toolchain partway through an install.
 A toolchain whose `cargo` is not beside `rustc` in its sysroot's `bin` is refused. The shared caches
 and the toolchain remain inputs, trusted as described below; this is not a hermetic build.
@@ -90,15 +101,16 @@ those six. A build script that reads a variable without declaring it is not dete
 remaps the snapshot and private `CARGO_HOME` paths. Installing the same build again keeps the existing entry.
 An entry with the same hash but another receipt is refused.
 
-The default store is `~/.t3/bench-runtime`. Every command takes `--store`.
+The store is `BENCH_RUNTIME_STORE`, else `~/.t3/bench-runtime`, for every command.
 
 ## Offline retention and restore
 
 A retained version needs no network, toolchain or registry to run or to roll back to.
-To move a version to another store, copy its entry and run:
+To move a version to another store, copy its entry and run the copied executable itself, which needs nothing
+installed:
 
 ```sh
-python3 bench/tools/rust_runtime.py restore --receipt ENTRY/receipt.json --executable ENTRY/<bin> --store OTHER
+BENCH_RUNTIME_STORE=OTHER ENTRY/bench-tools runtime restore --receipt ENTRY/receipt.json --executable ENTRY/bench-tools
 ```
 
 `restore` accepts the executable only when it hashes to the receipt. A rebuild from the receipt's
@@ -111,14 +123,14 @@ other hosts. Rebuilding offline also needs the locked dependencies in the Cargo 
 Freeze a run's Rust runtimes with the run, as with `clients.frozen.json`:
 
 ```sh
-python3 bench/tools/rust_runtime.py pin bench-tools > bench/runs/<run>/runtimes.frozen.json
+bench/tools/bench-tools runtime pin > bench/runs/<run>/runtimes.frozen.json
 ```
 
 A run frozen at a commit that has `rust/bench-tools` must pin `bench-tools`, whose `normalize-review` and
-`normalize-thermo` normalize its reviews ([#194](processing.md#the-review-normalizers)). `pin` prints one name; merge
-the objects when a run pins more than one. `bench-tools run-cell`, its `--file` and the skill runners refuse a run
-that pins none before anything is claimed, and `bench-tools queue` refuses its queue before any launch. A run frozen
-earlier pins none and keeps running from its own freeze checkout, with the Python normalizers.
+`normalize-thermo` normalize its reviews ([#194](processing.md#the-review-normalizers)). `bench-tools run-cell`, its
+`--file` and the skill runners refuse a run that pins none before anything is claimed, and `bench-tools queue`
+refuses its queue before any launch. A run frozen earlier pins none and keeps running from its own freeze checkout,
+with the Python normalizers.
 
 Copy the same object into the queue file as `runtimes`. Set `runtime_store` when the store is not
 the default. Before every launch, `bench-tools queue` checks the following:
@@ -140,33 +152,41 @@ against the same pinned version. One controller per work root still holds `seria
 
 ## Running a maintained command
 
-`resolve` prints the executable an operation runs, and `exec` runs it with the arguments after `--`, replacing
-the Python process so the program's exit code and output are the command's:
+`bench/tools/bench-tools` runs a command with the executable an operation runs, replacing itself so the program's
+exit code and output are the command's. `runtime resolve` prints that executable:
 
 ```sh
-python3 bench/tools/rust_runtime.py resolve bench-tools [--run bench/runs/<run>]
-python3 bench/tools/rust_runtime.py exec bench-tools [--run bench/runs/<run>] -- roster
+bench/tools/bench-tools roster
+bench/tools/bench-tools --run bench/runs/<run> -- run-cell --run bench/runs/<run> --next
+bench/tools/bench-tools runtime resolve [--run bench/runs/<run>]
 ```
 
-Both take the first of these and refuse everything else, printing the install command:
+The launcher runs the store's `launcher` entry with `runtime exec`, which takes the first of these and refuses
+everything else, printing the install command:
 
 1. `BENCH_RUST_<NAME>` with `BENCH_RUST_<NAME>_SHA256`, as a queue launch sets them. The file must be an
    absolute path to an executable that hashes to the second variable. Setting only one of them is refused.
 2. With `--run`, the pin for the name in the run's `runtimes.frozen.json`, checked as a queue checks it. A run
-   without that pin is refused; the selection is never read.
+   without that pin is refused, naming the freeze commit to run it from; the selection is never read.
 3. Otherwise the store's selected version, checked against its pin and this host, only while its receipt's crate
    tree is the crate tree at the checkout's `HEAD`. A commit that changes the crate needs a new install.
 
-There is no Python fallback, no `cargo run` and no unreceipted `target/` executable. The store is `--store`, else
-`BENCH_RUNTIME_STORE`, else `~/.t3/bench-runtime`, for every command. A queue still names its store with
-`runtime_store`. CI installs into a store under the runner's temporary directory.
+There is no Python fallback, no `cargo run` and no unreceipted `target/` executable: the only `cargo run` is the
+installer, which runs nothing but `runtime install`. A store with no `launcher` is refused with the install command.
+A queue still names its store with `runtime_store`. CI installs into a store under the runner's temporary directory.
+
+The launcher passes the caller's environment through unchanged. The Python launcher ran under whatever `python3`
+was on `PATH`, and a version manager's `python3` shim, such as mise's, put that manager's tool directories on `PATH`
+for every command it launched. On a host where `go` or `node` on `PATH` is such a shim, the grading sandbox refuses
+it as no dedicated toolchain; activate the manager or run the command under `mise exec --`.
 
 ## Upgrade and rollback
 
-To upgrade, install the new version and `select` it. Only runs frozen after that take it.
-An unfinished run keeps its frozen pin until it ends. Never edit a started run's `runtimes.frozen.json`.
+To upgrade, install the new version and select it (`runtime install --select`, or `runtime select SHA256`). Only
+runs frozen after that take it. An unfinished run keeps its frozen pin until it ends. Never edit a started run's
+`runtimes.frozen.json`.
 
-`rollback` selects the version that was selected before the current one. Like `select`, it changes
+`runtime rollback` selects the version that was selected before the current one. Like `select`, it changes
 only `selected.json` and appends to `selections.jsonl`. It reads the current selection and writes the
 new one under a single hold of the store lock, so a concurrent `select` cannot make it return to a
 stale version. Pinned
@@ -179,7 +199,7 @@ possibly successful side effect is therefore never replayed through another impl
 When a run needs another runtime, freeze a new run, or record the change and settle it by hand:
 
 ```sh
-python3 bench/tools/rust_runtime.py deviation --run bench/runs/<run> --name bench-tools \
+bench/tools/bench-tools runtime deviation --run bench/runs/<run> \
   --from OLD_SHA256 --to NEW_SHA256 --reason ... --scope ... --validation ... --accounting ...
 ```
 
@@ -192,25 +212,26 @@ it. No check reads it as permission: the queue still requires the frozen pin.
 
 The [script policy](../agents/scripts.md) supports macOS on Apple Silicon and Linux on x86_64 or aarch64.
 `SUPPORTED_TARGETS` holds one target for each of those hosts, and the `Rust runtime` workflow runs on a
-matching GitHub runner for each: the runtime tests with real cargo builds and
+matching GitHub runner for each: the runtime tests (`tests/runtime.rs`) with real cargo builds and
 [`rollback.sh`](runtime-evidence/rollback.sh). It also checks `bench-tools` with
-`cargo fmt`, `clippy` and `cargo test`, installs it, runs its corpora with the retained executable and the
-`diff-identity`, `normalize-review`, `check-manifest`, `rates` and `upstream` differentials against the retained
-Python libraries, and runs `roster` on the repository. The `CI and GitHub Pages` workflow installs `bench-tools` the
-same way for the explorer export.
+`cargo fmt`, `clippy` and `cargo test`, installs it, runs its corpora and `roster` on the repository. The
+`CI and GitHub Pages` workflow installs `bench-tools` the same way for the explorer export.
 
-The x86_64 Linux target splits its checks into three parallel jobs: the behavior contracts; formatting,
-Clippy and every other test; and the runtime tests, install and rollback. Pull requests run the full suite
+The x86_64 Linux target splits its checks into three parallel jobs: the behavior contracts, run with no Python on
+`PATH`; formatting, Clippy and every other test; and the runtime tests, install and rollback. The runtime job
+installs `bench-tools`, files a [fake-client cell](../../tools/fake-client-cell.sh) through a frozen run's pin, and
+writes the explorer export and the scorecard, all with no Python on `PATH`
+([`tools/without-python.sh`](../../tools/without-python.sh)). Pull requests run the full suite
 on x86_64 Linux. On aarch64 Linux and macOS they run the
 runtime pinning, retention and rollback tests with real cargo builds, install `bench-tools`,
 run `roster`, and run the `diff-identity` corpus. The full
-aarch64 Linux and macOS lint, test, differential and second-version rollback suites run on pushes to `main`.
+aarch64 Linux and macOS lint, test and second-version rollback suites run on pushes to `main`.
 This keeps native installation coverage before merge while deferring broader aarch64 regression
 detection until after merge. Merge a change to the runtime only after every target's job passes.
 
 | Target | Runner | Local run |
 | --- | --- | --- |
-| `x86_64-unknown-linux-gnu` | `ubuntu-latest` | Linux 6.6 under WSL2, glibc 2.35, Rust 1.99.1, Python 3.14.7 |
+| `x86_64-unknown-linux-gnu` | `ubuntu-latest` | Linux 6.6 under WSL2, glibc 2.35, Rust 1.99.1 |
 | `aarch64-unknown-linux-gnu` | `ubuntu-24.04-arm` | None |
 | `aarch64-apple-darwin` | `macos-latest` | None |
 
@@ -218,13 +239,13 @@ Each workflow run records its own results; this table records only where the che
 Windows is outside the script policy, and every check refuses an unknown host. `bench-tools queue`
 reads `/proc` and runs only on Linux, so queue pins apply only there. The C library check compares
 the build host's glibc with this host's, which is stricter than the symbol versions the executable
-needs; macOS receipts record no C library.
+needs; macOS receipts record no C library. The launcher is POSIX `sh` and runs on both.
 
 ## Ownership of the other runtime modules
 
 The [v2 inventory](README.md#responsibilities-and-contracts) also maps `seal`, `skill_provenance` and
-`fetch_freeze_commits` to #153. This stage adds `rust_runtime` and ports none of them. They keep their
-Python implementations until these stages move them:
+`fetch_freeze_commits` to #153. This stage added `rust_runtime` and ported none of them. They kept their
+Python implementations until these stages moved them:
 
 | Module | Owner | Reason |
 | --- | --- | --- |

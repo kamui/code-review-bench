@@ -1,0 +1,39 @@
+#!/bin/sh
+# The launcher every bench-tools command goes through; docs/python-migration/runtime.md describes it.
+#
+#   bench/tools/bench-tools [--run RUN] [--] COMMAND [ARGS...]
+#       Run COMMAND with the selected bench-tools, or with RUN's pinned one.
+#   bench/tools/bench-tools runtime install [--select]
+#       Build this checkout's rust/bench-tools into the store with this checkout's own installer.
+#   bench/tools/bench-tools runtime COMMAND [ARGS...]
+#       Manage the store: restore, verify, select, rollback, pin, list, resolve, deviation.
+#
+# The store is BENCH_RUNTIME_STORE, else ~/.t3/bench-runtime. Its launcher entry resolves and checks the executable
+# every other command runs, so nothing here runs an unpinned build.
+set -eu
+checkout=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd -P)
+store=${BENCH_RUNTIME_STORE:-${HOME:?}/.t3/bench-runtime}
+case $store in
+    /*) ;;
+    '~'|'~/'*) store=${HOME:?}${store#'~'} ;;
+    *) store=$PWD/$store ;;
+esac
+export BENCH_RUNTIME_STORE="$store"
+if [ "${1-}" = runtime ] && [ "${2-}" = install ]; then
+    shift 2
+    cd "$checkout/rust/bench-tools"
+    exec cargo run --locked --offline -- runtime install --checkout "$checkout" "$@"
+fi
+launcher=$store/bench-tools/launcher
+if [ ! -x "$launcher" ]; then
+    echo "bench-tools: $store has no installed bench-tools; install it with: bench/tools/bench-tools runtime install --select" >&2
+    exit 1
+fi
+if [ "${1-}" = runtime ]; then
+    shift
+    case ${1-} in
+        resolve | exec) command=$1; shift; exec "$launcher" runtime "$command" --checkout "$checkout" "$@" ;;
+    esac
+    exec "$launcher" runtime "$@"
+fi
+exec "$launcher" runtime exec --checkout "$checkout" "$@"

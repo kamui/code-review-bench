@@ -477,7 +477,7 @@ pub fn pinned_runtime(authorization: &Value, running: &Path) -> R<PathBuf> {
         .and_then(|runtimes| optional(runtimes, runtime::NAME))
         .filter(|pin| pin.as_object().is_some())
         .ok_or(
-            "authorization pins no bench-tools runtime; add the object `rust_runtime.py pin bench-tools` prints \
+            "authorization pins no bench-tools runtime; add the object `bench/tools/bench-tools runtime pin` prints \
              as `runtimes` in a new authorization version",
         )?;
     let unavailable =

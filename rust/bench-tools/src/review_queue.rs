@@ -31,13 +31,13 @@
 //! `dispatch.sh` checks the list again just before a built-in reviewer starts. The skill runners take their client
 //! from the run's frozen `inputs/runner.json` and check no companions.
 //!
-//! `runtimes` pins Rust executables that `rust_runtime.py` retained, by the pins its `pin` command prints, in the
+//! `runtimes` pins Rust executables that `bench-tools runtime` retained, by the pins `runtime pin` prints, in the
 //! store that `runtime_store` names (default `~/.t3/bench-runtime`). Each run's `runtimes.frozen.json`, written when
 //! the run is frozen, must hold the same pins. Before every launch each pinned executable and receipt must hash to
 //! the pin, suit this host's target and C library, and come from the crate tree at each run's `freeze_commit`. A
 //! launch gets the executable as `BENCH_RUST_<NAME>` with `BENCH_RUST_<NAME>_SHA256`, and its launch record keeps
 //! the pins. A missing or changed pinned version blocks the queue: nothing falls back to the store's selected
-//! version, and `rust_runtime.py rollback` changes only what new runs freeze. Each cell runs through the pinned
+//! version, and `runtime rollback` changes only what new runs freeze. Each cell runs through the pinned
 //! `bench-tools run-cell`, so a queue whose runs froze `rust/bench-tools` and that pins no `bench-tools` is refused
 //! before any launch.
 //!

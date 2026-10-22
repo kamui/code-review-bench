@@ -24,7 +24,7 @@ impl Drop for Bench {
     }
 }
 
-/// The store entry for `bytes`, with its receipt; the pin `rust_runtime.py pin` prints for it.
+/// The store entry for `bytes`, with its receipt; the pin `bench-tools runtime pin` prints for it.
 fn install(store: &Path, source: Option<&Path>, bytes: &[u8]) -> (PathBuf, String) {
     let sha = hex_digest(bytes);
     let entry = store.join("bench-tools").join(&sha);

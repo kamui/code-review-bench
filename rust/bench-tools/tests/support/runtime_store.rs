@@ -30,7 +30,7 @@ pub fn receipt(sha: &str, size: u64) -> String {
     )
 }
 
-/// The target a receipt names for this host, as `rust_runtime.py` builds it.
+/// The target a receipt names for this host, as `bench-tools runtime install` builds it.
 fn host_target() -> &'static str {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("linux", "x86_64") => "x86_64-unknown-linux-gnu",

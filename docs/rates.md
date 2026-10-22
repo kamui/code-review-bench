@@ -12,15 +12,15 @@ Append dated entries for prices that changed:
 bun run rates:refresh
 ```
 
-`rates:check` and `rates:refresh` run `bench-tools rates check` and `bench-tools rates refresh`; install it once per checkout revision with `python3 bench/tools/rust_runtime.py install --crate rust/bench-tools --select` ([Rust runtime](python-migration/runtime.md#running-a-maintained-command)).
+`rates:check` and `rates:refresh` run `bench-tools rates check` and `bench-tools rates refresh`; install it once per checkout revision with `bench/tools/bench-tools runtime install --select` ([Rust runtime](python-migration/runtime.md#running-a-maintained-command)).
 
 Both commands default to `bench/rates.current.json`. They fetch the [OpenAI standard pricing table](https://developers.openai.com/api/docs/pricing) and [Anthropic model pricing table](https://platform.claude.com/docs/en/about-claude/pricing). They make no model requests and need no credentials. Prices cover standard short-context usage, matching the catalog's existing policy. Batch, flex, priority, long-context premiums, and partner-cloud prices are outside this command's scope.
 
 Use `--model` to select models and `--json` to save the check receipt, including the time, source URLs, hashes, observed prices, and differences:
 
 ```sh
-python3 bench/tools/rust_runtime.py exec bench-tools -- rates check --model gpt-6.1-sol --json
-python3 bench/tools/rust_runtime.py exec bench-tools -- rates refresh --model claude-sonnet-5-5
+bench/tools/bench-tools rates check --model gpt-6.1-sol --json
+bench/tools/bench-tools rates refresh --model claude-sonnet-5-5
 ```
 
 `--source openai=URL` or `--source anthropic=URL` reads that provider's page from another URL, such as a saved copy at `file:pricing.md`. The receipt records the URL read.
