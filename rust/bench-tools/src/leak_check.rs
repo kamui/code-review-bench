@@ -1083,13 +1083,15 @@ fn supported_spans(
         .collect();
     kept.sort_unstable();
     let mut spans: Vec<Span> = Vec::new();
+    let mut keys: Vec<String> = Vec::new();
     for (start, end, record, at) in kept {
-        let text = overlap.text[found[start].start..found[end - 1].end].to_string();
-        let index = match spans.iter().position(|span| span.text == text) {
+        let key = phrase(&found[start..end]);
+        let index = match keys.iter().position(|seen| *seen == key) {
             Some(index) => index,
             None => {
+                keys.push(key);
                 spans.push(Span {
-                    text,
+                    text: overlap.text[found[start].start..found[end - 1].end].to_string(),
                     words: end - start,
                     places: Vec::new(),
                 });
@@ -1301,7 +1303,7 @@ mod tests {
     }
 
     #[test]
-    fn matches_from_adjacent_records_stay_separate_phrases() {
+    fn matches_from_separate_records_stay_separate_phrases() {
         let found = reported(
             "alpha beta gamma delta epsilon zeta",
             &[
@@ -1323,6 +1325,50 @@ mod tests {
                     vec![cite("B", "gamma delta epsilon zeta")]
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn a_phrase_does_not_run_across_a_segment_boundary() {
+        let found = reported(
+            "alpha beta gamma\0delta epsilon zeta",
+            &[("A", "alpha beta gamma delta epsilon zeta")],
+        );
+        assert_eq!(
+            found,
+            [
+                (
+                    "alpha beta gamma".to_string(),
+                    "3".to_string(),
+                    vec![cite("A", "alpha beta gamma")]
+                ),
+                (
+                    "delta epsilon zeta".to_string(),
+                    "3".to_string(),
+                    vec![cite("A", "delta epsilon zeta")]
+                ),
+            ]
+        );
+        let held = reported(
+            "alpha beta gamma delta epsilon zeta",
+            &[("A", "alpha beta gamma\0delta epsilon zeta")],
+        );
+        assert_eq!(held.len(), 2);
+    }
+
+    #[test]
+    fn a_phrase_repeated_in_another_case_is_reported_once() {
+        let found = reported(
+            "alpha beta gamma, then Alpha Beta Gamma",
+            &[("A", "alpha beta gamma")],
+        );
+        assert_eq!(
+            found,
+            [(
+                "alpha beta gamma".to_string(),
+                "3".to_string(),
+                vec![cite("A", "alpha beta gamma")]
+            )]
         );
     }
 
