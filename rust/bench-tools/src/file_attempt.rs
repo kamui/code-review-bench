@@ -1694,7 +1694,7 @@ fn replay(
             .arg("--allowed-prefix")
             .args(&arguments.audit_allowed_prefix);
     }
-    if is(profile, review_isolation::ENFORCED) {
+    if profile.as_str().is_some_and(review_isolation::is_enforced) {
         audit
             .arg("--isolation-settings")
             .arg(join(attempt_dir, "isolation-settings.json"));
