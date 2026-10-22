@@ -56,6 +56,7 @@ pub mod roster;
 pub mod ruling;
 pub mod run_cell;
 pub mod schema;
+pub mod seal;
 pub mod sha256;
 pub mod shlex;
 pub mod skill_provenance;

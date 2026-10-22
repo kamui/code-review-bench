@@ -1,10 +1,9 @@
-//! Check the dated rate catalog against the providers' current standard short-context prices, as
-//! the `check` command of `bench/tools/rates.py` does. Nothing is written.
+//! Check the dated rate catalog against the providers' current standard short-context prices, or refresh it.
 //!
 //! The catalog follows `bench/schema/rates.schema.json`. Each selected model's latest dated entry is compared
 //! with the price its provider's Markdown pricing page lists today. Providers are found by model prefix:
-//! `gpt-` is OpenAI and `claude-` is Anthropic. `rates.py refresh`, which appends changed prices, stays in
-//! Python.
+//! `gpt-` is OpenAI and `claude-` is Anthropic. `check` writes nothing. `refresh` appends a dated entry for each
+//! changed model and never rewrites one; historical catalogs and frozen runs cannot be refresh destinations.
 
 use crate::pyjson::{self, Duplicates, Object, Value};
 use crate::pytext::{self, PyPath};
@@ -804,7 +803,150 @@ pub fn inspect(
     ]))
 }
 
-/// The lines the `check` command of `rates.py` prints without `--json`.
+/// `rates.refresh`: append the changed prices of the selected models to the catalog at `path`, dated today, under
+/// an exclusive lock beside it; the check receipt with `refreshed`.
+pub fn refresh(
+    root: &PyPath,
+    path: &PyPath,
+    models: Option<&[String]>,
+    sources: &[(String, String)],
+    fetch: &dyn Fetch,
+    checked_at: &str,
+) -> Result<Value, Failure> {
+    let path = PyPath::new(&crate::pyfs::resolve(path.as_bytes()));
+    let within = |base: &[u8]| {
+        let raw = path.as_bytes();
+        raw == base || raw.starts_with(base) && raw.get(base.len()) == Some(&b'/')
+    };
+    if path.as_bytes() == root.join(b"bench/rates.json").as_bytes()
+        || within(root.join(b"bench/runs").as_bytes())
+        || within(root.join(b"artifacts").as_bytes())
+    {
+        return Err(Failure::Rate(
+            "historical rate evidence is immutable; refresh bench/rates.current.json".to_string(),
+        ));
+    }
+    let file = path.to_path_buf();
+    let io = |error: std::io::Error| Failure::Input(pytext::os_error(&error, path.as_bytes()));
+    let name = file
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let lock = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(file.with_file_name(format!(".{name}.lock")))
+        .map_err(io)?;
+    lock.lock().map_err(io)?;
+    let mut catalog = read_catalog(root, &path)?;
+    let mut report = inspect(&catalog, models, sources, fetch, checked_at)?;
+    let today = checked_at.get(..10).unwrap_or(checked_at);
+    let changes: Vec<String> = report
+        .as_object()
+        .and_then(|report| report.get("changes"))
+        .and_then(Value::as_array)
+        .unwrap_or(&[])
+        .iter()
+        .map(|change| {
+            change
+                .as_object()
+                .and_then(|change| change.get("model"))
+                .map(Value::py_str)
+                .unwrap_or_default()
+        })
+        .collect();
+    let mut appended = Vec::new();
+    {
+        let saved = latest(&catalog, models)?;
+        let field = |key: &str| report.as_object().and_then(|report| report.get(key));
+        for model in &changes {
+            let Some((_, row)) = saved.iter().find(|(name, _)| name == model) else {
+                continue;
+            };
+            if row
+                .get("as_of")
+                .map(Value::py_str)
+                .unwrap_or_default()
+                .as_str()
+                >= today
+            {
+                return Err(Failure::Rate(format!(
+                    "cannot append {model} prices on {today}; preserve the existing same-day or future entry"
+                )));
+            }
+            let provider = if model.starts_with("gpt-") {
+                "openai"
+            } else {
+                "anthropic"
+            };
+            let source = field("sources")
+                .and_then(Value::as_object)
+                .and_then(|sources| sources.get(provider));
+            let part = |key: &str| {
+                source
+                    .and_then(Value::as_object)
+                    .and_then(|source| source.get(key))
+                    .map(Value::py_str)
+                    .unwrap_or_default()
+            };
+            let mut entry = (*row).clone();
+            if let Some(prices) = field("prices")
+                .and_then(Value::as_object)
+                .and_then(|prices| prices.get(model))
+                .and_then(Value::as_object)
+            {
+                for (key, value) in prices.iter() {
+                    entry.insert(key.clone(), value.clone());
+                }
+            }
+            entry.insert("as_of".to_string(), Value::Str(today.to_string()));
+            entry.insert(
+                "source".to_string(),
+                Value::Str(format!(
+                    "{} checked {today}; sha256 {}; standard short-context prices",
+                    part("url"),
+                    part("sha256")
+                )),
+            );
+            appended.push(Value::Object(entry));
+        }
+    }
+    if !appended.is_empty() {
+        if let Some(Value::Array(rows)) = match &mut catalog {
+            Value::Object(catalog) => catalog.get_mut("rates"),
+            _ => None,
+        } {
+            rows.extend(appended);
+        }
+        let text = format!(
+            "{}\n",
+            pyjson::dumps(
+                &catalog,
+                &pyjson::Dumps {
+                    indent: Some(2),
+                    ..pyjson::Dumps::default()
+                }
+            )
+        );
+        let directory = file.parent().unwrap_or(std::path::Path::new("."));
+        let temporary = directory.join(crate::evidence::random_name(".tmp"));
+        let written = std::fs::metadata(&file)
+            .and_then(|found| {
+                std::fs::write(&temporary, text.as_bytes())?;
+                std::fs::set_permissions(&temporary, found.permissions())?;
+                std::fs::rename(&temporary, &file)
+            })
+            .map_err(io);
+        let _ = std::fs::remove_file(&temporary);
+        written?;
+    }
+    if let Value::Object(fields) = &mut report {
+        fields.insert("refreshed".to_string(), Value::Bool(!changes.is_empty()));
+    }
+    Ok(report)
+}
+
+/// The lines `check` and `refresh` print without `--json`.
 pub fn render(report: &Value) -> String {
     let field = |key: &str| report.as_object().and_then(|report| report.get(key));
     let mut out = String::new();
@@ -846,10 +988,12 @@ pub fn render(report: &Value) -> String {
             .and_then(Value::as_array)
             .map_or(0, <[Value]>::len)
     };
+    let refreshed = field("refreshed").is_some_and(Value::truthy);
     out.push_str(&format!(
-        "{} models checked; {} changed\n",
+        "{} models checked; {} changed{}\n",
         count("models"),
-        count("changes")
+        count("changes"),
+        if refreshed { "; catalog refreshed" } else { "" }
     ));
     out
 }

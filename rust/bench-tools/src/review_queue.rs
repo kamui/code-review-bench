@@ -1348,11 +1348,9 @@ fn scan(
                         let mine = fs::metadata(&directory)
                             .is_ok_and(|found| effects.uid == 0 || found.uid() == effects.uid);
                         if mine || member {
-                            let line = pysemantics::file_failure(
-                                &error,
-                                directory.as_os_str().as_bytes(),
-                            )
-                            .line();
+                            let line =
+                                pysemantics::file_failure(&error, directory.as_os_str().as_bytes())
+                                    .line();
                             if member {
                                 unreadable_members.push((stat, line, mine));
                             } else {
