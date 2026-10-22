@@ -92,7 +92,10 @@
 //!   of the process table in a row find no live process that carries the marker, names the attempt directory in its
 //!   environment, command or working directory, belongs to the launch's process group, or descends from one that
 //!   does. A recorded PID now held by a process with another start time is that other process, and a process older
-//!   than the launch is not the launch's.
+//!   than the launch is not the launch's. The process group counts only while it is shown to be the launch's: the
+//!   wrapper still holds its PID with its recorded start time, or a live member carries the marker or names the
+//!   attempt directory. A group number stays taken while any member lives, so once every process of the launch has
+//!   ended, an unrelated group can take it.
 //! - `running` otherwise, with the processes listed.
 //!
 //! A process of this user that is not older than the launch, is not a zombie, and refuses a read of its
@@ -121,6 +124,10 @@
 //!   reads only the first thread's working directory.
 //! - A single-threaded process is between images during `exec`. `environ` and `cmdline` can read empty without an
 //!   error, so they expose neither the marker nor the attempt directory.
+//!
+//! One more limit comes from group reuse. Once the wrapper has ended, a live process left in its group counts only
+//! while some live member carries the marker or names the attempt directory. Without one, nothing tells the
+//! launch's group from an unrelated group that took the number later, so the launch reads `absent`.
 //!
 //! This command never signals a process.
 //!
@@ -1248,6 +1255,13 @@ fn scan(
     }
     if let Some(directory) = attempt_dir {
         needles.push(directory.as_os_str().as_bytes().to_vec());
+        // The reviewer's home, temporary directory and working directory are canonical paths, which a work root
+        // with a symbolic link or `..` in it does not spell the same way.
+        if let Ok(canonical) = fs::canonicalize(directory)
+            && canonical != directory
+        {
+            needles.push(canonical.into_os_string().into_vec());
+        }
     }
     let recorded = integer(get(evidence, "pid")).filter(|pid| *pid != 0);
     let wrapper = match recorded {
@@ -1273,9 +1287,32 @@ fn scan(
                 .filter(|session| *session != 0)
                 .map(|session| (session, true))
         });
+    // A PID stays allocated while any process uses it as its process group, so a live wrapper with its recorded
+    // start time, or a live member that carries the marker or names the attempt directory, shows the group is the
+    // launch's own. Without either, the group's number may have been reused by an unrelated group after every
+    // process of the launch ended.
+    let wrapper_holds_group = wrapper.is_some() && !reused;
+    let in_group = |stat: &Stat| {
+        !reused
+            && group.is_some_and(|(group, session)| {
+                (if session {
+                    stat.session
+                } else {
+                    stat.process_group
+                }) == group
+            })
+    };
+    let group_reason = || {
+        let (group, session) = group.unwrap_or_default();
+        let what = if session { "session" } else { "process group" };
+        format!("{what} {group}")
+    };
     let mut table: BTreeMap<i64, Stat> = BTreeMap::new();
     let mut ours: BTreeMap<i64, String> = BTreeMap::new();
     let mut unreadable = Vec::new();
+    let mut group_confirmed = wrapper_holds_group;
+    let mut unconfirmed_members: Vec<i64> = Vec::new();
+    let mut unreadable_members: Vec<(Stat, String, bool)> = Vec::new();
     for entry in fs::read_dir(proc_root)? {
         let entry = entry?;
         let Some(pid) = entry
@@ -1290,19 +1327,11 @@ fn scan(
             continue;
         };
         if stat.start_ticks >= since {
-            let in_group = group.is_some_and(|(group, session)| {
-                (if session {
-                    stat.session
-                } else {
-                    stat.process_group
-                }) == group
-            });
+            let member = in_group(&stat);
             if recorded == Some(pid) && !reused {
                 ours.insert(pid, "the recorded PID and start time".into());
-            } else if in_group && !reused {
-                let (group, session) = group.unwrap_or_default();
-                let what = if session { "session" } else { "process group" };
-                ours.insert(pid, format!("{what} {group}"));
+            } else if member && wrapper_holds_group {
+                ours.insert(pid, group_reason());
             } else if !stat.ended() && !needles.is_empty() {
                 let directory = entry.path();
                 let held = fs::read(directory.join("environ")).and_then(|environ| {
@@ -1314,25 +1343,51 @@ fn scan(
                     Ok(held) => {
                         if needles.iter().any(|needle| contains(&held, needle)) {
                             ours.insert(pid, "the launch marker or the attempt directory".into());
+                            group_confirmed |= member;
+                        } else if member {
+                            unconfirmed_members.push(pid);
                         }
                     }
                     Err(error) if gone(&error) => continue,
                     Err(error) => {
                         // Another user's process cannot be read and is not this launch's; an unreadable one of ours
                         // might be.
-                        if let Ok(found) = fs::metadata(&directory)
-                            && (effects.uid == 0 || found.uid() == effects.uid)
-                        {
-                            let failure =
-                                pysemantics::file_failure(&error, directory.as_os_str().as_bytes());
-                            unreadable.push((stat, failure.line()));
+                        let mine = fs::metadata(&directory)
+                            .is_ok_and(|found| effects.uid == 0 || found.uid() == effects.uid);
+                        if mine || member {
+                            let line =
+                                pysemantics::file_failure(&error, directory.as_os_str().as_bytes())
+                                    .line();
+                            if member {
+                                unreadable_members.push((stat, line, mine));
+                            } else {
+                                unreadable.push((stat, line));
+                            }
                         }
                         continue;
                     }
                 }
+            } else if member {
+                unconfirmed_members.push(pid);
             }
         }
         table.insert(pid, stat);
+    }
+    if group_confirmed {
+        for pid in unconfirmed_members {
+            ours.insert(pid, group_reason());
+        }
+        for (stat, _, _) in unreadable_members {
+            ours.insert(stat.pid, group_reason());
+            table.insert(stat.pid, stat);
+        }
+    } else {
+        unreadable.extend(
+            unreadable_members
+                .into_iter()
+                .filter(|(_, _, mine)| *mine)
+                .map(|(stat, line, _)| (stat, line)),
+        );
     }
     let mut grew = true;
     while grew {

@@ -11,6 +11,7 @@ REPO = Path(__file__).resolve().parents[1]
 # Python program, the command that moved out of it, and the command that replaces it.
 MOVED = (
     ("bench/tools/rates.py", "check", "bench-tools rates check"),
+    ("bench/tools/rates.py", "refresh", "bench-tools rates refresh"),
     ("bench/tools/upstream.py", "report", "bench-tools upstream report"),
     ("bench/tools/upstream.py", "collect", "bench-tools upstream collect"),
     ("bench/tools/evidence_store.py", "fetch", "bench-tools evidence fetch"),
@@ -50,6 +51,9 @@ MOVED_PROGRAMS = (
     ("bench/tools/ruling_record.py", "bench-tools ruling check"),
     ("bench/tools/ruling_dossier.py", "bench-tools ruling dossier"),
     ("bench/tools/check_manifest.py", "bench-tools check-manifest"),
+    ("bench/tools/seal.py", "bench-tools seal"),
+    ("bench/tools/compare.py", "bench-tools provision hash"),
+    ("tools/fetch_freeze_commits.py", "bench-tools fetch-freeze-commits"),
     ("bench/tools/methodology.py", "bench-tools methodology"),
     ("tools/export_explorer.py", "bench-tools export-explorer"),
     ("bench/tools/grade.py", "bench-tools grade"),
@@ -128,6 +132,8 @@ class MovedCommands(unittest.TestCase):
     def test_package_scripts_run_the_rust_commands(self):
         scripts = json.loads((REPO / "package.json").read_text(encoding="utf-8"))["scripts"]
         self.assertEqual(scripts["rates:check"], "python3 bench/tools/rust_runtime.py exec bench-tools -- rates check")
+        self.assertEqual(scripts["rates:refresh"],
+                         "python3 bench/tools/rust_runtime.py exec bench-tools -- rates refresh")
         self.assertEqual(scripts["audit:maintainers"],
                          "python3 bench/tools/rust_runtime.py exec bench-tools -- upstream report")
         self.assertEqual(scripts["verify:import"], "bun run evidence:fetch && python3 bench/tools/rust_runtime.py exec "
