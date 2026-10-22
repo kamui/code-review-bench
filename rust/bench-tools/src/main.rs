@@ -1651,12 +1651,19 @@ struct AttemptAuditArgs {
     allowed_prefix: Option<Vec<OsString>>,
     #[arg(long, allow_negative_numbers = true)]
     isolation_settings: Option<OsString>,
-    /// The operator authorized toolchain and package-manager network access for the cohort.
+    /// The operator authorized toolchain and package-manager network access for the cohort. A tool that fetches
+    /// an arbitrary address stays a violation unless the attempt ran behind the network gate.
     #[arg(long)]
     allow_network: bool,
     /// The sandbox.json written for a bwrap-confined attempt.
     #[arg(long, allow_negative_numbers = true)]
     mount_sandbox: Option<OsString>,
+    /// The gate.json of an attempt that ran behind the network gate: apply the gated rules.
+    #[arg(long, allow_negative_numbers = true, requires = "target")]
+    network_gate: Option<OsString>,
+    /// The task's target directory, which names its repository, pull request, issues and titles.
+    #[arg(long, allow_negative_numbers = true)]
+    target: Option<OsString>,
     #[arg(long)]
     json: bool,
 }
@@ -4183,6 +4190,8 @@ fn run_attempt_audit(arguments: AttemptAuditArgs) -> Result<ExitCode, ExitCode> 
         isolation_settings: arguments.isolation_settings.map(bytes),
         allow_network: arguments.allow_network,
         mount_sandbox: arguments.mount_sandbox.map(bytes),
+        network_gate: arguments.network_gate.map(bytes),
+        target: arguments.target.map(bytes),
         json: arguments.json,
     };
     let (stdout, violations) = attempt_audit::run(&options).map_err(|error| {
