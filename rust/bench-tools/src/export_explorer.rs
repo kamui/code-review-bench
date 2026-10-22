@@ -1031,7 +1031,6 @@ fn non_finite(value: &Value) -> Option<&'static str> {
 
 impl Exporter {
     /// `write_export`: the dataset, with every detail file and linked evidence staged when staging.
-    #[allow(clippy::too_many_lines)]
     fn write_export(&mut self, facts: &Facts) -> Result<Value> {
         let (selected, documents, status) = (&facts.selected, &facts.documents, &facts.status);
         let registry = read(&self.bench.join(b"scoreboard.current.json"))?;

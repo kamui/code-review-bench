@@ -333,9 +333,7 @@ fn remove(path: &str) -> Result<()> {
 }
 
 fn mtime(metadata: &fs::Metadata) -> f64 {
-    #[allow(clippy::cast_precision_loss)]
-    let seconds = metadata.mtime() as f64 + metadata.mtime_nsec() as f64 * 1e-9;
-    seconds
+    metadata.mtime() as f64 + metadata.mtime_nsec() as f64 * 1e-9
 }
 
 /// The epoch time of the newest file among the attempt's `std*` streams and its home, or None.
@@ -381,7 +379,6 @@ fn timestamp(value: &Value) -> Option<(f64, bool)> {
     let offset = moment
         .get(10..)
         .is_some_and(|rest| rest.contains(['+', '-']));
-    #[allow(clippy::cast_precision_loss)]
     let seconds = micros as f64 / 1e6;
     Some((seconds, offset))
 }
@@ -1850,7 +1847,6 @@ fn pinned_here(run_dir: &str, action: &str) -> Result<()> {
 }
 
 /// Build the record; return it with the output directory.
-#[allow(clippy::too_many_lines)]
 fn file_attempt(arguments: &Arguments) -> Result<(Value, String)> {
     pinned_here(&arguments.run, "file")?;
     let attempt_dir = abspath(&arguments.attempt_dir)?;
