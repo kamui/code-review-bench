@@ -891,7 +891,8 @@ fn sandbox_gate(profile: &str, prepared: &Prepared) -> R<Option<network_gate::Ga
 
 /// Start `profile`'s sandbox for a client installed under `client_dir`: its gate, its `bwrap` prefix and its
 /// receipt, written to `sandbox.json` with the run's execution policy. bwrap-v2 shows only uv's managed Pythons,
-/// which virtualenvs link to: the rest of uv's data directory holds the credentials `uv auth login` saves.
+/// which virtualenvs link to: the rest of uv's data directory holds the credentials `uv auth login` saves, so
+/// bwrap-v2 refuses a client directory that holds it.
 fn start_sandbox(
     prepared: &Prepared,
     profile: &str,
@@ -900,6 +901,13 @@ fn start_sandbox(
 ) -> R<(Vec<String>, Value, Option<network_gate::Gate>)> {
     let source = source_home();
     let uv = source.join(".local/share/uv");
+    if profile == "bwrap-v2" && resolve(&uv).starts_with(resolve(client_dir)) {
+        return Err(format!(
+            "bwrap-v2 would show uv's credentials in {} with the client directory {}; install the pinned client outside it",
+            uv.display(),
+            client_dir.display()
+        ));
+    }
     let readonly = [
         client_dir.to_path_buf(),
         source.join(".local/share/mise"),
@@ -3560,6 +3568,36 @@ mod tests {
         }
     }
 
+    fn sandbox_prepared(fixture: &Recut, profile: &str) -> Prepared {
+        let attempt = fixture
+            .root
+            .parent()
+            .unwrap()
+            .join(format!("attempt-{profile}"));
+        fs::create_dir_all(attempt.join("tmp")).unwrap();
+        Prepared {
+            run_dir: fixture.run.clone(),
+            attempt: attempt.clone(),
+            clone: attempt,
+            entry: Value::Null,
+            model: String::new(),
+            effort: String::new(),
+            skill_source: PathBuf::new(),
+            tree_hash: String::new(),
+            runner: Value::Null,
+            cache: PathBuf::new(),
+            work: PathBuf::new(),
+            artifact_root: PathBuf::new(),
+            skill_name: String::new(),
+            input: PathBuf::new(),
+            prompt: String::new(),
+            tools: review_isolation::own_executable().unwrap(),
+            target_dir: fixture.target.clone(),
+            packet: PathBuf::new(),
+            policy: 2,
+        }
+    }
+
     #[test]
     fn bwrap_v2_shows_only_uv_managed_pythons_and_records_the_policy() {
         if review_isolation::which("bwrap").is_none() {
@@ -3573,39 +3611,13 @@ mod tests {
             ("bwrap-v1", uv.clone(), None),
             ("bwrap-v2", uv.join("python"), Some(uv.join("credentials"))),
         ] {
-            let attempt = fixture
-                .root
-                .parent()
-                .unwrap()
-                .join(format!("attempt-{profile}"));
-            fs::create_dir_all(attempt.join("tmp")).unwrap();
-            let prepared = Prepared {
-                run_dir: fixture.run.clone(),
-                attempt: attempt.clone(),
-                clone: attempt.clone(),
-                entry: Value::Null,
-                model: String::new(),
-                effort: String::new(),
-                skill_source: PathBuf::new(),
-                tree_hash: String::new(),
-                runner: Value::Null,
-                cache: PathBuf::new(),
-                work: PathBuf::new(),
-                artifact_root: PathBuf::new(),
-                skill_name: String::new(),
-                input: PathBuf::new(),
-                prompt: String::new(),
-                tools: review_isolation::own_executable().unwrap(),
-                target_dir: fixture.target.clone(),
-                packet: PathBuf::new(),
-                policy: 2,
-            };
+            let prepared = sandbox_prepared(&fixture, profile);
             let (_, receipt, gate) =
                 start_sandbox(&prepared, profile, Path::new("/usr"), &[]).unwrap();
             if let Some(gate) = gate {
                 gate.stop().unwrap();
             }
-            let saved = read_json(&attempt.join("sandbox.json")).unwrap();
+            let saved = read_json(&prepared.attempt.join("sandbox.json")).unwrap();
             assert!(saved.py_eq(&receipt));
             assert!(get(&saved, "execution_policy").py_eq(&int(2)));
             let readonly = get(&saved, "readonly").py_str();
@@ -3622,6 +3634,40 @@ mod tests {
                 );
                 assert!(!readonly.contains(&hidden.to_string_lossy().into_owned()));
             }
+        }
+    }
+
+    #[test]
+    fn bwrap_v2_refuses_a_client_directory_that_holds_uv_credentials() {
+        let fixture = Recut::new();
+        let home = source_home();
+        let prepared = sandbox_prepared(&fixture, "bwrap-v2");
+        for client_dir in [
+            home.join(".local"),
+            home.join(".local/share"),
+            home.clone(),
+            PathBuf::from("/"),
+        ] {
+            let Err(error) = start_sandbox(&prepared, "bwrap-v2", &client_dir, &[]) else {
+                panic!(
+                    "bwrap-v2 started with the client directory {}",
+                    client_dir.display()
+                );
+            };
+            assert!(error.contains("would show uv's credentials"), "{error}");
+            assert!(!prepared.attempt.join("sandbox.json").exists());
+            assert!(!prepared.attempt.join("network").exists());
+        }
+        if review_isolation::which("bwrap").is_some() && home.join(".local").is_dir() {
+            let prepared = sandbox_prepared(&fixture, "bwrap-v1");
+            let (_, receipt, gate) =
+                start_sandbox(&prepared, "bwrap-v1", &home.join(".local"), &[]).unwrap();
+            assert!(gate.is_none());
+            assert!(
+                get(&receipt, "readonly")
+                    .py_str()
+                    .contains(&format!("'{}'", home.join(".local").display()))
+            );
         }
     }
 }
