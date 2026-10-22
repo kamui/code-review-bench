@@ -84,6 +84,13 @@ export function conditionDifferences(configurations: Configuration[]) {
   })
 }
 
+export function peerLabel(configurations: Configuration[]): string | null {
+  const values = new Set(configurations.flatMap(configuration => configuration.conditions
+    .filter(condition => condition.name === 'Cross-model peer').flatMap(condition => condition.values)))
+  values.delete('none')
+  return values.size ? `Cross-model peer ${Array.from(values).join(', ')}` : null
+}
+
 export const percent = (value: number | null): string => value === null ? '—' : `${value.toFixed(1)}%`
 export const money = (value: number | null): string => value === null ? '—' : `$${value.toFixed(value > 0 && value < 0.01 ? 4 : 2)}`
 export const compact = (value: number | null): string => value === null ? '—'

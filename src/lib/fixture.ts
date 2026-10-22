@@ -123,12 +123,12 @@ export function scorecardFixture(): Dataset {
       [queue, thrice(() => fixing(queue, ['S3'], 'safe', ungraded))], [docs, quiet(docs, ungraded)], [audited, quiet(audited, ungraded)], [empty, quiet(empty, ungraded)], [novel, quiet(novel, ungraded)]],
     sparse: [[payments, thrice(() => fixing(payments, ['S1', 'S2'], 'safe', steady))], [queue, thrice(() => fixing(queue, ['S3'], 'safe', steady))]],
   }
-  const conditions = (client: string, network: string, sandbox: string) => [{ name: 'Client', values: [client] }, { name: 'Reasoning effort', values: ['high'] },
-    { name: 'Network access', values: [network] }, { name: 'Sandbox', values: [sandbox] }, { name: 'Billing basis', values: ['api-dollars'] }]
+  const conditions = (client: string, network: string, sandbox: string, peer: string) => [{ name: 'Client', values: [client] }, { name: 'Reasoning effort', values: ['high'] },
+    { name: 'Network access', values: [network] }, { name: 'Sandbox', values: [sandbox] }, { name: 'Billing basis', values: ['api-dollars'] }, { name: 'Cross-model peer', values: [peer] }]
   const builtin = (short: string, model: string, client: string): Partial<Configuration> =>
-    ({ short, label: `${short} (fixture)`, method: 'claude-builtin', models: [model], version: client, conditions: conditions(client, 'off', 'n/a') })
+    ({ short, label: `${short} (fixture)`, method: 'claude-builtin', models: [model], version: client, conditions: conditions(client, 'off', 'n/a', 'none') })
   const skill = (short: string, model: string, client: string): Partial<Configuration> => ({ short, label: `${short} (fixture)`, method: 'ce-code-review', builtin: false,
-    reviewEdition: 'snapshot', models: [model], version: client, conditions: conditions(client, 'on', 'workspace-write'),
+    reviewEdition: 'snapshot', models: [model], version: client, conditions: conditions(client, 'on', 'workspace-write', 'off (single provider)'),
     skillReleases: [{ version: '1.0.0', date: '2026-09-01', dateSource: 'release', provenanceUrl: '' }] })
   const dataset = build(tasks, cells, { audit: 'unassessed', experimental: ['sparse'],
     candidates: [{ id: 'NC-00000000f1c5', taskId: 'novel', recordedAt: '2026-09-20T12:00:00Z', claim: 'A cache key omits the tenant and can serve another tenant\'s entry.',

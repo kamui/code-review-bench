@@ -16,7 +16,7 @@ import { EvidenceDrawer } from './EvidenceDrawer'
 import { MethodologyViews } from './MethodologyViews'
 import { Overview } from './Overview'
 import type { Inspection } from './EvidenceDrawer'
-import { Notes, notesFor, Value } from './Reading'
+import { Notes, notesFor, PeerNote, Value } from './Reading'
 
 export type Page = 'scorecard' | 'tasks'
 type LoadState = { kind: 'loading' } | { kind: 'failed'; message: string } | { kind: 'ready'; dataset: Dataset }
@@ -122,7 +122,8 @@ export function Dashboard({ dataset, page, now = new Date() }: { dataset: Datase
   const status = datasetStatus(dataset)
   const differing = conditionDifferences(summaries.map(row => row.configuration)).map(difference => difference.name.toLowerCase())
   const labels = (key: keyof Task['profile']) => Array.from(new Set(dataset.tasks.flatMap(task => task.profile[key]))).sort()
-  const editionIds = (configuration: Configuration) => configurations.filter(item => item.method === configuration.method && item.reviewEdition === configuration.reviewEdition).map(item => item.id)
+  const edition = (configuration: Configuration) => configurations.filter(item => item.method === configuration.method && item.reviewEdition === configuration.reviewEdition)
+  const editionIds = (configuration: Configuration) => edition(configuration).map(item => item.id)
   const toggleEdition = (configuration: Configuration) => {
     const ids = editionIds(configuration)
     setSelected(values => ids.every(id => values.includes(id)) ? values.filter(value => !ids.includes(value)) : Array.from(new Set([...values, ...ids])))
@@ -204,7 +205,8 @@ export function Dashboard({ dataset, page, now = new Date() }: { dataset: Datase
             <Stack gap="md">{editions.map(configuration => <div className="configuration-option" key={`${configuration.method}/${configuration.reviewEdition}`}>
               <Checkbox checked={editionIds(configuration).every(id => selected.includes(id))} indeterminate={editionIds(configuration).some(id => selected.includes(id)) && !editionIds(configuration).every(id => selected.includes(id))} onChange={() => toggleEdition(configuration)}
                 label={<span className="configuration-name"><Mark configuration={configuration} />{configuration.builtin ? configuration.method === 'codex' ? 'Codex built-in' : 'Claude built-in' : `/${configuration.method}`}</span>} />
-              {!configuration.builtin && <span className="configuration-version">{skillReleaseLabel(configurations.filter(item => item.method === configuration.method && item.reviewEdition === configuration.reviewEdition))}</span>}
+              {!configuration.builtin && <span className="configuration-version">{skillReleaseLabel(edition(configuration))}</span>}
+              <PeerNote configurations={edition(configuration)} className="configuration-version" />
               {configuration.reviewChange && <Anchor className="configuration-version" href={configuration.reviewChange.url} target="_blank" rel="noreferrer">Review changed: {configuration.reviewChange.summary}</Anchor>}
             </div>)}</Stack>
             <p className="shape-key"><span><Mark configuration={{ method: '', reviewEdition: '', builtin: true }} /> Built-in reviewer</span><span><Mark configuration={{ method: '', reviewEdition: '', builtin: false }} /> Skill</span></p>
@@ -239,7 +241,8 @@ export function Dashboard({ dataset, page, now = new Date() }: { dataset: Datase
             </button>
           </Table.Th>)}<Table.Th>PR coverage</Table.Th><Table.Th /></Table.Tr></Table.Thead>
           <Table.Tbody>{tableRows.map(row => <Table.Tr key={row.configuration.id}>
-            <Table.Td><button className="text-button setup-label" onClick={() => setInspection({ kind: 'configuration', id: row.configuration.id })}><Mark configuration={row.configuration} size={10} />{row.configuration.short}</button></Table.Td>
+            <Table.Td><button className="text-button setup-label" onClick={() => setInspection({ kind: 'configuration', id: row.configuration.id })}><Mark configuration={row.configuration} size={10} />{row.configuration.short}</button>
+              <PeerNote configurations={[row.configuration]} className="rank-model" /></Table.Td>
             {(['equalProblem', 'equalPr', 'seriousCaught', 'repeatedMisses', 'cost', 'tokens', 'refuted'] as const).map(column => <Table.Td key={column}><Value cell={row.cells[column]} notes={tableNotes} /></Table.Td>)}
             <Table.Td><span className="completion-count">{row.completed}/{row.trials}</span></Table.Td>
             <Table.Td>{row.tasks}/{shared.length}</Table.Td>

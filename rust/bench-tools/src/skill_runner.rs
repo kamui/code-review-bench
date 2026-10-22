@@ -5,7 +5,9 @@
 //! `home`. The runner refuses unless the run's `runtimes.frozen.json` pins this bench-tools, checks the run, arm,
 //! skill, target and clone pins, writes the attempt's `input.md`, creates a clean home before copying credentials,
 //! starts one new root session, and keeps its raw output, transcripts, usage, session evidence and native skill
-//! artifacts. It never resumes a session, and normalizes the native report with this bench-tools.
+//! artifacts. It never resumes a session, and normalizes the native report with this bench-tools. When
+//! `runner.json` sets `cross_model_review_mode` to `off`, the runner writes that setting to CE's local config in the
+//! clone and excludes the file from Git before it records the clone's tree identity.
 //!
 //! Codex runs with project documents and apps off and every skill but the frozen one disabled. Claude runs in
 //! `--safe-mode`, which disables CLAUDE.md discovery, installed skills, plugins, hooks, MCP servers and custom
@@ -93,6 +95,8 @@ const PEER_PROGRAMS: [&str; 4] = [
     "cross-model-adversarial-review.sh",
     "peer-job-runner.py",
 ];
+// CE reads `cross_model_review_mode` from this file at the repository root before its own `config.yaml`.
+const CE_LOCAL_CONFIG: &str = ".compound-engineering/config.local.yaml";
 const COMMAND_PREFIXES: [&str; 11] = [
     "bash", "sh", "zsh", "exec", "nohup", "env", "command", "time", "setsid", "python", "python3",
 ];
@@ -370,6 +374,52 @@ fn tree_identity(clone: &Path) -> R<String> {
         git(clone, &["status", "--porcelain", "--untracked-files=all"])?
     );
     Ok(sha_of(state.as_bytes()))
+}
+
+/// Turn CE's cross-model peer off in the clone when `runner.json` asks for it. Git's exclude file hides the
+/// config, so the tree identity and the clean-clone checks see the pinned tree.
+fn configure_cross_model_review(clone: &Path, runner: &Value) -> R<()> {
+    match get(runner, "cross_model_review_mode") {
+        Value::Null => return Ok(()),
+        mode if mode.as_str() == Some("off") => {}
+        _ => return Err("cross_model_review_mode must be 'off' when set".to_string()),
+    }
+    let config = clone.join(CE_LOCAL_CONFIG);
+    if config.symlink_metadata().is_ok() {
+        return Err(format!("refusing to replace the clone's {CE_LOCAL_CONFIG}"));
+    }
+    if let Some(parent) = config.parent() {
+        mkdirs(parent)?;
+    }
+    write(&config, "cross_model_review_mode: off\n")?;
+    let exclude = clone.join(git(clone, &["rev-parse", "--git-path", "info/exclude"])?);
+    if let Some(parent) = exclude.parent() {
+        mkdirs(parent)?;
+    }
+    let mut excluded = if exclude.exists() {
+        read_text(&exclude)?
+    } else {
+        String::new()
+    };
+    if !excluded.is_empty() && !excluded.ends_with('\n') {
+        excluded.push('\n');
+    }
+    excluded.push_str(&format!("/{CE_LOCAL_CONFIG}\n"));
+    write(&exclude, &excluded)?;
+    let status = git(
+        clone,
+        &[
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--",
+            CE_LOCAL_CONFIG,
+        ],
+    )?;
+    if !status.is_empty() {
+        return Err(format!("{CE_LOCAL_CONFIG} left the clone's status unclean"));
+    }
+    Ok(())
 }
 
 fn mise_paths() -> R<String> {
@@ -730,6 +780,7 @@ fn prepare_attempt(arguments: &Arguments, client: Client) -> R<Prepared> {
     );
     let input = attempt.join("input.md");
     write(&input, &prompt)?;
+    configure_cross_model_review(&clone, &runner)?;
     write(
         &attempt.join("tree-before.txt"),
         &format!("{}\n", tree_identity(&clone)?),
@@ -3109,6 +3160,49 @@ mod tests {
             fixture.freeze(client, "Review {PACKET}\n", true);
             let error = fixture.prompt(client, "packet.md").unwrap_err();
             assert!(error.contains("PR packet differs"), "{error}");
+        }
+    }
+
+    #[test]
+    fn a_runner_that_turns_the_cross_model_peer_off_configures_ce_and_keeps_the_clone_clean() {
+        let fixture = Recut::new();
+        let runner = fixture.run.join("inputs/runner.json");
+        let clone = fixture.root.parent().unwrap().join("attempt/clone");
+        let config = clone.join(CE_LOCAL_CONFIG);
+        for client in [Client::Codex, Client::Claude] {
+            fixture.freeze(client, "Review {PACKET}\n", false);
+            fixture.prompt(client, "packet.md").unwrap();
+            assert!(!config.exists());
+
+            put(
+                &runner,
+                r#"{"artifact_root": "report", "cross_model_review_mode": "off"}"#,
+            );
+            fixture.freeze(client, "Review {PACKET}\n", false);
+            fixture.prompt(client, "packet.md").unwrap();
+            assert_eq!(
+                fs::read_to_string(&config).unwrap(),
+                "cross_model_review_mode: off\n"
+            );
+            assert_eq!(
+                git_in(&clone, &["status", "--porcelain", "--untracked-files=all"]),
+                ""
+            );
+            let clean = sha_of(format!("{}\n\n", fixture.head).as_bytes());
+            let before = fs::read_to_string(clone.with_file_name("tree-before.txt")).unwrap();
+            assert_eq!(before, format!("{clean}\n"));
+
+            put(
+                &runner,
+                r#"{"artifact_root": "report", "cross_model_review_mode": "auto"}"#,
+            );
+            fixture.freeze(client, "Review {PACKET}\n", false);
+            let error = fixture.prompt(client, "packet.md").unwrap_err();
+            assert!(
+                error.contains("cross_model_review_mode must be 'off'"),
+                "{error}"
+            );
+            put(&runner, r#"{"artifact_root": "report"}"#);
         }
     }
 }

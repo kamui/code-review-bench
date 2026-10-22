@@ -10,7 +10,7 @@ import { labelSegments, overviewColumns, overviewFirstDirection, overviewKey, ov
 import type { Band, LabelSegment, OverviewColumn, OverviewSort, Scorecard } from '../lib/scoring'
 import { Mark, reviewColor, setupParts } from './Chart'
 import { segmentClass, segmentLabels, swatch, trueSegments } from './ClaimLabels'
-import { Notes, notesFor, Value } from './Reading'
+import { Notes, notesFor, PeerNote, Value } from './Reading'
 
 const costScale: Scale = { kind: 'log', min: 0.001, max: 10 }
 const costTicks = [0.001, 0.01, 0.1, 1, 10]
@@ -105,7 +105,7 @@ export function Overview({ summaries, detection, sort, onSort, onSelect }: {
           <div role="rowheader" className="overview-name">
             <button type="button" className="text-button rank-name" onClick={event => { event.stopPropagation(); onSelect(configuration.id) }}
               aria-label={`${configuration.short}. Inspect evidence`}>
-              <Mark configuration={configuration} /><span><strong>{method}</strong><span className="rank-model">{model}{effort && ` · ${effort}`}</span></span>
+              <Mark configuration={configuration} /><span><strong>{method}</strong><span className="rank-model">{model}{effort && ` · ${effort}`}</span><PeerNote configurations={[configuration]} className="rank-model" /></span>
             </button>
           </div>
           <Cell label={heads.detection.short} cell={cells.detection} notes={notes} grid={shareTicks}>
