@@ -50,8 +50,7 @@ cargo test --locked --manifest-path rust/bench-tools/Cargo.toml
 (cd rust/bench-tools && cargo test --locked --test behavior_contracts -- grade-prepare:: grade-map::)
 (cd rust/bench-tools && cargo test --locked --test grading_sandbox --test grade_dispatch -- --ignored)
 python3 bench/tools/rust_runtime.py exec bench-tools -- grading probe-claude
-python3 bench/tools/test_codex_dispatch.py
-python3 bench/tools/test_claude_dispatch.py
+(cd rust/bench-tools && cargo test --locked --test dispatch)
 (cd rust/bench-tools && cargo test --locked --lib prune_workspace)
 (cd rust/bench-tools && cargo test --locked provision)
 python3 bench/tools/test_cache_replacements.py
