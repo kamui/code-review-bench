@@ -128,6 +128,14 @@ enum Cli {
     /// Run a command whose only network exit is the attempt's logging, deny-listing proxy.
     #[command(subcommand, infer_long_args = true)]
     NetworkGate(NetworkGateCommand),
+    /// Run COMMAND in its own process group and send the group SIGTERM after SECONDS, as GNU timeout does; exits
+    /// with COMMAND's code, 124 after the deadline, or 125 when it cannot run COMMAND.
+    #[command(infer_long_args = true)]
+    Timeout {
+        seconds: u64,
+        #[arg(required = true, allow_hyphen_values = true, trailing_var_arg = true)]
+        command: Vec<OsString>,
+    },
     /// File one dispatched attempt directory as a run's attempt.json.
     #[command(infer_long_args = true)]
     FileAttempt(Box<FileAttemptArgs>),
@@ -3480,6 +3488,16 @@ fn run_network_gate(command: NetworkGateCommand) -> Result<ExitCode, ExitCode> {
     Ok(ExitCode::from(u8::try_from(code).unwrap_or(1)))
 }
 
+fn run_timeout(seconds: u64, command: &[OsString]) -> Result<ExitCode, ExitCode> {
+    let failed = |error: String| {
+        eprintln!("timeout: {error}");
+        ExitCode::from(125)
+    };
+    let executable = review_isolation::own_executable().map_err(failed)?;
+    let code = bench_tools::timeout::run(&executable, seconds, command).map_err(failed)?;
+    Ok(ExitCode::from(u8::try_from(code).unwrap_or(1)))
+}
+
 fn refused(prefix: &str) -> impl Fn(String) -> ExitCode + '_ {
     move |error| {
         eprintln!("{prefix}: {error}");
@@ -5569,6 +5587,7 @@ fn main() -> ExitCode {
         Cli::NativeArtifacts(command) => run_native_artifacts(command),
         Cli::ReviewIsolation(command) => run_review_isolation(command),
         Cli::NetworkGate(command) => run_network_gate(command),
+        Cli::Timeout { seconds, command } => run_timeout(seconds, &command),
         Cli::FileAttempt(arguments) => run_file_attempt(*arguments),
         Cli::AttemptAudit(arguments) => run_attempt_audit(arguments),
         Cli::CleanContext(command) => run_clean_context(command),
