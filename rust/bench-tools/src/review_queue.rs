@@ -1916,12 +1916,16 @@ fn arm_of(record: &Value) -> String {
     get(get(record, "cell"), "arm").py_str()
 }
 
-/// Filed valid attempts whose clone or cache remains, or whose cleanup receipt is missing.
+/// Filed valid attempts whose clone or cache remains, or whose cleanup receipt is missing. An attempt whose audit
+/// flag awaits a ruling keeps its clone on purpose, so it blocks nothing.
 fn unpruned(run: &Run) -> Q<Vec<String>> {
     let mut left = Vec::new();
     for (attempt, record) in &run.filed {
         let workspace = run.work.join(attempt);
-        if !is_valid(record) || !exists(&workspace)? {
+        if !is_valid(record)
+            || crate::prune_workspace::awaits_ruling(record)
+            || !exists(&workspace)?
+        {
             continue;
         }
         let receipt = workspace.join("workspace-pruned.json");

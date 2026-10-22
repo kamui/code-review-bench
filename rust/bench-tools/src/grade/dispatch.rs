@@ -462,6 +462,9 @@ fn audit(work: &Path) -> Vec<String> {
         isolation_settings: None,
         allow_network: false,
         mount_sandbox: None,
+        network_gate: None,
+        target: None,
+        packet: None,
         json: true,
     });
     let report = audited.and_then(|(stdout, _)| {

@@ -659,6 +659,34 @@ fn incomplete_cleanup_of_a_valid_review_blocks_the_next_launch_until_it_is_prune
     assert_eq!(fx.launched().len(), 2);
 }
 
+#[test]
+fn a_review_whose_audit_flag_awaits_a_ruling_keeps_its_clone_and_blocks_nothing() {
+    let fx = fake();
+    assert_eq!(fx.run(Some(1)), 0);
+    let workspace = fx.work(RUN_A).join("att-001");
+    fs::remove_file(workspace.join("workspace-pruned.json")).expect("remove");
+    let filed = fx.run_dir(RUN_A).join("attempts/att-001/attempt.json");
+    let mut record = pyjson::loads(
+        &fs::read_to_string(&filed).expect("read"),
+        pyjson::Duplicates::KeepLast,
+    )
+    .expect("record");
+    if let Value::Object(fields) = &mut record {
+        fields.insert(
+            "audit".into(),
+            pyjson::loads(
+                r#"{"flags": [{"id": "flag-a", "ruling": null}]}"#,
+                pyjson::Duplicates::KeepLast,
+            )
+            .expect("audit"),
+        );
+    }
+    fs::write(&filed, pyjson::dumps(&record, &pyjson::Dumps::default())).expect("write");
+    *fx.cleanup_refusal.borrow_mut() = Some("an audit flag awaits a ruling".into());
+    assert_eq!(fx.run(Some(1)), 0);
+    assert_eq!(fx.launched().len(), 2);
+}
+
 fn texts_of(value: &Value) -> Vec<String> {
     value
         .as_array()
