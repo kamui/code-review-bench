@@ -1599,6 +1599,56 @@ fn a_reused_pid_is_another_process_and_is_left_alone() {
 }
 
 #[test]
+fn a_group_number_reused_after_the_launch_ended_is_another_group() {
+    let fx = fake();
+    fx.process(300, "S", 1, 100, 80, "HOME=/h");
+    let seen = observed(&fx, launch_evidence("m1"), None);
+    assert_eq!(status_of(&seen), "absent", "{seen:?}");
+    assert_eq!(get(&seen, "wrapper").py_str(), "gone");
+}
+
+#[test]
+fn a_group_is_the_launchs_while_its_wrapper_or_a_marked_member_lives() {
+    let fx = fake();
+    let matched = |seen: &Value| -> Vec<(String, String)> {
+        get(seen, "processes")
+            .as_array()
+            .expect("rows")
+            .iter()
+            .map(|row| (get(row, "pid").py_str(), get(row, "matched_by").py_str()))
+            .collect()
+    };
+    fx.process(300, "S", 1, 100, 80, "HOME=/h");
+    fx.process(301, "S", 1, 100, 81, "BENCH_QUEUE_LAUNCH=m1");
+    let seen = observed(&fx, launch_evidence("m1"), None);
+    assert_eq!(status_of(&seen), "running", "{seen:?}");
+    assert_eq!(
+        matched(&seen),
+        [
+            ("300".to_string(), "process group 100".to_string()),
+            (
+                "301".to_string(),
+                "the launch marker or the attempt directory".to_string()
+            )
+        ]
+    );
+    fs::remove_dir_all(fx.proc_root.join("301")).expect("remove");
+    fx.process(100, "S", 1, 100, 50, "HOME=/h");
+    let seen = observed(&fx, launch_evidence("m1"), None);
+    assert_eq!(status_of(&seen), "running", "{seen:?}");
+    assert_eq!(
+        matched(&seen),
+        [
+            (
+                "100".to_string(),
+                "the recorded PID and start time".to_string()
+            ),
+            ("300".to_string(), "process group 100".to_string())
+        ]
+    );
+}
+
+#[test]
 fn a_launch_this_process_cannot_attribute_is_unknown() {
     let fx = fake();
     let unknown = |pairs: Vec<(&str, Value)>, reason: &str| {
