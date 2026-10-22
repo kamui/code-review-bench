@@ -17,8 +17,10 @@ pub const PROBE: &str = "__probe-signal";
 
 const STOPPING: [Signal; 3] = [Signal::SIGHUP, Signal::SIGINT, Signal::SIGTERM];
 /// The signals that can wake the watcher once the hold ends. macOS discards an ignored signal even while it is
-/// blocked, so an ignored one cannot.
-const WAKING: [Signal; 2] = [Signal::SIGUSR2, Signal::SIGUSR1];
+/// blocked, so an ignored one cannot, nor can one whose default is to be ignored. Linux and macOS both take the
+/// lowest-numbered pending signal first, and these are numbered above every stop signal on both, so a stop signal
+/// still pending at the wake is noted before the watcher closes.
+const WAKING: [Signal; 2] = [Signal::SIGVTALRM, Signal::SIGPROF];
 
 fn set(signals: &[Signal]) -> SigSet {
     let mut set = SigSet::empty();
@@ -94,7 +96,7 @@ pub fn hold(executable: &Path) -> Result<Held, String> {
         }
     }
     let Some(close) = close else {
-        return Err("SIGUSR2 and SIGUSR1 are both ignored".to_string());
+        return Err("SIGVTALRM and SIGPROF are both ignored".to_string());
     };
     let waited = set(&[&held[..], &[close]].concat());
     let mut blocked = held;
@@ -105,28 +107,31 @@ pub fn hold(executable: &Path) -> Result<Held, String> {
         .thread_block()
         .map_err(|error| error.to_string())?;
     let watching = Arc::clone(&state);
-    let watcher = std::thread::spawn(move || {
-        while let Ok(signal) = waited.wait() {
-            if signal == close {
-                if watching.closing.load(Ordering::SeqCst) {
-                    return;
-                }
-            } else {
-                let _ = watching.received.compare_exchange(
-                    0,
-                    signal as i32,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                );
-            }
-        }
-    });
+    let watcher = std::thread::spawn(move || watch(waited, close, &watching));
     Ok(Held {
         executable: executable.to_path_buf(),
         blocked,
         state,
         watcher: Some((close, watcher)),
     })
+}
+
+/// Note the first of `waited` other than `close` until `close` arrives while closing.
+fn watch(waited: SigSet, close: Signal, state: &State) {
+    while let Ok(signal) = waited.wait() {
+        if signal == close {
+            if state.closing.load(Ordering::SeqCst) {
+                return;
+            }
+        } else {
+            let _ = state.received.compare_exchange(
+                0,
+                signal as i32,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            );
+        }
+    }
 }
 
 impl Held {
@@ -237,4 +242,29 @@ pub fn exec_probe(arguments: &[OsString]) -> ExitCode {
         return ExitCode::from(2);
     }
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_stop_signal_pending_with_the_closing_signal_is_noted_before_the_watcher_closes() {
+        for close in WAKING {
+            for stop in STOPPING {
+                let waited = set(&[&STOPPING[..], &[close]].concat());
+                waited.thread_block().unwrap();
+                raise(stop).unwrap();
+                raise(close).unwrap();
+                let state = State::default();
+                state.closing.store(true, Ordering::SeqCst);
+                watch(waited, close, &state);
+                assert_eq!(
+                    state.received.load(Ordering::SeqCst),
+                    stop as i32,
+                    "{stop} pending with {close}"
+                );
+            }
+        }
+    }
 }
