@@ -598,10 +598,13 @@ fn the_mirror_drops_the_leak_and_a_clone_has_the_review_branches() {
 
 #[test]
 fn prepare_restores_only_the_recorded_cache_archive_into_its_own_copy() {
+    if Command::new("bwrap").arg("--version").output().is_err() {
+        return;
+    }
     let provisioned = Provisioned::new("cache");
     let cache_config = r#"{"kind": "test",
-        "build": ["mkdir -p {cache}/store {cache}/ro/sub && printf hi > {cache}/store/f && printf r > {cache}/ro/sub/g && ln -s store {cache}/inside && chmod 555 {cache}/ro/sub {cache}/ro", "test -f {clone}/f.txt && test -d {cache_root}/mirrors"],
-        "post_clone": ["test -f {cache}/store/f && printf x > {work}/marker && test \"$BENCH_TEST_ENV\" = {cache}/store && printf w > {cache}/store/written"],
+        "build": ["mkdir -p {cache}/store {cache}/ro/sub && printf hi > {cache}/store/f && printf r > {cache}/ro/sub/g && ln -s store {cache}/inside && chmod 555 {cache}/ro/sub {cache}/ro", "test -f {clone}/f.txt && test ! -e {cache}/../../mirrors && printf e > $HOME/.cache/prisma/engine"],
+        "post_clone": ["test -f {cache}/store/f && printf x > {work}/marker && test \"$BENCH_TEST_ENV\" = {cache}/store && printf w > {cache}/store/written && test \"$(cat $HOME/.cache/prisma/engine)\" = e"],
         "env": {"BENCH_TEST_ENV": "{cache}/store"},
         "smoke": [{"name": "read", "command": "cat $BENCH_TEST_ENV/f", "revision": "head"}]}"#;
     provisioned.set_target(&format!(r#", "provisioning": {{"cache": {cache_config}}}"#));
@@ -627,6 +630,22 @@ fn prepare_restores_only_the_recorded_cache_archive_into_its_own_copy() {
     let archive_sha = sha256::hex_digest(&fs::read(&archive).unwrap());
     assert_eq!(text(field(&receipt, "archive.sha256")), archive_sha);
     assert_eq!(field(&receipt, "build").as_array().unwrap().len(), 2);
+    assert_eq!(
+        text(field(&receipt, "sandbox.profile")),
+        "provision-bwrap-v1"
+    );
+    assert_eq!(text(field(&receipt, "sandbox.network")), "shared");
+    assert_eq!(
+        fs::read_to_string(cache.join("caches/t-1/home/.cache/prisma/engine")).unwrap(),
+        "e",
+        "a build step's download cache is kept in the archived cache"
+    );
+    assert_eq!(
+        field(&receipt, "sandbox.home_caches")
+            .as_array()
+            .map(<[Value]>::len),
+        Some(1)
+    );
     assert!(
         !cache.join("scratch/t-1-cache").exists(),
         "the scratch clone must be removed"
@@ -673,6 +692,7 @@ fn prepare_restores_only_the_recorded_cache_archive_into_its_own_copy() {
         field(&record, "tree_clean_after"),
         Value::Bool(true)
     ));
+    assert_eq!(text(field(&record, "sandbox.network")), "off");
     assert!(
         text(field(&record, "recipe"))
             .starts_with(&format!("restore cache archive sha256:{archive_sha}")),
@@ -693,6 +713,17 @@ fn prepare_restores_only_the_recorded_cache_archive_into_its_own_copy() {
         sha256::hex_digest(&fs::read(&archive).unwrap()),
         archive_sha
     );
+
+    let smoke = provisioned.temp.0.join("smoke.json");
+    let smoked = provisioned.run(&["smoke", "--out", s(&smoke)]);
+    assert!(smoked.status.success(), "{}", both(&smoked));
+    let schema =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bench/schema/smoke.v2.schema.json");
+    let checked = bench_tools(&["check-manifest", s(&schema), s(&smoke)]);
+    assert!(checked.status.success(), "{}", both(&checked));
+    let receipt = parse(&fs::read_to_string(&smoke).unwrap());
+    assert_eq!(text(field(&receipt, "sandbox.network")), "off");
+    assert_eq!(text(field(&receipt, "provisioning.sandbox.network")), "off");
 }
 
 #[test]
