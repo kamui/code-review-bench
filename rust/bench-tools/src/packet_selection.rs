@@ -10,6 +10,8 @@ use crate::pyobject;
 use crate::pytext::{self, PyPath};
 use crate::pyvalue::{self, Py, Raised};
 use crate::sha256;
+use std::collections::BTreeMap;
+use std::sync::Mutex;
 
 fn value_error<T>(message: impl Into<String>) -> Py<T> {
     Err(Raised::Value(message.into()))
@@ -90,7 +92,9 @@ fn decoded(bytes: &[u8]) -> Py<String> {
 }
 
 /// The run manifest at the run's `freeze_commit`, through `git show`, or `None` when the run has no freeze commit
-/// or Git cannot show it.
+/// or Git cannot show it. The current record selects a packet for every attempt of a run, so the process keeps each
+/// root and spec's `git show` result, a failure included, and never retries a failed show. An error running Git or
+/// decoding its output is raised and not kept.
 pub fn frozen_manifest(run_dir: &PyPath, manifest: &Value, root: &PyPath) -> Py<Option<Value>> {
     let freeze = pyvalue::get(manifest, "freeze_commit")?;
     if !freeze.truthy() {
@@ -107,21 +111,34 @@ pub fn frozen_manifest(run_dir: &PyPath, manifest: &Value, root: &PyPath) -> Py<
     if spec.contains(&0) || root.as_bytes().contains(&0) {
         return value_error("embedded null byte");
     }
+    type Shown = BTreeMap<(Vec<u8>, Vec<u8>), Option<String>>;
+    static SHOWN: Mutex<Shown> = Mutex::new(BTreeMap::new());
+    let key = (root.as_bytes().to_vec(), spec);
+    let cached = SHOWN.lock().unwrap().get(&key).cloned();
+    let shown = match cached {
+        Some(shown) => shown,
+        None => {
+            let shown = show(root, &key.1)?;
+            SHOWN.lock().unwrap().insert(key, shown.clone());
+            shown
+        }
+    };
+    shown.as_deref().map(pyvalue::loads).transpose()
+}
+
+/// `git show <spec>` in `root`: its stdout, or `None` when Git fails.
+fn show(root: &PyPath, spec: &[u8]) -> Py<Option<String>> {
     let output = std::process::Command::new("git")
         .arg("-C")
         .arg(root.to_path_buf())
         .arg("show")
-        .arg(<std::ffi::OsString as std::os::unix::ffi::OsStringExt>::from_vec(spec))
+        .arg(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(spec))
         .stdin(std::process::Stdio::null())
         .output()
         .map_err(|error| Raised::Os(pytext::os_error(&error, b"git")))?;
     let stdout = decoded(&output.stdout)?;
     decoded(&output.stderr)?;
-    if output.status.code() == Some(0) {
-        pyvalue::loads(&stdout).map(Some)
-    } else {
-        Ok(None)
-    }
+    Ok((output.status.code() == Some(0)).then_some(stdout))
 }
 
 /// `row[key] == target["id"]` for each row, evaluated in Python's order.
