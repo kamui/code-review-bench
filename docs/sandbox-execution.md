@@ -1,6 +1,6 @@
-# Sandbox execution plan
+# Sandbox execution plan (superseded)
 
-Part of [#35](https://github.com/kamui/code-review-bench/issues/35). This is the accepted implementation plan. The launcher and its `--sandbox` option are not implemented yet. Existing frozen runs retain their original policies and evidence.
+Epic [#298](https://github.com/kamui/code-review-bench/issues/298) replaces this plan and [#35](https://github.com/kamui/code-review-bench/issues/35). #35's remaining tasks, #38 to #46 and #61, are closed as not planned. Nobody built the launcher or its `--sandbox` option. The text below is the plan as accepted on 2026-10-05. For how saved runs kept reviews blind, see [blindness in saved runs](v1-design.md#blindness-in-saved-runs).
 
 Use rootless Podman by default for benchmark and selected local review execution. Provide explicit unsandboxed host execution through `--sandbox=none`. Linux containers share the host kernel; macOS attempts share one suitable Podman Machine. Neither arrangement claims protection against kernel compromise. The [design review](research/sandbox-review-2026-10-05/README.md), [alternative assessment](research/sandbox-review-2026-10-05/alternatives.md) and [verification record](research/sandbox-review-2026-10-05/verification.json) explain the decision and current gaps.
 
