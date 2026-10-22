@@ -355,7 +355,8 @@ fn open_workspace(given: &PyPath) -> R<(PyPath, Identity)> {
     }
 }
 
-/// Remove what `plan` verified, after `recheck` finds the same workspace with it already open.
+/// Remove what `plan` verified, after `recheck` finds the same workspace with it already open. The recheck runs last
+/// before removal, and before the journal names a directory as being removed, so a retry after it fails checks again.
 fn commit(
     plan: &Plan,
     recheck: &dyn Fn() -> R<Checked>,
@@ -364,26 +365,6 @@ fn commit(
 ) -> R<Value> {
     let directory =
         Directory::open(&plan.workspace.to_path_buf(), plan.identity).map_err(Failure::Failed)?;
-    let Checked::Ready(again) = recheck()? else {
-        return Err(failed("the workspace changed while it was verified"));
-    };
-    if again.workspace != plan.workspace
-        || again.identity != plan.identity
-        || again.present != plan.present
-    {
-        return Err(failed("the workspace changed while it was verified"));
-    }
-    for candidate in &plan.present {
-        let seen = directory
-            .entry(candidate.name.as_bytes())
-            .map_err(Failure::Failed)?;
-        if seen != Some((candidate.identity, Kind::Directory)) {
-            return Err(failed(format!(
-                "{} changed while it was verified",
-                candidate.name
-            )));
-        }
-    }
     let mut journal = match &plan.journal {
         Some(journal) => journal.clone(),
         None => {
@@ -405,6 +386,26 @@ fn commit(
     };
     let interrupted = |error: std::io::Error| failed(error.to_string());
     hook(Point::BeforeRemoval).map_err(interrupted)?;
+    let Checked::Ready(again) = recheck()? else {
+        return Err(failed("the workspace changed while it was verified"));
+    };
+    if again.workspace != plan.workspace
+        || again.identity != plan.identity
+        || again.present != plan.present
+    {
+        return Err(failed("the workspace changed while it was verified"));
+    }
+    for candidate in &plan.present {
+        let seen = directory
+            .entry(candidate.name.as_bytes())
+            .map_err(Failure::Failed)?;
+        if seen != Some((candidate.identity, Kind::Directory)) {
+            return Err(failed(format!(
+                "{} changed while it was verified",
+                candidate.name
+            )));
+        }
+    }
     for candidate in &plan.present {
         if journal.removing != Some(candidate.name) {
             journal.removing = Some(candidate.name);
@@ -1402,6 +1403,23 @@ mod tests {
         fs::write(review.workspace.join("clone/edit"), "work after filing").unwrap();
         refused(review.prune(true), "changed after filing");
         refused(review.prune(false), "changed after filing");
+        assert_eq!(kept(&review.workspace), ["clone", "clone-cache"]);
+        assert!(review.workspace.join("clone/edit").exists());
+        assert!(!review.workspace.join(RECEIPT).exists());
+    }
+
+    #[test]
+    fn a_clone_modified_just_before_removal_is_never_removed() {
+        let review = Review::new();
+        let clone = review.workspace.join("clone");
+        let edit = move |at: Point| {
+            if at == Point::BeforeRemoval {
+                fs::write(clone.join("edit"), "work after filing")?;
+            }
+            Ok(())
+        };
+        refused(review.prune_with(true, None, &edit), "changed after filing");
+        refused(review.prune(true), "changed after filing");
         assert_eq!(kept(&review.workspace), ["clone", "clone-cache"]);
         assert!(review.workspace.join("clone/edit").exists());
         assert!(!review.workspace.join(RECEIPT).exists());

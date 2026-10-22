@@ -632,6 +632,29 @@ fn accounting_roots_must_be_named_and_present_and_readable() {
 }
 
 #[test]
+fn an_unsearchable_attempt_below_a_linked_ledger_is_an_error_not_no_reservation() {
+    let mut fixture = Fixture::new("unsearchable-attempt");
+    let queue = fixture.queue.clone();
+    let attempt = fixture.attempt(&queue);
+    symlink(&fixture.work, attempt.join("work")).unwrap();
+    let moved = fixture.base.join("linked-batches");
+    std::fs::rename(queue.join("batches"), &moved).unwrap();
+    symlink(&moved, queue.join("batches")).unwrap();
+    let hidden = moved.join("run/target/attempt-1");
+    std::fs::set_permissions(&hidden, std::os::unix::fs::PermissionsExt::from_mode(0o000)).unwrap();
+    let dependencies = fixture.dependencies();
+    let message = failure(fixture.run(true));
+    std::fs::set_permissions(&hidden, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    assert!(
+        matches!(&dependencies, Err(Error::Io(found)) if found.contains("Permission denied")),
+        "{dependencies:?}"
+    );
+    assert!(message.contains("Permission denied"), "{message}");
+    assert!(fixture.work.join("dispatch.json").exists());
+    assert!(!fixture.receipt().exists());
+}
+
+#[test]
 fn an_unreadable_directory_in_the_workspace_is_an_error_not_an_empty_one() {
     let mut fixture = Fixture::new("unreadable");
     let hidden = fixture.work.join("hidden");

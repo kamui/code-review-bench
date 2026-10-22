@@ -269,6 +269,7 @@ impl Directory {
                 continue;
             }
             directory.check_entry(&child, &child_stat, &below, &mut *check)?;
+            directory.still(&child, &child_stat)?;
             unistd::unlinkat(
                 &directory.fd,
                 OsStr::from_bytes(&child),
@@ -278,9 +279,25 @@ impl Directory {
             hook(Point::Removed).map_err(|error| error.to_string())?;
         }
         drop(directory);
+        self.still(name, stat)?;
         unistd::unlinkat(&self.fd, OsStr::from_bytes(name), UnlinkatFlags::RemoveDir)
             .map_err(|errno| failure(errno, &path))?;
         hook(Point::Removed).map_err(|error| error.to_string())
+    }
+
+    /// `name` must still be the entry `stat` describes, so one renamed into its place while it was checked stays.
+    fn still(&self, name: &[u8], stat: &FileStat) -> Result<(), String> {
+        let path = self.path.join(OsStr::from_bytes(name));
+        let now = stat::fstatat(
+            &self.fd,
+            OsStr::from_bytes(name),
+            AtFlags::AT_SYMLINK_NOFOLLOW,
+        )
+        .map_err(|errno| failure(errno, &path))?;
+        if Identity::of(&now) != Identity::of(stat) || Kind::of(&now) != Kind::of(stat) {
+            return Err(format!("{} changed during removal", path.display()));
+        }
+        Ok(())
     }
 
     /// Show an entry to `check`: a regular file through a descriptor that is still the entry just listed, anything
@@ -305,5 +322,49 @@ impl Directory {
             return Err(format!("{} changed during removal", path.display()));
         }
         check(relative, Entry::File(&file))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn scratch(label: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "bench-tools-removal-{label}-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(path.join("tree")).unwrap();
+        path
+    }
+
+    fn identity(path: &Path) -> Identity {
+        lstat(path).unwrap().unwrap().0
+    }
+
+    #[test]
+    fn a_file_renamed_over_a_checked_name_is_never_unlinked() {
+        let base = scratch("renamed");
+        fs::write(base.join("tree/checked"), "verified").unwrap();
+        fs::write(base.join("substitute"), "never verified").unwrap();
+        let parent = Directory::open(&base, identity(&base)).unwrap();
+        let (tree, substitute) = (base.join("tree"), base.join("substitute"));
+        let result = parent.remove_tree(
+            b"tree",
+            identity(&tree),
+            &mut |_, _| {
+                fs::rename(&substitute, tree.join("checked")).map_err(|error| error.to_string())
+            },
+            &uninterrupted,
+        );
+        let kept = fs::read_to_string(base.join("tree/checked"));
+        fs::remove_dir_all(&base).unwrap();
+        assert!(
+            matches!(&result, Err(message) if message.contains("changed during removal")),
+            "{result:?}"
+        );
+        assert_eq!(kept.unwrap(), "never verified");
     }
 }

@@ -167,15 +167,20 @@ fn missing(path: &PyPath) -> bool {
 
 /// Whether `path` is a directory, following links; a dangling link or a missing path is not.
 fn is_dir(path: &PyPath) -> R<bool> {
+    Ok(followed(path)?.is_some_and(|metadata| metadata.is_dir()))
+}
+
+/// What `path` names after following links, `None` when nothing does; a path that cannot be searched is an error.
+fn followed(path: &PyPath) -> R<Option<std::fs::Metadata>> {
     match std::fs::metadata(path.to_path_buf()) {
-        Ok(metadata) => Ok(metadata.is_dir()),
+        Ok(metadata) => Ok(Some(metadata)),
         Err(error)
             if error.kind() == std::io::ErrorKind::NotFound
                 || [nix::errno::Errno::ENOTDIR, nix::errno::Errno::ELOOP]
                     .iter()
                     .any(|errno| error.raw_os_error() == Some(*errno as i32)) =>
         {
-            Ok(false)
+            Ok(None)
         }
         Err(error) => Err(os_failure(&error, path.as_bytes())),
     }
@@ -615,9 +620,7 @@ fn reservations(root: &PyPath, found: &mut Vec<PyPath>) -> R<()> {
                 }
                 for attempt in names(&target)? {
                     let reservation = target.join(&attempt).join(b"reservation.json");
-                    if attempt.starts_with(b"attempt-")
-                        && std::fs::metadata(reservation.to_path_buf()).is_ok()
-                    {
+                    if attempt.starts_with(b"attempt-") && followed(&reservation)?.is_some() {
                         found.push(reservation);
                     }
                 }
