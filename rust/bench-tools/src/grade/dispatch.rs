@@ -599,10 +599,28 @@ fn session(
     match ended {
         Ended::Exited(status) => {
             group.exited = true;
+            pause_after_session();
             Ok(Some(crate::child::exit_code(status)))
         }
         Ended::Stopped(signal) => Err(stopped(signal)),
         Ended::TimedOut => Ok(None),
+    }
+}
+
+/// In a debug build with `BENCH_PAUSE_AFTER_SESSION` naming a file, create the file once the client has exited and
+/// wait until it is removed, so a test can send a signal after the session and before its record. Installs are
+/// release builds, which never pause.
+fn pause_after_session() {
+    let Some(path) =
+        std::env::var_os("BENCH_PAUSE_AFTER_SESSION").filter(|_| cfg!(debug_assertions))
+    else {
+        return;
+    };
+    let path = PathBuf::from(path);
+    if std::fs::write(&path, "").is_ok() {
+        while path.exists() {
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 }
 
