@@ -681,7 +681,7 @@ fn a_non_canonical_or_unsafe_workspace_refuses() {
     for unsafe_root in [
         fixture.repo.clone(),
         fixture.base.clone(),
-        PathBuf::from("/tmp"),
+        std::fs::canonicalize("/tmp").unwrap(),
     ] {
         fixture.workspace = unsafe_root.display().to_string();
         fixture.save_plan();
@@ -861,6 +861,7 @@ fn a_substituted_workspace_is_never_removed() {
     }
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn active_users_finds_a_process_working_in_the_workspace() {
     let fixture = Fixture::new("active");
@@ -883,6 +884,18 @@ fn active_users_finds_a_process_working_in_the_workspace() {
             assert!(message.starts_with("cannot inspect process "), "{message}")
         }
         Err(error) => panic!("{error:?}"),
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn active_users_refuses_without_linux_proc() {
+    let fixture = Fixture::new("no-proc");
+    match active_users(&py(&fixture.work)) {
+        Err(Error::Violation(message)) => {
+            assert_eq!(message, "cannot establish inactivity without Linux /proc");
+        }
+        other => panic!("{other:?}"),
     }
 }
 
