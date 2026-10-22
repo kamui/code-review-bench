@@ -4,9 +4,9 @@
 //! every home directory, Windows mount and shared scratch area, and the host's home, all of `/run` and `/tmp`. The
 //! clone, its working directory and its cache are the only paths a step can write, and the toolchains it needs are
 //! shown read-only. Steps start from an empty environment plus [`INHERITED`], [`OFFLINE`] when offline and the
-//! recipe's `env`, so host credential variables stay out. The vsock filter and the host Unix socket masks come from the network gate. Build
-//! steps share the host network, since they download dependencies; post-clone and smoke steps get their own empty
-//! network namespace.
+//! recipe's `env`, so host credential variables stay out. The vsock filter and the host Unix socket masks come from
+//! the network gate. Build steps share the host network, since they download dependencies; post-clone and smoke
+//! steps get their own empty network namespace and a private copy of each [`SEEDED`] cache.
 
 use crate::network_gate;
 use crate::pyjson::Value;
@@ -41,6 +41,9 @@ const OFFLINE: [(&str, &str); 3] = [
     ("pnpm_config_trust_policy", "off"),
     ("pnpm_config_minimum_release_age", "0"),
 ];
+/// Host download caches, under the home, that offline steps get a private writable copy of. Prisma's install script
+/// generates a client in the clone from cached engines and updates their timestamps (j-trpc-5017's examples).
+const SEEDED: [&str; 1] = [".cache/prisma"];
 /// mise's installs, uv's Pythons (a uv virtualenv links its interpreter there) and bun, under the home.
 const HOME_TOOLCHAINS: [&str; 3] = [".local/share/mise", ".local/share/uv", ".bun"];
 /// Executables shown by themselves: uv sits in `~/.local/bin` beside the clients' launchers.
@@ -61,8 +64,10 @@ pub struct Sandbox {
     readwrite: Vec<String>,
     masks: Vec<String>,
     environment: Vec<(String, String)>,
-    /// A private directory holding the vsock filter, removed on drop.
-    filter_dir: PathBuf,
+    /// Each seeded cache's private copy and the host path it is shown at.
+    seeded: Vec<(String, String)>,
+    /// A private directory holding the vsock filter and the seeded copies, removed on drop.
+    private: PathBuf,
 }
 
 fn texts(items: &[String]) -> Value {
@@ -77,7 +82,9 @@ fn set(environment: &mut Vec<(String, String)>, name: &str, value: String) {
 impl Sandbox {
     /// A sandbox that can write only `readwrite`, with `recipe` over the host's [`INHERITED`] variables.
     pub fn new(network: Network, readwrite: &[PathBuf], recipe: &[(String, String)]) -> P<Self> {
-        let host: Vec<(String, String)> = std::env::vars().collect();
+        let host: Vec<(String, String)> = std::env::vars_os()
+            .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
+            .collect();
         Self::for_host(network, readwrite, recipe, &host)
     }
 
@@ -95,7 +102,7 @@ impl Sandbox {
             .iter()
             .find(|(name, _)| name == "HOME")
             .map(|(_, value)| PathBuf::from(value))
-            .filter(|home| home.is_absolute());
+            .filter(|home| home.is_absolute() && home.parent().is_some());
         let mut hidden: Vec<String> = SANDBOX_HIDDEN
             .iter()
             .filter(|path| !path.starts_with("/run/"))
@@ -174,12 +181,12 @@ impl Sandbox {
         for (name, value) in recipe {
             set(&mut environment, name, value.clone());
         }
-        let filter_dir =
+        let private =
             nix::unistd::mkdtemp(&network_gate::runtime_dir().join("bench-provision-XXXXXX"))
                 .map_err(|error| {
                     format!("cannot make the provisioning sandbox directory: {error}")
                 })?;
-        let sandbox = Self {
+        let mut sandbox = Self {
             bwrap,
             network,
             hidden,
@@ -187,14 +194,30 @@ impl Sandbox {
             readwrite,
             masks,
             environment,
-            filter_dir,
+            seeded: Vec::new(),
+            private,
         };
         network_gate::write_vsock_filter(&sandbox.filter())?;
+        if network == Network::Off
+            && let Some(home) = &home
+        {
+            for (index, path) in SEEDED.iter().enumerate() {
+                let source = home.join(path);
+                if source.is_dir() {
+                    let copy = sandbox.private.join(format!("seed-{index}"));
+                    seed(&source, &copy)?;
+                    sandbox.seeded.push((
+                        copy.to_string_lossy().into_owned(),
+                        source.to_string_lossy().into_owned(),
+                    ));
+                }
+            }
+        }
         Ok(sandbox)
     }
 
     fn filter(&self) -> PathBuf {
-        self.filter_dir.join("vsock.bpf")
+        self.private.join("vsock.bpf")
     }
 
     fn arguments(&self, seccomp: i32, cwd: &Path, command: &str) -> Vec<String> {
@@ -223,6 +246,9 @@ impl Sandbox {
         }
         for path in &self.readwrite {
             arguments.extend(["--bind".to_string(), path.clone(), path.clone()]);
+        }
+        for (copy, shown) in &self.seeded {
+            arguments.extend(["--bind".to_string(), copy.clone(), shown.clone()]);
         }
         arguments.extend(self.masks.iter().cloned());
         arguments.extend([
@@ -271,6 +297,16 @@ impl Sandbox {
                 ("readonly", texts(&self.readonly)),
                 ("readwrite", texts(&self.readwrite)),
                 (
+                    "seeded",
+                    texts(
+                        &self
+                            .seeded
+                            .iter()
+                            .map(|(_, shown)| shown.clone())
+                            .collect::<Vec<_>>(),
+                    ),
+                ),
+                (
                     "masked_sockets",
                     Value::Array(
                         self.masks
@@ -299,8 +335,26 @@ impl Sandbox {
 
 impl Drop for Sandbox {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.filter_dir);
+        let _ = std::fs::remove_dir_all(&self.private);
     }
+}
+
+fn seed(source: &Path, copy: &Path) -> P<()> {
+    let done = Command::new("cp")
+        .args(["-a", "--reflink=auto"])
+        .arg(source)
+        .arg(copy)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("cannot run cp: {error}"))?;
+    if !done.status.success() {
+        return Err(format!(
+            "cannot copy {} for the sandbox: {}",
+            source.display(),
+            String::from_utf8_lossy(&done.stderr).trim()
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -394,6 +448,39 @@ mod tests {
         };
         assert_eq!(field("profile").as_deref(), Some(PROFILE));
         assert_eq!(field("network").as_deref(), Some("off"));
+    }
+
+    #[test]
+    fn an_offline_step_writes_only_a_private_copy_of_a_seeded_cache() {
+        if which("bwrap").is_none() {
+            return;
+        }
+        let root = scratch("provision-seed-");
+        let engine = root.0.join("home/.cache/prisma/engine");
+        std::fs::create_dir_all(engine.parent().unwrap()).unwrap();
+        std::fs::write(&engine, "engine").unwrap();
+        let clone = root.0.join("clone");
+        std::fs::create_dir_all(&clone).unwrap();
+        let host = [(
+            "HOME".to_string(),
+            root.0.join("home").to_string_lossy().into_owned(),
+        )];
+        let sandbox =
+            Sandbox::for_host(Network::Off, std::slice::from_ref(&clone), &[], &host).unwrap();
+        let (code, seen) = output(
+            &sandbox,
+            "cat $HOME/.cache/prisma/engine > copied && printf changed > $HOME/.cache/prisma/engine",
+            &clone,
+        );
+        assert_eq!(code, 0, "{seen}");
+        assert_eq!(
+            std::fs::read_to_string(clone.join("copied")).unwrap(),
+            "engine"
+        );
+        assert_eq!(std::fs::read_to_string(&engine).unwrap(), "engine");
+        let private = sandbox.private.clone();
+        drop(sandbox);
+        assert!(!private.exists(), "the private copy must be removed");
     }
 
     #[test]
