@@ -151,13 +151,20 @@ impl Fixture {
             format!(r#"{{"restored": [{{"at_fetch": "{LATER}"}}]}}"#),
         )
         .unwrap();
+        std::fs::write(
+            target.join("packet.v2.md"),
+            "**1.** 2024-01-04T00:00:00Z \u{b7} `reviewer` \u{b7} `a.txt:1` \u{b7} on commit `HEAD` \u{b7} thread unresolved\n",
+        )
+        .unwrap();
         let captures = root.join("bench/forge-captures.v1.json");
         std::fs::write(
             &captures,
             format!(
                 r#"{{"schema_version": 1, "targets": [{{"target": "t1", "target_sha256": "{}", "cutoff": "{CUTOFF}",
+                "packet": {{"path": "bench/targets/t1/packet.v2.md", "sha256": "{}"}},
                 "files": {{"graphql.json": "{}", "issues.json": "{}", "provenance.json": "{}"}}}}]}}"#,
                 sha256(&target.join("target.json")),
+                sha256(&target.join("packet.v2.md")),
                 sha256(&target.join("forge/graphql.json")),
                 sha256(&target.join("forge/issues.json")),
                 sha256(&target.join("forge/provenance.json")),
@@ -194,6 +201,14 @@ impl Fixture {
 
     /// A new attempt with a clone of the mirror and its frozen forge.
     fn attempt(&self, name: &str) -> PathBuf {
+        let attempt = self.clone(name);
+        let served = self.setup(&attempt, &[]);
+        assert!(served.status.success(), "{}", text(&served.stderr));
+        attempt
+    }
+
+    /// A new attempt with a clone of the mirror and no forge yet.
+    fn clone(&self, name: &str) -> PathBuf {
         let attempt = self.root.join(name);
         let clone = attempt.join("clone");
         std::fs::create_dir_all(&attempt).unwrap();
@@ -208,13 +223,12 @@ impl Fixture {
             clone.to_str().unwrap(),
         ]);
         assert!(cloned.status.success(), "{}", text(&cloned.stdout));
-        let served = self.setup(&attempt);
-        assert!(served.status.success(), "{}", text(&served.stderr));
         attempt
     }
 
-    fn setup(&self, attempt: &Path) -> Output {
-        bench(&[
+    fn setup(&self, attempt: &Path, extra: &[&str]) -> Output {
+        let clone = attempt.join("clone");
+        let mut arguments = vec![
             "frozen-forge",
             "setup",
             "--target",
@@ -222,12 +236,15 @@ impl Fixture {
             "--attempt",
             attempt.to_str().unwrap(),
             "--clone",
-            attempt.join("clone").to_str().unwrap(),
+            clone.to_str().unwrap(),
             "--captures",
             self.captures.to_str().unwrap(),
             "--captures-sha256",
-            &sha256(&self.captures),
-        ])
+        ];
+        let pinned = sha256(&self.captures);
+        arguments.push(&pinned);
+        arguments.extend_from_slice(extra);
+        bench(&arguments)
     }
 }
 
@@ -375,7 +392,7 @@ fn an_attempt_reads_the_pull_request_through_gh_and_origin_as_at_the_cutoff() {
     );
     let graphql = shell(
         &attempt,
-        "gh api graphql -F number=1 -f query='query($number:Int!){ repository(owner:\"o\",name:\"r\"){ pullRequest(number:$number){ reviewThreads(first:5){ nodes{ isResolved } } comments(first:5){ nodes{ body updatedAt } } } } }'",
+        "gh api graphql -F owner='{owner}' -F name='{repo}' -F number=1 -f query='query($owner:String!,$name:String!,$number:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$number){ reviewThreads(first:5){ nodes{ isResolved } } comments(first:5){ nodes{ body updatedAt } } } } }'",
     );
     assert_eq!(
         text(&graphql.stdout),
@@ -443,14 +460,13 @@ fn an_attempt_reads_the_pull_request_through_gh_and_origin_as_at_the_cutoff() {
     .unwrap();
     let receipt = receipt.as_object().unwrap();
     assert_eq!(receipt.get("cutoff").unwrap().py_str(), CUTOFF);
-    assert!(
-        receipt
-            .get("served")
-            .unwrap()
-            .as_object()
-            .unwrap()
-            .get("provenance.json")
-            .is_some()
+    let served = receipt.get("served").unwrap().as_object().unwrap();
+    assert_eq!(
+        served
+            .iter()
+            .map(|(key, _)| key.as_str())
+            .collect::<Vec<_>>(),
+        ["graphql.json", "issues.json"]
     );
 }
 
@@ -458,7 +474,7 @@ fn an_attempt_reads_the_pull_request_through_gh_and_origin_as_at_the_cutoff() {
 fn setup_refuses_a_changed_capture_and_a_reused_attempt() {
     let fixture = Fixture::new("refuse");
     let attempt = fixture.attempt("att-001");
-    let again = fixture.setup(&attempt);
+    let again = fixture.setup(&attempt, &[]);
     assert_eq!(again.status.code(), Some(2));
     assert!(
         text(&again.stderr).contains("never reused"),
@@ -484,7 +500,7 @@ fn setup_refuses_a_changed_capture_and_a_reused_attempt() {
         second.join("clone").to_str().unwrap(),
     ]);
     assert!(cloned.status.success());
-    let changed = fixture.setup(&second);
+    let changed = fixture.setup(&second, &[]);
     assert_eq!(changed.status.code(), Some(2));
     assert!(
         text(&changed.stderr).contains("issues.json differs from its pin"),
@@ -579,4 +595,41 @@ fn the_probe_runs_an_inventory_and_reports_each_call() {
     );
     assert!(!out.join("clone").exists() && !out.join("forge").exists());
     assert!(out.join("forge-log/calls.jsonl").is_file());
+}
+
+#[test]
+fn setup_refuses_a_packet_that_states_a_thread_resolution() {
+    let fixture = Fixture::new("packet");
+    let pinned = fixture.target.join("packet.v2.md");
+    let stated = fixture.clone("att-001");
+    let refused = fixture.setup(&stated, &["--packet", pinned.to_str().unwrap()]);
+    assert_eq!(refused.status.code(), Some(2), "{}", text(&refused.stdout));
+    assert!(
+        text(&refused.stderr).contains("does not state what the capture holds"),
+        "{}",
+        text(&refused.stderr)
+    );
+    assert!(!stated.join("forge").exists());
+
+    let unknown = fixture.target.join("packet.v3.md");
+    std::fs::write(
+        &unknown,
+        std::fs::read_to_string(&pinned)
+            .unwrap()
+            .replace("thread unresolved", "thread resolution unknown"),
+    )
+    .unwrap();
+    let attempt = fixture.clone("att-002");
+    let served = fixture.setup(&attempt, &["--packet", unknown.to_str().unwrap()]);
+    assert!(served.status.success(), "{}", text(&served.stderr));
+    let receipt = pyjson::loads(
+        &std::fs::read_to_string(attempt.join("forge.json")).unwrap(),
+        Duplicates::KeepLast,
+    )
+    .unwrap();
+    let packet = receipt.as_object().unwrap().get("packet").unwrap();
+    assert_eq!(
+        packet.as_object().unwrap().get("sha256").unwrap().py_str(),
+        sha256(&unknown)
+    );
 }

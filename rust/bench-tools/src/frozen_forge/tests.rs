@@ -1,12 +1,14 @@
-use super::{Capture, graphql, read_json};
+use super::{Capture, graphql, read_json, sha256_file, unknown_thread_states};
+use crate::build_packet::{THREAD_RESOLVED, THREAD_UNRESOLVED};
 use crate::pyjson::{Object, Value};
 use std::path::Path;
 
+fn repo() -> &'static Path {
+    Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
+}
+
 fn capture(target: &str) -> Capture {
-    let forge = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../bench/targets")
-        .join(target)
-        .join("forge");
+    let forge = repo().join("bench/targets").join(target).join("forge");
     Capture::load(
         &read_json(&forge.join("graphql.json")).expect("graphql.json"),
         &read_json(&forge.join("issues.json")).expect("issues.json"),
@@ -254,4 +256,38 @@ fn serves_an_originating_issue_from_issues_json() {
         at(&response, "data.repository.issue.updatedAt"),
         Value::Null
     ));
+}
+
+#[test]
+fn each_forge_packet_is_its_capture_packet_with_thread_states_unknown() {
+    let pinned = |entry: &Value, key: &str| {
+        let pin = at(entry, key);
+        let path = repo().join(at(pin, "path").py_str());
+        assert_eq!(
+            sha256_file(&path).expect("sha256"),
+            at(pin, "sha256").py_str(),
+            "{}",
+            path.display()
+        );
+        std::fs::read_to_string(path).expect("packet")
+    };
+    let captures = read_json(&repo().join("bench/forge-captures.v1.json")).expect("captures");
+    let replacements =
+        read_json(&repo().join("bench/forge-packet-replacements.v1.json")).expect("replacements");
+    let rows = at(&replacements, "targets").as_array().expect("targets");
+    let captured = at(&captures, "targets").as_array().expect("targets");
+    assert_eq!(rows.len(), captured.len());
+    for (row, entry) in rows.iter().zip(captured) {
+        assert_eq!(at(row, "target").py_str(), at(entry, "target").py_str());
+        assert!(at(row, "replacement.derived_from").py_eq(at(entry, "packet")));
+        let packet = pinned(row, "replacement");
+        assert_eq!(packet, unknown_thread_states(&pinned(entry, "packet")));
+        assert!(
+            !packet
+                .lines()
+                .any(|line| line.ends_with(THREAD_RESOLVED) || line.ends_with(THREAD_UNRESOLVED)),
+            "{}",
+            at(row, "target").py_str()
+        );
+    }
 }

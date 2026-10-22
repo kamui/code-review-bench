@@ -79,6 +79,8 @@ const EDITS_QUERY_AFTER: &str = "){ id ... on Comment{ userContentEdits(first:10
 
 /// A thread's state in the packet when the source holds no resolution, as a frozen capture does.
 pub(crate) const THREAD_STATE_UNKNOWN: &str = " \u{b7} thread resolution unknown";
+pub(crate) const THREAD_RESOLVED: &str = " \u{b7} thread resolved";
+pub(crate) const THREAD_UNRESOLVED: &str = " \u{b7} thread unresolved";
 const LAST_PUSH: &str = "the last push";
 const OPENING: &str = "the pull request's opening";
 
@@ -2757,8 +2759,8 @@ impl Rendering<'_> {
                 let commit = short_oid(item(comment, "originalCommit")?)?;
                 let state = match item(thread, "isResolved")? {
                     Value::Null => THREAD_STATE_UNKNOWN,
-                    resolved if resolved.truthy() => " \u{b7} thread resolved",
-                    _ => " \u{b7} thread unresolved",
+                    resolved if resolved.truthy() => THREAD_RESOLVED,
+                    _ => THREAD_UNRESOLVED,
                 };
                 w(format!(
                     "**{thread_comments}.** {created} \u{b7} `{author}` \u{b7} `{path}:{line}` \u{b7} on commit `{commit}`{state}\n"

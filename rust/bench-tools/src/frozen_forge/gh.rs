@@ -808,7 +808,28 @@ fn pr_checks(served: &Served, cwd: &Path, words: &[String]) -> Result<Ran, Strin
     })
 }
 
-fn typed(raw: &str) -> Result<Value, String> {
+/// `gh api` fills `{owner}`, `{repo}` and `{branch}` from the current repository in the endpoint and in `-F` values.
+fn filled(served: &Served, cwd: &Path, raw: &str) -> String {
+    let (owner, name) = served
+        .capture
+        .repository
+        .split_once('/')
+        .unwrap_or_default();
+    let raw = raw.replace("{owner}", owner).replace("{repo}", name);
+    if !raw.contains("{branch}") {
+        return raw;
+    }
+    let branch = Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(["symbolic-ref", "--short", "HEAD"])
+        .output()
+        .map(|done| String::from_utf8_lossy(&done.stdout).trim().to_string())
+        .unwrap_or_default();
+    raw.replace("{branch}", &branch)
+}
+
+fn typed(served: &Served, cwd: &Path, raw: &str) -> Result<Value, String> {
     Ok(match raw {
         "true" => Value::Bool(true),
         "false" => Value::Bool(false),
@@ -823,7 +844,7 @@ fn typed(raw: &str) -> Result<Value, String> {
             Some(path) => Value::Str(
                 std::fs::read_to_string(path).map_err(|error| format!("{path}: {error}"))?,
             ),
-            None => Value::Str(raw.to_string()),
+            None => Value::Str(filled(served, cwd, raw)),
         },
     })
 }
@@ -876,7 +897,7 @@ fn api(served: &Served, cwd: &Path, words: &[String]) -> Result<Ran, String> {
         let (key, value) = raw
             .split_once('=')
             .ok_or_else(|| format!("field {raw} has no '='"))?;
-        fields.insert(key.to_string(), typed(value)?);
+        fields.insert(key.to_string(), typed(served, cwd, value)?);
     }
     let method = parsed.value("method").map(str::to_ascii_uppercase);
     let ran = if endpoint == "graphql" {
@@ -957,26 +978,13 @@ fn rest(
     fields: &Object,
     parsed: &Parsed,
 ) -> Result<Ran, String> {
-    let (owner, name) = served
-        .capture
-        .repository
-        .split_once('/')
-        .unwrap_or_default();
-    let mut path = endpoint
-        .trim_start_matches("https://api.github.com")
-        .trim_start_matches('/')
-        .replace("{owner}", owner)
-        .replace("{repo}", name);
-    if path.contains("{branch}") {
-        let branch = Command::new("git")
-            .arg("-C")
-            .arg(cwd)
-            .args(["symbolic-ref", "--short", "HEAD"])
-            .output()
-            .map(|done| String::from_utf8_lossy(&done.stdout).trim().to_string())
-            .unwrap_or_default();
-        path = path.replace("{branch}", &branch);
-    }
+    let path = filled(
+        served,
+        cwd,
+        endpoint
+            .trim_start_matches("https://api.github.com")
+            .trim_start_matches('/'),
+    );
     let (path, query) = path
         .split_once('?')
         .map_or((path.as_str(), ""), |(path, query)| (path, query));

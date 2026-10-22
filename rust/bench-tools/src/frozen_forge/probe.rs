@@ -385,6 +385,7 @@ pub fn probe(options: &Probe) -> R<(Value, bool)> {
         captures: options.captures.clone(),
         captures_sha256: None,
         executable: options.executable.clone(),
+        packet: None,
     })?;
     let target = provision::load_target(&options.target_dir, None)?;
     let served = Served::open(&out.join("forge"))?;

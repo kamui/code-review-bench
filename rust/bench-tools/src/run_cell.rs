@@ -1468,6 +1468,8 @@ fn prepare(run: &Run, context: &Context<'_>, directory: &Path, claim: &mut Objec
             &display(&captures),
             "--captures-sha256",
             &get(pin, "sha256").py_str(),
+            "--packet",
+            &display(&packet_path),
         ]);
         let served = context.run(&setup, None)?;
         if served.code != 0 {
@@ -3435,6 +3437,7 @@ mod tests {
             display(&fixture.base.join("bench/forge-captures.v1.json"))
         );
         assert_eq!(after(&argv, "--captures-sha256"), "4".repeat(64));
+        assert!(after(&argv, "--packet").ends_with("/t1/packet.md"));
         assert_eq!(
             launched.borrow().as_deref(),
             Some(format!("{}:/usr/bin", display(&directory.join("forge/bin"))).as_str())

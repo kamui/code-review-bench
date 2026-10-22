@@ -1518,7 +1518,11 @@ fn packet_difference(rebuilt: &str, pinned: &str) -> Option<String> {
             .strip_suffix(build_packet::THREAD_STATE_UNKNOWN)
             .and_then(|shared| pinned.strip_prefix(shared))
             .is_some_and(|state| {
-                [" \u{b7} thread resolved", " \u{b7} thread unresolved"].contains(&state)
+                [
+                    build_packet::THREAD_RESOLVED,
+                    build_packet::THREAD_UNRESOLVED,
+                ]
+                .contains(&state)
             })
     };
     for index in 0..rebuilt.len().max(pinned.len()) {
