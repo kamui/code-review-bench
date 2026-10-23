@@ -359,7 +359,9 @@ fn unlink_forge_runtime(workspace: &PyPath, verified: Identity, pin: &str) -> R<
                     "{FORGE_RUNTIME} changed while it was verified"
                 )));
             }
-            forge.unlink_file(b"bench-tools").map_err(Failure::Failed)
+            forge
+                .unlink_checked(b"bench-tools", (verified, Kind::File))
+                .map_err(Failure::Failed)
         }
         Some(_) => Err(failed(format!(
             "{FORGE_RUNTIME} changed while it was verified"

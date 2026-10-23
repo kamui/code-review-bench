@@ -305,7 +305,7 @@ impl Directory {
             if let Some(check) = reborrow(&mut check) {
                 directory.check_entry(&child, &child_stat, &below, check)?;
             }
-            directory.unlink_checked(&child, &child_stat)?;
+            directory.unlink_checked(&child, (Identity::of(&child_stat), Kind::of(&child_stat)))?;
             hook(Point::Removed).map_err(|error| error.to_string())?;
         }
         drop(directory);
@@ -315,9 +315,9 @@ impl Directory {
         hook(Point::Removed).map_err(|error| error.to_string())
     }
 
-    /// Unlink `name` only if it is still the entry `stat` describes. It is first renamed to a name of its own, so
+    /// Unlink `name` only if it is still the entry `expected` describes. It is first renamed to a name of its own, so
     /// one renamed into its place meanwhile is what gets checked and is kept, under the reported name.
-    fn unlink_checked(&self, name: &[u8], stat: &FileStat) -> Result<(), String> {
+    pub fn unlink_checked(&self, name: &[u8], expected: (Identity, Kind)) -> Result<(), String> {
         let path = self.path.join(OsStr::from_bytes(name));
         let aside = format!(
             ".bench-tools-removing-{}-{}",
@@ -338,7 +338,7 @@ impl Directory {
             OsStr::new(&aside),
         )
         .map_err(|errno| failure(errno, &path))?;
-        if self.entry(aside.as_bytes())? != Some((Identity::of(stat), Kind::of(stat))) {
+        if self.entry(aside.as_bytes())? != Some(expected) {
             return Err(format!(
                 "{} changed during removal; what replaced it is kept at {}",
                 path.display(),
