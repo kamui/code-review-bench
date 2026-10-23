@@ -1561,6 +1561,7 @@ fn prepare(run: &Run, context: &Context<'_>, directory: &Path, claim: &mut Objec
         }
         command
     } else {
+        with(&mut env, "BENCH_TASK_PACKET", display(&packet_path));
         vec![
             display(&run.bench.join("tools").join("dispatch.sh")),
             kind.clone(),
@@ -3532,7 +3533,7 @@ mod tests {
     }
 
     #[test]
-    fn a_recut_packet_reaches_each_skill_runner_and_the_claim() {
+    fn a_recut_packet_reaches_each_runner_the_built_in_audit_and_the_claim() {
         let fixture = fixture();
         let target = fixture.target();
         let recut = target.join("packet.v2.md");
@@ -3547,8 +3548,17 @@ mod tests {
         put(&fixture.base.join("bench-tools"), "fixture bench-tools");
         let own = display(&fixture.base.join("bench-tools"));
         let runner = RefCell::new(Vec::<String>::new());
-        let tool = |argv: &[String], _: Option<&[(String, String)]>| {
-            assert_eq!(argv[0], own);
+        let task_packet = RefCell::new(None::<String>);
+        let tool = |argv: &[String], env: Option<&[(String, String)]>| {
+            if argv[0] != own {
+                *task_packet.borrow_mut() = env
+                    .expect("the launch environment")
+                    .iter()
+                    .find(|(key, _)| key == "BENCH_TASK_PACKET")
+                    .map(|(_, value)| value.clone());
+                put(&PathBuf::from(&argv[2]).join("timing.json"), "{}");
+                return Ok(ran(0, "", ""));
+            }
             match argv[1].as_str() {
                 "packet-selection" => Ok(ran(0, &format!("{}\n", display(&recut)), "")),
                 "provision" => Ok(ran(0, "{}", "")),
@@ -3588,6 +3598,17 @@ mod tests {
             );
             assert!(get(&recorded, "packet").py_eq(&json(&packet)));
         }
+
+        arm_file(&fixture.base, "arm-a", "codex", 2.0);
+        fixture.claim("att-003", "t1/arm-a/1", 5.0, "");
+        let mut claim: Object = [("cell".to_string(), parse_key("t1/arm-a/1").expect("key"))]
+            .into_iter()
+            .collect();
+        dispatch(&fixture.run(), &context, "att-003", &mut claim).expect("dispatched");
+        assert_eq!(
+            task_packet.borrow().as_deref(),
+            Some(display(&recut).as_str())
+        );
     }
 
     #[test]

@@ -706,22 +706,6 @@ fn setup_refuses_a_packet_that_states_a_thread_resolution_or_a_merge() {
     );
     let merge_prose = fixture.target.join("packet.merge-prose.md");
     std::fs::write(&merge_prose, &open).unwrap();
-    for (name, stated) in [
-        ("att-001", &pinned),
-        ("att-003", &merged),
-        ("att-004", &merge_prose),
-    ] {
-        let attempt = fixture.clone(name);
-        let refused = fixture.setup(&attempt, &["--packet", stated.to_str().unwrap()]);
-        assert_eq!(refused.status.code(), Some(2), "{}", text(&refused.stdout));
-        assert!(
-            text(&refused.stderr).contains("does not state what the capture holds"),
-            "{}",
-            text(&refused.stderr)
-        );
-        assert!(!attempt.join("forge").exists());
-    }
-
     let unknown = fixture.target.join("packet.v3.md");
     std::fs::write(
         &unknown,
@@ -731,6 +715,23 @@ fn setup_refuses_a_packet_that_states_a_thread_resolution_or_a_merge() {
         ),
     )
     .unwrap();
+    for (name, stated) in [
+        ("att-001", &pinned),
+        ("att-003", &merged),
+        ("att-004", &merge_prose),
+    ] {
+        let attempt = fixture.clone(name);
+        let refused = fixture.setup(&attempt, &["--packet", stated.to_str().unwrap()]);
+        assert_eq!(refused.status.code(), Some(2), "{}", text(&refused.stdout));
+        let stderr = text(&refused.stderr);
+        assert!(
+            stderr.contains("does not state what the capture holds")
+                && stderr.contains("; dispatch bench/targets/")
+                && stderr.contains("/packet.v3.md, which states"),
+            "{stderr}"
+        );
+        assert!(!attempt.join("forge").exists());
+    }
     let attempt = fixture.clone("att-002");
     let served = fixture.setup(&attempt, &["--packet", unknown.to_str().unwrap()]);
     assert!(served.status.success(), "{}", text(&served.stderr));

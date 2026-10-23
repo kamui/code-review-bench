@@ -1581,7 +1581,6 @@ fn preflight_target(
     let kind = pyvalue::item(cache, "kind")?;
     if !pyobject::eq(kind, &text(provision::EMPTY_CACHE_KIND)) {
         let id = string(pyvalue::item(target, "id")?)?;
-        let archive = PyPath::new(&provision::archive_path(&cache_root, id));
         let wanted = text(&format!("cache archive ({})", kind.py_str()));
         let no_identities = Value::Array(Vec::new());
         let mut expected = Vec::new();
@@ -1594,6 +1593,13 @@ fn preflight_target(
                 expected.push(pyvalue::item(&value, "sha256")?.clone());
             }
         }
+        let keyed = match expected.as_slice() {
+            [only] => only.as_str(),
+            _ => None,
+        };
+        let archive =
+            crate::provision::archive_path(&PyPath::new(&cache_root).to_path_buf(), id, keyed);
+        let archive = PyPath::new(std::os::unix::ffi::OsStrExt::as_bytes(archive.as_os_str()));
         let matches = expected.len() == 1
             && archive.is_file()
             && pyvalue::read_bytes(&archive)
