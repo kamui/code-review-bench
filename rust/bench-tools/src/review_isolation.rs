@@ -581,6 +581,39 @@ fn too_broad(entry: &str, denied: &[String], protected: &[PathBuf]) -> bool {
             .any(|directory| directory.starts_with(&real))
 }
 
+pub const RUNTIME_TOOLS: [&str; 6] = ["python3", "node", "go", "rg", "bwrap", "socat"];
+
+/// The folder holding a runtime tool's binary on PATH, and the folder a reviewer may read for it.
+pub fn runtime_folders(name: &str) -> Result<(PathBuf, PathBuf), String> {
+    let executable =
+        which(name).ok_or_else(|| format!("required executable is missing: {name}"))?;
+    install_folders(name, &executable)
+}
+
+/// A binary not named for its tool, such as the `mise` a version manager's shim resolves to, multiplexes tools
+/// it does not hold, so its folders are refused rather than guessed.
+fn install_folders(name: &str, executable: &Path) -> Result<(PathBuf, PathBuf), String> {
+    let resolved = resolve(executable);
+    if !resolved
+        .file_name()
+        .is_some_and(|file| file.as_bytes().starts_with(name.as_bytes()))
+    {
+        return Err(format!(
+            "{name} resolves from {} to {}, which is not a {name} binary; put the tool's install folder \
+             on PATH instead of a version manager's shims, for example with `mise activate` without `--shims`",
+            executable.display(),
+            resolved.display()
+        ));
+    }
+    let parent = resolved.parent().unwrap_or(Path::new("/"));
+    let exposed = if matches!(name, "python3" | "node" | "go") {
+        parent.parent().unwrap_or(Path::new("/"))
+    } else {
+        parent
+    };
+    Ok((parent.to_path_buf(), exposed.to_path_buf()))
+}
+
 /// The settings an isolated attempt runs under, with `hook` as the executable its file-tool hook runs.
 pub fn settings(
     attempt: &Path,
@@ -609,18 +642,10 @@ pub fn settings(
     .map(str::to_string)
     .to_vec();
     let mut binaries = Vec::new();
-    for name in ["python3", "node", "go", "rg", "bwrap", "socat"] {
-        let executable =
-            which(name).ok_or_else(|| format!("required executable is missing: {name}"))?;
-        let resolved = resolve(&executable);
-        let parent = resolved.parent().unwrap_or(Path::new("/"));
-        binaries.push(text(parent));
-        let exposed = if matches!(name, "python3" | "node" | "go") {
-            parent.parent().unwrap_or(Path::new("/"))
-        } else {
-            parent
-        };
-        runtime.push(text(exposed));
+    for name in RUNTIME_TOOLS {
+        let (parent, exposed) = runtime_folders(name)?;
+        binaries.push(text(&parent));
+        runtime.push(text(&exposed));
     }
     runtime.extend(venv_runtime(clone)?);
     let command = shlex::join(&[
@@ -1145,12 +1170,39 @@ mod tests {
     }
 
     #[test]
+    fn runtime_folders_refuse_a_version_manager_shim() {
+        let root = resolve(
+            &std::env::temp_dir().join(format!("review-isolation-shim-{}", std::process::id())),
+        );
+        let local = root.join("home/user/.local");
+        let shims = local.join("share/mise/shims");
+        let install = local.join("share/mise/installs/python/3.12.15");
+        std::fs::create_dir_all(&shims).unwrap();
+        std::fs::create_dir_all(install.join("bin")).unwrap();
+        std::fs::create_dir_all(local.join("bin")).unwrap();
+        std::fs::write(local.join("bin/mise"), "").unwrap();
+        std::fs::write(install.join("bin/python3.12"), "").unwrap();
+        std::os::unix::fs::symlink(local.join("bin/mise"), shims.join("python3")).unwrap();
+        std::os::unix::fs::symlink("python3.12", install.join("bin/python3")).unwrap();
+        let error = install_folders("python3", &shims.join("python3")).unwrap_err();
+        assert!(
+            error.contains(&text(&local.join("bin/mise"))) && error.contains("mise activate"),
+            "{error}"
+        );
+        assert_eq!(
+            install_folders("python3", &install.join("bin/python3")),
+            Ok((install.join("bin"), install.clone()))
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn settings_refuse_a_venv_whose_prefix_is_the_user_home() {
-        if ["python3", "node", "go", "rg", "bwrap", "socat"]
+        if let Some(error) = RUNTIME_TOOLS
             .into_iter()
-            .any(|name| which(name).is_none())
+            .find_map(|name| runtime_folders(name).err())
         {
-            eprintln!("skipped: the host lacks a sandbox runtime tool");
+            eprintln!("skipped: {error}");
             return;
         }
         let root = resolve(&std::env::temp_dir().join(format!(
