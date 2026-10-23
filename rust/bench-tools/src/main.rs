@@ -5045,7 +5045,7 @@ fn regrade_status(queues: &[OsString]) -> Result<ExitCode, ExitCode> {
         .collect();
     let mut stdout = std::io::stdout().lock();
     grading_reports::status(&queues, &mut stdout).map_err(|failure| {
-        eprintln!("regrade_queues.sh: {}", failure.line());
+        eprintln!("bench-tools regrade: {}", failure.line());
         ExitCode::from(1)
     })?;
     Ok(ExitCode::SUCCESS)
