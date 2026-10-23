@@ -50,6 +50,8 @@ TARGETS = {
 PLAN = [
     ("soba", "admission", [("soba", "P1")], "rule-admission.md", "precedents-pre-existing-admission.v1.md", ("sol", "astra")),
     ("base-ui", "credit", [("base-ui", "C1")], "rule-credit.md", "precedents-recovery.v1.md", ("sol", "astra")),
+    ("base-ui", "candidates", [("base-ui", "C1n")], CANDIDATE_RULE, "precedents-candidate.v1.md", ("sol", "astra")),
+    ("labels", "labels", [("base-ui", "C1n")], "rule-labels.md", "precedents-band.v1.md", ("sol",)),
     ("labels-pre-existing", "labels", [("soba", "P1")], "rule-labels-pre-existing.md", "precedents-band.v1.md", ("sol",)),
 ]
 
