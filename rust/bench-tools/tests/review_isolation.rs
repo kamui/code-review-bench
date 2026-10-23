@@ -355,20 +355,11 @@ fn a_clone_outside_the_attempt_is_refused() {
 #[test]
 fn settings_name_this_executable_as_the_hook_and_verify() {
     let case = Attempt::new("verify");
-    let tools = ["python3", "node", "go", "rg", "bwrap", "socat"];
-    let missing: Vec<&str> = tools
+    if let Some(error) = review_isolation::RUNTIME_TOOLS
         .into_iter()
-        .filter(|name| {
-            !Command::new("sh")
-                .args(["-c", &format!("command -v {name}")])
-                .output()
-                .unwrap()
-                .status
-                .success()
-        })
-        .collect();
-    if !missing.is_empty() {
-        eprintln!("skipped: the host lacks {missing:?}");
+        .find_map(|name| review_isolation::runtime_folders(name).err())
+    {
+        eprintln!("skipped: {error}");
         return;
     }
     let out = case.attempt.join("isolation-settings.json");
@@ -487,19 +478,11 @@ fn a_frozen_forge_is_readable_its_log_writable_and_its_gh_first_on_path() {
 
 #[test]
 fn claude_strict_v3_passes_bash_to_the_gate_and_reads_its_ca() {
-    let present = |name: &str| {
-        Command::new("sh")
-            .args(["-c", &format!("command -v {name}")])
-            .output()
-            .unwrap()
-            .status
-            .success()
-    };
-    if !["python3", "node", "go", "rg", "bwrap", "socat"]
+    if let Some(error) = review_isolation::RUNTIME_TOOLS
         .into_iter()
-        .all(present)
+        .find_map(|name| review_isolation::runtime_folders(name).err())
     {
-        eprintln!("skipped: the host lacks a sandbox runtime tool");
+        eprintln!("skipped: {error}");
         return;
     }
     let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bench/targets/m-grpc-go-7390");
