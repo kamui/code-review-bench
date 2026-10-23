@@ -1,0 +1,227 @@
+diff --git a/bench/schema/cache-replacements.schema.json b/bench/schema/cache-replacements.schema.json
+new file mode 100644
+index 000000000..831ff1582
+--- /dev/null
++++ b/bench/schema/cache-replacements.schema.json
+@@ -0,0 +1,75 @@
++{
++  "$schema": "https://json-schema.org/draft/2020-12/schema",
++  "title": "Replacement dependency caches for frozen targets",
++  "type": "object",
++  "additionalProperties": false,
++  "required": [
++    "schema_version",
++    "version",
++    "reason",
++    "targets"
++  ],
++  "properties": {
++    "schema_version": {
++      "const": 1
++    },
++    "version": {
++      "type": "integer",
++      "minimum": 1
++    },
++    "reason": {
++      "type": "string",
++      "pattern": "\\S"
++    },
++    "targets": {
++      "type": "array",
++      "items": {
++        "type": "object",
++        "additionalProperties": false,
++        "required": [
++          "target",
++          "target_sha256",
++          "original_sha256",
++          "sha256",
++          "build_receipt"
++        ],
++        "properties": {
++          "target": {
++            "type": "string",
++            "pattern": "^[a-z0-9-]+$"
++          },
++          "target_sha256": {
++            "type": "string",
++            "pattern": "^[0-9a-f]{64}$"
++          },
++          "original_sha256": {
++            "type": "string",
++            "pattern": "^[0-9a-f]{64}$"
++          },
++          "sha256": {
++            "type": "string",
++            "pattern": "^[0-9a-f]{64}$"
++          },
++          "build_receipt": {
++            "type": "object",
++            "additionalProperties": false,
++            "required": [
++              "path",
++              "sha256"
++            ],
++            "properties": {
++              "path": {
++                "type": "string",
++                "pattern": "\\S"
++              },
++              "sha256": {
++                "type": "string",
++                "pattern": "^[0-9a-f]{64}$"
++              }
++            }
++          }
++        }
++      }
++    }
++  }
++}
+diff --git a/bench/tools/provision.py b/bench/tools/provision.py
+index a5b9b64f9..557efb977 100644
+--- a/bench/tools/provision.py
++++ b/bench/tools/provision.py
+@@ -75,6 +75,7 @@ import tempfile
+ import time
+ 
+ sys.path.insert(0, str(Path(__file__).resolve().parent))
++import check_manifest  # noqa: E402
+ import diff_identity  # noqa: E402
+ 
+ DEFAULT_CACHE_ROOT = os.path.join(os.path.expanduser("~"), ".t3", "bench-cache")
+@@ -99,7 +100,7 @@ def has_object(repo: str, sha: str) -> bool:
+     return subprocess.run(["git", "-C", repo, "cat-file", "-e", sha], capture_output=True).returncode == 0
+ 
+ 
+-def load_target(target_dir: str) -> dict:
++def load_target(target_dir: str, replacements: str = None) -> dict:
+     path = Path(target_dir, "target.json")
+     try:
+         target = json.loads(path.read_text(encoding="utf-8"))
+@@ -108,9 +109,61 @@ def load_target(target_dir: str) -> dict:
+     for key in ("id", "head", "merge_base", "negative_shas", "diff_manifest_sha256", "local_base_branch"):
+         if key not in target:
+             raise ProvisionError(f"{path}: missing {key}")
++    if replacements:
++        apply_replacement(target, path, Path(replacements))
+     return target
+ 
+ 
++def apply_replacement(target: dict, target_path: Path, manifest_path: Path) -> None:
++    try:
++        raw = manifest_path.read_bytes()
++        manifest = json.loads(raw)
++        schema_raw = Path(__file__).resolve().parents[1].joinpath(
++            "schema/cache-replacements.schema.json").read_bytes()
++        schema = json.loads(schema_raw)
++        problems = check_manifest.validate(schema, manifest)
++        if problems:
++            raise ValueError("; ".join(problems))
++        ids = [entry["target"] for entry in manifest["targets"]]
++        if len(ids) != len(set(ids)):
++            raise ValueError("duplicate replacement target")
++        entry = next((entry for entry in manifest["targets"] if entry["target"] == target["id"]), None)
++        if entry is None:
++            raise ValueError(f"no replacement for {target['id']}")
++        if entry["target_sha256"] != sha256_file(str(target_path)):
++            raise ValueError("frozen target changed")
++        cfg = cache_config(target)
++        archives = [value for value in target["provisioning"]["dependency_identity"]
++                    if value["name"] == f"cache archive ({cfg['kind']})"]
++        if len(archives) != 1 or archives[0]["sha256"] != entry["original_sha256"]:
++            raise ValueError("original cache identity differs")
++        ref = entry["build_receipt"]
++        relative = Path(ref["path"])
++        if relative.is_absolute() or ".." in relative.parts:
++            raise ValueError("build receipt must be relative to the replacement manifest")
++        receipt_path = manifest_path.parent / relative
++        receipt_raw = receipt_path.read_bytes()
++        if hashlib.sha256(receipt_raw).hexdigest() != ref["sha256"]:
++            raise ValueError("build receipt changed")
++        receipt = json.loads(receipt_raw)
++        if (receipt["target"] != target["id"] or receipt["kind"] != cfg["kind"]
++                or receipt["target_sha256"] != entry["target_sha256"]
++                or receipt["archive"]["sha256"] != entry["sha256"]
++                or [step["command"] for step in receipt["build"]] != cfg["build"]
++                or any(step["exit_code"] != 0 for step in receipt["build"])):
++            raise ValueError("build receipt does not prove the frozen recipe and replacement archive")
++        target["_cache_replacement"] = {
++            "contract": "cache-replacements-v1",
++            "schema_sha256": hashlib.sha256(schema_raw).hexdigest(),
++            "manifest": {"path": str(manifest_path.resolve()), "sha256": hashlib.sha256(raw).hexdigest()},
++            "manifest_text": raw.decode("utf-8"), "build_receipt_text": receipt_raw.decode("utf-8"),
++            "target_path": str(target_path.resolve()), "selection": entry,
++        }
++        archives[0]["sha256"] = entry["sha256"]
++    except (OSError, ValueError, KeyError, TypeError) as error:
++        raise ProvisionError(f"cache replacement: {error}") from error
++
++
+ def cache_config(target: dict) -> dict:
+     cfg = dict(EMPTY_CACHE)
+     cfg.update(target.get("provisioning", {}).get("cache") or {})
+@@ -458,7 +511,7 @@ def prepare(target: dict, cache_root: str, out: str, revision: str = "head") ->
+ 
+ 
+ def cmd_prepare(args) -> int:
+-    target = load_target(args.target)
++    target = load_target(args.target, args.cache_replacements)
+     record = prepare(target, args.cache_root, os.path.abspath(args.out))
+     print(json.dumps(record, indent=2))
+     return 1 if record["failures"] else 0
+@@ -693,6 +746,8 @@ def main() -> int:
+             p.add_argument("--staging", required=True, help="full clone holding the head and the merge-base")
+         if name in ("clone", "prepare"):
+             p.add_argument("--out", required=True, help="new directory for the working clone")
++        if name == "prepare":
++            p.add_argument("--cache-replacements", help="versioned replacement archive identities; never modifies target.json")
+         if name == "smoke":
+             p.add_argument("--out", help="smoke.json to write (default: <target>/smoke.json)")
+     args = parser.parse_args()
+diff --git a/bench/tools/run_cell.py b/bench/tools/run_cell.py
+index 0fb720fe1..55195101f 100644
+--- a/bench/tools/run_cell.py
++++ b/bench/tools/run_cell.py
+@@ -401,6 +401,17 @@ def extract_skill_tree(work: Path, tree: str) -> Path:
+     return destination
+ 
+ 
++def cache_selection(target_id: str) -> tuple:
++    """The provisioning arguments for the target's replacement manifest in ``BENCH_CACHE_REPLACEMENTS``."""
++    listing = [Path(path).resolve() for path in os.environ.get("BENCH_CACHE_REPLACEMENTS", "").split(os.pathsep)
++               if path and any(entry["target"] == target_id for entry in read_json(path)["targets"])]
++    if len(listing) > 1:
++        raise Refused(f"{target_id} is listed by {len(listing)} cache replacement manifests")
++    if not listing:
++        return [], None
++    return ["--cache-replacements", str(listing[0])], {"path": str(listing[0]), "sha256": sha256_file(listing[0])}
++
++
+ def dispatch(run: Run, attempt_id: str, claim: dict) -> None:
+     directory = run.work / attempt_id
+     cell = claim["cell"]
+@@ -421,7 +432,11 @@ def dispatch(run: Run, attempt_id: str, claim: dict) -> None:
+             env["SKILL_TREE"] = str(extract_skill_tree(run.work, tree))
+             env["SKILL_TREE_ID"] = tree
+         clone = directory / "clone"
+-        prepared = tool([sys.executable, str(TOOLS / "provision.py"), "prepare", "--target", str(target_dir), "--out", str(clone)])
++        cache_argv, replacement = cache_selection(cell["target"])
++        if replacement:
++            claim["cache_replacements"] = replacement
++        prepared = tool([sys.executable, str(TOOLS / "provision.py"), "prepare", "--target", str(target_dir),
++                         "--out", str(clone), *cache_argv])
+         (directory / "prepare.json").write_text(prepared.stdout, encoding="utf-8")
+         if prepared.returncode != 0:
+             raise InputError(f"provision.py prepare failed: {prepared.stdout.strip()} {prepared.stderr.strip()}")
+@@ -473,6 +488,9 @@ def file(run: Run, attempt_id: str) -> dict:
+             "--replicate", str(cell["replicate"]), "--out", str(run.dir / "attempts" / attempt_id),
+             "--expect-cli-version", entry["expected_cli_version"],
+             "--note", f"input.md sha256 {claim.get('input_sha256')}; run policy sha256 {claim.get('policy_sha256')} (before path substitution)"]
++    if claim.get("cache_replacements"):
++        replacement = claim["cache_replacements"]
++        argv += ["--note", f"dependency cache rebuilt: replacement manifest {replacement['path']} sha256 {replacement['sha256']}"]
+     if arm["kind"] in ("review-code", "codex-skill") and entry.get("resolved_skill_tree"):
+         argv += ["--expect-skill-tree", entry["resolved_skill_tree"]]
+     if os.environ.get("BENCH_RATES"):
