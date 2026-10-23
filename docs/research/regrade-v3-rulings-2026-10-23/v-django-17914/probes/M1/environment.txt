@@ -1,0 +1,43 @@
+Run on 2026-10-23 (US Eastern).
+
+Django head  fad334e1a9b54ea1acb8cce02a25934c5acfe99f  (reports itself as 5.1.dev20240301080118)
+Django base  bcccea3ef31c777b73cba41a6255cd866bf87237  (reports itself as 5.1.dev20240301071359)
+  Git worktrees of a clone of the local mirror <mirrors>/v-django-17914.git, used through PYTHONPATH.
+  fix-m1, fix-gtv2, fix-both and fix-identity are four more worktrees of the head, each with one patch of
+  patches/ applied (patches/mkfix.py writes them):
+    fix-m1        PostgreSQL DatabaseCreation.destroy_test_db() closes the wrapper's connection and the alias
+                  pool, whatever keepdb is, then runs the base method (this group's place alone)
+    fix-gtv2      PostgreSQL DatabaseCreation.create_test_db() and setup_worker_connection() close the
+                  connection and the alias pool before NAME changes, and the _nodb_cursor() fallback wrapper
+                  is built with NO_DB_ALIAS so it neither registers nor reuses the alias pool (GT-v2's three places)
+    fix-both      fix-m1 and fix-gtv2 together
+    fix-identity  the pool property replaces the alias pool when its dbname differs from the NAME now in
+                  settings (one change at the shared cause)
+  In fix-m1 the order matters: closing the pool while the wrapper still holds a connection makes the
+  following close() call the pool property, which registers a new pool for the test database. A first
+  version of fix-m1 had that order; it was corrected and rerun, and only the corrected outputs are saved.
+
+Python        3.10.12 (/usr/bin/python3.10, venv made with uv 0.12.6 (x86_64-unknown-linux-gnu))
+psycopg       3.1.18 with psycopg-binary (bundled libpq 160000)
+psycopg_pool  3.2.1
+asgiref 3.7.2, sqlparse 0.4.4
+PostgreSQL    16.15 (Ubuntu 16.15-1.pgdg22.04+2) , a throwaway cluster made with initdb -U postgres -A trust in the scratch
+              directory, Unix socket only, port 54914. Login role postgres (superuser) for every case except
+              gtv2-fallback, which uses role m1_user (LOGIN CREATEDB) after REVOKE CONNECT ON DATABASE postgres FROM PUBLIC.
+OS            Linux 6.6.87.2-microsoft-standard-WSL2, x86_64, glibc 2.35
+
+Pool options in every pooled case: {"min_size": 2, "max_size": 4, "timeout": 5}.
+The application database is m1_app (with a table app_marker holding one row 'application');
+its test database is test_m1_app. probe.py resets both before each case.
+
+Commands:
+  sh run.sh <scratch> 54914 head <python>   > result-head.txt
+  sh run.sh <scratch> 54914 base <python>   > result-base.txt
+  sh run.sh <scratch> 54914 <fix> <python>  for fix-m1, fix-gtv2, fix-both, fix-identity, concatenated > result-fixes.txt
+  sh run_project.sh <scratch> 54914 <tree> <python> for head, base, fix-m1 > result-project.txt
+    (manage.py test --keepdb on project/, twice each, with the stock DiscoverRunner and with
+     t.runner.RecordingRunner, which queries the alias after super().teardown_databases())
+At the base the pool option does not exist; run.sh runs every case without it there, plus one pooled
+keepdb case that shows the option being rejected.
+Not run: forked parallel workers (gtv2-worker calls setup_worker_connection(1) in the parent process);
+psycopg2; other psycopg or psycopg_pool versions; upstream main.
