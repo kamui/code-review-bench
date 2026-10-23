@@ -623,15 +623,27 @@ fn prepare_restores_only_the_recorded_cache_archive_into_its_own_copy() {
         .nth(1)
         .unwrap()
         .trim();
-    let archive = provisioned.cache().join("archives/t-1.tar.gz");
     let cache = provisioned.cache();
     assert_eq!(
         fs::read_to_string(cache.join("caches/t-1/store/f")).unwrap(),
         "hi"
     );
     let receipt = parse(&fs::read_to_string(cache.join("caches/t-1.json")).unwrap());
-    let archive_sha = sha256::hex_digest(&fs::read(&archive).unwrap());
-    assert_eq!(text(field(&receipt, "archive.sha256")), archive_sha);
+    let archive_sha = text(field(&receipt, "archive.sha256"));
+    let archive = cache.join(format!("archives/t-1.{archive_sha}.tar.gz"));
+    assert_eq!(
+        PathBuf::from(text(field(&receipt, "archive.path"))),
+        archive
+    );
+    assert_eq!(
+        sha256::hex_digest(&fs::read(&archive).unwrap()),
+        archive_sha
+    );
+    assert_eq!(
+        entries(&cache.join("archives")),
+        [format!("t-1.{archive_sha}.tar.gz")],
+        "the build writes only the hash-keyed archive"
+    );
     assert_eq!(field(&receipt, "build").as_array().unwrap().len(), 2);
     assert_eq!(
         text(field(&receipt, "sandbox.profile")),
@@ -663,7 +675,7 @@ fn prepare_restores_only_the_recorded_cache_archive_into_its_own_copy() {
         both(&unrecorded)
     );
     let zeros = "0".repeat(64);
-    let wrong = entry.replace(&archive_sha, &zeros);
+    let wrong = entry.replace(archive_sha, &zeros);
     provisioned.set_target(&format!(
         r#", "provisioning": {{"cache": {cache_config}, "dependency_identity": [{wrong}]}}"#
     ));
@@ -674,10 +686,27 @@ fn prepare_restores_only_the_recorded_cache_archive_into_its_own_copy() {
     ]);
     assert_eq!(mismatched.status.code(), Some(1));
     assert!(
+        stdout(&mismatched).contains(&format!(
+            "no cache archive at {} or {}",
+            s(&cache.join(format!("archives/t-1.{zeros}.tar.gz"))),
+            s(&cache.join("archives/t-1.tar.gz"))
+        )),
+        "{}",
+        both(&mismatched)
+    );
+    fs::copy(&archive, cache.join("archives/t-1.tar.gz")).unwrap();
+    let mismatched = provisioned.run(&[
+        "prepare",
+        "--out",
+        s(&provisioned.temp.0.join("mismatched-per-task")),
+    ]);
+    assert_eq!(mismatched.status.code(), Some(1));
+    assert!(
         stdout(&mismatched).contains(&format!("target.json records {zeros}")),
         "{}",
         both(&mismatched)
     );
+    fs::remove_file(cache.join("archives/t-1.tar.gz")).unwrap();
 
     provisioned.set_target(&format!(
         r#", "provisioning": {{"cache": {cache_config}, "dependency_identity": [{entry}]}}"#
@@ -716,6 +745,25 @@ fn prepare_restores_only_the_recorded_cache_archive_into_its_own_copy() {
         sha256::hex_digest(&fs::read(&archive).unwrap()),
         archive_sha
     );
+
+    let per_task = cache.join("archives/t-1.tar.gz");
+    fs::write(&per_task, "another runtime's archive").unwrap();
+    let beside = provisioned.temp.0.join("beside");
+    let done = provisioned.run(&["prepare", "--out", s(&beside)]);
+    assert!(
+        done.status.success(),
+        "a hash-keyed archive is read before the per-task one: {}",
+        both(&done)
+    );
+    fs::rename(&archive, &per_task).unwrap();
+    let fallback = provisioned.temp.0.join("fallback");
+    let done = provisioned.run(&["prepare", "--out", s(&fallback)]);
+    assert!(
+        done.status.success(),
+        "a cache root without hash-keyed archives still restores: {}",
+        both(&done)
+    );
+    fs::rename(&per_task, &archive).unwrap();
 
     let smoke = provisioned.temp.0.join("smoke.json");
     let smoked = provisioned.run(&["smoke", "--out", s(&smoke)]);

@@ -240,16 +240,6 @@ fn receipt_proves(
     Ok(true)
 }
 
-/// `provision.archive_path(cache_root, target)`.
-pub fn archive_path(cache_root: &[u8], id: &str) -> Vec<u8> {
-    let mut path = cache_root.to_vec();
-    if !path.is_empty() && !path.ends_with(b"/") {
-        path.push(b'/');
-    }
-    path.extend_from_slice(format!("archives/{id}.tar.gz").as_bytes());
-    path
-}
-
 /// `provision.remove_tree(path)`: owner write and search bits first, since Go makes module-cache directories
 /// read-only. The error is the `ProvisionError` message.
 pub fn remove_tree(path: &[u8]) -> Result<(), String> {

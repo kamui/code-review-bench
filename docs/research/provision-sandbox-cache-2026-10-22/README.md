@@ -15,12 +15,28 @@ A runtime built with the sandbox cannot use v1 for trpc: `prepare` restores `ddf
 - an authorization or `BENCH_CACHE_REPLACEMENTS` that pins this manifest in place of v1;
 - `8f53201c` at the cache root's `archives/j-trpc-5017.tar.gz`.
 
-To serve both runtimes at once, use a separate cache root (`--cache-root`, `BENCH_CACHE_ROOT` or an authorization's `cacheRoot`) that holds `8f53201c` and the mirrors. Otherwise, once nothing still depends on v1 for trpc, move the archive into place:
+To serve both runtimes at once, use a separate cache root (`--cache-root`, `BENCH_CACHE_ROOT` or an authorization's `cacheRoot`). It must hold everything the run provisions, not only trpc: `mirrors/<id>.git` and `archives/<id>.tar.gz` for every target with a cache, with the archive this manifest names for each of its ten targets and the frozen archive for the others, and `8f53201c` for trpc. `run-cell` reads the manifest from `BENCH_CACHE_REPLACEMENTS` and regrade from the authorization's `cacheReplacements`. A direct `bench-tools provision prepare`, `smoke` or `check` call, like `grade prepare`, reads neither, so pass both `--cache-root` and `--cache-replacements`:
+
+```sh
+bench/tools/bench-tools provision prepare --target bench/targets/j-trpc-5017 \
+  --cache-root <separate root> \
+  --cache-replacements docs/research/provision-sandbox-cache-2026-10-22/cache-replacements.v2.json \
+  --out <clone>
+```
+
+Otherwise, once nothing still depends on v1 for trpc, move the archive into place:
 
 ```sh
 mv ~/.t3/bench-cache/archives/j-trpc-5017.tar.gz ~/.t3/bench-cache/staged/j-trpc-5017.ddfc465a.tar.gz
 mv ~/.t3/bench-cache/staged/j-trpc-5017.8f53201c.tar.gz ~/.t3/bench-cache/archives/j-trpc-5017.tar.gz
 ```
+
+The shared cache root was swapped this way on 2026-10-22.
+
+Runtimes with hash-keyed archive names (#351) read `archives/<id>.<sha256>.tar.gz` first, named by the hash the target or its replacement manifest records, and fall back to `archives/<id>.tar.gz`. With such a runtime, one cache root serves both trpc archives:
+
+- `ddfc465a` at `archives/j-trpc-5017.tar.gz`, for runtimes built before that change, and `8f53201c` at `archives/j-trpc-5017.8f53201cdabcb6197b453d49a93a1e44b5762d34673c187af10edd52ad1781f9.tar.gz`;
+- or, as the shared root stands after the swap, `8f53201c` at the per-task name and `ddfc465a` at `archives/j-trpc-5017.ddfc465ae0c6db10ddd48ad42839ee9d39688036f5aca06b662c1e0b3b7d000c.tar.gz`, for runtimes with hash-keyed names only.
 
 ## Verification
 

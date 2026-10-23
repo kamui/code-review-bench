@@ -12,8 +12,10 @@
 //! `{cache}`, `{clone}` and `{work}` substituted, inside the [`crate::provision_sandbox`] profile, which the cache
 //! receipt, `prepare`'s record and `smoke.json` record; only build steps share the host network.
 //! `cache` archives the built cache to
-//! `<cache-root>/archives/<id>.tar.gz` and prints its `dependency_identity` entry. `prepare` clones, checks the
-//! archive against the hash `target.json` records, restores it into `<out>-cache` and runs the post-clone steps.
+//! `<cache-root>/archives/<id>.<sha256>.tar.gz` and prints its `dependency_identity` entry. `prepare` clones, checks
+//! the archive against the hash `target.json` records, restores it into `<out>-cache` and runs the post-clone steps.
+//! It reads the archive named by that hash, or `archives/<id>.tar.gz` when no such file exists, so cache roots made
+//! before hash-keyed names keep working.
 //! `smoke` measures provisioning and the smoke checks and writes `smoke.json`.
 //!
 //! `prepare` refuses unless the output's filesystem keeps `BENCH_DISK_RESERVE_GIB` (default 20) free beyond what
@@ -381,10 +383,37 @@ fn cache_path(cache_root: &Path, target: &Target) -> PathBuf {
     cache_root.join("caches").join(&target.id)
 }
 
-fn archive_path(cache_root: &Path, target: &Target) -> PathBuf {
-    cache_root
-        .join("archives")
-        .join(format!("{}.tar.gz", target.id))
+/// Where the cache archive with `sha256` lives: `archives/<id>.<sha256>.tar.gz` when that file exists, so archives
+/// of one target built for different runtimes sit side by side, and otherwise the per-task `archives/<id>.tar.gz`
+/// that cache roots made before hash-keyed names hold.
+pub(crate) fn archive_path(cache_root: &Path, id: &str, sha256: Option<&str>) -> PathBuf {
+    let archives = cache_root.join("archives");
+    sha256
+        .map(|sha256| archives.join(format!("{id}.{sha256}.tar.gz")))
+        .filter(|keyed| keyed.is_file())
+        .unwrap_or_else(|| archives.join(format!("{id}.tar.gz")))
+}
+
+/// The archive hashes `target.json` records for `config`'s cache, which `restore_cache` requires to be exactly one.
+fn recorded_archives(target: &Target, config: &Cache) -> Vec<Value> {
+    let name = config.archive_name();
+    field(&target.value, "provisioning")
+        .and_then(|provisioning| field(provisioning, "dependency_identity"))
+        .and_then(Value::as_array)
+        .unwrap_or_default()
+        .iter()
+        .filter(|entry| field(entry, "name").and_then(Value::as_str) == Some(name.as_str()))
+        .map(|entry| field(entry, "sha256").cloned().unwrap_or(Value::Null))
+        .collect()
+}
+
+fn recorded_archive_path(cache_root: &Path, target: &Target, config: &Cache) -> PathBuf {
+    let recorded = recorded_archives(target, config);
+    let sha256 = match recorded.as_slice() {
+        [only] => only.as_str(),
+        _ => None,
+    };
+    archive_path(cache_root, &target.id, sha256)
 }
 
 fn remove(path: &Path) -> P<()> {
@@ -853,12 +882,13 @@ fn build_cache(
     }
     let mut archive_record = Value::Null;
     if !config.build.is_empty() {
-        let archive = archive_path(&options.cache_root, target);
-        make_directories(archive.parent().unwrap_or(Path::new("/")))?;
+        let archives = options.cache_root.join("archives");
+        make_directories(&archives)?;
+        let building = archives.join(format!("{}.building.tar.gz", target.id));
         let command = format!(
             "tar -C {} -czf {} {}",
             crate::shlex::quote(&cache.parent().unwrap_or(Path::new("/")).to_string_lossy()),
-            crate::shlex::quote(&archive.to_string_lossy()),
+            crate::shlex::quote(&building.to_string_lossy()),
             crate::shlex::quote(&target.id)
         );
         let ran = shell(&command, scratch)?;
@@ -868,12 +898,15 @@ fn build_cache(
                 tail(&ran.output, 20),
             ]));
         }
+        let sha256 = sha256_file(&building)?;
+        let archive = archives.join(format!("{}.{sha256}.tar.gz", target.id));
+        std::fs::rename(&building, &archive).map_err(os_failure(&archive))?;
         let bytes = std::fs::metadata(&archive)
             .map_err(os_failure(&archive))?
             .len();
         archive_record = object(vec![
             ("path", text(&archive.to_string_lossy())),
-            ("sha256", text(&sha256_file(&archive)?)),
+            ("sha256", text(&sha256)),
             ("bytes", Value::Int(bytes.to_string())),
             ("duration_seconds", Value::Float(ran.duration)),
         ]);
@@ -921,15 +954,8 @@ type Restored = (Option<(String, Ran)>, Vec<String>);
 /// Check the archive against the hash `target.json` records and extract it into `dest`.
 fn restore_cache(target: &Target, config: &Cache, cache_root: &Path, dest: &Path) -> P<Restored> {
     let name = config.archive_name();
-    let recorded: Vec<Value> = field(&target.value, "provisioning")
-        .and_then(|provisioning| field(provisioning, "dependency_identity"))
-        .and_then(Value::as_array)
-        .unwrap_or_default()
-        .iter()
-        .filter(|entry| field(entry, "name").and_then(Value::as_str) == Some(name.as_str()))
-        .map(|entry| field(entry, "sha256").cloned().unwrap_or(Value::Null))
-        .collect();
-    let archive = archive_path(cache_root, target);
+    let recorded = recorded_archives(target, config);
+    let archive = recorded_archive_path(cache_root, target, config);
     if recorded.len() != 1 {
         return Ok((
             None,
@@ -942,7 +968,14 @@ fn restore_cache(target: &Target, config: &Cache, cache_root: &Path, dest: &Path
     if !archive.is_file() {
         return Ok((
             None,
-            vec![format!("no cache archive at {}", archive.display())],
+            vec![format!(
+                "no cache archive at {} or {}",
+                cache_root
+                    .join("archives")
+                    .join(format!("{}.{}.tar.gz", target.id, recorded[0].py_str()))
+                    .display(),
+                archive.display()
+            )],
         ));
     }
     let actual = sha256_file(&archive)?;
@@ -1042,7 +1075,7 @@ fn space_needed(target: &Target, config: &Cache, cache_root: &Path) -> P<u64> {
         let size = line.split_whitespace().nth(3).unwrap_or_default();
         needed += size.parse::<u64>().map_or(BLOCK, blocks);
     }
-    let archive = archive_path(cache_root, target);
+    let archive = recorded_archive_path(cache_root, target, config);
     if !config.build.is_empty() && archive.is_file() {
         // restore_cache refuses an archive that tar cannot read.
         needed += archive_entries(&archive).unwrap_or(0);
