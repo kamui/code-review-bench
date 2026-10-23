@@ -25,7 +25,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 pub const CURRENT: &str = "bench/grading/current";
-pub const PROGRAM: &str = "current_grading.py";
+pub const PROGRAM: &str = "bench-tools current-grading";
 const KINDS: [&str; 6] = [
     "reference",
     "adjudication",
@@ -141,10 +141,10 @@ const SCHEMAS: [(&str, &str); 10] = [
 pub enum Failure {
     /// `Inconsistent`: the message on stdout, exit 1. Bytes, because a path in it is printed as its bytes.
     Inconsistent(Vec<u8>),
-    /// `InputError` or an `OSError`: `current_grading.py: <message>` on stderr, exit 2.
+    /// `InputError` or an `OSError`: `bench-tools current-grading: <message>` on stderr, exit 2.
     Input(String),
     /// Any other exception, which the Python command line did not catch: a traceback with exit 1 there. Rust
-    /// prints `current_grading.py: <class>: <message>` and exits 2, as `current-grading-decisions.v1.json`
+    /// prints `bench-tools current-grading: <class>: <message>` and exits 2, as `current-grading-decisions.v1.json`
     /// records.
     Crash(String),
 }

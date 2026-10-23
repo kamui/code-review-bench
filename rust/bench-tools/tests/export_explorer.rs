@@ -205,7 +205,7 @@ fn a_record_changed_after_staging_is_refused_and_the_previous_export_stays() {
     let result = export(&root, &mut moves(None), &mut || assess(&root));
     assert_eq!(
         line(result),
-        "current_grading.Inconsistent: current evidence changed during export"
+        "inconsistent: current evidence changed during export"
     );
     assert_eq!(files(&root.join("public")), before);
     assert!(!root.join(".cache/explorer-export").exists());

@@ -17,7 +17,7 @@ pub const MANIFEST: &str = "bench/import-manifest.json";
 const PRESERVED: &[u8] = b"artifacts/import-source";
 pub const PRESERVE_COMMAND: &str = "bun run import:preserve";
 
-/// A refusal, printed after `import_benchmark.py: ` on stderr with exit 1, the status Python's traceback had.
+/// A refusal, printed after `bench-tools import-benchmark: ` on stderr with exit 1, the status Python's traceback had.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Refusal(pub String);
 

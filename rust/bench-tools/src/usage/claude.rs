@@ -27,7 +27,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::os::unix::ffi::OsStrExt;
 
-const PROGRAM: &str = "transcript_usage";
+const PROGRAM: &str = "bench-tools usage";
 const WIDTH: usize = 18;
 const NO_PATH: &str = "(no path)";
 const TIMING_EVENTS: [&str; 3] = ["root_dispatched_at", "payload_validated_at", "completed_at"];

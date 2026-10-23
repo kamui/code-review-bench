@@ -62,7 +62,7 @@ fn an_http_page_is_read_after_a_redirect() {
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "rates.py: provider pricing section is missing: Standard pricing data\n"
+        "bench-tools rates: provider pricing section is missing: Standard pricing data\n"
     );
     assert!(requests[0].starts_with("GET /start "), "{requests:?}");
     assert!(requests[1].starts_with("GET /page "), "{requests:?}");
@@ -86,7 +86,7 @@ fn an_http_error_status_prints_urllibs_http_error() {
     assert!(output.stdout.is_empty(), "{output:?}");
     assert_eq!(
         String::from_utf8_lossy(&output.stderr),
-        "rates.py: HTTP Error 404: Not Found\n"
+        "bench-tools rates: HTTP Error 404: Not Found\n"
     );
 }
 
@@ -105,7 +105,9 @@ fn a_tls_failure_is_a_source_failure() {
     assert_eq!(output.status.code(), Some(2), "{output:?}");
     assert!(output.stdout.is_empty(), "{output:?}");
     assert!(
-        output.stderr.starts_with(b"rates.py: <urlopen error "),
+        output
+            .stderr
+            .starts_with(b"bench-tools rates: <urlopen error "),
         "{output:?}"
     );
 }
@@ -150,7 +152,7 @@ fn a_socks_all_proxy_connects_directly_instead_of_through_https_proxy() {
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "rates.py: provider pricing section is missing: Standard pricing data\n"
+        "bench-tools rates: provider pricing section is missing: Standard pricing data\n"
     );
     let requests = server.join().unwrap();
     assert!(requests[0].starts_with("GET /page "), "{requests:?}");
@@ -167,6 +169,6 @@ fn a_socks_all_proxy_that_resolves_remotely_fails_without_connecting() {
     assert!(output.stdout.is_empty(), "{output:?}");
     assert_eq!(
         String::from_utf8_lossy(&output.stderr),
-        "rates.py: <urlopen error Connection refused>\n"
+        "bench-tools rates: <urlopen error Connection refused>\n"
     );
 }

@@ -240,7 +240,7 @@ ranking.
   it cannot restore in `STAGE/previous`.
 
 Every failure exits 1 with the last line of the traceback `export_explorer.py` printed, after
-`export_explorer.py: `. Usage errors exit 2. `export-explorer-decisions.v3.json` records each change from the Python
+`bench-tools export-explorer: `. Usage errors exit 2. `export-explorer-decisions.v3.json` records each change from the Python
 export with its case:
 
 - `export-explorer-evidence-reads-every-input-first`: every input is read before any evidence is restored, so an
