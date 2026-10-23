@@ -339,8 +339,8 @@ fn to_verify(name: &str, present: &[Candidate], journal: Option<&Journal>) -> bo
 }
 
 /// Unlink the forge's bench-tools copy through the `forge` directory itself, never a link put in its place, and only
-/// while it is still the file that was verified.
-fn unlink_forge_runtime(workspace: &PyPath, verified: Identity) -> R<()> {
+/// while it is still the verified file and still holds the bytes `pin` names.
+fn unlink_forge_runtime(workspace: &PyPath, verified: Identity, pin: &str) -> R<()> {
     let forge = workspace.join(b"forge");
     let Some((identity, Kind::Directory)) = lstat(&forge)? else {
         return Err(failed(format!(
@@ -351,6 +351,14 @@ fn unlink_forge_runtime(workspace: &PyPath, verified: Identity) -> R<()> {
     match forge.entry(b"bench-tools").map_err(Failure::Failed)? {
         None => Ok(()),
         Some((found, Kind::File)) if found == verified => {
+            let copy = forge
+                .open_file(b"bench-tools", verified)
+                .map_err(Failure::Failed)?;
+            if file_digest(copy)? != pin {
+                return Err(failed(format!(
+                    "{FORGE_RUNTIME} changed while it was verified"
+                )));
+            }
             forge.unlink_file(b"bench-tools").map_err(Failure::Failed)
         }
         Some(_) => Err(failed(format!(
@@ -359,16 +367,32 @@ fn unlink_forge_runtime(workspace: &PyPath, verified: Identity) -> R<()> {
     }
 }
 
-/// Refuses a forge bench-tools copy other than the runtime the run pins, which alone can restore its bytes.
-fn pinned_runtime(copy: &PyPath, run: &PyPath) -> R<()> {
+fn file_digest(mut file: std::fs::File) -> R<String> {
+    use std::io::Read;
+    let mut hash = crate::sha256::Sha256::new();
+    let mut buffer = vec![0; 1 << 16];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| failed(format!("{FORGE_RUNTIME}: {error}")))?;
+        if read == 0 {
+            return Ok(crate::sha256::hex(&hash.finalize()));
+        }
+        hash.update(&buffer[..read]);
+    }
+}
+
+/// The digest `runtimes.frozen.json` pins, once the forge bench-tools copy is found to match it: only that runtime can
+/// restore its bytes.
+fn pinned_runtime(copy: &PyPath, run: &PyPath) -> R<String> {
     let pinned = read(&run.join(b"runtimes.frozen.json"))?;
     let pinned = at(at(&pinned, "bench-tools"), "sha256").as_str();
-    if pinned != Some(digest(copy)?.as_str()) {
-        return refuse(format!(
+    match pinned {
+        Some(pinned) if pinned == digest(copy)? => Ok(pinned.to_string()),
+        _ => refuse(format!(
             "{FORGE_RUNTIME} is not the runtime runtimes.frozen.json pins"
-        ));
+        )),
     }
-    Ok(())
 }
 
 /// The workspace as verification found it.
@@ -376,6 +400,8 @@ struct Plan {
     workspace: PyPath,
     identity: Identity,
     present: Vec<Candidate>,
+    /// The runtime digest the forge bench-tools copy must still hold when it is unlinked.
+    runtime_pin: Option<String>,
     journal: Option<Journal>,
     /// The receipt without `applied`, which [`Plan::receipt`] places.
     receipt: Object,
@@ -495,7 +521,11 @@ fn commit(
             write(&plan.workspace.join(JOURNAL.as_bytes()), &journal.value())?;
         }
         if candidate.name == FORGE_RUNTIME {
-            unlink_forge_runtime(&plan.workspace, candidate.identity)?;
+            let pin = plan
+                .runtime_pin
+                .as_deref()
+                .ok_or_else(|| failed(format!("{FORGE_RUNTIME} has no runtime pin")))?;
+            unlink_forge_runtime(&plan.workspace, candidate.identity, pin)?;
         } else {
             directory
                 .remove_tree(candidate.name.as_bytes(), candidate.identity, None, hook)
@@ -762,16 +792,22 @@ fn check_attempt(arguments: &Attempt<'_>) -> R<Checked> {
         }
     }
     // A file is never left partly removed, so a retry checks a copy that is still there.
-    if present
+    let runtime_pin = if present
         .iter()
         .any(|candidate| candidate.name == FORGE_RUNTIME)
     {
-        pinned_runtime(&workspace.join(FORGE_RUNTIME.as_bytes()), run)?;
-    }
+        Some(pinned_runtime(
+            &workspace.join(FORGE_RUNTIME.as_bytes()),
+            run,
+        )?)
+    } else {
+        None
+    };
     let mut plan = Plan {
         workspace,
         identity,
         present,
+        runtime_pin,
         journal,
         receipt: Object::default(),
     };
@@ -919,6 +955,7 @@ fn check_grading(arguments: &Grading<'_>) -> R<Checked> {
         workspace: work,
         identity,
         present,
+        runtime_pin: None,
         journal,
         receipt: Object::default(),
     };
@@ -1274,6 +1311,31 @@ mod tests {
             "another attempt's evidence"
         );
         assert!(review.workspace.join("forge-moved/bench-tools").is_file());
+    }
+
+    #[test]
+    fn a_forge_copy_rewritten_in_place_during_removal_is_kept() {
+        let review = Review::new();
+        let copy = forge(&review, b"pinned runtime").join("bench-tools");
+        let rewritten = Cell::new(false);
+        let hook = |point| {
+            if point == Point::Removed && !rewritten.replace(true) {
+                fs::set_permissions(&copy, fs::Permissions::from_mode(0o644))?;
+                fs::write(&copy, b"rewritten in place")?;
+            }
+            Ok(())
+        };
+        let before = std::os::unix::fs::MetadataExt::ino(&fs::metadata(&copy).unwrap());
+        assert!(matches!(
+            review.prune_with(true, None, &hook),
+            Err(Failure::Failed(_))
+        ));
+        assert!(rewritten.get());
+        assert_eq!(
+            std::os::unix::fs::MetadataExt::ino(&fs::metadata(&copy).unwrap()),
+            before
+        );
+        assert_eq!(fs::read(&copy).unwrap(), b"rewritten in place");
     }
 
     #[test]

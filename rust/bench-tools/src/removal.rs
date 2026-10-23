@@ -172,6 +172,20 @@ impl Directory {
         }
     }
 
+    /// Open the regular file `name` for reading without following a link, while it is still the file `expected`.
+    pub fn open_file(&self, name: &[u8], expected: Identity) -> Result<std::fs::File, String> {
+        let path = self.path.join(OsStr::from_bytes(name));
+        let flags = OFlag::O_RDONLY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC | OFlag::O_NONBLOCK;
+        let file = fcntl::openat(&self.fd, OsStr::from_bytes(name), flags, Mode::empty())
+            .map(std::fs::File::from)
+            .map_err(|errno| failure(errno, &path))?;
+        let opened = stat::fstat(file.as_fd()).map_err(|errno| failure(errno, &path))?;
+        if Identity::of(&opened) != expected || !is(&opened, SFlag::S_IFREG) {
+            return Err(format!("{} changed after it was verified", path.display()));
+        }
+        Ok(file)
+    }
+
     /// Unlink the regular file `name` when it is present; anything else there is an error.
     pub fn unlink_file(&self, name: &[u8]) -> Result<(), String> {
         match self.entry(name)? {
