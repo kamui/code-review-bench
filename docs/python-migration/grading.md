@@ -118,7 +118,7 @@ It never settles a pre-existing decision type, and `summary` refuses an agent se
 The decisions record each difference from the retained Python:
 
 - an exception the Python command line did not catch, a traceback with exit 1, exits 2 with one line naming its
-  class; usage errors and help are clap's;
+  class by a plain label, such as `missing key`; usage errors and help are clap's;
 - a record holding a lone surrogate, and a non-UTF-8 `--exclude`, are refused with exit 2;
 - `\d` follows Python 3.14's Unicode 16.0 digits in versioned rule names, round dates and natural ordering, and
   quoted paths follow its printable characters;
@@ -412,7 +412,7 @@ fields masked. The decided differences:
   the blinded cards' private-path check (`calibration-unicode-seed`, `calibration-unicode-exposure`), digits in a
   second assessment's number (`evaluator-audit-unicode-assessment-number`), and dash-led values (`*-cli-dash-led-*`).
 - An exception the Python did not catch, a pinned receipt that is not UTF-8 or a second-assessment receipt that is
-  not an object, prints `<program>: <class>: <message>`, exit 2, instead of a traceback, exit 1
+  not an object, prints `<program>: <label>: <message>`, exit 2, instead of a traceback, exit 1
   (`calibration-receipt-not-utf8`, `evaluator-audit-receipt-not-an-object`).
 - `evaluator-audit second` is refused as an invalid operation, exit 2 (`evaluator-audit-cli-second-*`).
 - Usage errors and help are clap's (`calibration-cli-*`, `evaluator-audit-cli-*`).
@@ -594,7 +594,7 @@ is not one of them; it moved to #157.
 output is the port's; every case where Python 3.12.15 or 3.14.7 printed something else carries Python's output as a
 `baseline_defect` and a decision record. The decided differences:
 
-- An exception the Python did not catch prints `<program>: <type>: <message>` and keeps exit 1, instead of a
+- An exception the Python did not catch prints `<program>: <label>: <message>` and keeps exit 1, instead of a
   traceback (`*-missing-batches`, `*-invalid-json`, `*-unhashable-state`, `*-uncaught-error`,
   `*-uncaught-type-error`, `*-zero-reviews`).
 - Values follow Python 3.14 where versions differ: `sum` (`*-mixed-wall-seconds`, `*-mixed-sum`), hour 24

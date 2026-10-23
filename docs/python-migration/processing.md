@@ -240,7 +240,7 @@ ranking.
   it cannot restore in `STAGE/previous`.
 
 Every failure exits 1 with the last line of the traceback `export_explorer.py` printed, after
-`bench-tools export-explorer: `. Usage errors exit 2. `export-explorer-decisions.v3.json` records each change from the Python
+`bench-tools export-explorer: ` and with a plain label, such as `invalid JSON`, for the exception's name. Usage errors exit 2. `export-explorer-decisions.v3.json` records each change from the Python
 export with its case:
 
 - `export-explorer-evidence-reads-every-input-first`: every input is read before any evidence is restored, so an
@@ -371,7 +371,7 @@ state the impact against Python 3.12 (80 decimal digits, 5,004 word characters, 
 3.10 (110, 9,917 and 510).
 
 The decisions also record eight intended changes from `build_packet.py`, each with its case. An input that made Python
-raise an uncaught exception exits 2 and names the exception: `build-packet-missing-merged-at`,
+raise an uncaught exception exits 2 and labels the exception, such as `missing key`: `build-packet-missing-merged-at`,
 `build-packet-null-author` and `build-packet-overflowing-cutoff`. A replay file or extra section that is not UTF-8
 exits 2 naming the file: `build-packet-invalid-utf8-replay` and `build-packet-invalid-utf8-extra-section`. A lone
 surrogate escape and JSON nested deeper than 1,000 levels are refused even in a field the packet never renders:

@@ -112,9 +112,9 @@ fn key<'a>(value: &'a Value, name: &str) -> Result<&'a Value, Error> {
     match value {
         Value::Object(object) => object
             .get(name)
-            .ok_or_else(|| Error::Violation(format!("KeyError: {}", pytext::repr_str(name)))),
+            .ok_or_else(|| Error::Violation(format!("missing key: {}", pytext::repr_str(name)))),
         other => Err(Error::Violation(format!(
-            "TypeError: {} indices must be integers or slices, not str",
+            "type error: {} indices must be integers or slices, not str",
             other.type_name()
         ))),
     }
@@ -132,13 +132,13 @@ impl Remote for GitHub {
         let mut assets = Vec::new();
         for page in pages.as_array().ok_or_else(|| {
             Error::Violation(format!(
-                "TypeError: '{}' object is not iterable",
+                "type error: '{}' object is not iterable",
                 pages.type_name()
             ))
         })? {
             assets.extend(page.as_array().map(<[Value]>::to_vec).ok_or_else(|| {
                 Error::Violation(format!(
-                    "TypeError: '{}' object is not iterable",
+                    "type error: '{}' object is not iterable",
                     page.type_name()
                 ))
             })?);

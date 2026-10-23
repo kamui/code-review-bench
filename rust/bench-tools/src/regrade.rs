@@ -376,7 +376,7 @@ impl Effects for Host {
                     String::from_utf8_lossy(&message).into_owned()
                 }
                 current_grading::Failure::Input(message)
-                | current_grading::Failure::Crash(message) => message,
+                | current_grading::Failure::Crash(message) => crate::pysemantics::relabel(&message),
             };
             format!("current evidence: {message}")
         };

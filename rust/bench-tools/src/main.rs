@@ -2,6 +2,7 @@
 
 use bench_tools::normalize_review::{self, Arm};
 use bench_tools::pyjson::{self, Duplicates};
+use bench_tools::pysemantics::relabel;
 use bench_tools::pytext::{self, PyPath};
 use bench_tools::schema::{SchemaError, Validator};
 use bench_tools::{
@@ -3024,7 +3025,7 @@ fn run_methodology(arguments: &MethodologyArgs) -> Result<ExitCode, ExitCode> {
             Err(ExitCode::from(1))
         }
         Err(Failure::Input(message) | Failure::Crash(message)) => {
-            eprintln!("{}: {message}", methodology::PROGRAM);
+            eprintln!("{}: {}", methodology::PROGRAM, relabel(&message));
             Err(ExitCode::from(2))
         }
     }
@@ -5136,7 +5137,7 @@ fn run_calibration(arguments: &CalibrationArgs) -> Result<ExitCode, ExitCode> {
             Ok(ExitCode::from(1))
         }
         Err(Failure::Input(message) | Failure::Crash(message)) => {
-            eprintln!("{}: {message}", calibration::PROGRAM);
+            eprintln!("{}: {}", calibration::PROGRAM, relabel(&message));
             Err(ExitCode::from(2))
         }
     }
@@ -5226,7 +5227,7 @@ fn run_evaluator_audit(arguments: &EvaluatorAuditArgs) -> Result<ExitCode, ExitC
                 .iter()
                 .find_map(|class| message.strip_prefix(class))
                 .unwrap_or(&message);
-            eprintln!("{}: {message}", evaluator_audit::PROGRAM);
+            eprintln!("{}: {}", evaluator_audit::PROGRAM, relabel(message));
             return Err(ExitCode::from(2));
         }
     };
@@ -5296,7 +5297,7 @@ fn run_current_grading(arguments: CurrentGradingArgs) -> Result<ExitCode, ExitCo
             Ok(ExitCode::from(1))
         }
         Err(Failure::Input(message) | Failure::Crash(message)) => {
-            eprintln!("{}: {message}", current_grading::PROGRAM);
+            eprintln!("{}: {}", current_grading::PROGRAM, relabel(&message));
             Err(ExitCode::from(2))
         }
     }
@@ -5496,7 +5497,7 @@ fn run_grade(command: GradeCommand) -> Result<ExitCode, ExitCode> {
             Ok(ExitCode::from(1))
         }
         Err(Failure::Input(message) | Failure::Crash(message)) => {
-            eprintln!("{}: {message}", grade::PROGRAM);
+            eprintln!("{}: {}", grade::PROGRAM, relabel(&message));
             Err(ExitCode::from(2))
         }
     }

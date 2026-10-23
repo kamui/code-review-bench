@@ -75,7 +75,7 @@ pub fn apply_replacement(
             | Raised::Key(message)
             | Raised::Type(message),
         ) => Ok(Err(format!("cache replacement: {message}"))),
-        Err(other) => Err(Failure::Crash(other.describe())),
+        Err(other) => Err(Failure::Crash(other.traceback())),
     }
 }
 

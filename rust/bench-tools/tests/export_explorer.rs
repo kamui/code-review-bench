@@ -224,7 +224,7 @@ fn a_failed_publication_restores_the_previous_export_and_removes_the_stage() {
     assess(&root);
     let mut failing = moves(Some(3));
     let result = export(&root, &mut failing, &mut || {});
-    assert!(line(result).starts_with("OSError: [Errno 28] No space left on device"));
+    assert!(line(result).starts_with("I/O error: [Errno 28] No space left on device"));
     assert_eq!(files(&root.join("public")), before);
     assert!(!root.join(".cache/explorer-export").exists());
     assert!(

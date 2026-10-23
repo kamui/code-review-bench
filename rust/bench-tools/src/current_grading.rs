@@ -144,7 +144,7 @@ pub enum Failure {
     /// `InputError` or an `OSError`: `bench-tools current-grading: <message>` on stderr, exit 2.
     Input(String),
     /// Any other exception, which the Python command line did not catch: a traceback with exit 1 there. Rust
-    /// prints `bench-tools current-grading: <class>: <message>` and exits 2, as `current-grading-decisions.v1.json`
+    /// prints `bench-tools current-grading: <label>: <message>` and exits 2, as `current-grading-decisions.v1.json`
     /// records.
     Crash(String),
 }
@@ -155,7 +155,7 @@ impl From<Raised> for Failure {
     fn from(raised: Raised) -> Self {
         match raised {
             Raised::Os(message) => Failure::Input(message),
-            other => Failure::Crash(other.describe()),
+            other => Failure::Crash(other.traceback()),
         }
     }
 }

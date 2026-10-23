@@ -1758,7 +1758,9 @@ impl ExportFailure {
             Self::Current(current_grading::Failure::Input(message)) => {
                 format!("input error: {message}")
             }
-            Self::Current(current_grading::Failure::Crash(message)) => message.clone(),
+            Self::Current(current_grading::Failure::Crash(message)) => {
+                crate::pysemantics::relabel(message)
+            }
         }
     }
 }
@@ -1917,7 +1919,7 @@ mod tests {
             let failure = Facts::through_file(&facts(selected)).err().unwrap();
             assert_eq!(
                 failure.line(),
-                format!("ValueError: Out of range float values are not JSON compliant: {spelled}")
+                format!("value error: Out of range float values are not JSON compliant: {spelled}")
             );
         }
         let failure = Facts::through_file(&facts(Value::os_text(b"run-\xff")))
@@ -1926,7 +1928,7 @@ mod tests {
         assert!(
             failure
                 .line()
-                .starts_with("ValueError: the string starting at char 13 holds a lone surrogate"),
+                .starts_with("value error: the string starting at char 13 holds a lone surrogate"),
             "{}",
             failure.line()
         );
