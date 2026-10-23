@@ -1581,12 +1581,12 @@ impl Gate {
                 }
             }
         }
-        arguments.extend(masks);
-        arguments.extend(again);
         for path in writable {
             let shown = format!("{path}{}", &network[attempt.len()..]);
             arguments.extend(["--ro-bind".to_string(), network.clone(), shown]);
         }
+        arguments.extend(masks);
+        arguments.extend(again);
         arguments.extend([
             "--ro-bind".to_string(),
             self.dir.to_string_lossy().into_owned(),
@@ -2366,7 +2366,7 @@ mod tests {
         fs::create_dir_all(&alias).unwrap();
         let gate =
             Gate::start_with(&attempt, Path::new("/bench-tools"), Upstream::public()).unwrap();
-        let sockets = [attempt.join("host.sock")];
+        let sockets = [attempt.join("host.sock"), gate.network().join("host.sock")];
         let _listeners = sockets
             .clone()
             .map(|socket| UnixListener::bind(socket).unwrap());
@@ -2401,7 +2401,7 @@ mod tests {
         fs::remove_dir_all(&alias).unwrap();
         assert_eq!(
             String::from_utf8_lossy(&output.stdout),
-            "ConnectionRefusedError\n".repeat(2),
+            "ConnectionRefusedError\n".repeat(4),
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
