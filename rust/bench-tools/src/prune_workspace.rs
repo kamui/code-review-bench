@@ -338,6 +338,27 @@ fn to_verify(name: &str, present: &[Candidate], journal: Option<&Journal>) -> bo
         && journal.is_none_or(|journal| journal.removing != Some(name))
 }
 
+/// Unlink the forge's bench-tools copy through the `forge` directory itself, never a link put in its place, and only
+/// while it is still the file that was verified.
+fn unlink_forge_runtime(workspace: &PyPath, verified: Identity) -> R<()> {
+    let forge = workspace.join(b"forge");
+    let Some((identity, Kind::Directory)) = lstat(&forge)? else {
+        return Err(failed(format!(
+            "forge changed while {FORGE_RUNTIME} was verified"
+        )));
+    };
+    let forge = Directory::open(&forge.to_path_buf(), identity).map_err(Failure::Failed)?;
+    match forge.entry(b"bench-tools").map_err(Failure::Failed)? {
+        None => Ok(()),
+        Some((found, Kind::File)) if found == verified => {
+            forge.unlink_file(b"bench-tools").map_err(Failure::Failed)
+        }
+        Some(_) => Err(failed(format!(
+            "{FORGE_RUNTIME} changed while it was verified"
+        ))),
+    }
+}
+
 /// Refuses a forge bench-tools copy other than the runtime the run pins, which alone can restore its bytes.
 fn pinned_runtime(copy: &PyPath, run: &PyPath) -> R<()> {
     let pinned = read(&run.join(b"runtimes.frozen.json"))?;
@@ -473,12 +494,13 @@ fn commit(
             journal.removing = Some(candidate.name);
             write(&plan.workspace.join(JOURNAL.as_bytes()), &journal.value())?;
         }
-        if kind_of(candidate.name) == Kind::File {
-            directory.unlink_file(candidate.name.as_bytes())
+        if candidate.name == FORGE_RUNTIME {
+            unlink_forge_runtime(&plan.workspace, candidate.identity)?;
         } else {
-            directory.remove_tree(candidate.name.as_bytes(), candidate.identity, None, hook)
+            directory
+                .remove_tree(candidate.name.as_bytes(), candidate.identity, None, hook)
+                .map_err(Failure::Failed)?;
         }
-        .map_err(Failure::Failed)?;
     }
     hook(Point::BeforeReceipt).map_err(interrupted)?;
     let mut receipt = journal.receipt.clone();
@@ -739,7 +761,11 @@ fn check_attempt(arguments: &Attempt<'_>) -> R<Checked> {
             return refuse("clone revision or working tree changed after filing");
         }
     }
-    if to_verify(FORGE_RUNTIME, &present, journal.as_ref()) {
+    // A file is never left partly removed, so a retry checks a copy that is still there.
+    if present
+        .iter()
+        .any(|candidate| candidate.name == FORGE_RUNTIME)
+    {
         pinned_runtime(&workspace.join(FORGE_RUNTIME.as_bytes()), run)?;
     }
     let mut plan = Plan {
@@ -1220,6 +1246,53 @@ mod tests {
         assert_eq!(
             fs::read_to_string(forge.join("bin/gh")).unwrap(),
             "#!/bin/sh\necho changed\n"
+        );
+    }
+
+    #[test]
+    fn a_forge_swapped_for_a_link_during_removal_loses_nothing() {
+        let review = Review::new();
+        let forge = forge(&review, b"pinned runtime");
+        let external = review.scratch.0.join("external");
+        fs::create_dir_all(&external).unwrap();
+        fs::write(external.join("bench-tools"), "another attempt's evidence").unwrap();
+        let swapped = Cell::new(false);
+        let hook = |point| {
+            if point == Point::Removed && !swapped.replace(true) {
+                fs::rename(&forge, review.workspace.join("forge-moved"))?;
+                symlink(&external, &forge)?;
+            }
+            Ok(())
+        };
+        assert!(matches!(
+            review.prune_with(true, None, &hook),
+            Err(Failure::Failed(_))
+        ));
+        assert!(swapped.get());
+        assert_eq!(
+            fs::read_to_string(external.join("bench-tools")).unwrap(),
+            "another attempt's evidence"
+        );
+        assert!(review.workspace.join("forge-moved/bench-tools").is_file());
+    }
+
+    #[test]
+    fn a_retry_checks_a_forge_copy_that_an_earlier_unlink_left() {
+        let review = Review::new();
+        let forge = forge(&review, b"pinned runtime");
+        fs::set_permissions(&forge, fs::Permissions::from_mode(0o555)).unwrap();
+        assert!(matches!(review.prune(true), Err(Failure::Failed(_))));
+        assert_eq!(kept(&review.workspace), ["forge/bench-tools"]);
+        fs::set_permissions(&forge, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(forge.join("bench-tools"), fs::Permissions::from_mode(0o644)).unwrap();
+        fs::write(forge.join("bench-tools"), b"changed after the first try").unwrap();
+        refused(
+            review.prune(true),
+            "forge/bench-tools is not the runtime runtimes.frozen.json pins",
+        );
+        assert_eq!(
+            fs::read(forge.join("bench-tools")).unwrap(),
+            b"changed after the first try"
         );
     }
 
