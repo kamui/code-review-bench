@@ -31,3 +31,7 @@ Part of [issue 30](https://github.com/kamui/code-review-bench/issues/30). The re
 ## Summary
 
 `bench-tools ruling summary --round regrade-v3` is saved as [`summary.v1.md`](summary.v1.md). Misses: two slips and one misread fact by the recommender, each corrected by reconciling before the question; one question re-asked after its reasoning was shown (not-shown); eight labels never needed (owner-weighs-differently, the nearest cause, as in the v10 round). No decision was settled by agents.
+
+## The filing
+
+[`filing/README.md`](filing/README.md) files these rulings in the current records against the [twelfth receipt](../../../bench/grading/rulings/cohort-rebuild.v12.md). The wording of the new and widened entries is a draft for the owner's acceptance, in [`filing/entries-for-approval.md`](filing/entries-for-approval.md).
