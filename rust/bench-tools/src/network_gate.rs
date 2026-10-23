@@ -2061,6 +2061,14 @@ mod tests {
         )
     }
 
+    fn hidden_as_run() -> Vec<String> {
+        RUN_HIDDEN
+            .iter()
+            .filter(|dir| Path::new(dir).is_dir())
+            .map(ToString::to_string)
+            .collect()
+    }
+
     fn attempt_dir() -> PathBuf {
         let dir = std::env::temp_dir().join(crate::evidence::random_name("gate-"));
         fs::create_dir_all(&dir).unwrap();
@@ -2267,11 +2275,7 @@ mod tests {
         let attempt_text = attempt.to_string_lossy().into_owned();
         // Hidden as `run` hides them: masking another test's /tmp socket that has just gone makes bwrap recreate
         // its directory on the host (#349).
-        let hidden: Vec<String> = RUN_HIDDEN
-            .iter()
-            .filter(|dir| Path::new(dir).is_dir())
-            .map(ToString::to_string)
-            .collect();
+        let hidden = hidden_as_run();
         let attempt_only = std::slice::from_ref(&attempt_text);
         let output = Command::new("bwrap")
             .args(["--dev-bind", "/", "/", "--unshare-net"])
@@ -2360,21 +2364,23 @@ mod tests {
         let attempt = attempt_dir();
         let alias = attempt.with_extension("alias");
         fs::create_dir_all(&alias).unwrap();
-        let _listener = UnixListener::bind(attempt.join("host.sock")).unwrap();
         let gate =
             Gate::start_with(&attempt, Path::new("/bench-tools"), Upstream::public()).unwrap();
+        let sockets = [attempt.join("host.sock")];
+        let _listeners = sockets
+            .clone()
+            .map(|socket| UnixListener::bind(socket).unwrap());
         let text = |path: &Path| path.to_string_lossy().into_owned();
+        let hidden = hidden_as_run();
+        let shown = [text(&attempt), text(&alias)];
         let output = Command::new("bwrap")
-            .args(["--dev-bind", "/", "/", "--unshare-net", "--tmpfs", "/run"])
+            .args(["--dev-bind", "/", "/", "--unshare-net"])
+            .args(hidden.iter().flat_map(|dir| ["--tmpfs", dir]))
+            .args(["--bind", &text(&attempt), &text(&attempt)])
             .args(["--bind", &text(&attempt), &text(&alias)])
             .args(
-                gate.namespace_arguments(
-                    &[text(&attempt), text(&alias)],
-                    &["/run".to_string()],
-                    &[],
-                    &[],
-                )
-                .unwrap(),
+                gate.namespace_arguments(&shown, &hidden, &shown, &[])
+                    .unwrap(),
             )
             .args(["--", "python3", "-I", "-c"])
             .arg(
@@ -2384,8 +2390,10 @@ mod tests {
                  \x20   try:\n        unix.connect(path); print('connected')\n\
                  \x20   except OSError as error: print(type(error).__name__)\n",
             )
-            .arg(attempt.join("host.sock"))
-            .arg(alias.join("host.sock"))
+            .args(sockets.iter().flat_map(|socket| {
+                let rest = socket.strip_prefix(&attempt).unwrap();
+                [socket.clone(), alias.join(rest)]
+            }))
             .output()
             .unwrap();
         drop(gate);
@@ -2393,7 +2401,7 @@ mod tests {
         fs::remove_dir_all(&alias).unwrap();
         assert_eq!(
             String::from_utf8_lossy(&output.stdout),
-            "ConnectionRefusedError\nConnectionRefusedError\n",
+            "ConnectionRefusedError\n".repeat(2),
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
