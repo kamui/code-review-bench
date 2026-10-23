@@ -476,6 +476,39 @@ fn a_void_must_be_its_attempts_only_diagnosis_and_give_a_reason() {
     }
 }
 
+/// A run whose one diagnosis is `diagnosis` must fail inventory derivation as a void naming no attempt of the run.
+fn refuses_void(diagnosis: &str) {
+    let root = written(Variant::Pending);
+    let deviations = root
+        .path()
+        .join(format!("bench/runs/{}/deviations", grading_fixture::RUN));
+    std::fs::create_dir_all(&deviations).unwrap();
+    std::fs::write(deviations.join("void.json"), diagnosis).unwrap();
+    let (code, text) = derive_inventory(root.path());
+    assert_ne!(code, Some(0), "{text}");
+    assert!(
+        text.contains(
+            "deviations/void.json: a confirmed-leak diagnosis must name an attempt of its run"
+        ),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_void_without_a_predecessor_is_refused() {
+    refuses_void(r#"{"cause": "confirmed-leak", "reason": "Leaked."}"#);
+}
+
+#[test]
+fn a_void_whose_predecessor_is_not_text_is_refused() {
+    refuses_void(r#"{"predecessor": 1, "cause": "confirmed-leak", "reason": "Leaked."}"#);
+}
+
+#[test]
+fn a_void_naming_an_attempt_outside_its_run_is_refused() {
+    refuses_void(r#"{"predecessor": "att-999", "cause": "confirmed-leak", "reason": "Leaked."}"#);
+}
+
 /// `bench-tools ruling check` on the fixture's before-record, and its after-record if any.
 fn ruling_problems(root: &Path) -> (Option<i32>, String) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_bench-tools"));

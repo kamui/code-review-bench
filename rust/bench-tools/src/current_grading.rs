@@ -561,27 +561,36 @@ fn concat_text(left: &str, right: &Value) -> R<String> {
 /// An attempt and the `(cause, reason)` of each diagnosis that names it.
 type Diagnosed = (String, Vec<(Value, Value)>);
 
-/// Each attempt a diagnosis in the run's `deviations/` names, with the cause and reason of every diagnosis naming it.
+/// Each diagnosis in the run's `deviations/`, with the file it was read from.
 ///
-/// A diagnosis is a JSON object with `predecessor`, `cause` and `reason`, read as `bench-tools queue` reads it: a
-/// file that is not such an object is passed over.
-fn diagnoses(run_dir: &PyPath) -> R<Vec<Diagnosed>> {
+/// A diagnosis is a JSON object, read as `bench-tools queue` reads it: a file that is not an object is passed over.
+fn diagnosis_rows(run_dir: &PyPath) -> R<Vec<(PyPath, Object)>> {
     let directory = run_dir.join(b"deviations");
     let mut names: Vec<Vec<u8>> = pyfs::names(directory.as_bytes())
         .into_iter()
         .filter(|name| name.ends_with(b".json"))
         .collect();
     names.sort_by_cached_key(|name| pytext::surrogateescape(name));
-    let mut found: Vec<Diagnosed> = Vec::new();
+    let mut rows = Vec::new();
     for name in names {
-        let row = match pyvalue::load(&directory.join(&name)) {
+        let path = directory.join(&name);
+        let row = match pyvalue::load(&path) {
             Ok(row) => row,
             Err(Raised::Os(_) | Raised::Value(_)) => continue,
             Err(other) => return Err(other.into()),
         };
-        let Some(object) = row.as_object() else {
-            continue;
-        };
+        if let Some(object) = row.as_object() {
+            rows.push((path, object.clone()));
+        }
+    }
+    Ok(rows)
+}
+
+/// Each attempt the diagnoses name, with the cause and reason of every diagnosis naming it. A diagnosis names an
+/// attempt only through a text `predecessor`, and counts only with a `cause`.
+fn diagnoses(rows: &[(PyPath, Object)]) -> Vec<Diagnosed> {
+    let mut found: Vec<Diagnosed> = Vec::new();
+    for (_, object) in rows {
         let (Some(Value::Str(predecessor)), Some(cause)) =
             (object.get("predecessor"), object.get("cause"))
         else {
@@ -593,7 +602,7 @@ fn diagnoses(run_dir: &PyPath) -> R<Vec<Diagnosed>> {
             None => found.push((predecessor.clone(), vec![(cause.clone(), reason)])),
         }
     }
-    Ok(found)
+    found
 }
 
 /// The attempts of a run that one diagnosis in `deviations/` keeps as their cell's result, each with its cause.
@@ -601,7 +610,7 @@ fn diagnoses(run_dir: &PyPath) -> R<Vec<Diagnosed>> {
 /// An attempt with two diagnoses, with a cause the queue replaces or with no reason is not kept, and neither is one
 /// whose cause or reason is not text.
 pub fn kept_stops(run_dir: &PyPath) -> R<Vec<(String, String)>> {
-    Ok(diagnoses(run_dir)?
+    Ok(diagnoses(&diagnosis_rows(run_dir)?)
         .into_iter()
         .filter_map(|(attempt, rows)| match &rows[..] {
             [(Value::Str(cause), Value::Str(reason))]
@@ -618,10 +627,30 @@ pub fn kept_stops(run_dir: &PyPath) -> R<Vec<(String, String)>> {
 /// The attempts of a run that a diagnosis in `deviations/` voids as a confirmed leak: the attempt saw evidence a
 /// reviewer could not have had before the cutoff, so its review is never admitted. A run frozen without the network
 /// gate has no audit flag for `leak-rulings.json` to rule on, so the owner's ruling is recorded here. The void must
-/// be the attempt's only diagnosis and give a reason; anything else is refused rather than read as no void.
-pub fn voided(run_dir: &PyPath) -> R<Vec<String>> {
+/// name one of the run's `records` as its predecessor, be that attempt's only diagnosis and give a reason; anything
+/// else is refused rather than read as no void.
+pub fn voided(run_dir: &PyPath, records: &[(PyPath, Value)]) -> R<Vec<String>> {
+    let rows = diagnosis_rows(run_dir)?;
+    for (path, row) in &rows {
+        if !row.get("cause").is_some_and(|cause| is(cause, VOID_CAUSE)) {
+            continue;
+        }
+        let named = match row.get("predecessor") {
+            Some(Value::Str(predecessor)) => records
+                .iter()
+                .any(|(_, record)| item(record, "attempt_id").is_ok_and(|id| is(id, predecessor))),
+            _ => false,
+        };
+        require(
+            named,
+            about(
+                path,
+                &format!("a {VOID_CAUSE} diagnosis must name an attempt of its run"),
+            ),
+        )?;
+    }
     let mut found = Vec::new();
-    for (attempt, rows) in diagnoses(run_dir)? {
+    for (attempt, rows) in diagnoses(&rows) {
         if !rows.iter().any(|(cause, _)| is(cause, VOID_CAUSE)) {
             continue;
         }
@@ -1054,7 +1083,7 @@ pub fn inventory(root: &Root) -> R<Value> {
                 records.push((path, record));
             }
             let kept = kept_stops(&run_dir)?;
-            let voided = voided(&run_dir)?;
+            let voided = voided(&run_dir, &records)?;
             runs.push((
                 run.clone(),
                 Run {
