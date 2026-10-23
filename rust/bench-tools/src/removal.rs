@@ -91,8 +91,8 @@ fn rename_no_replace(from: &OwnedFd, name: &[u8], to: &OwnedFd, new: &[u8]) -> R
     )
 }
 
-/// nix has no safe no-replace rename here; the target directory is new and private, so only a writer that entered
-/// it could be replaced.
+/// nix has no safe no-replace rename here, so an entry another writer makes at the new name after it was found free is
+/// replaced.
 #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
 fn rename_no_replace(from: &OwnedFd, name: &[u8], to: &OwnedFd, new: &[u8]) -> Result<(), Errno> {
     fcntl::renameat(from, OsStr::from_bytes(name), to, OsStr::from_bytes(new))
@@ -291,7 +291,6 @@ impl Directory {
             path: path.clone(),
             identity: Identity::of(&opened),
         };
-        let mut staging = None;
         for child in names {
             let below = if relative.is_empty() {
                 child.clone()
@@ -324,19 +323,8 @@ impl Directory {
             if let Some(check) = reborrow(&mut check) {
                 directory.check_entry(&child, &child_stat, &below, check)?;
             }
-            let staging = match &mut staging {
-                Some(staging) => staging,
-                empty => empty.insert(directory.staging()?),
-            };
-            staging.unlink_checked(
-                &directory,
-                &child,
-                (Identity::of(&child_stat), Kind::of(&child_stat)),
-            )?;
+            directory.unlink_checked(&child, (Identity::of(&child_stat), Kind::of(&child_stat)))?;
             hook(Point::Removed).map_err(|error| error.to_string())?;
-        }
-        if let Some(staging) = staging {
-            staging.remove(&directory)?;
         }
         drop(directory);
         self.still(name, stat)?;
@@ -345,36 +333,36 @@ impl Directory {
         hook(Point::Removed).map_err(|error| error.to_string())
     }
 
-    /// Unlink `name` only if it is still the entry `expected` describes, through a staging directory of its own.
+    /// Unlink `name` only if it is still the entry `expected` describes. It is first renamed to a free name of its own,
+    /// never one an entry already holds, so one renamed into its place meanwhile is what gets checked and is kept,
+    /// under the reported name. No directory is made for this, since nothing could later prove one was made here.
     pub fn unlink_checked(&self, name: &[u8], expected: (Identity, Kind)) -> Result<(), String> {
-        let staging = self.staging()?;
-        let unlinked = staging.unlink_checked(self, name, expected);
-        unlinked.and(staging.remove(self))
-    }
-
-    /// Make an empty private directory to move entries into before they are unlinked. Making it never replaces an
-    /// entry already at its name.
-    fn staging(&self) -> Result<Staging, String> {
-        let name = format!(
-            ".bench-tools-removing-{}-{}",
-            std::process::id(),
-            ASIDE.fetch_add(1, Ordering::Relaxed)
-        );
-        let path = self.path.join(&name);
-        stat::mkdirat(&self.fd, OsStr::new(&name), Mode::S_IRWXU).map_err(|errno| match errno {
-            Errno::EEXIST => format!(
-                "{} already exists; nothing is removed in its place",
-                path.display()
-            ),
-            errno => failure(errno, &path),
-        })?;
-        let fd = fcntl::openat(&self.fd, OsStr::new(&name), DIRECTORY, Mode::empty())
-            .map_err(|errno| failure(errno, &path))?;
-        let identity = Identity::of(&stat::fstat(&fd).map_err(|errno| failure(errno, &path))?);
-        Ok(Staging {
-            name,
-            directory: Self { fd, path, identity },
-        })
+        let path = self.path.join(OsStr::from_bytes(name));
+        let aside = loop {
+            let aside = format!(
+                ".bench-tools-removing-{}-{}",
+                std::process::id(),
+                ASIDE.fetch_add(1, Ordering::Relaxed)
+            );
+            if self.entry(aside.as_bytes())?.is_some() {
+                continue;
+            }
+            match rename_no_replace(&self.fd, name, &self.fd, aside.as_bytes()) {
+                Ok(()) => break aside,
+                Err(Errno::EEXIST) => continue,
+                Err(errno) => return Err(failure(errno, &path)),
+            }
+        };
+        let aside_path = self.path.join(&aside);
+        if self.entry(aside.as_bytes())? != Some(expected) {
+            return Err(format!(
+                "{} changed during removal; what replaced it is kept at {}",
+                path.display(),
+                aside_path.display()
+            ));
+        }
+        unistd::unlinkat(&self.fd, OsStr::new(&aside), UnlinkatFlags::NoRemoveDir)
+            .map_err(|errno| failure(errno, &aside_path))
     }
 
     /// `name` must still be the entry `stat` describes, so one renamed into its place while it was checked stays.
@@ -414,54 +402,6 @@ impl Directory {
             return Err(format!("{} changed during removal", path.display()));
         }
         check(relative, Entry::File(&file))
-    }
-}
-
-/// A private directory that entries are moved into, so the entry checked is the one unlinked and no entry another
-/// writer names is ever replaced.
-struct Staging {
-    name: String,
-    directory: Directory,
-}
-
-impl Staging {
-    /// Move `name` out of `parent` and unlink it only if it is still the entry `expected` describes. One renamed into
-    /// its place meanwhile is what gets checked and is kept, under the reported name.
-    fn unlink_checked(
-        &self,
-        parent: &Directory,
-        name: &[u8],
-        expected: (Identity, Kind),
-    ) -> Result<(), String> {
-        let path = parent.path.join(OsStr::from_bytes(name));
-        let staged = self.directory.path.join(OsStr::from_bytes(name));
-        rename_no_replace(&parent.fd, name, &self.directory.fd, name)
-            .map_err(|errno| failure(errno, &path))?;
-        if self.directory.entry(name)? != Some(expected) {
-            return Err(format!(
-                "{} changed during removal; what replaced it is kept at {}",
-                path.display(),
-                staged.display()
-            ));
-        }
-        unistd::unlinkat(
-            &self.directory.fd,
-            OsStr::from_bytes(name),
-            UnlinkatFlags::NoRemoveDir,
-        )
-        .map_err(|errno| failure(errno, &staged))
-    }
-
-    /// Remove the staging directory while its name still holds it; this fails while anything is left in it.
-    fn remove(self, parent: &Directory) -> Result<(), String> {
-        if parent.entry(self.name.as_bytes())? != Some((self.directory.identity, Kind::Directory)) {
-            return Err(format!(
-                "{} changed during removal",
-                self.directory.path.display()
-            ));
-        }
-        unistd::unlinkat(&parent.fd, OsStr::new(&self.name), UnlinkatFlags::RemoveDir)
-            .map_err(|errno| failure(errno, &self.directory.path))
     }
 }
 
@@ -513,73 +453,83 @@ mod tests {
         );
     }
 
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
     #[test]
-    fn a_file_made_at_the_staging_name_is_never_replaced() {
+    fn a_file_made_at_the_aside_name_is_never_replaced() {
         use std::sync::{Arc, Barrier};
         let base = scratch("staging");
         fs::write(base.join("evidence"), "evidence").unwrap();
         for round in 0..2000 {
             let checked = base.join("tree/checked");
             fs::write(&checked, "verified").unwrap();
-            let staging = base.join(format!(
+            let aside = base.join(format!(
                 "tree/.bench-tools-removing-{}-{}",
                 std::process::id(),
                 ASIDE.load(Ordering::Relaxed)
             ));
             let start = Arc::new(Barrier::new(2));
             let writer = {
-                let (start, evidence, staging) =
-                    (start.clone(), base.join("evidence"), staging.clone());
+                let (start, evidence, aside) =
+                    (start.clone(), base.join("evidence"), aside.clone());
                 std::thread::spawn(move || {
                     start.wait();
                     (0..round % 400).for_each(|_| std::hint::spin_loop());
-                    (0..1_000_000).any(|_| fs::hard_link(&evidence, &staging).is_ok())
+                    (0..1_000_000).any(|_| fs::hard_link(&evidence, &aside).is_ok())
                 })
             };
             let tree = Directory::open(&base.join("tree"), identity(&base.join("tree"))).unwrap();
             start.wait();
             let removed = tree.unlink_checked(b"checked", lstat(&checked).unwrap().unwrap());
             let made = writer.join().unwrap();
-            let kept = fs::symlink_metadata(&staging).is_ok();
-            let _ = fs::remove_file(&staging);
+            let kept = fs::symlink_metadata(&aside).is_ok();
+            let _ = fs::remove_file(&aside);
             let _ = fs::remove_file(&checked);
             assert!(!made || kept, "round {round}: {removed:?}");
         }
         fs::remove_dir_all(&base).unwrap();
     }
 
-    #[test]
-    fn a_directory_made_at_a_moved_staging_name_is_never_removed() {
-        let base = scratch("moved-staging");
-        fs::write(base.join("tree/checked"), "verified").unwrap();
-        let parent = Directory::open(&base, identity(&base)).unwrap();
-        let tree = base.join("tree");
-        let replacement = std::cell::RefCell::new(None);
-        let swap = |point| {
-            if point == Point::Removed && replacement.borrow().is_none() {
-                let staging = fs::read_dir(&tree)?
-                    .map(|entry| entry.map(|entry| entry.path()))
-                    .collect::<std::io::Result<Vec<_>>>()?
-                    .into_iter()
-                    .find(|path| path.to_string_lossy().contains(".bench-tools-removing-"))
-                    .ok_or_else(|| std::io::Error::other("no staging directory"))?;
-                fs::rename(&staging, base.join("aside"))?;
-                fs::create_dir(&staging)?;
-                *replacement.borrow_mut() = Some(staging);
+    fn directories(path: &Path) -> Vec<std::path::PathBuf> {
+        let mut found = vec![path.to_path_buf()];
+        for entry in fs::read_dir(path).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_dir() {
+                found.extend(directories(&entry.path()));
             }
+        }
+        found
+    }
+
+    /// A writer can put another directory at a new directory's name before it is opened, so removal makes none it
+    /// would later remove.
+    #[test]
+    fn removal_makes_no_directory() {
+        let base = scratch("no-directory");
+        let tree = base.join("tree");
+        fs::create_dir(tree.join("inner")).unwrap();
+        fs::write(tree.join("checked"), "verified").unwrap();
+        fs::write(tree.join("inner/checked"), "verified").unwrap();
+        fs::write(base.join("single"), "verified").unwrap();
+        let before = directories(&base);
+        let made = std::cell::RefCell::new(Vec::new());
+        let record = |_| {
+            made.borrow_mut().extend(
+                directories(&base)
+                    .into_iter()
+                    .filter(|path| !before.contains(path)),
+            );
             Ok(())
         };
-        let result = parent.remove_tree(b"tree", identity(&tree), None, &swap);
-        let kept = replacement
-            .borrow()
-            .as_ref()
-            .map(|path| fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir()));
+        let parent = Directory::open(&base, identity(&base)).unwrap();
+        let removed = parent.remove_tree(b"tree", identity(&tree), None, &record);
+        let unlinked =
+            parent.unlink_checked(b"single", lstat(&base.join("single")).unwrap().unwrap());
+        record(Point::BeforeReceipt).unwrap();
+        let left = directories(&base);
         fs::remove_dir_all(&base).unwrap();
-        assert_eq!(kept, Some(true), "{result:?}");
-        assert!(
-            matches!(&result, Err(message) if message.contains("changed during removal")),
-            "{result:?}"
-        );
+        assert_eq!((removed, unlinked), (Ok(()), Ok(())));
+        assert_eq!(made.into_inner(), Vec::<std::path::PathBuf>::new());
+        assert_eq!(left, vec![base]);
     }
 
     #[test]
