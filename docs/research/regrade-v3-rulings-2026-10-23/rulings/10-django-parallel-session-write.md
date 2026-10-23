@@ -284,3 +284,10 @@ To reconcile before asking:
 
 - None: every party's pick is the recommender's.
 
+
+## The owner's answer
+
+Asked 2026-10-23 with every question of the round in one message (groups A, B and C); the owner's words are in [`owner-answers.md`](../owner-answers.md).
+
+- `M1` (candidate): **duplicate**, part of GT-y2; asked 1 time.
+- `M1` (band): **not-applicable**; asked 1 time.

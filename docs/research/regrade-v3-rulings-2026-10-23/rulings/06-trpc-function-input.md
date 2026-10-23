@@ -317,3 +317,11 @@ To reconcile before asking:
 
 - None: every party's pick is the recommender's.
 
+
+## The owner's answer
+
+Asked 2026-10-23 with every question of the round in one message (groups A, B and C); the owner's words are in [`owner-answers.md`](../owner-answers.md).
+
+- `C1nb` (pre-existing-admission): **admitted**, part of PE-j1; asked 1 time.
+- `C1` (pre-existing-raise): **does-not-recover** (says what goes wrong: no; identifies the cause as a fault: yes); asked 1 time.
+- `C1nb` (band): **not-applicable**; asked 1 time.
