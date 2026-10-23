@@ -452,8 +452,14 @@ impl Staging {
         .map_err(|errno| failure(errno, &staged))
     }
 
-    /// Remove the staging directory, which fails while anything is left in it.
+    /// Remove the staging directory while its name still holds it; this fails while anything is left in it.
     fn remove(self, parent: &Directory) -> Result<(), String> {
+        if parent.entry(self.name.as_bytes())? != Some((self.directory.identity, Kind::Directory)) {
+            return Err(format!(
+                "{} changed during removal",
+                self.directory.path.display()
+            ));
+        }
         unistd::unlinkat(&parent.fd, OsStr::new(&self.name), UnlinkatFlags::RemoveDir)
             .map_err(|errno| failure(errno, &self.directory.path))
     }
@@ -540,6 +546,40 @@ mod tests {
             assert!(!made || kept, "round {round}: {removed:?}");
         }
         fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn a_directory_made_at_a_moved_staging_name_is_never_removed() {
+        let base = scratch("moved-staging");
+        fs::write(base.join("tree/checked"), "verified").unwrap();
+        let parent = Directory::open(&base, identity(&base)).unwrap();
+        let tree = base.join("tree");
+        let replacement = std::cell::RefCell::new(None);
+        let swap = |point| {
+            if point == Point::Removed && replacement.borrow().is_none() {
+                let staging = fs::read_dir(&tree)?
+                    .map(|entry| entry.map(|entry| entry.path()))
+                    .collect::<std::io::Result<Vec<_>>>()?
+                    .into_iter()
+                    .find(|path| path.to_string_lossy().contains(".bench-tools-removing-"))
+                    .ok_or_else(|| std::io::Error::other("no staging directory"))?;
+                fs::rename(&staging, base.join("aside"))?;
+                fs::create_dir(&staging)?;
+                *replacement.borrow_mut() = Some(staging);
+            }
+            Ok(())
+        };
+        let result = parent.remove_tree(b"tree", identity(&tree), None, &swap);
+        let kept = replacement
+            .borrow()
+            .as_ref()
+            .map(|path| fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir()));
+        fs::remove_dir_all(&base).unwrap();
+        assert_eq!(kept, Some(true), "{result:?}");
+        assert!(
+            matches!(&result, Err(message) if message.contains("changed during removal")),
+            "{result:?}"
+        );
     }
 
     #[test]
