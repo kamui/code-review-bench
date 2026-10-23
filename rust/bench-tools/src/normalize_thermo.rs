@@ -11,7 +11,7 @@ use crate::normalize_review::{Arm, Item, Normalized, Outcome};
 use crate::pyjson::{self, Dumps, Duplicates, Value};
 use crate::pytext::{self, PyPath};
 
-pub const PROGRAM: &str = "normalize_thermo.py";
+pub const PROGRAM: &str = "bench-tools normalize-thermo";
 
 #[derive(Clone, Debug)]
 pub struct Arguments {
@@ -347,7 +347,7 @@ mod tests {
         assert_eq!(
             String::from_utf8(outcome.stderr).unwrap(),
             format!(
-                "normalize_thermo.py: cannot read {}/finding-index.json: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)\n",
+                "bench-tools normalize-thermo: cannot read {}/finding-index.json: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)\n",
                 canonical.display()
             )
         );
@@ -357,7 +357,7 @@ mod tests {
         assert_eq!(
             String::from_utf8(outcome.stderr).unwrap(),
             format!(
-                "normalize_thermo.py: cannot read {index}: [Errno 2] No such file or directory: '{index}'\n"
+                "bench-tools normalize-thermo: cannot read {index}: [Errno 2] No such file or directory: '{index}'\n"
             )
         );
         assert!(!root.join("out.json").exists());

@@ -101,7 +101,7 @@ fn text_at(value: &Value, key: &str) -> R<String> {
     at(value, key)
         .as_str()
         .map(str::to_string)
-        .ok_or_else(|| Error::Violation(format!("KeyError: {}", pytext::repr_str(key))))
+        .ok_or_else(|| Error::Violation(format!("missing key: {}", pytext::repr_str(key))))
 }
 
 fn is_count(value: &Value, expected: u64) -> bool {

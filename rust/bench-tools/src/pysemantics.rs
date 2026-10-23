@@ -29,12 +29,59 @@ impl Failure {
         &self.message
     }
 
+    /// The failure as printed: its plain label, then its message.
     pub fn line(&self) -> String {
+        let label = label(self.kind).unwrap_or(self.kind);
         if self.message.is_empty() {
-            self.kind.to_string()
+            label.to_string()
         } else {
-            format!("{}: {}", self.kind, self.message)
+            format!("{label}: {}", self.message)
         }
+    }
+}
+
+/// Each Python exception name a port keeps to classify a failure, with the plain label printed in its place.
+const LABELS: [(&str, &str); 21] = [
+    ("AttributeError", "missing attribute"),
+    ("FileExistsError", "I/O error"),
+    ("FileNotFoundError", "I/O error"),
+    ("IndexError", "index out of range"),
+    ("IsADirectoryError", "I/O error"),
+    ("JSONDecodeError", "invalid JSON"),
+    ("KeyError", "missing key"),
+    ("NotADirectoryError", "I/O error"),
+    ("OSError", "I/O error"),
+    ("OverflowError", "arithmetic error"),
+    ("PermissionError", "I/O error"),
+    ("SchemaError", "schema error"),
+    ("StopIteration", "no match"),
+    ("TypeError", "type error"),
+    ("UnicodeDecodeError", "invalid UTF-8"),
+    ("UnicodeEncodeError", "encoding error"),
+    ("ValueError", "value error"),
+    ("ZeroDivisionError", "arithmetic error"),
+    ("json.decoder.JSONDecodeError", "invalid JSON"),
+    ("statistics.StatisticsError", "statistics error"),
+    ("tarfile.ReadError", "invalid archive"),
+];
+
+/// The plain label printed for a Python exception name.
+pub fn label(kind: &str) -> Option<&'static str> {
+    LABELS
+        .iter()
+        .find(|(name, _)| *name == kind)
+        .map(|(_, label)| *label)
+}
+
+/// A `<Python exception name>: <message>` line, or a bare name, as printed: with the name's plain label.
+pub fn relabel(line: &str) -> String {
+    let (kind, rest) = line
+        .split_once(": ")
+        .map_or((line, None), |(kind, rest)| (kind, Some(rest)));
+    match (label(kind), rest) {
+        (Some(label), Some(rest)) => format!("{label}: {rest}"),
+        (Some(label), None) => label.to_string(),
+        (None, _) => line.to_string(),
     }
 }
 
@@ -1457,6 +1504,25 @@ pub(crate) fn to_float(value: &Value) -> Result<f64> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn printed_failures_name_no_python_exception() {
+        let python_name = |text: &str| {
+            text.contains('.')
+                || text
+                    .as_bytes()
+                    .windows(2)
+                    .any(|pair| pair[0].is_ascii_uppercase() && pair[1].is_ascii_lowercase())
+        };
+        for (name, label) in LABELS {
+            assert!(python_name(name), "{name}");
+            assert!(!python_name(label), "{name} prints {label}");
+            assert_eq!(relabel(name), label);
+            assert_eq!(relabel(&format!("{name}: a: b")), format!("{label}: a: b"));
+            assert_eq!(Failure::new(name, "a").line(), format!("{label}: a"));
+        }
+        assert_eq!(relabel("unknown: KeyError: a"), "unknown: KeyError: a");
+    }
+
     fn micros(text: &str) -> Option<(i64, bool)> {
         fromisoformat(text)
     }
@@ -1573,7 +1639,7 @@ mod tests {
         );
         assert_eq!(
             median(&[]).unwrap_err().line(),
-            "statistics.StatisticsError: no median for empty data"
+            "statistics error: no median for empty data"
         );
         assert!(matches!(
             maximum(&[int("1"), Number::Float(1.0)]).unwrap(),

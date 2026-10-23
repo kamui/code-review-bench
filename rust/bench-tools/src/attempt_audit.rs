@@ -91,7 +91,7 @@ use crate::{pyfs, pyvalue, shlex};
 
 mod network;
 
-pub const PROGRAM: &str = "attempt-audit";
+pub const PROGRAM: &str = "bench-tools attempt-audit";
 pub const ARMS: [&str; 5] = [
     "claude-builtin",
     "claude-skill",

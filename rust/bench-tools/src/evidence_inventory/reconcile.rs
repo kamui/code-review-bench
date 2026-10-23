@@ -1,7 +1,7 @@
 //! `reconcile_evidence.py`: a saved host inventory, the record of one root, reconciled with the member identities
 //! of the published evidence manifests. It never authorizes retirement.
 //!
-//! Every failure is one message, which `main` prints after `reconcile_evidence.py: ` with exit 1; Python raised a
+//! Every failure is one message, which `main` prints after `bench-tools evidence: ` with exit 1; Python raised a
 //! traceback. The inventory is read with [`pyjson`], so one holding a lone surrogate escape, which Python reads
 //! into a `str`, is refused.
 

@@ -32,8 +32,13 @@ impl Raised {
         }
     }
 
-    /// The last line of the traceback Python prints, or the refusal of unsupported input.
+    /// The failure as printed: [`Self::traceback`] with the exception's plain label.
     pub fn describe(&self) -> String {
+        crate::pysemantics::relabel(&self.traceback())
+    }
+
+    /// The last line of the traceback Python prints, or the refusal of unsupported input.
+    pub fn traceback(&self) -> String {
         match self {
             Self::Key(message) => format!("KeyError: {message}"),
             Self::Value(message) => format!("ValueError: {message}"),

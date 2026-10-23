@@ -13,7 +13,7 @@ use crate::pytext::{self, PyPath};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::BufRead;
 
-const PROGRAM: &str = "codex_usage.py";
+const PROGRAM: &str = "bench-tools usage";
 
 /// The response-item payload types that are tool calls.
 pub const TOOL_TYPES: [&str; 3] = ["function_call", "custom_tool_call", "local_shell_call"];

@@ -200,7 +200,7 @@ which `pyjson` cannot read.
 - `--source`, which extracted the skills repository, is retired; `README.md` names a commit that still has it.
 
 `bun run verify:import` and `.github/workflows/rates.yml` run `--check`. Every refusal prints
-`import_benchmark.py: ` and the message on stderr with exit 1, where Python raised a traceback. The other differences
+`bench-tools import-benchmark: ` and the message on stderr with exit 1, where Python raised a traceback. The other differences
 are in `import-benchmark-decisions.v3.json`, each with its case. Before the switch, both implementations printed the
 same summary line on this checkout: `Verified copied bytes for 2775 source files and 288 archives; 9 superseded
 source-hash mismatches, 0 unavailable`.
@@ -285,7 +285,7 @@ recorded decision.
 - `evidence collect` and `evidence reconcile` write each new file through a synced temporary file linked into place,
   so an interrupted run leaves no partial archive copy or reconciliation. Python wrote in place.
 - Every failure that made `collect_run.py` or `reconcile_evidence.py` raise a traceback exits 1 with the program's
-  prefix and a message that approximates the traceback's last line, such as `reconcile_evidence.py: list indices must
+  prefix and a message that approximates the traceback's last line, such as `bench-tools evidence: list indices must
   be integers or slices, not str`. The decided `collect-run-*` and `reconcile-*` cases pin the forms the corpus covers.
 - Durable writes sync each file and directory before reporting success. Cargo tests inject a failure at each disk
   effect; neither they nor the corpora cut power, so the promise holds only on a filesystem that honors `fsync`.

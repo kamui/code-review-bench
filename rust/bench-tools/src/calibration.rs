@@ -13,7 +13,7 @@ use crate::pyvalue;
 use std::borrow::Cow;
 use std::fmt::Write as _;
 
-pub const PROGRAM: &str = "calibration.py";
+pub const PROGRAM: &str = "bench-tools calibration";
 const CARDS: &str = "impact-cards";
 const QUEUE: &str = "decision-queue.json";
 const CARD_TEXT: [&str; 6] = [

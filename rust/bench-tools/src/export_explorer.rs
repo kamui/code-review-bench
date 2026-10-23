@@ -22,11 +22,11 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
 fn inconsistent(message: impl Into<String>) -> Failure {
-    Failure::new("current_grading.Inconsistent", message)
+    Failure::new("inconsistent", message)
 }
 
 fn evidence_error(message: impl Into<String>) -> Failure {
-    Failure::new("evidence_store.EvidenceError", message)
+    Failure::new("evidence error", message)
 }
 
 fn os(path: &[u8]) -> &Path {
@@ -1666,7 +1666,7 @@ pub fn restore(root: &[u8], listed: &Value, store: &mut crate::evidence::Store<'
         crate::evidence::resolve(store, &root, &path, sha256.as_deref(), false).map_err(
             |error| match error {
                 crate::evidence::Error::Violation(message) => {
-                    Failure::new("evidence_store.EvidenceError", message)
+                    Failure::new("evidence error", message)
                 }
                 crate::evidence::Error::Io(message) => Failure::new("OSError", message),
             },
@@ -1752,14 +1752,15 @@ impl ExportFailure {
     pub fn line(&self) -> String {
         match self {
             Self::Export(failure) => failure.line(),
-            Self::Current(current_grading::Failure::Inconsistent(message)) => format!(
-                "current_grading.Inconsistent: {}",
-                pytext::stderr_text(message)
-            ),
-            Self::Current(current_grading::Failure::Input(message)) => {
-                format!("current_grading.InputError: {message}")
+            Self::Current(current_grading::Failure::Inconsistent(message)) => {
+                format!("inconsistent: {}", pytext::stderr_text(message))
             }
-            Self::Current(current_grading::Failure::Crash(message)) => message.clone(),
+            Self::Current(current_grading::Failure::Input(message)) => {
+                format!("input error: {message}")
+            }
+            Self::Current(current_grading::Failure::Crash(message)) => {
+                crate::pysemantics::relabel(message)
+            }
         }
     }
 }
@@ -1918,7 +1919,7 @@ mod tests {
             let failure = Facts::through_file(&facts(selected)).err().unwrap();
             assert_eq!(
                 failure.line(),
-                format!("ValueError: Out of range float values are not JSON compliant: {spelled}")
+                format!("value error: Out of range float values are not JSON compliant: {spelled}")
             );
         }
         let failure = Facts::through_file(&facts(Value::os_text(b"run-\xff")))
@@ -1927,7 +1928,7 @@ mod tests {
         assert!(
             failure
                 .line()
-                .starts_with("ValueError: the string starting at char 13 holds a lone surrogate"),
+                .starts_with("value error: the string starting at char 13 holds a lone surrogate"),
             "{}",
             failure.line()
         );
@@ -1986,7 +1987,7 @@ mod tests {
             let failure = bounds.entry(&listed, &changed).err().unwrap();
             assert_eq!(
                 failure.line(),
-                "current_grading.Inconsistent: run-a/att-001: the usage deviation names another filed cost"
+                "inconsistent: run-a/att-001: the usage deviation names another filed cost"
             );
         }
         std::fs::remove_dir_all(&bench).unwrap();
