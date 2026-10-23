@@ -22,9 +22,9 @@ fn get<'a>(value: &'a Value, key: &str) -> Result<&'a Value> {
     match value {
         Value::Object(object) => object
             .get(key)
-            .ok_or_else(|| violation(format!("KeyError: {}", pytext::repr_str(key)))),
+            .ok_or_else(|| violation(format!("missing key: {}", pytext::repr_str(key)))),
         other => Err(violation(format!(
-            "TypeError: {} indices must be integers or slices, not str",
+            "type error: {} indices must be integers or slices, not str",
             other.type_name()
         ))),
     }
@@ -35,7 +35,7 @@ fn optional<'a>(value: &'a Value, key: &str) -> Result<Option<&'a Value>> {
     match value {
         Value::Object(object) => Ok(object.get(key)),
         other => Err(violation(format!(
-            "AttributeError: '{}' object has no attribute 'get'",
+            "missing attribute: '{}' object has no attribute 'get'",
             other.type_name()
         ))),
     }
@@ -44,7 +44,7 @@ fn optional<'a>(value: &'a Value, key: &str) -> Result<Option<&'a Value>> {
 fn items(value: &Value) -> Result<&[Value]> {
     value.as_array().ok_or_else(|| {
         violation(format!(
-            "TypeError: '{}' object is not iterable",
+            "type error: '{}' object is not iterable",
             value.type_name()
         ))
     })
@@ -53,7 +53,7 @@ fn items(value: &Value) -> Result<&[Value]> {
 fn text(value: &Value) -> Result<&str> {
     value.as_str().ok_or_else(|| {
         violation(format!(
-            "TypeError: expected str, not {}",
+            "type error: expected str, not {}",
             value.type_name()
         ))
     })
@@ -96,7 +96,7 @@ fn recovery_manifest(root: &PyPath, source: &[u8]) -> Result<Value> {
         Value::Object(publications) => publications.clone(),
         other => {
             return Err(violation(format!(
-                "TypeError: {} is not a dict",
+                "type error: {} is not a dict",
                 other.type_name()
             )));
         }
@@ -115,7 +115,7 @@ fn recovery_manifest(root: &PyPath, source: &[u8]) -> Result<Value> {
     }
     let tag = get(&index, "tag")?.clone();
     let Value::Object(document) = &mut result else {
-        return Err(violation("TypeError: the manifest is not a dict"));
+        return Err(violation("type error: the manifest is not a dict"));
     };
     document.insert("tag".to_string(), tag);
     if let Some(Value::Array(packages)) = document.get_mut("packages") {
@@ -366,10 +366,10 @@ pub fn restore_local(
     let mode = match get(row, "mode")? {
         Value::Int(digits) => digits
             .parse::<u32>()
-            .map_err(|_| violation(format!("OverflowError: mode {digits} is out of range")))?,
+            .map_err(|_| violation(format!("arithmetic error: mode {digits} is out of range")))?,
         other => {
             return Err(violation(format!(
-                "TypeError: mode must be int, not {}",
+                "type error: mode must be int, not {}",
                 other.type_name()
             )));
         }
@@ -408,7 +408,7 @@ mod tests {
         let object = crate::pyjson::Object::default();
         assert!(matches!(
             get(&Value::Object(object), "sources"),
-            Err(Error::Violation(message)) if message == "KeyError: 'sources'"
+            Err(Error::Violation(message)) if message == "missing key: 'sources'"
         ));
     }
 }

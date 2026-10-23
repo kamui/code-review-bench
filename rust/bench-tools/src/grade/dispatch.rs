@@ -200,7 +200,7 @@ fn problems_after(runner: &Runner, work: &Path, key: &Value) -> Vec<String> {
             .collect(),
         Err(Failure::Input(message) | Failure::Crash(message)) => vec![format!(
             "bench-tools grade check-prepared failed (exit 2): {}",
-            first(&message, 300)
+            first(&crate::pysemantics::relabel(&message), 300)
         )],
     }
 }

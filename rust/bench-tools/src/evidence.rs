@@ -291,7 +291,7 @@ pub struct Manifest {
 fn field<'a>(object: &'a Object, key: &str) -> Result<&'a Value> {
     object
         .get(key)
-        .ok_or_else(|| violation(format!("KeyError: {}", pytext::repr_str(key))))
+        .ok_or_else(|| violation(format!("missing key: {}", pytext::repr_str(key))))
 }
 
 fn text(object: &Object, key: &str) -> Result<String> {
@@ -309,13 +309,13 @@ fn count(value: &Value) -> u64 {
 fn object(value: &Value) -> Result<&Object> {
     value
         .as_object()
-        .ok_or_else(|| violation(format!("TypeError: {} is not a dict", value.type_name())))
+        .ok_or_else(|| violation(format!("type error: {} is not a dict", value.type_name())))
 }
 
 fn array(value: &Value) -> Result<&[Value]> {
     value
         .as_array()
-        .ok_or_else(|| violation(format!("TypeError: {} is not a list", value.type_name())))
+        .ok_or_else(|| violation(format!("type error: {} is not a list", value.type_name())))
 }
 
 /// `evidence_store.validate`, returning the manifest's typed view.

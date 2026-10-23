@@ -14,7 +14,7 @@ use crate::pyjson::{self, Dumps, Duplicates, Object, Value};
 use crate::pytext::{self, PyPath};
 use std::fmt::Write as _;
 
-pub const PROGRAM: &str = "normalize_review.py";
+pub const PROGRAM: &str = "bench-tools normalize-review";
 
 pub const UNRESOLVED: &str = "unresolved: the native input lacks the arm's expected review markers or has a region that did not parse; adjudication required\n";
 

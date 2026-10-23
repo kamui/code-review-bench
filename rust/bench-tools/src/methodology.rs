@@ -9,7 +9,7 @@ use crate::pyjson::Value;
 use crate::pytext::{self, PyPath};
 use crate::pyvalue::{self, item, iterate, length};
 
-pub const PROGRAM: &str = "methodology.py";
+pub const PROGRAM: &str = "bench-tools methodology";
 
 fn text(value: &str) -> Value {
     Value::Str(value.to_string())

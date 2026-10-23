@@ -22,7 +22,7 @@ pub const STORAGE: &str = "native-artifact-storage.v1.json";
 pub const ARCHIVE: &str = "native-scratch.v1.zip";
 pub const INDEX: &str = "native-artifacts.json";
 
-/// A failure `native_artifacts.main` reports as `native_artifacts.py: <message>`, exit 1.
+/// A failure `native_artifacts.main` reports as `bench-tools native-artifacts: <message>`, exit 1.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Error(pub String);
 

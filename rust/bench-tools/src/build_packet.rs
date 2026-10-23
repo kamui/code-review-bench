@@ -211,7 +211,8 @@ struct PyError {
 
 impl fmt::Display for PyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}: {}", self.kind, self.message)
+        let label = crate::pysemantics::label(self.kind).unwrap_or(self.kind);
+        write!(f, "{label}: {}", self.message)
     }
 }
 
@@ -1038,7 +1039,7 @@ impl Process {
                         pytext::repr(&pytext::surrogateescape(&self.argv[0]))
                     ))
                 } else {
-                    Failure::Unsupported(format!("{}: {text}", os_error_kind(&error)))
+                    py_error(os_error_kind(&error), text).into()
                 }
             })?;
         let decode = |bytes: &[u8]| {

@@ -118,7 +118,7 @@ It never settles a pre-existing decision type, and `summary` refuses an agent se
 The decisions record each difference from the retained Python:
 
 - an exception the Python command line did not catch, a traceback with exit 1, exits 2 with one line naming its
-  class; usage errors and help are clap's;
+  class by a plain label, such as `missing key`; usage errors and help are clap's;
 - a record holding a lone surrogate, and a non-UTF-8 `--exclude`, are refused with exit 2;
 - `\d` follows Python 3.14's Unicode 16.0 digits in versioned rule names, round dates and natural ordering, and
   quoted paths follow its printable characters;
@@ -157,8 +157,9 @@ from the validation policy at the filing commit.
 The mapping replay, `the_mapping_replays_every_restorable_archive_identically` in the same file, gives each
 restorable archive's workspace and key to `bench-tools grade map` with a fixture `--assessor`, through `--root`,
 on a disposable worktree of the commit that filed its receipt. Each must end with the exit status and lines
-[`grading-replay-expectations.v1.json`](grading-replay-expectations.v1.json) records and write nothing but
-`.cache/current-record.lock`. Those are the outcomes of `grade.py`'s mapping, recorded before slice 10 removed it.
+[`grading-replay-expectations.v2.json`](grading-replay-expectations.v2.json) records and write nothing but
+`.cache/current-record.lock`. Those are the outcomes of `grade.py`'s mapping, recorded before slice 10 removed it,
+with the refusal's program label renamed to `bench-tools grade`; v1 keeps the label as Python printed it.
 The Pages workflow runs it in its own `Mapping replay` job, outside the build job's time limit. On 2026-10-20 all
 333 v1 replays were refused, exit 2: neither filing commit has `bench/grading/current/credits.json`, which mapping
 reads before it writes and `43bd77593` added later. No replay accepted, so accepted records are checked only in the
@@ -245,7 +246,7 @@ fixture variants and on these cases: a missing attempt record or review, an arm 
 frozen run without its Git history, an agent-settled credit whose before-record binds another family, and the
 command line. The decided differences:
 
-- an exception the Python did not catch exits 2 with `current_grading.py: <type>: <message>` instead of a
+- an exception the Python did not catch exits 2 with `bench-tools current-grading: <type>: <message>` instead of a
   traceback with exit 1; usage errors and help are clap's;
 - a lone surrogate in JSON and a UTF-16 replacement manifest are refused with exit 2;
 - messages follow Python 3.14: `repr` of Unicode 15.1 and 16.0 characters, Unicode 16.0 digits and exponents in
@@ -293,7 +294,7 @@ variants that plan and the two the record refuses, and on `--out` and the comman
 follow slice 3's:
 
 - an exception the Python did not catch prints one line instead of a traceback: an inconsistent record keeps exit 1
-  with `methodology.py: current_grading.Inconsistent: <message>`; an input or output it cannot read or write, such
+  with `bench-tools methodology: inconsistent: <message>`; an input or output it cannot read or write, such
   as an `--out` that exists, and any other exception exit 2;
 - usage errors and help are clap's;
 - Python 3.14's readings: `repr` of Unicode 15.1 and 16.0 characters, and a dash-led `--root` in exponent form or
@@ -348,7 +349,7 @@ stub `gh`, with failed, undecodable and paged responses injected. `test_behavior
 recorded call is a paginated GET of the case's repository that the stub answers. The decided differences:
 
 - An exception `claims.py` did not catch, such as a malformed target record's `TypeError` or an invalid
-  `--pattern`, prints `claims.py: <message>`, exit 1, instead of a traceback (`claims-check-uncaught-type-error`,
+  `--pattern`, prints `bench-tools claims: <message>`, exit 1, instead of a traceback (`claims-check-uncaught-type-error`,
   `claims-inventory-invalid-pattern`).
 - `--pattern` compiles through `pyregex`, which refuses lookarounds, back-references and other syntax it does not
   support, exit 1, where Python's `re` ran them (`claims-inventory-unsupported-pattern`).
@@ -411,7 +412,7 @@ fields masked. The decided differences:
   the blinded cards' private-path check (`calibration-unicode-seed`, `calibration-unicode-exposure`), digits in a
   second assessment's number (`evaluator-audit-unicode-assessment-number`), and dash-led values (`*-cli-dash-led-*`).
 - An exception the Python did not catch, a pinned receipt that is not UTF-8 or a second-assessment receipt that is
-  not an object, prints `<program>: <class>: <message>`, exit 2, instead of a traceback, exit 1
+  not an object, prints `<program>: <label>: <message>`, exit 2, instead of a traceback, exit 1
   (`calibration-receipt-not-utf8`, `evaluator-audit-receipt-not-an-object`).
 - `evaluator-audit second` is refused as an invalid operation, exit 2 (`evaluator-audit-cli-second-*`).
 - Usage errors and help are clap's (`calibration-cli-*`, `evaluator-audit-cli-*`).
@@ -505,7 +506,7 @@ carries v2 forward and records the decided differences:
 - `grade-map-runner-identity-v2`: `runner.mapping` in each receipt the mapping writes is the version 2 runner
   identity `grade prepare` writes, and each pin of the receipt's SHA-256 changes with it. `runner.prepared` is still
   copied from the key.
-- A failed read or write the Python did not catch prints `grade.py: <message>`, exit 2, instead of a traceback, exit
+- A failed read or write the Python did not catch prints `bench-tools grade: <message>`, exit 2, instead of a traceback, exit
   1 (`grade-map-target-without-head`, `grade-map-write-faults`).
 - The cleanup bridge runs the checkout's `prune_workspace.py` as a command, so a broken script fails the mapping
   (`grade-map-cleanup-bridge-*`).
@@ -593,7 +594,7 @@ is not one of them; it moved to #157.
 output is the port's; every case where Python 3.12.15 or 3.14.7 printed something else carries Python's output as a
 `baseline_defect` and a decision record. The decided differences:
 
-- An exception the Python did not catch prints `<program>: <type>: <message>` and keeps exit 1, instead of a
+- An exception the Python did not catch prints `<program>: <label>: <message>` and keeps exit 1, instead of a
   traceback (`*-missing-batches`, `*-invalid-json`, `*-unhashable-state`, `*-uncaught-error`,
   `*-uncaught-type-error`, `*-zero-reviews`).
 - Values follow Python 3.14 where versions differ: `sum` (`*-mixed-wall-seconds`, `*-mixed-sum`), hour 24

@@ -28,7 +28,7 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::Path;
 
-pub const PROGRAM: &str = "grade.py";
+pub const PROGRAM: &str = "bench-tools grade";
 pub const KEY_CONTRACT: &str = "current-grading-key/v1";
 pub const RUNNER_VERSION: i64 = 3;
 const PLACEHOLDERS: [&str; 4] = ["{TARGET}", "{FAMILY_IDS}", "{REVIEWS}", "{ALLOWANCE}"];

@@ -216,7 +216,9 @@ pub fn load_target(target_dir: &Path, replacements: Option<&Path>) -> P<Target> 
                     String::from_utf8_lossy(&bytes).into_owned()
                 }
                 crate::current_grading::Failure::Input(message)
-                | crate::current_grading::Failure::Crash(message) => message,
+                | crate::current_grading::Failure::Crash(message) => {
+                    crate::pysemantics::relabel(&message)
+                }
             }
         })??;
     }

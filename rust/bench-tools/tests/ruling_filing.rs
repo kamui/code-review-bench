@@ -204,7 +204,7 @@ fn filing_faults_match_the_recorded_outcomes() {
         (
             credit("").replace("\"review\": \"r1\", ", ""),
             "recovery",
-            "RAISED KeyError: 'review'",
+            "RAISED missing key: 'review'",
         ),
     ];
     for (decision, kind, wanted) in cases {

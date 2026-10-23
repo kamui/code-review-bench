@@ -19,7 +19,7 @@ use crate::pyvalue;
 use std::cmp::Ordering;
 use std::fmt::Write as _;
 
-pub const PROGRAM: &str = "evaluator_audit.py";
+pub const PROGRAM: &str = "bench-tools evaluator-audit";
 const CREDITS: [(&str, &str); 3] = [
     ("yes", "caught"),
     ("cannot-tell", "unresolved"),

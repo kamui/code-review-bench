@@ -743,7 +743,7 @@ fn records_naming_their_origin_checkout_restore_in_a_checkout_at_another_path() 
     assert_eq!(done.status.code(), Some(1));
     assert!(
         String::from_utf8_lossy(&done.stderr)
-            .starts_with("collect_run.py: missing or changed evidence: ")
+            .starts_with("bench-tools evidence: missing or changed evidence: ")
     );
     let done = scratch.run(
         Some(&remote),
@@ -773,7 +773,7 @@ fn records_naming_their_origin_checkout_restore_in_a_checkout_at_another_path() 
         (done.status.code(), String::from_utf8_lossy(&done.stderr)),
         (
             Some(1),
-            "collect_run.py: published release or asset identity changed\n".into()
+            "bench-tools evidence: published release or asset identity changed\n".into()
         )
     );
     let done = scratch.run(
@@ -865,6 +865,6 @@ fn archive_stored_under_a_path_no_record_names_is_mapped_by_its_hash() {
     let done = scratch.collect(Some(&remote), &root, &run);
     assert_eq!(done.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&done.stderr).contains(
-        "collect_run.py: Transcript archive unavailable: artifacts/transcripts/example/att-001.tar.gz"
+        "bench-tools evidence: Transcript archive unavailable: artifacts/transcripts/example/att-001.tar.gz"
     ));
 }
