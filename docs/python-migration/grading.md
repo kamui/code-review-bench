@@ -160,7 +160,7 @@ on a disposable worktree of the commit that filed its receipt. Each must end wit
 [`grading-replay-expectations.v2.json`](grading-replay-expectations.v2.json) records and write nothing but
 `.cache/current-record.lock`. Those are the outcomes of `grade.py`'s mapping, recorded before slice 10 removed it,
 with the refusal's program label renamed to `bench-tools grade`; v1 keeps the label as Python printed it.
-The Pages workflow runs it in its own `Mapping replay` job, outside the build job's time limit. On 2026-10-20 all
+The Pages workflow runs it last in the `Web and evidence` job, which builds the same test binary for the validator replay. On 2026-10-20 all
 333 v1 replays were refused, exit 2: neither filing commit has `bench/grading/current/credits.json`, which mapping
 reads before it writes and `43bd77593` added later. No replay accepted, so accepted records are checked only in the
 fixture cases.
