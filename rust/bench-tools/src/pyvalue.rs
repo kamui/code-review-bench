@@ -268,10 +268,21 @@ fn as_float(value: &Value) -> f64 {
     }
 }
 
-/// `left < right` and friends: text with text by code point, numbers with numbers.
+/// `left < right` and friends: text with text by code point, numbers with numbers, and lists or
+/// tuples by their first unequal element, then by length.
 pub fn compare(left: &Value, right: &Value) -> Py<Ordering> {
     match (left, right) {
         (Value::Str(left), Value::Str(right)) => Ok(left.cmp(right)),
+        (Value::Array(left), Value::Array(right)) => {
+            match left
+                .iter()
+                .zip(right)
+                .find(|(left, right)| !left.py_eq(right))
+            {
+                Some((left, right)) => compare(left, right),
+                None => Ok(left.len().cmp(&right.len())),
+            }
+        }
         (left, right) if numeric(left) && numeric(right) => match (integer(left), integer(right)) {
             (Some(left), Some(right)) => Ok(compare_integers(&left, &right)),
             _ => Ok(as_float(left)
@@ -770,5 +781,37 @@ mod tests {
         assert!(has_version(&points("x.v1.v2.md")));
         assert!(is_date("2026-10-19"));
         assert!(!is_date("2026-1-19"));
+    }
+
+    #[test]
+    fn lists_compare_as_python_tuples_do() {
+        let list = |values: Vec<Value>| Value::Array(values);
+        let pair = |left: &str, right: &str| list(vec![text(left), text(right)]);
+        assert_eq!(
+            compare(&pair("a", "y"), &pair("b", "x")).unwrap(),
+            Ordering::Less
+        );
+        assert_eq!(
+            compare(&pair("a", "y"), &pair("a", "x")).unwrap(),
+            Ordering::Greater
+        );
+        assert_eq!(
+            compare(&pair("a", "x"), &pair("a", "x")).unwrap(),
+            Ordering::Equal
+        );
+        assert_eq!(
+            compare(&list(vec![text("a")]), &pair("a", "x")).unwrap(),
+            Ordering::Less
+        );
+        assert_eq!(
+            compare(
+                &list(vec![Value::Int("1".into()), text("b")]),
+                &list(vec![Value::Float(1.0), text("a")])
+            )
+            .unwrap(),
+            Ordering::Greater
+        );
+        assert!(compare(&list(vec![Value::Int("1".into())]), &list(vec![text("1")])).is_err());
+        assert!(compare(&list(vec![]), &text("a")).is_err());
     }
 }
