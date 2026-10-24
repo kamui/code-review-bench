@@ -362,3 +362,11 @@ To reconcile before asking:
 
 - assessor-1 picks unknown where the recommender picks other-material. Its reason: The runs establish server-error removal but do not establish whether the loaded value remains invalid, whether absence of the error reports validity, or whether the other changes defeat an operation ordinary use relied on.
 
+
+## The owner's answer
+
+Asked 2026-10-23 with both questions of the round in one message; the owner's words are in [`owner-answers.md`](../owner-answers.md).
+
+- `C1` (recovery): **does-not-recover** (says what goes wrong: no; identifies the cause as a fault: yes); asked 1 time.
+- `C1n` (candidate): **suggestion**; asked 1 time.
+- `C1n` (band): **not-applicable**; asked 1 time.

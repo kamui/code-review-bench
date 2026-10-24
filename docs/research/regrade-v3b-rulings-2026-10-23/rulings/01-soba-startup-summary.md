@@ -262,3 +262,10 @@ To reconcile before asking:
 
 - None: every party's pick is the recommender's.
 
+
+## The owner's answer
+
+Asked 2026-10-23 with both questions of the round in one message; the owner's words are in [`owner-answers.md`](../owner-answers.md).
+
+- `P1` (pre-existing-admission): **not-admitted**; asked 1 time.
+- `P1` (band): **not-applicable**; asked 1 time.
