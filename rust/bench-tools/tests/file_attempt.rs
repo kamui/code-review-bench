@@ -1040,7 +1040,6 @@ fn files_only_with_the_bench_tools_its_run_pins() {
     let run = t.root().join("run");
     write(&run.join("manifest.json"), r#"{"freeze_commit": "abc123"}"#);
     let frozen = run.join("runtimes.frozen.json");
-    let pinned = fs::read(&frozen).unwrap();
     let replay = [("--replay", String::new())];
     for (pins, problem) in [
         (
@@ -1066,7 +1065,16 @@ fn files_only_with_the_bench_tools_its_run_pins() {
         );
         assert!(!t.root().join("o1").exists() && !t.att.join("audit.recorded.json").exists());
     }
-    write(&frozen, pinned);
+    // A recorded runtime deviation moves the run from its frozen pin to this bench-tools.
+    let own = sha_file(Path::new(env!("CARGO_BIN_EXE_bench-tools")));
+    write(&frozen, r#"{"bench-tools": {"sha256": "0000"}}"#);
+    write(
+        &run.join("deviations/runtime-bench-tools.v1.json"),
+        format!(
+            r#"{{"schema": "rust-runtime-deviation/1", "runtime": "bench-tools", "recorded_at": "2026-01-01T00:00:00Z",
+            "old": {{"pin": {{"sha256": "0000"}}}}, "new": {{"pin": {{"sha256": "{own}"}}}}}}"#
+        ),
+    );
     t.filed("o1", &[]);
 }
 

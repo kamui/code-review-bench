@@ -378,7 +378,12 @@ diagnosis for it: a JSON file with `predecessor`, `reason` and `cause`.
 | `skill-timeout` | the attempt stays as the cell's result |
 
 A replacement keeps the run's model, effort, policy, caps and budget, and starts in a fresh home.
-A valid attempt is never replaced.
+A valid attempt is never replaced. When the owner allows more reruns of one kind of stop after the
+run froze, `deviations/caps-extension.v1.json` records it: replacements of attempts whose diagnosis
+file and cause it names count against its own `added` number, and `max_attempts` grows by the same
+number. Every other replacement keeps the frozen cap, and spend caps stay as frozen. The runner
+that reads it is a newer `bench-tools`, so the run also needs a
+[runtime deviation](../docs/python-migration/runtime.md#deviations).
 
 The controller saves a status snapshot under `status/` every 30 minutes, also during a long
 review. A snapshot is a local file: `status --acknowledge SNAPSHOT --note TEXT` records
