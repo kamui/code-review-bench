@@ -1,0 +1,7 @@
+Index
+=====
+
+.. toctree::
+
+   target
+   ref
