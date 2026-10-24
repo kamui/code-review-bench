@@ -219,10 +219,11 @@ The [script policy](../agents/scripts.md) supports macOS on Apple Silicon and Li
 matching GitHub runner for each: the runtime tests (`tests/runtime.rs`) with real cargo builds and
 [`rollback.sh`](runtime-evidence/rollback.sh). It also checks `bench-tools` with
 `cargo fmt`, `clippy` and `cargo test`, installs it, runs its corpora and `roster` on the repository. The
-`CI and GitHub Pages` workflow installs `bench-tools` the same way for the explorer export.
+`CI and GitHub Pages` workflow installs `bench-tools` the same way, once per crate tree, and its other jobs restore
+that store for the explorer export and grading.
 
-The x86_64 Linux target splits its checks into three parallel jobs: the behavior contracts, run with no Python on
-`PATH`; formatting, Clippy and every other test; and the runtime tests, install and rollback. The runtime job
+The x86_64 Linux target splits its checks into two parallel jobs: formatting, Clippy, every test, and the behavior
+contracts run with no Python on `PATH`; and install and rollback. The runtime job
 installs `bench-tools`, files a [fake-client cell](../../tools/fake-client-cell.sh) through a frozen run's pin, and
 writes the explorer export and the scorecard, all with no Python on `PATH`
 ([`tools/without-python.sh`](../../tools/without-python.sh)). Pull requests run the full suite
