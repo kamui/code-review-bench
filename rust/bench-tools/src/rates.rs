@@ -548,16 +548,20 @@ pub fn parse_prices(provider: &str, markdown: &str, models: &[String]) -> Result
             &[
                 "Model",
                 "Short context input",
-                "Short context cached input",
-                "Short context cache writes",
                 "Short context output",
+                "Short context cached input",
+                "Short context 30m write",
+                "Short context 12h write",
                 "Long context input",
-                "Long context cached input",
-                "Long context cache writes",
                 "Long context output",
+                "Long context cached input",
+                "Long context 30m write",
+                "Long context 12h write",
             ],
             "Standard pricing data",
-            [1, 4, 2, 3, 3],
+            // OpenAI has one default cache lifetime, 30 minutes; the 12-hour write is a per-request opt-in.
+            // https://developers.openai.com/api/docs/guides/prompt-caching#prompt-cache-retention
+            [1, 2, 3, 4, 4],
         )
     } else {
         (
@@ -1005,15 +1009,7 @@ pub fn render(report: &Value) -> String {
 mod tests {
     use super::*;
 
-    const OPENAI: &str = "### Standard pricing data
-| Model | Short context input | Short context cached input | Short context cache writes | Short context output | Long context input | Long context cached input | Long context cache writes | Long context output |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| gpt-6.1-sol | $2.00 | $0.10 | $2.50 | $10.00 | $4.00 | $0.20 | $5.00 | $15.00 |
-### Batch pricing data
-| Model | Short context input | Short context cached input | Short context cache writes | Short context output | Long context input | Long context cached input | Long context cache writes | Long context output |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| gpt-6.1-sol | $1.00 | $0.05 | $1.25 | $5.00 | $2.00 | $0.10 | $2.50 | $7.50 |
-";
+    const OPENAI: &str = include_str!("../tests/fixtures/rates/openai-pricing.md");
     const ANTHROPIC: &str = "## Model pricing
 | Model | Base input tokens | 5m cache writes | 1h cache writes | Cache hits and refreshes | Output tokens |
 | --- | --- | --- | --- | --- | --- |
@@ -1022,13 +1018,30 @@ mod tests {
 
     #[test]
     fn provider_tables_read_as_python_reads_them() {
-        let models = vec!["gpt-6.1-sol".to_string()];
+        let models: Vec<String> = ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna", "gpt-6-sol"]
+            .map(String::from)
+            .to_vec();
         let (prices, unsupported) = parse_prices("openai", OPENAI, &models).unwrap();
         assert_eq!(
             prices,
-            vec![("gpt-6.1-sol".to_string(), [2.0, 10.0, 0.1, 2.5, 2.5])]
+            vec![
+                ("gpt-6-astra".to_string(), [10.0, 50.0, 1.0, 12.5, 12.5]),
+                ("gpt-6.1-sol".to_string(), [2.0, 10.0, 0.1, 2.5, 2.5]),
+                ("gpt-6-luna".to_string(), [0.1, 0.5, 0.01, 0.125, 0.125]),
+                ("gpt-6-sol".to_string(), [2.0, 10.0, 0.2, 2.5, 2.5]),
+            ]
         );
         assert_eq!(unsupported, [] as [(String, String); 0]);
+        let models = vec!["gpt-5.5".to_string(), "gpt-5.6-cyber".to_string()];
+        let (prices, unsupported) = parse_prices("openai", OPENAI, &models).unwrap();
+        assert_eq!(prices, []);
+        assert_eq!(
+            unsupported,
+            ["gpt-5.5", "gpt-5.6-cyber"].map(|model| (
+                model.to_string(),
+                "no standard short-context row in the provider table".to_string()
+            ))
+        );
         let models = vec!["claude-opus-5-5".to_string()];
         let (prices, _) = parse_prices("anthropic", ANTHROPIC, &models).unwrap();
         assert_eq!(
@@ -1053,16 +1066,27 @@ mod tests {
                 "ambiguous provider pricing row for claude-opus-5-5".to_string()
             ))
         );
-        assert_eq!(
-            parse_prices(
-                "openai",
-                &OPENAI.replace("Short context input", "Input"),
-                &["gpt-6.1-sol".to_string()]
+        let previous_layout = "### Standard pricing data
+| Model | Short context input | Short context cached input | Short context cache writes | Short context output | Long context input | Long context cached input | Long context cache writes | Long context output |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| gpt-6.1-sol | $2.00 | $0.10 | $2.50 | $10.00 | $4.00 | $0.20 | $5.00 | $15.00 |
+";
+        for changed in [
+            OPENAI.replace("Short context input", "Input"),
+            OPENAI.replace("Short context 12h write", "Short context 1h write"),
+            OPENAI.replace(
+                "| Long context 12h write |",
+                "| Long context 12h write | Regional |",
             ),
-            Err(Failure::Rate(
-                "provider pricing columns changed: Standard pricing data".to_string()
-            ))
-        );
+            previous_layout.to_string(),
+        ] {
+            assert_eq!(
+                parse_prices("openai", &changed, &["gpt-6.1-sol".to_string()]),
+                Err(Failure::Rate(
+                    "provider pricing columns changed: Standard pricing data".to_string()
+                ))
+            );
+        }
     }
 
     #[test]
