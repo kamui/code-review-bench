@@ -19,12 +19,72 @@ defaults:
   run:
     shell: bash
 
+env:
+  # Line tables build the tests a fifth to a quarter faster than full debuginfo and still give a panic its file and line.
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+
 jobs:
+  bench-tools:
+    name: Build bench-tools
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    # bench-tools refuses a host whose glibc is older than its build host's, and the grading and client jobs run 22.04.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    outputs:
+      store: ${{ steps.key.outputs.key }}
+    steps:
+      - uses: actions/checkout@v4
+      # runtime resolve refuses a selection built from any crate tree but HEAD's, so a store keyed by it is never stale.
+      - name: Key the store by the runner image and the crate tree
+        id: key
+        run: echo "key=bench-tools-store-$ImageOS-$RUNNER_ARCH-$(git rev-parse HEAD:rust/bench-tools)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        id: store
+        with:
+          path: ${{ runner.temp }}/rust-runtime-store
+          key: ${{ steps.key.outputs.key }}
+      - name: Install rustup when the image has none
+        if: steps.store.outputs.cache-hit != 'true'
+        run: |
+          if ! command -v rustup > /dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+      - name: Install pinned Rust toolchain
+        if: steps.store.outputs.cache-hit != 'true'
+        run: (cd rust/bench-tools && rustup show && rustup default "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)")
+      - uses: Swatinem/rust-cache@v2
+        if: steps.store.outputs.cache-hit != 'true'
+        with:
+          workspaces: rust/bench-tools
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install bench-tools for the jobs that restore evidence, export and grade
+        if: steps.store.outputs.cache-hit != 'true'
+        env:
+          BENCH_RUNTIME_STORE: ${{ runner.temp }}/rust-runtime-store
+        run: |
+          (cd rust/bench-tools && cargo fetch --locked)
+          bench/tools/bench-tools runtime install --select
+      - uses: actions/cache/save@v4
+        if: steps.store.outputs.cache-hit != 'true'
+        with:
+          path: ${{ runner.temp }}/rust-runtime-store
+          key: ${{ steps.key.outputs.key }}
+      - name: Require the saved store the other jobs restore
+        if: steps.store.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/rust-runtime-store
+          key: ${{ steps.key.outputs.key }}
+          lookup-only: true
+          fail-on-cache-miss: true
+
   build:
     name: Web and evidence
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    needs: bench-tools
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,6 +98,12 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
         run: bun tools/select_grading_tests.ts --event-name "$EVENT_NAME" --event-path "$GITHUB_EVENT_PATH" --job build --output "$GITHUB_OUTPUT"
+      - name: Select the mapping replay's coverage from the complete PR diff
+        id: mapping
+        continue-on-error: true
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: bun tools/select_grading_tests.ts --event-name "$EVENT_NAME" --event-path "$GITHUB_EVENT_PATH" --job mapping-replay --output "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
@@ -47,12 +113,22 @@ jobs:
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
             echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           fi
-      - name: Install bench-tools, which restores evidence and writes the explorer export
+      - name: Install pinned Rust toolchain
         run: |
-          (cd rust/bench-tools && rustup show && rustup default "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" && cargo fetch --locked)
+          (cd rust/bench-tools && rustup show && rustup default "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)")
           echo "BENCH_RUNTIME_STORE=$RUNNER_TEMP/rust-runtime-store" >> "$GITHUB_ENV"
-          BENCH_RUNTIME_STORE="$RUNNER_TEMP/rust-runtime-store" bench/tools/bench-tools runtime install --select
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust/bench-tools
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Restore bench-tools, which restores evidence and writes the explorer export
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/rust-runtime-store
+          key: ${{ needs.bench-tools.outputs.store }}
+          fail-on-cache-miss: true
       - name: Restore repository evidence
+        id: evidence
         env:
           GH_TOKEN: ${{ github.token }}
         run: bench/tools/bench-tools evidence fetch --manifest bench/evidence/manifests/repository-payloads-2026-10-08-v1.json
@@ -114,51 +190,16 @@ jobs:
         uses: actions/upload-pages-artifact@v3
         with:
           path: dist/client
-
-  mapping-replay:
-    name: Mapping replay
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: '1.3.10'
-      - name: Select this job's coverage from the complete PR diff
-        id: selection
-        continue-on-error: true
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-        run: bun tools/select_grading_tests.ts --event-name "$EVENT_NAME" --event-path "$GITHUB_EVENT_PATH" --job mapping-replay --output "$GITHUB_OUTPUT"
-      - name: Install rustup when the image has none
-        if: steps.selection.outcome != 'success' || steps.selection.outputs.run != 'false'
-        run: |
-          if ! command -v rustup > /dev/null; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
-            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          fi
-      - name: Install bench-tools, which restores evidence
-        if: steps.selection.outcome != 'success' || steps.selection.outputs.run != 'false'
-        run: |
-          (cd rust/bench-tools && rustup show && rustup default "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" && cargo fetch --locked)
-          echo "BENCH_RUNTIME_STORE=$RUNNER_TEMP/rust-runtime-store" >> "$GITHUB_ENV"
-          BENCH_RUNTIME_STORE="$RUNNER_TEMP/rust-runtime-store" bench/tools/bench-tools runtime install --select
-      - name: Restore repository evidence
-        if: steps.selection.outcome != 'success' || steps.selection.outputs.run != 'false'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bench/tools/bench-tools evidence fetch --manifest bench/evidence/manifests/repository-payloads-2026-10-08-v1.json
+      # Last, so the web checks report first; it still runs when one fails, and reuses their grading_replay test build.
       - name: Replay the mapping of every restorable archive against its recorded outcome
-        if: steps.selection.outcome != 'success' || steps.selection.outputs.run != 'false'
+        if: ${{ !cancelled() && steps.evidence.outcome == 'success' && (steps.mapping.outcome != 'success' || steps.mapping.outputs.run != 'false') }}
         working-directory: rust/bench-tools
         run: cargo test --locked --test grading_replay -- --ignored --exact the_mapping_replays_every_restorable_archive_identically --nocapture
 
   grading-tests:
     name: Grading regression tests
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    needs: bench-tools
     runs-on: ubuntu-22.04
     timeout-minutes: 25
     env:
@@ -188,12 +229,23 @@ jobs:
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
             echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           fi
-      - name: Install bench-tools, which restores evidence
+      - name: Install pinned Rust toolchain
         if: steps.selection.outcome != 'success' || steps.selection.outputs.run != 'false'
         run: |
-          (cd rust/bench-tools && rustup show && rustup default "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" && cargo fetch --locked)
+          (cd rust/bench-tools && rustup show && rustup default "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)")
           echo "BENCH_RUNTIME_STORE=$RUNNER_TEMP/rust-runtime-store" >> "$GITHUB_ENV"
-          BENCH_RUNTIME_STORE="$RUNNER_TEMP/rust-runtime-store" bench/tools/bench-tools runtime install --select
+      - uses: Swatinem/rust-cache@v2
+        if: steps.selection.outcome != 'success' || steps.selection.outputs.run != 'false'
+        with:
+          workspaces: rust/bench-tools
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Restore bench-tools, which restores evidence
+        if: steps.selection.outcome != 'success' || steps.selection.outputs.run != 'false'
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/rust-runtime-store
+          key: ${{ needs.bench-tools.outputs.store }}
+          fail-on-cache-miss: true
       - name: Restore repository evidence
         if: steps.selection.outcome != 'success' || steps.selection.outputs.run != 'false'
         env:
@@ -241,6 +293,7 @@ jobs:
   client:
     name: Client compatibility
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    needs: bench-tools
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     env:
@@ -259,19 +312,13 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
         run: bun tools/select_grading_tests.ts --event-name "$EVENT_NAME" --event-path "$GITHUB_EVENT_PATH" --job client --output "$GITHUB_OUTPUT"
-      - name: Install rustup when the image has none
+      - name: Restore bench-tools, which serves the blinded grading MCP
         if: steps.selection.outcome != 'success' || steps.selection.outputs.run != 'false'
-        run: |
-          if ! command -v rustup > /dev/null; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
-            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          fi
-      - name: Install bench-tools, which serves the blinded grading MCP
-        if: steps.selection.outcome != 'success' || steps.selection.outputs.run != 'false'
-        run: |
-          (cd rust/bench-tools && rustup show && rustup default "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" && cargo fetch --locked)
-          echo "BENCH_RUNTIME_STORE=$RUNNER_TEMP/rust-runtime-store" >> "$GITHUB_ENV"
-          BENCH_RUNTIME_STORE="$RUNNER_TEMP/rust-runtime-store" bench/tools/bench-tools runtime install --select
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/rust-runtime-store
+          key: ${{ needs.bench-tools.outputs.store }}
+          fail-on-cache-miss: true
       - name: Install sandbox tools
         if: steps.selection.outcome != 'success' || steps.selection.outputs.run != 'false'
         run: |
@@ -287,12 +334,14 @@ jobs:
         run: test "$(claude --version)" = "$CLAUDE_VERSION (Claude Code)"
       - name: Test client against the local fake API
         if: steps.selection.outcome != 'success' || steps.selection.outputs.run != 'false'
+        env:
+          BENCH_RUNTIME_STORE: ${{ runner.temp }}/rust-runtime-store
         run: bench/tools/bench-tools grading probe-claude
 
   deploy:
     # PAGES_PREVIEW_BRANCH names a branch Pages serves in place of main's build; unset it to deploy from main again.
     if: github.event_name != 'pull_request' && vars.PAGES_PREVIEW_BRANCH == ''
-    needs: [build, mapping-replay, grading, client]
+    needs: [build, grading, client]
     runs-on: ubuntu-latest
     permissions:
       pages: write

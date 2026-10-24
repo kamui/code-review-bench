@@ -836,7 +836,7 @@ struct MappingCounts {
 }
 
 #[test]
-#[ignore = "needs the restored repository evidence and full history; the Pages mapping replay job runs it"]
+#[ignore = "needs the restored repository evidence and full history; the Pages build job runs it"]
 fn the_mapping_replays_every_restorable_archive_identically() {
     let root = repository();
     let value = inventory(&root);
