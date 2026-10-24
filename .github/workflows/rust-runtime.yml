@@ -143,11 +143,36 @@ jobs:
         working-directory: rust/bench-tools
         run: cargo test --locked --test runtime
       - name: Install bench-tools and check the retained executable
-        if: matrix.part == 'all'
+        if: matrix.part == 'all' && github.event_name == 'pull_request'
         env:
           BENCH_RUNTIME_STORE: ${{ runner.temp }}/rust-runtime-store
         run: |
           bench/tools/bench-tools runtime install --select
+          bench/tools/bench-tools runtime resolve
+          bench/tools/bench-tools roster > "$RUNNER_TEMP/roster.tsv"
+          test -s "$RUNNER_TEMP/roster.tsv"
+      - name: Smoke test the behavior contracts on pull requests
+        if: matrix.part == 'all' && github.event_name == 'pull_request'
+        working-directory: rust/bench-tools
+        run: 'cargo test --locked --test behavior_contracts -- diff-identity::'
+      # rollback.sh ends with its first install, built from HEAD's crate tree, selected in $RUNNER_TEMP/rollback/store.
+      # The steps after it run that install rather than building a third copy of the same tree.
+      - name: Install two versions and roll back with no Python on PATH
+        if: matrix.part == 'runtime'
+        env:
+          # rust-cache turns incremental builds off; the second install rebuilds its clone's installer incrementally.
+          CARGO_INCREMENTAL: '1'
+        run: tools/without-python.sh docs/python-migration/runtime-evidence/rollback.sh "$RUNNER_TEMP/rollback" "$(git rev-parse HEAD)"
+      - name: Install a second version and roll back
+        if: matrix.part == 'all' && github.event_name != 'pull_request'
+        env:
+          CARGO_INCREMENTAL: '1'
+        run: docs/python-migration/runtime-evidence/rollback.sh "$RUNNER_TEMP/rollback" "$(git rev-parse HEAD)"
+      - name: Check the retained executable the rollback selected
+        if: matrix.part == 'all' && github.event_name != 'pull_request'
+        env:
+          BENCH_RUNTIME_STORE: ${{ runner.temp }}/rollback/store
+        run: |
           bench/tools/bench-tools runtime resolve
           bench/tools/bench-tools roster > "$RUNNER_TEMP/roster.tsv"
           test -s "$RUNNER_TEMP/roster.tsv"
@@ -158,18 +183,17 @@ jobs:
       - name: Install the explorer's dependencies
         if: matrix.part == 'runtime'
         run: bun install --frozen-lockfile
-      # The maintained engine needs no Python: install, a fake-client cell filed through a frozen run's pin, the
-      # freeze-commit fetch, the explorer export and the scorecard all run with every Python interpreter removed from
-      # PATH. The transcripts are fetched by manifest first, as the Pages build does: the export restores a missing
-      # file one at a time, which took about five minutes here.
-      - name: Install bench-tools and run the maintained workflows with no Python on PATH
+      # The maintained engine needs no Python: install (in the rollback above), a fake-client cell filed through a
+      # frozen run's pin, the freeze-commit fetch, the explorer export and the scorecard all run with every Python
+      # interpreter removed from PATH. The transcripts are fetched by manifest first, as the Pages build does: the export
+      # restores a missing file one at a time, which took about five minutes here.
+      - name: Run the maintained workflows with no Python on PATH
         if: matrix.part == 'runtime'
         env:
-          BENCH_RUNTIME_STORE: ${{ runner.temp }}/rust-runtime-store
+          BENCH_RUNTIME_STORE: ${{ runner.temp }}/rollback/store
           GH_TOKEN: ${{ github.token }}
         run: |
           tools/without-python.sh sh -euc '
-            bench/tools/bench-tools runtime install --select
             bench/tools/bench-tools runtime resolve
             bench/tools/bench-tools roster > "$RUNNER_TEMP/roster.tsv"
             test -s "$RUNNER_TEMP/roster.tsv"
@@ -183,16 +207,6 @@ jobs:
             bun run scorecard > "$RUNNER_TEMP/scorecard.txt"
             test -s "$RUNNER_TEMP/scorecard.txt"
           '
-      - name: Smoke test the behavior contracts on pull requests
-        if: matrix.part == 'all' && github.event_name == 'pull_request'
-        working-directory: rust/bench-tools
-        run: 'cargo test --locked --test behavior_contracts -- diff-identity::'
-      - name: Install a second version and roll back
-        if: matrix.part == 'runtime' || (matrix.part == 'all' && github.event_name != 'pull_request')
-        env:
-          # rust-cache turns incremental builds off; the second install rebuilds its clone's installer incrementally.
-          CARGO_INCREMENTAL: '1'
-        run: docs/python-migration/runtime-evidence/rollback.sh "$RUNNER_TEMP/rollback" "$(git rev-parse HEAD)"
 
   required:
     name: Rust runtime required
