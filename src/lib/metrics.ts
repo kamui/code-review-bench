@@ -51,7 +51,7 @@ export function summarize(configuration: Configuration, card: Scorecard, view: D
   return {
     configuration, card, detection: points(recall[view.estimator]), detectionNote: recall.zeroCredit.reason,
     range: range && { low: range.low * 100, high: range.high * 100 },
-    cost: measured(card.cost.perTrial), tokens: measured(card.tokens.perTrial), refuted: measured(refuted),
+    cost: lowerBound(card.cost.perTrial), tokens: measured(card.tokens.perTrial), refuted: measured(refuted),
     time: time && { ...time, reviews: card.time.completed, tasks: card.time.tasks },
     reasons: { detection: reasonOf(recall[view.estimator]), cost: reasonOf(card.cost.perTrial), tokens: reasonOf(card.tokens.perTrial),
       refuted: reasonOf(refuted), time: reasonOf(card.time.summary) },
