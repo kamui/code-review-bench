@@ -2904,8 +2904,13 @@ impl Rendering<'_> {
             w(format!(
                 "## 4. Originating reference `#{n}` (a pull request, closed unmerged), verbatim\n"
             ));
+            let when = if item(self.pull, "merged")?.truthy() {
+                format!(" {CLOSED_WHEN_MERGED}")
+            } else {
+                String::new()
+            };
             w(format!(
-                "Title: **{}**  \nOpened {} by `{}`; state `{}`, not merged; closed {} {CLOSED_WHEN_MERGED}.\n",
+                "Title: **{}**  \nOpened {} by `{}`; state `{}`, not merged; closed {}{when}.\n",
                 reference.title.py_str(),
                 head_of(&reference.created_at, 10)?,
                 reference.author.py_str(),
