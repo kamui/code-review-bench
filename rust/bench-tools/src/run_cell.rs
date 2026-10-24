@@ -3120,11 +3120,7 @@ mod tests {
     }
 
     const MODEL: &str = "gpt-6.1-sol";
-    const OPENAI: &str = "### Standard pricing data
-| Model | Short context input | Short context cached input | Short context cache writes | Short context output | Long context input | Long context cached input | Long context cache writes | Long context output |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| gpt-6.1-sol | $2.00 | $0.10 | $2.50 | $10.00 | $4.00 | $0.20 | $5.00 | $15.00 |
-";
+    const OPENAI: &str = include_str!("../tests/fixtures/rates/openai-pricing.md");
 
     struct Pricing;
 
