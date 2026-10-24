@@ -304,8 +304,17 @@ pub fn sorted(mut values: Vec<Value>) -> Py<Vec<Value>> {
             compare(first, value)?;
         }
     }
-    values.sort_by(|left, right| compare(left, right).unwrap_or(Ordering::Equal));
-    Ok(values)
+    let mut failed = None;
+    values.sort_by(|left, right| {
+        compare(left, right).unwrap_or_else(|error| {
+            failed.get_or_insert(error);
+            Ordering::Equal
+        })
+    });
+    match failed {
+        Some(error) => Err(error),
+        None => Ok(values),
+    }
 }
 
 /// `separator.join(values)`, which takes text only.
@@ -813,5 +822,11 @@ mod tests {
         );
         assert!(compare(&list(vec![Value::Int("1".into())]), &list(vec![text("1")])).is_err());
         assert!(compare(&list(vec![]), &text("a")).is_err());
+        let ragged = vec![
+            list(vec![text("a")]),
+            list(vec![text("b"), Value::Int("1".into())]),
+            list(vec![text("b"), text("x")]),
+        ];
+        assert!(sorted(ragged).is_err());
     }
 }
