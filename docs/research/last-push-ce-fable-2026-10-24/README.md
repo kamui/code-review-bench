@@ -115,7 +115,7 @@ At 05:47 UTC the Claude meters read 78% of the week, which resets at 09:00 UTC, 
 
 ## Status: paused after one review
 
-The queue launched at 05:54 UTC on 2026-10-24. At about 06:10 UTC the owner said "wait for thermo to finish before starting Fable ce", so the controller was stopped while its first attempt ran. `queue recover` settled that attempt at 07:00 UTC: `i-requests-6667/claude-ce-fable-5-1-high/1`, `att-001`, valid completed, $44.97 at list price, about 65 minutes. The estimate above assumed about $18 a review. At $44.97 the 30 reviews would cost about $1,350, over the $1,000 ceiling. The owner then said: "Given the cost i think we pause on CE Fable, it's just too expensive right now." The run stays frozen with 1 of 30 reviews filed. Resuming needs the owner's go-ahead; `queue run --detach` with this queue file continues from the next cell.
+The queue launched at 05:54 UTC on 2026-10-24. At about 05:57 UTC the owner said "wait for thermo to finish before starting Fable ce", so the controller was stopped while its first attempt ran. `queue recover` settled that attempt at 07:00 UTC: `i-requests-6667/claude-ce-fable-5-1-high/1`, `att-001`, valid completed, $44.97 at list price, about 65 minutes. The estimate above assumed about $18 a review. At $44.97 the 30 reviews would cost about $1,350, over the $1,000 ceiling. The owner then said: "Given the cost i think we pause on CE Fable, it's just too expensive right now." The run stays frozen with 1 of 30 reviews filed. Resuming needs the owner's go-ahead; `queue run --detach` with this queue file continues from the next cell.
 
 ## Not planned
 
