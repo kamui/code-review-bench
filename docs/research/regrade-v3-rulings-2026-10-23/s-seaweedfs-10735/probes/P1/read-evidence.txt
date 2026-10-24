@@ -1,0 +1,192 @@
+# Source read for P1 at base and head (clones of the local mirror)
+## the expiry branch at head (weed/filer/redis2/universal_redis_store.go lines 213-220)
+   213			} else {
+   214				if entry.TtlSec > 0 {
+   215					if entry.Attr.Crtime.Add(time.Duration(entry.TtlSec) * time.Second).Before(time.Now()) {
+   216						store.Client.Del(ctx, store.getKey(string(path))).Result()
+   217						store.Client.ZRem(ctx, dirListKey, fileName).Result()
+   218						continue
+   219					}
+   220				}
+## the same branch at base (lines 212-219)
+   212			} else {
+   213				if entry.TtlSec > 0 {
+   214					if entry.Attr.Crtime.Add(time.Duration(entry.TtlSec) * time.Second).Before(time.Now()) {
+   215						store.Client.Del(ctx, store.getKey(string(path))).Result()
+   216						store.Client.ZRem(ctx, dirListKey, fileName).Result()
+   217						continue
+   218					}
+   219				}
+## git diff base..head of universal_redis_store.go (the whole change to this file)
+diff --git a/weed/filer/redis2/universal_redis_store.go b/weed/filer/redis2/universal_redis_store.go
+index 776952fc4..d4ce64d80 100644
+--- a/weed/filer/redis2/universal_redis_store.go
++++ b/weed/filer/redis2/universal_redis_store.go
+@@ -205,6 +205,7 @@ func (store *UniversalRedis2Store) ListDirectoryEntries(ctx context.Context, dir
+ 		if err != nil {
+ 			glog.V(0).InfofCtx(ctx, "list %s : %v", path, err)
+ 			if err == filer_pb.ErrNotFound {
++				store.removeOrphanedDirectoryListMember(ctx, dirListKey, path, fileName)
+ 				err = nil
+ 				continue
+ 			}
+@@ -233,6 +234,22 @@ func (store *UniversalRedis2Store) ListDirectoryEntries(ctx context.Context, dir
+ 	return lastFileName, err
+ }
+ 
++func (store *UniversalRedis2Store) removeOrphanedDirectoryListMember(ctx context.Context, dirListKey string, path util.FullPath, fileName string) {
++	if err := store.Client.ZRem(ctx, dirListKey, fileName).Err(); err != nil {
++		return
++	}
++
++	// InsertEntry writes the value before adding the member, so a value present
++	// again here may belong to an insert that found the member still in place
++	// and whose ZAddNX was therefore a no-op.
++	exists, err := store.Client.Exists(ctx, store.getKey(string(path))).Result()
++	if err == nil && exists == 0 {
++		return
++	}
++
++	store.Client.ZAddNX(ctx, dirListKey, redis.Z{Score: 0, Member: fileName})
++}
++
+ func genDirectoryListKey(dir string) (dirList string) {
+ 	return dir + DIR_LIST_MARKER
+ }
+## blame of the branch's lines at head
+b5a713be68 weed/filer2/redis2/universal_redis_store.go (Chris Lu 2020-04-12 214) 			if entry.TtlSec > 0 {
+b5a713be68 weed/filer2/redis2/universal_redis_store.go (Chris Lu 2020-04-12 215) 				if entry.Attr.Crtime.Add(time.Duration(entry.TtlSec) * time.Second).Before(time.Now()) {
+61c0514a1c weed/filer/redis2/universal_redis_store.go  (Chris Lu 2025-12-01 216) 					store.Client.Del(ctx, store.getKey(string(path))).Result()
+acc0d5cd2c weed/filer/redis2/universal_redis_store.go  (Chris Lu 2021-01-11 217) 					store.Client.ZRem(ctx, dirListKey, fileName).Result()
+b5a713be68 weed/filer2/redis2/universal_redis_store.go (Chris Lu 2020-04-12 218) 					continue
+b5a713be68 weed/filer2/redis2/universal_redis_store.go (Chris Lu 2020-04-12 219) 				}
+## DeleteEntry at head, lines 119-143
+   119	func (store *UniversalRedis2Store) DeleteEntry(ctx context.Context, fullpath util.FullPath) (err error) {
+   120	
+   121		_, err = store.Client.Del(ctx, store.getKey(genDirectoryListKey(string(fullpath)))).Result()
+   122		if err != nil {
+   123			return fmt.Errorf("delete dir list %s : %v", fullpath, err)
+   124		}
+   125	
+   126		_, err = store.Client.Del(ctx, store.getKey(string(fullpath))).Result()
+   127		if err != nil {
+   128			return fmt.Errorf("delete %s : %v", fullpath, err)
+   129		}
+   130	
+   131		dir, name := fullpath.DirAndName()
+   132		if store.isSuperLargeDirectory(dir) {
+   133			return nil
+   134		}
+   135		if name != "" {
+   136			_, err = store.Client.ZRem(ctx, store.getKey(genDirectoryListKey(dir)), name).Result()
+   137			if err != nil {
+   138				return fmt.Errorf("DeleteEntry %s in parent dir: %v", fullpath, err)
+   139			}
+   140		}
+   141	
+   142		return nil
+   143	}
+## DeleteFolderChildren at head, lines 145-170
+   145	func (store *UniversalRedis2Store) DeleteFolderChildren(ctx context.Context, fullpath util.FullPath) (err error) {
+   146	
+   147		if store.isSuperLargeDirectory(string(fullpath)) {
+   148			return nil
+   149		}
+   150	
+   151		members, err := store.Client.ZRangeByLex(ctx, store.getKey(genDirectoryListKey(string(fullpath))), &redis.ZRangeBy{
+   152			Min: "-",
+   153			Max: "+",
+   154		}).Result()
+   155		if err != nil {
+   156			return fmt.Errorf("DeleteFolderChildren %s : %v", fullpath, err)
+   157		}
+   158	
+   159		for _, fileName := range members {
+   160			path := util.NewFullPath(string(fullpath), fileName)
+   161			_, err = store.Client.Del(ctx, store.getKey(string(path))).Result()
+   162			if err != nil {
+   163				return fmt.Errorf("DeleteFolderChildren %s in parent dir: %v", fullpath, err)
+   164			}
+   165			// not efficient, but need to remove if it is a directory
+   166			store.Client.Del(ctx, store.getKey(genDirectoryListKey(string(path))))
+   167		}
+   168	
+   169		return nil
+   170	}
+## Filer.CreateEntry at head, weed/filer/filer.go lines 222-234
+   222	func (f *Filer) CreateEntry(ctx context.Context, entry *Entry, existing *Entry, o_excl bool, isFromOtherCluster bool, signatures []int32, skipCreateParentDir bool, maxFilenameLength uint32) error {
+   223	
+   224		if string(entry.FullPath) == "/" {
+   225			return nil
+   226		}
+   227	
+   228		if entry.FullPath.IsLongerFileName(maxFilenameLength) {
+   229			return filer_pb.ErrEntryNameTooLong
+   230		}
+   231	
+   232		if entry.IsDirectory() {
+   233			entry.Attr.TtlSec = 0
+   234		}
+## Filer.UpdateEntry at head, lines 376-379
+   376	func (f *Filer) UpdateEntry(ctx context.Context, oldEntry, entry *Entry) (err error) {
+   377		if oldEntry != nil {
+   378			entry.Attr.Crtime = oldEntry.Attr.Crtime
+   379			if oldEntry.Attr.Inode != 0 {
+## Filer.FindEntry at head, lines 420-438
+   420	func (f *Filer) FindEntry(ctx context.Context, p util.FullPath) (entry *Entry, err error) {
+   421	
+   422		if string(p) == "/" {
+   423			return Root, nil
+   424		}
+   425		entry, err = f.Store.FindEntry(ctx, p)
+   426		if entry != nil && entry.TtlSec > 0 {
+   427			if entry.IsExpireS3Enabled() {
+   428				if entry.GetS3ExpireTime().Before(time.Now()) && !entry.IsS3Versioning() {
+   429					if delErr := f.doDeleteEntryMetaAndData(ctx, entry, true, false, nil); delErr != nil {
+   430						glog.ErrorfCtx(ctx, "FindEntry doDeleteEntryMetaAndData %s failed: %v", entry.FullPath, delErr)
+   431					}
+   432					return nil, filer_pb.ErrNotFound
+   433				}
+   434			} else if entry.Crtime.Add(time.Duration(entry.TtlSec) * time.Second).Before(time.Now()) {
+   435				f.Store.DeleteOneEntry(ctx, entry)
+   436				return nil, filer_pb.ErrNotFound
+   437			}
+   438		}
+## gRPC UpdateEntry at head, weed/server/filer_grpc_server.go lines 660-674
+   660		newEntry := filer.FromPbEntry(req.Directory, req.Entry)
+   661		newEntry.Chunks = chunks
+   662	
+   663		// Don't apply TTL to remote entries - they're managed by remote storage
+   664		if newEntry.Remote != nil {
+   665			newEntry.TtlSec = 0
+   666		}
+   667	
+   668		if filer.EqualEntry(entry, newEntry) {
+   669			return &filer_pb.UpdateEntryResponse{LogTsNs: logTsNs, LogSignature: fs.filer.Signature}, err
+   670		}
+   671	
+   672		ctx, eventSink := filer.WithMetadataEventSink(ctx)
+   673		resp := &filer_pb.UpdateEntryResponse{LogTsNs: logTsNs, LogSignature: fs.filer.Signature}
+   674		if err = fs.filer.UpdateEntry(ctx, entry, newEntry); err == nil {
+## HTTP mkdir at head, weed/server/filer_server_handlers_write_autochunk.go lines 423-441
+   423		glog.V(4).InfolnCtx(ctx, "mkdir", path)
+   424		entry := &filer.Entry{
+   425			FullPath: util.FullPath(path),
+   426			Attr: filer.Attr{
+   427				Mtime:  time.Now(),
+   428				Crtime: time.Now(),
+   429				Mode:   os.FileMode(mode) | os.ModeDir,
+   430				Uid:    OS_UID,
+   431				Gid:    OS_GID,
+   432				TtlSec: so.TtlSeconds,
+   433			},
+   434		}
+   435	
+   436		filerResult = &FilerPostResult{
+   437			Name: util.FullPath(path).Name(),
+   438		}
+   439	
+   440		if dbErr := fs.filer.CreateEntry(context.WithoutCancel(ctx), entry, nil, false, false, nil, false, so.MaxFileNameLength); dbErr != nil {
+   441			replyerr = dbErr
+## the commit that added the directory strip in Filer.CreateEntry
+ee0c14673d61be9346a04c6e9ccbbbd6d03a6d9d 2025-05-29T17:38:12+08:00 FQHSLycopene Fix TTL Behavior for Directories in Path-Specific Configuration (#6827)

@@ -1,0 +1,189 @@
+# Project documentation read for P1 (SeaweedFS wiki at the cut-off) and C1
+# wiki: https://github.com/seaweedfs/seaweedfs.wiki.git, last commit before 2026-08-13T14:12:47Z: c950d27415ac65555039e76ea5d65f1aabcb7623 2026-08-11T12:29:16-07:00 add Mount over the Internet
+# read on 2026-10-23 (UTC)
+
+## Q1: rg -n -i '(director|folder).{0,60}ttl|ttl.{0,60}(director|folder)' --glob '*.md'  (11 lines)
+Cloud-Drive-Architecture.md:46:By default (eager strategy), all the metadata will be pulled down and cached to the local filer store on mount. You can also use `-metadataStrategy=lazy` to skip the upfront pull and fetch metadata on demand, and `-listingCacheTTL=<seconds>` to enable automatic directory listing cache with a TTL.
+Path-Specific-Configuration.md:4:For example, an administrator can create a `/scratch/` directory, configured so that anything written to it is automatically given a 7-day TTL. This directory could be used to store things like CI build artifacts, and it would naturally roll off old files without any intervention.
+S3-API-FAQ.md:44:It is possible to set a TTL for a specific directory using the S3 API. They are set using [`PutBucketLifecycleConfiguration`](https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketLifecycleConfiguration.html).
+S3-API-FAQ.md:48:fs.configure -locationPrefix  /buckets/f341868e-baff-4e20-896a-08bc148e32f9/my-directory-whose-files-will-expire-in-20-days -ttl 20d -apply
+S3-Lifecycle.md:75:- `GET` has a legacy fallback: if a bucket has no lifecycle XML but does have directory TTLs configured via `fs.configure -ttl` (see [S3 Lifecycle vs Volume TTL](S3-Lifecycle-vs-Volume-TTL)), `GET` synthesizes `Expiration.Days` rules from those TTLs instead of returning `NoSuchLifecycleConfiguration`.
+Mount-on-Windows.md:39:| `-cacheMetaTtlSec` | How long WinFsp may cache attributes and directory entries. |
+Mount-Remote-Storage.md:47:- **`-listingCacheTTL`**: `0` (default) disables on-demand directory listing; `>0` enables automatic directory listing from remote, cached for the specified number of seconds.
+Mount-Remote-Storage.md:56:| `eager` | `>0` | `remote.mount -dir=/xxx -remote=cloud1/bucket -listingCacheTTL=300` | **Full upfront pull + auto-refreshing listings.** Same as eager, but directory listings automatically refresh from remote after the TTL expires. Keeps listings up-to-date when remote data changes over time without manual `remote.meta.sync`. |
+Mount-Remote-Storage.md:86:With `-listingCacheTTL`, directory listings refresh automatically, reducing the need for manual `remote.meta.sync`.
+S3-Lifecycle-vs-Volume-TTL.md:21:A file's TTL is tied to its *volume*. Files sharing a TTL land in the same volumes, and the volume server drops a whole volume once its newest file expires — no per-file delete, no vacuum. Set it per directory with `fs.configure -ttl 20d`, or per write with `assign?ttl=`.
+Filer-Stores.md:5:| Filer Store Name | Lookup | number of entries in a folder | Scalability | Directory Renaming | TTL | [Fast Bucket Deletion](https://github.com/seaweedfs/seaweedfs/wiki/S3-API-FAQ#how-to-speed-up-bucket-deletion) |Note |
+
+## Q2: Store-file-with-a-Time-To-Live.md lines 1-5
+## Introduction
+
+SeaweedFS is a key~file store, and files can optionally expire with a Time To Live (TTL).
+
+## How to use it?
+
+## Q3: Path-Specific-Configuration.md lines 1-6
+## Requirements
+Clients writing to SeaweedFS can configure most storage options, such as Collection, Replication, TTL, etc. However, you may want to configure these storage options on the filer side.
+
+For example, an administrator can create a `/scratch/` directory, configured so that anything written to it is automatically given a 7-day TTL. This directory could be used to store things like CI build artifacts, and it would naturally roll off old files without any intervention.
+
+This could also be used to implement a system-wide "trash can" (e.g. all deletes move objects to the trash and apply a TTL to them).
+
+## Q4: Filer-Stores.md lines 1-5 and the Redis rows
+### Comparing Storage Options
+
+The Filer Store persists all file metadata and directory information.
+
+| Filer Store Name | Lookup | number of entries in a folder | Scalability | Directory Renaming | TTL | [Fast Bucket Deletion](https://github.com/seaweedfs/seaweedfs/wiki/S3-API-FAQ#how-to-speed-up-bucket-deletion) |Note |
+16:| [Redis2](https://github.com/seaweedfs/seaweedfs/wiki/Filer-Redis-Setup)| O(1)   | limited   | Local or Distributed, Fastest  ||Native| | one directory's children are stored in one key~value entry |
+17:| [Redis3](https://github.com/seaweedfs/seaweedfs/wiki/Filer-Redis-Setup)| O(1)   | unlimited   | Local or Distributed, Fastest  ||Native| | one directory's children are spread into multiple key~value entries |
+61:# caution: this may not work correctly with some databases like Redis
+
+## Q5: rg -n -i 'recursive' Filer-Server-API.md
+454:// recursively delete all files and folders under a path
+455:> curl -X DELETE http://localhost:8888/path/to/dir?recursive=true
+456:// recursively delete everything, ignoring any recursive error
+457:> curl -X DELETE http://localhost:8888/path/to/dir?recursive=true&ignoreRecursiveError=true
+460:> curl -X DELETE http://localhost:8888/path/to?recursive=true&skipChunkDeletion=true
+464:| recursive | if "recursive=true", recursively delete all files and folders | filer recursive_delete option from filer.toml |
+465:| ignoreRecursiveError | if "ignoreRecursiveError=true", ignore errors in recursive mode | false |
+
+## Q6: S3-API-FAQ.md lines 42-50
+## Setting TTL
+
+It is possible to set a TTL for a specific directory using the S3 API. They are set using [`PutBucketLifecycleConfiguration`](https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketLifecycleConfiguration.html).
+
+Example of a JSON configuration is below.  It is an equivalent of calling the following with `weed shell`.
+```
+fs.configure -locationPrefix  /buckets/f341868e-baff-4e20-896a-08bc148e32f9/my-directory-whose-files-will-expire-in-20-days -ttl 20d -apply
+```
+:
+
+## Q7: S3-Lifecycle-vs-Volume-TTL.md line 21
+A file's TTL is tied to its *volume*. Files sharing a TTL land in the same volumes, and the volume server drops a whole volume once its newest file expires — no per-file delete, no vacuum. Set it per directory with `fs.configure -ttl 20d`, or per write with `assign?ttl=`.
+
+## Q8 (C1): rg -n -i 'readOnly|useReadOnly|routeByLatency|READONLY' --glob '*.md'
+FAQ.md:166:If the system is mostly readonly and running `large disk` version, it is ok to keep the volume size large.
+Server-Side-Encryption-SSE-KMS.md:301:      "name": "readonly",
+Server-Side-Encryption-SSE-KMS.md:302:      "credentials": [{"accessKey": "readonly", "secretKey": "password"}], 
+Environment-Variables.md:216:WEED_REDIS_CLUSTER2_READONLY=false
+Environment-Variables.md:217:WEED_REDIS_CLUSTER2_ROUTEBYLATENCY=false
+Cloud-Tier.md:30:* The volume is marked as readonly.
+Production-Setup.md:197:In a cluster, volume servers can go down. But automatic rebalancing will be problematic. It can cause unexpected busy network activities. For example, the heartbeat of a volume server may come and go, causing an unnecessarily busy system. Currently recommended strategy is to 
+Kubernetes-ServiceAccount-Authentication.md:113:          readOnly: true
+Admin-UI-OIDC.md:14:4. Claims are mapped to an admin role (`admin` or `readonly`) using `role_mapping` rules (or the `admin_groups` / `readonly_groups` shortcuts).
+Admin-UI-OIDC.md:47:| `role_mapping.default_role` | `WEED_ADMIN_OIDC_ROLE_MAPPING_DEFAULT_ROLE` | `admin` \| `readonly` | Role assigned when no rule matches. Leave unset to require an explicit match. |
+Admin-UI-OIDC.md:49:| `readonly_groups` | `WEED_ADMIN_OIDC_READONLY_GROUPS` | list / comma-separated | Shortcut: each entry becomes a rule `claim=groups, value=<entry>, role=readonly`. |
+Admin-UI-OIDC.md:54:> The `WEED_ADMIN_OIDC_ADMIN_GROUPS` / `WEED_ADMIN_OIDC_READONLY_GROUPS` env vars are convenience shortcuts. If your IdP exposes roles under a claim other than `groups`, or you need regex/wildcard matching, use `[[admin.oidc.role_mapping.rules]]` in `security.toml` instead.
+Admin-UI-OIDC.md:62:default_role = "readonly"
+Admin-UI-OIDC.md:71:value = "seaweedfs-readonly"
+Admin-UI-OIDC.md:72:role  = "readonly"
+Admin-UI-OIDC.md:76:- Otherwise, if any rule produces `readonly`, the user gets `readonly`.
+Admin-UI-OIDC.md:86:  - name: WEED_ADMIN_OIDC_READONLY_GROUPS
+Admin-UI-OIDC.md:87:    value: "seaweedfs-readonly"
+Admin-UI-OIDC.md:104:default_role = "readonly"
+Admin-UI-OIDC.md:125:WEED_ADMIN_OIDC_ROLE_MAPPING_DEFAULT_ROLE=readonly
+Admin-UI-OIDC.md:127:WEED_ADMIN_OIDC_READONLY_GROUPS=seaweedfs-readonly
+Admin-UI-OIDC.md:151:    WEED_ADMIN_OIDC_ROLE_MAPPING_DEFAULT_ROLE: "readonly"
+Admin-UI-OIDC.md:153:    WEED_ADMIN_OIDC_READONLY_GROUPS: "seaweedfs-readonly"
+Admin-UI-OIDC.md:184:- **Groups claim:** if you use `admin_groups` / `readonly_groups` or rules with `claim=groups`, configure the IdP to emit a `groups` claim in the ID token. In Keycloak this is a *Group Membership* mapper added to the client scope; verify with the **Evaluate** tab.
+Admin-UI-OIDC.md:199:5. Realm → Groups → create `seaweedfs-admin`, `seaweedfs-readonly` (or whatever you reference). Assign users.
+Admin-UI-OIDC.md:223:| `admin.oidc.role_mapping must include at least one rule or default_role` | Admin container logs | Add `WEED_ADMIN_OIDC_ROLE_MAPPING_DEFAULT_ROLE=readonly` or `WEED_ADMIN_OIDC_ADMIN_GROUPS=…`, or define rules in `security.toml`. |
+PostgreSQL-compatible-Server-weed-db.md:19:weed db -auth=md5 -users='{"admin":"secret","analyst":"readonly"}' -host=0.0.0.0 -port=5432
+PostgreSQL-compatible-Server-weed-db.md:22:echo '{"admin":"secret","analyst":"readonly"}' > /etc/seaweedfs/users.json
+Mount-on-Windows.md:38:| `-readOnly` | Reject every modification at the WinFsp layer. |
+Amazon-IAM-API.md:205:  --policy-name ReadOnlyPolicy \
+Amazon-IAM-API.md:227:  --policy-arn arn:aws:iam:::policy/ReadOnlyPolicy
+Amazon-IAM-API.md:235:  --policy-arn arn:aws:iam:::policy/ReadOnlyPolicy
+Amazon-IAM-API.md:362:  --policy-arn arn:aws:iam:::policy/ReadOnlyPolicy
+Amazon-IAM-API.md:382:  --policy-arn arn:aws:iam:::policy/ReadOnlyPolicy
+S3-Configuration.md:58:      "name": "readonly_user",
+S3-Configuration.md:61:          "accessKey": "readonly_key",
+S3-Configuration.md:62:          "secretKey": "readonly_secret"
+S3-Configuration.md:141:      "name": "ReadOnlyPolicy",
+S3-Configuration.md:152:      "roleName": "ReadOnlyRole",
+S3-Configuration.md:153:      "roleArn": "arn:aws:iam::role/ReadOnlyRole",
+S3-Configuration.md:154:      "attachedPolicies": ["ReadOnlyPolicy"],
+Path-Specific-Configuration.md:94:  -readOnly
+Path-Specific-Configuration.md:103:    	write-once-read-many, written files are readonly
+Volume-Management.md:40:When running large clusters, it is common that some volume servers are down. If a volume is replicated and one replica is missing, the volume will be marked as readonly.
+Volume-Management.md:51:The balancing plan will try to evenly spread the number of writable and readonly 
+Volume-Management.md:57:			balanceReadOnlyVolumes()
+Volume-Management.md:74:	func balanceReadOnlyVolumes(){
+Admin-UI.md:33:| `-readOnlyUser` | "" | Read-only user username (optional) |
+Admin-UI.md:34:| `-readOnlyPassword` | "" | Read-only user password (optional; requires adminPassword) |
+Admin-UI.md:155:- **Read-only access**: Optionally set `-readOnlyUser` and `-readOnlyPassword` for view-only access
+Admin-UI.md:171:[admin.readonly]
+Admin-UI.md:182:| `admin.readonly.user` | `WEED_ADMIN_READONLY_USER` |
+Admin-UI.md:183:| `admin.readonly.password` | `WEED_ADMIN_READONLY_PASSWORD` |
+weed-shell.md:103:  volume.mark                   	# Mark volume writable or readonly from one volume server 
+weed-shell.md:270:Roles: `readonly`, `readwrite`, `admin`. The bucket must be a literal name (no wildcards).
+Lakekeeper-Iceberg-Integration.md:86:    -s3.iam.readOnly=false
+Master-Server-API.md:67:If your system has many deletions, the deleted file's disk space will not be synchronously re-claimed. There is a background job to check volume disk usage. If empty space is more than the threshold, default to 0.3 which is 30%, the vacuum job will make the volume readonly, c
+Master-Server-API.md:264:              "ReadOnly": false,
+Master-Server-API.md:288:              "ReadOnly": false,
+Master-Server-API.md:312:              "ReadOnly": false,
+Master-Server-API.md:336:              "ReadOnly": false,
+Master-Server-API.md:360:              "ReadOnly": false,
+Master-Server-API.md:386:              "ReadOnly": false,
+Master-Server-API.md:410:              "ReadOnly": false,
+Master-Server-API.md:434:              "ReadOnly": false,
+Master-Server-API.md:460:              "ReadOnly": false,
+S3-Bucket-Quota.md:16:The bucket's "readOnly" flag is checked when the filer processes write requests. If a bucket is readOnly, the creation and update requests on the bucket will be denied, except deletion. The read operations are not be affected.
+S3-Bucket-Quota.md:50:Note: Internally this readOnly flag is saved into filer configuration for `locationPrefix="/buckets/b1/"`. So you could directly check the bucket `readOnly` property with `fs.configure` also.
+S3-Bucket-Quota.md:58:      "readOnly": true
+Replication.md:152:In `weed shell`, you can change a volume replication setting via `volume.configure.replication`. After that, the volume will become readonly since the replication setting is not matched. You will also need to run `volume.fix.replication` to create missing replicas.
+Security-Configuration.md:311:        readOnly: true
+Deployment-to-Kubernetes-and-Minikube.md:49:      - "-s3.iam.readOnly=false"
+SQL-Queries-on-Message-Queue.md:36:weed db -auth=md5 -users='{"admin":"secret","analyst":"readonly"}'
+SQL-Queries-on-Message-Queue.md:39:echo '{"admin":"secret","analyst":"readonly"}' > users.json
+SQL-Queries-on-Message-Queue.md:146:weed db -auth=md5 -users='{"admin":"secret","analyst":"readonly"}'
+SQL-Queries-on-Message-Queue.md:158:  "analyst": "readonly_user_456",
+A-typical-step‐by‐step-example.md:827:      "name": "readonly_user",
+A-typical-step‐by‐step-example.md:892:      "name": "readonly_user",
+A-typical-step‐by‐step-example.md:953:      "name": "ReadOnlyAccess",
+AWS-IAM-CLI.md:191:cat > readonly-policy.json << 'EOF'
+AWS-IAM-CLI.md:213:  --policy-name ReadOnlyPolicy \
+AWS-IAM-CLI.md:214:  --policy-document file://readonly-policy.json
+AWS-IAM-CLI.md:259:        "ReadOnlyPolicy"
+AWS-IAM-CLI.md:270:  --policy-name ReadOnlyPolicy
+AWS-IAM-CLI.md:278:  --policy-name ReadOnlyPolicy
+AWS-IAM-CLI.md:289:cat > readonly-policy.json << 'EOF'
+AWS-IAM-CLI.md:304:  --policy-name ReadOnlyPolicy \
+AWS-IAM-CLI.md:305:  --policy-document file://readonly-policy.json
+AWS-IAM-CLI.md:318:  --policy-arn arn:aws:iam:::policy/ReadOnlyPolicy
+AWS-IAM-CLI.md:326:  --policy-arn arn:aws:iam:::policy/ReadOnlyPolicy
+AWS-IAM-CLI.md:340:  --policy-arn arn:aws:iam:::policy/ReadOnlyPolicy
+AWS-IAM-CLI.md:349:  --policy-arn arn:aws:iam:::policy/ReadOnlyPolicy
+AWS-IAM-CLI.md:402:  --policy-arn arn:aws:iam:::policy/ReadOnlyPolicy
+AWS-IAM-CLI.md:432:  --policy-name SharedBucketReadOnly \
+AWS-IAM-CLI.md:441:  --policy-name SharedBucketReadOnly
+AWS-IAM-CLI.md:446:  --policy-name SharedBucketReadOnly
+AWS-IAM-CLI.md:454:  --policy-arn arn:aws:iam:::policy/ReadOnlyPolicy
+AWS-IAM-CLI.md:552:  --policy-name SharedBucketReadOnly \
+AWS-IAM-CLI.md:555:# 6. Attach a managed policy (e.g., ReadOnlyPolicy is built-in or previously created)
+AWS-IAM-CLI.md:558:  --policy-arn arn:aws:iam:::policy/ReadOnlyPolicy
+Volume-Server-API.md:105:      "ReadOnly": false
+Volume-Server-API.md:115:      "ReadOnly": false
+Volume-Server-API.md:125:      "ReadOnly": false
+Volume-Server-API.md:135:      "ReadOnly": false
+Volume-Server-API.md:145:      "ReadOnly": false
+Volume-Server-API.md:155:      "ReadOnly": false
+Volume-Server-API.md:165:      "ReadOnly": false
+S3-Credentials.md:36:          "accessKey": "readonly_access_key",
+S3-Credentials.md:37:          "secretKey": "readonly_secret_key"
+S3-Credentials.md:292:s3.user.provision -name bucket1_user -bucket otherbucket -role readonly
+Simplest-S3-Bucket-and-User-Setup.md:38:| `readonly`  | `s3:GetObject`                                      | `s3:ListBucket` |
+Simplest-S3-Bucket-and-User-Setup.md:98:> s3.user.provision -name bob -bucket my-bucket -role readonly
+OIDC-Integration.md:94:          "defaultRole": "arn:aws:iam::role/S3ReadOnlyRole"
+OIDC-Integration.md:125:      "name": "S3ReadOnlyPolicy",
+OIDC-Integration.md:145:      "roleName": "S3ReadOnlyRole",
+OIDC-Integration.md:146:      "roleArn": "arn:aws:iam::role/S3ReadOnlyRole",
+OIDC-Integration.md:147:      "attachedPolicies": ["S3ReadOnlyPolicy"],
+OIDC-Integration.md:226:          "defaultRole": "arn:aws:iam::role/S3ReadOnlyRole"
+OIDC-Integration.md:233:      "name": "S3ReadOnlyPolicy",
+OIDC-Integration.md:262:      "roleName": "S3ReadOnlyRole",
+OIDC-Integration.md:263:      "roleArn": "arn:aws:iam::role/S3ReadOnlyRole",
+OIDC-Integration.md:264:      "attachedPolicies": ["S3ReadOnlyPolicy"],
+OIDC-Integration.md:345:- All other users → `S3ReadOnlyRole`
