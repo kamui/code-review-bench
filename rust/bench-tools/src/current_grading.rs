@@ -2508,9 +2508,16 @@ fn sort_by_id(values: &mut [Value]) -> R<()> {
         }
     }
     let mut order: Vec<usize> = (0..values.len()).collect();
+    let mut failed = None;
     order.sort_by(|left, right| {
-        pyvalue::compare(&keys[*left], &keys[*right]).unwrap_or(std::cmp::Ordering::Equal)
+        pyvalue::compare(&keys[*left], &keys[*right]).unwrap_or_else(|error| {
+            failed.get_or_insert(error);
+            std::cmp::Ordering::Equal
+        })
     });
+    if let Some(error) = failed {
+        return Err(error.into());
+    }
     let sorted: Vec<Value> = order.iter().map(|at| values[*at].clone()).collect();
     values.clone_from_slice(&sorted);
     Ok(())
@@ -4207,5 +4214,16 @@ mod tests {
         assert_eq!(item_number("1\n").unwrap(), (false, "1".into()));
         assert_eq!(item_number("-1").unwrap(), (true, "1".into()));
         assert!(matches!(item_number("x"), Err(Failure::Crash(_))));
+    }
+
+    #[test]
+    fn ids_that_meet_incomparable_parts_raise() {
+        let mut values = vec![
+            crate::pyjson::loads(r#"{"id": ["a"]}"#, crate::pyjson::Duplicates::Refuse).unwrap(),
+            crate::pyjson::loads(r#"{"id": ["b", 1]}"#, crate::pyjson::Duplicates::Refuse).unwrap(),
+            crate::pyjson::loads(r#"{"id": ["b", "x"]}"#, crate::pyjson::Duplicates::Refuse)
+                .unwrap(),
+        ];
+        assert!(sort_by_id(&mut values).is_err());
     }
 }
