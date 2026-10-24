@@ -31,7 +31,8 @@
 //! so its presence means a finished filing.
 //!
 //! Exit codes: 0 filed; 1 the record does not validate, one line per violation on stdout; 2 the run's
-//! `runtimes.frozen.json` does not pin this bench-tools (checked before anything is written), an input is missing
+//! `runtimes.frozen.json`, as its runtime deviations moved it, does not pin this bench-tools (checked before anything
+//! is written), an input is missing
 //! or unreadable, the dispatch neither ended nor has a verified interruption record, or a helper failed.
 
 use crate::evidence::{self, transcripts};
@@ -1997,7 +1998,8 @@ fn skill_runner(kind: Arm) -> bool {
     matches!(kind, Arm::ClaudeSkill | Arm::CodexSkill)
 }
 
-/// Refuses unless this executable is the bench-tools the run's `runtimes.frozen.json` pins; `action` names what
+/// Refuses unless this executable is the bench-tools the run's `runtimes.frozen.json` pins, as its runtime deviations
+/// moved it ([`crate::grade::runtime::run_pins`]); `action` names what
 /// the refusal tells the operator to do from the freeze commit instead.
 pub fn check_pin(run_dir: &str, action: &str) -> std::result::Result<(), String> {
     pinned_here(run_dir, action).map_err(|FileError(message)| message)
@@ -2005,7 +2007,9 @@ pub fn check_pin(run_dir: &str, action: &str) -> std::result::Result<(), String>
 
 fn pinned_here(run_dir: &str, action: &str) -> Result<()> {
     let frozen = join(run_dir, "runtimes.frozen.json");
-    let pinned = read_json_if(&frozen)?;
+    let pinned = crate::grade::runtime::run_pins(Path::new(run_dir))
+        .map_err(FileError)?
+        .pins;
     let pinned = at(at(&pinned, "bench-tools"), "sha256").as_str();
     let executable = own_executable()?;
     if pinned == Some(sha256_file(&executable)?.as_str()) {

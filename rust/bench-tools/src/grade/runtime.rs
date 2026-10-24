@@ -452,3 +452,227 @@ fn executable_bit(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(path).is_ok_and(|found| found.permissions().mode() & 0o111 != 0)
 }
+
+pub const DEVIATION: &str = "rust-runtime-deviation/1";
+
+/// A run's Rust runtime pins: its `runtimes.frozen.json` (Null when it has none), with each pin moved by the
+/// `rust-runtime-deviation/1` records in its `deviations/`, in `recorded_at` order. A record moves its `runtime` from
+/// its `old` pin, which must be the pin at that point, to its `new` one, so a started run takes another runtime only
+/// through a recorded change, and a later record can move it back. `moved` names the runtimes whose pin differs
+/// from the frozen one: their crate comes from their own receipt's commit rather than the run's freeze commit.
+pub struct RunPins {
+    pub pins: Value,
+    pub moved: Vec<String>,
+}
+
+pub fn run_pins(run: &Path) -> Result<RunPins, String> {
+    let read = |path: &Path| {
+        let raw = std::fs::read(path).map_err(|error| format!("{}: {error}", shown(path)))?;
+        crate::pyjson::loads(
+            &String::from_utf8_lossy(&raw),
+            crate::pyjson::Duplicates::KeepLast,
+        )
+        .map_err(|error| format!("{}: {error}", shown(path)))
+    };
+    let frozen_path = run.join("runtimes.frozen.json");
+    if !frozen_path.is_file() {
+        return Ok(RunPins {
+            pins: Value::Null,
+            moved: Vec::new(),
+        });
+    }
+    let frozen = read(&frozen_path)?;
+    let mut records = Vec::new();
+    let paths = std::fs::read_dir(run.join("deviations"))
+        .map(|entries| entries.flatten().map(|entry| entry.path()).collect())
+        .unwrap_or_else(|_| Vec::new());
+    for path in paths {
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "json")
+            && let Ok(row) = read(&path)
+            && text_at(&row, &["schema"]) == Some(DEVIATION)
+        {
+            let at = text_at(&row, &["recorded_at"]).unwrap_or("").to_string();
+            records.push((at, path, row));
+        }
+    }
+    records.sort_by(|left, right| (&left.0, &left.1).cmp(&(&right.0, &right.1)));
+    let mut pins = frozen.clone();
+    if let Value::Object(object) = &mut pins {
+        while !records.is_empty() {
+            // `recorded_at` has whole seconds, so of the records made in one second, the one that starts from the
+            // pin then held goes first.
+            let first = records[0].0.clone();
+            let follows = records.iter().position(|(at, _, row)| {
+                *at == first
+                    && text_at(row, &["runtime"])
+                        .and_then(|name| object.get(name))
+                        .zip(value_at(row, &["old", "pin"]))
+                        .is_some_and(|(pin, old)| old.py_eq(pin))
+            });
+            let (_, path, row) = records.remove(follows.unwrap_or(0));
+            let name = text_at(&row, &["runtime"]).unwrap_or("");
+            let (Some(pin), Some(old), Some(new)) = (
+                object.get_mut(name),
+                value_at(&row, &["old", "pin"]),
+                value_at(&row, &["new", "pin"]),
+            ) else {
+                return Err(format!(
+                    "{} moves no runtime the run pins from an old pin to a new one",
+                    shown(&path)
+                ));
+            };
+            if !old.py_eq(pin) {
+                return Err(format!(
+                    "{} moves {name} from a pin other than the one the run held then",
+                    shown(&path)
+                ));
+            }
+            *pin = new.clone();
+        }
+    }
+    let moved = match (&pins, &frozen) {
+        (Value::Object(now), Value::Object(then)) => now
+            .iter()
+            .filter(|(name, pin)| !then.get(name).is_some_and(|was| was.py_eq(pin)))
+            .map(|(name, _)| name.clone())
+            .collect(),
+        _ => Vec::new(),
+    };
+    Ok(RunPins { pins, moved })
+}
+
+/// The commit a pinned runtime's crate must come from: the run's freeze commit, or for a pin a runtime deviation
+/// moved, the revision its own receipt was built from.
+pub fn source_commit<'a>(receipt: &'a Value, moved: bool, freeze_commit: &'a str) -> &'a str {
+    if moved {
+        text_at(receipt, &["source", "revision"]).unwrap_or("")
+    } else {
+        freeze_commit
+    }
+}
+
+fn value_at<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {
+    path.iter()
+        .try_fold(value, |found, key| found.as_object()?.get(key))
+}
+
+fn text_at<'a>(value: &'a Value, path: &[&str]) -> Option<&'a str> {
+    value_at(value, path).and_then(Value::as_str)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Run(PathBuf);
+
+    impl Drop for Run {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    impl Run {
+        fn new(frozen: Option<&str>) -> Self {
+            let run = Self(std::env::temp_dir().join(crate::evidence::random_name("run-pins-")));
+            std::fs::create_dir_all(run.0.join("deviations")).unwrap();
+            if let Some(frozen) = frozen {
+                std::fs::write(run.0.join("runtimes.frozen.json"), frozen).unwrap();
+            }
+            run
+        }
+
+        fn deviation(&self, file: &str, at: &str, old: &str, new: &str) {
+            std::fs::write(
+                self.0.join("deviations").join(file),
+                format!(
+                    r#"{{"schema": "{DEVIATION}", "runtime": "bench-tools", "recorded_at": "{at}",
+                    "old": {{"pin": {{"sha256": "{old}", "receipt_sha256": "r{old}"}}}},
+                    "new": {{"pin": {{"sha256": "{new}", "receipt_sha256": "r{new}"}}}}}}"#
+                ),
+            )
+            .unwrap();
+        }
+
+        fn pinned(&self) -> Result<(String, Vec<String>), String> {
+            let found = run_pins(&self.0)?;
+            Ok((
+                text_at(&found.pins, &[NAME, "sha256"])
+                    .unwrap_or("none")
+                    .to_string(),
+                found.moved,
+            ))
+        }
+    }
+
+    const FROZEN: &str = r#"{"bench-tools": {"sha256": "a", "receipt_sha256": "ra"}}"#;
+
+    #[test]
+    fn a_moved_pin_comes_from_its_receipts_revision_and_a_frozen_one_from_the_freeze_commit() {
+        let receipt = crate::pyjson::loads(
+            r#"{"source": {"revision": "abc", "tree": "def"}}"#,
+            crate::pyjson::Duplicates::KeepLast,
+        )
+        .unwrap();
+        assert_eq!(source_commit(&receipt, true, "f00"), "abc");
+        assert_eq!(source_commit(&receipt, false, "f00"), "f00");
+    }
+
+    #[test]
+    fn a_run_takes_its_frozen_pin_until_a_recorded_deviation_moves_it_in_order() {
+        assert!(matches!(
+            run_pins(&Run::new(None).0).unwrap().pins,
+            Value::Null
+        ));
+        let run = Run::new(Some(FROZEN));
+        std::fs::write(run.0.join("deviations/notes.json"), "not json").unwrap();
+        std::fs::write(
+            run.0.join("deviations/clone-write.att-001.v1.json"),
+            r#"{"predecessor": "att-001", "cause": "harness-stop"}"#,
+        )
+        .unwrap();
+        assert_eq!(run.pinned().unwrap(), ("a".to_string(), vec![]));
+        run.deviation("z.json", "2026-01-01T00:00:00Z", "a", "b");
+        assert_eq!(
+            run.pinned().unwrap(),
+            ("b".to_string(), vec!["bench-tools".to_string()])
+        );
+        // Applied by recorded_at, not file name; moving back to the frozen pin is not a move.
+        run.deviation("a.json", "2026-01-02T00:00:00Z", "b", "a");
+        assert_eq!(run.pinned().unwrap(), ("a".to_string(), vec![]));
+        // Two records made in the same second chain whatever their file names.
+        run.deviation("m.json", "2026-01-03T00:00:00Z", "c", "d");
+        run.deviation("n.json", "2026-01-03T00:00:00Z", "a", "c");
+        assert_eq!(
+            run.pinned().unwrap(),
+            ("d".to_string(), vec!["bench-tools".to_string()])
+        );
+    }
+
+    #[test]
+    fn a_deviation_from_a_pin_the_run_no_longer_holds_is_refused() {
+        let run = Run::new(Some(FROZEN));
+        run.deviation("one.json", "2026-01-01T00:00:00Z", "a", "b");
+        run.deviation("two.json", "2026-01-02T00:00:00Z", "a", "c");
+        let refused = run.pinned().unwrap_err();
+        assert!(
+            refused.contains(
+                "two.json moves bench-tools from a pin other than the one the run held then"
+            ),
+            "{refused}"
+        );
+        std::fs::remove_file(run.0.join("deviations/two.json")).unwrap();
+        std::fs::write(
+            run.0.join("deviations/other.json"),
+            format!(r#"{{"schema": "{DEVIATION}", "runtime": "other"}}"#),
+        )
+        .unwrap();
+        let refused = run.pinned().unwrap_err();
+        assert!(
+            refused.contains("other.json moves no runtime the run pins"),
+            "{refused}"
+        );
+    }
+}
