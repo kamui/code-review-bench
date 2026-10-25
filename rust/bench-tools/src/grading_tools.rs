@@ -77,9 +77,22 @@ impl Host<'_> {
     pub fn current() -> Host<'static> {
         Host {
             home: std::env::var_os("HOME").map_or_else(account_home, PathBuf::from),
-            which: &crate::review_isolation::which,
+            which: &|name| toolchain(&std::env::var_os("PATH")?, name),
         }
     }
+}
+
+/// The first executable named `name` on `path` whose links resolve to a program of that name. A version manager's
+/// shim, such as mise's `go`, links to the manager's own program, and the installation it selects comes later on
+/// `PATH`. Without such a program the first executable stands, so a shim alone is still checked and refused.
+fn toolchain(path: &std::ffi::OsStr, name: &str) -> Option<PathBuf> {
+    let mut found = crate::review_isolation::executables(path, name).peekable();
+    let first = found.peek()?.clone();
+    Some(
+        found
+            .find(|candidate| resolve(candidate).file_name() == Some(name.as_ref()))
+            .unwrap_or(first),
+    )
 }
 
 pub(crate) fn account_home() -> PathBuf {
