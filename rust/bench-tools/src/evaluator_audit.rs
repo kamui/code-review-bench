@@ -2515,7 +2515,10 @@ fn second(root: &Root, current: &[u8], arguments: &Arguments) -> R<Done> {
             .into_bytes(),
         ));
     }
-    let (raw, verdicts, problems) = grade::read_verdicts(&work)?;
+    let (raw, verdicts, mut problems) = grade::read_verdicts(&work)?;
+    if problems.is_empty() {
+        problems = grade::blocked_checks(&verdicts);
+    }
     if !problems.is_empty() {
         return Err(Failure::Inconsistent(problems.join("\n").into_bytes()));
     }
