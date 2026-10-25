@@ -44,8 +44,12 @@ fn json(text: &str) -> Value {
 }
 
 fn policy(kind: &str, once: bool) -> Value {
+    let settings = match kind {
+        "go" => r#"{"private": false, "flags": "-mod=readonly"}"#,
+        _ => r#"{"forms": ["script"]}"#,
+    };
     json(&format!(
-        r#"{{"test_kind": "{kind}", "private_go": false, "go_flags": "-mod=readonly", "once": {once}}}"#
+        r#"{{"commands": {{"{kind}": {settings}}}, "once": {once}}}"#
     ))
 }
 
