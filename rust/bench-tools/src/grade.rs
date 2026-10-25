@@ -12,9 +12,9 @@ pub(crate) mod runtime;
 mod source;
 
 pub use filing::{
-    Mapping, graded_v2, invalidate, inventory, key_counts, key_reviews, map_verdicts,
-    next_assessment, provenance_of, prune_grading, raised_candidates, read_verdicts, resolve,
-    sorted_by, validate,
+    Mapping, blocked_checks, graded_v2, invalidate, inventory, key_counts, key_reviews,
+    map_verdicts, next_assessment, provenance_of, prune_grading, raised_candidates, read_verdicts,
+    resolve, sorted_by, validate,
 };
 
 use crate::claims::{self, Decisions, Repository, blind::Entropy};
