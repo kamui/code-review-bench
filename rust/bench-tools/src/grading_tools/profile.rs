@@ -47,7 +47,7 @@ pub(super) fn toolchain(tools: &Tools, mut argv: Vec<String>, cwd: &str) -> T<Al
         .then(|| get(commands, &name))
         .flatten()
     else {
-        return denied("it is not in this target's command profile");
+        return denied("it is not in this task's command profile");
     };
     if argv[1..]
         .iter()

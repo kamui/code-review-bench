@@ -38,7 +38,7 @@ const HOSTS: &str = "127.0.0.1 localhost\n::1 localhost\n";
 const HOSTS_FILE: &str = "grading-hosts.v1";
 const SYSTEM_PATH: &str = "/usr/bin:/bin";
 const GENERIC: &str = "Denied or failed: command, path, timeout or input contract";
-const NO_ALLOWANCE: &str = "this target has no focused-command allowance";
+const NO_ALLOWANCE: &str = "this task has no command profile";
 /// The tools in the order `tools/list` gives them.
 pub const TOOLS: [&str; 6] = [
     "inspect",
@@ -677,14 +677,18 @@ fn allowed_programs(policy: &Value) -> String {
         _ => Vec::new(),
     };
     let profile = match programs.split_last() {
-        None => "this target allows no other program".to_string(),
-        Some((only, [])) => format!("this target's command profile also allows {only}"),
+        None => "This task allows nothing else.".to_string(),
+        Some((only, [])) => {
+            format!(
+                "This task's command profile also allows {only}, in the forms your instructions give."
+            )
+        }
         Some((last, rest)) => format!(
-            "this target's command profile also allows {} and {last}",
+            "This task's command profile also allows {} and {last}, in the forms your instructions give.",
             rest.join(", ")
         ),
     };
-    format!("Every target allows {inspections} and {git}; {profile}")
+    format!("You can always run {inspections} and {git}. {profile}")
 }
 
 fn tail(text: &str, count: usize) -> String {

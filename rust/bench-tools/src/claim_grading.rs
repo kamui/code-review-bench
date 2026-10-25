@@ -81,8 +81,8 @@ const V2_ANSWERS: [(&str, &[&str]); 4] = [
     ("delivered", &["yes", "no", "cannot-tell"]),
 ];
 const FACTS: [&str; 3] = ["yes", "no", "cannot-tell"];
-/// The open kind of a claim whose needed check the grading `run` tool refused; `grade map` files no batch holding
-/// one.
+/// The open kind of a claim whose needed check the grader could not make: the `run` tool refused its `command`, or
+/// it needs a `service` graders do not have. `grade map` files no batch holding one that names a command.
 pub const BLOCKED_CHECK: &str = "blocked-check";
 
 /// `", ".join(sorted(fields))`.
@@ -515,11 +515,15 @@ pub fn verdict_problems_v2(claim: &Value, families: &Value) -> PyResult<Vec<Stri
     }
     let opened = get("open");
     if is(outcome, "unresolved") && is(field(opened, "kind"), BLOCKED_CHECK) {
-        let described = has_exactly(opened, &["kind", "command", "would_settle"])
-            && filled(field(opened, "command"))
-            && filled(field(opened, "would_settle"));
+        let described = ["command", "service"].iter().any(|blocker| {
+            has_exactly(opened, &["kind", blocker, "would_settle"])
+                && filled(field(opened, blocker))
+        }) && filled(field(opened, "would_settle"));
         if !described {
-            problems.push("a blocked check needs open kind, command and would_settle".to_string());
+            problems.push(
+                "a blocked check needs open kind, would_settle and one of command or service"
+                    .to_string(),
+            );
         }
         if candidate_required && matches!(get("candidate"), Value::Null) {
             problems.push("a possible new problem or relied-on use needs a candidate".to_string());

@@ -72,7 +72,7 @@ fn unresolved_claim(open: &str) -> Value {
 }
 
 #[test]
-fn a_blocked_check_names_its_refused_command() {
+fn a_blocked_check_names_its_refused_command_or_service() {
     let families = json("[]");
     let problems = |open: &str| {
         claim_grading::verdict_problems_v2(&unresolved_claim(open), &families).unwrap()
@@ -83,14 +83,22 @@ fn a_blocked_check_names_its_refused_command() {
         ),
         Vec::<String>::new()
     );
+    assert_eq!(
+        problems(
+            r#"{"kind": "blocked-check", "service": "PostgreSQL", "would_settle": "Whether the migration locks the table."}"#
+        ),
+        Vec::<String>::new()
+    );
     for open in [
         r#"{"kind": "blocked-check", "would_settle": "Whether any scheduler file imports the package."}"#,
+        r#"{"kind": "blocked-check", "command": "go run ./cmd/import-boss", "service": "PostgreSQL", "would_settle": "w"}"#,
+        r#"{"kind": "blocked-check", "service": "", "would_settle": "w"}"#,
         r#"{"kind": "blocked-check", "command": " ", "would_settle": "Whether any scheduler file imports the package."}"#,
         r#"{"kind": "blocked-check", "command": "go run ./cmd/import-boss", "would_settle": ""}"#,
     ] {
         assert_eq!(
             problems(open),
-            ["a blocked check needs open kind, command and would_settle"],
+            ["a blocked check needs open kind, would_settle and one of command or service"],
             "{open}"
         );
     }
