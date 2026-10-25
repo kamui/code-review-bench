@@ -67,6 +67,29 @@ pub struct Options {
     pub cache_replacements: Option<PathBuf>,
 }
 
+pub struct Supplement {
+    pub archive: PathBuf,
+    pub sha256: String,
+}
+
+impl Supplement {
+    fn size(&self) -> P<u64> {
+        if sha256_file(&self.archive)? != self.sha256 {
+            return Err("dependency supplement SHA-256 mismatch".to_string());
+        }
+        archive_entries(&self.archive).map_err(os_failure(&self.archive))
+    }
+
+    fn restore(&self, cache: &Path) -> P<()> {
+        let dest = cache.join("toolchain-extra");
+        make_directories(&dest)?;
+        let file = std::fs::File::open(&self.archive).map_err(os_failure(&self.archive))?;
+        tar::Archive::new(flate2::read::GzDecoder::new(file))
+            .unpack(&dest)
+            .map_err(os_failure(&dest))
+    }
+}
+
 /// `~/.t3/bench-cache`.
 pub fn default_cache_root() -> PathBuf {
     let home = std::env::var_os("HOME").unwrap_or_default();
@@ -1115,6 +1138,7 @@ fn space_failures(
     config: &Cache,
     cache_root: &Path,
     out: &Path,
+    supplement_bytes: u64,
 ) -> P<Vec<String>> {
     let raw = std::env::var("BENCH_DISK_RESERVE_GIB").ok();
     let reserve = match &raw {
@@ -1139,7 +1163,7 @@ fn space_failures(
     let reserve = (reserve * GIB) as u64;
     Ok(space_refusal(
         free_space(&existing)?,
-        space_needed(target, config, cache_root)?,
+        space_needed(target, config, cache_root)?.saturating_add(supplement_bytes),
         reserve,
         out,
     ))
@@ -1182,6 +1206,7 @@ fn prepare(
     out: &Path,
     base: bool,
     extra: &[String],
+    supplement: Option<&Supplement>,
 ) -> P<Prepared> {
     let path = cache_root.join("prepare.lock");
     let file = std::fs::OpenOptions::new()
@@ -1197,7 +1222,7 @@ fn prepare(
         })?;
     let _lock = nix::fcntl::Flock::lock(file, nix::fcntl::FlockArg::LockExclusive)
         .map_err(|(_, error)| format!("cannot lock {}: {error}", path.display()))?;
-    prepare_locked(target, cache_root, out, base, extra)
+    prepare_locked(target, cache_root, out, base, extra, supplement)
 }
 
 /// Check the free space, clone (checking out the base branch for `base`), restore the cache archive into
@@ -1208,10 +1233,12 @@ fn prepare_locked(
     out: &Path,
     base: bool,
     extra: &[String],
+    supplement: Option<&Supplement>,
 ) -> P<Prepared> {
     let mut config = Cache::of(target)?;
     config.post_clone.extend_from_slice(extra);
-    let mut failures = space_failures(target, &config, cache_root, out)?;
+    let supplement_bytes = supplement.map(Supplement::size).transpose()?.unwrap_or(0);
+    let mut failures = space_failures(target, &config, cache_root, out, supplement_bytes)?;
     if failures.is_empty() {
         failures = make_clone(target, cache_root, out)?;
     }
@@ -1252,6 +1279,23 @@ fn prepare_locked(
             return Ok(record);
         }
     }
+    if let Some(supplement) = supplement {
+        let started = std::time::Instant::now();
+        supplement.restore(&substitutions.cache)?;
+        let duration = started.elapsed().as_secs_f64();
+        total += duration;
+        record.steps.push(object(vec![
+            (
+                "command",
+                text(&format!(
+                    "restore dependency supplement sha256:{}",
+                    supplement.sha256
+                )),
+            ),
+            ("exit_code", Value::Int("0".to_string())),
+            ("duration_seconds", Value::Float(duration)),
+        ]));
+    }
     if !config.post_clone.is_empty() {
         let sandbox = substitutions.sandbox(&config, Network::Off)?;
         record.sandbox = sandbox.receipt();
@@ -1286,9 +1330,21 @@ fn prepare_locked(
 }
 
 /// `prepare`, running the `extra` offline steps after the target's own post-clone steps.
-pub fn prepare_command(options: &Options, out: &Path, extra: &[String]) -> P<Outcome> {
+pub fn prepare_command(
+    options: &Options,
+    out: &Path,
+    extra: &[String],
+    supplement: Option<&Supplement>,
+) -> P<Outcome> {
     let target = load_target(&options.target, options.cache_replacements.as_deref())?;
-    let record = prepare(&target, &options.cache_root, &absolute(out)?, false, extra)?;
+    let record = prepare(
+        &target,
+        &options.cache_root,
+        &absolute(out)?,
+        false,
+        extra,
+        supplement,
+    )?;
     Ok(Outcome {
         stdout: indented(&record.value(), true) + "\n",
         code: u8::from(!record.failures.is_empty()),
@@ -1392,7 +1448,7 @@ pub fn smoke(options: &Options, out: Option<&Path>) -> P<Outcome> {
     let measured = (|| -> P<Measured> {
         let mut records = Vec::new();
         for (revision, clone) in &revisions {
-            let record = prepare(&target, cache_root, clone, *revision == "base", &[])?;
+            let record = prepare(&target, cache_root, clone, *revision == "base", &[], None)?;
             if !record.failures.is_empty() {
                 return Ok(Err(record
                     .failures

@@ -883,3 +883,65 @@ fn a_skill_runner_refuses_a_run_it_is_not_pinned_by_before_it_writes_anything() 
         }
     }
 }
+
+#[test]
+fn prepare_restores_a_pinned_supplement_without_changing_frozen_target_inputs() {
+    let provisioned = Provisioned::new("supplement");
+    provisioned.set_target(r#", "provisioning": {"cache": {"kind": "none"}}"#);
+    let payload = provisioned.temp.0.join("payload");
+    fs::create_dir(&payload).unwrap();
+    fs::write(payload.join("dependency"), "pinned bytes").unwrap();
+    let archive = provisioned.temp.0.join("supplement.tar.gz");
+    assert!(
+        Command::new("tar")
+            .args(["-czf", s(&archive), "-C", s(&payload), "."])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let sha = sha256::hex_digest(&fs::read(&archive).unwrap());
+    let target = fs::read(provisioned.target_dir.join("target.json")).unwrap();
+    let prepared = provisioned.temp.0.join("prepared");
+    let done = provisioned.run(&[
+        "prepare",
+        "--out",
+        s(&prepared),
+        "--supplement",
+        s(&archive),
+        "--supplement-sha256",
+        &sha,
+    ]);
+    assert!(done.status.success(), "{}", both(&done));
+    assert_eq!(
+        fs::read_to_string(
+            provisioned
+                .temp
+                .0
+                .join("prepared-cache/toolchain-extra/dependency")
+        )
+        .unwrap(),
+        "pinned bytes"
+    );
+    assert_eq!(
+        fs::read(provisioned.target_dir.join("target.json")).unwrap(),
+        target
+    );
+    fs::write(&archive, "changed").unwrap();
+    let refused = provisioned.temp.0.join("refused");
+    let done = provisioned.run(&[
+        "prepare",
+        "--out",
+        s(&refused),
+        "--supplement",
+        s(&archive),
+        "--supplement-sha256",
+        &sha,
+    ]);
+    assert!(!done.status.success());
+    assert!(
+        both(&done).contains("dependency supplement SHA-256 mismatch"),
+        "{}",
+        both(&done)
+    );
+    assert!(!refused.exists());
+}

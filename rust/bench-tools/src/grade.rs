@@ -38,7 +38,8 @@ const MISSING_FAULT: &str = "Missing pre-existing fault:";
 const EVIDENCE_CONTRACT: &str = "claim-evidence-v2";
 /// Command profile versions, newest first. A checkout uses the newest it holds; the behavior-contract fixtures hold
 /// only v1.
-const PROFILES: [&[u8]; 2] = [
+const PROFILES: [&[u8]; 3] = [
+    b"bench/policies/grading-commands.v3.json",
     b"bench/policies/grading-commands.v2.json",
     b"bench/policies/grading-commands.v1.json",
 ];
@@ -1674,6 +1675,21 @@ fn provision_clone(
     }
     if let Some(manifest) = &options.cache_replacements {
         command.extend([b"--cache-replacements".to_vec(), manifest.clone()]);
+    }
+    if let supplement @ Value::Object(_) = pyvalue::get(command_policy, "dependency_supplement")? {
+        let archive = runner
+            .checkout
+            .join(string(pyvalue::item(supplement, "path")?)?.as_bytes());
+        let expected = string(pyvalue::item(supplement, "sha256")?)?;
+        if digest(&archive)? != expected {
+            return inconsistent("dependency supplement SHA-256 mismatch");
+        }
+        command.extend([
+            b"--supplement".to_vec(),
+            archive.as_bytes().to_vec(),
+            b"--supplement-sha256".to_vec(),
+            expected.as_bytes().to_vec(),
+        ]);
     }
     if let Value::Array(steps) = pyvalue::get(command_policy, "post_clone")? {
         for step in steps {

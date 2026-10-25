@@ -705,6 +705,10 @@ enum ProvisionCommand {
         /// An offline step to run after the target's own post-clone steps, in the same way; repeatable.
         #[arg(long = "post-clone", allow_negative_numbers = true)]
         post_clone: Vec<String>,
+        #[arg(long, requires = "supplement_sha256")]
+        supplement: Option<PathBuf>,
+        #[arg(long, requires = "supplement")]
+        supplement_sha256: Option<String>,
     },
     /// Run the target's offline smoke commands and write smoke.json.
     #[command(infer_long_args = true)]
@@ -3928,10 +3932,16 @@ fn run_provision(command: ProvisionCommand) -> Result<ExitCode, ExitCode> {
             cache_replacements,
             out,
             post_clone,
+            supplement,
+            supplement_sha256,
         } => provision::prepare_command(
             &provision_options(target, cache_replacements),
             Path::new(&out),
             &post_clone,
+            supplement
+                .zip(supplement_sha256)
+                .map(|(archive, sha256)| provision::Supplement { archive, sha256 })
+                .as_ref(),
         ),
         ProvisionCommand::Smoke {
             target,
