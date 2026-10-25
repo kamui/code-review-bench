@@ -403,7 +403,7 @@ fn every_graded_target_has_a_toolchain_profile() {
 fn each_profile_allows_its_toolchain_and_refuses_more() {
     let venv = "../clone-cache/venv/bin/python";
     let go = "../clone-cache/toolchain/bin/go";
-    let cases: [(&str, &[&str], &[&str], &str); 22] = [
+    let cases: [(&str, &[&str], &[&str], &str); 23] = [
         (
             "i-requests-6667",
             &[
@@ -536,6 +536,12 @@ fn each_profile_allows_its_toolchain_and_refuses_more() {
                 "--outfile=src/repro.mjs",
             ],
             "scratch scripts and outputs belong in clone-work or tmp",
+        ),
+        (
+            "p-hono-5067",
+            &["node", "../clone-work/repro.mjs"],
+            &["./node_modules/.bin/vitest", "--run", "src/"],
+            "vitest runs once on test files under src/",
         ),
         (
             "q-soba-195",
@@ -695,29 +701,62 @@ fn test_runs_count_toward_once_and_scratch_runs_do_not() {
     assert!(vitest.env.contains(&("VITEST_ENV".into(), "jsdom".into())));
 }
 
+fn binds(command: &[String]) -> Vec<(String, String)> {
+    command
+        .windows(3)
+        .filter(|window| window[0] == "--ro-bind")
+        .map(|window| (window[1].clone(), window[2].clone()))
+        .collect()
+}
+
 #[test]
-fn a_venv_interpreter_outside_usr_is_mounted_under_each_name_its_links_use() {
+fn the_recorded_venv_interpreter_is_mounted_under_each_name_its_links_use() {
     let fixture = fixture("venv");
     let real = fixture.root.join("uv/cpython-3.13.15-linux-x86_64-gnu");
     fs::create_dir_all(real.join("bin")).unwrap();
+    fs::create_dir_all(real.join("lib/python3.13")).unwrap();
+    fs::write(real.join("lib/python3.13/os.py"), "").unwrap();
     fs::copy("/usr/bin/true", real.join("bin/python3.13")).unwrap();
     let named = fixture.root.join("uv/cpython-3.13-linux-x86_64-gnu");
     std::os::unix::fs::symlink(&real, &named).unwrap();
     let venv = fixture.work.join("clone-cache/venv/bin");
     fs::create_dir_all(&venv).unwrap();
     std::os::unix::fs::symlink(named.join("bin/python3.13"), venv.join("python")).unwrap();
-    let tools = tools(&fixture, profile("i-requests-6667"), &system_which);
-    let command = sandbox(&tools, &["/usr/bin/true".into()], ".", &[], None).unwrap();
-    let binds: Vec<(&str, &str)> = command
-        .windows(3)
-        .filter(|window| window[0] == "--ro-bind")
-        .map(|window| (window[1].as_str(), window[2].as_str()))
-        .collect();
-    let real = text_of(&real);
-    assert!(binds.contains(&(real.as_str(), real.as_str())), "{binds:?}");
+    let runtime = python_runtime(&fixture.work).unwrap();
+    let (real, named) = (text_of(&real), text_of(&named));
+    assert!(runtime.py_eq(&json(&format!(
+        r#"{{"installation": "{real}", "names": ["{real}", "{named}"]}}"#
+    ))));
+    let mut policy = profile("i-requests-6667");
+    let unrecorded = tools(&fixture, policy.clone(), &system_which);
+    let command = sandbox(&unrecorded, &["/usr/bin/true".into()], ".", &[], None).unwrap();
     assert!(
-        binds.contains(&(real.as_str(), text_of(&named).as_str())),
-        "{binds:?}"
+        !binds(&command).iter().any(|(source, _)| *source == real),
+        "a link in the writable cache alone mounts nothing"
+    );
+    if let Value::Object(object) = &mut policy {
+        object.insert("python_runtime".into(), runtime);
+    }
+    let recorded = tools(&fixture, policy.clone(), &system_which);
+    let mounted = binds(&sandbox(&recorded, &["/usr/bin/true".into()], ".", &[], None).unwrap());
+    assert!(
+        mounted.contains(&(real.clone(), real.clone())),
+        "{mounted:?}"
+    );
+    assert!(
+        mounted.contains(&(real.clone(), named.clone())),
+        "{mounted:?}"
+    );
+    fs::remove_file(Path::new(&real).join("lib/python3.13/os.py")).unwrap();
+    assert_eq!(
+        denial(sandbox(
+            &recorded,
+            &["/usr/bin/true".into()],
+            ".",
+            &[],
+            None
+        )),
+        "Python runtime is not a dedicated interpreter installation"
     );
 }
 

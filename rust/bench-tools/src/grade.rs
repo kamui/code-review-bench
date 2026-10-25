@@ -1112,7 +1112,7 @@ pub fn prepare(
     let stripped = |value: &Value, field: &str| -> R<String> {
         Ok(pytext::strip(string(pyvalue::item(value, field)?)?).to_string())
     };
-    let command = command_policy(&runner.checkout, target_id, &provisioning, &target)?;
+    let mut command = command_policy(&runner.checkout, target_id, &provisioning, &target)?;
     let profile_allowance = match pyvalue::get(&command, "allowance")? {
         Value::Null => String::new(),
         found => format!(" {}", pytext::strip(string(found)?)),
@@ -1304,6 +1304,12 @@ pub fn prepare(
     make_directory(&current::parent_of(&key_path), true)?;
     make_directory(&work, true)?;
     provision_clone(runner, options, &directory, &work, &command)?;
+    if let (Some(runtime), Value::Object(policy)) = (
+        crate::grading_tools::python_runtime(&work.to_path_buf()),
+        &mut command,
+    ) {
+        policy.insert("python_runtime".into(), runtime);
+    }
     make_directory(&work.join(b"reviews"), false)?;
     make_directory(&work.join(b"validator"), true)?;
     write(

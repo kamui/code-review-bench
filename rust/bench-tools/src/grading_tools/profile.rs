@@ -472,6 +472,7 @@ fn vitest(tools: &Tools, settings: &Value, argv: &[String], cwd: &str) -> T<bool
         prefixes
             .iter()
             .any(|prefix| file.starts_with(prefix) && !file.contains(".."))
+            && (file.contains(".test.") || file.contains(".spec."))
     });
     let single = run || arguments.iter().any(|a| a == "--run");
     if !single || !focused || (files.is_empty() && roots.is_empty()) {

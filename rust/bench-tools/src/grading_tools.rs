@@ -144,6 +144,7 @@ type Mount = (PathBuf, PathBuf);
 /// `PATH`.
 fn runtime_mounts(
     work: &Path,
+    policy: &Value,
     protected: &[PathBuf],
     host: &Host,
 ) -> T<(BTreeSet<Mount>, BTreeSet<PathBuf>)> {
@@ -177,7 +178,7 @@ fn runtime_mounts(
             }
         }
     }
-    mounts.extend(venv_interpreter(work));
+    mounts.extend(python_mounts(policy)?);
     let mut sensitive = vec![
         resolve(work),
         resolve(&work.join("home")),
@@ -206,10 +207,11 @@ fn runtime_mounts(
     Ok((mounts, paths))
 }
 
-/// The installation that the dependency cache's virtualenv interpreter links to, when it lies outside `/usr`. A
-/// link on the way may name the installation through another directory, as uv's `cpython-3.13-linux-x86_64-gnu`
-/// link to `cpython-3.13.15-linux-x86_64-gnu` does, so the installation is mounted under each name the links use.
-fn venv_interpreter(work: &Path) -> Vec<Mount> {
+/// The installation the dependency cache's virtualenv interpreter links to, when it lies outside `/usr`, and each
+/// name the links on the way give it, as uv's `cpython-3.13-linux-x86_64-gnu` link to
+/// `cpython-3.13.15-linux-x86_64-gnu` does. Preparation records it in the command policy before any grader command
+/// runs, because a grader can rewrite links in the cache.
+pub fn python_runtime(work: &Path) -> Option<Value> {
     let installation = |binary: &Path| {
         binary
             .parent()
@@ -217,22 +219,57 @@ fn venv_interpreter(work: &Path) -> Vec<Mount> {
             .map(|root| PathBuf::from(abspath(root)))
     };
     let mut link = work.join("clone-cache/venv/bin/python");
-    let Some(root) = installation(&resolve(&link)) else {
-        return Vec::new();
-    };
-    if !link.exists() || root.as_os_str().as_bytes().starts_with(b"/usr/") {
-        return Vec::new();
+    if !link.exists() {
+        return None;
     }
-    let mut mounts = vec![(root.clone(), root.clone())];
+    let root = installation(&resolve(&link))?;
+    if root.as_os_str().as_bytes().starts_with(b"/usr/") {
+        return None;
+    }
+    let mut names = vec![root.clone()];
     while let Ok(target) = fs::read_link(&link) {
         link = link.parent().unwrap_or(Path::new("/")).join(target);
         if let Some(named) = installation(&link)
-            && !mounts.iter().any(|(_, seen)| *seen == named)
+            && !names.contains(&named)
         {
-            mounts.push((root.clone(), named));
+            names.push(named);
         }
     }
-    mounts
+    let text = |path: &PathBuf| Value::Str(text_of(path));
+    Some(object(vec![
+        ("installation", text(&root)),
+        ("names", Value::Array(names.iter().map(text).collect())),
+    ]))
+}
+
+/// The mounts of the Python installation the command policy records, once it is a dedicated interpreter
+/// installation.
+fn python_mounts(policy: &Value) -> T<Vec<Mount>> {
+    let Some(runtime) = get(policy, "python_runtime") else {
+        return Ok(Vec::new());
+    };
+    let path = |value: &Value| value.as_str().map(PathBuf::from).ok_or(Refusal::Failed);
+    let installation = path(get(runtime, "installation").ok_or(Refusal::Failed)?)?;
+    let names = match get(runtime, "names") {
+        Some(Value::Array(names)) => names.iter().map(path).collect::<T<Vec<_>>>()?,
+        _ => return Err(Refusal::Failed),
+    };
+    let standard_library = fs::read_dir(installation.join("lib")).is_ok_and(|entries| {
+        entries.flatten().any(|entry| {
+            entry.file_name().to_string_lossy().starts_with("python3")
+                && entry.path().join("os.py").is_file()
+        })
+    });
+    if resolve(&installation) != installation
+        || !is_dir(&installation.join("bin"))
+        || !standard_library
+    {
+        return denied("Python runtime is not a dedicated interpreter installation");
+    }
+    Ok(names
+        .into_iter()
+        .map(|name| (installation.clone(), name))
+        .collect())
 }
 
 fn hosts_file(work: &Path) -> T<PathBuf> {
@@ -270,7 +307,7 @@ pub fn sandbox(
     ]
     .map(str::to_string)
     .to_vec();
-    let (mounts, paths) = runtime_mounts(work, &tools.protected, &tools.host)?;
+    let (mounts, paths) = runtime_mounts(work, &tools.policy, &tools.protected, &tools.host)?;
     let system = ["/usr", "/bin", "/lib", "/lib64"].map(PathBuf::from);
     for path in &system {
         if path.exists() {
