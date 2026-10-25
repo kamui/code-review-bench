@@ -21,6 +21,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 pub const QUOTA_STOPPED: &str = "quota-stopped";
+const BLOCKED_CHECK: &str = "blocked-check";
 const QUOTA_STOP_PERCENT: f64 = 95.0;
 const QUOTA_MAX_AGE_SECONDS: f64 = 300.0;
 const DEFAULT_TIMEOUT_SECONDS: u64 = 900;
@@ -844,7 +845,8 @@ struct Controller<'e> {
 }
 
 /// Grade the queue the authorization pins; the exit code: 0 once every batch is mapped or the limit is reached,
-/// 1 or a step's code after a failure, 2 after an error, 3 at the budget and 4 at the plan's quota.
+/// 1 or a step's code after a failure, 2 after an error, 3 at the budget, 4 at the plan's quota,
+/// and 5 when batches wait on blocked checks.
 pub fn execute(effects: &dyn Effects, run: &Run) -> R<u8> {
     let mut controller = Controller::new(effects, run)?;
     controller.resume(run.limit)?;
@@ -1375,7 +1377,8 @@ impl<'e> Controller<'e> {
             ],
             &map_log,
         )?;
-        if code != 0 {
+        let blocked = code == i32::from(crate::grade::BLOCKED_CHECK_EXIT);
+        if code != 0 && !blocked {
             self.set(index, "state", string("mapping-failed"));
             say(&tail(&map_log, 2400));
             return self.block(
@@ -1384,13 +1387,28 @@ impl<'e> Controller<'e> {
                 exit(code),
             );
         }
+        if blocked {
+            let refusals = std::fs::read_to_string(&map_log)
+                .map_err(|error| format!("cannot read {}: {error}", shown(&map_log)))?;
+            self.set(
+                index,
+                "blockedChecks",
+                Value::Array(refusals.lines().map(string).collect()),
+            );
+        } else {
+            self.set(index, "blockedChecks", Value::Array(Vec::new()));
+        }
         let evidence = self.archive(attempt)?;
         let fingerprint = self
             .planned
             .get(&(run.clone(), target.clone()))
             .cloned()
             .unwrap_or_default();
-        self.set(index, "state", string("mapped"));
+        self.set(
+            index,
+            "state",
+            string(if blocked { BLOCKED_CHECK } else { "mapped" }),
+        );
         self.set(index, "inputFingerprint", string(fingerprint));
         self.set(
             index,
@@ -1415,8 +1433,13 @@ impl<'e> Controller<'e> {
             .get("reviews")
             .map(Value::py_str)
             .unwrap_or_default();
+        let disposition = if blocked {
+            "Blocked check for"
+        } else {
+            "Mapped"
+        };
         say(&format!(
-            "Mapped {run}/{target}; {reviews} reviews; {spending}"
+            "{disposition} {run}/{target}; {reviews} reviews; {spending}"
         ));
         Ok(())
     }
@@ -1695,7 +1718,11 @@ impl<'e> Controller<'e> {
             }
         }
         for index in 0..self.rows.len() {
-            if self.row_text(index, "state") == "mapped" {
+            if self.row_text(index, "state") == "mapped"
+                || (self.row_text(index, "state") == BLOCKED_CHECK
+                    && self.row_text(index, "workspace")
+                        == self.relative(&self.latest_attempt(index)?)?)
+            {
                 if self.rows[index].get("evidence").is_none() {
                     let attempt = self.root.join(self.row_text(index, "workspace"));
                     let evidence = self.archive(&attempt)?;
@@ -1780,6 +1807,17 @@ impl<'e> Controller<'e> {
         if let Some(code) = self.stopped.as_ref().map(|stop| stop.code) {
             self.save_running()?;
             return Ok(code);
+        }
+        if self
+            .rows
+            .iter()
+            .any(|row| row.get("state").and_then(Value::as_str) == Some(BLOCKED_CHECK))
+        {
+            self.save(
+                BLOCKED_CHECK,
+                Some("Batches await access or the user's ruling on blocked checks"),
+            )?;
+            return Ok(crate::grade::BLOCKED_CHECK_EXIT);
         }
         if self.limited(limit, 0) {
             self.save("limited", Some("Requested batch limit reached"))?;
