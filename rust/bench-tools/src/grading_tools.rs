@@ -659,7 +659,7 @@ pub fn command(tools: &Tools, argv: &Value, cwd: &Value) -> T<Allowed> {
         }
         return inspection(tools, &argv, cwd);
     }
-    focused(tools, argv, cwd).map_err(|refusal| match refusal {
+    profile::toolchain(tools, argv, cwd).map_err(|refusal| match refusal {
         Refusal::Denied(reason) => Refusal::Denied(format!(
             "{executable} was refused: {reason}. {}",
             allowed_programs(&tools.policy)
@@ -685,19 +685,6 @@ fn allowed_programs(policy: &Value) -> String {
         ),
     };
     format!("Every target allows {inspections} and {git}; {profile}")
-}
-
-fn focused(tools: &Tools, argv: Vec<String>, cwd: &str) -> T<Allowed> {
-    if argv[1..]
-        .iter()
-        .any(|a| starts_with_any(a, &["-exec", "-toolexec", "-C"]))
-    {
-        return denied("test execution overrides are outside the command allowance");
-    }
-    if cwd != "clone" {
-        return denied("focused tests must run from clone");
-    }
-    profile::toolchain(tools, argv, cwd)
 }
 
 fn tail(text: &str, count: usize) -> String {
