@@ -1276,8 +1276,9 @@ fn a_batch_with_a_refused_command_is_not_filed_and_one_needing_a_service_is() {
     let assessor = bench.root.join("assessor.json");
     let grades = bench.root.join("bench/grading/current/grades.json");
     let before = fs::read(&grades).unwrap();
-    let map = || {
-        Command::new(&bench.tools)
+    let map = |safety_checks: Option<&Path>| {
+        let mut command = Command::new(&bench.tools);
+        command
             .args(["grade", "map", "--root"])
             .arg(&bench.root)
             .arg("--work")
@@ -1287,9 +1288,11 @@ fn a_batch_with_a_refused_command_is_not_filed_and_one_needing_a_service_is() {
             .arg("--assessor")
             .arg(&assessor)
             .current_dir(repository())
-            .env("HOME", &bench.home)
-            .output()
-            .unwrap()
+            .env("HOME", &bench.home);
+        if let Some(path) = safety_checks {
+            command.arg("--safety-checks").arg(path);
+        }
+        command.output().unwrap()
     };
 
     write_verdicts(
@@ -1301,8 +1304,8 @@ fn a_batch_with_a_refused_command_is_not_filed_and_one_needing_a_service_is() {
                 "would_settle": "Whether any file still imports the package."}"#,
         ),
     );
-    let refused = map();
-    assert_eq!(refused.status.code(), Some(1), "{}", output_text(&refused));
+    let refused = map(None);
+    assert_eq!(refused.status.code(), Some(5), "{}", output_text(&refused));
     assert!(
         output_text(&refused).contains(
             " item 1 claim c2: the run tool refused go run ./cmd/import-boss, a check needed to settle \
@@ -1314,6 +1317,29 @@ fn a_batch_with_a_refused_command_is_not_filed_and_one_needing_a_service_is() {
     );
     assert_eq!(fs::read(&grades).unwrap(), before);
 
+    let valid = fs::read(bench.work.join("verdicts.json")).unwrap();
+    let Value::Object(mut verdicts) = read_json(&bench.work.join("verdicts.json")) else {
+        unreachable!()
+    };
+    verdicts.insert("unexpected".into(), Value::Bool(true));
+    fs::write(
+        bench.work.join("verdicts.json"),
+        dumps(&Value::Object(verdicts)),
+    )
+    .unwrap();
+    let invalid = map(None);
+    assert_eq!(invalid.status.code(), Some(1), "{}", output_text(&invalid));
+    assert_eq!(fs::read(&grades).unwrap(), before);
+    fs::write(bench.work.join("verdicts.json"), valid).unwrap();
+
+    let safety_checks = bench.root.join("invalid-safety-checks.json");
+    fs::write(&safety_checks, "{}").unwrap();
+    let mixed = map(Some(&safety_checks));
+    assert_eq!(mixed.status.code(), Some(1), "{}", output_text(&mixed));
+    assert!(output_text(&mixed).contains("needs checker, independent_of and checks"));
+    assert!(output_text(&mixed).contains("the run tool refused go run ./cmd/import-boss"));
+    assert_eq!(fs::read(&grades).unwrap(), before);
+
     write_verdicts(
         &bench.key,
         &bench.work,
@@ -1323,6 +1349,6 @@ fn a_batch_with_a_refused_command_is_not_filed_and_one_needing_a_service_is() {
                 "would_settle": "Whether the migration locks the table."}"#,
         ),
     );
-    let mapped = map();
+    let mapped = map(None);
     assert_eq!(mapped.status.code(), Some(0), "{}", output_text(&mapped));
 }

@@ -37,6 +37,8 @@ struct Script {
     lost: HashSet<String>,
     shared_session: bool,
     map_code: i32,
+    blocked: HashSet<String>,
+    meters_after_prepare: Option<Result<f64, String>>,
     preflight_code: i32,
     version: &'static str,
     /// When the stored Claude sign-in expires, in milliseconds since 1970.
@@ -59,6 +61,8 @@ impl Default for Script {
             lost: HashSet::new(),
             shared_session: false,
             map_code: 0,
+            blocked: HashSet::new(),
+            meters_after_prepare: None,
             preflight_code: 0,
             version: "1.2.3",
             expires: None,
@@ -135,6 +139,11 @@ impl Fake {
             );
         }
         write(&argument("--key").unwrap(), &dumps(&key));
+        let mut script = self.script.lock().unwrap();
+        if let Some(usage) = script.meters_after_prepare.take() {
+            *self.clock.lock().unwrap() += QUOTA_MAX_AGE_SECONDS + 1.0;
+            script.usage = usage;
+        }
         Ok(0)
     }
 
@@ -191,6 +200,20 @@ impl Fake {
                 &work.join("clean-context.json"),
                 &format!(r#"{{"context_id": "context-{tag}"}}"#),
             );
+            write(
+                &work.join("verdicts.json"),
+                if script.blocked.contains(&target) {
+                    r#"{"reviews": {"review-1": {"items": {"1": {"claims": [{"id": "c1",
+                        "open": {"kind": "blocked-check", "command": "go run ./cmd/import-boss",
+                            "would_settle": "Whether any file still imports the package."}}]}}}}}"#
+                } else {
+                    r#"{"reviews": {}}"#
+                },
+            );
+            write(
+                &work.join("home/.claude/projects/fixture/session.jsonl"),
+                "fixture transcript\n",
+            );
         }
         let lost = script.lost.contains(&target);
         drop(script);
@@ -227,7 +250,23 @@ impl Effects for Fake {
             "preflight" => Ok(self.script.lock().unwrap().preflight_code),
             "prepare" => self.prepare(&args),
             "dispatch" => self.dispatch(&args),
-            "map" => Ok(self.script.lock().unwrap().map_code),
+            "map" => {
+                let code = self.script.lock().unwrap().map_code;
+                if code != 0 {
+                    Ok(code)
+                } else {
+                    let at = args.iter().position(|arg| arg == "--work").unwrap();
+                    let verdicts =
+                        read_json(&Path::new(&args[at + 1]).join("verdicts.json")).unwrap();
+                    let blocked = crate::grade::blocked_checks(&verdicts);
+                    if blocked.is_empty() {
+                        Ok(0)
+                    } else {
+                        write(log, &format!("{}\n", blocked.join("\n")));
+                        Ok(i32::from(crate::grade::BLOCKED_CHECK_EXIT))
+                    }
+                }
+            }
             other => panic!("unexpected step {other}"),
         };
         if let Some((step, path, contents)) = &self.script.lock().unwrap().rewrite_after
@@ -730,6 +769,163 @@ fn a_restart_settles_a_dispatched_attempt_once_and_continues() {
     assert_eq!(bench.dispatched(), ["t1", "t2", "t3"]);
     assert_eq!(bench.fake.calls("map").len(), 3);
     assert_eq!(bench.fake.calls("prepare").len(), 3);
+}
+
+#[test]
+fn a_command_blocked_check_is_archived_and_the_queue_continues_without_retrying_it() {
+    let bench = Bench::new(&["t1", "t2"], CLAUDE);
+    bench.script().blocked.insert("t1".into());
+    assert_eq!(bench.run(), Ok(5));
+    assert_eq!(state(&bench), "blocked-check");
+    assert_eq!(
+        bench.rows(),
+        states(&[("t1", "blocked-check"), ("t2", "mapped")])
+    );
+    assert_eq!(bench.dispatched(), ["t1", "t2"]);
+    let status = bench.status();
+    assert_eq!(
+        Usd::of(field(&status, "spentUpperUsd").unwrap()).unwrap(),
+        usd("2")
+    );
+    assert_eq!(
+        dumps(field(&status, "outstandingReservations").unwrap()),
+        "0"
+    );
+    let blocked = &list(&status, "batches").unwrap()[0];
+    assert_eq!(
+        text(blocked, "blockedAttempt").unwrap(),
+        "queue/q/batches/r1/t1/attempt-1"
+    );
+    let refusals: Vec<String> = list(blocked, "blockedChecks")
+        .unwrap()
+        .iter()
+        .map(Value::py_str)
+        .collect();
+    assert_eq!(
+        refusals.join("\n") + "\n",
+        std::fs::read_to_string(bench.attempt("t1", 1).join("map.log")).unwrap()
+    );
+    assert!(refusals[0].contains("the run tool refused go run ./cmd/import-boss"));
+    assert_eq!(text(blocked, "sessionId").unwrap(), "session-t1-attempt-1");
+    assert_eq!(text(blocked, "contextId").unwrap(), "context-t1-attempt-1");
+    assert_eq!(
+        Usd::of(field(blocked, "costUpperUsd").unwrap()).unwrap(),
+        usd("1")
+    );
+    let receipt = checked(&bench.root, field(blocked, "evidence").unwrap()).unwrap();
+    let evidence = read_json(&receipt).unwrap();
+    let archive = checked(&bench.root, field(&evidence, "archive").unwrap()).unwrap();
+    let archived = std::fs::read(&archive).unwrap();
+    let files = list(&evidence, "files").unwrap();
+    for name in [
+        "key.json",
+        "reservation.json",
+        "prepare.log",
+        "dispatch.log",
+        "map.log",
+        "work/verdicts.json",
+        "work/dispatch.json",
+        "work/clean-context.json",
+        "work/home/.claude/projects/fixture/session.jsonl",
+    ] {
+        let file = files
+            .iter()
+            .find(|file| text(file, "path").unwrap() == name)
+            .unwrap();
+        assert_eq!(
+            text(file, "sha256").unwrap(),
+            digest(&bench.attempt("t1", 1).join(name)).unwrap()
+        );
+    }
+
+    assert_eq!(bench.run(), Ok(5));
+    assert_eq!(bench.dispatched(), ["t1", "t2"]);
+    assert_eq!(bench.fake.calls("map").len(), 2);
+    assert_eq!(std::fs::read(&archive).unwrap(), archived);
+
+    std::fs::create_dir_all(bench.attempt("t1", 2)).unwrap();
+    bench.script().blocked.clear();
+    assert_eq!(bench.run(), Ok(0));
+    assert_eq!(bench.rows(), states(&[("t1", "mapped"), ("t2", "mapped")]));
+    assert_eq!(bench.dispatched(), ["t1", "t2", "t1"]);
+    assert_eq!(std::fs::read(&archive).unwrap(), archived);
+    let status = bench.status();
+    assert_eq!(
+        Usd::of(field(&status, "spentUpperUsd").unwrap()).unwrap(),
+        usd("3")
+    );
+    let retried = &list(&status, "batches").unwrap()[0];
+    assert_eq!(
+        text(retried, "workspace").unwrap(),
+        "queue/q/batches/r1/t1/attempt-2"
+    );
+    assert!(list(retried, "blockedChecks").unwrap().is_empty());
+    assert!(matches!(field(retried, "blockedAttempt"), Ok(Value::Null)));
+}
+
+#[test]
+fn a_blocked_retry_stopped_before_reservation_is_dispatched_on_restart() {
+    for usage in [Ok(96.0), Err("meters unavailable".into())] {
+        let bench = Bench::new(&["t1", "t2"], CLAUDE);
+        bench.script().blocked.insert("t1".into());
+        assert_eq!(bench.run(), Ok(5));
+        let original_status = bench.status();
+        let original = &list(&original_status, "batches").unwrap()[0];
+        let evidence = checked(&bench.root, field(original, "evidence").unwrap()).unwrap();
+        let original_evidence = std::fs::read(&evidence).unwrap();
+
+        let retry = bench.attempt("t1", 2);
+        std::fs::create_dir_all(&retry).unwrap();
+        {
+            let mut script = bench.script();
+            script.blocked.clear();
+            script.meters_after_prepare = Some(usage);
+        }
+        assert_eq!(bench.run(), Ok(4));
+        assert!(retry.join("key.json").is_file());
+        assert!(!retry.join("reservation.json").exists());
+        assert_eq!(bench.dispatched(), ["t1", "t2"]);
+        let status = bench.status();
+        let stopped = &list(&status, "batches").unwrap()[0];
+        assert_eq!(
+            text(stopped, "blockedAttempt").unwrap(),
+            "queue/q/batches/r1/t1/attempt-1"
+        );
+        for name in ["blockedChecks", "evidence"] {
+            assert_eq!(
+                dumps(field(stopped, name).unwrap()),
+                dumps(field(original, name).unwrap())
+            );
+        }
+
+        bench.script().usage = Ok(10.0);
+        assert_eq!(bench.run(), Ok(0));
+        assert_eq!(bench.dispatched(), ["t1", "t2", "t1"]);
+        assert_eq!(bench.fake.calls("prepare").len(), 3);
+        assert_eq!(bench.fake.calls("map").len(), 3);
+        assert!(retry.join("reservation.json").is_file());
+        assert_eq!(bench.rows(), states(&[("t1", "mapped"), ("t2", "mapped")]));
+        assert_eq!(std::fs::read(evidence).unwrap(), original_evidence);
+    }
+}
+
+#[test]
+fn a_mapping_failure_after_a_blocked_check_still_stops_new_launches() {
+    let bench = Bench::new(&["t1", "t2", "t3"], CLAUDE);
+    bench.script().blocked.insert("t1".into());
+    assert_eq!(bench.run_with(Some(1), 1, None), Ok(5));
+    bench.script().map_code = 1;
+    assert_eq!(bench.run(), Ok(1));
+    assert_eq!(state(&bench), "failed");
+    assert_eq!(
+        bench.rows(),
+        states(&[
+            ("t1", "blocked-check"),
+            ("t2", "mapping-failed"),
+            ("t3", "pending")
+        ])
+    );
+    assert_eq!(bench.dispatched(), ["t1", "t2"]);
 }
 
 #[test]

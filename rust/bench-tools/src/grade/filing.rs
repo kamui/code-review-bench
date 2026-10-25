@@ -1314,8 +1314,15 @@ pub fn blocked_checks(verdicts: &Value) -> Vec<String> {
     problems
 }
 
+pub const BLOCKED_CHECK_EXIT: u8 = 5;
+
+pub enum MappingOutcome {
+    Mapped(Vec<u8>),
+    BlockedChecks(Vec<String>),
+}
+
 /// `bench-tools grade map`: file one batch's verdicts as its current grades, or refuse with nothing written.
-pub fn map_verdicts(runner: &Runner, options: &Mapping) -> R<Vec<u8>> {
+pub fn map_verdicts(runner: &Runner, options: &Mapping) -> R<MappingOutcome> {
     let root = Root::new(options.root)?;
     let work = resolve(options.work)?;
     let key = current::read_json(&PyPath::new(options.key))?;
@@ -1381,9 +1388,13 @@ pub fn map_verdicts(runner: &Runner, options: &Mapping) -> R<Vec<u8>> {
             field("reason")?
         ));
     }
-    problems.extend(blocked_checks(&verdicts));
+    let blocked = blocked_checks(&verdicts);
     if !problems.is_empty() {
+        problems.extend(blocked);
         return inconsistent(problems.join("\n"));
+    }
+    if !blocked.is_empty() {
+        return Ok(MappingOutcome::BlockedChecks(blocked));
     }
 
     let current = root.local(options.current)?;
@@ -1586,7 +1597,7 @@ pub fn map_verdicts(runner: &Runner, options: &Mapping) -> R<Vec<u8>> {
     let count = |name: &str| outcomes.iter().filter(|outcome| is(outcome, name)).count();
     let relative = pyfs::relative_to(out.as_bytes(), root.path.as_bytes())
         .map_err(|message| Failure::Crash(format!("ValueError: {message}")))?;
-    Ok([
+    Ok(MappingOutcome::Mapped([
         format!(
             "replaced {}/{} in ",
             run.py_str(),
@@ -1606,7 +1617,7 @@ pub fn map_verdicts(runner: &Runner, options: &Mapping) -> R<Vec<u8>> {
         &relative,
         b"\n",
     ]
-    .concat())
+    .concat()))
 }
 
 /// `sorted(values, key=lambda v: (v["run"], v["target"]))` with each pair given as its key.
