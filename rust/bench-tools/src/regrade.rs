@@ -1399,6 +1399,11 @@ impl<'e> Controller<'e> {
             self.set(index, "blockedChecks", Value::Array(Vec::new()));
         }
         let evidence = self.archive(attempt)?;
+        if blocked {
+            self.set(index, "blockedAttempt", string(self.relative(attempt)?));
+        } else {
+            self.set(index, "blockedAttempt", Value::Null);
+        }
         let fingerprint = self
             .planned
             .get(&(run.clone(), target.clone()))
@@ -1720,7 +1725,7 @@ impl<'e> Controller<'e> {
         for index in 0..self.rows.len() {
             if self.row_text(index, "state") == "mapped"
                 || (self.row_text(index, "state") == BLOCKED_CHECK
-                    && self.row_text(index, "workspace")
+                    && self.row_text(index, "blockedAttempt")
                         == self.relative(&self.latest_attempt(index)?)?)
             {
                 if self.rows[index].get("evidence").is_none() {
