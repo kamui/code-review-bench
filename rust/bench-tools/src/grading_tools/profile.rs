@@ -39,12 +39,15 @@ pub(super) fn toolchain(tools: &Tools, mut argv: Vec<String>, cwd: &str) -> T<Al
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
+    let Some(commands) = get(&tools.policy, "commands") else {
+        return denied(super::NO_ALLOWANCE);
+    };
     let Some(settings) = FAMILIES
         .contains(&name.as_str())
-        .then(|| get(&tools.policy, "commands").and_then(|commands| get(commands, &name)))
+        .then(|| get(commands, &name))
         .flatten()
     else {
-        return denied("this target has no encoded focused-command allowance");
+        return denied("it is not in this target's command profile");
     };
     let (mut env, test) = match name.as_str() {
         "go" => go(tools, settings, &mut argv, cwd)?,

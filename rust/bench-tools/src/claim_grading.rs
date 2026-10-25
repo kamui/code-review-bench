@@ -81,6 +81,9 @@ const V2_ANSWERS: [(&str, &[&str]); 4] = [
     ("delivered", &["yes", "no", "cannot-tell"]),
 ];
 const FACTS: [&str; 3] = ["yes", "no", "cannot-tell"];
+/// The open kind of a claim whose needed check the grading `run` tool refused; `grade map` files no batch holding
+/// one.
+pub const BLOCKED_CHECK: &str = "blocked-check";
 
 /// `", ".join(sorted(fields))`.
 pub fn sorted_names(fields: &[&str]) -> String {
@@ -511,7 +514,17 @@ pub fn verdict_problems_v2(claim: &Value, families: &Value) -> PyResult<Vec<Stri
         );
     }
     let opened = get("open");
-    if is(outcome, "unresolved") {
+    if is(outcome, "unresolved") && is(field(opened, "kind"), BLOCKED_CHECK) {
+        let described = has_exactly(opened, &["kind", "command", "would_settle"])
+            && filled(field(opened, "command"))
+            && filled(field(opened, "would_settle"));
+        if !described {
+            problems.push("a blocked check needs open kind, command and would_settle".to_string());
+        }
+        if candidate_required && matches!(get("candidate"), Value::Null) {
+            problems.push("a possible new problem or relied-on use needs a candidate".to_string());
+        }
+    } else if is(outcome, "unresolved") {
         let described = has_exactly(opened, &["kind", "would_settle"])
             && one_of(
                 field(opened, "kind"),
