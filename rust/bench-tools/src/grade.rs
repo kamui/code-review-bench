@@ -38,7 +38,8 @@ const MISSING_FAULT: &str = "Missing pre-existing fault:";
 const EVIDENCE_CONTRACT: &str = "claim-evidence-v2";
 /// Command profile versions, newest first. A checkout uses the newest it holds; the behavior-contract fixtures hold
 /// only v1.
-const PROFILES: [&[u8]; 3] = [
+const PROFILES: [&[u8]; 4] = [
+    b"bench/policies/grading-commands.v4.json",
     b"bench/policies/grading-commands.v3.json",
     b"bench/policies/grading-commands.v2.json",
     b"bench/policies/grading-commands.v1.json",
