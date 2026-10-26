@@ -49,7 +49,12 @@ pub(super) fn toolchain(tools: &Tools, mut argv: Vec<String>, cwd: &str) -> T<Al
     else {
         return denied("it is not in this task's command profile");
     };
-    if argv[1..]
+    let unchecked = if name == "go" && listed_dir(settings, &argv)? {
+        4
+    } else {
+        1
+    };
+    if argv[unchecked..]
         .iter()
         .any(|a| super::starts_with_any(a, &["-exec", "-toolexec", "-C"]))
     {
@@ -80,6 +85,14 @@ pub(super) fn toolchain(tools: &Tools, mut argv: Vec<String>, cwd: &str) -> T<Al
         }
     }
     Ok(Allowed { argv, env, test })
+}
+
+/// `go list -C <dir>` on a directory the profile's `list_dirs` names. Go accepts `-C` only as the first flag.
+fn listed_dir(settings: &Value, argv: &[String]) -> T<bool> {
+    Ok(argv.len() > 3
+        && argv[1] == "list"
+        && argv[2] == "-C"
+        && strings(settings, "list_dirs")?.contains(&argv[3].as_str()))
 }
 
 fn go(
@@ -122,6 +135,10 @@ fn go(
                 .any(|pattern| !pattern.starts_with("./") || pattern.contains("../"))
         {
             return denied("go run needs local package patterns");
+        }
+    } else if listed_dir(settings, argv)? {
+        if selections(&argv[4..], &["-tags"], &["-deps", "-e", "-json"])? != ["."] {
+            return denied("go list -C loads the named directory's own package, `.`, only");
         }
     } else if argv[1] != "version" {
         let modfiles = strings(settings, "modfiles")?;
