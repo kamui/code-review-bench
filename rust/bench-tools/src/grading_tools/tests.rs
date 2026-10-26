@@ -946,6 +946,59 @@ fn a_runtime_root_holding_a_protected_path_refuses_the_sandbox() {
 }
 
 #[test]
+fn a_version_manager_shim_on_path_yields_to_the_installation_after_it() {
+    let fixture = fixture("shim");
+    let executable = |path: &Path| {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::copy("/usr/bin/true", path).unwrap();
+    };
+    let manager = fixture.root.join("bin/mise");
+    executable(&manager);
+    let shims = fixture.root.join("shims");
+    fs::create_dir_all(&shims).unwrap();
+    std::os::unix::fs::symlink(&manager, shims.join("go")).unwrap();
+    let installed = fixture.root.join("installs/go/1.26.5");
+    executable(&installed.join("bin/go"));
+    fs::create_dir_all(installed.join("src/runtime")).unwrap();
+    fs::create_dir_all(installed.join("pkg/tool")).unwrap();
+    let shared = fixture.root.join("shared/bin");
+    executable(&shared.join("go"));
+    let on = |directories: &[&Path]| std::env::join_paths(directories).unwrap();
+
+    let path = on(&[&shims, &installed.join("bin")]);
+    assert_eq!(toolchain(&path, "go"), Some(installed.join("bin/go")));
+    let which = |name: &str| toolchain(&path, name);
+    let found = tools(&fixture, python_policy(), &which);
+    let command = sandbox(&found, &["/usr/bin/true".into()], ".", &[], None).unwrap();
+    assert!(command.contains(&text_of(&installed.join("src"))));
+    assert!(!command.contains(&text_of(&manager)));
+
+    for path in [on(&[&shims, &shared]), on(&[&shims])] {
+        let which = |name: &str| toolchain(&path, name);
+        let refused = tools(&fixture, python_policy(), &which);
+        assert_eq!(
+            denial(sandbox(&refused, &["/usr/bin/true".into()], ".", &[], None)),
+            "Go runtime is not a dedicated toolchain installation"
+        );
+    }
+
+    let private = fixture.root.join("private");
+    fs::create_dir_all(private.join("runtime")).unwrap();
+    fs::write(private.join("key"), "PRIVATE").unwrap();
+    let linked = fixture.root.join("installs/go/linked");
+    executable(&linked.join("bin/go"));
+    fs::create_dir_all(linked.join("pkg/tool")).unwrap();
+    std::os::unix::fs::symlink("../../../private", linked.join("src")).unwrap();
+    let path = on(&[&shims, &linked.join("bin")]);
+    let which = |name: &str| toolchain(&path, name);
+    let mut exposed = tools(&fixture, python_policy(), &which);
+    exposed.protected.push(private.join("key"));
+    assert!(
+        denial(sandbox(&exposed, &["/usr/bin/true".into()], ".", &[], None)).contains("protected")
+    );
+}
+
+#[test]
 fn the_server_answers_lists_calls_and_denials_and_records_each_call() {
     let fixture = fixture("serve");
     let tools = tools(&fixture, python_policy(), &system_which);
