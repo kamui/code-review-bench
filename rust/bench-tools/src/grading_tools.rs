@@ -187,7 +187,7 @@ fn runtime_mounts(
             for name in ["src", "pkg", "lib", "go.env", "VERSION"] {
                 let path = root.join(name);
                 if path.exists() {
-                    mounts.insert((path.clone(), path));
+                    mounts.insert((resolve(&path), path));
                 }
             }
         }

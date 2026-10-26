@@ -981,6 +981,21 @@ fn a_version_manager_shim_on_path_yields_to_the_installation_after_it() {
             "Go runtime is not a dedicated toolchain installation"
         );
     }
+
+    let private = fixture.root.join("private");
+    fs::create_dir_all(private.join("runtime")).unwrap();
+    fs::write(private.join("key"), "PRIVATE").unwrap();
+    let linked = fixture.root.join("installs/go/linked");
+    executable(&linked.join("bin/go"));
+    fs::create_dir_all(linked.join("pkg/tool")).unwrap();
+    std::os::unix::fs::symlink("../../../private", linked.join("src")).unwrap();
+    let path = on(&[&shims, &linked.join("bin")]);
+    let which = |name: &str| toolchain(&path, name);
+    let mut exposed = tools(&fixture, python_policy(), &which);
+    exposed.protected.push(private.join("key"));
+    assert!(
+        denial(sandbox(&exposed, &["/usr/bin/true".into()], ".", &[], None)).contains("protected")
+    );
 }
 
 #[test]
