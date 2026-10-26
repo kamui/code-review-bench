@@ -71,7 +71,7 @@ bench/tools/bench-tools regrade run --authorization <authorization.json> --direc
 
 The authorization pins these inputs by path and SHA-256, and the controller refuses to start when one changed:
 
-- `sourcePlan`, the current queue from `bun run plan:methodology`. It records each batch's input fingerprint and whether its saved grade is `current`, `stale` or `missing`. Remove stale grades with `bench-tools grade invalidate` before planning.
+- `sourcePlan`, the current queue from `bun run plan:methodology`. It records each batch's input fingerprint and whether its saved grade is `current`, `stale` or `missing`. A grade is also stale when `bench/grading/current/remedy-policy.json` selects a different remedy policy from the one its receipt names. Remove stale grades with `bench-tools grade invalidate` before planning.
 - `executionPlan`, described below.
 - `runtimes`, required: the object `bench/tools/bench-tools runtime pin` prints. The controller is that `bench-tools`: started from another installed one, it hands the run to the pinned one, and every step runs the pinned one, so a reinstall that changes the store's selection mid-queue changes nothing the queue runs. A changed controller therefore needs a new authorization version. Earlier authorizations pin `bench/tools/regrade.py` under `runnerDeviations` and stay as they are; they run only at their own commit.
 - `runnerDeviations`, optional: further files pinned by path and SHA-256.
