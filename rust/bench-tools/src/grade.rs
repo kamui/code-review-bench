@@ -350,6 +350,7 @@ pub fn batch_inputs(
             selected.clone(),
             Documents {
                 kinds: documents.kinds.clone(),
+                remedy_policy: documents.remedy_policy.clone(),
             },
         ),
         None => current::load_current(root, current, false)?,
@@ -380,6 +381,13 @@ pub fn unchanged_inputs(root: &Root, current: &[u8], key: &Value) -> R<(Value, D
             target.py_str(),
             prefix(string(pinned)?),
             prefix(&fingerprint)
+        ));
+    }
+    if !documents.remedy_policy_unchanged(key)? {
+        return inconsistent(format!(
+            "{}/{}: the selected remedy policy changed since preparation; prepare it again",
+            run.py_str(),
+            target.py_str()
         ));
     }
     Ok((selected, documents))
