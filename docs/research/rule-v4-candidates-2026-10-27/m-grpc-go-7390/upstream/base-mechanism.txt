@@ -1,0 +1,230 @@
+905: func (ac *addrConn) connect() error {
+906: 	ac.mu.Lock()
+907: 	if ac.state == connectivity.Shutdown {
+908: 		if logger.V(2) {
+909: 			logger.Infof("connect called on shutdown addrConn; ignoring.")
+910: 		}
+911: 		ac.mu.Unlock()
+912: 		return errConnClosing
+913: 	}
+914: 	if ac.state != connectivity.Idle {
+915: 		if logger.V(2) {
+916: 			logger.Infof("connect called on addrConn in non-idle state (%v); ignoring.", ac.state)
+917: 		}
+918: 		ac.mu.Unlock()
+919: 		return nil
+920: 	}
+921: 	ac.mu.Unlock()
+922: 
+923: 	ac.resetTransport()
+924: 	return nil
+925: }
+948: 
+949: 	ac.mu.Lock()
+950: 	if equalAddresses(ac.addrs, addrs) {
+951: 		ac.mu.Unlock()
+952: 		return
+953: 	}
+954: 
+955: 	ac.addrs = addrs
+956: 
+957: 	if ac.state == connectivity.Shutdown ||
+958: 		ac.state == connectivity.TransientFailure ||
+959: 		ac.state == connectivity.Idle {
+960: 		// We were not connecting, so do nothing but update the addresses.
+961: 		ac.mu.Unlock()
+962: 		return
+963: 	}
+964: 
+965: 	if ac.state == connectivity.Ready {
+966: 		// Try to find the connected address.
+967: 		for _, a := range addrs {
+968: 			a.ServerName = ac.cc.getServerName(a)
+969: 			if a.Equal(ac.curAddr) {
+970: 				// We are connected to a valid address, so do nothing but
+971: 				// update the addresses.
+972: 				ac.mu.Unlock()
+973: 				return
+974: 			}
+975: 		}
+976: 	}
+977: 
+978: 	// We are either connected to the wrong address or currently connecting.
+979: 	// Stop the current iteration and restart.
+980: 
+981: 	ac.cancel()
+982: 	ac.ctx, ac.cancel = context.WithCancel(ac.cc.ctx)
+983: 
+984: 	// We have to defer here because GracefulClose => onClose, which requires
+985: 	// locking ac.mu.
+986: 	if ac.transport != nil {
+987: 		defer ac.transport.GracefulClose()
+988: 		ac.transport = nil
+989: 	}
+990: 
+991: 	if len(addrs) == 0 {
+992: 		ac.updateConnectivityState(connectivity.Idle, nil)
+993: 	}
+994: 
+995: 	ac.mu.Unlock()
+996: 
+997: 	// Since we were connecting/connected, we should start a new connection
+998: 	// attempt.
+999: 	go ac.resetTransport()
+1230: 		ac.cc.mu.Unlock()
+1231: 	}
+1232: }
+1233: 
+1234: func (ac *addrConn) resetTransport() {
+1235: 	ac.mu.Lock()
+1236: 	acCtx := ac.ctx
+1237: 	if acCtx.Err() != nil {
+1238: 		ac.mu.Unlock()
+1239: 		return
+1240: 	}
+1241: 
+1242: 	addrs := ac.addrs
+1243: 	backoffFor := ac.dopts.bs.Backoff(ac.backoffIdx)
+1244: 	// This will be the duration that dial gets to finish.
+1245: 	dialDuration := minConnectTimeout
+1246: 	if ac.dopts.minConnectTimeout != nil {
+1247: 		dialDuration = ac.dopts.minConnectTimeout()
+1248: 	}
+1249: 
+1250: 	if dialDuration < backoffFor {
+1251: 		// Give dial more time as we keep failing to connect.
+1252: 		dialDuration = backoffFor
+1253: 	}
+1254: 	// We can potentially spend all the time trying the first address, and
+1255: 	// if the server accepts the connection and then hangs, the following
+1256: 	// addresses will never be tried.
+1257: 	//
+1258: 	// The spec doesn't mention what should be done for multiple addresses.
+1259: 	// https://github.com/grpc/grpc/blob/master/doc/connection-backoff.md#proposed-backoff-algorithm
+1260: 	connectDeadline := time.Now().Add(dialDuration)
+1261: 
+1262: 	ac.updateConnectivityState(connectivity.Connecting, nil)
+1263: 	ac.mu.Unlock()
+1264: 
+1265: 	if err := ac.tryAllAddrs(acCtx, addrs, connectDeadline); err != nil {
+1266: 		ac.cc.resolveNow(resolver.ResolveNowOptions{})
+1267: 		ac.mu.Lock()
+1268: 		if acCtx.Err() != nil {
+1269: 			// addrConn was torn down.
+1270: 			ac.mu.Unlock()
+1271: 			return
+1272: 		}
+1273: 		// After exhausting all addresses, the addrConn enters
+1274: 		// TRANSIENT_FAILURE.
+1275: 		ac.updateConnectivityState(connectivity.TransientFailure, err)
+1276: 
+1277: 		// Backoff.
+1278: 		b := ac.resetBackoff
+1279: 		ac.mu.Unlock()
+1280: 
+1281: 		timer := time.NewTimer(backoffFor)
+1282: 		select {
+1283: 		case <-timer.C:
+1284: 			ac.mu.Lock()
+1285: 			ac.backoffIdx++
+1286: 			ac.mu.Unlock()
+1287: 		case <-b:
+1288: 			timer.Stop()
+1289: 		case <-acCtx.Done():
+1290: 			timer.Stop()
+1291: 			return
+1292: 		}
+1293: 
+1294: 		ac.mu.Lock()
+1295: 		if acCtx.Err() == nil {
+1296: 			ac.updateConnectivityState(connectivity.Idle, err)
+1297: 		}
+1298: 		ac.mu.Unlock()
+1299: 		return
+1300: 	}
+1301: 	// Success; reset backoff.
+1302: 	ac.mu.Lock()
+1303: 	ac.backoffIdx = 0
+1304: 	ac.mu.Unlock()
+1305: }
+1306: 
+1307: // tryAllAddrs tries to creates a connection to the addresses, and stop when at
+1308: // the first successful one. It returns an error if no address was successfully
+1309: // connected, or updates ac appropriately with the new transport.
+1310: func (ac *addrConn) tryAllAddrs(ctx context.Context, addrs []resolver.Address, connectDeadline time.Time) error {
+1311: 	var firstConnErr error
+1312: 	for _, addr := range addrs {
+1313: 		ac.channelz.ChannelMetrics.Target.Store(&addr.Addr)
+1314: 		if ctx.Err() != nil {
+1315: 			return errConnClosing
+1316: 		}
+1317: 		ac.mu.Lock()
+1318: 
+1319: 		ac.cc.mu.RLock()
+1320: 		ac.dopts.copts.KeepaliveParams = ac.cc.mkp
+1321: 		ac.cc.mu.RUnlock()
+1322: 
+1323: 		copts := ac.dopts.copts
+1324: 		if ac.scopts.CredsBundle != nil {
+1325: 			copts.CredsBundle = ac.scopts.CredsBundle
+1326: 		}
+1327: 		ac.mu.Unlock()
+1328: 
+1329: 		channelz.Infof(logger, ac.channelz, "Subchannel picks a new address %q to connect", addr.Addr)
+1330: 
+1331: 		err := ac.createTransport(ctx, addr, copts, connectDeadline)
+1332: 		if err == nil {
+1333: 			return nil
+1334: 		}
+1335: 		if firstConnErr == nil {
+1336: 			firstConnErr = err
+1337: 		}
+1338: 		ac.cc.updateConnectionError(err)
+1339: 	}
+1340: 
+1380: 	connectCtx, cancel := context.WithDeadline(ctx, connectDeadline)
+1381: 	defer cancel()
+1382: 	copts.ChannelzParent = ac.channelz
+1383: 
+1384: 	newTr, err := transport.NewClientTransport(connectCtx, ac.cc.ctx, addr, copts, onClose)
+1385: 	if err != nil {
+1386: 		if logger.V(2) {
+1387: 			logger.Infof("Creating new client transport to %q: %v", addr, err)
+1388: 		}
+1389: 		// newTr is either nil, or closed.
+1390: 		hcancel()
+1391: 		channelz.Warningf(logger, ac.channelz, "grpc: addrConn.createTransport failed to connect to %s. Err: %v", addr, err)
+1392: 		return err
+1393: 	}
+1394: 
+1395: 	ac.mu.Lock()
+1396: 	defer ac.mu.Unlock()
+1397: 	if ctx.Err() != nil {
+1398: 		// This can happen if the subConn was removed while in `Connecting`
+1399: 		// state. tearDown() would have set the state to `Shutdown`, but
+1400: 		// would not have closed the transport since ac.transport would not
+1401: 		// have been set at that point.
+1402: 		//
+1403: 		// We run this in a goroutine because newTr.Close() calls onClose()
+1404: 		// inline, which requires locking ac.mu.
+1405: 		//
+1406: 		// The error we pass to Close() is immaterial since there are no open
+1407: 		// streams at this point, so no trailers with error details will be sent
+1408: 		// out. We just need to pass a non-nil error.
+1409: 		//
+1410: 		// This can also happen when updateAddrs is called during a connection
+1411: 		// attempt.
+1412: 		go newTr.Close(transport.ErrConnClosing)
+1413: 		return nil
+1414: 	}
+1415: 	if hctx.Err() != nil {
+1416: 		// onClose was already called for this connection, but the connection
+1417: 		// was successfully established first.  Consider it a success and set
+1418: 		// the new state to Idle.
+1419: 		ac.updateConnectivityState(connectivity.Idle, nil)
+1420: 		return nil
+1421: 	}
+1422: 	ac.curAddr = addr
+1423: 	ac.transport = newTr
+1424: 	ac.startHealthCheck(hctx) // Will set state to READY if appropriate.
+1425: 	return nil

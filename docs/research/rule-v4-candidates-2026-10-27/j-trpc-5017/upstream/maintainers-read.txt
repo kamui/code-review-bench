@@ -1,0 +1,1472 @@
+#1937 https://github.com/trpc/trpc/issues/1937 created 2022-05-25T09:00:50Z updated 2025-10-06T10:56:36Z Support for additional `Content-Type`s
+_Originally posted by @KATT in https://github.com/trpc/trpc/discussions/1936#discussioncomment-2818345_
+
+If we go down this route what we're really talking about is straying away from JSON as the defacto mode of transport. If we do this we should also have support for some sort of binary format when doing `POST`s that could take the compression further and let us have something else than `content-type: application/json`.
+
+Furthermore, I think the server should be able to receive different types of request types and be informed on what to do. I have thought about this a bit before in the context of transformers, so outlining below.
+
+## Some ideas for communicating transformers/serializer
+
+> Rough ideas below, I think best by writing code, but don't see any of this as a final design.
+
+### `contentType`-param
+
+Goals:
+
+- Allow for multiple content-types
+- Allow for deserializing from a `Response` with a `body`
+- Allow for serializing into a `Fetch.body`
+- Allow for serializing into a string for query params
+
+**When creating a server:**
+
+```ts
+import { initTRPC } from '@trpc/server';
+import { jsonContentType, createContentType } from '@trpc/server/content-type';
+
+// JSON crush could be a community plugin that looks something like this:
+import jsoncrush from 'jsoncrush';
+const crush = createContentType({
+  key: 'crush',
+  contentType: 'application/json',
+  // a smarter content type would use something that could be streamed, i.e ReadableStream from `Response`
+  // used for `POST`:
+  fromResponse: async (res) => jsoncrush.uncrush(await res.text()),
+  fromString: (str) => jsoncrush.uncrush(str),
+  toBody: data => jsoncrush.crush(data), // this could allow for the types that the `Fetch API` allows - ArrayBuffer, string, [...]
+  // used for `GET`
+  toString: data => jsoncrush.data(data),
+})
+
+const trpc = initTRPC({
+  contentTypes: [
+    jsonContentType,
+    crush,
+  }
+});
+```
+
+**HTTP level**
+
+```
+// inform server that we are sending `crush` content
+GET http://localhost?content=crush&input=[...]
+GET http://localhost?content=json&input=[...]
+
+POST http://localhost?content=crush
+content-type: "application/json"
+// [..]
+```
+
+### Similarly, `transformer`-param could be used
+
+```ts
+import { initTRPC } from '@trpc/server';
+import { defaultTransform } from '@trpc/server/transform';
+// JSON crush could be a community plugin
+import { crush } from 'trpc-json-crush';
+
+const trpc = initTRPC({
+  transforms: [
+      defaultTransform, // our "no-op" trnasform
+      { key: "superjson", value: superjson },
+   ],
+});
+```
+
+### The client story
+
+Maybe only needs to allow for one content type.
+
+```ts
+import { crush } from "~/shared/contentType"
+
+const client = createTRPCClient({
+  links: [ /* ... */ ],
+  contentType: crush,
+});
+
+```
+
+<sub>[TRP-67](https://linear.app/trpc/issue/TRP-67/support-for-additional-content-types)</sub>
+
+#4306 https://github.com/trpc/trpc/issues/4306 created 2023-05-03T20:13:35Z updated 2026-05-14T09:35:59Z bug: conflicting `ctx` types allowed at compile time
+### Provide environment information
+
+```
+  System:
+    OS: macOS 13.2.1
+    CPU: (12) arm64 Apple M2 Max
+    Memory: 57.83 GB / 96.00 GB
+    Shell: 5.8.1 - /bin/zsh
+  Binaries:
+    Node: 18.15.0 - ~/.nvm/versions/node/v18.15.0/bin/node
+    Yarn: 1.22.19 - ~/.nvm/versions/node/v18.15.0/bin/yarn
+    npm: 9.5.0 - ~/.nvm/versions/node/v18.15.0/bin/npm
+  Browsers:
+    Chrome: 112.0.5615.137
+    Safari: 16.3
+```
+
+```
+"@trpc/server": "10.23.0",
+```
+
+### Describe the bug
+
+routers don't seem to check the types of their procedures or sub-routers. self contained example:
+
+```ts
+import {initTRPC} from '@trpc/server'
+import {createNextApiHandler} from '@trpc/server/adapters/next'
+
+const trpca = initTRPC.context<{a: string}>().create()
+const trpcb = initTRPC.context<{b: string}>().create()
+
+const parent = trpca.router({
+  a: trpca.procedure.query(({ctx}) => ctx.a.slice()),
+  b: trpcb.procedure.query(({ctx}) => ctx.b.slice()),
+})
+
+export default createNextApiHandler({
+  router: parent,
+  createContext: () => ({a: 'aaa'}),
+})
+```
+
+this is fine at compile time, and hitting `/api/trpc.a` works, but hitting `/api/trpc.b` gets `TypeError: Cannot read properties of undefined (reading 'slice')` (since `ctx.b` is never defined anywhere) - I shouldn't have been allowed to use `trpcb.procedure.query(...)` on a router for `trpca`, since they have different contexts.
+
+### Link to reproduction
+
+https://www.typescriptlang.org/play?ts=5.0.3#code/JYWwDg9gTgLgBAb2AO2DAKgJQAoGEC+cAZlBCHAOQACMUYAxgPQDOAplAG7sUBQoksRPSisAhjFYA5VgA8YAQTDAAEqOQATADbtCJMpRp0mbTu0aj1osBKjNGyWTF496EZM3i0GouAF44KGhYeAB0rsgScgA8CKIAXHAeUCgA5vgAfAAUAJRhIuKsOS5uHnBe9ABGfgGoGDi4YW6RMDEVCUmpGTl5YhJFxe7wYKIiEdXloiGkAK42mQg8cHDxZUaTYKT0rOrTIiEAjtPsAJ6Z8-QwMvjZfulwFzIhk8yawFs52QA0i3BtqwwVEIbCBbHZ7Q4nM4IB7XW73S4hQEvN6FbJfHjXHg8WQCeDqVhEUTTTTwYS9KSORQqNRadjzH4zGwJYajGDfJZkgq4JqOBI5OHzFYUUQiijXb7XIA
+
+### To reproduce
+
+Paste the code above into a next api handler. I tried that above using the stackblitz suggested but there's a strange compile error that I don't get locally, it doesn't seem to acknowledge that the export for the next adapter exists: https://stackblitz.com/edit/github-qwqz1i-qs9elv?file=src/pages/api/trpc/[trpc].ts
+
+### Additional information
+
+My use-case: I'm trying to make a router in a library, which can be plugged into an application's parent router for modular functionality, with the requirement that the parent has a context which meets the requirement of the library router. But the type system doesn't seem to enforce this. Maybe it's just not supported (yet)?
+
+I'm putting yes I'd be down to fix this but I don't know if I'll have the time to so if someone else wants to, go for it!
+
+### 👨‍👧‍👦 Contributing
+
+- [X] 🙋‍♂️ Yes, I'd be down to file a PR fixing this bug!
+
+<sub>[TRP-29](https://linear.app/trpc/issue/TRP-29/bug-conflicting-ctx-types-allowed-at-compile-time)</sub>
+
+#4947 https://github.com/trpc/trpc/issues/4947 created 2023-10-21T13:43:14Z updated 2025-03-20T15:41:59Z feat: Middleware specific input and/or merging middleware and procedure inputs
+### Describe the feature you'd like to request
+
+I'm trying to abstract a logic in some of my routes. From my research I figured out that the regular middleware doesn't have a proper input support. Most of the previously asked related discussions are pointing towards the `experimental_standaloneMiddleware`. The idea is great but there seems to be a flaw in the implementation as of now. Please correct me if I'm wrong.
+
+The type we provide for the generic `T` in `experimental_standaloneMiddleware<T>` has to match that of `.input()`'s. So if we have different routes with different inputs -that have a shared set of params for the middleware- it won't work.
+
+### Describe the solution you'd like to see
+
+What I had expected was to at least have a partial validation or merging of the two types for only the shared part of the inputs between the middleware and the procedure.
+
+In other words: The `.input()` type must include the middleware params, but it can include other items as well.
+
+### Describe alternate solutions
+
+```ts
+const schemaA = z.object({ valueA: z.string() });
+
+const setQuizAnswerMiddleware = experimental_standaloneMiddleware(schemaA).create((opts) => {
+  // The type-safe input
+  const { input } = opts;
+
+  // Create a new context value from the input...
+
+  return opts.next({ ctx: { ... } });
+});
+
+const schemaB = z.object({ valueB: z.string() });
+
+publicProcedure.input(schemaB).use(setQuizAnswerMiddleware)
+            // Merged inputs
+  .query(({ input: { valueA, valueB }, ctx: { ... } }): => ('Hello world');
+```
+
+### Additional information
+
+There could also be an "isolated middleware" that takes it's own input, but doesn't expose them to the procedure. Its job is only to do some internal computation and add some values to the `ctx` object.
+
+### 👨‍👧‍👦 Contributing
+
+- [x] 🙋‍♂️ Yes, I'd be down to file a PR implementing this feature!
+
+#4709 https://github.com/trpc/trpc/issues/4709 created 2023-08-11T11:41:12Z updated 2025-03-20T15:41:51Z feat: simplify output types of `Router` and `Procedure`
+### Describe the feature you'd like to request
+
+Simplify routers and procedure types in order to:
+
+- reduce `.d.ts`-footprint (Context is duplicated everywhere)
+- improve TS perf
+- allow design to be more happy for defining standalone procedures without a router
+- nicer procedures when hovering / autocompletion 
+
+
+### Describe the solution you'd like to see
+
+
+- built procedures should just be a simple structure containing `_input_in`, `_output_out` 
+- instead of passing `TRouter extends AnyRouter` around everywhere, we should pass around `TConfig`
+- (procedures are not aware of the `TConfig` once "built")
+- when we create client helpers, we still need `TConfig`, so when we first initialize `TRPCClient` we  first extract `TConfig` and pass through the decorator
+
+### Describe alternate solutions
+
+not doing it
+
+### Additional information
+
+Currently a built router looks something like this:
+
+```ts
+export declare const router0: import("@trpc/server").CreateRouterInner<import("@trpc/server").RootConfig<{
+    ctx: {};
+    meta: object;
+    errorShape: import("@trpc/server").DefaultErrorShape;
+    transformer: import("@trpc/server").DefaultDataTransformer;
+}>, {
+    greeting: import("@trpc/server").BuildProcedure<"query", {
+        _config: import("@trpc/server").RootConfig<{
+            ctx: {};
+            meta: object;
+            errorShape: import("@trpc/server").DefaultErrorShape;
+            transformer: import("@trpc/server").DefaultDataTransformer;
+        }>;
+        _meta: object;
+        _ctx_out: {};
+        _input_in: {
+            who: string;
+        };
+        _input_out: {
+            who: string;
+        };
+        _output_in: typeof import("@trpc/server").unsetMarker;
+        _output_out: typeof import("@trpc/server").unsetMarker;
+    }, string>;
+}>;
+```
+
+Where after this, it'd look something like
+
+```ts
+export declare const router0: import("@trpc/server").CreateRouterInner<import("@trpc/server").RootConfig<{
+    ctx: {};
+    meta: object;
+    errorShape: import("@trpc/server").DefaultErrorShape;
+    transformer: import("@trpc/server").DefaultDataTransformer;
+}>, {
+    greeting: import("@trpc/server").Procedure<"query", {
+        _input_in: {
+            who: string;
+        };
+        _output_out: undefined;
+    }, string>;
+}>;
+```
+
+### 👨‍👧‍👦 Contributing
+
+- [X] 🙋‍♂️ Yes, I'd be down to file a PR implementing this feature!
+
+<sub>[T-119](https://linear.app/trpc/issue/T-119/feat-simplify-types-of-router-and-procedure)</sub>
+
+#4948 https://github.com/trpc/trpc/pull/4948 created 2023-10-21T14:45:37Z updated 2023-11-23T18:02:11Z fix(server): merge _input_out when using standalone middlewares
+Closes #4947
+
+## 🎯 Changes
+
+There was a problem in the current implementation of `experimental_standaloneMiddleware`
+where the `input` type was not merged properly in the middleware chain.
+
+Example:
+
+```
+  const t = initTRPC.create();
+  const schemaA = z.object({ valueA: z.string() });
+  const schemaB = z.object({ valueB: z.string() });
+
+  const mw1 = experimental_standaloneMiddleware<{
+    input: z.infer<typeof schemaA>;
+  }>().create((opts) => {
+    return opts.next();
+  });
+
+  const mw2 = experimental_standaloneMiddleware<{
+    input: z.infer<typeof schemaB>;
+  }>().create((opts) => {
+    return opts.next();
+  });
+
+  const combinedInputThatSatisfiesBothMiddlewares = z.object({
+    valueA: z.string(),
+    valueB: z.string(),
+  })
+
+  t.procedure
+    .input(combinedInputThatSatisfiesBothMiddlewares)
+    .use(mw1)
+    .use(mw2) // <-- error: input only has { valueA: string }
+    .query(
+      ({
+        input: { valueA, valueB }, // <-- error: input only has { valueB: string }
+      }) =>
+        `valueA: ${valueA}, valueB: ${valueB}`,
+    );
+```
+
+Funnily enough, since tRPC merges multiple .input() schemas under the hood, it was
+possible to never encounter this problem if you e.g. defined another .input() parser
+after a standalone middleware, e.g.:
+
+```
+t.input(onlyA).use(requiresAMiddleware).input(otherStuff).query(opts => /* opts.input has merged onlyA and otherStuff! */
+```
+
+This commits fixes the problem by merging `_input_out` whenever necessary.
+
+## ✅ Checklist
+
+- [x] I have followed the steps listed in the [Contributing guide](https://github.com/trpc/trpc/blob/main/CONTRIBUTING.md).
+- [x] If necessary, I have added documentation related to the changes made.
+- [x] I have added or updated the tests related to the changes made.
+
+
+#4973 https://github.com/trpc/trpc/pull/4973 created 2023-10-28T20:10:29Z updated 2023-12-02T12:02:11Z fix(server + client): incorrect inferred input type when using standalone middleware
+…wares
+
+Closes #4972
+
+## 🎯 Changes
+
+The previous fix fixed _input_out which resolved the incorrect types on the server side when defining the procedure, but still had incorrect _input_in types, which clients use.
+
+Similar fix as before: do a merge of the _input_in types similarly as with _input_out.
+
+## ✅ Checklist
+
+- [x] I have followed the steps listed in the [Contributing guide](https://github.com/trpc/trpc/blob/main/CONTRIBUTING.md).
+- [ ] If necessary, I have added documentation related to the changes made.
+- [x] I have added or updated the tests related to the changes made.
+
+
+#4713 https://github.com/trpc/trpc/pull/4713 created 2023-08-12T11:48:28Z updated 2023-09-30T18:01:55Z feat(`server`): add standalone middleware (experimental)
+## 🎯 Changes
+
+Proposal/feat: `standaloneMiddleware`
+
+```
+  const projectAccessMiddleware = standaloneMiddleware<{
+    ctx: { allowedProjects: string[] }; // defaults to 'object' if not defined
+    input: { projectId: string }; // defaults to 'unknown' if not defined
+  }>().create((opts) => {
+    if (!opts.ctx.allowedProjects.includes(opts.input.projectId)) {
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'Not allowed',
+      });
+    }
+
+    return opts.next();
+  });
+```
+    
+Enables creation of middlewares that are not bound to any particular
+tRPC instance; instead they can define a type of `Context`/`Input` that they
+expect, and as long as the preceding middleware chain provides `Context` and `Input`
+types that are assignable to the middleware's required context type,
+the middleware can be used in the chain. The required context defaults to `object` and the required input defaults to `unknown`.
+    
+This commit provides a few tests that demonstrate the usage of
+standalone middlewares in two different tRPC instances.
+
+## ✅ Checklist
+
+- [x] I have followed the steps listed in the [Contributing guide](https://github.com/trpc/trpc/blob/main/CONTRIBUTING.md).
+- [x] If necessary, I have added documentation related to the changes made.
+- [x] I have added or updated the tests related to the changes made.
+
+
+#3631 https://github.com/trpc/trpc/pull/3631 created 2023-01-17T21:10:22Z updated 2023-03-06T00:06:17Z feat(react-query): implement standalone getQueryKey
+Closes https://github.com/trpc/trpc/issues/3605 https://github.com/trpc/trpc/pull/3528
+
+## 🎯 Changes
+
+What changes are made in this PR? Is it a feature or a bug fix?
+
+## ✅ Checklist
+
+- [ ] I have followed the steps listed in the [Contributing guide](https://github.com/trpc/trpc/blob/main/CONTRIBUTING.md).
+- [ ] If necessary, I have added documentation related to the changes made.
+- [ ] I have added or updated the tests related to the changes made.
+
+
+#4431 https://github.com/trpc/trpc/issues/4431 created 2023-05-26T12:49:56Z updated 2023-05-26T20:18:23Z feat: React Server Components & Server Actions 
+### Describe the feature you'd like to request
+
+The last couple of days I have been experimenting with the new Next app directory, in combination with server actions. I want to suggest a new part of TRPC ecosystem to fully embrace next 13.4 and the big changes react 18 brought. 
+
+I don't have a precise clue how TRPC wants to implement next 13.4 and what the ideas are around server actions and server components. So maybe the below solution is redundant.
+
+### Describe the solution you'd like to see
+
+I would like to suggest the following API added to `@trpc/nextjs` and maybe even as a standalone package.
+
+
+```ts
+import { createServerHandlers } from `@trpc/nextjs`;
+const f = createServerHandlers();
+
+export const protectedProcedure = f.use(authMiddleware).  // authMiddleware is an example middleware, like how TRPC handles middleware
+
+```
+
+## server actions
+The new api should allow the following idea in the example component snippet: 
+```ts
+import { protectedProcedure } from "@/utils/trpc";
+import { cookies } from 'next/headers';
+
+//  createOrder is now an exportable, validated server action and can be used as form action
+export const createOrder = protectedProcedure.input(z.object({ product_id: z.number() })).action(async ({ctx,input}) => {
+"use server";
+// createOrder..
+});
+
+ 
+export default function CreateOrder({ productId }) {
+  return (
+    <form action={createOrder}>
+      <button type="submit">Create order</button>
+    </form>
+  );
+```
+
+## server components 
+For server components I would like to suggest the same kind of idea:
+```ts
+const getUserOrders = protectedProcedure.query(async ({ ctx }) => {
+  return await prisma.orders.findMany({ 
+       where : {
+           user_id: ctx.user.id
+        }
+);
+})
+
+export default  async function UserOrdersPage() {
+      const orders = await getUserOrders();
+
+      return <OrdersTable orders={orders} />
+}
+
+```
+
+## Advantages
+- the action and server component query function could be exported and reused in other components
+- The nicest part would that the function maybe integrated to the trpc router at some point: 
+```ts
+// example with the previous defined functions
+export const ordersRouter = t.router({
+createOrder: t.procedure.implement(createOrder),
+getUserOrders: t.procedure.implement(getUserOrders) 
+ })
+
+// note: implement is here a magic method that knows to add it correcly to the router. 
+// the specifics of this implement function are left-aside, but I think it should be possible
+```
+
+
+
+### Describe alternate solutions
+
+other possible libaries: 
+- https://github.com/pingdotgg/zact
+- https://github.com/TheEdoRan/next-safe-action
+
+However, I think TRPC could be the best solution (if it integrates with the app router)
+
+### Additional information
+
+I would really like to see suggestions or other enhancements and become aware of what the plans are with TRPC in the context of next 13.4!
+
+### 👨‍👧‍👦 Contributing
+
+- [ ] 🙋‍♂️ Yes, I'd be down to file a PR implementing this feature!
+
+#3605 https://github.com/trpc/trpc/issues/3605 created 2023-01-11T22:17:18Z updated 2023-02-18T00:05:22Z feat: move `trpc.something.getQueryKey` to a standalone function
+### Describe the feature you'd like to request
+
+Deprecate `.getQueryKey` from the magical chain. It's noisy and an edge-case where you need to use it.
+
+<img width="333" alt="CleanShot 2023-01-11 at 23 13 40@2x" src="https://user-images.githubusercontent.com/459267/211929258-0002f973-0757-4322-add6-c20e5d92a851.png">
+
+
+### Describe the solution you'd like to see
+
+Introduce another way of accessing it like. Example:
+
+Idea:
+
+
+```ts
+import { trpc } from '~/utils/trpc';
+import { getQueryKey } from '@trpc/react-query';
+
+function MyComponent() {
+  const utils = trpc.useContext();
+
+  const queryKey = utils.getQueryKey(t => t.post.byId('x'))
+}
+```
+
+Only on the root?
+
+
+```ts
+import { trpc } from '~/utils/trpc';
+
+function MyComponent() {
+  const queryKey = trpc.getQueryKey(t => t.post.byId('x'))
+}
+```
+
+### Describe alternate solutions
+
+Above
+
+### Additional information
+
+- Deprecate in v10
+- Delete in v11
+
+### 👨‍👧‍👦 Contributing
+
+- [X] 🙋‍♂️ Yes, I'd be down to file a PR implementing this feature!
+
+#4585 https://github.com/trpc/trpc/pull/4585 created 2023-07-03T20:18:33Z updated 2023-08-03T00:05:37Z chore(deps): update dependency next to v13.4.8
+[![Mend Renovate](https://app.renovatebot.com/images/banner.svg)](https://renovatebot.com)
+
+This PR contains the following updates:
+
+| Package | Change | Age | Adoption | Passing | Confidence |
+|---|---|---|---|---|---|
+| [next](https://nextjs.org) ([source](https://togithub.com/vercel/next.js)) | [`13.4.7` -> `13.4.8`](https://renovatebot.com/diffs/npm/next/13.4.7/13.4.8) | [![age](https://badges.renovateapi.com/packages/npm/next/13.4.8/age-slim)](https://docs.renovatebot.com/merge-confidence/) | [![adoption](https://badges.renovateapi.com/packages/npm/next/13.4.8/adoption-slim)](https://docs.renovatebot.com/merge-confidence/) | [![passing](https://badges.renovateapi.com/packages/npm/next/13.4.8/compatibility-slim/13.4.7)](https://docs.renovatebot.com/merge-confidence/) | [![confidence](https://badges.renovateapi.com/packages/npm/next/13.4.8/confidence-slim/13.4.7)](https://docs.renovatebot.com/merge-confidence/) |
+
+---
+
+### Release Notes
+
+<details>
+<summary>vercel/next.js (next)</summary>
+
+### [`v13.4.8`](https://togithub.com/vercel/next.js/releases/tag/v13.4.8)
+
+[Compare Source](https://togithub.com/vercel/next.js/compare/v13.4.7...v13.4.8)
+
+For a more detailed summary of recent performance improvements around compilation, please [see this comment](https://togithub.com/vercel/next.js/issues/48748#issuecomment-1614456247).
+
+***
+
+##### Core Changes
+
+-   Auto fill title/images/description from openGraph for twitter if missing: [#&#8203;51453](https://togithub.com/vercel/next.js/issues/51453)
+-   Route Module Updates: [#&#8203;51433](https://togithub.com/vercel/next.js/issues/51433)
+-   fix(typo): rename var name in comment: [#&#8203;51531](https://togithub.com/vercel/next.js/issues/51531)
+-   feat: support for numeric separators in revalidate config: [#&#8203;51438](https://togithub.com/vercel/next.js/issues/51438)
+-   Support response aborting: [#&#8203;51594](https://togithub.com/vercel/next.js/issues/51594)
+-   Next Build Turbo POC (2): [#&#8203;51546](https://togithub.com/vercel/next.js/issues/51546)
+-   bugfix: route interception with dynamic paths: [#&#8203;51526](https://togithub.com/vercel/next.js/issues/51526)
+-   add edge rendering for app dir for Turbopack: [#&#8203;51631](https://togithub.com/vercel/next.js/issues/51631)
+-   Pages Error Route Module Rendering: [#&#8203;51374](https://togithub.com/vercel/next.js/issues/51374)
+-   Revert "add edge rendering for app dir for Turbopack": [#&#8203;51659](https://togithub.com/vercel/next.js/issues/51659)
+-   Update cache handling in draft mode: [#&#8203;51663](https://togithub.com/vercel/next.js/issues/51663)
+-   Add esm entry for next/server and alias [@&#8203;vercel/og](https://togithub.com/vercel/og): [#&#8203;51651](https://togithub.com/vercel/next.js/issues/51651)
+-   Hot reload when conflicted pages detected and when conflicts are resolved: [#&#8203;51516](https://togithub.com/vercel/next.js/issues/51516)
+-   Fix standalone rendering for unmatched \_next routes: [#&#8203;51611](https://togithub.com/vercel/next.js/issues/51611)
+-   add edge rendering for app dir for Turbopack: [#&#8203;51666](https://togithub.com/vercel/next.js/issues/51666)
+-   Revert "Update `swc_core` to `v0.78.15`": [#&#8203;51716](https://togithub.com/vercel/next.js/issues/51716)
+-   type check tests (and convert next-test-utils.js to ts) : [#&#8203;51071](https://togithub.com/vercel/next.js/issues/51071)
+-   Add default modularizeImports that breaks up [@&#8203;mui/icons-material](https://togithub.com/mui/icons-material), [@&#8203;mui/material](https://togithub.com/mui/material), date-fns, lodash, lodash-es, ramda, react-bootstrap: [#&#8203;50900](https://togithub.com/vercel/next.js/issues/50900)
+-   Move Pages `render` out of server: [#&#8203;51678](https://togithub.com/vercel/next.js/issues/51678)
+-   Add url to patched fetch response: [#&#8203;51665](https://togithub.com/vercel/next.js/issues/51665)
+-   Correct Flight client's condition for SSR and `createServerReference`: [#&#8203;51723](https://togithub.com/vercel/next.js/issues/51723)
+-   Update manual basePath with trailingSlash: [#&#8203;51726](https://togithub.com/vercel/next.js/issues/51726)
+-   feat: add body parser limit for server actions: [#&#8203;51104](https://togithub.com/vercel/next.js/issues/51104)
+-   fix: handle 404 errors in HotReload client: [#&#8203;51637](https://togithub.com/vercel/next.js/issues/51637)
+-   Add critical next config value to github info: [#&#8203;51715](https://togithub.com/vercel/next.js/issues/51715)
+-   Fix not-found handling in turbopack: [#&#8203;51735](https://togithub.com/vercel/next.js/issues/51735)
+-   Allow matching against user-agent in rewrites that match headers: [#&#8203;48271](https://togithub.com/vercel/next.js/issues/48271)
+-   revalidate should be more than a boolean: [#&#8203;51627](https://togithub.com/vercel/next.js/issues/51627)
+-   Rename `serverActionsSizeLimit` as `serverActionsBodySizeLimit` and add docs: [#&#8203;51755](https://togithub.com/vercel/next.js/issues/51755)
+-   Fix HMR for missing dependencies in next-app-loader: [#&#8203;51778](https://togithub.com/vercel/next.js/issues/51778)
+-   fix: interception rewrites should support catch-all segments: [#&#8203;51787](https://togithub.com/vercel/next.js/issues/51787)
+-   Remove `execSync`: [#&#8203;51785](https://togithub.com/vercel/next.js/issues/51785)
+-   Remove unncessary source matching from loader: [#&#8203;51775](https://togithub.com/vercel/next.js/issues/51775)
+-   Fix `NODE_OPTIONS='--inspect'` not running expected: [#&#8203;51467](https://togithub.com/vercel/next.js/issues/51467)
+-   Fix tree-shaking for metadata image functions on the Edge runtime: [#&#8203;51762](https://togithub.com/vercel/next.js/issues/51762)
+-   Add `WATCHPACK_WATCHER_LIMIT=20`: [#&#8203;51826](https://togithub.com/vercel/next.js/issues/51826)
+-   Simplify Flight manifest plugin: [#&#8203;51589](https://togithub.com/vercel/next.js/issues/51589)
+-   performance: don't compile on hover on dev: [#&#8203;51830](https://togithub.com/vercel/next.js/issues/51830)
+-   Refactor `next-font-manifest-plugin`: [#&#8203;51835](https://togithub.com/vercel/next.js/issues/51835)
+-   feat: Introduce eslint rule for async client components: [#&#8203;51547](https://togithub.com/vercel/next.js/issues/51547)
+-   fix: webpack target should match node engines: [#&#8203;51852](https://togithub.com/vercel/next.js/issues/51852)
+-   Enable compression for Webpack's cache during dev: [#&#8203;51851](https://togithub.com/vercel/next.js/issues/51851)
+-   perf: only require nextjs-require-cache-hot-reloader related API in dev mode: [#&#8203;51834](https://togithub.com/vercel/next.js/issues/51834)
+-   fix: build stats should properly report root page size in appDir: [#&#8203;51854](https://togithub.com/vercel/next.js/issues/51854)
+-   Optimize client entry creation: [#&#8203;51849](https://togithub.com/vercel/next.js/issues/51849)
+-   Fix white screen when navigating to pages in certain cases: [#&#8203;51866](https://togithub.com/vercel/next.js/issues/51866)
+-   Fix missing request body in DELETE and OPTIONS Route Handlers: [#&#8203;51874](https://togithub.com/vercel/next.js/issues/51874)
+-   make stdout blocking on macos: [#&#8203;51883](https://togithub.com/vercel/next.js/issues/51883)
+-   Fix windows fill metadata dynamic path: [#&#8203;51885](https://togithub.com/vercel/next.js/issues/51885)
+-   Support relative url for openGraph.url and itunes.appArgument: [#&#8203;51877](https://togithub.com/vercel/next.js/issues/51877)
+-   feat(next-dev): add a new experimental flag: [#&#8203;51895](https://togithub.com/vercel/next.js/issues/51895)
+-   next/node-polyfill-web-streams: fix web stream polyfill for Node v16: [#&#8203;51901](https://togithub.com/vercel/next.js/issues/51901)
+-   node-polyfill-web-streams: require from stream/web instead of stream: [#&#8203;51906](https://togithub.com/vercel/next.js/issues/51906)
+-   Add retries and clear message to font fetching: [#&#8203;51890](https://togithub.com/vercel/next.js/issues/51890)
+-   performance: enable minification for the server bundles: [#&#8203;51831](https://togithub.com/vercel/next.js/issues/51831)
+-   Simplify module context invalidation: [#&#8203;51905](https://togithub.com/vercel/next.js/issues/51905)
+-   Reduce the client bundle size of App Router: [#&#8203;51806](https://togithub.com/vercel/next.js/issues/51806)
+-   fix turbopack mdx import map: [#&#8203;51881](https://togithub.com/vercel/next.js/issues/51881)
+-   error recovery during turbopack hydration: [#&#8203;51882](https://togithub.com/vercel/next.js/issues/51882)
+-   Ensure `edge` runtime Pages API/App Route handlers `AbortSignal` aborts on client disconnect: [#&#8203;51727](https://togithub.com/vercel/next.js/issues/51727)
+-   adds payload to server-external-packages.json: [#&#8203;51933](https://togithub.com/vercel/next.js/issues/51933)
+-   fix(next): improve error for using <Html> outside of document: [#&#8203;45056](https://togithub.com/vercel/next.js/issues/45056)
+-   Support react profiling option for app dir client components: [#&#8203;51947](https://togithub.com/vercel/next.js/issues/51947)
+-   Add cpu-features to server external packages: [#&#8203;51946](https://togithub.com/vercel/next.js/issues/51946)
+-   Add `unstable_getImgProps` export from `next/image`: [#&#8203;51205](https://togithub.com/vercel/next.js/issues/51205)
+-   Fix eslint async client component: [#&#8203;51952](https://togithub.com/vercel/next.js/issues/51952)
+-   fix modularizeImports with [@&#8203;mui/material](https://togithub.com/mui/material): [#&#8203;51953](https://togithub.com/vercel/next.js/issues/51953)
+-   Fix entrypoints.get and entrypoints.stream from turbopack: [#&#8203;50733](https://togithub.com/vercel/next.js/issues/50733)
+-   Optimize next-app-loader file resolution: [#&#8203;51924](https://togithub.com/vercel/next.js/issues/51924)
+-   fix(typedRoutes): added missing anchor props to LinkRestProps: [#&#8203;51977](https://togithub.com/vercel/next.js/issues/51977)
+-   Update `turbopack` and `swc_core` to `v0.78.24`: [#&#8203;51943](https://togithub.com/vercel/next.js/issues/51943)
+-   export config into functions config manifest: [#&#8203;51700](https://togithub.com/vercel/next.js/issues/51700)
+-   Add shared input filesystem: [#&#8203;51879](https://togithub.com/vercel/next.js/issues/51879)
+-   Make sure DevEx can approve docs PRs / Remove Spaces: [#&#8203;51996](https://togithub.com/vercel/next.js/issues/51996)
+-   Filter invalid image descriptor from metadata images: [#&#8203;51992](https://togithub.com/vercel/next.js/issues/51992)
+-   Fix NextRequest constructor parameters: [#&#8203;52001](https://togithub.com/vercel/next.js/issues/52001)
+-   Update edge-runtime to latest: [#&#8203;51944](https://togithub.com/vercel/next.js/issues/51944)
+-   Increase time and size windows for cached on-demand entries: [#&#8203;52019](https://togithub.com/vercel/next.js/issues/52019)
+-   Avoid disposing middleware and instrumentation hook during development: [#&#8203;52022](https://togithub.com/vercel/next.js/issues/52022)
+-   Update displayed error message for rsc case: [#&#8203;52004](https://togithub.com/vercel/next.js/issues/52004)
+-   Refactor some loaders to be synchronous: [#&#8203;51997](https://togithub.com/vercel/next.js/issues/51997)
+-   Optimize inlined Flight data array format: [#&#8203;52028](https://togithub.com/vercel/next.js/issues/52028)
+-   Revert "Optimize inlined Flight data array format": [#&#8203;52039](https://togithub.com/vercel/next.js/issues/52039)
+-   Refactor ContentSources to RouteTree: [#&#8203;51660](https://togithub.com/vercel/next.js/issues/51660)
+-   Fix font missing during server HMR: [#&#8203;52033](https://togithub.com/vercel/next.js/issues/52033)
+-   Enable Pages Route Module Rendering for Edge: [#&#8203;51894](https://togithub.com/vercel/next.js/issues/51894)
+-   Ensure non-implicit unstable_cache tags are propagated: [#&#8203;52058](https://togithub.com/vercel/next.js/issues/52058)
+-   Delegate static analyzation task to the router worker: [#&#8203;52104](https://togithub.com/vercel/next.js/issues/52104)
+-   Add default modularizeImports for antd / ant-design/icons / ahooks: [#&#8203;52031](https://togithub.com/vercel/next.js/issues/52031)
+-   Avoid unnecessary `resolveExternal` calls: [#&#8203;52053](https://togithub.com/vercel/next.js/issues/52053)
+-   Remove EnvironmentIntention: [#&#8203;51965](https://togithub.com/vercel/next.js/issues/51965)
+-   fix: env hot reload for RSC pages: [#&#8203;51930](https://togithub.com/vercel/next.js/issues/51930)
+
+##### Documentation Changes
+
+-   added good to know in `/app` based pages and layout in nested layouts: [#&#8203;51558](https://togithub.com/vercel/next.js/issues/51558)
+-   docs: Add Panda CSS to CSS-in-JS docs.: [#&#8203;51484](https://togithub.com/vercel/next.js/issues/51484)
+-   Add docs for src directory to include tailwindcss: [#&#8203;51619](https://togithub.com/vercel/next.js/issues/51619)
+-   Add page router documentation: [#&#8203;51626](https://togithub.com/vercel/next.js/issues/51626)
+-   docs: Add 'DO NOT EDIT' comment: [#&#8203;51600](https://togithub.com/vercel/next.js/issues/51600)
+-   Fix validator action breaking when PRs originate from forks: [#&#8203;51668](https://togithub.com/vercel/next.js/issues/51668)
+-   `docs`: fix generated app icons file extensions: [#&#8203;51562](https://togithub.com/vercel/next.js/issues/51562)
+-   Fix typo in 01-typescript.mdx: [#&#8203;51669](https://togithub.com/vercel/next.js/issues/51669)
+-   fix(docs): added missing dot: [#&#8203;51718](https://togithub.com/vercel/next.js/issues/51718)
+-   Update 01-images.mdx: [#&#8203;51532](https://togithub.com/vercel/next.js/issues/51532)
+-   Add app to tailwind.config.js in fonts documentation.: [#&#8203;51671](https://togithub.com/vercel/next.js/issues/51671)
+-   Update docs for Google Analytics 4: [#&#8203;51405](https://togithub.com/vercel/next.js/issues/51405)
+-   Fix Typo in Optimizing - Open Telemetry docs: [#&#8203;51729](https://togithub.com/vercel/next.js/issues/51729)
+-   docs: improve minor grammar mistake: [#&#8203;51758](https://togithub.com/vercel/next.js/issues/51758)
+-   fix: typo into 03-css-in-js.mdx page: [#&#8203;51761](https://togithub.com/vercel/next.js/issues/51761)
+-   docs: Add updated `next/image` video.: [#&#8203;51790](https://togithub.com/vercel/next.js/issues/51790)
+-   docs(deploy): fix GitHub Actions cache key: [#&#8203;51789](https://togithub.com/vercel/next.js/issues/51789)
+-   Fix usage of article "an" before a consonant sound: [#&#8203;51803](https://togithub.com/vercel/next.js/issues/51803)
+-   Update 10-router-handlers.mdx: [#&#8203;51850](https://togithub.com/vercel/next.js/issues/51850)
+-   \[docs] fix angle bracket in mdx: [#&#8203;51920](https://togithub.com/vercel/next.js/issues/51920)
+-   \[docs] Replace the term "hole" with "slot": [#&#8203;51919](https://togithub.com/vercel/next.js/issues/51919)
+-   \[docs] fix curly brackets in mdx: [#&#8203;51916](https://togithub.com/vercel/next.js/issues/51916)
+-   Add separate links in shared documentation: [#&#8203;51733](https://togithub.com/vercel/next.js/issues/51733)
+-   Fix run-on sentence: [#&#8203;51956](https://togithub.com/vercel/next.js/issues/51956)
+-   docs: make custom image loader a client component.: [#&#8203;51858](https://togithub.com/vercel/next.js/issues/51858)
+-   docs: clarify `reactStrictMode: true` by default: [#&#8203;51931](https://togithub.com/vercel/next.js/issues/51931)
+-   Remove unnecessary mention of scroll false: [#&#8203;51964](https://togithub.com/vercel/next.js/issues/51964)
+-   Update next lint section: [#&#8203;51898](https://togithub.com/vercel/next.js/issues/51898)
+-   Docs: Fix broken link: [#&#8203;51991](https://togithub.com/vercel/next.js/issues/51991)
+-   chore(docs): explain `NODE_ENV` environment variable: [#&#8203;52003](https://togithub.com/vercel/next.js/issues/52003)
+-   fix(create-next-app): consolidate messages to "Would you like to use": [#&#8203;52011](https://togithub.com/vercel/next.js/issues/52011)
+-   Docs: Fix missing typings for typescript example: [#&#8203;52076](https://togithub.com/vercel/next.js/issues/52076)
+-   docs: Fix broken link: [#&#8203;52092](https://togithub.com/vercel/next.js/issues/52092)
+
+##### Example Changes
+
+-   examples: improve `with-supabase` example: [#&#8203;51442](https://togithub.com/vercel/next.js/issues/51442)
+-   examples: add missing `supabase-js` dependency for `with-supabase` example: [#&#8203;51703](https://togithub.com/vercel/next.js/issues/51703)
+-   docs: update with-next-translate example using appdir: [#&#8203;51720](https://togithub.com/vercel/next.js/issues/51720)
+-   fix some issues on examples/app-dir-i18n-routing: [#&#8203;51576](https://togithub.com/vercel/next.js/issues/51576)
+-   chore(examples): relax pinned versions to fix npm install fail due to peer deps issue: [#&#8203;51636](https://togithub.com/vercel/next.js/issues/51636)
+-   Avoiding try-catch block on examples/app-dir-i18n-routing: [#&#8203;51786](https://togithub.com/vercel/next.js/issues/51786)
+-   \[examples] Update styling for with-supabase example: [#&#8203;51751](https://togithub.com/vercel/next.js/issues/51751)
+
+##### Misc Changes
+
+-   chore: make next/src/build files indexable on github: [#&#8203;51647](https://togithub.com/vercel/next.js/issues/51647)
+-   fix lockfile: [#&#8203;51650](https://togithub.com/vercel/next.js/issues/51650)
+-   Remove the 'notify' modifier on .vercel.approvers: [#&#8203;51655](https://togithub.com/vercel/next.js/issues/51655)
+-   Move the Next.js team back to github codeowners: [#&#8203;51657](https://togithub.com/vercel/next.js/issues/51657)
+-   Revert "\[Docs] Fix validator action breaking when PRs originate from …: [#&#8203;51674](https://togithub.com/vercel/next.js/issues/51674)
+-   Update `swc_core` to `v0.78.15`: [#&#8203;51269](https://togithub.com/vercel/next.js/issues/51269)
+-   Update link validator: use checks, fail on PR from forked repo: [#&#8203;51706](https://togithub.com/vercel/next.js/issues/51706)
+-   Update page.tsx tw className: [#&#8203;49040](https://togithub.com/vercel/next.js/issues/49040)
+-   Update needs for build and deploy: [#&#8203;51731](https://togithub.com/vercel/next.js/issues/51731)
+-   Ensure we run cargo-integration on next change: [#&#8203;51736](https://togithub.com/vercel/next.js/issues/51736)
+-   Update `swc_core` to `v0.78.24`: [#&#8203;51857](https://togithub.com/vercel/next.js/issues/51857)
+-   Revert "Update `swc_core` to `v0.78.24`": [#&#8203;51940](https://togithub.com/vercel/next.js/issues/51940)
+-   Update codeowners: [#&#8203;51935](https://togithub.com/vercel/next.js/issues/51935)
+-   lint fix
+-   Ensure metadata test is not affected by other tests: [#&#8203;51973](https://togithub.com/vercel/next.js/issues/51973)
+-   Remove test skip: [#&#8203;51988](https://togithub.com/vercel/next.js/issues/51988)
+-   Loosen metatdata test matcher: [#&#8203;52007](https://togithub.com/vercel/next.js/issues/52007)
+-   chore(script): improve markdown changelog output in sync-react.js: [#&#8203;52052](https://togithub.com/vercel/next.js/issues/52052)
+-   chore(script): fix typo in sync-react.js pull request url: [#&#8203;52057](https://togithub.com/vercel/next.js/issues/52057)
+-   fix app-hmr-changes.test.ts by updating next-tweet: [#&#8203;52046](https://togithub.com/vercel/next.js/issues/52046)
+-   link validator: log broken links for PRs from forks: [#&#8203;51963](https://togithub.com/vercel/next.js/issues/51963)
+-   Renable flaky tests disabled before: [#&#8203;51680](https://togithub.com/vercel/next.js/issues/51680)
+
+##### Credits
+
+Huge thanks to [@&#8203;huozhi](https://togithub.com/huozhi), [@&#8203;wyattjoh](https://togithub.com/wyattjoh), [@&#8203;dijonmusters](https://togithub.com/dijonmusters), [@&#8203;danger-ahead](https://togithub.com/danger-ahead), [@&#8203;bre30kra69cs](https://togithub.com/bre30kra69cs), [@&#8203;leerob](https://togithub.com/leerob), [@&#8203;Yash-Singh1](https://togithub.com/Yash-Singh1), [@&#8203;jridgewell](https://togithub.com/jridgewell), [@&#8203;alexkirsz](https://togithub.com/alexkirsz), [@&#8203;ztanner](https://togithub.com/ztanner), [@&#8203;sokra](https://togithub.com/sokra), [@&#8203;krmeda](https://togithub.com/krmeda), [@&#8203;tyler-lutz](https://togithub.com/tyler-lutz), [@&#8203;ijjk](https://togithub.com/ijjk), [@&#8203;delbaoliveira](https://togithub.com/delbaoliveira), [@&#8203;bigyanse](https://togithub.com/bigyanse), [@&#8203;kdy1](https://togithub.com/kdy1), [@&#8203;2-NOW](https://togithub.com/2-NOW), [@&#8203;ForsakenHarmony](https://togithub.com/ForsakenHarmony), [@&#8203;Mingyu-Song](https://togithub.com/Mingyu-Song), [@&#8203;morganfeeney](https://togithub.com/morganfeeney), [@&#8203;timneutkens](https://togithub.com/timneutkens), [@&#8203;aralroca](https://togithub.com/aralroca), [@&#8203;nickmccurdy](https://togithub.com/nickmccurdy), [@&#8203;adamjmcgrath](https://togithub.com/adamjmcgrath), [@&#8203;shuding](https://togithub.com/shuding), [@&#8203;devjiwonchoi](https://togithub.com/devjiwonchoi), [@&#8203;angel1254mc](https://togithub.com/angel1254mc), [@&#8203;cxa](https://togithub.com/cxa), [@&#8203;ibash](https://togithub.com/ibash), [@&#8203;mohanraj-r](https://togithub.com/mohanraj-r), [@&#8203;kevinmitch14](https://togithub.com/kevinmitch14), [@&#8203;iaurg](https://togithub.com/iaurg), [@&#8203;steebchen](https://togithub.com/steebchen), [@&#8203;Cow258](https://togithub.com/Cow258), [@&#8203;charlesbdudley](https://togithub.com/charlesbdudley), [@&#8203;feedthejim](https://togithub.com/feedthejim), [@&#8203;tyhopp](https://togithub.com/tyhopp), [@&#8203;Drblessing](https://togithub.com/Drblessing), [@&#8203;styfle](https://togithub.com/styfle), [@&#8203;kwonoj](https://togithub.com/kwonoj), [@&#8203;MaxLeiter](https://togithub.com/MaxLeiter), [@&#8203;milovangudelj](https://togithub.com/milovangudelj), [@&#8203;SukkaW](https://togithub.com/SukkaW), [@&#8203;jacobsfletch](https://togithub.com/jacobsfletch), [@&#8203;JoshuaKGoldberg](https://togithub.com/JoshuaKGoldberg), [@&#8203;zignis](https://togithub.com/zignis), [@&#8203;ChristianIvicevic](https://togithub.com/ChristianIvicevic), [@&#8203;mrxbox98](https://togithub.com/mrxbox98), [@&#8203;oliviertassinari](https://togithub.com/oliviertassinari), [@&#8203;balazsorban44](https://togithub.com/balazsorban44), [@&#8203;fsansalvadore](https://togithub.com/fsansalvadore), [@&#8203;DuCanhGH](https://togithub.com/DuCanhGH), [@&#8203;tvthatsme](https://togithub.com/tvthatsme), [@&#8203;gnoff](https://togithub.com/gnoff), and [@&#8203;SonMooSans](https://togithub.com/SonMooSans) for helping!
+
+</details>
+
+---
+
+### Configuration
+
+📅 **Schedule**: Branch creation - At any time (no schedule defined), Automerge - At any time (no schedule defined).
+
+🚦 **Automerge**: Disabled by config. Please merge this manually once you are satisfied.
+
+♻ **Rebasing**: Whenever PR becomes conflicted, or you tick the rebase/retry checkbox.
+
+🔕 **Ignore**: Close this PR and you won't be reminded about this update again.
+
+---
+
+ - [ ] <!-- rebase-check -->If you want to rebase/retry this PR, check this box
+
+---
+
+This PR has been generated by [Mend Renovate](https://www.mend.io/free-developer-tools/renovate/). View repository job log [here](https://developer.mend.io/github/trpc/trpc).
+<!--renovate-debug:eyJjcmVhdGVkSW5WZXIiOiIzNS4xNDQuMiIsInVwZGF0ZWRJblZlciI6IjM1LjE0NC4yIiwidGFyZ2V0QnJhbmNoIjoibWFpbiJ9-->
+
+
+#4243 https://github.com/trpc/trpc/issues/4243 created 2023-04-24T10:13:42Z updated 2023-05-11T12:02:11Z bug: Disabling batching breaks serialization of string values
+### Provide environment information
+
+```
+  System:
+    OS: macOS 13.0.1
+    CPU: (12) x64 Intel(R) Core(TM) i7-8750H CPU @ 2.20GHz
+    Memory: 2.14 GB / 16.00 GB
+    Shell: 3.5.1 - /usr/local/bin/fish
+  Binaries:
+    Node: 16.18.1 - /usr/local/bin/node
+    Yarn: 1.22.19 - /usr/local/bin/yarn
+    npm: 8.19.2 - /usr/local/bin/npm
+  Browsers:
+    Chrome: 112.0.5615.137
+    Firefox: 109.0
+    Safari: 16.1
+  npmPackages:
+    @tanstack/react-query: ^4.18.0 => 4.29.3 
+    @trpc/client: ^10.21.1 => 10.21.1 
+    @trpc/next: ^10.21.1 => 10.21.1 
+    @trpc/react-query: ^10.21.1 => 10.21.1 
+    @trpc/server: ^10.21.1 => 10.21.1 
+    next: ^13.2.1 => 13.3.1 
+    react: ^18.2.0 => 18.2.0 
+    typescript: ^4.8.3 => 4.9.5
+```
+
+### Describe the bug
+
+When batching is disabled, and the input is supposed to be string (defined with `z.string()`), it is unable properly parse the request body.
+The error:
+
+```
+{
+    "error": {
+        "message": "Unexpected number in JSON at position 1",
+        "code": -32700,
+        "data": {
+            "code": "PARSE_ERROR",
+            "httpStatus": 400,
+            "stack": "TRPCError: Unexpected number in JSON at position 1\n    at getRawProcedureInputOrThrow (file:///PATH/trpc-next-minimal/node_modules/@trpc/server/dist/resolveHTTPResponse-6c8965e4.mjs:24:15)\n    at resolveHTTPResponse (file:///PATH/trpc-next-minimal/node_modules/@trpc/server/dist/resolveHTTPResponse-6c8965e4.mjs:90:26)\n    at file:///PATHs/trpc-next-minimal/node_modules/@trpc/server/dist/nodeHTTPRequestHandler-2718f9d8.mjs:61:30\n    at processTicksAndRejections (node:internal/process/task_queues:96:5)\n    at async file:///PATH/trpc-next-minimal/node_modules/@trpc/server/dist/adapters/next.mjs:39:9"
+        }
+    }
+}
+```
+
+### Link to reproduction
+
+https://stackblitz.com/edit/github-ferjpz?file=src/utils/trpc.ts
+
+### To reproduce
+
+In the stackblitz sandbox, click "As string", observe error. Then basically the same thing, but payload is passed as object with one field, and no problem.
+
+### Additional information
+
+Seems like adding [data transformers](https://trpc.io/docs/server/data-transformers) can fix the issue. But it'd still be great not to have the need to apply this solution
+
+### 👨‍👧‍👦 Contributing
+
+- [x] 🙋‍♂️ Yes, I'd be down to file a PR fixing this bug!
+
+#2085 https://github.com/trpc/trpc/pull/2085 created 2022-07-05T07:03:16Z updated 2023-04-21T18:01:55Z add utility to remove invalid headers for node 18 `fetch()`
+Closes #2084
+
+#1946 https://github.com/trpc/trpc/pull/1946 created 2022-05-30T00:31:16Z updated 2022-10-06T00:18:46Z replace standalone example
+I had trouble understanding how tRPC worked, and this example was too complex for me. I created a simpler example that will be useful to a wider audience. I hope you like it :)
+
+It's possible it should be its own example, I wasn't sure what you would prefer
+
+#3334 https://github.com/trpc/trpc/issues/3334 created 2022-12-02T22:53:56Z updated 2022-12-19T12:02:27Z bug: SSR mode has stopped working in built Next.js app
+### Provide environment information
+
+```
+  System:
+    OS: Windows 10 10.0.22000
+    CPU: (24) x64 AMD Ryzen 9 3900X 12-Core Processor
+    Memory: 4.89 GB / 15.93 GB
+  Binaries:
+    Node: 19.2.0 - ~\scoop\apps\nodejs\current\node.EXE
+    npm: 8.19.3 - ~\scoop\apps\nodejs\current\npm.CMD
+  Browsers:
+    Edge: Spartan (44.22000.120.0), Chromium (107.0.1418.62)
+    Internet Explorer: 11.0.22000.120
+  npmPackages:
+    @tanstack/react-query: ^4.19.0 => 4.19.0
+    @trpc/client: ^10.4.3 => 10.4.3
+    @trpc/next: ^10.4.3 => 10.4.3
+    @trpc/react-query: ^10.4.3 => 10.4.3
+    @trpc/server: ^10.4.3 => 10.4.3
+    next: 13.0.6 => 13.0.6
+    react: 18.2.0 => 18.2.0
+    typescript: ^4.9.3 => 4.9.3
+```
+
+### Describe the bug
+
+With `ssr: true`, Next.js and React Query renders the tRPC query with SSR prepass as expected in **dev mode**.
+
+However, after building the app using `npm run build` and then `npm run start`, it doesn't render the page with an SSR prepass. The initial load still shows the "Loading..." message / has no data.
+
+`refetchOnWindowFocus` works still, so the issue is with the initial SSR prepass on a built Next.js app.
+
+### Link to reproduction
+
+https://github.com/austins/trpc-nextjs-ssr_not_working_in_build-repro
+
+### To reproduce
+
+1. Have `ssr: true`
+2. Build Next.js app
+3. Run built Next.js app
+4. See that it doesn't load the initial data via SSR prepass
+
+### Additional information
+
+_No response_
+
+### 👨‍👧‍👦 Contributing
+
+- [x] 🙋‍♂️ Yes, I'd be down to file a PR fixing this bug!
+
+#3178 https://github.com/trpc/trpc/issues/3178 created 2022-11-15T08:36:11Z updated 2022-12-09T12:02:04Z bug: head response to server not hits `responseMeta`
+### Provide environment information
+
+System:
+    OS: macOS 12.3.1
+    CPU: (16) x64 Intel(R) Core(TM) i9-9880H CPU @ 2.30GHz
+    Memory: 4.21 GB / 16.00 GB
+    Shell: 5.8 - /bin/zsh
+  Binaries:
+    Node: 16.17.1 - ~/.nvm/versions/node/v16.17.1/bin/node
+    Yarn: 1.22.10 - /usr/local/bin/yarn
+    npm: 8.15.0 - ~/.nvm/versions/node/v16.17.1/bin/npm
+    Watchman: 2022.09.26.00 - /usr/local/bin/watchman
+  Browsers:
+    Chrome: 107.0.5304.110
+    Safari: 15.4
+  npmPackages:
+    @tanstack/react-query: ^4.3.8 => 4.16.1 
+    @trpc/client: ^10.0.0-rc.7 => 10.0.0-rc.7 
+    @trpc/next: ^10.0.0-rc.7 => 10.0.0-rc.7 
+    @trpc/react-query: ^10.0.0-rc.7 => 10.0.0-rc.7 
+    @trpc/server: ^10.0.0-rc.7 => 10.0.0-rc.7 
+    next: 13.0.0 => 13.0.0 
+    react: 18.2.0 => 18.2.0 
+
+### Describe the bug
+
+I'm trying fetch head of server and I get the response `HTTP/1.1 204 No Content` . But I configure response meta cors headers like this: 
+```
+import { createHTTPServer } from '@trpc/server/adapters/standalone';
+import { appRouter } from '~/api-router';
+
+// http server
+const { server, listen } = createHTTPServer({
+  router: appRouter,
+  responseMeta: (opts) => {
+    return {
+      headers: {
+        'Access-Control-Allow-Credentials': 'true',
+        'Access-Control-Allow-Headers': '*',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': '*',
+      },
+    };
+  },
+});
+```
+
+So I get CORS error in browser. I want to make separated server and client services. Imaging that client will be in `example.com` and my tRPC api will in `api.example.com`. I found some hardcoded point that handle it: 
+https://github.com/trpc/trpc/blob/bba7d97ccf864517dc2455dcbd0e320df280215e/packages/server/src/http/resolveHTTPResponse.ts#L67
+
+Is it a bug? How can I configure headers of head requests in standalone server?
+
+### Link to reproduction
+
+no need
+
+### To reproduce
+
+any head curl request to a server
+```
+curl -I "http://localhost:2022/greeting?batch=1&input=%7B%220%22%3A%7B%22name%22%3A%22123%22%7D%7D"
+```
+
+### Additional information
+
+_No response_
+
+### 👨‍👧‍👦 Contributing
+
+- [x] 🙋‍♂️ Yes, I'd be down to file a PR fixing this bug!
+
+#672 https://github.com/trpc/trpc/issues/672 created 2021-07-19T09:25:43Z updated 2022-10-05T00:09:32Z Client does not enforce 'no input' when an endpoint declared without 'input'
+Example
+
+`
+const appRouter = trpc
+  .router()
+  .query('getData', {
+    async resolve() {
+      return data;
+    },
+  })
+`
+
+
+`
+ await api.query('getData', 'some unneeded input');
+`
+
+Runtime error - 'no input expected'.
+
+
+Expected Behaviour:
+Client should enforce no input on using the compiler.
+
+
+#880 https://github.com/trpc/trpc/pull/880 created 2021-09-04T01:14:37Z updated 2022-10-10T06:18:15Z refactor http internals
+- Expose lower-level function `resolveHTTPResponse()` to be used in place of `requestHandler()` when doing adapters
+- Rename `requestRequestHandler` to `nodeHTTPRequestHandler` and move to `adapters/node-http` *
+- Make naming consistent of `HTTP` rather than `Http` everywhere *
+- Move standalone http server to `adapters/standalone` *
+- Move websocket from `@trpc/ws` to `@trpc/adapters/ws` *
+
+***)** with backwards compatibility and deprecation warnings
+
+## why? 
+
+- separation of "generic" HTTP vs `require('http')`-esque HTTP
+- easier aws lambda support (#882)
+- easier svelte support
+
+
+
+#16 https://github.com/trpc/trpc/issues/16 created 2021-01-25T11:40:16Z updated 2022-10-05T06:10:52Z Ideas / things to do
+## General
+
+- [x] I want args to be changed to be **1 single input argument** (similar to GraphQL best practices)
+- [ ] Traceability. Listen to errors so they're loggable - express/next middlewares & api client
+- [ ] custom error printing - printing validation output would prob be nice
+- [x] Any way of automatically testing/asserting type inference in jest or whatnot? 
+- [x] nice readme with some gifs showing the type autocompletion
+- [x] Tests
+
+## docs 
+
+- [x] relationship with graphql / why not graphql? 
+- [x] gif / video with autocompletion 
+- [x] link examples in readme
+- [x] alternatives? blitz, hyper-ts
+- [ ] mutations / queries / subscriptions docced
+- [ ] input validators doc
+
+
+
+## Server
+
+### Resolvers with input schema
+
+- [x] make `input` optional 
+- [ ] Possible to bulk-add input schema (like `.queries()`
+- [x] make `queries()`, etc `private` - disallow creating endpoints without input schema
+
+### niceities
+
+- [ ] better inferer-helpers & clean them up - e.g. `inferQueryData<TRouter, TPath extends string>`
+- [x] subscription pull factory in core? see chat example for how it works (no need for redis or smth for queue)
+- [x] Create connect middleware / standalone server
+- [x] refactor: remove `invokeX`-fns, make nicer impl
+- [x] get rid of `@typescript-eslint/no-explicit-any` across codebase
+- [x] get rid of `@typescript-eslint/ban-types`
+- [x] update chat example to use type inference rather than importing prisma types
+
+## Client
+
+- [x] Can we use [react query select](https://react-query.tanstack.com/guides/migrating-to-react-query-3#query-data-selectors)? 
+- [x] is http subscriptions a terrible idea that shouldn't be part of this?
+- [x] allow `useQuery(string)` rather than forcing `useQuery([string, ...args])` on queries w/o inputs
+- [x] move o onSuccess to react specific implementation as the client doesn't have the transformed data
+- [ ] query keys needs to be prefixed with sub/mut/quer so they don't collide
+- [x] prefetch query, rename ssr prefetch 
+
+## old/completed
+
+
+- [x] Breaking: enforced input data validation - using zod/yup
+- [x] Turn into monorepo with client/react/server as separate libs
+- [x] 🐛  Fix type inference on `react` lib after monorepo migration
+- [x] Subscriptions
+  - [x] Add TTL 
+  - [x] Cancel requests in client on unsub
+  - [x] Cancel sub on cancel req
+- [x] Next.js support
+- [x] Next.js reference project
+- [x] Refactor `createExpress` / `createNext` things
+- [x] Remove logs, etc (add `debug()`?)
+- [x] publish
+- [x] Order of get initial data after trigger on
+- [x] Zodendpointt that calls endpoint (async)? 
+	- [x] See if works with other validation 
+		- [x] Validate unknown >> input
+		- [x] Yupesque
+- [x] Turn endpoints private
+- [x] Integrations in lib
+- [x] See if works with tsdx
+- [x] Subscriptions using react query 
+- [x] Refactor fetch methods to be cancellable 
+- [x] Subscription Refactor on/on to be async, remove initial data ting
+- [x] Move adapters to adapters folder 
+- [x] data transformers are a bit hacked in and it's unclear where they belong - maybe move to implementation code smh?
+
+## tests
+
+- [dtslint](https://github.com/microsoft/dtslint) e.g.https://github.com/mjewell/good-form/blob/c39b2f8eeb394e6d5501e3530c06ae4119c4e672/types/Field.types.ts#L8
+
+#508 https://github.com/trpc/trpc/pull/508 created 2021-06-10T22:16:45Z updated 2022-10-12T00:10:47Z add websocket support
+# WebSocket support 🎉 
+
+- 😻 add support for websockets transport using  the `ws`-package and a new `wsLink()`
+- 🤔 planning to release this a bit earlier than it's ready but with hidden docs and some warnings if you use it
+
+
+## How to review
+
+- 👉  **Try it on CodeSandbox** - https://githubbox.com/trpc/trpc/tree/feature/websockets/examples/standalone-server
+- 👀  Read the `test('$subscription()', ..` in the tests to understand usage both on the backend and frontend https://github.com/trpc/trpc/blob/feature/websockets/packages/server/test/websockets.test.ts
+
+
+## Left to do
+
+- [ ] someone to review / critisise the API
+- [x] add support for queries
+- [x] add support for subscriptions
+- [x] add support for mutations
+- [ ] graceful reconnect when server shutting down - broadcast some event to clients and they can have a grace period where they reconnect (and ideally not all at once), in k8s this is 30sec?
+- [ ] cleanup api - need some input on both the backend and the frontend
+- [x] more rigid testing 
+- [ ] ~maybe creating a new `Subscription` instance on the backend for each isn't that performant?~ 🤷 
+- [x] allow backend subscriptions to control when they stop themselves and notify client when they do
+- [x] should `webSocketLink` be called `wsLink`?
+- [x] either make server not depend on `ws` or make separate package?
+- [x] observable logic is quite convoluted
+- [x] errors and dege cases
+  - [x] backend: what to do if a `Subscription` emits an error? auto-destroy the subscription? just pass to client?
+  - [x] client: what to do if a subscription encounters an error? up to the subscriber i guess?
+  - [x] some errors can probably terminate the subscription - for instance if `createContext` fails or if the ws server goes down - how to handle that?
+
+#1724 https://github.com/trpc/trpc/issues/1724 created 2022-04-01T15:23:50Z updated 2022-10-04T12:02:48Z tRPC to OpenAPI generator
+**Note:** I do not want to have this as part of the library itself, but an example would be good
+
+## Overview
+
+With the addition of output parser (#1699), we should now have all the pieces to automatically create an OpenAPI-compliant endpoint
+
+
+### Some rough ideas:
+
+
+
+- Create a new endpoint `/api/openapi.yml.ts` that can use the method earlier to generate a schema
+- Create a catch-all `/api/openapi/[...params].ts` that can dynamically read and call tRPC queries
+- https://github.com/StefanTerdell/zod-to-json-schema#readme can be useful
+- Example how to create JSON schema from tRPC routes: https://gist.github.com/KATT/993fbcbaf123f08098a154631e5af68c
+- This package can be of good inspo for the openapi output https://github.com/RobinTail/express-zod-api
+
+
+A starting point for the api handler:
+
+```ts
+import { ProcedureType, TRPCError } from '@trpc/server';
+import { NextApiRequest, NextApiResponse } from 'next';
+import { createContext } from '~/server/context';
+import { appRouter } from '~/server/routers/_app';
+
+export default async function swag(req: NextApiRequest, res: NextApiResponse) {
+  const { params, ...queryParams } = req.query;
+  if (req.method !== 'POST' && req.method !== 'GET') {
+    res.status(405).json({
+      message: 'Invalid method',
+    });
+    return;
+  }
+  const path = Array.isArray(params) ? params.join('/') : params;
+  const ctx = await createContext({ req, res });
+  const type: ProcedureType = req.method === 'POST' ? 'mutation' : 'query';
+  try {
+    const caller = appRouter.createCaller({ ctx });
+
+    const fn = caller[type] as any;
+    const result = await fn(path, queryParams);
+
+    res.json(result);
+    return;
+  } catch (error) {
+    if (!(error instanceof TRPCError)) {
+      res.status(500).json({
+        message: 'Something went wrong',
+      });
+      return;
+    }
+    const formatted = appRouter.getErrorShape({
+      error,
+      path,
+      ctx,
+      input: params,
+      type,
+    });
+    // TODO: use https://github.com/trpc/trpc/blob/main/packages/server/src/http/internals/getHTTPStatusCode.ts#L55-L59
+    // Feel free to make them publicly exposed
+    const status = 500;
+    res.status(500).json(formatted);
+  }
+}
+```
+
+#1274 https://github.com/trpc/trpc/pull/1274 created 2021-11-16T18:54:24Z updated 2022-10-08T06:04:12Z Bump next from 12.0.3 to 12.0.4
+Bumps [next](https://github.com/vercel/next.js) from 12.0.3 to 12.0.4.
+<details>
+<summary>Release notes</summary>
+<p><em>Sourced from <a href="https://github.com/vercel/next.js/releases">next's releases</a>.</em></p>
+<blockquote>
+<h2>v12.0.4</h2>
+<h3>Core Changes</h3>
+<ul>
+<li>Update middleware eval checks: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/30883">#30883</a></li>
+<li>Optimize the SSR middleware runtime size: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/30906">#30906</a></li>
+<li>Improve error handling in the SSR middleware: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31057">#31057</a></li>
+<li>Ensure decode error in minimal mode responds with 400 not 500: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31037">#31037</a></li>
+<li>Update ServerlessPlugin to use chunkGraph: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31058">#31058</a></li>
+<li>Fix custom 404 page when concurrentFeatures is enabled: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31059">#31059</a></li>
+<li>Upgrade React alpha and experimental dependencies to latest: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31039">#31039</a></li>
+<li>Change disabled SWC message to Log.info: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31091">#31091</a></li>
+<li>Add render prop support to <code>&lt;Main&gt;</code>: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/30156">#30156</a></li>
+<li>Change .web extension of document page to part of path: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31116">#31116</a></li>
+<li>Enable code splitting for the web runtime build: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31090">#31090</a></li>
+<li>Give priority to document.title over h1 when announcing page change: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31147">#31147</a></li>
+<li>Add webpack5 namespace to fix type errors: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31140">#31140</a></li>
+<li>Add warning when image has unused <code>sizes</code> prop: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31064">#31064</a></li>
+<li>Add experimental next-swc jest transform: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/30993">#30993</a></li>
+<li>fix: support --cache-strategy ESLint argument (fixes <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/29926">#29926</a>): <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/29928">#29928</a></li>
+<li>fixes <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31060">#31060</a>: NullReferenceException: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31061">#31061</a></li>
+<li>use loader-utils 2 for resolve-url-loader to fix <code>./data:</code> urls in sass: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31134">#31134</a></li>
+<li>Update reason message for isolatedModules and esModuleInterop: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31150">#31150</a></li>
+<li>Add input/output test for 30091: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31166">#31166</a></li>
+<li>Fix <code>useId</code> mismatches on hydration: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31102">#31102</a></li>
+<li>Do not hide body when concurrentFeatures is enabled: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31187">#31187</a></li>
+<li>Fix middleware i18n rewrites: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31174">#31174</a></li>
+<li>next-swc: Add <code>displayNameAndId</code> of <code>styled-components</code>: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31189">#31189</a></li>
+<li>Use require.resolve to detect &quot;framework&quot; packages (fix pnpm): <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/21048">#21048</a></li>
+<li>Add all cases where webpack5 type is used: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31206">#31206</a></li>
+<li>Add test for styled-components SWC transform disabled: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31214">#31214</a></li>
+<li>Add initial standalone build handling: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31003">#31003</a></li>
+<li>fix(middleware): expose <code>CryptoKey</code> and <code>globalThis.CryptoKey</code>: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31193">#31193</a></li>
+<li>Disable styled-components displayName in production: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31216">#31216</a></li>
+<li>fix(31013): add base path to preflight request url: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31101">#31101</a></li>
+<li>share collections in middleware vm context: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31043">#31043</a></li>
+<li>Support assetPrefix specific protocol: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31213">#31213</a></li>
+<li>upgrade webpack: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31034">#31034</a></li>
+<li>Update swc: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31233">#31233</a></li>
+<li>run middleware parser handler only for middleware modules: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31219">#31219</a></li>
+<li>Update swc minifier: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31242">#31242</a></li>
+<li>Fix process.env overriden in web runtime: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31261">#31261</a></li>
+<li>fix: replaced useless let: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31239">#31239</a></li>
+<li>Experimental next/jest config helper: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31246">#31246</a></li>
+<li>correctly assess node equality when nonce attribute is present: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/27573">#27573</a></li>
+<li>bugfix/i18n Do not support the second locale in the pathname: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31229">#31229</a></li>
+<li>Fix typo in <code>next build</code> log: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31295">#31295</a></li>
+<li>Ensure next/jest is published: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31296">#31296</a></li>
+<li>Update swc for <code>jsc.paths</code>: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31290">#31290</a></li>
+<li>next/jest: Ensure typeof window is not transformed in jsdom environment: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31304">#31304</a></li>
+<li>Output where preference is saved: <a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31305">#31305</a></li>
+</ul>
+<!-- raw HTML omitted -->
+</blockquote>
+<p>... (truncated)</p>
+</details>
+<details>
+<summary>Commits</summary>
+<ul>
+<li><a href="https://github.com/vercel/next.js/commit/abd87a515ea5954b7f96de455a74cb80eb83757f"><code>abd87a5</code></a> v12.0.4</li>
+<li><a href="https://github.com/vercel/next.js/commit/b2046400086fcfc18d77a4695f71fae1a4e4dbc4"><code>b204640</code></a> v12.0.4-canary.15</li>
+<li><a href="https://github.com/vercel/next.js/commit/a9eb0de8e792b237264e248bc70d0e834cd5fe30"><code>a9eb0de</code></a> Ensure swc dep is copied for isolated tests (<a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31462">#31462</a>)</li>
+<li><a href="https://github.com/vercel/next.js/commit/b51a020941f79dccf818bad841bf377d6fd7bd1d"><code>b51a020</code></a> middleware: add request referrer support (<a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31343">#31343</a>)</li>
+<li><a href="https://github.com/vercel/next.js/commit/66d9b4e14a2b59475480f24ad7c4a19d0f7d7eb7"><code>66d9b4e</code></a> v12.0.4-canary.14</li>
+<li><a href="https://github.com/vercel/next.js/commit/be03a1d17bf8aa16cae3c0658ad553ae93fd1ef6"><code>be03a1d</code></a> Remove .only and ensure jest lint rules apply for all tests (<a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31456">#31456</a>)</li>
+<li><a href="https://github.com/vercel/next.js/commit/ef5795327a99ec8a3dfbe0b40fc1fdde3cdc58fb"><code>ef57953</code></a> Close stream when fatal error occurs (<a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31164">#31164</a>)</li>
+<li><a href="https://github.com/vercel/next.js/commit/eb0bd63af48ea9bec85670ad1bcbc455c5f879ec"><code>eb0bd63</code></a> Fix basePath replacing server-side and <code>normalizeLocalePath()</code> when path is e...</li>
+<li><a href="https://github.com/vercel/next.js/commit/2d9ac399c145fc201bce9ebcef5edd4e996d9243"><code>2d9ac39</code></a> Remove moment locale replace from craCompat as it's a default in Next.js 12 (...</li>
+<li><a href="https://github.com/vercel/next.js/commit/16d56e2c49b2d4bff93e6e74e8939efae2ccda4d"><code>16d56e2</code></a> Refactor server/render for SSR streaming (<a href="https://github-redirect.dependabot.com/vercel/next.js/issues/31231">#31231</a>)</li>
+<li>Additional commits viewable in <a href="https://github.com/vercel/next.js/compare/v12.0.3...v12.0.4">compare view</a></li>
+</ul>
+</details>
+<br />
+
+
+[![Dependabot compatibility score](https://dependabot-badges.githubapp.com/badges/compatibility_score?dependency-name=next&package-manager=npm_and_yarn&previous-version=12.0.3&new-version=12.0.4)](https://docs.github.com/en/github/managing-security-vulnerabilities/about-dependabot-security-updates#about-compatibility-scores)
+
+Dependabot will resolve any conflicts with this PR as long as you don't alter it yourself. You can also trigger a rebase manually by commenting `@dependabot rebase`.
+
+[//]: # (dependabot-automerge-start)
+[//]: # (dependabot-automerge-end)
+
+---
+
+<details>
+<summary>Dependabot commands and options</summary>
+<br />
+
+You can trigger Dependabot actions by commenting on this PR:
+- `@dependabot rebase` will rebase this PR
+- `@dependabot recreate` will recreate this PR, overwriting any edits that have been made to it
+- `@dependabot merge` will merge this PR after your CI passes on it
+- `@dependabot squash and merge` will squash and merge this PR after your CI passes on it
+- `@dependabot cancel merge` will cancel a previously requested merge and block automerging
+- `@dependabot reopen` will reopen this PR if it is closed
+- `@dependabot close` will close this PR and stop Dependabot recreating it. You can achieve the same result by closing it manually
+- `@dependabot ignore this major version` will close this PR and stop Dependabot creating any more for this major version (unless you reopen the PR or upgrade to it yourself)
+- `@dependabot ignore this minor version` will close this PR and stop Dependabot creating any more for this minor version (unless you reopen the PR or upgrade to it yourself)
+- `@dependabot ignore this dependency` will close this PR and stop Dependabot creating any more for this dependency (unless you reopen the PR or upgrade to it yourself)
+
+
+</details>
+
+#1273 https://github.com/trpc/trpc/pull/1273 created 2021-11-16T18:51:14Z updated 2022-10-08T06:04:13Z Bump eslint-config-next from 12.0.3 to 12.0.4
+Bumps [eslint-config-next](https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next) from 12.0.3 to 12.0.4.
+<details>
+<summary>Release notes</summary>
+<p><em>Sourced from <a href="https://github.com/vercel/next.js/releases">eslint-config-next's releases</a>.</em></p>
+<blockquote>
+<h2>v12.0.4</h2>
+<h3>Core Changes</h3>
+<ul>
+<li>Update middleware eval checks: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/30883">#30883</a></li>
+<li>Optimize the SSR middleware runtime size: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/30906">#30906</a></li>
+<li>Improve error handling in the SSR middleware: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31057">#31057</a></li>
+<li>Ensure decode error in minimal mode responds with 400 not 500: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31037">#31037</a></li>
+<li>Update ServerlessPlugin to use chunkGraph: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31058">#31058</a></li>
+<li>Fix custom 404 page when concurrentFeatures is enabled: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31059">#31059</a></li>
+<li>Upgrade React alpha and experimental dependencies to latest: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31039">#31039</a></li>
+<li>Change disabled SWC message to Log.info: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31091">#31091</a></li>
+<li>Add render prop support to <code>&lt;Main&gt;</code>: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/30156">#30156</a></li>
+<li>Change .web extension of document page to part of path: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31116">#31116</a></li>
+<li>Enable code splitting for the web runtime build: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31090">#31090</a></li>
+<li>Give priority to document.title over h1 when announcing page change: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31147">#31147</a></li>
+<li>Add webpack5 namespace to fix type errors: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31140">#31140</a></li>
+<li>Add warning when image has unused <code>sizes</code> prop: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31064">#31064</a></li>
+<li>Add experimental next-swc jest transform: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/30993">#30993</a></li>
+<li>fix: support --cache-strategy ESLint argument (fixes <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/29926">#29926</a>): <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/29928">#29928</a></li>
+<li>fixes <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31060">#31060</a>: NullReferenceException: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31061">#31061</a></li>
+<li>use loader-utils 2 for resolve-url-loader to fix <code>./data:</code> urls in sass: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31134">#31134</a></li>
+<li>Update reason message for isolatedModules and esModuleInterop: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31150">#31150</a></li>
+<li>Add input/output test for 30091: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31166">#31166</a></li>
+<li>Fix <code>useId</code> mismatches on hydration: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31102">#31102</a></li>
+<li>Do not hide body when concurrentFeatures is enabled: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31187">#31187</a></li>
+<li>Fix middleware i18n rewrites: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31174">#31174</a></li>
+<li>next-swc: Add <code>displayNameAndId</code> of <code>styled-components</code>: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31189">#31189</a></li>
+<li>Use require.resolve to detect &quot;framework&quot; packages (fix pnpm): <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/21048">#21048</a></li>
+<li>Add all cases where webpack5 type is used: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31206">#31206</a></li>
+<li>Add test for styled-components SWC transform disabled: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31214">#31214</a></li>
+<li>Add initial standalone build handling: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31003">#31003</a></li>
+<li>fix(middleware): expose <code>CryptoKey</code> and <code>globalThis.CryptoKey</code>: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31193">#31193</a></li>
+<li>Disable styled-components displayName in production: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31216">#31216</a></li>
+<li>fix(31013): add base path to preflight request url: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31101">#31101</a></li>
+<li>share collections in middleware vm context: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31043">#31043</a></li>
+<li>Support assetPrefix specific protocol: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31213">#31213</a></li>
+<li>upgrade webpack: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31034">#31034</a></li>
+<li>Update swc: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31233">#31233</a></li>
+<li>run middleware parser handler only for middleware modules: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31219">#31219</a></li>
+<li>Update swc minifier: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31242">#31242</a></li>
+<li>Fix process.env overriden in web runtime: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31261">#31261</a></li>
+<li>fix: replaced useless let: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31239">#31239</a></li>
+<li>Experimental next/jest config helper: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31246">#31246</a></li>
+<li>correctly assess node equality when nonce attribute is present: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/27573">#27573</a></li>
+<li>bugfix/i18n Do not support the second locale in the pathname: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31229">#31229</a></li>
+<li>Fix typo in <code>next build</code> log: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31295">#31295</a></li>
+<li>Ensure next/jest is published: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31296">#31296</a></li>
+<li>Update swc for <code>jsc.paths</code>: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31290">#31290</a></li>
+<li>next/jest: Ensure typeof window is not transformed in jsdom environment: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31304">#31304</a></li>
+<li>Output where preference is saved: <a href="https://github.com/vercel/next.js/tree/HEAD/packages/eslint-config-next/issues/31305">#31305</a></li>
+</ul>
+<!-- raw HTML omitted -->
+</blockquote>
+<p>... (truncated)</p>
+</details>
+<details>
+<summary>Commits</summary>
+<ul>
+<li><a href="https://github.com/vercel/next.js/commit/abd87a515ea5954b7f96de455a74cb80eb83757f"><code>abd87a5</code></a> v12.0.4</li>
+<li><a href="https://github.com/vercel/next.js/commit/b2046400086fcfc18d77a4695f71fae1a4e4dbc4"><code>b204640</code></a> v12.0.4-canary.15</li>
+<li><a href="https://github.com/vercel/next.js/commit/66d9b4e14a2b59475480f24ad7c4a19d0f7d7eb7"><code>66d9b4e</code></a> v12.0.4-canary.14</li>
+<li><a href="https://github.com/vercel/next.js/commit/e5171758d3b72b90269225e6f3b371a3b2bcc0cb"><code>e517175</code></a> v12.0.4-canary.13</li>
+<li><a href="https://github.com/vercel/next.js/commit/8c84b4a1b6f1b2af24bcdca0e51ca29fb2778693"><code>8c84b4a</code></a> v12.0.4-canary.12</li>
+<li><a href="https://github.com/vercel/next.js/commit/950eb0f48916e36e813e7aeb3d80cc24293fa0c2"><code>950eb0f</code></a> v12.0.4-canary.11</li>
+<li><a href="https://github.com/vercel/next.js/commit/d9fc3eeb7e7fc4e9e35feaabacb33b790a2705da"><code>d9fc3ee</code></a> v12.0.4-canary.10</li>
+<li><a href="https://github.com/vercel/next.js/commit/51ad2542bb662132f734110f7571c92b8bb1dcbf"><code>51ad254</code></a> v12.0.4-canary.9</li>
+<li><a href="https://github.com/vercel/next.js/commit/fbe366f4656a29f8ef03b7ee66c38ab9f642d665"><code>fbe366f</code></a> v12.0.4-canary.8</li>
+<li><a href="https://github.com/vercel/next.js/commit/7aabcda66e0bc6159cfe0685622bb0aede1b3f42"><code>7aabcda</code></a> v12.0.4-canary.7</li>
+<li>Additional commits viewable in <a href="https://github.com/vercel/next.js/commits/v12.0.4/packages/eslint-config-next">compare view</a></li>
+</ul>
+</details>
+<br />
+
+
+[![Dependabot compatibility score](https://dependabot-badges.githubapp.com/badges/compatibility_score?dependency-name=eslint-config-next&package-manager=npm_and_yarn&previous-version=12.0.3&new-version=12.0.4)](https://docs.github.com/en/github/managing-security-vulnerabilities/about-dependabot-security-updates#about-compatibility-scores)
+
+Dependabot will resolve any conflicts with this PR as long as you don't alter it yourself. You can also trigger a rebase manually by commenting `@dependabot rebase`.
+
+[//]: # (dependabot-automerge-start)
+[//]: # (dependabot-automerge-end)
+
+---
+
+<details>
+<summary>Dependabot commands and options</summary>
+<br />
+
+You can trigger Dependabot actions by commenting on this PR:
+- `@dependabot rebase` will rebase this PR
+- `@dependabot recreate` will recreate this PR, overwriting any edits that have been made to it
+- `@dependabot merge` will merge this PR after your CI passes on it
+- `@dependabot squash and merge` will squash and merge this PR after your CI passes on it
+- `@dependabot cancel merge` will cancel a previously requested merge and block automerging
+- `@dependabot reopen` will reopen this PR if it is closed
+- `@dependabot close` will close this PR and stop Dependabot recreating it. You can achieve the same result by closing it manually
+- `@dependabot ignore this major version` will close this PR and stop Dependabot creating any more for this major version (unless you reopen the PR or upgrade to it yourself)
+- `@dependabot ignore this minor version` will close this PR and stop Dependabot creating any more for this minor version (unless you reopen the PR or upgrade to it yourself)
+- `@dependabot ignore this dependency` will close this PR and stop Dependabot creating any more for this dependency (unless you reopen the PR or upgrade to it yourself)
+
+
+</details>
+
+#623 https://github.com/trpc/trpc/issues/623 created 2021-07-04T21:06:51Z updated 2021-07-12T23:04:43Z @trpc/server - Handling CORS and CORS preflight requests
+When using the standalone server, it might be useful to handle CORS preflight requests. Currently the request just falls with a 405, Method Not Allowed. I'm proposing the addition of a `cors` field on the `CreateHttpHandlerOptions` object, which would contain an array of allowed origins, or a boolean of whether to allow all origins. Thoughts?
+
+#709 https://github.com/trpc/trpc/issues/709 created 2021-07-23T15:17:57Z updated 2021-07-24T08:59:13Z API Gateway adapter?
+Would you be open to adding an API Gateway adapter? I haven't dived in deeply enough to the express and standalone ones to know exactly what it'd entail, but here's our current approach:
+
+```ts
+import * as trpc from '@trpc/server'
+import * as trpcExpress from '@trpc/server/adapters/express'
+import {z} from 'zod'
+import serverless from 'serverless-http'
+import express from 'express'
+
+const appRouter = trpc.router<{foo: string}>().query('getUser', {
+  input: z.string(),
+  async resolve(req) {
+    return {id: req.input, name: 'Bilbo', now: Date.now()}
+  },
+})
+
+export const app = express()
+
+app.use(
+  trpcExpress.createExpressMiddleware({
+    router: appRouter,
+    createContext: () => ({foo: 'bar'}),
+  }),
+)
+
+export const handler = serverless(app)
+
+export type AppRouter = typeof appRouter
+```
+
+Which is fine, but we're relying on the `serverless-http` library to do all the magic hacks that make our _entire_ backend work. And it doesn't feel right that we need express and serverless-http as prod dependencies at all, since API Gateway lambdas are actually already kind of closer to what trpc/server does in the first place, I think (just functions that take inputs and return promise outputs, rather than weird `res.status(...).send(...)` side-effects). How I imagine it could look:
+
+```ts
+import * as trpc from '@trpc/server'
+import * as trpcApiGateway from '@trpc/server/adapters/apiGateway'
+import {z} from 'zod'
+
+const appRouter = trpc.router<{foo: string}>().query('getUser', {
+  input: z.string(),
+  async resolve(req) {
+    return {id: req.input, name: 'Bilbo', now: Date.now()}
+  },
+})
+
+export const handler = trpcApiGateway.createApiGatewayHandler({
+  router: appRouter,
+  createContext: () => ({foo: 'bar'}),
+})
+
+export type AppRouter = typeof appRouter
+```
+
+So I think it fits pretty neatly in alongside the other adapters. A simple API Gateway handler looks something like:
+
+```ts
+export const handler = async event => {
+  return {
+    statusCode: 200,
+    headers: {'x-foo': 'bar'},
+    body: JSON.stringify({
+      result: `Hello ${event.queryStringParameters.abc} ${event.body.def}`,
+    }),
+  }
+}
+```

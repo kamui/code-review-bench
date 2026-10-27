@@ -1,0 +1,53 @@
+--- a/django/db/backends/postgresql/base.py
++++ b/django/db/backends/postgresql/base.py
+@@ -205,7 +205,10 @@
+         if self.alias == NO_DB_ALIAS or not pool_options:
+             return None
+ 
+-        if self.alias not in self._connection_pools:
++        existing_pool = self._connection_pools.get(self.alias)
++        if existing_pool is not None:
++            return existing_pool
++        if existing_pool is None:
+             if self.settings_dict.get("CONN_MAX_AGE", 0) != 0:
+                 raise ImproperlyConfigured(
+                     "Pooling doesn't support persistent connections."
+@@ -236,14 +239,12 @@
+             # parallel. Since we do not open the pool during it's init above,
+             # this means that at worst during startup multiple threads generate
+             # pool objects and the first to set it wins.
+-            self._connection_pools.setdefault(self.alias, pool)
+-
+-        return self._connection_pools[self.alias]
++            return self._connection_pools.setdefault(self.alias, pool)
+ 
+     def close_pool(self):
+-        if self.pool:
+-            self.pool.close()
+-            del self._connection_pools[self.alias]
++        pool = self._connection_pools.pop(self.alias, None)
++        if pool is not None:
++            pool.close()
+ 
+     def get_database_version(self):
+         """
+@@ -344,8 +345,17 @@
+                 )
+         if self.pool:
+             # If nothing else has opened the pool, open it now.
+-            self.pool.open()
+-            connection = self.pool.getconn()
++            while True:
++                pool = self.pool
++                try:
++                    pool.open()
++                    connection = pool.getconn()
++                    break
++                except self.Database.OperationalError:
++                    if not pool.closed:
++                        raise
++                    if self._connection_pools.get(self.alias) is pool:
++                        self._connection_pools.pop(self.alias, None)
+         else:
+             connection = self.Database.connect(**conn_params)
+         if set_isolation_level:
