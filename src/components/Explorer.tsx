@@ -173,7 +173,7 @@ export function Dashboard({ dataset, page, now = new Date() }: { dataset: Datase
           <Text size="sm" c="dimmed" mt={5}>Detection, delivery, claim reliability, remedies, controls and cost stay separate. No single number ranks the setups.</Text></div>
           <Badge variant="light" color="gray">{status.label}</Badge>
         </Group>
-        {!status.complete && <Alert color="yellow" mb="md">{status.limits.join(' ')} Saved reviews, delivery and usage remain available. A measure that needs a missing judgment is unavailable, with its reason, and is never shown as zero.</Alert>}
+        {!status.complete && <Alert color="yellow" mb="md">{status.limits.join(' ')} Saved reviews, delivery and usage remain available. Unresolved detection outcomes receive zero credit, with an explanation. Measures blocked by missing evidence are unavailable, with their reasons.</Alert>}
         <Paper withBorder radius="lg" className="leaderboard-paper">
           <div className="chart-layout"><div className="chart-main">
             <div className="chart-toolbar">
@@ -274,9 +274,13 @@ export function Dashboard({ dataset, page, now = new Date() }: { dataset: Datase
           <Tabs.Panel value="catalog" pt="md"><Table.ScrollContainer minWidth={720}><Table verticalSpacing="md" className="task-table" highlightOnHover>
             <Table.Thead><Table.Tr><Table.Th>Pull request</Table.Th><Table.Th>Profile</Table.Th><Table.Th>References</Table.Th><Table.Th>Mean {bandLabels[band].toLowerCase()} detection, selected setups</Table.Th><Table.Th>In comparison</Table.Th><Table.Th /></Table.Tr></Table.Thead>
             <Table.Tbody>{candidates.map(task => {
+              const approved = task.families.filter(family => family.eligibility === 'approved').length
+              const pending = task.families.length - approved
               return <Table.Tr key={task.id}><Table.Td><button className="text-button task-name" onClick={() => setInspection({ kind: 'task', id: task.id })}>{task.repo}<span>#{task.pr}</span></button><Text size="xs" c="dimmed" mt={4} maw={340}>{task.shape}</Text></Table.Td>
                 <Table.Td><Group gap={5} maw={220}>{[...task.profile.technologies, ...task.profile.changeKinds].map(label => <Badge key={label} color="gray" variant="light" size="sm">{label}</Badge>)}</Group></Table.Td>
-                <Table.Td>{task.families.length ? <Text size="sm">{task.families.length} {task.families.length === 1 ? 'problem' : 'problems'}</Text> : <Badge color="gray" variant="light" size="sm">{controlLabels[task.control]}</Badge>}</Table.Td>
+                <Table.Td>{approved ? <Text size="sm">{plural(approved, 'problem')}</Text> : <Badge color="gray" variant="light" size="sm">{controlLabels[task.control]}</Badge>}
+                  {pending > 0 && <Text size="xs" c="dimmed" mt={4}>{pending} awaiting eligibility</Text>}
+                  {!!task.preExistingProblems?.length && <Text size="xs" c="dimmed" mt={4}>{plural(task.preExistingProblems.length, 'pre-existing problem')}</Text>}</Table.Td>
                 <Table.Td><DetectionBar result={meanTaskRecall(board.cards.filter(card => activeIds.includes(card.configurationId)), task.id, band)} /></Table.Td><Table.Td>{sharedIds.has(task.id) ? <span className="included-label"><Check size={14} aria-hidden="true" /> Included</span>
                   : <Tooltip label="At least one selected setup has no result for this PR"><Text size="xs" c="dimmed" className="missing-label">Missing results</Text></Tooltip>}</Table.Td>
                 <Table.Td><ActionIcon aria-label={`Inspect ${task.repo} PR ${task.pr}`} variant="subtle" color="gray" onClick={() => setInspection({ kind: 'task', id: task.id })}><ArrowUpRight size={18} /></ActionIcon></Table.Td></Table.Tr>
@@ -284,7 +288,7 @@ export function Dashboard({ dataset, page, now = new Date() }: { dataset: Datase
             {!candidates.length && <Paper ta="center" py="xl"><Text fw={600}>No tasks match these filters</Text><Button variant="subtle" mt="sm" onClick={resetFilters}>Show all tasks</Button></Paper>}
           </Tabs.Panel>
           <Tabs.Panel value="coverage" pt="lg"><CoverageMatrix tasks={dataset.tasks} />
-            <Text size="xs" c="dimmed" mt="md" className="footnote">Proposed labels can overlap. A task with no reference findings has no recall, and tests false alarms only once it is an audited clean control. Coverage is not a claim of statistical reliability.</Text></Tabs.Panel>
+            <Text size="xs" c="dimmed" mt="md" className="footnote">Coverage describes the full corpus; labels can overlap, and only approved references are counted. Problems without a concern label appear in their own row. These counts do not establish comparability or statistical reliability. A task with no reference findings has no recall, and tests false alarms only once it is an audited clean control.</Text></Tabs.Panel>
         </Tabs>
       </section>}
 
@@ -294,7 +298,7 @@ export function Dashboard({ dataset, page, now = new Date() }: { dataset: Datase
           <div><h3>Every reference rests on a saved ruling</h3><p>A problem counts only after a saved ruling that it is real and belongs to the change. Most are faults in code; a gap in the documentation a change adds can be one too. The benchmark's owner gives it. Two agents from different model families may settle that one question in the owner's place, and only with a saved before-and-after reproduction and an explicit acknowledgement of the problem from the project's maintainers. Every impact label is the owner's ruling. A different model family then labels the same evidence blind, and its disagreements stay on record.</p></div>
           <div><h3>Clean controls are audited</h3><p>A PR with no reference problem tests false alarms only after an independent audit and a saved ruling. The audit reads the change and every saved review comment on it. A comment that several reviews raise is a claim to test, so a disputed path that can be run is run. Each control's record says what its audit covered.</p></div>
           <div><h3>Separate dimensions, no blended score</h3><p>Delivery, claim reliability, remedy sufficiency and safety, audited controls, advice benefit, cost and time are reported beside detection. Refuted claims and fixes never change detection, and nothing combines them into one rank.</p></div>
-          <div><h3>Unknown stays unknown</h3><p>A missing judgment, an unlabelled impact, an unassessed remedy or an unaudited control is shown as unavailable with its reason. Candidates wait for a saved human ruling. Saved reviews, failures and rulings stay linked from every setup and PR.</p></div></div>
+          <div><h3>Unknown stays unknown</h3><p>Unresolved detection outcomes receive zero credit, with the affected problems and decisions explained. This does not adjudicate them as misses. Unknown impact stays in its own band; measures blocked by missing judgments, unassessed remedies or unaudited controls are unavailable with their reasons. Candidates wait for a saved human ruling. Saved reviews, failures and rulings stay linked from every setup and PR.</p></div></div>
         <Group gap="md" mt="lg"><Anchor href={`${import.meta.env.BASE_URL}data/benchmark.json`} download size="sm"><Group gap={5}><ArrowDownToLine size={14} />Download explorer data</Group></Anchor></Group>
         <Text size="xs" c="dimmed" mt="lg">Imported from skills revision {dataset.revision.slice(0, 10)}. {dataset.import.files.toLocaleString()} preserved source files and {dataset.import.transcripts} transcript references. {dataset.import.mismatches} superseded archive references have recorded hash mismatches; the two main run archives are verified. Evidence hash {dataset.evidence.datasetHash.slice(0, 12)} identifies the exported current records.</Text>
       </section>}
@@ -314,22 +318,22 @@ function DetectionBar({ result }: { result: ReturnType<typeof meanTaskRecall> })
 }
 
 const concerns = ['Security', 'Performance', 'Scalability', 'Architecture', 'Reliability', 'Maintainability', 'Functional', 'Testing']
-const enoughReferences = 3
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
 
-function CoverageMatrix({ tasks }: { tasks: Task[] }) {
-  const rows = concerns.map(concern => ({ concern, tagged: tasks.filter(task => task.profile.concerns.includes(concern)).length,
-    references: tasks.flatMap(task => task.families).filter(family => family.concerns.includes(concern)).length }))
-  const maxReferences = Math.max(enoughReferences, ...rows.map(row => row.references))
+export function CoverageMatrix({ tasks }: { tasks: Task[] }) {
+  const labels = Array.from(new Set([...concerns, ...tasks.flatMap(task => [...task.profile.concerns, ...task.families.flatMap(family => family.concerns)])]))
+  const rows = labels.map(concern => ({ concern, tagged: tasks.filter(task => task.profile.concerns.includes(concern)).length,
+    references: tasks.flatMap(task => task.families).filter(family => family.eligibility === 'approved' && family.concerns.includes(concern)).length }))
+  rows.push({ concern: 'No concern tag', tagged: tasks.filter(task => !task.profile.concerns.length).length,
+    references: tasks.flatMap(task => task.families).filter(family => family.eligibility === 'approved' && !family.concerns.length).length })
+  const maxReferences = Math.max(1, ...rows.map(row => row.references))
   return <Table.ScrollContainer minWidth={560}><Table className="coverage-table" verticalSpacing="sm" aria-label="Review concern coverage">
-    <Table.Thead><Table.Tr><Table.Th>Concern</Table.Th><Table.Th>Tasks tagged</Table.Th><Table.Th>Reference problems <span className="threshold-key">(tick marks {enoughReferences})</span></Table.Th><Table.Th>Comparable?</Table.Th></Table.Tr></Table.Thead>
+    <Table.Thead><Table.Tr><Table.Th>Concern</Table.Th><Table.Th>Tasks tagged</Table.Th><Table.Th>Approved reference problems</Table.Th></Table.Tr></Table.Thead>
     <Table.Tbody>{rows.map(row => <Table.Tr key={row.concern}>
       <Table.Td fw={600}>{row.concern}</Table.Td>
-      <Table.Td><span className="coverage-cell"><span>{row.tagged} of {tasks.length}</span><span className="coverage-track" aria-hidden="true"><span style={{ width: `${row.tagged / tasks.length * 100}%` }} /></span></span></Table.Td>
+      <Table.Td><span className="coverage-cell"><span>{row.tagged} of {tasks.length}</span><span className="coverage-track" aria-hidden="true"><span style={{ width: `${tasks.length ? row.tagged / tasks.length * 100 : 0}%` }} /></span></span></Table.Td>
       <Table.Td><span className="coverage-cell"><span>{row.references}</span><span className="coverage-track" aria-hidden="true">
-        <span style={{ width: `${row.references / maxReferences * 100}%` }} /><i style={{ left: `${enoughReferences / maxReferences * 100}%` }} /></span></span></Table.Td>
-      <Table.Td>{row.references >= enoughReferences ? <span className="included-label"><Check size={14} aria-hidden="true" />Enough to compare</span>
-        : <Text size="xs" c="dimmed">{row.references ? `Too few (${plural(row.references, 'problem')}, needs ${enoughReferences})` : 'No reference problems yet'}</Text>}</Table.Td>
+        <span style={{ width: `${row.references / maxReferences * 100}%` }} /></span></span></Table.Td>
     </Table.Tr>)}</Table.Tbody>
   </Table></Table.ScrollContainer>
 }

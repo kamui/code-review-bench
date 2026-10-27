@@ -26,6 +26,11 @@ describe('pareto frontier', () => {
     const points = [{ x: 1, y: 50 }, { x: 2, y: 40 }, { x: 3, y: 90 }, { x: 3, y: 70 }, { x: 5, y: 90 }, { x: 0.5, y: 20 }]
     expect(paretoFrontier(points)).toEqual([{ x: 0.5, y: 20 }, { x: 1, y: 50 }, { x: 3, y: 90 }])
   })
+  test('keeps every setup tied on the frontier and excludes ties on dominated points', () => {
+    const points = [{ id: 'a', x: 1, y: 50 }, { id: 'b', x: 1, y: 50 }, { id: 'c', x: 2, y: 50 },
+      { id: 'd', x: 2, y: 50 }, { id: 'e', x: 3, y: 90 }, { id: 'f', x: 3, y: 90 }, { id: 'g', x: 3, y: 80 }]
+    expect(paretoFrontier(points).map(point => point.id)).toEqual(['a', 'b', 'e', 'f'])
+  })
 })
 
 describe('label placement', () => {
