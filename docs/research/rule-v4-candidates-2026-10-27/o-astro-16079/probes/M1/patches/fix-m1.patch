@@ -1,0 +1,64 @@
+diff --git a/packages/integrations/vercel/src/index.ts b/packages/integrations/vercel/src/index.ts
+index c7672aacd..7ca114824 100644
+--- a/packages/integrations/vercel/src/index.ts
++++ b/packages/integrations/vercel/src/index.ts
+@@ -307,6 +307,9 @@ export default function vercelAdapter({
+ 							createConfigPlugin({
+ 								middlewareSecret,
+ 								skewProtection,
++								isrExclude: (typeof isr === 'object' ? (isr.exclude ?? []) : []).map((e) =>
++									e instanceof RegExp ? { regex: e.source, flags: e.flags } : e,
++								),
+ 							}),
+ 						],
+ 					},
+diff --git a/packages/integrations/vercel/src/serverless/entrypoint.ts b/packages/integrations/vercel/src/serverless/entrypoint.ts
+index c02049c8a..5a6b4b01f 100644
+--- a/packages/integrations/vercel/src/serverless/entrypoint.ts
++++ b/packages/integrations/vercel/src/serverless/entrypoint.ts
+@@ -5,7 +5,7 @@ import {
+ 	ASTRO_PATH_HEADER,
+ 	ASTRO_PATH_PARAM,
+ } from '../index.js';
+-import { middlewareSecret, skewProtection } from 'virtual:astro-vercel:config';
++import { isrExclude, middlewareSecret, skewProtection } from 'virtual:astro-vercel:config';
+ import { createApp } from 'astro/app/entrypoint';
+ import { getClientIpAddress } from '@astrojs/internal-helpers/request';
+ 
+@@ -19,10 +19,12 @@ export default {
+ 		const middlewareSecretHeader = request.headers.get(ASTRO_MIDDLEWARE_SECRET_HEADER);
+ 		const hasValidMiddlewareSecret = middlewareSecretHeader === middlewareSecret;
+ 		let realPath = undefined;
++		let fromIsr = false;
+ 		if(hasValidMiddlewareSecret) {
+ 			realPath = request.headers.get(ASTRO_PATH_HEADER)
+ 		} else if(request.headers.get('x-vercel-isr') === '1') {
+ 			realPath = url.searchParams.get(ASTRO_PATH_PARAM);
++			fromIsr = true;
+ 		}
+ 		if (typeof realPath === 'string') {
+ 			url.pathname = realPath;
+@@ -34,6 +36,11 @@ export default {
+ 		}
+ 
+ 		const routeData = app.match(request);
++		if (fromIsr && routeData && isrExclude.some((e: string | { regex: string; flags: string }) =>
++			typeof e === 'string' ? e === routeData.route : new RegExp(e.regex, e.flags).test(routeData.route),
++		)) {
++			return new Response('Not Found', { status: 404 });
++		}
+ 
+ 		let locals: Record<string, unknown> = {};
+ 
+diff --git a/packages/integrations/vercel/src/vite-plugin-config.ts b/packages/integrations/vercel/src/vite-plugin-config.ts
+index f3e70801b..04656be75 100644
+--- a/packages/integrations/vercel/src/vite-plugin-config.ts
++++ b/packages/integrations/vercel/src/vite-plugin-config.ts
+@@ -6,6 +6,7 @@ const RESOLVED_VIRTUAL_CONFIG_ID = '\0' + VIRTUAL_CONFIG_ID;
+ export interface Config {
+ 	middlewareSecret: string;
+ 	skewProtection: boolean;
++	isrExclude: (string | { regex: string; flags: string })[];
+ }
+ 
+ export function createConfigPlugin(config: Config): PluginOption {

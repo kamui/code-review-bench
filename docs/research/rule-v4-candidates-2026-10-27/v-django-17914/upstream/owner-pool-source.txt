@@ -1,0 +1,88 @@
+psycopg_pool 3.2.0
+
+    def getconn(self, timeout: Optional[float] = None) -> CT:
+        """Obtain a connection from the pool.
+
+        You should preferably use `connection()`. Use this function only if
+        it is not possible to use the connection as context manager.
+
+        After using this function you *must* call a corresponding `putconn()`:
+        failing to do so will deplete the pool. A depleted pool is a sad pool:
+        you don't want a depleted pool.
+        """
+        t0 = monotonic()
+        if timeout is None:
+            timeout = self.timeout
+        deadline = t0 + timeout
+
+        logger.info("connection requested from %r", self.name)
+        self._stats[self._REQUESTS_NUM] += 1
+
+        self._check_open_getconn()
+
+        try:
+            while True:
+                conn = self._getconn_unchecked(deadline - monotonic())
+                try:
+                    self._check_connection(conn)
+                except Exception:
+                    self._putconn(conn, from_getconn=True)
+                else:
+                    logger.info("connection given by %r", self.name)
+                    return conn
+        # Re-raise the timeout exception presenting the user the global
+        # timeout, not the per-attempt one.
+        except PoolTimeout:
+            raise PoolTimeout(
+                f"couldn't get a connection after {timeout:.2f} sec"
+            ) from None
+
+    def close(self, timeout: float = 5.0) -> None:
+        """Close the pool and make it unavailable to new clients.
+
+        All the waiting and future clients will fail to acquire a connection
+        with a `PoolClosed` exception. Currently used connections will not be
+        closed until returned to the pool.
+
+        Wait *timeout* seconds for threads to terminate their job, if positive.
+        If the timeout expires the pool is closed anyway, although it may raise
+        some warnings on exit.
+        """
+        if self._closed:
+            return
+
+        with self._lock:
+            self._closed = True
+            logger.debug("pool %r closed", self.name)
+
+            # Take waiting client and pool connections out of the state
+            waiting = list(self._waiting)
+            self._waiting.clear()
+            connections = list(self._pool)
+            self._pool.clear()
+
+        # Now that the flag _closed is set, getconn will fail immediately,
+        # putconn will just close the returned connection.
+        self._stop_workers(waiting, connections, timeout)
+
+    def open(self, wait: bool = False, timeout: float = 30.0) -> None:
+        """Open the pool by starting connecting and and accepting clients.
+
+        If *wait* is `!False`, return immediately and let the background worker
+        fill the pool if `min_size` > 0. Otherwise wait up to *timeout* seconds
+        for the requested number of connections to be ready (see `wait()` for
+        details).
+
+        It is safe to call `!open()` again on a pool already open (because the
+        method was already called, or because the pool context was entered, or
+        because the pool was initialized with *open* = `!True`) but you cannot
+        currently re-open a closed pool.
+        """
+        # Make sure the lock is created after there is an event loop
+        self._ensure_lock()
+
+        with self._lock:
+            self._open()
+
+        if wait:
+            self.wait(timeout=timeout)

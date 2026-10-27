@@ -1,0 +1,3427 @@
+
+# maintainers-malformed-all.json
+3707 feat: warn when json validator does not find a content type in the request created=2024-11-28T02:45:11Z updated=2026-08-03T21:42:54Z
+When a validator has a target 'json' it will now warn if a request is missing a `Content-Type: application/json` header.
+
+Closes https://github.com/honojs/middleware/issues/841
+
+Added some docs too https://github.com/honojs/website/pull/540
+
+### The author should do the following, if applicable
+
+- [ ] Add tests
+- [ ] Run tests
+- [ ] `bun run format:fix && bun run lint:fix` to format the code
+- [ ] Add [TSDoc](https://tsdoc.org/)/[JSDoc](https://jsdoc.app/about-getting-started) to document the code
+
+1441 Validator should throw error rather than `return c.json({ success, message })` created=2023-09-11T16:45:32Z updated=2026-04-15T04:40:14Z
+### What is the feature you are proposing?
+
+Validator should throw error rather than `return c.json({ success, message })`
+So we can use onError handler to format and send the right response to the client. 
+
+# maintainers-override-all.json
+5022 fix(method-override): add duplex option when body is a ReadableStream created=2026-06-12T06:28:17Z updated=2026-07-13T00:28:53Z
+The `query` override branch passes `c.req.raw.body` (a `ReadableStream`) directly to `new Request()` without setting `duplex: 'half'`. The Fetch spec requires this option whenever the request body is a stream, and undici (the native fetch implementation in Node.js) enforces it with:
+
+```
+TypeError: RequestInit: duplex option is required when sending a body.
+```
+
+This means any HTML form that submits to a route using query-based method override will get a 500, because forms always send a body.
+
+The `form` and `header` branches are not affected. They consume the body into `FormData` or `URLSearchParams` before constructing the new request, so the stream is already resolved by the time `new Request()` is called.
+
+The fix spreads `{ duplex: 'half' }` into the `RequestInit` only when `body` is non-null, and casts to `RequestInit` because the TypeScript lib types do not yet include `duplex`.
+
+Added a regression test: a `POST ?_method=DELETE` with a `application/x-www-form-urlencoded` body. The existing test for the query branch only used a bodyless POST.
+
+Fixes part of #5010.
+2675 feat(utils/body): add dot notation support for `parseBody` created=2024-05-15T03:34:03Z updated=2024-06-27T00:45:04Z
+Closes #2656
+
+cc @yusukebe  @MathurAditya724 
+
+### The author should do the following, if applicable
+
+- [x] Add tests
+- [x] Run tests
+- [x] `bun denoify` to generate files for Deno
+- [x] `bun run format:fix && bun run lint:fix` to format the code
+
+2369 feat(jsr): reduce slow types created=2024-03-17T12:14:58Z updated=2024-05-12T02:04:46Z
+I reduced [JSR slow types](https://jsr.io/docs/about-slow-types).
+It make a piece for creating the JSR version of Hono.
+### Author should do the followings, if applicable
+
+- [ ] Add tests
+- [x] Run tests
+- [x] `yarn denoify` to generate files for Deno
+
+
+# maintainers-parsebody-all.json
+1018 req.parseBody should allow multiple keys (and converted to array) created=2023-03-30T03:09:28Z updated=2024-06-07T05:41:41Z
+# Currently
+Only the last key is recorded into the resulting object after `req.parseBody()`.
+
+# Expected
+When parsing request parameters that consists of multiple keys, the keys should be converted to array automatically.
+
+```
+tests=1&tests=2&tests=3
+
+{ tests: [ 1,2,3 ] }
+```
+
+Also, another use case where using `tests[]` which has been around for some time also need to be supported.
+
+```
+tests[]=1
+
+{ tests: [ 1 ] }
+```  
+
+Related: https://github.com/honojs/hono/issues/257
+4052 Solution : Hono CSRF middleware blocking valid formData requests. created=2025-04-05T12:21:49Z updated=2025-04-17T02:20:59Z
+### What version of Hono are you using?
+
+4.7.5
+
+### What runtime/platform is your app running on? (with version if possible)
+
+Bun
+
+### What steps can reproduce the bug?
+
+Use CSRF middleware with expected origins.
+Create an api to receive formData requests.
+
+```index.ts
+import { Hono } from 'hono'
+import { csrf } from 'hono/csrf'
+
+const app = new Hono()
+
+app.use('*', csrf({ origin: ["http://your-domain.com", "http://localhost"] }))
+
+app.post('/ping', async (c) => {
+    const body = await c.req.parseBody()
+    c.status(200)
+    return c.json({ success: true, message: `Hi ${body.name}` })
+})
+
+export default app
+```
+
+**Create a test for the api**
+
+```index.test.ts
+import { describe, it, mock, test, expect } from 'bun:test';
+import app from './index';
+
+it('Testing api using formData', async () => {
+    const formData = new FormData();
+    formData.append('name', 'John Doe');
+    const res = await app.request('/ping', {
+        method: 'POST',
+        body: formData,
+        headers: {
+            'Content-Type': 'multipart/form-data',
+            'Origin': 'http://localhost',
+        }
+    });
+    expect(res.status).toBe(200);
+})
+```
+
+Test will fail with error 403 despite the correct Origin.
+
+### What is the expected behavior?
+
+Test should Pass with response status 200.
+
+### What do you see instead?
+
+Hono api will throw an error 403.
+
+### Additional information
+
+Hono CSRF middleware blocking valid formData requests despite whitelisting the origin. I am facing this problem for very long time on our Android and iOS apps but it magically works fine on web browsers. On website we don't set any explicit headers for content-type or origin but it still works. While on iOS and Android apps our formData requests are always blocked by CSRF middleware whether we set or not set explicit headers for content-type and origin.
+
+**Solution**
+
+You have to explicitly set the Origin header and remove the Content-Type header in your request.
+
+```ts
+    const res = await app.request('/ping', {
+        method: 'POST',
+        body: formData,
+        headers: {
+            'Origin': 'http://localhost',
+        }
+    });
+```
+
+If both Origin header and Content-Type header present then request will fail :
+
+```ts
+    const res = await app.request('/ping', {
+        method: 'POST',
+        body: formData,
+        headers: {
+            'Content-Type': 'multipart/form-data',
+            'Origin': 'http://localhost',
+        }
+    });
+```
+
+Its a bug that needs to be fixed by Hono Dev Team. 
+
+1184 Is there a bodyParser.urlencoded({ extended: true } equivalent in Hono? created=2023-06-17T05:51:23Z updated=2023-08-30T12:05:54Z
+Hello,
+I'm making my move from `Express`/`node.js` to `Hono`/`Bun`, and it feels refreshing!
+Some stuff are really nice and useful: for example: `set()`/`get()`!
+But sometimes, I'm struggling...
+
+Consider the simple `c.req.parseBody()` below:
+
+```
+{
+  id: "123456"
+  "timeslots[0][start]": "",
+  "timeslots[0][end]": "",
+  "timeslots[1][start]": "",
+  "timeslots[1][end]": "",
+  "timeslots[2][start]": "",
+  "timeslots[2][end]": "",
+}
+```
+With `express`, it is automatically parsed using `bodyParser.urlencoded({ extended: true }`, and `timeslots` is returned as an array.
+
+Maybe I'm missing something, but is there something equivalent in `hono`? Thanks.
+664 Feature request: support for file upload created=2022-11-16T11:21:06Z updated=2025-02-21T13:25:32Z
+I have a played a bit here with `bun` and `hono` to see how it works and realized that the request body comes there in raw format if I want to upload files.
+
+surprisingly, getting body as a buffer worked out of the box:
+
+```ts
+ const reader = ctx.req.body.getReader()
+ const result = await reader.read()
+ const buffer = Buffer.from(result.value ?? [])
+```
+
+So I have my `buffer`, but the question is -- do we have anything is there any functionality to have a list of files within that buffer?
+
+In other words, - maybe there is an example of implementing file uploading with `hono`, or at least some timeline on when it will be available.
+
+Thank you.
+1256 Deploying to Vercel Serverless Functions created=2023-07-22T21:46:12Z updated=2026-02-14T14:35:45Z
+Is there any official way of deploying a hono app to Vercel serverless functions? I am not talking about edge. I am using prisma with Hono and it would be nice to deploy to serverless functions. As far as I know Prisma is not supported on edge runtimes, it seems like Vercel serverless functions are my only option. I could not find documentation on the website relating to this topic.
+4806 parseBody() breaks subsequent text()/json() calls with TypeError created=2026-03-17T16:50:34Z updated=2026-03-21T11:02:53Z
+### What version of Hono are you using?
+
+4.12.8
+
+### What runtime/platform is your app running on? (with version if possible)
+
+Node.js v22 (also reproducible on any runtime)
+
+### What steps can reproduce the bug?
+
+Calling `parseBody()` followed by `text()` or `json()` on the same request throws `TypeError: bodyCache[anyCachedKey].then is not a function`.
+
+This happens when `Content-Type` is **not** `multipart/form-data` or `application/x-www-form-urlencoded` (e.g., `application/json` or no Content-Type header).
+
+**Root cause:**
+`parseBody()` stores a resolved plain object in `bodyCache.parsedBody` (via `??= await parseBody(...)`). When Content-Type is not a form type, `parseBody()` returns `{}` immediately without going through `formData()`, so `parsedBody` is the only key in `bodyCache`.
+
+`#cachedBody()` then picks it up via `Object.keys(bodyCache)[0]` and calls `.then()` on it, assuming every cache entry is a `Promise`.
+
+When Content-Type **is** a form type, `parseBody()` internally calls `request.formData()` which goes through `#cachedBody('formData')`, caching a `Promise` under `bodyCache.formData` first — so `Object.keys()[0]` is `'formData'` and `.then()` succeeds.
+
+**Reproduction:**
+
+```typescript
+import { HonoRequest } from 'hono/request'
+
+const req = new HonoRequest(
+  new Request('http://localhost', {
+    method: 'POST',
+    body: JSON.stringify({ event: 'push' }),
+    headers: { 'Content-Type': 'application/json' },
+  })
+)
+await req.parseBody()  // returns {}, caches plain object in bodyCache.parsedBody
+await req.text()       // TypeError: bodyCache[anyCachedKey].then is not a function
+```
+
+### What is the expected behavior?
+
+`text()` should return the raw request body text regardless of whether `parseBody()` was called first.
+
+### What do you see instead?
+
+`TypeError: bodyCache[anyCachedKey].then is not a function`
+
+### Additional information
+
+**Use case:** A middleware that tries to extract form data if present (without checking Content-Type upfront), then a downstream handler needs the raw body for signature verification:
+
+```typescript
+app.use('*', async (c, next) => {
+  const body = await c.req.parseBody()
+  if (Object.keys(body).length > 0) {
+    c.set('formData', body)
+  }
+  await next()
+})
+
+app.post('/webhook', async (c) => {
+  const raw = await c.req.text()  // TypeError — even though parseBody() returned {}
+  verify(raw, c.req.header('X-Signature'))
+})
+```
+
+Note: This is related to but distinct from #3881 — that issue did not identify the root cause (non-Promise value in bodyCache) or the Content-Type dependency.
+4807 fix(request): remove `parseBody` from bodyCache to prevent TypeError created=2026-03-18T00:26:17Z updated=2026-03-21T11:03:19Z
+Fixes #4806
+
+I realized `bodyCache.parsedBody` in Hono Request is unnecessary, and this change will fix #4806.
+
+`parseBody` uses `formData` inside, so it might already be cached:
+
+https://github.com/honojs/hono/blob/fe689eceb7834db653a64ecae5f8d203d9c23b9a/src/utils/body.ts#L125
+
+
+### The author should do the following, if applicable
+
+- [x] Add tests
+- [x] Run tests
+- [x] `bun run format:fix && bun run lint:fix` to format the code
+- [ ] Add [TSDoc](https://tsdoc.org/)/[JSDoc](https://jsdoc.app/about-getting-started) to document the code
+
+4093 "Unrecognized Content-Type header value" error from formData() and parseBody(), when content-type is correct created=2025-04-19T22:13:16Z updated=2025-07-13T00:40:28Z
+### What version of Hono are you using?
+
+4.7.6
+
+### What runtime/platform is your app running on? (with version if possible)
+
+Cloudflare workers
+
+### What steps can reproduce the bug?
+
+I have the following code in a Hono middleware function that handles requests from Slack:
+```
+    let body
+    try {
+        const contentType = c.req.header('content-type');
+        console.log('content-type: ', contentType);
+        switch (contentType) {
+            case 'application/json':
+                body = await c.req.json();
+                break;
+            case 'application/x-www-form-urlencoded':
+                body = await c.req.parseBody();
+                break;
+            default:
+                console.error('Unexpected content-type for /slack/events: ', contentType);
+                body = await c.req.text();
+        }
+    } catch (e) {
+        console.error(e);
+        throw new Error('Invalid payload')
+    }
+```
+
+When slack sends a request with content type of 'application/json', it's fine.  But if slack sends 'application/x-www-form-urlencoded`, it fails.  
+
+### What is the expected behavior?
+
+the request body should be parsed.
+
+### What do you see instead?
+
+This is the console output:
+
+```
+content-type:  application/x-www-form-urlencoded
+✘ [ERROR] TypeError: Unrecognized Content-Type header value. FormData can only parse the following MIME types: multipart/form-data, application/x-www-form-urlencoded
+```
+
+Note that the logged content-type exactly matches the expected content type in the error message. 
+
+### Additional information
+
+ I've also tried changing `parseBody()` to `formData()` but I get the same error.
+
+The only thing I'm unsure about is if the actual header from Slack might be capitalized in a different way than `parseBody()` expects, but I don't know how to see the raw headers before hono parses them and lowercases them.  For my code it's find; I can see the content type; but I don't know if the underlying library that's trying to parse the form is only looking for a specific capitalization?  
+4108 parseBody does not wrap single‐element key[] fields into arrays nor strip the [] suffix created=2025-04-24T16:50:44Z updated=2025-06-20T23:08:05Z
+### What version of Hono are you using?
+
+4.6.14
+
+### What runtime/platform is your app running on? (with version if possible)
+
+Node
+
+### What steps can reproduce the bug?
+
+When submitting a multipart/form-data or application/x-www-form-urlencoded request with any field name ending in [], the first (and only) value is treated as a scalar and the key is left with its [] suffix.
+
+### What is the expected behavior?
+
+According to the docs, any form field named key[] should always be parsed as a (string | File)[]—even if the client only submits one value. However, in the current implementation:
+
+"foo[]": "5" instead of foo: ["5"]
+
+### What do you see instead?
+
+"foo[]": "5"
+
+### Additional information
+
+_No response_
+4183 fix(utils/body): normalize key names in parseBody (#4108) created=2025-06-01T00:35:48Z updated=2025-06-16T05:08:37Z
+### The author should do the following, if applicable
+Fixes #4108 
+- [x]  Add tests
+- [x] Run tests
+- [x] `bun run format:fix && bun run lint:fix` to format the code
+- [ ] Add [TSDoc](https://tsdoc.org/)/[JSDoc](https://jsdoc.app/about-getting-started) to document the code
+
+4080 validator() form parsing and c.req.parseBody have different behavior created=2025-04-15T12:28:17Z updated=2025-04-17T06:27:39Z
+Hello Hono team,
+
+I found a small gap when trying to use `validator()` to parse a dot encoded FormData. Small example:
+```html
+<form>
+   <input name="survey_id" />
+   <input name="person.firstname" />
+   <input name="person.lasname" />
+</form>
+```
+
+
+Currently `validator` doesn't support dot notation at all [validator.ts](https://github.com/honojs/hono/blob/b68da3945e23f0ddef8878b08df3a359eeef4a75/src/validator/validator.ts#L108)
+
+I'm having to do this manually:
+```typescript
+const body = structuredClone(await c.req.parseBody({ dot: true })) ?? {};
+const form =
+	await MyObjZodSchema.safeParseAsync(body);
+if (form.success) {
+    // form.data should be { survey_id?: string; person?: { firstname?: string; lastname?: string } }
+}
+```
+
+It would be nice to support c.req.valid for these cases, but I don't want to break existing form users. Either way is fine, may I suggest `formbody` or `formparse` target?
+
+Another thing to note is that Zod isn't able to parse the result of `c.req.parseBody`, so I used `structuredClone`. I'm assuming it's due to how the object is constructed (no prototype), so it needs to be cloned before going to Zod.
+
+
+
+3141 Uploading a file using FormData from React Native to Hono created=2024-07-14T10:30:19Z updated=2025-04-13T03:38:04Z
+### What version of Hono are you using?
+
+4.4.13
+
+### What runtime/platform is your app running on?
+
+NodeJs
+
+### What steps can reproduce the bug?
+
+in Hono:
+
+`
+user.post("/test", test)
+
+async function test (c:Context){
+  try {
+    const data = await c.req.formData();
+    return c.json({message:"formData was sent successfully!"});
+  } catch (error)
+  {
+    console.log(error);
+    return c.json({message:"error uploading formData", error})
+  }}`
+  
+  in React Native (Expo):
+
+`useEffect(() => {
+        (async () => {
+          try {
+            // Load the asset
+            const asset = Asset.fromModule(require('../assets/tilk_icon.png'));
+            await asset.downloadAsync();
+            // Create FormData
+            const formData = new FormData();
+            //append a file
+            formData.append('file', {
+              uri: asset.uri,
+              name: 'tilk-icon.png',
+              type: 'image/png'
+            } as any);
+            //append a text
+            formData.append("text", JSON.stringify({message: "hi!"}));
+
+            //send
+            const {data} = await axios.post("user/test", formData,{headers:{
+              "content-type": 'multipart/form-data; boundary=--------------------------585591568098780255545610'
+              }});
+
+            console.log(data)
+
+          } catch (error) {
+            console.error('Error creating FormData (response):', error.response);
+            console.error('Error creating FormData (request):', error.request);
+          }
+        })()
+      },
+      [])`
+
+![image](https://github.com/user-attachments/assets/fef8d80b-10d5-4367-90ff-fd43d772c692)
+
+![image](https://github.com/user-attachments/assets/eb5824be-e472-4281-a174-f4d1f6cdff3b)
+
+
+### What is the expected behavior?
+
+the React Native app should get the URI of an image file called "tilk_icon.png" that is in the "assets" folder.
+
+Then, It should create a FormData and append that file.
+It also should append a text entry.  
+
+Then it should send it to the server using Axios.
+
+The Hono server should receive the request, parse the FormData, and return the object:
+{message:"formData was sent successfully!"}
+
+
+
+
+### What do you see instead?
+
+
+I see an error in the back-end:
+`TypeError: Failed to parse body as FormData.
+    at node:internal/deps/undici/undici:5410:27
+    at successSteps (node:internal/deps/undici/undici:5454:27)
+    at fullyReadBody (node:internal/deps/undici/undici:4381:9)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async consumeBody (node:internal/deps/undici/undici:5463:7)
+    at test (C:\programming\_chat_app\chat-app\backend-server\src\routes\user\user.ts:49:18)
+    at async dispatch (file:///C:/programming/_chat_app/chat-app/backend-server/node_modules/hono/dist/compose.js:29:17)
+    at async cors2 (file:///C:/programming/_chat_app/chat-app/backend-server/node_modules/hono/dist/middleware/cors/index.js:70:5)
+    at async dispatch (file:///C:/programming/_chat_app/chat-app/backend-server/node_modules/hono/dist/compose.js:29:17)
+    at async logger2 (file:///C:/programming/_chat_app/chat-app/backend-server/node_modules/hono/dist/middleware/logger/index.js:37:5)`
+
+
+
+If I remove the manual addition of the header,
+Axios gives the following error:
+
+"content-type": "application/x-www-form-urlencoded"
+and
+"_response": "multipart != application/x-www-form-urlencoded"
+
+meaning, axios sends the FormData in the wrong "content-type".
+
+
+
+
+
+### Additional information
+
+using the "c.req.parseBody()" method, returns the same result.
+
+appending on the text, returns the same result.
+3881 Using json() and parseBody() same times created=2025-02-01T11:25:05Z updated=2025-02-28T00:30:28Z
+### What version of Hono are you using?
+
+4.6.18
+
+### What runtime/platform is your app running on? (with version if possible)
+
+Nodejs
+
+### What steps can reproduce the bug?
+
+RequestKernel.ts class
+
+```typescript
+public static async processData(request: HonoRequest) {
+  request.input = await Promise.allSettled([
+    request.json(),
+    request.parseBody({
+      dot: true,
+    })
+  ]).
+  then((dataProcessed) => {
+    return dataProcessed.reduce((carry, item) => {
+      if(item.status === 'fulfilled') {
+        return {
+          ...carry,
+          ...item.value
+        }
+      }
+
+      return carry;
+    }, {
+      ...request.query()
+    })
+  })
+
+  return request;
+}
+```
+
+Request.test.ts
+
+```typescript
+const rawRequest = new Request(getUrl(routeMock.path), {
+  method: "POST",
+  body: createFormData({
+    email: 'test@example.com',
+    password: 'password123',
+    name: 'John Doe',
+  })
+})
+const request = new HonoRequest(rawRequest);
+const requestInstance = await RequestKernel.processData(request);
+```
+
+
+
+### What is the expected behavior?
+
+`request.input` should be 
+```
+{
+  email: 'test@example.com',
+  password: 'password123',
+  name: 'John Doe',
+}
+```
+(Parsed from FormData, json is error will be skipped)
+
+### What do you see instead?
+
+Inside allSettled().then()
+I got Array<PromiseResult<Error>> with a same error:
+```
+"No number after minus sign in JSON at position 1"
+```
+But I'm using parseBody(), json() as sequence, it's working
+```typescript
+const test = request.parseBody({
+  dot: true,
+}) // working
+
+request.input = await Promise.allSettled([
+  request.json(),
+])
+```
+
+### Additional information
+I'm using Nodejs v20.17.0
+3265 File upload (c.req.parseBody) returns 403 Forbidden created=2024-08-13T12:08:40Z updated=2025-02-06T01:34:19Z
+### What version of Hono are you using?
+
+4.0.9
+
+### What runtime/platform is your app running on?
+
+Bun
+
+### What steps can reproduce the bug?
+
+1. Set up a POST endpoint with `c.req.parseBody`
+2. Frontend fires api cal: POST Request with headers `'Content-Type': 'multipart/form-data'` & new FormData() - file (i.e. PDF)
+3. Response shows 403 Forbidden
+
+
+### What is the expected behavior?
+
+- Be able to see the file uploaded
+- Response should be 200 OK
+
+### What do you see instead?
+
+- 403 Forbidden, don't think `c.req.parseBody` is working properly
+
+### Additional information
+
+_No response_
+3753 validate formdata with array fields created=2024-12-16T17:18:25Z updated=2024-12-16T18:08:29Z
+### What version of Hono are you using?
+
+4.6.14
+
+### What runtime/platform is your app running on? (with version if possible)
+
+Node
+
+### What steps can reproduce the bug?
+
+There is no way to use the all: true alternative with validator to transform multiple keys with the same name into an array, parseBody should also remove the [] from the key name or have an option for that.
+
+### What is the expected behavior?
+
+_No response_
+
+### What do you see instead?
+
+_No response_
+
+### Additional information
+
+_No response_
+3684 403 when multipart/form-data is added as content-type created=2024-11-18T08:07:38Z updated=2024-12-23T05:16:28Z
+### What version of Hono are you using?
+
+4.5.8
+
+### What runtime/platform is your app running on? (with version if possible)
+
+Cloudflare workers
+
+### What steps can reproduce the bug?
+
+So when i try to upload files on my upload endpoint and i make the content-type of the request to be multipart/form-data a 403 status code is thrown
+
+This the code snippet for cors
+``` typescript
+app.use("*", cors({
+  origin: "*",
+  credentials: true,
+  allowHeaders: ["Content-Type", "Authorization"],
+  allowMethods: ['GET', 'POST', 'OPTIONS', 'PUT', 'DELETE'],
+}))
+```
+
+This is the code snippet for the upload route
+```ts
+productRoutes.post(
+  "/upload-image",
+  async (c) => {
+   // Use the formData() method to parse the form data
+    const body = await c.req.parseBody();
+    const file = body["file"]
+
+    // Access the uploaded file (assuming form field is named "file")
+    //if (!file) return c.json({error: "No file uploaded!"}, 400)
+
+    // File metadata
+    console.log(file);
+    return c.json({})
+ }
+)
+```
+
+
+
+
+### What is the expected behavior?
+
+the expected behaviour is to allow my api to upload the file and give status code based on the success of the file upload
+
+### What do you see instead?
+
+_No response_
+
+### Additional information
+
+_No response_
+724 Validator - File Type in Formdata created=2022-12-14T13:11:31Z updated=2024-10-23T22:07:26Z
+In the validator is there any way to validate a specific such as `File` within FormData? 
+
+I see the `v.body` is already using `req.parseBody()` which does support `File`.
+
+e.g. 
+
+```js
+app.put(
+  '/form/:id',
+  validator((v) => ({
+    file: v.body('file').isRequired(),
+    name: v.body('name').isOptional(),
+  })),
+  async (c) => {
+    const res = c.req.valid()
+
+    const id = c.req.param('id')
+    const file = res.file
+    const name = res.name || 'foo'
+    c.text('Valid')
+})
+```
+3039 Built-in validator formData parsing created=2024-06-25T18:24:21Z updated=2024-07-01T07:29:35Z
+### What version of Hono are you using?
+
+4.46
+
+### What runtime/platform is your app running on?
+
+Nodejs
+
+### What steps can reproduce the bug?
+
+Is there a reason at this you use arrayBuffer to construct formData record?
+https://github.com/honojs/hono/blob/d21f8eb27aa43da9cd9d5b6f666692c4e92a0344/src/validator/validator.ts#L92
+
+Hono has a built-in for that already `c.req.parseBody()`
+
+This causes a bug if there's middleware which uses `.parseBody()` before validator - this populates `c.req.bodyCache.parsedBody` AND `c.req.bodyCache.formData`.
+And since your validator tries to check the cache for `formData`(not `parsedBody`) - it gets a hit which contains `FormData`, not a `Record`. 
+
+It seems this issue would be mitigated if either hono used `c.req.bodyCache.parsedBody` with a fallback to `arrayBuffer` or would just use `parseBody()` directly since it already checks the cache. 
+
+So is there some reason for the current behavior? Apologies that the issue isn't properly filled in but I hope my explanation is clear enough.
+
+### What is the expected behavior?
+
+_No response_
+
+### What do you see instead?
+
+_No response_
+
+### Additional information
+
+_No response_
+2695 Empty c.req.raw body for application/x-www-form-urlencoded created=2024-05-17T16:49:58Z updated=2024-08-10T10:17:04Z
+### What version of Hono are you using?
+
+4.3.6
+
+### What runtime/platform is your app running on?
+
+bun 1.1.8
+
+### What steps can reproduce the bug?
+
+```
+import { HTTPException } from 'hono/http-exception'
+import { OpenAPIHono } from '@hono/zod-openapi'
+
+const app = new OpenAPIHono()
+
+app.use(async (c, next) => {
+  console.log('Request received:: \n',c.req.raw)
+  const bod = await c.req.parseBody()
+  console.log('After parse:: ',bod)
+  await next()
+})
+
+export default {
+  port: 4000,
+  fetch: app.fetch,
+}
+
+```
+
+
+### What is the expected behavior?
+
+```
+{
+  accept: "*/*",
+  "accept-encoding": "deflate, gzip, br",
+  authorization: "-------",
+  "content-length": "125073",
+  "content-type": "application/x-www-form-urlencoded",
+  host: "api-service:4000",
+  "user-agent": "MoodleBot/4.3 (+http://localhost:8080)",
+  client_id: "nkalnw0ov",
+}
+^\ftypM4A M4A isommp42^Amdat^A� ...
+```
+
+### What do you see instead?
+
+```
+Request (0 KB) {
+method: "POST",
+url: "http://api-service:4000/endpoint",
+headers: Headers {
+    "host": "api-service:4000",
+     "accept": "*/*",
+     "accept-encoding": "deflate, gzip, br",
+     "authorization": "------",
+     "user-agent": "MoodleBot/4.3 (+http://localhost:8080)",
+     "content-length": "125073",
+     "content-type": "application/x-www-form-urlencoded",
+   }
+}
+{}
+```
+
+### Additional information
+
+I can get the body using plain bun.
+2675 feat(utils/body): add dot notation support for `parseBody` created=2024-05-15T03:34:03Z updated=2024-06-27T00:45:04Z
+Closes #2656
+
+cc @yusukebe  @MathurAditya724 
+
+### The author should do the following, if applicable
+
+- [x] Add tests
+- [x] Run tests
+- [x] `bun denoify` to generate files for Deno
+- [x] `bun run format:fix && bun run lint:fix` to format the code
+
+2656 context.req.parseBody(): option for support dot notation created=2024-05-10T15:39:51Z updated=2024-05-28T05:07:05Z
+### What is the feature you are proposing?
+
+For now this method has only option **all** for array support. It is awesome!
+
+In my opinion, it would be very convenient to add an option to support dot notation (**dot: boolean**), which would greatly simplify the processing of nested objects.
+
+Example:
+
+```js
+let formData = new FormData();
+formData.append('obj.key1', 'value1');
+formData.append('obj.key2', 'value2');
+
+// processed without dot notation support, like `await context.req.parseBody()`
+{
+	"obj.key1": "value1",
+    "obj.key2": "value2",
+} 
+
+// processed with dot notation support, like `await context.req.parseBody({ dot: true })`
+{
+	"obj": {
+		"key1": "value1",
+		"key2": "value2"
+	}
+}
+```
+2689 FormData parse error missing final boundary created=2024-05-17T06:21:59Z updated=2024-05-18T22:40:35Z
+### What version of Hono are you using?
+
+4.3.7
+
+### What runtime/platform is your app running on?
+
+bun
+
+### What steps can reproduce the bug?
+
+Have following error when try to parse body from request
+```
+const body = await c.req.parseBody();
+```
+
+> FormData parse error missing final boundary
+
+
+
+### What is the expected behavior?
+
+_No response_
+
+### What do you see instead?
+
+_No response_
+
+### Additional information
+
+_No response_
+1527 Support for multiple file uploads under the same key created=2023-09-29T23:21:15Z updated=2024-06-10T01:27:40Z
+Currently it's not possible to handle multiple files uploaded at once (`<input type="file" name="...[]" multiple />`) while using validators or `parseBody`. Looks like this is because any arrays that are uploaded get stringified:
+
+https://github.com/honojs/hono/blob/dddd4978d81cbc526622f14a74d8ca41dc1126b9/src/utils/body.ts#L20-L22
+
+Workaround is available by using `await c.req.formData()` and manually building the array.
+1688 Built-in CSRF helper created=2023-11-12T22:03:04Z updated=2024-07-01T00:50:21Z
+### What is the feature you are proposing?
+
+It would be useful to have some sort of CSRF protection mechanism built in that users could opt in to if desired. 
+
+OSWAP’s [cheat sheet for CSRF Prevention](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html) has a few strategies that could be implemented in a helper. 
+
+If maintainers are open to this, I would be glad to put forth a PR, as this is definitely a feature I would take advantage of. 
+2625 [Bug]: form validator does not return all data created=2024-05-06T15:38:07Z updated=2024-05-08T13:30:52Z
+### What version of Hono are you using?
+
+4.3.2
+
+### What runtime/platform is your app running on?
+
+Node 20.10.0 / Windows 10 Pro
+
+### What steps can reproduce the bug?
+
+The form validator in hono does not return all data when using with zod-validator.
+
+When you use zod-validator to validate multiple uploaded file of request form data then it only returns last file data. It should  return all the files with the same key as an array,
+
+![validate-body-data](https://github.com/honojs/hono/assets/62164346/3fcdb6a5-6747-4f09-a6c6-9074faa48440)
+
+1. Start a new Hono project using `create-hono` with `pnpm` and select NodeJS template. `pnpm create hono my-app`
+1. Install `@hono/zod-validator` and `zod` to validate incoming request body and params. `pnpm add @hono/zod-validator zod`.
+1. Now, in `index.ts` create a `POST /upload` route for file upload without using zod-validator.
+1. Create another `POST /validate-upload` route for file upload to accepts data as `FormData` in which use zod-validator to validate incoming data.
+
+Github Repro Link: https://github.com/ParasSolanki/hono-multi-file-upload-validation-bug.
+
+If i use `c.req.parseBody()` as mentioned [here](https://hono.dev/snippets/file-upload#snippets) then i do get all the multiple uploaded files in an array.
+
+![parse-body-data](https://github.com/honojs/hono/assets/62164346/5d6d921e-160b-4655-a920-d1e4b962c66a)
+
+
+### What is the expected behavior?
+
+If key is ending with "[]" then it should return data in an array form after the validation. Same logic as we have for the `parseBody()` [here](https://github.com/honojs/hono/blob/main/src/utils/body.ts#L70).
+
+### What do you see instead?
+
+_No response_
+
+### Additional information
+
+In the [validator.ts](https://github.com/honojs/hono/blob/main/src/validator/validator.ts#L96) we should handle logic for key ending with "[]". Instead of returning last value it should return it as an array.
+2366 Uploading does not work as mentioned in docs created=2024-03-16T16:44:28Z updated=2024-03-17T14:02:18Z
+### What version of Hono are you using?
+
+4.1.0
+
+### What runtime/platform is your app running on?
+
+node v20
+
+### What steps can reproduce the bug?
+
+Create a new project using `yarn create hono` and copy this code in `src/index.ts`
+
+```ts
+import { serve } from '@hono/node-server';
+import { Hono } from 'hono';
+
+const app = new Hono();
+
+app
+  .get('/', (c) => {
+    return c.text('Hello Hono!');
+  })
+  .post('/upload', async (c) => {
+    // form
+    const form = await c.req.formData(); // error
+    const file = form.get('file');
+    console.log(file);
+
+    // or body
+    const body = await c.req.parseBody();
+    console.log(body); // {}
+
+    return c.text('file upload');
+  });
+
+const port = 3000;
+console.log(`Server is running on port ${port}`);
+
+serve({
+  fetch: app.fetch,
+  port,
+});
+
+```
+
+![image](https://github.com/honojs/hono/assets/54232641/b308a198-0c99-455c-ada7-497006f7fa14)
+
+
+### What is the expected behavior?
+
+I should get a `File` in the form or at least in the body as you described in the docs [here](https://hono.dev/snippets/file-upload).
+
+### What do you see instead?
+
+## Body
+I get an empty object `{}`.
+
+## Form
+I get an error :
+
+```bash
+TypeError: Request.formData: Could not parse content as FormData.
+    at webidl.errors.exception (node:internal/deps/undici/undici:1581:14)
+    at Request.formData (node:internal/deps/undici/undici:5276:33)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at Array.<anonymous> (/home/ri/workspace/hono-upload/src/index.ts:12:18)
+    at responseViaResponseObject (/home/ri/workspace/hono-upload/node_modules/@hono/node-server/dist/index.js:347:13)
+```
+
+### Additional information
+
+I am using `WSL 2`.
+2077 feat: new built-in middleware bodyLimit created=2024-01-24T08:25:05Z updated=2024-02-25T10:03:41Z
+### Author should do the followings, if applicable
+I saw this DISCUSSION and implemented it.
+https://github.com/orgs/honojs/discussions/2048
+It takes a little time to prepare an explanation.
+
+- [x] Add tests
+- [x] Run tests
+- [x] `yarn denoify` to generate files for Deno
+
+1528 feat: `parseBody()` for multi values' field created=2023-09-30T14:10:45Z updated=2023-10-05T07:33:56Z
+### Author should do the followings, if applicable
+
+Hi @yusukebe 
+This is an implemention of the suggesion in #1018
+As you mention, this changes have backward compatible.
+
+- [x] Add tests
+- [x] Run tests
+- [x] `yarn denoify` to generate files for Deno
+
+1508 File Objects posted with `multipart/form-data` are not parsed into a File created=2023-09-26T08:34:52Z updated=2023-09-26T21:48:35Z
+### What version of Hono are you using?
+
+3.7.2 (latest)
+
+### What runtime/platform is your app running on?
+
+Cloudflare Workers (miniflare)
+
+### What steps can reproduce the bug?
+
+repro repo: https://github.com/sor4chi/hono-repro-file-parse-body
+
+
+
+```ts
+const app = new Hono()
+
+app.post('/', async (c) => {
+  const formData = await c.req.parseBody()
+  const file = formData['file']
+
+  if (file instanceof File) {
+    return c.text('File!')
+  }
+  return c.text('Not File!')
+})
+
+const formData = new FormData()
+const file = new File(['Hello Hono Storage 1\n'], 'sample1.txt')
+formData.append('file', file)
+
+const res = await app.request('http://localhost/', {
+  method: 'POST',
+  body: formData,
+})
+
+console.log(await res.text()) // expected: "File!", actual: "Not File!"
+```
+
+### What is the expected behavior?
+
+The posted files parse to File object.
+
+### What do you see instead?
+
+The posted files parse to File string.
+
+### Additional information
+
+https://twitter.com/monica18_pr/status/1706194484864958708
+2306 perf: don't use `#` created=2024-03-03T14:58:45Z updated=2024-03-04T02:38:00Z
+I haven't found a source that says it explicitly, but adding `#` to private properties will significantly degrade performance. "Hello World" was slower than `fetch` and itty-router, so I thought it was strange, investigated, and found it.
+
+The benchmark results:
+
+Node.js:
+
+```
+cpu: Apple M1 Pro
+runtime: node v20.10.0 (arm64-darwin)
+
+benchmark                time (avg)             (min … max)       p75       p99      p995
+----------------------------------------------------------- -----------------------------
+noop                 325.93 ps/iter     (300 ps … 11.16 ns)    325 ps  345.8 ps  354.2 ps
+
+• Get /hello
+----------------------------------------------------------- -----------------------------
+fetch                  4.43 µs/iter     (3.58 µs … 1.04 ms)      4 µs   8.96 µs  11.38 µs
+Hono                   5.48 µs/iter     (5.29 µs … 6.22 µs)   5.52 µs   6.22 µs   6.22 µs
+Hono without sharps    4.17 µs/iter     (4.03 µs … 4.45 µs)   4.25 µs   4.45 µs   4.45 µs
+itty-router            4.73 µs/iter      (4.6 µs … 4.92 µs)   4.76 µs   4.92 µs   4.92 µs
+
+summary for Get /hello
+  Hono without sharps
+   1.06x faster than fetch
+   1.13x faster than itty-router
+   1.31x faster than Hono
+```
+
+Bun:
+```
+cpu: Apple M1 Pro
+runtime: bun 1.0.25 (arm64-darwin)
+
+benchmark                time (avg)             (min … max)       p75       p99      p995
+----------------------------------------------------------- -----------------------------
+noop                 327.07 ps/iter   (304.1 ps … 12.31 ns)    325 ps    350 ps  358.4 ps
+
+• Get /hello
+----------------------------------------------------------- -----------------------------
+fetch                573.14 ns/iter (522.54 ns … 747.17 ns) 580.23 ns 747.17 ns 747.17 ns
+Hono                   1.06 µs/iter   (680.44 ns … 1.68 µs)   1.32 µs   1.68 µs   1.68 µs
+Hono without sharps  492.24 ns/iter (430.88 ns … 600.82 ns) 518.88 ns 569.58 ns 600.82 ns
+itty-router            1.17 µs/iter     (1.05 µs … 1.41 µs)   1.21 µs   1.41 µs   1.41 µs
+
+summary for Get /hello
+  Hono without sharps
+   1.16x faster than fetch
+   2.15x faster than Hono
+   2.37x faster than itty-router
+```
+
+The benchmark script: https://github.com/yusukebe/cloudflare-workshop-examples/tree/main/projects/benchmarks
+
+### Author should do the followings, if applicable
+
+- [ ] Add tests
+- [x] Run tests
+- [x] `yarn denoify` to generate files for Deno
+
+1393 fix(validator): cache `arrayBuffer` to use after validation created=2023-08-30T22:11:53Z updated=2023-09-03T05:43:03Z
+This PR enhances the handling of request bodies post-validation. After validating a JSON with the validator, you can now invoke `c.req.text()` to access the request body. Additionally, `c.req.text()` is now available `body` validation. We achieve this by caching the `arrayBuffer` in `c.req.bodyCache` and reusing it when calling `c.req.text()`.
+
+Note, if you attempt to use `c.req.raw.text()` after validating the `json` or `body`, you will encounter an error. Instead, always use `c.req.text()` in this context.
+
+Fix #1387
+
+
+### Author should do the followings, if applicable
+
+- [x] Add tests
+- [x] Run tests
+- [x] `yarn denoify` to generate files for Deno
+
+750 r.formData is not a function (bun) created=2022-12-29T11:46:05Z updated=2023-03-21T09:02:36Z
+Hey!
+
+I was just playing around with hono and bun and I wanted to parse the incoming form response of this route:
+
+```tsx
+app.get('/signup', async c => {
+  return c.html(
+    <Layout>
+      <form method="POST" action="/signup">
+        <input type="text" name="username" />
+        <input type="password" name="password" />
+        <input type="submit" value="Sign up" />
+      </form>
+    </Layout>
+  )
+})
+```
+
+```tsx
+app.post(
+  '/signup',
+  validator(v => ({
+    username: v.body('username').isRequired(),
+    password: v.body('password').isRequired(),
+  })),
+  async c => {
+    const body = c.req.valid()
+
+    console.log('body', body)
+
+    return c.redirect('/signup')
+  }
+)
+```
+`POST /signup` returns ```r.formData is not a function. (In 'r.formData()', 'r.formData' is undefined)```. 
+
+I assume this is coming from [`body.ts#parseBody(Request: Request)`](https://github.com/honojs/hono/blob/main/src/utils/body.ts#L3) which gets called in [`request.ts#Request.parseBody`](https://github.com/honojs/hono/blob/main/src/request.ts#L133).
+
+When I add ```console.log(r)```
+to `body.ts` the following object gets logged:
+
+```
+Request (0 KB) {
+  method: "POST",
+  url: "http://localhost:3000/signup"
+}
+```
+
+I assume this is a bun-only bug? Is there any workaround for this?
+487 [BREAKING] fix: make that `c.req.parseBody` parses only `FormData` created=2022-08-27T02:36:26Z updated=2022-09-28T17:42:01Z
+Make that `c.req.parseBody` parses only FormData and does not parse JSON, text, and arrayBuffer. This fix includes breaking changes.
+
+Before this PR, this function returns the parsed body according to Content-Type, despite the type of body. And, it will be `any`:
+
+```ts
+parseBody<T = any>(r: Request | Response): Promise<T>
+```
+
+Even though the user was expecting a `Record<string, string>`, this may return `Object`. This behavior could potentially cause a security vulnerability. See #484 
+
+In this PR, `c.req.parseBody` only parse `FormData`. If the user wants to parse others than FormData, then the user should explicitly use `json()`, `text()`, and `arrayBuffer()`.
+
+```ts
+const data = c.req.json()
+```
+
+`parseBody` will only return `Record<string, string | File>`.
+
+```ts
+parseBody(r: Request | Response): Promise<Record<string, string | File>>
+```
+
+Fix #484 
+484 Should `parseBody` only parse FormData? created=2022-08-26T04:56:51Z updated=2022-08-27T02:38:49Z
+Currently, `req.parseBody()` parses any objects according to content type.
+
+<https://github.com/honojs/hono/blob/main/src/utils/body.ts>
+
+But, I think it would be better just to restrict it to FormData / `req.formData()`.
+
+The first reason, the type we receive will be obscured; thus, it will be `any`. `parseBody` definition is below:
+
+```ts
+parseBody<T = any>(r: Request | Response): Promise<T>
+```
+
+If it only parses FormData, it will be restricted:
+
+```ts
+Record<string, string | File>
+```
+
+The second reason, it has the possibility of opening Security Vulnerability because we receive unexpected values. "*Plack*" rejected the PR for the same reason: <https://github.com/plack/Plack/pull/678>.
+
+Consider the following code referred from the PR comment:
+
+```ts
+app.post('/foo', async (c) => {
+  const body = await c.req.parseBody()
+  const id = body.itemId
+  const item = shopQuery(id)
+  // ~> ['SELECT * FROM shop_item WHERE item_id = ?', id]
+  // ...
+```
+
+In this case, `body.itemId` is expected `string` but, if receive Request that the body is JSON like below:
+
+```ts
+new Request(JSON.stringify({
+  itemId: [1, 2, 3],
+}), {
+  headers: {
+    'Content-Type': 'application/json',
+  },
+})
+```
+
+`body.itemId` will be `[1, 2, 3]`. If `shopQuery` behaves differently when it receives a string than when it receives an array, this could be a problem.
+
+```ts
+// ~> ['SELECT * FROM shop_item WHERE item_id IN (?,?,?)', id ]
+```
+
+This would not happen if `shopQuery` does the type check on the input value, but it would be better to reduce the possibility of this happening. Fortunately, the Request object has a `req.json()`, `req.text()`,  and an `req.arrayBuffer()` method in addition to the `req.formData`. Users can explicitly body parse using those methods. So, `parseBody` should support only FormData. This fix includes breaking changes, but I think we should do it.
+
+---
+
+@metrue @usualoma 
+I want to know your opinion.
+
+# maintainers-pretty-all.json
+3952 prettyJSON throws on invalid query parameters created=2025-02-24T18:54:00Z updated=2025-06-19T08:31:21Z
+### What version of Hono are you using?
+
+4.7.2
+
+### What runtime/platform is your app running on? (with version if possible)
+
+NodeJS v20.16.0
+
+### What steps can reproduce the bug?
+
+prettyJSON calls `HonoRequest.query()` without a try clause, so when an invalid query parameter is passed, it throws the `URIError: URI Malformed` error.
+
+Here is the code:
+
+```
+import { serve } from '@hono/node-server'
+import { Hono } from 'hono'
+import { prettyJSON } from "hono/pretty-json";
+
+const app = new Hono()
+app.use("*", prettyJSON());
+
+app.get('/', (c) => {
+  return c.text('Hello Hono!')
+})
+
+serve({
+  fetch: app.fetch,
+  port: 3000
+}, (info) => {
+  console.log(`Server is running on http://localhost:${info.port}`)
+})
+```
+
+This code was obtained by running `npm create hono@latest` and adding two lines for importing and using prettyJSON.
+
+### What is the expected behavior?
+
+It should not throw an error
+
+### What do you see instead?
+
+Making requests to the server throws the error as follows:
+
+```
+lincolnbergeson@Lincolns-MacBook-Pro-2 ~ % curl 'localhost:3000'
+Hello Hono!%
+lincolnbergeson@Lincolns-MacBook-Pro-2 ~ % curl 'localhost:3000?%E0%A4%A'
+Internal Server Error%
+```
+
+And the server logs:
+
+```
+Server is running on http://localhost:3000
+URIError: URI malformed
+    at decodeURIComponent (<anonymous>)
+    at _decodeURI (file:///Users/lincolnbergeson/Documents/GitHub/hono-demo/node_modules/hono/dist/utils/url.js:132:38)
+    at _getQueryParam (file:///Users/lincolnbergeson/Documents/GitHub/hono-demo/node_modules/hono/dist/utils/url.js:171:14)
+    at HonoRequest.query (file:///Users/lincolnbergeson/Documents/GitHub/hono-demo/node_modules/hono/dist/request.js:41:12)
+    at prettyJSON2 (file:///Users/lincolnbergeson/Documents/GitHub/hono-demo/node_modules/hono/dist/middleware/pretty-json/index.js:5:26)
+    at dispatch (file:///Users/lincolnbergeson/Documents/GitHub/hono-demo/node_modules/hono/dist/compose.js:22:23)
+    at file:///Users/lincolnbergeson/Documents/GitHub/hono-demo/node_modules/hono/dist/compose.js:5:12
+    at file:///Users/lincolnbergeson/Documents/GitHub/hono-demo/node_modules/hono/dist/hono-base.js:195:31
+    at #dispatch (file:///Users/lincolnbergeson/Documents/GitHub/hono-demo/node_modules/hono/dist/hono-base.js:205:7)
+    at fetch (file:///Users/lincolnbergeson/Documents/GitHub/hono-demo/node_modules/hono/dist/hono-base.js:208:26)
+```
+
+### Additional information
+
+_No response_
+3300 feat(pretty-json): support custom query created=2024-08-20T04:07:49Z updated=2024-08-26T13:43:33Z
+Pretty JSON middleware changed to support custom queries, like that:
+```ts
+app.use('*', prettyJSON({
+  query: 'format'
+})
+```
+In this case, you can see formatted JSON at `?format`.  I think it should be customizable.
+
+### The author should do the following, if applicable
+
+- [x] Add tests
+- [x] Run tests
+- [x] `bun run format:fix && bun run lint:fix` to format the code
+- [x] Add [TSDoc](https://tsdoc.org/)/[JSDoc](https://jsdoc.app/about-getting-started) to document the code
+
+2565 Unable to Serve Static Files (IMPORTANT) created=2024-04-27T15:27:34Z updated=2024-04-28T02:28:43Z
+### What version of Hono are you using?
+
+4.2.3
+
+### What runtime/platform is your app running on?
+
+Bun
+
+### What steps can reproduce the bug?
+
+Start the application.
+Attempt to access static files using the specified route /static/*.
+```ts
+/* eslint-disable @typescript-eslint/no-unused-vars */
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { Handler, Hono } from "hono";
+
+import "reflect-metadata";
+import { controllers } from "./api/registerer";
+import { MetadataKeys } from "./core/utils/metadatakeys";
+import { Router } from "./core/annotations/types/Route";
+import showroutes from "./core/utils/showroutes";
+import { secureHeaders } from "hono/secure-headers";
+import { logger } from 'hono/logger'
+import { prettyJSON } from 'hono/pretty-json'
+import { html } from "hono/html";
+import { serveStatic } from 'hono/bun'
+// ! APPLICATON BOOT CLASS
+class YouTubeApplication {
+  private readonly _instance: Hono;
+
+  get instance(): Hono {
+    return this._instance;
+  }
+
+  constructor() {
+    this._instance = new Hono();
+    this.implementSecurity();
+    this.registerRouters();
+  }
+
+  private implementSecurity() {
+    this._instance.use(secureHeaders());
+  }
+
+  private registerRouters() {
+    this._instance.use(logger())
+    this._instance.use(prettyJSON())
+    this._instance.use('/static/*', serveStatic({ root: './',onNotFound(path, c) {
+      console.log(path)
+    }, }))
+    
+    this._instance.get('/', (c) => c.text('You can access: /static/hello.txt'))
+    this._instance.onError((error,c) => {
+      return c.html(html`
+          <!DOCTYPE html>
+          <html lang="en">
+            <head>
+              <meta charset="UTF-8" />
+              <meta
+                name="viewport"
+                content="width=device-width, initial-scale=1.0"
+              />
+              <title>Whitelabel Error Page</title>
+              <style>
+                body {
+                  font-family: Arial, sans-serif;
+                  background-color: #f4f4f4;
+                  color: #333;
+                  margin: 0;
+                  padding: 0;
+                }
+                .container {
+                  display: flex;
+                  justify-content: start;
+                  align-items: start;
+                  height: 100vh;
+                }
+                .content {
+                  text-align: left;
+                  padding:5rem;
+                }
+                h1 {
+                  font-size: 36px;
+                  color: #000; 
+                }
+                p {
+                  font-size: 18px;
+                  margin-top: 10px;
+                }
+              </style>
+            </head>
+            <body>
+              <div class="container">
+                <div class="content">
+                  <h1>The Whitelabel Error</h1>
+                  <p>There was an error processing your request.</p>
+                  <p>[${c.req.raw.method}] ${c.req.raw.url}</p>
+                  <p>[MESSAGE] ${(error.message as string)}</p>
+                </div>
+              </div>
+            </body>
+          </html>
+        `)
+    })
+    controllers.forEach((controller) => {
+      const controllerInstance = new (controller as { new (): any })();
+      const base_path = Reflect.getMetadata(MetadataKeys.BASE_PATH, controller);
+      const routers: Router[] = Reflect.getMetadata(
+        MetadataKeys.ROUTERS,
+        controller
+      );
+      this.handleSubRoutes(base_path, routers, controllerInstance);
+    });
+  }
+
+  private handleSubRoutes(
+    base_path: string,
+    routers: Router[],
+    controllerInstance: { [handleName: string]: Handler }
+  ): void {
+    routers.forEach((route) => {
+      const routeHandler = async (c: any, next: any) => {
+              
+          const metadata = Reflect.getMetadata(
+            MetadataKeys.ROUTERS,
+            controllerInstance.constructor
+          );
+          // const routeMetadata = metadata.find(
+          //   (data: { handlerName: string | symbol; }) => data.handlerName === route.handlerName
+          // );
+
+          // Call the route handler method
+          const boundHandler =
+            controllerInstance[String(route.handlerName)].bind(
+              controllerInstance
+            );
+          const result = await boundHandler(c, next);
+          return result;
+      };
+      this._instance.on(
+        route.method,
+        base_path.concat(route.path),
+        routeHandler
+      );
+    });
+  }
+}
+
+showroutes();
+const Singleton = new YouTubeApplication().instance;
+export default Singleton;
+
+
+```
+
+### What is the expected behavior?
+
+Static files located in the root directory should be served successfully when accessed via the /static/* route.
+
+### What do you see instead?
+
+Instead of successfully serving static files as expected, the application fails to serve the static content. Upon attempting to access static files through the specified route `/static/*`, the files are not served, and the expected content is not displayed.
+
+### Additional information
+
+Despite the inclusion of the `serveStatic` middleware with appropriate configuration, the static files are not served as expected. Additionally, no specific error message is provided, making it challenging to pinpoint the exact cause of the issue. Further investigation into the middleware configuration, potential conflicts, or errors during initialization may be necessary to resolve the problem with serving static files.
+
+# maintainers-validator-all.json
+4109 feat(validator)!: warn when validator does not find a valid content type in the request  created=2025-04-25T03:41:23Z updated=2026-08-03T21:42:54Z
+Related: https://github.com/honojs/hono/pull/3707
+
+### The author should do the following, if applicable
+
+- [ ] Add tests
+- [ ] Run tests
+- [ ] `bun run format:fix && bun run lint:fix` to format the code
+- [ ] Add [TSDoc](https://tsdoc.org/)/[JSDoc](https://jsdoc.app/about-getting-started) to document the code
+
+3707 feat: warn when json validator does not find a content type in the request created=2024-11-28T02:45:11Z updated=2026-08-03T21:42:54Z
+When a validator has a target 'json' it will now warn if a request is missing a `Content-Type: application/json` header.
+
+Closes https://github.com/honojs/middleware/issues/841
+
+Added some docs too https://github.com/honojs/website/pull/540
+
+### The author should do the following, if applicable
+
+- [ ] Add tests
+- [ ] Run tests
+- [ ] `bun run format:fix && bun run lint:fix` to format the code
+- [ ] Add [TSDoc](https://tsdoc.org/)/[JSDoc](https://jsdoc.app/about-getting-started) to document the code
+
+4062 Support `body` validation target to handle form OR json content type use-case created=2025-04-09T13:46:05Z updated=2025-04-18T00:11:48Z
+### What is the feature you are proposing?
+
+The [`validator`](https://github.com/honojs/hono/blob/16a9a949c66bd561e55fffba1580ddc18ef30857/src/validator/validator.ts#L30) function is used by most of the hono middleware packages (e.g. [`@hono/zod-validator`](https://github.com/honojs/middleware/tree/main/packages/zod-validator)) to validate incoming request data, automatically throw errors where applicable, and provided typed data back via `c.req.valid(...)`. The current implementation will treat all middleware calls as intersecting and ensure that ALL the data validates currently before passing the request through to the route handler:
+
+```ts
+app.post(
+  '/',
+  zValidator('query', z.object({ q: z.string().optional() })),
+  zValidator('json', z.object({ name: z.string() })),
+  async (c) => {
+    // Both typed correctly
+    const query = c.req.valid('query');
+    const json = c.req.valid('json');
+  }
+);
+```
+
+However, requiring ALL the validators to be used on every request fails in the case of `json` and `form` data which cannot exist simultaneously because they are both part of the `body` of the request. (See https://github.com/honojs/middleware/issues/907 for some context). Requests will always fail if a route tries to validate both `json` and `form` data simultaneously. 
+
+The more appropriate expectation for `body` data in this case would be to validate either `json` OR `form` data based on the incoming content type. This is a valid way to discriminate incoming data, and it would be great for the native hono validation to support it.
+
+-------
+
+What I propose is to add support for `body` inside of [`ValidationTargets`](https://github.com/honojs/hono/blob/16a9a949c66bd561e55fffba1580ddc18ef30857/src/types.ts#L1930) that would take in a dictionary of appropriate targets along with a validation function for each. When validating the incoming requests, it would only validate the incoming data against the function matching the incoming content type:
+
+```ts
+app.post(
+  '/',
+  validator('body', {
+    json: (value, c) => {
+      // Only called when Content-Type = 'application/json'
+    },
+    form: (value, c) => {
+      // Only called when Content-Type = 'application/form-data'
+    }
+  }),
+  async (c) => {
+    if (c.req.header('User-Agent') === 'application/json') {
+      const json = c.req.valid('json');
+    } else {
+     const data = c.req.valid('form');
+    }
+  }
+);
+```
+2439 Response serialization and validation created=2024-03-30T04:15:25Z updated=2026-08-08T12:55:22Z
+### What is the feature you are proposing?
+
+Certain frameworks (eg: [fastify](https://fastify.dev/docs/latest/Reference/Validation-and-Serialization/#serialization)) provide response validation for success or error payloads.
+Is there support for such feature in hono? If not, is it something planned?
+
+### Context
+Apart from obvious advantages like schema-first approach, this feature would greatly help securing API internals.
+For example, when you have multiple unique IDs for DB records and you want to make sure that only `external_id` IDs are ever returned without accidentally leaking `internal_id` IDs.
+
+664 Feature request: support for file upload created=2022-11-16T11:21:06Z updated=2025-02-21T13:25:32Z
+I have a played a bit here with `bun` and `hono` to see how it works and realized that the request body comes there in raw format if I want to upload files.
+
+surprisingly, getting body as a buffer worked out of the box:
+
+```ts
+ const reader = ctx.req.body.getReader()
+ const result = await reader.read()
+ const buffer = Buffer.from(result.value ?? [])
+```
+
+So I have my `buffer`, but the question is -- do we have anything is there any functionality to have a list of files within that buffer?
+
+In other words, - maybe there is an example of implementing file uploading with `hono`, or at least some timeline on when it will be available.
+
+Thank you.
+5060 parseBody and validator skip mixed-case Content-Type media types created=2026-06-30T06:29:01Z updated=2026-07-01T09:42:28Z
+## Summary
+
+`parseBody()` and `validator()` match supported `Content-Type` media types with case-sensitive checks. Requests using valid mixed/upper-case media type values such as `Application/JSON` or `Application/X-WWW-Form-Urlencoded` can be parsed by the platform `Request`, but Hono's guards skip them and may pass an empty object downstream.
+
+## Code path
+
+Parser / validator / feedback anchors:
+
+- `src/utils/body.ts:100-101`: `parseBody()` reads the raw `Content-Type` header value.
+- `src/utils/body.ts:103-105`: form parsing is guarded by lower-case `startsWith()` literals.
+- `src/utils/body.ts:110`: non-matching content types return `{}`.
+- `src/validator/validator.ts:24-26`: JSON/form regexes use lower-case media type literals.
+- `src/validator/validator.ts:95` and `src/validator/validator.ts:107`: non-matching content types skip the parsing/validation branch.
+
+## Steps to reproduce
+
+Validation level: dynamic platform reproduction plus source-control-flow validation.
+
+```js
+const req = new Request('http://localhost/post', {
+  method: 'POST',
+  headers: { 'Content-Type': 'Application/JSON' },
+  body: '{"message":"hello"}',
+})
+
+console.log(await req.clone().json()) // { message: 'hello' }
+```
+
+The platform parser accepts the mixed/upper-case media type. However, Hono's current guards evaluate the same header value with lower-case-only string/regex checks. The local branch probe showed:
+
+```text
+Application/JSON -> platform JSON parsed, Hono json validator guard false
+Application/X-WWW-Form-Urlencoded -> platform form parsed, Hono parseBody guard false
+```
+
+## Expected behavior
+
+Supported media type matching should be case-insensitive for the media type portion. Parameter values such as multipart boundaries should remain intact.
+
+## Actual behavior
+
+Case-only variants of supported content types are silently skipped by Hono parser/validator logic, so handlers can receive `{}` or unvalidated empty data instead of the request body.
+
+## Existing coverage
+
+I searched current issues and PRs for `Content-Type parseBody validator case`, `Application JSON validator`, `parseBody`, and broader `Content-Type` terms. Related items such as #4062, #3707, and #4109 discuss validator/content-type behavior, but they do not appear to cover media type value case normalization.
+
+## Suggested fix
+
+Normalize or parse the media type portion before matching, for example by lowercasing only the part before `;`. Avoid lowercasing parameter values that may be case-sensitive.
+
+## Suggested tests
+
+- `parseBody()` handles `Application/X-WWW-Form-Urlencoded`.
+- `validator('json')` handles `Application/JSON`.
+- `validator('form')` handles mixed-case urlencoded/multipart media types while preserving multipart boundary behavior.
+
+---
+Submitted with Codex.
+
+
+5064 fix(utils,validator): match Content-Type media types case-insensitively created=2026-06-30T13:25:33Z updated=2026-07-04T23:31:41Z
+### What changed
+
+* Match supported `Content-Type` media types case-insensitively in `validator()`.
+* Normalize the media type portion of `Content-Type` in `parseBody()` before checking form content types.
+* Add regression tests for mixed-case JSON and URL-encoded form media types.
+
+### Why
+
+`Content-Type` media types are case-insensitive, but mixed-case values such as `Application/JSON` and `Application/X-WWW-Form-Urlencoded` were skipped by `validator()` and `parseBody()`.
+
+Fixes #5060.
+
+### Tests
+
+- `bunx vitest --run src/utils/body.test.ts src/validator/validator.test.ts`
+- `bun run test`
+- `bun run lint`
+
+### The author should do the following, if applicable
+
+- [x] Add tests
+- [x] Run tests
+- [x] `bun run format:fix && bun run lint:fix` to format the code
+- [ ] Add [TSDoc](https://tsdoc.org/)/[JSDoc](https://jsdoc.app/about-getting-started) to document the code
+
+5067 fix(utils/body,validator): normalize Content-Type media type for case-insensitive matching created=2026-07-01T09:39:48Z updated=2026-07-01T09:42:28Z
+Fixes #5060
+
+### The author should do the following, if applicable
+
+- [x] Add tests
+- [x] Run tests
+- [x] `bun run format:fix && bun run lint:fix` to format the code
+- [ ] Add [TSDoc](https://tsdoc.org/)/[JSDoc](https://jsdoc.app/about-getting-started) to document the code
+
+4892 method-override: form-based override fails when Content-Type includes charset parameter created=2026-04-24T12:34:16Z updated=2026-04-25T23:37:21Z
+### What version of Hono are you using?
+
+4.12.15
+
+### What runtime/platform is your app running on? (with version if possible)
+
+The bug is runtime-agnostic, but I encountered it on: Cloudflare Workers
+
+### What steps can reproduce the bug?
+
+When a request to a `method-override` middleware has a `Content-Type` header with a charset parameter (e.g. `application/x-www-form-urlencoded;charset=UTF-8`), the method override does **not** take effect and the request is handled as the original POST.
+
+This is the Content-Type that the Fetch API automatically sets when a `URLSearchParams` instance is passed as the request body. It is also the default for libraries such as [Hotwired Turbo](https://turbo.hotwired.dev/), which is how I originally hit this.
+
+### Minimal reproduction
+
+```ts
+import { Hono } from 'hono'
+import { methodOverride } from 'hono/method-override'
+
+const app = new Hono()
+app.use('/posts', methodOverride({ app }))
+app.delete('/posts', (c) => c.text('deleted'))
+
+const body = new URLSearchParams()
+body.append('_method', 'DELETE')
+
+// Note: no explicit Content-Type header — fetch/Request sets
+// `application/x-www-form-urlencoded;charset=UTF-8` automatically
+// when the body is a URLSearchParams instance.
+const res = await app.request('/posts', {
+  method: 'POST',
+  body,
+})
+
+console.log(res.status) // 404 (expected 200)
+```
+
+### What is the expected behavior?
+
+The form-based override should fire for any `Content-Type` whose media type is `application/x-www-form-urlencoded`, regardless of parameters like `charset`. The request above should be routed to the DELETE handler and return 200.
+
+### What do you see instead?
+
+The override does not fire. The request is handled as the original POST. In the repro above, since there is no POST handler for `/posts`, the request falls through to a 404.
+
+### Additional information
+
+### Root cause
+
+In [`src/middleware/method-override/index.ts`](https://github.com/honojs/hono/blob/main/src/middleware/method-override/index.ts#L92), the URL-encoded branch uses strict string equality:
+
+```ts
+if (contentType === 'application/x-www-form-urlencoded') {
+```
+
+So `application/x-www-form-urlencoded;charset=UTF-8` fails the check.
+
+The `multipart/form-data` branch in the same function (line 74) already uses `startsWith`, and the rest of the codebase consistently tolerates media-type parameters:
+
+- [`src/utils/body.ts` L105](https://github.com/honojs/hono/blob/main/src/utils/body.ts#L105) uses `contentType?.startsWith('application/x-www-form-urlencoded')`
+- [`src/validator/validator.ts` L26](https://github.com/honojs/hono/blob/main/src/validator/validator.ts#L26) uses a regex that accepts parameters
+- [`src/middleware/csrf/index.ts` L30](https://github.com/honojs/hono/blob/main/src/middleware/csrf/index.ts#L30) uses a regex that accepts parameters
+
+The same class of bug was previously fixed in the validator middleware in #3297 (`URL Encoded Data could not be validated if the Content-Type included charset`).
+
+### Proposed fix
+
+Change line 92 to `startsWith`, matching the multipart branch above it and `utils/body.ts`:
+
+```ts
+if (contentType?.startsWith('application/x-www-form-urlencoded')) {
+```
+
+I would be happy to open a PR with this fix and tests if this makes sense.
+3814 JSON in RPC is not being sent with the correct Content-Type headers (even other custom headers not working) created=2025-01-09T04:15:11Z updated=2025-07-19T11:07:50Z
+### What version of Hono are you using?
+
+4.6.16
+
+### What runtime/platform is your app running on? (with version if possible)
+
+local - nodejs. remote - cloudflare workers
+
+### What steps can reproduce the bug?
+
+Create an endpoint  and use zValidator("json", someValidator) 
+create an RPC that client can use. use hc
+access the endpoint and pass in a json body
+check the network tab and you would see the content-type is text/plain instead of application/json
+
+### What is the expected behavior?
+
+headers should be Content-Type = application/json
+
+### What do you see instead?
+
+text/plain
+
+### Additional information
+
+client rpc
+![image](https://github.com/user-attachments/assets/88b58219-8696-468f-bdd6-41e3e536e33f)
+
+endpoint:
+![image](https://github.com/user-attachments/assets/737c545a-1f8f-4e0e-a690-c7596a9943cb)
+
+error returned by zValidator cause he's not able to parse the body correctly.
+![image](https://github.com/user-attachments/assets/cc402b4b-aaf6-4725-a4ea-0256c165ecc9)
+
+correct payload was sent
+![image](https://github.com/user-attachments/assets/7bcb1c43-cd20-4314-8e9b-f2b4c8dd7399)
+
+incorrect headers were set
+![image](https://github.com/user-attachments/assets/2c88d9fe-2f7e-4d78-89e2-a2daa8e255bd)
+
+4247 Type safe not working for path parameter in RPC created=2025-06-24T22:56:15Z updated=2025-06-26T09:56:02Z
+### What version of Hono are you using?
+
+4.8.2
+
+### What runtime/platform is your app running on? (with version if possible)
+
+Bun 1.2.17
+
+### What steps can reproduce the bug?
+
+I've created a users module, that follows separation of concerns principle.
+
+Here is the main index:
+
+```typescript
+// index.ts
+
+import roles from "./modules/roles";
+import users from "./modules/users";
+import authentication from "./modules/auth";
+
+const app = new Hono()
+    .use(logger())
+    .use("*", async (c, next) => {
+        const corsMiddlewareHandler = cors({
+            origin: CORS_ORIGIN,
+            allowHeaders: ["Content-Type", "Authorization"],
+            allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+            credentials: true
+        });
+        return corsMiddlewareHandler(c, next);
+    })
+    .onError((error, c) => {
+        return errorHandler(error, c);
+    })
+    .route("/ws", wsRoute)
+    .route("/auth", authentication)
+    .route("/users", users)
+
+export type AppType = typeof app;
+export default {
+    port: APP_PORT,
+    fetch: app.fetch,
+    websocket
+};
+```
+
+Here is the users module, by using handlers, so module it's just routing:
+
+```typescript
+// users/index.ts
+
+import { Hono } from "hono";
+import {
+    exportUsersHandler,
+    importUsersHandler,
+    getOneUserHandler,
+    updateUserHandler,
+    deleteUserHandler,
+    restoreUserHandler,
+    changeUserPasswordHandler,
+    validateUserPasswordHandler,
+    banUserHandler,
+    unbanUserHandler,
+    listUsersHandler,
+    createUserHandler
+} from "./handlers";
+
+const app = new Hono()
+    .get("/", ...listUsersHandler)
+    .post("/", ...createUserHandler)
+    .get("/export", ...exportUsersHandler)
+    .post("/import", ...importUsersHandler)
+    .get("/:id", ...getOneUserHandler)
+    .put("/:id", ...updateUserHandler)
+    .delete("/:id", ...deleteUserHandler)
+    .patch("/:id/restore", ...restoreUserHandler)
+    .post("/:id/change-password", ...changeUserPasswordHandler)
+    .patch("/:id/validate-password", ...validateUserPasswordHandler)
+    .patch("/:id/ban", ...banUserHandler)
+    .patch("/:id/unban", ...unbanUserHandler);
+
+export default app;
+```
+
+For handlers, i prefer using ArkType validator so it's look like this (`get-one-user` example), pretty straight forward:
+
+```typescript
+// users/handlers/get-one-user.ts
+
+import { arktypeValidator } from "@hono/arktype-validator";
+import { COMMON_PARAMS_SCHEMA } from "helpers/common-schemas";
+import { getOneUser } from "../services";
+import { factory } from "./factory";
+
+export const getOneUserHandler = factory.createHandlers(
+    arktypeValidator("param", COMMON_PARAMS_SCHEMA),
+    async (c) => {
+        const { id } = c.req.valid("param");
+        const user = await getOneUser(id);
+        if (!user) {
+            return c.notFound();
+        }
+
+        return c.json(user);
+    }
+);
+```
+
+i'm using singleton factory:
+```typescript
+// factory.ts
+
+import { createFactory } from "hono/factory";
+export const factory = createFactory();
+```
+
+and schema it's only `id: string` type:
+```typescript
+// users/schemas/common.ts
+
+import { type } from "arktype";
+
+export const COMMON_PARAMS_SCHEMA = type({
+    id: "string",
+});
+```
+
+RPC type safety is working except for path parameters, like `change-password`, `ban` etc. :
+`await client.users[":id"]["change-password"].$post({})`
+
+`await client.users[":id"].ban.$patch({}); // ban is any`
+
+### What is the expected behavior?
+
+i expect type safety like `users.get`:
+
+![Image](https://github.com/user-attachments/assets/b710156b-e8ba-48fd-974a-cdaaf5e5ecf0)
+
+### What do you see instead?
+
+i've got `any`
+
+![Image](https://github.com/user-attachments/assets/d0f2e079-1bcb-4673-8455-0bc837bda1bb)
+
+
+### Additional information
+
+I'm using Bun 1.2.17
+
+My project structure:
+
+![Image](https://github.com/user-attachments/assets/a82bddd9-6666-4ea4-84b2-e2ee4809e7da)
+2651 Inconsistent Handling of Empty JSON Request Body in Hono Validator created=2024-05-09T22:41:40Z updated=2024-12-29T22:17:04Z
+### What version of Hono are you using?
+
+4.3.3
+
+### What runtime/platform is your app running on?
+
+Bun
+
+### What steps can reproduce the bug?
+
+1. Send a request with an empty JSON body to a route utilizing hono/validator middleware.
+2. Observe the unexpected 400 Bad Request response due to the middleware's exception handling for empty JSON bodies.
+
+### What is the expected behavior?
+
+The hono/validator middleware should gracefully handle empty JSON request bodies, considering them valid without triggering exceptions. This behavior is crucial for scenarios where empty JSON bodies are legitimate or expected.
+
+### What do you see instead?
+
+The current behavior negatively affects applications where empty JSON request bodies should be permitted. This inconsistency leads to unexpected errors and hinders the module's usability.
+
+### Additional information
+
+This issue is critical for applications relying on hono/validator. A swift resolution or workaround would greatly benefit the developer community.
+2983 Parsing a null body throws exception instead of returning null created=2024-06-17T10:35:22Z updated=2025-01-31T10:44:25Z
+### What is the feature you are proposing?
+
+## Current behaviour
+
+When receiving a request with an optional body in its payload, I was hoping that `c.req.json()` would more gracefully handle the case where there's nothing to parse (body is null).
+
+It currently throws an exception.
+
+```sh
+Runtime:
+bun
+
+Versions:
+"hono": "^4.4.5",
+"@hono/zod-validator": "^0.2.2",
+```
+
+## Expected / Desired behaviour
+
+Return null instead of throwing the exception.
+
+----
+
+Wanted to avoid catch an exception when parsing the body as this make the router's code a little bit more convoluted than I was hoping for.
+
+On the other hand it makes it explicit that we need to handle the exception on the "consumer" side, which one could argue it has benefits.
+
+## Steps to reproduce:
+
+### index.ts
+```ts
+app.post("/no-body-example", async (c) => {
+  try {
+    const body = await c.req.json();
+    console.log("Body: ", body);
+    return c.json({ message: "OK" }, 201);
+  } catch (e) {
+    console.error("Error on no body", e);
+    return c.json({ message: "Error on request" }, 500);
+  }
+});
+```
+
+### And test case:
+
+```ts
+it("It should return 201 even when request has no body", async () => {
+  const res = await app.request(
+    "/no-body-example",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: null // or we can simply not specify it or 'undefined'
+    },
+    {}
+  );
+
+  expect(res.status).toBe(201);
+});
+```
+
+
+### Result
+
+```sh
+Error on register  68 |           body = JSON.stringify(body);
+69 |         }
+70 |         return new Response(body)[key]();
+71 |       });
+72 |     }
+73 |     return bodyCache[key] = raw[key]();
+                                     ^
+SyntaxError: Unexpected end of JSON input
+
+(...)
+
+188 |         headers: { "Content-Type": "application/json" },
+189 |       },
+190 |       {}
+191 |     );
+192 | 
+193 |     expect(res.status).toBe(201);
+                             ^
+error: expect(received).toBe(expected)
+```
+
+While I understand that obfuscating what's happening might not be optimal for some use cases I'm wondering if it makes sense to make this body parsing safe to consumers and instead have a more explicit parsing method that keeps this behaviour.
+
+Relevant part of the framework's `request.ts`:
+https://github.com/honojs/hono/blob/main/src/request.ts#L208-L227
+
+```ts
+  private cachedBody = (key: keyof Body) => {
+    const { bodyCache, raw } = this
+    const cachedBody = bodyCache[key]
+
+    if (cachedBody) {
+      return cachedBody
+    }
+
+    const anyCachedKey = Object.keys(bodyCache)[0]
+    if (anyCachedKey) {
+      return (bodyCache[anyCachedKey as keyof Body] as Promise<BodyInit>).then((body) => {
+        if (anyCachedKey === 'json') {
+          body = JSON.stringify(body)
+        }
+        return new Response(body)[key]()
+      })
+    }
+
+    return (bodyCache[key] = raw[key]())
+  }
+```
+ 
+ Happy to give it a go at a PR if this is an acceptable change and/or happy to further discuss this.
+3165 fix(validator): ignore content-type mismatches created=2024-07-19T13:36:11Z updated=2024-07-20T14:05:13Z
+With this PR, the validator will ignore the mismatch between the validate type like `json` and `form` and the content type of the incoming request.
+
+Before this PR, it will throw the error if the validator validates a request that does not have a valid content type for validate type, including `json` and `form`:
+
+```ts
+const app = new Hono()
+app.post(
+  '/post',
+  validator('json', (value) => value),
+  (c) => {
+    return c.json(c.req.valid('json'))
+  }
+)
+
+const res = await app.request('http://localhost/post', {
+  method: 'POST',
+  body: JSON.stringify({ foo: 'bar' }),
+  headers: {
+    // Does not set a content-type
+  },
+})
+
+// res.status will be 400!
+```
+
+This is inconvenient since it can't allow requests with no content type.
+
+And with this spec, it does not support multiple validators for the body:
+
+```ts
+app.post(
+  '/',
+  validator('json', (value) => value),
+  validator('form', (value) => value),
+  async (c) => {
+    const jsonData = c.req.valid('json')
+    const formData = c.req.valid('form')
+    return c.json({
+      json: jsonData,
+      form: formData,
+    })
+  }
+)
+```
+
+With this PR, it does not throw errors.
+
+### Is this a breaking change?
+
+I've changed the test behavior. However, the current implementation causes unintended results like https://github.com/honojs/middleware/issues/638. So, I think we can include this in a patch or minor release, not a major release.
+
+Fixes https://github.com/honojs/middleware/issues/638
+
+### The author should do the following, if applicable
+
+- [x] Add tests
+- [x] Run tests
+- [x] `bun run format:fix && bun run lint:fix` to format the code
+- [x] Add [TSDoc](https://tsdoc.org/)/[JSDoc](https://jsdoc.app/about-getting-started) to document the code
+
+3285 Validator: FormData validation fails when content-type header does not have a space created=2024-08-17T05:29:48Z updated=2024-08-17T09:49:02Z
+### What version of Hono are you using?
+
+4.5.5
+
+### What runtime/platform is your app running on?
+
+Cloudflare Workers
+
+### What steps can reproduce the bug?
+
+1. Define a route with a validator schema (I'm using the example in the docs)
+
+```typescript
+const route = app.post(
+  '/posts',
+  zValidator(
+    'form',
+    z.object({
+      body: z.string(),
+    })
+  ),
+  (c) => {
+    const validated = c.req.valid('form')
+    // ... use your validated data
+  }
+)
+```
+
+2. Call endpoint with form data matching expecting shape.
+
+### What is the expected behavior?
+
+`c.req.valid('form')` to parse the form data.
+
+### What do you see instead?
+
+A validation error is thrown. Adding logs inside `validator.js` (in my `node_modules`) shows that the `validator` function is receiving an empty object. It seems that the multipart regex test fails so an empty object is returned. In my case, it fails because the `Content-Type` header does not have a space after the semi-colon (`multipart/form-data;boundary=2b6246d41cda0544685d0b416bddc327`) like the regex is expecting.
+
+### Additional information
+
+This used to work fine, not clue what it is in my stack that has removed the space in the `Content-Type` header.
+727 [Proposal] RPC created=2022-12-14T23:04:24Z updated=2024-11-12T19:28:52Z
+I'll introduce an ultra cool feature. It will improve our developer experience. This issue is a continuation of #602.
+
+"[tRPC](https://trpc.io)" is helpful for sharing the types between the server and the client. This means it makes the types an API specification. There is a request to make tRPC adapter #582 , I think it's good to make the adapter as 3rd party middleware.
+
+So, tPRC is great, but we can do it in a better way with Hono because we can make it "integrated".
+
+What we want to do are below:
+
+* Share the request format inferred from the validation schema.
+* Share the response format inferred from JSON objects that is returned in a handler.
+* Implement "client" not only on the server-side.
+
+Then, I have created those prototypes. They are not fully implemented, but they work. See the screencast:
+
+![output](https://user-images.githubusercontent.com/10682/207732300-2e30a611-cead-4bee-8dd5-2ebdbbe732e6.gif)
+
+Server-side code:
+
+```ts
+const api = new Hono()
+
+const getRoute = api
+  .get('/hello', (c) => {
+    return c.jsonT({
+      messages: 'hello',
+    })
+  })
+  .build()
+
+const postRoute = api
+  .post(
+    '/posts',
+    validator((v) => ({
+      id: v.json('id'),
+      title: v.json('title'),
+    })),
+    (c) => {
+      const post = c.req.valid()
+      return c.jsonT({ title: post.title })
+    }
+  )
+  .build()
+
+export type AppType = typeof postRoute & typeof getRoute
+```
+
+Client-side code:
+
+```ts
+import type { AppType } from './server'
+
+const client = new Client<AppType>('http://127.0.0.1:8787/api')
+
+const res = await client.get('/hello')
+
+console.log(res.messages)
+
+const res2 = await client.json('/posts', {
+  id: '123',
+  title: 'Hello!'
+})
+
+console.log(res2.title)
+```
+
+The client-side needs to be considered, but this is a good idea for the server-side API. And, if developers want to use 3rd party validator like a "Zod", they may use it.
+
+Notes, we need to brush up on our data structures to handle types with Generics.
+
+Isn't it cool? I may create the PR later.
+3296 `hono/validator` cannot validate if charset is included in the Content-Type of URL Encoded Data created=2024-08-19T05:19:34Z updated=2024-08-19T05:44:58Z
+### What version of Hono are you using?
+
+4.5.6
+
+### What runtime/platform is your app running on?
+
+Node.js, Bun
+
+### What steps can reproduce the bug?
+
+When you try to validate a request whose Content-Type is `application/x-www-form-urlencoded; charset=UTF-8` with `hono/validator`, the value cannot be validated correctly.
+
+code: 
+
+```ts
+import { Hono } from 'hono';
+import { validator } from 'hono/validator';
+
+const app = new Hono()
+app.post(
+  '/post',
+  validator('form', (value) => value),
+  (c) => {
+    return c.json({
+      validation_result: c.req.valid('form'),
+      formData: await c.req.formData(),
+    })
+  }
+)
+
+export default app
+```
+
+request:
+
+```bash
+$> curl -XPOST \
+       -H 'Content-Type: application/x-www-form-urlencoded; charset=UTF-8' \
+       -d 'a=foo&b=bar' \
+    'http://localhost:3000'
+
+> { "validation_result": {}, "formData": { "a":"foo", "b":"bar" } }
+```
+
+### What is the expected behavior?
+
+The value of validate_result and formData should be the same.
+
+```bash
+$> curl -XPOST \
+       -H 'Content-Type: application/x-www-form-urlencoded; charset=UTF-8' \
+       -d 'a=foo&b=bar' \
+    'http://localhost:3000'
+
+> { "validation_result": { "a":"foo", "b":"bar" }, "formData": { "a":"foo", "b":"bar" } }
+```
+
+### What do you see instead?
+
+_No response_
+
+### Additional information
+
+_No response_
+3297 fix(validator): Fixed a bug in hono/validator where URL Encoded Data could not be validated if the Content-Type included charset. created=2024-08-19T05:22:48Z updated=2024-08-19T05:48:25Z
+Fix #3296 
+
+### The author should do the following, if applicable
+
+- [x] Add tests
+- [x] Run tests
+- [x] `bun run format:fix && bun run lint:fix` to format the code
+- [ ] Add [TSDoc](https://tsdoc.org/)/[JSDoc](https://jsdoc.app/about-getting-started) to document the code
+
+3194 Validator doesn't parse body when request uses content-type application/json; charset=utf-8 created=2024-07-27T20:25:10Z updated=2024-07-28T07:39:41Z
+### What version of Hono are you using?
+
+4.5.1
+
+### What runtime/platform is your app running on?
+
+Cloudflare workers
+
+### What steps can reproduce the bug?
+
+There is a bit of a discussion on stack overflow about application/json content-type - if it's valid for it to indicate a charset or not (https://stackoverflow.com/questions/9254891/what-does-content-type-application-json-charset-utf-8-really-mean).
+
+I noticed that `context.json()` returns a response with content-type with a charset included (https://github.com/honojs/hono/blob/main/src/context.ts#L733), but when we send a request with the exact content-type to the app which uses a validator, it fails. It seems to be caused by https://github.com/honojs/hono/blob/main/src/validator/validator.ts#L74 and the fact that `jsonRegex` doesn't include optional matching for a charset.
+
+I prepared a code that demonstrates the issue and a test case.
+
+File app.ts:
+```
+import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi';
+
+const app = new OpenAPIHono();
+
+const RequestBodySchema = z
+  .object({
+    name: z.string(),
+  })
+  .openapi('RequestBody');
+
+const ResponseBodySchema = z
+  .object({
+    status: z.string(),
+  })
+  .openapi('ResponseBody');
+
+const route = createRoute({
+  method: 'post',
+  path: '/test',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: RequestBodySchema,
+        },
+      },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: {
+        'application/json': {
+          schema: ResponseBodySchema,
+        },
+      },
+      description: 'Successful response',
+    },
+  },
+});
+
+app.openapi(route, async (c) => {
+  const { name } = c.req.valid('json');
+  return c.json({
+    status: 'ok',
+  } satisfies z.infer<typeof ResponseBodySchema>);
+});
+
+export default app;
+
+```
+
+file app.test.ts:
+```
+import { describe, expect, test } from 'vitest';
+import app from './app';
+
+test('should return valid response for content-type application/json with a charset', async () => {
+  const res = await app.request('/test', {
+    method: 'post',
+    body: JSON.stringify({
+      name: 'John Doe',
+    }),
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+    },
+  });
+  console.log(await res.text());
+  expect(res.status).toBe(200);
+});
+```
+
+
+
+### What is the expected behavior?
+
+I would expect the test to pass. Validator should accept both 'application/json' as well as 'application/json; charset=utf-8'
+
+### What do you see instead?
+
+Error - zod parsing fails, because it's called on empty object and the requests fails with status 400.
+
+### Additional information
+
+_No response_
+3195 fix(validator): Add double quotation marks to multipart checker regex created=2024-07-27T23:18:11Z updated=2024-07-28T07:22:53Z
+Some runtimes, like Bun (and I assume WebKit based stuff) use double quotes for the `boundary` part of `Content-Type` headers.
+
+Here's a real value from my app: `multipart/form-data; boundary="-WebkitFormBoundary6210507107db483aa49299da6f4298bd`.
+
+Currently, the regex does not include double quotes. This PR fixes this issue by adding double quotes. Patch tested working in my app for Hono 4.5.2.
+3069 Can we generate an openapi schema from any existing hono app? created=2024-07-01T02:39:05Z updated=2024-07-02T22:55:14Z
+### What is the feature you are proposing?
+
+I'm using zod validator, just like the technique described [here](https://hono.dev/docs/concepts/stacks#validation-with-zod). Is there a way I can generate an openapi schema from this app?
+
+Regarding [Swagger UI](https://hono.dev/examples/swagger-ui) and [Zod OpenApi](https://hono.dev/examples/zod-openapi), is my assumption correct that they cannot generate an openapi schema for a hono app, unless that hono app uses [Zod OpenApi](https://hono.dev/examples/zod-openapi) to explicitly declare the shape of each endpoint using `createRoute()`?
+
+Hono client does a really great job of _inferring_ the request types, response types, status codes, etc when using zod-validator. However, I couldn't figure out how to make it generate an openapi schema or a swagger ui, despite all of the strong typing afforded to us by zod-validator. I'd just like to make sure that this not currently possible, and not due to a misunderstanding on my part.
+
+---
+
+The closest I got was this (using [chanfana](https://github.com/cloudflare/chanfana)):
+
+```typescript
+import { fromHono } from "chanfana";
+import { zValidator } from "@hono/zod-validator";
+import { z } from "zod";
+import { Hono } from "hono";
+import { serve } from "@hono/node-server";
+
+const _app = new Hono();
+const app = fromHono(_app);
+
+const route = app.get(
+	"/hello",
+	zValidator("query", z.object({ name: z.string() })),
+	(c) => {
+		const { name } = c.req.valid("query");
+		if (name === "") {
+			return c.json({ error_title: "Invalid name" }, 400);
+		}
+		return c.json({ message: `Hello! ${name}` }, 202);
+	},
+);
+
+serve({ fetch: app.fetch, port: 3000 });
+```
+
+But it wasn't very intelligent as it did not make use of all the available type information. Here is what we get when we run it then call `curl http://localhost:3000/openapi.json`:
+
+```json
+{
+	"openapi": "3.1.0",
+	"info": {
+		"version": "1.0.0",
+		"title": "OpenAPI",
+	},
+	"components": {
+		"schemas": {},
+		"parameters": {},
+	},
+	"paths": {
+		"/hello": {
+			"get": {
+				"operationId": "get__hello",
+				"responses": {
+					"200": {
+						"description": "Successful response.",
+					},
+				},
+			},
+		},
+	},
+	"webhooks": {},
+}
+```
+
+It incorrectly assumed our endpoint returned status of 200 (instead of 202 or 400). It also did not capture the response shape.
+
+Now compare that with how Hono client make use of the rich static typing (focus on the final 3 lines):
+
+typescript playground: [link](https://www.typescriptlang.org/play/?#code/JYWwDg9gTgLgBAbzgCwMZwL5wGZQiOAImQgDsIB6VAG2AFNSZCBuAKFElkTgC8A1AIa0AJgJjRMOPAUIABEuQo8IwgLQA3IcFHioLduGjwkPSbnxFlw-RyPcAEmQhnpRBRH2tUZAM7wBYGBwALxwpHQA7nCO5AAUAJRsrBQUcADKdFDqmV6+8HgArjB0IXABYAB0AOZ0MLGsAJCEFMh01NQeADSN-Fo60LGEAI4FmQCehJ28FRAARgBWdKh1SKQCIHQAXNN+UMCkVQmY8fHdDbGo8SEAfIiNDd6kftxrG5KhqBVQdEMVmiKDEbjQiJe7AbBwWKvErBWFEEF3BpI74wApQUhwT7zHxkWJITJ4KAAfRgwBg1C2RAAkqR-towus6IRMFMACwABnZoKRGHuKLRGKxONIeLgGx8PgENW2AAN7G0OgBCOAAEgQ0IwMpZcAATOyddyMN1QclUgBhWgMGC5J7+MDAUpoAA8MDGYDoEAhhWK10GILYj2e3x8pQEEQEZLK9oqrXaEAqKpqKzgQKgY22q0Z20IzKwGFB4MhiuDMwA1lcEI1A-AdAJQ+HIyXsbjuYGIBSKh1DrWKuLJTVEnAUnAYMhgCHaOEUAIQ3XXe6fKg9mB4ASJLMlgICj4Su5MZbGHBS+QIiHR2I4DK+1K6FqwHh3bAxpiBBjwtkoHA6AAPcfwVrfIqrBwCBoFgeBEHDgAegA-FWvjtnQnYQN2YgCBUa7EqS5J0IOw6juOcCEQA8gA0sBEGUZR0FwbyQA)
+
+![2024-07-01-05-36-56](https://github.com/honojs/hono/assets/33713262/90798028-3499-45d8-8b78-e4e0eed741ab)
+
+
+```typescript
+import { hc } from "hono/client";
+import { zValidator } from "@hono/zod-validator";
+import { z } from "zod";
+import { Hono } from "hono";
+
+const app = new Hono();
+
+// Server
+const route = app.get(
+	"/hello",
+	zValidator("query", z.object({ name: z.string() })),
+	(c) => {
+		const { name } = c.req.valid("query");
+		if (name === "") {
+			return c.json({ error_title: "Invalid name" }, 400);
+		}
+		return c.json({ message: `Hello! ${name}` }, 202);
+	},
+);
+
+// Client
+const api = hc<typeof route>("");
+const res = await api.hello.$get({ query: { name: "" } });
+if (!res.ok) {
+	const data = await res.json();
+	console.log(data.message); // this line has a useful typescript error because hono client knows that `message` property can never exist here!
+	console.log(data.error_title); // this is OK
+}
+```
+
+I'm aware this is operating on the type-level (not runtime), but I was wondering if there are some type reflection tools that would make this feature request possible? Especially given that all the required type information is available.
+2266 On incorrect Content-Type, Validator should inform client instead of throwing 500. created=2024-02-24T08:59:37Z updated=2024-03-25T17:50:38Z
+### What is the feature you are proposing?
+
+If I send a request with an empty body or incorrect Content-Type to a route that validates some JSON schema, it should inform the client of the expected content type and data schema instead of throwing HTTPException and sending 500.
+2633 Support json subtypes like application/merge-patch+json in validator created=2024-05-07T21:42:04Z updated=2024-05-09T13:23:25Z
+### What version of Hono are you using?
+
+4.3.2
+
+### What runtime/platform is your app running on?
+
+Bun (but should affect all)
+
+### What steps can reproduce the bug?
+
+Create a route with a validator with target 'json'.
+Request with a Content-Type Header like 'application/merge-patch+json' 
+
+### What is the expected behavior?
+
+Validation should not fail with a message like:
+Invalid HTTP header: ContentType=application/merge-patch+json.
+
+### What do you see instead?
+
+The request should result in a 200, or at least should not fail on this specific check.
+
+### Additional information
+
+One could additionally argue, that it should not be the responsibility of the json validator to check the request header.
+Instead the the validator with target 'header' should be responsible for this. But I see the convenience and brevity of the current solution.
+
+We also have no option to control the error response in this case.
+1179 Form validator receives empty value on Bun created=2023-06-14T19:31:09Z updated=2024-04-23T10:02:11Z
+I've tested the same code with Node and there's no issue.
+
+Under bun, `req.formData()` returns a promise, which Hono doesn't `await`. I don't know why the promise has a `forEach()` method, that seems pretty weird, but it performs zero iterations.
+
+```ts
+import { Hono } from "hono";
+import { validator } from "hono/validator";
+
+const app = new Hono();
+
+app.post(
+  "/",
+  validator("form", (value, ctx) => console.log(value)),
+  (c) => c.text("Hello Hono!")
+);
+
+export default app
+```
+
+```
+$ curl 'http://localhost:3000' -X POST  -H 'Content-Type: application/x-www-form-urlencoded' --data-raw 'foo=bar'
+```
+
+Result: 
+```
+{}
+```
+1872 CORS error issues when passing `Content-Type: application/json` from the client created=2023-12-29T17:57:03Z updated=2024-03-25T17:57:07Z
+### What version of Hono are you using?
+
+3.11.11
+
+### What runtime/platform is your app running on?
+
+Vercel
+
+### What steps can reproduce the bug?
+
+```ts
+// app/api/[[...route]]/route.ts
+
+import { Hono } from "hono";
+import { cors } from "hono/cors";
+import { handle } from "hono/vercel";
+
+export const runtime = "edge";
+
+const app = new Hono().basePath("/api");
+
+app.use("*", cors());
+
+app.post("/test", async (c) => {
+  const body = await c.req.json();
+  return c.json({ ok: true, body });
+});
+
+export const POST = handle(app);
+```
+
+```ts
+// Client
+
+const res = await fetch("http://localhost:3001/api/test", {
+  method: "POST",
+  headers: { "Content-Type": "application/json", },
+  body: JSON.stringify({ hello: "world" }),
+});
+
+// ❌ Error: CORS error
+```
+
+```ts
+// Client
+
+const res = await fetch("http://localhost:3001/api/test", {
+  method: "POST",
+  body: JSON.stringify({ hello: "world" }),
+});
+
+// ✅ It works
+```
+
+---
+
+However, when using `zValidator` from `@hono/zod-validator`, I experience this:
+
+```ts
+import { zValidator } from "@hono/zod-validator";
+import { Hono } from "hono";
+import { cors } from "hono/cors";
+import { handle } from "hono/vercel";
+import { z } from "zod";
+
+export const runtime = "edge";
+
+const app = new Hono().basePath("/api");
+
+app.use("*", cors());
+
+const schema = z.object({
+  hello: z.string(),
+});
+
+app.post("/test", zValidator("json", schema), async (c) => {
+  const body = await c.req.valid("json");
+  return c.json({ ok: true, body });
+});
+
+export const POST = handle(app);
+
+```
+
+```ts
+// Client
+
+const res = await fetch("http://localhost:3001/api/test", {
+  method: "POST",
+  body: JSON.stringify({ hello: "world" }),
+});
+
+// ❌ Error: 400 Bad Request
+// { success: false, message: "Invalid HTTP header: Content-Type=text/plain;charset=UTF-8" }
+```
+
+```ts
+// Client
+
+const res = await fetch("http://localhost:3001/api/test", {
+  method: "POST",
+  headers: { "Content-Type": "application/json", },
+  body: JSON.stringify({ hello: "world" }),
+});
+
+// ❌ Error: CORS error
+```
+
+### What is the expected behavior?
+
+I should get CORS to work when passing `Content-Type: application/json` from the client.
+
+### What do you see instead?
+
+_No response_
+
+### Additional information
+
+Dependencies:
+
+```
+"@hono/zod-validator": "^0.1.11",
+"hono": "^3.11.11",
+"next": "14.0.4",
+"react": "^18",
+"react-dom": "^18",
+"zod": "^3.22.4",
+```
+2221 Improve test execution speed on WSL created=2024-02-15T17:33:33Z updated=2024-03-10T04:47:23Z
+### What is the feature you are proposing?
+
+### Run test time
+OS: Windows10(Ubuntu20.04)
+CPU: Intel(R) Core(TM) i7-8700 CPU @ 3.20GHz
+- `bun run test`: 75.70 + 14.62 + 12.58 = 102.9s
+- `yarn test`: 7.85 + 2.30 + 2.10 = 12.25s
+
+
+
+<details>
+
+<summary>Bun logs</summary>
+
+```sh
+xxxxx@yyyyy:/mnt/c/Users/xxxxx/repo/hono$ bun run test
+$ tsc --noEmit && vitest --run && vitest -c .vitest.config/jsx-runtime-default.ts --run && vitest -c .vitest.config/jsx-runtime-dom.ts --run
+
+ RUN  v1.2.2 /mnt/c/Users/xxxxx/repo/hono
+
+stdout | src/hono.test.ts > Middleware > Basic > logging and custom header
+GET : http://localhost/hello
+
+stdout | src/hono.test.ts > Middleware > Basic > logging and custom header with named param
+GET : http://localhost/hello/message
+
+stdout | src/hono.test.ts > Middleware > Basic > should return correct the content-type header
+GET : http://localhost/json
+
+stdout | src/hono.test.ts > Middleware > Basic > not found
+GET : http://localhost/foo
+
+stdout | src/hono.test.ts > Middleware > Basic > internal server error
+GET : http://localhost/error
+Internal Server Error
+
+stderr | src/hono.test.ts > Middleware > Basic > internal server error
+Error: Error!
+    at /mnt/c/Users/xxxxx/repo/hono/src/hono.test.ts:973:13
+    at dispatch (/mnt/c/Users/xxxxx/repo/hono/src/compose.ts:45:23)
+    at /mnt/c/Users/xxxxx/repo/hono/src/compose.ts:46:20
+    at /mnt/c/Users/xxxxx/repo/hono/src/hono.test.ts:930:13
+    at dispatch (/mnt/c/Users/xxxxx/repo/hono/src/compose.ts:45:23)
+    at /mnt/c/Users/xxxxx/repo/hono/src/compose.ts:46:20
+    at /mnt/c/Users/xxxxx/repo/hono/src/hono.test.ts:925:13
+    at dispatch (/mnt/c/Users/xxxxx/repo/hono/src/compose.ts:45:23)
+    at /mnt/c/Users/xxxxx/repo/hono/src/compose.ts:18:12
+    at /mnt/c/Users/xxxxx/repo/hono/src/hono-base.ts:357:31
+
+stderr | src/hono.test.ts > Error handling in middleware > Should handle the error in middleware
+Error: Error message
+    at /mnt/c/Users/xxxxx/repo/hono/src/hono.test.ts:1400:11
+    at dispatch (/mnt/c/Users/xxxxx/repo/hono/src/compose.ts:45:23)
+    at /mnt/c/Users/xxxxx/repo/hono/src/compose.ts:46:20
+    at /mnt/c/Users/xxxxx/repo/hono/src/hono.test.ts:1381:11
+    at dispatch (/mnt/c/Users/xxxxx/repo/hono/src/compose.ts:45:23)
+    at /mnt/c/Users/xxxxx/repo/hono/src/compose.ts:18:12
+    at /mnt/c/Users/xxxxx/repo/hono/src/hono-base.ts:357:31
+    at Hono.dispatch (/mnt/c/Users/xxxxx/repo/hono/src/hono-base.ts:368:5)
+    at Hono.fetch (/mnt/c/Users/xxxxx/repo/hono/src/hono-base.ts:376:17)
+    at Hono.request (/mnt/c/Users/xxxxx/repo/hono/src/hono-base.ts:406:17)
+
+stderr | src/hono.test.ts > Error handling in middleware > Should handle the error in middleware - async
+Error: Error message
+    at /mnt/c/Users/xxxxx/repo/hono/src/hono.test.ts:1404:11
+    at dispatch (/mnt/c/Users/xxxxx/repo/hono/src/compose.ts:45:23)
+    at /mnt/c/Users/xxxxx/repo/hono/src/compose.ts:46:20
+    at /mnt/c/Users/xxxxx/repo/hono/src/hono.test.ts:1389:11
+    at dispatch (/mnt/c/Users/xxxxx/repo/hono/src/compose.ts:45:23)
+    at /mnt/c/Users/xxxxx/repo/hono/src/compose.ts:18:12
+    at /mnt/c/Users/xxxxx/repo/hono/src/hono-base.ts:357:31
+    at Hono.dispatch (/mnt/c/Users/xxxxx/repo/hono/src/hono-base.ts:368:5)
+    at Hono.fetch (/mnt/c/Users/xxxxx/repo/hono/src/hono-base.ts:376:17)
+    at Hono.request (/mnt/c/Users/xxxxx/repo/hono/src/hono-base.ts:406:17)
+
+stdout | src/helper/ssg/index.test.tsx > toSSG function > should execute additional processing using afterGenerateHook
+static/index.html
+static/about.html
+static/about/some.txt
+static/bravo.html
+static/Charlie.html
+static/post/1.html
+static/post/2.html
+static/user/1.html
+static/user/2.html
+static/user/3.html
+
+stderr | src/jsx/streaming.test.tsx > Streaming > reject()
+Trace: undefined
+    at /mnt/c/Users/xxxxx/repo/hono/src/jsx/streaming.ts:137:23
+    at async Promise.all (index 0)
+    at Object.start (/mnt/c/Users/xxxxx/repo/hono/src/jsx/streaming.ts:158:9)
+
+ ✓ src/router/trie-router/node.test.ts (77)
+ ✓ src/router/pattern-router/router.test.ts (52)
+ ✓ src/router/reg-exp-router/router.test.ts (60)
+ ✓ src/compose.test.ts (31)
+ ✓ src/validator/validator.test.ts (30)
+ ✓ src/hono.test.ts (179) 489ms
+ ✓ src/jsx/index.test.tsx (62)
+ ↓ src/helper/css/common.test.tsx (1) [skipped]
+ ✓ src/helper/ssg/index.test.tsx (24)
+ ✓ src/types.test.ts (38)
+ ✓ src/client/client.test.ts (28)
+ ✓ src/jsx/streaming.test.tsx (17) 503ms
+ ✓ src/jsx/dom/index.test.tsx (49) 866ms
+ ✓ src/router/linear-router/router.test.ts (34)
+ ✓ src/helper/cookie/index.test.ts (17)
+ ✓ src/utils/url.test.ts (15)
+ ✓ src/middleware/jsx-renderer/index.test.tsx (11)
+ ✓ src/context.test.ts (30)
+ ✓ src/middleware/secure-headers/index.test.ts (10)
+ ✓ src/utils/cookie.test.ts (22)
+ ✓ src/router/trie-router/router.test.ts (24)
+ ✓ src/middleware/csrf/index.test.ts (14)
+ ✓ src/request.test.ts (14)
+ ✓ src/utils/jwt/jwt.test.ts (10)
+ ✓ src/middleware/jwt/index.test.ts (12)
+ ✓ src/adapter/cloudflare-workers/serve-static.test.ts (15)
+ ✓ src/helper/css/index.test.tsx (36) 741ms
+ ✓ src/helper/accepts/accepts.test.ts (8)
+ ✓ src/helper/dev/index.test.ts (8)
+ ✓ src/middleware/basic-auth/index.test.ts (7)
+ ✓ src/jsx/components.test.tsx (18) 307ms
+ ✓ src/middleware/bearer-auth/index.test.ts (9)
+ ✓ src/middleware/cors/index.test.ts (7)
+ ✓ src/jsx/hooks/dom.test.tsx (10) 320ms
+ ✓ src/helper/factory/index.test.ts (7)
+ ✓ src/utils/stream.test.ts (8)
+ ✓ src/middleware/logger/index.test.ts (10) 2065ms
+ ✓ src/middleware/etag/index.test.ts (8)
+ ✓ src/router/smart-router/router.test.ts (6)
+ ✓ src/helper/streaming/sse.test.ts (3) 427ms
+ ✓ src/middleware/cache/index.test.ts (6)
+ ✓ src/utils/buffer.test.ts (5)
+ ✓ src/client/utils.test.ts (7)
+ ✓ src/utils/body.test.ts (6)
+ ✓ src/utils/filepath.test.ts (1)
+ ✓ src/utils/encode.test.ts (44)
+ ✓ src/helper/html/index.test.ts (10)
+ ✓ src/helper/ssg/utils.test.ts (3)
+ ✓ src/middleware/timing/index.test.ts (3)
+ ✓ src/utils/types.test.ts (4)
+ ✓ src/utils/crypto.test.ts (5)
+ ✓ src/middleware/compress/index.test.ts (4)
+ ✓ src/utils/mime.test.ts (3)
+ ✓ src/adapter/aws-lambda/handler.test.ts (2)
+ ✓ src/helper/streaming/text.test.ts (1)
+ ✓ src/helper/streaming/stream.test.ts (2)
+ ✓ src/jsx/dom/components.test.tsx (16) 506ms
+ ✓ src/adapter/vercel/handler.test.ts (2)
+ ✓ src/adapter/cloudflare-pages/handler.test.ts (2)
+ ✓ src/jsx/jsx-runtime.test.tsx (6)
+ ✓ src/adapter/cloudflare-workers/utils.test.ts (1)
+ ✓ src/middleware/pretty-json/index.test.ts (2)
+ ✓ src/utils/html.test.ts (1)
+ ✓ src/adapter/lambda-edge/handler.test.ts (1)
+ ✓ src/jsx/dom/context.test.tsx (8)
+ ✓ src/helper/testing/index.test.ts (2)
+ ✓ src/http-exception.test.ts (1)
+ ✓ src/middleware/powered-by/index.test.ts (2)
+ ✓ src/utils/jwt/types.test.ts (1)
+ ✓ src/helper/adapter/index.test.ts (1)
+ ✓ src/jsx/dom/css.test.tsx (27)
+
+ Test Files  70 passed | 1 skipped (71)
+      Tests  1193 passed | 7 skipped (1200)
+   Start at  00:27:23
+   Duration  75.70s (transform 59.87s, setup 27.65s, collect 310.53s, tests 9.35s, environment 36ms, prepare 291.23s)
+
+
+ RUN  v1.2.2 /mnt/c/Users/xxxxx/repo/hono
+
+ ✓ src/jsx/dom/index.test.tsx (49) 803ms
+ ✓ src/jsx/dom/context.test.tsx (8)
+ ✓ src/jsx/hooks/dom.test.tsx (10) 428ms
+ ✓ src/jsx/dom/components.test.tsx (16) 358ms
+ ✓ src/jsx/dom/css.test.tsx (27)
+
+ Test Files  5 passed (5)
+      Tests  106 passed | 4 skipped (110)
+   Start at  00:28:45
+   Duration  14.62s (transform 4.65s, setup 2.12s, collect 48.46s, tests 2.04s, environment 1ms, prepare 9.41s)
+
+
+ RUN  v1.2.2 /mnt/c/Users/xxxxx/repo/hono
+
+ ✓ src/jsx/dom/index.test.tsx (49) 744ms
+ ✓ src/jsx/hooks/dom.test.tsx (10)
+ ✓ src/jsx/dom/context.test.tsx (8)
+ ✓ src/jsx/dom/css.test.tsx (27) 665ms
+ ✓ src/jsx/dom/components.test.tsx (16) 322ms
+
+ Test Files  5 passed (5)
+      Tests  106 passed | 4 skipped (110)
+   Start at  00:29:06
+   Duration  12.58s (transform 5.31s, setup 1.84s, collect 39.74s, tests 2.20s, environment 1ms, prepare 9.63s)
+```
+
+</details>
+
+<details>
+<summary>Yarn logs</summary>
+
+```sh
+C:\Users\xxxxx\repo\hono>yarn test
+yarn run v1.22.19
+$ tsc --noEmit && vitest --run && vitest -c .vitest.config/jsx-runtime-default.ts --run && vitest -c .vitest.config/jsx-runtime-dom.ts --run
+
+ RUN  v1.2.2 C:/Users/xxxxx/repo/hono
+
+stdout | src/hono.test.ts > Middleware > Basic > logging and custom header
+GET : http://localhost/hello
+
+stdout | src/hono.test.ts > Middleware > Basic > logging and custom header with named param
+GET : http://localhost/hello/message
+
+stdout | src/hono.test.ts > Middleware > Basic > should return correct the content-type header
+GET : http://localhost/json
+
+stdout | src/hono.test.ts > Middleware > Basic > not found
+GET : http://localhost/foo
+
+stdout | src/hono.test.ts > Middleware > Basic > internal server error
+GET : http://localhost/error
+Internal Server Error
+
+stderr | src/hono.test.ts > Middleware > Basic > internal server error
+Error: Error!
+    at C:\Users\xxxxx\repo\hono\src\hono.test.ts:973:13
+    at dispatch (C:\Users\xxxxx\repo\hono\src\compose.ts:45:23)
+    at C:\Users\xxxxx\repo\hono\src\compose.ts:46:20
+    at C:\Users\xxxxx\repo\hono\src\hono.test.ts:930:13
+    at dispatch (C:\Users\xxxxx\repo\hono\src\compose.ts:45:23)
+    at C:\Users\xxxxx\repo\hono\src\compose.ts:46:20
+    at C:\Users\xxxxx\repo\hono\src\hono.test.ts:925:13
+    at dispatch (C:\Users\xxxxx\repo\hono\src\compose.ts:45:23)
+    at C:\Users\xxxxx\repo\hono\src\compose.ts:18:12
+    at C:\Users\xxxxx\repo\hono\src\hono-base.ts:357:31
+
+stderr | src/hono.test.ts > Error handling in middleware > Should handle the error in middleware
+Error: Error message
+    at C:\Users\xxxxx\repo\hono\src\hono.test.ts:1400:11
+    at dispatch (C:\Users\xxxxx\repo\hono\src\compose.ts:45:23)
+    at C:\Users\xxxxx\repo\hono\src\compose.ts:46:20
+    at C:\Users\xxxxx\repo\hono\src\hono.test.ts:1381:11
+    at dispatch (C:\Users\xxxxx\repo\hono\src\compose.ts:45:23)
+    at C:\Users\xxxxx\repo\hono\src\compose.ts:18:12
+    at C:\Users\xxxxx\repo\hono\src\hono-base.ts:357:31
+    at Hono.dispatch (C:\Users\xxxxx\repo\hono\src\hono-base.ts:368:5)
+    at Hono.fetch (C:\Users\xxxxx\repo\hono\src\hono-base.ts:376:17)
+    at Hono.request (C:\Users\xxxxx\repo\hono\src\hono-base.ts:406:17)
+
+stderr | src/hono.test.ts > Error handling in middleware > Should handle the error in middleware - async
+Error: Error message
+    at C:\Users\xxxxx\repo\hono\src\hono.test.ts:1404:11
+    at dispatch (C:\Users\xxxxx\repo\hono\src\compose.ts:45:23)
+    at C:\Users\xxxxx\repo\hono\src\compose.ts:46:20
+    at C:\Users\xxxxx\repo\hono\src\hono.test.ts:1389:11
+    at dispatch (C:\Users\xxxxx\repo\hono\src\compose.ts:45:23)
+    at C:\Users\xxxxx\repo\hono\src\compose.ts:18:12
+    at C:\Users\xxxxx\repo\hono\src\hono-base.ts:357:31
+    at Hono.dispatch (C:\Users\xxxxx\repo\hono\src\hono-base.ts:368:5)
+    at Hono.fetch (C:\Users\xxxxx\repo\hono\src\hono-base.ts:376:17)
+    at Hono.request (C:\Users\xxxxx\repo\hono\src\hono-base.ts:406:17)
+
+stderr | src/jsx/streaming.test.tsx > Streaming > reject()
+Trace: undefined
+    at C:\Users\xxxxx\repo\hono\src\jsx\streaming.ts:137:23
+    at async Promise.all (index 0)
+    at Object.start (C:\Users\xxxxx\repo\hono\src\jsx\streaming.ts:158:9)
+
+stdout | src/helper/ssg/index.test.tsx > toSSG function > should execute additional processing using afterGenerateHook
+static/index.html
+static/about.html
+static/about/some.txt
+static/bravo.html
+static/Charlie.html
+static/post/1.html
+static/post/2.html
+static/user/1.html
+static/user/2.html
+static/user/3.html
+
+ ✓ src/router/pattern-router/router.test.ts (52)
+ ✓ src/router/trie-router/node.test.ts (77)
+ ✓ src/router/reg-exp-router/router.test.ts (60)
+ ✓ src/compose.test.ts (31)
+ ✓ src/validator/validator.test.ts (30)
+ ✓ src/hono.test.ts (179) 398ms
+ ✓ src/client/client.test.ts (28)
+ ✓ src/jsx/index.test.tsx (62)
+ ✓ src/jsx/streaming.test.tsx (17) 657ms
+ ↓ src/helper/css/common.test.tsx (1) [skipped]
+ ✓ src/jsx/dom/index.test.tsx (49) 1037ms
+ ✓ src/types.test.ts (38)
+ ✓ src/helper/ssg/index.test.tsx (24)
+ ✓ src/router/linear-router/router.test.ts (34)
+ ✓ src/middleware/jsx-renderer/index.test.tsx (11)
+ ✓ src/jsx/components.test.tsx (18) 394ms
+ ✓ src/utils/url.test.ts (15)
+ ✓ src/context.test.ts (30)
+ ✓ src/helper/cookie/index.test.ts (17)
+ ✓ src/utils/cookie.test.ts (22)
+ ✓ src/middleware/secure-headers/index.test.ts (10)
+ ✓ src/jsx/hooks/dom.test.tsx (10) 397ms
+ ✓ src/middleware/csrf/index.test.ts (14)
+ ✓ src/router/trie-router/router.test.ts (24)
+ ✓ src/request.test.ts (14)
+ ✓ src/utils/jwt/jwt.test.ts (10)
+ ✓ src/middleware/jwt/index.test.ts (12)
+ ✓ src/adapter/cloudflare-workers/serve-static.test.ts (15)
+ ✓ src/helper/accepts/accepts.test.ts (8)
+ ✓ src/helper/dev/index.test.ts (8)
+ ✓ src/helper/css/index.test.tsx (36)
+ ✓ src/middleware/cors/index.test.ts (7)
+ ✓ src/middleware/basic-auth/index.test.ts (7)
+ ✓ src/middleware/bearer-auth/index.test.ts (9)
+ ✓ src/jsx/dom/components.test.tsx (16) 622ms
+ ✓ src/middleware/etag/index.test.ts (8)
+ ✓ src/middleware/logger/index.test.ts (10) 2054ms
+ ✓ src/helper/factory/index.test.ts (7)
+ ✓ src/utils/stream.test.ts (8)
+ ✓ src/router/smart-router/router.test.ts (6)
+ ✓ src/middleware/cache/index.test.ts (6)
+ ✓ src/helper/streaming/sse.test.ts (3) 429ms
+ ✓ src/utils/buffer.test.ts (5)
+ ✓ src/client/utils.test.ts (7)
+ ✓ src/utils/body.test.ts (6)
+ ✓ src/utils/filepath.test.ts (1)
+ ✓ src/utils/encode.test.ts (44)
+ ✓ src/jsx/dom/context.test.tsx (8) 329ms
+ ✓ src/helper/html/index.test.ts (10)
+ ✓ src/helper/ssg/utils.test.ts (3)
+ ✓ src/middleware/timing/index.test.ts (3)
+ ✓ src/middleware/compress/index.test.ts (4)
+ ✓ src/utils/crypto.test.ts (5)
+ ✓ src/utils/mime.test.ts (3)
+ ✓ src/jsx/dom/css.test.tsx (27) 590ms
+ ✓ src/utils/types.test.ts (4)
+ ✓ src/adapter/cloudflare-pages/handler.test.ts (2)
+ ✓ src/adapter/aws-lambda/handler.test.ts (2)
+ ✓ src/adapter/vercel/handler.test.ts (2)
+ ✓ src/helper/streaming/stream.test.ts (2)
+ ✓ src/adapter/cloudflare-workers/utils.test.ts (1)
+ ✓ src/helper/streaming/text.test.ts (1)
+ ✓ src/adapter/lambda-edge/handler.test.ts (1)
+ ✓ src/middleware/pretty-json/index.test.ts (2)
+ ✓ src/jsx/jsx-runtime.test.tsx (6)
+ ✓ src/middleware/powered-by/index.test.ts (2)
+ ✓ src/utils/html.test.ts (1)
+ ✓ src/helper/testing/index.test.ts (2)
+ ✓ src/http-exception.test.ts (1)
+ ✓ src/utils/jwt/types.test.ts (1)
+ ✓ src/helper/adapter/index.test.ts (1)
+
+ Test Files  70 passed | 1 skipped (71)
+      Tests  1193 passed | 7 skipped (1200)
+   Start at  00:30:31
+   Duration  7.85s (transform 7.80s, setup 2.32s, collect 24.43s, tests 9.59s, environment 27ms, prepare 20.33s)
+
+
+ RUN  v1.2.2 C:/Users/xxxxx/repo/hono
+
+ ✓ src/jsx/hooks/dom.test.tsx (10)
+ ✓ src/jsx/dom/index.test.tsx (49) 749ms
+ ✓ src/jsx/dom/components.test.tsx (16) 370ms
+ ✓ src/jsx/dom/context.test.tsx (8)
+ ✓ src/jsx/dom/css.test.tsx (27) 385ms
+
+ Test Files  5 passed (5)
+      Tests  106 passed | 4 skipped (110)
+   Start at  00:30:39
+   Duration  2.30s (transform 874ms, setup 96ms, collect 5.19s, tests 2.03s, environment 1ms, prepare 823ms)
+
+
+ RUN  v1.2.2 C:/Users/xxxxx/repo/hono
+
+ ✓ src/jsx/hooks/dom.test.tsx (10)
+ ✓ src/jsx/dom/index.test.tsx (49) 595ms
+ ✓ src/jsx/dom/context.test.tsx (8)
+ ✓ src/jsx/dom/components.test.tsx (16)
+ ✓ src/jsx/dom/css.test.tsx (27)
+
+ Test Files  5 passed (5)
+      Tests  106 passed | 4 skipped (110)
+   Start at  00:30:42
+   Duration  2.10s (transform 1.18s, setup 127ms, collect 4.64s, tests 1.53s, environment 1ms, prepare 1.25s)
+
+Done in 21.50s.
+```
+</details>
+
+It's too slow so I am testing by replacing `bun run` with `yarn` in package.json
+Windows users have difficulty testing Hono with Bun on WSL.
+If you use Windows and can test faster, please let me know.
+My computer is old.
+
+1554 fix: return status 500 when using validator 'form' created=2023-10-08T02:30:59Z updated=2023-10-11T15:21:02Z
+When using `validator('form', ...)` hono is returning a 500 status when receiving a POST request with a JSON in request body, instead of a bad request 400, .
+
+This is happenning due to a unhandled error in an
+underlying library (@miniflare).
+https://github.com/cloudflare/miniflare/pull/711
+
+The code changes in this PR are responsible to prepare the code to handle possible TypeError that can be thrown in the future, by the lib doing the FormData parsing, as per, https://fetch.spec.whatwg.org/#dom-body-formdata.
+
+This PR should wait for bugfix on @miniflare.
+
+### Author should do the followings, if applicable
+
+- [x] Add tests
+- [x] Run tests (don't have deno to perform `yarn test:all`
+- [x] `yarn denoify` to generate files for Deno
+
+1393 fix(validator): cache `arrayBuffer` to use after validation created=2023-08-30T22:11:53Z updated=2023-09-03T05:43:03Z
+This PR enhances the handling of request bodies post-validation. After validating a JSON with the validator, you can now invoke `c.req.text()` to access the request body. Additionally, `c.req.text()` is now available `body` validation. We achieve this by caching the `arrayBuffer` in `c.req.bodyCache` and reusing it when calling `c.req.text()`.
+
+Note, if you attempt to use `c.req.raw.text()` after validating the `json` or `body`, you will encounter an error. Instead, always use `c.req.text()` in this context.
+
+Fix #1387
+
+
+### Author should do the followings, if applicable
+
+- [x] Add tests
+- [x] Run tests
+- [x] `yarn denoify` to generate files for Deno
+
+955 Simplify Middleware role created=2023-03-05T14:07:15Z updated=2023-03-16T15:18:05Z
+Currently the middleware can return a Response, but what about making it unable to return?
+
+```ts
+type MiddlewareHandler = (c: Context, next: Next) => Promise<void>
+```
+
+The reason the Middleware Handler is able to return a Response is because Basic Auth Middleware and others needed to return a response immediately.
+
+```ts
+app.use('*', async (c, next) => {
+  // authentication process
+  if (unauthorized) {
+    return authResponse
+  }
+  await next()
+})
+```
+
+But now that we have `HTTPException`, `return` is not necessary.
+
+```ts
+app.use('*', async (c, next) => {
+  // authentication process
+  if (unauthorized) {
+    throw new HTTPException(401, {
+      res: authResponse,
+    })
+  }
+  await next()
+})
+```
+
+If we want to change the Response in the Middleware, assign it to `c.res`. Here is a practical example:
+
+```ts
+app.use('*', async (c, next) => {
+  await next()
+
+  class HeaderElementHandler {
+    element(element: Element) {
+      element.append('<b>Hono</b>', { html: true })
+    }
+  }
+
+  const rewriter = new HTMLRewriter().on('*', new HeaderElementHandler())
+  if (c.res.headers.get('content-type')?.startsWith('text/html')) {
+    c.res = rewriter.transform(c.res)
+  }
+})
+```
+
+The beauty of Hono is that Middleware and Handler are treated in the same way, but there are differences. I thought that being able to do a lot of things is good, but by making it more limited, it makes it easier to explain "what Middleware is?". Then this way can clarify the role with Handler. Or perhaps we could make the implementation of `compose.ts` simpler.
+677 Validator: v.array() weird experience created=2022-11-24T15:34:03Z updated=2022-11-30T11:20:37Z
+<details>
+
+```js
+import { Hono } from "hono";
+import { validator } from "hono/validator";
+
+const app = new Hono();
+
+app.post(
+	"/",
+	validator(
+		(v) => ({
+			response: v.object("response", (v1) => ({
+				content: v1.json("content").isOptional().isLength({ max: 2000 }),
+				embeds: v1
+					.array("embeds", (v2) => ({
+						title: v2.json("title").isOptional(),
+						description: v2.json("description").isOptional(),
+						url: v2.json("url").isOptional(),
+						timestamp: v2.json("timestamp").isOptional(),
+						color: v2.json("color").asNumber().isOptional(),
+						author: v2
+							.object("embeds.[*].author", (v3) => ({
+								name: v3.json("name").isOptional(),
+								url: v3.json("url").isOptional(),
+								icon_url: v3.json("icon_url").isOptional(),
+							}))
+							.isOptional(),
+						footer: v2
+							.object("embeds.[*].footer", (v3) => ({
+								text: v3.json("text").isOptional(),
+								icon_url: v3.json("icon_url").isOptional(),
+							}))
+							.isOptional(),
+						image: v2
+							.object("embeds.[*].image", (v3) => ({
+								url: v3.json("url").isOptional(),
+							}))
+							.isOptional(),
+						thumbnail: v2
+							.object("embeds.[*].thumbnail", (v3) => ({
+								url: v3.json("url").isOptional(),
+							}))
+							.isOptional(),
+						fields: v2
+							.array("embeds.[*].fields", (v3) => ({
+								name: v3.json("name"),
+								value: v3.json("value"),
+								inline: v3.json("inline").isOptional().asBoolean(),
+							}))
+							.isOptional(),
+					}))
+					.isOptional(),
+				flags: v1.json("flags").isOptional().asNumber(),
+			})),
+		}),
+		{
+			done: (res) => {
+				if (res.hasError) {
+					return new Response(res.messages.join("\n"), { status: 400 });
+				}
+			},
+		}
+	),
+	(c) => {
+		return Response.json(c.req.valid());
+	}
+);
+
+app.notFound(() => {
+	return new Response("Not found", { status: 404 });
+})
+
+export default app;
+```
+</details>
+
+Issues:
+- [x] 1. I have to use `fields: v2.array("embeds.[*].fields")` despite the fact it's already under `embeds` - if you don't it incorrectly looks under `response`. #683 
+- [x] 2. `v.array()` won't accept an empty array - even with it being marked as isOptional, the validator will error. This also occurs when `null` is provided. #690 
+- [x] 3. `"Invalid Value [64]: the JSON body \"response.flags\" is invalid - should be \"number[]\""` - this is not under an array field - it should not be counted as an array? It turns out this can be fixed by putting `response.flags` before `response.embeds` in the validator - this is odd.  #680 
+
+I appreciate this issue description is pretty awful - but I feel like I'm running into a combination of bugs here with nested arrays and objects
