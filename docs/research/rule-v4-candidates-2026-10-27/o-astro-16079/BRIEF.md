@@ -112,3 +112,9 @@ Your packet: `docs/research/rule-v4-candidates-2026-10-27/o-astro-16079/packet.j
 ## Final reply
 
 Reply with the contents of `summary.json` and one short paragraph on anything that blocked you or that the owner should know. Nothing else.
+
+---
+
+## Added for this pull request: a real Vercel deployment
+
+The owner approved a test on Vercel's free tier, and it ran on 2026-10-27. The evidence is in `docs/research/rule-v4-candidates-2026-10-27/o-astro-16079/vercel-run/`: `RESULTS.md`, one log per step with every command, header and body, the scripts, and the test app's source at the pull request's adapter (`@astrojs/vercel` 10.0.3 with `astro` 6.1.0) and at the earlier one (10.0.2 with `astro` 6.0.7). The deployments are deleted, so do not try to reach them, and do not deploy anything yourself. Treat these runs as *run* facts made on 2026-10-27 against Vercel as it is now. Say in the dossier and the case file that Vercel's behaviour at the cut-off is not established by them. Read every log you rely on and quote it exactly. Your own runs stay in-process, as the brief says.
