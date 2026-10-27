@@ -2,9 +2,12 @@
 
 const path = require('path');
 const root = process.argv[2];
-require(path.join(root, 'resources/ts-register.js'));
-const printer = require(path.join(root, 'src/language/printer.ts'));
-const { visit } = require(path.join(root, 'src/language/visitor.ts'));
+const built = process.argv[3] === 'built';
+if (!built) require(path.join(root, 'resources/ts-register.js'));
+const codePath = built ? 'npmDist' : 'src';
+const extension = built ? '.js' : '.ts';
+const printer = require(path.join(root, codePath, 'language/printer' + extension));
+const { visit } = require(path.join(root, codePath, 'language/visitor' + extension));
 const originalPrint = printer.print;
 let prints = 0;
 let printedNodes = 0;
@@ -16,7 +19,7 @@ printer.print = function (node) {
 const {
   buildSchema, parse, validate, executeSync, valueFromASTUntyped,
   OverlappingFieldsCanBeMergedRule,
-} = require(path.join(root, 'src/index.ts'));
+} = require(path.join(root, codePath, 'index' + extension));
 const schema = buildSchema(`
   input Input { s: String }
   type Query {
