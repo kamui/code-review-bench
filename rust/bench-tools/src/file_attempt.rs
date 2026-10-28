@@ -940,6 +940,16 @@ fn thermo(normalizer: &Value) -> bool {
     is(at(normalizer, "kind"), "thermo")
 }
 
+/// The arm whose parser reads an attempt's native report: a skill runner whose normalizer is `review-code` saved
+/// the review-code skill's composition, which the `review-code` arm's parser reads.
+fn parser(kind: Arm, normalizer: &Value) -> Arm {
+    if skill_runner(kind) && is(at(normalizer, "kind"), "review-code") {
+        Arm::ReviewCode
+    } else {
+        kind
+    }
+}
+
 fn native_file(normalizer: &Value) -> String {
     at(normalizer, "native_file")
         .as_str()
@@ -1747,7 +1757,12 @@ fn replay(
                     arm: kind,
                 }),
                 (false, _, Some(native)) => {
-                    normalize.native_review = Some(native.into_bytes());
+                    if parser(kind, &normalizer) == Arm::ReviewCode {
+                        normalize.arm = Some(Arm::ReviewCode);
+                        normalize.composition = Some(native.into_bytes());
+                    } else {
+                        normalize.native_review = Some(native.into_bytes());
+                    }
                     normalize_review::command(&normalize, &normalize_review::utc_now)
                 }
                 _ => {
@@ -2160,7 +2175,7 @@ fn file_attempt(arguments: &Arguments) -> Result<(Value, String)> {
             format!("no {native_rel}")
         };
         let placeholder = object(vec![
-            ("arm", text(kind.name())),
+            ("arm", text(parser(kind, &normalizer).name())),
             ("parse_status", text("unresolved")),
             ("native_verdict", Value::Null),
             ("verdict_source", Value::Null),
@@ -2852,7 +2867,7 @@ fn file_attempt(arguments: &Arguments) -> Result<(Value, String)> {
         Value::Null
     } else {
         match (&native_path, kind) {
-            (Some(native), Arm::ReviewCode) => Value::Bool(is(
+            (Some(native), _) if parser(kind, &normalizer) == Arm::ReviewCode => Value::Bool(is(
                 at(at(&read_json(native)?, "run"), "coverage"),
                 "complete",
             )),

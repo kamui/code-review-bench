@@ -79,7 +79,7 @@ impl Drop for Fixture {
 
 impl Fixture {
     fn new(real_proc: bool) -> Self {
-        let parent = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/queue-tests");
+        let parent = crate::test_scratch("queue-tests");
         let base = parent.join(evidence::random_name("q-"));
         fs::create_dir_all(&base).expect("mkdir");
         let base = base.canonicalize().expect("canonical");

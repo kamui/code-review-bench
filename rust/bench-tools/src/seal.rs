@@ -186,9 +186,7 @@ mod tests {
     }
 
     fn scratch() -> PathBuf {
-        let base = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("target/seal-tests")
-            .join(crate::evidence::random_name("s-"));
+        let base = crate::test_scratch("seal-tests").join(crate::evidence::random_name("s-"));
         fs::create_dir_all(&base).expect("mkdir");
         base
     }
