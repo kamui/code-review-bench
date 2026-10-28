@@ -546,12 +546,21 @@ impl Provisioned {
         );
     }
 
+    /// `provision` with no disk reserve, so a `prepare` does not depend on the runner's free space (#376).
     fn run(&self, arguments: &[&str]) -> Output {
+        self.run_with_reserve("0", arguments)
+    }
+
+    fn run_with_reserve(&self, reserve_gib: &str, arguments: &[&str]) -> Output {
         let cache = self.cache();
         let mut command = vec!["provision", arguments[0], "--target", s(&self.target_dir)];
         command.extend(&arguments[1..]);
         command.extend(["--cache-root", s(&cache)]);
-        bench_tools(&command)
+        Command::new(env!("CARGO_BIN_EXE_bench-tools"))
+            .args(command)
+            .env("BENCH_DISK_RESERVE_GIB", reserve_gib)
+            .output()
+            .unwrap()
     }
 }
 
@@ -775,6 +784,24 @@ fn prepare_restores_only_the_recorded_cache_archive_into_its_own_copy() {
     let receipt = parse(&fs::read_to_string(&smoke).unwrap());
     assert_eq!(text(field(&receipt, "sandbox.network")), "off");
     assert_eq!(text(field(&receipt, "provisioning.sandbox.network")), "off");
+}
+
+#[test]
+fn prepare_refuses_before_cloning_when_the_reserve_would_not_stay_free() {
+    let provisioned = Provisioned::new("reserve");
+    provisioned.set_target(r#", "provisioning": {"cache": {"kind": "none"}}"#);
+    let prepared = provisioned.temp.0.join("prepared");
+    let refused = provisioned.run_with_reserve("1000000", &["prepare", "--out", s(&prepared)]);
+    assert_eq!(refused.status.code(), Some(1), "{}", both(&refused));
+    assert!(
+        stdout(&refused).contains(&format!(
+            "disk space: {} needs about 0.0 GiB and a 1000000.0 GiB reserve, but its filesystem has",
+            prepared.display()
+        )) && stdout(&refused).contains("free; nothing was cloned"),
+        "{}",
+        both(&refused)
+    );
+    assert!(!prepared.exists());
 }
 
 #[test]
