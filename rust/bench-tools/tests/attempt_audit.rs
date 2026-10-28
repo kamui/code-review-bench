@@ -904,6 +904,7 @@ fn allowed_network_still_stops_a_tool_that_fetches_an_arbitrary_address() {
     for (number, command) in [
         "curl https://example.com",
         "go version && gh pr view 1",
+        "go version && glab mr view 1 --comments",
         "git fetch https://example.com/x.git",
         "wget -q https://example.com",
     ]
@@ -1495,6 +1496,10 @@ fn a_tool_named_outside_command_position_is_listed_and_is_no_violation() {
     let found = report_of(&mut a, &[swallowed], None);
     assert_eq!(list(&found, "violations"), [] as [String; 0]);
     assert_eq!(mentions(&found), [mention(&["gh"], swallowed)]);
+    let gitlab = "x=$(glab mr view 1) timeout -s KILL 5 pnpm build";
+    let found = report_of(&mut a, &[gitlab], None);
+    assert_eq!(list(&found, "violations"), [] as [String; 0]);
+    assert_eq!(mentions(&found), [mention(&["glab"], gitlab)]);
     // Where the settings confine the network a mention shows nothing.
     let settings = a.settings(None, &[]);
     assert_eq!(
@@ -1598,6 +1603,7 @@ fn network_commands_are_violations() {
         "curl https://example.com",
         "cd src && wget x",
         "gh pr view 1",
+        "glab mr view 1 --comments",
         "git fetch origin",
         "go test ./...",
         "GOPROXY=off go test ./...",
@@ -1636,6 +1642,7 @@ fn network_commands_are_violations() {
         "zsh -fc 'export GOPROXY=off GOTOOLCHAIN=local'; go mod download",
         "bash -c 'export GOPROXY=off GOTOOLCHAIN=local'; go mod download",
         "zsh -fc 'pnpm test'; gh pr view 1",
+        "bash -c 'glab api projects/1/merge_requests/1/notes'",
         "bash -lc 'cd src && pnpm install'",
         "npm ci; echo done",
         "zsh -fc 'export GOPROXY=off GOTOOLCHAIN=local; go build'; go mod download",
@@ -2166,11 +2173,12 @@ fn frozen_forge_calls_are_requests_until_the_clone_leaves_the_frozen_origin() {
         bash_records(&[
             "git fetch https://github.com/o/r pull/7/head",
             "curl -s https://example.com",
+            "glab mr view 7 --comments",
         ]),
         Some(&forge),
     );
     assert_eq!(status, 1);
-    assert_eq!(violations.len(), 2, "{violations:?}");
+    assert_eq!(violations.len(), 3, "{violations:?}");
 
     let (status, violations) = a.run_audit("review-code", bash_records(&["gh pr view 7"]), None);
     assert_eq!((status, network(&violations)), (1, true), "{violations:?}");
