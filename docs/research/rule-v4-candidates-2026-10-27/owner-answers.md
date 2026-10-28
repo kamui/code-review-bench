@@ -247,3 +247,11 @@ Asked once on 2026-10-28, after a shared SeaweedFS background (the Redis directo
 The owner's choice: "Suggestion (Recommended)"
 
 Decision: a suggestion (an improvement); no new problem.
+
+## Ruling 26, SeaweedFS, the first listing still logs each expired name (M1b)
+
+Asked once on 2026-10-28. Shown: the claim; the description's two complaints and its fix; the runs (before, three lines per listing every time; after, three on the first listing and none after; both listings correct); that the log line is unchanged and no silence on first encounter was promised; the first answers (all three outside this change). Options: "Outside this change (Recommended)", "Suggestion".
+
+The owner's choice: "Outside this change (Recommended)"
+
+Decision: outside this change.
