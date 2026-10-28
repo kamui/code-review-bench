@@ -203,3 +203,11 @@ Asked once, just before midnight Eastern on 2026-10-27. Shown: the background (t
 The owner's choice: "Outside this change (Recommended)"
 
 Decision: outside this change.
+
+## Ruling 21, Hono, prettyJSON skips a mixed-case `Application/JSON` (P2)
+
+Asked once on 2026-10-28. Shown: what a pre-existing question is; how the change relates, with PE-p1 and its serious label; the background (the optional middleware and its documented `force: true`); the case-sensitive check; the runs (compact JSON for `Application/JSON`, indented for lower case, the same data and status, at both commits on Node and Bun); the admission test; the label walked through S1 to S6, the presentation shape, and the difference from PE-p1; that it is apart from PE-p1; the first answers (all three admit; other-material from the recommender and the inspector). Options: "Admit, other-material (Recommended)", "Admit, serious", "Don't admit".
+
+The owner's choice: "Admit, other-material (Recommended)"
+
+Decision: admitted as a pre-existing problem, apart from PE-p1, labelled other-material.
