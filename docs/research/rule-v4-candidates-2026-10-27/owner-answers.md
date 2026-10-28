@@ -131,3 +131,11 @@ Asked once on 2026-10-27, after a shared Hono background (the two form readers, 
 The owner's choice: "New problem, serious (Recommended)"
 
 Decision: a new problem, labelled serious.
+
+## Ruling 14, Hono, an extra parameter before boundary empties the validated form (M4b)
+
+Asked once on 2026-10-27. Shown: the valid header with `charset` before `boundary`; the runs (`parseBody()` and the runtime reader return the field, the validator hands `{}` with 200, at both commits); a correction to question 13's "separate" statement, which used the smallest-fix test; ground rule 4's three tests and the answer to each (the same pattern line; one fix, run, cures both; one cause sentence: the validator's hand-written header pattern rejects valid header forms that MIME allows); the recommendation changed to part of question 13's problem (`reconcile.v1.md`); the first answers (all three a separate problem; serious from the recommender and the inspector). Options: "Part of Q13's problem (Recommended)", "Separate problem, serious", "Separate problem, other-material".
+
+The owner's choice: "Part of Q13's problem (Recommended)"
+
+Decision: the same fault as ruling 13's new problem. At filing, that problem's description covers both a space before `;` and an extra parameter before `boundary`, under its serious label.
