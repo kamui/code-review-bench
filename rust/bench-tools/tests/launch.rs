@@ -546,12 +546,21 @@ impl Provisioned {
         );
     }
 
+    /// `provision` with no disk reserve, so a `prepare` does not depend on the runner's free space (#376).
     fn run(&self, arguments: &[&str]) -> Output {
+        self.run_with_reserve("0", arguments)
+    }
+
+    fn run_with_reserve(&self, reserve_gib: &str, arguments: &[&str]) -> Output {
         let cache = self.cache();
         let mut command = vec!["provision", arguments[0], "--target", s(&self.target_dir)];
         command.extend(&arguments[1..]);
         command.extend(["--cache-root", s(&cache)]);
-        bench_tools(&command)
+        Command::new(env!("CARGO_BIN_EXE_bench-tools"))
+            .args(command)
+            .env("BENCH_DISK_RESERVE_GIB", reserve_gib)
+            .output()
+            .unwrap()
     }
 }
 
@@ -778,6 +787,68 @@ fn prepare_restores_only_the_recorded_cache_archive_into_its_own_copy() {
 }
 
 #[test]
+fn prepare_refuses_before_cloning_when_the_reserve_would_not_stay_free() {
+    let provisioned = Provisioned::new("reserve");
+    provisioned.set_target(r#", "provisioning": {"cache": {"kind": "none"}}"#);
+    let prepared = provisioned.temp.0.join("prepared");
+    let refused = provisioned.run_with_reserve("1000000", &["prepare", "--out", s(&prepared)]);
+    assert_eq!(refused.status.code(), Some(1), "{}", both(&refused));
+    assert!(
+        stdout(&refused).contains(&format!(
+            "disk space: {} needs about 0.0 GiB and a 1000000.0 GiB reserve, but its filesystem has",
+            prepared.display()
+        )) && stdout(&refused).contains("free; nothing was cloned"),
+        "{}",
+        both(&refused)
+    );
+    assert!(!prepared.exists());
+}
+
+#[test]
+fn prepare_runs_added_post_clone_steps_after_the_targets_own_and_keeps_the_tree_clean() {
+    if Command::new("bwrap").arg("--version").output().is_err() {
+        return;
+    }
+    let provisioned = Provisioned::new("extra-steps");
+    provisioned.set_target(
+        r#", "provisioning": {"cache": {"kind": "none", "post_clone": ["printf own > {work}/order"]}}"#,
+    );
+    let prepared = provisioned.temp.0.join("prepared");
+    let done = provisioned.run(&[
+        "prepare",
+        "--out",
+        s(&prepared),
+        "--post-clone",
+        "printf ' added' >> {work}/order && test -f f.txt",
+    ]);
+    assert!(done.status.success(), "{}", both(&done));
+    let record = parse(&stdout(&done));
+    assert_eq!(
+        field(&record, "steps").as_array().map(<[Value]>::len),
+        Some(2)
+    );
+    assert_eq!(text(field(&record, "sandbox.network")), "off");
+    assert_eq!(
+        fs::read_to_string(provisioned.temp.0.join("prepared-work/order")).unwrap(),
+        "own added"
+    );
+    let dirty = provisioned.temp.0.join("dirty");
+    let refused = provisioned.run(&[
+        "prepare",
+        "--out",
+        s(&dirty),
+        "--post-clone",
+        "printf changed > f.txt",
+    ]);
+    assert_eq!(refused.status.code(), Some(1), "{}", both(&refused));
+    assert!(
+        stdout(&refused).contains("dirtied the tracked tree"),
+        "{}",
+        both(&refused)
+    );
+}
+
+#[test]
 fn a_skill_runner_refuses_a_run_it_is_not_pinned_by_before_it_writes_anything() {
     let temp = Temp::new("unpinned");
     let run = temp.0.join("bench/runs/2026-01-01-unpinned");
@@ -838,4 +909,66 @@ fn a_skill_runner_refuses_a_run_it_is_not_pinned_by_before_it_writes_anything() 
             assert_eq!(entries(&attempt), [] as [String; 0]);
         }
     }
+}
+
+#[test]
+fn prepare_restores_a_pinned_supplement_without_changing_frozen_target_inputs() {
+    let provisioned = Provisioned::new("supplement");
+    provisioned.set_target(r#", "provisioning": {"cache": {"kind": "none"}}"#);
+    let payload = provisioned.temp.0.join("payload");
+    fs::create_dir(&payload).unwrap();
+    fs::write(payload.join("dependency"), "pinned bytes").unwrap();
+    let archive = provisioned.temp.0.join("supplement.tar.gz");
+    assert!(
+        Command::new("tar")
+            .args(["-czf", s(&archive), "-C", s(&payload), "."])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let sha = sha256::hex_digest(&fs::read(&archive).unwrap());
+    let target = fs::read(provisioned.target_dir.join("target.json")).unwrap();
+    let prepared = provisioned.temp.0.join("prepared");
+    let done = provisioned.run(&[
+        "prepare",
+        "--out",
+        s(&prepared),
+        "--supplement",
+        s(&archive),
+        "--supplement-sha256",
+        &sha,
+    ]);
+    assert!(done.status.success(), "{}", both(&done));
+    assert_eq!(
+        fs::read_to_string(
+            provisioned
+                .temp
+                .0
+                .join("prepared-cache/toolchain-extra/dependency")
+        )
+        .unwrap(),
+        "pinned bytes"
+    );
+    assert_eq!(
+        fs::read(provisioned.target_dir.join("target.json")).unwrap(),
+        target
+    );
+    fs::write(&archive, "changed").unwrap();
+    let refused = provisioned.temp.0.join("refused");
+    let done = provisioned.run(&[
+        "prepare",
+        "--out",
+        s(&refused),
+        "--supplement",
+        s(&archive),
+        "--supplement-sha256",
+        &sha,
+    ]);
+    assert!(!done.status.success());
+    assert!(
+        both(&done).contains("dependency supplement SHA-256 mismatch"),
+        "{}",
+        both(&done)
+    );
+    assert!(!refused.exists());
 }

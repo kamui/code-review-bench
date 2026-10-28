@@ -702,6 +702,13 @@ enum ProvisionCommand {
         cache_replacements: Option<OsString>,
         #[arg(long, allow_negative_numbers = true)]
         out: OsString,
+        /// An offline step to run after the target's own post-clone steps, in the same way; repeatable.
+        #[arg(long = "post-clone", allow_negative_numbers = true)]
+        post_clone: Vec<String>,
+        #[arg(long, requires = "supplement_sha256")]
+        supplement: Option<PathBuf>,
+        #[arg(long, requires = "supplement")]
+        supplement_sha256: Option<String>,
     },
     /// Run the target's offline smoke commands and write smoke.json.
     #[command(infer_long_args = true)]
@@ -3924,9 +3931,17 @@ fn run_provision(command: ProvisionCommand) -> Result<ExitCode, ExitCode> {
             target,
             cache_replacements,
             out,
+            post_clone,
+            supplement,
+            supplement_sha256,
         } => provision::prepare_command(
             &provision_options(target, cache_replacements),
             Path::new(&out),
+            &post_clone,
+            supplement
+                .zip(supplement_sha256)
+                .map(|(archive, sha256)| provision::Supplement { archive, sha256 })
+                .as_ref(),
         ),
         ProvisionCommand::Smoke {
             target,
@@ -5326,6 +5341,7 @@ fn grade_options(sources: GradeSources) -> grade::Options {
 fn run_grade(command: GradeCommand) -> Result<ExitCode, ExitCode> {
     use current_grading::Failure;
     let mut printed = Vec::new();
+    let mut exit_code = ExitCode::SUCCESS;
     let outcome = (|| -> current_grading::R<Vec<u8>> {
         let checkout = std::env::current_dir()
             .map_err(|error| Failure::Input(pytext::os_error(&error, b".")))?;
@@ -5467,7 +5483,7 @@ fn run_grade(command: GradeCommand) -> Result<ExitCode, ExitCode> {
                     .iter()
                     .map(|path| pytext::os_bytes(path).to_vec())
                     .collect();
-                grade::map_verdicts(
+                match grade::map_verdicts(
                     &runner,
                     &grade::Mapping {
                         root: pytext::os_bytes(&root),
@@ -5477,7 +5493,13 @@ fn run_grade(command: GradeCommand) -> Result<ExitCode, ExitCode> {
                         assessor: assessor.as_ref().map(|path| pytext::os_bytes(path)),
                         safety_checks: &safety_checks,
                     },
-                )
+                )? {
+                    grade::MappingOutcome::Mapped(output) => Ok(output),
+                    grade::MappingOutcome::BlockedChecks(problems) => {
+                        exit_code = ExitCode::from(grade::BLOCKED_CHECK_EXIT);
+                        Ok(format!("{}\n", problems.join("\n")).into_bytes())
+                    }
+                }
             }
             GradeCommand::Invalidate { root, current } => {
                 let _lock = evaluator_audit::lock(pytext::os_bytes(&root))?;
@@ -5489,7 +5511,7 @@ fn run_grade(command: GradeCommand) -> Result<ExitCode, ExitCode> {
     match outcome {
         Ok(output) => {
             write_stdout(&output)?;
-            Ok(ExitCode::SUCCESS)
+            Ok(exit_code)
         }
         Err(Failure::Inconsistent(mut message)) => {
             message.push(b'\n');

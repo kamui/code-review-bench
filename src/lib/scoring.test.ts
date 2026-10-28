@@ -161,7 +161,7 @@ describe('detection', () => {
     if (!configuration) throw new Error('Missing fixture configuration')
     for (const estimator of ['equalProblem', 'equalPr'] as const) {
       expect(summarize(configuration, result, { band: 'all', estimator }, { kind: 'available', value: 0 }))
-        .toMatchObject({ detectionNote: result.detection.all.zeroCredit.reason, cost: null, tokens: null })
+        .toMatchObject({ detectionNote: result.detection.all.zeroCredit.reason, cost: 0.6, tokens: null })
     }
     const directory = await mkdtemp(join(tmpdir(), 'unresolved-scorecard-'))
     try {

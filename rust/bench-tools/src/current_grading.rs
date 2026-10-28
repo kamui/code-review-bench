@@ -1688,9 +1688,11 @@ fn faults_message(identifier: &Value, faults: &[String]) -> String {
     format!("{}: {}", identifier.py_str(), faults.join("; "))
 }
 
-/// The loaded record: the inventory and the current documents by kind, with `policy` and `audit`.
+/// The loaded record: the inventory and the current documents by kind, with `policy` and `audit`, and the remedy
+/// policy pin `remedy-policy.json` selects, if the record has one.
 pub struct Documents {
     pub kinds: Vec<(&'static str, Value)>,
+    pub remedy_policy: Option<Value>,
 }
 
 impl Documents {
@@ -1701,6 +1703,20 @@ impl Documents {
             .find(|(known, _)| *known == kind)
             .expect("every kind is loaded")
             .1
+    }
+
+    /// Whether `recorded`, a key or assessment receipt, saved the remedy policy the record still selects.
+    pub fn remedy_policy_unchanged(&self, recorded: &Value) -> R<bool> {
+        let saved = if pyvalue::has(recorded, "remedy_policy")? {
+            Some(item(item(recorded, "remedy_policy")?, "source")?)
+        } else {
+            None
+        };
+        Ok(match (saved, &self.remedy_policy) {
+            (None, None) => true,
+            (Some(saved), Some(selected)) => eq(saved, selected),
+            _ => false,
+        })
     }
 }
 
@@ -2508,9 +2524,16 @@ fn sort_by_id(values: &mut [Value]) -> R<()> {
         }
     }
     let mut order: Vec<usize> = (0..values.len()).collect();
+    let mut failed = None;
     order.sort_by(|left, right| {
-        pyvalue::compare(&keys[*left], &keys[*right]).unwrap_or(std::cmp::Ordering::Equal)
+        pyvalue::compare(&keys[*left], &keys[*right]).unwrap_or_else(|error| {
+            failed.get_or_insert(error);
+            std::cmp::Ordering::Equal
+        })
     });
+    if let Some(error) = failed {
+        return Err(error.into());
+    }
     let sorted: Vec<Value> = order.iter().map(|at| values[*at].clone()).collect();
     values.clone_from_slice(&sorted);
     Ok(())
@@ -2529,8 +2552,8 @@ pub fn grading_fingerprint(
     )?))
 }
 
-/// `(fingerprint, state)`: `current` when a saved grade matches the batch's inputs, `stale` when they changed after
-/// it was graded, `missing` when no grade is saved.
+/// `(fingerprint, state)`: `current` when a saved grade matches the batch's inputs and was graded under the selected
+/// remedy policy, `stale` when either changed after it was graded, `missing` when no grade is saved.
 pub fn batch_state(
     root: &Root,
     batch: &Value,
@@ -2541,16 +2564,25 @@ pub fn batch_state(
         grading_fingerprint(root, batch, selected, documents, documents.get("policy"))?;
     let run = item(batch, "run")?;
     let target = item(batch, "target")?;
+    let grades = each(item(documents.get("grade"), "batches")?)?;
     let mut saved = Vec::new();
-    for grade in each(item(documents.get("grade"), "batches")?)?.iter() {
+    for grade in grades.iter() {
         let identity = (item(grade, "run")?, item(grade, "target")?);
         if pyobject::same(identity.0, run) && pyobject::same(identity.1, target) {
-            saved.push(item(grade, "input_fingerprint")?.clone());
+            saved.push(grade);
         }
     }
     let state = if saved.is_empty() {
         "missing"
-    } else if saved.len() == 1 && pyobject::same(&saved[0], &Value::Str(fingerprint.clone())) {
+    } else if saved.len() == 1
+        && pyobject::same(
+            item(saved[0], "input_fingerprint")?,
+            &Value::Str(fingerprint.clone()),
+        )
+        && documents.remedy_policy_unchanged(&read_json(
+            &root.resolve_pin(item(item(saved[0], "assessor")?, "receipt")?)?,
+        )?)?
+    {
         "current"
     } else {
         "stale"
@@ -2652,6 +2684,10 @@ fn validate_grades(
                 .zip(filed)
                 .all(|(left, right)| pyobject::same(left, right)),
             format!("{key_text}: assessor receipt belongs to another assessment"),
+        )?;
+        require(
+            documents.remedy_policy_unchanged(&receipt)?,
+            format!("{key_text}: grade remedy policy is stale"),
         )?;
         let conditional_safety = pyvalue::has(&receipt, "remedy_policy")?;
         if conditional_safety {
@@ -3950,7 +3986,16 @@ pub fn load_current(root: &Root, current: &[u8], grades: bool) -> R<(Value, Docu
     let audit = read_json(&directory.join(b"audits.json"))?;
     verify_pins(root, &audit)?;
     kinds.push(("audit", audit));
-    let documents = Documents { kinds };
+    let pointer = directory.join(b"remedy-policy.json");
+    let remedy_policy = if pointer.to_path_buf().exists() {
+        Some(read_json(&pointer)?)
+    } else {
+        None
+    };
+    let documents = Documents {
+        kinds,
+        remedy_policy,
+    };
     validate_documents(root, &documents, &selected, grades)?;
     Ok((selected, documents))
 }
@@ -4207,5 +4252,16 @@ mod tests {
         assert_eq!(item_number("1\n").unwrap(), (false, "1".into()));
         assert_eq!(item_number("-1").unwrap(), (true, "1".into()));
         assert!(matches!(item_number("x"), Err(Failure::Crash(_))));
+    }
+
+    #[test]
+    fn ids_that_meet_incomparable_parts_raise() {
+        let mut values = vec![
+            crate::pyjson::loads(r#"{"id": ["a"]}"#, crate::pyjson::Duplicates::Refuse).unwrap(),
+            crate::pyjson::loads(r#"{"id": ["b", 1]}"#, crate::pyjson::Duplicates::Refuse).unwrap(),
+            crate::pyjson::loads(r#"{"id": ["b", "x"]}"#, crate::pyjson::Duplicates::Refuse)
+                .unwrap(),
+        ];
+        assert!(sort_by_id(&mut values).is_err());
     }
 }

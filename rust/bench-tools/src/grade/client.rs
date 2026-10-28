@@ -309,12 +309,7 @@ fn sandbox_probe(work: &Path, policy: Value, bench_tools: &Path) -> S<Value> {
 }
 
 fn probe_policy() -> Value {
-    object(vec![
-        ("test_kind", text("none")),
-        ("private_go", Value::Bool(false)),
-        ("go_flags", text("-mod=readonly")),
-        ("once", Value::Bool(false)),
-    ])
+    object(vec![("once", Value::Bool(false))])
 }
 
 /// The workspace inputs both probes give the tools: a clone to inspect, validator inputs and the exercises.

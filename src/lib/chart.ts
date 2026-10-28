@@ -53,12 +53,12 @@ export function position(scale: Scale, value: number, from: number, to: number) 
   return from + fraction * (to - from)
 }
 
-/** Points no other point beats on both lower x and higher y, ordered by x. */
+/** Nondominated points, including ties, ordered by x. */
 export function paretoFrontier<T extends { x: number; y: number }>(points: T[]): T[] {
   const frontier: T[] = []
   for (const point of [...points].sort((left, right) => left.x - right.x || right.y - left.y)) {
     const best = frontier.at(-1)
-    if (!best || point.y > best.y) frontier.push(point)
+    if (!best || point.y > best.y || (point.x === best.x && point.y === best.y)) frontier.push(point)
   }
   return frontier
 }

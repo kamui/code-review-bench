@@ -489,10 +489,17 @@ fn top_level() -> Vec<(String, String)> {
 }
 
 pub fn which(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|directory| directory.join(name))
-        .find(|candidate| {
+    executables(&std::env::var_os("PATH")?, name).next()
+}
+
+/// Every executable file named `name` in the directories of `path`, in order.
+pub fn executables<'a>(
+    path: &'a std::ffi::OsStr,
+    name: &'a str,
+) -> impl Iterator<Item = PathBuf> + 'a {
+    std::env::split_paths(path)
+        .map(move |directory| directory.join(name))
+        .filter(|candidate| {
             std::fs::metadata(candidate).is_ok_and(|meta| {
                 meta.is_file()
                     && std::os::unix::fs::PermissionsExt::mode(&meta.permissions()) & 0o111 != 0
