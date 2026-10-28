@@ -498,6 +498,17 @@ impl Claude {
     /// With the clone inside the attempt, as `run-cell` lays it out, which isolation settings require, and with
     /// the receipt, stand-in `gh` and origin `frozen-forge setup` leaves after checking `checked`, if given.
     fn review_code(&self, name: &str, vars: Vars, checked: Option<&Path>) -> Output {
+        self.review_code_on(name, vars, checked, &[])
+    }
+
+    /// As [`Claude::review_code`], with `model_effort` passed after the packet.
+    fn review_code_on(
+        &self,
+        name: &str,
+        vars: Vars,
+        checked: Option<&Path>,
+        model_effort: &[&str],
+    ) -> Output {
         let attempt = self.fixture.attempt(name);
         let clone = attempt.join("clone");
         fs::create_dir_all(&clone).unwrap();
@@ -509,13 +520,14 @@ impl Claude {
         }
         let mut all = borrowed(&self.vars);
         all.extend(vars);
-        let args = [
+        let mut args = vec![
             "review-code",
             s(&attempt),
             s(&clone),
             "main",
             s(&self.fixture.packet),
         ];
+        args.extend(model_effort);
         self.fixture.dispatch(&args, &all)
     }
 }
@@ -709,6 +721,44 @@ fn the_review_code_prompt_allows_forge_reads_only_under_the_open_network_policy(
         let gh_first = path.starts_with(&format!("{}:", s(&attempt.join("forge/bin"))));
         assert_eq!(gh_first, policy.is_some(), "{name}: {path}");
     }
+}
+
+#[test]
+fn review_code_workers_run_on_the_reviewers_model_family() {
+    let (claude, skill, _) = review_code("review-code-workers");
+    let tree_id = "f".repeat(40);
+    let vars = || {
+        vec![
+            ("SKILL_TREE", Some(skill.as_str())),
+            ("SKILL_TREE_ID", Some(tree_id.as_str())),
+        ]
+    };
+    for (name, model_effort, workers) in [
+        ("default", vec![], "sonnet"),
+        ("sonnet", vec!["claude-sonnet-5-5", "high"], "sonnet"),
+        ("opus", vec!["claude-opus-5-5", "high"], "opus"),
+        ("haiku", vec!["claude-haiku-5-5", "high"], "haiku"),
+    ] {
+        let _ = fs::remove_file(&claude.fixture.capture);
+        let output = claude.review_code_on(name, vars(), None, &model_effort);
+        let prompt = fs::read_to_string(claude.fixture.attempt(name).join("prompt.txt"))
+            .unwrap_or_else(|_| panic!("{name}: no prompt: {}", both(&output)));
+        let expected = format!("subagent_type general-purpose, model `{workers}`, and");
+        assert!(prompt.contains(&expected), "{name}: {prompt}");
+        let receipt = claude.fixture.receipt().expect("the reviewer started");
+        let model = model_effort.first().copied().unwrap_or("sonnet");
+        assert_eq!(receipt.after("--model"), model, "{name}");
+    }
+    let _ = fs::remove_file(&claude.fixture.capture);
+    let output = claude.review_code_on("fable", vars(), None, &["claude-fable-5-1", "high"]);
+    assert_eq!(output.status.code(), Some(2), "{}", both(&output));
+    assert!(
+        stderr(&output).contains("review-code has no worker alias for model claude-fable-5-1"),
+        "{}",
+        both(&output)
+    );
+    assert!(!claude.fixture.attempt("fable").join("prompt.txt").exists());
+    assert!(claude.fixture.receipt().is_none(), "the reviewer started");
 }
 
 #[test]
