@@ -49,7 +49,7 @@ TRIALS = 3
 WORK_ROOT = "/home/jack/rq-gap"
 SOCKET_DIR_LIMIT = 72
 QUEUE_ID = "2026-10-28-claude-gap-benchmarks"
-QUOTA_STOP_PERCENT = 100
+QUOTA_STOP_PERCENT = 95
 PLACEHOLDER = "NOT APPROVED: <owner approval, quoted with its date>"
 
 CE_TEMPLATE = BENCH / "runs/2026-10-10-last-push-claude-ce-opus"
@@ -89,12 +89,12 @@ class Spec:
 SPECS = (
     Spec("2026-10-28-claude-ce-opus-selected", "ce-code-review", "claude-ce-opus-5-5-high", "claude-opus-5-5",
          SELECTED, 20, 250, 5),
-    Spec("2026-10-28-claude-review-code-opus", "review-code", "review-code-opus-5-5-high-enforced",
-         "claude-opus-5-5", None, 16, 450, 10),
     Spec("2026-10-28-claude-review-code-sonnet", "review-code", RC_TEMPLATE_ARM, "claude-sonnet-5-5",
          SELECTED, 8, 40, 5),
     Spec("2026-10-28-claude-review-code-haiku", "review-code", "review-code-haiku-5-5-high-enforced",
          "claude-haiku-5-5", None, 2, 40, 10),
+    Spec("2026-10-28-claude-review-code-opus", "review-code", "review-code-opus-5-5-high-enforced",
+         "claude-opus-5-5", None, 16, 450, 10),
 )
 CEILING = sum(spec.spend_usd for spec in SPECS)
 NEW_ARMS = {"review-code-opus-5-5-high-enforced": "Opus 5.5", "review-code-haiku-5-5-high-enforced": "Haiku 5.5"}
