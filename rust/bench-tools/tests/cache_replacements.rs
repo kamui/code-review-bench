@@ -96,11 +96,13 @@ fn install(root: &Path) -> PathBuf {
     executable
 }
 
-/// Runs from the repository, whose `bench/policies` grading reads relative to the working directory.
+/// Runs from the repository, whose `bench/policies` grading reads relative to the working directory, with no disk
+/// reserve, so a `prepare` does not depend on the runner's free space (#376).
 fn bench_tools(executable: &Path, arguments: &[&str]) -> Output {
     Command::new(executable)
         .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
         .args(arguments)
+        .env("BENCH_DISK_RESERVE_GIB", "0")
         .output()
         .unwrap()
 }
