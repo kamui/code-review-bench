@@ -5,14 +5,18 @@
 //! `home`. The runner refuses unless the run's `runtimes.frozen.json` pins this bench-tools, checks the run, arm,
 //! skill, target and clone pins, writes the attempt's `input.md`, creates a clean home before copying credentials,
 //! starts one new root session, and keeps its raw output, transcripts, usage, session evidence and native skill
-//! artifacts. It never resumes a session, and normalizes the native report with this bench-tools. When
+//! artifacts. It never resumes a session, and normalizes the native report with this bench-tools: `runner.json`'s
+//! `normalizer.kind` is `thermo`, `native-review` (Claude) or `codex-skill` (Codex) for a structured report, or, on
+//! Codex, `review-code`, whose `composition.json` the `review-code` arm's parser reads. When
 //! `runner.json` sets `cross_model_review_mode` to `off`, the runner writes that setting to CE's local config in the
 //! clone and excludes the file from Git before it records the clone's tree identity.
 //! `runner.json` must record the manifest's execution policy version as `execution_policy` (none for version 1),
 //! and version 2 needs the `bwrap-v2` sandbox and the attempt's frozen forge, whose `gh` leads the reviewer's
 //! `PATH`; `sandbox.json` records the version. The invocation's `{MODEL}` and `{EFFORT}` are the arm's.
 //!
-//! Codex runs with project documents and apps off and every skill but the frozen one disabled. Claude runs in
+//! Codex runs with project documents and apps off and every skill but the frozen one disabled. Its sandbox lets
+//! commands reach the network unless `runner.json` sets `network_allowed` to `false`, which turns Codex's
+//! `network_access` off and keeps the audit's offline rules. Claude runs in
 //! `--safe-mode`, which disables CLAUDE.md discovery, installed skills, plugins, hooks, MCP servers and custom
 //! agents, so the frozen skill is read by path from the attempt's private work directory.
 //! `CLAUDE_CODE_SUBAGENT_MODEL` pins every Agent call to the arm's model, and the transcripts are then checked
@@ -1644,12 +1648,13 @@ mod codex {
             command.extend(["--add-dir".to_string(), root.clone()]);
         }
         command.extend(["--strict-config".into(), "--cd".into(), path(clone)]);
+        let offline = matches!(get(&prepared.runner, "network_allowed"), Value::Bool(false));
         for setting in [
             format!("model_reasoning_effort=\"{effort}\""),
             format!("review_model=\"{model}\""),
             "sandbox_mode=\"workspace-write\"".into(),
             "approval_policy=\"never\"".into(),
-            "sandbox_workspace_write.network_access=true".into(),
+            format!("sandbox_workspace_write.network_access={}", !offline),
             "project_doc_max_bytes=0".into(),
             "project_doc_fallback_filenames=[]".into(),
             "features.apps=false".into(),
@@ -1663,8 +1668,9 @@ mod codex {
         }
         let mut sandbox = Value::Null;
         let mut gate = None;
-        let network = get(&prepared.runner, "network_allowed").truthy()
-            || std::env::var("BENCH_NETWORK_ALLOWED").as_deref() == Ok("1");
+        let network = !offline
+            && (get(&prepared.runner, "network_allowed").truthy()
+                || std::env::var("BENCH_NETWORK_ALLOWED").as_deref() == Ok("1"));
         if let Some(profile) = sandbox_profile(&prepared.runner) {
             let client_dir = executable
                 .parent()
@@ -1932,7 +1938,12 @@ mod codex {
                     );
                     normalize(prepared, &command, &mut violations)?;
                 }
-                Some("codex-skill") => {
+                Some(kind @ ("codex-skill" | "review-code")) => {
+                    let (arm, input) = if kind == "review-code" {
+                        ("review-code", "--composition")
+                    } else {
+                        ("codex-skill", "--native-review")
+                    };
                     let expected = get(normalizer, "native_file");
                     let reports = reports_named(prepared, &rows, expected);
                     if reports.len() == 1 {
@@ -1942,8 +1953,8 @@ mod codex {
                             &[
                                 "normalize-review",
                                 "--arm",
-                                "codex-skill",
-                                "--native-review",
+                                arm,
+                                input,
                                 &report,
                                 "--clone",
                                 &clone_text,
