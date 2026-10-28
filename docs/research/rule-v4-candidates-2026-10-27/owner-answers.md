@@ -231,3 +231,11 @@ Asked once on 2026-10-28. Shown: the background (zsh global aliases; aliases app
 The owner's choice: "New problem, other-material (Recommended)"
 
 Decision: a new problem, apart from GT-n4, GT-n5 and ruling 22's case, labelled other-material.
+
+## Ruling 24, Base UI, a prevented handler's stored value is still validated (M1)
+
+Asked once on 2026-10-28. Shown: the background (controlled inputs; `preventBaseUIHandler()` and its documented words); the change's stored-value watcher and its code comment; the claim; the runs (prevent and store: validation and error clearing after, not before; prevent without storing: nothing at both commits; Base UI's handler still skipped); the two promises and Delivery rule 3; why that makes it a minor defect; the first answers (problem from the recommender; minor defect from both blind sessions) and the recommendation changed (`reconcile.v1.md`). Options: "Minor defect (Recommended)", "Problem, other-material".
+
+The owner's choice: "Minor defect (Recommended)"
+
+Decision: a minor defect; no new problem.
