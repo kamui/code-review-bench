@@ -1,0 +1,84 @@
+# Thermo Nuclear Review — psf/requests#6667
+
+Range: `8dd3b26b..4089f3dc` (`main...review-head`), one file: `src/requests/adapters.py`.
+
+The change creates one module-level `SSLContext` (`_preloaded_ssl_context`, adapters.py:75-78), hands that same object to every `verify=True` connection pool through `pool_kwargs["ssl_context"]` (adapters.py:94-95), and stops `cert_verify()` from setting `conn.ca_certs` when `verify=True` (adapters.py:297-317). The root problem is that urllib3 does not treat a caller-supplied `ssl_context` as read-only. For every connection it changes that object's settings: `context.verify_mode = ...` (urllib3 `connection.py:1042`), `context.check_hostname = False` (`connection.py:1056`) and `context.load_cert_chain(certfile, keyfile)` (`util/ssl_.py:429-433`). Before this PR, each connection had its own context, so those changes stayed local. Now they land on one object shared by every adapter, `Session` and thread in the process. Separately, removing `conn.ca_certs` changes which CA bundle urllib3 uses for HTTPS proxies. Loading the bundle when the module is imported also moves failures that used to happen per request to `import requests`.
+
+I checked each finding against the installed urllib3 2.8.0 source. I also ran scratch probes, outside the clone, that run the same snippet against the base tree (`git archive main`) and against the head tree. They use local TLS fixture servers on 127.0.0.1, and a copy of `certifi.where()` patched to a bundle containing the scratch server CA. The repo's TLS-related tests (`tests/test_requests.py -k "ssl or verify or cert or adapter"`): 19 pass, and the only 2 failures are the known fixture failures that also happen at the merge-base.
+
+---
+
+### 1. [High] A client certificate from any `verify=True` request is loaded into the shared context and sent to every later host
+
+**Where:** `src/requests/adapters.py:75-78`, `src/requests/adapters.py:94-95` (together with the unchanged `cert` → `pool_kwargs["cert_file"]/["key_file"]` handling at adapters.py:102-109).
+
+**Evidence:** With `verify=True` and `cert=(...)`, the pool gets `ssl_context=_preloaded_ssl_context` plus `cert_file`/`key_file`. When urllib3 connects, `ssl_wrap_socket()` sees that the context was supplied and calls `context.load_cert_chain(certfile, keyfile)` on it (`urllib3/util/ssl_.py:429-433`). The context is not copied first, so the client identity is now installed on the process-wide `_preloaded_ssl_context`. Every later `verify=True` connection uses that context, including ones to other hosts, from other `Session`s and with no `cert=`. OpenSSL copies the context's certificate and key into each new `SSL` object, so the client presents that certificate to any server that sends a CertificateRequest.
+
+**Reproduced:** The scratch probe sends `requests.get("https://localhost:P/tenant-a", cert=(cli.pem, cli.key))` and then `requests.Session().get("https://127.0.0.1:P/unrelated")`, which has no `cert`, to a server that asks for an optional client certificate:
+- base: server saw `[('/tenant-a', 'tenant-A-client'), ('/unrelated', None)]`
+- head: server saw `[('/tenant-a', 'tenant-A-client'), ('/unrelated', 'tenant-A-client')]`
+
+**Impact:** This is a security problem: an mTLS identity leaks to unrelated, possibly hostile, servers, which get the client certificate (identity and fingerprint) and can track the client. If the process uses several client certificates (multi-tenant services, or workers using different identities against the same API), each `load_cert_chain` replaces the shared identity. Concurrent requests can then authenticate to a server as a different tenant than the one that made the call: the last thread to load wins between another thread's load and its handshake. Requests made later without a certificate also stop being anonymous.
+
+---
+
+### 2. [High] A custom `ssl_context` from an `HTTPAdapter` subclass is silently replaced by the shared default context
+
+**Where:** `src/requests/adapters.py:94-95`.
+
+**Evidence:** A common documented pattern is to subclass `HTTPAdapter` and pass `ssl_context=` to `init_poolmanager()` / `PoolManager(**pool_kwargs)`. People use it for the system trust store or `truststore`, a private CA, custom ciphers, minimum TLS versions, or `OP_LEGACY_SERVER_CONNECT`. That value is stored in `PoolManager.connection_pool_kw`. urllib3 merges the per-request `pool_kwargs` over `connection_pool_kw`, so the `ssl_context` that `_urllib3_request_context` now always injects for `verify=True` (the default) wins.
+
+**Reproduced:** With a subclass that sets `kw["ssl_context"] = mine` in `init_poolmanager`, `ad._get_connection(<https request>, True).conn_kw["ssl_context"] is mine` returns `True` on base and `False` on head.
+
+**Impact:** This breaks existing functionality without any error. Users whose custom context trusts a private or system CA get `CERTIFICATE_VERIFY_FAILED`. Users who rely on the custom context for stricter settings (pinned TLS versions or ciphers, special options) silently get requests' generic context. Some of those settings are security controls, and losing them raises no warning. Only `verify=False` or a string `verify` keeps the subclass context.
+
+---
+
+### 3. [Medium] Plain-HTTP requests through an HTTPS proxy now fail with a raw `ValueError`
+
+**Where:** `src/requests/adapters.py:94-95`, in combination with the existing `cert_verify()` `else` branch (adapters.py:318-321), which sets `conn.cert_reqs = "CERT_NONE"` for non-https URLs.
+
+**Evidence:** For an `http://` URL with an `https://` proxy, urllib3's `ProxyManager.connection_from_host` (`poolmanager.py:635-641`) builds an `HTTPSConnectionPool` to the proxy using the request's `pool_kwargs`, which now include `ssl_context=_preloaded_ssl_context`. `cert_verify()` then sets that pool's `cert_reqs` to `CERT_NONE`. At connect time urllib3 runs `context.verify_mode = CERT_NONE` on the shared context (`connection.py:1042`). That context has `check_hostname=True`, so CPython raises `ValueError`. urllib3 does not catch it and it is not a `requests` exception.
+
+**Reproduced:** `requests.get("http://example.invalid/x", proxies={"http": "https://localhost:P"})`: base returns `status 403` from the fixture proxy; head raises `builtins ValueError Cannot set verify_mode to CERT_NONE when check_hostname is enabled.`
+
+**Impact:** Every plain-HTTP request through an HTTPS proxy with default `verify=True` fails. Callers that catch `requests.RequestException` do not catch this error.
+
+---
+
+### 4. [Medium] Shared-context reconfiguration can turn off certificate verification for concurrent `verify=True` connections
+
+**Where:** `src/requests/adapters.py:75-78`, `src/requests/adapters.py:94-95`.
+
+**Evidence:** urllib3 sets `context.check_hostname = False` on the supplied context whenever a pool has `assert_hostname` or `assert_fingerprint` (for example, the `HostHeaderSSLAdapter` pattern, or `connection_pool_kw["assert_hostname"]`), and always under pyOpenSSL (`connection.py:1044-1056`). Because the context is now shared, that change lasts for the whole process. After it, the Finding 3 path no longer raises. Instead it sets `verify_mode = CERT_NONE` on the shared context and leaves it there until another connection resets it. Each connection does `context.verify_mode = ...` (line 1042) and then wraps the socket (line 1080) as two separate steps with no lock. So if thread A (an HTTP-via-HTTPS-proxy request) writes `CERT_NONE` between thread B's line 1042 and its wrap, thread B's `verify=True` HTTPS socket is created with `CERT_NONE`. urllib3's own hostname check (lines 1098-1101) is also skipped because `context.verify_mode == CERT_NONE` at that point. Thread B then accepts any certificate for any host.
+
+**Reproduced (state change):** After `check_hostname` was set to `False` as urllib3 does at line 1056, one HTTP-via-HTTPS-proxy request left `requests.adapters._preloaded_ssl_context.verify_mode == 0` (`CERT_NONE`) on head. I did not reproduce the thread interleaving itself. It follows from the unsynchronized write-then-wrap sequence above.
+
+**Impact:** In processes that mix those configurations across threads, there is a window where `verify=True` connections can be intercepted (MITM). More generally, the shared object's security settings are changed back and forth by unrelated requests, which tiran's thread-safety comment in the PR discussion says should not happen once a context is in use.
+
+---
+
+### 5. [Medium] HTTPS proxies are now verified against the OS trust store instead of requests' CA bundle
+
+**Where:** `src/requests/adapters.py:297-317` (the `ca_certs`/`ca_cert_dir` assignment now only happens when `verify` is not `True`).
+
+**Evidence:** For an `https://` target through an `https://` proxy, urllib3's `_connect_tls_proxy` verifies the proxy's certificate with `ssl_context = self.ssl_context if self.proxy_is_forwarding else None` and `ca_certs = self.ca_certs` (`connection.py:964-968`). The shared context is therefore not used for the CONNECT-tunnel proxy handshake. Before, `cert_verify()` set `conn.ca_certs = extract_zipped_paths(DEFAULT_CA_BUNDLE_PATH)`. Now `ca_certs` is `None`, so urllib3 builds a default context and calls `load_default_certs()` (`connection.py:1061-1068`), which is the OS store. The same thing happens to any pool that does not come from `_get_connection()`, for example subclasses with a custom `send()` that still call the public `get_connection()` and then `cert_verify(conn, url, True, cert)`. Those pools have no `ssl_context` and no longer get `ca_certs`.
+
+**Reproduced:** With the proxy's CA present only in `DEFAULT_CA_BUNDLE_PATH`: base completes the TLS handshake with the proxy and gets `Tunnel connection failed: 403 Forbidden` from the fixture. Head fails with `SSLCertVerificationError ... CERTIFICATE_VERIFY_FAILED`, and the server logs `TLSV1_ALERT_UNKNOWN_CA`.
+
+**Impact:** HTTPS-proxy users on systems whose OS store lacks the CA (slim containers, python.org macOS builds, distros that ship certifi or a bundle via `certs.py`) lose connectivity. On other systems the trust anchor for the proxy quietly changes from requests' bundle to the OS store.
+
+---
+
+### 6. [Medium] Loading the CA bundle at import makes `import requests` fail in environments that worked before
+
+**Where:** `src/requests/adapters.py:75-78`.
+
+**Evidence:** Before this PR the bundle was only looked up inside `cert_verify()` when a `verify=True` HTTPS request was sent, and failures raised a descriptive `OSError` for that request only. Now `create_urllib3_context()` and `load_verify_locations()` run when `requests.adapters` is imported, and `requests/__init__.py` imports it unconditionally through `api` → `sessions`.
+
+**Reproduced (base: `import ok`; head: traceback from adapters.py:75/76):**
+- Python without the `ssl` module: `TypeError: Can't create an SSLContext object without an ssl module` (urllib3 `util/ssl_.py:224`). HTTP-only use of requests used to work.
+- `DEFAULT_CA_BUNDLE_PATH` missing (stripped certifi data, a repackaged `certs.py` pointing at an absent system path): `FileNotFoundError: [Errno 2] No such file or directory`. Code that only uses `verify=False`, `verify=<path>` or plain HTTP used to work.
+- `DEFAULT_CA_BUNDLE_PATH` being a directory: `IsADirectoryError`. The removed code handled this explicitly (`if not os.path.isdir(cert_loc): conn.ca_certs = ... else: conn.ca_cert_dir = ...`), and `certs.py` invites distributors to redefine `where()`.
+
+**Impact:** The whole library fails to import in those environments, including in programs that never make a verified HTTPS request. The useful "Could not find a suitable TLS CA certificate bundle" message is also replaced by a bare import-time exception. Every importer now also pays to parse the full CA bundle at import time.
