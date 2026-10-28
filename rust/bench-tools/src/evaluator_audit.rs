@@ -2515,7 +2515,10 @@ fn second(root: &Root, current: &[u8], arguments: &Arguments) -> R<Done> {
             .into_bytes(),
         ));
     }
-    let (raw, verdicts, problems) = grade::read_verdicts(&work)?;
+    let (raw, verdicts, mut problems) = grade::read_verdicts(&work)?;
+    if problems.is_empty() {
+        problems = grade::blocked_checks(&verdicts);
+    }
     if !problems.is_empty() {
         return Err(Failure::Inconsistent(problems.join("\n").into_bytes()));
     }
@@ -2709,5 +2712,31 @@ mod tests {
         assert!(holds(b"/a/b", b"/a/b/c"));
         assert!(!holds(b"/a/b", b"/a/bc"));
         assert!(holds(b"/", b"/x"));
+    }
+
+    #[test]
+    fn batches_sort_by_run_then_target() {
+        let key = |run: &str, target: &str| tuple_key(&[&text(run), &text(target)]).unwrap();
+        let counted = tally([
+            Ok(key("runs/b", "x-task")),
+            Ok(key("runs/a", "y-task")),
+            Ok(key("runs/a", "x-task")),
+        ])
+        .unwrap();
+        let order: Vec<Value> = sorted_items(counted.0)
+            .unwrap()
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect();
+        assert!(
+            order
+                .iter()
+                .zip([
+                    key("runs/a", "x-task"),
+                    key("runs/a", "y-task"),
+                    key("runs/b", "x-task")
+                ])
+                .all(|(found, wanted)| found.py_eq(&wanted))
+        );
     }
 }

@@ -62,6 +62,54 @@ fn an_unresolved_canonical_pin_accepts_only_an_unresolved_claim() {
     assert!(!grading_validation::pinned_matches_v2(&resolved, &pin).unwrap());
 }
 
+fn unresolved_claim(open: &str) -> Value {
+    json(&format!(
+        r#"{{"id": "c1", "quote": "q", "true": "cannot-check", "this_change": null, "promised": null,
+        "promise_source": [], "delivered": null, "outcome": "unresolved", "kind": null, "known_problems": [],
+        "canonical_claim_id": null, "duplicate_group": null, "candidate": null, "open": {open},
+        "notes": "n", "evidence": ["e"]}}"#
+    ))
+}
+
+#[test]
+fn a_blocked_check_names_its_refused_command_or_service() {
+    let families = json("[]");
+    let problems = |open: &str| {
+        claim_grading::verdict_problems_v2(&unresolved_claim(open), &families).unwrap()
+    };
+    assert_eq!(
+        problems(
+            r#"{"kind": "blocked-check", "command": "go run ./cmd/import-boss", "would_settle": "Whether any scheduler file imports the package."}"#
+        ),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        problems(
+            r#"{"kind": "blocked-check", "service": "PostgreSQL", "would_settle": "Whether the migration locks the table."}"#
+        ),
+        Vec::<String>::new()
+    );
+    for open in [
+        r#"{"kind": "blocked-check", "would_settle": "Whether any scheduler file imports the package."}"#,
+        r#"{"kind": "blocked-check", "command": "go run ./cmd/import-boss", "service": "PostgreSQL", "would_settle": "w"}"#,
+        r#"{"kind": "blocked-check", "service": "", "would_settle": "w"}"#,
+        r#"{"kind": "blocked-check", "command": " ", "would_settle": "Whether any scheduler file imports the package."}"#,
+        r#"{"kind": "blocked-check", "command": "go run ./cmd/import-boss", "would_settle": ""}"#,
+    ] {
+        assert_eq!(
+            problems(open),
+            ["a blocked check needs open kind, would_settle and one of command or service"],
+            "{open}"
+        );
+    }
+    assert_eq!(
+        problems(
+            r#"{"kind": "missing-fact", "command": "go run ./cmd/import-boss", "would_settle": "w"}"#
+        ),
+        ["unresolved needs open kind and would_settle"]
+    );
+}
+
 #[test]
 fn an_unadmitted_review_leaves_a_pre_existing_problem_unresolved() {
     let claims = vec![json(
