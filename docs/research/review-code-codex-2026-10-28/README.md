@@ -89,6 +89,8 @@ The fixture `rust/bench-tools/tests/fixtures/review-code/composition.json` is wh
 
 On 2026-10-28 the owner accepted the harness difference and approved the run with a $100 cap and a stop at 95% of the Codex plan quota, to start after the thermo-nuclear-review Codex queue finishes ([owner answers](owner-answers-2026-10-28.md)). [`rc_sol_run.py`](rc_sol_run.py) defines, checks and freezes the run and prints its queue file.
 
+The run was defined at `3c20b5156` and frozen against it on 2026-10-28; that commit is its `freeze_commit`.
+
 | Run | Arm | Model | Reviews | Run cap | Per-attempt reservation | Replacements |
 | --- | --- | --- | ---: | ---: | ---: | ---: |
 | `2026-10-28-codex-review-code-sol` | `codex-review-code-sol61-high` | `gpt-6.1-sol` at high, root and workers | 16 × 3 = 48 | $100 | $8 | 10 |
