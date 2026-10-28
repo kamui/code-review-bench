@@ -4,8 +4,9 @@
 //! The artifact root holds `summary.md` and `finding-index.json`, whose `findings` and `questions` entries
 //! each quote a report under the root verbatim. The output is written as
 //! `json.dumps(result, ensure_ascii=False, indent=2)` with a final newline, then one line is printed. A
-//! quote that is not verbatim, or an empty index that the summary does not call empty, is unresolved and
-//! exits 1; an index that cannot be used exits 2 with its message on stderr.
+//! quote that is not verbatim, an empty index that the summary does not call empty, or a summary that says
+//! there are no findings while some finding's quote is not in it, is unresolved and exits 1; an index that
+//! cannot be used exits 2 with its message on stderr.
 
 use crate::normalize_review::{Arm, Item, Normalized, Outcome};
 use crate::pyjson::{self, Dumps, Duplicates, Value};
@@ -222,7 +223,11 @@ pub fn normalize(root: &[u8], clone: Option<&[u8]>, arm: Arm) -> Result<Value, S
                 .to_string(),
         );
     }
-    if empty && !findings.is_empty() {
+    let summary_states_each_finding = items
+        .iter()
+        .filter(|item| item.kind == "finding")
+        .all(|item| matches!(&item.claim, Value::Str(quote) if summary.contains(quote.as_str())));
+    if empty && !findings.is_empty() && !summary_states_each_finding {
         notes.push(
             "unresolved: summary says there are no findings but finding index is non-empty"
                 .to_string(),
