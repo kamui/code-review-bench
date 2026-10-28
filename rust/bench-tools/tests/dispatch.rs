@@ -742,6 +742,51 @@ fn claude_strict_v3_runs_only_behind_the_gate() {
 }
 
 #[test]
+fn only_claude_strict_v4_turns_off_the_client_read_check() {
+    let (claude, skill, target) = review_code("review-code-strict-v4");
+    let tree_id = "f".repeat(40);
+    for (profile, blocked) in [("claude-strict-v2", true), ("claude-strict-v4", false)] {
+        let _ = fs::remove_file(&claude.fixture.capture);
+        let output = claude.review_code(
+            profile,
+            vec![
+                ("SKILL_TREE", Some(&skill)),
+                ("SKILL_TREE_ID", Some(&tree_id)),
+                ("BENCH_TARGET_DIR", Some(&target)),
+                ("BENCH_NETWORK", Some("off")),
+                ("BENCH_ISOLATION", Some(profile)),
+            ],
+            None,
+        );
+        if stderr(&output).contains("required executable is missing") {
+            eprintln!("skipped {profile}: {}", stderr(&output));
+            continue;
+        }
+        assert_eq!(
+            output.status.code(),
+            Some(23),
+            "{profile}: {}",
+            both(&output)
+        );
+        let attempt = claude.fixture.attempt(profile);
+        let settings = attempt.join("isolation-settings.json");
+        let receipt = claude.fixture.receipt().unwrap();
+        assert_eq!(receipt.after("--settings"), s(&settings), "{profile}");
+        assert_eq!(receipt.after("--permission-mode"), "dontAsk", "{profile}");
+        let config = json(&settings);
+        let permissions = field(&config, "permissions");
+        assert!(
+            field(permissions, "blockReadsOutsideWorkingDirectories").py_eq(&Value::Bool(blocked)),
+            "{profile}"
+        );
+        assert_eq!(
+            field(&json(&attempt.join("isolation.json")), "profile").as_str(),
+            Some(profile)
+        );
+    }
+}
+
+#[test]
 fn codex_model_and_effort_overrides_are_separate_and_the_default_is_unforced() {
     let fixture = fixture("codex");
     let bin = fixture.root.join("bin");
