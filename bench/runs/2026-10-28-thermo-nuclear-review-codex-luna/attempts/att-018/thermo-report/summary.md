@@ -1,0 +1,3 @@
+No actionable findings.
+
+The change updates `Overwrite` so key-wise merging applies when both types extend `object`; otherwise the right-hand type replaces the left-hand type, with `never` remaining `never`. This addresses primitive inputs such as `string` passing through middleware without changing the existing key-wise merge for object operands. The other uses in procedure and middleware composition are consistent with that distinction. The regression test covers string input inference through middleware. Focused verification passed: `packages/tests` TypeScript compilation with `tsc --noEmit -p tsconfig.json`.
