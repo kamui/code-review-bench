@@ -1593,9 +1593,7 @@ mod tests {
 
     #[test]
     fn the_provisioning_hash_is_canonical_json_without_the_platform_measurement() {
-        let base = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("target/provision-tests")
-            .join(crate::evidence::random_name("h-"));
+        let base = crate::test_scratch("provision-tests").join(crate::evidence::random_name("h-"));
         let hash = |name: &str, provisioning: &str| {
             let directory = base.join(name);
             std::fs::create_dir_all(&directory).expect("mkdir");

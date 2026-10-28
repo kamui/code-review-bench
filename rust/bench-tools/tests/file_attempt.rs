@@ -1482,6 +1482,10 @@ impl Fixture {
     }
 
     fn filer(&self, attempt: &Path, harness: Harness) -> Output {
+        self.filer_with(attempt, harness, &[])
+    }
+
+    fn filer_with(&self, attempt: &Path, harness: Harness, extra: &[&str]) -> Output {
         let path = |path: &Path| path.to_string_lossy().into_owned();
         let name = attempt.file_name().unwrap().to_string_lossy().into_owned();
         let arguments: Vec<String> = [
@@ -1517,6 +1521,7 @@ impl Fixture {
             "subscription",
         ]
         .iter()
+        .chain(extra)
         .map(ToString::to_string)
         .collect();
         bench(&arguments)
@@ -1728,6 +1733,90 @@ fn codex_attempt_reads_its_rubric_threads_and_sandbox() {
         .map(|row| text(field(row, "thread")))
         .collect();
     assert_eq!(threads, ["rollout-child.jsonl"]);
+}
+
+/// A saved Codex review-code report: `tests/fixtures/review-code/composition.json` is what the frozen skill tree
+/// `5e12864b`'s `render_review.py --example` prints, with its batch operation set to the Codex route. Filing replays
+/// it through the review-code arm's parser, so it normalizes byte for byte as a Claude review-code attempt's would.
+#[test]
+fn a_codex_review_code_report_normalizes_as_the_review_code_arm_does() {
+    let f = Fixture::new("codex-review-code");
+    write(
+        &f.root().join("bench/arms/arm-codex.json"),
+        r#"{"id": "arm-codex", "kind": "codex-skill", "model": "m-1", "effort": "high"}"#,
+    );
+    write(
+        &f.run_dir.join("inputs/runner.json"),
+        r#"{"normalizer": {"kind": "review-code", "native_file": "composition.json"}}"#,
+    );
+    let attempt = f.attempt("att-001", Harness::Codex, Some(0));
+    let composition = include_bytes!("fixtures/review-code/composition.json");
+    let reports = attempt.join("clone-work/review-code-artifacts");
+    let files: [(&str, &[u8]); 3] = [
+        ("composition.json", composition),
+        ("payload.json", b"{}\n"),
+        ("report.md", b"# Review\n"),
+    ];
+    let mut rows = Vec::new();
+    for (name, data) in files {
+        write(&reports.join(name), data);
+        rows.push(format!(
+            r#"{{"path": "{name}", "bytes": {}, "sha256": "{}"}}"#,
+            data.len(),
+            sha(data)
+        ));
+    }
+    write(
+        &attempt.join("native-artifacts.json"),
+        format!(
+            r#"{{"root": {}, "files": [{}]}}"#,
+            quoted(&reports.to_string_lossy()),
+            rows.join(", ")
+        ),
+    );
+    let done = f.filer_with(&attempt, Harness::Codex, &["--replay"]);
+    assert_eq!(done.status.code(), Some(0), "{}", report(&done));
+    let record = read(&f.filed_dir(&attempt).join("attempt.json"));
+    assert_eq!(
+        text(field(&record, "disposition")),
+        "valid completed",
+        "{record:?}"
+    );
+    assert_eq!(text(field(&record, "arm_reported_complete")), "True");
+    assert_eq!(
+        text(field(&record, "native_payload.path")),
+        "review-code-artifacts/composition.json"
+    );
+
+    let claude = f.root().join("claude-normalized.json");
+    let path = |path: &Path| path.to_string_lossy().into_owned();
+    let done = bench(&[
+        "normalize-review".into(),
+        "--arm".into(),
+        "review-code".into(),
+        "--composition".into(),
+        path(&reports.join("composition.json")),
+        "--clone".into(),
+        path(&attempt.join("clone")),
+        "--out".into(),
+        path(&claude),
+    ]);
+    assert!(done.status.success(), "{}", report(&done));
+    let normalized = fs::read_to_string(attempt.join("normalized.json")).unwrap();
+    assert_eq!(normalized, fs::read_to_string(&claude).unwrap());
+    let normalized = parse(&normalized);
+    assert_eq!(text(field(&normalized, "arm")), "review-code");
+    assert_eq!(text(field(&normalized, "parse_status")), "parsed");
+    assert_eq!(
+        text(field(&normalized, "native_verdict")),
+        "Changes Requested"
+    );
+    let items = field(&normalized, "items").as_array().unwrap();
+    let kinds: Vec<String> = items.iter().map(|item| text(field(item, "kind"))).collect();
+    assert_eq!(kinds, ["finding", "question", "observation"]);
+    assert_eq!(text(field(&items[0], "file")), "src/payments.ts");
+    assert_eq!(text(field(&items[0], "line_start")), "42");
+    assert_eq!(text(field(&items[0], "native_action")), "must-fix");
 }
 
 #[test]
