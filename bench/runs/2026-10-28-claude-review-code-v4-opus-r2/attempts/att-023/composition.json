@@ -1,0 +1,141 @@
+{
+  "run": {
+    "target_kind": "range",
+    "target": "main...review-head",
+    "base_ref": "main",
+    "base_sha": "b089b904f1ed578e9edaefd129bf9843120a808f",
+    "issues": [],
+    "specs": ["spec-withastro-astro-16079-review-packet"],
+    "change_description": "fix(vercel): Fix ISR path rewrite to prevent 404\n",
+    "coverage": "complete"
+  },
+  "summary": {
+    "status": "Changes Requested",
+    "intent": "Make Vercel ISR routes render again by letting the `_isr` function take the original path from `x_astro_path`. That override was disabled by #15959 (335a204), which required the middleware secret for any path override.",
+    "issue_fit": "Issue alignment unavailable: no issue is linked. Intent comes from the supplied pull-request text (withastro/astro#16079) and commit 71ae513. In-process, the ISR fix works when `x-vercel-isr: 1` is present, but it re-enables the untrusted override on `_render`.",
+    "coverage": "Both changed files reviewed against merge-base b089b90, along with the entrypoint's build wiring in `src/index.ts`, the edge middleware forwarder, and #15959's history and test. The adapter's own fixture tests could not build inside the clone, so the same fixtures were copied to the work directory and the built handlers were called in-process at head. Vercel's platform was unavailable. The clone's untracked `.mcp.json` predates the review and was not reviewed.",
+    "check_details": [
+      "Environmental failure (unavailable): `node --test test/path-override-security.test.js test/isr.test.js` in `packages/integrations/vercel` at head 71ae513 could not build either fixture. The error was `ENOENT: no such file or directory, mkdir '.../test/fixtures/<fixture>/.astro/collections/'`. The command was invoked twice with the same flags; the second run only summarized the same failure.",
+      "Reviewer run at head 71ae513: scratch `node --test probe.test.mjs` in `clone-work/probe`, with copies of fixtures `serverless-with-dynamic-routes` and `isr` built against the clone's adapter (dist matches src at head). Exit 1. `_render` given `?x_astro_path=/api/private` alone returned id `public`. With header `x-vercel-isr: 1` it returned id `private`. `_isr` given `?x_astro_path=/one` returned 200 with the header and 404 without it. `_isr` given `?x_astro_path=/api` (ISR-excluded) returned 200 `OK`.",
+      "The verifier reran the `_render` cases of the same probe at head: exit 1, `+ 'private' - 'public'`."
+    ]
+  },
+  "findings": [
+    {
+      "id": "vercel/entrypoint-untrusted-isr-header-path-override",
+      "title": "Stop trusting a client-settable header for path overrides",
+      "priority": "P1",
+      "action": "must-fix",
+      "kind": "security",
+      "trigger": "The shared entrypoint, which is also bundled into `_render`, now takes the path from `x_astro_path` whenever a request sends `x-vercel-isr: 1`, and nothing authenticates that header. So `GET /api/public?x_astro_path=/api/private` with that header, sent to `_render`, renders `/api/private`; in-process at head it returned id `private`.",
+      "impact": "Any client can again choose which route `_render` renders. Path-scoped protections, such as Vercel path rules or the `_middleware` hop when `_render` is requested directly, can then be bypassed. This undoes the guarantee from released fix #15959.",
+      "change": "Read `ASTRO_PATH_PARAM` only inside the `_isr` function, using a marker that `buildISRFolder` sets for that function alone, not a request header. Add a `path-override-security` case that sends `x-vercel-isr: 1` to `_render`.",
+      "source": "Commit 335a204 (#15959) \"Require trusted secret for path overrides\" and `packages/integrations/vercel/test/path-override-security.test.js:30-38`.",
+      "anchor": {
+        "type": "line",
+        "path": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+        "start_line": 21,
+        "end_line": 26,
+        "side": "RIGHT"
+      }
+    }
+  ],
+  "questions": [
+    {
+      "id": "vercel/platform-strips-client-isr-header",
+      "title": "Does Vercel strip a client-supplied `x-vercel-isr` header?",
+      "evidence": "The new branch at `entrypoint.ts:24` trusts `x-vercel-isr: 1`. No repository source, test, or doc says whether Vercel's edge removes or overwrites that header when a client sends it to `_render`, or whether Vercel sets it on every `_isr` invocation. The PR's manual deployments could not be inspected offline.",
+      "why_it_matters": "If Vercel strips the header, the finding's production reach shrinks to defense in depth. If Vercel does not set it reliably on `_isr`, the 404 fix itself does not hold.",
+      "answer": "A Vercel platform statement or a deployed probe that sends `x-vercel-isr: 1` to `/_render` and inspects `/_isr` request headers settles both points, and with them the finding's priority and the fix's acceptance row.",
+      "anchor": {
+        "type": "file",
+        "path": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+        "side": "RIGHT"
+      }
+    }
+  ],
+  "observations": [
+    {
+      "fact": "At head, the `_isr` function renders any route named in `x_astro_path`, including routes excluded from ISR; this matches behavior before #15959.",
+      "evidence": "Reviewer probe: `_isr` given `?x_astro_path=/api` (excluded by `/^\\/api/` in `test/fixtures/isr/astro.config.mjs`) returned 200 `OK`."
+    }
+  ],
+  "prior_items": [],
+  "record": {
+    "repository": "/home/jack/rq-rc/2026-10-28-claude-review-code-v4-opus-r2/att-023/clone",
+    "requirements": [
+      {
+        "source": "spec-withastro-astro-16079-review-packet/pr-title",
+        "class": "acceptance",
+        "disposition": "not-verifiable",
+        "evidence": "In-process at head, `_isr` with `x-vercel-isr: 1` and `?x_astro_path=/one` returns 200, and 404 without the header. Whether Vercel sends `x-vercel-isr: 1` on ISR invocations is platform behavior that was unavailable offline (question vercel/platform-strips-client-isr-header). Commit 71ae513 carries the same title."
+      },
+      {
+        "source": "spec-withastro-astro-16079-review-packet/pr-body/\"we need to change the request path when serving an ISR path\"",
+        "class": "acceptance",
+        "disposition": "met",
+        "evidence": "packages/integrations/vercel/src/serverless/entrypoint.ts:24-25"
+      },
+      {
+        "source": "spec-withastro-astro-16079-review-packet/pr-body/\"No additional test cases added\"",
+        "class": "supporting",
+        "disposition": "met",
+        "evidence": "Manifest: only `.changeset/common-cats-travel.md` and `entrypoint.ts` change."
+      },
+      {
+        "source": "spec-withastro-astro-16079-review-packet/pr-body/\"Manual e2e tests performed\"",
+        "class": "supporting",
+        "disposition": "not-verifiable",
+        "evidence": "External Vercel deployments are unreachable offline. Nothing material depends on this beyond the question above."
+      }
+    ],
+    "files": [
+      {
+        "path": ".changeset/common-cats-travel.md",
+        "state": "reviewed"
+      },
+      {
+        "path": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+        "state": "reviewed"
+      }
+    ],
+    "check_evidence": [
+      {
+        "check": "node --test test/path-override-security.test.js test/isr.test.js",
+        "head": "71ae513388df11d7dad6b1e0077c402ad03d0d62",
+        "outcome": "unavailable",
+        "reason": "Environmental failure: fixture build ENOENT creating `.astro/collections/` inside the clone; no test ran."
+      },
+      {
+        "check": "node --test probe.test.mjs (clone-work/probe scratch copy of fixtures)",
+        "head": "71ae513388df11d7dad6b1e0077c402ad03d0d62",
+        "outcome": "reviewer-executed",
+        "reason": "Exit 1: `_render` honored `x_astro_path` when sent with `x-vercel-isr: 1` (id `private`); `_isr` with the header rendered `/one` (200)."
+      }
+    ],
+    "verification": {
+      "tasks": [
+        {
+          "id": "vercel/entrypoint-untrusted-isr-header-path-override",
+          "type": "candidate",
+          "trigger": "must-fix",
+          "batch": "initial",
+          "ruling": "confirmed"
+        }
+      ],
+      "batches": [
+        {
+          "bundle": "/home/jack/rq-rc/2026-10-28-claude-review-code-v4-opus-r2/att-023/tmp/review-code.GsKoXm/initial",
+          "accounting": "/home/jack/rq-rc/2026-10-28-claude-review-code-v4-opus-r2/att-023/tmp/review-code.GsKoXm/initial/accounting.json",
+          "operation": "Agent subagent_type=general-purpose model=opus run_in_background=false"
+        }
+      ],
+      "outstanding": []
+    },
+    "routed": {
+      "unresolved": ["vercel/platform-strips-client-isr-header"],
+      "disputed": [],
+      "unrecoverable_inputs": []
+    }
+  }
+}
