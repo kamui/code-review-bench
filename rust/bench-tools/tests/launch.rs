@@ -975,8 +975,10 @@ fn prepare_restores_a_pinned_supplement_without_changing_frozen_target_inputs() 
 
 /// The review-code Codex adapter end to end, with a stand-in client in place of Codex: the frozen skill tree of the
 /// 2026-10-12 Claude review-code run, this repository's arm file, invocation and empty-harness policy, and a
-/// `runner.json` with the `review-code` normalizer and the network off. The stand-in records its arguments, spawns
-/// one verifier through `fork_turns=none` and saves the fixture composition as the skill would.
+/// `runner.json` with the `review-code` normalizer and the network off. The stand-in records its arguments, imports
+/// the skill's Python from its `scripts/` as the skill's first step does, spawns one verifier through
+/// `fork_turns=none` and saves the fixture composition as the skill would. Python must not write a bytecode cache
+/// into the frozen skill copy, or the runner stops the attempt.
 #[test]
 fn a_codex_review_code_attempt_runs_the_frozen_skill_offline_and_normalizes_its_composition() {
     use std::os::unix::fs::PermissionsExt;
@@ -1031,6 +1033,7 @@ fn a_codex_review_code_attempt_runs_the_frozen_skill_offline_and_normalizes_its_
 [ "$1" = --version ] && {{ echo "codex-cli 9.9.9"; exit 0; }}
 printf '%s\n' "$@" > "$(dirname "$PWD")/codex-argv.txt"
 cat > /dev/null
+PYTHONPATH="$PWD-work/frozen-skill/scripts" python3 -c 'import review_context' || exit 3
 reports="$PWD-work/review-code-artifacts"
 mkdir -p "$reports"
 cp '{}' "$reports/composition.json"
