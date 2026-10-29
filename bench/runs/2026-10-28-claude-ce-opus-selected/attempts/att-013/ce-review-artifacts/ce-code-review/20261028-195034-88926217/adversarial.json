@@ -1,0 +1,52 @@
+{
+  "reviewer": "adversarial",
+  "findings": [
+    {
+      "title": "Duplicated-argument conflicts flip in both directions",
+      "severity": "P3",
+      "file": "src/validation/rules/OverlappingFieldsCanBeMergedRule.ts",
+      "line": 591,
+      "why_it_matters": "The intent says this refactor must not change results for duplicated arguments, but it does, in both directions. `{ f(a: 1, a: 1) f(a: 1, b: 1) }` used to pass and is now reported as 'differing arguments'. `{ f(a: 1, a: 2) f(a: 1, a: 2) }` used to be reported and now passes. The old code compared counts and then used a first-match `find` by name; the new code compares the full sorted printout. Under specifiedRules, UniqueArgumentNamesRule already rejects these documents, so the only visible change is for callers that run OverlappingFieldsCanBeMergedRule alone or with a custom rule set.",
+      "autofix_class": "advisory",
+      "owner": "human",
+      "requires_verification": false,
+      "suggested_fix": "Either accept the new (arguably more correct) behavior and update the intent/changelog to say duplicated-argument results changed, adding a test that pins it down, or keep the old `sameArguments` semantics if strict behavior preservation is required.",
+      "confidence": 100,
+      "evidence": [
+        "src/validation/rules/OverlappingFieldsCanBeMergedRule.ts:591: if (stringifyArguments(node1) !== stringifyArguments(node2)) {",
+        "The old sameArguments checked length equality, then for each arg1 used `arguments2.find(name === arg1.name)`. This first-match lookup ignores args2 entries never matched and always matches the first duplicate.",
+        "Scratch script (tmp/adv-run.js) comparing a reconstruction of the old logic with the new rule: `f(a: 1, a: 1)` vs `f(a: 1, b: 1)`: old conflict=false, new conflict=true.",
+        "Same script: `f(a: 1, a: 2)` vs `f(a: 1, a: 2)`: old conflict=true (second a:2 matched the first a:1), new conflict=false.",
+        "No test in src/validation/__tests__/OverlappingFieldsCanBeMergedRule-test.ts covers duplicated arguments, so the suite stays green."
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Reordered args with long numeric names now falsely conflict",
+      "severity": "P3",
+      "file": "src/validation/rules/OverlappingFieldsCanBeMergedRule.ts",
+      "line": 649,
+      "why_it_matters": "Argument order-insensitivity now relies on sortValueNode's naturalCompare comparator. That comparator builds digit runs as JS numbers, so it returns 0 for distinct names whose numeric suffixes differ only above 2^53. When the comparator ties, the stable sort keeps source order, so the same arguments in a different order print differently and get reported as 'differing arguments'. The old name-based `find` did not depend on the comparator. The scenario is contrived (it needs argument names with 16+ digit suffixes defined in the schema), so the impact is low.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In sortValueNode.sortFields, break naturalCompare ties with a plain string comparison (e.g. `naturalCompare(a, b) || (a < b ? -1 : a > b ? 1 : 0)`), or make naturalCompare fall back to code-unit comparison when it would return 0 for unequal strings.",
+      "confidence": 75,
+      "evidence": [
+        "src/validation/rules/OverlappingFieldsCanBeMergedRule.ts:649: return print(sortValueNode(inputObjectWithArgs));",
+        "src/jsutils/naturalCompare.ts:20 `aNum = aNum * 10 + aChar - DIGIT_0;` accumulates in a double, so 9007199254740993 rounds to 9007199254740992 and two distinct same-length names compare as 0.",
+        "src/utilities/sortValueNode.ts:45 sorts only by naturalCompare(name), so tied names keep their input order.",
+        "Scratch script with schema `f(a9007199254740993: Int, a9007199254740992: Int)`: `f(a9007199254740993: 1, a9007199254740992: 2)` vs `f(a9007199254740992: 2, a9007199254740993: 1)`: old conflict=false, new conflict=true.",
+        "The comparator weakness already existed for nested input-object fields; this diff newly applies it to top-level argument names."
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "The equivalence check for ordinary (non-duplicated) arguments was spot-checked only: reordering, missing args, and differing counts all behave the same. It was not exhaustively fuzzed.",
+    "The synthetic ObjectValueNode has no `loc`. print() does not need loc, but any future change to sortValueNode/print that reads loc would break here."
+  ],
+  "testing_gaps": [
+    "No test covers duplicated arguments on overlapping fields (`f(a: 1, a: 1)` vs `f(a: 1, b: 1)`), so the behavior change is invisible to CI."
+  ]
+}
