@@ -1,0 +1,49 @@
+{
+  "reviewer": "reliability",
+  "findings": [
+    {
+      "title": "LRS invalid-interval error reports stale nil err",
+      "severity": "P3",
+      "file": "xds/internal/xdsclient/transport/loadreport.go",
+      "line": 175,
+      "why_it_matters": "When a management server sends an invalid load_reporting_interval, the LRS stream is torn down and retried, and operators see only the warning \"Reading from LRS stream failed: invalid load_reporting_interval: <nil>\". The migration discards the CheckValid() error and formats the earlier `err` from stream.Recv(), which is always nil on this path, so the real cause (nil duration, out of range, mismatched signs) disappears. Before this change the message included the ptypes.Duration validation error. Capturing the CheckValid result and formatting that error brings the diagnostic back.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": false,
+      "suggested_fix": "Replace lines 174-176 with: `if err := rInterval.CheckValid(); err != nil { return nil, 0, fmt.Errorf(\"invalid load_reporting_interval: %v\", err) }`",
+      "confidence": 100,
+      "evidence": [
+        "xds/internal/xdsclient/transport/loadreport.go:174-175 -- if rInterval.CheckValid() != nil { return nil, 0, fmt.Errorf(\"invalid load_reporting_interval: %v\", err)",
+        "xds/internal/xdsclient/transport/loadreport.go:165-168 -- resp, err := stream.Recv(); if err != nil { return ... } (so err is nil when line 175 runs)",
+        "base 5051eeae loadreport.go -- interval, err := ptypes.Duration(resp.GetLoadReportingInterval()); if err != nil { return nil, 0, fmt.Errorf(\"invalid load_reporting_interval: %v\", err) }"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Zero/negative LRS interval panics time.NewTicker, crashing client",
+      "severity": "P2",
+      "file": "xds/internal/xdsclient/transport/loadreport.go",
+      "line": 137,
+      "why_it_matters": "If a management server returns load_reporting_interval of 0s or a negative duration, the whole client process crashes. time.NewTicker panics on a non-positive interval, and this runs in the LRS goroutine with no recover. CheckValid(), like the old ptypes.Duration, only rejects nil and out-of-range values, so these intervals get through the validation the diff just rewrote. Rejecting non-positive intervals in recvFirstLoadStatsResponse makes the stream fail and back off through the existing error path instead of panicking.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In recvFirstLoadStatsResponse after `interval := rInterval.AsDuration()`, add `if interval <= 0 { return nil, 0, fmt.Errorf(\"invalid load_reporting_interval: %v, must be positive\", interval) }` (assumes a non-positive interval should be treated as a stream error and retried with backoff, as other invalid responses are).",
+      "confidence": 75,
+      "evidence": [
+        "xds/internal/xdsclient/transport/loadreport.go:137 -- tick := time.NewTicker(interval)",
+        "xds/internal/xdsclient/transport/loadreport.go:174-177 -- if rInterval.CheckValid() != nil {...}; interval := rInterval.AsDuration()",
+        "google.golang.org/protobuf@v1.32.0 durationpb check(): only invalidNil/Underflow/Overflow/NanosRange/NanosSign -- zero and negative durations are valid",
+        "provenance: 110ed9e6c Easwar Swaminathan 2022-11-30 (NewTicker line predates this diff)"
+      ],
+      "pre_existing": true
+    }
+  ],
+  "residual_risks": [
+    "Validation semantics shifted slightly: ptypes.Duration rejected durations that are proto-valid but outside time.Duration's ~292-year range, while d.AsDuration()+CheckValid() now saturates them to MaxInt64/MinInt64 with a nil error (balancer/rls/config.go:310 convertDuration, LRS interval at loadreport.go:177). The RLS lookup_service_timeout/max_age and the LRS interval would now accept such values instead of rejecting the config or stream. This is narrow, but it departs from the stated 'must not change validation' intent.",
+    "test/tools/go.mod downgrades golang.org/x/tools from v0.17.0 to v0.14.0 (and x/sync), which the stated intent does not cover. vet.sh installs goimports from this module, so the CI vet gate now runs an older tool than before."
+  ],
+  "testing_gaps": [
+    "No test covers recvFirstLoadStatsResponse with an invalid or non-positive load_reporting_interval. Such a test would catch both the '<nil>' error message and the NewTicker panic."
+  ]
+}

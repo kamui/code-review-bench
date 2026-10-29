@@ -71,6 +71,8 @@ export function datasetStatus(dataset: Dataset) {
   const { coverage, audit } = dataset.evidence
   const limits = [
     ...coverage.complete ? [] : [`${coverage.reason} ${coverage.assessedReviews} of ${coverage.requiredReviews} admitted reviews are assessed.`],
+    ...coverage.unresolvedRecoveries ? [`${coverage.unresolvedRecoveries} unresolved detection ${coverage.unresolvedRecoveries === 1 ? 'decision receives' : 'decisions receive'} zero credit.`] : [],
+    ...coverage.unresolvedClaims ? [`${coverage.unresolvedClaims} ${coverage.unresolvedClaims === 1 ? 'claim remains' : 'claims remain'} unresolved.`] : [],
     ...audit.state === 'assessed' ? [] : [`The evaluator audit is ${audit.state}.${audit.reason ? ` ${audit.reason}` : ''}`]]
   return { label: limits.length ? 'v1 preview' : 'Current v1', complete: !limits.length, limits }
 }

@@ -1,0 +1,54 @@
+# Thermo Nuclear Review — bokeh/bokeh#9232
+
+Scope: `bokehjs/src/lib/models/widgets/date_picker.ts` (`_unlocal_date`) and the new `tests/integration/widgets/test_datepicker.py`.
+
+## Finding 1 — High: `_unlocal_date` now shows the wrong day in UTC− timezones for server-supplied values and min/max dates (regression)
+
+**File:** `bokehjs/src/lib/models/widgets/date_picker.ts`, lines 78–89 (the added `getTimezoneOffset` / `setTime` shift). It is called from `render()` at lines 63, 65 and 66.
+
+**Evidence traced.** `_unlocal_date` receives `new Date(this.model.value)`, and the same for `min_date` and `max_date`. These inputs come in two different forms:
+
+1. **Python-supplied values.** `DatePicker.value`, `min_date` and `max_date` are `Date` properties. `bokeh/util/serialization.py:convert_datetime_type` turns a `datetime.date` or `datetime` into milliseconds since the epoch. That is UTC midnight for `datetime(2019, 9, 20)` or `date(2019, 9, 20)`. `new Date(<ms number>)` therefore gives the instant `2019-09-20T00:00Z`.
+2. **After a user pick.** `_on_select` stores `date.toDateString()`, for example `"Fri Sep 20 2019"`. `new Date("Fri Sep 20 2019")` is parsed as local midnight. The `change` signal then re-renders with this string.
+
+The old code read the UTC calendar date, which is correct for form 1 but wrong for form 2 in UTC+ zones. That is the bug in #9129. The new code subtracts `getTimezoneOffset()` and then reads the UTC date. That is correct for form 2 in every zone. It breaks form 1 in UTC− zones: UTC midnight minus the positive offset falls on the previous UTC day.
+
+I ran the old and new functions under node with `TZ` set. The inputs were `Date.UTC(2019, 8, 20)` (form 1) and `"Fri Sep 20 2019"` (form 2).
+
+| TZ | form 1, old | form 1, new | form 2, old | form 2, new |
+|---|---|---|---|---|
+| America/Los_Angeles | Fri Sep 20 | **Thu Sep 19** | Fri Sep 20 | Fri Sep 20 |
+| Pacific/Honolulu | Fri Sep 20 | **Thu Sep 19** | Fri Sep 20 | Fri Sep 20 |
+| Europe/Paris, Asia/Kolkata, Pacific/Auckland | Fri Sep 20 | Fri Sep 20 | Thu Sep 19 (the #9129 bug) | Fri Sep 20 |
+
+**Failure.** For every user west of Greenwich, which covers the Americas, the first render of `DatePicker(value=date(2019, 9, 20))` now displays and selects 2019-09-19. This is the mirror image of #9129, and it worked before the patch. The user sees the wrong date until they pick one. The server's `value` still says the 20th, so the display and the model disagree.
+
+`min_date` and `max_date` are Python-supplied and stay in form 1 even after a pick. They are shifted back a day in UTC− zones on every render, including re-renders after a pick. A `min_date` of 2019-09-01 therefore allows 2019-08-31, and a `max_date` of D forbids D.
+
+The PR's "works in PST" confirmation in the thread is consistent with this. It was probably checked after clicking a day, which goes through form 2, rather than on the initial render with a Python-supplied value.
+
+**Likely fix direction (not applied):** normalise the two forms separately. For ms or ISO inputs use the UTC components. For `toDateString` strings use the local components. Alternatively, have `_on_select` / `model.value` use a single representation.
+
+## Finding 2 — Low: input `Date` is mutated, and non-midnight timestamps can land on the next day in far-east zones
+
+**File:** `bokehjs/src/lib/models/widgets/date_picker.ts`, lines 79–83.
+
+`date.setTime(...)` mutates the argument. Current callers pass fresh `new Date(...)` objects, so there is no live bug today. It is a hazard if the helper is reused.
+
+The same shift applied to a non-midnight UTC timestamp is not date-preserving. The integration tests use `max_date=datetime.utcnow()`. I ran `Date.UTC(2019, 8, 20, 13)` in Pacific/Auckland. The old code gave Fri Sep 20; the new code gives Sat Sep 21. A "today" `max_date` can therefore be a day ahead for UTC+12 to +14 users.
+
+## Finding 3 — Medium: the new integration tests do not exercise the changed code in the zones that matter
+
+**File:** `tests/integration/widgets/test_datepicker.py`, lines 40–98.
+
+The tests run in whatever timezone the Selenium host has, most likely UTC in CI. In UTC the old and new `_unlocal_date` behave identically (see the table), so the tests pass before and after the fix. They cannot catch #9129 or the Finding 1 regression.
+
+They also never check the initial display of the input (`.bk-input`) for a Python-supplied value. They only check it after a click. That is exactly the path Finding 1 breaks.
+
+`test_server_on_change_round_trip` asserts `d0` as the old value, which is the server value. That is a Python-side round trip and does not check what the widget displayed.
+
+The PR checklist leaves "tests added / passed" unchecked, and the tests were added later by the maintainer.
+
+## Not reported
+- The `.idea/vcs.xml` file was removed in a later commit, so there is no residual issue.
+- There are no security or devex concerns in this diff.

@@ -1,0 +1,106 @@
+{
+  "reviewer": "testing",
+  "findings": [
+    {
+      "title": "Atomic-block guard test fakes state instead of exercising pool close",
+      "severity": "P2",
+      "file": "tests/backends/postgresql/tests.py",
+      "line": 334,
+      "why_it_matters": "The guard only matters because pooled _close() returns the connection to the pool and sets self.connection = None. In an atomic block, without that, the next query would silently reconnect (connect() resets in_atomic_block) and run outside the transaction, or keep using a connection the pool has already handed to someone else. The test sets in_atomic_block and closed_in_transaction by hand on a wrapper that never connected, so 'pool' = True plays no part: it raises before the pool is touched, and it would pass with pool=False. If the `self.connection = None` in pooled _close(), or the closed_in_transaction marking in close(), were removed, a real atomic()+close()+query flow would no longer raise, and this test would still pass.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "With a pooled new_connection (pool=True): new_connection.connect(); new_connection.in_atomic_block = True; new_connection.close(); assert new_connection.connection is None and new_connection.closed_in_transaction; then assertRaisesMessage(ProgrammingError, msg) around new_connection.cursor(). In finally, reset in_atomic_block = False and call close_pool(). This drives pooled _close() and close()'s closed_in_transaction marking instead of setting closed_in_transaction by hand (assumes in_atomic_block stands in for atomic(), since the 'default_pool' alias is not registered in connections).",
+      "confidence": 75,
+      "evidence": [
+        "tests/backends/postgresql/tests.py:334-337 -- new_connection.in_atomic_block = True / new_connection.closed_in_transaction = True / with self.assertRaisesMessage(ProgrammingError, msg): new_connection.ensure_connection()",
+        "django/db/backends/postgresql/base.py:395-397 -- self.connection._pool.putconn(self.connection) / # Connection can no longer be used. / self.connection = None",
+        "django/db/backends/base/base.py:357-361 -- close(): if self.in_atomic_block: self.closed_in_transaction = True ... else: self.connection = None (non-pooled backends keep a non-None connection, so the guard only fires because pooled _close nulls it)",
+        "django/db/backends/base/base.py:242 -- connect() resets self.in_atomic_block = False, so without the guard a reconnect silently escapes the transaction"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Pool reset on TIME_ZONE change and stale-pool putconn untested",
+      "severity": "P2",
+      "file": "django/db/backends/postgresql/base.py",
+      "line": 364,
+      "why_it_matters": "ensure_timezone() now drops the alias's pool whenever TIME_ZONE/USE_TZ changes (via the setting_changed signal), and _close() returns the connection through `self.connection._pool` so that a connection borrowed from the old, now-closed pool can still be returned. The code comment calls this a workaround for tests. No test covers it. test_connect_pool_with_timezone builds its pool lazily inside the settings override on an unregistered alias, so the signal never reaches it. If close_pool() is removed from ensure_timezone(), pooled connections keep the old time zone after override_settings(TIME_ZONE=...). If _close() switches to self.pool.putconn, self.pool builds a new pool and psycopg_pool rejects the foreign connection. The repo has no pooled CI configuration that would catch either regression.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Add a psycopg3 test: new_connection = no_pool_connection(alias=\"default_pool\") with pool=True; new_connection.connect(); old_pool = new_connection.pool; new_connection.ensure_timezone() (what the setting_changed handler calls); assert \"default_pool\" not in new_connection._connection_pools and old_pool.closed; then new_connection.close() must not raise and new_connection.connection is None; finally new_connection.close_pool().",
+      "confidence": 75,
+      "evidence": [
+        "django/db/backends/postgresql/base.py:363-364 -- # Close the pool so new connections pick up the correct timezone. / self.close_pool()",
+        "django/db/backends/postgresql/base.py:391-395 -- # Ensure the correct pool is returned. This is a workaround for tests so a pool can be changed on setting changes (e.g. USE_TZ, TIME_ZONE). / self.connection._pool.putconn(self.connection)",
+        "django/test/signals.py:72-82 -- for conn in connections.all(initialized_only=True): ... conn.ensure_timezone() (only registered aliases; the test's 'default_pool' copy is never reached)",
+        "tests/backends/postgresql/tests.py:300-303 -- pool created lazily inside `with self.settings(TIME_ZONE=new_time_zone)`, so the test passes even without close_pool() in ensure_timezone",
+        "grep of .github/ and tests/*.py for 'pool' returned no pooled test-settings/CI configuration"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Docs and test name say psycopg2 ignores pool; code raises",
+      "severity": "P2",
+      "file": "docs/ref/databases.txt",
+      "line": 271,
+      "why_it_matters": "Users on psycopg2 who read the docs will expect `\"pool\": True` to be ignored, but the first connect raises ImproperlyConfigured(\"Database pooling requires psycopg >= 3\"). The test is named test_connect_pool_setting_ignored_for_psycopg2, yet it asserts the error. So the test name repeats the docs' claim while its body proves the opposite. The stated intent ('pooling rejects ... psycopg2') matches the code, so the docs sentence and the test name are what's wrong.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": false,
+      "suggested_fix": "Change docs line to 'and is not supported with ``psycopg2`` (ImproperlyConfigured is raised).' and rename the test to test_connect_pool_setting_rejected_for_psycopg2 (assumes raising is the intended contract, per the stated intent).",
+      "confidence": 100,
+      "evidence": [
+        "docs/ref/databases.txt:270-271 -- This option requires ``psycopg[pool]`` or :pypi:`psycopg-pool` to be installed / and is ignored with ``psycopg2``.",
+        "django/db/backends/postgresql/base.py: pool_options = conn_params.pop(\"pool\", None) / if pool_options and not is_psycopg3: raise ImproperlyConfigured(\"Database pooling requires psycopg >= 3\")",
+        "tests/backends/postgresql/tests.py:349-354 -- def test_connect_pool_setting_ignored_for_psycopg2(self): ... with self.assertRaisesMessage(ImproperlyConfigured, msg): new_connection.connect()"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Pool reuse test relies on 100ms real-time connect budget",
+      "severity": "P2",
+      "file": "tests/backends/postgresql/tests.py",
+      "line": 244,
+      "why_it_matters": "With min_size=0, every successful get_connection() must wait for the pool's background worker to open a new server connection and run the configure callback (SET TIME ZONE / SET ROLE) within the 0.1s timeout. The tight timeout is only needed for the negative third call. On a slow or loaded CI host, or with a remote or SSL database, the first or second connect can exceed 100ms, and the test fails with PoolTimeout on a call that should succeed.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Use min_size=2, max_size=2 and call new_connection.pool.open(wait=True) before borrowing, so the two expected-success getconn() calls take ready connections immediately and only the expected-PoolTimeout call depends on the 0.1s timeout.",
+      "confidence": 50,
+      "evidence": [
+        "tests/backends/postgresql/tests.py:241-245 -- \"min_size\": 0, \"max_size\": 2, \"timeout\": 0.1,",
+        "psycopg_pool/pool.py:265-271 -- self._maybe_grow_pool() ... conn = pos.wait(timeout=timeout) (a new connection is created asynchronously and the caller waits up to timeout)"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Pool timezone test silently depends on USE_TZ=False settings",
+      "severity": "P3",
+      "file": "tests/backends/postgresql/tests.py",
+      "line": 302,
+      "why_it_matters": "timezone_name returns settings.TIME_ZONE only when USE_TZ is False. Otherwise it returns settings_dict['TIME_ZONE'] or 'UTC'. The test overrides only TIME_ZONE, so it passes only because tests/test_sqlite.py sets USE_TZ = False. Under a PostgreSQL settings module with USE_TZ=True (Django's default), the assertion compares 'Africa/Nairobi' with 'UTC' and fails, for reasons unrelated to pooling.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": false,
+      "suggested_fix": "Use `with self.settings(USE_TZ=False, TIME_ZONE=new_time_zone):` (or set new_connection.settings_dict[\"TIME_ZONE\"] = new_time_zone as test_connect_and_rollback does).",
+      "confidence": 50,
+      "evidence": [
+        "tests/backends/postgresql/tests.py:302 -- with self.settings(TIME_ZONE=new_time_zone):",
+        "django/db/backends/base/base.py:162-167 -- if not settings.USE_TZ: return settings.TIME_ZONE / elif self.settings_dict[\"TIME_ZONE\"] is None: return \"UTC\"",
+        "tests/test_sqlite.py:33 -- USE_TZ = False"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Pooled code paths in creation.py (_clone_test_db/_destroy_test_db close_pool), features.django_test_skips pool branch, close_if_health_check_failed pool short-circuit, and NO_DB_ALIAS bypass are reachable only by running the full suite with OPTIONS['pool'] enabled; no such settings/CI config exists in the repo (grep-only check of .github/ and tests/*.py), so they rely on external CI.",
+    "No live PostgreSQL available; none of the new tests were executed, so pass/fail conclusions are from reading code and psycopg_pool 3.3.3 source."
+  ],
+  "testing_gaps": [
+    "ImportError branch for psycopg_pool ('Error loading psycopg_pool module') has no test; mock.patch.dict(sys.modules, {'psycopg_pool': None}) with pool=True and asserting ImproperlyConfigured would cover it.",
+    "assume_role applied via the pool's configure callback is untested: with pool enabled, a nonexistent role fails inside the pool worker (connection discarded) and surfaces as PoolTimeout after the timeout rather than InvalidParameterValue as test_connect_role asserts for the non-pooled path.",
+    "close_if_health_check_failed() pooled early-return has no positive test; the two base health-check tests are merely skipped under pool."
+  ]
+}

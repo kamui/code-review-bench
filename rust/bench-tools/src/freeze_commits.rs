@@ -127,9 +127,8 @@ mod tests {
     #[test]
     fn a_missing_freeze_commit_is_fetched_and_the_clone_keeps_its_depth() {
         for shallow in [false, true] {
-            let root: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("target/freeze-commit-tests")
-                .join(crate::evidence::random_name("f-"));
+            let root: PathBuf =
+                crate::test_scratch("freeze-commit-tests").join(crate::evidence::random_name("f-"));
             let source = root.join("source");
             std::fs::create_dir_all(&source).expect("mkdir");
             run(&source, &["init", "-q", "--initial-branch=main"]);
@@ -186,9 +185,8 @@ mod tests {
 
     #[test]
     fn a_commit_the_forge_does_not_serve_is_reported_absent() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("target/freeze-commit-tests")
-            .join(crate::evidence::random_name("a-"));
+        let root =
+            crate::test_scratch("freeze-commit-tests").join(crate::evidence::random_name("a-"));
         let source = root.join("source");
         std::fs::create_dir_all(&source).expect("mkdir");
         run(&source, &["init", "-q", "--initial-branch=main"]);

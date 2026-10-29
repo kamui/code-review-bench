@@ -90,6 +90,7 @@ describe('scorecard display', () => {
   test('a preview with missing assessments or no audit is never labelled the completed dataset', () => {
     expect(datasetStatus(fixture)).toEqual({ label: 'v1 preview', complete: false, limits: [
       'Fixture data for interface checks, not benchmark evidence. 92 of 93 admitted reviews are assessed.',
+      '1 claim remains unresolved.',
       'The evaluator audit is unassessed. The fixture declares no evaluator audit.'] })
     const subject = task('pr', [family('f')])
     const cells = { a: [[subject, [review(subject, ['f'])]]] } satisfies Parameters<typeof build>[1]
@@ -105,6 +106,15 @@ describe('scorecard display', () => {
     expect(conditionDifferences([setup('a', false, { conditions: [{ name: 'Client', values: ['x'] }] }), setup('b')]).map(row => row.values.map(item => item.value)))
       .toEqual([['x', 'unrecorded']])
   })
+
+  test('explains unresolved judgments even when every admitted review has been assessed', () => {
+    const subject = task('pr', [family('f')])
+    const status = datasetStatus(build([subject], { a: [[subject, [review(subject, ['f'])]]] },
+      { coverage: { requiredReviews: 1, assessedReviews: 1, complete: false, reason: 'Judgments remain unresolved.', unresolvedRecoveries: 2, unresolvedClaims: 1 } }))
+    expect(status.limits).toEqual(['Judgments remain unresolved. 1 of 1 admitted reviews are assessed.',
+      '2 unresolved detection decisions receive zero credit.', '1 claim remains unresolved.'])
+    expect(status.label).toBe('v1 preview')
+  })
 })
 
 describe('current graded record', () => {
@@ -113,7 +123,7 @@ describe('current graded record', () => {
       complete: false, reason: 'Current judgment coverage is incomplete.' })
     expect(imported.evidence.audit.state).toBe('unassessed')
     expect(datasetStatus(imported)).toMatchObject({ label: 'v1 preview', complete: false, limits: [
-      'Current judgment coverage is incomplete. 627 of 627 admitted reviews are assessed.', expect.stringMatching(/^The evaluator audit is unassessed\./)] })
+      'Current judgment coverage is incomplete. 627 of 627 admitted reviews are assessed.', '29 claims remain unresolved.', expect.stringMatching(/^The evaluator audit is unassessed\./)] })
     expect(imported.configurations).toHaveLength(14)
     expect(imported.attempts).toHaveLength(669)
     expect(imported.attempts.filter(attempt => attempt.admitted)).toHaveLength(627)

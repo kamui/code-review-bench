@@ -26,8 +26,8 @@ fn row(model: &str, as_of: &str, output: u32) -> String {
 impl Fixture {
     fn new(rows: &[String]) -> Self {
         let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("target/rates-refresh-tests")
+        let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join("rates-refresh-tests")
             .join(format!(
                 "r-{}-{}",
                 std::process::id(),
