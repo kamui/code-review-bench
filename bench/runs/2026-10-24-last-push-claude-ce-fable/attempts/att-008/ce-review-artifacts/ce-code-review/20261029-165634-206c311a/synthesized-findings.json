@@ -1,0 +1,267 @@
+{
+  "run_id": "20261029-165634-206c311a",
+  "run_dir": "/home/jack/.t3/ce-fable-runs/2026-10-24-last-push-claude-ce-fable/att-008/clone-work/ce-review-artifacts/ce-code-review/20261029-165634-206c311a",
+  "stage": "merge-leaf: Stage 5 steps 1-7 and Stage 5b steps 1-3 complete; validator not run",
+  "helper_input": "/home/jack/.t3/ce-fable-runs/2026-10-24-last-push-claude-ce-fable/att-008/clone-work/ce-review-artifacts/ce-code-review/20261029-165634-206c311a/helper-input.json",
+  "mechanical_output": "/home/jack/.t3/ce-fable-runs/2026-10-24-last-push-claude-ce-fable/att-008/clone-work/ce-review-artifacts/ce-code-review/20261029-165634-206c311a/mechanical-findings.json",
+  "mechanics_summary": {
+    "helper_passes": 1,
+    "valid_findings": 5,
+    "malformed_findings": 0,
+    "malformed_returns": 0,
+    "first_evidence_backfilled": 0,
+    "quote_check_demotions": 0,
+    "suppressed_by_confidence": {},
+    "suppressed_findings_count": 0,
+    "pre_existing_count": 0,
+    "semantic_merges": 0,
+    "direct_dependency_reclassifications": 0,
+    "settlement_discards": 0,
+    "settlement_evaluated": false,
+    "mode_aware_demotion_count": 3
+  },
+  "findings": [
+    {
+      "#": 1,
+      "autofix_class": "gated_auto",
+      "confidence": 100,
+      "evidence": [
+        "internal/backup.go:475-477: `workingDIR := os.Getenv(envGitWorkingDir)\\n\\tif workingDIR == \"\" {\\n\\t\\tworkingDIR = filepath.Join(backupDIR, workingDIRName)`",
+        "internal/backup.go:140-145: `func resolveWorkingDir(backupDir string) string { if w := os.Getenv(envGitWorkingDir); w != \"\" { return w } return filepath.Join(backupDir, workingDIRName) }`",
+        "internal/backup.go:52: `workingDir := resolveWorkingDir(backupDir)` (existing consumer)",
+        "provenance: the inline copy pre-dates this PR (git show c77f548:internal/backup.go line 420) and resolveWorkingDir was added in 6adadb6; this diff moves the copy into a new function rather than reusing the helper"
+      ],
+      "file": "internal/backup.go",
+      "first_evidence": "internal/backup.go:475-477: `workingDIR := os.Getenv(envGitWorkingDir)\\n\\tif workingDIR == \"\" {\\n\\t\\tworkingDIR = filepath.Join(backupDIR, workingDIRName)`",
+      "independent_reviewers": [
+        "maintainability"
+      ],
+      "line": 475,
+      "owner": "downstream-resolver",
+      "pre_existing": false,
+      "requires_verification": false,
+      "reviewers": [
+        "maintainability"
+      ],
+      "severity": "P2",
+      "suggested_fix": "In createWorkingDir replace lines 474-478 with `workingDIR := resolveWorkingDir(backupDIR)` and delete the now-redundant comment. Behaviour is identical: resolveWorkingDir uses os.Getenv(envGitWorkingDir) with the same filepath.Join(backupDir, workingDIRName) fallback.",
+      "title": "createWorkingDir re-inlines resolveWorkingDir (duplicate canonical helper)",
+      "why_it_matters": "The new createWorkingDir helper computes the working directory with its own copy of the GIT_WORKING_DIR-or-default logic, while resolveWorkingDir (same file, line 140) is the existing canonical implementation used by runProviderBackups. Two call sites now resolve the same path independently, so a future change to the fallback (for example honouring a trimmed or absolute path) must be made twice or the directory that is created will diverge from the one that is later used and cleaned up. Extracting the function in this PR was the natural moment to collapse the duplication; instead it was given its own name and doc-less signature.",
+      "validation_status": null,
+      "validation_reason": null
+    },
+    {
+      "#": 2,
+      "autofix_class": "gated_auto",
+      "confidence": 75,
+      "evidence": [
+        "internal/backup.go:358: `_, _ = fmt.Fprintf(outputErrs, \"%s parameter '%s' is not defined.\\n\", provider, param)` (rewritten in this diff; same branch at internal/backup.go:385 in checkUserAndPasswordProvider)",
+        "internal/backup_test.go:798-801: `err := checkProvidersDefined()` / `require.Contains(t, err.Error(), \"no providers defined\")` is the only direct caller in tests and only exercises the count==0 path.",
+        "grep of internal/*_test.go for `is not defined|parameter '|provider configuration invalid` returns only backup_test.go:801 (the 'no providers defined' assertion); no test asserts the partial-configuration message.",
+        "build-test-output.txt: every Run()-driven provider test that would indirectly reach checkProvider skipped (15 SKIP); TestFailureIfGitBackupDirUndefined returns before checkProvidersDefined is called."
+      ],
+      "file": "internal/backup.go",
+      "first_evidence": "internal/backup.go:358: `_, _ = fmt.Fprintf(outputErrs, \"%s parameter '%s' is not defined.\\n\", provider, param)` (rewritten in this diff; same branch at internal/backup.go:385 in checkUserAndPasswordProvider)",
+      "independent_reviewers": [
+        "testing"
+      ],
+      "line": 358,
+      "owner": "downstream-resolver",
+      "pre_existing": false,
+      "requires_verification": true,
+      "reviewers": [
+        "testing"
+      ],
+      "severity": "P2",
+      "suggested_fix": "Add a table-driven test in internal/backup_test.go that calls checkProvidersDefined() after unsetEnvVarsExcept([]string{envPath}) and per-case os.Setenv: (1) envGitHubToken=\"   \" -> require.ErrorContains(err, \"GitHub parameter 'GITHUB_TOKEN' is not defined.\"); (2) envAzureDevOpsUserName=\"u\" with envAzureDevOpsPAT unset -> require.ErrorContains(err, fmt.Sprintf(\"%s parameter '%s' is not defined.\", providerNameAzureDevOps, envAzureDevOpsPAT)); (3) both Azure vars set -> require.NoError; (4) envBitBucketEmail+envBitBucketAPIToken set -> require.NoError; (5) envBitBucketUser alone -> error naming the missing OAuth params. Use backupEnvironmentVariables()/restoreEnvironmentVariables as surrounding tests do.",
+      "title": "Refactored partial-credential error branches have no test",
+      "why_it_matters": "checkProvider was split into checkJustTokenProvider and checkUserAndPasswordProvider, and both of their error-producing branches (a token defined but blank; a user/password pair only partly set) were rewritten in this diff. The only test that reaches checkProvidersDefined is TestCheckProvidersFailureWhenNoneDefined, which sets nothing and asserts only the count==0 'no providers defined' message, so a slip in either rewritten branch (wrong provider/param in the message, counting a blank token, returning 1 for a partial pair) would pass the suite. The PR relies on 'the full test suite pass locally' as the behaviour-unchanged guarantee, but for this code path the suite cannot see a regression. A small table test against checkProvidersDefined locks the contract in without touching production code.",
+      "validation_status": null,
+      "validation_reason": null
+    }
+  ],
+  "pre_existing_findings": [],
+  "demoted_findings": [
+    {
+      "#": 3,
+      "autofix_class": "gated_auto",
+      "confidence": 100,
+      "evidence": [
+        "internal/backup_test.go:627-635: `case sobaOrgTwo:\\n\\t\\t\\tassertGiteaOrgTwoOnlyBackedUp(t)\\n\\t\\t\\tresetBackups()\\n\\t\\tcase \"*\":\\n\\t\\t\\tassertGiteaAllOrgsBackedUp(t)\\n\\t\\t\\tresetBackups()\\n\\t\\t}\\n\\n\\t\\tresetBackups()`",
+        "provenance: the same triple call existed before the refactor (git show c77f548:internal/backup_test.go lines 669, 703, 706); this diff rewrote the block and kept it"
+      ],
+      "file": "internal/backup_test.go",
+      "first_evidence": "internal/backup_test.go:627-635: `case sobaOrgTwo:\\n\\t\\t\\tassertGiteaOrgTwoOnlyBackedUp(t)\\n\\t\\t\\tresetBackups()\\n\\t\\tcase \"*\":\\n\\t\\t\\tassertGiteaAllOrgsBackedUp(t)\\n\\t\\t\\tresetBackups()\\n\\t\\t}\\n\\n\\t\\tresetBackups()`",
+      "independent_reviewers": [
+        "maintainability"
+      ],
+      "line": 629,
+      "owner": "downstream-resolver",
+      "pre_existing": false,
+      "requires_verification": false,
+      "reviewers": [
+        "maintainability"
+      ],
+      "severity": "P3",
+      "suggested_fix": "Delete the `resetBackups()` on lines 629 and 632, keeping only the unconditional call on line 635. Optionally collapse the switch to `if org == sobaOrgTwo { assertGiteaOrgTwoOnlyBackedUp(t) } else { assertGiteaAllOrgsBackedUp(t) }`.",
+      "title": "Redundant resetBackups() calls kept inside refactored test switch",
+      "why_it_matters": "Each switch case calls resetBackups() and then the loop body calls resetBackups() again unconditionally, so every iteration cleans up twice. After the assertions were extracted into helpers the switch cases are now one-line assert calls followed by a cleanup that the trailing line already performs, which makes the double call stand out and leaves a reader wondering whether the second reset is load-bearing. The PR explicitly targeted this test for simplification, so carrying the dead calls forward is a missed deletion.",
+      "demoted_to": "residual_risks",
+      "demotion_reason": "Single-reviewer P3 advisory from maintainability (anchor 100): two dead resetBackups() calls carried forward inside a credential-gated test; no violated contract and no user-facing defect, so it fails primary admission under Stage 5 step 4 and is retained as a residual risk."
+    },
+    {
+      "#": 4,
+      "autofix_class": "gated_auto",
+      "confidence": 75,
+      "evidence": [
+        "internal/backup.go:271-273: `logProviderBackupsToKeep(\"GitLab\", envGitLabBackups)\\n\\tlogProviderCompareMethod(\"GitLab\", envGitLabCompare)\\n\\tlogProviderBackupLFS(\"Gitlab\", envGitLabBackupLFS)`",
+        "pre-refactor: git show c77f548:internal/backup.go contains `logger.Printf(\"Gitlab backup LFS: true\")` alongside `GitLab compare method` and `GitLab backups to keep`, so the mixed casing is deliberate output preservation"
+      ],
+      "file": "internal/backup.go",
+      "first_evidence": "internal/backup.go:271-273: `logProviderBackupsToKeep(\"GitLab\", envGitLabBackups)\\n\\tlogProviderCompareMethod(\"GitLab\", envGitLabCompare)\\n\\tlogProviderBackupLFS(\"Gitlab\", envGitLabBackupLFS)`",
+      "independent_reviewers": [
+        "maintainability"
+      ],
+      "line": 273,
+      "owner": "human",
+      "pre_existing": false,
+      "requires_verification": false,
+      "reviewers": [
+        "maintainability"
+      ],
+      "severity": "P3",
+      "suggested_fix": "Either normalise to `logProviderBackupLFS(\"GitLab\", envGitLabBackupLFS)` and note the one-character log change in the PR description, or keep \"Gitlab\" with a trailing comment such as `// \"Gitlab\" (sic) preserves the historical log line`.",
+      "title": "Intentional 'Gitlab' label divergence hidden among 'GitLab' siblings",
+      "why_it_matters": "displayGitLabStartupConfig passes \"GitLab\" to two helpers and \"Gitlab\" to the third. This preserves the pre-refactor log line `Gitlab backup LFS: true` byte-for-byte, but nothing in the code says so, and the inconsistency reads as a typo. The next maintainer will either 'fix' it (silently changing log output the author promised was unchanged) or waste time working out whether it matters. Making the label-level divergence explicit removes the ambiguity.",
+      "demoted_to": "residual_risks",
+      "demotion_reason": "Single-reviewer P3 advisory from maintainability (anchor 75, owner human): a documentation preference about the intentionally preserved 'Gitlab backup LFS' label; the log line is byte-identical to the pre-refactor output, so there is no defect and the design call (normalise vs. annotate) stays report-only as a residual risk."
+    },
+    {
+      "#": 5,
+      "autofix_class": "gated_auto",
+      "confidence": 75,
+      "evidence": [
+        "internal/notify.go:31-39: `func backupStatusTitle(succeeded, failed int) string { switch { case succeeded > 0 && failed == 0: return titleBackupsSucceeded ... default: return titleBackupsFailed } }`",
+        "grep of internal/*_test.go for `backupStatusTitle|sendNtfy|sendSlackMessage|sendTelegramMessage|notify\\(|envSobaNtfyURL|envTelegramBotToken|envSlackChannelID` returns no matches.",
+        "internal/notify.go:94 / :190 / :222: all three senders now call backupStatusTitle(succeeded, failed) (diff lines 944, 974, 1006)."
+      ],
+      "file": "internal/notify.go",
+      "first_evidence": "internal/notify.go:31-39: `func backupStatusTitle(succeeded, failed int) string { switch { case succeeded > 0 && failed == 0: return titleBackupsSucceeded ... default: return titleBackupsFailed } }`",
+      "independent_reviewers": [
+        "testing"
+      ],
+      "line": 31,
+      "owner": "downstream-resolver",
+      "pre_existing": false,
+      "requires_verification": false,
+      "reviewers": [
+        "testing"
+      ],
+      "severity": "P3",
+      "suggested_fix": "Add TestBackupStatusTitle (new notify_test.go or alongside webhook_test.go) with cases {succeeded,failed,want}: {1,0,\"🚀 soba backups succeeded\"}, {1,1,\"️⚠️ soba backups completed with errors\"}, {0,1,\"️🚨 soba backups failed\"}, {0,0,\"️🚨 soba backups failed\"}; compare against literal strings, not the title* constants.",
+      "title": "New backupStatusTitle helper and its three consumers are untested",
+      "why_it_matters": "backupStatusTitle is a new function that now decides the notification title for ntfy, Slack and Telegram in one place. Before this diff each sender had its own switch, so a mistake affected one channel; now a mistake in the case ordering or the default arm (e.g. (0,0) and (0,n) both mapping to 'failed') changes every notification at once, and no test calls backupStatusTitle, notify, sendNtfy, sendSlackMessage or sendTelegramMessage. A four-row table test is trivial and makes the shared contract regression-sensitive.",
+      "demoted_to": "testing_gaps",
+      "demotion_reason": "Single-reviewer P3 testing advisory (anchor 75): backupStatusTitle is a nine-line helper whose three constants were verified byte-identical to the pre-refactor literals by two reviewers; the lack of a direct unit test is not material enough for a second umbrella primary (the notify subsystem's gap is recorded in testing_gaps with the suggested table test)."
+    }
+  ],
+  "retention_rationale": {
+    "1": "Retained as primary P2 (anchor 100, maintainability, gated_auto). Admitted on a concrete maintenance benefit rather than a runtime bug: createWorkingDir (internal/backup.go:475-477) re-implements the GIT_WORKING_DIR-or-default resolution that resolveWorkingDir (internal/backup.go:140-145) already provides and that runProviderBackups consumes at :52, so the directory created and the directory used/cleaned are computed by two independent copies that can drift. Verified in this leaf: resolveWorkingDir exists at :140 with identical semantics, the consumer is at :52, and the inline copy was moved from Run() (c77f548 internal/backup.go:420-423) into the new helper by this diff, so the lines are changed lines (primary), not pre-existing. One-line fix with identical behaviour.",
+    "2": "Retained as the single umbrella testing primary P2 (anchor 75, testing, gated_auto, requires_verification) for the changed credential-check subsystem, under the Stage 5 step 4 umbrella rule: the lack of tests is material because the PR's only behaviour-unchanged guarantee for checkProvider/checkJustTokenProvider/checkUserAndPasswordProvider is suite passage, and the suite reaches only the count==0 branch (internal/backup_test.go:798-801) while every Run()-driven provider test skipped. Three reviewers (testing, correctness, adversarial) independently listed the same uncovered branches in testing_gaps; same-model agreement does not raise confidence but establishes relevance. The fix is a table test touching no production code. Narrower BitBucket scenarios beyond this umbrella are kept in testing_gaps."
+  },
+  "rejected_claims": [
+    {
+      "source": "correctness/adversarial residual_risks",
+      "claim": "internal/backup.go:217-219 strings.ToLower(compare) == compareTypeRefs replaced by strings.EqualFold(compare, compareTypeRefs)",
+      "decision": "dropped from the soft buckets: equivalent for every ASCII input and the reviewers themselves found no realistic configuration value that diverges (Unicode special-fold cases only), so no significant consequence is established; the provider passes the raw value through regardless (internal/bitbucket.go:59)."
+    },
+    {
+      "source": "adversarial residual_risks",
+      "claim": "Dockerfile rm -f \"/var/cache/apk/*\" is a quoted literal glob no-op",
+      "decision": "dropped from the soft buckets: pre-existing, unchanged by this PR, and --no-cache already makes it inert, so there is no consequence to report."
+    }
+  ],
+  "actionable_queue": [
+    1,
+    2
+  ],
+  "human_or_release_owned": [],
+  "triage_groups": [],
+  "triage_groups_note": "grouping:auto; no groups built because the two primary findings are unrelated concerns and single-item groups would be decorative.",
+  "residual_risks": [
+    "Intent ledger (benign, non-observable): checkProvidersDefined (internal/backup.go:685-697) now evaluates bitbucketAPITokenComplete once before the map-ordered loop instead of inside it, so count is deterministic (1) where the pre-refactor code could count BitBucket once or twice depending on map iteration order when both auth methods were complete; the only consumer is the count == 0 check at internal/backup.go:712, so no behaviour differs, but it is a semantic tightening the PR body does not call out. (correctness, testing, reliability, adversarial)",
+    "Intent ledger (log noise under misconfiguration only): collectProviderBackupResults short-circuits bitbucketAPITokenDefined() || bitbucketOAuthDefined() at internal/backup.go:101, whereas the pre-refactor runProviderBackups read all five BitBucket variables unconditionally. GetEnvOrFile (internal/envfile.go:36-53) logs when a *_FILE path is missing, unreadable or oversized, so an operator with complete API-token auth plus dangling BITBUCKET_USER_FILE/KEY_FILE/SECRET_FILE now sees those lines once per run (from Bitbucket() at internal/bitbucket.go:19-21) instead of twice: a strict-reading exception to the 'log output unchanged' claim, arguably an improvement, and not a functional divergence. (correctness, adversarial)",
+    "Provider registration is now split across three structures: the new tokenProviders table in collectProviderBackupResults (internal/backup.go:105-114) carries the run function, while justTokenProviders and enabledProviderAuth still gate credentials; a future provider must be registered in all three or it will be validated but never run (or run but never validated). Not flagged as a finding because the shapes differ, but it is a trap the decomposition introduced. (maintainability)",
+    "Demoted #3 (P3, maintainability, anchor 100): internal/backup_test.go:629 and :632 call resetBackups() inside each switch case and the loop body calls it again unconditionally at :635, so every iteration cleans up twice. The same triple call existed before the refactor (c77f548 internal/backup_test.go:669, :703, :706) and the diff rewrote the block and kept it. Suggested fix: delete the two in-case calls, keeping only :635; optionally collapse the switch to an if/else. Report-only; roughly 2 removable lines in 1 file.",
+    "Demoted #4 (P3, maintainability, anchor 75, owner human): displayGitLabStartupConfig (internal/backup.go:271-273) passes \"GitLab\" to two log helpers and \"Gitlab\" to logProviderBackupLFS. This deliberately preserves the pre-refactor line `Gitlab backup LFS: ...` byte-for-byte, but nothing in the code says so, so the next maintainer will either 'fix' it (silently changing promised-unchanged log output) or stop to work out whether it matters. Options: normalise to \"GitLab\" and note the one-character log change, or keep \"Gitlab\" with a `(sic)` comment. Design call; report-only.",
+    "Scheduler and signal wiring (gocron singleton mode, waitForShutdown, Shutdown() waiting for the running job) was verified by reading internal/backup.go:30-38 and :503-556 against c77f548; gocron library semantics were not re-read from the module cache because the job definition, options and start/shutdown calls are byte-for-byte unchanged by this diff. (reliability)",
+    "callsite completeness: grep-only. Caller and usage checks for resolveWorkingDir, resetBackups, the title* constants, and the func(string) *ProviderBackupResults shape of Gitea/GitHub/Gitlab/AzureDevOps/Sourcehut in the tokenProviders table rest on text search plus a passing go build; no symbol-aware tooling was available to any reviewer. (correctness, testing, maintainability, adversarial)"
+  ],
+  "testing_gaps": [
+    "displayStartupConfig and the new logProviderOrgs/logProviderBackupsToKeep/logProviderCompareMethod/logProviderBackupLFS helpers: the PR promises log output is unchanged, but no test captures logger output, so a label or format slip in the templated helpers is invisible to CI. logger is a plain *log.Logger created in init() (internal/backup.go:660), so a golden-output test can logger.SetOutput(&buf), set a provider env (e.g. GITHUB_TOKEN, GITHUB_ORGS, GITHUB_COMPARE=refs, GITHUB_BACKUP_LFS=true), call displayStartupConfig() and assert the exact lines and order. Reviewers verified the strings by manual trace only (all labels, including 'Gitlab backup LFS' and 'Organistations', match c77f548). (testing, correctness, maintainability, reliability)",
+    "Beyond the #2 umbrella: no unit test exercises checkProvidersDefined with both BitBucket auth methods (API token and OAuth) fully set, or with API-token auth complete and the OAuth *_FILE paths pointing at missing files; these are exactly the paths whose evaluation order and short-circuiting changed, and they are covered only by the credential-gated integration tests that skipped in this run. (correctness, adversarial)",
+    "Demoted #5 (P3, testing, anchor 75): backupStatusTitle (internal/notify.go:31-39) now decides the notification title for ntfy, Slack and Telegram in one place (internal/notify.go:94, :190, :222), and no test calls backupStatusTitle, notify, sendNtfy, sendSlackMessage or sendTelegramMessage. Suggested: TestBackupStatusTitle with cases {1,0 -> succeeded}, {1,1 -> completed with errors}, {0,1 -> failed}, {0,0 -> failed}, comparing against literal strings rather than the title* constants so a constant edit is also caught. The three constants were verified byte-identical to the old literals (hexdump) by reviewers. (testing, correctness, maintainability)",
+    "scheduleBackups/runScheduledJob interval and cron branches: no test sets GIT_BACKUP_CRON or drives Run() with a non-zero interval (TestGetBackupInterval only parses the value). runScheduledJob blocks on waitForShutdown, so covering it would need an injectable signal channel or scheduler; noted as unreachable with current seams rather than required for this PR. (testing, reliability)",
+    "The restructured Run() pipeline (validateStartupConfig, createWorkingDir, scheduleBackups, runScheduledJob), collectProviderBackupResults and the Gitea assertion helpers (assertGiteaOrgTwoOnlyBackedUp/assertGiteaAllOrgsBackedUp) are exercised only by credential-gated live-provider tests, all 15 of which skipped in this run; TestGithubRepositoryBackupWithMockAPI calls githosts directly and bypasses Run()/collectProviderBackupResults. (testing, reliability)"
+  ],
+  "learnings": null,
+  "agent_native": null,
+  "deployment": null,
+  "fold_in": {
+    "peer_outcome": "in-process-fallback",
+    "peer_artifact": null,
+    "folded_reviewer": null,
+    "in_process_adversarial_in_raw_returns": true,
+    "independence_verified_peer_present": false
+  },
+  "validator_plan": {
+    "skip_count": 0,
+    "skip_basis": "no finding has both an ordinary reviewer and an adversarial-<provider> reviewer with independence_verified:true (peer.outcome is in-process-fallback; same-model corroboration never licenses the shortcut)",
+    "selected": [
+      1,
+      2
+    ]
+  },
+  "coverage": {
+    "coverage_notes_from_dispatch": [
+      "project standards: not run (no applicable standards files).",
+      "cross-model pass: not run (single-model configuration requested); adversarial lens covered in-process.",
+      "scope: standalone (base: c77f548cbd340d2e744da7c6d92a54372b4b900b on the current checkout, branch review-head at 136a4850df9aec8cf8813b27ba1533d4a17bc642; working tree is the reviewed head and is clean; no untracked files).",
+      "PR metadata (title, body, state MERGED, no prior comments) came from the caller's frozen packet; no forge API was called and no upstream discussion was fetched.",
+      "Verification executed once by the dispatch context: go build OK, go vet OK, go test ./internal/ -count=1 passed with 24 PASS, 15 SKIP, 0 FAIL; the 15 skips are live provider tests gated on credentials that are unavailable here, so collectProviderBackupResults, the Gitea assertion helpers and the scheduler branches were not executed by tests in this run.",
+      "Docker is unavailable, so the Dockerfile change was reviewed by reading only and was not built.",
+      "No plan document was found (no plan: argument, no plan path in the PR body, docs/plans does not exist), so requirements completeness is not assessed against a plan.",
+      "Fast pass found no P0/P1 candidates and contributed no findings.",
+      "learnings, agent-native and deployment lenses did not run; their output arrays are empty and not assessed."
+    ],
+    "peer_coverage": "cross-model pass: not run (the invocation requested a single-model configuration, so no different-provider peer was eligible); the adversarial lens ran as the in-process adversarial reviewer at the session model and its return is in raw-returns.json.",
+    "stage5_sentences": [
+      "Reviewer returns: 5 structured returns (correctness, testing, maintainability, reliability, adversarial) with 5 valid findings in total (testing 2, maintainability 3; correctness, reliability and adversarial returned 0 findings); 0 malformed findings, 0 malformed returns, 0 unstructured returns, no failed or bound-exceeded reviewers.",
+      "Mechanics: one helper pass; 0 findings suppressed at anchor 50, 0 at anchor 25; first_evidence_backfilled 0; 0 findings demoted by the quote-the-line check for missing first_evidence; 0 exact-fingerprint duplicates; 0 pre-existing findings.",
+      "Semantic reconciliation merged nothing: the five candidates describe five distinct defects and fix paths, so the helper was not rerun and the stable numbering #1-#5 is the single helper assignment.",
+      "No plan was discovered (plan.source none), so settlement suppression was not evaluated and no settled_conflict candidates existed.",
+      "Mode-aware demotion: 3 of 5 candidates demoted before validation (#3 and #4, single-reviewer maintainability P3 advisories, to residual_risks; #5, a single-reviewer testing P3 advisory, to testing_gaps); 2 primary findings remain (#1 P2 maintainability, #2 P2 testing). Two reviewer residual-risk notes were rejected from the soft buckets for lacking a significant consequence (the strings.EqualFold Unicode edge at internal/backup.go:217-219 and the pre-existing, inert Dockerfile rm -f quoted-glob line).",
+      "Detail hydration: both retained primary findings carry why_it_matters and evidence from their reviewer artifacts (exact-key matches; nothing reconstructed from first_evidence).",
+      "Triage groups: none built under grouping:auto; the two primary findings are unrelated concerns (helper duplication in createWorkingDir; test coverage of the rewritten credential-check branches) and single-item groups would be decorative.",
+      "Cross-model fold-in: peer.outcome in-process-fallback, no adversarial-<provider> artifact to fold; the in-process adversarial reviewer's return (0 findings, 5 residual risks, 1 testing gap) was merged from raw-returns.json like every other local return. Same-model agreement raised no confidence anchor.",
+      "Validator shortcut (Stage 5b step 1): 0 findings skipped; no finding has an adversarial-<provider> reviewer with independence_verified true, and same-model corroboration never licenses the shortcut. Selected for the single validator batch (Stage 5b step 2-3): 2 findings (#1, #2), both actionable gated_auto / downstream-resolver P2s, ordered by severity then stable #; no P0/P1 survives.",
+      "Intent verification by reviewers (read-only, against c77f548): TestPublicGitLabRepositoryBackup2 was line-for-line identical to the retained TestPublicGitLabRepositoryBackup; provider order in collectProviderBackupResults (BitBucket, Gitea, GitHub, GitLab, AzureDevOps, Sourcehut), credential predicates, every startup log string (including the retained 'Gitlab backup LFS' and 'Organistations' spellings), the three notification title constants (byte-identical), Run() step order, and scheduler/signal wiring were traced as equivalent; the two benign non-observable semantic tightenings found are recorded as residual risks.",
+      "Actionable queue after Stage 5 step 5: #1 and #2 (gated_auto, owner downstream-resolver); no finding is owned by human or release; no P0/P1 normalization was needed."
+    ],
+    "failed_reviewers": [],
+    "bound_exceeded": [],
+    "unstructured_returns": [],
+    "fast_pass": {
+      "emitted_preliminary": false,
+      "candidates": []
+    },
+    "intent_confidence": "explicit",
+    "plan_source": "none",
+    "standards": {
+      "criteria": [],
+      "fallback_named": false,
+      "not_run_reason": "no applicable standards files (CODING_STANDARDS.md, CLAUDE.md, AGENTS.md absent from the reviewed tree)"
+    },
+    "removable_surface_note": "No deletion-oriented maintainability finding remains primary; demoted #3 would remove ~2 lines in 1 file (report-only)."
+  }
+}

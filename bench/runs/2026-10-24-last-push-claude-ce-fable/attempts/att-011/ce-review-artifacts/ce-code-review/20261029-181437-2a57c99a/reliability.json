@@ -1,0 +1,76 @@
+{
+  "reviewer": "reliability",
+  "findings": [
+    {
+      "title": "Shared SSLContext accumulates client certs across sessions",
+      "severity": "P0",
+      "file": "src/requests/adapters.py",
+      "line": 95,
+      "why_it_matters": "With `verify=True` and `cert=(cert, key)`, urllib3 calls `context.load_cert_chain(certfile, keyfile)` on the connection's `ssl_context`, which is now the single process-wide `_preloaded_ssl_context`. The client certificate and private key are loaded into that shared object and never removed, so every later `verify=True` connection in the process (any Session, any adapter, no `cert=` argument at all) presents that client certificate to any server that sends a CertificateRequest; under concurrency, two threads using different `cert=` values interleave `load_cert_chain` and `wrap_socket` and one handshake is performed with the other thread's identity, producing mTLS auth failures or the wrong identity being accepted. Before this diff, `verify=True` left `ssl_context` unset so urllib3 built a fresh context per connection and client credentials were isolated per pool. The fix is a bulkhead: never hand the shared context to a connection that will mutate it with credentials; fall back to the pre-change `ca_certs=<default bundle>` path when `client_cert` is set.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In `_urllib3_request_context`, only share the preloaded context when no client certificate is involved, and otherwise restore the old per-pool bundle path:\n\n```python\n    elif verify is True:\n        if client_cert is None:\n            pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context\n        else:\n            # load_cert_chain() mutates the context; never share it with mTLS pools\n            pool_kwargs[\"ca_certs\"] = extract_zipped_paths(DEFAULT_CA_BUNDLE_PATH)\n```\n\nand in `cert_verify`, when `verify is True and cert:` set `conn.ca_certs = extract_zipped_paths(DEFAULT_CA_BUNDLE_PATH)` (the pre-diff behaviour) so urllib3 creates a fresh context for that connection. Alternatively build and cache one context per distinct `(cert_file, key_file)` pair, but a plain fallback is the minimal safe change. Add a test that makes a `verify=True, cert=...` request and then asserts a subsequent `verify=True` request without `cert=` does not present a client certificate (the local TLSServer fixture with `mutual_tls=True` can observe this).",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:95 `pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context` (module-level singleton created at adapters.py:75)",
+        "src/requests/adapters.py:102-105 `if client_cert is not None: ... pool_kwargs[\"cert_file\"] = client_cert[0]; pool_kwargs[\"key_file\"] = client_cert[1]` -- same pool_kwargs carry both the shared context and the client cert",
+        "urllib3/connection.py:887-891 `cert_file=self.cert_file, key_file=self.key_file, ... ssl_context=self.ssl_context,` passed to `_ssl_wrap_socket_and_match_hostname`, which uses the supplied object directly: connection.py:1039-1040 `else: context = ssl_context`",
+        "urllib3/util/ssl_.py:429-431 `if certfile: if key_password is None: context.load_cert_chain(certfile, keyfile)` -- mutates the shared context; nothing ever unloads it",
+        "Pre-diff behaviour (git show 8dd3b26b:src/requests/adapters.py): `verify=True` never set `ssl_context`, so connection.py:1031-1033 created a fresh `create_urllib3_context()` per connection and `load_cert_chain` only affected that connection's context",
+        "urllib3 1.26.x `ssl_wrap_socket` has the identical `context.load_cert_chain(certfile, keyfile)` on the caller-supplied context, so the declared `urllib3>=1.21.1,<3` range is affected throughout"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Per-request bundle OSError becomes import-time crash",
+      "severity": "P1",
+      "file": "src/requests/adapters.py",
+      "line": 76,
+      "why_it_matters": "`import requests` now executes `create_urllib3_context()` plus `load_verify_locations(extract_zipped_paths(DEFAULT_CA_BUNDLE_PATH))`. If the default bundle is missing, unreadable, empty/malformed, or cannot be extracted from a zip (read-only or absent temp dir in frozen apps), or if Python was built without the `ssl` module, every importer of `requests` fails at import -- including programs that only use plain HTTP, `verify=False`, `verify=<path>`, or `REQUESTS_CA_BUNDLE` (the usual workaround precisely when certifi's bundle is unusable). Before this diff those same conditions surfaced only on an HTTPS request with `verify=True`, as a clear `OSError(\"Could not find a suitable TLS CA certificate bundle...\")` from `cert_verify`, which callers could catch per request. The scope of the error has widened from one request to the whole process (the inverse of fail-fast: it is fail-everything). Lazy, locked initialisation on first `verify=True` use keeps the performance win while restoring the old blast radius and exception site.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Build the context lazily and keep the old error surface:\n\n```python\nimport threading\n_preloaded_ssl_context = None\n_preloaded_ssl_context_lock = threading.Lock()\n\ndef _get_preloaded_ssl_context():\n    global _preloaded_ssl_context\n    if _preloaded_ssl_context is None:\n        with _preloaded_ssl_context_lock:\n            if _preloaded_ssl_context is None:\n                cert_loc = extract_zipped_paths(DEFAULT_CA_BUNDLE_PATH)\n                if not cert_loc or not os.path.exists(cert_loc):\n                    raise OSError(\n                        f\"Could not find a suitable TLS CA certificate bundle, \"\n                        f\"invalid path: {cert_loc}\"\n                    )\n                ctx = create_urllib3_context()\n                ctx.load_verify_locations(cert_loc)\n                _preloaded_ssl_context = ctx\n    return _preloaded_ssl_context\n```\n\nand use `pool_kwargs[\"ssl_context\"] = _get_preloaded_ssl_context()` in `_urllib3_request_context`. `ssl.SSLError` from a malformed bundle is an `OSError` subclass, so the exception type callers already handle is preserved. Add a test that monkeypatches `DEFAULT_CA_BUNDLE_PATH` to a nonexistent path and asserts an `https` `verify=True` request raises `OSError` while `verify=False` / `verify=<path>` requests still work.",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:75-78 `_preloaded_ssl_context = create_urllib3_context()` / `_preloaded_ssl_context.load_verify_locations(extract_zipped_paths(DEFAULT_CA_BUNDLE_PATH))` -- executed at module import, no try/except",
+        "src/requests/utils.py:288-289 `if not zipfile.is_zipfile(archive): return path` -- a plain missing bundle is returned unchanged, so `load_verify_locations` raises `FileNotFoundError` at import; utils.py:300 `with atomic_open(extracted_path)` / utils.py:308 `tempfile.mkstemp(dir=...)` raise `PermissionError` on an unwritable temp dir for zip-bundled certifi",
+        "urllib3/util/ssl_.py:223-224 `if SSLContext is None: raise TypeError(\"Can't create an SSLContext object without an ssl module\")` -- import now fails on ssl-less Pythons that `src/requests/__init__.py:121-124` deliberately tolerates (`except ImportError: ssl = None`)",
+        "Removed pre-diff per-request guard (git show 8dd3b26b:src/requests/adapters.py, cert_verify): `if not cert_loc or not os.path.exists(cert_loc): raise OSError(f\"Could not find a suitable TLS CA certificate bundle, invalid path: {cert_loc}\")` -- only reached for `https` + truthy `verify`",
+        "src/requests/certs.py:10-12 docstring: packagers are expected to repoint `where()` to a separately packaged bundle, i.e. a system path that may be absent in minimal images"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Preloaded context silently overrides subclass TLS pool settings",
+      "severity": "P1",
+      "file": "src/requests/adapters.py",
+      "line": 95,
+      "why_it_matters": "The documented subclassing pattern passes TLS settings to `PoolManager(...)` in `init_poolmanager` (`ssl_version=` in docs/user/advanced.rst, and the widespread `ssl_context=ctx` variant used for custom ciphers, `OP_LEGACY_SERVER_CONNECT`, minimum TLS version, or an internal CA). urllib3 merges the per-request `pool_kwargs` over `connection_pool_kw`, so for every `verify=True` request the new `ssl_context=_preloaded_ssl_context` replaces the subclass's context, and when any `ssl_context` is present urllib3 ignores `ssl_version`/`ssl_minimum_version`/`ssl_maximum_version`. The subclass's settings are therefore dropped without any error: connections to legacy servers that needed the relaxed settings now fail the handshake with `SSLError`, hosts trusted via the custom context's CA now fail `CERTIFICATE_VERIFY_FAILED`, and a context that was *stricter* than certifi (pinned CA) is silently weakened to the public bundle. Before this diff the `verify=True` pool_kwargs contained only `cert_reqs`, so the subclass's context survived the merge. Only injecting the shared context when the adapter has not supplied its own TLS configuration preserves the optimisation for the default adapter without breaking the documented hook.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Decide in `_get_connection` (which has access to the adapter) rather than in the module-level helper. After `host_params, pool_kwargs = _urllib3_request_context(...)`, add:\n\n```python\n        base_kw = self.poolmanager.connection_pool_kw\n        if pool_kwargs.get(\"ssl_context\") is _preloaded_ssl_context and any(\n            k in base_kw\n            for k in (\"ssl_context\", \"ssl_version\", \"ssl_minimum_version\",\n                      \"ssl_maximum_version\", \"ca_certs\", \"ca_cert_dir\", \"ca_cert_data\")\n        ):\n            # Adapter supplies its own TLS configuration; do not clobber it.\n            del pool_kwargs[\"ssl_context\"]\n```\n\nand in `cert_verify` restore the pre-diff `conn.ca_certs = extract_zipped_paths(DEFAULT_CA_BUNDLE_PATH)` for `verify is True` when `conn.ssl_context is not _preloaded_ssl_context` (so the subclass's context still gets the certifi bundle loaded per connection, exactly as before). Apply the same check for proxy managers (`self.proxy_manager[proxy].connection_pool_kw`). Add a test with an `HTTPAdapter` subclass whose `init_poolmanager` passes `ssl_context=ctx` and assert the pool created for a `verify=True` request uses `ctx`.",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:95 `pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context` -- unconditional for `verify is True`, regardless of what `init_poolmanager` configured",
+        "urllib3/poolmanager.py:400-409 `base_pool_kwargs = self.connection_pool_kw.copy() ... else: base_pool_kwargs[key] = value` -- request override replaces the PoolManager-level `ssl_context`",
+        "urllib3/connection.py:1031-1040 `if ssl_context is None: ... create_urllib3_context(ssl_version=..., ssl_minimum_version=..., ssl_maximum_version=...) else: context = ssl_context` -- `ssl_version`/min/max are only honoured when no context is supplied",
+        "docs/user/advanced.rst:1030-1033 `def init_poolmanager(self, connections, maxsize, block=False): self.poolmanager = PoolManager(num_pools=connections, maxsize=maxsize, block=block, ssl_version=ssl.PROTOCOL_SSLv3)` -- the documented customisation hook now has no effect for `verify=True`",
+        "Pre-diff (git show 8dd3b26b:src/requests/adapters.py `_urllib3_request_context`): `verify=True` produced `pool_kwargs = {\"cert_reqs\": \"CERT_REQUIRED\"}` only, so the merge never touched `ssl_context`"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "pyOpenSSL injected after `import requests` (user-called `urllib3.contrib.pyopenssl.inject_into_urllib3()`): `_preloaded_ssl_context` is a stdlib `ssl.SSLContext` created before injection, so `verify=True` connections silently bypass pyOpenSSL and `connection.py:1053-1056` permanently sets `check_hostname=False` on the shared object (hostname matching still happens via urllib3's `_match_hostname`, so this is a behavioural divergence rather than a verified bypass). Not elevated to a finding: pyOpenSSL contrib is deprecated in urllib3 2.x and requests' own injection at `src/requests/__init__.py:126-129` runs before `adapters` is imported.",
+    "urllib3 1.26.x is not installed; the client-cert leak and pool_kwargs merge behaviour were reasoned from the 2.8.0 source plus knowledge of 1.26's `ssl_wrap_socket`/`_merge_pool_kwargs`, which have the same shape. Callsite completeness for `init_poolmanager(ssl_context=...)` consumers is grep-only within this repo; external subclasses cannot be enumerated.",
+    "The failing `test_different_connection_pool_for_mtls_settings` is a fixture-expiry issue independent of this diff: `tests/certs/mtls/client/client.pem` was committed 2024-03-14 (`a94e9b53`) with `-days 730` (tests/certs/mtls/client/Makefile:10), so it expired around 2026-03-14 and the server's `CERTIFICATE_EXPIRED` alert concerns the client cert on the untouched `verify=False` path."
+  ],
+  "testing_gaps": [
+    "No test exercises `verify=True` with `cert=` followed by a `verify=True` request without `cert=` (or two concurrent sessions with different `cert=`) to confirm client credentials do not leak through the shared context; the existing mTLS test only asserts `SSLError` on the second request, which the leak would not change.",
+    "No test covers `import requests` / `verify=False` / `verify=<path>` behaviour when `DEFAULT_CA_BUNDLE_PATH` is missing, empty, or a zip member whose temp extraction fails -- the only previously existing guard (`cert_verify` raising `OSError`) was removed for `verify=True` and nothing replaces it at the new import-time site.",
+    "No test asserts that an `HTTPAdapter` subclass passing `ssl_context=`/`ssl_version=` to `PoolManager` in `init_poolmanager` still has those settings applied to `verify=True` pools after this change."
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "reviewer": "julik-frontend-races",
+  "findings": [
+    {
+      "title": "PR claims focused-latch fix that the commit does not contain",
+      "severity": "P2",
+      "file": "packages/react/src/field/control/FieldControl.tsx",
+      "line": 163,
+      "why_it_matters": "A `Field.Control` that is conditionally unmounted or flipped to `disabled` while it has focus leaves `data-focused` stuck on `Field.Root`, `Field.Label`, and every other part that reads `fieldState.focused`, because no `blur` event is dispatched for a removed or newly-disabled element and `setFocused(false)` lives only in `onBlur`. The PR body states this path is fixed (\"A control that unmounts or becomes disabled while focused no longer latches `data-focused`\"), but the head commit contains no such change: the only writes to `focused` are the `autoFocus` layout effect, `onFocus`, and `onBlur`. Reviewers and release notes will record a fix that did not ship. A layout-effect cleanup plus a `disabled` watcher closes the gap in a few lines.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In FieldControl.tsx, next to the existing autoFocus effect, add:\n\n  useIsoLayoutEffect(() => {\n    if (disabled) {\n      setFocused(false);\n    }\n  }, [disabled, setFocused]);\n\n  useIsoLayoutEffect(() => () => setFocused(false), [setFocused]);\n\n`setFocused` is a plain `useState` setter from FieldRoot, so the unmount cleanup is a no-op when the Root unmounts in the same commit and a bail-out when the control was never focused. Add a test that mounts a focused control inside a persistent `Field.Root`, unmounts it (and separately toggles `disabled`), and asserts the root no longer has `data-focused`. Alternatively, drop the claim from the PR description if the fix is intended for a follow-up.",
+      "confidence": 75,
+      "evidence": [
+        "packages/react/src/field/control/FieldControl.tsx:161-163 -- onBlur(event) {\n          setTouched(true);\n          setFocused(false);",
+        "packages/react/src/field/control/FieldControl.tsx:119-123 -- useIsoLayoutEffect(() => { if (autoFocus && inputRef.current === activeElement(ownerDocument(inputRef.current))) { setFocused(true); } }, [autoFocus, setFocused]); (no cleanup, no disabled dependency)",
+        "grep `setFocused\\(` in packages/react/src/field (non-test): only FieldControl.tsx:121 (true), :159 (true), :163 (false) -- no unmount or disabled path resets it",
+        "PR body: \"A control that unmounts or becomes disabled while focused no longer latches `data-focused`, since no blur fires in that path.\" -- full.diff for FieldControl.tsx touches only the value/filled/dirty/validation paths; no change to focus handling",
+        "packages/react/src/field/root/FieldRoot.tsx:53 -- const [focused, setFocused] = React.useState(false); (state lives in Root, so it survives the control's unmount)"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "clearErrors on programmatic sync (packages/react/src/field/control/FieldControl.tsx:110): the PR body's open question is resolved toward clearing. A consumer that receives server `errors` in one render and normalizes the controlled value (trim, format) in a later render will wipe that server error. Same-batch updates are safe: FieldControl's layout effect runs before Form's `useValueChanged(externalErrors)` and `clearErrors` is a functional updater (Form.tsx:145-156), so the external errors win. The later-render case is consumer-visible behaviour that matches Switch/Checkbox/Select but is a change for Input.",
+    "The react#9023 `defaultPrevented` guard (FieldControl.tsx:153) no longer applies to controlled inputs because `onChange` returns at line 144 before reaching it. A controlled input whose native `input` event is preventDefault-ed by a capture listener (input-mask libraries) but whose `onValueChange` still echoes the value will now clearErrors and validate through the prop sync. Arguably correct (the consumer accepted the value), but it is a silent behaviour change not covered by the existing 'does not clear errors or validate when change is prevented' test, which is uncontrolled.",
+    "Programmatic DOM writes (`ref.current.value = x`, native `form.reset()`) on an uncontrolled `Field.Control` fire no change event, so `filled`/`dirty` stay stale. Pre-existing and unchanged by this diff (the removed `valueProp` dependency only covered the controlled path, which `useValueChanged` now owns)."
+  ],
+  "testing_gaps": [
+    "No test for a controlled `Field.Control` with an async `validate` where the value is changed programmatically while a previous validation is in flight; the PR body claims the stale result no longer publishes, which relies on `validationCommitIdRef` in useFieldValidation.ts:117-119,268-271 being incremented by the new call site. A test with two deferred promises resolved out of order would pin this.",
+    "No test for a controlled value change landing in the same commit that flips `disabled` to true (registration is removed at useRegisterFieldControl.ts:24-26 before the `useValueChanged` callback runs `validation.change`; the custom validator is still invoked for a disabled field, consistent with siblings but unasserted).",
+    "No StrictMode coverage of the new controlled-sync path's render count: 'renders once per keystroke for controlled input changes' uses `renderNonStrict`; the strict `render` variant is only exercised via `validate` call counts."
+  ]
+}

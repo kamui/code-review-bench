@@ -1,0 +1,57 @@
+{
+  "reviewer": "testing",
+  "findings": [
+    {
+      "title": "Render-count test misses 2x renders under validationMode=onChange",
+      "severity": "P2",
+      "file": "packages/react/src/field/control/FieldControl.test.tsx",
+      "line": 90,
+      "why_it_matters": "A controlled Field.Control inside a Field.Root with validationMode=\"onChange\" now renders twice per keystroke (the consumer's setValue render, then a synchronous second render triggered when the useValueChanged layout effect calls validation.change -> commit -> setValidityData). Before this PR the same validation ran inside the React change handler and was batched with setValue into one render, and the intent explicitly says the change must not add a render per keystroke for controlled inputs. The new test asserts 'settledRenderCount + 2' with the comment 'The controlled echo must not schedule a second render per keystroke', but it only runs in the default validation mode where validation.change takes the revalidate path and performs no state update, so the claim it documents is only true for the mode it happens to test. Measured in a scratch harness against the reviewed tree: controlled + onChange mode = 2 renders/keystroke, uncontrolled + onChange mode = 1 render/keystroke.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Add a sibling test identical to 'renders once per keystroke for controlled input changes' but with `<Field.Root validationMode=\"onChange\" validate={() => null}>` and the same `toBe(settledRenderCount + 2)` assertion. It will fail on the current head (observed settledRenderCount + 4); either accept and document the extra render (change the assertion and comment) or batch the sync (e.g. run the controlled validation.change from the onChange handler via a ref flag and keep only clearErrors/dirty/filled in the prop sync) so the test passes.",
+      "confidence": 75,
+      "evidence": [
+        "packages/react/src/field/control/FieldControl.test.tsx:90 -- expect(renderCountRef.current).toBe(settledRenderCount + 2);",
+        "packages/react/src/field/control/FieldControl.test.tsx:64 -- <Field.Root> (no validationMode; default mode makes validation.change a no-op revalidate when state is valid)",
+        "packages/react/src/field/control/FieldControl.tsx:114 -- validation.change(serializedValue); (called from the useValueChanged layout effect, after the consumer's render has committed)",
+        "packages/react/src/field/root/useFieldValidation.ts:326 -- commit(value, !validateOnChange); and :169-172 the revalidate path returns early when state.valid !== false, which is why the default-mode test sees no extra render",
+        "scratch probe (clone-work/scratch-testing/probe.test.tsx, run against the reviewed tree): 'A controlled onChange-mode renders per keystroke: 2' vs 'A2 uncontrolled onChange-mode renders per keystroke: 1'"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "clearErrors in controlled sync path has no test coverage",
+      "severity": "P2",
+      "file": "packages/react/src/field/control/FieldControl.tsx",
+      "line": 110,
+      "why_it_matters": "For every controlled Field.Control, Form-level server errors are now cleared only by the new `clearErrors(name)` call in the useValueChanged sync; the onChange handler returns before its own clearErrors for controlled inputs. No test in the diff or the repo renders a controlled Field.Control inside a Form with `errors` (the only Form-errors test in FieldControl.test.tsx uses an uncontrolled control, and Form.test.tsx's controlled error-clearing test uses Switch). Deleting line 110 leaves the whole suite green while a server error would stick on every controlled text input after the user fixes it, which is the most common Form + Input shape. The PR body also says this call is intentionally absent, so the head/body disagreement is itself unpinned by a test.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Add to FieldControl.test.tsx: render `<Form errors={{ message: 'Server error' }}><Field.Root name=\"message\"><Field.Control value={value} onValueChange={setValue} /><Field.Error /></Field.Root><button onClick={() => setValue('external')}/></Form>` with the errors object hoisted to a constant (a fresh object per render re-syncs Form errors and masks the clear), assert 'Server error' is present on mount, then (a) fireEvent.change the textbox and assert it is gone, and (b) in a second case click the button for the programmatic path and assert it is gone. Both scenarios were confirmed to behave correctly on the reviewed tree in a scratch run, so the tests only need to pin them.",
+      "confidence": 75,
+      "evidence": [
+        "packages/react/src/field/control/FieldControl.tsx:110 -- clearErrors(name);",
+        "packages/react/src/field/control/FieldControl.tsx:144-146 -- if (isControlled) { return; } (precedes the onChange-path clearErrors at :154, so controlled inputs never reach it)",
+        "packages/react/src/field/control/FieldControl.test.tsx:210 -- <Field.Control onValueChange={handleValueChange} /> (the only Form-errors test in this file; uncontrolled)",
+        "packages/react/src/form/Form.test.tsx:794 -- <Switch.Root checked={a} onCheckedChange={setA} /> (controlled error-clearing coverage exists only for Switch)",
+        "grep for controlled Field.Control in *.test.tsx: only FieldRoot.test.tsx:1636,1755 (dirty/filled, no Form) and FieldControl.test.tsx (no Form errors + controlled)",
+        "scratch probe B2/B3: programmatic and typed controlled changes both clear the server error on the reviewed tree; behavior is correct but unpinned"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Behavior change not covered by any test: a controlled Field.Control whose consumer commits the value now validates and clears Form errors even when the native input event was preventDefault-ed (scratch probe D2: validate called once, server error cleared). The unchanged 'does not clear errors or validate when change is prevented' test exercises only the uncontrolled branch after the early return at FieldControl.tsx:144, so the react#9023 workaround is now uncontrolled-only without a test pinning either mode.",
+    "details.cancel() in uncontrolled mode skips clearErrors/validation but still sets dirty and filled (scratch probe F); the new test asserts only that validate is not called, so whether 'stops the internal handling' (PR body) is meant to include dirty/filled is neither decided nor pinned."
+  ],
+  "testing_gaps": [
+    "Array controlled value (PR body's second motivating case): no test that `value={['a','b']}` starts clean, becomes dirty on change, and clears dirty on return; confirmed working on the reviewed tree (scratch probe E) but unpinned.",
+    "The comment at FieldControl.tsx:142-143 ('a value the consumer rejects or rewrites never reaches the field state') has no test: a controlled input whose onValueChange does not commit should leave data-dirty/data-filled unset and validate uncalled (probe C confirms); moving setDirty/setFilled above the early return would not fail any test.",
+    "Mount-only filled effect is tested for defaultValue and for an empty controlled value but not for a non-empty controlled value on mount (`value=\"foo\"`).",
+    "The `serializedValue === undefined` early return in the sync (controlled value transitioning to null) has no test.",
+    "The PR-body claim that a pending async validator for the old value can no longer publish after a programmatic change relies on the pre-existing validationCommitIdRef guard; no test in the diff covers the async-then-programmatic-change ordering (probe G confirms it holds)."
+  ]
+}

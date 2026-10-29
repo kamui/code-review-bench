@@ -1,0 +1,47 @@
+{
+  "reviewer": "project-standards",
+  "criteria_applied": {
+    "file": "AGENTS.md",
+    "governs": [
+      ".changeset/common-cats-travel.md",
+      "packages/integrations/vercel/src/serverless/entrypoint.ts"
+    ],
+    "rules_extracted": [
+      "AGENTS.md:3 -- \"Not defined here. For now, follow the same conventions and patterns that you detect in the surrounding code.\" (judgment-based; applied to TypeScript source only -- the Style Guide speaks of 'surrounding code', and changeset markdown is not code, so it is not applied to the changeset)",
+      "AGENTS.md:4 -- \"Keep formatting consistent. Our rules are defined in our [biome.jsonc](./biome.jsonc) file, enforced by Biome.\" (tooling-enforced; deviations a formatter fixes are not findings per persona rule 'Violations that automated checks already catch')"
+    ],
+    "not_applicable": "AGENTS.md contains no rule addressing changeset files. CONTRIBUTING.md:232 only says to add a changeset; AGENTS.md does not defer to it. The repo's .agents/skills/astro-pr-writer/SKILL.md does hold changeset-wording guidance but is outside the designated criteria mapping and cannot ground a finding."
+  },
+  "findings": [
+    {
+      "title": "realPath declared untyped with undefined, unlike surrounding code",
+      "severity": "P3",
+      "file": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+      "line": 21,
+      "why_it_matters": "The path-override variable now has no declared type and uses `undefined` as its 'no override' sentinel, while every neighbouring declaration of the same idea uses `string | null`: both `headers.get()` and `searchParams.get()` return `string | null`, the line this diff replaced used `: null`, and the only other `let` in the function is explicitly typed (`let locals: Record<string, unknown> = {};`). A maintainer reading `let realPath = undefined;` cannot tell what the variable is meant to hold, and TypeScript gives it an evolving-any type rather than a checked contract; Biome's `noImplicitAnyLet` is switched off in biome.jsonc (\"To enable later\"), so no tool catches this. Declaring `let realPath: string | null = null;` restores the convention the surrounding code (and the two prior versions of this line) already follow, with no behavioural change since the `typeof realPath === 'string'` guard on line 27 is unchanged. AGENTS.md:3 asks contributors to \"follow the same conventions and patterns that you detect in the surrounding code\"; applying that rule here requires judgment, so this is anchored at 50 as an advisory-tier observation.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": false,
+      "suggested_fix": "Replace `let realPath = undefined;` with `let realPath: string | null = null;` (both assignment sources, `request.headers.get(...)` and `url.searchParams.get(...)`, already return `string | null`, and the existing `typeof realPath === 'string'` check on line 27 continues to work unchanged).",
+      "confidence": 50,
+      "evidence": [
+        "packages/integrations/vercel/src/serverless/entrypoint.ts:21 -- `\t\tlet realPath = undefined;`",
+        "AGENTS.md:3 -- \"- Not defined here. For now, follow the same conventions and patterns that you detect in the surrounding code.\"",
+        "packages/integrations/vercel/src/serverless/entrypoint.ts:38 -- `\t\tlet locals: Record<string, unknown> = {};` (the only other `let` in this function carries an explicit type annotation)",
+        "packages/integrations/vercel/src/serverless/entrypoint.ts:23,25 -- `realPath = request.headers.get(ASTRO_PATH_HEADER)` / `realPath = url.searchParams.get(ASTRO_PATH_PARAM);` (both sources return `string | null`, never `undefined`)",
+        "base b089b904f packages/integrations/vercel/src/serverless/entrypoint.ts:20 (removed by this diff) -- `const realPath = hasValidMiddlewareSecret ? request.headers.get(ASTRO_PATH_HEADER) : null;` (prior sentinel was `null`)",
+        "biome.jsonc:64-65 -- `// To enable later` / `\"noImplicitAnyLet\": \"off\"` (rule that would flag this is disabled, so tooling does not catch it)",
+        "provenance: 335a20416 Matthew Phillips 2026-03-19 - Require trusted secret for path overrides (#15959) (authored the `: null` form this diff replaced); 71ae51338 Em Poulter 2026-03-25 - fix(vercel): Fix ISR path rewrite to prevent 404 (introduces the `= undefined` form)"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Changeset wording is outside the designated criteria (AGENTS.md says nothing about changesets, and does not defer to CONTRIBUTING.md), so no finding is raised; but note that `.changeset/common-cats-travel.md:5` reads `Fix vercel ISR path rewrite`, whereas every sibling changeset in `.changeset/` starts with a present-tense third-person verb and names the user-visible effect (e.g. `giant-islands-stare.md`: \"Fixes server islands returning 404 in production when using `output: 'static'`\"), and the repo's own `.agents/skills/astro-pr-writer/SKILL.md:127` instructs \"Begin with a **present tense verb** that completes the sentence 'This PR …'\". This line becomes the `@astrojs/vercel` CHANGELOG entry as written; a maintainer may want it to read along the lines of \"Fixes ISR-rendered pages returning 404 on Vercel\".",
+    "Hard-coded header literal `'x-vercel-isr'` at entrypoint.ts:24 was examined against the 'surrounding conventions' rule and deliberately NOT flagged: Astro-owned header/param names are exported constants in `src/index.ts:44-52`, but Vercel-platform header names are already written as literals in this same function (`entrypoint.ts:55` -- `request.headers.set('x-deployment-id', ...)`), so the literal is consistent with the file's existing pattern.",
+    "Formatter deviations on entrypoint.ts:22 and :24 (`if(` without space) and :23 (missing semicolon) are Biome formatter output differences, not findings: `.github/workflows/format.yml` auto-formats via the withastro/automation workflow and lands `[ci] format` commits (e.g. 526b2d564 in `git log`), so they will be corrected by tooling. Note only that `biome ci` in `.github/workflows/ci.yml:106` runs with `--formatter-enabled=false`, so these will not block the PR either."
+  ],
+  "testing_gaps": [
+    "No test exercises the new acceptance branch: `packages/integrations/vercel/test/path-override-security.test.js` only asserts that `_render` ignores an untrusted `x_astro_path` query param / `x-astro-path` header, and `test/isr.test.js` never invokes the `_isr` function. A test that calls the serverless entrypoint with header `x-vercel-isr: 1` plus `?x_astro_path=/some-route` and asserts the route is served, and a companion test asserting the same query param is still ignored when the header is absent or not `'1'`, would pin both the restored ISR behaviour and the #15959 security property this PR must preserve."
+  ]
+}

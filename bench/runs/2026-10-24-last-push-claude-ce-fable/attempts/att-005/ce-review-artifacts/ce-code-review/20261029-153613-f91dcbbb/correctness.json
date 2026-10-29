@@ -1,0 +1,85 @@
+{
+  "reviewer": "correctness",
+  "findings": [
+    {
+      "title": "FAQ source instruction omits that it must run after compinit",
+      "severity": "P3",
+      "file": "FAQ.md",
+      "line": 135,
+      "why_it_matters": "A user who follows the new FAQ paragraph and places `source <(rg --generate complete-zsh)` in `.zshrc` before `compinit` has run (for example above the line that loads oh-my-zsh or prezto, which call compinit) gets `_rg:341: command not found: _arguments` on every shell start and no completion. The script's new tail falls through to `_rg \"$@\"` whenever `compdef` is undefined (that branch exists for ci/test-complete), so sourcing early executes the completion function at top level. Verified empirically with zsh 5.8.1: sourcing without compinit exits 1 with that error; sourcing after compinit registers `_rg` for `rg` correctly. One clause in the FAQ removes the trap.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": false,
+      "suggested_fix": "In FAQ.md change the lead-in to read: \"you can add the following to your `$HOME/.zshrc` file, after the line that runs `compinit`:\" (or an equivalent sentence noting that the completion system must already be initialised).",
+      "confidence": 75,
+      "evidence": [
+        "FAQ.md:135 -- $ source <(rg --generate complete-zsh)",
+        "crates/core/flags/complete/rg.zsh:441 -- if [[ $funcstack[1] == _rg ]] || (( ! $+functions[compdef] )); then",
+        "crates/core/flags/complete/rg.zsh:442 --   _rg \"$@\"",
+        "scratch run (zsh -f, no compinit): `source <(cat _rg)` -> `_rg:341: command not found: _arguments`, rc=1; after `compinit`: rc=0 and `$_comps[rg]` == `_rg`"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Shell prompt `$ ` left inside a code block meant for .zshrc",
+      "severity": "P3",
+      "file": "FAQ.md",
+      "line": 135,
+      "why_it_matters": "The paragraph tells the reader to add the block to `$HOME/.zshrc`, but the block carries an interactive `$ ` prompt. Pasted literally, zsh reports `command not found: $` at every shell start and the completion is never loaded. The adjacent `fpath=(...)` block added in the same change correctly omits the prompt, so the two blocks are inconsistent.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": false,
+      "suggested_fix": "Replace the block content with `source <(rg --generate complete-zsh)` (drop the leading `$ `).",
+      "confidence": 100,
+      "evidence": [
+        "FAQ.md:135 -- $ source <(rg --generate complete-zsh)",
+        "FAQ.md:132 -- add the following to your `$HOME/.zshrc` file:",
+        "FAQ.md:128 -- fpath=($HOME/.zsh-complete $fpath)"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Missing subject in the new FAQ caveat sentence",
+      "severity": "P3",
+      "file": "FAQ.md",
+      "line": 138,
+      "why_it_matters": "The sentence \"while this approach is easier to setup, is generally slower than the previous method\" has no subject for its main clause, so the reader has to reconstruct what is slower. It is user-facing documentation added by this change; a one-word fix makes it read cleanly.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": false,
+      "suggested_fix": "Rewrite as: \"Note though that while this approach is easier to set up, it is generally slower than the previous method, and will add more time to loading your shell prompt.\"",
+      "confidence": 100,
+      "evidence": [
+        "FAQ.md:138 -- Note though that while this approach is easier to setup, is generally slower"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Sourcing the file by bare relative name still runs completion",
+      "severity": "P3",
+      "file": "crates/core/flags/complete/rg.zsh",
+      "line": 441,
+      "why_it_matters": "The guard decides \"am I the autoloaded completion function\" by comparing `$funcstack[1]` to the literal `_rg`, but zsh also puts the *filename as given* into `funcstack` for a sourced file. A user who saves the script as `_rg` (the FAQ's filename) and runs `source _rg` from inside that directory hits the first branch and gets `_arguments:comparguments:325: can only be called from completion function`, the exact error issue #2956 set out to remove; `source ./_rg`, an absolute path, `source <(...)`, and `eval` all work. Verified on zsh 5.8.1. `$zsh_eval_context[-1]` distinguishes the cases directly: it is `file` for any sourced file and `loadautofunc` for both zsh-style and ksh-style autoload, and the alternative guard passes the autoload, process-substitution, relative-source, and ci/test-complete scenarios in scratch runs.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Use the evaluation context instead of the frame name: `if [[ ${zsh_eval_context[-1]} != file ]] || (( ! ${+functions[compdef]} )); then`. Assumption: zsh_eval_context is available on every zsh version the script targets (it predates the zsh 5.4 features the script already works around). Bracing the expansions also keeps the test well-formed when the sourcing shell has KSH_ARRAYS set.",
+      "confidence": 75,
+      "evidence": [
+        "crates/core/flags/complete/rg.zsh:441 -- if [[ $funcstack[1] == _rg ]] || (( ! $+functions[compdef] )); then",
+        "crates/core/flags/complete/rg.zsh:442 --   _rg \"$@\"",
+        "scratch run (zsh -f, after compinit): `cd dir; source _rg` -> `_arguments:comparguments:325: can only be called from completion function`, rc=1; `source ./_rg` -> rc=0",
+        "scratch probes: funcstack[1] is `/proc/self/fd/11` for `source <(...)`, `_probe` for `source _probe`, `(eval)` for eval, `_probe` for autoload; zsh_eval_context[-1] is `file`, `file`, `eval`, `loadautofunc` respectively",
+        "scratch run with the suggested guard: relative source rc=0 and registered; zsh-style and ksh-style autoload list args; ci/test-complete emulation prints 341 arg specs (same as the original)"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "A shell with `setopt ksh_arrays` active when the script is sourced prints `<file>:441: bad output format specification` from `(( ! $+functions[compdef] ))` (the `[compdef]` is parsed as an arithmetic output-base spec once the subscript no longer binds); registration still succeeds because the failed test falls through to `compdef _rg rg`. Narrow (global KSH_ARRAYS breaks most zsh plugins) and cosmetic; bracing the expansion as in the finding on rg.zsh:441 removes it.",
+    "Behaviour under zsh versions older than 5.8.1 was not executed; only 5.8.1 was available for the scratch runs."
+  ],
+  "testing_gaps": [
+    "ci/test-complete only exercises the `compdef`-undefined branch of the new tail. Nothing automated checks the two branches the change is about: that `source <(rg --generate complete-zsh)` after `compinit` registers `_rg` for `rg` without error, and that the fpath/autoload path still runs the function. A CI step such as `zsh -f -c 'autoload -Uz compinit; compinit -u; source <(rg --generate complete-zsh) && [[ $_comps[rg] == _rg ]]'` would cover the headline scenario once a built `rg` is available."
+  ]
+}

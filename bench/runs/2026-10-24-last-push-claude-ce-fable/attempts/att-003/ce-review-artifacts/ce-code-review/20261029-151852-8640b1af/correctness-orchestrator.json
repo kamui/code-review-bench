@@ -1,0 +1,57 @@
+{
+  "reviewer": "correctness",
+  "note": "Orchestrator's own lite/focused-path read, performed in the dispatch context (not an independent subagent).",
+  "verification": {
+    "scratch_script": "/home/jack/.t3/ce-fable-runs/2026-10-24-last-push-claude-ce-fable/att-003/tmp/unlocal_check.js",
+    "method": "Re-implemented old and new _unlocal_date verbatim in node v24 and ran under TZ=UTC, Europe/Paris, Europe/London, Asia/Tokyo, Pacific/Auckland, America/Los_Angeles, America/New_York, America/Sao_Paulo, Pacific/Honolulu with (a) the ms-since-epoch value Python serializes for datetime.date(2019,9,20) and (b) the toDateString() string 'Mon Sep 16 2019' that _on_select stores.",
+    "result": "New code: string input correct in all 9 zones (old code was one day early in the four UTC+ zones -- the reported bug). Number input: old code correct in all 9 zones; new code one day EARLY in all four UTC- zones (Los_Angeles, New_York, Sao_Paulo, Honolulu) and correct in UTC and UTC+ zones.",
+    "python_side": "bokeh/core/json_encoder.py:186 routes datetime.date/datetime through convert_datetime_type; bokeh/util/serialization.py:183-184 converts a date to ms since epoch at 00:00 UTC (bokeh/util/tests/test_serialization.py:118 asserts date(2016,5,11) -> 1462924800000.0). So value/min_date/max_date reach the browser as UTC-midnight timestamps on initial render."
+  },
+  "findings": [
+    {
+      "title": "Initial value/min/max now render one day early in UTC- zones",
+      "severity": "P1",
+      "file": "bokehjs/src/lib/models/widgets/date_picker.ts",
+      "line": 83,
+      "why_it_matters": "Every user whose browser runs west of UTC (all of the Americas) now sees the DatePicker open on the day before the date the Python model set, and min_date/max_date are likewise shifted one day early; before this change those users saw the correct date. The function receives two different encodings: on initial render `new Date(this.model.value)` is built from the millisecond timestamp Python serializes at 00:00 UTC, while after a pick it is built from the local-midnight string `toDateString()` stores. Subtracting the local offset turns the local-midnight string into UTC midnight (fixing the UTC+ bug) but pushes the already-UTC-midnight timestamp into the previous UTC day whenever the offset is positive. Branching on the encoding fixes both cases.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Decide the calendar date from the encoding instead of shifting: in render() pass the raw model value, and implement `_unlocal_date(value: string | number): Date { const d = new Date(value); return typeof value === \"number\" ? new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) : new Date(d.getFullYear(), d.getMonth(), d.getDate()) }`. Assumption: numbers only ever arrive as Python's UTC-midnight serialization and strings only as toDateString()/local-parsed forms; a date-only ISO string ('2019-09-20') is parsed as UTC by `new Date` and would need the UTC branch too if the project ever sends one.",
+      "confidence": 100,
+      "evidence": [
+        "bokehjs/src/lib/models/widgets/date_picker.ts:83 -- date.setTime(date.getTime() - timeOffsetInMS)",
+        "bokehjs/src/lib/models/widgets/date_picker.ts:68 -- defaultDate: this._unlocal_date(new Date(this.model.value)),",
+        "bokehjs/src/lib/models/widgets/date_picker.ts:95 -- this.model.value = date.toDateString()",
+        "bokeh/util/serialization.py:183-184 -- elif isinstance(obj, dt.date): return (dt.datetime(*obj.timetuple()[:6]) - DT_EPOCH).total_seconds() * 1000",
+        "bokeh/core/json_encoder.py:186 -- return convert_datetime_type(obj)",
+        "node scratch under TZ=America/Los_Angeles: number(py date 2019-09-20) old=2019-09-20 new=2019-09-19 (WRONG); TZ=Europe/Paris: string('Mon Sep 16 2019') old=2019-09-15 (WRONG) new=2019-09-16"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "New tests never assert the initially displayed date",
+      "severity": "P2",
+      "file": "tests/integration/widgets/test_datepicker.py",
+      "line": 47,
+      "why_it_matters": "The integration file added for this fix would stay green while the widget opens on the wrong day: test_basic only checks the label text, and the two other tests only check the input after a pick. The initial-render path (Python timestamp -> _unlocal_date -> Pikaday defaultDate) is exactly the path the rewritten function regresses in UTC- zones, and the pick-path assertion only distinguishes old from new behaviour when the browser runs in a UTC+ zone. Asserting the rendered input value on load gives the suite a check that fails in any zone where the initial date is shifted.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In test_basic, after the label assertion add: `el = page.driver.find_element_by_css_selector('.foo input'); assert el.get_attribute('value') == 'Fri Sep 20 2019'`. Note this assertion fails under the current diff when the browser runs in a UTC- zone, which is the regression it is meant to catch.",
+      "confidence": 75,
+      "evidence": [
+        "tests/integration/widgets/test_datepicker.py:47 -- assert el.text == \"Select date\"",
+        "tests/integration/widgets/test_datepicker.py:42 -- dp = DatePicker(title='Select date', value=datetime(2019, 9, 20), ...",
+        "tests/integration/widgets/test_datepicker.py:63-64 -- el = page.driver.find_element_by_css_selector('.bk-input'); assert el.get_attribute('value') == 'Mon Sep 16 2019' (only after the pick)"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "The timezone-dependence of the displayed date is not exercised by CI unless the Selenium browser runs under a non-UTC TZ; under TZ=UTC both the old and new code produce identical output for every input, so the suite as written cannot distinguish them."
+  ],
+  "testing_gaps": [
+    "No test runs the DatePicker under a UTC- and a UTC+ browser timezone (e.g. parametrize TZ for the Selenium driver or add a bokehjs unit test of _unlocal_date with a stubbed getTimezoneOffset) for both the Python-serialized initial value and the toDateString() picked value."
+  ]
+}
