@@ -9,7 +9,7 @@ Part of [issue 213](https://github.com/kamui/code-review-bench/issues/213). This
 - The runs use the Rust tooling: `bench-tools run-cell`, the skill runner and `bench-tools queue`.
 - On 2026-10-24 the owner ruled to cut the skill's step that reads the pull request discussion with `gh` before freezing. The tasks are public pull requests and reviewers have network access, so that step could read maintainer comments.
 - Spare Claude usage on 2026-10-24 goes first to the Claude arms. The Codex arms are planned here and frozen later.
-- On 2026-10-28 the owner ruled the two flagged Opus reviews not leaks, approved publishing the Claude transcripts, and approved the Codex runs' caps and a quota stop at 95% ([owner answers](owner-answers-2026-10-28.md)).
+- On 2026-10-28 the owner ruled the two flagged Opus reviews not leaks, approved publishing the Claude transcripts, approved the Codex runs' caps and a quota stop at 95%, and approved publishing the Codex transcripts ([owner answers](owner-answers-2026-10-28.md)).
 
 ## Runs
 
@@ -173,13 +173,7 @@ The same test ran in eight Claude reviews of the task ([Leak checks](#leak-check
 - Attempt records: `bench/runs/<run>/attempts/`, as filed by `bench-tools run-cell`.
 - Transcripts: `bench-tools evidence collect` mapped and verified all 144 archives in each run's `transcripts.json`, and a separate check rehashed each archive against its attempt record and its map entry. **(run)** The archives are under `artifacts/transcripts/<run>/` on this host and Git ignores them.
 - Clones: filing removed the `clone` and `clone-cache` of all 144 attempts and wrote the runner's receipt, copied byte for byte to [`prune-receipts/`](prune-receipts/). Each receipt is applied, names the archive hash its attempt record holds, and its removed paths are gone. Every attempt keeps `home` and `clone-work` under `~/.t3/bench-runs-lanes/thermo-213-codex/`. **(run)**
-- Publication plan: [`publication-plan.codex.v1.json`](publication-plan.codex.v1.json), not published. It needs the owner's approval of these facts:
-  - Destination: GitHub release `evidence-thermo-nuclear-review-codex-transcripts-2026-10-28-v1` of `kamui/code-review-bench`.
-  - Visibility: public.
-  - Categories: execution (the 144 Codex rollouts, one per attempt) and accounting and lineage (the archives the 144 attempt records pin by SHA-256).
-  - Package: 144 archives, 17,241,207 bytes, packed by `bench-tools evidence pack` into one 16,923,687-byte asset. Two packs from the selection gave the same manifest, whose SHA-256 the plan pins. **(run)**
-  - Credentials: no `auth.json`, `.credentials.json` or `.claude.json` member. A token search found the Netlify preview link of `r-base-ui-5460`'s public pull request in 9 archives, and `sk-` runs only inside Codex's encrypted reasoning text. **(run)**
-  - Once approved, the plan's `publish` commands pack, publish and verify it as the Claude release was.
+- Publication: the archives hold no `auth.json`, `.credentials.json` or `.claude.json` member. A token search found the Netlify preview link of `r-base-ui-5460`'s public pull request in 9 archives, and `sk-` runs only inside Codex's encrypted reasoning text. **(run)** The owner approved their publication on 2026-10-28 ([answer 4](owner-answers-2026-10-28.md#4-codex-transcripts)), and they are in the public [release](https://github.com/kamui/code-review-bench/releases/tag/evidence-thermo-nuclear-review-codex-transcripts-2026-10-28-v1) as one 16,923,687-byte package, packed from [`publication-plan.codex.v1.json`](publication-plan.codex.v1.json)'s selection to the manifest hash it pinned. The [manifest](../../../bench/evidence/manifests/thermo-nuclear-review-codex-transcripts-2026-10-28-v1.json) keeps each archive's path, size, hash and mode, and the [restoration receipt](../../../bench/evidence/receipts/thermo-nuclear-review-codex-transcripts-2026-10-28-v1-restoration.json) records a download and restoration from the release. A separate download of the asset matched its SHA-256 `99a7a2af…d0e4`, and each of its 144 members matched the hash its run's `transcripts.json` froze. **(run)**
 
 ## Cost
 
