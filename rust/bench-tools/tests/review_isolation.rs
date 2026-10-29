@@ -477,7 +477,7 @@ fn a_frozen_forge_is_readable_its_log_writable_and_its_gh_first_on_path() {
 }
 
 #[test]
-fn claude_strict_v3_passes_bash_to_the_gate_and_reads_its_ca() {
+fn claude_strict_v3_opens_bash_to_the_gate_and_v4_drops_the_client_read_check() {
     if let Some(error) = review_isolation::RUNTIME_TOOLS
         .into_iter()
         .find_map(|name| review_isolation::runtime_folders(name).err())
@@ -549,6 +549,60 @@ fn claude_strict_v3_passes_bash_to_the_gate_and_reads_its_ca() {
         review_isolation::verify_evidence(&closed.attempt, review_isolation::ENFORCED),
         [] as [String; 0]
     );
+
+    let with_read_check = |settings: &Value, blocked: bool| {
+        let mut changed = settings.clone();
+        if let Value::Object(config) = &mut changed
+            && let Some(Value::Object(permissions)) = config.get_mut("permissions")
+        {
+            permissions.insert(
+                "blockReadsOutsideWorkingDirectories".into(),
+                Value::Bool(blocked),
+            );
+        }
+        changed
+    };
+    assert!(settings.py_eq(&with_read_check(&settings, true)));
+    let v2 = settings;
+    let (out, settings) = written(&closed, review_isolation::SANDBOXED_READS);
+    receipt_for(&closed, &std::fs::read_to_string(&out).unwrap());
+    assert!(settings.py_eq(&with_read_check(&v2, false)));
+    assert_eq!(
+        review_isolation::verify_evidence(&closed.attempt, review_isolation::SANDBOXED_READS),
+        [] as [String; 0]
+    );
+    assert_eq!(
+        review_isolation::verify_evidence(&closed.attempt, review_isolation::ENFORCED),
+        ["isolation profile or settings hash changed"]
+    );
+    for (profile, blocked, problem) in [
+        (
+            review_isolation::SANDBOXED_READS,
+            true,
+            "isolation settings keep the client's read check",
+        ),
+        (
+            review_isolation::ENFORCED,
+            false,
+            "isolation file-tool boundary is missing",
+        ),
+    ] {
+        let text = pyjson::dumps(
+            &with_read_check(&settings, blocked),
+            &pyjson::Dumps::default(),
+        );
+        std::fs::write(&out, &text).unwrap();
+        receipt_for(&closed, &text);
+        let evidence = closed.attempt.join("isolation.json");
+        let receipt = std::fs::read_to_string(&evidence)
+            .unwrap()
+            .replace(review_isolation::SANDBOXED_READS, profile);
+        std::fs::write(&evidence, receipt).unwrap();
+        assert_eq!(
+            review_isolation::verify_evidence(&closed.attempt, profile),
+            [problem]
+        );
+    }
 
     let open = Attempt::new("strict-v3");
     let (out, settings) = written(&open, review_isolation::GATED);
