@@ -6,6 +6,8 @@ This is the second plan. The user [selected](../bench/grading/rulings/cohort-reb
 
 The first plan, declared on 2026-10-03 under the previous rubric, is [closed as superseded](../bench/grading/rulings/cohort-rebuild-audit.v3.md). Its round did not pass and is not described as passed. `audits.json` keeps its declaration and evidence under `superseded`, and its records stay in `bench/grading/current/audit/evaluator-audit-v1-2026-10-03/`.
 
+The round this plan drew on 2026-10-24 with seed `evaluator-audit-v2-2026-10-12` sampled the rule-version-3 grades. It was assessed a second time, and its reconciliation was paused after its first question. On 2026-10-29 the owner [closed it as superseded](../bench/grading/rulings/cohort-rebuild-audit.v5.md) by the rule-version-4 regrade. It did not pass, and its remaining questions are not asked. `audits.json` keeps that round under `superseded`, and its records stay in `bench/grading/current/audit/evaluator-audit-v2-2026-10-12/`. The plan is unchanged. Its next draw, from the rule-version-4 grades, uses the seed `evaluator-audit-v2-2026-10-29`.
+
 ## Units and strata
 
 A stratum is a set of graded units of one kind.
@@ -85,7 +87,7 @@ Every confirmed error is corrected, inside tolerance or not, by grading the batc
 
 A tolerance is the largest count of confirmed first-grader errors that a stratum's sample may contain. It counts errors after reconciliation, not disagreements, and both graders being wrong counts as a first-grader error. One grader differs from its own labels on about 3% of claims when run twice, so raw disagreement cannot be the measure. Both the raw agreement and the confirmed count are published.
 
-A stratum over its tolerance fails the round. The affected batches are graded again and every stratum is drawn once more with seed `evaluator-audit-v2-2026-10-12-round-2` and fresh second sessions, under a separately approved spend. A second failure returns to the user for a new plan. A failed round's records stay in its directory.
+A stratum over its tolerance fails the round. The affected batches are graded again and every stratum is drawn once more with the round's seed followed by `-round-2` and fresh second sessions, under a separately approved spend. A second failure returns to the user for a new plan. A failed round's records stay in its directory.
 
 `audits.json` becomes `assessed` only when every stratum was drawn, assessed a second time, reconciled and within tolerance, with the populations, drawn units, second assessments, confusion tables and reconciliation saved as pinned evidence. Until then any display says the audit is pending or failed and gives no recommendation. After a pass the allowed sentence is: "Detection, claim outcomes, control silence and pre-existing problems raised passed evaluator audit v2 at its declared tolerances, for the fixed claim list and the pre-existing problems admitted when the sample was drawn. Every raised and unresolved pre-existing problem result was checked in full." An assessed audit describes the grades as they were drawn: correcting its confirmed errors afterwards leaves it assessed, as the user [chose](../bench/grading/rulings/cohort-rebuild-audit.v1.md).
 
