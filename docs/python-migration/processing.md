@@ -296,6 +296,10 @@ recorded decision. [Storage](storage.md#behavior-the-corpora-do-not-pin) lists t
   Unicode database is 16.0. `pytext` holds both tables, generated from Python 3.14; `derive-packet` reads the
   same digit table and `build-packet` both. Python 3.12 does not match the
   characters Unicode 16.0 added. The v3 decisions of both normalizer corpora record that difference.
+- Since [#370](https://github.com/kamui/code-review-bench/issues/370), `normalize-thermo` adds its note that the
+  summary says there are no findings but the index is non-empty only when some finding's quote is not in
+  `summary.md`, so a scoped sentence such as "I have no findings on them" no longer stops a review that quotes each
+  finding. Python added the note whenever the no-findings statement matched. The v10 thermo decisions record it.
 - `normalize-thermo` resolves a relative missing `--artifact-root` as Python 3.13 and later do, naming the absolute
   component in the error; Python 3.12 named the relative one. A symbolic link loop in it is an `ELOOP` error, as in
   Python 3.13 and later; Python 3.12 raised a traceback. Callers pass an absolute root.

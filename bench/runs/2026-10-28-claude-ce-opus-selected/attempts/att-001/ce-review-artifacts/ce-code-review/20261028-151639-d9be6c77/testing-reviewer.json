@@ -1,0 +1,48 @@
+{
+  "reviewer": "testing",
+  "findings": [
+    {
+      "title": "RLS duration validation changed; convertDuration error path untested",
+      "severity": "P2",
+      "file": "balancer/rls/config.go",
+      "line": 144,
+      "why_it_matters": "RLS configs that used to be rejected are now accepted silently, and no test catches it. Example: lookupServiceTimeout \"10000000000s\" (about 317 years). ptypes.Duration rejected values that do not fit in time.Duration. AsDuration() saturates them to math.MaxInt64, and CheckValid() only enforces the +/-10000-year proto limit. lookupServiceTimeout is not clamped, so the config now parses with an effectively infinite RLS lookup timeout where it used to fail. The existing 'invalid lookup service timeout/max age/stale age' cases in TestParseConfigErrors use 315576000001s. protojson.Unmarshal rejects that value ('google.protobuf.Duration value out of range') before convertDuration runs. So the guard those cases are named for never runs, and the semantic change passes the suite.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Add a TestParseConfigErrors case with \"lookupServiceTimeout\": \"10000000000s\" (valid per protojson, too large for time.Duration) and expect a parse error. To keep the old behavior, make convertDuration return (0, err) on CheckValid failure. Also return an 'out of range for time.Duration' error when d.GetSeconds() != int64(d.AsDuration()/time.Second) (saturation detected). This assumes rejection, the pre-migration behavior, is still intended.",
+      "confidence": 75,
+      "evidence": [
+        "balancer/rls/config.go:144 -- return d.AsDuration(), d.CheckValid()",
+        "balancer/rls/config_test.go:214-217 -- \"lookupServiceTimeout\" : \"315576000001s\" ... wantErr: \"google.protobuf.Duration value out of range\" (protojson error, raised before convertDuration)",
+        "Scratch check (tmp/durcheck) on Duration{Seconds:10000000000}: ptypes.Duration -> 0s err=\"duration: seconds:10000000000 is out of range for time.Duration\"; AsDuration/CheckValid -> 2562047h47m16.854775807s err=<nil>",
+        "balancer/rls/config.go:209-216 -- lookupServiceTimeout is only defaulted when 0; no upper clamp (unlike maxAge)"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Rewritten LRS interval validation branch has no test; logs nil error",
+      "severity": "P2",
+      "file": "xds/internal/xdsclient/transport/loadreport.go",
+      "line": 175,
+      "why_it_matters": "If a management server sends an invalid or missing load_reporting_interval, operators see 'invalid load_reporting_interval: <nil>' in the warning. The new branch formats the stale (nil) Recv error instead of the CheckValid error. A second change is also untested: intervals that fit the proto range but not time.Duration used to fail the stream and trigger a backoff retry. They now become a math.MaxInt64 ticker, so loads are never reported on that stream. TestReportLoad only sends a valid 50ms interval, so neither the error branch nor the overflow window runs in any test.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Change the branch to `if err := rInterval.CheckValid(); err != nil { return nil, 0, fmt.Errorf(\"invalid load_reporting_interval: %v\", err) }`. If pre-migration semantics are intended, also reject saturated AsDuration() values. Add a transport test modeled on TestReportLoad: push a LoadStatsResponse with LoadReportingInterval nil (and a second case with {Seconds: 10000000000}) via mgmtServer.LRSResponseChan. Assert that the next LRSRequestChan message is a fresh initial LoadStatsRequest (stream restarted after backoff) and not a load report.",
+      "confidence": 75,
+      "evidence": [
+        "xds/internal/xdsclient/transport/loadreport.go:174-175 -- if rInterval.CheckValid() != nil { return nil, 0, fmt.Errorf(\"invalid load_reporting_interval: %v\", err)",
+        "xds/internal/xdsclient/transport/loadreport.go:165-168 -- resp, err := stream.Recv(); if err != nil { return ... } (err is nil when the branch above is reached)",
+        "xds/internal/xdsclient/transport/loadreport.go:122-126 -- recvFirstLoadStatsResponse error -> Warningf + return nil (stream retried with backoff); success -> t.sendLoads(..., interval) which does time.NewTicker(interval)",
+        "xds/internal/xdsclient/transport/loadreport_test.go:94 -- LoadReportingInterval: &durationpb.Duration{Nanos: 50000000}, // 50ms (only interval exercised)"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "test/tools/go.mod downgrades golang.org/x/tools from v0.17.0 to v0.14.0 while swapping protoc-gen-go. Nothing in the test suite exercises this, so a tooling regression (goimports/vet behavior) would not be caught by tests.",
+    "Verified only focused packages (status, balancer/rls compile/tests); the xds/* and transport packages touched by import swaps were not run in this review."
+  ],
+  "testing_gaps": []
+}

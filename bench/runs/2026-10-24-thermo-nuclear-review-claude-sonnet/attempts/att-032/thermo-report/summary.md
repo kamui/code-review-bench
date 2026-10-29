@@ -1,0 +1,43 @@
+# Thermo nuclear review: django/django#17914 (PostgreSQL connection pool support)
+
+Range reviewed: `bcccea3ef3..fad334e1a9`. No PostgreSQL server was available, so I traced the findings below through the code and did not run them.
+
+## Finding 1 (P2): the `_nodb_cursor` fallback wrapper shares and can poison the alias's connection pool
+
+Location: `django/db/backends/postgresql/base.py` lines 203-240 (`pool`), 508-540 (`_nodb_cursor`, unchanged but now interacting with the new pool).
+
+Evidence: `pool` returns `None` only when `self.alias == NO_DB_ALIAS`. The pool cache `_connection_pools` is a class-level dict keyed only by alias. In its fallback branch, `_nodb_cursor` builds `self.__class__({**self.settings_dict, "NAME": <other connection's NAME>}, alias=self.alias)`. That branch runs when the `postgres` maintenance database can't be reached.
+
+The temporary wrapper therefore has the real alias and still has `OPTIONS["pool"]` set. This has two consequences:
+- **Pool already exists:** `conn.cursor()` takes `self.pool.getconn()` from the alias's existing pool. The `NAME` override is ignored, and the cursor lands on whatever database that pool was built for.
+- **Pool doesn't exist yet:** the temporary wrapper builds the pool with `connect_kwargs` containing the borrowed `NAME` and caches it under the real alias. `conn.close()` returns the connection to that pool and leaves the pool open. Every later wrapper for that alias, including the real application connection, reuses this pool, so it connects to the wrong database.
+
+Failure: with `pool` configured and no access to the `postgres` database, test DB creation or any other `_nodb_cursor` use can issue `CREATE DATABASE` or `DROP DATABASE` on the wrong database. Alternatively, the application connection is silently bound to a different database for the life of the process. The fix is to bypass the pool for this wrapper, for example by disabling `pool` in its settings, or to include the database name in the pool key.
+
+## Finding 2 (P3): worker processes that inherit a parent pool after parallel test cloning keep connecting to the wrong database
+
+Location: `django/db/backends/postgresql/base.py` lines 200-240 and 243-246, together with `creation.py` lines 58-90. `BaseDatabaseCreation.setup_worker_connection` (base/creation.py ~380) is unchanged.
+
+Evidence: the pool's connection kwargs, including `NAME`, are captured once at pool creation and stored in the class-level `_connection_pools`. This PR adds `close_pool()` calls in `_clone_test_db`, `_destroy_test_db` and `ensure_timezone`. It adds none to `setup_worker_connection`, which updates `settings_dict["NAME"]` in place and calls only `connection.close()`.
+
+`DiscoverRunner.run_checks` runs after `setup_databases` and its clones, and any parent-process DB access there builds and opens a pool for the test DB. Under the `fork` start method, the default on Linux, `_init_worker` then runs in children that inherit that pool object. The child's `pool` property finds the existing entry and ignores the new clone `NAME`. Workers therefore connect to the parent's test DB instead of their clone, and they share the parent's sockets. The pool's background threads don't exist in the child.
+
+Failure: with `OPTIONS["pool"]` and `--parallel` on a fork platform, the workers share one database and can contend with the parent, producing cross-test interference or hangs. I couldn't confirm that `run_checks` itself touches the DB for every project. Any parent query after cloning triggers the same problem. The fix is to call `close_pool()` (or drop the inherited entry) in the PostgreSQL `setup_worker_connection`.
+
+## Finding 3 (P3): `CONN_HEALTH_CHECKS=True` with `psycopg_pool` older than 3.2 raises `AttributeError`, and the docs and error message don't mention the requirement
+
+Location: `django/db/backends/postgresql/base.py` line 232; `docs/ref/databases.txt` (new "Connection pool" section); `tests/requirements/postgres.txt`.
+
+Evidence: `check=ConnectionPool.check_connection if enable_checks else None`. `ConnectionPool.check_connection` exists only from `psycopg_pool` 3.2. The test requirements pin `psycopg-pool>=3.2.0`, but the user-facing docs say only "requires `psycopg[pool]` or psycopg-pool". The `ImportError` message suggests "Did you install psycopg[pool]?", and that extra can resolve to a 3.1.x pool, which satisfies the import.
+
+Failure: users on an older pool package get an `AttributeError` from the `pool` property on first connection whenever `CONN_HEALTH_CHECKS` is true. The fix is to document and enforce the minimum version or to guard the attribute.
+
+## Finding 4 (P3): `"pool": {}` silently disables pooling, and `close_pool` has a delete race
+
+Location: `django/db/backends/postgresql/base.py` lines 203-207 and 243-246.
+
+Evidence: `pool_options = ...get("pool")` followed by `if ... or not pool_options: return None`. The new docs say the value may be a dict of `ConnectionPool` options, so `{}` is a plausible "defaults" value, but it is falsy. It gets no pool and no error, and only `True` enables defaults.
+
+Separately, `close_pool` does `if self.pool: self.pool.close(); del self._connection_pools[self.alias]`. `self.pool` can create a pool just to close it. Two threads closing concurrently, for example via `ensure_timezone` on a settings change, can both pass the check, and the second `del` raises `KeyError`.
+
+Failure: pooling is silently off when the config is `{}`, so the app runs with one connection per request. Concurrent `close_pool` calls raise an unhandled `KeyError`. The fix is to test `is None` for the first and use `pop(self.alias, None)` for the second.

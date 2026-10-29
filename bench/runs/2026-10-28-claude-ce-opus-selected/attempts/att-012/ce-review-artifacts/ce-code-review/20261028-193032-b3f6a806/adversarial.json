@@ -1,0 +1,72 @@
+{
+  "reviewer": "adversarial",
+  "findings": [
+    {
+      "title": "Pool configure with assume_role re-enters Django wrapper from pool worker",
+      "severity": "P1",
+      "file": "django/db/backends/postgresql/base.py",
+      "line": 280,
+      "why_it_matters": "With OPTIONS {'pool': True, 'assume_role': ...}, the pool cannot hand out a connection. psycopg_pool runs the configure callback in its worker threads. The callback calls ensure_role(), and ensure_role calls ops.compose_sql(). compose_sql runs mogrify(sql, params, self.connection), and that connection is the Django DatabaseWrapper of whichever thread created the pool. mogrify then calls that wrapper's cursor(). If the wrapper has no connection yet (the first-ever checkout), this calls wrapper.connect() from the worker thread. That calls pool.getconn() inside a pool worker, so the workers wait on connections only workers can create. Both the worker and the requesting thread end in PoolTimeout (30s by default), and the worker thread has overwritten the owning thread's wrapper state. Once the wrapper does have a connection, cursor() fails validate_thread_sharing in the worker instead, so every later pool growth fails. The pool's purpose is that configure must not touch Django thread-bound objects, as the diff's own comment says ('does not access anything on self aside from variables'). Building the SET ROLE statement with psycopg.sql on the raw connection removes the back-reference.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In ensure_role(), build the statement without the Django wrapper, e.g. `from psycopg import sql; cursor.execute(sql.SQL(\"SET ROLE {}\").format(sql.Literal(role_name)))` (or `psycopg.ClientCursor(connection).mogrify(\"SET ROLE %s\", [role_name])` on the raw psycopg connection passed to the callback). Keep `ops.compose_sql` only on the non-pool path if psycopg2 compatibility is needed (pooling is psycopg3-only). Add a pooled variant of test_connect_role.",
+      "confidence": 75,
+      "evidence": [
+        "django/db/backends/postgresql/base.py:103 -- sql = ops.compose_sql(\"SET ROLE %s\", [role_name])  (called from _configure_connection at base.py:280, registered as ConnectionPool(configure=self._configure_connection) at base.py:161)",
+        "django/db/backends/postgresql/operations.py:193 -- return mogrify(sql, params, self.connection)  ;  psycopg_any.py:21 -- with connection.cursor() as cursor:  (connection = Django DatabaseWrapper, not the psycopg conn)",
+        "psycopg_pool/pool.py:634-635 -- if self._configure: self._configure(conn)  -- executed inside _connect(), run by AddConnection tasks on pool worker threads",
+        "Offline reproduction (tmp/adv/role.py): with OPTIONS {'pool': True, 'assume_role': 'app_role'}, calling w._configure_connection(fake_psycopg_conn) from a separate thread invoked DatabaseWrapper.connect() on the owning wrapper from thread 'pool-worker'",
+        "Test fidelity: test_connect_role uses no_pool_connection(), which forces OPTIONS['pool'] = False, so the pooled+assume_role path is never exercised even when the suite runs with pooling enabled"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Test DB NAME switch ignored by pre-existing pool; tests hit real DB",
+      "severity": "P1",
+      "file": "django/db/backends/postgresql/base.py",
+      "line": 154,
+      "why_it_matters": "The pool stores get_connection_params() once, when it is created, and keys it only by alias for the life of the process. Later changes to settings_dict are ignored until close_pool() runs. If anything opens a pooled connection before setup_databases, the 'default' pool is created with dbname=<real NAME>. Two examples are a query in AppConfig.ready() (Django only warns) and an import-time query in a test module during build_suite. base create_test_db() then returns that connection to the pool, switches settings_dict['NAME'] to test_<name>, and runs migrate, serialization and the whole suite through the same pool. All of that goes to the real database. TransactionTestCase flushes then truncate real tables. Without the pool, connection.close() before the NAME switch guarantees the next connect() uses the test NAME. The diff only invalidates the pool in _clone_test_db/_destroy_test_db, not on test-DB creation. The same stale-kwargs problem applies to setup_worker_connection(), which updates NAME and calls close() but leaves any pool inherited across fork in place.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In postgresql/creation.py, override _create_test_db() (or create_test_db()) to call self.connection.close_pool() before delegating, so the pool is rebuilt after the NAME switch. Also override setup_worker_connection() to discard any inherited pool without closing its shared sockets (e.g. `self.connection._connection_pools.pop(self.connection.alias, None)` before super()). More robust option: key _connection_pools on (alias, os.getpid()) and on the frozen connect kwargs' dbname, or assert pool.kwargs['dbname'] matches settings_dict['NAME'] in get_new_connection.",
+      "confidence": 75,
+      "evidence": [
+        "django/db/backends/postgresql/base.py:154-164 -- connect_kwargs = self.get_connection_params() ... pool = ConnectionPool(kwargs=connect_kwargs, ...)  (stored once in class-level _connection_pools[self.alias])",
+        "django/db/backends/base/creation.py:64-66 -- self.connection.close(); settings.DATABASES[self.connection.alias][\"NAME\"] = test_database_name; self.connection.settings_dict[\"NAME\"] = test_database_name  (no close_pool; only _clone_test_db/_destroy_test_db call it)",
+        "Offline reproduction (tmp/adv/role.py): with NAME='prod' and pool=True, w.pool.kwargs['dbname'] == 'prod'; after w.settings_dict['NAME'] = 'test_prod', w.pool.kwargs['dbname'] is still 'prod'",
+        "django/test/runner.py run_tests: build_suite (imports test modules) runs before setup_databases, and django.setup()/AppConfig.ready() run before both"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Threads exiting without close() permanently consume pool slots",
+      "severity": "P2",
+      "file": "django/db/backends/postgresql/base.py",
+      "line": 228,
+      "why_it_matters": "Without the pool, a thread that runs an ORM query and exits without connection.close() frees its connection when the thread-local wrapper is garbage-collected. With pool=True, the connection is checked out of the pool and is only given back by Django's _close() via putconn. psycopg_pool decrements its _nconns counter only when a connection attempt fails or the pool shrinks, so a dropped checked-out connection permanently uses up capacity. The defaults are pool max_size = min_size = 4 and timeout 30s. Common patterns can hit this: a threading.Thread or ThreadPoolExecutor job started from a view, or a sync_to_async(thread_sensitive=False) executor thread that never sees request_finished. After a handful of these, every getconn() in the process blocks 30s and raises PoolTimeout, which is a full outage that cannot happen in the non-pooled configuration. The docs added in this diff don't mention that pooled connections must be closed explicitly outside the request cycle.",
+      "autofix_class": "advisory",
+      "owner": "human",
+      "requires_verification": true,
+      "suggested_fix": "At minimum, document in docs/ref/databases.txt (Connection pool section) that connections used outside the request/response cycle must be closed (connection.close() / close_old_connections()) or the pool will be exhausted. Optionally, in get_new_connection() when pooled, register `weakref.finalize(self, pool.putconn, connection)` and detach it in _close(), so the connection returns to the pool when the wrapper is garbage-collected (assumes putconn from a GC context is acceptable; pool reset rolls back open transactions).",
+      "confidence": 75,
+      "evidence": [
+        "django/db/backends/postgresql/base.py:228 -- connection = self.pool.getconn()  (only returned via _close(): self.connection._pool.putconn(self.connection) at base.py:294)",
+        "psycopg_pool/pool.py:688 and :844 -- the only `self._nconns -= 1` sites (connection-attempt failure and shrink); an unreturned checked-out connection is never reclaimed",
+        "psycopg_pool/base.py:119-120 -- if max_size is None: max_size = min_size  (default min_size 4, so pool: True caps at 4 connections)",
+        "psycopg/_connection_base.py:149-151 -- __del__ returns early for pooled connections ('Connection in a pool so terminating with the program is normal')"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Health checks are off by default with pool=True (check=None unless CONN_HEALTH_CHECKS), and close_if_health_check_failed() is bypassed. Previously CONN_MAX_AGE=0 meant a fresh connection per request. Now, after a DB restart/failover or a middlebox idle timeout shorter than the pool's max_idle (10 min), each stale pooled connection fails one request before it is discarded.",
+    "Parallel test runner with fork start method: if the parent opens a pooled connection after the last _clone_test_db (e.g. a system check that reads a pg_version-dependent feature), children inherit an opened pool (dead worker threads, shared sockets, dbname of the template DB). setup_worker_connection does not discard it. I did not confirm whether stock run_checks opens a connection.",
+    "close_pool() is unsynchronised (check self.pool, close, then `del self._connection_pools[alias]`) and ensure_timezone() now closes the process-wide pool. This is reachable in tests via override_settings(TIME_ZONE/USE_TZ). Concurrent callers (e.g. live-server threads) can hit a KeyError, or a closed pool between get_new_connection's two self.pool lookups (open() on a closed pool raises)."
+  ],
+  "testing_gaps": [
+    "No test runs pool=True together with assume_role (test_connect_role is forced to pool=False via no_pool_connection), which would have caught the configure-callback re-entry.",
+    "No test covers create_test_db (or setup_worker_connection) when a pool for the alias already exists with a different NAME."
+  ]
+}

@@ -68,3 +68,23 @@ pub mod subscription_meters;
 pub mod timeout;
 pub mod upstream;
 pub mod usage;
+
+/// The scratch directory `<target>/tmp/<group>`, which follows `CARGO_TARGET_DIR` like the
+/// `CARGO_TARGET_TMPDIR` integration tests use. Cargo sets that variable only for integration
+/// tests and benches, so unit tests find the target directory from their own binary instead.
+#[cfg(test)]
+pub(crate) fn test_scratch(group: &str) -> std::path::PathBuf {
+    let binary = std::env::current_exe().expect("the test binary's path");
+    let deps = binary.parent().expect("the test binary's directory");
+    assert_eq!(
+        deps.file_name().and_then(|name| name.to_str()),
+        Some("deps"),
+        "Cargo builds unit test binaries in <target>/<profile>/deps: {}",
+        binary.display()
+    );
+    let target = deps
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("the target directory");
+    target.join("tmp").join(group)
+}

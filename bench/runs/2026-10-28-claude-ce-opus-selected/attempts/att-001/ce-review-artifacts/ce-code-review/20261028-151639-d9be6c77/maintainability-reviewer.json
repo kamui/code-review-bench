@@ -1,0 +1,81 @@
+{
+  "reviewer": "maintainability",
+  "findings": [
+    {
+      "title": "Discarded CheckValid error; message formats stale nil err",
+      "severity": "P2",
+      "file": "xds/internal/xdsclient/transport/loadreport.go",
+      "line": 175,
+      "why_it_matters": "When the management server sends an invalid or missing load_reporting_interval, operators see the error \"invalid load_reporting_interval: <nil>\" with no reason. The migration throws away the error from rInterval.CheckValid() and formats the outer `err` from stream.Recv(), which is always nil at that point. The old ptypes.Duration call bound the validation error to `err`. Binding the CheckValid result in the if-statement brings back the real reason and keeps the stale variable out of the message.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Replace lines 174-176 with: `if err := rInterval.CheckValid(); err != nil { return nil, 0, fmt.Errorf(\"invalid load_reporting_interval: %v\", err) }`.",
+      "confidence": 100,
+      "evidence": [
+        "xds/internal/xdsclient/transport/loadreport.go:174-175 -- if rInterval.CheckValid() != nil { return nil, 0, fmt.Errorf(\"invalid load_reporting_interval: %v\", err)",
+        "xds/internal/xdsclient/transport/loadreport.go (same function, earlier) -- resp, err := stream.Recv(); if err != nil { return ... } -- so err is nil when line 175 runs",
+        "base version: interval, err := ptypes.Duration(resp.GetLoadReportingInterval()); if err != nil { ... %v\", err) } -- err was the validation error"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "pretty.ToJSON keeps duplicate v1/v2 branches and APIv1 import",
+      "severity": "P2",
+      "file": "internal/pretty/pretty.go",
+      "line": 39,
+      "why_it_matters": "After this diff, both branches of ToJSON do the same thing: marshal a v2 message with protojson and fall back to %+v (protojson's Indent already turns on multiline). Anyone changing logging output must now edit both copies the same way. The only reason the v1 branch remains is the `protov1 \"github.com/golang/protobuf/proto\"` import, so this non-test package still pins the deprecated module the migration is meant to remove. Converting a v1 message with protoadapt.MessageV2Of and then using a single protojson branch removes the duplicate code and the leftover import. Upstream grpc-go uses this shape.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Drop the protov1 import and the `case protov1.Message` branch. Start ToJSON with `if ee, ok := e.(protoadapt.MessageV1); ok { e = protoadapt.MessageV2Of(ee) }`, then keep one `case protov2.Message:` branch (Multiline: true, Indent: jsonIndent) and the default json.MarshalIndent branch.",
+      "confidence": 75,
+      "evidence": [
+        "internal/pretty/pretty.go:39-41 -- case protov1.Message: mm := protojson.MarshalOptions{Indent: jsonIndent}; ret, err := mm.Marshal(protov1.MessageV2(ee))",
+        "internal/pretty/pretty.go:49-54 -- case protov2.Message: mm := protojson.MarshalOptions{Multiline: true, Indent: jsonIndent}; ret, err := mm.Marshal(ee)",
+        "internal/pretty/pretty.go:27 -- protov1 \"github.com/golang/protobuf/proto\" (still imported in non-test code)"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Conflict resolution downgrades x/tools v0.17.0 to v0.14.0",
+      "severity": "P2",
+      "file": "test/tools/go.mod",
+      "line": 7,
+      "why_it_matters": "The vet/goimports toolchain pinned in test/tools goes back to an older golang.org/x/tools (v0.17.0 -> v0.14.0), and go.sum also drops x/sync from v0.6.0 to v0.4.0. This silently undoes the bump that the base commit #6939 made on purpose. Nothing in the protobuf migration needs it; it looks like the go.mod/go.sum conflict was resolved toward the older side. Keeping v0.17.0 and only swapping the protoc-gen-go module keeps the diff to its stated goal.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Restore `golang.org/x/tools v0.17.0` in test/tools/go.mod. Keep the new `google.golang.org/protobuf v1.32.0` direct requirement and drop the golang/protobuf line. Then run `go mod tidy` in test/tools so go.sum and the indirect block (x/sync, x/sys) match the base versions.",
+      "confidence": 75,
+      "evidence": [
+        "test/tools/go.mod:7 -- golang.org/x/tools v0.14.0 (diff: -golang.org/x/tools v0.17.0 / +golang.org/x/tools v0.14.0)",
+        "test/tools/go.sum:10 -- golang.org/x/sync v0.4.0 (was v0.6.0 at base)",
+        "provenance: 5051eeae Zach Reyes 2024-01-24 - grpc: Update go mod (#6939) introduced x/tools v0.17.0; reverted by b8374114 'resolve conflicts and add changes'"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Test depends on protoimpl internals and exact runtime error text",
+      "severity": "P3",
+      "file": "status/status_test.go",
+      "line": 412,
+      "why_it_matters": "TestStatus_ErrorDetails_Fail now builds its expected error with protoimpl.X.NewError. protoimpl is documented as for generated code only, and the test only passes while the protobuf runtime emits exactly \"invalid empty type URL\" with its own prefix. A protobuf upgrade that rewords this message breaks a gRPC test even though gRPC behavior has not changed. The test only needs to know that this slot holds an error rather than a decoded message, and cmpopts.AnyError says exactly that without reaching into the runtime.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Replace `protoimpl.X.NewError(\"invalid empty type URL\")` with `cmpopts.AnyError`. Swap `cmp.Comparer(equalError)` for `cmpopts.EquateErrors()` in the cmp.Equal call (removing equalError if nothing else uses it) and drop the protoimpl import.",
+      "confidence": 75,
+      "evidence": [
+        "status/status_test.go:412 -- protoimpl.X.NewError(\"invalid empty type URL\"),",
+        "status/status_test.go:423 -- if !cmp.Equal(got, tc.i, cmp.Comparer(proto.Equal), cmp.Comparer(equalError)) {",
+        "status/status_test.go:34 -- \"google.golang.org/protobuf/runtime/protoimpl\""
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Migration is partial: non-test code still imports APIv1 in credentials/credentials.go:31 (proto), channelz/service/service.go:26-27 and func_linux.go:24-25 (ptypes, wrappers, duration), and xds/internal/xdsclient/bootstrap/bootstrap.go:32 (jsonpb), plus internal/pretty/pretty.go:27. The root go.mod still requires github.com/golang/protobuf directly, so both protobuf APIs remain in the codebase. Fine if this is a staged migration; otherwise these call sites are left behind."
+  ],
+  "testing_gaps": []
+}

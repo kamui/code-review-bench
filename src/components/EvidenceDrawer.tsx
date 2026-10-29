@@ -3,7 +3,7 @@ import { Accordion, Alert, Badge, Button, Code, Drawer, Group, Loader, Paper, Se
 import { ExternalLink, FileJson, FileText, Download } from 'lucide-react'
 import { fetchDetail, skillReleaseLabel } from '../lib/data'
 import type { Attempt, AttemptDetail, Configuration, Dataset, Task } from '../lib/data'
-import { compact, money } from '../lib/metrics'
+import { bandLabels, compact, money } from '../lib/metrics'
 import { pendingCandidates, reviewFacts } from '../lib/scoring'
 
 const outcomeColors: Record<string, string> = { eligible: 'teal', refuted: 'red', unsupported: 'red', unresolved: 'yellow' }
@@ -89,7 +89,9 @@ function InspectionBody({ dataset, configuration, task, initialAttemptId, now }:
           </Group>
             {!detail.archiveUrl && <Text size="xs" c="dimmed">Transcript archive: {detail.archiveStatus}. No verified download is available.</Text>}
             {detail.assessment.state === 'unassessed' && <Text size="xs" c="dimmed">No current assessment is saved for this review, so its claims have no outcome yet.</Text>}
-            {!detail.items.length && <Alert color="gray">This attempt returned no usable findings. Its failure and usage remain in the evidence.</Alert>}
+            {!detail.items.length && <Alert color="gray">{attempt?.admitted
+              ? 'This review reported no findings. An empty review does not establish that the change is free of problems.'
+              : 'This attempt returned no usable findings. Its failure and usage remain in the evidence.'}</Alert>}
             <Accordion variant="separated">{detail.items.map((item, index) => <Accordion.Item key={item.id} value={item.id}>
               <Accordion.Control><Group gap="xs" mb={5}><Badge size="xs" color={outcomeColors[item.assignment] ?? 'gray'} variant="light">{item.assignment}</Badge>
                 <Text size="xs" c="dimmed">Finding {index + 1}</Text></Group><Text size="sm" fw={550}>{item.claim}</Text></Accordion.Control>
@@ -122,6 +124,7 @@ function InspectionBody({ dataset, configuration, task, initialAttemptId, now }:
             {defect.rulings.length > 0 && <Group gap="xs">{defect.rulings.map(ruling => <Button key={ruling.dimension} component="a" href={ruling.url} target="_blank" rel="noreferrer" variant="subtle" size="xs">Saved {ruling.dimension} ruling</Button>)}</Group>}
           </Stack></Accordion.Panel>
         </Accordion.Item>)}</Accordion>
+        <PreExistingCatalog task={currentTask} />
         {novel.length > 0 && <><Title order={5}>Candidates awaiting a ruling</Title>
           {novel.map(candidate => <Paper withBorder p="sm" key={candidate.id}><Text size="xs" c="dimmed">{candidate.id} / recorded {candidate.recordedAt.slice(0, 10)}, {candidate.ageDays} {candidate.ageDays === 1 ? 'day' : 'days'} ago</Text>
             <Text size="sm">{candidate.claim}</Text><Text size="sm"><strong>Evidence limits: </strong>{candidate.limits}</Text><Text size="sm"><strong>Decision relevance: </strong>{candidate.relevance}</Text></Paper>)}</>}
@@ -142,6 +145,23 @@ function InspectionBody({ dataset, configuration, task, initialAttemptId, now }:
       </Stack></Tabs.Panel>
     </Tabs>
   </Stack>
+}
+
+export function PreExistingCatalog({ task }: { task: Task }) {
+  if (!task.preExistingProblems?.length) return null
+  return <>
+    <Title order={5}>Approved pre-existing problems</Title>
+    <Text size="sm">These problems predate the change and are separate from the reference problems. Raising one is counted separately; silence creates no miss.</Text>
+    <Accordion variant="separated">{task.preExistingProblems.map(problem => <Accordion.Item key={problem.id} value={problem.id}>
+      <Accordion.Control><Text size="xs" c="dimmed">{problem.id} / Impact {bandLabels[problem.impact]}</Text><Text size="sm" fw={550}>{problem.title}</Text></Accordion.Control>
+      <Accordion.Panel><Stack gap="sm">
+        <Text size="sm"><strong>Trigger: </strong>{problem.trigger}</Text>
+        <Text size="sm"><strong>Consequence: </strong>{problem.consequence}</Text>
+        <Text size="sm"><strong>Required outcome: </strong>{problem.requiredOutcome}</Text>
+        {problem.admissionUrl && <Button component="a" href={problem.admissionUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Saved pre-existing problem ruling</Button>}
+      </Stack></Accordion.Panel>
+    </Accordion.Item>)}</Accordion>
+  </>
 }
 
 function ReviewSummary({ attempt }: { attempt: Attempt }) {
