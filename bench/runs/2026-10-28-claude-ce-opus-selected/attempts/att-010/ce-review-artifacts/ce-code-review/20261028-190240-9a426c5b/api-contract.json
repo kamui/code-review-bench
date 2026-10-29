@@ -1,0 +1,30 @@
+{
+  "reviewer": "api-contract",
+  "findings": [
+    {
+      "title": "get_user crashes for duck-typed users lacking fallback hash method",
+      "severity": "P1",
+      "file": "django/contrib/auth/__init__.py",
+      "line": 215,
+      "why_it_matters": "Django documents two supported shapes for session verification: a user model that inherits AbstractBaseUser, or one that just implements its own get_session_auth_hash() (docs/topics/auth/default.txt:920-922). get_user() still gates verification on hasattr(user, \"get_session_auth_hash\"), but on any hash mismatch it now calls the new user.get_session_auth_fallback_hash() unconditionally. For a model of the second shape, a stale session hash (for example after the user changes their password elsewhere, which is the exact case session invalidation exists for) used to flush the session and return AnonymousUser. Now it raises AttributeError, so every request carrying that session returns a 500 instead of logging the user out. This lands in a patch release (4.1.8) that is meant as a backport bugfix, and I reproduced it with a minimal duck-typed user: `EXC AttributeError 'U' object has no attribute 'get_session_auth_fallback_hash'`. Falling back to an empty iterable when the method is missing keeps the old flush behavior for these models, the same way the existing hasattr guard already treats get_session_auth_hash as optional.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Guard the fallback lookup so the new method is optional, matching the existing hasattr pattern: compute `fallback_hashes = user.get_session_auth_fallback_hash() if hasattr(user, \"get_session_auth_fallback_hash\") else ()` and iterate over that in the any(...). Add a test in tests/auth_tests/test_basic.py using a user/backend whose user defines only get_session_auth_hash and a mismatched session hash, asserting AnonymousUser is returned and the session is flushed.",
+      "confidence": 100,
+      "evidence": [
+        "django/contrib/auth/__init__.py:215 -- for fallback_auth_hash in user.get_session_auth_fallback_hash()",
+        "django/contrib/auth/__init__.py:200 -- if hasattr(user, \"get_session_auth_hash\"):",
+        "docs/topics/auth/default.txt:920-923 -- If your AUTH_USER_MODEL inherits from AbstractBaseUser or implements its own get_session_auth_hash() method, authenticated sessions will include the hash returned by this function.",
+        "Reproduction (scratch-api-contract/duck.py): user class defining only get_session_auth_hash, session hash 'stale' -> get_user raised AttributeError: 'U' object has no attribute 'get_session_auth_fallback_hash' (pre-change code path would flush and return AnonymousUser)"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "AbstractBaseUser subclasses that override get_session_auth_hash() (a documented extension point) do not get fallback support: get_session_auth_fallback_hash() always yields the base _get_session_auth_hash() with the AbstractBaseUser salt, so a custom hash signed with an old key never matches and those sessions are still invalidated on rotation. This is not a regression, but the new public method's docs don't say it has to be overridden together with get_session_auth_hash()."
+  ],
+  "testing_gaps": [
+    "No test covers a session hash that matches neither SECRET_KEY nor any SECRET_KEY_FALLBACKS entry while fallbacks are configured (the session must still be flushed). That is the path that keeps session invalidation on password change working once fallbacks exist."
+  ]
+}
