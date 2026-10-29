@@ -1,0 +1,439 @@
+{
+ "run_id": "20261028-172443-a5ea70ea",
+ "stage": "merge (Stage 5 and Stage 5b steps 1-3)",
+ "findings": [
+  {
+   "#": 1,
+   "autofix_class": "manual",
+   "confidence": 75,
+   "evidence": [
+    "django/db/backends/postgresql/base.py:529-535 -- conn = self.__class__({**self.settings_dict, \"NAME\": connection.settings_dict[\"NAME\"]}, alias=self.alias)",
+    "django/db/backends/postgresql/base.py:208 -- if self.alias not in self._connection_pools:  (pool only built once per alias; later NAME changes ignored)",
+    "django/db/backends/postgresql/base.py:239 -- self._connection_pools.setdefault(self.alias, pool)",
+    "django/db/backends/base/creation.py:33-37 -- self._create_test_db(...); self.connection.close(); settings.DATABASES[alias][\"NAME\"] = test_database_name; self.connection.settings_dict[\"NAME\"] = test_database_name  (no close_pool between fallback and migrate)",
+    "Offline repro (tmp/adv/repro.py): fallback-style DatabaseWrapper(alias='default', NAME='prod_db').pool -> kwargs dbname 'prod_db'; after main.settings_dict['NAME']='test_prod_db', main.pool is the same pool and still dbname 'prod_db'",
+    "django/db/backends/postgresql/creation.py:60-69 -- close(); close_pool(); then with self._nodb_cursor() -> fallback re-registers a 'default' pool on the template DB"
+   ],
+   "file": "django/db/backends/postgresql/base.py",
+   "first_evidence": "django/db/backends/postgresql/base.py:529-535 -- conn = self.__class__({**self.settings_dict, \"NAME\": connection.settings_dict[\"NAME\"]}, alias=self.alias)",
+   "independent_reviewers": [
+    "adversarial"
+   ],
+   "line": 534,
+   "owner": "downstream-resolver",
+   "pre_existing": false,
+   "requires_verification": true,
+   "reviewers": [
+    "adversarial"
+   ],
+   "severity": "P0",
+   "suggested_fix": "In DatabaseWrapper._nodb_cursor's fallback, strip pooling from the temporary wrapper's settings, matching how the base _nodb_cursor avoids pooling via NO_DB_ALIAS: `conn = self.__class__({**self.settings_dict, \"NAME\": connection.settings_dict[\"NAME\"], \"OPTIONS\": {k: v for k, v in self.settings_dict[\"OPTIONS\"].items() if k != \"pool\"}}, alias=self.alias)`. As defence in depth, also call self.connection.close_pool() in create_test_db after NAME is switched (or key _connection_pools by (alias, dbname)).",
+   "title": "Cascade: _nodb_cursor fallback registers 'default' pool on non-test DB",
+   "why_it_matters": "If 'postgres' is unreachable (the managed-hosting case the fallback exists for), the test run migrates, runs tests and flushes the real configured database instead of test_<NAME>. TransactionTestCase truncates its tables, so the data is lost. The fallback builds a wrapper with alias=self.alias ('default'), the real NAME and the inherited OPTIONS['pool']. Its first cursor creates and opens the class-level pool for 'default' with dbname=<real NAME>. conn.close() only returns the connection, so the pool stays registered. create_test_db then sets settings_dict['NAME'] to the test name, but the pool property only builds a pool when the alias is missing, so migrate and every test connection reuse the pool aimed at the real DB. In _clone_test_db the same fallback re-registers a pool on the template DB right after close_pool(); its background min_size connections can make CREATE DATABASE ... TEMPLATE fail with 'source database is being accessed by other users'.",
+   "source_keys": [
+    [
+     "adversarial",
+     "django/db/backends/postgresql/base.py",
+     "534",
+     "cascade: _nodb_cursor fallback registers 'default' pool on non-test db"
+    ]
+   ]
+  },
+  {
+   "#": 2,
+   "autofix_class": "manual",
+   "confidence": 100,
+   "evidence": [
+    "django/db/backends/postgresql/base.py:101 -- sql = ops.compose_sql(\"SET ROLE %s\", [role_name])",
+    "django/db/backends/postgresql/operations.py:193 -- return mogrify(sql, params, self.connection)",
+    "django/db/backends/postgresql/psycopg_any.py:21 -- with connection.cursor() as cursor:  (Django wrapper cursor -> ensure_connection -> connect -> pool.getconn)",
+    "psycopg_pool/pool.py:634-635 -- if self._configure: self._configure(conn)  (inside _connect, run by AddConnection worker tasks)",
+    "django/db/backends/postgresql/base.py:231 -- configure=self._configure_connection,",
+    "Offline repro (tmp/corr/role.py): invoking wrapper._configure_connection(fake_raw_conn) from a separate thread with assume_role set re-entered pool.getconn from that thread and failed: 'OperationalError couldn't get a connection after 0.50 sec'",
+    "django/db/backends/postgresql/operations.py:192-193 -- def compose_sql(self, sql, params): return mogrify(sql, params, self.connection)  (self.connection is the Django DatabaseWrapper)",
+    "django/db/backends/postgresql/psycopg_any.py:20-22 -- def mogrify(sql, params, connection): with connection.cursor() as cursor: ...  (Django wrapper .cursor() -> validate_thread_sharing / ensure_connection)",
+    "django/db/backends/postgresql/base.py:231 -- configure=self._configure_connection (bound to the wrapper instance that first built the pool)",
+    "psycopg_pool/pool.py:634-635 (_connect, invoked from AddConnection worker tasks) -- if self._configure: self._configure(conn); psycopg_pool/pool.py:35 CLIENT_EXCEPTIONS = Exception -> _add_connection logs and reschedules, client getconn() waits until PoolTimeout",
+    "Offline repro (tmp/adv/repro.py): invoking pool._configure from a second thread with assume_role set -> django.db.utils.DatabaseError: DatabaseWrapper objects created in a thread can only be used in that same thread.",
+    "tests/backends/postgresql/tests.py test_connect_role uses no_pool_connection(), so the pool+assume_role combination is never exercised"
+   ],
+   "file": "django/db/backends/postgresql/base.py",
+   "first_evidence": "django/db/backends/postgresql/base.py:101 -- sql = ops.compose_sql(\"SET ROLE %s\", [role_name])",
+   "independent_reviewers": [
+    "correctness",
+    "adversarial"
+   ],
+   "line": 101,
+   "owner": "downstream-resolver",
+   "pre_existing": false,
+   "requires_verification": true,
+   "reviewers": [
+    "correctness",
+    "adversarial"
+   ],
+   "severity": "P1",
+   "suggested_fix": "In ensure_role, build the SQL without going through the Django wrapper. For example (pool is psycopg3-only, but ensure_role is shared): if is_psycopg3, run `cursor.execute(sql.SQL(\"SET ROLE {}\").format(sql.Literal(role_name)))` using psycopg.sql, or `ClientCursor(connection).mogrify(\"SET ROLE %s\", [role_name])` on the raw connection; for psycopg2 keep `cursor.mogrify(...)` on the raw cursor. Add a pooled assume_role test (tests currently use no_pool_connection() for test_connect_role).",
+   "title": "assume_role with pool: configure callback re-enters the wrapper from a pool thread",
+   "why_it_matters": "With OPTIONS {'pool': ..., 'assume_role': ...} no pooled connection can be created, so every request hangs for the pool timeout (30s by default) and then fails with PoolTimeout. psycopg_pool runs the configure callback in its own worker threads. ensure_role calls ops.compose_sql(), which goes through mogrify(sql, params, self.connection), i.e. the Django wrapper that created the pool. If that wrapper is connected, validate_thread_sharing raises DatabaseError. If it is not connected, the worker calls wrapper.connect(), which calls pool.getconn() from inside the pool's own worker and deadlocks. The pool treats any Exception as a connection failure and keeps retrying with backoff. This breaks the in-code rule 'does not access anything on self aside from variables'. Building the statement from the raw psycopg connection removes the dependency on the wrapper and its thread.",
+   "source_keys": [
+    [
+     "correctness",
+     "django/db/backends/postgresql/base.py",
+     "101",
+     "assume_role with pool re-enters wrapper from pool worker thread"
+    ],
+    [
+     "adversarial",
+     "django/db/backends/postgresql/base.py",
+     "101",
+     "cascade: assume_role + pool, configure runs in worker thread, pooltimeout"
+    ]
+   ]
+  },
+  {
+   "#": 3,
+   "autofix_class": "gated_auto",
+   "confidence": 75,
+   "evidence": [
+    "django/db/backends/postgresql/base.py:239 -- self._connection_pools.setdefault(self.alias, pool)  (pool keyed only by alias; kwargs frozen at creation)",
+    "django/db/backends/postgresql/base.py (_nodb_cursor fallback) -- conn = self.__class__({**self.settings_dict, \"NAME\": connection.settings_dict[\"NAME\"]}, alias=self.alias)",
+    "django/db/backends/base/creation.py:64-66 -- self.connection.close(); settings.DATABASES[...][\"NAME\"] = test_database_name; self.connection.settings_dict[\"NAME\"] = test_database_name  (no close_pool)",
+    "Offline repro (tmp/corr/stale.py): after fallback-style wrapper created the pool and NAME was renamed, main.get_connection_params dbname=test_prod_db but main.pool is the same pool with kwargs dbname=prod_db",
+    "django/db/backends/postgresql/base.py:224 -- connect_kwargs = self.get_connection_params()",
+    "django/db/backends/postgresql/base.py:239 -- self._connection_pools.setdefault(self.alias, pool)",
+    "django/db/backends/base/creation.py:64-66 -- self.connection.close(); settings.DATABASES[...]['NAME'] = test_database_name; self.connection.settings_dict['NAME'] = test_database_name (no close_pool)",
+    "Offline simulation (psycopg_pool 3.3.3): after emulating create_test_db's close()+NAME switch, get_connection_params()['dbname'] == 'test_prod_db' but c.pool.kwargs['dbname'] == 'prod_db' and c.pool is the same object"
+   ],
+   "file": "django/db/backends/postgresql/base.py",
+   "first_evidence": "django/db/backends/postgresql/base.py:239 -- self._connection_pools.setdefault(self.alias, pool)  (pool keyed only by alias; kwargs frozen at creation)",
+   "independent_reviewers": [
+    "correctness",
+    "reliability"
+   ],
+   "line": 239,
+   "owner": "downstream-resolver",
+   "pre_existing": false,
+   "requires_verification": true,
+   "reviewers": [
+    "correctness",
+    "reliability"
+   ],
+   "severity": "P1",
+   "suggested_fix": "In django/db/backends/postgresql/creation.py, close the alias pool wherever settings_dict['NAME'] is rewritten: override _create_test_db() as `try: return super()._create_test_db(verbosity, autoclobber, keepdb) finally: self.connection.close_pool()` so the pool is gone before base create_test_db switches NAME, and do the same in set_as_test_mirror() and setup_worker_connection(), following the close_pool() pattern the diff already uses in _clone_test_db/_destroy_test_db. For extra safety, recreate the pool when get_connection_params()['dbname'] differs from pool.kwargs['dbname'] (or key _connection_pools by alias plus dbname). Add a test that builds the pool under one NAME, switches NAME, and asserts the next connection targets the new database.",
+   "title": "Alias-keyed pool survives create_test_db NAME switch",
+   "why_it_matters": "If anything opens the pooled alias before the test runner creates the test database (an AppConfig.ready() query, or a query at import time in a module the test suite imports), the per-alias pool is built with the real database's connection kwargs. create_test_db() then closes the connection and rewrites settings_dict['NAME'], but the pool is still in the class-level _connection_pools dict, so every later connect, including migrate, serialization, the tests themselves and TransactionTestCase flushes, goes back to the original (possibly production) database. Without a pool, close() plus the NAME rewrite was enough to retarget the alias. The diff already closes the pool for the same reason in _clone_test_db, _destroy_test_db and ensure_timezone, but not on the create path, the mirror path or setup_worker_connection.",
+   "source_keys": [
+    [
+     "correctness",
+     "django/db/backends/postgresql/base.py",
+     "239",
+     "stale alias-keyed pool sends test run to production db"
+    ],
+    [
+     "reliability",
+     "django/db/backends/postgresql/base.py",
+     "224",
+     "pool keeps stale dbname after create_test_db switches name"
+    ]
+   ]
+  },
+  {
+   "#": 4,
+   "autofix_class": "manual",
+   "confidence": 75,
+   "evidence": [
+    "django/db/backends/postgresql/base.py:348 -- connection = self.pool.getconn()",
+    "django/db/backends/postgresql/base.py:395 -- self.connection._pool.putconn(self.connection)  (only return path)",
+    "psycopg/_connection_base.py:150 -- if hasattr(self, \"_pool\"): return  (pooled connection GC'd silently)",
+    "psycopg_pool/pool.py:_getconn_unchecked -- conn._pool = self; return conn  (pool keeps no reference to checked-out connections; _nconns only decremented on close/shrink/failed reconnect)",
+    "django/db/utils.py:145 -- thread_critical = True (connections are threading.local, discarded on thread exit)"
+   ],
+   "file": "django/db/backends/postgresql/base.py",
+   "first_evidence": "django/db/backends/postgresql/base.py:348 -- connection = self.pool.getconn()",
+   "independent_reviewers": [
+    "reliability"
+   ],
+   "line": 348,
+   "owner": "downstream-resolver",
+   "pre_existing": false,
+   "requires_verification": true,
+   "reviewers": [
+    "reliability"
+   ],
+   "severity": "P1",
+   "suggested_fix": "Return orphaned connections to the pool. In get_new_connection(), after self.pool.getconn(), register weakref.finalize(self, connection._pool.putconn, connection) and keep the finalizer on the wrapper; call finalizer.detach() in _close() before the explicit putconn. Also add a note to the 'Connection pool' docs section that connections opened outside the request cycle must be closed (connections.close_all()) or they keep a pool slot. Assumption: putconn is thread-safe from a finalizer (psycopg_pool takes its own lock).",
+   "title": "Threads exiting without close() permanently leak pool slots",
+   "why_it_matters": "With pooling on, a borrowed connection only goes back to the pool when DatabaseWrapper._close() calls putconn. A worker thread (a threading.Thread, an executor job, a management-command helper) that uses the ORM and exits without connection.close() drops its thread-local wrapper, and the psycopg connection is garbage collected without any warning. psycopg_pool does not track checked-out connections and only decrements _nconns on putconn/close, so that slot is lost for good. With 'pool': True the defaults are min_size=4 and max_size=min_size, so four such threads are enough: after that every connection attempt in the process blocks for the 30 s pool timeout and then raises PoolTimeout. Before this change, the same leaked connection was simply closed when it was garbage collected.",
+   "source_keys": [
+    [
+     "reliability",
+     "django/db/backends/postgresql/base.py",
+     "348",
+     "threads exiting without close() permanently leak pool slots"
+    ]
+   ]
+  },
+  {
+   "#": 5,
+   "autofix_class": "gated_auto",
+   "confidence": 100,
+   "evidence": [
+    "docs/ref/databases.txt:271 -- and is ignored with ``psycopg2``.",
+    "django/db/backends/postgresql/base.py:291-292 -- if pool_options and not is_psycopg3: raise ImproperlyConfigured(\"Database pooling requires psycopg >= 3\")",
+    "tests/backends/postgresql/tests.py -- def test_connect_pool_setting_ignored_for_psycopg2 ... with self.assertRaisesMessage(ImproperlyConfigured, msg): new_connection.connect()",
+    "django/db/backends/postgresql/base.py:292 -- raise ImproperlyConfigured(\"Database pooling requires psycopg >= 3\")",
+    "tests/backends/postgresql/tests.py:349 -- def test_connect_pool_setting_ignored_for_psycopg2(self):  (asserts ImproperlyConfigured)"
+   ],
+   "file": "docs/ref/databases.txt",
+   "first_evidence": "docs/ref/databases.txt:271 -- and is ignored with ``psycopg2``.",
+   "independent_reviewers": [
+    "correctness",
+    "testing",
+    "adversarial"
+   ],
+   "line": 271,
+   "owner": "downstream-resolver",
+   "pre_existing": false,
+   "requires_verification": false,
+   "reviewers": [
+    "correctness",
+    "testing",
+    "adversarial",
+    "fast-pass"
+   ],
+   "severity": "P2",
+   "suggested_fix": "Assuming raising is the intended behaviour (it is what the test asserts), change the docs sentence to: \"This option requires ``psycopg[pool]`` or :pypi:`psycopg-pool` to be installed and is not supported with ``psycopg2`` (``ImproperlyConfigured`` is raised).\" Rename the test to test_connect_pool_setting_not_supported_for_psycopg2.",
+   "title": "Docs say pool option is ignored with psycopg2; code raises ImproperlyConfigured",
+   "why_it_matters": "A project that shares settings between psycopg2 and psycopg3 environments and trusts the docs will not get a silently ignored option. On psycopg2 the first connection fails with ImproperlyConfigured. Other places that touch the pool property (close(), ensure_timezone() via setting_changed, close_if_health_check_failed()) can fail the same way, before any query runs. The new test is named test_connect_pool_setting_ignored_for_psycopg2 but asserts the raise, so the code and docs contradict each other.",
+   "source_keys": [
+    [
+     "correctness",
+     "docs/ref/databases.txt",
+     "271",
+     "docs say pool ignored on psycopg2; code raises improperlyconfigured"
+    ],
+    [
+     "testing",
+     "docs/ref/databases.txt",
+     "271",
+     "docs and test name say psycopg2 ignores pool; code raises"
+    ],
+    [
+     "adversarial",
+     "docs/ref/databases.txt",
+     "271",
+     "docs promise pool is ignored on psycopg2; code raises"
+    ],
+    [
+     "fast-pass",
+     "django/db/backends/postgresql/base.py",
+     "292",
+     "docs say the pool option is ignored with psycopg2, but get_connection_params raises improperlyconfigured"
+    ]
+   ]
+  }
+ ],
+ "pre_existing_findings": [],
+ "actionable_queue": [
+  1,
+  2,
+  3,
+  4,
+  5
+ ],
+ "report_only": [],
+ "residual_risks": [
+  "Session state leaks between pool borrowers: no reset callback is configured, so session-level state (SET search_path or other SET values, RESET/SET ROLE, temp tables, session advisory locks, LISTEN) survives close() and reaches the next borrower; before this change close() ended the session. A DISCARD ALL reset would also undo the configure-only SET ROLE/TIME ZONE, and _close() notes wrap_database_errors breaks with a reset function (reliability).",
+  "Connection or configure failures under pooling (database down, bad credentials, nonexistent assume_role) are only logged on the 'psycopg.pool' logger and retried in worker threads; each caller blocks in getconn() for the default 30 s timeout and gets an opaque PoolTimeout raised 'from None'. Consider documenting the 'timeout' pool option and the logger, or opening the pool with wait=True on first use (reliability, demoted from candidate #6).",
+  "OPTIONS['pool'] keys that collide with Django-supplied ConnectionPool arguments (kwargs, open, configure, check) raise TypeError 'got multiple values for keyword argument', although the docs describe the dict as passed to ConnectionPool; a user-supplied check or configure cannot be used (reliability candidate #10, adversarial).",
+  "Fork-mode parallel test workers inherit the class-level _connection_pools dict; setup_worker_connection() rewrites NAME and calls close() but not close_pool(), so if the parent holds a 'default' pool at fork time a worker would reuse a pool aimed at the main test DB with dead worker threads and shared sockets. Unconfirmed whether the parent reconnects after the last _clone_test_db (reliability, adversarial).",
+  "close_pool() reads self.pool (creating a pool if none exists) and does an unguarded del self._connection_pools[self.alias]; two concurrent close_pool() calls can raise KeyError, and a concurrent get_new_connection() can reopen the just-closed pool, leaving an unreferenced open pool. Only test and setting_changed paths call it (correctness, adversarial).",
+  "The pool's configure callback is bound to whichever wrapper instance first evaluated .pool and uses its cached timezone_name; update_connections_time_zone only clears cached properties on the current thread's wrappers, so a pool rebuilt from another thread after override_settings(TIME_ZONE=...) can carry a stale time zone (adversarial; test/settings-change path).",
+  "ConnectionPool(check=...) and ConnectionPool.check_connection require psycopg-pool 3.2; only tests/requirements/postgres.txt pins >=3.2.0 and the docs name no minimum, so an older psycopg-pool fails with TypeError rather than ImproperlyConfigured (adversarial; not verified against 3.1 offline).",
+  "The new base ensure_connection() atomic-block guard fires only when self.connection is None with in_atomic_block and closed_in_transaction set; built-in non-pooled backends keep self.connection non-None, but a third-party backend whose _close() sets self.connection = None now gets ProgrammingError instead of reconnecting (adversarial; callsite completeness: grep-only)."
+ ],
+ "testing_gaps": [
+  "No test combines OPTIONS['pool'] with OPTIONS['assume_role']; test_connect_role moved to no_pool_connection(), so the configure-callback SET ROLE path (finding #2) and a failing configure callback under pooling have no coverage (correctness, testing, reliability, adversarial).",
+  "No test builds a pool under one NAME and then exercises create_test_db / set_as_test_mirror / setup_worker_connection or the _nodb_cursor fallback with pooling enabled (findings #1, #3) (correctness, reliability, adversarial).",
+  "No test that a pooled connection borrowed in a thread that exits without close() is returned to the pool or that pool capacity is preserved (finding #4) (reliability).",
+  "test_connect_pool uses min_size=0 with a pool-wide timeout of 0.1 s, so the first two real connection setups (plus configure) must finish within 100 ms; on a slow CI host it can raise PoolTimeout spuriously. Pre-open the pool (min_size=2, open(wait=True, timeout=10)) so the short timeout governs only the exhausted-pool assertion (tests/backends/postgresql/tests.py:244, testing, demoted candidate #7).",
+  "The pool reset in ensure_timezone() and the connection._pool.putconn() return path are not exercised: test_connect_pool_with_timezone creates its pool inside the settings override, and its copied 'default_pool' wrapper is not in connections, so the setting_changed receiver never runs for it; the test would still pass if close_pool() were removed from ensure_timezone() (tests/backends/postgresql/tests.py:302, testing, demoted candidate #8).",
+  "test_cannot_open_new_connection_in_atomic_block sets in_atomic_block/closed_in_transaction by hand and never calls close() on a pooled connection, so nothing proves close() inside a transaction leaves connection None, raises on the next query, discards uncommitted work, and reconnects after the block (tests/backends/postgresql/tests.py:335, testing, demoted candidate #9).",
+  "Under pooling, features.django_test_skips disables the two behavioral health-check tests; the replacement only asserts psycopg_pool's private _check attribute and never exercises the close_if_health_check_failed() early return or a dead pooled connection being discarded (tests/backends/postgresql/tests.py:318, testing).",
+  "Untested branches: the psycopg_pool ImportError path (ImproperlyConfigured 'Error loading psycopg_pool module'), pool returning None for NO_DB_ALIAS, close_pool() in _clone_test_db/_destroy_test_db, and the new is_usable() connection-is-None early return (testing).",
+  "Coverage of the pooled path for base/transactions behavior depends on CI running the full suite with OPTIONS['pool']; the django_test_skips addition implies that run, but no such settings file is in the repo or diff. test_connect_pool_with_timezone also relies on USE_TZ=False in the runner settings (tests/test_sqlite.py sets it; a pooled CI settings file must too) (testing)."
+ ],
+ "triage_groups": [
+  {
+   "title": "Pool identity across test-database NAME changes",
+   "findings": [
+    1,
+    3
+   ],
+   "kind": "apply-queue",
+   "context": "The class-level pool is keyed only by alias and freezes connect kwargs at creation, so any pool that exists before a test-DB NAME rewrite keeps pointing at the original database.",
+   "preferred_resolution": "Handle #1 first: strip OPTIONS['pool'] from the temporary wrapper in DatabaseWrapper._nodb_cursor's fallback (P0 data-loss path and the clone-template 'being accessed by other users' failure). Then apply #3: close the alias pool in PostgreSQL creation wherever NAME is rewritten (_create_test_db, set_as_test_mirror, setup_worker_connection), which also guards #1's data-loss mode from any other early pool creation.",
+   "why": "Shared root cause (alias-only pool key surviving NAME changes) with complementary fixes in base.py and creation.py; both need the same NAME-switch regression test."
+  }
+ ],
+ "demoted": [
+  {
+   "#": 6,
+   "title": "Connection/config failures become 30 s hang plus opaque PoolTimeout",
+   "severity": "P2",
+   "reviewers": [
+    "reliability"
+   ],
+   "file": "django/db/backends/postgresql/base.py",
+   "line": 348,
+   "routed_to": "residual_risks",
+   "reason": "Single-reviewer reliability P2 describing psycopg_pool default retry/timeout semantics; the remedy is documentation and no violated Django contract or current user-facing defect beyond the library default was shown."
+  },
+  {
+   "#": 7,
+   "title": "test_connect_pool has 0.1s timeout covering real connection setup",
+   "severity": "P2",
+   "reviewers": [
+    "testing"
+   ],
+   "file": "tests/backends/postgresql/tests.py",
+   "line": 244,
+   "routed_to": "testing_gaps",
+   "reason": "Single-reviewer testing P2 (test flakiness risk); no observed failure, retained as a testing gap."
+  },
+  {
+   "#": 8,
+   "title": "Pool reset on TIME_ZONE change and _pool.putconn workaround untested",
+   "severity": "P2",
+   "reviewers": [
+    "testing"
+   ],
+   "file": "tests/backends/postgresql/tests.py",
+   "line": 302,
+   "routed_to": "testing_gaps",
+   "reason": "Single-reviewer testing P2 absence-of-coverage; narrower than the P1 findings, retained as a testing gap."
+  },
+  {
+   "#": 9,
+   "title": "Atomic-block guard test fakes flags, skips pooled close()",
+   "severity": "P2",
+   "reviewers": [
+    "testing"
+   ],
+   "file": "tests/backends/postgresql/tests.py",
+   "line": 335,
+   "routed_to": "testing_gaps",
+   "reason": "Single-reviewer testing P2 absence-of-coverage; retained as a testing gap."
+  },
+  {
+   "#": 10,
+   "title": "Documented pool dict crashes if it sets check/configure/kwargs/open",
+   "severity": "P3",
+   "reviewers": [
+    "reliability"
+   ],
+   "file": "django/db/backends/postgresql/base.py",
+   "line": 233,
+   "routed_to": "residual_risks",
+   "reason": "Single-reviewer reliability P3; a user-supplied reserved key fails loudly with TypeError, no silent misbehavior; retained as residual risk (adversarial raised the same point as a residual)."
+  }
+ ],
+ "suppressed_routing": [
+  {
+   "title": "Pool health checks covered only by private _check attribute",
+   "reviewers": [
+    "testing"
+   ],
+   "anchor": 50,
+   "routed_to": "testing_gaps",
+   "reason": "Adds a consequential uncovered scenario: the two behavioral health-check tests are skipped under pooling and close_if_health_check_failed() early return is untested."
+  },
+  {
+   "title": "close_pool() builds a new ConnectionPool via the pool property just to close it when none exists",
+   "reviewers": [
+    "fast-pass"
+   ],
+   "anchor": 50,
+   "routed_to": "discarded",
+   "reason": "The pool is built with open=False, so close() on it is cheap; no significant consequence established. The related concurrent close_pool KeyError concern is kept as a residual risk from correctness/adversarial."
+  },
+  {
+   "title": "ensure_role removed and ensure_timezone no longer an init hook",
+   "reviewers": [
+    "correctness"
+   ],
+   "anchor": 50,
+   "routed_to": "discarded",
+   "reason": "ensure_role/ensure_timezone are undocumented internal methods; no public-API contract or concrete affected caller established."
+  }
+ ],
+ "counts": {
+  "input_candidates": 18,
+  "helper_pass1": {
+   "findings": 14,
+   "suppressed_by_confidence": {
+    "50": 4
+   },
+   "pre_existing": 0,
+   "malformed_findings": 0,
+   "malformed_returns": 0
+  },
+  "helper_final": {
+   "findings": 10,
+   "suppressed_by_confidence": {
+    "50": 3
+   },
+   "pre_existing": 0,
+   "malformed_findings": 0,
+   "malformed_returns": 0
+  },
+  "semantic_merges": {
+   "from": 10,
+   "into": 4
+  },
+  "soft_bucket_demotions": 5,
+  "suppressed_routed_to_soft_bucket": 1,
+  "suppressed_discarded": 2,
+  "first_evidence_backfilled": 0,
+  "quote_gate_demotions": 0,
+  "hydration_dropped": 0,
+  "primary": 5,
+  "validator_selected": 5,
+  "validator_shortcut_skipped": 0
+ },
+ "peer": {
+  "outcome": "in-process-fallback",
+  "artifact": null,
+  "folded": false,
+  "coverage": "Adversarial lens ran in-process (same model); the cross-model peer was not run because the user restricted this review to a single model (claude-opus-5-5), so there is no cross-model corroboration."
+ },
+ "settlement": {
+  "evaluated": false,
+  "reason": "no plan discovered",
+  "discarded": 0
+ },
+ "coverage": [
+  "Adversarial lens ran in-process (same model); the cross-model peer was not run because the user restricted this review to a single model (claude-opus-5-5), so there is no cross-model corroboration.",
+  "Scope: base:bcccea3ef3 against the current checkout (branch review-head, HEAD fad334e1a9); PR django/django#17914 metadata from the task packet only, body not fetched.",
+  "Project standards: not run (no applicable standards files).",
+  "Intent inferred from commit message, diff, and docs; no plan document found (no docs/plans).",
+  "No PostgreSQL server available: reviewers verified by static reading and offline psycopg_pool source inspection/mock simulation only; no live tests executed.",
+  "Learnings, agent-native, security, performance, api-contract, maintainability, data-migration reviewers not selected (no surface in diff; no solutions corpus; no Compound Packs).",
+  "Fast pass ran internally (mode:agent), no preliminary block emitted.",
+  "Merge: 5 reviewer returns (correctness 4, testing 5, reliability 4, adversarial 3, fast-pass 2 = 18 candidates); helper pass 1 kept 14 primary, suppressed 4 at anchor 50, 0 pre-existing, 0 malformed findings, 0 malformed returns.",
+  "Semantic reconciliation merged 10 candidates into 4: assume_role/configure-thread (correctness + adversarial -> #2), stale pool after create_test_db NAME switch (correctness + reliability -> #3), docs-vs-code psycopg2 contradiction (correctness + testing + adversarial + fast-pass anchor-50 -> #5); the _nodb_cursor fallback finding (#1) was kept separate from #3 because its fix path (strip pool from the fallback wrapper) and its clone-template failure mode differ. Helper rerun on the reconciled set: 10 primary, 3 suppressed at anchor 50.",
+  "Agreement among in-process reviewers (same serving model) is recorded in reviewers but raised no confidence; fast-pass never counts toward agreement.",
+  "Suppressed by confidence (final pass): 3 findings at anchor 50; 1 routed to testing_gaps (pool health checks via private _check), 2 discarded (close_pool builds a throwaway pool; ensure_role/ensure_timezone internal-hook removal).",
+  "Mode-aware soft-bucket demotion: 5 candidates demoted from primary (#6 and #10 to residual_risks; #7, #8, #9 to testing_gaps); 1 pre-fork-server residual risk dropped as an assumed deployment topology without repository evidence.",
+  "Quote-the-line gate: 0 anchor-75/100 findings demoted for missing first_evidence; first_evidence_backfilled: 0.",
+  "Detail hydration: all 5 primary findings hydrated from per-reviewer artifacts (why_it_matters and evidence present); 0 dropped as malformed.",
+  "No plan was discovered (plan.source none), so settlement suppression was not evaluated and Requirements Completeness does not apply.",
+  "Intent confidence is inferred (from commit message, diff, and docs).",
+  "Validator shortcut: 0 findings skipped; no finding has cross-model corroboration from an adversarial-<provider> peer with independence_verified:true (peer not run; adversarial lens ran in-process on the same model).",
+  "Validator batch: 5 findings selected (1 P0, 3 P1, 1 actionable P2) in one batch, within the normal cap of 8."
+ ],
+ "helper_outputs": {
+  "pass1": "/home/jack/rq-gap/2026-10-28-claude-ce-opus-selected/att-002/clone-work/ce-review-artifacts/ce-code-review/20261028-172443-a5ea70ea/mechanical-findings.json",
+  "final": "/home/jack/rq-gap/2026-10-28-claude-ce-opus-selected/att-002/clone-work/ce-review-artifacts/ce-code-review/20261028-172443-a5ea70ea/mechanical-findings-final.json"
+ }
+}

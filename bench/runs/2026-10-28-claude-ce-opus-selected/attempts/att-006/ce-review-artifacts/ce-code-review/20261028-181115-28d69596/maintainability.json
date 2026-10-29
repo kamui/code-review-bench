@@ -1,0 +1,66 @@
+{
+  "reviewer": "maintainability",
+  "findings": [
+    {
+      "title": "Stale err reference drops CheckValid error in LRS",
+      "severity": "P2",
+      "file": "xds/internal/xdsclient/transport/loadreport.go",
+      "line": 175,
+      "why_it_matters": "When the management server sends an invalid or missing load_reporting_interval, operators see the error \"invalid load_reporting_interval: <nil>\" with no reason. During the rewrite, the CheckValid() result was thrown away and the message still formats the outer `err` from stream.Recv(), which is always nil at this point. Before the migration, ptypes.Duration's error was assigned to `err`, so the message carried the real cause. Binding the CheckValid error locally restores that, and it also removes the misleading dependency on a variable from an unrelated earlier step.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Replace lines 173-177 with: `rInterval := resp.GetLoadReportingInterval(); if err := rInterval.CheckValid(); err != nil { return nil, 0, fmt.Errorf(\"invalid load_reporting_interval: %v\", err) }; interval := rInterval.AsDuration()`",
+      "confidence": 100,
+      "evidence": [
+        "xds/internal/xdsclient/transport/loadreport.go:174-175 -- if rInterval.CheckValid() != nil { return nil, 0, fmt.Errorf(\"invalid load_reporting_interval: %v\", err)",
+        "xds/internal/xdsclient/transport/loadreport.go:165-168 -- resp, err := stream.Recv(); if err != nil { return ... } (so err is nil at line 175)",
+        "base 5051eeae: interval, err := ptypes.Duration(resp.GetLoadReportingInterval()); if err != nil { ... %v\", err) }"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Conflict resolution downgrades golang.org/x/tools in test/tools",
+      "severity": "P2",
+      "file": "test/tools/go.mod",
+      "line": 7,
+      "why_it_matters": "The CI vet/lint tooling module goes back from golang.org/x/tools v0.17.0 to v0.14.0, and golang.org/x/sync drops from v0.6.0 to v0.4.0 in go.sum. The protobuf migration did not call for this. The base commit 5051eeae (\"grpc: Update go mod\") had just bumped these, and the merge resolution b8374114 reverted that bump. As a result, goimports and the analyzers run on older tooling than the rest of the repo expects, and the next dependency-bump PR will hit this conflict again.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "In test/tools/go.mod, restore `golang.org/x/tools v0.17.0` and keep `google.golang.org/protobuf v1.32.0` as a direct require (it is now imported by tools.go). Then run `go mod tidy` in test/tools so go.sum and the indirect requires (x/sys, x/sync) match the base versions.",
+      "confidence": 75,
+      "evidence": [
+        "test/tools/go.mod:7 -- golang.org/x/tools v0.14.0",
+        "base 5051eeae test/tools/go.mod -- golang.org/x/tools v0.17.0",
+        "test/tools/go.sum diff -- -golang.org/x/sync v0.6.0 h1:... / +golang.org/x/sync v0.4.0 h1:...",
+        "provenance: b8374114 Clement 2024-01-26 - resolve conflicts and add changes (merge of 5051eeae)"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Duplicated protojson branches in pretty.ToJSON (complexity moved, not removed)",
+      "severity": "P3",
+      "file": "internal/pretty/pretty.go",
+      "line": 39,
+      "why_it_matters": "After the change, the protov1.Message and protov2.Message cases are the same code: each marshals with protojson using a two-space indent and has the same fallback and comment. Per the protojson docs, a non-empty Indent already implies Multiline. Two identical branches mean any future change to the formatting or fallback has to be made twice. They also keep the only remaining non-test import of github.com/golang/protobuf/proto in this file, although protoadapt (already used by internal/status in this diff) offers the same conversion.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Before the switch, normalize: `if m, ok := e.(protoadapt.MessageV1); ok { e = protoadapt.MessageV2Of(m) }`. Then keep a single `case protov2.Message:` branch with `protojson.MarshalOptions{Multiline: true, Indent: jsonIndent}`, delete the protov1 case, and replace the `protov1 \"github.com/golang/protobuf/proto\"` import with google.golang.org/protobuf/protoadapt.",
+      "confidence": 75,
+      "evidence": [
+        "internal/pretty/pretty.go:39-41 -- case protov1.Message: mm := protojson.MarshalOptions{Indent: jsonIndent}; ret, err := mm.Marshal(protov1.MessageV2(ee))",
+        "internal/pretty/pretty.go:49-53 -- case protov2.Message: mm := protojson.MarshalOptions{Multiline: true, Indent: jsonIndent}",
+        "google.golang.org/protobuf@v1.32.0/encoding/protojson/encode.go:52 -- // terminated by a newline. If non-empty, then Multiline is treated as true."
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Migration is incomplete in non-test code: credentials/credentials.go:31, channelz/service/service.go:26-27, channelz/service/func_linux.go:24-25 and xds/internal/xdsclient/bootstrap/bootstrap.go:32 still import github.com/golang/protobuf (proto/ptypes/jsonpb), so the main module keeps both proto APIs in use. Whether these are deliberately left for a follow-up PR was not confirmed."
+  ],
+  "testing_gaps": [
+    "No test checks the error text produced by recvFirstLoadStatsResponse when load_reporting_interval is invalid; such a test would have caught the lost CheckValid error."
+  ]
+}
