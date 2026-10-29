@@ -171,3 +171,11 @@ PR #406 makes the Codex runner's work copy read-only (main `aef0c2829`). A froze
 - Same as the first run, byte for byte: `inputs/` (skill tree, skill pin, skill provenance, invocation, shared policy, runner), `clients.frozen.json`, `clean-context-policy.md`, the arm, cohort, planned cells, sealed order, rates and execution policy. `check` fails on any other difference.
 - Runtime: `bench-tools` `e0626dc6…` (receipt `8a28b40e…`), built from this branch after merging main at `aef0c2829`; its `rust/` tree equals main's. It holds #406's read-only skill copy. Deviation `codex-runtime-v2` replaces the first run's `codex-runtime-v1`.
 - Cap: the owner's $100 less the first run's $0.684383, rounded down to the cent, recorded as deviation `successor-v1`. With $8 reserved, the run stops launching once $91.31 is spent.
+
+The run was defined at `13c635b74` and frozen against it on 2026-10-29 UTC (2026-10-28 evening, Eastern); that commit is its `freeze_commit`. [`queue.codex.v2.json`](queue.codex.v2.json) holds it alone under a $99.31 Codex ceiling and the 95% quota stop. It keeps v1's client pin, environment, runtime store and work root, and carries the owner's approval receipt with the successor noted. `queue.codex.v1.json` is not run again.
+
+| Check, before launch | Result |
+| --- | --- |
+| `rc_sol_v2_run.py check` | `{"reviews": 48, "cap_usd": 99.31, "predecessor_usd": 0.684383, "attempt_usd": 8.0, "client": "codex-cli 0.161.0", "skill_tree": "f78fd818…", "bench_tools": "e0626dc6…", "frozen": "13c635b7…"}`, with `check-manifest` and `skill-provenance verify-pin` passing inside it |
+| `bun run verify:import` | exit 0: `Verified copied bytes for 2775 source files and 288 archives; 9 superseded source-hash mismatches, 0 unavailable` |
+| `bench-tools queue check` on `queue.codex.v2.json` | `ready`, nothing blocked; Codex weekly meter at 41% at 00:49 UTC |
