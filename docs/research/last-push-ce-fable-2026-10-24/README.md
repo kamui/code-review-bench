@@ -117,6 +117,12 @@ At 05:47 UTC the Claude meters read 78% of the week, which resets at 09:00 UTC, 
 
 The queue launched at 05:54 UTC on 2026-10-24. At about 05:57 UTC the owner said "wait for thermo to finish before starting Fable ce", so the controller was stopped while its first attempt ran. `queue recover` settled that attempt at 07:00 UTC: `i-requests-6667/claude-ce-fable-5-1-high/1`, `att-001`, valid completed, $44.97 at list price, about 65 minutes. The estimate above assumed about $18 a review. At $44.97 the 30 reviews would cost about $1,350, over the $1,000 ceiling. The owner then said: "Given the cost i think we pause on CE Fable, it's just too expensive right now." The run stays frozen with 1 of 30 reviews filed. Resuming needs the owner's go-ahead; `queue run --detach` with this queue file continues from the next cell.
 
+## Status: resumed in steps on 2026-10-29
+
+On 2026-10-29 at about 3:05 PM ET, asked whether to run the 29 reviews left (about $45 each), the owner said: "Can we space it out? I want to use up to 20% usage on claude left, then reassess if we should keep going before the reset". At 19:07 UTC the meters read 49% of the week, which resets at 09:00 UTC on 2026-10-31, and 2% of the five-hour window.
+
+The frozen run, its caps and the queue file are unchanged. A controller outside the run (`~/.cache/ce-fable-paced.py`) launches one review at a time with `queue run --count 1`. Before each launch it reads the meters and launches nothing when the week has reached 69% (49% plus 20 points), or would reach it on the largest weekly increase one review has caused so far. It waits for the five-hour window to reset when that window reaches 80%. It stops for the operator when a review is not filed valid or the queue reports a block. The $1,000 ceiling still applies; at about $45 a review it covers about 21 more reviews.
+
 ## Not planned
 
 | Combination | Why |
