@@ -499,14 +499,52 @@ fn sample_of(plan: &Value, units: &Map<Value>) -> R<Object> {
     Ok(found)
 }
 
-fn grades_path(root: &Root, sample: &Value) -> R<PyPath> {
-    under(root, at(at(sample, "grades")?, "path")?)
+/// A round that keeps its own `grades.json` reads it, so batches filed after the draw leave the round's population
+/// as drawn (audit decision 11, `bench/grading/rulings/cohort-rebuild-audit.v7.md`). A sampled batch's grade must
+/// still be the drawn one in the live file: the exception admits new batches, not corrected ones.
+fn grades_path(root: &Root, directory: &PyPath, sample: &Value) -> R<PyPath> {
+    let live = under(root, at(at(sample, "grades")?, "path")?)?;
+    let copy = directory.join(b"grades.json");
+    if !pyvalue::exists(&copy) {
+        return Ok(live);
+    }
+    let by_batch = |grades: &Value| -> R<Map<Value>> {
+        let mut found = Map::default();
+        for batch in each(at(grades, "batches")?)?.iter() {
+            found.insert(
+                tuple_key(&[at(batch, "run")?, at(batch, "target")?])?,
+                batch.clone(),
+            );
+        }
+        Ok(found)
+    };
+    let kept = by_batch(&current_grading::read_json(&copy)?)?;
+    let filed = by_batch(&current_grading::read_json(&live)?)?;
+    for batch in each(at(sample, "batches")?)?.iter() {
+        let key = tuple_key(&[at(batch, "run")?, at(batch, "target")?])?;
+        let same = match (kept.get(&key), filed.get(&key)) {
+            (Some(drawn), Some(now)) => drawn.py_eq(now),
+            _ => false,
+        };
+        if !same {
+            return Err(Failure::Inconsistent(
+                format!(
+                    "{}/{}: grades.json no longer holds the grade the sample drew; correct a sampled grade after \
+                     the conclusion",
+                    at(batch, "run")?.py_str(),
+                    at(batch, "target")?.py_str()
+                )
+                .into_bytes(),
+            ));
+        }
+    }
+    Ok(copy)
 }
 
 fn drawn_sample(root: &Root, current: &[u8]) -> R<(PyPath, Value)> {
     let directory = audit_dir(root, current)?;
     let sample = current_grading::read_json(&directory.join(b"sample.json"))?;
-    let grades = grades_path(root, &sample)?;
+    let grades = grades_path(root, &directory, &sample)?;
     if !Value::Str(current_grading::file_hash(&grades)?)
         .py_eq(at(at(&sample, "grades")?, "sha256")?)
     {
@@ -540,7 +578,13 @@ fn same_batch(batch: &Value, run: &str, target: &str) -> R<bool> {
     Ok(is(left, run) && is(right, target))
 }
 
-fn sampled_grade(sample: &Value, root: &Root, run: &str, target: &str) -> R<Value> {
+fn sampled_grade(
+    sample: &Value,
+    root: &Root,
+    directory: &PyPath,
+    run: &str,
+    target: &str,
+) -> R<Value> {
     let mut held = false;
     for batch in each(at(sample, "batches")?)?.iter() {
         if same_batch(batch, run, target)? {
@@ -553,7 +597,7 @@ fn sampled_grade(sample: &Value, root: &Root, run: &str, target: &str) -> R<Valu
             format!("{run}/{target} holds no sampled unit").into_bytes(),
         ));
     }
-    let grades = current_grading::read_json(&grades_path(root, sample)?)?;
+    let grades = current_grading::read_json(&grades_path(root, directory, sample)?)?;
     for batch in each(at(&grades, "batches")?)?.iter() {
         if same_batch(batch, run, target)? {
             return Ok(batch.clone());
@@ -1404,7 +1448,7 @@ fn listed_claims(root: &Root, current: &[u8], run: &str, target: &str, out: &[u8
     let given = PyPath::new(out);
     let out = crate::packet_selection::resolve(&given)?;
     let (directory, sample) = drawn_sample(root, current)?;
-    let first = sampled_grade(&sample, root, &run, target)?;
+    let first = sampled_grade(&sample, root, &directory, &run, target)?;
     if pyvalue::exists(&out) || holds(&pyfs::resolve(directory.as_bytes()), out.as_bytes()) {
         return Err(Failure::Inconsistent(
             [
@@ -1947,7 +1991,7 @@ fn assessments(batch: &PyPath) -> R<Vec<PyPath>> {
 }
 
 fn comparison_of(directory: &PyPath, sample: &Value, root: &Root) -> R<Result<Value, Vec<String>>> {
-    let grades = current_grading::read_json(&grades_path(root, sample)?)?;
+    let grades = current_grading::read_json(&grades_path(root, directory, sample)?)?;
     let mut graded: Map<Value> = Map::default();
     for batch in each(at(&grades, "batches")?)?.iter() {
         graded.insert(
@@ -2430,7 +2474,7 @@ fn second(root: &Root, current: &[u8], arguments: &Arguments) -> R<Done> {
     let (run, target) = (at(&key, "run")?, at(&key, "target")?);
     let (run_text, target_text) = (string_of(run)?, string_of(target)?);
     let (directory, sample) = drawn_sample(root, current)?;
-    let first = sampled_grade(&sample, root, run_text, target_text)?;
+    let first = sampled_grade(&sample, root, &directory, run_text, target_text)?;
     let (selected, documents, fingerprint) =
         grade::batch_inputs(root, current, run_text, target_text, None)?;
     let fingerprint = Value::Str(fingerprint);
@@ -2712,6 +2756,54 @@ mod tests {
         assert!(holds(b"/a/b", b"/a/b/c"));
         assert!(!holds(b"/a/b", b"/a/bc"));
         assert!(holds(b"/", b"/x"));
+    }
+
+    #[test]
+    fn a_round_admits_later_batches_and_refuses_a_replaced_sampled_grade() {
+        let base =
+            std::env::temp_dir().join(format!("evaluator-audit-pinned-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let current = base.join("bench/grading/current");
+        let round = current.join("audit/seed-1");
+        std::fs::create_dir_all(&round).unwrap();
+        let batch = |run: &str, marker: &str| {
+            format!(r#"{{"run": "{run}", "target": "t-1", "reviews": [], "marker": "{marker}"}}"#)
+        };
+        let write = |path: &std::path::Path, batches: &[String]| {
+            std::fs::write(path, format!(r#"{{"batches": [{}]}}"#, batches.join(", "))).unwrap();
+        };
+        write(&current.join("grades.json"), &[batch("runs/a", "drawn")]);
+        let root = Root::new(base.to_str().unwrap().as_bytes()).unwrap();
+        let directory = PyPath::new(round.to_str().unwrap().as_bytes());
+        std::fs::write(
+            round.join("sample.json"),
+            r#"{"grades": {"path": "bench/grading/current/grades.json"}, "batches": [{"run": "runs/a", "target": "t-1"}]}"#,
+        )
+        .unwrap();
+        let sample = current_grading::read_json(&directory.join(b"sample.json")).unwrap();
+        let marker = |grade: Value| at(&grade, "marker").unwrap().py_str();
+        let first = || sampled_grade(&sample, &root, &directory, "runs/a", "t-1").unwrap();
+        assert_eq!(marker(first()), "drawn");
+
+        std::fs::copy(current.join("grades.json"), round.join("grades.json")).unwrap();
+        write(
+            &current.join("grades.json"),
+            &[
+                batch("runs/a", "regraded"),
+                batch("runs/new", "filed later"),
+            ],
+        );
+        assert!(
+            sampled_grade(&sample, &root, &directory, "runs/a", "t-1").is_err(),
+            "a replaced sampled grade is refused"
+        );
+
+        write(
+            &current.join("grades.json"),
+            &[batch("runs/a", "drawn"), batch("runs/new", "filed later")],
+        );
+        assert_eq!(marker(first()), "drawn");
+        std::fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]

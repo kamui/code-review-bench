@@ -356,32 +356,31 @@ fn inventory(root: &Path) -> Value {
                     && archive.files.get(INPUTS).map(String::as_str) == inputs
             })
             .collect();
-        let (archive, restored, contract, source, reason) = match candidates.as_slice() {
-            [] => {
-                let policy = commit.as_ref().and_then(|commit| {
-                    git(
-                        root,
-                        &[
-                            "show",
-                            &format!("{commit}:bench/grading/current/validation-policy.json"),
-                        ],
-                    )
-                });
-                let contract = policy
-                    .and_then(|policy| pyjson::loads(&policy, Duplicates::Refuse).ok())
-                    .map(|policy| {
-                        text(&policy, &["verdicts"])
-                            .unwrap_or(DEFAULT_CONTRACT)
-                            .to_string()
-                    });
-                (
-                    None,
-                    Value::Null,
-                    contract,
-                    "the validation policy at the filing commit",
-                    Some("no archive under bench/regrading lists this receipt's key, validator inputs and verdicts".to_string()),
+        let policy_contract = || {
+            let policy = commit.as_ref().and_then(|commit| {
+                git(
+                    root,
+                    &[
+                        "show",
+                        &format!("{commit}:bench/grading/current/validation-policy.json"),
+                    ],
                 )
-            }
+            })?;
+            let policy = pyjson::loads(&policy, Duplicates::Refuse).ok()?;
+            Some(
+                text(&policy, &["verdicts"])
+                    .unwrap_or(DEFAULT_CONTRACT)
+                    .to_string(),
+            )
+        };
+        let (archive, restored, contract, source, reason) = match candidates.as_slice() {
+            [] => (
+                None,
+                Value::Null,
+                policy_contract(),
+                "the validation policy at the filing commit",
+                Some("no archive under bench/regrading lists this receipt's key, validator inputs and verdicts".to_string()),
+            ),
             [archive] => match restore(root, archive, &members) {
                 Ok([key, inputs, _verdicts]) => {
                     let differing: Vec<&str> = KEY_FIELDS
@@ -422,8 +421,8 @@ fn inventory(root: &Path) -> Value {
                 Err(reason) => (
                     Some(*archive),
                     Value::Bool(false),
-                    None,
-                    "unknown",
+                    policy_contract(),
+                    "the validation policy at the filing commit",
                     Some(reason),
                 ),
             },
