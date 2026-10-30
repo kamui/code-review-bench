@@ -290,8 +290,8 @@ class Launcher:
 
     def run(self):
         if self.state["phase"] in ("stopped", "finished"):
-            log(f"Nothing to do: the pass is {self.state['phase']}"
-                + (f" ({self.state['stopped']['reason']})" if self.state["phase"] == "stopped" else "") + ".")
+            print(f"Nothing to do: the pass is {self.state['phase']}"
+                  + (f" ({self.state['stopped']['reason']})" if self.state["phase"] == "stopped" else "") + ".")
             return 0
         log(f"Starting in phase '{self.state['phase']}': {len(self.saved_batches())} of "
             f"{len(self.plan['order'])} batches saved, ${self.spent():.2f} of ${self.cap:.0f} spent.")
@@ -405,7 +405,7 @@ def main():
         return 2
     not_before = datetime.fromisoformat(args.not_before.replace("Z", "+00:00")).timestamp() if args.not_before else None
     if not_before and now() < not_before:
-        log(f"Started before {eastern(not_before)}; the timer starts the pass then.")
+        print(f"Started before {eastern(not_before)}; the pass starts then.")
         return 0
     return Launcher(args.authorization).run()
 
