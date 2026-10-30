@@ -8,7 +8,7 @@ The owner chose Claude Opus 5.5 at high effort as the second grader of the 170 s
   - The grader is `claude`, `claude-opus-5-5`, `high`. The queue copies the installed `claude` into `client-bin/` and refuses a version other than `grader.cliVersion`.
   - `grade dispatch` gets `--max-budget-usd 6`. Each running session counts at that limit until its priced receipt settles it, so the cap check uses a true upper bound.
   - The preflight runs `grading probe-claude`, and the quota check reads the Claude meters.
-  - `run` reads `grades.json` nowhere. It relies on `evaluator-audit claims` and `evaluator-audit second`, which check the sample's pinned grades, so batches may join `grades.json` while the round runs.
+  - `run` reads `grades.json` nowhere and leaves that check to `evaluator-audit claims` and `evaluator-audit second`. The bench-tools this authorization pins still refuses those steps once `grades.json` differs from the file the sample pins. So the pass runs in its own checkout, `/home/jack/.cache/regrade-v4`, whose `grades.json` stays the pinned file until the pass ends. New batches join `grades.json` in other checkouts. Only a later authorization that pins a bench-tools which reads the round's own pinned copy lets this checkout's `grades.json` change mid-pass. `test_second_pass.py`'s `runs_after_grades_change` checks only the driver, because its fake tool does not refuse.
   - It never runs `grade map`.
 - [`plan.v1.json`](plan.v1.json) lists the 170 batches in sample order. Each batch has the cache replacement manifest its regrade queue used (109 rebuilt, 39 selected, 22 with none) and the list price of its latest Opus first grade, which totals $214.25.
 - [`launch.py`](launch.py) runs the pass unattended, in chunks:
@@ -49,6 +49,6 @@ tail -f .local/second-pass-v4/launcher.log      # one plain line per decision, i
 tail -f .local/second-pass-v4/driver.log        # second_pass.py output
 ```
 
-To resume after a stop, read the reason, fix its cause, delete the `"phase": "stopped"` entry from `.local/second-pass-v4/launcher.json` (set it to `"full"`), and run `start.sh`. To cancel before it starts, remove the cron lines and the two symlinks.
+To resume after a stop, read the reason, fix its cause, set `"phase"` in `.local/second-pass-v4/launcher.json` to `"full"`, and run `start.sh`. After a stop because the Claude week reset, also set `"baseline"` to `null`, so the launcher takes a new baseline. Without that it stops again, even though its stop message says a restart takes a new baseline. To cancel before it starts, remove the cron lines and the two symlinks.
 
 Keep the checkout's pinned files unchanged until the pass is done. A changed file makes `second_pass.py` refuse (exit 2), and the launcher then stops and says so.
