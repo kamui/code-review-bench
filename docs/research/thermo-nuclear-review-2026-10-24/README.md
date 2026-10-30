@@ -192,6 +192,17 @@ All figures are actual usage. Before the Codex runs, the estimates from the code
 
 All figures are list-price equivalents. The Codex reviews bill to the ChatGPT plan's quota.
 
+## Grading
+
+On 2026-10-29 the owner chose to publish the setups on the ten tasks cut again at the last push, as experiments, and to grade them on Claude Opus 5.5 at high effort. On 2026-10-30 the owner allowed the new batches to join `grades.json` while the rule-version-4 audit round runs ([audit decision 11](../../../bench/grading/rulings/cohort-rebuild-audit.v7.md)) and set a $90 list-price cap and a stop at 92% of the Claude week ([`grading/approval.v1.json`](grading/approval.v1.json)). **(read)**
+
+- Claims intake: `bench-tools claims inventory --target <task> --unlinked` listed 274 unlinked items of these reviews on nine tasks; `q-soba-195` had none. One Opus 5.5 session per task proposed links, and 212 were added to `claims.json`: 81 `equivalent` and 131 `related`. Only links were added; no claim changed, and the 198 rule-version-4 batches stayed `current`. **(run)**
+- Queues: [`grading/`](grading/) holds the plans and authorizations, a `plain` queue of 12 batches (`l-bokeh-9232`, `n-ripgrep-2957`) and a `rebuilt` queue of 48 with the rebuilt caches. Claude Code 2.1.314, 3 workers, a cache root copied from the shared mirrors and archives. The first preparation failed because this checkout lacked the `toolchain-supplements-2026-10-25-v1` archives; after fetching them, its next attempt ran. The failed preparation reserved and spent nothing. **(run)**
+- Result: all 60 batches mapped, 180 admitted reviews assessed, no blocked check. Wall time 13 and 48 minutes. **(run)**
+- Spend, list-price equivalent: $45.56 of the $90 cap. Fable $9.09, Opus $9.57, Sonnet $8.93, Astra $6.17, Luna $4.54, Sol $7.27. **(run)**
+- Claude week: 73% at 4:31 PM ET before the intake, 76% at 5:57 PM ET after grading. **(run)**
+- Candidates: the graders raised `NC-2a3425e24057` and `NC-e9470b7251c2`, both on `i-requests-6667` and both about an adapter subclass whose CA is loaded into the shared `_preloaded_ssl_context`. Both are pending; each holds one review's credit for `GT-i7` unresolved until the owner rules. **(run)**
+
 ## Skipped combinations
 
 None. `thermo-nuclear-review` is a skill, so it runs on every roster model through the `claude-skill` and `codex-skill` adapters. `bun run roster` reported no violation on 2026-10-24 and again on 2026-10-28, with the Codex arm files added. It lists the method under neither client yet, because no run of it is published.
