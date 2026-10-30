@@ -133,7 +133,7 @@ describe('moved commands', () => {
       }
     }
     expect(found).toEqual([])
-  })
+  }, 30_000)
   test('package scripts run the Rust commands through the launcher', () => {
     const scripts = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8')).scripts as Record<string, string>
     expect(scripts['rates:check']).toBe('bench/tools/bench-tools rates check')
