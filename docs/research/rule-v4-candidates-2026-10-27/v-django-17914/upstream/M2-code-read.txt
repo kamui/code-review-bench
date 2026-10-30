@@ -1,0 +1,115 @@
+FILE 0: https://github.com/django/django/blob/e9414948e9660ee4c167eebb187710ee3031d9d8/django/db/backends/postgresql/base.py
+267:             )
+268:         if settings_dict["NAME"]:
+269:             conn_params = {
+270:                 "dbname": settings_dict["NAME"],
+271:                 **settings_dict["OPTIONS"],
+272:             }
+274:             # Connect to the default 'postgres' db.
+275:             settings_dict["OPTIONS"].pop("service", None)
+276:             conn_params = {"dbname": "postgres", **settings_dict["OPTIONS"]}
+277:         else:
+278:             conn_params = {**settings_dict["OPTIONS"]}
+279:         conn_params["client_encoding"] = "UTF8"
+280: 
+281:         conn_params.pop("assume_role", None)
+282:         conn_params.pop("isolation_level", None)
+283: 
+284:         pool_options = conn_params.pop("pool", None)
+285:         if pool_options and not is_psycopg3:
+286:             raise ImproperlyConfigured("Database pooling requires psycopg >= 3")
+287: 
+288:         server_side_binding = conn_params.pop("server_side_binding", None)
+289:         conn_params.setdefault(
+290:             "cursor_factory",
+291:             (
+292:                 ServerBindingCursor
+296:         )
+297:         if settings_dict["USER"]:
+298:             conn_params["user"] = settings_dict["USER"]
+299:         if settings_dict["PASSWORD"]:
+300:             conn_params["password"] = settings_dict["PASSWORD"]
+301:         if settings_dict["HOST"]:
+302:             conn_params["host"] = settings_dict["HOST"]
+303:         if settings_dict["PORT"]:
+304:             conn_params["port"] = settings_dict["PORT"]
+305:         if is_psycopg3:
+306:             conn_params["context"] = get_adapters_template(
+307:                 settings.USE_TZ, self.timezone
+308:             )
+309:             # Disable prepared statements by default to keep connection poolers
+310:             # working. Can be reenabled via OPTIONS in the settings dict.
+311:             conn_params["prepare_threshold"] = conn_params.pop(
+312:                 "prepare_threshold", None
+313:             )
+314:         return conn_params
+315: 
+316:     @async_unsafe
+317:     def get_new_connection(self, conn_params):
+318:         # self.isolation_level must be set:
+319:         # - after connecting to the database in order to obtain the database's
+320:         #   default when no value is explicitly specified in options.
+342:             connection = self.pool.getconn()
+343:         else:
+344:             connection = self.Database.connect(**conn_params)
+345:         if set_isolation_level:
+346:             connection.isolation_level = self.isolation_level
+347:         if not is_psycopg3:
+
+FILE 1: https://github.com/django/django/blob/e9414948e9660ee4c167eebb187710ee3031d9d8/django/db/backends/base/base.py
+207: 
+208:     def get_connection_params(self):
+209:         """Return a dict of parameters suitable for get_new_connection."""
+210:         raise NotImplementedError(
+211:             "subclasses of BaseDatabaseWrapper may require a get_connection_params() "
+212:             "method"
+213:         )
+214: 
+215:     def get_new_connection(self, conn_params):
+216:         """Open a connection to the database."""
+217:         raise NotImplementedError(
+218:             "subclasses of BaseDatabaseWrapper may require a get_new_connection() "
+219:             "method"
+220:         )
+221: 
+253:         self.health_check_done = True
+254:         # Establish the connection
+255:         conn_params = self.get_connection_params()
+256:         self.connection = self.get_new_connection(conn_params)
+257:         self.set_autocommit(self.settings_dict["AUTOCOMMIT"])
+258:         self.init_connection_state()
+259:         connection_created.send(sender=self.__class__, connection=self)
+
+FILE 2: https://github.com/django/django/blob/e9414948e9660ee4c167eebb187710ee3031d9d8/django/db/backends/oracle/base.py
+293: 
+294:     def get_connection_params(self):
+295:         conn_params = self.settings_dict["OPTIONS"].copy()
+296:         if "use_returning_into" in conn_params:
+297:             del conn_params["use_returning_into"]
+298:         return conn_params
+299: 
+300:     @async_unsafe
+301:     def get_new_connection(self, conn_params):
+302:         if self.pool:
+303:             return self.pool.acquire()
+304:         return Database.connect(
+306:             password=self.settings_dict["PASSWORD"],
+307:             dsn=dsn(self.settings_dict),
+308:             **conn_params,
+309:         )
+310: 
+311:     def init_connection_state(self):
+
+FILE 3: https://github.com/django/django/blob/e9414948e9660ee4c167eebb187710ee3031d9d8/django/db/backends/sqlite3/base.py
+203: 
+204:     @async_unsafe
+205:     def get_new_connection(self, conn_params):
+206:         if not self.is_in_memory_db():
+207:             try:
+208:                 Path(conn_params["database"]).parent.mkdir(exist_ok=True, parents=True)
+209:             except OSError as e:
+210:                 raise InterfaceError(f"Error creating path to SQLite database: {e}.")
+211:         conn = Database.connect(**conn_params)
+212:         register_functions(conn)
+213: 
+214:         conn.execute("PRAGMA foreign_keys = ON")

@@ -368,7 +368,66 @@ fn answers(record: &Value) -> Py<Vec<Value>> {
     pyvalue::iterate(item(record, "answers")?)
 }
 
-fn party_faults(record: &Value, rulings: &Value, blind_needed: usize) -> Py<Vec<String>> {
+/// The before-record field that carries the owner's saved permission for blind answers from the recommender's
+/// model family in one named round. Such a record always goes to the owner and counts nothing toward delegation.
+pub const SAME_FAMILY: &str = "same_family_blind";
+
+/// The routing reason a record under that permission always carries.
+pub const SAME_FAMILY_REASON: &str = "the owner allowed blind answers from the recommender's model family for this round; the decision stays with the owner and counts nothing toward delegation";
+
+/// Whether the record claims the owner's permission for same-family blind answers.
+pub fn same_family(record: &Value) -> Py<bool> {
+    Ok(get(record, SAME_FAMILY)?.truthy())
+}
+
+/// What the permission lacks: the owner's receipt pinned by path and sha256, a `scope` that is a passage of it
+/// naming the `round`, and a `round` that is the one the record's `round_opening` names.
+fn same_family_faults(repo: &Repo, record: &Value) -> Py<Vec<String>> {
+    let allowance = get(record, SAME_FAMILY)?;
+    if !allowance.truthy() {
+        return Ok(Vec::new());
+    }
+    let refused = || {
+        Ok(vec![format!(
+            "`{SAME_FAMILY}` needs `round`, the round its `round_opening` names, `receipt`, the owner's saved receipt by path and sha256, and `scope`, the passage of that receipt that names the round and allows it"
+        )])
+    };
+    if !matches!(allowance, Value::Object(_)) {
+        return refused();
+    }
+    let (Value::Str(round), Value::Str(scope)) =
+        (get(allowance, "round")?, get(allowance, "scope")?)
+    else {
+        return refused();
+    };
+    let receipt = get(allowance, "receipt")?;
+    if round.trim().is_empty() || scope.trim().is_empty() || !pinned(repo, receipt)? {
+        return refused();
+    }
+    let text = pyvalue::read_bytes(&repo.path(item(receipt, "path")?)?)?;
+    let text = String::from_utf8_lossy(&text);
+    let opening = get(record, "round_opening")?;
+    let opened = if pinned(repo, opening)? {
+        repo.load(&repo.path(item(opening, "path")?)?)?
+    } else {
+        Value::Null
+    };
+    if !text.contains(scope.as_str())
+        || !scope.contains(round.as_str())
+        || !matches!(opened, Value::Object(_))
+        || !get(&opened, "round")?.py_eq(&pyvalue::text(round))
+    {
+        return refused();
+    }
+    Ok(Vec::new())
+}
+
+fn party_faults(
+    record: &Value,
+    rulings: &Value,
+    blind_needed: usize,
+    same_family_allowed: bool,
+) -> Py<Vec<String>> {
     let mut recommenders = Vec::new();
     for answer in answers(record)? {
         if pyvalue::is(item(&answer, "by")?, "recommender") {
@@ -389,7 +448,7 @@ fn party_faults(record: &Value, rulings: &Value, blind_needed: usize) -> Py<Vec<
     }
     if blind_needed > 0 {
         let mut short = blind.len() < blind_needed;
-        if !short {
+        if !short && !same_family_allowed {
             for answer in &blind {
                 if item(answer, "family")?.py_eq(item(&recommenders[0], "family")?) {
                     short = true;
@@ -664,8 +723,9 @@ fn second_faults(repo: &Repo, record: &Value) -> Py<Vec<String>> {
             item(record, "decision_type")?.py_str()
         ));
     }
+    found.extend(same_family_faults(repo, record)?);
     if found.is_empty() {
-        party_faults(record, &rulings, blind_needed)
+        party_faults(record, &rulings, blind_needed, same_family(record)?)
     } else {
         Ok(found)
     }
@@ -735,7 +795,7 @@ pub fn faults(repo: &Repo, record: &Value) -> Py<Vec<String>> {
         found.extend(name_faults(&answer, &clauses, &rulings)?);
     }
     if found.is_empty() {
-        party_faults(record, &rulings, 2)
+        party_faults(record, &rulings, 2, false)
     } else {
         Ok(found)
     }
@@ -755,6 +815,9 @@ pub fn reasons(repo: &Repo, record: &Value) -> Py<Vec<String>> {
     }
     let kind = item(record, "decision_type")?;
     let mut found = Vec::new();
+    if same_family(record)? {
+        found.push(SAME_FAMILY_REASON.into());
+    }
     if !one_of(kind, &["candidate", "reconciliation"]) {
         found.push(format!(
             "a {} decision is the user's under ADR-0006",

@@ -204,7 +204,9 @@ pub fn route(
             kind.py_str()
         ));
     }
-    if !summary::eligible(before)? {
+    if record::same_family(before)? {
+        reasons.push(record::SAME_FAMILY_REASON.into());
+    } else if !summary::eligible(before)? {
         reasons.push("only contract 2 first answers written before the question qualify".into());
     }
     if item(before, "reviews")?.truthy() {
