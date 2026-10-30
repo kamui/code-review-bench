@@ -36,7 +36,7 @@ On 2026-10-30 the running user manager could not be reached: its private socket 
 @reboot sleep 120 && /home/jack/.cache/regrade-v4/docs/research/rule-v4-regrade-2026-10-25/second-pass/start.sh >> /home/jack/.cache/second-pass-v4-logs/cron.out 2>&1
 ```
 
-Remove the cron lines once `launch.py status` says the pass finished or stopped.
+The owner approved this fallback on 2026-10-30 ("Yes, add them (Recommended)"). At about 5:45 PM ET that day, the coordinating session added exactly these two lines to the user crontab. It then ran `start.sh` under a bare cron environment, which printed "Started before Sat Oct 31, 5:10 AM ET; the pass starts then." and exited 0. Cron's 10-minute runs have since logged the same line to `cron.out`. The coordinating session removes both lines after the pass concludes.
 
 Status, without a model call:
 
