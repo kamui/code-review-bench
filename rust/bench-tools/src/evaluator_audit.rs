@@ -2728,7 +2728,8 @@ mod tests {
 
     #[test]
     fn a_round_reads_the_grades_it_keeps_after_later_batches_are_filed() {
-        let base = std::env::temp_dir().join(format!("evaluator-audit-pinned-{}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("evaluator-audit-pinned-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let current = base.join("bench/grading/current");
         let round = current.join("audit/seed-1");
@@ -2755,7 +2756,10 @@ mod tests {
         std::fs::copy(current.join("grades.json"), round.join("grades.json")).unwrap();
         write(
             &current.join("grades.json"),
-            &[batch("runs/a", "regraded"), batch("runs/new", "filed later")],
+            &[
+                batch("runs/a", "regraded"),
+                batch("runs/new", "filed later"),
+            ],
         );
         assert_eq!(marker(first()), "drawn");
         std::fs::remove_dir_all(&base).unwrap();
