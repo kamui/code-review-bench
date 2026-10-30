@@ -500,13 +500,45 @@ fn sample_of(plan: &Value, units: &Map<Value>) -> R<Object> {
 }
 
 /// A round that keeps its own `grades.json` reads it, so batches filed after the draw leave the round's population
-/// as drawn (audit decision 11, `bench/grading/rulings/cohort-rebuild-audit.v7.md`).
+/// as drawn (audit decision 11, `bench/grading/rulings/cohort-rebuild-audit.v7.md`). A sampled batch's grade must
+/// still be the drawn one in the live file: the exception admits new batches, not corrected ones.
 fn grades_path(root: &Root, directory: &PyPath, sample: &Value) -> R<PyPath> {
+    let live = under(root, at(at(sample, "grades")?, "path")?)?;
     let copy = directory.join(b"grades.json");
-    if pyvalue::exists(&copy) {
-        return Ok(copy);
+    if !pyvalue::exists(&copy) {
+        return Ok(live);
     }
-    under(root, at(at(sample, "grades")?, "path")?)
+    let by_batch = |grades: &Value| -> R<Map<Value>> {
+        let mut found = Map::default();
+        for batch in each(at(grades, "batches")?)?.iter() {
+            found.insert(
+                tuple_key(&[at(batch, "run")?, at(batch, "target")?])?,
+                batch.clone(),
+            );
+        }
+        Ok(found)
+    };
+    let kept = by_batch(&current_grading::read_json(&copy)?)?;
+    let filed = by_batch(&current_grading::read_json(&live)?)?;
+    for batch in each(at(sample, "batches")?)?.iter() {
+        let key = tuple_key(&[at(batch, "run")?, at(batch, "target")?])?;
+        let same = match (kept.get(&key), filed.get(&key)) {
+            (Some(drawn), Some(now)) => drawn.py_eq(now),
+            _ => false,
+        };
+        if !same {
+            return Err(Failure::Inconsistent(
+                format!(
+                    "{}/{}: grades.json no longer holds the grade the sample drew; correct a sampled grade after \
+                     the conclusion",
+                    at(batch, "run")?.py_str(),
+                    at(batch, "target")?.py_str()
+                )
+                .into_bytes(),
+            ));
+        }
+    }
+    Ok(copy)
 }
 
 fn drawn_sample(root: &Root, current: &[u8]) -> R<(PyPath, Value)> {
@@ -2727,7 +2759,7 @@ mod tests {
     }
 
     #[test]
-    fn a_round_reads_the_grades_it_keeps_after_later_batches_are_filed() {
+    fn a_round_admits_later_batches_and_refuses_a_replaced_sampled_grade() {
         let base =
             std::env::temp_dir().join(format!("evaluator-audit-pinned-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
@@ -2760,6 +2792,15 @@ mod tests {
                 batch("runs/a", "regraded"),
                 batch("runs/new", "filed later"),
             ],
+        );
+        assert!(
+            sampled_grade(&sample, &root, &directory, "runs/a", "t-1").is_err(),
+            "a replaced sampled grade is refused"
+        );
+
+        write(
+            &current.join("grades.json"),
+            &[batch("runs/a", "drawn"), batch("runs/new", "filed later")],
         );
         assert_eq!(marker(first()), "drawn");
         std::fs::remove_dir_all(&base).unwrap();
