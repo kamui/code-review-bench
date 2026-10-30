@@ -24,22 +24,31 @@ The owner chose Claude Opus 5.5 at high effort as the second grader of the 170 s
 
 ## The units
 
-The pass runs from a shell, never from an assistant session. Two systemd user units in `~/.config/systemd/user` start it, in the checkout at `/home/jack/.cache/regrade-v4`:
+The pass runs from a shell, never from an assistant session. [`start.sh`](start.sh) sets the environment and runs `launch.py run` under a lock, so only one launcher runs however it is started. Before 5:10 AM, or once the pass has finished or stopped, a start does nothing and exits 0. Two systemd user units in `~/.config/systemd/user` start it, in the checkout at `/home/jack/.cache/regrade-v4`:
 
 - `second-pass-v4.timer` fires once, at Sat 2026-10-31 5:10 AM ET, with `Persistent=true`. If the host is off then, it fires at the next boot.
-- `second-pass-v4.service` runs `launch.py run`, and it is enabled for `default.target`, so a reboot during the pass resumes it. Before 5:10 AM, or once the pass has finished or stopped, a start does nothing and exits 0. The host keeps the user manager running without a login (`Linger=yes`).
+- `second-pass-v4.service` runs `start.sh`, and it is wanted by `default.target`, so a reboot during the pass resumes it. The host keeps the user manager running without a login (`Linger=yes`).
+
+On 2026-10-30 the running user manager could not be reached: its private socket file was replaced at 4:27 PM ET, so `systemctl --user` fails with "Failed to connect to bus" and the manager cannot load new units until it restarts. Both units are enabled by their symlinks in `timers.target.wants/` and `default.target.wants/`, which the manager reads at the next boot. Until then, this cron line starts the pass, and `@reboot` covers a restart:
+
+```cron
+*/10 * * * * /home/jack/.cache/regrade-v4/docs/research/rule-v4-regrade-2026-10-25/second-pass/start.sh >> /home/jack/.cache/second-pass-v4-logs/cron.out 2>&1
+@reboot sleep 120 && /home/jack/.cache/regrade-v4/docs/research/rule-v4-regrade-2026-10-25/second-pass/start.sh >> /home/jack/.cache/second-pass-v4-logs/cron.out 2>&1
+```
+
+Remove the cron lines once `launch.py status` says the pass finished or stopped.
 
 Status, without a model call:
 
 ```sh
 cd ~/.cache/regrade-v4
 python3 -I docs/research/rule-v4-regrade-2026-10-25/second-pass/launch.py status
-systemctl --user list-timers second-pass-v4.timer
+systemctl --user list-timers second-pass-v4.timer   # works once the user manager is reachable
 systemctl --user status second-pass-v4.service
 tail -f .local/second-pass-v4/launcher.log      # one plain line per decision, in ET
 tail -f .local/second-pass-v4/driver.log        # second_pass.py output
 ```
 
-To resume after a stop, read the reason, fix its cause, delete the `"phase": "stopped"` entry from `.local/second-pass-v4/launcher.json` (set it to `"full"`), and run `systemctl --user start second-pass-v4.service`. To cancel before it starts, run `systemctl --user disable --now second-pass-v4.timer second-pass-v4.service`.
+To resume after a stop, read the reason, fix its cause, delete the `"phase": "stopped"` entry from `.local/second-pass-v4/launcher.json` (set it to `"full"`), and run `start.sh`. To cancel before it starts, remove the cron lines and the two symlinks.
 
 Keep the checkout's pinned files unchanged until the pass is done. A changed file makes `second_pass.py` refuse (exit 2), and the launcher then stops and says so.
