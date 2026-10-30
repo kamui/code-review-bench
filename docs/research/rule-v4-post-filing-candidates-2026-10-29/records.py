@@ -4,7 +4,9 @@
     python3 docs/research/rule-v4-post-filing-candidates-2026-10-29/records.py [--out DIR] [RULING...]
 
 questions.json names each question (a ruling) and, for each of its decisions, the pull request, group, decision
-type and the answer files of the recommender and the two blind sessions. The answers are copied as
+type and the answer files of the recommender and the two blind sessions. Each record is marked reconstructed: it was
+written after the owner's answers, from the answer files committed before the questions, because the record tool
+refused same-family blind answers until the owner's receipt allowed them for this round. The answers are copied as
 the parties wrote them, with two exceptions that the record's note names each time: a nearest ruling that is not in
 the index is left out, and where the tool requires a condition of high confidence to be named (no nearest ruling of
 the current reading, a stated gap or a stated conflict) the condition is added and the level follows the count. The
@@ -32,6 +34,11 @@ PARTIES = {
     "opus": {"by": "assessor-1", "model": "claude-opus-5-5", "family": "claude", "effort": "high", "blind": True, "exposure": "none"},
     "sonnet": {"by": "assessor-2", "model": "claude-sonnet-5-5", "family": "claude", "effort": "high", "blind": True, "exposure": "none"},
 }
+SAME_FAMILY_RECEIPT = "bench/grading/rulings/same-family-blind.v1.md"
+SAME_FAMILY_SCOPE = "Blind answers from the recommender's model family are allowed in round rule-v4-post-filing-candidates."
+RECONSTRUCTED = ("Written after the owner's answers, from answer files committed before the questions: the recommender's at 620dd06a0 and "
+                 "the blind sessions' at c89b9d9cc. bench-tools ruling route refused these records until the owner allowed same-family "
+                 "blind answers for this round (same-family-blind.v1.md), so none was saved before the questions.")
 DROPPED = ("case", "promised", "promised_by", "delivered", "intent", "identifies_instead", "against")
 
 
@@ -99,11 +106,13 @@ def main(only):
                        for party, source in files.items()]
             note = decision.get("note", "") + (" Differences between this record and the saved answer files, which keep each party's own words: " + "; ".join(left_out) + "." if left_out else "")
             source = f"{ROUND}/{decision['target']}/{'cards' if kind == 'band' else 'cases'}/{decision['group']}.md"
-            record = {"contract": 2, "ruling": question["ruling"], "decision_type": kind, "target": decision["target"], "group": decision["group"], "reconstructed": False,
+            note = (RECONSTRUCTED + " " + note).strip()
+            record = {"contract": 2, "ruling": question["ruling"], "decision_type": kind, "target": decision["target"], "group": decision["group"], "reconstructed": True,
                       "note": note.strip(), "round_opening": opening, "filing": decision.get("filing"),
                       "dossier": f"{ROUND}/{decision['target']}" if kind == "candidate" else None,
                       "case": {**pin(source), "written_by": "claude-opus-5-5 (a preparation agent of the asking session)", "precedents": sheet},
-                      "rule": pin(rule), "clauses": clauses_path, "rulings": f"{TERMS}/rulings.index.json", "reviews": decision.get("reviews"), "answers": answers}
+                      "rule": pin(rule), "clauses": clauses_path, "rulings": f"{TERMS}/rulings.index.json", "reviews": decision.get("reviews"), "answers": answers,
+                      "same_family_blind": {"round": "rule-v4-post-filing-candidates", "receipt": pin(SAME_FAMILY_RECEIPT), "scope": SAME_FAMILY_SCOPE}}
             out = OUT / f"{question['ruling']}.{decision['group']}{'-label' if kind == 'band' else ''}.before.json"
             out.write_text(json.dumps(record, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
             declared = out.with_name(out.name.replace(".before.json", ".declared.json"))
