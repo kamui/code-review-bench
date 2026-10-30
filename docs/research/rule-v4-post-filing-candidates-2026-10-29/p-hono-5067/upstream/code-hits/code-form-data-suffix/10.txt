@@ -1,0 +1,601 @@
+unit Horse.Provider.RawAdapters;
+
+{
+  Horse Provider Raw Adapters
+  ===========================
+  Generic TWebRequest / TWebResponse subclasses that delegate to
+  IHorseRawRequest / IHorseRawResponse interfaces.
+
+  Purpose: new providers implement the lightweight interfaces (~10 methods)
+  from Horse.Provider.RawInterfaces and wrap them in these adapters to get
+  full TWebRequest / TWebResponse compatibility for free.
+
+  Delphi branch: subclasses TWebRequest / TWebResponse (Web.HTTPApp).
+  FPC branch:    subclasses TRequest / TResponse (HTTPDefs).
+
+  The adapters handle:
+  - All abstract Get/Set variable method stubs
+  - Eager population of QueryFields / ContentFields / CookieFields
+  - GetFieldByName delegation
+  - ReadClient / ReadString delegation
+  - Write-side stubs (no-ops — responses go through THorseResponse)
+
+  SetCustomHeader on TInterfacedWebResponse is inherited from TWebResponse
+  and writes to the inherited CustomHeaders TStrings. The adapter optionally
+  forwards to IHorseRawResponse if the provider wants real-time interception.
+}
+
+{$IF DEFINED(FPC)}
+  {$MODE DELPHI}{$H+}
+{$ENDIF}
+
+{$IF DEFINED(HORSE_APACHE) or DEFINED(HORSE_ISAPI) or DEFINED(HORSE_CGI) or DEFINED(HORSE_FCGI)}
+  {$MESSAGE FATAL 'Horse.Provider.RawAdapters is for self-hosted providers and must not be linked into Apache, ISAPI, CGI, or FastCGI applications.'}
+{$IFEND}
+
+interface
+
+uses
+{$IF DEFINED(FPC)}
+  SysUtils,
+  Classes,
+  fpHTTP,
+  HTTPDefs,
+{$ELSE}
+  System.SysUtils,
+  System.Classes,
+  Web.HTTPApp,
+{$ENDIF}
+  Horse.Provider.RawInterfaces;
+
+type
+{$IF DEFINED(FPC)}
+
+  { TInterfacedWebRequest — FPC TRequest subclass
+    Populates inherited fields from IHorseRawRequest in constructor. }
+  TInterfacedWebRequest = class(TRequest)
+  private
+    FRawReq: IHorseRawRequest;
+  public
+    constructor Create(const ARawReq: IHorseRawRequest); reintroduce;
+    property RawReq: IHorseRawRequest read FRawReq;
+  end;
+
+  { TInterfacedWebResponse — FPC TResponse subclass }
+  TInterfacedWebResponse = class(TResponse)
+  private
+    FRawRes: IHorseRawResponse;
+  public
+    constructor Create(const ARawRes: IHorseRawResponse); reintroduce;
+    property RawRes: IHorseRawResponse read FRawRes;
+  end;
+
+{$ELSE}
+
+  {$IF CompilerVersion >= 31.0}
+  TWebString = string;
+  {$ELSE}
+  TWebString = AnsiString;
+  {$IFEND}
+
+  { TInterfacedWebRequest — Delphi TWebRequest subclass
+    Delegates all abstract methods to IHorseRawRequest.
+    Eagerly populates inherited QueryFields / ContentFields / CookieFields. }
+  TInterfacedWebRequest = class(TWebRequest)
+  private
+    FRawReq: IHorseRawRequest;
+    FInitializingQueryFields: Boolean;
+  protected
+    function  GetStringVariable(Index: Integer): TWebString; override;
+    function  GetDateVariable(Index: Integer): TDateTime; override;
+{$IF CompilerVersion >= 35.0}  // Delphi 11 Alexandria+
+    function  GetIntegerVariable(Index: Integer): Int64; override;
+{$ELSE}
+    function  GetIntegerVariable(Index: Integer): Integer; override;
+{$IFEND}
+{$IF CompilerVersion >= 32.0}
+    function  GetRawContent: TBytes; override;
+{$IFEND}
+  public
+    constructor Create(const ARawReq: IHorseRawRequest); reintroduce;
+    destructor  Destroy; override;
+    function  GetFieldByName(const Name: TWebString): TWebString; override;
+    function  ReadClient(var Buffer; Count: Integer): Integer; override;
+    function  ReadString(Count: Integer): TWebString; override;
+    function  TranslateURI(const URI: string): string; override;
+    function  WriteClient(var Buffer; Count: Integer): Integer; override;
+    function  WriteString(const AString: TWebString): Boolean; override;
+    function  WriteHeaders(StatusCode: Integer; const ReasonString,
+                           Headers: TWebString): Boolean; override;
+    property  RawReq: IHorseRawRequest read FRawReq;
+  end;
+
+  { TInterfacedWebResponse — Delphi TWebResponse subclass
+    All abstract methods stubbed. SetCustomHeader is inherited and works
+    out of the box via the inherited CustomHeaders TStrings. }
+  TInterfacedWebResponse = class(TWebResponse)
+  private
+    FRawRes: IHorseRawResponse;
+    FContent: TWebString;
+    FContentType: TWebString;
+    FContentStream: TStream;
+  protected
+    function  GetStringVariable(Index: Integer): TWebString; override;
+    procedure SetStringVariable(Index: Integer; const Value: TWebString); override;
+    function  GetDateVariable(Index: Integer): TDateTime; override;
+    procedure SetDateVariable(Index: Integer; const Value: TDateTime); override;
+{$IF CompilerVersion >= 35.0}  // Delphi 11 Alexandria+
+    function  GetIntegerVariable(Index: Integer): Int64; override;
+    procedure SetIntegerVariable(Index: Integer; Value: Int64); override;
+{$ELSE}
+    function  GetIntegerVariable(Index: Integer): Integer; override;
+    procedure SetIntegerVariable(Index: Integer; Value: Integer); override;
+{$IFEND}
+    function  GetContent: TWebString; override;
+    procedure SetContent(const Value: TWebString); override;
+    procedure SetContentStream(Value: TStream); override;
+    function  GetStatusCode: Integer; override;
+    procedure SetStatusCode(Value: Integer); override;
+    function  GetLogMessage: string; override;
+    procedure SetLogMessage(const Value: string); override;
+  public
+    constructor Create(const ARawRes: IHorseRawResponse); reintroduce;
+    destructor  Destroy; override;
+    procedure SendResponse; override;
+    procedure SendRedirect(const URI: TWebString); override;
+    property  RawRes: IHorseRawResponse read FRawRes;
+    property  ContentStream: TStream read FContentStream write FContentStream;
+  end;
+
+{$ENDIF}
+
+implementation
+
+{ --------------------------------------------------------------------------- }
+{ String variable indices — same as Web.HTTPApp TWebRequest private constants  }
+{ Stable across Delphi versions from XE onward.                               }
+{ --------------------------------------------------------------------------- }
+{$IF NOT DEFINED(FPC)}
+const
+  HRV_Method           = 0;
+  HRV_ProtocolVersion  = 1;
+  HRV_URL              = 2;
+  HRV_Query            = 3;
+  HRV_PathInfo         = 4;
+  HRV_PathTranslated   = 5;
+  HRV_CacheControl     = 6;
+  HRV_Date             = 7;
+  HRV_Accept           = 8;
+  HRV_From             = 9;
+  HRV_Host             = 10;
+  HRV_IfModifiedSince  = 11;
+  HRV_Referer          = 12;
+  HRV_UserAgent        = 13;
+  HRV_ContentEncoding  = 14;
+  HRV_ContentType      = 15;
+  HRV_ContentLength    = 16;
+  HRV_ContentVersion   = 17;
+  HRV_DerivedFrom      = 18;
+  HRV_Expires          = 19;
+  HRV_Title            = 20;
+  HRV_RemoteAddr       = 21;
+  HRV_RemoteHost       = 22;
+  HRV_ScriptName       = 23;
+  HRV_ServerPort       = 24;
+  HRV_Content          = 25;
+  HRV_Connection       = 26;
+  HRV_Cookie           = 27;
+  HRV_Authorization    = 28;
+{$ENDIF}
+
+{ =========================================================================== }
+{ Delphi implementation                                                       }
+{ =========================================================================== }
+{$IF NOT DEFINED(FPC)}
+
+{ --------------------------------------------------------------------------- }
+{ TInterfacedWebRequest                                                       }
+{ --------------------------------------------------------------------------- }
+
+{ [FIX-RAWFIELDS-1] True when the media type IS a form body.
+
+  Compares the media type EXACTLY, after stripping any parameters, rather than
+  searching for a substring. Pos('application/x-www-form-urlencoded', ...) also
+  matches 'x-application/x-www-form-urlencoded', 'multipart/form-data-x', and any
+  header that merely MENTIONS the token inside a parameter - each of which would send
+  a non-form body straight back down the parsing path this guard exists to avoid. }
+function IsFormMediaType(const AContentType: string): Boolean;
+var
+  LMedia: string;
+  LSemicolon: Integer;
+begin
+  LMedia := AContentType;
+  LSemicolon := Pos(';', LMedia);
+  if LSemicolon > 0 then
+    LMedia := Copy(LMedia, 1, LSemicolon - 1);
+  LMedia := LowerCase(Trim(LMedia));
+  Result := (LMedia = 'application/x-www-form-urlencoded') or
+            (LMedia = 'multipart/form-data');
+end;
+
+constructor TInterfacedWebRequest.Create(const ARawReq: IHorseRawRequest);
+var
+  LQueryFields: TStrings;
+begin
+  { Assign FRawReq BEFORE inherited Create — TWebRequest.Create calls
+    GetStringVariable internally during initialisation. }
+  FRawReq := ARawReq;
+  inherited Create;
+
+  { Populate the inherited TStrings (backed by private fields — no virtual
+    getter to override). }
+  if Assigned(FRawReq) then
+  begin
+    { QueryFields lazily invokes WebBroker's non-virtual query parser. Let it
+      allocate an empty list, then use the raw provider's parser exactly once.
+      Otherwise malformed percent escapes can raise before dispatch, and even
+      valid fields are unnecessarily parsed twice. Keep Query itself unchanged
+      outside this narrowly scoped initialization. }
+    FInitializingQueryFields := True;
+    try
+      LQueryFields := QueryFields;
+    finally
+      FInitializingQueryFields := False;
+    end;
+    FRawReq.PopulateQueryFields(LQueryFields);
+
+    { [FIX-RAWFIELDS-1] Only touch ContentFields when the body really is form
+      data. READING this property is not free: TWebRequest.GetContentFields
+      lazily runs ExtractContentFields over Content, which splits the body,
+      strips quotes and URL-DECODES every piece. On a JSON body that is both
+      pointless and unsafe — a literal '%' in any string value raises
+      EConvertError ("Error decoding URL style (%XX) encoded string at position
+      N") from the CONSTRUCTOR, before the route or any middleware runs, so the
+      caller gets a 500 whose message names neither the request nor the field.
+
+      Reported against a live service and reproduced: a PUT whose payload held
+        "descripcion":"Impuesto al Valor Agregado 13%"
+      failed every time — 30 characters, '%' last, hence "at position 30" — while
+      the identical document without the percent sign succeeded. It presented as
+      intermittent because only documents containing a '%' fail, and as
+      provider-specific because Indy uses a real WebBroker request and never
+      reaches these adapters.
+
+      Skipping costs nothing: every provider's PopulateContentFields is already
+      gated on a form body and adds nothing otherwise, so this removes only work
+      that had no effect. }
+    if IsFormMediaType(FRawReq.GetContentType) then
+      FRawReq.PopulateContentFields(ContentFields);
+
+    FRawReq.PopulateCookieFields(CookieFields);
+  end;
+end;
+
+destructor TInterfacedWebRequest.Destroy;
+begin
+  FRawReq := nil;
+  inherited;
+end;
+
+function TInterfacedWebRequest.GetStringVariable(Index: Integer): TWebString;
+begin
+  if FRawReq = nil then Exit('');
+  case Index of
+    HRV_Method:           Result := FRawReq.GetMethod;
+    HRV_ProtocolVersion:  Result := FRawReq.GetProtocolVersion;
+    HRV_URL:              Result := FRawReq.GetURL;
+    HRV_Query:
+      if FInitializingQueryFields then
+        Result := ''
+      else
+        Result := FRawReq.GetQueryString;
+    HRV_PathInfo:         Result := FRawReq.GetPathInfo;
+    HRV_PathTranslated:   Result := FRawReq.GetPathInfo;
+    HRV_CacheControl:     Result := FRawReq.GetFieldByName('Cache-Control');
+    HRV_Date:             Result := FRawReq.GetFieldByName('Date');
+    HRV_Accept:           Result := FRawReq.GetFieldByName('Accept');
+    HRV_From:             Result := FRawReq.GetFieldByName('From');
+    HRV_Host:             Result := FRawReq.GetHost;
+    HRV_IfModifiedSince:  Result := FRawReq.GetFieldByName('If-Modified-Since');
+    HRV_Referer:          Result := FRawReq.GetFieldByName('Referer');
+    HRV_UserAgent:        Result := FRawReq.GetFieldByName('User-Agent');
+    HRV_ContentEncoding:  Result := FRawReq.GetFieldByName('Content-Encoding');
+    HRV_ContentType:      Result := FRawReq.GetContentType;
+    HRV_ContentLength:    Result := IntToStr(FRawReq.GetContentLength);
+    HRV_ContentVersion:   Result := FRawReq.GetFieldByName('Content-Version');
+    HRV_DerivedFrom:      Result := FRawReq.GetFieldByName('Derived-From');
+    HRV_Expires:          Result := FRawReq.GetFieldByName('Expires');
+    HRV_Title:            Result := FRawReq.GetFieldByName('Title');
+    HRV_RemoteAddr:       Result := FRawReq.GetRemoteAddr;
+    HRV_RemoteHost:       Result := FRawReq.GetRemoteAddr;
+    HRV_ScriptName:       Result := '';
+    HRV_ServerPort:       Result := IntToStr(FRawReq.GetServerPort);
+    HRV_Content:
+{$IF CompilerVersion < 32.0}
+      // Legacy WebBroker decodes this byte string using Content-Type. Preserve
+      // that encoding instead of implicitly converting Unicode to ANSI first.
+      Result := StringOf(EncodingGetBytes(AnsiString(FRawReq.GetContentType),
+        FRawReq.GetContent));
+{$ELSE}
+      Result := FRawReq.GetContent;
+{$IFEND}
+    HRV_Connection:       Result := FRawReq.GetFieldByName('Connection');
+    HRV_Cookie:           Result := FRawReq.GetFieldByName('Cookie');
+    HRV_Authorization:    Result := FRawReq.GetFieldByName('Authorization');
+  else
+    Result := '';
+  end;
+end;
+
+function TInterfacedWebRequest.GetDateVariable(Index: Integer): TDateTime;
+begin
+  Result := 0;
+end;
+
+{$IF CompilerVersion >= 35.0}
+function TInterfacedWebRequest.GetIntegerVariable(Index: Integer): Int64;
+{$ELSE}
+function TInterfacedWebRequest.GetIntegerVariable(Index: Integer): Integer;
+{$IFEND}
+begin
+  if FRawReq = nil then Exit(-1);
+  case Index of
+    HRV_ContentLength:  Result := FRawReq.GetContentLength;
+    HRV_ServerPort:     Result := FRawReq.GetServerPort;
+  else
+    Result := -1;
+  end;
+end;
+
+{$IF CompilerVersion >= 32.0}
+function TInterfacedWebRequest.GetRawContent: TBytes;
+var
+  LContent: string;
+begin
+  if Assigned(FRawReq) then
+  begin
+    LContent := FRawReq.GetContent;
+    if LContent <> '' then
+      Result := TEncoding.UTF8.GetBytes(LContent)
+    else
+      Result := nil;
+  end
+  else
+    Result := nil;
+end;
+{$IFEND}
+
+function TInterfacedWebRequest.GetFieldByName(const Name: TWebString): TWebString;
+begin
+  if Assigned(FRawReq) then
+    Result := FRawReq.GetFieldByName(string(Name))
+  else
+    Result := '';
+end;
+
+function TInterfacedWebRequest.ReadClient(var Buffer; Count: Integer): Integer;
+begin
+  if Assigned(FRawReq) then
+    Result := FRawReq.ReadBody(Buffer, Count)
+  else
+    Result := 0;
+end;
+
+function TInterfacedWebRequest.ReadString(Count: Integer): TWebString;
+var
+  LBytes: TBytes;
+  LRead:  Integer;
+begin
+  if Count <= 0 then Exit('');
+  SetLength(LBytes, Count);
+  LRead := ReadClient(LBytes[0], Count);
+  if LRead <= 0 then Exit('');
+  SetLength(LBytes, LRead);
+  Result := TWebString(TEncoding.UTF8.GetString(LBytes));
+end;
+
+function TInterfacedWebRequest.TranslateURI(const URI: string): string;
+begin
+  Result := URI;
+end;
+
+function TInterfacedWebRequest.WriteClient(var Buffer; Count: Integer): Integer;
+begin
+  Result := 0;
+end;
+
+function TInterfacedWebRequest.WriteString(const AString: TWebString): Boolean;
+begin
+  Result := False;
+end;
+
+function TInterfacedWebRequest.WriteHeaders(StatusCode: Integer;
+  const ReasonString, Headers: TWebString): Boolean;
+begin
+  Result := False;
+end;
+
+{ --------------------------------------------------------------------------- }
+{ TInterfacedWebResponse                                                      }
+{ --------------------------------------------------------------------------- }
+
+constructor TInterfacedWebResponse.Create(const ARawRes: IHorseRawResponse);
+begin
+  FRawRes := ARawRes;
+  inherited Create(nil);
+end;
+
+destructor TInterfacedWebResponse.Destroy;
+begin
+  FRawRes := nil;
+  if Assigned(FContentStream) then
+    FContentStream.Free;
+  inherited;
+end;
+
+function TInterfacedWebResponse.GetStringVariable(Index: Integer): TWebString;
+begin
+  case Index of
+    8: Result := FContentType;
+    12: Result := FContent;
+  else
+    Result := '';
+  end;
+end;
+
+procedure TInterfacedWebResponse.SetStringVariable(Index: Integer; const Value: TWebString);
+begin
+  case Index of
+    8: FContentType := Value;
+    12: FContent := Value;
+  end;
+end;
+
+function TInterfacedWebResponse.GetDateVariable(Index: Integer): TDateTime;
+begin
+  Result := 0;
+end;
+
+procedure TInterfacedWebResponse.SetDateVariable(Index: Integer; const Value: TDateTime);
+begin
+  { Stub }
+end;
+
+{$IF CompilerVersion >= 35.0}
+function TInterfacedWebResponse.GetIntegerVariable(Index: Integer): Int64;
+{$ELSE}
+function TInterfacedWebResponse.GetIntegerVariable(Index: Integer): Integer;
+{$IFEND}
+begin
+  Result := 0;
+end;
+
+{$IF CompilerVersion >= 35.0}
+procedure TInterfacedWebResponse.SetIntegerVariable(Index: Integer; Value: Int64);
+{$ELSE}
+procedure TInterfacedWebResponse.SetIntegerVariable(Index: Integer; Value: Integer);
+{$IFEND}
+begin
+  { Stub }
+end;
+
+function TInterfacedWebResponse.GetContent: TWebString;
+begin
+  Result := FContent;
+end;
+
+procedure TInterfacedWebResponse.SetContent(const Value: TWebString);
+begin
+  FContent := Value;
+end;
+
+procedure TInterfacedWebResponse.SetContentStream(Value: TStream);
+begin
+  FContentStream := Value;
+end;
+
+function TInterfacedWebResponse.GetStatusCode: Integer;
+begin
+  Result := 200;
+end;
+
+procedure TInterfacedWebResponse.SetStatusCode(Value: Integer);
+begin
+  { Stub — use THorseResponse.Status }
+end;
+
+function TInterfacedWebResponse.GetLogMessage: string;
+begin
+  Result := '';
+end;
+
+procedure TInterfacedWebResponse.SetLogMessage(const Value: string);
+begin
+  { Stub }
+end;
+
+procedure TInterfacedWebResponse.SendResponse;
+begin
+  { No-op — response sending goes through TResponseBridge.Flush }
+end;
+
+procedure TInterfacedWebResponse.SendRedirect(const URI: TWebString);
+begin
+  { No-op — use THorseResponse.RedirectTo }
+end;
+
+{$ELSE}
+
+{ =========================================================================== }
+{ FPC implementation                                                          }
+{ =========================================================================== }
+
+{ --------------------------------------------------------------------------- }
+{ TInterfacedWebRequest — FPC                                                 }
+{ --------------------------------------------------------------------------- }
+
+constructor TInterfacedWebRequest.Create(const ARawReq: IHorseRawRequest);
+var
+  LHeaders: TStringList;
+  I: Integer;
+begin
+  FRawReq := ARawReq;
+  inherited Create;
+
+  if Assigned(FRawReq) then
+  begin
+    Method          := FRawReq.GetMethod;
+    URL             := FRawReq.GetURL;
+    URI             := FRawReq.GetURL;
+    PathInfo        := FRawReq.GetPathInfo;
+    Host            := FRawReq.GetHost;
+    ContentType     := FRawReq.GetContentType;
+    RemoteAddr      := FRawReq.GetRemoteAddr;
+    RemoteHost      := FRawReq.GetRemoteAddr;
+    ProtocolVersion := FRawReq.GetProtocolVersion;
+    {$IF DEFINED(FPC)}
+    ServerPort      := FRawReq.GetServerPort;
+    {$ELSE}
+    ServerPort      := IntToStr(FRawReq.GetServerPort);
+    {$ENDIF}
+
+    QueryString     := FRawReq.GetQueryString;
+    FRawReq.PopulateQueryFields(QueryFields);
+    FRawReq.PopulateContentFields(ContentFields);
+    FRawReq.PopulateCookieFields(CookieFields);
+    Content         := FRawReq.GetContent;
+    ContentLength   := FRawReq.GetContentLength;
+
+    { ALL request headers → TRequest header storage, so GetFieldByName also
+      resolves non-standard headers (e.g. X-Test-Header).  SetFieldByName
+      routes known headers to their typed fields and everything else to
+      CustomHeaders; re-setting the fields assigned above is harmless (same
+      source values). }
+    LHeaders := TStringList.Create;
+    try
+      LHeaders.NameValueSeparator := '=';
+      FRawReq.PopulateHeaders(LHeaders);
+      for I := 0 to LHeaders.Count - 1 do
+        if LHeaders.Names[I] <> '' then
+          SetFieldByName(LHeaders.Names[I], LHeaders.ValueFromIndex[I]);
+    finally
+      LHeaders.Free;
+    end;
+  end;
+end;
+
+{ --------------------------------------------------------------------------- }
+{ TInterfacedWebResponse — FPC                                                }
+{ --------------------------------------------------------------------------- }
+
+constructor TInterfacedWebResponse.Create(const ARawRes: IHorseRawResponse);
+begin
+  FRawRes := ARawRes;
+  inherited Create(nil);
+  Code := 200;
+  ContentType := '';
+end;
+
+{$ENDIF}
+
+end.

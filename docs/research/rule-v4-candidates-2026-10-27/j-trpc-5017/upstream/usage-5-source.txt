@@ -1,0 +1,118 @@
+/**
+ * tRPC Rate Limiting Middleware
+ *
+ * Provides rate limiting middleware for tRPC procedures.
+ * Uses Redis-based sliding window algorithm.
+ */
+
+import { TRPCError, experimental_standaloneMiddleware } from '@trpc/server';
+import { RateLimiter, RateLimitConfig, RATE_LIMITS } from './rate-limit';
+import { logger } from '../lib/logger';
+import type { Context } from '../trpc';
+
+/**
+ * Instance cache to avoid creating new limiters per request
+ */
+const limiterCache = new Map<string, RateLimiter>();
+
+/**
+ * Get or create a rate limiter instance
+ */
+function getLimiter(config: RateLimitConfig): RateLimiter {
+  const key = config.keyPrefix || 'default';
+  if (!limiterCache.has(key)) {
+    limiterCache.set(key, new RateLimiter(config));
+  }
+  return limiterCache.get(key)!;
+}
+
+/**
+ * Create a rate limiting middleware for tRPC procedures
+ *
+ * @param config - Rate limit configuration (use RATE_LIMITS presets)
+ *
+ * @example
+ * ```typescript
+ * import { createRateLimitMiddleware } from '../middleware/rate-limit-trpc';
+ * import { RATE_LIMITS } from '../middleware/rate-limit';
+ *
+ * login: publicProcedure
+ *   .use(createRateLimitMiddleware(RATE_LIMITS.LOGIN))
+ *   .input(...)
+ *   .mutation(...)
+ * ```
+ */
+export function createRateLimitMiddleware(config: RateLimitConfig) {
+  return experimental_standaloneMiddleware<{
+    ctx: Context;
+    input: unknown;
+  }>().create(async ({ ctx, next, input }) => {
+    // Skip if rate limiting is disabled
+    if (process.env.ENABLE_RATE_LIMITING !== 'true') {
+      return next();
+    }
+
+    const limiter = getLimiter(config);
+    await limiter.init();
+
+    // Build identifier from IP and optionally email (for auth endpoints)
+    let identifier = ctx.request?.ip || 'unknown';
+
+    // For auth endpoints, also include email in identifier for per-email limiting
+    if (input && typeof input === 'object' && 'email' in input) {
+      identifier += `:${(input as { email: string }).email}`;
+    }
+
+    const result = await limiter.check(identifier);
+
+    if (!result.allowed) {
+      logger.warn(
+        {
+          identifier,
+          config: config.keyPrefix,
+          retryAfterSeconds: result.retryAfterSeconds,
+        },
+        'Rate limit exceeded'
+      );
+
+      throw new TRPCError({
+        code: 'TOO_MANY_REQUESTS',
+        message: `Too many attempts. Please try again in ${result.retryAfterSeconds} seconds.`,
+      });
+    }
+
+    return next();
+  });
+}
+
+/**
+ * Pre-configured rate limit middlewares for common use cases
+ */
+export const rateLimitMiddlewares = {
+  /**
+   * Login rate limiting - 5 attempts per 5 minutes per IP+email
+   */
+  login: createRateLimitMiddleware(RATE_LIMITS.LOGIN),
+
+  /**
+   * Auth rate limiting - 10 attempts per minute per IP
+   */
+  auth: createRateLimitMiddleware(RATE_LIMITS.AUTH),
+
+  /**
+   * API rate limiting - 100 requests per minute per user
+   */
+  api: createRateLimitMiddleware(RATE_LIMITS.API),
+
+  /**
+   * Mutation rate limiting - 30 requests per minute per user
+   */
+  mutation: createRateLimitMiddleware(RATE_LIMITS.MUTATION),
+
+  /**
+   * Export rate limiting - 5 requests per 5 minutes per user
+   */
+  export: createRateLimitMiddleware(RATE_LIMITS.EXPORT),
+};
+
+export { RATE_LIMITS };

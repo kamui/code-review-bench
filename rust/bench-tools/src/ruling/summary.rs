@@ -618,10 +618,12 @@ pub fn consensus(repo: &Repo, before: &Value) -> Py<bool> {
         && pyvalue::one_of(item(&first, "confidence")?, &["medium", "high"]))
 }
 
-/// A contract 2 record whose first answers were all written before the question.
+/// A contract 2 record whose first answers were all written before the question, and whose blind answers do not
+/// rest on the owner's permission for the recommender's model family.
 pub fn eligible(before: &Value) -> Py<bool> {
     if !get(before, "contract")?.py_eq(&Value::Int("2".into()))
         || item(before, "reconstructed")?.truthy()
+        || record::same_family(before)?
     {
         return Ok(false);
     }
