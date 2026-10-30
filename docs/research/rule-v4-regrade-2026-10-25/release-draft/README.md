@@ -1,6 +1,6 @@
 # Rule-version-4 regrade: grading archives release draft
 
-This folder prepares a release of the regrade's grading archives. Nothing here is published. No release exists, nothing was uploaded, and no tracked file outside this folder changed. Publishing needs the owner's approval for this release (see [the question](#the-question-for-the-owner)).
+This folder prepared the release of the regrade's grading archives. The owner approved it on 2026-10-30 ([`evidence-authorization.v1.json`](../evidence-authorization.v1.json)), and it was published as drafted that day: [`evidence-rule-v4-regrade-2026-10-25-v1`](https://github.com/kamui/code-review-bench/releases/tag/evidence-rule-v4-regrade-2026-10-25-v1), recorded in [`evidence-publication.v1.json`](../evidence-publication.v1.json). The rest of this file is the draft as the owner saw it.
 
 Prepared on 2026-10-30. Each fact is labelled **(run)** when a command here produced it, **(read)** when it comes from a file or record, and **(estimate)** when it is a judgement.
 
