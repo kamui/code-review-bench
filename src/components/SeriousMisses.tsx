@@ -3,8 +3,8 @@ import { Badge, Button, Chip, Group, Popover, Stack, Switch, Table, Text, Toolti
 import type { Configuration, Dataset, Family, Task } from '../lib/data'
 import { seriousMatrix, skillsPerModel } from '../lib/scoring'
 import type { FamilyRow, Scorecard, Selection, TrialOutcome, Verdict } from '../lib/scoring'
+import type { Inspection } from '../lib/view'
 import { setupParts } from './Chart'
-import type { Inspection } from './EvidenceDrawer'
 
 type Column = { configuration: Configuration; card: Scorecard; skill: string; model: string; label: string }
 

@@ -12,7 +12,9 @@ import { Chart } from './Chart'
 import { PreExistingCatalog } from './EvidenceDrawer'
 import { CoverageMatrix, Dashboard } from './Explorer'
 import type { Page } from './Explorer'
-import { MethodologyViews, scorecardTabs } from './MethodologyViews'
+import { scorecardTabs } from '../lib/view'
+import type { ExplorerSearch } from '../lib/view'
+import { MethodologyViews } from './MethodologyViews'
 import { Overview } from './Overview'
 import { SeriousMisses } from './SeriousMisses'
 
@@ -20,7 +22,8 @@ const now = new Date('2026-10-03T12:00:00Z')
 const text = (markup: string) => markup.replace(/<style[\s\S]*?<\/style>/g, '').replace(/<[^>]+>/g, ' ').replace(/&#x27;/g, "'").replace(/&amp;/g, '&').replace(/\s+/g, ' ')
 const card = (dataset: Dataset, id: string) => scorecard(dataset, id, { taskIds: dataset.tasks.map(item => item.id), concern: null })
 const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory() })
-const markup = (dataset: Dataset, view: Page) => renderToStaticMarkup(<RouterContextProvider router={router}><MantineProvider><Dashboard dataset={dataset} page={view} now={now} /></MantineProvider></RouterContextProvider>)
+const markup = (dataset: Dataset, view: Page, search: ExplorerSearch = {}) => renderToStaticMarkup(<RouterContextProvider router={router}><MantineProvider>
+  <Dashboard dataset={dataset} page={view} search={search} onSearch={() => {}} now={now} /></MantineProvider></RouterContextProvider>)
 const page = (dataset: Dataset) => text(`${markup(dataset, 'scorecard')} ${markup(dataset, 'tasks')}`)
 
 function chart(dataset: Dataset, detection: DetectionView, view: 'setups' | 'tradeoff' | 'models' = 'setups', axis: 'cost' | 'refuted' = 'cost', omit: string[] = []) {
@@ -39,7 +42,7 @@ function panels(dataset: Dataset, taskIds = dataset.tasks.map(item => item.id)) 
   const selected = dataset.configurations.filter(configuration => !configuration.experimental)
   const board = leaderboard(dataset, { selected: selected.map(configuration => configuration.id), candidateTaskIds: taskIds, concern: null })
   return scorecardTabs.map(tab => text(renderToStaticMarkup(<MantineProvider><MethodologyViews dataset={dataset} configurations={selected} cards={board.cards}
-    selection={board.selection} detection={{ band: 'serious', estimator: 'equalProblem' }} now={now} onInspect={() => {}} initialTab={tab} /></MantineProvider>))).join(' ')
+    selection={board.selection} detection={{ band: 'serious', estimator: 'equalProblem' }} now={now} onInspect={() => {}} tab={tab} onTab={() => {}} /></MantineProvider>))).join(' ')
 }
 
 describe('scorecard page on the fixture', () => {
@@ -225,8 +228,8 @@ describe('pre-existing problems raised on the fixture', () => {
 
 describe('overview', () => {
   const fixture = scorecardFixture()
-  const markup = renderToStaticMarkup(<RouterContextProvider router={router}><MantineProvider><Dashboard dataset={fixture} page="scorecard" now={now} /></MantineProvider></RouterContextProvider>)
-  const shown = text(markup)
+  const dashboard = markup(fixture, 'scorecard')
+  const shown = text(dashboard)
   const setups = (rendered: string) => [...rendered.matchAll(/aria-label="([^"]+?)\. Inspect evidence"/g)].map(match => match[1])
   function overview(sort: OverviewSort) {
     const selected = fixture.configurations.filter(configuration => !configuration.experimental)
@@ -238,9 +241,9 @@ describe('overview', () => {
 
   test('is the default view, sorted by problem claims per review with unavailable values last, and hides the detection axis control', () => {
     expect(shown).toContain('Sorted by problem claims per review, most first. Setups without a value come last.')
-    expect(markup).not.toContain('Compare detection against')
-    expect(markup).toMatch(/aria-sort="descending"[^>]*>(?:<[^>]+>)*<span class="overview-title">True claims/)
-    expect(setups(markup).slice(0, 6)).toEqual(['ce-code-review / Fixture A / High', 'Claude built-in / Fixture A / High', 'ce-code-review / Fixture B / High',
+    expect(dashboard).not.toContain('Compare detection against')
+    expect(dashboard).toMatch(/aria-sort="descending"[^>]*>(?:<[^>]+>)*<span class="overview-title">True claims/)
+    expect(setups(dashboard).slice(0, 6)).toEqual(['ce-code-review / Fixture A / High', 'Claude built-in / Fixture A / High', 'ce-code-review / Fixture B / High',
       'ce-code-review / Fixture C / High', 'Claude built-in / Fixture B / High', 'Claude built-in / Fixture C / High'])
     expect(shown).toContain('Problem claims per review Unavailable 1 : 4 admitted reviews were graded before these labels.')
     expect(shown).toContain('Refuted or unproven 22.2%')
@@ -249,9 +252,9 @@ describe('overview', () => {
   })
 
   test('each claim segment names its label and rate, and a problem segment the known problems of its band caught', () => {
-    expect(markup).toContain('aria-label="Problem, other material · 0.33 claims per review · caught 2 of 3 other material known problems"')
-    expect(markup).toContain('aria-label="Minor defect · 0.17 claims per review"')
-    expect(markup).not.toMatch(/aria-label="Minor defect[^"]*caught/)
+    expect(dashboard).toContain('aria-label="Problem, other material · 0.33 claims per review · caught 2 of 3 other material known problems"')
+    expect(dashboard).toContain('aria-label="Minor defect · 0.17 claims per review"')
+    expect(dashboard).not.toMatch(/aria-label="Minor defect[^"]*caught/)
   })
 
   test('a header sort states its rule and keeps setups without the value last in both directions', () => {
@@ -364,5 +367,24 @@ describe('chart', () => {
   test('the frontier view names the two measures it compares', () => {
     expect(chart(fixture, { band: 'all', estimator: 'equalPr' }, 'tradeoff'))
       .toContain('Frontier of all references detection, PRs weighted equally against cost per scheduled trial')
+  })
+})
+
+describe('a linked view', () => {
+  const fixture = scorecardFixture()
+
+  test('opens on the chart, measure, selection and dimension the link names', () => {
+    const linked = markup(fixture, 'scorecard', { chart: 'skills', axis: 'tokens', band: 'serious', average: 'equalPr', dimension: 'delivery', experiments: true })
+    for (const value of ['skills', 'tokens']) expect(linked).toMatch(new RegExp(`checked="" value="${value}"`))
+    expect(linked).toContain('value="Serious (3)"')
+    expect(linked).toContain('value="PRs weighted equally"')
+    expect(linked).toMatch(/aria-selected="true"[^>]*><span[^>]*>Delivery</)
+    expect(text(linked)).toContain('Review setups (7/7)')
+  })
+
+  test('keeps a chosen subset of setups and models', () => {
+    const shown = text(markup(fixture, 'scorecard', { setups: 'steady,risky', models: 'fixture-a' }))
+    expect(shown).toContain('Review setups (2/6)')
+    expect(shown).toContain('Models (1/4)')
   })
 })
