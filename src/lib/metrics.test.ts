@@ -131,13 +131,17 @@ describe('current graded record', () => {
     expect(imported.attempts.every(attempt => attempt.assessment?.state === 'assessed')).toBe(true)
     expect(heroCounts(imported)).toMatchObject({ tasks: 16, problems: 86, awaitingEligibility: 0 })
     expect(summaries).toHaveLength(standard.length)
+    const withUnresolvedDecision = ['claude-thermo-nuclear-review-opus-5-5-high', 'claude-thermo-nuclear-review-fable-5-1-high']
     for (const summary of summaries) {
       for (const band of ['all', 'serious', 'other-material'] as const) {
         expect(summary.card.detection[band].equalPr.kind).toBe('available')
         expect(summary.card.detection[band].equalProblem.kind).toBe('available')
       }
       expect(summary.card.detection.unknown.equalPr).toEqual({ kind: 'unavailable', reason: 'No references in this band.' })
-      expect(summary).toMatchObject({ detectionNote: null, reasons: { detection: null, refuted: null } })
+      expect(summary.detectionNote).toBe(withUnresolvedDecision.includes(summary.card.configurationId)
+        ? '1 unresolved detection decision across 1 reference problem counts as zero credit. They remain in the denominator; confirmed detections still count.'
+        : null)
+      expect(summary).toMatchObject({ reasons: { detection: null, refuted: null } })
       expect(summary.card.limits.auditComplete).toBe(false)
       expect(summary.completed).toBeGreaterThan(0)
     }
