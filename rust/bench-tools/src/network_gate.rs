@@ -2311,9 +2311,10 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_socket_in_the_attempt_is_covered_at_each_path_the_sandbox_shows_it() {
-        let attempt = attempt_dir();
+        let attempt = fs::canonicalize(attempt_dir()).unwrap();
         fs::create_dir_all(attempt.join("tmp")).unwrap();
         let _listeners = ["host.sock", "tmp/tmp.sock"]
             .map(|name| UnixListener::bind(attempt.join(name)).unwrap());
