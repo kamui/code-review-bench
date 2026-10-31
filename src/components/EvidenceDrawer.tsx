@@ -5,6 +5,8 @@ import { fetchDetail, skillReleaseLabel } from '../lib/data'
 import type { Attempt, AttemptDetail, Configuration, Dataset, Task } from '../lib/data'
 import { bandLabels, compact, money } from '../lib/metrics'
 import { pendingCandidates, reviewFacts } from '../lib/scoring'
+import { drawerTabs } from '../lib/view'
+import type { Inspection } from '../lib/view'
 
 const outcomeColors: Record<string, string> = { eligible: 'teal', refuted: 'red', unsupported: 'red', unresolved: 'yellow' }
 const controlText: Record<Task['control'], string> = {
@@ -14,25 +16,25 @@ const controlText: Record<Task['control'], string> = {
   'known-problems': 'No approved reference problem yet. This PR has no detection denominator and is not a clean control.',
 }
 
-export type Inspection = { kind: 'task'; id: string; attemptId?: string } | { kind: 'configuration'; id: string }
-
-export function EvidenceDrawer({ dataset, inspection, now, onClose }: { dataset: Dataset; inspection: Inspection | null; now: Date; onClose: () => void }) {
+export function EvidenceDrawer({ dataset, inspection, now, onChange }: { dataset: Dataset; inspection: Inspection | null; now: Date; onChange: (inspection: Inspection | null) => void }) {
   const configuration = inspection?.kind === 'configuration' ? dataset.configurations.find(item => item.id === inspection.id) : undefined
   const task = inspection?.kind === 'task' ? dataset.tasks.find(item => item.id === inspection.id) : undefined
-  return <Drawer opened={inspection !== null} onClose={onClose} position="right" size="xl"
+  return <Drawer opened={inspection !== null} onClose={() => onChange(null)} position="right" size="xl"
     title={task ? `${task.repo} #${task.pr}` : configuration?.short ?? 'Evidence'}
     classNames={{ title: 'drawer-title' }}>
-    {inspection && <InspectionBody key={`${inspection.kind}:${inspection.id}:${inspection.kind === 'task' ? inspection.attemptId ?? '' : ''}`} dataset={dataset}
-      configuration={configuration} task={task} initialAttemptId={inspection.kind === 'task' ? inspection.attemptId : undefined} now={now} />}
+    {inspection && <InspectionBody key={`${inspection.kind}:${inspection.id}`} dataset={dataset}
+      configuration={configuration} task={task} inspection={inspection} onChange={onChange} now={now} />}
   </Drawer>
 }
 
-function InspectionBody({ dataset, configuration, task, initialAttemptId, now }: { dataset: Dataset; configuration?: Configuration; task?: Task; initialAttemptId?: string; now: Date }) {
+function InspectionBody({ dataset, configuration, task, inspection, onChange, now }: {
+  dataset: Dataset; configuration?: Configuration; task?: Task; inspection: Inspection; onChange: (inspection: Inspection) => void; now: Date
+}) {
   const outcomes = dataset.outcomes.filter(outcome => configuration ? outcome.configurationId === configuration.id : outcome.taskId === task?.id)
   const allowed = new Set(outcomes.flatMap(outcome => outcome.attemptIds))
   const attempts = dataset.attempts.filter(attempt => allowed.has(attempt.id))
-  const [attemptId, setAttemptId] = useState<string | null>(attempts.find(item => item.id === initialAttemptId)?.id ?? attempts[0]?.id ?? null)
-  const [tab, setTab] = useState<string | null>('reviews')
+  const attemptId = attempts.find(item => item.id === inspection.attemptId)?.id ?? attempts[0]?.id ?? null
+  const tab = inspection.tab ?? 'reviews'
   const [detail, setDetail] = useState<AttemptDetail | null>(null)
   const [error, setError] = useState('')
   const attempt = attempts.find(item => item.id === attemptId)
@@ -57,11 +59,11 @@ function InspectionBody({ dataset, configuration, task, initialAttemptId, now }:
       <Group><Button component="a" href={task.sourceUrl} target="_blank" rel="noreferrer" variant="light" size="xs" leftSection={<ExternalLink size={14} />}>Original PR</Button>
         <Button component="a" href={task.packetUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileText size={14} />}>Review packet</Button></Group>
       <Text size="xs" c="dimmed">Revision {task.head.slice(0, 10)}. Each reference shows its own eligibility and impact state.</Text></>}
-    <Tabs value={tab} onChange={setTab}>
+    <Tabs value={tab} onChange={value => { const next = drawerTabs.find(item => item === value); if (next) onChange({ ...inspection, tab: next }) }}>
       <Tabs.List><Tabs.Tab value="reviews">Reviews ({attempts.length})</Tabs.Tab><Tabs.Tab value="references">References and candidates</Tabs.Tab><Tabs.Tab value="coverage">Coverage & failures</Tabs.Tab></Tabs.List>
       <Tabs.Panel value="reviews" pt="lg">
         <Stack gap="md">
-          <Select label="Review attempt" searchable value={attemptId} onChange={setAttemptId}
+          <Select label="Review attempt" searchable value={attemptId} onChange={value => onChange({ ...inspection, attemptId: value ?? undefined })}
             data={attempts.map(item => {
               const owner = outcomes.find(outcome => outcome.attemptIds.includes(item.id))
               const setup = dataset.configurations.find(configuration => configuration.id === owner?.configurationId)
@@ -139,7 +141,7 @@ function InspectionBody({ dataset, configuration, task, initialAttemptId, now }:
           <Text size="sm" fw={600}>{item.taskId} / {item.label}</Text><Text size="sm">{item.disposition}</Text>
           {!item.complete && item.admitted && <Text size="sm">Review returned findings but reported incomplete coverage.</Text>}
           {item.predecessor && <Text size="sm">Replaces {item.predecessor.split('/').at(-1)}. {item.retryReason}</Text>}
-          <Button size="xs" variant="subtle" mt="xs" onClick={() => { setAttemptId(item.id); setTab('reviews') }}>Select this review</Button>
+          <Button size="xs" variant="subtle" mt="xs" onClick={() => onChange({ ...inspection, attemptId: item.id, tab: 'reviews' })}>Select this review</Button>
         </Paper>)}
         {attempts.every(item => item.complete && !item.predecessor) && <Text size="sm">No failed or replacement attempts in this selection.</Text>}
       </Stack></Tabs.Panel>

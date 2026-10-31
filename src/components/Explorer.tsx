@@ -2,25 +2,25 @@ import { useEffect, useMemo, useState } from 'react'
 import { ActionIcon, Alert, Anchor, Badge, Button, Checkbox, Container, Group, Loader, Paper, Popover,
   SegmentedControl, Select, Stack, Switch, Table, Tabs, Text, TextInput, Title, Tooltip, useComputedColorScheme, useMantineColorScheme } from '@mantine/core'
 import { useMediaQuery } from '@mantine/hooks'
-import { Link, Navigate, useLocation, useMatch } from '@tanstack/react-router'
+import { Link, Navigate, useLocation, useMatch, useNavigate, useSearch } from '@tanstack/react-router'
 import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpDown, ArrowUpRight, Check, ChevronDown, CodeXml, Database, Info, Moon, Search, Sun, X } from 'lucide-react'
 import { fetchDataset, impactBands, skillReleaseLabel } from '../lib/data'
 import type { Configuration, Dataset, Task } from '../lib/data'
 import { bandLabels, compact, conditionDifferences, datasetStatus, detectionLabel, estimatorLabels, heroCounts, lowerBound, measured, money, percent, perReview, reading, reasonCounts, share, summarize } from '../lib/metrics'
-import type { Axis, Reading } from '../lib/metrics'
+import type { Reading } from '../lib/metrics'
 import { estimators, leaderboard, matched, meanTaskRecall, pendingCandidates, referenceCoverage } from '../lib/scoring'
 import type { OverviewSort } from '../lib/scoring'
+import { axes, chartViews, inspectionOf, inspectionParams, listParam, listValue, unlessDefault } from '../lib/view'
+import type { ExplorerSearch, Inspection, Section } from '../lib/view'
 import { Chart, Mark } from './Chart'
-import type { ChartView } from './Chart'
 import { EvidenceDrawer } from './EvidenceDrawer'
 import { MethodologyViews } from './MethodologyViews'
 import { Overview } from './Overview'
-import type { Inspection } from './EvidenceDrawer'
 import { Notes, notesFor, PeerNote, Value } from './Reading'
 
 export type Page = 'scorecard' | 'tasks'
 type LoadState = { kind: 'loading' } | { kind: 'failed'; message: string } | { kind: 'ready'; dataset: Dataset }
-type MainView = 'overview' | ChartView
+type MainView = (typeof chartViews)[number]
 type ResultsColumn = 'setup' | 'equalProblem' | 'equalPr' | 'seriousCaught' | 'repeatedMisses' | 'cost' | 'tokens' | 'refuted' | 'completed'
 const bands = ['all', ...impactBands] as const
 const controlLabels: Record<Task['control'], string> = { 'audited-clean': 'Audited clean control', provisional: 'Provisional control',
@@ -31,6 +31,14 @@ export function Explorer() {
   const [reload, setReload] = useState(0)
   const page: Page = useMatch({ from: '/_explorer/tasks', shouldThrow: false }) ? 'tasks' : 'scorecard'
   const hash = useLocation({ select: location => location.hash })
+  const search = useSearch({ from: '/_explorer' })
+  const navigate = useNavigate()
+  // A state change keeps the section in the link but must not scroll the page to it.
+  const onSearch = (patch: ExplorerSearch, section?: Section) => navigate({ to: page === 'tasks' ? '/tasks' : '/', search: current => ({ ...current, ...patch }),
+    hash: section ?? true, replace: true, resetScroll: false, hashScrollIntoView: false })
+  useEffect(() => {
+    if (state.kind === 'ready' && hash) document.getElementById(hash)?.scrollIntoView()
+  }, [state.kind])
   useEffect(() => {
     let cancelled = false
     setState({ kind: 'loading' })
@@ -42,23 +50,30 @@ export function Explorer() {
   if (page === 'scorecard' && hash === 'tasks') return <><Navigate to="/tasks" replace />{loading}</>
   if (state.kind === 'loading') return loading
   if (state.kind === 'failed') return <Container size="sm" py={100}><Alert color="red" title="Benchmark unavailable">{state.message}</Alert><Button mt="md" onClick={() => setReload(value => value + 1)}>Retry</Button></Container>
-  return <Dashboard dataset={state.dataset} page={page} />
+  return <Dashboard dataset={state.dataset} page={page} search={search} onSearch={onSearch} />
 }
 
-export function Dashboard({ dataset, page, now = new Date() }: { dataset: Dataset; page: Page; now?: Date }) {
-  const [selected, setSelected] = useState(dataset.configurations.filter(item => !item.experimental).map(item => item.id))
+export function Dashboard({ dataset, page, search, onSearch, now = new Date() }: {
+  dataset: Dataset; page: Page; search: ExplorerSearch; onSearch: (patch: ExplorerSearch, section?: Section) => void; now?: Date
+}) {
+  const setupIds = dataset.configurations.map(item => item.id)
+  const defaultSetups = (experiments: boolean) => dataset.configurations.filter(item => experiments || !item.experimental).map(item => item.id)
+  const includeExperiments = search.experiments ?? false
+  const selected = listValue(search.setups, setupIds, defaultSetups(includeExperiments))
+  const setSelected = (ids: string[]) => onSearch({ setups: listParam(ids, setupIds, defaultSetups(includeExperiments)) }, 'scorecard')
   const modelChoices = dataset.configurations.flatMap(configuration => configuration.models.map(model => ({
     value: model, label: configuration.short.split(' / ').at(-2) ?? model,
   }))).filter((model, index, choices) => choices.findIndex(choice => choice.value === model.value) === index)
-  const [selectedModels, setSelectedModels] = useState(modelChoices.map(model => model.value))
-  const [includeExperiments, setIncludeExperiments] = useState(false)
-  const [axis, setAxis] = useState<Axis>('cost')
-  const [band, setBand] = useState<(typeof bands)[number]>('all')
-  const [estimator, setEstimator] = useState<(typeof estimators)[number]>('equalProblem')
+  const modelIds = modelChoices.map(model => model.value)
+  const selectedModels = listValue(search.models, modelIds, modelIds)
+  const setSelectedModels = (models: string[]) => onSearch({ models: listParam(models, modelIds, modelIds) }, 'scorecard')
+  const axis = search.axis ?? 'cost'
+  const band = search.band ?? 'all'
+  const estimator = search.average ?? 'equalProblem'
   const detection = { band, estimator }
-  const [view, setView] = useState<MainView>('overview')
+  const view: MainView = search.chart ?? 'overview'
   const [overviewSort, setOverviewSort] = useState<OverviewSort>({ column: 'claims', direction: 'descending' })
-  const [showAllLabels, setShowAllLabels] = useState(false)
+  const showAllLabels = search.labels ?? false
   const narrow = useMediaQuery('(max-width: 700px)') ?? false
   const chartView = narrow && view !== 'overview' ? 'setups' : view
   const views: { label: string; value: MainView }[] = [{ label: 'Overview', value: 'overview' }, { label: 'By method', value: 'skills' }, { label: 'By setup', value: 'setups' },
@@ -69,7 +84,8 @@ export function Dashboard({ dataset, page, now = new Date() }: { dataset: Datase
   const [technology, setTechnology] = useState<string | null>(null)
   const [concern, setConcern] = useState<string | null>(null)
   const [findingConcern, setFindingConcern] = useState<string | null>(null)
-  const [inspection, setInspection] = useState<Inspection | null>(null)
+  const inspection = inspectionOf(search, dataset)
+  const inspect = (section?: Section) => (next: Inspection | null, within = section) => onSearch(inspectionParams(next), within)
   const [sort, setSort] = useState<{ column: ResultsColumn; direction: 'ascending' | 'descending' }>({ column: 'setup', direction: 'ascending' })
   const { toggleColorScheme } = useMantineColorScheme()
   const colorScheme = useComputedColorScheme('light')
@@ -126,12 +142,12 @@ export function Dashboard({ dataset, page, now = new Date() }: { dataset: Datase
   const editionIds = (configuration: Configuration) => edition(configuration).map(item => item.id)
   const toggleEdition = (configuration: Configuration) => {
     const ids = editionIds(configuration)
-    setSelected(values => ids.every(id => values.includes(id)) ? values.filter(value => !ids.includes(value)) : Array.from(new Set([...values, ...ids])))
+    setSelected(ids.every(id => selected.includes(id)) ? selected.filter(value => !ids.includes(value)) : [...selected, ...ids])
   }
   const toggleExperiments = (checked: boolean) => {
     const ids = dataset.configurations.filter(item => item.experimental).map(item => item.id)
-    setIncludeExperiments(checked)
-    setSelected(values => checked ? Array.from(new Set([...values, ...ids])) : values.filter(value => !ids.includes(value)))
+    const next = checked ? [...selected, ...ids] : selected.filter(value => !ids.includes(value))
+    onSearch({ experiments: checked || undefined, setups: listParam(next, setupIds, defaultSetups(checked)) }, 'scorecard')
   }
   const resetFilters = () => { setQuery(''); setArea(null); setChange(null); setTechnology(null); setConcern(null); setFindingConcern(null) }
   const activeFilters = [
@@ -179,26 +195,27 @@ export function Dashboard({ dataset, page, now = new Date() }: { dataset: Datase
             <div className="chart-toolbar">
               <SegmentedControl aria-label="Chart view" value={chartView} onChange={value => {
                 const next = views.find(item => item.value === value)
-                if (next) setView(next.value)
+                if (next) onSearch({ chart: unlessDefault(next.value, 'overview') }, 'scorecard')
               }} data={narrow ? views.filter(item => item.value === 'overview' || item.value === 'setups') : views} />
               {chartView !== 'overview' && <SegmentedControl aria-label="Compare detection against" value={axis} onChange={value => {
-                if (value === 'cost' || value === 'tokens' || value === 'refuted' || value === 'time') setAxis(value)
+                const next = axes.find(item => item === value)
+                if (next) onSearch({ axis: unlessDefault(next, 'cost') }, 'scorecard')
               }} data={[{ label: 'Cost', value: 'cost' }, { label: 'Tokens', value: 'tokens' }, { label: 'Refuted claims', value: 'refuted' }, { label: 'Time', value: 'time' }]} />}
             </div>
             <div className="measure-controls">
               <Select label="Impact band" size="xs" w={190} allowDeselect={false} value={band} data={bands.map(value => ({ value, label: `${bandLabels[value]} (${coverage.bands[value]})` }))}
-                onChange={value => { const next = bands.find(item => item === value); if (next) setBand(next) }} />
+                onChange={value => { const next = bands.find(item => item === value); if (next) onSearch({ band: unlessDefault(next, 'all') }, 'scorecard') }} />
               <Select label="Average" size="xs" w={230} allowDeselect={false} value={estimator} data={estimators.map(value => ({ value, label: estimatorLabels[value].replace(/^./, letter => letter.toUpperCase()) }))}
-                onChange={value => { const next = estimators.find(item => item === value); if (next) setEstimator(next) }} />
+                onChange={value => { const next = estimators.find(item => item === value); if (next) onSearch({ average: unlessDefault(next, 'equalProblem') }, 'scorecard') }} />
             </div>
             <div className="chart-context">
               <span className="basis-chip">{detectionLabel(detection)} · {plural(shared.length, 'PR')} · {coverage.bands[band]} of {coverage.bands.all} approved references in this band{candidateCount > 0 && ` · ${candidateCount} awaiting eligibility`}</span>
               {activeFilters.map(item => <button type="button" key={item.label} className="filter-chip" onClick={item.clear} aria-label={`Remove filter ${item.label}`}>{item.label}<X size={12} aria-hidden="true" /></button>)}
               {activeFilters.length > 0 && <Link className="filter-link" to="/tasks">Edit filters</Link>}
-              {chartView === 'tradeoff' && <Switch className="label-switch" checked={showAllLabels} onChange={event => setShowAllLabels(event.currentTarget.checked)} label="Label every point" size="xs" />}
+              {chartView === 'tradeoff' && <Switch className="label-switch" checked={showAllLabels} onChange={event => onSearch({ labels: event.currentTarget.checked || undefined }, 'scorecard')} label="Label every point" size="xs" />}
             </div>
-            {chartView === 'overview' ? <Overview summaries={summaries} detection={detection} sort={overviewSort} onSort={setOverviewSort} onSelect={id => setInspection({ kind: 'configuration', id })} />
-              : <Chart summaries={summaries} detection={detection} matching={{ included: matchedRefuted.included.length, excluded: matchedRefuted.excluded.length }} axis={axis} view={chartView} showAllLabels={showAllLabels} onSelect={id => setInspection({ kind: 'configuration', id })} />}
+            {chartView === 'overview' ? <Overview summaries={summaries} detection={detection} sort={overviewSort} onSort={setOverviewSort} onSelect={id => inspect('scorecard')({ kind: 'configuration', id })} />
+              : <Chart summaries={summaries} detection={detection} matching={{ included: matchedRefuted.included.length, excluded: matchedRefuted.excluded.length }} axis={axis} view={chartView} showAllLabels={showAllLabels} onSelect={id => inspect('scorecard')({ kind: 'configuration', id })} />}
           </div>
           <aside className="configuration-list" aria-label="Review methods"><Group justify="space-between" mb="lg"><Text fw={650} size="sm">Review methods</Text><Text size="xs" c="dimmed">{editions.filter(edition => editionIds(edition).some(id => selected.includes(id))).length} selected</Text></Group>
             <div className="skill-switch"><Switch checked={includeExperiments} onChange={event => toggleExperiments(event.currentTarget.checked)} label="Include skill experiments" size="xs" /></div>
@@ -217,13 +234,13 @@ export function Dashboard({ dataset, page, now = new Date() }: { dataset: Datase
                   <Button variant="subtle" size="compact-xs" onClick={() => setSelected(configurations.map(item => item.id))}>Select all</Button>
                   <Button variant="subtle" size="compact-xs" onClick={() => setSelected([])}>Clear all</Button>
                 </Group></Group>
-                {configurations.map(configuration => <Checkbox key={configuration.id} label={configuration.short} checked={selected.includes(configuration.id)} onChange={() => setSelected(values => values.includes(configuration.id) ? values.filter(id => id !== configuration.id) : [...values, configuration.id])} size="xs" />)}
+                {configurations.map(configuration => <Checkbox key={configuration.id} label={configuration.short} checked={selected.includes(configuration.id)} onChange={() => setSelected(selected.includes(configuration.id) ? selected.filter(id => id !== configuration.id) : [...selected, configuration.id])} size="xs" />)}
               </Stack></Popover.Dropdown>
             </Popover>
             <Popover position="bottom-end" width={230} withArrow>
               <Popover.Target><Button variant="subtle" color="gray" size="xs" mt="md" rightSection={<ChevronDown size={14} />}>Models ({selectedModels.length}/{modelChoices.length})</Button></Popover.Target>
               <Popover.Dropdown><Stack gap="sm"><Group justify="space-between"><Text size="xs" fw={600}>Models</Text><Button variant="subtle" size="compact-xs" onClick={() => setSelectedModels(modelChoices.map(model => model.value))}>Select all</Button></Group>
-                {modelChoices.map(model => <Checkbox key={model.value} label={model.label} checked={selectedModels.includes(model.value)} onChange={() => setSelectedModels(values => values.includes(model.value) ? values.filter(value => value !== model.value) : [...values, model.value])} size="xs" />)}
+                {modelChoices.map(model => <Checkbox key={model.value} label={model.label} checked={selectedModels.includes(model.value)} onChange={() => setSelectedModels(selectedModels.includes(model.value) ? selectedModels.filter(value => value !== model.value) : [...selectedModels, model.value])} size="xs" />)}
               </Stack></Popover.Dropdown>
             </Popover>
             <Text size="xs" c="dimmed">Choose methods or individual setups, then narrow by model. Review editions mark meaningful changes.</Text>
@@ -232,7 +249,7 @@ export function Dashboard({ dataset, page, now = new Date() }: { dataset: Datase
             {differing.length > 0 && ` The selected setups differ in recorded ${differing.join(', ')}; a difference between setups includes those conditions. Compare two setups below to see the values.`}</span></div>
         </Paper>
         {unresolved && <Alert color="yellow" mt="md">Some claim assessments are unresolved. Reliability measurements are provisional.</Alert>}
-        <Text size="sm" mt="xl" fw={600}>All review setups</Text>
+        <Text size="sm" mt="xl" fw={600} id="review-setups">All review setups</Text>
         <Text size="xs" c="dimmed" mt={4}>Includes skill experiments. Same {shared.length} comparison PRs as the chart, in the {bandLabels[band].toLowerCase()} band. Rows start in name order; a column heading sorts by that one measure only.</Text>
         <Table.ScrollContainer minWidth={1050} mt="md"><Table verticalSpacing="sm" className="leaderboard-table" aria-label="All review setup results">
           <Table.Thead><Table.Tr>{resultsColumns.map(column => <Table.Th key={column.key} aria-sort={sort.column === column.key ? sort.direction : 'none'}>
@@ -241,19 +258,20 @@ export function Dashboard({ dataset, page, now = new Date() }: { dataset: Datase
             </button>
           </Table.Th>)}<Table.Th>PR coverage</Table.Th><Table.Th /></Table.Tr></Table.Thead>
           <Table.Tbody>{tableRows.map(row => <Table.Tr key={row.configuration.id}>
-            <Table.Td><button className="text-button setup-label" onClick={() => setInspection({ kind: 'configuration', id: row.configuration.id })}><Mark configuration={row.configuration} size={10} />{row.configuration.short}</button>
+            <Table.Td><button className="text-button setup-label" onClick={() => inspect('review-setups')({ kind: 'configuration', id: row.configuration.id })}><Mark configuration={row.configuration} size={10} />{row.configuration.short}</button>
               <PeerNote configurations={[row.configuration]} className="rank-model" /></Table.Td>
             {(['equalProblem', 'equalPr', 'seriousCaught', 'repeatedMisses', 'cost', 'tokens', 'refuted'] as const).map(column => <Table.Td key={column}><Value cell={row.cells[column]} notes={tableNotes} /></Table.Td>)}
             <Table.Td><span className="completion-count">{row.completed}/{row.trials}</span></Table.Td>
             <Table.Td>{row.tasks}/{shared.length}</Table.Td>
-            <Table.Td><ActionIcon aria-label={`Inspect ${row.configuration.short}`} variant="subtle" color="gray" onClick={() => setInspection({ kind: 'configuration', id: row.configuration.id })}><ArrowUpRight size={18} /></ActionIcon></Table.Td>
+            <Table.Td><ActionIcon aria-label={`Inspect ${row.configuration.short}`} variant="subtle" color="gray" onClick={() => inspect('review-setups')({ kind: 'configuration', id: row.configuration.id })}><ArrowUpRight size={18} /></ActionIcon></Table.Td>
           </Table.Tr>)}</Table.Tbody>
         </Table></Table.ScrollContainer>
         <Notes notes={tableNotes} />
         {!shared.length && <Text ta="center" c="dimmed" py="xl">No PR is shared by the selected standard setups with these filters.</Text>}
         <Text size="xs" c="dimmed" mt="sm" className="footnote">Cost and output tokens add every attempt, retries included, and divide by scheduled trials. * Subscription usage is valued at token list prices. Output includes reasoning and subagents. Refuted claims and proposed fixes never change detection.</Text>
         <Text size="sm" mt="sm"><Anchor href="https://github.com/kamui/code-review-bench/blob/main/docs/research/skill-matrix-2026-10-02/README.md#time-and-cost" target="_blank" rel="noreferrer">October 2 time and cost report</Anchor> · Per-setup and per-task totals, including failed attempts and held runs, with grading listed separately. This report covers a fixed batch.</Text>
-        <MethodologyViews dataset={dataset} configurations={configurations.filter(c => activeIds.includes(c.id))} cards={board.cards} selection={board.selection} detection={detection} now={now} onInspect={setInspection} />
+        <MethodologyViews dataset={dataset} configurations={configurations.filter(c => activeIds.includes(c.id))} cards={board.cards} selection={board.selection} detection={detection} now={now} onInspect={inspect('dimensions')}
+          tab={search.dimension ?? 'detection'} onTab={tab => onSearch({ dimension: unlessDefault(tab, 'detection') }, 'dimensions')} />
       </section></>}
 
       {page === 'tasks' && <section id="tasks" className="tasks-section">
@@ -276,14 +294,14 @@ export function Dashboard({ dataset, page, now = new Date() }: { dataset: Datase
             <Table.Tbody>{candidates.map(task => {
               const approved = task.families.filter(family => family.eligibility === 'approved').length
               const pending = task.families.length - approved
-              return <Table.Tr key={task.id}><Table.Td><button className="text-button task-name" onClick={() => setInspection({ kind: 'task', id: task.id })}>{task.repo}<span>#{task.pr}</span></button><Text size="xs" c="dimmed" mt={4} maw={340}>{task.shape}</Text></Table.Td>
+              return <Table.Tr key={task.id}><Table.Td><button className="text-button task-name" onClick={() => inspect()({ kind: 'task', id: task.id })}>{task.repo}<span>#{task.pr}</span></button><Text size="xs" c="dimmed" mt={4} maw={340}>{task.shape}</Text></Table.Td>
                 <Table.Td><Group gap={5} maw={220}>{[...task.profile.technologies, ...task.profile.changeKinds].map(label => <Badge key={label} color="gray" variant="light" size="sm">{label}</Badge>)}</Group></Table.Td>
                 <Table.Td>{approved ? <Text size="sm">{plural(approved, 'problem')}</Text> : <Badge color="gray" variant="light" size="sm">{controlLabels[task.control]}</Badge>}
                   {pending > 0 && <Text size="xs" c="dimmed" mt={4}>{pending} awaiting eligibility</Text>}
                   {!!task.preExistingProblems?.length && <Text size="xs" c="dimmed" mt={4}>{plural(task.preExistingProblems.length, 'pre-existing problem')}</Text>}</Table.Td>
                 <Table.Td><DetectionBar result={meanTaskRecall(board.cards.filter(card => activeIds.includes(card.configurationId)), task.id, band)} /></Table.Td><Table.Td>{sharedIds.has(task.id) ? <span className="included-label"><Check size={14} aria-hidden="true" /> Included</span>
                   : <Tooltip label="At least one selected setup has no result for this PR"><Text size="xs" c="dimmed" className="missing-label">Missing results</Text></Tooltip>}</Table.Td>
-                <Table.Td><ActionIcon aria-label={`Inspect ${task.repo} PR ${task.pr}`} variant="subtle" color="gray" onClick={() => setInspection({ kind: 'task', id: task.id })}><ArrowUpRight size={18} /></ActionIcon></Table.Td></Table.Tr>
+                <Table.Td><ActionIcon aria-label={`Inspect ${task.repo} PR ${task.pr}`} variant="subtle" color="gray" onClick={() => inspect()({ kind: 'task', id: task.id })}><ArrowUpRight size={18} /></ActionIcon></Table.Td></Table.Tr>
             })}</Table.Tbody></Table></Table.ScrollContainer>
             {!candidates.length && <Paper ta="center" py="xl"><Text fw={600}>No tasks match these filters</Text><Button variant="subtle" mt="sm" onClick={resetFilters}>Show all tasks</Button></Paper>}
           </Tabs.Panel>
@@ -304,7 +322,7 @@ export function Dashboard({ dataset, page, now = new Date() }: { dataset: Datase
       </section>}
       <footer className="site-footer"><span>code<span className="brand-review">review</span>bench.</span><Anchor href="https://deepswe.datacurve.ai/" target="_blank" rel="noreferrer" size="xs" c="dimmed">Inspired by DeepSWE</Anchor></footer>
     </Container>
-    <EvidenceDrawer dataset={dataset} inspection={inspection} now={now} onClose={() => setInspection(null)} />
+    <EvidenceDrawer dataset={dataset} inspection={inspection} now={now} onChange={inspect()} />
   </>
 }
 
