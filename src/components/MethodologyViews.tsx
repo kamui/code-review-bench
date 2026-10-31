@@ -5,8 +5,9 @@ import { bandLabels, compact, conditionDifferences, detectionLabel, duration, es
 import type { DetectionView, Reading } from '../lib/metrics'
 import { bands, candidates as pendingFamilies, conditionalMetrics, estimators, matched, orderingConflicts, pairwise, pendingCandidates, preExistingLabels, recommend, referenceCoverage } from '../lib/scoring'
 import type { ConditionalMetric, Estimator, Scorecard, Selection } from '../lib/scoring'
+import { scorecardTabs } from '../lib/view'
+import type { Inspection, ScorecardTab, Section } from '../lib/view'
 import { ClaimLabels } from './ClaimLabels'
-import type { Inspection } from './EvidenceDrawer'
 import { DataTable, Value } from './Reading'
 import { SeriousMisses } from './SeriousMisses'
 import type { Column } from './Reading'
@@ -26,11 +27,9 @@ function harm(card: Scorecard): Reading {
   return { text: 'Unavailable', reason: bound.kind === 'observed' ? `${unsafe} unsafe among ${safe + unsafe} assessed remedies so far. ${bound.reason}` : bound.reason }
 }
 
-export const scorecardTabs = ['detection', 'delivery', 'reliability', 'remedies', 'controls', 'pre-existing', 'advice', 'usage', 'candidates', 'comparison'] as const
-
-export function MethodologyViews({ dataset, configurations, cards, selection, detection, now, onInspect, initialTab = 'detection' }: {
+export function MethodologyViews({ dataset, configurations, cards, selection, detection, now, onInspect, tab, onTab }: {
   dataset: Dataset; configurations: Configuration[]; cards: Scorecard[]; selection: Selection; detection: DetectionView; now: Date
-  onInspect: (inspection: Inspection) => void; initialTab?: (typeof scorecardTabs)[number]
+  onInspect: (inspection: Inspection, section?: Section) => void; tab: ScorecardTab; onTab: (tab: ScorecardTab) => void
 }) {
   const [left, setLeft] = useState<string | null>(null)
   const [right, setRight] = useState<string | null>(null)
@@ -66,10 +65,10 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
   const advice = a && b ? recommend(dataset, a.card, b.card, selection) : null
   const recommendation = (label: string, result: NonNullable<typeof advice>['impact']) => <Text size="sm">{label}: {result.kind === 'none' ? 'none'
     : `${result.kind}, ${result.prefer ? `prefers ${short(result.prefer)}` : 'no preference'}`}{result.reasons.length > 0 && `. ${result.reasons.join(' ')}`}</Text>
-  return <Paper withBorder radius="lg" p="lg" mt="xl" className="methodology-panel">
+  return <Paper withBorder radius="lg" p="lg" mt="xl" className="methodology-panel" id="dimensions">
     <Title order={3}>The scorecard, dimension by dimension</Title>
     <Text size="sm" c="dimmed" mt="xs">Every value comes from the shared scoring kernel for the selected setups and PRs. Dimensions stay separate: there is no blended score. A numbered mark explains a value below its table.</Text>
-    <Tabs defaultValue={initialTab} mt="md">
+    <Tabs value={tab} onChange={value => { const next = scorecardTabs.find(item => item === value); if (next) onTab(next) }} mt="md">
       <Tabs.List><Tabs.Tab value="detection">Detection</Tabs.Tab><Tabs.Tab value="delivery">Delivery</Tabs.Tab><Tabs.Tab value="reliability">Claim reliability</Tabs.Tab>
         <Tabs.Tab value="remedies">Remedies</Tabs.Tab><Tabs.Tab value="controls">Controls</Tabs.Tab><Tabs.Tab value="pre-existing">Pre-existing problems raised</Tabs.Tab><Tabs.Tab value="advice">Advice benefit</Tabs.Tab>
         <Tabs.Tab value="usage">Cost and time</Tabs.Tab><Tabs.Tab value="candidates">Pending candidates ({novel.length + awaiting.length})</Tabs.Tab><Tabs.Tab value="comparison">Compare two setups</Tabs.Tab></Tabs.List>
@@ -92,8 +91,8 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
           { label: 'Range with one PR left out', value: row => reading(row.card.detection[band].omissions[estimator], span) },
           { label: 'Each linked claim as its own unit', value: row => reading(row.card.detection[band].grouping, grouping => `${percent(grouping[estimator] * 100)} over ${grouping.units} units`) }]} />
         <Text size="xs" c="dimmed" className="footnote">Observed counts are outcomes determined so far and are not a final rate. The admitted-only figure excludes failed trials, so it describes delivered reviews rather than the setup. The left-out range shows sensitivity to these PRs, not a confidence interval.</Text>
-        <Title order={4}>Serious references not caught</Title>
-        <SeriousMisses dataset={dataset} configurations={configurations} cards={cards} selection={selection} onInspect={onInspect} />
+        <Title order={4} id="serious-misses">Serious references not caught</Title>
+        <SeriousMisses dataset={dataset} configurations={configurations} cards={cards} selection={selection} onInspect={inspection => onInspect(inspection, 'serious-misses')} />
       </Stack></Tabs.Panel>
 
       <Tabs.Panel value="delivery" pt="md"><Stack>
