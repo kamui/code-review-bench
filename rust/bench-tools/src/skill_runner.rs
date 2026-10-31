@@ -2,7 +2,8 @@
 //!
 //! The run supplies `inputs/skill-pin.json`, the frozen tree under `inputs/skill/`, `inputs/invocation.md`,
 //! `inputs/runner.json` and `inputs/shared-policy.md`. The attempt directory must already exist and must not hold a
-//! `home`. The runner refuses unless the run's `runtimes.frozen.json` pins this bench-tools, checks the run, arm,
+//! `home`. The runner refuses unless the run's `runtimes.frozen.json`, as its runtime deviations moved it, pins this
+//! bench-tools, checks the run, arm,
 //! skill, target and clone pins, writes the attempt's `input.md`, creates a clean home before copying credentials,
 //! starts one new root session, and keeps its raw output, transcripts, usage, session evidence and native skill
 //! artifacts. It never resumes a session, and normalizes the native report with this bench-tools: `runner.json`'s
