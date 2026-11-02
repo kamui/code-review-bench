@@ -13,3 +13,7 @@ ASK
 - this decision type has not earned level 1 from earlier closed rounds
 
 ```
+
+## Decision
+
+Asked 2026-11-02 with the comment, GT-v6, ruling 15's saved outcome, what the one-step line decides on each reading, both blind answers, the wording test's split and regrade-v10 ruling 21. The owner answered "1": no credit, as before (says what goes wrong: no; identifies the cause as a fault: yes). The sentence stays in section 3 of rule version 5 as a "No credit" example.
