@@ -9,6 +9,7 @@
 //! with the session, observed models, access audit and priced usage, and with a run directory a charge line in
 //! that run's `charges.jsonl`. It succeeds only for a clean, priced, single-model session that left `verdicts.json`.
 
+use super::client::Kind;
 use super::{Options, Runner, check_current_record, check_prepared, client, preflight_inputs};
 use crate::current_grading::{self as current, Failure, R};
 use crate::grading_tools::{self, Host, Refusal, Tools};
@@ -37,11 +38,14 @@ const PROBE_FAILED: &str =
     "pinned client enforcement probe failed; dispatch refused before payment";
 const LOGS: [&str; 2] = ["command-audit.jsonl", "policy-audit.jsonl"];
 
+mod pi;
+
 /// The grader client a dispatch or preflight checks.
 pub struct Client {
     pub model: String,
     pub expected_cli_version: String,
-    pub allow_unbounded_codex: bool,
+    /// Authorizes a client that has no per-session dollar limit (Codex or Pi).
+    pub allow_unbounded: bool,
 }
 
 /// `bench-tools grade dispatch`'s options.
@@ -213,13 +217,24 @@ fn rate_for(runner: &Runner, model: &str) -> R<Option<Value>> {
 fn client_preflight(runner: &Runner, grader: &Client) -> R<String> {
     let (model, expected) = (grader.model.as_str(), grader.expected_cli_version.as_str());
     let home = client::user_home();
-    if model.starts_with("gpt-") {
-        if !grader.allow_unbounded_codex {
-            return inconsistent(
-                "Codex grading requires --allow-unbounded-codex; the client has no verified per-session dollar \
-                 limit and cannot use a bounded reservation",
-            );
+    let kind = Kind::of(model);
+    if kind != Kind::Claude && !grader.allow_unbounded {
+        let label = if kind == Kind::Codex { "Codex" } else { "Pi" };
+        return inconsistent(format!(
+            "{label} grading requires --allow-unbounded; the client has no verified per-session dollar limit and \
+             cannot use a bounded reservation"
+        ));
+    }
+    if kind == Kind::Pi {
+        client::pi::split(model).or_else(inconsistent)?;
+        if rate_for(runner, model)?.is_none() {
+            return inconsistent(format!(
+                "no rates.json entry for {model}; dispatch refused before payment"
+            ));
         }
+        return client::pi::preflight(expected, &home, model).or_else(inconsistent);
+    }
+    if kind == Kind::Codex {
         if codex_efforts(runner, model)?.is_none() {
             return inconsistent(format!(
                 "Codex model {model} has no pinned grading tool profile"
@@ -263,10 +278,10 @@ fn codex_efforts(runner: &Runner, model: &str) -> R<Option<Vec<String>>> {
 /// Run after `client_preflight`, which pins the client whose offer this reads.
 fn check_effort(runner: &Runner, grader: &Client, effort: &str) -> R<()> {
     let model = grader.model.as_str();
-    let supported = if model.starts_with("gpt-") {
-        codex_efforts(runner, model)?.unwrap_or_default()
-    } else {
-        client::claude_efforts().or_else(inconsistent)?
+    let supported = match Kind::of(model) {
+        Kind::Codex => codex_efforts(runner, model)?.unwrap_or_default(),
+        Kind::Claude => client::claude_efforts().or_else(inconsistent)?,
+        Kind::Pi => client::pi::efforts(model).or_else(inconsistent)?,
     };
     if supported.iter().any(|offered| offered == effort) {
         return Ok(());
@@ -280,10 +295,12 @@ fn check_effort(runner: &Runner, grader: &Client, effort: &str) -> R<()> {
 
 /// The client's own enforcement probe against a local fake API; no model is called.
 fn client_probe(runner: &Runner, model: &str) -> R<Value> {
-    let probed = if model.starts_with("gpt-") {
-        client::probe_codex(&runner.checkout.to_path_buf(), &runner.executable, None)
-    } else {
-        client::probe_claude(&runner.executable)
+    let probed = match Kind::of(model) {
+        Kind::Codex => {
+            client::probe_codex(&runner.checkout.to_path_buf(), &runner.executable, None)
+        }
+        Kind::Claude => client::probe_claude(&runner.executable),
+        Kind::Pi => client::pi::probe(&runner.executable, model),
     };
     probed.or_else(|_| inconsistent(PROBE_FAILED))
 }
@@ -341,10 +358,10 @@ fn append_charge(run: &Path, charge: &Value) -> R<()> {
 
 /// Run `dispatch` and return the line it prints on success; the reasons it failed are its inconsistency.
 pub fn dispatch(runner: &Runner, options: &Dispatch) -> R<Vec<u8>> {
-    let reasons_or_line = if options.client.model.starts_with("gpt-") {
-        dispatch_codex(runner, options)?
-    } else {
-        dispatch_claude(runner, options)?
+    let reasons_or_line = match Kind::of(&options.client.model) {
+        Kind::Codex => dispatch_codex(runner, options)?,
+        Kind::Claude => dispatch_claude(runner, options)?,
+        Kind::Pi => pi::dispatch(runner, options)?,
     };
     match reasons_or_line {
         Ok(line) => Ok(format!("{line}\n").into_bytes()),
@@ -521,21 +538,36 @@ fn audit(work: &Path) -> Vec<String> {
     }
 }
 
-/// The directory the client starts in, once it names none of the key's identities.
-fn start_directory(key: &Value) -> R<PathBuf> {
+/// The run, arm and attempt names the key lists, which nothing the client is shown may name.
+fn identities(key: &Value) -> R<Vec<&str>> {
     let Some(identifying) = get(key, "identifying") else {
         return inconsistent(
             "the key lists no identities to check the client's start directory against; prepare a fresh workspace",
         );
     };
-    let start = clean_context::neutral_directory().or_else(inconsistent)?;
-    let shown_start = start.to_string_lossy();
-    let named: Vec<String> = identifying
+    Ok(identifying
         .as_array()
         .unwrap_or_default()
         .iter()
         .filter_map(Value::as_str)
-        .filter(|identity| shown_start.contains(identity))
+        .collect())
+}
+
+fn named<'k>(identities: &[&'k str], path: &Path) -> Vec<&'k str> {
+    let shown = path.to_string_lossy();
+    identities
+        .iter()
+        .copied()
+        .filter(|identity| shown.contains(identity))
+        .collect()
+}
+
+/// The directory the client starts in, once it names none of the key's identities.
+fn start_directory(key: &Value) -> R<PathBuf> {
+    let identities = identities(key)?;
+    let start = clean_context::neutral_directory().or_else(inconsistent)?;
+    let named: Vec<String> = named(&identities, &start)
+        .iter()
         .map(|identity| {
             format!(
                 "client start directory names {}; set TMPDIR to a neutral directory",

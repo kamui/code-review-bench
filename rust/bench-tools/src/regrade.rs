@@ -7,6 +7,7 @@
 //! own neutral workspace.
 
 use crate::current_grading;
+use crate::grade::client::{self, Kind};
 use crate::grade::runtime;
 use crate::pyjson::{self, Duplicates, Object, Value};
 use crate::pytext::{self, PyPath};
@@ -604,22 +605,27 @@ pub struct Run {
 
 fn authorized_cap(authorization: &Value) -> R<Option<Usd>> {
     let cap = field(authorization, "budgetCapUsd")?;
-    let codex = text(field(authorization, "grader")?, "model")?.starts_with("gpt-");
-    let unbounded =
-        optional(authorization, "budgetPolicy").and_then(Value::as_str) == Some("codex-unbounded");
+    let kind = Kind::of(text(field(authorization, "grader")?, "model")?);
+    let named = optional(authorization, "budgetPolicy").and_then(Value::as_str);
+    let unbounded = named.is_some() && named == kind.unbounded_policy();
     if matches!(cap, Value::Null) {
-        if !codex || !unbounded {
+        if !unbounded {
             return Err(
-                "a null budget cap requires a Codex grader and budgetPolicy codex-unbounded".into(),
+                "a null budget cap requires a Codex grader with budgetPolicy codex-unbounded or a Pi grader with \
+                 budgetPolicy pi-unbounded"
+                    .into(),
             );
         }
         return Ok(None);
     }
-    if unbounded {
-        return Err("budgetPolicy codex-unbounded requires a null budget cap".into());
+    if let Some(named) = named.filter(|named| named.ends_with("-unbounded")) {
+        return Err(format!("budgetPolicy {named} requires a null budget cap"));
     }
-    if codex {
-        return Err("bounded Codex dispatch requires a verified dollar hard cap".into());
+    if kind != Kind::Claude {
+        return Err(format!(
+            "bounded {} dispatch requires a verified dollar hard cap",
+            if kind == Kind::Codex { "Codex" } else { "Pi" }
+        ));
     }
     Usd::of(cap).map(Some)
 }
@@ -670,12 +676,51 @@ impl Grader {
         })
     }
 
-    fn client(&self) -> &'static str {
-        if self.model.starts_with("gpt-") {
-            "codex"
-        } else {
-            "claude"
-        }
+    fn kind(&self) -> Kind {
+        Kind::of(&self.model)
+    }
+}
+
+/// Copy the installed client `source` into the queue's `bin` under the client's name. Pi runs from its package, so
+/// the copy is the package's runtime files beside a `pi` link to their launcher.
+fn copy_client(kind: Kind, source: &Path, bin: &Path) -> R<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let name = kind.name();
+    let failed = |error: String| format!("cannot copy {} into the queue: {error}", shown(source));
+    if kind == Kind::Pi {
+        let package = client::pi::package_of(source).map_err(failed)?;
+        let staged = bin.join("pi-package.copying");
+        client::pi::pin(&package, &staged).map_err(failed)?;
+        std::fs::rename(&staged, bin.join("pi-package"))
+            .and_then(|()| {
+                std::os::unix::fs::symlink(
+                    Path::new("pi-package").join(client::pi::LAUNCHER),
+                    bin.join(name),
+                )
+            })
+            .map_err(|error| failed(error.to_string()))
+    } else {
+        let staged = bin.join(format!("{name}.copying"));
+        std::fs::copy(source, &staged)
+            .and_then(|_| std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o555)))
+            .and_then(|()| std::fs::rename(&staged, bin.join(name)))
+            .map_err(|error| failed(error.to_string()))
+    }
+}
+
+/// The digest of the queue's copy of the client, or `None` when it is gone or no longer the shape `copy_client`
+/// left: one regular file, or for Pi the link to the launcher and every file of the copied package.
+fn copied_digest(kind: Kind, bin: &Path) -> Option<String> {
+    let copy = bin.join(kind.name());
+    if kind == Kind::Pi {
+        let linked = std::fs::read_link(&copy).ok()?;
+        (linked == Path::new("pi-package").join(client::pi::LAUNCHER))
+            .then(|| client::pi::tree_sha256(&bin.join("pi-package")).ok())
+            .flatten()
+    } else {
+        (!copy.is_symlink() && copy.is_file())
+            .then(|| digest(&copy).ok())
+            .flatten()
     }
 }
 
@@ -688,22 +733,20 @@ fn pin_client(
     grader: &Grader,
     expected: Option<&str>,
 ) -> R<(String, OsString)> {
-    use std::os::unix::fs::PermissionsExt;
-    let name = grader.client();
+    let kind = grader.kind();
+    let name = kind.name();
     let record = directory.join("client.json");
-    let copy = directory.join("client-bin").join(name);
+    let bin = directory.join("client-bin");
+    let copy = bin.join(name);
     let pinned = if exists(&record)? {
         read_json(&record)?
     } else {
         let source = effects.installed_client(name)?;
-        let bin = directory.join("client-bin");
         std::fs::create_dir_all(&bin)
             .map_err(|error| format!("cannot create {}: {error}", shown(&bin)))?;
-        let staged = bin.join(format!("{name}.copying"));
-        std::fs::copy(&source, &staged)
-            .and_then(|_| std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o555)))
-            .and_then(|()| std::fs::rename(&staged, &copy))
-            .map_err(|error| format!("cannot copy {} into the queue: {error}", shown(&source)))?;
+        copy_client(kind, &source, &bin)?;
+        let copied = copied_digest(kind, &bin)
+            .ok_or_else(|| format!("cannot read the queue's copy of {name}"))?;
         let pinned: Object = [
             ("client".to_string(), string(name)),
             (
@@ -711,7 +754,7 @@ fn pin_client(
                 string(effects.client_version(&copy)?),
             ),
             ("source".to_string(), path_value(&source)),
-            ("sha256".to_string(), string(digest(&copy)?)),
+            ("sha256".to_string(), string(copied)),
             ("pinnedAt".to_string(), string(iso_now(effects.now()))),
         ]
         .into_iter()
@@ -721,9 +764,7 @@ fn pin_client(
         pinned
     };
     let version = text(&pinned, "version")?.to_string();
-    let intact = !copy.is_symlink()
-        && copy.is_file()
-        && digest(&copy).ok().as_deref() == Some(text(&pinned, "sha256")?);
+    let intact = copied_digest(kind, &bin).as_deref() == Some(text(&pinned, "sha256")?);
     if !intact {
         return Err(format!(
             "the queue's copy of {name} {version} at {} is missing or changed; restore it, or remove {} to pin the \
@@ -874,11 +915,14 @@ impl<'e> Controller<'e> {
             &grader,
             run.expected_cli_version.as_deref(),
         )?;
-        let clients = vec![Pinned {
-            name: grader.client().to_string(),
-            path: run.directory.join("client-bin").join(grader.client()),
-            version: cli_version.clone(),
-        }];
+        let clients = match grader.kind() {
+            Kind::Pi => Vec::new(),
+            kind => vec![Pinned {
+                name: kind.name().to_string(),
+                path: run.directory.join("client-bin").join(kind.name()),
+                version: cli_version.clone(),
+            }],
+        };
         let workspaces = planned_root(&root, text(&execution, "workspaceRoot")?)?;
         let archives = planned_root(&root, text(&execution, "archiveRoot")?)?;
         let mut groups: HashMap<Batch, Vec<Value>> = HashMap::new();
@@ -1493,7 +1537,7 @@ impl<'e> Controller<'e> {
                 args.extend(["--target".into(), target.into()]);
             }
             if self.cap.is_none() {
-                args.push("--allow-unbounded-codex".into());
+                args.push("--allow-unbounded".into());
             }
             let log = unused_log(&logs.join(format!("{}.log", run_name(&run))))?;
             let code = self.step(args, &log)?;
@@ -1576,10 +1620,10 @@ impl<'e> Controller<'e> {
             self.cli_version.clone().into(),
         ];
         match budget {
-            None if !self.grader.model.starts_with("gpt-") => {
-                return Err("unbounded dispatch requires a Codex grader".into());
+            None if self.grader.kind().unbounded_policy().is_none() => {
+                return Err("unbounded dispatch requires a Codex or Pi grader".into());
             }
-            None => args.push("--allow-unbounded-codex".into()),
+            None => args.push("--allow-unbounded".into()),
             Some(budget) => args.extend(["--max-budget-usd".into(), budget.cents().into()]),
         }
         args.extend(["--timeout".into(), self.grader.timeout.to_string().into()]);
