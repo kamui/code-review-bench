@@ -15,7 +15,11 @@ use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 use std::process::{Command, Stdio};
 
-const CREDENTIALS: [&[u8]; 2] = [b"home/.codex/auth.json", b"home/.claude/.credentials.json"];
+const CREDENTIALS: [&[u8]; 3] = [
+    b"home/.codex/auth.json",
+    b"home/.claude/.credentials.json",
+    b"home/.pi/agent/auth.json",
+];
 const GENERATED: [&[u8]; 6] = [
     b"node_modules",
     b"dist",
@@ -491,8 +495,9 @@ mod tests {
 
     #[test]
     fn classification_matches_python() {
-        let cases: [(&[u8], &str); 12] = [
+        let cases: [(&[u8], &str); 13] = [
             (b"home/.codex/auth.json", "account-state"),
+            (b"work/home/.pi/agent/auth.json", "account-state"),
             (b"work/home/.claude/.credentials.json", "account-state"),
             (b".git/HEAD", "rebuildable"),
             (b"a/node_modules/x.js", "rebuildable"),

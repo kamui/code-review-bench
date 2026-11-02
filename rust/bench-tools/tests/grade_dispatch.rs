@@ -1,7 +1,7 @@
 //! `bench-tools grade dispatch` on the `grading/pending` fixture root, prepared by an installed copy of this
 //! build, with a stub provisioner and fake clients. Refusals before the client run anywhere; a session needs
-//! bubblewrap, git and ripgrep for the grading tools, and the Codex session the real Codex client for its local
-//! probe, so those are ignored by default and CI's grading job runs them.
+//! bubblewrap, git and ripgrep for the grading tools, and the Codex and Pi sessions the real Codex and Pi clients
+//! for their local probes, so those are ignored by default and CI's grading job runs them.
 
 #[path = "support/runtime_store.rs"]
 mod runtime_store;
@@ -24,6 +24,7 @@ const RUN: &str = "runs/2026-01-01-grade-test";
 const TARGET: &str = "t-grade-1";
 const MODEL: &str = "claude-sonnet-5";
 const CODEX_MODEL: &str = "gpt-6.1-sol";
+const PI_MODEL: &str = "openrouter/z-ai/glm-5.3-flash";
 
 /// Makes `--out` and its `-cache` sibling, as the provisioner that `grade prepare --provision` runs would.
 const PROVISIONER: &str = r#"set -eu
@@ -198,6 +199,12 @@ fn bench(label: &str) -> Bench {
         r#"{"oauthAccount": {"id": 1}, "projects": {"/elsewhere": {}}}"#,
     )
     .unwrap();
+    fs::create_dir_all(home.join(".pi/agent")).unwrap();
+    fs::write(
+        home.join(".pi/agent/auth.json"),
+        r#"{"openrouter": {"type": "api_key", "key": "test-secret"}, "anthropic": {"type": "oauth", "access": "other-secret"}}"#,
+    )
+    .unwrap();
     fs::create_dir_all(home.join(".codex")).unwrap();
     fs::write(
         home.join(".codex/auth.json"),
@@ -355,6 +362,28 @@ impl Bench {
         self.command(&self.codex_argv(extra_argv, version), &[])
     }
 
+    fn pi_argv<'a>(&'a self, extra_argv: &[&'a str], version: &'a str) -> Vec<&'a str> {
+        let (work, key) = (self.work.to_str().unwrap(), self.key.to_str().unwrap());
+        let run = self.run_dir.to_str().unwrap();
+        let mut argv = vec!["grade", "dispatch", "--work", work, "--key", key];
+        argv.extend(["--model", PI_MODEL, "--expected-cli-version", version]);
+        argv.extend([
+            "--effort",
+            "high",
+            "--run",
+            run,
+            "--step",
+            "grading t-grade-1",
+        ]);
+        argv.extend(extra_argv);
+        argv
+    }
+
+    /// Where the stand-in Pi client keeps its settings and logs: beside its launcher in the package.
+    fn pi_bundle(&self) -> PathBuf {
+        self.bin.join("pi-package/dist/bundle")
+    }
+
     /// Prepare the same batch again in a fresh workspace, and dispatch there from now on.
     fn prepare_again(&mut self) {
         (self.work, self.key) = (self.root.join("work-2"), self.root.join("keys/key-2.json"));
@@ -436,8 +465,12 @@ impl Bench {
 
     fn client_starts(&self) -> Vec<Value> {
         let mut starts = Vec::new();
-        for log in ["claude.log", "codex.log"] {
-            if let Ok(text) = fs::read_to_string(self.bin.join(log)) {
+        for log in [
+            self.bin.join("claude.log"),
+            self.bin.join("codex.log"),
+            self.pi_bundle().join("pi.log"),
+        ] {
+            if let Ok(text) = fs::read_to_string(log) {
                 starts.extend(text.lines().map(loads));
             }
         }
@@ -458,7 +491,11 @@ impl Bench {
 
     /// Sign-ins the refused command must not read: a read would fail and change the refusal.
     fn lock_sign_ins(&self) {
-        for path in [".claude/.credentials.json", ".codex/auth.json"] {
+        for path in [
+            ".claude/.credentials.json",
+            ".codex/auth.json",
+            ".pi/agent/auth.json",
+        ] {
             fs::set_permissions(self.home.join(path), fs::Permissions::from_mode(0o000)).unwrap();
         }
     }
@@ -667,7 +704,7 @@ fn codex_requires_explicit_unbounded_authorization() {
     let bench = bench("codex-unbounded");
     bench.lock_sign_ins();
     let done = bench.codex(&[], "0.160.0");
-    bench.assert_refused_before_the_client(&done, "requires --allow-unbounded-codex");
+    bench.assert_refused_before_the_client(&done, "requires --allow-unbounded");
 }
 
 #[test]
@@ -689,7 +726,7 @@ fn codex_refuses_models_without_a_pinned_tool_profile() {
             "0.160.0",
             "--effort",
             "high",
-            "--allow-unbounded-codex",
+            "--allow-unbounded",
         ],
         &[],
     );
@@ -724,10 +761,7 @@ fn an_effort_the_claude_client_does_not_offer_is_refused_before_the_session() {
 fn an_effort_the_codex_catalog_does_not_offer_the_model_is_refused_before_the_session() {
     let bench = bench("codex-effort");
     codex_stand_in(&bench, &[("mode", "version")]);
-    let mut argv = with_effort(
-        bench.codex_argv(&["--allow-unbounded-codex"], "0.160.0"),
-        "ultra",
-    );
+    let mut argv = with_effort(bench.codex_argv(&["--allow-unbounded"], "0.160.0"), "ultra");
     let at = argv.iter().position(|arg| *arg == CODEX_MODEL).unwrap();
     argv[at] = "gpt-6-luna";
     let done = bench.command(&argv, &[]);
@@ -977,7 +1011,7 @@ fn codex_stand_in(bench: &Bench, settings: &[(&str, &str)]) {
 #[ignore = "needs bubblewrap, git, ripgrep and the Codex client"]
 fn a_codex_session_runs_confined_and_charges_list_price() {
     let (bench, version) = codex_bench("codex-clean", "clean");
-    let done = bench.codex(&["--allow-unbounded-codex"], &version);
+    let done = bench.codex(&["--allow-unbounded"], &version);
     assert_eq!(done.status.code(), Some(0), "{}", output_text(&done));
     let seen = bench.seen();
     assert_eq!(
@@ -1017,7 +1051,7 @@ fn a_codex_session_runs_confined_and_charges_list_price() {
 fn a_failed_or_interrupted_codex_session_removes_the_sign_in_and_proves_no_charge() {
     for mode in ["fail", "hang"] {
         let (bench, version) = codex_bench(&format!("codex-{mode}"), mode);
-        let done = bench.codex(&["--allow-unbounded-codex", "--timeout", "5"], &version);
+        let done = bench.codex(&["--allow-unbounded", "--timeout", "5"], &version);
         assert_eq!(done.status.code(), Some(1), "{}", output_text(&done));
         let exit = if mode == "fail" { "3" } else { "None" };
         assert!(
@@ -1061,13 +1095,13 @@ fn an_interrupted_claude_session_is_stopped_and_its_sign_in_removed() {
 fn an_interrupted_codex_session_is_stopped_and_its_sign_in_removed() {
     let (mut bench, version) = codex_bench("codex-interrupt", "interrupt");
     let pids = bench.bin.join("codex.pids");
-    let argv = bench.codex_argv(&["--allow-unbounded-codex"], &version);
+    let argv = bench.codex_argv(&["--allow-unbounded"], &version);
     let (done, seen) = bench.interrupt(&argv, &[], &pids);
     bench.assert_interrupted(&done, &seen, ".codex/auth.json", None);
 
     codex_stub(&bench, "clean");
     bench.prepare_again();
-    let again = bench.codex(&["--allow-unbounded-codex"], &version);
+    let again = bench.codex(&["--allow-unbounded"], &version);
     assert_eq!(again.status.code(), Some(0), "{}", output_text(&again));
     assert_eq!(bench.charges().len(), 2);
 }
@@ -1127,7 +1161,7 @@ fn an_interrupt_just_after_a_claude_session_waits_for_its_record_and_charge() {
 #[ignore = "needs bubblewrap, git, ripgrep and the Codex client"]
 fn an_interrupt_just_after_a_codex_session_waits_for_its_record_and_charge() {
     let (bench, version) = codex_bench("codex-after", "clean");
-    let argv = bench.codex_argv(&["--allow-unbounded-codex"], &version);
+    let argv = bench.codex_argv(&["--allow-unbounded"], &version);
     let done = bench.interrupt_after_session(&argv, &[]);
     assert_eq!(done.status.signal(), Some(2), "{}", output_text(&done));
     assert!(bench.work.join("dispatch.json").is_file());
@@ -1351,4 +1385,307 @@ fn a_batch_with_a_refused_command_is_not_filed_and_one_needing_a_service_is() {
     );
     let mapped = map(None);
     assert_eq!(mapped.status.code(), Some(0), "{}", output_text(&mapped));
+}
+
+/// The stand-in installed as the launcher of a Pi package with `pi` linked to it on `PATH`, as a global install
+/// lays it out, with the settings it reads from `pi.json` beside it.
+fn pi_stand_in(bench: &Bench, settings: &[(&str, &str)]) {
+    let bundle = bench.pi_bundle();
+    fs::create_dir_all(&bundle).unwrap();
+    fs::write(
+        bench.bin.join("pi-package/package.json"),
+        r#"{"name": "pi-stand-in"}"#,
+    )
+    .unwrap();
+    let settings = settings
+        .iter()
+        .map(|(name, value)| (name.to_string(), Value::Str(value.to_string())))
+        .collect();
+    fs::write(bundle.join("pi.json"), dumps(&Value::Object(settings))).unwrap();
+    stand_in::install(&bundle, "cli.js");
+    let link = bench.bin.join("pi");
+    if fs::symlink_metadata(&link).is_err() {
+        std::os::unix::fs::symlink("pi-package/dist/bundle/cli.js", link).unwrap();
+    }
+}
+
+/// A bench whose `pi` is the stand-in in `mode` over the real client, and the real client's version.
+fn pi_bench(label: &str, mode: &str) -> (Bench, String) {
+    let bench = bench(label);
+    let real = bench_tools::review_isolation::which("pi").expect("the Pi client");
+    let version = Command::new(&real).arg("--version").output().unwrap();
+    let version = String::from_utf8_lossy(&version.stdout).trim().to_string();
+    pi_stand_in(&bench, &[("real", real.to_str().unwrap()), ("mode", mode)]);
+    (bench, version)
+}
+
+#[test]
+fn pi_requires_explicit_unbounded_authorization() {
+    let bench = bench("pi-unbounded");
+    bench.lock_sign_ins();
+    let done = bench.command(&bench.pi_argv(&[], "1.5.0"), &[]);
+    bench.assert_refused_before_the_client(
+        &done,
+        "Pi grading requires --allow-unbounded; the client has no verified per-session dollar limit",
+    );
+}
+
+#[test]
+fn pi_cannot_take_a_dollar_limit() {
+    refused(
+        "pi-budget",
+        |_| {},
+        PI_MODEL,
+        Some("5"),
+        "Pi cannot enforce --max-budget-usd",
+    );
+}
+
+#[test]
+fn a_pi_model_without_rates_or_of_another_provider_is_refused_before_the_client() {
+    for (label, model, refusal) in [
+        (
+            "pi-unpriced",
+            "openrouter/z-ai/unpriced",
+            "no rates.json entry for openrouter/z-ai/unpriced; dispatch refused before payment",
+        ),
+        (
+            "pi-provider",
+            "anthropic/claude-opus-5-5",
+            "Pi grading supports openrouter models named openrouter/<id>, not anthropic/claude-opus-5-5",
+        ),
+    ] {
+        let bench = bench(label);
+        bench.lock_sign_ins();
+        let mut argv = bench.pi_argv(&["--allow-unbounded"], "1.5.0");
+        let at = argv.iter().position(|arg| *arg == PI_MODEL).unwrap();
+        argv[at] = model;
+        let done = bench.command(&argv, &[]);
+        bench.assert_refused_before_the_client(&done, refusal);
+    }
+}
+
+#[test]
+fn an_effort_pi_does_not_offer_the_model_is_refused_before_the_session() {
+    let bench = bench("pi-effort");
+    pi_stand_in(&bench, &[("mode", "version")]);
+    let done = bench.command(
+        &with_effort(bench.pi_argv(&["--allow-unbounded"], "1.5.0"), "medium"),
+        &[],
+    );
+    let query = dumps(&Value::Array(
+        [
+            "--mode",
+            "rpc",
+            "--no-session",
+            "--model",
+            PI_MODEL,
+            "--no-extensions",
+            "--extension",
+            "builtin:mcp",
+            "--no-builtin-tools",
+            "--no-context-files",
+            "--no-skills",
+            "--no-prompt-templates",
+            "--no-themes",
+            "--no-approve",
+            "--offline",
+        ]
+        .into_iter()
+        .map(|part| Value::Str(part.to_string()))
+        .collect(),
+    ));
+    bench.assert_refused_after(
+        &done,
+        &format!(
+            "effort 'medium' is not supported for {PI_MODEL}; supported: low, high, max; dispatch refused \
+             before payment"
+        ),
+        &[r#"["--version"]"#, &query],
+    );
+}
+
+#[test]
+#[ignore = "needs bubblewrap, git, ripgrep and the Pi client"]
+fn a_pi_session_runs_confined_and_charges_api_dollars() {
+    let (bench, version) = pi_bench("pi-clean", "clean");
+    let temporary = Outside::new("pi-clean");
+    let outside = temporary.0.clone();
+    let done = bench.command(
+        &bench.pi_argv(&["--allow-unbounded"], &version),
+        &[("TMPDIR", outside.to_str().unwrap())],
+    );
+    assert_eq!(done.status.code(), Some(0), "{}", output_text(&done));
+    assert!(
+        String::from_utf8_lossy(&done.stdout)
+            .starts_with(&format!("graded in {}: Pi session ", bench.work.display()))
+    );
+
+    let seen = bench.seen();
+    assert_eq!(
+        dumps(get(&seen, "environment")),
+        r#"["HOME", "LANG", "PATH", "PI_CODING_AGENT_DIR", "PI_OFFLINE", "PI_SKIP_VERSION_CHECK", "PI_TELEMETRY", "TMPDIR"]"#
+    );
+    assert_eq!(dumps(get(&seen, "auth_mode")), "384");
+    assert_eq!(
+        str_of(&seen, "auth"),
+        r#"{"openrouter": {"type": "api_key", "key": "test-secret"}}"#
+    );
+    assert!(!bench.work.join("home/.pi/agent/auth.json").exists());
+    let start = PathBuf::from(str_of(&seen, "cwd"));
+    assert_eq!(start.parent(), Some(outside.as_path()));
+    assert!(!start.exists());
+    let prompt = fs::read(bench.work.join("prompt.md")).unwrap();
+    assert_eq!(str_of(&seen, "prompt").as_bytes(), prompt);
+    let argv: Vec<&str> = get(&seen, "argv")
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|part| part.as_str().unwrap())
+        .collect();
+    let after = |flag: &str| argv[argv.iter().position(|part| *part == flag).unwrap() + 1];
+    assert_eq!(
+        after("--tools"),
+        "mcp__grading__edit_verdicts,mcp__grading__inspect,mcp__grading__run,mcp__grading__validate,\
+         mcp__grading__write_scratch,mcp__grading__write_verdicts"
+    );
+    assert_eq!(after("--extension"), "builtin:mcp");
+    assert_eq!(after("--thinking"), "high");
+    assert_eq!(after("--model"), PI_MODEL);
+    for flag in [
+        "--print",
+        "--no-extensions",
+        "--no-builtin-tools",
+        "--no-context-files",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--no-themes",
+        "--no-approve",
+        "--offline",
+    ] {
+        assert!(argv.contains(&flag), "{flag} not in {argv:?}");
+    }
+    for flag in ["--continue", "--resume", "--session", "--fork"] {
+        assert!(!argv.contains(&flag), "{flag} in {argv:?}");
+    }
+    let server = get(get(get(&seen, "mcp"), "mcpServers"), "grading");
+    assert_eq!(str_of(server, "exposure"), "direct");
+    assert!(matches!(
+        get(get(&seen, "mcp"), "autoEnableCodemode"),
+        Value::Bool(false)
+    ));
+
+    let record = bench.record();
+    assert_eq!(str_of(&record, "session_id"), after("--session-id"));
+    assert_eq!(str_of(&record, "cli_version"), version);
+    assert_eq!(str_of(&record, "model"), PI_MODEL);
+    assert_eq!(
+        dumps(get(&record, "models_observed")),
+        format!(r#"["{PI_MODEL}"]"#)
+    );
+    assert_eq!(dumps(get(&record, "subagents")), "0");
+    assert_eq!(dumps(get(&record, "audit_violations")), "[]");
+    assert_eq!(str_of(&record, "budget_policy"), "pi-unbounded");
+    assert!(matches!(
+        get(&record, "provider_call_possible"),
+        Value::Bool(true)
+    ));
+    let enforcement = get(&record, "enforcement");
+    assert_eq!(str_of(enforcement, "native_tools"), "none");
+    let probe = get(enforcement, "client_probe");
+    assert_eq!(str_of(probe, "client"), "pi");
+    assert_eq!(
+        dumps(get(probe, "tools")),
+        r#"["mcp__grading__edit_verdicts", "mcp__grading__inspect", "mcp__grading__run", "mcp__grading__validate", "mcp__grading__write_scratch", "mcp__grading__write_verdicts"]"#
+    );
+    assert!(matches!(
+        get(probe, "ambient_markers_absent"),
+        Value::Bool(true)
+    ));
+    let usage = get(&record, "usage");
+    let priced = (1000.0 * 0.0285 + 100.0 * 0.0923 + 10000.0 * 0.0285) / 1e6;
+    assert!((number(get(usage, "priced_total_usd")) - priced).abs() < 1e-6);
+    assert!((number(get(usage, "high")) - 0.5).abs() < 1e-9);
+    assert!((number(get(usage, "provider_reported_usd")) - 0.5).abs() < 1e-9);
+
+    let (provenance, problems) = bench_tools::grade::provenance_of(
+        &bench_tools::pytext::PyPath::new(bench.work.as_os_str().as_encoded_bytes()),
+        &bench.key_document(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(problems, Vec::<String>::new());
+    let provenance = provenance.unwrap();
+    assert_eq!(str_of(&provenance, "budget_policy"), "pi-unbounded");
+    assert_eq!(str_of(&provenance, "model"), PI_MODEL);
+
+    let charges = bench.charges();
+    assert_eq!(charges.len(), 2);
+    assert_eq!(str_of(&charges[1], "billing"), "api-dollars");
+    assert_eq!(str_of(&charges[1], "model"), PI_MODEL);
+    assert_eq!(
+        str_of(&charges[1], "session"),
+        &str_of(&record, "session_id")[..8]
+    );
+}
+
+#[test]
+#[ignore = "needs bubblewrap, git, ripgrep and the Pi client"]
+fn a_failed_or_hung_pi_session_removes_the_sign_in_and_charges_nothing_known() {
+    for mode in ["fail", "hang"] {
+        let (bench, version) = pi_bench(&format!("pi-{mode}"), mode);
+        let done = bench.command(
+            &bench.pi_argv(&["--allow-unbounded", "--timeout", "5"], &version),
+            &[],
+        );
+        assert_eq!(done.status.code(), Some(1), "{}", output_text(&done));
+        let exit = if mode == "fail" { "3" } else { "None" };
+        assert!(
+            String::from_utf8_lossy(&done.stdout)
+                .contains(&format!("Pi session exit {exit}; timeout limit 5 s")),
+            "{}",
+            output_text(&done)
+        );
+        assert!(!bench.work.join("home/.pi/agent/auth.json").exists());
+        let record = bench.record();
+        assert!(matches!(get(get(&record, "usage"), "high"), Value::Null));
+        assert!(matches!(
+            get(&record, "provider_call_possible"),
+            Value::Bool(true)
+        ));
+        assert_eq!(bench.charges().len(), 1);
+    }
+}
+
+#[test]
+#[ignore = "needs bubblewrap, git, ripgrep and the Pi client"]
+fn an_interrupted_pi_session_is_stopped_and_its_sign_in_removed() {
+    let (bench, version) = pi_bench("pi-interrupt", "interrupt");
+    let temporary = Outside::new("pi-interrupt");
+    let pids = bench.pi_bundle().join("pi.pids");
+    let argv = bench.pi_argv(&["--allow-unbounded"], &version);
+    let (done, seen) = bench.interrupt(&argv, &[("TMPDIR", temporary.0.to_str().unwrap())], &pids);
+    let start = PathBuf::from(str_of(&seen, "cwd"));
+    bench.assert_interrupted(&done, &seen, ".pi/agent/auth.json", Some(&start));
+}
+
+#[test]
+#[ignore = "needs bubblewrap, git, ripgrep and the Pi client"]
+fn another_model_fails_the_pi_dispatch() {
+    let (bench, version) = pi_bench("pi-another-model", "clean");
+    let real = bench_tools::review_isolation::which("pi").unwrap();
+    fs::write(
+        bench.pi_bundle().join("pi.json"),
+        format!(
+            r#"{{"real": "{}", "mode": "clean", "model": "openrouter/z-ai/glm-5.3"}}"#,
+            real.display()
+        ),
+    )
+    .unwrap();
+    let done = bench.command(&bench.pi_argv(&["--allow-unbounded"], &version), &[]);
+    assert_eq!(done.status.code(), Some(1), "{}", output_text(&done));
+    assert!(
+        String::from_utf8_lossy(&done.stdout)
+            .contains("Pi grader did not run the pinned model alone")
+    );
 }

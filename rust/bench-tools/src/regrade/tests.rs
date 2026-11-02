@@ -602,7 +602,7 @@ fn maps_every_batch_within_its_reservation() {
             "{pair:?} in {dispatch:?}"
         );
     }
-    assert!(!dispatch.contains(&"--allow-unbounded-codex".to_string()));
+    assert!(!dispatch.contains(&"--allow-unbounded".to_string()));
     assert_eq!(bench.fake.calls("map").len(), 3);
 }
 
@@ -1084,14 +1084,61 @@ fn an_unbounded_codex_queue_reserves_no_amount() {
     );
     assert_eq!(bench.run(), Ok(0));
     let dispatch = &bench.fake.calls("dispatch")[0];
-    assert!(dispatch.contains(&"--allow-unbounded-codex".to_string()));
+    assert!(dispatch.contains(&"--allow-unbounded".to_string()));
     assert!(!dispatch.contains(&"--max-budget-usd".to_string()));
-    assert!(bench.fake.calls("preflight")[0].contains(&"--allow-unbounded-codex".to_string()));
+    assert!(bench.fake.calls("preflight")[0].contains(&"--allow-unbounded".to_string()));
     let reservation = read_json(&bench.attempt("t1", 1).join("reservation.json")).unwrap();
     assert!(matches!(
         field(&reservation, "maxBudgetUsd").unwrap(),
         Value::Null
     ));
+}
+
+#[test]
+fn an_unbounded_pi_queue_runs_a_pinned_copy_of_the_package() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut bench = Bench::new(
+        &["t1"],
+        r#""budgetCapUsd": null, "budgetPolicy": "pi-unbounded", "grader": {"model": "openrouter/test", "effort": "high"}"#,
+    );
+    let package = bench.root.join("node_modules/pi");
+    for (name, body) in [
+        ("package.json", r#"{"version": "1.2.3"}"#),
+        ("dist/bundle/cli.js", "launcher"),
+        ("dist/bundle/chunks/a.js", "chunk"),
+    ] {
+        std::fs::create_dir_all(package.join(name).parent().unwrap()).unwrap();
+        write(&package.join(name), body);
+    }
+    let cli = package.join("dist/bundle/cli.js");
+    std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+    bench.fake.client = cli.clone();
+    assert_eq!(bench.run(), Ok(0));
+    let dispatch = &bench.fake.calls("dispatch")[0];
+    assert!(dispatch.contains(&"--allow-unbounded".to_string()));
+    assert!(!dispatch.contains(&"--max-budget-usd".to_string()));
+    let bin = bench.directory.join("client-bin");
+    assert_eq!(
+        std::fs::read_link(bin.join("pi")).unwrap(),
+        Path::new("pi-package/dist/bundle/cli.js")
+    );
+    assert_eq!(
+        std::fs::read_to_string(bin.join("pi-package/dist/bundle/chunks/a.js")).unwrap(),
+        "chunk"
+    );
+    let record = read_json(&bench.directory.join("client.json")).unwrap();
+    assert_eq!(text(&record, "client").unwrap(), "pi");
+    assert_eq!(text(&record, "source").unwrap(), cli.to_string_lossy());
+
+    write(&package.join("dist/bundle/chunks/a.js"), "an updated chunk");
+    assert_eq!(bench.run(), Ok(0));
+    write(&bin.join("pi-package/dist/bundle/chunks/a.js"), "tampered");
+    assert!(
+        bench
+            .run()
+            .unwrap_err()
+            .contains("is missing or changed; restore it, or remove")
+    );
 }
 
 #[test]
@@ -1103,7 +1150,17 @@ fn spending_policies_are_checked_before_any_step() {
         ),
         (
             r#""budgetCapUsd": null, "grader": {"model": "claude-test", "effort": "high"}"#,
-            "a null budget cap requires a Codex grader and budgetPolicy codex-unbounded",
+            "a null budget cap requires a Codex grader with budgetPolicy codex-unbounded or a Pi grader with \
+             budgetPolicy pi-unbounded",
+        ),
+        (
+            r#""budgetCapUsd": null, "budgetPolicy": "codex-unbounded", "grader": {"model": "openrouter/test", "effort": "high"}"#,
+            "a null budget cap requires a Codex grader with budgetPolicy codex-unbounded or a Pi grader with \
+             budgetPolicy pi-unbounded",
+        ),
+        (
+            r#""budgetCapUsd": 20, "grader": {"model": "openrouter/test", "effort": "high"}"#,
+            "bounded Pi dispatch requires a verified dollar hard cap",
         ),
         (
             r#""budgetCapUsd": 5, "budgetPolicy": "codex-unbounded", "grader": {"model": "gpt-test", "effort": "high"}"#,

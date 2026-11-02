@@ -220,7 +220,7 @@ fn dispatch_record(work: &PyPath, key: &Value) -> R<(Option<Value>, Vec<String>)
                 model.type_name()
             ));
         };
-        if model.starts_with("gpt-") {
+        if super::client::Kind::of(model) == super::client::Kind::Codex {
             let helpers = Value::Array(AUX_TOOL_NAMES.iter().map(|name| text(name)).collect());
             native = is(
                 pyvalue::get(enforcement, "native_tools")?,
