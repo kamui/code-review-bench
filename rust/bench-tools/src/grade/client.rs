@@ -45,6 +45,48 @@ const CLAUDE_MARKERS: [&str; 2] = [
 
 type S<T> = Result<T, String>;
 
+pub mod pi;
+
+/// The client that runs a grader model.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Claude,
+    Codex,
+    /// Pi, for a model named with its provider, as `openrouter/z-ai/glm-5.3-flash`.
+    Pi,
+}
+
+impl Kind {
+    pub fn of(model: &str) -> Kind {
+        if model.starts_with("gpt-") {
+            Kind::Codex
+        } else if model.contains('/') {
+            Kind::Pi
+        } else {
+            Kind::Claude
+        }
+    }
+
+    /// The client's executable name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Kind::Claude => "claude",
+            Kind::Codex => "codex",
+            Kind::Pi => pi::NAME,
+        }
+    }
+
+    /// The budget policy a session of a client without a per-session dollar limit records; `None` for Claude,
+    /// whose sessions take `--max-budget-usd`.
+    pub fn unbounded_policy(self) -> Option<&'static str> {
+        match self {
+            Kind::Claude => None,
+            Kind::Codex => Some("codex-unbounded"),
+            Kind::Pi => Some("pi-unbounded"),
+        }
+    }
+}
+
 fn text(value: &str) -> Value {
     Value::Str(value.to_string())
 }
@@ -1299,7 +1341,7 @@ pub fn claude_preflight(expected: &str, home: &Path) -> S<String> {
 
 /// The latest dated price entry for `model`: `rates.current.json` for a Codex model, `rates.json` otherwise.
 pub fn rate_for(checkout: &Path, model: &str) -> S<Option<Value>> {
-    let name = if model.starts_with("gpt-") {
+    let name = if Kind::of(model) == Kind::Codex {
         "rates.current.json"
     } else {
         "rates.json"

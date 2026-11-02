@@ -1438,9 +1438,9 @@ struct GradeClient {
     model: String,
     #[arg(long, required = true, allow_negative_numbers = true)]
     expected_cli_version: String,
-    /// Explicitly authorize a Codex grader, which has no dollar limit.
+    /// Explicitly authorize a Codex or Pi grader, which has no per-session dollar limit.
     #[arg(long)]
-    allow_unbounded_codex: bool,
+    allow_unbounded: bool,
 }
 
 impl GradeClient {
@@ -1448,7 +1448,7 @@ impl GradeClient {
         grade::dispatch::Client {
             model: self.model,
             expected_cli_version: self.expected_cli_version,
-            allow_unbounded_codex: self.allow_unbounded_codex,
+            allow_unbounded: self.allow_unbounded,
         }
     }
 }
@@ -1922,6 +1922,14 @@ enum GradingCommand {
         /// A new directory that keeps the fake API's requests, the client's logs and the receipt.
         #[arg(long, allow_negative_numbers = true)]
         evidence_dir: Option<PathBuf>,
+    },
+    /// Run the installed Pi client against a local fake OpenRouter API that calls each grading tool, without a model
+    /// call.
+    #[command(infer_long_args = true)]
+    ProbePi {
+        /// The grader model as Pi names it, with its provider, such as openrouter/z-ai/glm-5.3-flash.
+        #[arg(long, allow_negative_numbers = true)]
+        model: String,
     },
 }
 
@@ -5622,6 +5630,11 @@ fn main() -> ExitCode {
             review_isolation::own_executable().and_then(|own| {
                 grade::client::probe_codex(Path::new("."), &own, evidence_dir.as_deref())
             }),
+        ),
+        Cli::Grading(GradingCommand::ProbePi { model }) => grading_probe(
+            "Pi grading compatibility probe failed",
+            review_isolation::own_executable()
+                .and_then(|own| grade::client::pi::probe(&own, &model)),
         ),
         Cli::Regrade(RegradeCommand::Status { queues }) => regrade_status(&queues),
         Cli::Regrade(RegradeCommand::ArchiveAttempt {
