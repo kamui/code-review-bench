@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Run the blind GLM assessors of round rule-v5-rulings-2026-11-02 for one question.
 
-    python3 -I docs/research/rule-v5-rulings-2026-11-02/assessors/run.py QUESTION [BRIEF]
+    python3 -I docs/research/rule-v5-rulings-2026-11-02/assessors/run.py QUESTION [BRIEF [ASSESSOR]]
+
+A session that failed is rerun once by naming its ASSESSOR; the rerun's cache directory ends in `-rerun`.
 
 QUESTION names the case file `cases/QUESTION.md`. BRIEF, by default `brief-credit.md`, must name it in its file list, with every pin current. Two
 sessions, `assessor-1` and `assessor-2`, each run `pi -p` with `openrouter/z-ai/glm-5.3-flash` at thinking high,
@@ -46,9 +48,11 @@ def run(question, assessor, name):
     instructions, files = brief(question, name)
     prompt = instructions + "".join(f"\n\n# File `{target}`\n\n{path.read_text(encoding='utf-8')}" for target, path in files)
     base = CACHE / f"{question}-{assessor}"
+    if base.exists():
+        base = CACHE / f"{question}-{assessor}-rerun"
     work, agent = base / "work", base / "home/agent"
     if base.exists():
-        raise SystemExit(f"refusing existing {base}")
+        raise SystemExit(f"refusing existing {base}: a failed session is rerun once")
     work.mkdir(parents=True)
     agent.mkdir(parents=True)
     auth = json.loads((Path.home() / ".pi/agent/auth.json").read_text(encoding="utf-8"))
@@ -63,13 +67,12 @@ def run(question, assessor, name):
                "--no-skills", "--no-extensions", "--no-prompt-templates", "--no-themes", "--no-mcp", "--no-session",
                "--no-approve", prompt]
     try:
-        done = subprocess.run(command, cwd=work, env=env, capture_output=True, timeout=1200)
+        with open(base / "out.jsonl", "wb") as stdout, open(base / "stderr.txt", "wb") as stderr:
+            done = subprocess.run(command, cwd=work, env=env, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, timeout=1200)
     finally:
         secret.unlink(missing_ok=True)
-    (base / "out.jsonl").write_bytes(done.stdout)
-    (base / "stderr.txt").write_bytes(done.stderr)
     text, models, usd = "", set(), 0.0
-    for line in done.stdout.split(b"\n"):
+    for line in (base / "out.jsonl").read_bytes().split(b"\n"):
         try:
             event = json.loads(line)
         except (json.JSONDecodeError, UnicodeDecodeError):
@@ -92,7 +95,7 @@ def run(question, assessor, name):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) not in (2, 3):
+    if len(sys.argv) not in (2, 3, 4):
         raise SystemExit(__doc__)
-    for assessor in ("assessor-1", "assessor-2"):
-        run(sys.argv[1], assessor, sys.argv[2] if len(sys.argv) == 3 else "brief-credit.md")
+    for assessor in sys.argv[3:] or ("assessor-1", "assessor-2"):
+        run(sys.argv[1], assessor, sys.argv[2] if len(sys.argv) >= 3 else "brief-credit.md")
