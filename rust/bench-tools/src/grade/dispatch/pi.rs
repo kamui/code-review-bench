@@ -257,17 +257,20 @@ pub(super) fn dispatch(runner: &Runner, options: &Dispatch) -> R<Outcome> {
     if let Some((run, step)) = &options.charge
         && !matches!(priced, Value::Null)
     {
-        append_charge(
-            run,
-            &object(vec![
-                ("at", text(&completed_at)),
-                ("step", text(step)),
-                ("usd", priced.clone()),
-                ("model", text(model)),
-                ("billing", text("api-dollars")),
-                ("session", text(&session_id[..8])),
-            ]),
-        )?;
+        // `priced` uses the model's cheapest OpenRouter endpoint; `high` adds what OpenRouter reported it billed.
+        let high = get(&usage, "high").filter(|high| !matches!(high, Value::Null));
+        let mut charge = vec![
+            ("at", text(&completed_at)),
+            ("step", text(step)),
+            ("usd", high.unwrap_or(&priced).clone()),
+            ("model", text(model)),
+            ("billing", text("api-dollars")),
+            ("session", text(&session_id[..8])),
+        ];
+        if high.is_none() {
+            charge.push(("usd_is_lower_bound", Value::Bool(true)));
+        }
+        append_charge(run, &object(charge))?;
     }
     drop(held);
     if !reasons.is_empty() {

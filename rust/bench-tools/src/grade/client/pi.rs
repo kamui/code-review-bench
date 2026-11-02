@@ -675,9 +675,9 @@ impl Session {
 
     /// A model response or usage record: its `provider/model` and its usage.
     fn answered(&mut self, record: &Value) {
-        if let (Some(provider), Some(model)) =
-            (get_str(record, "provider"), get_str(record, "model"))
-        {
+        // Pi records the model the provider served in `responseModel`, only when it differs from the requested one.
+        let served = get_str(record, "responseModel").or_else(|| get_str(record, "model"));
+        if let (Some(provider), Some(model)) = (get_str(record, "provider"), served) {
             self.models.insert(format!("{provider}/{model}"));
         }
         if let Some(usage) = get(record, "usage") {

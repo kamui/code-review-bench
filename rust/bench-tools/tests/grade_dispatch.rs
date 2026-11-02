@@ -1622,6 +1622,14 @@ fn a_pi_session_runs_confined_and_charges_api_dollars() {
     let charges = bench.charges();
     assert_eq!(charges.len(), 2);
     assert_eq!(str_of(&charges[1], "billing"), "api-dollars");
+    assert!((number(get(&charges[1], "usd")) - 0.5).abs() < 1e-9);
+    assert!(
+        charges[1]
+            .as_object()
+            .unwrap()
+            .get("usd_is_lower_bound")
+            .is_none()
+    );
     assert_eq!(str_of(&charges[1], "model"), PI_MODEL);
     assert_eq!(
         str_of(&charges[1], "session"),
