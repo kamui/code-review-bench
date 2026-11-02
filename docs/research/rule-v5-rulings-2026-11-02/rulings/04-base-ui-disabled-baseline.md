@@ -12,3 +12,7 @@ ASK
 - a miss or model change reset this decision type during the round
 - this decision type has not earned level 1 from earlier closed rounds
 ```
+
+## Decision
+
+Asked 2026-11-02 with the comment, GT-r11 and the case its answer key leaves out, the saved outcome, what the one-step line decides, the screen answers and the version 4 control. The owner answered "1": credit for GT-r11 (says what goes wrong: yes; identifies the cause as a fault: yes).
