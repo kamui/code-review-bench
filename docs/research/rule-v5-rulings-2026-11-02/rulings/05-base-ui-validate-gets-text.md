@@ -14,3 +14,7 @@ ASK
 - a miss or model change reset this decision type during the round
 - this decision type has not earned level 1 from earlier closed rounds
 ```
+
+## Decision
+
+Asked 2026-11-02 with the comment, GT-r4, the saved outcome, the owner's credit for comment C, what the one-step line decides, the screen answers and the version 4 control. The owner answered "1": credit for GT-r4, matching comment C (says what goes wrong: yes; identifies the cause as a fault: yes).
