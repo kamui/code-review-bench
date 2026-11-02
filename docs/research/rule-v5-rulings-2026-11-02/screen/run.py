@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Screen saved no-credit rulings under the draft of rule version 5 with two blind GLM answers each.
 
-    python3 -I docs/research/rule-v5-rulings-2026-11-02/screen/run.py [KEY ...]
+    python3 -I docs/research/rule-v5-rulings-2026-11-02/screen/run.py [--manifest NAME] [--rerun] [KEY ...]
+
+NAME defaults to manifest.json; a manifest may name its own `answers` directory and `cache` suffix, as the control under
+the version 4 rule does. --rerun runs once more each named KEY's sessions whose answer has no outcome, keeping the first
+under `<assessor>.first/`.
 
 manifest.json lists each ruling's case and precedent sheet, the rule and the assessor text, all pinned; a changed pin
 stops the run. Each session runs `pi -p` with `openrouter/z-ai/glm-5.3-flash` at thinking high, with built-in tools,
@@ -28,6 +32,7 @@ ASSESSORS = ("assessor-1", "assessor-2")
 PARALLEL = 6
 TIMEOUT = 1200
 MARKER = "## Text for the assessor\n\n---\n\n"
+RERUN = False
 
 
 def pinned(entry):
@@ -45,7 +50,9 @@ def prompt(manifest, entry):
 
 
 def start(manifest, entry, assessor):
-    base = CACHE / f"{entry['key']}-{assessor}"
+    base = CACHE / manifest.get("cache", "") / f"{entry['key']}-{assessor}"
+    if base.exists() and (base.parent / f"{base.name}.first").exists() is False and RERUN:
+        base.rename(base.parent / f"{base.name}.first")
     if base.exists():
         raise SystemExit(f"refusing existing {base}")
     work, agent = base / "work", base / "home/agent"
@@ -79,7 +86,7 @@ def finish(manifest, entry, assessor, base, code):
             text = "".join(block.get("text", "") for block in message.get("content", []) if block.get("type") == "text")
             models.add(f"{message.get('provider')}/{message.get('responseModel') or message.get('model')}")
             usd += ((message.get("usage") or {}).get("cost") or {}).get("total") or 0.0
-    out = HERE / "answers" / entry["key"] / assessor
+    out = HERE / manifest.get("answers", "answers") / entry["key"] / assessor
     out.mkdir(parents=True, exist_ok=False)
     session = {"exit": code, "models_observed": sorted(models), "usd": usd}
     try:
@@ -95,11 +102,11 @@ def finish(manifest, entry, assessor, base, code):
     print(f"{entry['key']} {assessor}: {session}", flush=True)
 
 
-def main(keys):
-    manifest = json.loads((HERE / "manifest.json").read_text(encoding="utf-8"))
+def main(keys, name):
+    manifest = json.loads((HERE / name).read_text(encoding="utf-8"))
     pinned(manifest["rule"])
     queue = [(entry, assessor) for entry in manifest["entries"] for assessor in ASSESSORS
-             if (not keys or entry["key"] in keys) and not (HERE / "answers" / entry["key"] / assessor).exists()]
+             if (not keys or entry["key"] in keys) and not (HERE / manifest.get("answers", "answers") / entry["key"] / assessor).exists()]
     running = []
     while queue or running:
         for item in list(running):
@@ -119,4 +126,18 @@ def main(keys):
 
 
 if __name__ == "__main__":
-    main(set(sys.argv[1:]))
+    arguments = sys.argv[1:]
+    name = "manifest.json"
+    if arguments[:1] == ["--manifest"]:
+        name, arguments = arguments[1], arguments[2:]
+    RERUN = arguments[:1] == ["--rerun"]
+    if RERUN:
+        arguments = arguments[1:]
+        answers = HERE / json.loads((HERE / name).read_text(encoding="utf-8")).get("answers", "answers")
+        for key in arguments:
+            for assessor in ASSESSORS:
+                out = answers / key / assessor
+                answer = json.loads((out / "answers.json").read_text()) if (out / "answers.json").exists() else [{}]
+                if not answer[0].get("outcome"):
+                    out.rename(out.parent / f"{assessor}.first")
+    main(set(arguments), name)
