@@ -38,7 +38,7 @@ export const setupParts = (configuration: Configuration) => {
 }
 
 const metricOf = (summary: Summary, axis: Axis) => axis === 'time' ? summary.time ? summary.time.median / 60 : null : summary[axis]
-const boundedOn = (summary: Summary, axis: Axis) => axis === 'cost' && summary.card.cost.perTrial.kind === 'atLeast'
+const boundedOn = (summary: Summary, axis: Axis) => (axis === 'cost' || axis === 'tokens') && summary.card[axis].perTrial.kind === 'atLeast'
 
 function formatMetric(axis: Axis, value: number | null, configuration?: Configuration, bounded = false) {
   if (value === null) return '—'
