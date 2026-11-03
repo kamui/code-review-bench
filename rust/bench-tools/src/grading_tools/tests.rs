@@ -1443,7 +1443,7 @@ fn the_grpc_modules_tidy_in_diff_mode_only() {
             );
         }
     }
-    let limited = "go mod is limited to `go mod tidy -C <dir> -diff` on the modules";
+    let limited = "go mod is limited to `go mod tidy -C <dir> -diff`, or `go mod tidy -diff` for `.`, on the modules";
     let overrides = "test execution overrides are outside the command allowance";
     let cases: &[(&[&str], &str)] = &[
         (&["go", "mod", "tidy"], limited),
@@ -1462,6 +1462,14 @@ fn the_grpc_modules_tidy_in_diff_mode_only() {
         ),
         (&["go", "mod", "tidy", "-C", ".", "-diff"], overrides),
         (&["go", "mod", "tidy", "-C", "stats", "-diff"], overrides),
+        (
+            &["go", "mod", "tidy", "-C", "stats/opencensus/", "-diff"],
+            overrides,
+        ),
+        (
+            &["go", "mod", "tidy", "-C", "-modfile=x", "-diff"],
+            overrides,
+        ),
         (
             &["go", "mod", "tidy", "-C", "stats/opencensus/..", "-diff"],
             overrides,
@@ -1515,4 +1523,30 @@ fn the_grpc_modules_tidy_in_diff_mode_only() {
             "{refusal}"
         );
     }
+    let mut without_root = profile("u-grpc-go-6919");
+    if let Value::Object(profile) = &mut without_root
+        && let Some(Value::Object(commands)) = profile.get_mut("commands")
+        && let Some(Value::Object(go)) = commands.get_mut("go")
+    {
+        go.insert(
+            "tidy_dirs".into(),
+            Value::Array(vec![Value::Str("stats/opencensus".into())]),
+        );
+    } else {
+        panic!("the u-grpc profile has Go settings");
+    }
+    let tools = self::tools(&fixture, without_root, &system_which);
+    assert!(
+        allowed(
+            &tools,
+            &["go", "mod", "tidy", "-C", "stats/opencensus", "-diff"],
+            "clone"
+        )
+        .is_ok()
+    );
+    let refusal = denial(allowed(&tools, &["go", "mod", "tidy", "-diff"], "clone"));
+    assert!(
+        refusal.starts_with(&format!("go was refused: {limited}")),
+        "{refusal}"
+    );
 }

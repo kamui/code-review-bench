@@ -148,7 +148,7 @@ fn go(
         && argv.get(1).map(String::as_str) == Some("mod")
     {
         return denied(format!(
-            "go mod is limited to `go mod tidy -C <dir> -diff` on the modules {}",
+            "go mod is limited to `go mod tidy -C <dir> -diff`, or `go mod tidy -diff` for `.`, on the modules {}",
             tidy_dirs.join(", ")
         ));
     }
