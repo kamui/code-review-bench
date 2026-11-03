@@ -35,7 +35,7 @@ export function assessment(subject: Task, caught: string[], overrides: Partial<A
 let serial = 0
 export const review = (subject: Task, caught: string[] | null, overrides: Partial<Attempt> = {}): Attempt => ({ id: `run/att-${serial += 1}`, label: 'att',
   runId: 'run', taskId: subject.id, replicate: 1, disposition: 'valid completed', complete: true, admitted: true, observedItems: 0,
-  assessment: caught === null ? null : assessment(subject, caught), cost: 1, costLowerBound: null, outputTokens: 100, durationSeconds: 60, billing: 'api-dollars',
+  assessment: caught === null ? null : assessment(subject, caught), cost: 1, costLowerBound: null, outputTokens: 100, outputTokensLowerBound: null, durationSeconds: 60, billing: 'api-dollars',
   predecessor: null, retryReason: null, detailUrl: '', ...overrides })
 
 export const failed = (subject: Task, overrides: Partial<Attempt> = {}) => review(subject, null, { admitted: false, complete: false, disposition: 'harness-invalid: audit', ...overrides })
