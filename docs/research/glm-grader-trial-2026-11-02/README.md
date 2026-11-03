@@ -66,5 +66,5 @@ The GLM results showed GLM repeating Opus's wrong answers, so the owner chose to
 
 ## The false claims all three missed
 
-For 7 of the 11 claims the owner ruled false, the ruling rests on a probe run during reconciliation: a type test at the pinned Vitest version, a concurrent `Close()` run 200 times, two quick address updates, or dates in Paris before 1911. The first grader, Sol, refuted six of them and Opus the seventh. GLM and Sonnet refuted none of the seven. On all sampled units Sol refuted 28 claims, Opus 13, Sonnet 13 and GLM 7.
+For 7 of the 11 claims the owner ruled false, the ruling rests on a probe run during reconciliation: a type test at the pinned Vitest version, a concurrent `Close()` run 200 times, two quick address updates, or dates in Paris before 1911. The first grader, Sol, refuted six of them and Opus the seventh. Sonnet refuted none of the seven and GLM one. On all sampled units Sol refuted 28 claims, Opus 13, Sonnet 13 and GLM 7.
 
