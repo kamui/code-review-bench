@@ -8,10 +8,10 @@
 
 use crate::pyjson::{self, Object, Value};
 use crate::pysemantics::{
-    Dict, Failure, Result, at, concat, contains, count, file_failure, fromisoformat, get, get_or,
-    index, iterate, join, join_text, length, loads, lookup, move_failure, number, number_value,
-    object, optional, or, path_of, python_sum, read, read_bytes, read_text, set_of, sorted,
-    str_text, text, unhashable,
+    Dict, Failure, Number, Result, at, concat, contains, count, file_failure, fromisoformat, get,
+    get_or, index, iterate, join, join_text, length, loads, lookup, move_failure, number,
+    number_value, object, optional, or, path_of, python_sum, read, read_bytes, read_text, set_of,
+    sorted, str_text, text, unhashable,
 };
 use crate::pytext::{self, PyPath};
 use crate::{current_grading, leak_check, pyfs, sha256};
@@ -200,30 +200,41 @@ impl Exporter {
     }
 }
 
+/// The output counts an attempt's request rows record, and whether every row records one.
+fn request_tokens(path: &PyPath) -> Result<(Vec<Number>, bool)> {
+    let mut counts = Vec::new();
+    let mut rows = 0;
+    if !path.is_file() {
+        return Ok((counts, false));
+    }
+    for line in pytext::splitlines(&read_text(path)?) {
+        if pytext::strip(line).is_empty() {
+            continue;
+        }
+        rows += 1;
+        if let Some(value) = get(&loads(line)?, "output_tokens")?.and_then(number) {
+            counts.push(value);
+        }
+    }
+    let every = rows > 0 && counts.len() == rows;
+    Ok((counts, every))
+}
+
 /// `usage_tokens`: the summed output tokens of complete metering, or null when any count is unavailable.
 fn usage_tokens(path: &PyPath, record: &Value) -> Result<Value> {
-    if !path.is_file() {
-        return Ok(Value::Null);
-    }
     let usage = get_or(record, "usage", Value::Object(Object::default()))?;
-    if !optional(get(&usage, "metering_status")?).py_eq(&text("complete")) {
+    let (counts, every) = request_tokens(path)?;
+    if !every || !optional(get(&usage, "metering_status")?).py_eq(&text("complete")) {
         return Ok(Value::Null);
     }
-    let content = read_text(path)?;
-    let mut lines = Vec::new();
-    for line in pytext::splitlines(&content) {
-        if !pytext::strip(line).is_empty() {
-            lines.push(loads(line)?);
-        }
-    }
-    let mut counts = Vec::with_capacity(lines.len());
-    for line in &lines {
-        match get(line, "output_tokens")?.and_then(number) {
-            Some(value) => counts.push(value),
-            None => return Ok(Value::Null),
-        }
-    }
-    if lines.is_empty() {
+    number_value(python_sum(&counts)?)
+}
+
+/// `output_tokens_lower_bound`: the summed output counts the request rows record, or null when none records one.
+/// Counts are never negative and partly recorded rows only undercount, so the sum is a true lower bound.
+fn output_tokens_lower_bound(path: &PyPath) -> Result<Value> {
+    let (counts, _) = request_tokens(path)?;
+    if counts.is_empty() {
         return Ok(Value::Null);
     }
     number_value(python_sum(&counts)?)
@@ -768,6 +779,10 @@ impl Exporter {
                 at(at(usage, "cost_bounds_usd")?, "low")?.clone(),
             ),
             ("outputTokens", output_tokens),
+            (
+                "outputTokensLowerBound",
+                output_tokens_lower_bound(&requests)?,
+            ),
             ("durationSeconds", duration_seconds(&record)?),
             (
                 "billing",

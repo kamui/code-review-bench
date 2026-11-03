@@ -49,7 +49,9 @@ pub(super) fn toolchain(tools: &Tools, mut argv: Vec<String>, cwd: &str) -> T<Al
     else {
         return denied("it is not in this task's command profile");
     };
-    let unchecked = if name == "go" && listed_dir(settings, &argv)? {
+    let unchecked = if name == "go" && tidy_form(settings, &argv)? {
+        argv.len()
+    } else if name == "go" && listed_dir(settings, &argv)? {
         4
     } else {
         1
@@ -95,6 +97,26 @@ fn listed_dir(settings: &Value, argv: &[String]) -> T<bool> {
         && strings(settings, "list_dirs")?.contains(&argv[3].as_str()))
 }
 
+/// `go mod tidy -C <dir> -diff` on a module directory the profile's `tidy_dirs` names, or `go mod tidy -diff` when it
+/// names the clone root, `.`. `-diff` prints the changes tidy would make and writes nothing.
+fn tidy_form(settings: &Value, argv: &[String]) -> T<bool> {
+    let dirs = strings(settings, "tidy_dirs")?;
+    Ok(match argv {
+        [_, verb, tidy, diff] => {
+            verb == "mod" && tidy == "tidy" && diff == "-diff" && dirs.contains(&".")
+        }
+        [_, verb, tidy, flag, dir, diff] => {
+            verb == "mod"
+                && tidy == "tidy"
+                && flag == "-C"
+                && diff == "-diff"
+                && dir != "."
+                && dirs.contains(&dir.as_str())
+        }
+        _ => false,
+    })
+}
+
 fn go(
     tools: &Tools,
     settings: &Value,
@@ -118,7 +140,19 @@ fn go(
     } else {
         &["test", "list", "version", "run"]
     };
-    if argv[0] != expected || argv.len() < 2 || !verbs.contains(&argv[1].as_str()) {
+    let tidy = tidy_form(settings, argv)?;
+    let tidy_dirs = strings(settings, "tidy_dirs")?;
+    if argv[0] == expected
+        && !tidy
+        && !tidy_dirs.is_empty()
+        && argv.get(1).map(String::as_str) == Some("mod")
+    {
+        return denied(format!(
+            "go mod is limited to `go mod tidy -C <dir> -diff`, or `go mod tidy -diff` for `.`, on the modules {}",
+            tidy_dirs.join(", ")
+        ));
+    }
+    if argv[0] != expected || argv.len() < 2 || !(tidy || verbs.contains(&argv[1].as_str())) {
         return denied(format!(
             "use the pinned Go executable for focused {}",
             verbs.join(", ")
@@ -140,7 +174,7 @@ fn go(
         if selections(&argv[4..], &["-tags"], &["-deps", "-e", "-json"])? != ["."] {
             return denied("go list -C loads the named directory's own package, `.`, only");
         }
-    } else if argv[1] != "version" {
+    } else if !tidy && argv[1] != "version" {
         let modfiles = strings(settings, "modfiles")?;
         let mut arguments = Vec::new();
         let mut tools_module = false;
