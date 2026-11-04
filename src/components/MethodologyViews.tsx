@@ -10,7 +10,7 @@ import type { ConditionalMetric, Estimator, Scorecard, Selection } from '../lib/
 import { scorecardTabs } from '../lib/view'
 import type { Inspection, ScorecardTab, Section } from '../lib/view'
 import { ClaimLabels } from './ClaimLabels'
-import { SetupName } from './Chart'
+import { SetupName, setupLabel } from './Chart'
 import { DataTable, Disclosure, Value } from './Reading'
 import { SeriousMisses } from './SeriousMisses'
 import type { Column } from './Reading'
@@ -46,7 +46,10 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
   const { band, estimator } = detection
   const key = (row: Row) => row.configuration.id
   const setup: Column<Row> = { label: 'Setup', value: row => row.configuration.short, render: row => <SetupName configuration={row.configuration} /> }
-  const short = (id: string) => configurations.find(configuration => configuration.id === id)?.short ?? id
+  const short = (id: string) => {
+    const configuration = configurations.find(item => item.id === id)
+    return configuration ? setupLabel(configuration) : id
+  }
   const task = (taskId: string) => dataset.tasks.find(item => item.id === taskId)
   const name = (taskId: string) => {
     const found = task(taskId)
@@ -209,7 +212,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
           { label: 'Output tokens per scheduled trial', value: row => reading(row.card.tokens.perTrial, compact) },
           { label: 'Attempts with usage / attempts', value: row => `${row.card.cost.measuredAttempts} / ${row.card.cost.attempts}` },
           { label: 'Median completed-trial time', value: row => reading(row.card.time.summary, summary => duration(summary.median)) },
-          { label: 'Middle 50%', value: row => reading(row.card.time.summary, summary => `${duration(summary.q1)} to ${duration(summary.q3)}`) },
+          { label: 'Middle 50%', value: row => reading(row.card.time.summary, summary => `${duration(summary.q1)} to ${duration(summary.q3)}`.replace(/ /g, '\u00a0')) },
           { label: 'Completed / scheduled trials', value: row => `${row.card.time.completed} / ${row.card.time.scheduled}` },
           { label: 'Failed', value: row => String(row.card.time.failed) }, { label: 'Incomplete', value: row => String(row.card.time.incomplete) },
           { label: 'Pending', value: row => String(row.card.time.pending) }, { label: 'Completed without a duration', value: row => String(row.card.time.missing) }]} />
@@ -222,7 +225,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
         {novel.length ? <Table.ScrollContainer minWidth={900}><Table aria-label="Novel candidates awaiting a ruling" className="data-table">
           <Table.Thead><Table.Tr><Table.Th scope="col">PR</Table.Th><Table.Th scope="col">Age</Table.Th><Table.Th scope="col">Claim</Table.Th><Table.Th scope="col">Evidence limits</Table.Th><Table.Th scope="col">Decision relevance</Table.Th></Table.Tr></Table.Thead>
           <Table.Tbody>{novel.map(candidate => <Table.Tr key={candidate.id}><Table.Th scope="row"><button className="text-button" onClick={() => onInspect({ kind: 'task', id: candidate.taskId })}>{name(candidate.taskId)}</button></Table.Th>
-            <Table.Td>{candidate.ageDays} {candidate.ageDays === 1 ? 'day' : 'days'}<Text size="xs" c="dimmed">since {candidate.recordedAt.slice(0, 10)}</Text></Table.Td>
+            <Table.Td>{candidate.ageDays} {candidate.ageDays === 1 ? 'day' : 'days'}<Text size="xs" c="dimmed" className="nowrap">since {candidate.recordedAt.slice(0, 10)}</Text></Table.Td>
             <Table.Td>{candidate.claim}<Text size="xs" c="dimmed" className="candidate-id">Record {candidate.id}</Text></Table.Td><Table.Td>{candidate.limits}</Table.Td><Table.Td>{candidate.relevance}</Table.Td></Table.Tr>)}</Table.Tbody>
         </Table></Table.ScrollContainer> : <Text size="sm" c="dimmed">No novel candidate awaits a ruling on the selected PRs.</Text>}
         <Title order={4}>Reference families awaiting eligibility</Title>
@@ -235,8 +238,8 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
 
       <Tabs.Panel value="comparison" ><Stack>
         <TabIntro lede="Pick two setups to see how their detection differs, PR by PR." />
-        <Group><Select label="Comparison A" aria-label="Comparison A" value={a?.configuration.id ?? null} data={configurations.map(c => ({ value: c.id, label: c.short }))} onChange={setLeft} w={330} />
-          <Select label="Comparison B" aria-label="Comparison B" value={b?.configuration.id ?? null} data={configurations.filter(c => c.id !== a?.configuration.id).map(c => ({ value: c.id, label: c.short }))} onChange={setRight} w={330} /></Group>
+        <Group><Select label="Comparison A" aria-label="Comparison A" value={a?.configuration.id ?? null} data={configurations.map(c => ({ value: c.id, label: setupLabel(c) }))} onChange={setLeft} w={330} />
+          <Select label="Comparison B" aria-label="Comparison B" value={b?.configuration.id ?? null} data={configurations.filter(c => c.id !== a?.configuration.id).map(c => ({ value: c.id, label: setupLabel(c) }))} onChange={setRight} w={330} /></Group>
         {!comparison || !a || !b ? <Text>Select at least two setups.</Text> : <>
           <div className="compare-figures">
             <div className="compare-figure"><span className="compare-label">A minus B, {estimatorLabels[estimator]}</span><span className="compare-value"><Value cell={reading(comparison.full[estimator].delta, value => signed(value * 100))} /></span></div>
@@ -250,7 +253,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
           <DeltaPlot rows={comparison.rows.flatMap(row => {
             const value = points(row.delta)
             return value === null ? [] : [{ id: row.taskId, label: name(row.taskId), delta: value }]
-          })} a={a.configuration.short} b={b.configuration.short} />
+          })} a={setupLabel(a.configuration)} b={setupLabel(b.configuration)} />
           {advice && <div className="compare-block"><Text size="sm" fw={640}>What the evidence supports</Text>{recommendation('Serious-impact preference', advice.impact)}{recommendation('Claim-reliability preference', advice.reliability)}
             <Text size="xs" c="dimmed" className="footnote">A preference is limited to its own dimension. Nothing here names a best setup overall.</Text></div>}
           <div className="compare-block"><Text size="sm" fw={640}>Comparison conditions</Text>

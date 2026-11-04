@@ -66,7 +66,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
   const setSelected = (ids: string[]) => onSearch({ setups: listParam(ids, setupIds, defaultSetups(includeExperiments)) }, 'scorecard')
   const modelChoices = dataset.configurations.flatMap(configuration => configuration.models.map(model => ({
     value: model, label: configuration.short.split(' / ').at(-2) ?? model,
-  }))).filter((model, index, choices) => choices.findIndex(choice => choice.value === model.value) === index)
+  }))).filter((model, index, choices) => choices.findIndex(choice => choice.value === model.value) === index).sort((left, right) => left.label.localeCompare(right.label))
   const modelIds = modelChoices.map(model => model.value)
   const selectedModels = listValue(search.models, modelIds, modelIds)
   const setSelectedModels = (models: string[]) => onSearch({ models: listParam(models, modelIds, modelIds) }, 'scorecard')
@@ -131,9 +131,9 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
   const tableNotes = notesFor(tableRows.flatMap(row => Object.values(row.cells)))
   const resultsColumns: { key: ResultsColumn; label: string; sub?: string }[] = [
     { key: 'setup', label: 'Review setup' }, { key: 'equalProblem', label: bandLabels[band], sub: 'equal problems' }, { key: 'equalPr', label: bandLabels[band], sub: 'equal PRs' },
-    { key: 'seriousCaught', label: 'All serious', sub: 'caught' }, { key: 'repeatedMisses', label: 'Misses', sub: 'serious, repeated' },
-    { key: 'cost', label: 'Cost', sub: 'per trial' }, { key: 'tokens', label: 'Tokens', sub: 'output per trial' },
-    { key: 'refuted', label: 'Refuted', sub: 'per admitted review' }, { key: 'completed', label: 'Completed', sub: 'of trials' },
+    { key: 'seriousCaught', label: 'All serious', sub: 'caught' }, { key: 'repeatedMisses', label: 'Repeated', sub: 'serious misses' },
+    { key: 'cost', label: 'Cost', sub: 'per trial' }, { key: 'tokens', label: 'Output', sub: 'tokens per trial' },
+    { key: 'refuted', label: 'Refuted', sub: 'per review' }, { key: 'completed', label: 'Completed', sub: 'of trials' },
   ]
   const coverage = referenceCoverage(dataset, board.selection)
   const candidateCount = coverage.pendingFamilies + pendingCandidates(dataset, board.selection.taskIds, now).length
@@ -227,6 +227,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
                   <Mark configuration={configuration} size={11} /><span className="configuration-name">{methodName(configuration)}</span>
                   {configuration.experimental && <span className="chip-partial">experiment</span>}
                   {some && !all && <span className="chip-partial">partial</span>}
+                  {all && <Check size={14} aria-hidden="true" className="chip-check" />}
                 </button>
               })}</div>
             </div>
@@ -235,18 +236,18 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
                 <Popover.Target><Button variant="default" size="xs" className="refine-button" leftSection={<SlidersHorizontal size={14} aria-hidden="true" />} rightSection={<ChevronDown size={14} aria-hidden="true" />}>Review setups ({configurations.filter(item => selected.includes(item.id)).length}/{configurations.length})</Button></Popover.Target>
                 <Popover.Dropdown className="refine-dropdown" style={{ maxHeight: '70vh', overflowY: 'auto', maxWidth: 'calc(100vw - 24px)' }}><Stack gap="sm">
                   <Group justify="space-between"><Text size="xs" fw={640}>Review setups</Text><Group gap="xs">
-                    <Button variant="subtle" size="compact-xs" onClick={() => setSelected(configurations.map(item => item.id))}>Select all</Button>
-                    <Button variant="subtle" size="compact-xs" onClick={() => setSelected([])}>Clear all</Button>
+                    <Button variant="subtle" size="compact-xs" className="popover-action" onClick={() => setSelected(configurations.map(item => item.id))}>Select all</Button>
+                    <Button variant="subtle" size="compact-xs" className="popover-action" onClick={() => setSelected([])}>Clear all</Button>
                   </Group></Group>
                   {editions.map(group => <div key={`${group.method}/${group.reviewEdition}`} className="refine-group"><span className="refine-group-title"><Mark configuration={group} size={9} />{methodName(group)}</span>
-                    {edition(group).map(configuration => <Checkbox key={configuration.id} label={[setupParts(configuration).model, setupParts(configuration).effort].filter(Boolean).join(' · ')} aria-label={configuration.short}
+                    {[...edition(group)].sort((left, right) => left.short.localeCompare(right.short)).map(configuration => <Checkbox key={configuration.id} label={[setupParts(configuration).model, setupParts(configuration).effort].filter(Boolean).join(' · ')} aria-label={configuration.short}
                       checked={selected.includes(configuration.id)} onChange={() => setSelected(selected.includes(configuration.id) ? selected.filter(id => id !== configuration.id) : [...selected, configuration.id])} size="xs" />)}</div>)}
                 </Stack></Popover.Dropdown>
               </Popover>
               <Popover position="bottom-start" width={340} withArrow arrowPosition="side">
                 <Popover.Target><Button variant="default" size="xs" className="refine-button" leftSection={<Cpu size={14} aria-hidden="true" />} rightSection={<ChevronDown size={14} aria-hidden="true" />}>Models ({selectedModels.length}/{modelChoices.length})</Button></Popover.Target>
-                <Popover.Dropdown className="refine-dropdown"><Stack gap="sm"><Group justify="space-between"><Text size="xs" fw={640}>Models</Text><Group gap="xs"><Button variant="subtle" size="compact-xs" onClick={() => setSelectedModels(modelChoices.map(model => model.value))}>Select all</Button>
-                  <Button variant="subtle" size="compact-xs" onClick={() => setSelectedModels([])}>Clear all</Button></Group></Group>
+                <Popover.Dropdown className="refine-dropdown"><Stack gap="sm"><Group justify="space-between"><Text size="xs" fw={640}>Models</Text><Group gap="xs"><Button variant="subtle" size="compact-xs" className="popover-action" onClick={() => setSelectedModels(modelChoices.map(model => model.value))}>Select all</Button>
+                  <Button variant="subtle" size="compact-xs" className="popover-action" onClick={() => setSelectedModels([])}>Clear all</Button></Group></Group>
                   {modelChoices.map(model => <Checkbox key={model.value} label={model.label} checked={selectedModels.includes(model.value)} onChange={() => setSelectedModels(selectedModels.includes(model.value) ? selectedModels.filter(value => value !== model.value) : [...selectedModels, model.value])} size="xs" />)}
                 </Stack></Popover.Dropdown>
               </Popover>
@@ -277,18 +278,18 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
         <header className="subsection-head" id="review-setups"><Title order={3}>All review setups</Title>
         <Text className="subsection-lede">Includes skill experiments. Same {shared.length} comparison PRs as the chart, in the {bandLabels[band].toLowerCase()} band. Rows start in name order; a column heading sorts by that one measure only.</Text></header>
         <div className="table-frame"><Table.ScrollContainer minWidth={1050}><Table verticalSpacing="sm" horizontalSpacing="sm" className="leaderboard-table" aria-label="All review setup results">
-          <Table.Thead><Table.Tr>{resultsColumns.map(column => <Table.Th key={column.key} aria-sort={sort.column === column.key ? sort.direction : 'none'}>
+          <Table.Thead><Table.Tr>{resultsColumns.map(column => <Table.Th key={column.key} data-numeric={column.key !== 'setup' || undefined} aria-sort={sort.column === column.key ? sort.direction : 'none'}>
             <button className="text-button sort-heading" onClick={() => setSort(current => ({ column: column.key, direction: current.column === column.key && current.direction === 'ascending' ? 'descending' : 'ascending' }))}>
               <span className="th-title">{column.label}{column.sub && <span className="th-sub">{column.sub}</span>}</span>{sort.column === column.key ? sort.direction === 'ascending' ? <ArrowUp size={13} aria-hidden="true" /> : <ArrowDown size={13} aria-hidden="true" /> : <ArrowUpDown size={13} aria-hidden="true" />}
             </button>
-          </Table.Th>)}<Table.Th>PR coverage</Table.Th><Table.Th /></Table.Tr></Table.Thead>
+          </Table.Th>)}<Table.Th data-numeric><span className="th-title">PRs<span className="th-sub">covered</span></span></Table.Th><Table.Th /></Table.Tr></Table.Thead>
           <Table.Tbody>{tableRows.map(row => <Table.Tr key={row.configuration.id}>
             <Table.Td><button className="text-button setup-label" onClick={() => inspect('review-setups')({ kind: 'configuration', id: row.configuration.id })} aria-label={`${row.configuration.short}. Inspect evidence`}><Mark configuration={row.configuration} size={10} />
               <span><span className="setup-method">{setupParts(row.configuration).method}</span><span className="setup-model">{[setupParts(row.configuration).model, setupParts(row.configuration).effort].filter(Boolean).join(' · ')}</span>
               <PeerNote configurations={[row.configuration]} className="setup-model" /></span></button></Table.Td>
-            {(['equalProblem', 'equalPr', 'seriousCaught', 'repeatedMisses', 'cost', 'tokens', 'refuted'] as const).map(column => <Table.Td key={column}><Value cell={row.cells[column]} notes={tableNotes} /></Table.Td>)}
-            <Table.Td><span className="completion-count">{row.completed}/{row.trials}</span></Table.Td>
-            <Table.Td>{row.tasks}/{shared.length}</Table.Td>
+            {(['equalProblem', 'equalPr', 'seriousCaught', 'repeatedMisses', 'cost', 'tokens', 'refuted'] as const).map(column => <Table.Td key={column} data-numeric><Value cell={row.cells[column]} notes={tableNotes} /></Table.Td>)}
+            <Table.Td data-numeric><span className="completion-count">{row.completed}/{row.trials}</span></Table.Td>
+            <Table.Td data-numeric>{row.tasks}/{shared.length}</Table.Td>
             <Table.Td><ActionIcon aria-label={`Inspect ${row.configuration.short}`} variant="subtle" color="gray" onClick={() => inspect('review-setups')({ kind: 'configuration', id: row.configuration.id })}><ChevronRight size={18} /></ActionIcon></Table.Td>
           </Table.Tr>)}</Table.Tbody>
         </Table></Table.ScrollContainer></div>
@@ -308,13 +309,13 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
             <Select label="Change kind" aria-label="Change kind" placeholder="All change kinds" data={labels('changeKinds')} value={change} onChange={setChange} clearable />
             <Select label="Technology" aria-label="Technology" placeholder="All technologies" data={labels('technologies')} value={technology} onChange={setTechnology} clearable />
             <Select label="Review concern" aria-label="Task review concern" placeholder="All review concerns" data={labels('concerns')} value={concern} onChange={setConcern} clearable />
+            <Select label="Count only references about" aria-label="Finding concern" placeholder="All finding concerns" data={findingConcerns} value={findingConcern} onChange={setFindingConcern} clearable />
           </div>
-          <Group gap="sm" mt="md" justify="space-between" align="flex-end" className="task-filters-extra">
-            <div><Select label="Count only references about" aria-label="Finding concern" placeholder="All finding concerns" data={findingConcerns} value={findingConcern} onChange={setFindingConcern} clearable w={260} />
-              <Text size="xs" c="dimmed" mt={6}>{findingConcern ? `Detection now counts only the ${plural(concernReferences, `${findingConcern.toLowerCase()} reference`)} on these PRs.` : 'Detection counts every approved reference.'}</Text></div>
-            <Button variant="subtle" color="gray" size="sm" onClick={resetFilters}>Reset filters</Button></Group>
+          <div className="task-filters-foot">
+            <Text size="xs" c="dimmed">{findingConcern ? `Detection counts only the ${plural(concernReferences, `${findingConcern.toLowerCase()} reference`)} on these PRs.` : 'Detection counts every approved reference.'} Filters also narrow the <Link className="filter-link" to="/" hash="scorecard">scorecard</Link> comparison.</Text>
+            <Button variant="subtle" color="gray" size="xs" onClick={resetFilters}>Reset filters</Button>
+          </div>
         </Paper>
-        <Text size="xs" c="dimmed" mt="sm" mb="md">Filters also narrow the <Link className="filter-link" to="/" hash="scorecard">scorecard</Link> comparison. Concern labels describe review opportunities; finding breakdowns count only matching reference problems.</Text>
         <Tabs defaultValue="catalog" className="task-tabs"><Tabs.List><Tabs.Tab value="catalog" leftSection={<Database size={15} />}>Task catalog</Tabs.Tab><Tabs.Tab value="coverage" leftSection={<Grid3x3 size={15} />}>Coverage gaps</Tabs.Tab></Tabs.List>
           <Tabs.Panel value="catalog" pt="md"><Table.ScrollContainer minWidth={720}><Table verticalSpacing="md" className="task-table" highlightOnHover>
             <Table.Thead><Table.Tr><Table.Th>Pull request</Table.Th><Table.Th>Profile</Table.Th><Table.Th>References</Table.Th><Table.Th>Mean {bandLabels[band].toLowerCase()} detection, selected setups</Table.Th><Table.Th>In comparison</Table.Th><Table.Th /></Table.Tr></Table.Thead>
@@ -387,9 +388,9 @@ function DetectionBar({ result }: { result: ReturnType<typeof meanTaskRecall> })
   const value = percent(result.mean.value * 100)
   const notes = result.annotations.map(note => note.reason).join(' ')
   return <span className="detection-cell"><span className="detection-bar"><Tooltip label={notes} disabled={!notes} multiline w={280} withArrow>
-    <span className={notes ? 'annotated' : undefined}>{value}{notes && <sup aria-hidden="true">†</sup>}{notes && <VisuallyHidden>: {notes}</VisuallyHidden>}</span></Tooltip>
+    <span className={notes ? 'annotated' : undefined}>{value}{notes && <VisuallyHidden>: {notes}</VisuallyHidden>}</span></Tooltip>
     <span className="detection-track" aria-hidden="true"><span style={{ width: value }} /></span></span>
-    <Text size="xs" c="dimmed" component="span">Mean of {result.included} of {plural(result.selected, 'selected setup')}{withheld && `. Not included: ${withheld}`}{notes && '. † Counts unresolved decisions as zero credit'}</Text></span>
+    <Text size="xs" c="dimmed" component="span">Mean of {result.included} of {plural(result.selected, 'selected setup')}{withheld && `. Not included: ${withheld}`}{notes && '. Underlined: counts unresolved decisions as zero credit'}</Text></span>
 }
 
 const concerns = ['Security', 'Performance', 'Scalability', 'Architecture', 'Reliability', 'Maintainability', 'Functional', 'Testing']

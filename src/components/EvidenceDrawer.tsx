@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Accordion, Alert, Badge, Button, Code, Drawer, Group, Loader, Paper, Select, Stack, Tabs, Text, Title } from '@mantine/core'
 import { Braces, ExternalLink, FileJson, FileText, Download, Gauge, Receipt, Scale } from 'lucide-react'
-import { SetupName } from './Chart'
+import { SetupName, setupLabel } from './Chart'
 import { Disclosure, humanize, Rich, Tag, Value } from './Reading'
 import { fetchDetail, skillReleaseLabel } from '../lib/data'
 import type { Attempt, AttemptDetail, Configuration, Dataset, Task } from '../lib/data'
@@ -42,13 +42,20 @@ function InspectionBody({ dataset, results, band, configuration, task, inspectio
   const attempts = dataset.attempts.filter(attempt => allowed.has(attempt.id))
   const attemptId = attempts.find(item => item.id === inspection.attemptId)?.id ?? attempts[0]?.id ?? null
   const tab = inspection.tab ?? 'reviews'
+  const taskName = (id: string) => {
+    const entry = dataset.tasks.find(item => item.id === id)
+    return entry ? `${entry.repo} #${entry.pr}` : id
+  }
+  const setupName = (id: string) => {
+    const entry = dataset.configurations.find(item => item.id === id)
+    return entry ? setupLabel(entry) : id
+  }
   const groups = new Map<string, { value: string; label: string }[]>()
   for (const item of attempts) {
     const owner = outcomes.find(outcome => outcome.attemptIds.includes(item.id))
     const setup = dataset.configurations.find(configuration => configuration.id === owner?.configurationId)
-    const owningTask = dataset.tasks.find(entry => entry.id === item.taskId)
-    const group = configuration ? owningTask ? `${owningTask.repo} #${owningTask.pr}` : item.taskId : setup?.short ?? item.runId
-    groups.set(group, [...groups.get(group) ?? [], { value: item.id, label: `Trial ${item.replicate} · ${item.label.replace(/^att-0*/, 'attempt ')}${item.complete ? '' : ' · incomplete or invalid'}` }])
+    const group = configuration ? taskName(item.taskId) : setup ? setupLabel(setup) : item.runId
+    groups.set(group, [...groups.get(group) ?? [], { value: item.id, label: `Trial ${item.replicate} · ${attemptName(item)}${item.complete ? '' : ' · incomplete or invalid'}` }])
   }
   const attemptGroups = Array.from(groups, ([group, items]) => ({ group, items }))
   const currentGroup = attemptGroups.find(entry => entry.items.some(item => item.value === attemptId))?.group
@@ -148,11 +155,11 @@ function InspectionBody({ dataset, results, band, configuration, task, inspectio
       </Stack>}</Tabs.Panel>
       <Tabs.Panel value="coverage" pt="lg"><Stack>
         <Text size="sm" c="dimmed">All attempts remain visible. Replacements do not erase failed attempts or their usage.</Text>
-        {outcomes.filter(outcome => outcome.status !== 'ran').map(outcome => <Alert key={`${outcome.configurationId}:${outcome.taskId}`} color="yellow" title={outcome.taskId}>
-          {dataset.configurations.find(item => item.id === outcome.configurationId)?.short}: {outcome.status}. {outcome.reason}
+        {outcomes.filter(outcome => outcome.status !== 'ran').map(outcome => <Alert key={`${outcome.configurationId}:${outcome.taskId}`} color="yellow" title={taskName(outcome.taskId)}>
+          {setupName(outcome.configurationId)}: {humanize(outcome.status)}. {outcome.reason}
         </Alert>)}
         {attempts.filter(item => !item.complete || item.predecessor).map(item => <Paper withBorder p="md" key={item.id}>
-          <Text size="sm" fw={640}>{item.taskId} · {item.label}</Text><Text size="sm">{humanize(item.disposition)}</Text>
+          <Text size="sm" fw={640}>{taskName(item.taskId)} · Trial {item.replicate}, {attemptName(item)}</Text><Text size="sm">{humanize(item.disposition)}</Text>
           {!item.complete && item.admitted && <Text size="sm">Review returned findings but reported incomplete coverage.</Text>}
           {item.predecessor && <Text size="sm">Replaces {item.predecessor.split('/').at(-1)}. {item.retryReason}</Text>}
           <Button size="xs" variant="subtle" mt="xs" onClick={() => onChange({ ...inspection, attemptId: item.id, tab: 'reviews' })}>Select this review</Button>
@@ -210,3 +217,5 @@ function ReviewSummary({ attempt }: { attempt: Attempt }) {
     {attempt.predecessor && <Text size="xs" c="dimmed" mt="xs">Replacement for {attempt.predecessor}. Trial costs include the original attempt.</Text>}
   </Paper>
 }
+
+const attemptName = (attempt: Attempt) => attempt.label.replace(/^att-0*/, 'attempt ')

@@ -8,7 +8,8 @@ import { compact, detectionLabel, duration, lowerFirst, money, percent, reasonCo
 import type { Axis, DetectionView, Summary } from '../lib/metrics'
 import type { Configuration } from '../lib/data'
 import { skillReleaseLabel } from '../lib/data'
-import { ChartGuide } from './Reading'
+import { ChartGuide, Notes } from './Reading'
+import type { Note } from './Reading'
 
 export type ChartView = 'skills' | 'setups' | 'models' | 'tradeoff'
 type Range = { low: number; high: number } | null
@@ -44,6 +45,8 @@ export const setupParts = (configuration: Configuration) => {
   const [method = configuration.short, model = '', effort = ''] = configuration.short.split(' / ')
   return { method, model, effort }
 }
+
+export const setupLabel = (configuration: Configuration) => Object.values(setupParts(configuration)).filter(Boolean).join(' · ')
 
 const metricOf = (summary: Summary, axis: Axis) => axis === 'time' ? summary.time ? summary.time.median / 60 : null : summary[axis]
 const boundedOn = (summary: Summary, axis: Axis) => (axis === 'cost' || axis === 'tokens') && summary.card[axis].perTrial.kind === 'atLeast'
@@ -89,16 +92,17 @@ export function Chart({ summaries, detection, matching, axis, view, showAllLabel
     onMouseLeave: () => setHovered(null), onBlur: () => setHovered(null),
   })
   const unplotted = points.filter(point => point.metric === null)
+  const notes = reasonCounts(points.map(point => point.summary.detectionNote ?? null))
   return <div className="plot-shell" onMouseLeave={() => setHovered(null)}>
     {!points.length ? <div className="plot-empty" role="status"><strong>{measure} is unavailable</strong>
       {summaries.length ? <ul className="reason-list">{withheld.map(row => <li key={row.reason}>{row.reason} ({setups(row.count)})</li>)}</ul>
         : <span>Select at least one review method and model.</span>}
       <span>No other impact band or average is substituted. Choose them above.</span></div>
-      : view === 'setups' ? <SetupRows points={points} measure={measure} axis={axis} scale={scale} frontier={frontier} onSelect={onSelect} interactions={interactions} />
+      : view === 'setups' ? <SetupRows points={points} notes={notes} measure={measure} axis={axis} scale={scale} frontier={frontier} onSelect={onSelect} interactions={interactions} />
         : view === 'tradeoff' ? <Scatter points={measured} dimensions={dimensions} axis={axis} scale={scale} frontier={frontier} showAllLabels={showAllLabels}
           hovered={hovered?.id ?? null} onSelect={onSelect} interactions={interactions} />
         : view === 'skills' ? <MethodPanels points={measured} axis={axis} scale={scale} onSelect={onSelect} interactions={interactions} />
-          : <Models points={points} measure={measure} axis={axis} onSelect={onSelect} interactions={interactions} />}
+          : <Models points={points} notes={notes} measure={measure} axis={axis} onSelect={onSelect} interactions={interactions} />}
     {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={measure} axis={axis} left={hovered.left} top={hovered.top} />}
     {points.length > 0 && view !== 'models' && <ul className="chart-keys" aria-label="Chart key">
       {view === 'setups' && <li><span className="whisker-key" aria-hidden="true" />Range with any one PR left out</li>}
@@ -112,21 +116,26 @@ export function Chart({ summaries, detection, matching, axis, view, showAllLabel
       {view === 'skills' && <span>Each panel shows one review method on every model it ran on, with detection against {lowerFirst(axisLabels[axis])} on shared axes. Gray dots are the other selected setups, for context.</span>}
       {view === 'tradeoff' && <span><span className="frontier-key" aria-hidden="true" />Frontier of {dimensions}: no other selected setup is at least as good on both measures and strictly better on one. Identical results share the frontier. It says nothing about any other measure.</span>}
       {view === 'models' && <span>Each row is one model. Marks show {lowerFirst(measure)} for each review method that ran on it.</span>}
-      {points.filter(point => point.summary.detectionNote).map(point => <span key={point.summary.configuration.id}>† {point.summary.configuration.short}: {point.summary.detectionNote}</span>)}
       {withheld.length > 0 && <span>Not plotted, {lowerFirst(measure)} unavailable: {withheld.map(row => `${row.reason} (${setups(row.count)})`).join(' ')}</span>}
       {view !== 'models' && measured.some(point => point.bounded) && <span><span className="bound-key" aria-hidden="true" />Hollow marks show a lower bound of {lowerFirst(axisLabels[axis])}: some attempts recorded only part of their usage, so the true value may be higher.{view !== 'skills' && ' They are left out of the frontier.'}</span>}
-      {unplotted.length > 0 && <span>No {lowerFirst(axisLabels[axis])} for {unplotted.map(point => `${point.summary.configuration.short} (${point.summary.reasons[axis]})`).join('; ')}.</span>}
+      {unplotted.length > 0 && <span>No {lowerFirst(axisLabels[axis])} for {unplotted.map(point => `${setupLabel(point.summary.configuration)} (${point.summary.reasons[axis]})`).join('; ')}.</span>}
       {axis === 'refuted' && <span>Refuted claims are compared on the {matching.included} of {matching.included + matching.excluded} selected PRs where every selected setup has admitted, assessed reviews, with PRs weighted equally. A setup that admitted only some trials of a matched PR is measured on the reviews it delivered; the tooltip gives its admitted trials.</span>}
       {axis === 'time' && <span>Completed trials only. Includes replacement attempts; excludes gaps between attempts, provisioning, and grading.</span>}
       {axis === 'cost' && points.some(point => point.summary.configuration.billing === 'list-price-equivalent') && <span>* Subscription usage valued at token list prices, not a bill or quota measurement.</span>}
     </div></ChartGuide>}
+    <Notes notes={notes} />
   </div>
+}
+
+function NoteMark({ summary, notes }: { summary: Summary; notes: Note[] }) {
+  const index = notes.findIndex(note => note.reason === summary.detectionNote)
+  return index >= 0 && <sup aria-hidden="true">{index + 1}</sup>
 }
 
 type Interactions = (id: string) => Pick<DOMAttributes<Element>, 'onMouseEnter' | 'onFocus' | 'onMouseLeave' | 'onBlur'>
 
-function SetupRows({ points, measure, axis, scale, frontier, onSelect, interactions }: {
-  points: Point[]; measure: string; axis: Axis; scale: Scale; frontier: Set<string>; onSelect: (id: string) => void; interactions: Interactions
+function SetupRows({ points, notes, measure, axis, scale, frontier, onSelect, interactions }: {
+  points: Point[]; notes: Note[]; measure: string; axis: Axis; scale: Scale; frontier: Set<string>; onSelect: (id: string) => void; interactions: Interactions
 }) {
   const metricTicks = ticks(scale)
   return <div role="list" aria-label={`Setups ordered by ${lowerFirst(measure)}, with ${lowerFirst(axisLabels[axis])}`}>
@@ -147,7 +156,7 @@ function SetupRows({ points, measure, axis, scale, frontier, onSelect, interacti
           <span className="rank-name"><Mark configuration={configuration} />
             <span><strong>{method}</strong><span className="rank-model">{model}{effort && ` · ${effort}`}
               {frontier.has(configuration.id) && <span className="frontier-tag">On frontier</span>}</span></span></span>
-          <span className="rank-cell"><span className="rank-value">{percent(score)}{summary.detectionNote && '†'}</span>
+          <span className="rank-cell"><span className="rank-value">{percent(score)}<NoteMark summary={summary} notes={notes} /></span>
             <span className="rank-track">{scoreTicks.map(tick => <span key={tick} className="rank-grid" style={{ left: `${tick}%` }} />)}
               {range && <span className="rank-whisker" style={{ left: `${range.low}%`, width: `${range.high - range.low}%` }} />}
               <span className="rank-dot" style={{ left: `${score}%` }}><Mark configuration={configuration} /></span></span></span>
@@ -322,7 +331,7 @@ function PointMark({ configuration, x, y, hollow }: { configuration: Configurati
     : <path d={`M${x},${y - 8}L${x + 8},${y}L${x},${y + 8}L${x - 8},${y}Z`} {...props} />
 }
 
-function Models({ points, measure, axis, onSelect, interactions }: { points: Point[]; measure: string; axis: Axis; onSelect: (id: string) => void; interactions: Interactions }) {
+function Models({ points, notes, measure, axis, onSelect, interactions }: { points: Point[]; notes: Note[]; measure: string; axis: Axis; onSelect: (id: string) => void; interactions: Interactions }) {
   const groups = new Map<string, Point[]>()
   for (const point of points) {
     const { model, effort } = setupParts(point.summary.configuration)
@@ -352,7 +361,7 @@ function Models({ points, measure, axis, onSelect, interactions }: { points: Poi
           return <button type="button" key={configuration.id} className="model-entry" onClick={() => onSelect(configuration.id)} {...interactions(configuration.id)}
             aria-label={`${configuration.short}: ${percent(point.summary.detection)}, ${axisLabels[axis]} ${formatMetric(axis, point.metric, configuration, point.bounded)}. Inspect evidence`}>
             <Mark configuration={configuration} size={10} /><span>{setupParts(configuration).method}</span>
-            <strong>{percent(point.summary.detection)}{point.summary.detectionNote && '†'}</strong><span className="model-metric">{formatMetric(axis, point.metric, configuration, point.bounded)}</span>
+            <strong>{percent(point.summary.detection)}<NoteMark summary={point.summary} notes={notes} /></strong><span className="model-metric">{formatMetric(axis, point.metric, configuration, point.bounded)}</span>
           </button>
         })}</span>
       </div>
@@ -366,7 +375,7 @@ function Tooltip({ point, measure, axis, left, top }: { point: Point; measure: s
     <span key={key} className="tip-row"><span className="tip-label">{label}</span><b>{value}</b>{note && <span className="tip-note">{note}</span>}</span>
   const lines: ReactNode[] = [
     row('score', measure, percent(summary.detection), range && `${percent(range.low)} to ${percent(range.high)} leaving one PR out; sensitivity, not a confidence interval`),
-    summary.detectionNote && <span key="zero-credit" className="tip-note">† {summary.detectionNote}</span>,
+    summary.detectionNote && <span key="zero-credit" className="tip-note">{summary.detectionNote}</span>,
     row('metric', axisLabels[axis], formatMetric(axis, point.metric, summary.configuration, point.bounded), (point.metric === null || point.bounded) && summary.reasons[axis]),
     axis === 'time' && summary.time && <span key="time" className="tip-note">Mean {duration(summary.time.mean)} · middle 50% {duration(summary.time.q1)} to {duration(summary.time.q3)} · {summary.time.reviews} timed trials</span>,
     row('count', 'Trials admitted', `${summary.admitted} of ${summary.trials}`, `${summary.tasks} PRs · ${summary.completed} complete`),

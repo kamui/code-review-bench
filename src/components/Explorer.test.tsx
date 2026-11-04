@@ -303,7 +303,7 @@ describe('chart', () => {
       for (const estimator of ['equalProblem', 'equalPr'] as const) {
         for (const view of ['setups', 'tradeoff', 'models'] as const) {
           const rendered = chart(dataset, { band, estimator }, view)
-          expect(rendered).toContain(`† a: ${note}`)
+          expect(rendered).toContain(`Notes on marked values 1 ${note}`)
           expect(rendered).not.toContain('Not plotted,')
           expect(rendered).toContain('1 attempt has no recorded usage.')
         }
