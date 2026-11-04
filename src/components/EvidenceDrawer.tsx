@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Accordion, Alert, Badge, Button, Code, Drawer, Group, Loader, Paper, Select, Stack, Tabs, Text, Title } from '@mantine/core'
-import { Braces, ExternalLink, FileJson, FileText, Download, NotebookText, Receipt, Scale } from 'lucide-react'
+import { Braces, ExternalLink, FileJson, FileText, Download, Gauge, NotebookText, Receipt, Scale } from 'lucide-react'
 import { SetupName } from './Chart'
 import { Disclosure, humanize, Rich } from './Reading'
 import { fetchDetail, skillReleaseLabel } from '../lib/data'
@@ -77,15 +77,15 @@ function InspectionBody({ dataset, configuration, task, inspection, onChange, no
           {detail && <><Paper withBorder p="md" radius="md"><Stack gap="xs">
             <Text size="sm" fw={640}>Observed review harness</Text>
             <Text size="sm">{detail.record.observed.harness} {detail.record.observed.cli_version}</Text>
-            <Text size="sm">Models: {detail.record.observed.models.join(', ')} / Effort: {detail.record.observed.effort ?? 'Not reported'}</Text>
+            <Text size="sm">Models: {detail.record.observed.models.join(', ')} · Effort: {detail.record.observed.effort ?? 'Not reported'}</Text>
             <Text size="xs" c="dimmed">Prompt identity: {detail.record.observed.prompt_registry_match ?? 'No registry match recorded'}</Text>
             <Code block>{detail.record.observed.prompt_hash ?? 'Prompt hash unavailable'}</Code>
             {detail.record.observed.skill_tree && <><Text size="xs" c="dimmed">Skill tree revision</Text><Code block>{detail.record.observed.skill_tree}</Code></>}
-            <Text size="xs" c="dimmed">Subagents: {detail.record.observed.subagent_count} / Client-reported sandbox: {detail.record.observed.sandbox ?? 'Not reported'}</Text>
+            <Text size="xs" c="dimmed">Subagents: {detail.record.observed.subagent_count} · Client-reported sandbox: {detail.record.observed.sandbox ?? 'Not reported'}</Text>
           </Stack></Paper><Group gap="xs">
             <Button component="a" href={detail.recordUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileJson size={14} />}>Attempt record</Button>
             {detail.billingCorrectionUrl && <Button component="a" href={detail.billingCorrectionUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Billing correction</Button>}
-            {detail.usageCorrectionUrl && <Button component="a" href={detail.usageCorrectionUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Usage lower bound</Button>}
+            {detail.usageCorrectionUrl && <Button component="a" href={detail.usageCorrectionUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<Gauge size={14} />}>Usage lower bound</Button>}
             {detail.normalizedUrl && <Button component="a" href={detail.normalizedUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<Braces size={14} />}>Review JSON</Button>}
             {detail.assessment.receiptUrl && <Button component="a" href={detail.assessment.receiptUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<Receipt size={14} />}>Current assessment receipt</Button>}
             {detail.assessment.verdictsUrl && <Button component="a" href={detail.assessment.verdictsUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<Scale size={14} />}>Assessor verdicts</Button>}
@@ -172,9 +172,9 @@ function ReviewSummary({ attempt }: { attempt: Attempt }) {
   const facts = attempt.assessment ? reviewFacts(attempt.assessment) : null
   return <Paper withBorder p="md" radius="md"><Group justify="space-between" gap="sm">
     <Badge color={attempt.complete ? 'teal' : 'orange'} variant="light">{attempt.complete ? 'Completed' : attempt.admitted ? 'Incomplete coverage' : 'Stopped / invalid'}</Badge>
-    <Text size="sm">{attempt.cost === null && attempt.costLowerBound !== null ? `≥ ${money(attempt.costLowerBound)}` : money(attempt.cost)}{attempt.billing === 'list-price-equivalent' ? ' list-price equivalent' : ''} / {attempt.outputTokens === null && attempt.outputTokensLowerBound !== null ? `≥ ${compact(attempt.outputTokensLowerBound)}` : compact(attempt.outputTokens)} output tokens</Text>
+    <Text size="sm">{attempt.cost === null && attempt.costLowerBound !== null ? `≥ ${money(attempt.costLowerBound)}` : money(attempt.cost)}{attempt.billing === 'list-price-equivalent' ? ' list-price equivalent' : ''} · {attempt.outputTokens === null && attempt.outputTokensLowerBound !== null ? `≥ ${compact(attempt.outputTokensLowerBound)}` : compact(attempt.outputTokens)} output tokens</Text>
   </Group><Text size="sm" mt="sm">{!facts ? 'Current claim and remedy judgments are unavailable.'
-    : `${facts.caught} reference problems found / ${facts.outcomes.refuted.distinct} refuted and ${facts.outcomes.unsupported.distinct} unsupported claims / ${facts.outcomes.inconsequential.distinct} non-material observations`}</Text>
+    : `${facts.caught} reference problems found · ${facts.outcomes.refuted.distinct} refuted and ${facts.outcomes.unsupported.distinct} unsupported claims · ${facts.outcomes.inconsequential.distinct} non-material observations`}</Text>
     {attempt.predecessor && <Text size="xs" c="dimmed" mt="xs">Replacement for {attempt.predecessor}. Trial costs include the original attempt.</Text>}
   </Paper>
 }
