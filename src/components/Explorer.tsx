@@ -314,13 +314,13 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
               const approved = task.families.filter(family => family.eligibility === 'approved').length
               const pending = task.families.length - approved
               return <Table.Tr key={task.id}><Table.Td><button className="text-button task-name" onClick={() => inspect()({ kind: 'task', id: task.id })}>{task.repo}<span>#{task.pr}</span></button><Text size="xs" c="dimmed" mt={4} maw={340}>{task.shape}</Text></Table.Td>
-                <Table.Td><Group gap={5} maw={220}>{[...task.profile.technologies, ...task.profile.changeKinds].map(label => <Badge key={label} color="gray" variant="light" size="sm">{label}</Badge>)}</Group></Table.Td>
-                <Table.Td>{approved ? <Text size="sm">{plural(approved, 'problem')}</Text> : <Badge color="gray" variant="light" size="sm">{controlLabels[task.control]}</Badge>}
+                <Table.Td data-label="Profile"><Group gap={5} maw={220}>{[...task.profile.technologies, ...task.profile.changeKinds].map(label => <Badge key={label} color="gray" variant="light" size="sm">{label}</Badge>)}</Group></Table.Td>
+                <Table.Td data-label="References">{approved ? <Text size="sm">{plural(approved, 'problem')}</Text> : <Badge color="gray" variant="light" size="sm">{controlLabels[task.control]}</Badge>}
                   {pending > 0 && <Text size="xs" c="dimmed" mt={4}>{pending} awaiting eligibility</Text>}
                   {!!task.preExistingProblems?.length && <Text size="xs" c="dimmed" mt={4}>{plural(task.preExistingProblems.length, 'pre-existing problem')}</Text>}</Table.Td>
-                <Table.Td><DetectionBar result={meanTaskRecall(board.cards.filter(card => activeIds.includes(card.configurationId)), task.id, band)} /></Table.Td><Table.Td>{sharedIds.has(task.id) ? <span className="included-label"><Check size={14} aria-hidden="true" /> Included</span>
+                <Table.Td data-label="Mean detection"><DetectionBar result={meanTaskRecall(board.cards.filter(card => activeIds.includes(card.configurationId)), task.id, band)} /></Table.Td><Table.Td data-label="In comparison">{sharedIds.has(task.id) ? <span className="included-label"><Check size={14} aria-hidden="true" /> Included</span>
                   : <Tooltip label="At least one selected setup has no result for this PR"><Text size="xs" c="dimmed" className="missing-label">Missing results</Text></Tooltip>}</Table.Td>
-                <Table.Td><ActionIcon aria-label={`Inspect ${task.repo} PR ${task.pr}`} variant="subtle" color="gray" onClick={() => inspect()({ kind: 'task', id: task.id })}><ChevronRight size={18} /></ActionIcon></Table.Td></Table.Tr>
+                <Table.Td className="row-open"><ActionIcon aria-label={`Inspect ${task.repo} PR ${task.pr}`} variant="subtle" color="gray" onClick={() => inspect()({ kind: 'task', id: task.id })}><ChevronRight size={18} /></ActionIcon></Table.Td></Table.Tr>
             })}</Table.Tbody></Table></Table.ScrollContainer>
             {!candidates.length && <Paper ta="center" py="xl"><Text fw={640}>No tasks match these filters</Text><Button variant="subtle" mt="sm" onClick={resetFilters}>Show all tasks</Button></Paper>}
           </Tabs.Panel>

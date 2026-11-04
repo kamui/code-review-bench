@@ -274,7 +274,9 @@ function ChartPoint({ point, axis, x, y, faded, frontier, onSelect, interactions
 function MethodPanels({ points, axis, scale, onSelect, interactions }: {
   points: Plotted[]; axis: Axis; scale: Scale; onSelect: (id: string) => void; interactions: Interactions
 }) {
-  const groups = groupPaths(points, point => methodKey(point.summary.configuration))
+  const order = ['claude-builtin', 'codex']
+  const rank = (key: string) => { const found = order.findIndex(method => key.startsWith(`${method}/`)); return found < 0 ? order.length : found }
+  const groups = groupPaths(points, point => methodKey(point.summary.configuration)).sort((left, right) => rank(left.key) - rank(right.key) || left.key.localeCompare(right.key))
   const labelText = labelOf(points)
   return <div className="multiples" role="list" aria-label={`Detection against ${lowerFirst(axisLabels[axis])}, one panel per review method`}>
     {groups.map(group => <MethodPanel key={group.key} members={group.points} context={points.filter(point => !group.points.includes(point))}
