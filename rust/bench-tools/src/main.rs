@@ -710,6 +710,21 @@ enum ProvisionCommand {
         #[arg(long, requires = "supplement")]
         supplement_sha256: Option<String>,
     },
+    /// Place the target's published cache archive and git mirror in --cache-root, verified by hash.
+    #[command(infer_long_args = true)]
+    Fetch {
+        /// The target directory holding target.json.
+        #[arg(long, allow_negative_numbers = true)]
+        target: OsString,
+        #[arg(long, allow_negative_numbers = true)]
+        cache_replacements: Option<OsString>,
+        /// An absolute directory; archives/ and mirrors/ are made in it.
+        #[arg(long, allow_negative_numbers = true)]
+        cache_root: OsString,
+        /// The checkout whose bench/evidence/manifests name the published files; the current directory by default.
+        #[arg(long, allow_negative_numbers = true)]
+        root: Option<OsString>,
+    },
     /// Run the target's offline smoke commands and write smoke.json.
     #[command(infer_long_args = true)]
     Smoke {
@@ -1321,6 +1336,15 @@ enum EvidenceCommand {
         offline: bool,
         #[arg(allow_negative_numbers = true)]
         path: String,
+    },
+    /// Fail when a tracked file pins a large input that no published manifest holds and bench/evidence/unpublished.json
+    /// does not list, or when a listed hash is published or no longer pinned.
+    ///
+    /// Hidden because the evidence-store corpus pins this command's usage text.
+    #[command(infer_long_args = true, hide = true)]
+    Pinned {
+        #[arg(long, allow_negative_numbers = true)]
+        root: Option<OsString>,
     },
     /// Restore an exact package copy from the recorded recovery release.
     #[command(infer_long_args = true)]
@@ -3236,6 +3260,18 @@ fn run_evidence(command: EvidenceCommand) -> Result<ExitCode, ExitCode> {
             .map_err(String::into_bytes),
         );
     }
+    if let EvidenceCommand::Pinned { root } = &command {
+        let root = evidence_root(root.as_deref())?;
+        return match evidence::pinned::check(&root.to_path_buf()) {
+            Ok(report) => {
+                let mut lines = report.problems.clone();
+                lines.push(report.summary);
+                write_stdout((lines.join("\n") + "\n").as_bytes())?;
+                Ok(ExitCode::from(u8::from(!report.problems.is_empty())))
+            }
+            Err(error) => evidence_outcome(Err(error)).map(|_| ExitCode::SUCCESS),
+        };
+    }
     let mut remote = evidence::GitHub;
     let mut disk = evidence::System;
     let mut store = evidence::Store {
@@ -3361,6 +3397,7 @@ fn run_evidence(command: EvidenceCommand) -> Result<ExitCode, ExitCode> {
             .map(|archived| archived.json())
         }
         EvidenceCommand::RestoreLocal { .. }
+        | EvidenceCommand::Pinned { .. }
         | EvidenceCommand::Inventory { .. }
         | EvidenceCommand::Reconcile { .. } => {
             unreachable!("handled above")
@@ -3921,6 +3958,32 @@ fn provision_options(
     }
 }
 
+fn fetch_dependencies(
+    target: OsString,
+    cache_replacements: Option<OsString>,
+    cache_root: OsString,
+    root: Option<&OsStr>,
+) -> Result<provision::Outcome, String> {
+    let root = match root {
+        Some(root) => PathBuf::from(root),
+        None => std::env::current_dir().map_err(|error| pytext::os_error(&error, b"."))?,
+    };
+    let options = provision::Options {
+        target: target.into(),
+        cache_root: cache_root.into(),
+        cache_replacements: cache_replacements.map(Into::into),
+    };
+    let mut remote = evidence::GitHub;
+    let mut disk = evidence::System;
+    let mut store = evidence::Store {
+        remote: &mut remote,
+        disk: &mut disk,
+        now: &evidence::now_isoformat,
+        temporary: evidence::system_temp(),
+    };
+    provision::fetch::run(&mut store, &root, &options)
+}
+
 fn run_provision(command: ProvisionCommand) -> Result<ExitCode, ExitCode> {
     let outcome = match command {
         ProvisionCommand::Mirror { target, staging } => {
@@ -3951,6 +4014,12 @@ fn run_provision(command: ProvisionCommand) -> Result<ExitCode, ExitCode> {
                 .map(|(archive, sha256)| provision::Supplement { archive, sha256 })
                 .as_ref(),
         ),
+        ProvisionCommand::Fetch {
+            target,
+            cache_replacements,
+            cache_root,
+            root,
+        } => fetch_dependencies(target, cache_replacements, cache_root, root.as_deref()),
         ProvisionCommand::Smoke {
             target,
             cache_replacements,

@@ -9,6 +9,7 @@
 pub mod collect;
 #[cfg(test)]
 pub mod fake;
+pub mod pinned;
 pub mod publication;
 pub mod recovery;
 pub mod remote;
