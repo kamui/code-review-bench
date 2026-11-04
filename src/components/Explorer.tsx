@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ActionIcon, Alert, Anchor, Badge, Button, Checkbox, Container, Group, Loader, Paper, Popover,
-  SegmentedControl, Select, Stack, Switch, Table, Tabs, Text, TextInput, Title, Tooltip, useComputedColorScheme, useMantineColorScheme } from '@mantine/core'
+  SegmentedControl, Select, Stack, Switch, Table, Tabs, Text, TextInput, Title, Tooltip, VisuallyHidden, useComputedColorScheme, useMantineColorScheme } from '@mantine/core'
 import { useMediaQuery } from '@mantine/hooks'
 import { Link, Navigate, useLocation, useMatch, useNavigate, useSearch } from '@tanstack/react-router'
 import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpDown, ArrowUpRight, ChartNoAxesGantt, ChartScatter, Check, ChevronDown, ChevronRight, CodeXml, Cpu, Crosshair, Database,
@@ -129,11 +129,11 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
     return (sort.direction === 'ascending' ? comparison : -comparison) || left.configuration.short.localeCompare(right.configuration.short)
   })
   const tableNotes = notesFor(tableRows.flatMap(row => Object.values(row.cells)))
-  const resultsColumns: { key: ResultsColumn; label: string }[] = [
-    { key: 'setup', label: 'Review setup' }, { key: 'equalProblem', label: `${bandLabels[band]}, equal problems` }, { key: 'equalPr', label: `${bandLabels[band]}, equal PRs` },
-    { key: 'seriousCaught', label: 'All serious caught' }, { key: 'repeatedMisses', label: 'Repeated serious misses' },
-    { key: 'cost', label: 'Cost / trial' }, { key: 'tokens', label: 'Output tokens / trial' },
-    { key: 'refuted', label: 'Refuted / admitted review' }, { key: 'completed', label: 'Completed / trials' },
+  const resultsColumns: { key: ResultsColumn; label: string; sub?: string }[] = [
+    { key: 'setup', label: 'Review setup' }, { key: 'equalProblem', label: bandLabels[band], sub: 'equal problems' }, { key: 'equalPr', label: bandLabels[band], sub: 'equal PRs' },
+    { key: 'seriousCaught', label: 'All serious', sub: 'caught' }, { key: 'repeatedMisses', label: 'Misses', sub: 'serious, repeated' },
+    { key: 'cost', label: 'Cost', sub: 'per trial' }, { key: 'tokens', label: 'Tokens', sub: 'output per trial' },
+    { key: 'refuted', label: 'Refuted', sub: 'per admitted review' }, { key: 'completed', label: 'Completed', sub: 'of trials' },
   ]
   const coverage = referenceCoverage(dataset, board.selection)
   const candidateCount = coverage.pendingFamilies + pendingCandidates(dataset, board.selection.taskIds, now).length
@@ -181,18 +181,17 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
           <Title order={1}>Good reviews find<br />the problems that matter.</Title>
           <Text className="intro-description">Compare real code review setups by what they catch,<br className="desktop-break" /> what they cost, and how often they’re wrong.</Text>
         </div>
-        <dl className="corpus-stats" aria-label="Benchmark statistics">
+        <div className="corpus"><dl className="corpus-stats" aria-label="Benchmark statistics">
           <div><dt>PR tasks</dt><dd>{hero.tasks}</dd></div>
           <div><dt>{hero.awaitingEligibility ? 'provisional problems' : 'known problems'}</dt><dd>{hero.problems}</dd></div>
           <div><dt>review methods</dt><dd>{hero.methods}</dd></div>
           <div><dt>models tested</dt><dd>{hero.models}</dd></div>
-        </dl>
+        </dl><p className="corpus-note">Whole corpus. The scorecard compares the PRs that every selected setup ran.</p></div>
       </section>
 
       <section id="scorecard" className="leaderboard-section">
-        <header className="section-head"><div><Title order={2}>The scorecard</Title>
+        <header className="section-head"><div><div className="title-row"><Title order={2}>The scorecard</Title><Badge variant="outline" color="gray" radius="sm" className="status-badge">{status.label}</Badge></div>
           <Text className="section-lede">Detection, delivery, claim reliability, remedies, controls and cost stay separate. No single number ranks the setups.</Text></div>
-          <Badge variant="outline" color="gray" radius="sm" className="status-badge">{status.label}</Badge>
         </header>
         {(!status.complete || unresolved) && <StatusNotice limits={status.limits} unresolved={unresolved} />}
         <Paper withBorder radius="lg" className="leaderboard-paper">
@@ -202,6 +201,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
               if (next) onSearch({ chart: unlessDefault(next.value, 'overview') }, 'scorecard')
             }} data={(narrow ? views.filter(item => item.value === 'overview' || item.value === 'setups') : views).map(item => ({ value: item.value,
               label: <span className="switch-label"><item.icon size={15} strokeWidth={1.9} aria-hidden="true" />{item.label}</span> }))} />
+            {narrow && <span className="view-note">A wider screen adds By method, By model and Frontier.</span>}
             {chartView !== 'overview' && <div className="axis-switch"><span className="control-label" id="axis-label">Plot against</span><SegmentedControl aria-label="Compare detection against" size="xs" value={axis} onChange={value => {
               const next = axes.find(item => item === value)
               if (next) onSearch({ axis: unlessDefault(next, 'cost') }, 'scorecard')
@@ -216,11 +216,12 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
             </div>
             <div className="method-filter" role="group" aria-label="Review methods">
               <span className="control-label">Review methods <span className="control-count">{editions.filter(edition => editionIds(edition).some(id => selected.includes(id))).length} selected</span></span>
-              <div className="method-chips">{editions.map(configuration => {
+              <div className="method-chips">{[...editions].sort((left, right) => Number(left.experimental) - Number(right.experimental)).map(configuration => {
                 const ids = editionIds(configuration), all = ids.every(id => selected.includes(id)), some = ids.some(id => selected.includes(id))
                 return <button type="button" role="checkbox" aria-checked={all ? true : some ? 'mixed' : false} key={`${configuration.method}/${configuration.reviewEdition}`}
                   className="method-chip" data-state={all ? 'on' : some ? 'mixed' : 'off'} onClick={() => toggleEdition(configuration)}>
                   <Mark configuration={configuration} size={11} hollow={!some} /><span className="configuration-name">{methodName(configuration)}</span>
+                  {configuration.experimental && <span className="chip-partial">experiment</span>}
                   {some && !all && <span className="chip-partial">partial</span>}
                 </button>
               })}</div>
@@ -271,10 +272,10 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
         </Paper>
         <header className="subsection-head" id="review-setups"><Title order={3}>All review setups</Title>
         <Text className="subsection-lede">Includes skill experiments. Same {shared.length} comparison PRs as the chart, in the {bandLabels[band].toLowerCase()} band. Rows start in name order; a column heading sorts by that one measure only.</Text></header>
-        <div className="table-frame"><Table.ScrollContainer minWidth={1050}><Table verticalSpacing="sm" horizontalSpacing="md" className="leaderboard-table" aria-label="All review setup results">
+        <div className="table-frame"><Table.ScrollContainer minWidth={1050}><Table verticalSpacing="sm" horizontalSpacing="sm" className="leaderboard-table" aria-label="All review setup results">
           <Table.Thead><Table.Tr>{resultsColumns.map(column => <Table.Th key={column.key} aria-sort={sort.column === column.key ? sort.direction : 'none'}>
             <button className="text-button sort-heading" onClick={() => setSort(current => ({ column: column.key, direction: current.column === column.key && current.direction === 'ascending' ? 'descending' : 'ascending' }))}>
-              {column.label}{sort.column === column.key ? sort.direction === 'ascending' ? <ArrowUp size={13} aria-hidden="true" /> : <ArrowDown size={13} aria-hidden="true" /> : <ArrowUpDown size={13} aria-hidden="true" />}
+              <span className="th-title">{column.label}{column.sub && <span className="th-sub">{column.sub}</span>}</span>{sort.column === column.key ? sort.direction === 'ascending' ? <ArrowUp size={13} aria-hidden="true" /> : <ArrowDown size={13} aria-hidden="true" /> : <ArrowUpDown size={13} aria-hidden="true" />}
             </button>
           </Table.Th>)}<Table.Th>PR coverage</Table.Th><Table.Th /></Table.Tr></Table.Thead>
           <Table.Tbody>{tableRows.map(row => <Table.Tr key={row.configuration.id}>
@@ -289,14 +290,14 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
         </Table></Table.ScrollContainer></div>
         <Notes notes={tableNotes} />
         {!shared.length && <Text ta="center" c="dimmed" py="xl">No PR is shared by the selected standard setups with these filters.</Text>}
-        <Text size="xs" c="dimmed" mt="sm" className="footnote">Cost and output tokens add every attempt, retries included, and divide by scheduled trials. * Subscription usage is valued at token list prices. Output includes reasoning and subagents. Refuted claims and proposed fixes never change detection.</Text>
+        <Text size="xs" c="dimmed" mt="sm" className="footnote">Cost and output tokens add every attempt, retries included, and divide by scheduled trials. ≥ marks a lower bound where usage was only partly recorded; hover it for the count. * Subscription usage is valued at token list prices. Output includes reasoning and subagents. Refuted claims and proposed fixes never change detection.</Text>
         <Text size="sm" mt="sm"><Anchor href="https://github.com/kamui/code-review-bench/blob/main/docs/research/skill-matrix-2026-10-02/README.md#time-and-cost" target="_blank" rel="noreferrer">October 2 time and cost report</Anchor> · Per-setup and per-task totals, including failed attempts and held runs, with grading listed separately. This report covers a fixed batch.</Text>
         <MethodologyViews dataset={dataset} configurations={configurations.filter(c => activeIds.includes(c.id))} cards={board.cards} selection={board.selection} detection={detection} now={now} onInspect={inspect('dimensions')}
           tab={search.dimension ?? 'detection'} onTab={tab => onSearch({ dimension: unlessDefault(tab, 'detection') }, 'dimensions')} />
       </section></>}
 
       {page === 'tasks' && <section id="tasks" className="tasks-section">
-        <header className="section-head"><div><p className="eyebrow">Corpus</p><Title order={2}>Explore the tasks</Title><Text className="section-lede">A small, varied corpus. Find the gaps before drawing conclusions.</Text></div><Badge variant="outline" color="gray" radius="sm" className="status-badge">{candidates.length} of {dataset.tasks.length} tasks</Badge></header>
+        <header className="section-head"><div><p className="eyebrow">Corpus</p><div className="title-row"><Title order={2}>Explore the tasks</Title><Badge variant="outline" color="gray" radius="sm" className="status-badge">{candidates.length} of {dataset.tasks.length} tasks</Badge></div><Text className="section-lede">A small, varied corpus. Find the gaps before drawing conclusions.</Text></div></header>
         <Paper withBorder radius="lg" p="lg" className="filter-panel">
           <div className="task-filters"><TextInput label="Search" aria-label="Search tasks" placeholder="Search repository, PR, or behavior" value={query} onChange={event => setQuery(event.currentTarget.value)} leftSection={<Search size={16} />} />
             <Select label="Code area" aria-label="Code area" placeholder="All code areas" data={labels('areas')} value={area} onChange={setArea} clearable />
@@ -304,9 +305,9 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
             <Select label="Technology" aria-label="Technology" placeholder="All technologies" data={labels('technologies')} value={technology} onChange={setTechnology} clearable />
             <Select label="Review concern" aria-label="Task review concern" placeholder="All review concerns" data={labels('concerns')} value={concern} onChange={setConcern} clearable />
           </div>
-          <Group gap="sm" mt="md" justify="space-between"><Group gap="sm"><Text size="xs" c="dimmed">Count only references about</Text>
-            <Select aria-label="Finding concern" placeholder="All finding concerns" data={labels('concerns')} value={findingConcern} onChange={setFindingConcern} clearable size="xs" w={200} />
-          </Group><Button variant="subtle" color="gray" size="xs" onClick={resetFilters}>Reset filters</Button></Group>
+          <Group gap="sm" mt="md" justify="space-between" align="flex-end" className="task-filters-extra">
+            <Select label="Count only references about" aria-label="Finding concern" placeholder="All finding concerns" data={labels('concerns')} value={findingConcern} onChange={setFindingConcern} clearable w={260} />
+            <Button variant="subtle" color="gray" size="sm" onClick={resetFilters}>Reset filters</Button></Group>
         </Paper>
         <Text size="xs" c="dimmed" mt="sm" mb="md">Filters also narrow the <Link className="filter-link" to="/" hash="scorecard">scorecard</Link> comparison. Concern labels describe review opportunities; finding breakdowns count only matching reference problems.</Text>
         <Tabs defaultValue="catalog" className="task-tabs"><Tabs.List><Tabs.Tab value="catalog" leftSection={<Database size={15} />}>Task catalog</Tabs.Tab><Tabs.Tab value="coverage" leftSection={<Grid3x3 size={15} />}>Coverage gaps</Tabs.Tab></Tabs.List>
@@ -379,9 +380,11 @@ function DetectionBar({ result }: { result: ReturnType<typeof meanTaskRecall> })
   const withheld = reasonCounts(result.withheld).map(row => `${row.reason} (${plural(row.count, 'setup')})`).join(' ')
   if (result.mean.kind === 'unavailable') return <Text size="sm" c="dimmed" component="span"><Value cell={{ text: 'Unavailable', reason: withheld || result.mean.reason }} /></Text>
   const value = percent(result.mean.value * 100)
-  return <span className="detection-cell"><span className="detection-bar"><span>{value}</span><span className="detection-track" aria-hidden="true"><span style={{ width: value }} /></span></span>
-    <Text size="xs" c="dimmed" component="span">Mean of {result.included} of {plural(result.selected, 'selected setup')}{withheld && `. Not included: ${withheld}`}</Text>
-    {result.annotations.map(note => <Text size="xs" c="dimmed" component="span" key={note.configurationId}>{note.reason}</Text>)}</span>
+  const notes = result.annotations.map(note => note.reason).join(' ')
+  return <span className="detection-cell"><span className="detection-bar"><Tooltip label={notes} disabled={!notes} multiline w={280} withArrow>
+    <span className={notes ? 'annotated' : undefined}>{value}{notes && <sup aria-hidden="true">†</sup>}{notes && <VisuallyHidden>: {notes}</VisuallyHidden>}</span></Tooltip>
+    <span className="detection-track" aria-hidden="true"><span style={{ width: value }} /></span></span>
+    <Text size="xs" c="dimmed" component="span">Mean of {result.included} of {plural(result.selected, 'selected setup')}{withheld && `. Not included: ${withheld}`}{notes && '. † Counts unresolved decisions as zero credit'}</Text></span>
 }
 
 const concerns = ['Security', 'Performance', 'Scalability', 'Architecture', 'Reliability', 'Maintainability', 'Functional', 'Testing']

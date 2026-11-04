@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
-import { ArrowLeftRight, Ruler } from 'lucide-react'
+import { ArrowLeftRight } from 'lucide-react'
 import { Group, Paper, Select, Stack, Switch, Table, Tabs, Text, Title } from '@mantine/core'
 import type { Configuration, Dataset } from '../lib/data'
 import { bandLabels, compact, conditionDifferences, detectionLabel, duration, estimatorLabels, lowerFirst, measured, money, percent, perReview, points, reading, scaled, share } from '../lib/metrics'
@@ -69,6 +69,11 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
   const scope = band === 'all' ? 'any' : bandLabels[band].toLowerCase()
   const recommendation = (label: string, result: NonNullable<typeof advice>['impact']) => <Text size="sm">{label}: {result.kind === 'none' ? 'none'
     : `${result.kind}, ${result.prefer ? `prefers ${short(result.prefer)}` : 'no preference'}`}{result.reasons.length > 0 && `. ${result.reasons.join(' ')}`}</Text>
+  const adviceTable = <DataTable label="Supported advice benefit, sampled" rows={rows} rowKey={key} minWidth={900} columns={[setup,
+    { label: 'Sampled: benefit supported', value: row => String(row.card.advice.supported) }, { label: 'Sampled: benefit unsupported', value: row => String(row.card.advice.unsupported) },
+    { label: 'Sampled: unresolved', value: row => String(row.card.advice.unresolved) },
+    { label: 'Reviews sampled / admitted', value: row => `${row.card.advice.sampledReviews} / ${row.card.advice.admitted}` },
+    { label: 'Generic advisory dossiers, benefit unmeasured', value: row => String(row.card.advice.generic) }]} />
   return <Paper withBorder radius="lg" className="methodology-panel" id="dimensions">
     <div className="dimension-head"><Title order={3}>The scorecard, dimension by dimension</Title>
       <Text className="subsection-lede">Every value comes from the shared scoring kernel for the selected setups and PRs. Dimensions stay separate: there is no blended score. A numbered mark explains a value in the notes below its table.</Text></div>
@@ -191,13 +196,10 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
 
       <Tabs.Panel value="advice" ><Stack>
         <TabIntro lede="What an audited sample found about the benefit of review advice. It earns no points.">Advice benefit is a description of an audited sample. It earns no points, and a count of advisory claims does not establish benefit. Read each figure with its sample.</TabIntro>
-        <DataTable label="Supported advice benefit, sampled" rows={rows} rowKey={key} minWidth={900} columns={[setup,
-          { label: 'Sampled: benefit supported', value: row => String(row.card.advice.supported) }, { label: 'Sampled: benefit unsupported', value: row => String(row.card.advice.unsupported) },
-          { label: 'Sampled: unresolved', value: row => String(row.card.advice.unresolved) },
-          { label: 'Reviews sampled / admitted', value: row => `${row.card.advice.sampledReviews} / ${row.card.advice.admitted}` },
-          { label: 'Generic advisory dossiers, benefit unmeasured', value: row => String(row.card.advice.generic) }]} />
-        {samples.length ? <ul className="reason-list">{samples.map(sample => <li key={JSON.stringify(sample)}>Population: {sample.population}. Selection: {sample.selection}. Limits: {sample.limits}.</li>)}</ul>
-          : <Text size="sm" c="dimmed">No advice sample has been assessed for the selected setups, so no benefit is reported.</Text>}
+        {samples.length ? <>{adviceTable}
+          <ul className="reason-list">{samples.map(sample => <li key={JSON.stringify(sample)}>Population: {sample.population}. Selection: {sample.selection}. Limits: {sample.limits}.</li>)}</ul></>
+          : <><div className="empty-state" role="status">No advice sample has been assessed for the selected setups, so no benefit is reported.</div>
+            <Disclosure title="Admitted reviews per setup">{adviceTable}</Disclosure></>}
       </Stack></Tabs.Panel>
 
       <Tabs.Panel value="usage" ><Stack>
@@ -306,5 +308,5 @@ function DeltaPlot({ rows, a, b }: { rows: { id: string; label: string; delta: n
 
 function TabIntro({ lede, children }: { lede: string; children?: ReactNode }) {
   return <div className="tab-intro"><Text className="tab-lede">{lede}</Text>
-    {children && <Disclosure title="How this is measured" icon={Ruler}><Text size="sm" className="disclosure-body">{children}</Text></Disclosure>}</div>
+    {children && <Disclosure title="How this is measured"><Text size="sm" className="disclosure-body">{children}</Text></Disclosure>}</div>
 }

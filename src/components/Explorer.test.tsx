@@ -330,8 +330,8 @@ describe('chart', () => {
       b: [[subject, [review(subject, ['s']), review(subject, ['s'])]]],
     })
     const whole = page(dataset)
-    expect(whole).toContain("≥ $0.75 1 : 1 attempt's usage was only partly recorded.")
-    expect(whole).toContain("1 attempt's usage was only partly recorded. (1 value)")
+    expect(whole).toContain("≥ $0.75 : 1 attempt's usage was only partly recorded.")
+    expect(whole).toContain('≥ marks a lower bound where usage was only partly recorded')
     const setups = chart(dataset, { band: 'all', estimator: 'equalProblem' })
     expect(setups).toContain('a 100.0% ≥ $0.75 b On frontier 50.0% $1.00')
     expect(setups).toContain('Hollow marks show a lower bound of cost per scheduled trial')

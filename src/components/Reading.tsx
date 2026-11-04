@@ -1,7 +1,6 @@
 import { Table, Text, VisuallyHidden } from '@mantine/core'
 import type { ReactNode } from 'react'
-import { BookOpen, ChevronRight, ListOrdered } from 'lucide-react'
-import type { LucideIcon } from 'lucide-react'
+import { ChevronRight } from 'lucide-react'
 import { peerLabel, reasonCounts } from '../lib/metrics'
 import type { Configuration } from '../lib/data'
 import type { Reading } from '../lib/metrics'
@@ -15,27 +14,29 @@ export function PeerNote({ configurations, className }: { configurations: Config
   return label && <span className={className}>{label}</span>
 }
 
-export const notesFor = (cells: Cell[]): Note[] => reasonCounts(cells.map(cell => typeof cell === 'string' ? null : cell.reason ?? cell.annotation ?? null))
+const lowerBound = (cell: Cell) => typeof cell !== 'string' && cell.text.startsWith('≥ ')
+
+// A lower bound already says what it is; its reason stays on the value instead of adding a numbered note.
+export const notesFor = (cells: Cell[]): Note[] => reasonCounts(cells.map(cell => typeof cell === 'string' || lowerBound(cell) ? null : cell.reason ?? cell.annotation ?? null))
 
 export function Value({ cell, notes = [] }: { cell: Cell; notes?: Note[] }) {
   if (typeof cell === 'string') return cell
   const note = cell.reason ?? cell.annotation
   if (!note) return cell.text
   const index = notes.findIndex(item => item.reason === note)
-  return <span className={cell.reason ? 'unavailable' : undefined} title={note}>{cell.text}{index >= 0 && <sup aria-hidden="true">{index + 1}</sup>}<VisuallyHidden>: {note}</VisuallyHidden></span>
+  return <span className={lowerBound(cell) ? 'annotated' : cell.reason ? 'unavailable' : undefined} title={note}>{cell.text}{index >= 0 && <sup aria-hidden="true">{index + 1}</sup>}<VisuallyHidden>: {note}</VisuallyHidden></span>
 }
 
 export function Notes({ notes }: { notes: Note[] }) {
   if (!notes.length) return null
-  return <details className="table-notes"><summary><ChevronRight className="chevron" size={14} aria-hidden="true" /><ListOrdered size={14} aria-hidden="true" />Notes on marked values <span className="summary-count">{notes.length}</span></summary>
+  return <details className="table-notes"><summary><ChevronRight className="chevron" size={14} aria-hidden="true" />Notes on marked values <span className="summary-count">{notes.length}</span></summary>
     <ol aria-label="Notes on these values">
       {notes.map(note => <li key={note.reason}>{note.reason} <span className="note-count">({note.count} {note.count === 1 ? 'value' : 'values'})</span></li>)}
     </ol></details>
 }
 
-export function Disclosure({ title, icon = BookOpen, children }: { title: string; icon?: LucideIcon; children: ReactNode }) {
-  const Icon = icon
-  return <details className="chart-guide"><summary><ChevronRight className="chevron" size={14} aria-hidden="true" /><Icon size={14} aria-hidden="true" />{title}</summary>{children}</details>
+export function Disclosure({ title, children }: { title: string; children: ReactNode }) {
+  return <details className="chart-guide"><summary><ChevronRight className="chevron" size={14} aria-hidden="true" />{title}</summary>{children}</details>
 }
 
 export const ChartGuide = ({ children }: { children: ReactNode }) => <Disclosure title="How to read this chart">{children}</Disclosure>

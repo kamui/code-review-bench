@@ -40,7 +40,7 @@ function headings(detection: DetectionView, claimsMax: number): Record<OverviewC
   return {
     setup: { title: 'Setup', short: 'Setup', measure: 'setup name', ascending: 'A to Z', descending: 'Z to A' },
     detection: { title: foundLabels[detection.band], note: estimatorLabels[detection.estimator], short: foundLabels[detection.band], measure: lowerFirst(detectionLabel(detection)), ascending: 'least first', descending: 'most first', ends: ['0%', '100%'] },
-    claims: { title: 'True claims', note: 'bar: all true labels · value: problems', short: 'Problem claims per review', measure: 'problem claims per review', ascending: 'fewest first', descending: 'most first', ends: ['0', String(claimsMax)] },
+    claims: { title: 'True claims', note: 'bar: every true claim · number: problem claims', short: 'Problem claims per review', measure: 'problem claims per review', ascending: 'fewest first', descending: 'most first', ends: ['0', String(claimsMax)] },
     doubt: { title: 'Refuted or unproven', note: 'share of reviews', short: 'Refuted or unproven', hint: doubtMeaning, measure: 'share of reviews with a refuted or unproven claim', ascending: 'fewest first', descending: 'most first', ends: ['0%', '100%'] },
     cost: { title: 'Cost per trial', short: 'Cost per trial', measure: 'cost per scheduled trial', ascending: 'lowest first', descending: 'highest first', note: 'log scale', ends: ['$0.001', '$10'] },
     time: { title: 'Median time', short: 'Median time', measure: 'median completed-trial time', ascending: 'shortest first', descending: 'longest first', note: 'log scale', ends: ['20 s', '30 min'] },
@@ -118,9 +118,9 @@ export function Overview({ summaries, detection, sort, onSort, onSelect }: {
               <Mark configuration={configuration} /><span><strong>{method}</strong><span className="rank-model">{model}{effort && ` · ${effort}`}</span><PeerNote configurations={[configuration]} className="rank-model" /></span>
             </button>
           </div>
-          <Cell label={heads.detection.short} cell={cells.detection} notes={notes} grid={shareTicks}>
+          <Cell sorted={sort.column === 'detection'} label={heads.detection.short} cell={cells.detection} notes={notes} grid={shareTicks}>
             {summary.detection !== null && <span className="overview-bar" style={{ width: `${summary.detection}%` }} />}</Cell>
-          <Cell label={heads.claims.short} cell={cells.claims} notes={notes} grid={ticks(claimScale).map(tick => at(claimScale, tick))} interactive>
+          <Cell sorted={sort.column === 'claims'} label={heads.claims.short} cell={cells.claims} notes={notes} grid={ticks(claimScale).map(tick => at(claimScale, tick))} interactive>
             {!cells.claims.reason && trueSegments.map(segment => {
               const value = measured(rates[segment]) ?? 0
               if (value <= 0) return null
@@ -131,13 +131,13 @@ export function Overview({ summaries, detection, sort, onSort, onSelect }: {
                 onMouseEnter={show(text)} onFocus={show(text)} onMouseLeave={() => setTip(null)} onBlur={() => setTip(null)}
                 style={{ ...swatch(segment), left: `${at(claimScale, start)}%`, width: `${at(claimScale, value)}%` }} />
             })}</Cell>
-          <Cell label={heads.doubt.short} cell={cells.doubt} notes={notes} grid={shareTicks} description={unresolved ? `, and ${cells.unresolved.text} whose only doubt is unresolved` : undefined}>
+          <Cell sorted={sort.column === 'doubt'} label={heads.doubt.short} cell={cells.doubt} notes={notes} grid={shareTicks} description={unresolved ? `, and ${cells.unresolved.text} whose only doubt is unresolved` : undefined}>
             {doubt !== null && <span className="overview-segment" style={{ ...swatch('refuted'), left: 0, width: `${doubt * 100}%` }} title={`Refuted or unproven, ${cells.doubt.text} of reviews`} />}
             {doubt !== null && unresolved !== null && unresolved > 0 && <span className={segmentClass('overview-segment', 'unresolved')} title={`Only doubt is unresolved, ${cells.unresolved.text} of reviews`}
               style={{ ...swatch('unresolved'), left: `${doubt * 100}%`, width: `${unresolved * 100}%` }} />}</Cell>
-          <Cell label={heads.cost.short} cell={cells.cost} notes={notes} grid={costTicks.map(tick => at(costScale, tick))} floor>
+          <Cell sorted={sort.column === 'cost'} label={heads.cost.short} cell={cells.cost} notes={notes} grid={costTicks.map(tick => at(costScale, tick))} floor>
             {cost.kind !== 'unavailable' && <Stem left={at(costScale, cost.value)} hollow={cost.kind === 'atLeast'} />}</Cell>
-          <Cell label={heads.time.short} cell={cells.time} notes={notes} grid={timeTicks.map(tick => at(timeScale, tick))} floor>
+          <Cell sorted={sort.column === 'time'} label={heads.time.short} cell={cells.time} notes={notes} grid={timeTicks.map(tick => at(timeScale, tick))} floor>
             {time && <span className="overview-spread" style={{ left: `${at(timeScale, time.q1)}%`, width: `${at(timeScale, time.q3) - at(timeScale, time.q1)}%` }} />}
             {time && <Stem left={at(timeScale, time.median)} />}</Cell>
         </div>
@@ -154,10 +154,10 @@ export function Overview({ summaries, detection, sort, onSort, onSelect }: {
   </div>
 }
 
-function Cell({ label, cell, notes, grid, floor, interactive, description, children }: {
-  label: string; cell: Reading; notes: ReturnType<typeof notesFor>; grid: number[]; floor?: true; interactive?: true; description?: string; children: ReactNode
+function Cell({ sorted, label, cell, notes, grid, floor, interactive, description, children }: {
+  sorted: boolean; label: string; cell: Reading; notes: ReturnType<typeof notesFor>; grid: number[]; floor?: true; interactive?: true; description?: string; children: ReactNode
 }) {
-  return <div role="cell" className={cell.text === 'Unavailable' ? 'overview-cell missing' : 'overview-cell'}><span className="overview-label" aria-hidden="true">{label}</span>
+  return <div role="cell" className={cell.text === 'Unavailable' ? 'overview-cell missing' : 'overview-cell'} data-sorted={sorted || undefined}><span className="overview-label" aria-hidden="true">{label}</span>
     <span className="overview-value"><Value cell={cell} notes={notes} />{description && <VisuallyHidden>{description}</VisuallyHidden>}</span>
     <span className="overview-track" aria-hidden={interactive ? undefined : true}>{grid.map(left => <span key={left} className="rank-grid" style={{ left: `${left}%` }} />)}
       {floor && <span className="overview-floor" />}{children}</span></div>

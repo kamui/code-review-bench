@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
 import { Accordion, Alert, Badge, Button, Code, Drawer, Group, Loader, Paper, Select, Stack, Tabs, Text, Title } from '@mantine/core'
-import { Braces, ExternalLink, FileJson, FileText, Download, Gauge, NotebookText, Receipt, Scale } from 'lucide-react'
+import { Braces, ExternalLink, FileJson, FileText, Download, Gauge, Receipt, Scale } from 'lucide-react'
 import { SetupName } from './Chart'
 import { Disclosure, humanize, Rich, Tag } from './Reading'
 import { fetchDetail, skillReleaseLabel } from '../lib/data'
 import type { Attempt, AttemptDetail, Configuration, Dataset, Task } from '../lib/data'
-import { bandLabels, compact, money } from '../lib/metrics'
+import { bandLabels, compact, lowerFirst, money } from '../lib/metrics'
 import { pendingCandidates, reviewFacts } from '../lib/scoring'
 import { drawerTabs } from '../lib/view'
 import type { Inspection } from '../lib/view'
@@ -51,12 +51,12 @@ function InspectionBody({ dataset, configuration, task, inspection, onChange, no
   const currentTask = task ?? dataset.tasks.find(item => item.id === attempt?.taskId)
   const novel = currentTask ? pendingCandidates(dataset, [currentTask.id], now) : []
   return <Stack gap="lg">
-    {configuration && <><Group gap="xs">{!configuration.builtin && <Badge variant="light" radius="sm">{skillReleaseLabel([configuration])}</Badge>}<Text size="xs" c="dimmed">Recorded version: {configuration.version}</Text></Group><Disclosure title="Run notes" icon={NotebookText}><Text size="sm" className="disclosure-body">{configuration.note}</Text></Disclosure>
+    {configuration && <>{!configuration.builtin && <Group gap="xs"><Badge variant="light" radius="sm">{skillReleaseLabel([configuration])}</Badge></Group>}<Disclosure title="Run notes"><Text size="sm" className="disclosure-body">{configuration.note}</Text></Disclosure>
       {Array.from(new Set(configuration.skillReleases.map(release => release.provenanceUrl))).map(url => <Button key={url} component="a" href={url} target="_blank" rel="noreferrer" variant="subtle" size="xs">Skill release provenance</Button>)}
       {configuration.reviewChange && <Button component="a" href={configuration.reviewChange.url} target="_blank" rel="noreferrer" variant="subtle" size="xs">Review change: {configuration.reviewChange.summary}</Button>}
       {configuration.skillProvenanceUrl && <Button component="a" href={configuration.skillProvenanceUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Skill commits & timestamps</Button>}
       <Paper withBorder p="md" radius="md"><Text size="sm" fw={640} mb={5}>Comparison conditions</Text>
-        <dl className="conditions">{configuration.conditions.map(condition => <div key={condition.name}><dt>{condition.name}</dt><dd>{condition.values.join(', ')}</dd></div>)}</dl></Paper></>}
+        <dl className="conditions">{configuration.conditions.map(condition => <div key={condition.name}><dt>{condition.name}</dt><dd>{condition.values.map(conditionValue).join(', ')}</dd></div>)}</dl></Paper></>}
     {task && <><Text>{task.shape}</Text><Group gap="xs">{task.profile.concerns.map(concern => <Tag key={concern}>{concern}</Tag>)}</Group>
       <Group><Button component="a" href={task.sourceUrl} target="_blank" rel="noreferrer" variant="default" size="xs" leftSection={<ExternalLink size={14} />}>Original PR</Button>
         <Button component="a" href={task.packetUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileText size={14} />}>Review packet</Button></Group>
@@ -103,7 +103,7 @@ function InspectionBody({ dataset, configuration, task, inspection, onChange, no
                 <Paper p="sm" className="evidence-note"><Text size="xs" fw={640} mb={5}>Current assessment</Text><Text size="sm"><Rich text={item.notes} /></Text></Paper>
                 {item.claims?.map(claim => <Paper withBorder p="sm" key={claim.id}><Stack gap="xs">
                   <Badge variant="light" radius="sm" color={outcomeColors[claim.assignment] ?? 'gray'}>{humanize(claim.assignment)}</Badge>
-                  <Text size="sm"><Rich text={claim.quote} /></Text><Text size="sm"><Rich text={claim.notes} /></Text>
+                  {claim.quote.trim() !== item.claim.trim() && <Text size="sm"><Rich text={claim.quote} /></Text>}<Text size="sm"><Rich text={claim.notes} /></Text>
                   {claim.knownProblems?.map(fact => <Text size="xs" key={fact.familyId}>{fact.familyId}: says what goes wrong, {fact.saysWhat}; identifies the cause, {fact.identifiesCause}. {fact.reason}</Text>)}
                   {claim.preExistingProblems?.map(fact => <Text size="xs" key={fact.problemId}>Pre-existing problem {fact.problemId}: says what goes wrong, {fact.saysWhat}; identifies the cause, {fact.identifiesCause}. {fact.reason}</Text>)}
                   {claim.preExistingCandidateId && <Text size="xs">Pre-existing-problem candidate {claim.preExistingCandidateId} awaits admission and does not count as raised.</Text>}
@@ -121,16 +121,16 @@ function InspectionBody({ dataset, configuration, task, inspection, onChange, no
         {!currentTask.families.length && <Alert color="gray">{controlText[currentTask.control]} {currentTask.controlReason}.
           {currentTask.controlRulingUrl && <> <a href={currentTask.controlRulingUrl} target="_blank" rel="noreferrer">Saved control ruling</a></>}</Alert>}
         <Accordion variant="separated">{currentTask.families.map(defect => <Accordion.Item key={defect.id} value={defect.id}>
-          <Accordion.Control><Text size="xs" c="dimmed">{defect.id} / Eligibility {defect.eligibility} / Impact {defect.impact}</Text><Text size="sm" className="finding-claim">{defect.title}</Text></Accordion.Control>
+          <Accordion.Control><Text size="xs" c="dimmed">{defect.id} · {humanize(defect.eligibility)} · {humanize(defect.impact)} impact</Text><Text size="sm" className="finding-claim">{defect.title}</Text></Accordion.Control>
           <Accordion.Panel><Stack gap="sm"><Text size="sm"><strong>Trigger: </strong>{defect.trigger}</Text><Text size="sm"><strong>Consequence: </strong>{defect.consequence}</Text>
             <Text size="sm"><strong>Required outcome: </strong>{defect.requiredOutcome}</Text>
-            <Text size="sm"><strong>Eligibility {defect.eligibility}: </strong>{defect.eligibilityReason}</Text><Text size="sm"><strong>Impact {defect.impact}: </strong>{defect.impactReason}</Text>
+            <Text size="sm"><strong>Eligibility, {lowerFirst(humanize(defect.eligibility))}: </strong>{defect.eligibilityReason}</Text><Text size="sm"><strong>Impact, {lowerFirst(humanize(defect.impact))}: </strong>{defect.impactReason}</Text>
             {defect.rulings.length > 0 && <Group gap="xs">{defect.rulings.map(ruling => <Button key={ruling.dimension} component="a" href={ruling.url} target="_blank" rel="noreferrer" variant="subtle" size="xs">Saved {ruling.dimension} ruling</Button>)}</Group>}
           </Stack></Accordion.Panel>
         </Accordion.Item>)}</Accordion>
         <PreExistingCatalog task={currentTask} />
         {novel.length > 0 && <><Title order={5}>Candidates awaiting a ruling</Title>
-          {novel.map(candidate => <Paper withBorder p="sm" key={candidate.id}><Text size="xs" c="dimmed">{candidate.id} / recorded {candidate.recordedAt.slice(0, 10)}, {candidate.ageDays} {candidate.ageDays === 1 ? 'day' : 'days'} ago</Text>
+          {novel.map(candidate => <Paper withBorder p="sm" key={candidate.id}><Text size="xs" c="dimmed">{candidate.id} · recorded {candidate.recordedAt.slice(0, 10)}, {candidate.ageDays} {candidate.ageDays === 1 ? 'day' : 'days'} ago</Text>
             <Text size="sm">{candidate.claim}</Text><Text size="sm"><strong>Evidence limits: </strong>{candidate.limits}</Text><Text size="sm"><strong>Decision relevance: </strong>{candidate.relevance}</Text></Paper>)}</>}
         <Button component="a" href={currentTask.registerUrl} target="_blank" rel="noreferrer" variant="light" size="xs">Open current reference records</Button>
       </Stack>}</Tabs.Panel>
@@ -140,7 +140,7 @@ function InspectionBody({ dataset, configuration, task, inspection, onChange, no
           {dataset.configurations.find(item => item.id === outcome.configurationId)?.short}: {outcome.status}. {outcome.reason}
         </Alert>)}
         {attempts.filter(item => !item.complete || item.predecessor).map(item => <Paper withBorder p="md" key={item.id}>
-          <Text size="sm" fw={640}>{item.taskId} / {item.label}</Text><Text size="sm">{item.disposition}</Text>
+          <Text size="sm" fw={640}>{item.taskId} · {item.label}</Text><Text size="sm">{humanize(item.disposition)}</Text>
           {!item.complete && item.admitted && <Text size="sm">Review returned findings but reported incomplete coverage.</Text>}
           {item.predecessor && <Text size="sm">Replaces {item.predecessor.split('/').at(-1)}. {item.retryReason}</Text>}
           <Button size="xs" variant="subtle" mt="xs" onClick={() => onChange({ ...inspection, attemptId: item.id, tab: 'reviews' })}>Select this review</Button>
@@ -167,6 +167,8 @@ export function PreExistingCatalog({ task }: { task: Task }) {
     </Accordion.Item>)}</Accordion>
   </>
 }
+
+const conditionValue = (value: string) => value === 'n/a' ? 'Not applicable' : /^[a-z]+(-[a-z]+)*$/.test(value) ? humanize(value) : value
 
 function ReviewSummary({ attempt }: { attempt: Attempt }) {
   const facts = attempt.assessment ? reviewFacts(attempt.assessment) : null
