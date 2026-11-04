@@ -62,7 +62,7 @@ export function DataTable<Row>({ label, rows, columns, rowKey, minWidth, empty =
   const column = (position: number) => cells.map(row => row[position] ?? '')
   // Columns that hold the same value for every setup say more as one line than as a repeated column.
   const constant = columns.map((_, position) => foldShared && position > 0 && rows.length >= 5 && column(position).every(cell => sameCell(cell, cells[0]?.[position] ?? '')))
-  const numeric = columns.map((_, position) => position > 0 && column(position).every(cell => /^(≥ |At least )?[$\d.,/ %KM*+-]+$|^Unavailable$|^None$/.test(text(cell))))
+  const numeric = columns.map((_, position) => position > 0 && column(position).every(cell => /^(≥ |At least )?[$\d.,/ %KM*+-]+$|^[\d.]+% to [\d.]+%$|^Unavailable$|^None$/.test(text(cell))))
   const shown = columns.flatMap((item, position) => constant[position] ? [] : [{ item, position }])
   const shared = columns.flatMap((item, position) => constant[position] ? [{ item, cell: cells[0]?.[position] ?? '' }] : [])
   return <>

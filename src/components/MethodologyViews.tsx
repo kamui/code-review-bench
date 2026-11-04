@@ -79,7 +79,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
     { label: 'Generic advisory dossiers, benefit unmeasured', value: row => String(row.card.advice.generic) }]} />
   return <Paper withBorder radius="lg" className="methodology-panel" id="dimensions">
     <div className="dimension-head"><Title order={3}>The scorecard, dimension by dimension</Title>
-      <Text className="subsection-lede">Every value comes from the shared scoring kernel for the selected setups and PRs. Dimensions stay separate: there is no blended score. Rows are in name order, as in the table above. A numbered mark explains a value in the notes below its table.</Text></div>
+      <Text className="subsection-lede">Every value comes from the shared scoring kernel for the selected setups and PRs. Dimensions stay separate: there is no blended score. Rows are in name order. A numbered mark explains a value in the notes below its table.</Text></div>
     <Tabs value={tab} onChange={value => { const next = scorecardTabs.find(item => item === value); if (next) onTab(next) }} className="dimension-tabs">
       <Tabs.List><Tabs.Tab value="detection">Detection</Tabs.Tab><Tabs.Tab value="delivery">Delivery</Tabs.Tab><Tabs.Tab value="reliability">Claim reliability</Tabs.Tab>
         <Tabs.Tab value="remedies">Remedies</Tabs.Tab><Tabs.Tab value="controls">Controls</Tabs.Tab><Tabs.Tab value="pre-existing">Pre-existing problems raised</Tabs.Tab><Tabs.Tab value="advice">Advice benefit</Tabs.Tab>
