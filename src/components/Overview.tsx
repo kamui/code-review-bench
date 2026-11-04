@@ -40,7 +40,7 @@ function headings(detection: DetectionView, claimsMax: number): Record<OverviewC
   return {
     setup: { title: 'Setup', short: 'Setup', measure: 'setup name', ascending: 'A to Z', descending: 'Z to A' },
     detection: { title: foundLabels[detection.band], note: estimatorLabels[detection.estimator], short: foundLabels[detection.band], measure: lowerFirst(detectionLabel(detection)), ascending: 'least first', descending: 'most first', ends: ['0%', '100%'] },
-    claims: { title: 'True claims', note: 'per review; number: problems', short: 'Problem claims per review', measure: 'problem claims per review', ascending: 'fewest first', descending: 'most first', ends: ['0', String(claimsMax)] },
+    claims: { title: 'True claims', note: 'bar: every true label · value: problem claims', short: 'Problem claims per review', measure: 'problem claims per review', ascending: 'fewest first', descending: 'most first', ends: ['0', String(claimsMax)] },
     doubt: { title: 'Refuted or unproven', note: 'share of reviews', short: 'Refuted or unproven', hint: doubtMeaning, measure: 'share of reviews with a refuted or unproven claim', ascending: 'fewest first', descending: 'most first', ends: ['0%', '100%'] },
     cost: { title: 'Cost per trial', short: 'Cost per trial', measure: 'cost per scheduled trial', ascending: 'lowest first', descending: 'highest first', note: 'log scale', ends: ['$0.001', '$10'] },
     time: { title: 'Median time', short: 'Median time', measure: 'median completed-trial time', ascending: 'shortest first', descending: 'longest first', note: 'log scale', ends: ['20 s', '30 min'] },
@@ -79,6 +79,16 @@ export function Overview({ summaries, detection, sort, onSort, onSelect }: {
     ? { column, direction: sort.direction === 'ascending' ? 'descending' : 'ascending' } : { column, direction: overviewFirstDirection[column] })
   if (!rows.length) return <div className="plot-empty" role="status"><span>Select at least one review method and model.</span></div>
   return <div className="overview" onMouseLeave={() => setTip(null)}>
+    <div className="overview-keys" aria-label="Overview key">
+      <div className="key-group"><span className="key-title">True claims per review</span><ul className="label-legend">
+        {trueSegments.map(segment => <li key={segment}><span className={segmentClass('label-swatch', segment)} style={swatch(segment)} aria-hidden="true" />{segmentLabels[segment]}</li>)}</ul></div>
+      <div className="key-group"><span className="key-title">Doubt</span><ul className="label-legend">
+        <li><span className="label-swatch" style={swatch('refuted')} aria-hidden="true" />Refuted or unproven</li>
+        <li><span className="label-swatch hatched" style={swatch('unresolved')} aria-hidden="true" />Only doubt is unresolved</li></ul></div>
+      <div className="key-group"><span className="key-title">Cost and time</span><ul className="label-legend">
+        <li><span className="overview-key-dot" aria-hidden="true" />Lower-bound cost</li>
+        <li><span className="overview-key-spread" aria-hidden="true" />Middle 50% of completed trials</li></ul></div>
+    </div>
     <p className="overview-rule" aria-live="polite">{rule}</p>
     <div role="table" aria-label={`Overview of the selected setups. ${rule}`} className="overview-table">
       <div role="row" className="overview-head">{overviewColumns.map(column => {
@@ -134,13 +144,6 @@ export function Overview({ summaries, detection, sort, onSort, onSelect }: {
       })}
     </div>
     {tip && <div className="chart-tip" role="presentation" style={{ left: tip.left, top: tip.top }}>{tip.text}</div>}
-    <ul className="label-legend overview-legend" aria-label="Overview key">
-      {trueSegments.map(segment => <li key={segment}><span className={segmentClass('label-swatch', segment)} style={swatch(segment)} aria-hidden="true" />{segmentLabels[segment]}</li>)}
-      <li><span className="label-swatch" style={swatch('refuted')} aria-hidden="true" />Refuted or unproven</li>
-      <li><span className="label-swatch hatched" style={swatch('unresolved')} aria-hidden="true" />Only doubt is unresolved</li>
-      <li><span className="overview-key-dot" aria-hidden="true" />Lower-bound cost</li>
-      <li><span className="overview-key-spread" aria-hidden="true" />Middle 50% of completed trials</li>
-    </ul>
     <ChartGuide><div className="plot-caption">
       <span>Each column has its own scale; a header sorts by that column. Problems found uses the impact band and average chosen above. True claims stack every true label from 0, and the number is problem claims per review. Refuted, unproven and unresolved claims are not drawn there.</span>
       <span>Refuted or unproven: {doubtMeaning} An unproven claim is not shown to be false.</span>

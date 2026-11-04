@@ -82,7 +82,7 @@ export function SeriousMisses({ dataset, configurations, cards, selection, onIns
                 <button type="button" className="text-button task-name" onClick={() => onInspect({ kind: 'task', id: task.id })}>{task.repo}<span>#{task.pr}</span></button>
                 <Group gap={4} mt={4}>{[...task.profile.changeKinds, ...task.profile.technologies].map(tag => <Badge key={tag} variant="outline" color="gray" size="xs">{tag}</Badge>)}</Group>
                 <Text size="xs" c="dimmed" mt={4} fw={400}>{task.shape}</Text>
-                <Text size="xs" mt={2} fw={500}>{problems(row.serious)}</Text>
+                <Text size="xs" mt={2} fw={560}>{problems(row.serious)}</Text>
               </Table.Th>
               {shown.map((column, index) => <Table.Td key={column.configuration.id} className={highlight(index)} onMouseEnter={enter(index)} />)}
             </Table.Tr>,
@@ -116,7 +116,7 @@ function Problem({ task, family, familyId, onInspect }: { task: Task; family: Fa
       <Popover.Target><button type="button" className="text-button short-label" onClick={() => setOpened(value => !value)}>{label}</button></Popover.Target>
       <Popover.Dropdown><Stack gap={6}>
         <Text size="xs" c="dimmed">{task.repo} #{task.pr}</Text>
-        <Text size="sm" fw={600}>{label}</Text>
+        <Text size="sm" fw={640}>{label}</Text>
         <Text size="sm">{family?.title ?? familyId}</Text>
         <Button size="xs" variant="light" onClick={() => { setOpened(false); onInspect({ kind: 'task', id: task.id }) }}>Open PR evidence</Button>
       </Stack></Popover.Dropdown>
@@ -127,7 +127,7 @@ function Problem({ task, family, familyId, onInspect }: { task: Task; family: Fa
 
 function Dot({ trial, position, total, setup, onOpen }: { trial: FamilyRow['trials'][number]; position: number; total: number; setup: string; onOpen: (attemptId: string) => void }) {
   const description = `${setup}, run ${position} of ${total}: ${outcomeText[trial.verdict]}`
-  const card = <Stack gap={2}><Text size="xs" fw={600}>{setup}</Text><Text size="xs">Run {position} of {total}</Text><Text size="xs">{outcomeText[trial.verdict]}</Text></Stack>
+  const card = <Stack gap={2}><Text size="xs" fw={640}>{setup}</Text><Text size="xs">Run {position} of {total}</Text><Text size="xs">{outcomeText[trial.verdict]}</Text></Stack>
   const { attemptId } = trial
   return <Tooltip label={card} withArrow multiline w={260}>
     {attemptId ? <button type="button" className={`miss-dot ${trial.outcome}`} aria-label={`${description} Open this review.`} onClick={() => onOpen(attemptId)} />

@@ -221,7 +221,7 @@ describe('pre-existing problems raised on the fixture', () => {
 
   test('the controls table says refuted or unproven', () => {
     const rendered = panels(fixture)
-    expect(rendered).toContain('Admitted control reviews Without a refuted or unproven claim With a refuted or unproven claim With an unresolved claim')
+    for (const heading of ['Admitted control reviews', 'Without a refuted or unproven claim', 'With a refuted or unproven claim', 'With an unresolved claim']) expect(rendered).toContain(heading)
     expect(rendered).not.toContain('refuted or unsupported')
   })
 })

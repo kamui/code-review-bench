@@ -53,7 +53,7 @@ function InspectionBody({ dataset, configuration, task, inspection, onChange, no
       {Array.from(new Set(configuration.skillReleases.map(release => release.provenanceUrl))).map(url => <Button key={url} component="a" href={url} target="_blank" rel="noreferrer" variant="subtle" size="xs">Skill release provenance</Button>)}
       {configuration.reviewChange && <Button component="a" href={configuration.reviewChange.url} target="_blank" rel="noreferrer" variant="subtle" size="xs">Review change: {configuration.reviewChange.summary}</Button>}
       {configuration.skillProvenanceUrl && <Button component="a" href={configuration.skillProvenanceUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Skill commits & timestamps</Button>}
-      <Paper withBorder p="md" radius="md"><Text size="sm" fw={650} mb={5}>Comparison conditions</Text>
+      <Paper withBorder p="md" radius="md"><Text size="sm" fw={640} mb={5}>Comparison conditions</Text>
         <dl className="conditions">{configuration.conditions.map(condition => <div key={condition.name}><dt>{condition.name}</dt><dd>{condition.values.join(', ')}</dd></div>)}</dl></Paper></>}
     {task && <><Text>{task.shape}</Text><Group gap="xs">{task.profile.concerns.map(concern => <Badge variant="light" key={concern}>{concern}</Badge>)}</Group>
       <Group><Button component="a" href={task.sourceUrl} target="_blank" rel="noreferrer" variant="light" size="xs" leftSection={<ExternalLink size={14} />}>Original PR</Button>
@@ -73,7 +73,7 @@ function InspectionBody({ dataset, configuration, task, inspection, onChange, no
           {attempt && <ReviewSummary attempt={attempt} />}
           {attempt && !detail && !error && <Loader size="sm" />}
           {detail && <><Paper withBorder p="md" radius="md"><Stack gap="xs">
-            <Text size="sm" fw={650}>Observed review harness</Text>
+            <Text size="sm" fw={640}>Observed review harness</Text>
             <Text size="sm">{detail.record.observed.harness} {detail.record.observed.cli_version}</Text>
             <Text size="sm">Models: {detail.record.observed.models.join(', ')} / Effort: {detail.record.observed.effort ?? 'Not reported'}</Text>
             <Text size="xs" c="dimmed">Prompt identity: {detail.record.observed.prompt_registry_match ?? 'No registry match recorded'}</Text>
@@ -96,9 +96,9 @@ function InspectionBody({ dataset, configuration, task, inspection, onChange, no
               : 'This attempt returned no usable findings. Its failure and usage remain in the evidence.'}</Alert>}
             <Accordion variant="separated">{detail.items.map((item, index) => <Accordion.Item key={item.id} value={item.id}>
               <Accordion.Control><Group gap="xs" mb={5}><Badge size="xs" color={outcomeColors[item.assignment] ?? 'gray'} variant="light">{item.assignment}</Badge>
-                <Text size="xs" c="dimmed">Finding {index + 1}</Text></Group><Text size="sm" fw={550}>{item.claim}</Text></Accordion.Control>
+                <Text size="xs" c="dimmed">Finding {index + 1}</Text></Group><Text size="sm" fw={560}>{item.claim}</Text></Accordion.Control>
               <Accordion.Panel><Stack gap="sm"><Text size="xs" c="dimmed">{item.file}{item.line === null ? '' : `:${item.line}`}</Text><Text size="sm">{item.consequence}</Text>
-                <Paper p="sm" className="evidence-note"><Text size="xs" fw={650} mb={5}>Current assessment</Text><Text size="sm">{item.notes}</Text></Paper>
+                <Paper p="sm" className="evidence-note"><Text size="xs" fw={640} mb={5}>Current assessment</Text><Text size="sm">{item.notes}</Text></Paper>
                 {item.claims?.map(claim => <Paper withBorder p="sm" key={claim.id}><Stack gap="xs">
                   <Badge variant="light" color={outcomeColors[claim.assignment] ?? 'gray'}>{claim.assignment}</Badge>
                   <Text size="sm">{claim.quote}</Text><Text size="sm">{claim.notes}</Text>
@@ -119,7 +119,7 @@ function InspectionBody({ dataset, configuration, task, inspection, onChange, no
         {!currentTask.families.length && <Alert color="gray">{controlText[currentTask.control]} {currentTask.controlReason}.
           {currentTask.controlRulingUrl && <> <a href={currentTask.controlRulingUrl} target="_blank" rel="noreferrer">Saved control ruling</a></>}</Alert>}
         <Accordion variant="separated">{currentTask.families.map(defect => <Accordion.Item key={defect.id} value={defect.id}>
-          <Accordion.Control><Text size="xs" c="dimmed">{defect.id} / Eligibility {defect.eligibility} / Impact {defect.impact}</Text><Text fw={550} size="sm">{defect.title}</Text></Accordion.Control>
+          <Accordion.Control><Text size="xs" c="dimmed">{defect.id} / Eligibility {defect.eligibility} / Impact {defect.impact}</Text><Text fw={560} size="sm">{defect.title}</Text></Accordion.Control>
           <Accordion.Panel><Stack gap="sm"><Text size="sm"><strong>Trigger: </strong>{defect.trigger}</Text><Text size="sm"><strong>Consequence: </strong>{defect.consequence}</Text>
             <Text size="sm"><strong>Required outcome: </strong>{defect.requiredOutcome}</Text>
             <Text size="sm"><strong>Eligibility {defect.eligibility}: </strong>{defect.eligibilityReason}</Text><Text size="sm"><strong>Impact {defect.impact}: </strong>{defect.impactReason}</Text>
@@ -138,7 +138,7 @@ function InspectionBody({ dataset, configuration, task, inspection, onChange, no
           {dataset.configurations.find(item => item.id === outcome.configurationId)?.short}: {outcome.status}. {outcome.reason}
         </Alert>)}
         {attempts.filter(item => !item.complete || item.predecessor).map(item => <Paper withBorder p="md" key={item.id}>
-          <Text size="sm" fw={600}>{item.taskId} / {item.label}</Text><Text size="sm">{item.disposition}</Text>
+          <Text size="sm" fw={640}>{item.taskId} / {item.label}</Text><Text size="sm">{item.disposition}</Text>
           {!item.complete && item.admitted && <Text size="sm">Review returned findings but reported incomplete coverage.</Text>}
           {item.predecessor && <Text size="sm">Replaces {item.predecessor.split('/').at(-1)}. {item.retryReason}</Text>}
           <Button size="xs" variant="subtle" mt="xs" onClick={() => onChange({ ...inspection, attemptId: item.id, tab: 'reviews' })}>Select this review</Button>
@@ -155,7 +155,7 @@ export function PreExistingCatalog({ task }: { task: Task }) {
     <Title order={5}>Approved pre-existing problems</Title>
     <Text size="sm">These problems predate the change and are separate from the reference problems. Raising one is counted separately; silence creates no miss.</Text>
     <Accordion variant="separated">{task.preExistingProblems.map(problem => <Accordion.Item key={problem.id} value={problem.id}>
-      <Accordion.Control><Text size="xs" c="dimmed">{problem.id} / Impact {bandLabels[problem.impact]}</Text><Text size="sm" fw={550}>{problem.title}</Text></Accordion.Control>
+      <Accordion.Control><Text size="xs" c="dimmed">{problem.id} / Impact {bandLabels[problem.impact]}</Text><Text size="sm" fw={560}>{problem.title}</Text></Accordion.Control>
       <Accordion.Panel><Stack gap="sm">
         <Text size="sm"><strong>Trigger: </strong>{problem.trigger}</Text>
         <Text size="sm"><strong>Consequence: </strong>{problem.consequence}</Text>

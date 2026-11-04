@@ -192,7 +192,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
           <Text className="section-lede">Detection, delivery, claim reliability, remedies, controls and cost stay separate. No single number ranks the setups.</Text></div>
           <Badge variant="outline" color="gray" radius="sm" className="status-badge">{status.label}</Badge>
         </header>
-        {!status.complete && <StatusNotice limits={status.limits} />}
+        {(!status.complete || unresolved) && <StatusNotice limits={status.limits} unresolved={unresolved} />}
         <Paper withBorder radius="lg" className="leaderboard-paper">
           <div className="chart-toolbar">
             <SegmentedControl aria-label="Chart view" className="view-switch" value={chartView} onChange={value => {
@@ -227,7 +227,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
               <Popover position="bottom-end" width={360} withArrow>
                 <Popover.Target><Button variant="default" size="xs" className="refine-button" leftSection={<SlidersHorizontal size={14} aria-hidden="true" />} rightSection={<ChevronDown size={14} aria-hidden="true" />}>Review setups ({configurations.filter(item => selected.includes(item.id)).length}/{configurations.length})</Button></Popover.Target>
                 <Popover.Dropdown className="refine-dropdown" style={{ maxHeight: '70vh', overflowY: 'auto', maxWidth: 'calc(100vw - 24px)' }}><Stack gap="sm">
-                  <Group justify="space-between"><Text size="xs" fw={650}>Review setups</Text><Group gap="xs">
+                  <Group justify="space-between"><Text size="xs" fw={640}>Review setups</Text><Group gap="xs">
                     <Button variant="subtle" size="compact-xs" onClick={() => setSelected(configurations.map(item => item.id))}>Select all</Button>
                     <Button variant="subtle" size="compact-xs" onClick={() => setSelected([])}>Clear all</Button>
                   </Group></Group>
@@ -236,7 +236,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
               </Popover>
               <Popover position="bottom-end" width={230} withArrow>
                 <Popover.Target><Button variant="default" size="xs" className="refine-button" leftSection={<Cpu size={14} aria-hidden="true" />} rightSection={<ChevronDown size={14} aria-hidden="true" />}>Models ({selectedModels.length}/{modelChoices.length})</Button></Popover.Target>
-                <Popover.Dropdown className="refine-dropdown"><Stack gap="sm"><Group justify="space-between"><Text size="xs" fw={650}>Models</Text><Button variant="subtle" size="compact-xs" onClick={() => setSelectedModels(modelChoices.map(model => model.value))}>Select all</Button></Group>
+                <Popover.Dropdown className="refine-dropdown"><Stack gap="sm"><Group justify="space-between"><Text size="xs" fw={640}>Models</Text><Button variant="subtle" size="compact-xs" onClick={() => setSelectedModels(modelChoices.map(model => model.value))}>Select all</Button></Group>
                   {modelChoices.map(model => <Checkbox key={model.value} label={model.label} checked={selectedModels.includes(model.value)} onChange={() => setSelectedModels(selectedModels.includes(model.value) ? selectedModels.filter(value => value !== model.value) : [...selectedModels, model.value])} size="xs" />)}
                 </Stack></Popover.Dropdown>
               </Popover>
@@ -264,7 +264,6 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
           <div className="comparison-strip"><Info size={15} aria-hidden="true" /><span>Chart and table use the PRs every selected standard setup ran. Method, model and task filters change the comparison. Experiments do not shrink its PR coverage.
             {differing.length > 0 && ` The selected setups differ in recorded ${differing.join(', ')}; a difference between setups includes those conditions. Compare two setups below to see the values.`}</span></div>
         </Paper>
-        {unresolved && <p className="inline-notice"><CircleDashed size={15} aria-hidden="true" />Some claim assessments are unresolved. Reliability measurements are provisional.</p>}
         <header className="subsection-head" id="review-setups"><Title order={3}>All review setups</Title>
         <Text className="subsection-lede">Includes skill experiments. Same {shared.length} comparison PRs as the chart, in the {bandLabels[band].toLowerCase()} band. Rows start in name order; a column heading sorts by that one measure only.</Text></header>
         <div className="table-frame"><Table.ScrollContainer minWidth={1050}><Table verticalSpacing="sm" horizontalSpacing="md" className="leaderboard-table" aria-label="All review setup results">
@@ -320,7 +319,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
                   : <Tooltip label="At least one selected setup has no result for this PR"><Text size="xs" c="dimmed" className="missing-label">Missing results</Text></Tooltip>}</Table.Td>
                 <Table.Td><ActionIcon aria-label={`Inspect ${task.repo} PR ${task.pr}`} variant="subtle" color="gray" onClick={() => inspect()({ kind: 'task', id: task.id })}><ArrowUpRight size={18} /></ActionIcon></Table.Td></Table.Tr>
             })}</Table.Tbody></Table></Table.ScrollContainer>
-            {!candidates.length && <Paper ta="center" py="xl"><Text fw={600}>No tasks match these filters</Text><Button variant="subtle" mt="sm" onClick={resetFilters}>Show all tasks</Button></Paper>}
+            {!candidates.length && <Paper ta="center" py="xl"><Text fw={640}>No tasks match these filters</Text><Button variant="subtle" mt="sm" onClick={resetFilters}>Show all tasks</Button></Paper>}
           </Tabs.Panel>
           <Tabs.Panel value="coverage" pt="lg"><CoverageMatrix tasks={dataset.tasks} />
             <Text size="xs" c="dimmed" mt="md" className="footnote">Coverage describes the full corpus; labels can overlap, and only approved references are counted. Problems without a concern label appear in their own row. These counts do not establish comparability or statistical reliability. A task with no reference findings has no recall, and tests false alarms only once it is an audited clean control.</Text></Tabs.Panel>
@@ -346,14 +345,15 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
 
 const methodName = (configuration: Configuration) => configuration.builtin ? configuration.method === 'codex' ? 'Codex built-in' : 'Claude built-in' : `/${configuration.method}`
 
-function StatusNotice({ limits }: { limits: string[] }) {
+function StatusNotice({ limits, unresolved }: { limits: string[]; unresolved: boolean }) {
   return <aside className="status-notice" aria-label="Result status">
     <span className="status-icon" aria-hidden="true"><CircleDashed size={18} strokeWidth={2} /></span>
     <div className="status-body">
-      <p className="status-title">Provisional results: grading is still in progress</p>
-      <p className="status-summary">Saved reviews, delivery and usage remain available. Unresolved detection outcomes receive zero credit, with an explanation. Measures blocked by missing evidence are unavailable, with their reasons.</p>
-      <details className="status-details"><summary>What is still open ({limits.length})</summary>
-        <ul>{limits.map(limit => <li key={limit}>{limit}</li>)}</ul></details>
+      <p className="status-title">{limits.length ? 'Provisional results: grading is still in progress' : 'Reliability measurements are provisional'}</p>
+      <p className="status-summary">{limits.length > 0 && 'Saved reviews, delivery and usage remain available. Unresolved detection outcomes receive zero credit, with an explanation. Measures blocked by missing evidence are unavailable, with their reasons. '}
+        {unresolved && 'Some claim assessments are unresolved. Reliability measurements are provisional.'}</p>
+      {limits.length > 0 && <details className="status-details"><summary>What is still open ({limits.length})</summary>
+        <ul>{limits.map(limit => <li key={limit}>{limit}</li>)}</ul></details>}
     </div>
   </aside>
 }
@@ -380,7 +380,7 @@ export function CoverageMatrix({ tasks }: { tasks: Task[] }) {
   return <Table.ScrollContainer minWidth={560}><Table className="coverage-table" verticalSpacing="sm" aria-label="Review concern coverage">
     <Table.Thead><Table.Tr><Table.Th>Concern</Table.Th><Table.Th>Tasks tagged</Table.Th><Table.Th>Approved reference problems</Table.Th></Table.Tr></Table.Thead>
     <Table.Tbody>{rows.map(row => <Table.Tr key={row.concern}>
-      <Table.Td fw={600}>{row.concern}</Table.Td>
+      <Table.Td fw={640}>{row.concern}</Table.Td>
       <Table.Td><span className="coverage-cell"><span>{row.tagged} of {tasks.length}</span><span className="coverage-track" aria-hidden="true"><span style={{ width: `${tasks.length ? row.tagged / tasks.length * 100 : 0}%` }} /></span></span></Table.Td>
       <Table.Td><span className="coverage-cell"><span>{row.references}</span><span className="coverage-track" aria-hidden="true">
         <span style={{ width: `${row.references / maxReferences * 100}%` }} /></span></span></Table.Td>

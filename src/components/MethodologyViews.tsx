@@ -8,6 +8,7 @@ import type { ConditionalMetric, Estimator, Scorecard, Selection } from '../lib/
 import { scorecardTabs } from '../lib/view'
 import type { Inspection, ScorecardTab, Section } from '../lib/view'
 import { ClaimLabels } from './ClaimLabels'
+import { SetupName } from './Chart'
 import { DataTable, Value } from './Reading'
 import { SeriousMisses } from './SeriousMisses'
 import type { Column } from './Reading'
@@ -42,7 +43,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
   type Row = (typeof rows)[number]
   const { band, estimator } = detection
   const key = (row: Row) => row.configuration.id
-  const setup: Column<Row> = { label: 'Setup', value: row => row.configuration.short }
+  const setup: Column<Row> = { label: 'Setup', value: row => row.configuration.short, render: row => <SetupName configuration={row.configuration} /> }
   const short = (id: string) => configurations.find(configuration => configuration.id === id)?.short ?? id
   const task = (taskId: string) => dataset.tasks.find(item => item.id === taskId)
   const name = (taskId: string) => {
@@ -127,11 +128,14 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
           data={conditionalMetrics.map(item => ({ value: item, label: matchedLabels[item] }))} onChange={value => { const next = conditionalMetrics.find(item => item === value); if (next) setMetric(next) }} /></Group>
         <Text size="sm">{common.included.length} of {common.included.length + common.excluded.length} selected PRs are included: those where every selected setup has admitted reviews assessed well enough for this measure. Each included PR has equal weight.</Text>
         <DataTable label={`${matchedLabels[metric]} on matched PRs`} rows={common.rows} rowKey={row => row.configurationId} minWidth={760} columns={[
-          { label: 'Setup', value: row => short(row.configurationId) },
+          { label: 'Setup', value: row => short(row.configurationId), render: row => {
+            const found = configurations.find(configuration => configuration.id === row.configurationId)
+            return found ? <SetupName configuration={found} /> : short(row.configurationId)
+          } },
           { label: `${matchedLabels[metric]}, matched PRs`, value: row => metric === 'clean' ? share(row.equalPr) : perReview(row.equalPr) },
           { label: 'Admitted / scheduled, all selected PRs', value: row => `${row.delivery.admitted} / ${row.delivery.scheduled}` },
           { label: 'Matched PRs admitted only in part', value: row => String(row.selectivelyAdmitted) }]} />
-        {common.excluded.length > 0 && <div><Text size="sm" fw={600}>Excluded PRs</Text><ul className="reason-list">{common.excluded.map(row => <li key={row.taskId}>{name(row.taskId)}: {row.reason}</li>)}</ul></div>}
+        {common.excluded.length > 0 && <div><Text size="sm" fw={640}>Excluded PRs</Text><ul className="reason-list">{common.excluded.map(row => <li key={row.taskId}>{name(row.taskId)}: {row.reason}</li>)}</ul></div>}
         <Text size="xs" c="dimmed" className="footnote">Matching removes PRs a setup did not deliver on. A setup that admitted only some trials of a matched PR is still measured on the reviews it delivered, so that selection remains.</Text>
       </Stack></Tabs.Panel>
 
@@ -152,8 +156,8 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
       <Tabs.Panel value="pre-existing" ><Stack>
         <Text size="sm">An approved pre-existing problem counts as raised once for each admitted review that says what goes wrong. Silence creates no miss. Each count is given separately for serious and for other-material pre-existing problems. These counts do not change recall or recommendations.</Text>
         {preExistingLabels.map(label => <Stack key={label}>
-          <Text size="sm" fw={600}>{bandLabels[label]} pre-existing problems</Text>
-          <DataTable label={`${bandLabels[label]} pre-existing problems raised`} rows={rows} rowKey={key} minWidth={1150} columns={[setup,
+          <Text size="sm" fw={640}>{bandLabels[label]} pre-existing problems</Text>
+          <DataTable label={`${bandLabels[label]} pre-existing problems raised`} rows={rows} rowKey={key} minWidth={1150} foldShared={false} columns={[setup,
             { label: 'Approved catalog', value: row => String(row.card.preExisting.labels[label].catalog) },
             { label: 'Raised, per review and problem', value: row => reading(row.card.preExisting.labels[label].raised, String) },
             { label: 'Distinct problems raised', value: row => reading(row.card.preExisting.labels[label].problems, String) },
@@ -162,7 +166,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
             { label: 'Reviews assessed / admitted', value: row => `${row.card.preExisting.labels[label].assessed} / ${row.card.preExisting.labels[label].admitted}` },
             { label: 'Unresolved', value: row => String(row.card.preExisting.labels[label].unresolved) },
             { label: 'Pending candidates', value: row => String(row.card.preExisting.candidates.length) }]} />
-          {rows.map(row => <div key={key(row)}><Text size="sm" fw={600}>{row.configuration.short}</Text>
+          {rows.map(row => <div key={key(row)}><Text size="sm" fw={640}>{row.configuration.short}</Text>
             <ul>{row.card.preExisting.labels[label].rows.map(problem => <li key={problem.problemId}>{problem.title}: observed raised {problem.raised} times; {problem.assessed} assessments, {problem.unresolved} unresolved.</li>)}</ul></div>)}
         </Stack>)}
         <Text size="xs" c="dimmed">The catalog contains discovered cases, not every pre-existing fault. Assessment coverage does not establish historical audit coverage.</Text>
@@ -176,7 +180,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
           { label: 'With a refuted or unproven claim', value: row => String(row.card.controls.alarmed) }, { label: 'With an unresolved claim', value: row => String(row.card.controls.unresolved) },
           { label: 'Awaiting assessment', value: row => String(row.card.controls.unassessed) }, { label: 'Missing output', value: row => String(row.card.controls.missingOutput) },
           { label: 'Pending trials', value: row => String(row.card.controls.pending) }, { label: 'Unaudited or provisional controls', value: row => String(row.card.controls.unaudited.length) }]} />
-        {[...coverage.controls.unaudited, ...coverage.controls.provisional].length > 0 && <div><Text size="sm" fw={600}>Controls without a clean percentage</Text>
+        {[...coverage.controls.unaudited, ...coverage.controls.provisional].length > 0 && <div><Text size="sm" fw={640}>Controls without a clean percentage</Text>
           <ul className="reason-list">{[...coverage.controls.unaudited, ...coverage.controls.provisional].map(id => <li key={id}>
             <button className="text-button" onClick={() => onInspect({ kind: 'task', id })}>{name(id)}</button>: {task(id)?.control}. {task(id)?.controlReason}</li>)}</ul></div>}
       </Stack></Tabs.Panel>
@@ -229,7 +233,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
         <Group><Select label="Comparison A" aria-label="Comparison A" value={a?.configuration.id ?? null} data={configurations.map(c => ({ value: c.id, label: c.short }))} onChange={setLeft} w={330} />
           <Select label="Comparison B" aria-label="Comparison B" value={b?.configuration.id ?? null} data={configurations.filter(c => c.id !== a?.configuration.id).map(c => ({ value: c.id, label: c.short }))} onChange={setRight} w={330} /></Group>
         {!comparison || !a || !b ? <Text>Select at least two setups.</Text> : <>
-          <div><Text size="sm" fw={600}>Comparison conditions</Text>
+          <div><Text size="sm" fw={640}>Comparison conditions</Text>
             {differences.length ? <ul className="reason-list">{differences.map(difference => <li key={difference.name}>{difference.name}: {difference.values.map(row => `${row.value} (${row.configuration.short})`).join(' against ')}</li>)}</ul>
               : <Text size="sm">The recorded client, effort, permissions and billing basis match.</Text>}
             <Text size="xs" c="dimmed" className="footnote">A difference between two setups includes these conditions; it does not isolate the review method or the model.</Text></div>
@@ -239,7 +243,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
             {' '}Across {comparison.rows.length} shared PRs with {bandLabels[band].toLowerCase()} references, A is higher on {comparison.wins}, tied on {comparison.ties} and lower on {comparison.losses}; {comparison.pending} have no final comparison.</Text>
           {comparison.aggregationSensitive.kind === 'available' && comparison.aggregationSensitive.value && <Text size="sm">The two averages order these setups differently, so this comparison depends on the average chosen.</Text>}
           {omissionRange && <Text size="sm">Leaving any one whole PR out, A minus B ranges from {signed(omissionRange.low * 100)} to {signed(omissionRange.high * 100)} with {estimatorLabels[estimator]}. This is sensitivity to these PRs, not a confidence interval.</Text>}
-          {advice && <div><Text size="sm" fw={600}>What the evidence supports</Text>{recommendation('Serious-impact preference', advice.impact)}{recommendation('Claim-reliability preference', advice.reliability)}
+          {advice && <div><Text size="sm" fw={640}>What the evidence supports</Text>{recommendation('Serious-impact preference', advice.impact)}{recommendation('Claim-reliability preference', advice.reliability)}
             <Text size="xs" c="dimmed" className="footnote">A preference is limited to its own dimension. Nothing here names a best setup overall.</Text></div>}
           <DeltaPlot rows={comparison.rows.flatMap(row => {
             const value = points(row.delta)

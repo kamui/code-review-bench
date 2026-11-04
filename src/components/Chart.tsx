@@ -28,6 +28,13 @@ export function Mark({ configuration, size = 12, hollow = false }: { configurati
     style={{ '--mark-color': reviewColor(configuration), '--mark-size': `${size}px` } as CSSProperties} />
 }
 
+export function SetupName({ configuration, mark = true }: { configuration: Configuration; mark?: boolean }) {
+  const { method, model, effort } = setupParts(configuration)
+  return <span className="setup-name">{mark && <Mark configuration={configuration} size={10} />}
+    <span className="setup-name-text"><span className="setup-method">{method}</span>{model && <><span className="setup-sep"> / </span><span className="setup-model">{model}
+      {effort && <><span className="setup-sep setup-dot"> / </span>{effort}</>}</span></>}</span></span>
+}
+
 export const axisLabels: Record<Axis, string> = {
   cost: 'Cost per scheduled trial', tokens: 'Output tokens per scheduled trial', refuted: 'Refuted claims per admitted review on matched PRs', time: 'Median completed-trial time',
 }
