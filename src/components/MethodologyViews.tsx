@@ -65,15 +65,15 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
   const advice = a && b ? recommend(dataset, a.card, b.card, selection) : null
   const recommendation = (label: string, result: NonNullable<typeof advice>['impact']) => <Text size="sm">{label}: {result.kind === 'none' ? 'none'
     : `${result.kind}, ${result.prefer ? `prefers ${short(result.prefer)}` : 'no preference'}`}{result.reasons.length > 0 && `. ${result.reasons.join(' ')}`}</Text>
-  return <Paper withBorder radius="lg" p="lg" mt="xl" className="methodology-panel" id="dimensions">
-    <Title order={3}>The scorecard, dimension by dimension</Title>
-    <Text size="sm" c="dimmed" mt="xs">Every value comes from the shared scoring kernel for the selected setups and PRs. Dimensions stay separate: there is no blended score. A numbered mark explains a value below its table.</Text>
-    <Tabs value={tab} onChange={value => { const next = scorecardTabs.find(item => item === value); if (next) onTab(next) }} mt="md">
+  return <Paper withBorder radius="lg" className="methodology-panel" id="dimensions">
+    <div className="dimension-head"><Title order={3}>The scorecard, dimension by dimension</Title>
+      <Text className="subsection-lede">Every value comes from the shared scoring kernel for the selected setups and PRs. Dimensions stay separate: there is no blended score. A numbered mark explains a value in the notes below its table.</Text></div>
+    <Tabs value={tab} onChange={value => { const next = scorecardTabs.find(item => item === value); if (next) onTab(next) }} className="dimension-tabs">
       <Tabs.List><Tabs.Tab value="detection">Detection</Tabs.Tab><Tabs.Tab value="delivery">Delivery</Tabs.Tab><Tabs.Tab value="reliability">Claim reliability</Tabs.Tab>
         <Tabs.Tab value="remedies">Remedies</Tabs.Tab><Tabs.Tab value="controls">Controls</Tabs.Tab><Tabs.Tab value="pre-existing">Pre-existing problems raised</Tabs.Tab><Tabs.Tab value="advice">Advice benefit</Tabs.Tab>
         <Tabs.Tab value="usage">Cost and time</Tabs.Tab><Tabs.Tab value="candidates">Pending candidates ({novel.length + awaiting.length})</Tabs.Tab><Tabs.Tab value="comparison">Compare two setups</Tabs.Tab></Tabs.List>
 
-      <Tabs.Panel value="detection" pt="md"><Stack>
+      <Tabs.Panel value="detection" ><Stack>
         <Text size="sm" className="footnote">Recovery of each reference problem is averaged over the PR's scheduled trials; a resolved trial without an admitted review counts as not caught. Unresolved recoveries also receive zero credit and stay in the denominator, with an annotation counting affected problems and detection decisions. Both averages are shown. Problems weighted equally is the primary average for the serious and other-material bands; the unknown and all-reference bands have no preferred average. A serious reference is one the implementer had to be made aware of before release. An other-material reference earns credit when a review raises it but did not have to be raised.</Text>
         <Text size="sm">Approved references on the selected PRs: {bands.map(item => `${coverage.bands[item]} ${bandLabels[item].toLowerCase()}`).join(' · ')}. {coverage.pendingFamilies} more {coverage.pendingFamilies === 1 ? 'awaits' : 'await'} an eligibility ruling.</Text>
         <DataTable label="Detection by impact band and average" rows={rows} rowKey={key} minWidth={1250} columns={[setup,
@@ -95,7 +95,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
         <SeriousMisses dataset={dataset} configurations={configurations} cards={cards} selection={selection} onInspect={inspection => onInspect(inspection, 'serious-misses')} />
       </Stack></Tabs.Panel>
 
-      <Tabs.Panel value="delivery" pt="md"><Stack>
+      <Tabs.Panel value="delivery" ><Stack>
         <Text size="sm" className="footnote">A scheduled trial is one planned repetition on a PR. It is admitted when its last attempt delivered a usable review, failed when it resolved without one, and pending while a replacement is owed. Replaced attempts stay in the counts and in the cost.</Text>
         <DataTable label="Delivery and completion" rows={rows} rowKey={key} minWidth={1150} columns={[setup,
           { label: 'PRs run / selected', value: row => `${row.card.coverage.ran} / ${row.card.coverage.selected}` },
@@ -106,7 +106,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
           { label: 'Failure reasons', value: row => reasons(row.card.delivery.failureReasons) }, { label: 'Pending reasons', value: row => reasons(row.card.delivery.pendingReasons) }]} />
       </Stack></Tabs.Panel>
 
-      <Tabs.Panel value="reliability" pt="md"><Stack>
+      <Tabs.Panel value="reliability" ><Stack>
         <Text size="sm" className="footnote">Rates divide distinct claims by admitted reviews, the denominator shown beside them. Unsupported claims are not proven false. A setup with no admitted review has no rate: silence from a failed trial is not reliability. Rates stay unavailable while a trial is pending or an admitted review awaits assessment.</Text>
         <DataTable label="Claim outcomes per admitted review" rows={rows} rowKey={key} minWidth={1300} columns={[setup,
           { label: 'Admitted / scheduled', value: row => `${row.card.delivery.admitted} / ${row.card.delivery.scheduled}` },
@@ -135,7 +135,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
         <Text size="xs" c="dimmed" className="footnote">Matching removes PRs a setup did not deliver on. A setup that admitted only some trials of a matched PR is still measured on the reviews it delivered, so that selection remains.</Text>
       </Stack></Tabs.Panel>
 
-      <Tabs.Panel value="remedies" pt="md"><Stack>
+      <Tabs.Panel value="remedies" ><Stack>
         <Text size="sm" className="footnote">Sufficiency asks whether a recommendation resolves the problem it addresses; safety asks, independently, whether applying it does harm. New first-grader assessments check safety only for sufficient or partial fixes; the second grader omits safety. Historical assessments retain their original coverage. A recommendation without a safety assessment is unassessed, never safe. The assessed subset is selected for usefulness, so its unsafe share does not describe all advice. Only when admission is final and no trial is pending are unsafe recommendations per admitted review a lower bound, because unassessed ones could add to it. Pending cohorts show observed counts and assessed exposure without a final-cohort bound.</Text>
         <DataTable label="Remedy sufficiency and safety" rows={rows} rowKey={key} minWidth={1250} columns={[setup,
           { label: 'Inventoried / admitted reviews', value: row => `${row.card.remedies.inventoried} / ${row.card.remedies.admitted}` },
@@ -149,7 +149,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
           { label: 'Sufficiency unassessed', value: row => String(row.card.remedies.sufficiency.unassessed) }]} />
       </Stack></Tabs.Panel>
 
-      <Tabs.Panel value="pre-existing" pt="md"><Stack>
+      <Tabs.Panel value="pre-existing" ><Stack>
         <Text size="sm">An approved pre-existing problem counts as raised once for each admitted review that says what goes wrong. Silence creates no miss. Each count is given separately for serious and for other-material pre-existing problems. These counts do not change recall or recommendations.</Text>
         {preExistingLabels.map(label => <Stack key={label}>
           <Text size="sm" fw={600}>{bandLabels[label]} pre-existing problems</Text>
@@ -168,7 +168,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
         <Text size="xs" c="dimmed">The catalog contains discovered cases, not every pre-existing fault. Assessment coverage does not establish historical audit coverage.</Text>
       </Stack></Tabs.Panel>
 
-      <Tabs.Panel value="controls" pt="md"><Stack>
+      <Tabs.Panel value="controls" ><Stack>
         <Text size="sm" className="footnote">Only an independently audited clean control gets a correct-silence percentage, over the reviews that were delivered. An empty reference list is not an audit, and a failed trial is missing output, not silence.</Text>
         <DataTable label="Audited controls" rows={rows} rowKey={key} minWidth={1150} columns={[setup,
           { label: 'Audited controls', value: row => String(row.card.controls.audited) }, { label: 'Admitted control reviews', value: row => String(row.card.controls.admitted) },
@@ -181,7 +181,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
             <button className="text-button" onClick={() => onInspect({ kind: 'task', id })}>{name(id)}</button>: {task(id)?.control}. {task(id)?.controlReason}</li>)}</ul></div>}
       </Stack></Tabs.Panel>
 
-      <Tabs.Panel value="advice" pt="md"><Stack>
+      <Tabs.Panel value="advice" ><Stack>
         <Text size="sm" className="footnote">Advice benefit is a description of an audited sample. It earns no points, and a count of advisory claims does not establish benefit. Read each figure with its sample.</Text>
         <DataTable label="Supported advice benefit, sampled" rows={rows} rowKey={key} minWidth={900} columns={[setup,
           { label: 'Sampled: benefit supported', value: row => String(row.card.advice.supported) }, { label: 'Sampled: benefit unsupported', value: row => String(row.card.advice.unsupported) },
@@ -192,7 +192,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
           : <Text size="sm" c="dimmed">No advice sample has been assessed for the selected setups, so no benefit is reported.</Text>}
       </Stack></Tabs.Panel>
 
-      <Tabs.Panel value="usage" pt="md"><Stack>
+      <Tabs.Panel value="usage" ><Stack>
         <Text size="sm" className="footnote">Cost and output tokens add every attempt, retries included, and divide by scheduled trials. Time covers completed trials only and includes their replaced attempts; it excludes gaps between attempts, provisioning and grading.</Text>
         <DataTable label="Cost and time" rows={rows} rowKey={key} minWidth={1250} columns={[setup,
           { label: 'Cost per scheduled trial', value: row => reading(row.card.cost.perTrial, value => `${money(value)}${row.configuration.billing === 'list-price-equivalent' ? '*' : ''}`) },
@@ -206,7 +206,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
         <Text size="xs" c="dimmed" className="footnote">* Subscription usage valued at token list prices, not a bill or quota measurement. Output tokens include reasoning and subagents.</Text>
       </Stack></Tabs.Panel>
 
-      <Tabs.Panel value="candidates" pt="md"><Stack>
+      <Tabs.Panel value="candidates" ><Stack>
         <Text size="sm" className="footnote">A candidate is a reported problem that is not yet a reference. Only a saved human ruling makes it one, and then every selected review of that PR is graded again. Until then it earns no credit, impact and reliability recommendations on its PR are withheld, and an audited control on its PR is provisional.</Text>
         <Title order={4}>Novel candidates awaiting a ruling</Title>
         {novel.length ? <Table.ScrollContainer minWidth={900}><Table aria-label="Novel candidates awaiting a ruling" className="data-table">
@@ -225,7 +225,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
         </Table></Table.ScrollContainer> : <Text size="sm" c="dimmed">Every reference family on the selected PRs has an eligibility ruling.</Text>}
       </Stack></Tabs.Panel>
 
-      <Tabs.Panel value="comparison" pt="md"><Stack>
+      <Tabs.Panel value="comparison" ><Stack>
         <Group><Select label="Comparison A" aria-label="Comparison A" value={a?.configuration.id ?? null} data={configurations.map(c => ({ value: c.id, label: c.short }))} onChange={setLeft} w={330} />
           <Select label="Comparison B" aria-label="Comparison B" value={b?.configuration.id ?? null} data={configurations.filter(c => c.id !== a?.configuration.id).map(c => ({ value: c.id, label: c.short }))} onChange={setRight} w={330} /></Group>
         {!comparison || !a || !b ? <Text>Select at least two setups.</Text> : <>

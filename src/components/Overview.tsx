@@ -10,7 +10,7 @@ import { labelSegments, overviewColumns, overviewFirstDirection, overviewKey, ov
 import type { Band, LabelSegment, OverviewColumn, OverviewSort, Scorecard } from '../lib/scoring'
 import { Mark, reviewColor, setupParts } from './Chart'
 import { segmentClass, segmentLabels, swatch, trueSegments } from './ClaimLabels'
-import { Notes, notesFor, PeerNote, Value } from './Reading'
+import { ChartGuide, Notes, notesFor, PeerNote, Value } from './Reading'
 
 const costScale: Scale = { kind: 'log', min: 0.001, max: 10 }
 const costTicks = [0.001, 0.01, 0.1, 1, 10]
@@ -141,13 +141,13 @@ export function Overview({ summaries, detection, sort, onSort, onSelect }: {
       <li><span className="overview-key-dot" aria-hidden="true" />Lower-bound cost</li>
       <li><span className="overview-key-spread" aria-hidden="true" />Middle 50% of completed trials</li>
     </ul>
-    <Notes notes={notes} />
-    <div className="plot-caption">
+    <ChartGuide><div className="plot-caption">
       <span>Each column has its own scale; a header sorts by that column. Problems found uses the impact band and average chosen above. True claims stack every true label from 0, and the number is problem claims per review. Refuted, unproven and unresolved claims are not drawn there.</span>
       <span>Refuted or unproven: {doubtMeaning} An unproven claim is not shown to be false.</span>
       <span>Cost and time use log scales from a marked floor; a value below the floor sits on it. Cost adds every attempt, retries included, per scheduled trial. Time covers completed trials only.</span>
       {rows.some(summary => summary.configuration.billing === 'list-price-equivalent') && <span>* Subscription usage valued at token list prices, not a bill or quota measurement.</span>}
-    </div>
+    </div></ChartGuide>
+    <Notes notes={notes} />
   </div>
 }
 

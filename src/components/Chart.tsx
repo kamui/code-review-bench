@@ -8,13 +8,14 @@ import { compact, detectionLabel, duration, lowerFirst, money, percent, reasonCo
 import type { Axis, DetectionView, Summary } from '../lib/metrics'
 import type { Configuration } from '../lib/data'
 import { skillReleaseLabel } from '../lib/data'
+import { ChartGuide } from './Reading'
 
 export type ChartView = 'skills' | 'setups' | 'models' | 'tradeoff'
 type Range = { low: number; high: number } | null
 type Point = { summary: Summary; range: Range; metric: number | null; bounded: boolean }
 
 const seriesKeys: Record<string, string> = {
-  'claude-builtin': 'claude', codex: 'codex', 'ce-code-review': 'ce', 'thermo-nuclear-code-quality-review': 'thermo',
+  'claude-builtin': 'claude', codex: 'codex', 'ce-code-review': 'ce', 'thermo-nuclear-review': 'thermo-nuclear', 'thermo-nuclear-code-quality-review': 'thermo',
   'review-code/v5b-30-x382': 'review-a',
 }
 
@@ -91,7 +92,7 @@ export function Chart({ summaries, detection, matching, axis, view, showAllLabel
           hovered={hovered?.id ?? null} onSelect={onSelect} interactions={interactions} />
           : <Models points={points} measure={measure} axis={axis} onSelect={onSelect} interactions={interactions} />}
     {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={measure} axis={axis} left={hovered.left} top={hovered.top} />}
-    {points.length > 0 && <div className="plot-caption">
+    {points.length > 0 && <ChartGuide><div className="plot-caption">
       {view === 'setups' && <span><span className="whisker-key" aria-hidden="true" />Rows are ordered by {lowerFirst(measure)}. The whisker spans this average with any one whole PR left out: sensitivity to these PRs, not a confidence interval.</span>}
       {view === 'skills' && <span><span className="skill-key" aria-hidden="true" />Each line joins one review method across the models it ran on, from lowest to highest {lowerFirst(axisLabels[axis])}. Hover or focus a point to follow its method.</span>}
       {view === 'tradeoff' && <span><span className="frontier-key" aria-hidden="true" />Frontier of {dimensions}: no other selected setup is at least as good on both measures and strictly better on one. Identical results share the frontier. It says nothing about any other measure.</span>}
@@ -103,7 +104,7 @@ export function Chart({ summaries, detection, matching, axis, view, showAllLabel
       {axis === 'refuted' && <span>Refuted claims are compared on the {matching.included} of {matching.included + matching.excluded} selected PRs where every selected setup has admitted, assessed reviews, with PRs weighted equally. A setup that admitted only some trials of a matched PR is measured on the reviews it delivered; the tooltip gives its admitted trials.</span>}
       {axis === 'time' && <span>Completed trials only. Includes replacement attempts; excludes gaps between attempts, provisioning, and grading.</span>}
       {axis === 'cost' && points.some(point => point.summary.configuration.billing === 'list-price-equivalent') && <span>* Subscription usage valued at token list prices, not a bill or quota measurement.</span>}
-    </div>}
+    </div></ChartGuide>}
   </div>
 }
 
@@ -160,7 +161,7 @@ function Scatter({ mode, points, dimensions, axis, scale, frontier, showAllLabel
   hovered: string | null; onSelect: (id: string) => void; interactions: Interactions
 }) {
   const { ref, width } = useElementSize()
-  const height = 380, margin = { top: 18, right: 22, bottom: 50, left: 48 }
+  const height = 400, margin = { top: 18, right: 22, bottom: 50, left: 62 }
   const plot = { left: margin.left, right: Math.max(margin.left + 1, width - margin.right), top: margin.top, bottom: height - margin.bottom }
   const px = (value: number) => position(scale, value, plot.left, plot.right)
   const py = (value: number) => plot.bottom - value / 100 * (plot.bottom - plot.top)
@@ -216,6 +217,7 @@ function Scatter({ mode, points, dimensions, axis, scale, frontier, showAllLabel
         <text x={plot.left - 8} y={py(tick)} className="tick-label" textAnchor="end" dominantBaseline="middle">{tick}%</text></g>)}
       {xTicks.map(tick => <g key={tick}><line x1={px(tick)} x2={px(tick)} y1={plot.top} y2={plot.bottom} className="grid-line" />
         <text x={px(tick)} y={plot.bottom + 18} className="tick-label" textAnchor="middle">{tickLabel(axis, tick)}</text></g>)}
+      <text x={14} y={(plot.top + plot.bottom) / 2} className="axis-title" textAnchor="middle" transform={`rotate(-90 14 ${(plot.top + plot.bottom) / 2})`}>Detection</text>
       <text x={(plot.left + plot.right) / 2} y={height - 8} className="axis-title" textAnchor="middle">
         {axisLabels[axis]}{scale.kind === 'log' ? ' (log scale)' : ''}</text>
       {mode === 'tradeoff' && steps.length > 1 && <path d={stepPath} className="frontier-line" />}

@@ -1,4 +1,6 @@
 import { Table, Text, VisuallyHidden } from '@mantine/core'
+import type { ReactNode } from 'react'
+import { BookOpen, ChevronRight, ListOrdered } from 'lucide-react'
 import { peerLabel, reasonCounts } from '../lib/metrics'
 import type { Configuration } from '../lib/data'
 import type { Reading } from '../lib/metrics'
@@ -24,9 +26,14 @@ export function Value({ cell, notes = [] }: { cell: Cell; notes?: Note[] }) {
 
 export function Notes({ notes }: { notes: Note[] }) {
   if (!notes.length) return null
-  return <ol className="table-notes" aria-label="Notes on these values">
-    {notes.map(note => <li key={note.reason}>{note.reason} <span className="note-count">({note.count} {note.count === 1 ? 'value' : 'values'})</span></li>)}
-  </ol>
+  return <details className="table-notes"><summary><ChevronRight className="chevron" size={14} aria-hidden="true" /><ListOrdered size={14} aria-hidden="true" />Notes on marked values <span className="summary-count">{notes.length}</span></summary>
+    <ol aria-label="Notes on these values">
+      {notes.map(note => <li key={note.reason}>{note.reason} <span className="note-count">({note.count} {note.count === 1 ? 'value' : 'values'})</span></li>)}
+    </ol></details>
+}
+
+export function ChartGuide({ children }: { children: ReactNode }) {
+  return <details className="chart-guide"><summary><ChevronRight className="chevron" size={14} aria-hidden="true" /><BookOpen size={14} aria-hidden="true" />How to read this chart</summary>{children}</details>
 }
 
 export function DataTable<Row>({ label, rows, columns, rowKey, minWidth, empty = 'No selected setup.' }: {

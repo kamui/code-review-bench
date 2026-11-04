@@ -1,5 +1,6 @@
 import { createRootRoute, HeadContent, Outlet, Scripts } from '@tanstack/react-router'
-import { ColorSchemeScript, createTheme, MantineProvider, mantineHtmlProps } from '@mantine/core'
+import { ColorSchemeScript, createTheme, MantineProvider, mantineHtmlProps, Popover, SegmentedControl, Select, Tooltip } from '@mantine/core'
+import { ChevronDown } from 'lucide-react'
 import mantineStylesheet from '@mantine/core/styles.css?url'
 import geistStylesheet from '@fontsource-variable/geist/wght.css?url'
 import geistMonoStylesheet from '@fontsource-variable/geist-mono/wght.css?url'
@@ -13,6 +14,13 @@ const theme = createTheme({
   fontFamily: "'Geist Variable', system-ui, -apple-system, 'Segoe UI', sans-serif",
   fontFamilyMonospace: "'Geist Mono Variable', ui-monospace, SFMono-Regular, Consolas, monospace",
   headings: { fontFamily: "'Geist Variable', system-ui, -apple-system, 'Segoe UI', sans-serif", fontWeight: '640' },
+  components: {
+    Select: Select.extend({ defaultProps: { rightSection: <ChevronDown size={15} strokeWidth={2} aria-hidden="true" />, rightSectionPointerEvents: 'none', clearSectionMode: 'clear', checkIconPosition: 'right',
+      comboboxProps: { shadow: 'lg', radius: 'md', offset: 6, transitionProps: { transition: 'pop', duration: 120 } } } }),
+    SegmentedControl: SegmentedControl.extend({ defaultProps: { radius: 'md', withItemsBorders: false } }),
+    Tooltip: Tooltip.extend({ defaultProps: { radius: 'md', openDelay: 120 } }),
+    Popover: Popover.extend({ defaultProps: { shadow: 'lg', radius: 'md' } }),
+  },
 })
 
 export const Route = createRootRoute({
