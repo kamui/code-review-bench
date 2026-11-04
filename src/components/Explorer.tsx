@@ -292,7 +292,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
       </section></>}
 
       {page === 'tasks' && <section id="tasks" className="tasks-section">
-        <Group justify="space-between" mb="lg"><div><Title order={2}>Explore the tasks</Title><Text size="sm" c="dimmed" mt={5}>A small, varied corpus. Find the gaps before drawing conclusions.</Text></div><Badge variant="light" color="gray" size="lg">{candidates.length} of {dataset.tasks.length} tasks</Badge></Group>
+        <header className="section-head"><div><p className="eyebrow">Corpus</p><Title order={2}>Explore the tasks</Title><Text className="section-lede">A small, varied corpus. Find the gaps before drawing conclusions.</Text></div><Badge variant="outline" color="gray" radius="sm" className="status-badge">{candidates.length} of {dataset.tasks.length} tasks</Badge></header>
         <Paper withBorder radius="lg" p="lg" className="filter-panel">
           <div className="task-filters"><TextInput aria-label="Search tasks" placeholder="Search repository, PR, or behavior" value={query} onChange={event => setQuery(event.currentTarget.value)} leftSection={<Search size={16} />} />
             <Select aria-label="Code area" placeholder="All code areas" data={labels('areas')} value={area} onChange={setArea} clearable />

@@ -15,7 +15,7 @@ const theme = createTheme({
   fontFamilyMonospace: "'Geist Mono Variable', ui-monospace, SFMono-Regular, Consolas, monospace",
   headings: { fontFamily: "'Geist Variable', system-ui, -apple-system, 'Segoe UI', sans-serif", fontWeight: '640' },
   components: {
-    Select: Select.extend({ defaultProps: { rightSection: <ChevronDown size={15} strokeWidth={2} aria-hidden="true" />, rightSectionPointerEvents: 'none', clearSectionMode: 'clear', checkIconPosition: 'right',
+    Select: Select.extend({ defaultProps: { rightSection: <ChevronDown size={15} strokeWidth={2} aria-hidden="true" />, rightSectionPointerEvents: 'none', checkIconPosition: 'right',
       comboboxProps: { shadow: 'lg', radius: 'md', offset: 6, transitionProps: { transition: 'pop', duration: 120 } } } }),
     SegmentedControl: SegmentedControl.extend({ defaultProps: { radius: 'md', withItemsBorders: false } }),
     Tooltip: Tooltip.extend({ defaultProps: { radius: 'md', openDelay: 120 } }),
