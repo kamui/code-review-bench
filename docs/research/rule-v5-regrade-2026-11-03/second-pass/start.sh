@@ -7,4 +7,4 @@ export PATH=/home/t3/.local/bin:/home/t3/.local/share/mise/installs/bun/1.4.4/bi
 cd /home/t3/.t3/worktrees/code-review-bench/t3-aecb23e8
 exec /usr/bin/flock -n -E 0 /home/t3/.cache/second-pass-v5.lock \
   python3 -I docs/research/rule-v5-regrade-2026-11-03/second-pass/launch.py run \
-  --authorization docs/research/rule-v5-regrade-2026-11-03/authorization.second-pass.v1.json
+  --authorization docs/research/rule-v5-regrade-2026-11-03/authorization.second-pass.v2.json
