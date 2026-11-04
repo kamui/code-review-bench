@@ -245,7 +245,7 @@ describe('overview', () => {
   test('is the default view, sorted by problem claims per review with unavailable values last, and hides the detection axis control', () => {
     expect(shown).toContain('Sorted by problem claims per review, most first. Setups without a value come last.')
     expect(dashboard).not.toContain('Compare detection against')
-    expect(dashboard).toMatch(/aria-sort="descending"[^>]*>(?:<[^>]+>)*<span class="overview-title">True claims/)
+    expect(dashboard).toMatch(/aria-sort="descending"[^>]*>(?:<[^>]+>)*<span class="overview-title">Claims per review/)
     expect(setups(dashboard).slice(0, 6)).toEqual(['ce-code-review / Fixture A / High', 'Claude built-in / Fixture A / High', 'ce-code-review / Fixture B / High',
       'ce-code-review / Fixture C / High', 'Claude built-in / Fixture B / High', 'Claude built-in / Fixture C / High'])
     expect(shown).toContain('Problem claims per review Unavailable 1 : 4 admitted reviews were graded before these labels.')

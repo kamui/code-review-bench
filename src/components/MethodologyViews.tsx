@@ -241,7 +241,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
           <div className="compare-figures">
             <div className="compare-figure"><span className="compare-label">A minus B, {estimatorLabels[estimator]}</span><span className="compare-value"><Value cell={reading(comparison.full[estimator].delta, value => signed(value * 100))} /></span></div>
             <div className="compare-figure"><span className="compare-label">A minus B, {estimatorLabels[estimator === 'equalPr' ? 'equalProblem' : 'equalPr']}</span><span className="compare-value"><Value cell={reading(comparison.full[estimator === 'equalPr' ? 'equalProblem' : 'equalPr'].delta, value => signed(value * 100))} /></span></div>
-            <div className="compare-figure"><span className="compare-label">Shared PRs with {scope} references</span><span className="compare-value">{comparison.wins} higher · {comparison.ties} tied · {comparison.losses} lower</span>
+            <div className="compare-figure"><span className="compare-label">Shared PRs with {scope} references, A against B</span><span className="compare-value">{comparison.wins} higher · {comparison.ties} tied · {comparison.losses} lower</span>
               {comparison.pending > 0 && <span className="compare-note">{comparison.pending} without a final comparison</span>}</div>
           </div>
           <Text size="sm" c="dimmed">{lowerFirst(detectionLabel(detection)).replace(/^./, first => first.toUpperCase())}, in percentage points.{omissionRange && ` Leaving any one whole PR out, A minus B ranges from ${signed(omissionRange.low * 100)} to ${signed(omissionRange.high * 100)}; this is sensitivity to these PRs, not a confidence interval.`}
