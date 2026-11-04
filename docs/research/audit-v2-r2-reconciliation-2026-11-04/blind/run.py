@@ -32,9 +32,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROUND = HERE.parent
 ROOT = HERE.parents[3]
-CACHE = Path.home() / ".cache/audit-v2-r2-2026-11-04-blind"
+CACHE = Path.home() / ".cache/audit-v2-r2-2026-11-04-blind-2"
 SESSIONS, HOMES, LOGS, PROMPTS = CACHE / "sessions", CACHE / "homes", CACHE / "logs", CACHE / "prompts"
-STORE = CACHE / "runtime-store"
 CREDENTIALS = Path.home() / ".claude/.credentials.json"
 ACCOUNT = Path.home() / ".claude.json"
 CLAUDE = Path.home() / ".local/share/mise/installs/claude/2.1.317/claude"
@@ -109,8 +108,8 @@ def prepare(name, question):
     for target, source in files:
         shutil.copyfile(source, directory / target)
     prompt_file.write_text(prompt, encoding="utf-8")
-    subprocess.run(["mise", "exec", "--", "bench/tools/bench-tools", "clean-context", "claude-account", "--source", str(ACCOUNT), "--home", str(home)],
-                   cwd=ROOT, check=True, capture_output=True, env={**os.environ, "BENCH_RUNTIME_STORE": str(STORE)})
+    subprocess.run(["bench/tools/bench-tools", "clean-context", "claude-account", "--source", str(ACCOUNT), "--home", str(home)],
+                   cwd=ROOT, check=True, capture_output=True)
 
 
 def result(log):
