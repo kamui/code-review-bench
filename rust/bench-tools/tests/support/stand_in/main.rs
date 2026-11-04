@@ -24,7 +24,7 @@ fn main() {
         sleep(seconds.to_str().unwrap().parse().unwrap());
         return;
     }
-    let executable = env::current_exe().unwrap();
+    let executable = env::current_exe().unwrap().canonicalize().unwrap();
     let directory = executable.parent().unwrap().to_path_buf();
     let argv: Vec<String> = env::args().skip(1).collect();
     let code = match executable.file_name().and_then(|name| name.to_str()) {
