@@ -141,6 +141,10 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
   const status = datasetStatus(dataset)
   const differing = conditionDifferences(summaries.map(row => row.configuration)).map(difference => difference.name.toLowerCase())
   const labels = (key: keyof Task['profile']) => Array.from(new Set(dataset.tasks.flatMap(task => task.profile[key]))).sort()
+  const approvedFamilies = candidates.flatMap(task => task.families.filter(family => family.eligibility === 'approved'))
+  const findingConcerns = Array.from(new Set([...approvedFamilies.flatMap(family => family.concerns), ...findingConcern ? [findingConcern] : []])).sort()
+    .map(value => ({ value, label: `${value} (${approvedFamilies.filter(family => family.concerns.includes(value)).length})` }))
+  const concernReferences = approvedFamilies.filter(family => findingConcern && family.concerns.includes(findingConcern)).length
   const edition = (configuration: Configuration) => configurations.filter(item => item.method === configuration.method && item.reviewEdition === configuration.reviewEdition)
   const editionIds = (configuration: Configuration) => edition(configuration).map(item => item.id)
   const toggleEdition = (configuration: Configuration) => {
@@ -209,7 +213,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
           </div>
           <div className="filter-bar">
             <div className="measure-controls">
-              <Select label="Impact band" size="xs" w={200} allowDeselect={false} value={band} data={bands.map(value => ({ value, label: `${bandLabels[value]} (${coverage.bands[value]})` }))}
+              <Select label="Impact band" size="xs" w={200} allowDeselect={false} value={band} data={bands.filter(value => coverage.bands[value] > 0 || value === band).map(value => ({ value, label: `${bandLabels[value]} (${coverage.bands[value]})` }))}
                 onChange={value => { const next = bands.find(item => item === value); if (next) onSearch({ band: unlessDefault(next, 'all') }, 'scorecard') }} />
               <Select label="Average" size="xs" w={220} allowDeselect={false} value={estimator} data={estimators.map(value => ({ value, label: estimatorLabels[value].replace(/^./, letter => letter.toUpperCase()) }))}
                 onChange={value => { const next = estimators.find(item => item === value); if (next) onSearch({ average: unlessDefault(next, 'equalProblem') }, 'scorecard') }} />
@@ -220,7 +224,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
                 const ids = editionIds(configuration), all = ids.every(id => selected.includes(id)), some = ids.some(id => selected.includes(id))
                 return <button type="button" role="checkbox" aria-checked={all ? true : some ? 'mixed' : false} key={`${configuration.method}/${configuration.reviewEdition}`}
                   className="method-chip" data-state={all ? 'on' : some ? 'mixed' : 'off'} onClick={() => toggleEdition(configuration)}>
-                  <Mark configuration={configuration} size={11} hollow={!some} /><span className="configuration-name">{methodName(configuration)}</span>
+                  <Mark configuration={configuration} size={11} /><span className="configuration-name">{methodName(configuration)}</span>
                   {configuration.experimental && <span className="chip-partial">experiment</span>}
                   {some && !all && <span className="chip-partial">partial</span>}
                 </button>
@@ -306,7 +310,8 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
             <Select label="Review concern" aria-label="Task review concern" placeholder="All review concerns" data={labels('concerns')} value={concern} onChange={setConcern} clearable />
           </div>
           <Group gap="sm" mt="md" justify="space-between" align="flex-end" className="task-filters-extra">
-            <Select label="Count only references about" aria-label="Finding concern" placeholder="All finding concerns" data={labels('concerns')} value={findingConcern} onChange={setFindingConcern} clearable w={260} />
+            <div><Select label="Count only references about" aria-label="Finding concern" placeholder="All finding concerns" data={findingConcerns} value={findingConcern} onChange={setFindingConcern} clearable w={260} />
+              <Text size="xs" c="dimmed" mt={6}>{findingConcern ? `Detection now counts only the ${plural(concernReferences, `${findingConcern.toLowerCase()} reference`)} on these PRs.` : 'Detection counts every approved reference.'}</Text></div>
             <Button variant="subtle" color="gray" size="sm" onClick={resetFilters}>Reset filters</Button></Group>
         </Paper>
         <Text size="xs" c="dimmed" mt="sm" mb="md">Filters also narrow the <Link className="filter-link" to="/" hash="scorecard">scorecard</Link> comparison. Concern labels describe review opportunities; finding breakdowns count only matching reference problems.</Text>

@@ -15,7 +15,7 @@ import { DataTable, Disclosure, Value } from './Reading'
 import { SeriousMisses } from './SeriousMisses'
 import type { Column } from './Reading'
 
-const signed = (value: number) => `${value > 0 ? '+' : ''}${value.toFixed(2)} pp`
+const signed = (value: number) => `${value > 0 ? '+' : value < 0 ? '−' : ''}${Math.abs(value).toFixed(1)} pp`
 const span = (range: { low: number; high: number }) => `${percent(range.low * 100)} to ${percent(range.high * 100)}`
 const reasons = (counts: Record<string, number>) => Object.entries(counts).map(([reason, count]) => `${count} ${reason}`).join('; ') || 'None'
 const averages: Record<Estimator, string> = { equalProblem: 'equal problems', equalPr: 'equal PRs' }
@@ -41,7 +41,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
   const rows = configurations.flatMap(configuration => {
     const card = cards.find(item => item.configurationId === configuration.id)
     return card ? [{ configuration, card }] : []
-  })
+  }).sort((left, right) => left.configuration.short.localeCompare(right.configuration.short))
   type Row = (typeof rows)[number]
   const { band, estimator } = detection
   const key = (row: Row) => row.configuration.id
@@ -76,7 +76,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
     { label: 'Generic advisory dossiers, benefit unmeasured', value: row => String(row.card.advice.generic) }]} />
   return <Paper withBorder radius="lg" className="methodology-panel" id="dimensions">
     <div className="dimension-head"><Title order={3}>The scorecard, dimension by dimension</Title>
-      <Text className="subsection-lede">Every value comes from the shared scoring kernel for the selected setups and PRs. Dimensions stay separate: there is no blended score. A numbered mark explains a value in the notes below its table.</Text></div>
+      <Text className="subsection-lede">Every value comes from the shared scoring kernel for the selected setups and PRs. Dimensions stay separate: there is no blended score. Rows are in name order, as in the table above. A numbered mark explains a value in the notes below its table.</Text></div>
     <Tabs value={tab} onChange={value => { const next = scorecardTabs.find(item => item === value); if (next) onTab(next) }} className="dimension-tabs">
       <Tabs.List><Tabs.Tab value="detection">Detection</Tabs.Tab><Tabs.Tab value="delivery">Delivery</Tabs.Tab><Tabs.Tab value="reliability">Claim reliability</Tabs.Tab>
         <Tabs.Tab value="remedies">Remedies</Tabs.Tab><Tabs.Tab value="controls">Controls</Tabs.Tab><Tabs.Tab value="pre-existing">Pre-existing problems raised</Tabs.Tab><Tabs.Tab value="advice">Advice benefit</Tabs.Tab>
@@ -220,18 +220,16 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
         <TabIntro lede="Problems that reviews reported but that are not yet references, waiting for a human ruling.">A candidate is a reported problem that is not yet a reference. Only a saved human ruling makes it one, and then every selected review of that PR is graded again. Until then it earns no credit, impact and reliability recommendations on its PR are withheld, and an audited control on its PR is provisional.</TabIntro>
         <Title order={4}>Novel candidates awaiting a ruling</Title>
         {novel.length ? <Table.ScrollContainer minWidth={900}><Table aria-label="Novel candidates awaiting a ruling" className="data-table">
-          <Table.Thead><Table.Tr><Table.Th scope="col">Candidate</Table.Th><Table.Th scope="col">PR</Table.Th><Table.Th scope="col">Age</Table.Th><Table.Th scope="col">Claim</Table.Th><Table.Th scope="col">Evidence limits</Table.Th><Table.Th scope="col">Decision relevance</Table.Th></Table.Tr></Table.Thead>
-          <Table.Tbody>{novel.map(candidate => <Table.Tr key={candidate.id}><Table.Th scope="row" className="candidate-id">{candidate.id}</Table.Th>
-            <Table.Td><button className="text-button" onClick={() => onInspect({ kind: 'task', id: candidate.taskId })}>{name(candidate.taskId)}</button></Table.Td>
+          <Table.Thead><Table.Tr><Table.Th scope="col">PR</Table.Th><Table.Th scope="col">Age</Table.Th><Table.Th scope="col">Claim</Table.Th><Table.Th scope="col">Evidence limits</Table.Th><Table.Th scope="col">Decision relevance</Table.Th></Table.Tr></Table.Thead>
+          <Table.Tbody>{novel.map(candidate => <Table.Tr key={candidate.id}><Table.Th scope="row"><button className="text-button" onClick={() => onInspect({ kind: 'task', id: candidate.taskId })}>{name(candidate.taskId)}</button></Table.Th>
             <Table.Td>{candidate.ageDays} {candidate.ageDays === 1 ? 'day' : 'days'}<Text size="xs" c="dimmed">since {candidate.recordedAt.slice(0, 10)}</Text></Table.Td>
-            <Table.Td>{candidate.claim}</Table.Td><Table.Td>{candidate.limits}</Table.Td><Table.Td>{candidate.relevance}</Table.Td></Table.Tr>)}</Table.Tbody>
+            <Table.Td>{candidate.claim}<Text size="xs" c="dimmed" className="candidate-id">Record {candidate.id}</Text></Table.Td><Table.Td>{candidate.limits}</Table.Td><Table.Td>{candidate.relevance}</Table.Td></Table.Tr>)}</Table.Tbody>
         </Table></Table.ScrollContainer> : <Text size="sm" c="dimmed">No novel candidate awaits a ruling on the selected PRs.</Text>}
         <Title order={4}>Reference families awaiting eligibility</Title>
         {awaiting.length ? <Table.ScrollContainer minWidth={700}><Table aria-label="Reference families awaiting eligibility" className="data-table">
-          <Table.Thead><Table.Tr><Table.Th scope="col">Family</Table.Th><Table.Th scope="col">PR</Table.Th><Table.Th scope="col">Problem</Table.Th><Table.Th scope="col">Why it is pending</Table.Th></Table.Tr></Table.Thead>
-          <Table.Tbody>{awaiting.map(({ taskId, family }) => <Table.Tr key={`${taskId}/${family.id}`}><Table.Th scope="row" className="candidate-id">{family.id}</Table.Th>
-            <Table.Td><button className="text-button" onClick={() => onInspect({ kind: 'task', id: taskId })}>{name(taskId)}</button></Table.Td>
-            <Table.Td>{family.title}</Table.Td><Table.Td>{family.eligibilityReason}</Table.Td></Table.Tr>)}</Table.Tbody>
+          <Table.Thead><Table.Tr><Table.Th scope="col">PR</Table.Th><Table.Th scope="col">Problem</Table.Th><Table.Th scope="col">Why it is pending</Table.Th></Table.Tr></Table.Thead>
+          <Table.Tbody>{awaiting.map(({ taskId, family }) => <Table.Tr key={`${taskId}/${family.id}`}><Table.Th scope="row"><button className="text-button" onClick={() => onInspect({ kind: 'task', id: taskId })}>{name(taskId)}</button></Table.Th>
+            <Table.Td>{family.title}<Text size="xs" c="dimmed" className="candidate-id">Family {family.id}</Text></Table.Td><Table.Td>{family.eligibilityReason}</Table.Td></Table.Tr>)}</Table.Tbody>
         </Table></Table.ScrollContainer> : <Text size="sm" c="dimmed">Every reference family on the selected PRs has an eligibility ruling.</Text>}
       </Stack></Tabs.Panel>
 

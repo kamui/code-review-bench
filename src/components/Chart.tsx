@@ -49,7 +49,7 @@ const metricOf = (summary: Summary, axis: Axis) => axis === 'time' ? summary.tim
 const boundedOn = (summary: Summary, axis: Axis) => (axis === 'cost' || axis === 'tokens') && summary.card[axis].perTrial.kind === 'atLeast'
 
 function formatMetric(axis: Axis, value: number | null, configuration?: Configuration, bounded = false) {
-  if (value === null) return '—'
+  if (value === null) return 'Unavailable'
   const text = `${bounded ? '≥ ' : ''}${axis === 'cost' ? money(value) : axis === 'tokens' ? compact(value) : axis === 'time' ? duration(value * 60) : value.toFixed(2)}`
   return axis === 'cost' && configuration?.billing === 'list-price-equivalent' ? `${text}*` : text
 }
@@ -104,7 +104,7 @@ export function Chart({ summaries, detection, matching, axis, view, showAllLabel
       {view === 'setups' && <li><span className="whisker-key" aria-hidden="true" />Range with any one PR left out</li>}
       {view === 'skills' && <li><span className="context-key" aria-hidden="true" />Other selected setups</li>}
       {view === 'tradeoff' && <li><span className="frontier-key" aria-hidden="true" />Frontier</li>}
-      {view === 'tradeoff' && <li><span className="faded-key" aria-hidden="true" />Not on the frontier</li>}
+      {view === 'tradeoff' && <li><span className="faded-key" aria-hidden="true"><span /><span /></span>Not on the frontier, paler</li>}
       {measured.some(point => point.bounded) && <li><span className="bound-key" aria-hidden="true" />Lower bound{view === 'skills' ? '' : ', left out of the frontier'}</li>}
     </ul>}
     {points.length > 0 && <ChartGuide><div className="plot-caption">

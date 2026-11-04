@@ -46,8 +46,9 @@ function InspectionBody({ dataset, results, band, configuration, task, inspectio
   for (const item of attempts) {
     const owner = outcomes.find(outcome => outcome.attemptIds.includes(item.id))
     const setup = dataset.configurations.find(configuration => configuration.id === owner?.configurationId)
-    const group = configuration ? item.taskId : setup?.short ?? item.runId
-    groups.set(group, [...groups.get(group) ?? [], { value: item.id, label: `Trial ${item.replicate} · ${item.label}${item.complete ? '' : ' · incomplete or invalid'}` }])
+    const owningTask = dataset.tasks.find(entry => entry.id === item.taskId)
+    const group = configuration ? owningTask ? `${owningTask.repo} #${owningTask.pr}` : item.taskId : setup?.short ?? item.runId
+    groups.set(group, [...groups.get(group) ?? [], { value: item.id, label: `Trial ${item.replicate} · ${item.label.replace(/^att-0*/, 'attempt ')}${item.complete ? '' : ' · incomplete or invalid'}` }])
   }
   const attemptGroups = Array.from(groups, ([group, items]) => ({ group, items }))
   const currentGroup = attemptGroups.find(entry => entry.items.some(item => item.value === attemptId))?.group
