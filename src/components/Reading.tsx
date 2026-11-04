@@ -1,6 +1,7 @@
 import { Table, Text, VisuallyHidden } from '@mantine/core'
 import type { ReactNode } from 'react'
 import { BookOpen, ChevronRight, ListOrdered } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import { peerLabel, reasonCounts } from '../lib/metrics'
 import type { Configuration } from '../lib/data'
 import type { Reading } from '../lib/metrics'
@@ -32,9 +33,20 @@ export function Notes({ notes }: { notes: Note[] }) {
     </ol></details>
 }
 
-export function ChartGuide({ children }: { children: ReactNode }) {
-  return <details className="chart-guide"><summary><ChevronRight className="chevron" size={14} aria-hidden="true" /><BookOpen size={14} aria-hidden="true" />How to read this chart</summary>{children}</details>
+export function Disclosure({ title, icon = BookOpen, children }: { title: string; icon?: LucideIcon; children: ReactNode }) {
+  const Icon = icon
+  return <details className="chart-guide"><summary><ChevronRight className="chevron" size={14} aria-hidden="true" /><Icon size={14} aria-hidden="true" />{title}</summary>{children}</details>
 }
+
+export const ChartGuide = ({ children }: { children: ReactNode }) => <Disclosure title="How to read this chart">{children}</Disclosure>
+
+// Saved review text marks code with Markdown backticks.
+export function Rich({ text }: { text: string }) {
+  return text.split(/(`[^`]+`)/).map((part, index) => part.length > 2 && part.startsWith('`') && part.endsWith('`')
+    ? <code key={index} className="inline-code">{part.slice(1, -1)}</code> : part)
+}
+
+export const humanize = (slug: string) => slug.replace(/-/g, ' ').replace(/^./, letter => letter.toUpperCase())
 
 export function DataTable<Row>({ label, rows, columns, rowKey, minWidth, empty = 'No selected setup.', foldShared = true }: {
   label: string; rows: Row[]; columns: Column<Row>[]; rowKey: (row: Row) => string; minWidth: number; empty?: string; foldShared?: boolean

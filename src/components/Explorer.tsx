@@ -3,8 +3,8 @@ import { ActionIcon, Alert, Anchor, Badge, Button, Checkbox, Container, Group, L
   SegmentedControl, Select, Stack, Switch, Table, Tabs, Text, TextInput, Title, Tooltip, useComputedColorScheme, useMantineColorScheme } from '@mantine/core'
 import { useMediaQuery } from '@mantine/hooks'
 import { Link, Navigate, useLocation, useMatch, useNavigate, useSearch } from '@tanstack/react-router'
-import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpDown, ArrowUpRight, Boxes, Check, ChevronDown, CircleDashed, CodeXml, Cpu, Crosshair, Database, EyeOff, FileCheck2, GitCompareArrows,
-  Grid3x3, Info, LayoutList, Moon, Rows3, Scale, Search, ShieldCheck, SlidersHorizontal, Spline, Sun, TrendingUp, X } from 'lucide-react'
+import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpDown, ArrowUpRight, ChartNoAxesGantt, ChartScatter, Check, ChevronDown, ChevronRight, CircleDashed, CodeXml, Cpu, Crosshair, Database,
+  EyeOff, FileCheck2, GitCommitHorizontal, Grid3x3, Info, LayoutGrid, LayoutList, Moon, Scale, Search, ShieldCheck, SlidersHorizontal, Sun, X } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { fetchDataset, impactBands, skillReleaseLabel } from '../lib/data'
 import type { Configuration, Dataset, Task } from '../lib/data'
@@ -78,8 +78,8 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
   const showAllLabels = search.labels ?? false
   const narrow = useMediaQuery('(max-width: 700px)') ?? false
   const chartView = narrow && view !== 'overview' ? 'setups' : view
-  const views: { label: string; value: MainView; icon: LucideIcon }[] = [{ label: 'Overview', value: 'overview', icon: LayoutList }, { label: 'By method', value: 'skills', icon: Spline },
-    { label: 'By setup', value: 'setups', icon: Rows3 }, { label: 'By model', value: 'models', icon: Boxes }, { label: 'Frontier', value: 'tradeoff', icon: TrendingUp }]
+  const views: { label: string; value: MainView; icon: LucideIcon }[] = [{ label: 'Overview', value: 'overview', icon: LayoutList }, { label: 'By method', value: 'skills', icon: LayoutGrid },
+    { label: 'By setup', value: 'setups', icon: ChartNoAxesGantt }, { label: 'By model', value: 'models', icon: GitCommitHorizontal }, { label: 'Frontier', value: 'tradeoff', icon: ChartScatter }]
   const [query, setQuery] = useState('')
   const [area, setArea] = useState<string | null>(null)
   const [change, setChange] = useState<string | null>(null)
@@ -231,12 +231,15 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
                     <Button variant="subtle" size="compact-xs" onClick={() => setSelected(configurations.map(item => item.id))}>Select all</Button>
                     <Button variant="subtle" size="compact-xs" onClick={() => setSelected([])}>Clear all</Button>
                   </Group></Group>
-                  {configurations.map(configuration => <Checkbox key={configuration.id} label={<span className="configuration-name"><Mark configuration={configuration} size={9} />{configuration.short}</span>} checked={selected.includes(configuration.id)} onChange={() => setSelected(selected.includes(configuration.id) ? selected.filter(id => id !== configuration.id) : [...selected, configuration.id])} size="xs" />)}
+                  {editions.map(group => <div key={`${group.method}/${group.reviewEdition}`} className="refine-group"><span className="refine-group-title"><Mark configuration={group} size={9} />{methodName(group)}</span>
+                    {edition(group).map(configuration => <Checkbox key={configuration.id} label={[setupParts(configuration).model, setupParts(configuration).effort].filter(Boolean).join(' · ')} aria-label={configuration.short}
+                      checked={selected.includes(configuration.id)} onChange={() => setSelected(selected.includes(configuration.id) ? selected.filter(id => id !== configuration.id) : [...selected, configuration.id])} size="xs" />)}</div>)}
                 </Stack></Popover.Dropdown>
               </Popover>
               <Popover position="bottom-end" width={230} withArrow>
                 <Popover.Target><Button variant="default" size="xs" className="refine-button" leftSection={<Cpu size={14} aria-hidden="true" />} rightSection={<ChevronDown size={14} aria-hidden="true" />}>Models ({selectedModels.length}/{modelChoices.length})</Button></Popover.Target>
-                <Popover.Dropdown className="refine-dropdown"><Stack gap="sm"><Group justify="space-between"><Text size="xs" fw={640}>Models</Text><Button variant="subtle" size="compact-xs" onClick={() => setSelectedModels(modelChoices.map(model => model.value))}>Select all</Button></Group>
+                <Popover.Dropdown className="refine-dropdown"><Stack gap="sm"><Group justify="space-between"><Text size="xs" fw={640}>Models</Text><Group gap="xs"><Button variant="subtle" size="compact-xs" onClick={() => setSelectedModels(modelChoices.map(model => model.value))}>Select all</Button>
+                  <Button variant="subtle" size="compact-xs" onClick={() => setSelectedModels([])}>Clear all</Button></Group></Group>
                   {modelChoices.map(model => <Checkbox key={model.value} label={model.label} checked={selectedModels.includes(model.value)} onChange={() => setSelectedModels(selectedModels.includes(model.value) ? selectedModels.filter(value => value !== model.value) : [...selectedModels, model.value])} size="xs" />)}
                 </Stack></Popover.Dropdown>
               </Popover>
@@ -279,7 +282,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
             {(['equalProblem', 'equalPr', 'seriousCaught', 'repeatedMisses', 'cost', 'tokens', 'refuted'] as const).map(column => <Table.Td key={column}><Value cell={row.cells[column]} notes={tableNotes} /></Table.Td>)}
             <Table.Td><span className="completion-count">{row.completed}/{row.trials}</span></Table.Td>
             <Table.Td>{row.tasks}/{shared.length}</Table.Td>
-            <Table.Td><ActionIcon aria-label={`Inspect ${row.configuration.short}`} variant="subtle" color="gray" onClick={() => inspect('review-setups')({ kind: 'configuration', id: row.configuration.id })}><ArrowUpRight size={18} /></ActionIcon></Table.Td>
+            <Table.Td><ActionIcon aria-label={`Inspect ${row.configuration.short}`} variant="subtle" color="gray" onClick={() => inspect('review-setups')({ kind: 'configuration', id: row.configuration.id })}><ChevronRight size={18} /></ActionIcon></Table.Td>
           </Table.Tr>)}</Table.Tbody>
         </Table></Table.ScrollContainer></div>
         <Notes notes={tableNotes} />
@@ -293,18 +296,18 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
       {page === 'tasks' && <section id="tasks" className="tasks-section">
         <header className="section-head"><div><p className="eyebrow">Corpus</p><Title order={2}>Explore the tasks</Title><Text className="section-lede">A small, varied corpus. Find the gaps before drawing conclusions.</Text></div><Badge variant="outline" color="gray" radius="sm" className="status-badge">{candidates.length} of {dataset.tasks.length} tasks</Badge></header>
         <Paper withBorder radius="lg" p="lg" className="filter-panel">
-          <div className="task-filters"><TextInput aria-label="Search tasks" placeholder="Search repository, PR, or behavior" value={query} onChange={event => setQuery(event.currentTarget.value)} leftSection={<Search size={16} />} />
-            <Select aria-label="Code area" placeholder="All code areas" data={labels('areas')} value={area} onChange={setArea} clearable />
-            <Select aria-label="Change kind" placeholder="All change kinds" data={labels('changeKinds')} value={change} onChange={setChange} clearable />
-            <Select aria-label="Technology" placeholder="All technologies" data={labels('technologies')} value={technology} onChange={setTechnology} clearable />
-            <Select aria-label="Task review concern" placeholder="All review concerns" data={labels('concerns')} value={concern} onChange={setConcern} clearable />
+          <div className="task-filters"><TextInput label="Search" aria-label="Search tasks" placeholder="Search repository, PR, or behavior" value={query} onChange={event => setQuery(event.currentTarget.value)} leftSection={<Search size={16} />} />
+            <Select label="Code area" aria-label="Code area" placeholder="All code areas" data={labels('areas')} value={area} onChange={setArea} clearable />
+            <Select label="Change kind" aria-label="Change kind" placeholder="All change kinds" data={labels('changeKinds')} value={change} onChange={setChange} clearable />
+            <Select label="Technology" aria-label="Technology" placeholder="All technologies" data={labels('technologies')} value={technology} onChange={setTechnology} clearable />
+            <Select label="Review concern" aria-label="Task review concern" placeholder="All review concerns" data={labels('concerns')} value={concern} onChange={setConcern} clearable />
           </div>
           <Group gap="sm" mt="md" justify="space-between"><Group gap="sm"><Text size="xs" c="dimmed">Count only references about</Text>
             <Select aria-label="Finding concern" placeholder="All finding concerns" data={labels('concerns')} value={findingConcern} onChange={setFindingConcern} clearable size="xs" w={200} />
           </Group><Button variant="subtle" color="gray" size="xs" onClick={resetFilters}>Reset filters</Button></Group>
         </Paper>
         <Text size="xs" c="dimmed" mt="sm" mb="md">Filters also narrow the <Link className="filter-link" to="/" hash="scorecard">scorecard</Link> comparison. Concern labels describe review opportunities; finding breakdowns count only matching reference problems.</Text>
-        <Tabs defaultValue="catalog" className="task-tabs"><Tabs.List><Tabs.Tab value="catalog" leftSection={<Database size={15} />}>Task catalog</Tabs.Tab><Tabs.Tab value="coverage">Coverage gaps</Tabs.Tab></Tabs.List>
+        <Tabs defaultValue="catalog" className="task-tabs"><Tabs.List><Tabs.Tab value="catalog" leftSection={<Database size={15} />}>Task catalog</Tabs.Tab><Tabs.Tab value="coverage" leftSection={<Grid3x3 size={15} />}>Coverage gaps</Tabs.Tab></Tabs.List>
           <Tabs.Panel value="catalog" pt="md"><Table.ScrollContainer minWidth={720}><Table verticalSpacing="md" className="task-table" highlightOnHover>
             <Table.Thead><Table.Tr><Table.Th>Pull request</Table.Th><Table.Th>Profile</Table.Th><Table.Th>References</Table.Th><Table.Th>Mean {bandLabels[band].toLowerCase()} detection, selected setups</Table.Th><Table.Th>In comparison</Table.Th><Table.Th /></Table.Tr></Table.Thead>
             <Table.Tbody>{candidates.map(task => {
@@ -317,7 +320,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
                   {!!task.preExistingProblems?.length && <Text size="xs" c="dimmed" mt={4}>{plural(task.preExistingProblems.length, 'pre-existing problem')}</Text>}</Table.Td>
                 <Table.Td><DetectionBar result={meanTaskRecall(board.cards.filter(card => activeIds.includes(card.configurationId)), task.id, band)} /></Table.Td><Table.Td>{sharedIds.has(task.id) ? <span className="included-label"><Check size={14} aria-hidden="true" /> Included</span>
                   : <Tooltip label="At least one selected setup has no result for this PR"><Text size="xs" c="dimmed" className="missing-label">Missing results</Text></Tooltip>}</Table.Td>
-                <Table.Td><ActionIcon aria-label={`Inspect ${task.repo} PR ${task.pr}`} variant="subtle" color="gray" onClick={() => inspect()({ kind: 'task', id: task.id })}><ArrowUpRight size={18} /></ActionIcon></Table.Td></Table.Tr>
+                <Table.Td><ActionIcon aria-label={`Inspect ${task.repo} PR ${task.pr}`} variant="subtle" color="gray" onClick={() => inspect()({ kind: 'task', id: task.id })}><ChevronRight size={18} /></ActionIcon></Table.Td></Table.Tr>
             })}</Table.Tbody></Table></Table.ScrollContainer>
             {!candidates.length && <Paper ta="center" py="xl"><Text fw={640}>No tasks match these filters</Text><Button variant="subtle" mt="sm" onClick={resetFilters}>Show all tasks</Button></Paper>}
           </Tabs.Panel>

@@ -98,14 +98,3 @@ export function groupPaths<T extends { x: number; y: number }>(points: T[], key:
   for (const point of points) groups.set(key(point), [...groups.get(key(point)) ?? [], point])
   return Array.from(groups, ([groupKey, members]) => ({ key: groupKey, points: [...members].sort((left, right) => left.x - right.x || left.y - right.y) }))
 }
-
-export function segmentObstacles(points: { x: number; y: number }[], spacing = 7, radius = 2.5): Box[] {
-  return points.slice(1).flatMap((point, index) => {
-    const previous = points[index]!
-    const count = Math.max(1, Math.ceil(Math.hypot(point.x - previous.x, point.y - previous.y) / spacing))
-    return Array.from({ length: count + 1 }, (_, step) => {
-      const x = previous.x + (point.x - previous.x) * step / count, y = previous.y + (point.y - previous.y) * step / count
-      return { left: x - radius, top: y - radius, right: x + radius, bottom: y + radius }
-    })
-  })
-}

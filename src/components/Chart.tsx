@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { CSSProperties, DOMAttributes, FocusEvent, MouseEvent, ReactNode } from 'react'
 import { useElementSize } from '@mantine/hooks'
 import { ArrowUpLeft } from 'lucide-react'
-import { groupPaths, linearScale, logScale, paretoFrontier, placeLabels, position, segmentObstacles, ticks } from '../lib/chart'
+import { groupPaths, linearScale, logScale, paretoFrontier, placeLabels, position, ticks } from '../lib/chart'
 import type { Scale } from '../lib/chart'
 import { compact, detectionLabel, duration, lowerFirst, money, percent, reasonCounts } from '../lib/metrics'
 import type { Axis, DetectionView, Summary } from '../lib/metrics'
@@ -95,13 +95,21 @@ export function Chart({ summaries, detection, matching, axis, view, showAllLabel
         : <span>Select at least one review method and model.</span>}
       <span>No other impact band or average is substituted. Choose them above.</span></div>
       : view === 'setups' ? <SetupRows points={points} measure={measure} axis={axis} scale={scale} frontier={frontier} onSelect={onSelect} interactions={interactions} />
-        : view === 'tradeoff' || view === 'skills' ? <Scatter mode={view} points={measured} dimensions={dimensions} axis={axis} scale={scale} frontier={frontier} showAllLabels={showAllLabels}
+        : view === 'tradeoff' ? <Scatter points={measured} dimensions={dimensions} axis={axis} scale={scale} frontier={frontier} showAllLabels={showAllLabels}
           hovered={hovered?.id ?? null} onSelect={onSelect} interactions={interactions} />
+        : view === 'skills' ? <MethodPanels points={measured} axis={axis} scale={scale} onSelect={onSelect} interactions={interactions} />
           : <Models points={points} measure={measure} axis={axis} onSelect={onSelect} interactions={interactions} />}
     {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={measure} axis={axis} left={hovered.left} top={hovered.top} />}
+    {points.length > 0 && view !== 'models' && <ul className="chart-keys" aria-label="Chart key">
+      {view === 'setups' && <li><span className="whisker-key" aria-hidden="true" />Range with any one PR left out</li>}
+      {view === 'skills' && <li><span className="context-key" aria-hidden="true" />Other selected setups</li>}
+      {view === 'tradeoff' && <li><span className="frontier-key" aria-hidden="true" />Frontier</li>}
+      {view === 'tradeoff' && <li><span className="faded-key" aria-hidden="true" />Not on the frontier</li>}
+      {measured.some(point => point.bounded) && <li><span className="bound-key" aria-hidden="true" />Lower bound{view === 'skills' ? '' : ', left out of the frontier'}</li>}
+    </ul>}
     {points.length > 0 && <ChartGuide><div className="plot-caption">
       {view === 'setups' && <span><span className="whisker-key" aria-hidden="true" />Rows are ordered by {lowerFirst(measure)}. The whisker spans this average with any one whole PR left out: sensitivity to these PRs, not a confidence interval.</span>}
-      {view === 'skills' && <span><span className="skill-key" aria-hidden="true" />Each line joins one review method across the models it ran on, from lowest to highest {lowerFirst(axisLabels[axis])}. Hover or focus a point to follow its method.</span>}
+      {view === 'skills' && <span>Each panel shows one review method on every model it ran on, with detection against {lowerFirst(axisLabels[axis])} on shared axes. Gray dots are the other selected setups, for context.</span>}
       {view === 'tradeoff' && <span><span className="frontier-key" aria-hidden="true" />Frontier of {dimensions}: no other selected setup is at least as good on both measures and strictly better on one. Identical results share the frontier. It says nothing about any other measure.</span>}
       {view === 'models' && <span>Each row is one model. Marks show {lowerFirst(measure)} for each review method that ran on it.</span>}
       {points.filter(point => point.summary.detectionNote).map(point => <span key={point.summary.configuration.id}>† {point.summary.configuration.short}: {point.summary.detectionNote}</span>)}
@@ -163,8 +171,22 @@ function textWidth(text: string) {
 
 const methodKey = (configuration: Configuration) => `${configuration.method}/${configuration.reviewEdition}`
 
-function Scatter({ mode, points, dimensions, axis, scale, frontier, showAllLabels, hovered, onSelect, interactions }: {
-  mode: 'skills' | 'tradeoff'; dimensions: string; points: (Point & { x: number; y: number })[]; axis: Axis; scale: Scale; frontier: Set<string>; showAllLabels: boolean
+const labelOf = (points: Point[]) => {
+  const models = new Map<string, number>()
+  for (const point of points) {
+    const { method, model } = setupParts(point.summary.configuration)
+    models.set(`${method}/${model}`, (models.get(`${method}/${model}`) ?? 0) + 1)
+  }
+  return (configuration: Configuration) => {
+    const { method, model, effort } = setupParts(configuration)
+    return (models.get(`${method}/${model}`) ?? 0) > 1 ? `${model} · ${effort}` : model
+  }
+}
+
+type Plotted = Point & { x: number; y: number }
+
+function Scatter({ points, dimensions, axis, scale, frontier, showAllLabels, hovered, onSelect, interactions }: {
+  dimensions: string; points: Plotted[]; axis: Axis; scale: Scale; frontier: Set<string>; showAllLabels: boolean
   hovered: string | null; onSelect: (id: string) => void; interactions: Interactions
 }) {
   const { ref, width } = useElementSize()
@@ -172,38 +194,22 @@ function Scatter({ mode, points, dimensions, axis, scale, frontier, showAllLabel
   const plot = { left: margin.left, right: Math.max(margin.left + 1, width - margin.right), top: margin.top, bottom: height - margin.bottom }
   const px = (value: number) => position(scale, value, plot.left, plot.right)
   const py = (value: number) => plot.bottom - value / 100 * (plot.bottom - plot.top)
-  const models = new Map<string, number>()
-  for (const point of points) {
-    const { method, model } = setupParts(point.summary.configuration)
-    models.set(`${method}/${model}`, (models.get(`${method}/${model}`) ?? 0) + 1)
-  }
-  const labelText = (configuration: Configuration) => {
-    const { method, model, effort } = setupParts(configuration)
-    return (models.get(`${method}/${model}`) ?? 0) > 1 ? `${model} · ${effort}` : model
-  }
+  const labelText = labelOf(points)
   const ordered = [...points].sort((left, right) => right.y - left.y)
   const steps = paretoFrontier(points.filter(point => !point.bounded))
   const segment = (x1: number, y1: number, x2: number, y2: number) =>
     ({ left: Math.min(x1, x2) - 2, top: Math.min(y1, y2) - 2, right: Math.max(x1, x2) + 2, bottom: Math.max(y1, y2) + 2 })
-  const paths = groupPaths(points, point => methodKey(point.summary.configuration))
-  const hoveredPoint = points.find(point => point.summary.configuration.id === hovered)
-  const highlight = mode === 'skills' && hoveredPoint ? methodKey(hoveredPoint.summary.configuration) : null
   const obstacles = [
     ...ordered.map(point => ({ left: px(point.x) - 8, top: py(point.y) - 8, right: px(point.x) + 8, bottom: py(point.y) + 8 })),
-    ...mode === 'skills' ? paths.flatMap(path => segmentObstacles(path.points.map(point => ({ x: px(point.x), y: py(point.y) }))))
-      : steps.slice(1).flatMap((point, index) => {
-        const previous = steps[index]!
-        return [segment(px(previous.x), py(previous.y), px(point.x), py(previous.y)), segment(px(point.x), py(previous.y), px(point.x), py(point.y))]
-      }),
+    ...steps.slice(1).flatMap((point, index) => {
+      const previous = steps[index]!
+      return [segment(px(previous.x), py(previous.y), px(point.x), py(previous.y)), segment(px(point.x), py(previous.y), px(point.x), py(point.y))]
+    }),
   ]
   const prominent = (point: Point) => frontier.has(point.summary.configuration.id) || point.bounded
-  const requested = mode === 'skills'
-    ? ordered.filter(point => !highlight || methodKey(point.summary.configuration) === highlight)
-    : ordered.filter(point => showAllLabels || prominent(point) || hovered === point.summary.configuration.id)
-      .sort((left, right) => Number(frontier.has(right.summary.configuration.id)) - Number(frontier.has(left.summary.configuration.id)))
-  const dimmed = (point: Point) => mode === 'skills'
-    ? highlight !== null && methodKey(point.summary.configuration) !== highlight
-    : !prominent(point) && hovered !== point.summary.configuration.id
+  const requested = ordered.filter(point => showAllLabels || prominent(point) || hovered === point.summary.configuration.id)
+    .sort((left, right) => Number(frontier.has(right.summary.configuration.id)) - Number(frontier.has(left.summary.configuration.id)))
+  const dimmed = (point: Point) => !prominent(point) && hovered !== point.summary.configuration.id
   const labels = width ? placeLabels(requested.map(point => ({
     id: point.summary.configuration.id, x: px(point.x), y: py(point.y), width: textWidth(labelText(point.summary.configuration)), height: 14,
   })), obstacles, { left: plot.left + 2, right: plot.right, top: 2, bottom: plot.bottom - 2 }) : []
@@ -213,46 +219,98 @@ function Scatter({ mode, points, dimensions, axis, scale, frontier, showAllLabel
   }).join('')
   const xTicks = ticks(scale)
   return <div ref={ref} className="tradeoff">
-    {width > 0 && <svg width={width} height={height} role="group" aria-label={mode === 'skills'
-      ? `Plot of ${dimensions}, with a line per review method across models.`
-      : `Plot of ${dimensions}. ${frontier.size} setups on the frontier of these two measures are labelled.`}>
+    {width > 0 && <svg width={width} height={height} role="group" aria-label={`Plot of ${dimensions}. ${frontier.size} setups on the frontier of these two measures are labelled.`}>
       <defs><linearGradient id="better-corner" x1="0" y1="0" x2="1" y2="1">
         <stop offset="0" stopColor="var(--brand-accent)" stopOpacity="0.09" /><stop offset="0.45" stopColor="var(--brand-accent)" stopOpacity="0" />
       </linearGradient></defs>
       <rect x={plot.left} y={plot.top} width={plot.right - plot.left} height={plot.bottom - plot.top} fill="url(#better-corner)" />
-      {scoreTicks.map(tick => <g key={tick}><line x1={plot.left} x2={plot.right} y1={py(tick)} y2={py(tick)} className="grid-line" />
-        <text x={plot.left - 8} y={py(tick)} className="tick-label" textAnchor="end" dominantBaseline="middle">{tick}%</text></g>)}
-      {xTicks.map(tick => <g key={tick}><line x1={px(tick)} x2={px(tick)} y1={plot.top} y2={plot.bottom} className="grid-line" />
-        <text x={px(tick)} y={plot.bottom + 18} className="tick-label" textAnchor="middle">{tickLabel(axis, tick)}</text></g>)}
-      <text x={14} y={(plot.top + plot.bottom) / 2} className="axis-title" textAnchor="middle" transform={`rotate(-90 14 ${(plot.top + plot.bottom) / 2})`}>Detection</text>
-      <text x={(plot.left + plot.right) / 2} y={height - 8} className="axis-title" textAnchor="middle">
-        {axisLabels[axis]}{scale.kind === 'log' ? ' (log scale)' : ''}</text>
-      {mode === 'tradeoff' && steps.length > 1 && <path d={stepPath} className="frontier-line" />}
-      {mode === 'skills' && paths.filter(path => path.points.length > 1).map(path => <polyline key={path.key}
-        points={path.points.map(point => `${px(point.x)},${py(point.y)}`).join(' ')} stroke={reviewColor(path.points[0]!.summary.configuration)}
-        className={highlight && highlight !== path.key ? 'skill-line faded' : 'skill-line'} />)}
+      <Axes plot={plot} axis={axis} scale={scale} xTicks={xTicks} px={px} py={py} height={height} />
+      {steps.length > 1 && <path d={stepPath} className="frontier-line" />}
       {labels.filter(label => label.leader).map(label => {
         const point = points.find(item => item.summary.configuration.id === label.id)
         return point && <line key={`leader-${label.id}`} x1={px(point.x)} y1={py(point.y)} x2={label.anchor === 'middle' ? label.x : label.x + (label.anchor === 'start' ? -3 : 3)} y2={label.y} className="leader-line" />
       })}
-      {ordered.map(point => {
-        const { configuration } = point.summary
-        const faded = dimmed(point)
-        return <g key={configuration.id} role="button" tabIndex={0} className={faded ? 'chart-point faded' : 'chart-point'}
-          aria-label={`${configuration.short}: ${percent(point.y)}, ${formatMetric(axis, point.x, configuration, point.bounded)}${frontier.has(configuration.id) ? ', on the frontier of these two measures' : ''}. Inspect evidence`}
-          onClick={() => onSelect(configuration.id)} {...interactions(configuration.id)}
-          onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(configuration.id) } }}>
-          <circle cx={px(point.x)} cy={py(point.y)} r={14} fill="transparent" />
-          <PointMark configuration={configuration} x={px(point.x)} y={py(point.y)} hollow={point.bounded} />
-        </g>
-      })}
+      {ordered.map(point => <ChartPoint key={point.summary.configuration.id} point={point} axis={axis} x={px(point.x)} y={py(point.y)} faded={dimmed(point)}
+        frontier={frontier.has(point.summary.configuration.id)} onSelect={onSelect} interactions={interactions} />)}
       {labels.map(label => {
         const point = points.find(item => item.summary.configuration.id === label.id)
         return point && <text key={`label-${label.id}`} x={label.x} y={label.y} textAnchor={label.anchor} dominantBaseline="middle"
-          className={mode === 'skills' || frontier.has(label.id) ? 'point-label' : 'point-label secondary'}>{labelText(point.summary.configuration)}</text>
+          className={frontier.has(label.id) ? 'point-label' : 'point-label secondary'}>{labelText(point.summary.configuration)}</text>
       })}
     </svg>}
     <span className="better-hint" style={{ left: plot.left + 10, top: plot.top + 8 }}><ArrowUpLeft size={13} aria-hidden="true" />Higher detection, lower {lowerFirst(axisLabels[axis])}</span>
+  </div>
+}
+
+function Axes({ plot, axis, scale, xTicks, px, py, height, compact = false }: {
+  plot: { left: number; right: number; top: number; bottom: number }; axis: Axis; scale: Scale; xTicks: number[]
+  px: (value: number) => number; py: (value: number) => number; height: number; compact?: boolean
+}) {
+  const yTicks = compact ? [0, 50, 100] : scoreTicks
+  return <>
+    {yTicks.map(tick => <g key={tick}><line x1={plot.left} x2={plot.right} y1={py(tick)} y2={py(tick)} className="grid-line" />
+      <text x={plot.left - 8} y={py(tick)} className="tick-label" textAnchor="end" dominantBaseline="middle">{tick}%</text></g>)}
+    {xTicks.map(tick => <g key={tick}><line x1={px(tick)} x2={px(tick)} y1={plot.top} y2={plot.bottom} className="grid-line" />
+      <text x={px(tick)} y={plot.bottom + 17} className="tick-label" textAnchor="middle">{tickLabel(axis, tick)}</text></g>)}
+    {!compact && <>
+      <text x={14} y={(plot.top + plot.bottom) / 2} className="axis-title" textAnchor="middle" transform={`rotate(-90 14 ${(plot.top + plot.bottom) / 2})`}>Detection</text>
+      <text x={(plot.left + plot.right) / 2} y={height - 8} className="axis-title" textAnchor="middle">{axisLabels[axis]}{scale.kind === 'log' ? ' (log scale)' : ''}</text></>}
+  </>
+}
+
+function ChartPoint({ point, axis, x, y, faded, frontier, onSelect, interactions }: {
+  point: Plotted; axis: Axis; x: number; y: number; faded: boolean; frontier: boolean; onSelect: (id: string) => void; interactions: Interactions
+}) {
+  const { configuration } = point.summary
+  return <g role="button" tabIndex={0} className={faded ? 'chart-point faded' : 'chart-point'}
+    aria-label={`${configuration.short}: ${percent(point.y)}, ${formatMetric(axis, point.x, configuration, point.bounded)}${frontier ? ', on the frontier of these two measures' : ''}. Inspect evidence`}
+    onClick={() => onSelect(configuration.id)} {...interactions(configuration.id)}
+    onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(configuration.id) } }}>
+    <circle cx={x} cy={y} r={14} fill="transparent" />
+    <PointMark configuration={configuration} x={x} y={y} hollow={point.bounded} />
+  </g>
+}
+
+function MethodPanels({ points, axis, scale, onSelect, interactions }: {
+  points: Plotted[]; axis: Axis; scale: Scale; onSelect: (id: string) => void; interactions: Interactions
+}) {
+  const groups = groupPaths(points, point => methodKey(point.summary.configuration))
+  const labelText = labelOf(points)
+  return <div className="multiples" role="list" aria-label={`Detection against ${lowerFirst(axisLabels[axis])}, one panel per review method`}>
+    {groups.map(group => <MethodPanel key={group.key} members={group.points} context={points.filter(point => !group.points.includes(point))}
+      axis={axis} scale={scale} labelText={labelText} onSelect={onSelect} interactions={interactions} />)}
+  </div>
+}
+
+function MethodPanel({ members, context, axis, scale, labelText, onSelect, interactions }: {
+  members: Plotted[]; context: Plotted[]; axis: Axis; scale: Scale; labelText: (configuration: Configuration) => string; onSelect: (id: string) => void; interactions: Interactions
+}) {
+  const { ref, width } = useElementSize()
+  const height = 230, plot = { left: 44, right: Math.max(45, width - 16), top: 12, bottom: height - 28 }
+  const px = (value: number) => position(scale, value, plot.left, plot.right)
+  const py = (value: number) => plot.bottom - value / 100 * (plot.bottom - plot.top)
+  const first = members[0]!.summary.configuration
+  const best = [...members].sort((left, right) => right.y - left.y)[0]!
+  const labels = width ? placeLabels([...members].sort((left, right) => right.y - left.y).map(point => ({
+    id: point.summary.configuration.id, x: px(point.x), y: py(point.y), width: textWidth(labelText(point.summary.configuration)), height: 14,
+  })), members.map(point => ({ left: px(point.x) - 8, top: py(point.y) - 8, right: px(point.x) + 8, bottom: py(point.y) + 8 })),
+  { left: plot.left + 2, right: plot.right, top: 2, bottom: plot.bottom - 2 }) : []
+  return <div role="listitem" className="method-panel">
+    <div className="panel-head"><span className="configuration-name"><Mark configuration={first} size={10} />{setupParts(first).method}</span>
+      <span className="panel-meta">{members.length} {members.length === 1 ? 'model' : 'models'} · best {percent(best.y)}</span></div>
+    <div ref={ref} className="panel-plot">{width > 0 && <svg width={width} height={height} role="group" aria-label={`${setupParts(first).method}: ${members.map(point => `${labelText(point.summary.configuration)} ${percent(point.y)}`).join(', ')}`}>
+      <Axes plot={plot} axis={axis} scale={scale} xTicks={ticks(scale)} px={px} py={py} height={height} compact />
+      {context.map(point => <circle key={point.summary.configuration.id} cx={px(point.x)} cy={py(point.y)} r={3.5} className="context-dot" />)}
+      {labels.filter(label => label.leader).map(label => {
+        const point = members.find(item => item.summary.configuration.id === label.id)
+        return point && <line key={`leader-${label.id}`} x1={px(point.x)} y1={py(point.y)} x2={label.anchor === 'middle' ? label.x : label.x + (label.anchor === 'start' ? -3 : 3)} y2={label.y} className="leader-line" />
+      })}
+      {members.map(point => <ChartPoint key={point.summary.configuration.id} point={point} axis={axis} x={px(point.x)} y={py(point.y)} faded={false} frontier={false} onSelect={onSelect} interactions={interactions} />)}
+      {labels.map(label => {
+        const point = members.find(item => item.summary.configuration.id === label.id)
+        return point && <text key={`label-${label.id}`} x={label.x} y={label.y} textAnchor={label.anchor} dominantBaseline="middle" className="point-label">{labelText(point.summary.configuration)}</text>
+      })}
+    </svg>}</div>
   </div>
 }
 

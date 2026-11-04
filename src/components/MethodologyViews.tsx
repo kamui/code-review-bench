@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { ArrowLeftRight } from 'lucide-react'
 import { Group, Paper, Select, Stack, Switch, Table, Tabs, Text, Title } from '@mantine/core'
 import type { Configuration, Dataset } from '../lib/data'
 import { bandLabels, compact, conditionDifferences, detectionLabel, duration, estimatorLabels, lowerFirst, measured, money, percent, perReview, points, reading, scaled, share } from '../lib/metrics'
@@ -82,7 +83,8 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
           { label: 'All labelled serious caught', value: row => share(row.card.seriousCaught.equalPr, row.card.detection.serious.zeroCredit.reason) },
           { label: 'Repeated serious misses', value: row => reading(row.card.seriousMisses.repeated, String) }]} />
         <Text size="xs" c="dimmed" className="footnote">All labelled serious caught is the share of scheduled trials that caught every serious reference of a PR, averaged over PRs with one. A repeated serious miss is a serious reference not caught in two or more scheduled trials.</Text>
-        {conflicts.length > 0 && <Text size="sm">In the {bandLabels[band].toLowerCase()} band the two averages order {conflicts.length === 1 ? 'this pair' : 'these pairs'} differently: {conflicts.map(pair => `${short(pair.a)} and ${short(pair.b)}`).join('; ')}. That ordering depends on the average chosen.</Text>}
+        {conflicts.length > 0 && <div><Text size="sm" mb={8}>In the {bandLabels[band].toLowerCase()} band the two averages order {conflicts.length === 1 ? 'this pair' : 'these pairs'} differently. That ordering depends on the average chosen.</Text>
+          <ul className="pair-list">{conflicts.map(pair => <li key={`${pair.a}/${pair.b}`}>{short(pair.a)}<ArrowLeftRight size={14} aria-label="and" />{short(pair.b)}</li>)}</ul></div>}
         <Title order={4}>{bandLabels[band]} band counts</Title>
         <DataTable label={`Counts behind ${bandLabels[band].toLowerCase()} detection`} rows={rows} rowKey={key} minWidth={1000} columns={[setup,
           { label: 'Problems / PRs', value: row => `${row.card.detection[band].problems} / ${row.card.detection[band].prs}` },
@@ -215,7 +217,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
         <Title order={4}>Novel candidates awaiting a ruling</Title>
         {novel.length ? <Table.ScrollContainer minWidth={900}><Table aria-label="Novel candidates awaiting a ruling" className="data-table">
           <Table.Thead><Table.Tr><Table.Th scope="col">Candidate</Table.Th><Table.Th scope="col">PR</Table.Th><Table.Th scope="col">Age</Table.Th><Table.Th scope="col">Claim</Table.Th><Table.Th scope="col">Evidence limits</Table.Th><Table.Th scope="col">Decision relevance</Table.Th></Table.Tr></Table.Thead>
-          <Table.Tbody>{novel.map(candidate => <Table.Tr key={candidate.id}><Table.Th scope="row">{candidate.id}</Table.Th>
+          <Table.Tbody>{novel.map(candidate => <Table.Tr key={candidate.id}><Table.Th scope="row" className="candidate-id">{candidate.id}</Table.Th>
             <Table.Td><button className="text-button" onClick={() => onInspect({ kind: 'task', id: candidate.taskId })}>{name(candidate.taskId)}</button></Table.Td>
             <Table.Td>{candidate.ageDays} {candidate.ageDays === 1 ? 'day' : 'days'}<Text size="xs" c="dimmed">since {candidate.recordedAt.slice(0, 10)}</Text></Table.Td>
             <Table.Td>{candidate.claim}</Table.Td><Table.Td>{candidate.limits}</Table.Td><Table.Td>{candidate.relevance}</Table.Td></Table.Tr>)}</Table.Tbody>
@@ -223,7 +225,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
         <Title order={4}>Reference families awaiting eligibility</Title>
         {awaiting.length ? <Table.ScrollContainer minWidth={700}><Table aria-label="Reference families awaiting eligibility" className="data-table">
           <Table.Thead><Table.Tr><Table.Th scope="col">Family</Table.Th><Table.Th scope="col">PR</Table.Th><Table.Th scope="col">Problem</Table.Th><Table.Th scope="col">Why it is pending</Table.Th></Table.Tr></Table.Thead>
-          <Table.Tbody>{awaiting.map(({ taskId, family }) => <Table.Tr key={`${taskId}/${family.id}`}><Table.Th scope="row">{family.id}</Table.Th>
+          <Table.Tbody>{awaiting.map(({ taskId, family }) => <Table.Tr key={`${taskId}/${family.id}`}><Table.Th scope="row" className="candidate-id">{family.id}</Table.Th>
             <Table.Td><button className="text-button" onClick={() => onInspect({ kind: 'task', id: taskId })}>{name(taskId)}</button></Table.Td>
             <Table.Td>{family.title}</Table.Td><Table.Td>{family.eligibilityReason}</Table.Td></Table.Tr>)}</Table.Tbody>
         </Table></Table.ScrollContainer> : <Text size="sm" c="dimmed">Every reference family on the selected PRs has an eligibility ruling.</Text>}
