@@ -127,7 +127,8 @@ class Launcher:
         return {"claude": {"path": str(path), "version": self.authorization["grader"]["cliVersion"]}}
 
     def meters(self):
-        """The five-hour and weekly windows, as dicts with utilization and resets_at, or None. Calls no model."""
+        """The five-hour and weekly windows, as dicts with utilization and resets_at, or None. Calls no model. The
+        meter reports a window with no use in it as null."""
         done = subprocess.run([str(TOOL), "subscription-meters", "read", "--clients", json.dumps(self.client())],
                               cwd=ROOT, capture_output=True, text=True)
         if done.returncode:
@@ -136,7 +137,7 @@ class Launcher:
         reading = json.loads(done.stdout)["claude"]
         windows = []
         for name in ("five_hour", "seven_day"):
-            window = reading[name]
+            window = reading[name] or {"utilization": 0.0}
             reset = window.get("resets_at")
             windows.append({"utilization": float(window["utilization"]),
                             "resets_at": datetime.fromisoformat(reset).timestamp() if reset else None})

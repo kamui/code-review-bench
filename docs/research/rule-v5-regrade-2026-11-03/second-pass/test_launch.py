@@ -29,7 +29,7 @@ if meters.get("high_five_hour_reads", 0) > 0:
     Path("meters.json").write_text(json.dumps(meters))
     five = 95.0
 iso = lambda s: datetime.fromtimestamp(s, timezone.utc).isoformat()
-print(json.dumps({"claude": {"five_hour": {"utilization": five, "resets_at": iso(time.time() + 1)},
+print(json.dumps({"claude": {"five_hour": None if five is None else {"utilization": five, "resets_at": iso(time.time() + 1)},
                              "seven_day": {"utilization": float(math.floor(meters["week"])),
                                            "resets_at": iso(meters["week_resets_at"])}}}))
 '''
@@ -131,6 +131,14 @@ def low_rate_runs_the_full_pass(root):
     assert state["decisions"][0]["projectedCostUsd"] == 40.0, state
 
 
+def reads_an_unused_five_hour_window(root):
+    build(root, 10)
+    meters = json.loads((root / "meters.json").read_text())
+    (root / "meters.json").write_text(json.dumps({**meters, "five_hour": None}))
+    code, state, out = launch(root, rate=0.05)
+    assert code == 0 and state["phase"] == "finished" and saved(root) == 10, out
+
+
 def high_rate_stops_after_the_trial(root):
     build(root, 40)
     code, state, out = launch(root, rate=2.0)
@@ -215,7 +223,8 @@ def case(name, check):
 
 
 if __name__ == "__main__":
-    results = [case(f.__name__, f) for f in (low_rate_runs_the_full_pass, high_rate_stops_after_the_trial,
+    results = [case(f.__name__, f) for f in (low_rate_runs_the_full_pass, reads_an_unused_five_hour_window,
+                                              high_rate_stops_after_the_trial,
                                               unsettled_trial_measures_more, projected_cost_over_cap_stops,
                                               waits_out_the_five_hour_window, retries_a_passing_failure,
                                               stops_on_an_unknown_failure, stops_at_the_weekly_quota,
