@@ -201,7 +201,7 @@ describe('pre-existing problems raised on the fixture', () => {
   })
 
   const fixture = preExistingScorecardFixture()
-  const columns = 'Setup Approved catalog Raised, per review and problem Distinct problems raised Reviews that raised one Observed raised Reviews assessed / admitted Unresolved Pending candidates'
+  const columns = 'Setup Approved catalog Times raised Distinct problems raised Reviews that raised one Observed raised Reviews assessed / admitted Unresolved Pending candidates'
 
   test('gives each count separately for serious and for other-material problems', () => {
     const rendered = panels(fixture, ['payments', 'queue', 'docs', 'audited', 'empty'])

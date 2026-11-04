@@ -88,6 +88,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
       <Tabs.Panel value="detection" ><Stack>
         <TabIntro lede="How many known problems each setup caught, averaged over its repeated runs on each PR.">Recovery of each reference problem is averaged over the PR's scheduled trials; a resolved trial without an admitted review counts as not caught. Unresolved recoveries also receive zero credit and stay in the denominator, with an annotation counting affected problems and detection decisions. Both averages are shown. Problems weighted equally is the primary average for the serious and other-material bands; the unknown and all-reference bands have no preferred average. A serious reference is one the implementer had to be made aware of before release. An other-material reference earns credit when a review raises it but did not have to be raised.</TabIntro>
         <Text size="sm">Approved references on the selected PRs: {bands.map(item => `${coverage.bands[item]} ${bandLabels[item].toLowerCase()}`).join(' · ')}. {coverage.pendingFamilies} more {coverage.pendingFamilies === 1 ? 'awaits' : 'await'} an eligibility ruling.</Text>
+        <Title order={4}>Detection by impact band and average</Title>
         <DataTable label="Detection by impact band and average" rows={rows} rowKey={key} minWidth={1250} columns={[setup,
           ...bands.flatMap(item => estimators.map((average): Column<Row> => ({ label: `${bandLabels[item]}, ${averages[average]}`, value: row => share(row.card.detection[item][average], row.card.detection[item].zeroCredit.reason) }))),
           { label: 'All labelled serious caught', value: row => share(row.card.seriousCaught.equalPr, row.card.detection.serious.zeroCredit.reason) },
@@ -97,7 +98,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
           <ul className="pair-list">{conflicts.map(pair => <li key={`${pair.a}/${pair.b}`}>{short(pair.a)}<ArrowLeftRight size={14} aria-label="and" />{short(pair.b)}</li>)}</ul></div>}
         <Title order={4}>{bandLabels[band]} band counts</Title>
         <DataTable label={`Counts behind ${bandLabels[band].toLowerCase()} detection`} rows={rows} rowKey={key} minWidth={1000} columns={[setup,
-          { label: 'Problems / PRs', value: row => `${row.card.detection[band].problems} / ${row.card.detection[band].prs}` },
+          { label: 'Problems / PRs with one', value: row => `${row.card.detection[band].problems} / ${row.card.detection[band].prs}` },
           { label: 'Observed caught / determined', value: row => `${row.card.detection[band].observed.caught} / ${row.card.detection[band].observed.determined}` },
           { label: 'Admitted reviews / scheduled trials', value: row => `${row.card.detection[band].admittedOnly.admittedReviews} / ${row.card.detection[band].admittedOnly.scheduledTrials}` },
           { label: `Admitted reviews only, ${averages[estimator]}`, value: row => share(row.card.detection[band].admittedOnly[estimator], row.card.detection[band].zeroCredit.reason) },
@@ -121,6 +122,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
 
       <Tabs.Panel value="reliability" ><Stack>
         <TabIntro lede="How often a delivered review made a claim that was wrong or not shown to be right.">Rates divide distinct claims by admitted reviews, the denominator shown beside them. Unsupported claims are not proven false. A setup with no admitted review has no rate: silence from a failed trial is not reliability. Rates stay unavailable while a trial is pending or an admitted review awaits assessment.</TabIntro>
+        <Title order={4}>Claim outcomes per admitted review</Title>
         <DataTable label="Claim outcomes per admitted review" rows={rows} rowKey={key} minWidth={1300} columns={[setup,
           { label: 'Admitted / scheduled', value: row => `${row.card.delivery.admitted} / ${row.card.delivery.scheduled}` },
           { label: 'Assessed / admitted', value: row => `${row.card.reliability.assessed} / ${row.card.reliability.admitted}` },
@@ -128,8 +130,8 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
           { label: 'Refuted per admitted review', value: row => perReview(row.card.reliability.outcomes.refuted.perAdmittedReview) },
           { label: 'Unsupported per admitted review', value: row => perReview(row.card.reliability.outcomes.unsupported.perAdmittedReview) },
           { label: 'Unresolved per admitted review', value: row => perReview(row.card.reliability.outcomes.unresolved.perAdmittedReview) },
-          { label: 'Admitted reviews with a refuted claim', value: row => share(row.card.reliability.outcomes.refuted.reviewFraction) },
-          { label: 'Admitted reviews with an unsupported claim', value: row => share(row.card.reliability.outcomes.unsupported.reviewFraction) },
+          { label: 'Reviews with a refuted claim', value: row => share(row.card.reliability.outcomes.refuted.reviewFraction) },
+          { label: 'Reviews with an unsupported claim', value: row => share(row.card.reliability.outcomes.unsupported.reviewFraction) },
           { label: 'Scope exclusions', value: row => String(row.card.reliability.outcomes['scope-excluded'].distinct) },
           { label: 'Repeated claims', value: row => String(row.card.reliability.duplicates) }, { label: 'Mixed items', value: row => String(row.card.reliability.mixedItems) }]} />
         <Text size="xs" c="dimmed" className="footnote">Claim counts are distinct claims in assessed admitted reviews. Repeated claims count extra occurrences; mixed items hold claims with different outcomes. Item counts measure volume, not reading time.</Text>
@@ -168,17 +170,17 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
       <Tabs.Panel value="pre-existing" ><Stack>
         <TabIntro lede="How often reviews raised known problems that were already in the code before the PR.">An approved pre-existing problem counts as raised once for each admitted review that says what goes wrong. Silence creates no miss. Each count is given separately for serious and for other-material pre-existing problems. These counts do not change recall or recommendations.</TabIntro>
         {preExistingLabels.map(label => <Stack key={label}>
-          <Text size="sm" fw={640}>{bandLabels[label]} pre-existing problems</Text>
+          <Title order={4}>{bandLabels[label]} pre-existing problems</Title>
           <DataTable label={`${bandLabels[label]} pre-existing problems raised`} rows={rows} rowKey={key} minWidth={1150} foldShared={false} columns={[setup,
             { label: 'Approved catalog', value: row => String(row.card.preExisting.labels[label].catalog) },
-            { label: 'Raised, per review and problem', value: row => reading(row.card.preExisting.labels[label].raised, String) },
+            { label: 'Times raised', value: row => reading(row.card.preExisting.labels[label].raised, String) },
             { label: 'Distinct problems raised', value: row => reading(row.card.preExisting.labels[label].problems, String) },
             { label: 'Reviews that raised one', value: row => reading(row.card.preExisting.labels[label].reviews, String) },
             { label: 'Observed raised', value: row => String(row.card.preExisting.labels[label].observed.raised) },
             { label: 'Reviews assessed / admitted', value: row => `${row.card.preExisting.labels[label].assessed} / ${row.card.preExisting.labels[label].admitted}` },
             { label: 'Unresolved', value: row => String(row.card.preExisting.labels[label].unresolved) },
             { label: 'Pending candidates', value: row => String(row.card.preExisting.candidates.length) }]} />
-          {rows.map(row => <div key={key(row)}><Text size="sm" fw={640}>{row.configuration.short}</Text>
+          {rows.map(row => <div key={key(row)}><Text size="sm" fw={640}><SetupName configuration={row.configuration} mark={false} /></Text>
             <ul>{row.card.preExisting.labels[label].rows.map(problem => <li key={problem.problemId}>{problem.title}: observed raised {problem.raised} times; {problem.assessed} assessments, {problem.unresolved} unresolved.</li>)}</ul></div>)}
         </Stack>)}
         <Text size="xs" c="dimmed">The catalog contains discovered cases, not every pre-existing fault. Assessment coverage does not establish historical audit coverage.</Text>
@@ -192,7 +194,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
           { label: 'With a refuted or unproven claim', value: row => String(row.card.controls.alarmed) }, { label: 'With an unresolved claim', value: row => String(row.card.controls.unresolved) },
           { label: 'Awaiting assessment', value: row => String(row.card.controls.unassessed) }, { label: 'Missing output', value: row => String(row.card.controls.missingOutput) },
           { label: 'Pending trials', value: row => String(row.card.controls.pending) }, { label: 'Unaudited or provisional controls', value: row => String(row.card.controls.unaudited.length) }]} />
-        {[...coverage.controls.unaudited, ...coverage.controls.provisional].length > 0 && <div><Text size="sm" fw={640}>Controls without a clean percentage</Text>
+        {[...coverage.controls.unaudited, ...coverage.controls.provisional].length > 0 && <div><Title order={4} mb={8}>Controls without a clean percentage</Title>
           <ul className="reason-list">{[...coverage.controls.unaudited, ...coverage.controls.provisional].map(id => <li key={id}>
             <button className="text-button" onClick={() => onInspect({ kind: 'task', id })}>{name(id)}</button>: {task(id)?.control}. {task(id)?.controlReason}</li>)}</ul></div>}
       </Stack></Tabs.Panel>
@@ -295,7 +297,7 @@ function DeltaPlot({ rows, a, b }: { rows: { id: string; label: string; delta: n
   const limit = Math.max(25, ...rows.map(row => Math.abs(row.delta)))
   const at = (value: number) => 50 + value / limit * 50
   return <div className="delta-plot" role="list" aria-label="A minus B detection difference per PR">
-    <div className="delta-head" aria-hidden="true"><span /><span className="delta-sides"><span>{b} higher</span><span>{a} higher</span></span></div>
+    <div className="delta-head" aria-hidden="true"><span /><span className="delta-sides"><span><b>← B higher</b>{b}</span><span><b>A higher →</b>{a}</span></span></div>
     {[...rows].sort((left, right) => right.delta - left.delta).map(row => <div role="listitem" key={row.id} className="delta-row"
       aria-label={`${row.label}: ${signed(row.delta)}`}>
       <span className="delta-label">{row.label}</span>

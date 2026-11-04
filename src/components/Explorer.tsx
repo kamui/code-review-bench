@@ -277,6 +277,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
         </Paper>
         <header className="subsection-head" id="review-setups"><Title order={3}>All review setups</Title>
         <Text className="subsection-lede">Includes skill experiments. Same {shared.length} comparison PRs as the chart, in the {bandLabels[band].toLowerCase()} band. Rows start in name order; a column heading sorts by that one measure only.</Text></header>
+        <details className="results-disclosure"><summary><ChevronRight className="chevron" size={16} aria-hidden="true" />Show every measure for all {tableRows.length} setups<span className="summary-hint">Sortable table</span></summary>
         <div className="table-frame"><Table.ScrollContainer minWidth={1050}><Table verticalSpacing="sm" horizontalSpacing="sm" className="leaderboard-table" aria-label="All review setup results">
           <Table.Thead><Table.Tr>{resultsColumns.map(column => <Table.Th key={column.key} data-numeric={column.key !== 'setup' || undefined} aria-sort={sort.column === column.key ? sort.direction : 'none'}>
             <button className="text-button sort-heading" onClick={() => setSort(current => ({ column: column.key, direction: current.column === column.key && current.direction === 'ascending' ? 'descending' : 'ascending' }))}>
@@ -297,6 +298,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
         {!shared.length && <Text ta="center" c="dimmed" py="xl">No PR is shared by the selected standard setups with these filters.</Text>}
         <Text size="xs" c="dimmed" mt="sm" className="footnote">Cost and output tokens add every attempt, retries included, and divide by scheduled trials. ≥ marks a lower bound where usage was only partly recorded; hover it for the count. * Subscription usage is valued at token list prices. Output includes reasoning and subagents. Refuted claims and proposed fixes never change detection.</Text>
         <Text size="sm" mt="sm"><Anchor href="https://github.com/kamui/code-review-bench/blob/main/docs/research/skill-matrix-2026-10-02/README.md#time-and-cost" target="_blank" rel="noreferrer">October 2 time and cost report</Anchor> · Per-setup and per-task totals, including failed attempts and held runs, with grading listed separately. This report covers a fixed batch.</Text>
+        </details>
         <MethodologyViews dataset={dataset} configurations={configurations.filter(c => activeIds.includes(c.id))} cards={board.cards} selection={board.selection} detection={detection} now={now} onInspect={inspect('dimensions')}
           tab={search.dimension ?? 'detection'} onTab={tab => onSearch({ dimension: unlessDefault(tab, 'detection') }, 'dimensions')} />
       </section></>}
@@ -370,6 +372,12 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
 
 const methodName = (configuration: Configuration) => configuration.builtin ? configuration.method === 'codex' ? 'Codex built-in' : 'Claude built-in' : `/${configuration.method}`
 
+function Limit({ text }: { text: string }) {
+  const [head = text, ...rest] = text.split(/(?<=\.) /)
+  const detail = rest.join(' ')
+  return detail.length > 140 ? <li>{head}<details className="status-record"><summary>Details<ChevronDown size={13} aria-hidden="true" /></summary><p>{detail}</p></details></li> : <li>{text}</li>
+}
+
 function StatusNotice({ limits, unresolved }: { limits: string[]; unresolved: boolean }) {
   const title = limits.length ? 'Provisional results: grading is still in progress' : 'Reliability measurements are provisional'
   const summary = <p className="status-summary">{limits.length > 0 && 'Saved reviews, delivery and usage remain available. Unresolved detection outcomes receive zero credit, with an explanation. Measures blocked by missing evidence are unavailable, with their reasons. '}
@@ -377,7 +385,7 @@ function StatusNotice({ limits, unresolved }: { limits: string[]; unresolved: bo
   const icon = <Hourglass className="status-icon" size={15} strokeWidth={2} aria-hidden="true" />
   return <aside className="status-notice" aria-label="Result status">
     {limits.length ? <details className="status-details"><summary>{icon}<span className="status-title">{title}</span><span className="status-more">What is still open ({limits.length})<ChevronDown size={14} aria-hidden="true" /></span></summary>
-      <div className="status-body">{summary}<ul>{limits.map(limit => <li key={limit}>{limit}</li>)}</ul></div></details>
+      <div className="status-body">{summary}<ul>{limits.map(limit => <Limit key={limit} text={limit} />)}</ul></div></details>
       : <div className="status-line">{icon}<span className="status-title">{title}</span>{summary}</div>}
   </aside>
 }

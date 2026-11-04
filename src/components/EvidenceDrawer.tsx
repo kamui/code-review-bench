@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Accordion, Alert, Badge, Button, Code, Drawer, Group, Loader, Paper, Select, Stack, Tabs, Text, Title } from '@mantine/core'
-import { Braces, ExternalLink, FileJson, FileText, Download, Gauge, Receipt, Scale } from 'lucide-react'
+import { ExternalLink, FileText, Download } from 'lucide-react'
 import { SetupName, setupLabel } from './Chart'
 import { Disclosure, humanize, Rich, Tag, Value } from './Reading'
 import { fetchDetail, skillReleaseLabel } from '../lib/data'
@@ -71,6 +71,7 @@ function InspectionBody({ dataset, results, band, configuration, task, inspectio
     return () => { cancelled = true }
   }, [attempt])
   const currentTask = task ?? dataset.tasks.find(item => item.id === attempt?.taskId)
+  const familyName = (id: string) => currentTask?.families.find(family => family.id === id)?.shortLabel ?? id
   const novel = currentTask ? pendingCandidates(dataset, [currentTask.id], now) : []
   return <Stack gap="lg">
     {configuration && <>{!configuration.builtin && <Group gap="xs"><Badge variant="light" radius="sm">{skillReleaseLabel([configuration])}</Badge></Group>}<Disclosure title="Run notes"><Text size="sm" className="disclosure-body">{configuration.note}</Text></Disclosure>
@@ -102,12 +103,12 @@ function InspectionBody({ dataset, results, band, configuration, task, inspectio
             {detail.record.observed.skill_tree && <><Text size="xs" c="dimmed">Skill tree revision</Text><Code block>{detail.record.observed.skill_tree}</Code></>}
             <Text size="xs" c="dimmed">Subagents: {detail.record.observed.subagent_count} · Client-reported sandbox: {detail.record.observed.sandbox ?? 'Not reported'}</Text>
           </Stack></Paper><Group gap="xs">
-            <Button component="a" href={detail.recordUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileJson size={14} />}>Attempt record</Button>
+            <Button component="a" href={detail.recordUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileText size={14} />}>Attempt record</Button>
             {detail.billingCorrectionUrl && <Button component="a" href={detail.billingCorrectionUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Billing correction</Button>}
-            {detail.usageCorrectionUrl && <Button component="a" href={detail.usageCorrectionUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<Gauge size={14} />}>Usage lower bound</Button>}
-            {detail.normalizedUrl && <Button component="a" href={detail.normalizedUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<Braces size={14} />}>Review JSON</Button>}
-            {detail.assessment.receiptUrl && <Button component="a" href={detail.assessment.receiptUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<Receipt size={14} />}>Current assessment receipt</Button>}
-            {detail.assessment.verdictsUrl && <Button component="a" href={detail.assessment.verdictsUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<Scale size={14} />}>Assessor verdicts</Button>}
+            {detail.usageCorrectionUrl && <Button component="a" href={detail.usageCorrectionUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileText size={14} />}>Usage lower bound</Button>}
+            {detail.normalizedUrl && <Button component="a" href={detail.normalizedUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileText size={14} />}>Review JSON</Button>}
+            {detail.assessment.receiptUrl && <Button component="a" href={detail.assessment.receiptUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileText size={14} />}>Current assessment receipt</Button>}
+            {detail.assessment.verdictsUrl && <Button component="a" href={detail.assessment.verdictsUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileText size={14} />}>Assessor verdicts</Button>}
             {detail.archiveUrl && <Button component="a" href={detail.archiveUrl} download variant="subtle" size="xs" leftSection={<Download size={14} />}>Raw transcript</Button>}
           </Group>
             {!detail.archiveUrl && <Text size="xs" c="dimmed">Transcript archive: {detail.archiveStatus}. No verified download is available.</Text>}
@@ -123,7 +124,7 @@ function InspectionBody({ dataset, results, band, configuration, task, inspectio
                 {item.claims?.map(claim => <Paper withBorder p="sm" key={claim.id}><Stack gap="xs">
                   <Badge variant="light" radius="sm" color={outcomeColors[claim.assignment] ?? 'gray'}>{humanize(claim.assignment)}</Badge>
                   {claim.quote.trim() !== item.claim.trim() && <Text size="sm"><Rich text={claim.quote} /></Text>}<Text size="sm"><Rich text={claim.notes} /></Text>
-                  {claim.knownProblems?.map(fact => <Text size="xs" key={fact.familyId}>{fact.familyId}: says what goes wrong, {fact.saysWhat}; identifies the cause, {fact.identifiesCause}. {fact.reason}</Text>)}
+                  {claim.knownProblems?.map(fact => <Text size="xs" key={fact.familyId}>{familyName(fact.familyId)}: says what goes wrong, {fact.saysWhat}; identifies the cause, {fact.identifiesCause}. {fact.reason}</Text>)}
                   {claim.preExistingProblems?.map(fact => <Text size="xs" key={fact.problemId}>Pre-existing problem {fact.problemId}: says what goes wrong, {fact.saysWhat}; identifies the cause, {fact.identifiesCause}. {fact.reason}</Text>)}
                   {claim.preExistingCandidateId && <Text size="xs">Pre-existing-problem candidate {claim.preExistingCandidateId} awaits admission and does not count as raised.</Text>}
                   {claim.canonical_claim_id && <Text size="xs" c="dimmed">Shared claim: {claim.canonical_claim_id}{claim.rulingUrl && <> · <a href={claim.rulingUrl} target="_blank" rel="noreferrer">Saved ruling</a></>}</Text>}
