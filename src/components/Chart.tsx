@@ -252,9 +252,8 @@ function Axes({ plot, axis, scale, xTicks, px, py, height, compact = false }: {
       <text x={plot.left - 8} y={py(tick)} className="tick-label" textAnchor="end" dominantBaseline="middle">{tick}%</text></g>)}
     {xTicks.map(tick => <g key={tick}><line x1={px(tick)} x2={px(tick)} y1={plot.top} y2={plot.bottom} className="grid-line" />
       <text x={px(tick)} y={plot.bottom + 17} className="tick-label" textAnchor="middle">{tickLabel(axis, tick)}</text></g>)}
-    {!compact && <>
-      <text x={14} y={(plot.top + plot.bottom) / 2} className="axis-title" textAnchor="middle" transform={`rotate(-90 14 ${(plot.top + plot.bottom) / 2})`}>Detection</text>
-      <text x={(plot.left + plot.right) / 2} y={height - 8} className="axis-title" textAnchor="middle">{axisLabels[axis]}{scale.kind === 'log' ? ' (log scale)' : ''}</text></>}
+    <text x={14} y={(plot.top + plot.bottom) / 2} className="axis-title" textAnchor="middle" transform={`rotate(-90 14 ${(plot.top + plot.bottom) / 2})`}>Detection</text>
+    <text x={(plot.left + plot.right) / 2} y={height - 8} className="axis-title" textAnchor="middle">{axisLabels[axis]}{scale.kind === 'log' ? ' (log scale)' : ''}</text>
   </>
 }
 
@@ -288,18 +287,17 @@ function MethodPanel({ members, context, axis, scale, labelText, onSelect, inter
   members: Plotted[]; context: Plotted[]; axis: Axis; scale: Scale; labelText: (configuration: Configuration) => string; onSelect: (id: string) => void; interactions: Interactions
 }) {
   const { ref, width } = useElementSize()
-  const height = 230, plot = { left: 44, right: Math.max(45, width - 16), top: 12, bottom: height - 28 }
+  const height = 262, plot = { left: 60, right: Math.max(61, width - 16), top: 12, bottom: height - 46 }
   const px = (value: number) => position(scale, value, plot.left, plot.right)
   const py = (value: number) => plot.bottom - value / 100 * (plot.bottom - plot.top)
   const first = members[0]!.summary.configuration
-  const best = [...members].sort((left, right) => right.y - left.y)[0]!
   const labels = width ? placeLabels([...members].sort((left, right) => right.y - left.y).map(point => ({
     id: point.summary.configuration.id, x: px(point.x), y: py(point.y), width: textWidth(labelText(point.summary.configuration)), height: 14,
   })), members.map(point => ({ left: px(point.x) - 8, top: py(point.y) - 8, right: px(point.x) + 8, bottom: py(point.y) + 8 })),
   { left: plot.left + 2, right: plot.right, top: 2, bottom: plot.bottom - 2 }) : []
   return <div role="listitem" className="method-panel">
     <div className="panel-head"><span className="configuration-name"><Mark configuration={first} size={10} />{setupParts(first).method}</span>
-      <span className="panel-meta">{members.length} {members.length === 1 ? 'model' : 'models'} · best {percent(best.y)}</span></div>
+      <span className="panel-meta">{members.length} {members.length === 1 ? 'model' : 'models'}</span></div>
     <div ref={ref} className="panel-plot">{width > 0 && <svg width={width} height={height} role="group" aria-label={`${setupParts(first).method}: ${members.map(point => `${labelText(point.summary.configuration)} ${percent(point.y)}`).join(', ')}`}>
       <Axes plot={plot} axis={axis} scale={scale} xTicks={ticks(scale)} px={px} py={py} height={height} compact />
       {context.map(point => <circle key={point.summary.configuration.id} cx={px(point.x)} cy={py(point.y)} r={3.5} className="context-dot" />)}
@@ -372,5 +370,5 @@ function Tooltip({ point, measure, axis, left, top }: { point: Point; measure: s
     axis === 'time' && summary.time && <span key="time">Mean {duration(summary.time.mean)} · middle 50% {duration(summary.time.q1)} to {duration(summary.time.q3)} · {summary.time.reviews} timed trials</span>,
     <span key="count">{summary.tasks} PRs · {summary.admitted} of {summary.trials} scheduled trials admitted, {summary.completed} complete</span>,
   ]
-  return <div className="chart-tip" role="presentation" style={{ left, top }}><strong>{summary.configuration.label}</strong>{lines}</div>
+  return <div className="chart-tip" role="presentation" style={{ left, top }}><strong><SetupName configuration={summary.configuration} mark={false} /></strong>{lines}</div>
 }

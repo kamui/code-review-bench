@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Accordion, Alert, Badge, Button, Code, Drawer, Group, Loader, Paper, Select, Stack, Tabs, Text, Title } from '@mantine/core'
 import { Braces, ExternalLink, FileJson, FileText, Download, Gauge, NotebookText, Receipt, Scale } from 'lucide-react'
 import { SetupName } from './Chart'
-import { Disclosure, humanize, Rich } from './Reading'
+import { Disclosure, humanize, Rich, Tag } from './Reading'
 import { fetchDetail, skillReleaseLabel } from '../lib/data'
 import type { Attempt, AttemptDetail, Configuration, Dataset, Task } from '../lib/data'
 import { bandLabels, compact, money } from '../lib/metrics'
@@ -51,13 +51,13 @@ function InspectionBody({ dataset, configuration, task, inspection, onChange, no
   const currentTask = task ?? dataset.tasks.find(item => item.id === attempt?.taskId)
   const novel = currentTask ? pendingCandidates(dataset, [currentTask.id], now) : []
   return <Stack gap="lg">
-    {configuration && <><Text size="sm" c="dimmed">{configuration.label}</Text><Group><Badge variant="light">{configuration.version}</Badge>{!configuration.builtin && <Badge variant="outline">{skillReleaseLabel([configuration])}</Badge>}</Group><Disclosure title="Run notes" icon={NotebookText}><Text size="sm" className="disclosure-body">{configuration.note}</Text></Disclosure>
+    {configuration && <><Group gap="xs">{!configuration.builtin && <Badge variant="light" radius="sm">{skillReleaseLabel([configuration])}</Badge>}<Text size="xs" c="dimmed">Recorded version: {configuration.version}</Text></Group><Disclosure title="Run notes" icon={NotebookText}><Text size="sm" className="disclosure-body">{configuration.note}</Text></Disclosure>
       {Array.from(new Set(configuration.skillReleases.map(release => release.provenanceUrl))).map(url => <Button key={url} component="a" href={url} target="_blank" rel="noreferrer" variant="subtle" size="xs">Skill release provenance</Button>)}
       {configuration.reviewChange && <Button component="a" href={configuration.reviewChange.url} target="_blank" rel="noreferrer" variant="subtle" size="xs">Review change: {configuration.reviewChange.summary}</Button>}
       {configuration.skillProvenanceUrl && <Button component="a" href={configuration.skillProvenanceUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Skill commits & timestamps</Button>}
       <Paper withBorder p="md" radius="md"><Text size="sm" fw={640} mb={5}>Comparison conditions</Text>
         <dl className="conditions">{configuration.conditions.map(condition => <div key={condition.name}><dt>{condition.name}</dt><dd>{condition.values.join(', ')}</dd></div>)}</dl></Paper></>}
-    {task && <><Text>{task.shape}</Text><Group gap="xs">{task.profile.concerns.map(concern => <Badge variant="light" key={concern}>{concern}</Badge>)}</Group>
+    {task && <><Text>{task.shape}</Text><Group gap="xs">{task.profile.concerns.map(concern => <Tag key={concern}>{concern}</Tag>)}</Group>
       <Group><Button component="a" href={task.sourceUrl} target="_blank" rel="noreferrer" variant="default" size="xs" leftSection={<ExternalLink size={14} />}>Original PR</Button>
         <Button component="a" href={task.packetUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileText size={14} />}>Review packet</Button></Group>
       <Text size="xs" c="dimmed">Revision {task.head.slice(0, 10)}. Each reference shows its own eligibility and impact state.</Text></>}

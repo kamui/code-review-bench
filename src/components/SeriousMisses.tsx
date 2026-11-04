@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { Badge, Button, Chip, Group, Popover, Stack, Switch, Table, Text, Tooltip } from '@mantine/core'
+import { Button, Chip, Group, Popover, Stack, Switch, Table, Text, Tooltip } from '@mantine/core'
 import type { Configuration, Dataset, Family, Task } from '../lib/data'
 import { seriousMatrix, skillsPerModel } from '../lib/scoring'
 import type { FamilyRow, Scorecard, Selection, TrialOutcome, Verdict } from '../lib/scoring'
 import type { Inspection } from '../lib/view'
 import { setupParts } from './Chart'
+import { Tag } from './Reading'
 
 type Column = { configuration: Configuration; card: Scorecard; skill: string; model: string; label: string }
 
@@ -80,7 +81,7 @@ export function SeriousMisses({ dataset, configurations, cards, selection, onIns
             return [<Table.Tr key={task.id} className="miss-pr">
               <Table.Th scope="rowgroup" className="miss-sticky">
                 <button type="button" className="text-button task-name" onClick={() => onInspect({ kind: 'task', id: task.id })}>{task.repo}<span>#{task.pr}</span></button>
-                <Group gap={4} mt={4}>{[...task.profile.changeKinds, ...task.profile.technologies].map(tag => <Badge key={tag} variant="outline" color="gray" size="xs">{tag}</Badge>)}</Group>
+                <Group gap={4} mt={4}>{[...task.profile.changeKinds, ...task.profile.technologies].map(tag => <Tag key={tag}>{tag}</Tag>)}</Group>
                 <Text size="xs" c="dimmed" mt={4} fw={400}>{task.shape}</Text>
                 <Text size="xs" mt={2} fw={560}>{problems(row.serious)}</Text>
               </Table.Th>

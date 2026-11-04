@@ -3,8 +3,8 @@ import { ActionIcon, Alert, Anchor, Badge, Button, Checkbox, Container, Group, L
   SegmentedControl, Select, Stack, Switch, Table, Tabs, Text, TextInput, Title, Tooltip, useComputedColorScheme, useMantineColorScheme } from '@mantine/core'
 import { useMediaQuery } from '@mantine/hooks'
 import { Link, Navigate, useLocation, useMatch, useNavigate, useSearch } from '@tanstack/react-router'
-import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpDown, ArrowUpRight, ChartNoAxesGantt, ChartScatter, Check, ChevronDown, ChevronRight, CircleDashed, CodeXml, Cpu, Crosshair, Database,
-  EyeOff, FileCheck2, GitCommitHorizontal, Grid3x3, Info, LayoutGrid, LayoutList, Moon, Scale, Search, ShieldCheck, SlidersHorizontal, Sun, X } from 'lucide-react'
+import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpDown, ArrowUpRight, ChartNoAxesGantt, ChartScatter, Check, ChevronDown, ChevronRight, CodeXml, Cpu, Crosshair, Database,
+  EyeOff, FileCheck2, Grid3x3, Hourglass, Info, LayoutGrid, LayoutList, Moon, Scale, Search, ShieldCheck, SlidersHorizontal, Sun, X } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { fetchDataset, impactBands, skillReleaseLabel } from '../lib/data'
 import type { Configuration, Dataset, Task } from '../lib/data'
@@ -18,7 +18,7 @@ import { Chart, Mark, setupParts } from './Chart'
 import { EvidenceDrawer } from './EvidenceDrawer'
 import { MethodologyViews } from './MethodologyViews'
 import { Overview } from './Overview'
-import { Notes, notesFor, PeerNote, Value } from './Reading'
+import { Notes, notesFor, PeerNote, Tag, Value } from './Reading'
 
 export type Page = 'scorecard' | 'tasks'
 type LoadState = { kind: 'loading' } | { kind: 'failed'; message: string } | { kind: 'ready'; dataset: Dataset }
@@ -58,6 +58,7 @@ export function Explorer() {
 export function Dashboard({ dataset, page, search, onSearch, now = new Date() }: {
   dataset: Dataset; page: Page; search: ExplorerSearch; onSearch: (patch: ExplorerSearch, section?: Section) => void; now?: Date
 }) {
+  const hash = useLocation({ select: location => location.hash })
   const setupIds = dataset.configurations.map(item => item.id)
   const defaultSetups = (experiments: boolean) => dataset.configurations.filter(item => experiments || !item.experimental).map(item => item.id)
   const includeExperiments = search.experiments ?? false
@@ -79,7 +80,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
   const narrow = useMediaQuery('(max-width: 700px)') ?? false
   const chartView = narrow && view !== 'overview' ? 'setups' : view
   const views: { label: string; value: MainView; icon: LucideIcon }[] = [{ label: 'Overview', value: 'overview', icon: LayoutList }, { label: 'By method', value: 'skills', icon: LayoutGrid },
-    { label: 'By setup', value: 'setups', icon: ChartNoAxesGantt }, { label: 'By model', value: 'models', icon: GitCommitHorizontal }, { label: 'Frontier', value: 'tradeoff', icon: ChartScatter }]
+    { label: 'By setup', value: 'setups', icon: ChartNoAxesGantt }, { label: 'By model', value: 'models', icon: Cpu }, { label: 'Frontier', value: 'tradeoff', icon: ChartScatter }]
   const [query, setQuery] = useState('')
   const [area, setArea] = useState<string | null>(null)
   const [change, setChange] = useState<string | null>(null)
@@ -158,11 +159,12 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
     concern && { label: `Task concern: ${concern}`, clear: () => setConcern(null) }, findingConcern && { label: `Findings: ${findingConcern}`, clear: () => setFindingConcern(null) },
   ].flatMap(item => item ? [item] : [])
   const hero = heroCounts(dataset)
+  const current = page === 'tasks' ? 'tasks' : hash === 'methodology' ? 'methodology' : 'scorecard'
   return <>
     <header className="site-header"><Container size="xl" className="nav-inner">
       <Link className="brand" to="/" aria-label="codereviewbench home"><span className="brand-mark"><CodeXml size={22} strokeWidth={2} /></span><span>code<span className="brand-review">review</span>bench<span className="brand-dot">.</span></span></Link>
       <div className="header-links">
-        <nav className="top-nav" aria-label="Main navigation"><Link className="section-link" to="/" hash="scorecard" resetScroll={false}>Scorecard</Link><Link to="/tasks">Tasks</Link><Link className="section-link" to="/" hash="methodology" resetScroll={false}>Methodology</Link></nav>
+        <nav className="top-nav" aria-label="Main navigation"><Link className="section-link" data-current={current === 'scorecard' || undefined} to="/" hash="scorecard" resetScroll={false} activeOptions={{ includeHash: true }}>Scorecard</Link><Link to="/tasks">Tasks</Link><Link className="section-link" data-current={current === 'methodology' || undefined} to="/" hash="methodology" resetScroll={false} activeOptions={{ includeHash: true }}>Methodology</Link></nav>
         <a className="github-link" href="https://github.com/kamui/code-review-bench" target="_blank" rel="noreferrer" aria-label="GitHub repository">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4" />
@@ -224,7 +226,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
               })}</div>
             </div>
             <div className="refine-controls">
-              <Popover position="bottom-end" width={360} withArrow>
+              <Popover position="bottom-start" width={340} withArrow arrowPosition="side">
                 <Popover.Target><Button variant="default" size="xs" className="refine-button" leftSection={<SlidersHorizontal size={14} aria-hidden="true" />} rightSection={<ChevronDown size={14} aria-hidden="true" />}>Review setups ({configurations.filter(item => selected.includes(item.id)).length}/{configurations.length})</Button></Popover.Target>
                 <Popover.Dropdown className="refine-dropdown" style={{ maxHeight: '70vh', overflowY: 'auto', maxWidth: 'calc(100vw - 24px)' }}><Stack gap="sm">
                   <Group justify="space-between"><Text size="xs" fw={640}>Review setups</Text><Group gap="xs">
@@ -236,7 +238,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
                       checked={selected.includes(configuration.id)} onChange={() => setSelected(selected.includes(configuration.id) ? selected.filter(id => id !== configuration.id) : [...selected, configuration.id])} size="xs" />)}</div>)}
                 </Stack></Popover.Dropdown>
               </Popover>
-              <Popover position="bottom-end" width={230} withArrow>
+              <Popover position="bottom-start" width={340} withArrow arrowPosition="side">
                 <Popover.Target><Button variant="default" size="xs" className="refine-button" leftSection={<Cpu size={14} aria-hidden="true" />} rightSection={<ChevronDown size={14} aria-hidden="true" />}>Models ({selectedModels.length}/{modelChoices.length})</Button></Popover.Target>
                 <Popover.Dropdown className="refine-dropdown"><Stack gap="sm"><Group justify="space-between"><Text size="xs" fw={640}>Models</Text><Group gap="xs"><Button variant="subtle" size="compact-xs" onClick={() => setSelectedModels(modelChoices.map(model => model.value))}>Select all</Button>
                   <Button variant="subtle" size="compact-xs" onClick={() => setSelectedModels([])}>Clear all</Button></Group></Group>
@@ -314,8 +316,8 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
               const approved = task.families.filter(family => family.eligibility === 'approved').length
               const pending = task.families.length - approved
               return <Table.Tr key={task.id}><Table.Td><button className="text-button task-name" onClick={() => inspect()({ kind: 'task', id: task.id })}>{task.repo}<span>#{task.pr}</span></button><Text size="xs" c="dimmed" mt={4} maw={340}>{task.shape}</Text></Table.Td>
-                <Table.Td data-label="Profile"><Group gap={5} maw={220}>{[...task.profile.technologies, ...task.profile.changeKinds].map(label => <Badge key={label} color="gray" variant="light" size="sm">{label}</Badge>)}</Group></Table.Td>
-                <Table.Td data-label="References">{approved ? <Text size="sm">{plural(approved, 'problem')}</Text> : <Badge color="gray" variant="light" size="sm">{controlLabels[task.control]}</Badge>}
+                <Table.Td data-label="Profile"><Group gap={5} maw={220}>{[...task.profile.technologies, ...task.profile.changeKinds].map(label => <Tag key={label}>{label}</Tag>)}</Group></Table.Td>
+                <Table.Td data-label="References">{approved ? <Text size="sm">{plural(approved, 'problem')}</Text> : <Tag>{controlLabels[task.control]}</Tag>}
                   {pending > 0 && <Text size="xs" c="dimmed" mt={4}>{pending} awaiting eligibility</Text>}
                   {!!task.preExistingProblems?.length && <Text size="xs" c="dimmed" mt={4}>{plural(task.preExistingProblems.length, 'pre-existing problem')}</Text>}</Table.Td>
                 <Table.Td data-label="Mean detection"><DetectionBar result={meanTaskRecall(board.cards.filter(card => activeIds.includes(card.configurationId)), task.id, band)} /></Table.Td><Table.Td data-label="In comparison">{sharedIds.has(task.id) ? <span className="included-label"><Check size={14} aria-hidden="true" /> Included</span>
@@ -331,12 +333,12 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
 
       {page === 'scorecard' && <section id="methodology" className="methodology-section"><div><Title order={2}>What the numbers mean</Title><Text className="section-lede" maw={620}>Finding a real problem, giving a useful fix, and avoiding false alarms are different skills. We keep them visible separately.</Text></div>
         <div className="methodology-grid">
-          <article className="principle"><span className="principle-icon" aria-hidden="true"><Crosshair size={18} strokeWidth={1.8} /></span><h3>Detection, two averages, three bands</h3><p>Each reference problem counts once per review. Recovery is averaged over a PR's scheduled trials, then reported with problems weighted equally and with PRs weighted equally, for serious, other-material and unknown-impact references. The chart plots the band and average you select.</p></article>
-          <article className="principle"><span className="principle-icon" aria-hidden="true"><ShieldCheck size={18} strokeWidth={1.8} /></span><h3>Serious means the implementer had to know</h3><p>A reference problem is serious when the implementer has to be made aware of it before release. If it ships without them knowing, the review has failed. Once aware, they may fix it, or accept it and document it. Other material is a real problem that earns credit when a review raises it but does not have to be raised. The label decides which band counts a problem and changes no score.</p></article>
-          <article className="principle"><span className="principle-icon" aria-hidden="true"><Scale size={18} strokeWidth={1.8} /></span><h3>Every reference rests on a saved ruling</h3><p>A problem counts only after a saved ruling that it is real and belongs to the change. Most are faults in code; a gap in the documentation a change adds can be one too. The benchmark's owner gives it. Two agents from different model families may settle that one question in the owner's place, and only with a saved before-and-after reproduction and an explicit acknowledgement of the problem from the project's maintainers. Every impact label is the owner's ruling. A different model family then labels the same evidence blind, and its disagreements stay on record.</p></article>
-          <article className="principle"><span className="principle-icon" aria-hidden="true"><FileCheck2 size={18} strokeWidth={1.8} /></span><h3>Clean controls are audited</h3><p>A PR with no reference problem tests false alarms only after an independent audit and a saved ruling. The audit reads the change and every saved review comment on it. A comment that several reviews raise is a claim to test, so a disputed path that can be run is run. Each control's record says what its audit covered.</p></article>
-          <article className="principle"><span className="principle-icon" aria-hidden="true"><Grid3x3 size={18} strokeWidth={1.8} /></span><h3>Separate dimensions, no blended score</h3><p>Delivery, claim reliability, remedy sufficiency and safety, audited controls, advice benefit, cost and time are reported beside detection. Refuted claims and fixes never change detection, and nothing combines them into one rank.</p></article>
-          <article className="principle"><span className="principle-icon" aria-hidden="true"><EyeOff size={18} strokeWidth={1.8} /></span><h3>Unknown stays unknown</h3><p>Unresolved detection outcomes receive zero credit, with the affected problems and decisions explained. This does not adjudicate them as misses. Unknown impact stays in its own band; measures blocked by missing judgments, unassessed remedies or unaudited controls are unavailable with their reasons. Candidates wait for a saved human ruling. Saved reviews, failures and rulings stay linked from every setup and PR.</p></article></div>
+          <article className="principle"><span className="principle-icon" aria-hidden="true"><Crosshair size={17} strokeWidth={2} /></span><h3>Detection, two averages, three bands</h3><p>Each reference problem counts once per review. Recovery is averaged over a PR's scheduled trials, then reported with problems weighted equally and with PRs weighted equally, for serious, other-material and unknown-impact references. The chart plots the band and average you select.</p></article>
+          <article className="principle"><span className="principle-icon" aria-hidden="true"><ShieldCheck size={17} strokeWidth={2} /></span><h3>Serious means the implementer had to know</h3><p>A reference problem is serious when the implementer has to be made aware of it before release. If it ships without them knowing, the review has failed. Once aware, they may fix it, or accept it and document it. Other material is a real problem that earns credit when a review raises it but does not have to be raised. The label decides which band counts a problem and changes no score.</p></article>
+          <article className="principle"><span className="principle-icon" aria-hidden="true"><Scale size={17} strokeWidth={2} /></span><h3>Every reference rests on a saved ruling</h3><p>A problem counts only after a saved ruling that it is real and belongs to the change. Most are faults in code; a gap in the documentation a change adds can be one too. The benchmark's owner gives it. Two agents from different model families may settle that one question in the owner's place, and only with a saved before-and-after reproduction and an explicit acknowledgement of the problem from the project's maintainers. Every impact label is the owner's ruling. A different model family then labels the same evidence blind, and its disagreements stay on record.</p></article>
+          <article className="principle"><span className="principle-icon" aria-hidden="true"><FileCheck2 size={17} strokeWidth={2} /></span><h3>Clean controls are audited</h3><p>A PR with no reference problem tests false alarms only after an independent audit and a saved ruling. The audit reads the change and every saved review comment on it. A comment that several reviews raise is a claim to test, so a disputed path that can be run is run. Each control's record says what its audit covered.</p></article>
+          <article className="principle"><span className="principle-icon" aria-hidden="true"><Grid3x3 size={17} strokeWidth={2} /></span><h3>Separate dimensions, no blended score</h3><p>Delivery, claim reliability, remedy sufficiency and safety, audited controls, advice benefit, cost and time are reported beside detection. Refuted claims and fixes never change detection, and nothing combines them into one rank.</p></article>
+          <article className="principle"><span className="principle-icon" aria-hidden="true"><EyeOff size={17} strokeWidth={2} /></span><h3>Unknown stays unknown</h3><p>Unresolved detection outcomes receive zero credit, with the affected problems and decisions explained. This does not adjudicate them as misses. Unknown impact stays in its own band; measures blocked by missing judgments, unassessed remedies or unaudited controls are unavailable with their reasons. Candidates wait for a saved human ruling. Saved reviews, failures and rulings stay linked from every setup and PR.</p></article></div>
         <Group gap="md" mt="lg"><Anchor href={`${import.meta.env.BASE_URL}data/benchmark.json`} download size="sm" className="data-download"><ArrowDownToLine size={15} aria-hidden="true" />Download explorer data</Anchor></Group>
         <Text size="xs" c="dimmed" mt="lg">Imported from skills revision {dataset.revision.slice(0, 10)}. {dataset.import.files.toLocaleString()} preserved source files and {dataset.import.transcripts} transcript references. {dataset.import.mismatches} superseded archive references have recorded hash mismatches; the two main run archives are verified. Evidence hash {dataset.evidence.datasetHash.slice(0, 12)} identifies the exported current records.</Text>
       </section>}
@@ -349,15 +351,14 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
 const methodName = (configuration: Configuration) => configuration.builtin ? configuration.method === 'codex' ? 'Codex built-in' : 'Claude built-in' : `/${configuration.method}`
 
 function StatusNotice({ limits, unresolved }: { limits: string[]; unresolved: boolean }) {
+  const title = limits.length ? 'Provisional results: grading is still in progress' : 'Reliability measurements are provisional'
+  const summary = <p className="status-summary">{limits.length > 0 && 'Saved reviews, delivery and usage remain available. Unresolved detection outcomes receive zero credit, with an explanation. Measures blocked by missing evidence are unavailable, with their reasons. '}
+    {unresolved && 'Some claim assessments are unresolved. Reliability measurements are provisional.'}</p>
+  const icon = <Hourglass className="status-icon" size={15} strokeWidth={2} aria-hidden="true" />
   return <aside className="status-notice" aria-label="Result status">
-    <span className="status-icon" aria-hidden="true"><CircleDashed size={18} strokeWidth={2} /></span>
-    <div className="status-body">
-      <p className="status-title">{limits.length ? 'Provisional results: grading is still in progress' : 'Reliability measurements are provisional'}</p>
-      <p className="status-summary">{limits.length > 0 && 'Saved reviews, delivery and usage remain available. Unresolved detection outcomes receive zero credit, with an explanation. Measures blocked by missing evidence are unavailable, with their reasons. '}
-        {unresolved && 'Some claim assessments are unresolved. Reliability measurements are provisional.'}</p>
-      {limits.length > 0 && <details className="status-details"><summary>What is still open ({limits.length})</summary>
-        <ul>{limits.map(limit => <li key={limit}>{limit}</li>)}</ul></details>}
-    </div>
+    {limits.length ? <details className="status-details"><summary>{icon}<span className="status-title">{title}</span><span className="status-more">What is still open ({limits.length})<ChevronDown size={14} aria-hidden="true" /></span></summary>
+      <div className="status-body">{summary}<ul>{limits.map(limit => <li key={limit}>{limit}</li>)}</ul></div></details>
+      : <div className="status-line">{icon}<span className="status-title">{title}</span>{summary}</div>}
   </aside>
 }
 

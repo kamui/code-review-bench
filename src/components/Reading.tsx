@@ -41,6 +41,10 @@ export function Disclosure({ title, icon = BookOpen, children }: { title: string
 export const ChartGuide = ({ children }: { children: ReactNode }) => <Disclosure title="How to read this chart">{children}</Disclosure>
 
 // Saved review text marks code with Markdown backticks.
+export function Tag({ children }: { children: ReactNode }) {
+  return <span className="tag">{children}</span>
+}
+
 export function Rich({ text }: { text: string }) {
   return text.split(/(`[^`]+`)/).map((part, index) => part.length > 2 && part.startsWith('`') && part.endsWith('`')
     ? <code key={index} className="inline-code">{part.slice(1, -1)}</code> : part)
@@ -63,7 +67,7 @@ export function DataTable<Row>({ label, rows, columns, rowKey, minWidth, empty =
   return <>
     {shared.length > 0 && <p className="shared-values"><span className="shared-title">Same for every setup</span>
       {shared.map(({ item, cell }) => <span key={item.label} className="shared-value"><span>{item.label}</span><b><Value cell={cell} notes={notes} /></b></span>)}</p>}
-    <Table.ScrollContainer minWidth={Math.min(minWidth, 220 + shown.length * 110)} className="data-scroll"><Table aria-label={label} className="data-table">
+    <Table.ScrollContainer minWidth={Math.min(minWidth, 180 + shown.length * 84)} className="data-scroll"><Table aria-label={label} className="data-table">
       <Table.Thead><Table.Tr>{shown.map(({ item, position }) => <Table.Th key={item.label} scope="col" data-numeric={numeric[position] || undefined}>{item.label}</Table.Th>)}</Table.Tr></Table.Thead>
       <Table.Tbody>{rows.map((row, index) => <Table.Tr key={rowKey(row)}>{shown.map(({ item, position }) => {
         const cell = cells[index]?.[position] ?? ''
