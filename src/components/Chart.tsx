@@ -362,13 +362,15 @@ function Models({ points, measure, axis, onSelect, interactions }: { points: Poi
 
 function Tooltip({ point, measure, axis, left, top }: { point: Point; measure: string; axis: Axis; left: number; top: number }) {
   const { summary, range } = point
+  const row = (key: string, label: string, value: ReactNode, note?: ReactNode) =>
+    <span key={key} className="tip-row"><span className="tip-label">{label}</span><b>{value}</b>{note && <span className="tip-note">{note}</span>}</span>
   const lines: ReactNode[] = [
-    !summary.configuration.builtin && <span key="skill">Skill: {skillReleaseLabel([summary.configuration])}</span>,
-    <span key="score">{measure}: <b>{percent(summary.detection)}</b>{range && ` (${percent(range.low)} to ${percent(range.high)} leaving one PR out; sensitivity, not a confidence interval)`}</span>,
-    summary.detectionNote && <span key="zero-credit">† {summary.detectionNote}</span>,
-    <span key="metric">{axisLabels[axis]}: <b>{formatMetric(axis, point.metric, summary.configuration, point.bounded)}</b>{(point.metric === null || point.bounded) && ` ${summary.reasons[axis]}`}</span>,
-    axis === 'time' && summary.time && <span key="time">Mean {duration(summary.time.mean)} · middle 50% {duration(summary.time.q1)} to {duration(summary.time.q3)} · {summary.time.reviews} timed trials</span>,
-    <span key="count">{summary.tasks} PRs · {summary.admitted} of {summary.trials} scheduled trials admitted, {summary.completed} complete</span>,
+    row('score', measure, percent(summary.detection), range && `${percent(range.low)} to ${percent(range.high)} leaving one PR out; sensitivity, not a confidence interval`),
+    summary.detectionNote && <span key="zero-credit" className="tip-note">† {summary.detectionNote}</span>,
+    row('metric', axisLabels[axis], formatMetric(axis, point.metric, summary.configuration, point.bounded), (point.metric === null || point.bounded) && summary.reasons[axis]),
+    axis === 'time' && summary.time && <span key="time" className="tip-note">Mean {duration(summary.time.mean)} · middle 50% {duration(summary.time.q1)} to {duration(summary.time.q3)} · {summary.time.reviews} timed trials</span>,
+    row('count', 'Trials admitted', `${summary.admitted} of ${summary.trials}`, `${summary.tasks} PRs · ${summary.completed} complete`),
+    !summary.configuration.builtin && row('skill', 'Skill', skillReleaseLabel([summary.configuration])),
   ]
   return <div className="chart-tip" role="presentation" style={{ left, top }}><strong><SetupName configuration={summary.configuration} mark={false} /></strong>{lines}</div>
 }
