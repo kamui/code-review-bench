@@ -10,6 +10,7 @@ export const estimatorLabels: Record<Estimator, string> = { equalProblem: 'probl
 export const foundLabels: Record<Band, string> = { serious: 'Serious problems found', 'other-material': 'Other material problems found', unknown: 'Unknown-impact problems found', all: 'Known problems found' }
 export const detectionLabel = (view: DetectionView) => `${foundLabels[view.band]}, ${estimatorLabels[view.estimator]}`
 export const lowerFirst = (label: string) => label.charAt(0).toLowerCase() + label.slice(1)
+export const upperFirst = (label: string) => label.charAt(0).toUpperCase() + label.slice(1)
 
 export const measured = <T>(measure: Bounded<T>): T | null => measure.kind === 'available' ? measure.value : null
 export const lowerBound = (measure: Bounded): number | null => measure.kind === 'unavailable' ? null : measure.value

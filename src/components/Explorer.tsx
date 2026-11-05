@@ -8,7 +8,7 @@ import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpDown, ArrowUpRight, ChartBa
 import type { LucideIcon } from 'lucide-react'
 import { fetchDataset, impactBands, skillReleaseLabel } from '../lib/data'
 import type { Configuration, Dataset, Task } from '../lib/data'
-import { bandLabels, compact, conditionDifferences, datasetStatus, detectionLabel, estimatorLabels, foundLabels, heroCounts, lowerBound, lowerFirst, measured, percent, perReview, reading, reasonCounts, share, summarize } from '../lib/metrics'
+import { bandLabels, compact, conditionDifferences, datasetStatus, detectionLabel, estimatorLabels, foundLabels, heroCounts, lowerBound, lowerFirst, measured, percent, perReview, reading, reasonCounts, share, summarize, upperFirst } from '../lib/metrics'
 import type { Axis, Reading } from '../lib/metrics'
 import { estimators, leaderboard, matched, meanTaskRecall, overviewOrder, pendingCandidates, referenceCoverage } from '../lib/scoring'
 import { axes, chartViews, clearedSearch, inspectionOf, inspectionParams, listParam, listValue, unlessDefault } from '../lib/view'
@@ -252,13 +252,13 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
             </div>
           </div>
           <div className="chart-main">
-            <div className="chart-context">
-              <span className="basis-chip"><Glossed text={`${detectionLabel(detection)} · ${plural(shared.length, 'PR')} · ${coverage.bands[band]} of ${coverage.bands.all} known problems in this band${candidateCount > 0 ? ` · ${candidateCount} awaiting a ruling` : ''}`} /></span>
+            {(chartView !== 'overview' || activeFilters.length > 0) && <div className="chart-context">
+              {chartView !== 'overview' && <span className="basis-chip"><Glossed text={`${detectionLabel(detection)} · ${plural(shared.length, 'PR')} · ${coverage.bands[band]} of ${coverage.bands.all} known problems in this band${candidateCount > 0 ? ` · ${candidateCount} awaiting a ruling` : ''}`} /></span>}
               {activeFilters.map(item => <button type="button" key={item.label} className="filter-chip" onClick={item.clear} aria-label={`Remove filter ${item.label}`}>{item.label}<X size={12} aria-hidden="true" /></button>)}
               {activeFilters.length > 0 && <Link className="filter-link" to="/tasks">Edit filters</Link>}
-            </div>
+            </div>}
             {chartView === 'overview' ? <Overview summaries={summaries} detection={detection} axis={axis} matching={{ included: matchedRefuted.included.length, excluded: matchedRefuted.excluded.length }}
-              basis={{ problems: coverage.bands[band], prs: shared.length }} onSelect={id => inspect('scorecard')({ kind: 'configuration', id })} />
+              basis={{ problems: coverage.bands[band], known: coverage.bands.all, prs: shared.length, awaiting: candidateCount }} onSelect={id => inspect('scorecard')({ kind: 'configuration', id })} />
               : <Chart summaries={summaries} detection={detection} matching={{ included: matchedRefuted.included.length, excluded: matchedRefuted.excluded.length }} axis={axis} view={chartView} onSelect={id => inspect('scorecard')({ kind: 'configuration', id })} />}
           </div>
           <div className="edition-notes" aria-label="Review method editions">
@@ -323,7 +323,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
             <Table.Tbody>{candidates.map(task => {
               const approved = task.families.filter(family => family.eligibility === 'approved').length
               const pending = task.families.length - approved
-              return <Table.Tr key={task.id}><Table.Td><button className="text-button task-name" onClick={() => inspect()({ kind: 'task', id: task.id })}>{task.repo}<span>#{task.pr}</span></button><Text size="xs" c="dimmed" mt={4} maw={340}>{task.shape}</Text></Table.Td>
+              return <Table.Tr key={task.id}><Table.Td><button className="text-button task-name" onClick={() => inspect()({ kind: 'task', id: task.id })}>{task.repo}<span>#{task.pr}</span></button><TaskShape task={task} /></Table.Td>
                 <Table.Td data-label="Profile"><Group gap={5} maw={220}>{[...task.profile.technologies, ...task.profile.changeKinds].map(label => <Tag key={label}>{label}</Tag>)}</Group></Table.Td>
                 <Table.Td data-label="References">{approved ? <Text size="sm">{plural(approved, 'problem')}</Text> : <Tag>{controlLabels[task.control]}</Tag>}
                   {pending > 0 && <Text size="xs" c="dimmed" mt={4}>{pending} awaiting eligibility</Text>}
@@ -419,3 +419,6 @@ export function CoverageMatrix({ tasks }: { tasks: Task[] }) {
     </Table.Tr>)}</Table.Tbody>
   </Table></Table.ScrollContainer>
 }
+
+const TaskShape = ({ task }: { task: Task }) => task.shape === 'pending evaluation'
+  ? <span className="row-tag task-shape">Pending evaluation</span> : <Text size="xs" c="dimmed" mt={4} maw={340}>{upperFirst(task.shape)}</Text>
