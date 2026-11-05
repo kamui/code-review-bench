@@ -131,7 +131,7 @@ function InspectionBody({ dataset, results, band, estimator, configuration, task
               : 'This attempt returned no usable findings. Its failure and usage remain in the evidence.'}</Alert>}
             <Accordion variant="separated">{detail.items.map((item, index) => <Accordion.Item key={item.id} value={item.id}>
               <Accordion.Control><Group gap="xs" mb={6}><Text size="xs" c="dimmed" fw={560}>Finding {index + 1}</Text><Outcome assignment={item.assignment} /></Group>
-                <Text size="sm" className="finding-claim"><Rich text={firstLine(item.claim)} /></Text></Accordion.Control>
+                <Text size="sm" className="finding-claim"><Rich text={firstLine(item.claim).replace(/^Finding \d+\s*[—–:-]\s*/, '')} /></Text></Accordion.Control>
               <Accordion.Panel><Stack gap="sm"><Text size="xs" c="dimmed">{item.file}{item.line === null ? '' : `:${item.line}`}</Text>
                 {item.claim.trim().includes('\n') && <Text size="sm" component="div"><Markdown text={item.claim} /></Text>}
                 <Text size="sm" component="div"><Markdown text={item.consequence} /></Text>
