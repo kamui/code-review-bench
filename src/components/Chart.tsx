@@ -146,6 +146,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
       })}</ul></div>}
     {points.length > 0 && view !== 'models' && (view !== 'tradeoff' || bounded) && <ul className="chart-keys" aria-label="Chart key">
       {view === 'setups' && <li><span className="whisker-key" aria-hidden="true" />Range with any one PR left out</li>}
+      {view === 'setups' && frontier.size > 0 && <li><span className="frontier-tag">On frontier</span>No other setup finds more at a lower {lowerFirst(axisLabels[axis])}</li>}
       {view === 'skills' && <li><span className="context-key" aria-hidden="true" />Other selected setups</li>}
       {bounded && <li><span className="bound-key" aria-hidden="true" />Lower bound</li>}
     </ul>}
