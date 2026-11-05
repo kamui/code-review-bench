@@ -187,8 +187,8 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
       {page === 'scorecard' && <><section className="intro">
         <div>
           <p className="eyebrow">Code review benchmark</p>
-          <Title order={1}>Good reviews find<br />the problems that matter.</Title>
-          <Text className="intro-description">Compare real code review setups by what they catch,<br className="desktop-break" /> what they cost, and how often they’re wrong.</Text>
+          <Title order={1}>Good reviews find the problems that matter.</Title>
+          <Text className="intro-description">Compare real code review setups by what they catch, what they cost, and how often they’re wrong.</Text>
         </div>
         <div className="corpus"><dl className="corpus-stats" aria-label="Benchmark statistics">
           <div><dt>PR tasks</dt><dd>{hero.tasks}</dd></div>
@@ -201,8 +201,8 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
       <section id="scorecard" className="leaderboard-section">
         <header className="section-head"><div><div className="title-row"><Title order={2}>The scorecard</Title><Badge variant="outline" color="gray" radius="sm" className="status-badge">{status.label}</Badge></div>
           <Text className="section-lede">Detection, delivery, claim reliability, remedies, controls and cost stay separate. No single number ranks the setups.</Text></div>
+          {(!status.complete || unresolved) && <StatusNotice limits={status.limits} unresolved={unresolved} />}
         </header>
-        {(!status.complete || unresolved) && <StatusNotice limits={status.limits} unresolved={unresolved} />}
         <Paper withBorder radius="lg" className="leaderboard-paper">
           <div className="chart-toolbar">
             <SegmentedControl aria-label="Chart view" className="view-switch" value={chartView} onChange={value => {

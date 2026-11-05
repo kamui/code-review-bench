@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { ArrowLeftRight, GitCompareArrows, Hourglass } from 'lucide-react'
+import { ArrowLeftRight } from 'lucide-react'
 import { Group, Paper, Select, Stack, Switch, Table, Tabs, Text, Title } from '@mantine/core'
 import type { Configuration, Dataset } from '../lib/data'
 import { bandLabels, compact, conditionDifferences, detectionLabel, duration, estimatorLabels, lowerFirst, measured, percent, perReview, points, reading, scaled, share } from '../lib/metrics'
@@ -34,6 +34,12 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
   dataset: Dataset; configurations: Configuration[]; cards: Scorecard[]; selection: Selection; detection: DetectionView; now: Date
   onInspect: (inspection: Inspection, section?: Section) => void; tab: ScorecardTab; onTab: (tab: ScorecardTab) => void
 }) {
+  const tabList = useRef<HTMLDivElement>(null)
+  // A deep link to a later tab must not leave it scrolled out of the strip; scrolling the strip alone keeps the page still.
+  useEffect(() => {
+    const list = tabList.current, active = list?.querySelector<HTMLElement>('[data-active]')
+    if (list && active) list.scrollLeft = Math.max(0, active.offsetLeft - (list.clientWidth - active.offsetWidth) / 2)
+  }, [tab])
   const [left, setLeft] = useState<string | null>(null)
   const [right, setRight] = useState<string | null>(null)
   const [metric, setMetric] = useState<ConditionalMetric>('refuted')
@@ -78,13 +84,13 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
     { label: 'Reviews sampled / admitted', value: row => `${row.card.advice.sampledReviews} / ${row.card.advice.admitted}` },
     { label: 'Generic advisory dossiers, benefit unmeasured', value: row => String(row.card.advice.generic) }]} />
   return <Paper withBorder radius="lg" className="methodology-panel" id="dimensions">
-    <div className="dimension-head"><Title order={3}>The scorecard, dimension by dimension</Title>
+    <div className="dimension-head"><Title order={3}>Each measure in detail</Title>
       <Text className="subsection-lede">Every value comes from the shared scoring kernel for the selected setups and PRs. Dimensions stay separate: there is no blended score. Rows are in name order. A numbered mark explains a value in the notes below its table.</Text></div>
     <Tabs value={tab} onChange={value => { const next = scorecardTabs.find(item => item === value); if (next) onTab(next) }} className="dimension-tabs">
-      <Tabs.List><Tabs.Tab value="detection">Detection</Tabs.Tab><Tabs.Tab value="misses">Serious misses</Tabs.Tab><Tabs.Tab value="delivery">Delivery</Tabs.Tab><Tabs.Tab value="reliability">Claim reliability</Tabs.Tab>
+      <Tabs.List ref={tabList}><Tabs.Tab value="detection">Detection</Tabs.Tab><Tabs.Tab value="misses">Serious misses</Tabs.Tab><Tabs.Tab value="delivery">Delivery</Tabs.Tab><Tabs.Tab value="reliability">Claim reliability</Tabs.Tab>
         <Tabs.Tab value="remedies">Remedies</Tabs.Tab><Tabs.Tab value="controls">Controls</Tabs.Tab><Tabs.Tab value="pre-existing">Pre-existing problems</Tabs.Tab><Tabs.Tab value="advice">Advice benefit</Tabs.Tab>
-        <Tabs.Tab value="usage">Cost and time</Tabs.Tab><Tabs.Tab value="candidates" className="tab-tool tab-tools-start" leftSection={<Hourglass size={14} aria-hidden="true" />}>Pending candidates ({novel.length + awaiting.length})</Tabs.Tab>
-        <Tabs.Tab value="comparison" className="tab-tool" leftSection={<GitCompareArrows size={14} aria-hidden="true" />}>Compare setups</Tabs.Tab></Tabs.List>
+        <Tabs.Tab value="usage">Cost and time</Tabs.Tab><Tabs.Tab value="candidates" className="tab-tools-start">Pending candidates ({novel.length + awaiting.length})</Tabs.Tab>
+        <Tabs.Tab value="comparison">Compare setups</Tabs.Tab></Tabs.List>
 
       <Tabs.Panel value="detection" ><Stack>
         <TabIntro lede="How many known problems each setup caught, averaged over its repeated runs on each PR.">Recovery of each reference problem is averaged over the PR's scheduled trials; a resolved trial without an admitted review counts as not caught. Unresolved recoveries also receive zero credit and stay in the denominator, with an annotation counting affected problems and detection decisions. Both averages are shown. Problems weighted equally is the primary average for the serious and other-material bands; the unknown and all-reference bands have no preferred average. A serious reference is one the implementer had to be made aware of before release. An other-material reference earns credit when a review raises it but did not have to be raised.</TabIntro>
