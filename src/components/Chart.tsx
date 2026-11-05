@@ -262,7 +262,7 @@ function Scatter({ points, dimensions, axis, scale, spotlight, marked, onSelect,
   ]
   const placed = width ? placeLabels([...(markedPoint ? [markedPoint] : []), ...ordered.filter(point => point !== markedPoint && !outside(point))].map(point => ({
     id: point.summary.configuration.id, x: px(point.x), y: py(point.y), width: textWidth(labelText(point.summary.configuration)), height: 16,
-  })), obstacles, { left: plot.left + 2, right: plot.right, top: 2, bottom: plot.bottom - 2 }, width < 600 ? [12, 22] : [12, 24, 36]) : []
+  })), obstacles, { left: plot.left + 2, right: plot.right, top: 2, bottom: plot.bottom - 2 }, width < 600 ? [12, 22] : [12, 24, 36, 48]) : []
   const labels = markedPoint && width && !placed.some(label => label.id === marked)
     ? [{ id: markedPoint.summary.configuration.id, x: px(markedPoint.x) + 12, y: py(markedPoint.y), anchor: 'start' as const, leader: false }, ...placed] : placed
   const xTicks = ticks(scale, width > 700)
