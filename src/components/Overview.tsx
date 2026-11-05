@@ -4,13 +4,14 @@ import type { CSSProperties, FocusEvent, MouseEvent, ReactNode } from 'react'
 import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react'
 import { linearScale, position, ticks, tipPlace } from '../lib/chart'
 import type { Scale, TipPlace } from '../lib/chart'
-import { bandLabels, detectionLabel, duration, estimatorLabels, lowerFirst, measured, perReview, reading, share } from '../lib/metrics'
+import { bandLabels, detectionLabel, foundLabels, duration, estimatorLabels, lowerFirst, measured, perReview, reading, share } from '../lib/metrics'
 import type { DetectionView, Reading, Summary } from '../lib/metrics'
 import type { Configuration } from '../lib/data'
 import { labelSegments, overviewColumns, overviewFirstDirection, overviewKey, overviewOrder } from '../lib/scoring'
-import type { Band, LabelSegment, OverviewColumn, OverviewSort, Scorecard } from '../lib/scoring'
+import type { LabelSegment, Measure, OverviewColumn, OverviewSort, Scorecard } from '../lib/scoring'
 import { Mark, reviewColor, SetupName, setupParts } from './Chart'
 import { segmentClass, segmentLabels, swatch, trueSegments } from './ClaimLabels'
+import { VendorMark } from './VendorMark'
 import { ChartGuide, costNote, costScaleNote, costText, Notes, notesFor, PeerBadge, Value } from './Reading'
 
 const costScale: Scale = { kind: 'log', min: 0.001, max: 10 }
@@ -21,14 +22,6 @@ const shareTicks = [0, 25, 50, 75, 100]
 const at = (scale: Scale, value: number) => position(scale, value, 0, 100)
 
 const problemBands: Partial<Record<LabelSegment, 'serious' | 'other-material' | 'unknown'>> = { 'problem:serious': 'serious', 'problem:other-material': 'other-material', 'problem:unknown': 'unknown' }
-
-function segmentTip(card: Scorecard, segment: LabelSegment, value: number) {
-  const text = `${segmentLabels[segment]} · ${value.toFixed(2)} claims per review`
-  const band = problemBands[segment]
-  if (!band) return text
-  const caught = card.problemsCaught[band], known = `${bandLabels[band].toLowerCase()} known problems`
-  return caught.kind === 'available' ? `${text} · caught ${caught.value.caught} of ${caught.value.known} ${known}` : `${text} · ${known} caught: unavailable. ${caught.reason}`
-}
 
 function segmentLines(card: Scorecard, segment: LabelSegment, value: number): TipLine[] {
   const lines = [{ label: segmentLabels[segment], value: `${value.toFixed(2)} per review` }]
@@ -43,7 +36,6 @@ type Tip = { configuration: Configuration; lines: TipLine[] } & TipPlace
 type ShowTip = { show: (lines: TipLine[]) => (event: MouseEvent<Element> | FocusEvent<Element>) => void; hide: () => void }
 const doubtMeaning = 'Share of admitted reviews with at least one refuted or unproven claim. Hatched: reviews whose only doubt is an unresolved claim.'
 
-const foundLabels: Record<Band, string> = { serious: 'Serious problems found', 'other-material': 'Other material problems found', unknown: 'Unknown-impact problems found', all: 'Known problems found' }
 
 type Heading = { title: string; short: string; hint?: string; note?: string; measure: string; ascending: string; descending: string; ends?: [string, string] }
 
@@ -51,19 +43,23 @@ function headings(detection: DetectionView, claimsMax: number, shown: Configurat
   return {
     setup: { title: 'Setup', short: 'Setup', measure: 'setup name', ascending: 'A to Z', descending: 'Z to A' },
     detection: { title: foundLabels[detection.band], note: estimatorLabels[detection.estimator], short: foundLabels[detection.band], measure: lowerFirst(detectionLabel(detection)), ascending: 'least first', descending: 'most first', ends: ['0%', '100%'] },
-    claims: { title: 'Problem claims per review', note: 'bar adds other true claims', short: 'Problem claims per review', measure: 'problem claims per review', ascending: 'fewest first', descending: 'most first', ends: ['0', String(claimsMax)] },
+    claims: { title: 'Problem claims per review', short: 'Problem claims per review', measure: 'problem claims per review', ascending: 'fewest first', descending: 'most first', ends: ['0', String(claimsMax)] },
     doubt: { title: 'Refuted or unproven', note: 'share of reviews', short: 'Refuted or unproven', hint: doubtMeaning, measure: 'share of reviews with a refuted or unproven claim', ascending: 'fewest first', descending: 'most first', ends: ['0%', '100%'] },
     cost: { title: 'Cost per trial', short: 'Cost per trial', measure: 'cost per scheduled trial', ascending: 'lowest first', descending: 'highest first', note: costScaleNote(shown), ends: ['$0.001', '$10'] },
     time: { title: 'Median time', short: 'Median time', measure: 'median completed-trial time', ascending: 'shortest first', descending: 'longest first', note: 'log scale', ends: ['20 s', '30 min'] },
   }
 }
 
-const keyGroups: { label: string; segments: LabelSegment[] }[] = [
-  { label: 'Problem, serious to unknown', segments: ['problem:serious', 'problem:other-material', 'problem:unknown'] },
-  { label: 'Minor defect', segments: ['minor-defect'] },
-  { label: 'Suggestion', segments: ['suggestion:improvement', 'suggestion:outside-supported-use', 'suggestion:relied-on', 'suggestion:known-cause'] },
-  { label: 'Outside this change', segments: ['outside-this-change'] },
-]
+const problemSegments = trueSegments.filter(segment => segment in problemBands)
+const sum = (rates: Record<LabelSegment, Measure>, segments: LabelSegment[]) => segments.reduce((total, segment) => total + (measured(rates[segment]) ?? 0), 0)
+
+type Key = { label: string; className: string }
+const keys: Partial<Record<OverviewColumn, Key[]>> = {
+  claims: [{ label: 'problem', className: 'key-problem' }, { label: 'other true', className: 'key-other' }],
+  doubt: [{ label: 'only doubt unresolved', className: 'key-unresolved' }],
+}
+const KeyList = ({ items }: { items: Key[] }) => <span className="column-keys">{items.map(item =>
+  <span key={item.label}><span className={`column-key ${item.className}`} aria-hidden="true" />{item.label}</span>)}</span>
 
 export function Overview({ summaries, detection, sort, onSort, onSelect }: {
   summaries: Summary[]; detection: DetectionView; sort: OverviewSort; onSort: (sort: OverviewSort) => void; onSelect: (id: string) => void
@@ -102,14 +98,8 @@ export function Overview({ summaries, detection, sort, onSort, onSelect }: {
   if (!rows.length) return <div className="plot-empty" role="status"><span>Select at least one review method and model.</span></div>
   return <div className="overview" onMouseLeave={() => setTip(null)}>
     <div className="overview-keys">
-      <ul className="label-legend" aria-label="Overview key">
-        {keyGroups.map(group => <li key={group.label}><span className="key-ramp">{group.segments.map(segment =>
-          <span key={segment} className={segmentClass('label-swatch', segment)} style={swatch(segment)} aria-hidden="true" />)}</span>{group.label}</li>)}
-        <li className="key-break"><span className="label-swatch" style={swatch('refuted')} aria-hidden="true" />Refuted or unproven</li>
-        <li><span className={segmentClass('label-swatch', 'unresolved')} style={swatch('unresolved')} aria-hidden="true" />Only doubt unresolved</li>
-        <li className="key-break"><span className="overview-key-dot" aria-hidden="true" />Lower bound</li>
-        <li><span className="overview-key-spread" aria-hidden="true" />Middle 50%</li></ul>
       <p className="overview-rule" aria-live="polite">{rule}</p>
+      <span className="overview-phone-keys" aria-hidden="true"><KeyList items={[...keys.claims ?? [], { label: 'refuted or unproven', className: 'key-refuted' }, ...keys.doubt ?? []]} /></span>
     </div>
     <div className="overview-sort-select">
       <NativeSelect size="xs" label="Sort by" value={sort.column} data={overviewColumns.map(column => ({ value: column, label: heads[column].short }))}
@@ -123,7 +113,7 @@ export function Overview({ summaries, detection, sort, onSort, onSelect }: {
         return <div role="columnheader" key={column} className="overview-axis" aria-sort={current ? sort.direction : 'none'}>
           <Tooltip label={heading.hint} disabled={!heading.hint} multiline w={280} withArrow>
             <button type="button" className="text-button sort-heading overview-sort" onClick={() => toggle(column)} aria-description={heading.hint}>
-              <span className="overview-title">{heading.title}{heading.note && <em>{heading.note}</em>}</span><span className="overview-short">{heading.short}</span>
+              <span className="overview-title">{heading.title}{heading.note && <em>{heading.note}</em>}{keys[column] && <KeyList items={keys[column]} />}</span><span className="overview-short">{heading.short}</span>
               {current ? sort.direction === 'ascending' ? <ArrowUp size={13} aria-hidden="true" /> : <ArrowDown size={13} aria-hidden="true" /> : <ArrowUpDown size={13} aria-hidden="true" />}
             </button>
           </Tooltip>
@@ -138,27 +128,21 @@ export function Overview({ summaries, detection, sort, onSort, onSelect }: {
         const doubt = measured(card.reliability.reviewsWithDoubt.refutedOrUnproven), unresolved = measured(card.reliability.reviewsWithDoubt.onlyUnresolved)
         const cost = card.cost.perTrial, time = measured(card.time.summary)
         const tip = tipFor(configuration)
-        let offset = 0
+        const problems = sum(rates, problemSegments), others = sum(rates, trueSegments) - problems
+        const breakdown = trueSegments.flatMap(segment => { const value = measured(rates[segment]) ?? 0; return value > 0 ? segmentLines(card, segment, value) : [] })
         return <div role="row" key={configuration.id} className="overview-row" style={{ '--mark-color': reviewColor(configuration) } as CSSProperties} onClick={() => onSelect(configuration.id)}>
           <div role="rowheader" className="overview-name">
             <button type="button" className="text-button rank-name" onClick={event => { event.stopPropagation(); onSelect(configuration.id) }}
               aria-label={`${configuration.short}. Inspect evidence`}>
-              <Mark configuration={configuration} /><span><strong>{method}</strong><span className="rank-model">{model}{effort && ` · ${effort}`}<PeerBadge configuration={configuration} /></span></span>
+              <Mark configuration={configuration} /><span><strong>{method}</strong><span className="rank-model"><VendorMark configuration={configuration} />{model}{effort && ` · ${effort}`}<PeerBadge configuration={configuration} />{configuration.experimental && <span className="row-tag">Experiment</span>}</span></span>
             </button>
           </div>
           <Cell sorted={sort.column === 'detection'} label={heads.detection.short} cell={cells.detection} notes={notes} tip={tip} grid={shareTicks}>
             {summary.detection !== null && <span className="overview-bar" style={{ width: `${summary.detection}%` }} />}</Cell>
-          <Cell sorted={sort.column === 'claims'} label={heads.claims.short} cell={cells.claims} notes={notes} tip={tip} grid={ticks(claimScale).map(tick => at(claimScale, tick))} interactive>
-            {!cells.claims.reason && trueSegments.map(segment => {
-              const value = measured(rates[segment]) ?? 0
-              if (value <= 0) return null
-              const start = offset
-              offset += value
-              const text = segmentTip(card, segment, value), lines = segmentLines(card, segment, value)
-              return <span key={segment} className={segmentClass('overview-segment', segment)} role="img" tabIndex={0} aria-label={text}
-                onMouseEnter={tip.show(lines)} onFocus={tip.show(lines)} onMouseLeave={tip.hide} onBlur={tip.hide}
-                style={{ ...swatch(segment), left: `${at(claimScale, start)}%`, width: `${at(claimScale, value)}%` }} />
-            })}</Cell>
+          <Cell sorted={sort.column === 'claims'} label={heads.claims.short} cell={cells.claims} notes={notes} tip={tip} grid={ticks(claimScale).map(tick => at(claimScale, tick))}
+            more={breakdown} description={breakdown.length ? `. By label: ${breakdown.map(line => `${line.label} ${line.value}`).join(', ')}` : undefined}>
+            {!cells.claims.reason && <><span className="overview-segment claims-problem" style={{ left: 0, width: `${at(claimScale, problems)}%` }} />
+              {others > 0 && <span className="overview-segment claims-other" style={{ left: `${at(claimScale, problems)}%`, width: `${at(claimScale, others)}%` }} />}</>}</Cell>
           <Cell sorted={sort.column === 'doubt'} label={heads.doubt.short} cell={cells.doubt} notes={notes} tip={tip} grid={shareTicks}
             description={unresolved ? `, and ${cells.unresolved.text} whose only doubt is unresolved` : undefined} more={unresolved ? [{ label: 'Only doubt unresolved', value: cells.unresolved.text }] : []}>
             {doubt !== null && <span className="overview-segment" style={{ ...swatch('refuted'), left: 0, width: `${doubt * 100}%` }} />}
@@ -185,14 +169,14 @@ export function Overview({ summaries, detection, sort, onSort, onSelect }: {
   </div>
 }
 
-function Cell({ sorted, label, cell, notes, grid, floor, interactive, description, more = [], tip, children }: {
-  sorted: boolean; label: string; cell: Reading; notes: ReturnType<typeof notesFor>; grid: number[]; floor?: true; interactive?: true; description?: string
+function Cell({ sorted, label, cell, notes, grid, floor, description, more = [], tip, children }: {
+  sorted: boolean; label: string; cell: Reading; notes: ReturnType<typeof notesFor>; grid: number[]; floor?: true; description?: string
   more?: TipLine[]; tip: ShowTip; children: ReactNode
 }) {
   const note = cell.reason ?? cell.annotation
   return <div role="cell" className={cell.text === 'Unavailable' ? 'overview-cell missing' : 'overview-cell'} data-sorted={sorted || undefined}><span className="overview-label" aria-hidden="true">{label}</span>
     <span className="overview-value"><Value cell={cell} notes={notes} />{description && <VisuallyHidden>{description}</VisuallyHidden>}</span>
-    <span className="overview-track" aria-hidden={interactive ? undefined : true}
+    <span className="overview-track" aria-hidden="true"
       onMouseEnter={tip.show([{ label, value: cell.text, note }, ...more])} onMouseLeave={tip.hide}>{grid.map(left => <span key={left} className="rank-grid" style={{ left: `${left}%` }} />)}
       {floor && <span className="overview-floor" />}{children}</span></div>
 }
