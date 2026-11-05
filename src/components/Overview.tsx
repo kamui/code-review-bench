@@ -134,7 +134,7 @@ export function Overview({ summaries, detection, sort, onSort, onSelect }: {
           <div role="rowheader" className="overview-name">
             <button type="button" className="text-button rank-name" onClick={event => { event.stopPropagation(); onSelect(configuration.id) }}
               aria-label={`${configuration.short}. Inspect evidence`}>
-              <Mark configuration={configuration} /><span><strong>{method}</strong><span className="rank-model"><VendorMark configuration={configuration} />{model}{effort && ` · ${effort}`}<PeerBadge configuration={configuration} /></span></span>
+              <Mark configuration={configuration} /><span><strong>{method}</strong><span className="rank-model"><VendorMark configuration={configuration} />{model}{effort && ` · ${effort}`}<PeerBadge configuration={configuration} />{configuration.experimental && <span className="row-tag">Experiment</span>}</span></span>
             </button>
           </div>
           <Cell sorted={sort.column === 'detection'} label={heads.detection.short} cell={cells.detection} notes={notes} tip={tip} grid={shareTicks}>
