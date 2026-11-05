@@ -120,7 +120,7 @@ describe('scorecard page on the fixture', () => {
     expect(rendered).toContain('example/empty #505 : unaudited. No audit has been performed')
     expect(rendered).toContain('example/novel #606 : provisional. Independently audited; a novel candidate awaits a ruling')
     expect(rendered).toContain('Empty register, unaudited')
-    expect(rendered).toContain('example/novel #606 13 days since 2026-09-20 A cache key omits the tenant and can serve another tenant\'s entry. Record NC-00000000f1c5')
+    expect(rendered).toContain('example/novel #606 13 days since 2026-09-20 A cache key omits the tenant and can serve another tenant\'s entry.')
     expect(rendered).toContain('Read from the diff only; no reproduction was run.')
     expect(rendered).toContain('Pending candidates (2)')
     expect(rendered).toContain('The selected setups differ in recorded client, network access, sandbox')

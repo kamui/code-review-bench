@@ -95,13 +95,14 @@ const definition = (entry: (typeof glossary)[number]) => <span className="term-t
 
 const recordId = /\b(GT-[a-z]*\d+|blind-[0-9a-f]+ items? \d+)\b/g
 
-/** Grading records cite known problems and blind-graded review items by ID; each ID shows what it names on hover. */
+/** Grading records cite known problems and blind-graded review items by ID; each reads by name, with its ID on hover. */
 export function Referenced({ text, task }: { text: string; task: Task | undefined }) {
   return text.split(recordId).map((part, index) => {
     if (index % 2 === 0) return part
     const problem = task?.families.find(family => family.id === part)
-    const label = problem ? `Known problem ${part}: ${problem.title}` : part.startsWith('blind-') ? 'A claim in one review, named by the anonymous ID its graders saw.' : null
-    return label ? <Tooltip key={index} multiline w={320} withArrow label={label}><span className="term" tabIndex={0}>{part}</span></Tooltip> : part
+    const [shown, label] = problem ? [`“${problem.shortLabel}”`, `Known problem ${part}: ${problem.title}`]
+      : part.startsWith('blind-') ? [`a review's finding`, `${part}: a finding in one review, named by the anonymous ID its graders saw.`] : [part, null]
+    return label ? <Tooltip key={index} multiline w={320} withArrow label={label}><span className="term" tabIndex={0}>{shown}</span></Tooltip> : part
   })
 }
 
