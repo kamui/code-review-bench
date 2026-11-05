@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { CSSProperties, DOMAttributes, FocusEvent, MouseEvent, ReactNode } from 'react'
 import { useElementSize } from '@mantine/hooks'
 import { ArrowUpLeft } from 'lucide-react'
-import { groupPaths, linearScale, logScale, paretoFrontier, placeLabels, position, sqrtScale, ticks, tipPlace } from '../lib/chart'
+import { groupPaths, logScale, paretoFrontier, placeLabels, position, sqrtScale, ticks, tipPlace } from '../lib/chart'
 import type { Scale, TipPlace } from '../lib/chart'
 import { compact, detectionLabel, foundLabels, duration, lowerFirst, money, percent, reasonCounts } from '../lib/metrics'
 import type { Axis, DetectionView, Summary } from '../lib/metrics'
@@ -12,7 +12,7 @@ import { ChartGuide, costNote, costStarred, Notes } from './Reading'
 import type { Note } from './Reading'
 import { VendorMark } from './VendorMark'
 
-export type ChartView = 'skills' | 'setups' | 'models' | 'tradeoff' | 'pair'
+export type ChartView = 'skills' | 'setups' | 'models' | 'tradeoff'
 type Range = { low: number; high: number } | null
 type Point = { summary: Summary; range: Range; metric: number | null; bounded: boolean; starred: boolean }
 
@@ -67,28 +67,24 @@ function tickLabel(axis: Axis, value: number) {
 }
 
 const scaleNames: Record<Scale['kind'], string> = { log: 'log scale', sqrt: 'square-root scale', linear: 'linear scale' }
-const scaleFor = (axis: Axis, values: number[]): Scale => axis === 'refuted' ? sqrtScale(values) : axis === 'doubt' ? linearScale(values) : logScale(values)
+const scaleFor = (axis: Axis, values: number[]): Scale => axis === 'refuted' || axis === 'doubt' ? sqrtScale(values) : logScale(values)
 const fraction = (scale: Scale, value: number) => position(scale, value, 0, 100)
 const scoreTicks = [0, 25, 50, 75, 100]
-const pairAxes: Axis[] = ['cost', 'doubt']
+const frontierCost: Record<Axis, string> = { cost: 'less money', tokens: 'fewer tokens', refuted: 'fewer refuted claims', doubt: 'fewer doubtful reviews', time: 'less time' }
 
-export function Chart({ summaries, detection, matching, axis, view, showAllLabels, onSelect, guide }: {
-  summaries: Summary[]; detection: DetectionView; matching: { included: number; excluded: number }; axis: Axis; view: ChartView; showAllLabels: boolean; onSelect: (id: string) => void; guide?: ReactNode
+export function Chart({ summaries, detection, matching, axis, view, showAllLabels, onSelect, guide, height, withNotes = true }: {
+  summaries: Summary[]; detection: DetectionView; matching: { included: number; excluded: number }; axis: Axis; view: ChartView; showAllLabels: boolean; onSelect: (id: string) => void
+  guide?: ReactNode; height?: number; withNotes?: boolean
 }) {
   const measure = detectionLabel(detection), dimensions = `${lowerFirst(measure)} against ${lowerFirst(axisLabels[axis])}`
   const [hovered, setHovered] = useState<({ id: string } & TipPlace) | null>(null)
   const shown = summaries.map(summary => summary.configuration)
-  const plotted = (axis: Axis) => {
-    const points: Point[] = summaries.filter(summary => summary.detection !== null).map(summary => ({
-      summary, range: summary.range, metric: metricOf(summary, axis), bounded: boundedOn(summary, axis), starred: costStarred(summary.configuration, shown),
-    }))
-    const measured = points.flatMap(point => point.metric === null ? [] : [{ ...point, x: point.metric, y: point.summary.detection ?? 0 }])
-    const frontier = new Set(paretoFrontier(measured.filter(point => !point.bounded)).map(point => point.summary.configuration.id))
-    return { axis, points, measured, frontier, scale: scaleFor(axis, measured.map(point => point.x)), unplotted: points.filter(point => point.metric === null) }
-  }
-  const axes: Axis[] = view === 'pair' ? pairAxes : view === 'models' ? [] : [axis]
-  const sides = (view === 'pair' ? pairAxes : [axis]).map(plotted)
-  const { points, measured, frontier, scale } = sides[0]!
+  const points: Point[] = summaries.filter(summary => summary.detection !== null).map(summary => ({
+    summary, range: summary.range, metric: metricOf(summary, axis), bounded: boundedOn(summary, axis), starred: costStarred(summary.configuration, shown),
+  }))
+  const measured = points.flatMap(point => point.metric === null ? [] : [{ ...point, x: point.metric, y: point.summary.detection ?? 0 }])
+  const frontier = new Set(paretoFrontier(measured.filter(point => !point.bounded)).map(point => point.summary.configuration.id))
+  const scale = scaleFor(axis, measured.map(point => point.x))
   const withheld = reasonCounts(summaries.map(summary => summary.reasons.detection))
   const hoveredPoint = points.find(point => point.summary.configuration.id === hovered?.id)
   const hover = (id: string, element: Element) => {
@@ -101,48 +97,44 @@ export function Chart({ summaries, detection, matching, axis, view, showAllLabel
     onFocus: (event: FocusEvent<Element>) => hover(id, event.currentTarget),
     onMouseLeave: () => setHovered(null), onBlur: () => setHovered(null),
   })
-  const scatter = view === 'tradeoff' || view === 'pair'
-  const bounded = sides.some(side => side.measured.some(point => point.bounded))
+  const unplotted = points.filter(point => point.metric === null)
+  const bounded = measured.some(point => point.bounded)
   const notes = reasonCounts(points.map(point => point.summary.detectionNote ?? null))
   return <div className="plot-shell" onMouseLeave={() => setHovered(null)}>
     {!points.length ? <div className="plot-empty" role="status"><strong>{measure} is unavailable</strong>
       {summaries.length ? <ul className="reason-list">{withheld.map(row => <li key={row.reason}>{row.reason} ({setups(row.count)})</li>)}</ul>
         : <span>Select at least one review method and model.</span>}
       <span>No other impact band or average is substituted. Choose them above.</span></div>
-      : view === 'pair' ? <div className="scatter-pair">{sides.map(side => <figure key={side.axis} className="scatter-panel">
-        <figcaption>Against {lowerFirst(axisLabels[side.axis])}</figcaption>
-        <Scatter points={side.measured} dimensions={`${lowerFirst(measure)} against ${lowerFirst(axisLabels[side.axis])}`} axis={side.axis} scale={side.scale} frontier={side.frontier}
-          showAllLabels={showAllLabels} hovered={hovered?.id ?? null} onSelect={onSelect} interactions={interactions} yTitle={foundLabels[detection.band]} height={340} /></figure>)}</div>
       : view === 'setups' ? <SetupRows points={points} notes={notes} measure={measure} axis={axis} scale={scale} frontier={frontier} onSelect={onSelect} interactions={interactions} />
         : view === 'tradeoff' ? <Scatter points={measured} dimensions={dimensions} axis={axis} scale={scale} frontier={frontier} showAllLabels={showAllLabels}
-          hovered={hovered?.id ?? null} onSelect={onSelect} interactions={interactions} yTitle={foundLabels[detection.band]} />
+          hovered={hovered?.id ?? null} onSelect={onSelect} interactions={interactions} yTitle={foundLabels[detection.band]} height={height} />
         : view === 'skills' ? <MethodPanels points={measured} axis={axis} scale={scale} onSelect={onSelect} interactions={interactions} />
           : <Models points={points} notes={notes} measure={measure} onSelect={onSelect} interactions={interactions} />}
-    {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={measure} axes={axes} place={hovered} />}
+    {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={measure} axes={view === 'models' ? [] : [axis]} place={hovered} />}
     {points.length > 0 && view !== 'models' && <ul className="chart-keys" aria-label="Chart key">
       {view === 'setups' && <li><span className="whisker-key" aria-hidden="true" />Range with any one PR left out</li>}
       {view === 'skills' && <li><span className="context-key" aria-hidden="true" />Other selected setups</li>}
-      {scatter && [...new Map(measured.map(point => [setupParts(point.summary.configuration).method, point.summary.configuration])).entries()]
+      {view === 'tradeoff' && [...new Map(measured.map(point => [setupParts(point.summary.configuration).method, point.summary.configuration])).entries()]
         .sort(([left, one], [right, other]) => Number(other.builtin) - Number(one.builtin) || left.localeCompare(right)).map(([method, configuration]) => <li key={method}><Mark configuration={configuration} size={10} />{method}</li>)}
-      {scatter && <li className="key-break"><span className="frontier-key" aria-hidden="true" />Frontier</li>}
-      {scatter && <li><span className="faded-key" aria-hidden="true"><span /><span /></span>Not on the frontier, paler</li>}
+      {view === 'tradeoff' && <li className="key-break"><span className="frontier-key" aria-hidden="true" />Frontier: no other setup finds more for {frontierCost[axis]}</li>}
+      {view === 'tradeoff' && <li><span className="faded-key" aria-hidden="true"><span /><span /></span>Not on the frontier, paler</li>}
       {bounded && <li><span className="bound-key" aria-hidden="true" />Lower bound{view === 'skills' ? '' : ', left out of the frontier'}</li>}
     </ul>}
     {points.length > 0 && <ChartGuide title={guide ? 'How to read these charts' : undefined}><div className="plot-caption">
       {guide}
       {view === 'setups' && <span><span className="whisker-key" aria-hidden="true" />Rows are ordered by {lowerFirst(measure)}. The whisker spans this average with any one whole PR left out: sensitivity to these PRs, not a confidence interval.</span>}
       {view === 'skills' && <span>Each panel shows one review method on every model it ran on, with detection against {lowerFirst(axisLabels[axis])} on shared axes. Gray dots are the other selected setups, for context.</span>}
-      {view === 'pair' && <span>Each panel plots {lowerFirst(measure)} against one cost of a review: what a trial costs, and how often a review makes a claim that was refuted or not proven. An unproven claim is not shown to be false. Up and to the left is better on both.</span>}
-      {scatter && <span><span className="frontier-key" aria-hidden="true" />Frontier of {view === 'pair' ? 'each panel' : dimensions}: no other selected setup is at least as good on both measures and strictly better on one. Identical results share the frontier. It says nothing about any other measure.</span>}
+      {view === 'tradeoff' && axis === 'doubt' && <span>An unproven claim is not shown to be false.</span>}
+      {view === 'tradeoff' && <span><span className="frontier-key" aria-hidden="true" />Frontier of {dimensions}: no other selected setup is at least as good on both measures and strictly better on one. Identical results share the frontier. It says nothing about any other measure.</span>}
       {view === 'models' && <span>Each row is one model, in name order. Marks show {lowerFirst(measure)} for each review method that ran on it.</span>}
       {withheld.length > 0 && <span>Not plotted, {lowerFirst(measure)} unavailable: {withheld.map(row => `${row.reason} (${setups(row.count)})`).join(' ')}</span>}
-      {view !== 'models' && bounded && <span><span className="bound-key" aria-hidden="true" />Hollow marks show a lower bound of {lowerFirst(sides.filter(side => side.measured.some(point => point.bounded)).map(side => axisLabels[side.axis]).join(' or '))}: some attempts recorded only part of their usage, so the true value may be higher.{view !== 'skills' && ' They are left out of the frontier.'}</span>}
-      {sides.map(side => side.unplotted.length > 0 && <span key={side.axis}>No {lowerFirst(axisLabels[side.axis])} for {side.unplotted.map(point => `${setupLabel(point.summary.configuration)} (${point.summary.reasons[side.axis]})`).join('; ')}.</span>)}
-      {axes.includes('refuted') && <span>Refuted claims are compared on the {matching.included} of {matching.included + matching.excluded} selected PRs where every selected setup has admitted, assessed reviews, with PRs weighted equally. A setup that admitted only some trials of a matched PR is measured on the reviews it delivered; the tooltip gives its admitted trials.</span>}
-      {axes.includes('time') && <span>Completed trials only. Includes replacement attempts; excludes gaps between attempts, provisioning, and grading.</span>}
-      {axes.includes('cost') && costNote(shown) && <span>{costNote(shown)}</span>}
+      {view !== 'models' && bounded && <span><span className="bound-key" aria-hidden="true" />Hollow marks show a lower bound of {lowerFirst(axisLabels[axis])}: some attempts recorded only part of their usage, so the true value may be higher.{view !== 'skills' && ' They are left out of the frontier.'}</span>}
+      {unplotted.length > 0 && <span>No {lowerFirst(axisLabels[axis])} for {unplotted.map(point => `${setupLabel(point.summary.configuration)} (${point.summary.reasons[axis]})`).join('; ')}.</span>}
+      {axis === 'refuted' && <span>Refuted claims are compared on the {matching.included} of {matching.included + matching.excluded} selected PRs where every selected setup has admitted, assessed reviews, with PRs weighted equally. A setup that admitted only some trials of a matched PR is measured on the reviews it delivered; the tooltip gives its admitted trials.</span>}
+      {axis === 'time' && <span>Completed trials only. Includes replacement attempts; excludes gaps between attempts, provisioning, and grading.</span>}
+      {axis === 'cost' && costNote(shown) && <span>{costNote(shown)}</span>}
     </div></ChartGuide>}
-    {view !== 'pair' && <Notes notes={notes} />}
+    {withNotes && <Notes notes={notes} />}
   </div>
 }
 
@@ -193,7 +185,7 @@ let measureContext: CanvasRenderingContext2D | null = null
 function textWidth(text: string) {
   measureContext ??= document.createElement('canvas').getContext('2d')
   if (!measureContext) return text.length * 6.5
-  measureContext.font = `560 12px 'Geist Variable', system-ui, sans-serif`
+  measureContext.font = `560 13px 'Geist Variable', system-ui, sans-serif`
   return measureContext.measureText(text).width
 }
 
@@ -223,7 +215,7 @@ function Scatter({ points, dimensions, axis, scale, frontier, showAllLabels, hov
   const plot = { left: margin.left, right: Math.max(margin.left + 1, width - margin.right), top: margin.top, bottom: height - margin.bottom }
   const px = (value: number) => position(scale, value, plot.left, plot.right)
   const py = (value: number) => plot.bottom - value / 100 * (plot.bottom - plot.top)
-  const labelText = labelOf(points, true)
+  const labelText = labelOf(points)
   const ordered = [...points].sort((left, right) => right.y - left.y)
   const steps = paretoFrontier(points.filter(point => !point.bounded))
   const segment = (x1: number, y1: number, x2: number, y2: number) =>
@@ -241,13 +233,13 @@ function Scatter({ points, dimensions, axis, scale, frontier, showAllLabels, hov
     .sort((left, right) => Number(frontier.has(right.summary.configuration.id)) - Number(frontier.has(left.summary.configuration.id)))
   const dimmed = (point: Point) => !prominent(point) && hovered !== point.summary.configuration.id
   const labels = width ? placeLabels(requested.map(point => ({
-    id: point.summary.configuration.id, x: px(point.x), y: py(point.y), width: textWidth(labelText(point.summary.configuration)), height: 14,
+    id: point.summary.configuration.id, x: px(point.x), y: py(point.y), width: textWidth(labelText(point.summary.configuration)), height: 16,
   })), obstacles, { left: plot.left + 2, right: plot.right, top: 2, bottom: plot.bottom - 2 }) : []
   const stepPath = steps.map((point, index) => {
     const previous = steps[index - 1]
     return previous ? `H${px(point.x)}V${py(point.y)}` : `M${px(point.x)},${py(point.y)}`
   }).join('')
-  const xTicks = ticks(scale)
+  const xTicks = ticks(scale, width > 700)
   return <div ref={ref} className="tradeoff">
     {width > 0 && <svg width={width} height={height} role="group" aria-label={`Plot of ${dimensions}. ${frontier.size} setups on the frontier of these two measures are labelled.`}>
       <defs><linearGradient id="better-corner" x1="0" y1="0" x2="1" y2="1">
@@ -322,7 +314,7 @@ function MethodPanel({ members, context, axis, scale, labelText, onSelect, inter
   const py = (value: number) => plot.bottom - value / 100 * (plot.bottom - plot.top)
   const first = members[0]!.summary.configuration
   const labels = width ? placeLabels([...members].sort((left, right) => right.y - left.y).map(point => ({
-    id: point.summary.configuration.id, x: px(point.x), y: py(point.y), width: textWidth(labelText(point.summary.configuration)), height: 14,
+    id: point.summary.configuration.id, x: px(point.x), y: py(point.y), width: textWidth(labelText(point.summary.configuration)), height: 16,
   })), [...members, ...context].map(point => ({ left: px(point.x) - 10, top: py(point.y) - 10, right: px(point.x) + 10, bottom: py(point.y) + 10 })),
   { left: plot.left + 2, right: plot.right, top: 2, bottom: plot.bottom - 2 }) : []
   return <div role="listitem" className="method-panel">

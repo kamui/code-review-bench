@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { VisuallyHidden } from '@mantine/core'
+import { SegmentedControl, VisuallyHidden } from '@mantine/core'
 import type { CSSProperties, FocusEvent, MouseEvent, ReactNode } from 'react'
 import { ArrowDown, ArrowUp } from 'lucide-react'
 import { linearScale, logScale, position, ticks, tipPlace } from '../lib/chart'
@@ -9,7 +9,7 @@ import type { DetectionView, Reading, Summary } from '../lib/metrics'
 import type { Configuration } from '../lib/data'
 import { labelSegments, overviewFirstDirection, overviewOrder } from '../lib/scoring'
 import type { LabelSegment, Measure, OverviewColumn, Scorecard } from '../lib/scoring'
-import { Chart, Mark, reviewColor, SetupName, setupParts } from './Chart'
+import { axisLabels, Chart, Mark, reviewColor, SetupName, setupParts } from './Chart'
 import { segmentLabels, trueSegments } from './ClaimLabels'
 import { VendorMark } from './VendorMark'
 import { costScaleNote, costText, Notes, notesFor, PeerBadge, Value } from './Reading'
@@ -54,6 +54,9 @@ const weight = ({ band, estimator }: DetectionView, { problems, prs }: { problem
   : estimator === 'equalProblem' ? `The ${problems} ${band === 'all' ? 'known' : lowerFirst(bandLabels[band])} problems weigh the same, so one problem caught in every review is ${(100 / problems).toFixed(1)} points.`
     : `The ${prs} PRs weigh the same, so each PR is ${(100 / prs).toFixed(0)} points, shared among its problems.`
 
+type LeadAxis = 'cost' | 'doubt'
+const leadAxes: { value: LeadAxis; label: string }[] = [{ value: 'cost', label: 'Cost' }, { value: 'doubt', label: 'Refuted or unproven' }]
+
 const orderText: Record<Column, string> = { detection: 'Most first', claims: 'Most first', doubt: 'Fewest first', cost: 'Lowest first', time: 'Shortest first' }
 
 export function Overview({ summaries, detection, matching, basis, onSelect }: {
@@ -61,6 +64,7 @@ export function Overview({ summaries, detection, matching, basis, onSelect }: {
 }) {
   const [tipState, setTip] = useState<Tip | null>(null)
   const [focus, setFocus] = useState<string | null>(null)
+  const [against, setAgainst] = useState<LeadAxis>('cost')
   if (!summaries.length) return <div className="plot-empty" role="status"><span>Select at least one review method and model.</span></div>
   const shown = summaries.map(summary => summary.configuration)
   const ordered = (column: Column) => overviewOrder(summaries, summary => ({ name: summary.configuration.short, card: summary.card }),
@@ -136,10 +140,12 @@ export function Overview({ summaries, detection, matching, basis, onSelect }: {
   return <div className="overview" data-focusing={focus ? '' : undefined} onMouseLeave={() => { setTip(null); setFocus(null) }}>
     <div className="measure-grid">
       <section className="measure-card lead-card" data-lead aria-labelledby="measure-lead">
-        <header className="measure-head"><div><h3 id="measure-lead">{foundLabels[detection.band]} against cost and refuted or unproven claims</h3>
-          <p className="lead-about">Each point is one setup; up and to the left is better on both. {weight(detection, basis)}</p></div></header>
-        <Chart summaries={summaries} detection={detection} matching={matching} axis="cost" view="pair" showAllLabels={false} onSelect={onSelect}
-          guide={<><span>Below the scatters, each chart ranks the setups by one measure, on its own scale and in its own order; a setup without a value comes last. Point at a setup to find it in every chart, and select it to open its evidence.</span>
+        <header className="measure-head"><div><h3 id="measure-lead">{foundLabels[detection.band]} against {lowerFirst(axisLabels[against])}</h3>
+          <p className="lead-about">Each point is one setup; up and to the left is better on both. {weight(detection, basis)}</p></div>
+          <SegmentedControl size="xs" aria-label={`Plot ${lowerFirst(foundLabels[detection.band])} against`} value={against} data={leadAxes}
+            onChange={value => { const next = leadAxes.find(item => item.value === value); if (next) setAgainst(next.value) }} /></header>
+        <Chart summaries={summaries} detection={detection} matching={matching} axis={against} view="tradeoff" showAllLabels height={460} withNotes={false} onSelect={onSelect}
+          guide={<><span>Below this chart, each chart ranks the setups by one measure, on its own scale and in its own order; a setup without a value comes last. Point at a setup to find it in every chart, and select it to open its evidence.</span>
             <span>The charts stay separate on purpose: no single number ranks the setups.</span></>} />
       </section>
       {columns.map(column => {
