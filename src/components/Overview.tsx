@@ -2,8 +2,8 @@ import { useState } from 'react'
 import { Tooltip, VisuallyHidden } from '@mantine/core'
 import type { CSSProperties, FocusEvent, MouseEvent, ReactNode } from 'react'
 import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react'
-import { linearScale, position, ticks } from '../lib/chart'
-import type { Scale } from '../lib/chart'
+import { linearScale, position, ticks, tipPlace } from '../lib/chart'
+import type { Scale, TipPlace } from '../lib/chart'
 import { bandLabels, detectionLabel, duration, estimatorLabels, lowerFirst, measured, money, perReview, reading, share } from '../lib/metrics'
 import type { DetectionView, Reading, Summary } from '../lib/metrics'
 import { labelSegments, overviewColumns, overviewFirstDirection, overviewKey, overviewOrder } from '../lib/scoring'
@@ -29,7 +29,7 @@ function segmentTip(card: Scorecard, segment: LabelSegment, value: number) {
   return caught.kind === 'available' ? `${text} · caught ${caught.value.caught} of ${caught.value.known} ${known}` : `${text} · ${known} caught: unavailable. ${caught.reason}`
 }
 
-type Tip = { text: string; left: number; top: number }
+type Tip = { text: string } & TipPlace
 const doubtMeaning = 'Share of admitted reviews with at least one refuted or unproven claim. Hatched: reviews whose only doubt is an unresolved claim.'
 
 const foundLabels: Record<Band, string> = { serious: 'Serious problems found', 'other-material': 'Other material problems found', unknown: 'Unknown-impact problems found', all: 'Known problems found' }
@@ -60,7 +60,7 @@ export function Overview({ summaries, detection, sort, onSort, onSelect }: {
   const [tipState, setTip] = useState<Tip | null>(null)
   const show = (text: string) => (event: MouseEvent<Element> | FocusEvent<Element>) => {
     const shell = event.currentTarget.closest('.overview')?.getBoundingClientRect(), box = event.currentTarget.getBoundingClientRect()
-    if (shell) setTip({ text, left: box.left + box.width / 2 - shell.left, top: box.top - shell.top })
+    if (shell) setTip({ text, ...tipPlace(shell, box, 160, Infinity) })
   }
   const tip = { show, hide: () => setTip(null) }
   const rows = overviewOrder(summaries, summary => ({ name: summary.configuration.short, card: summary.card }), sort, detection.band, detection.estimator)
@@ -150,7 +150,7 @@ export function Overview({ summaries, detection, sort, onSort, onSelect }: {
         </div>
       })}
     </div>
-    {tipState && <div className="chart-tip" role="presentation" style={{ left: tipState.left, top: tipState.top }}>{tipState.text}</div>}
+    {tipState && <div className={tipState.below ? 'chart-tip below' : 'chart-tip'} role="presentation" style={{ left: tipState.left, top: tipState.top }}>{tipState.text}</div>}
     <ChartGuide><div className="plot-caption">
       <span>Each column has its own scale; a header sorts by that column. Problems found uses the impact band and average chosen above. Problem claims per review: the number counts problem claims, shown in indigo; the bar continues with the other true claims, in gray and sand. Refuted, unproven and unresolved claims are not drawn there.</span>
       <span>Refuted or unproven: {doubtMeaning} An unproven claim is not shown to be false.</span>

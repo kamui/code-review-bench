@@ -258,7 +258,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
           </div>
           <div className="chart-main">
             <div className="chart-context">
-              <span className="basis-chip">{detectionLabel(detection)} · {plural(shared.length, 'PR')} · {coverage.bands[band]} of {coverage.bands.all} approved references in this band{candidateCount > 0 && ` · ${candidateCount} awaiting eligibility`}</span>
+              <span className="basis-chip">{detectionLabel(detection)} · {plural(shared.length, 'PR')} · {coverage.bands[band]} of {coverage.bands.all} known problems in this band{candidateCount > 0 && ` · ${candidateCount} awaiting eligibility`}</span>
               {activeFilters.map(item => <button type="button" key={item.label} className="filter-chip" onClick={item.clear} aria-label={`Remove filter ${item.label}`}>{item.label}<X size={12} aria-hidden="true" /></button>)}
               {activeFilters.length > 0 && <Link className="filter-link" to="/tasks">Edit filters</Link>}
               {chartView === 'tradeoff' && <Switch className="label-switch" checked={showAllLabels} onChange={event => onSearch({ labels: event.currentTarget.checked || undefined }, 'scorecard')} label="Label every point" size="xs" />}

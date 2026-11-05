@@ -2,8 +2,8 @@ import { useState } from 'react'
 import type { CSSProperties, DOMAttributes, FocusEvent, MouseEvent, ReactNode } from 'react'
 import { useElementSize } from '@mantine/hooks'
 import { ArrowUpLeft } from 'lucide-react'
-import { groupPaths, linearScale, logScale, paretoFrontier, placeLabels, position, ticks } from '../lib/chart'
-import type { Scale } from '../lib/chart'
+import { groupPaths, linearScale, logScale, paretoFrontier, placeLabels, position, ticks, tipPlace } from '../lib/chart'
+import type { Scale, TipPlace } from '../lib/chart'
 import { compact, detectionLabel, duration, lowerFirst, money, percent, reasonCounts } from '../lib/metrics'
 import type { Axis, DetectionView, Summary } from '../lib/metrics'
 import type { Configuration } from '../lib/data'
@@ -72,7 +72,7 @@ export function Chart({ summaries, detection, matching, axis, view, showAllLabel
   summaries: Summary[]; detection: DetectionView; matching: { included: number; excluded: number }; axis: Axis; view: ChartView; showAllLabels: boolean; onSelect: (id: string) => void
 }) {
   const measure = detectionLabel(detection), dimensions = `${lowerFirst(measure)} against ${lowerFirst(axisLabels[axis])}`
-  const [hovered, setHovered] = useState<{ id: string; left: number; top: number } | null>(null)
+  const [hovered, setHovered] = useState<({ id: string } & TipPlace) | null>(null)
   const points: Point[] = summaries.filter(summary => summary.detection !== null).map(summary => ({
     summary, range: summary.range, metric: metricOf(summary, axis), bounded: boundedOn(summary, axis),
   }))
@@ -84,7 +84,7 @@ export function Chart({ summaries, detection, matching, axis, view, showAllLabel
   const hover = (id: string, element: Element) => {
     const shell = element.closest('.plot-shell')?.getBoundingClientRect()
     const box = element.getBoundingClientRect()
-    if (shell) setHovered({ id, left: box.left + box.width / 2 - shell.left, top: box.top - shell.top })
+    if (shell) setHovered({ id, ...tipPlace(shell, box) })
   }
   const interactions = (id: string) => ({
     onMouseEnter: (event: MouseEvent<Element>) => hover(id, event.currentTarget),
@@ -103,7 +103,7 @@ export function Chart({ summaries, detection, matching, axis, view, showAllLabel
           hovered={hovered?.id ?? null} onSelect={onSelect} interactions={interactions} />
         : view === 'skills' ? <MethodPanels points={measured} axis={axis} scale={scale} onSelect={onSelect} interactions={interactions} />
           : <Models points={points} notes={notes} measure={measure} onSelect={onSelect} interactions={interactions} />}
-    {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={measure} axis={view === 'models' ? null : axis} left={hovered.left} top={hovered.top} />}
+    {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={measure} axis={view === 'models' ? null : axis} place={hovered} />}
     {points.length > 0 && view !== 'models' && <ul className="chart-keys" aria-label="Chart key">
       {view === 'setups' && <li><span className="whisker-key" aria-hidden="true" />Range with any one PR left out</li>}
       {view === 'skills' && <li><span className="context-key" aria-hidden="true" />Other selected setups</li>}
@@ -369,7 +369,7 @@ function Models({ points, notes, measure, onSelect, interactions }: { points: Po
   </div>
 }
 
-function Tooltip({ point, measure, axis, left, top }: { point: Point; measure: string; axis: Axis | null; left: number; top: number }) {
+function Tooltip({ point, measure, axis, place }: { point: Point; measure: string; axis: Axis | null; place: TipPlace }) {
   const { summary, range } = point
   const row = (key: string, label: string, value: ReactNode, note?: ReactNode) =>
     <span key={key} className="tip-row"><span className="tip-label">{label}</span><b>{value}</b>{note && <span className="tip-note">{note}</span>}</span>
@@ -381,5 +381,5 @@ function Tooltip({ point, measure, axis, left, top }: { point: Point; measure: s
     row('count', 'Trials admitted', `${summary.admitted} of ${summary.trials}`, `${summary.tasks} PRs · ${summary.completed} complete`),
     !summary.configuration.builtin && row('skill', 'Skill', skillReleaseLabel([summary.configuration])),
   ]
-  return <div className="chart-tip" role="presentation" style={{ left, top }}><strong><SetupName configuration={summary.configuration} mark={false} /></strong>{lines}</div>
+  return <div className={place.below ? 'chart-tip below' : 'chart-tip'} role="presentation" style={{ left: place.left, top: place.top }}><strong><SetupName configuration={summary.configuration} mark={false} /></strong>{lines}</div>
 }
