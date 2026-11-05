@@ -10,6 +10,7 @@ import type { Configuration } from '../lib/data'
 import { skillReleaseLabel } from '../lib/data'
 import { ChartGuide, costNote, costStarred, Notes } from './Reading'
 import type { Note } from './Reading'
+import { VendorMark } from './VendorMark'
 
 export type ChartView = 'skills' | 'setups' | 'models' | 'tradeoff'
 type Range = { low: number; high: number } | null
@@ -32,12 +33,12 @@ export function Mark({ configuration, size = 12, hollow = false }: { configurati
 export function SetupName({ configuration, mark = true }: { configuration: Configuration; mark?: boolean }) {
   const { method, model, effort } = setupParts(configuration)
   return <span className="setup-name">{mark && <Mark configuration={configuration} size={10} />}
-    <span className="setup-name-text"><span className="setup-method">{method}</span>{model && <><span className="setup-sep"> / </span><span className="setup-model">{model}
+    <span className="setup-name-text"><span className="setup-method">{method}</span>{model && <><span className="setup-sep"> / </span><span className="setup-model"><VendorMark configuration={configuration} />{model}
       {effort && <><span className="setup-sep setup-dot"> / </span>{effort}</>}</span></>}</span></span>
 }
 
 export const axisLabels: Record<Axis, string> = {
-  cost: 'Cost per scheduled trial', tokens: 'Output tokens per scheduled trial', refuted: 'Refuted claims per admitted review on matched PRs', time: 'Median completed-trial time',
+  cost: 'Cost per trial', tokens: 'Output tokens per trial', refuted: 'Refuted claims per review on matched PRs', time: 'Median time',
 }
 const setups = (count: number) => `${count} ${count === 1 ? 'setup' : 'setups'}`
 

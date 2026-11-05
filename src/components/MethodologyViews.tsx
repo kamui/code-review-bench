@@ -20,8 +20,8 @@ const span = (range: { low: number; high: number }) => `${percent(range.low * 10
 const reasons = (counts: Record<string, number>) => Object.entries(counts).map(([reason, count]) => `${count} ${reason}`).join('; ') || 'None'
 const averages: Record<Estimator, string> = { equalProblem: 'equal problems', equalPr: 'equal PRs' }
 const matchedLabels: Record<ConditionalMetric, string> = {
-  refuted: 'Refuted claims per admitted review', unsupported: 'Unsupported claims per admitted review', unresolved: 'Unresolved claims per admitted review',
-  harmful: 'Unsafe recommendations per admitted review', clean: 'Correctly silent share of admitted control reviews',
+  refuted: 'Refuted claims per review', unsupported: 'Unproven claims per review', unresolved: 'Unresolved claims per review',
+  harmful: 'Unsafe fixes per review', clean: 'Correctly silent share of admitted control reviews',
 }
 
 function harm(card: Scorecard): Reading {
@@ -132,20 +132,20 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
 
       <Tabs.Panel value="reliability" ><Stack>
         <TabIntro lede="How often a delivered review made a claim that was wrong or not shown to be right.">Rates divide distinct claims by admitted reviews, the denominator shown beside them. Unsupported claims are not proven false. A setup with no admitted review has no rate: silence from a failed trial is not reliability. Rates stay unavailable while a trial is pending or an admitted review awaits assessment.</TabIntro>
-        <Title order={4}>Claim outcomes per admitted review</Title>
-        <DataTable label="Claim outcomes per admitted review" rows={rows} rowKey={key} minWidth={1300} columns={[setup,
+        <Title order={4}>Claim outcomes per review</Title>
+        <DataTable label="Claim outcomes per review" rows={rows} rowKey={key} minWidth={1300} columns={[setup,
           { label: 'Admitted / scheduled', value: row => `${row.card.delivery.admitted} / ${row.card.delivery.scheduled}` },
           { label: 'Assessed / admitted', value: row => `${row.card.reliability.assessed} / ${row.card.reliability.admitted}` },
-          { label: 'Items per admitted review', value: row => perReview(row.card.reliability.itemsPerAdmittedReview) },
-          { label: 'Refuted per admitted review', value: row => perReview(row.card.reliability.outcomes.refuted.perAdmittedReview) },
-          { label: 'Unsupported per admitted review', value: row => perReview(row.card.reliability.outcomes.unsupported.perAdmittedReview) },
-          { label: 'Unresolved per admitted review', value: row => perReview(row.card.reliability.outcomes.unresolved.perAdmittedReview) },
+          { label: 'Items per review', value: row => perReview(row.card.reliability.itemsPerAdmittedReview) },
+          { label: 'Refuted per review', value: row => perReview(row.card.reliability.outcomes.refuted.perAdmittedReview) },
+          { label: 'Unproven per review', value: row => perReview(row.card.reliability.outcomes.unsupported.perAdmittedReview) },
+          { label: 'Unresolved per review', value: row => perReview(row.card.reliability.outcomes.unresolved.perAdmittedReview) },
           { label: 'Reviews with a refuted claim', value: row => share(row.card.reliability.outcomes.refuted.reviewFraction) },
-          { label: 'Reviews with an unsupported claim', value: row => share(row.card.reliability.outcomes.unsupported.reviewFraction) },
-          { label: 'Scope exclusions', value: row => String(row.card.reliability.outcomes['scope-excluded'].distinct) },
-          { label: 'Repeated claims', value: row => String(row.card.reliability.duplicates) }, { label: 'Mixed items', value: row => String(row.card.reliability.mixedItems) }]} />
+          { label: 'Reviews with an unproven claim', value: row => share(row.card.reliability.outcomes.unsupported.reviewFraction) },
+          { label: 'Claims ruled out of scope', value: row => String(row.card.reliability.outcomes['scope-excluded'].distinct) },
+          { label: 'Repeated claims', value: row => String(row.card.reliability.duplicates) }, { label: 'Items with mixed outcomes', value: row => String(row.card.reliability.mixedItems) }]} />
         <Text size="xs" c="dimmed" className="footnote">Claim counts are distinct claims in assessed admitted reviews. Repeated claims count extra occurrences; mixed items hold claims with different outcomes. Item counts measure volume, not reading time.</Text>
-        <Title order={4}>Claim labels per admitted review</Title>
+        <Title order={4}>Claim labels per review</Title>
         <ClaimLabels rows={rows.map(row => ({ id: key(row), configuration: row.configuration, rates: row.card.reliability.labelsPerAdmittedReview }))} />
         <Title order={4}>Matched on commonly admitted PRs</Title>
         <Group align="end"><Select label="Matched measure" aria-label="Matched measure" value={metric} w={360} allowDeselect={false}
@@ -169,7 +169,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
           { label: 'Inventoried / admitted reviews', value: row => `${row.card.remedies.inventoried} / ${row.card.remedies.admitted}` },
           { label: 'Recommendations', value: row => String(row.card.remedies.recommendations) }, { label: 'Assessed safe', value: row => String(row.card.remedies.safe) },
           { label: 'Assessed unsafe', value: row => String(row.card.remedies.unsafe) }, { label: 'Safety unassessed', value: row => String(row.card.remedies.unassessed) },
-          { label: 'Unsafe per admitted review', value: row => harm(row.card) },
+          { label: 'Unsafe fixes per review', value: row => harm(row.card) },
           { label: 'Unsafe share of assessed remedies', value: row => share(row.card.remedies.unsafePerAssessedRemedy) },
           { label: 'Caught problems: fix sufficient', value: row => String(row.card.remedies.sufficiency.sufficient) },
           { label: 'Partial', value: row => String(row.card.remedies.sufficiency.partial) },

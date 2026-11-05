@@ -287,7 +287,7 @@ describe('chart', () => {
     expect(serious).toContain('Rows are ordered by serious problems found, problems weighted equally.')
     expect(serious).toContain('sensitivity to these PRs, not a confidence interval')
     expect(serious).toContain('Not plotted, serious problems found, problems weighted equally unavailable: 1 scheduled trial awaits execution. (1 setup) 1 admitted review awaits assessment. (1 setup)')
-    expect(serious).toContain('Cost per scheduled trial')
+    expect(serious).toContain('Cost per trial')
     expect(chart(fixture, { band: 'serious', estimator: 'equalPr' })).toContain('Serious problems found, PRs weighted equally')
   })
 
@@ -322,7 +322,7 @@ describe('chart', () => {
     const dataset = build([subject], { a: [[subject, [review(subject, ['s'], { cost: null })]]] })
     const models = chart(dataset, { band: 'serious', estimator: 'equalProblem' }, 'models')
     expect(models).toContain('100.0%')
-    expect(models).toContain('No cost per scheduled trial for a (1 attempt has no recorded usage.).')
+    expect(models).toContain('No cost per trial for a (1 attempt has no recorded usage.).')
   })
 
   test('a lower-bound cost is shown with its reason in the table and plotted as a bound outside the frontier', () => {
@@ -336,8 +336,8 @@ describe('chart', () => {
     expect(whole).toContain('≥ marks a lower bound where usage was only partly recorded')
     const setups = chart(dataset, { band: 'all', estimator: 'equalProblem' })
     expect(setups).toContain('a 100.0% ≥ $0.75 b On frontier 50.0% $1.00')
-    expect(setups).toContain('Hollow marks show a lower bound of cost per scheduled trial')
-    expect(setups).not.toContain('No cost per scheduled trial for a')
+    expect(setups).toContain('Hollow marks show a lower bound of cost per trial')
+    expect(setups).not.toContain('No cost per trial for a')
   })
 
   test('an unlabelled dataset leaves serious detection unavailable instead of falling back to all references', () => {
@@ -360,7 +360,7 @@ describe('chart', () => {
     expect(everyone).toContain('unavailable')
     expect(everyone).toContain('(No PR is commonly admitted and sufficiently assessed.)')
     const delivered = chart(fixture, { band: 'serious', estimator: 'equalProblem' }, 'setups', 'refuted', ['silent', 'waiting', 'ungraded'])
-    expect(delivered).toContain('Refuted claims per admitted review on matched PRs')
+    expect(delivered).toContain('Refuted claims per review on matched PRs')
     expect(delivered).toContain('Refuted claims are compared on the 6 of 6 selected PRs')
     expect(delivered).toContain('0.33')
     expect(delivered).not.toContain('0.13')
@@ -368,7 +368,7 @@ describe('chart', () => {
 
   test('the frontier view names the two measures it compares', () => {
     expect(chart(fixture, { band: 'all', estimator: 'equalPr' }, 'tradeoff'))
-      .toContain('Frontier of known problems found, PRs weighted equally against cost per scheduled trial')
+      .toContain('Frontier of known problems found, PRs weighted equally against cost per trial')
   })
 })
 
