@@ -381,8 +381,10 @@ function StatusNotice({ limits, unresolved }: { limits: string[]; unresolved: bo
 }
 
 function DetectionBar({ result }: { result: ReturnType<typeof meanTaskRecall> }) {
-  const withheld = reasonCounts(result.withheld).map(row => `${row.reason} (${plural(row.count, 'setup')})`).join(' ')
-  if (result.mean.kind === 'unavailable') return <Text size="sm" c="dimmed" component="span"><Value cell={{ text: 'Unavailable', reason: withheld || result.mean.reason }} /></Text>
+  const reasons = reasonCounts(result.withheld)
+  const withheld = reasons.map(row => `${row.reason} (${plural(row.count, 'setup')})`).join(' ')
+  if (result.mean.kind === 'unavailable') return <span className="detection-cell"><Text size="sm" c="dimmed" component="span">Unavailable</Text>
+    <Text size="xs" c="dimmed" component="span">{reasons.length === 1 && reasons[0]!.count === result.selected ? reasons[0]!.reason : withheld || result.mean.reason}</Text></span>
   const value = percent(result.mean.value * 100)
   const notes = result.annotations.map(note => note.reason).join(' ')
   return <span className="detection-cell"><span className="detection-bar"><Tooltip label={notes} disabled={!notes} multiline w={280} withArrow>
