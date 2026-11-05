@@ -12,7 +12,7 @@ import { bandLabels, compact, conditionDifferences, datasetStatus, detectionLabe
 import type { Reading } from '../lib/metrics'
 import { estimators, leaderboard, matched, meanTaskRecall, pendingCandidates, referenceCoverage } from '../lib/scoring'
 import type { OverviewSort } from '../lib/scoring'
-import { axes, chartViews, inspectionOf, inspectionParams, listParam, listValue, unlessDefault } from '../lib/view'
+import { axes, chartViews, clearedSearch, inspectionOf, inspectionParams, listParam, listValue, unlessDefault } from '../lib/view'
 import type { ExplorerSearch, Inspection, Section } from '../lib/view'
 import { Chart, Mark, setupParts } from './Chart'
 import { EvidenceDrawer } from './EvidenceDrawer'
@@ -172,7 +172,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
   const hero = heroCounts(dataset)
   return <>
     <header className="site-header"><Container size="xl" className="nav-inner">
-      <Link className="brand" to="/" aria-label="codereviewbench home"><span className="brand-mark"><CodeXml size={22} strokeWidth={2} /></span><span>code<span className="brand-review">review</span>bench<span className="brand-dot">.</span></span></Link>
+      <Link className="brand" to="/" search={clearedSearch} hash={undefined} aria-label="codereviewbench home"><span className="brand-mark"><CodeXml size={22} strokeWidth={2} /></span><span>code<span className="brand-review">review</span>bench<span className="brand-dot">.</span></span></Link>
       <div className="header-links">
         <nav className="top-nav" aria-label="Main navigation"><Link className="section-link" data-current={page === 'scorecard' || undefined} to="/" hash="scorecard" resetScroll={false} activeOptions={{ includeHash: true }}>Scorecard</Link><Link to="/tasks">Tasks</Link><Link to="/methodology">Methodology</Link></nav>
         <a className="github-link" href="https://github.com/kamui/code-review-bench" target="_blank" rel="noreferrer" aria-label="GitHub repository">
