@@ -192,7 +192,7 @@ const labelOf = (points: Point[], withMethod = false) => {
   return (configuration: Configuration) => {
     const { method, model, effort } = setupParts(configuration)
     const label = (models.get(`${method}/${model}`) ?? 0) > 1 ? `${model} · ${effort}` : model
-    return withMethod ? `${method.replace(/ built-in$/, '')} · ${label}` : label
+    return withMethod ? `${method} · ${label}` : label
   }
 }
 

@@ -3,8 +3,8 @@ import { ActionIcon, Alert, Anchor, Badge, Button, Checkbox, Container, Group, L
   SegmentedControl, Select, Stack, Switch, Table, Tabs, Text, TextInput, Title, Tooltip, VisuallyHidden, useComputedColorScheme, useMantineColorScheme } from '@mantine/core'
 import { useMediaQuery } from '@mantine/hooks'
 import { Link, Navigate, useLocation, useMatch, useNavigate, useSearch } from '@tanstack/react-router'
-import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpDown, ArrowUpRight, ChartNoAxesGantt, ChartScatter, Check, ChevronDown, ChevronRight, CodeXml, Cpu, Crosshair, Database,
-  EyeOff, FileCheck2, Grid3x3, Hourglass, Info, LayoutGrid, LayoutList, Moon, Scale, Search, ShieldCheck, SlidersHorizontal, Sun, X } from 'lucide-react'
+import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpDown, ArrowUpRight, ChartBarStacked, ChartNoAxesGantt, ChartScatter, Check, ChevronDown, ChevronRight, CodeXml, Cpu, Crosshair, Database,
+  EyeOff, FileCheck2, Grid3x3, Hourglass, Info, LayoutGrid, Moon, Scale, Search, ShieldCheck, SlidersHorizontal, Sun, X } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { fetchDataset, impactBands, skillReleaseLabel } from '../lib/data'
 import type { Configuration, Dataset, Task } from '../lib/data'
@@ -81,7 +81,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
   const showAllLabels = search.labels ?? false
   const narrow = useMediaQuery('(max-width: 700px)') ?? false
   const chartView = narrow && view !== 'overview' ? 'setups' : view
-  const views: { label: string; value: MainView; icon: LucideIcon }[] = [{ label: 'Overview', value: 'overview', icon: LayoutList }, { label: 'By method', value: 'skills', icon: LayoutGrid },
+  const views: { label: string; value: MainView; icon: LucideIcon }[] = [{ label: 'Overview', value: 'overview', icon: ChartBarStacked }, { label: 'By method', value: 'skills', icon: LayoutGrid },
     { label: 'By setup', value: 'setups', icon: ChartNoAxesGantt }, { label: 'By model', value: 'models', icon: Cpu }, { label: 'Frontier', value: 'tradeoff', icon: ChartScatter }]
   const [query, setQuery] = useState('')
   const [area, setArea] = useState<string | null>(null)
