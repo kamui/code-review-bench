@@ -8,7 +8,7 @@ import { compact, detectionLabel, foundLabels, duration, lowerFirst, money, perc
 import type { Axis, DetectionView, Summary } from '../lib/metrics'
 import type { Configuration } from '../lib/data'
 import { skillReleaseLabel } from '../lib/data'
-import { ChartGuide, costNote, costStarred } from './Reading'
+import { ChartGuide, costNote, costStarred, GuideItem } from './Reading'
 import { VendorMark } from './VendorMark'
 
 export type ChartView = 'skills' | 'setups' | 'models' | 'tradeoff'
@@ -73,9 +73,9 @@ const scaleFor = (axis: Axis, values: number[]): Scale => axis === 'refuted' || 
 const fraction = (scale: Scale, value: number) => position(scale, value, 0, 100)
 const scoreTicks = [0, 25, 50, 75, 100]
 
-export function Chart({ summaries, detection, matching, axis, view, onSelect, guide, aside, height, linked }: {
+export function Chart({ summaries, detection, matching, axis, view, onSelect, guide, height, linked }: {
   summaries: Summary[]; detection: DetectionView; matching: { included: number; excluded: number }; axis: Axis; view: ChartView; onSelect: (id: string) => void
-  guide?: ReactNode; aside?: ReactNode; height?: number; linked?: { id: string | null; point: (id: string | null) => void; pin: (id: string) => void }
+  guide?: ReactNode; height?: number; linked?: { id: string | null; point: (id: string | null) => void; pin: (id: string) => void }
 }) {
   const measure = detectionLabel(detection), dimensions = `${lowerFirst(measure)} against ${lowerFirst(axisLabels[axis])}`
   const [hovered, setHovered] = useState<({ id: string } & TipPlace) | null>(null)
@@ -144,28 +144,27 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
           <span className="strip-value" data-label="Found"><Score summary={top.summary} /></span><span className={stripValue(first)} data-label={shortAxis[axis]}>{first}</span>
           <span className={stripValue(secondText)} data-label={shortAxis[pair]}>{secondText}</span></button></li>
       })}</ul></div>}
-    {points.length > 0 && view !== 'models' && (view !== 'tradeoff' || bounded || aside) && <ul className="chart-keys" aria-label="Chart key">
+    {points.length > 0 && view !== 'models' && (view !== 'tradeoff' || bounded) && <ul className="chart-keys" aria-label="Chart key">
       {view === 'setups' && <li><span className="whisker-key" aria-hidden="true" />Range with any one PR left out</li>}
       {view === 'skills' && <li><span className="context-key" aria-hidden="true" />Other selected setups</li>}
       {bounded && <li><span className="bound-key" aria-hidden="true" />Lower bound</li>}
-      {aside && <li className="key-aside">{aside}</li>}
     </ul>}
     {points.length > 0 && <ChartGuide title={guide ? 'How to read these charts' : undefined}><div className="plot-caption">
-      {guide}
       {view === 'setups' && <span><span className="whisker-key" aria-hidden="true" />Rows are ordered by {lowerFirst(measure)}. The whisker spans this average with any one whole PR left out: sensitivity to these PRs, not a confidence interval.</span>}
       {view === 'skills' && <span>Each panel shows one review method on every model it ran on, with detection against {lowerFirst(axisLabels[axis])} on shared axes. Gray dots are the other selected setups, for context.</span>}
-      {view === 'tradeoff' && <span>The table above the panels lists each review method's setup that finds the most, from the method whose setup finds the most. Point at a method there to pick out its setups and mark its top setup; select it to keep them picked out.</span>}
-      {view === 'tradeoff' && <span>Both panels plot the same setups at the same height. Point at a setup, or select it, to mark it and show its name in both.</span>}
-      {(view === 'tradeoff' || axis === 'doubt') && <span>An unproven claim is not shown to be false.</span>}
-      {view === 'tradeoff' && <span>{view === 'tradeoff' ? 'In each panel, a' : 'A'} faint line joins each review method's setups from left to right, and comes forward when you point at one of them. It shows one method across models; the points between are not measured.</span>}
+      {view === 'tradeoff' && <GuideItem label="Table">Each review method's setup that finds the most. Point at a method to pick out its setups; select it to keep them picked out.</GuideItem>}
+      {view === 'tradeoff' && <GuideItem label="Panels">The same setups at the same height in both. Point at or select a setup to name it in both and in every chart below.</GuideItem>}
+      {view === 'tradeoff' && <GuideItem label="Lines">In each panel, a faint line joins one review method's setups across models, from left to right; the points between are not measured.</GuideItem>}
+      {(view === 'tradeoff' || axis === 'doubt') && <GuideItem label="Unproven">An unproven claim is not shown to be false.</GuideItem>}
       {view === 'models' && <span>Each row is one model; rows start with the model whose setup finds the most. Marks show {lowerFirst(measure)} for each review method that ran on it, listed from most found to least.</span>}
       {withheld.length > 0 && <span>Not plotted, {lowerFirst(measure)} unavailable: {withheld.map(row => `${row.reason} (${setups(row.count)})`).join(' ')}</span>}
-      {view !== 'models' && bounded && <span><span className="bound-key" aria-hidden="true" />Hollow marks show a lower bound of {lowerFirst(axisLabels[boundedAxis])}: some attempts recorded only part of their usage, so the true value may be higher.{view === 'setups' && ' They are left out of the frontier.'}</span>}
+      {view !== 'models' && bounded && <GuideItem label="Hollow marks">A lower bound of {lowerFirst(axisLabels[boundedAxis])}: some attempts recorded only part of their usage, so the true value may be higher.{view === 'setups' && ' They are left out of the frontier.'}</GuideItem>}
       {unplotted.length > 0 && <span>No {lowerFirst(axisLabels[axis])} for {unplotted.map(point => `${setupLabel(point.summary.configuration)} (${point.summary.reasons[axis]})`).join('; ')}.</span>}
       {axis === 'refuted' && <span>Refuted claims are compared on the {matching.included} of {matching.included + matching.excluded} selected PRs where every selected setup has admitted, assessed reviews, with PRs weighted equally. A setup that admitted only some trials of a matched PR is measured on the reviews it delivered; the tooltip gives its admitted trials.</span>}
       {axis === 'time' && <span>Completed trials only. Includes replacement attempts; excludes gaps between attempts, provisioning, and grading.</span>}
-      {(axis === 'cost' || view === 'tradeoff') && costNote(shown) && <span>{costNote(shown)}</span>}
-      {points.some(point => point.summary.detectionNote) && <span>{view === 'tradeoff' ? 'Some setups count' : 'A dotted underline marks a value that counts'} unresolved detection decisions as zero credit; point at a setup for the count.</span>}
+      {(axis === 'cost' || view === 'tradeoff') && costNote(shown) && <GuideItem label="Cost">{costNote(shown)}</GuideItem>}
+      {points.some(point => point.summary.detectionNote) && <GuideItem label="Dotted underline">The value counts unresolved detection decisions as zero credit; point at it for the count.</GuideItem>}
+      {guide}
     </div></ChartGuide>}
   </div>
 }

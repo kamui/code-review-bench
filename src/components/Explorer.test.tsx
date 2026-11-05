@@ -255,7 +255,7 @@ describe('overview', () => {
   })
 
   test('ranks each measure in its own chart, in that measure\'s order, with setups lacking a value last', () => {
-    expect(text(overview)).toContain('each chart ranks the setups by one measure, on its own scale and in its own order; a setup without a value comes last.')
+    expect(text(overview)).toContain('Each ranks the setups by one measure, on its own scale; a setup without a value comes last.')
     expect(card(0)).toEqual(['ce-code-review / Fixture A / High', 'Claude built-in / Fixture A / High', 'ce-code-review / Fixture B / High',
       'Claude built-in / Fixture C / High', 'ce-code-review / Fixture C / High', 'Claude built-in / Fixture B / High'])
     expect(card(3)).toEqual(['Claude built-in / Fixture C / High', 'ce-code-review / Fixture B / High', 'ce-code-review / Fixture C / High',
@@ -303,7 +303,7 @@ describe('chart', () => {
       for (const estimator of ['equalProblem', 'equalPr'] as const) {
         for (const view of ['setups', 'tradeoff', 'models'] as const) {
           const rendered = chart(dataset, { band, estimator }, view)
-          expect(rendered).toContain('unresolved detection decisions as zero credit; point at a setup for the count.')
+          expect(rendered).toContain('unresolved detection decisions as zero credit; point at it for the count.')
           expect(rendered).not.toContain('Not plotted,')
           expect(rendered).toContain('1 attempt has no recorded usage.')
         }
@@ -337,7 +337,7 @@ describe('chart', () => {
     expect(whole).toContain('≥ marks a lower bound where usage was only partly recorded')
     const setups = chart(dataset, { band: 'all', estimator: 'equalProblem' })
     expect(setups).toContain('a 100% ≥ $0.75 b On frontier 50% $1.00')
-    expect(setups).toContain('Hollow marks show a lower bound of cost per trial')
+    expect(setups).toContain('Hollow marks A lower bound of cost per trial')
     expect(setups).not.toContain('No cost per trial for a')
   })
 
@@ -369,7 +369,7 @@ describe('chart', () => {
 
   test('the scatter says its lines join each review method\'s setups and are not a trend', () => {
     expect(chart(fixture, { band: 'all', estimator: 'equalPr' }, 'tradeoff'))
-      .toContain('In each panel, a faint line joins each review method\'s setups from left to right, and comes forward when you point at one of them.')
+      .toContain('In each panel, a faint line joins one review method\'s setups across models, from left to right; the points between are not measured.')
   })
 })
 

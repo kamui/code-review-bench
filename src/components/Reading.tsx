@@ -107,9 +107,11 @@ export function Referenced({ text, task }: { text: string; task: Task | undefine
 }
 
 /** A short list of glossary terms, each with its definition on hover and focus. */
+export const GuideItem = ({ label, children }: { label: string; children: ReactNode }) => <span className="guide-item"><strong>{label}</strong><span>{children}</span></span>
+
 export function KeyTerms({ terms }: { terms: string[] }) {
   const entries = glossary.filter(entry => terms.includes(entry.term))
-  return <span className="key-terms"><span className="key-terms-label">Terms</span>{entries.map(entry =>
+  return <span className="key-terms">{entries.map(entry =>
     <Tooltip key={entry.term} multiline w={300} withArrow label={definition(entry)}><span className="term" tabIndex={0}>{entry.term}</span></Tooltip>)}</span>
 }
 

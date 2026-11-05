@@ -12,7 +12,7 @@ import type { LabelSegment, Measure, OverviewColumn, Scorecard } from '../lib/sc
 import { axisLabels, Chart, Mark, reviewColor, SetupName, setupParts } from './Chart'
 import { segmentLabels, trueSegments } from './ClaimLabels'
 import { VendorMark } from './VendorMark'
-import { costScaleNote, costText, Glossed, KeyTerms, Notes, notesFor, PeerBadge, Value } from './Reading'
+import { costScaleNote, costText, Glossed, GuideItem, KeyTerms, Notes, notesFor, PeerBadge, Value } from './Reading'
 
 type Column = Exclude<OverviewColumn, 'setup'>
 const columns: Column[] = ['detection', 'claims', 'doubt', 'cost', 'time']
@@ -146,10 +146,9 @@ export function Overview({ summaries, detection, axis, matching, basis, onSelect
             detection.band === 'all' ? `${basis.known} known problems` : `${basis.problems} of ${basis.known} known problems are ${lowerFirst(bandLabels[detection.band])}`,
             basis.awaiting > 0 && `${basis.awaiting} awaiting a ruling`].filter(Boolean).join(' · ')}</span></p></div></header>
         <Chart summaries={summaries} detection={detection} matching={matching} axis={axis} view="tradeoff" height={325} onSelect={onSelect} linked={{ id: active, point: setFocus, pin }}
-          guide={<><span><KeyTerms terms={['Review setup', 'Known problem', 'Impact band', 'Problems or PRs weighted equally', 'Refuted or unproven', 'Admitted review']} /></span>
-            {weight(detection, basis) && <span>{weight(detection, basis)}</span>}<span>Below this chart, each chart ranks the setups by one measure, on its own scale and in its own order; a setup without a value comes last. Point at a setup to find it in every chart, and select it to open its evidence.</span>
-            <span>The charts stay separate on purpose: no single number ranks the setups.</span>
-            {summaries.some(summary => summary.detectionNote) && <span>A dotted underline marks a value that counts unresolved detection decisions as zero credit; point at it for the count.</span>}</>} />
+          guide={<><GuideItem label="Terms"><KeyTerms terms={['Review setup', 'Known problem', 'Impact band', 'Problems or PRs weighted equally', 'Refuted or unproven', 'Admitted review']} /></GuideItem>
+            {weight(detection, basis) && <GuideItem label="Weight">{weight(detection, basis)}</GuideItem>}
+            <GuideItem label="Charts below">Each ranks the setups by one measure, on its own scale; a setup without a value comes last. No single number ranks the setups. Select a setup to open its evidence.</GuideItem></>} />
       </section>
       {columns.map(column => {
         const panel = panels[column], id = `measure-${column}`
