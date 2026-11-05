@@ -12,7 +12,7 @@ import type { LabelSegment, Measure, OverviewColumn, Scorecard } from '../lib/sc
 import { axisLabels, Chart, Mark, reviewColor, SetupName, setupParts } from './Chart'
 import { segmentLabels, trueSegments } from './ClaimLabels'
 import { VendorMark } from './VendorMark'
-import { costScaleNote, costText, Glossed, Notes, notesFor, PeerBadge, Value } from './Reading'
+import { costScaleNote, costText, Glossed, KeyTerms, Notes, notesFor, PeerBadge, Value } from './Reading'
 
 type Column = Exclude<OverviewColumn, 'setup'>
 const columns: Column[] = ['detection', 'claims', 'doubt', 'cost', 'time']
@@ -140,7 +140,8 @@ export function Overview({ summaries, detection, axis, matching, basis, onSelect
         <header className="measure-head"><div><h3 id="measure-lead">{foundLabels[detection.band]} against {lowerFirst(axisLabels[axis])}</h3>
           <p className="lead-about">Each point is one setup; up and to the left is better on both. {weight(detection, basis)}</p>
           <p className="lead-meta">{[`${basis.prs} PRs`, detection.band === 'all' ? `${basis.known} known problems` : `${basis.problems} of ${basis.known} known problems are ${lowerFirst(bandLabels[detection.band])}`,
-            basis.awaiting > 0 && `${basis.awaiting} awaiting a ruling`].filter(Boolean).join(' · ')}</p></div></header>
+            basis.awaiting > 0 && `${basis.awaiting} awaiting a ruling`].filter(Boolean).join(' · ')}
+            <KeyTerms terms={['Review setup', 'Known problem', 'Impact band', 'Problems or PRs weighted equally', 'Refuted or unproven', 'Admitted review']} /></p></div></header>
         <Chart summaries={summaries} detection={detection} matching={matching} axis={axis} view="tradeoff" height={460} onSelect={onSelect}
           guide={<><span>Below this chart, each chart ranks the setups by one measure, on its own scale and in its own order; a setup without a value comes last. Point at a setup to find it in every chart, and select it to open its evidence.</span>
             <span>The charts stay separate on purpose: no single number ranks the setups.</span>

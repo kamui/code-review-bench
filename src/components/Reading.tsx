@@ -91,7 +91,6 @@ export const glossary: { term: string; definition: string; match?: RegExp }[] = 
 /** A table heading that uses a glossary term carries that term's definition on hover and focus. */
 const definition = (entry: (typeof glossary)[number]) => <span className="term-tip"><b>{entry.term}</b> {entry.definition}</span>
 
-/** Running text with the first use of each glossary term marked, its definition on hover and focus. */
 const recordId = /\b(GT-[a-z]*\d+|blind-[0-9a-f]+ items? \d+)\b/g
 
 /** Grading records cite known problems and blind-graded review items by ID; each ID shows what it names on hover. */
@@ -104,6 +103,14 @@ export function Referenced({ text, task }: { text: string; task: Task | undefine
   })
 }
 
+/** A short list of glossary terms, each with its definition on hover and focus. */
+export function KeyTerms({ terms }: { terms: string[] }) {
+  const entries = glossary.filter(entry => terms.includes(entry.term))
+  return <span className="key-terms"><span className="key-terms-label">Terms</span>{entries.map(entry =>
+    <Tooltip key={entry.term} multiline w={300} withArrow label={definition(entry)}><span className="term" tabIndex={0}>{entry.term}</span></Tooltip>)}</span>
+}
+
+/** Running text with the first use of each glossary term marked, its definition on hover and focus. */
 export function Glossed({ text }: { text: string }) {
   const parts: ReactNode[] = []
   const unused = glossary.filter(entry => entry.match)
