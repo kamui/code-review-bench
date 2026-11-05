@@ -215,9 +215,9 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
             {narrow && <span className="view-note">A wider screen adds By method and By model.</span>}
             <Button variant="default" size="xs" className="filters-toggle" leftSection={<SlidersHorizontal size={14} aria-hidden="true" />} rightSection={<ChevronDown size={14} aria-hidden="true" />}
               aria-expanded={optionsOpen} onClick={() => setOptionsOpen(open => !open)}>Chart options · {bandLabels[band]} · {configurations.filter(item => selected.includes(item.id)).length} of {configurations.length} setups</Button>
-            {chartView !== 'models' && <div className="axis-switch"><span className="control-label" id="axis-label">Plot against</span>{narrow
-              ? <Select aria-label="Compare detection against" size="xs" allowDeselect={false} value={axis} onChange={plotAgainst} data={axisChoices} />
-              : <SegmentedControl aria-label="Compare detection against" size="xs" value={axis} onChange={plotAgainst} data={axisChoices} />}</div>}
+            <div className="axis-switch" title={chartView === 'models' ? 'By model plots detection only' : undefined}><span className="control-label" id="axis-label">Plot against</span>{narrow
+              ? <Select aria-label="Compare detection against" size="xs" allowDeselect={false} disabled={chartView === 'models'} value={axis} onChange={plotAgainst} data={axisChoices} />
+              : <SegmentedControl aria-label="Compare detection against" size="xs" disabled={chartView === 'models'} value={axis} onChange={plotAgainst} data={axisChoices} />}</div>
           </div>
           <div className="filter-bar" data-open={optionsOpen || undefined}>
             <div className="measure-controls">
