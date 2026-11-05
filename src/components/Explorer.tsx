@@ -266,8 +266,8 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
               <PeerNote configurations={edition(configuration)} className="edition-peer" />
               {configuration.reviewChange && <Anchor className="edition-change" href={configuration.reviewChange.url} target="_blank" rel="noreferrer" title={configuration.reviewChange.summary}>Review changed<ArrowUpRight size={12} aria-hidden="true" /></Anchor>}
             </span>)}
-            <p className="comparison-note">Chart and table use the PRs every selected standard setup ran. Method, model and task filters change the comparison. Experiments do not shrink its PR coverage.
-              {differing.length > 0 && ` The selected setups differ in recorded ${differing.join(', ')}; a difference between setups includes those conditions. Compare setups below to see the values.`}</p>
+            <ul className="comparison-note"><li>Every selected setup is compared on the same {plural(shared.length, 'PR')}: the ones all selected standard setups ran. Filters change them; experiments never shrink them.</li>
+              {differing.length > 0 && <li>Setups also differ in {differing.join(', ')}, so a gap between two setups includes those. Compare setups, below, lists the values.</li>}</ul>
           </div>
         </Paper>
         <header className="subsection-head" id="review-setups"><Title order={3}>All review setups</Title>

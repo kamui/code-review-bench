@@ -123,7 +123,7 @@ describe('scorecard page on the fixture', () => {
     expect(rendered).toContain('example/novel #606 13 days since 2026-09-20 A cache key omits the tenant and can serve another tenant\'s entry.')
     expect(rendered).toContain('Read from the diff only; no reproduction was run.')
     expect(rendered).toContain('Pending candidates (2)')
-    expect(rendered).toContain('The selected setups differ in recorded client, network access, sandbox')
+    expect(rendered).toContain('Setups also differ in client, network access, sandbox')
   })
 
   test('shows claim labels per admitted review, each suggestion kind apart, and why a setup has none', () => {
