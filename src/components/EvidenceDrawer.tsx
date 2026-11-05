@@ -6,7 +6,7 @@ import { SetupName, setupLabel } from './Chart'
 import { costText, Disclosure, humanize, Referenced, Rich, Tag, Value } from './Reading'
 import { fetchDetail, skillReleaseLabel } from '../lib/data'
 import type { Attempt, AttemptDetail, Configuration, Dataset, Task } from '../lib/data'
-import { bandLabels, compact, detectionLabel, foundLabels, duration, lowerFirst, measured, money, perReview, reading, share } from '../lib/metrics'
+import { bandLabels, compact, estimatorLabels, foundLabels, duration, lowerFirst, measured, money, upperFirst, perReview, reading, share } from '../lib/metrics'
 import { pendingCandidates, reviewFacts } from '../lib/scoring'
 import type { Band, Estimator, Scorecard } from '../lib/scoring'
 import { drawerTabs } from '../lib/view'
@@ -36,7 +36,7 @@ export function EvidenceDrawer({ dataset, results, band, estimator, inspection, 
   const configuration = inspection?.kind === 'configuration' ? dataset.configurations.find(item => item.id === inspection.id) : undefined
   const task = inspection?.kind === 'task' ? dataset.tasks.find(item => item.id === inspection.id) : undefined
   return <Drawer opened={inspection !== null} onClose={() => onChange(null)} position="right" size="xl"
-    title={task ? <span className="setup-name"><span className="setup-name-text"><span className="setup-method">{task.repo} #{task.pr}</span><span className="setup-model">{task.shape}</span></span></span> : configuration ? <SetupName configuration={configuration} /> : 'Evidence'}
+    title={task ? <span className="setup-name"><span className="setup-name-text"><span className="setup-method">{task.repo} #{task.pr}</span><span className="setup-model">{upperFirst(task.shape)}</span></span></span> : configuration ? <SetupName configuration={configuration} /> : 'Evidence'}
     classNames={{ title: 'drawer-title' }}>
     {inspection && <InspectionBody key={`${inspection.kind}:${inspection.id}`} dataset={dataset} results={results} band={band} estimator={estimator}
       configuration={configuration} task={task} inspection={inspection} onChange={onChange} now={now} />}
@@ -202,13 +202,14 @@ function SetupResults({ result, band, estimator }: { result?: SetupResult; band:
   if (!result) return null
   const { card, configuration } = result
   const items = [
-    { label: detectionLabel({ band, estimator }), cell: share(card.detection[band][estimator], card.detection[band].zeroCredit.reason) },
+    { label: foundLabels[band], cell: share(card.detection[band][estimator], card.detection[band].zeroCredit.reason, 0) },
     { label: 'Problem claims per review', cell: perReview(card.reliability.problemClaimsPerReview) },
-    { label: 'Reviews with a refuted or unproven claim', cell: share(card.reliability.reviewsWithDoubt.refutedOrUnproven) },
+    { label: 'Refuted or unproven', cell: share(card.reliability.reviewsWithDoubt.refutedOrUnproven, null, 0) },
     { label: 'Cost per trial', cell: reading(card.cost.perTrial, costText(configuration, [configuration])) },
     { label: 'Median time', cell: reading(card.time.summary, value => duration(value.median)) },
   ]
-  return <dl className="setup-results">{items.map(item => <div key={item.label}><dt>{item.label}</dt><dd><Value cell={item.cell} /></dd></div>)}</dl>
+  return <><dl className="setup-results">{items.map(item => <div key={item.label}><dt>{item.label}</dt><dd><Value cell={item.cell} /></dd></div>)}</dl>
+    <Text size="xs" c="dimmed">{foundLabels[band]} with {estimatorLabels[estimator]}; refuted or unproven is the share of admitted reviews with such a claim.</Text></>
 }
 
 function TaskResults({ task, results, band, onOpen }: { task: Task; results: SetupResult[]; band: Band; onOpen: (attemptId: string) => void }) {

@@ -239,7 +239,7 @@ describe('overview', () => {
   const summaries = selected.flatMap(configuration => board.cards.flatMap(card => card.configurationId === configuration.id
     ? [summarize(configuration, card, { band: 'all', estimator: 'equalProblem' }, { kind: 'unavailable', reason: 'Not compared.' })] : []))
   const overview = renderToStaticMarkup(<MantineProvider><Overview summaries={summaries} detection={{ band: 'all', estimator: 'equalProblem' }} axis="cost"
-    matching={{ included: 0, excluded: 0 }} basis={{ problems: 9, prs: 6 }} onSelect={() => {}} /></MantineProvider>)
+    matching={{ included: 0, excluded: 0 }} basis={{ problems: 9, known: 9, prs: 6, awaiting: 0 }} onSelect={() => {}} /></MantineProvider>)
   const card = (index: number) => setups(overview).slice(index * selected.length, (index + 1) * selected.length)
 
   test('is the default view and leads with serious problems found against cost, plotted against the measure every view shares', () => {
@@ -267,7 +267,7 @@ describe('overview', () => {
 
   test('says what to select when no setup is selected', () => {
     const empty = renderToStaticMarkup(<MantineProvider><Overview summaries={[]} detection={{ band: 'all', estimator: 'equalProblem' }} axis="cost"
-      matching={{ included: 0, excluded: 0 }} basis={{ problems: 0, prs: 0 }} onSelect={() => {}} /></MantineProvider>)
+      matching={{ included: 0, excluded: 0 }} basis={{ problems: 0, known: 0, prs: 0, awaiting: 0 }} onSelect={() => {}} /></MantineProvider>)
     expect(empty).toContain('role="status"')
     expect(text(empty)).toContain('Select at least one review method and model.')
   })

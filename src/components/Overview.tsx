@@ -12,7 +12,7 @@ import type { LabelSegment, Measure, OverviewColumn, Scorecard } from '../lib/sc
 import { axisLabels, Chart, Mark, reviewColor, SetupName, setupParts } from './Chart'
 import { segmentLabels, trueSegments } from './ClaimLabels'
 import { VendorMark } from './VendorMark'
-import { costScaleNote, costText, Glossed, Notes, notesFor, PeerBadge, Value } from './Reading'
+import { costScaleNote, costText, Glossed, KeyTerms, Notes, notesFor, PeerBadge, Value } from './Reading'
 
 type Column = Exclude<OverviewColumn, 'setup'>
 const columns: Column[] = ['detection', 'claims', 'doubt', 'cost', 'time']
@@ -50,14 +50,15 @@ type Panel = { title: string; about: string; order: string; keys?: Key[]; axis: 
 const KeyList = ({ items }: { items: Key[] }) => <span className="column-keys">{items.map(item =>
   <span key={item.label}><span className={`column-key ${item.className}`} aria-hidden="true" />{item.label}</span>)}</span>
 
-const weight = ({ band, estimator }: DetectionView, { problems, prs }: { problems: number; prs: number }) => !problems || !prs ? ''
+type Basis = { problems: number; known: number; prs: number; awaiting: number }
+const weight = ({ band, estimator }: DetectionView, { problems, prs }: Basis) => !problems || !prs ? ''
   : estimator === 'equalProblem' ? `The ${problems} ${band === 'all' ? 'known' : lowerFirst(bandLabels[band])} problems weigh the same, so one problem caught in every review is ${(100 / problems).toFixed(1)} points.`
     : `The ${prs} PRs weigh the same, so each PR is ${(100 / prs).toFixed(0)} points, shared among its problems.`
 
 const orderText: Record<Column, string> = { detection: 'Most first', claims: 'Most first', doubt: 'Fewest first', cost: 'Lowest first', time: 'Shortest first' }
 
 export function Overview({ summaries, detection, axis, matching, basis, onSelect }: {
-  summaries: Summary[]; detection: DetectionView; axis: ChartAxis; matching: { included: number; excluded: number }; basis: { problems: number; prs: number }; onSelect: (id: string) => void
+  summaries: Summary[]; detection: DetectionView; axis: ChartAxis; matching: { included: number; excluded: number }; basis: Basis; onSelect: (id: string) => void
 }) {
   const [tipState, setTip] = useState<Tip | null>(null)
   const [focus, setFocus] = useState<string | null>(null)
@@ -137,7 +138,10 @@ export function Overview({ summaries, detection, axis, matching, basis, onSelect
     <div className="measure-grid">
       <section className="measure-card lead-card" data-lead aria-labelledby="measure-lead">
         <header className="measure-head"><div><h3 id="measure-lead">{foundLabels[detection.band]} against {lowerFirst(axisLabels[axis])}</h3>
-          <p className="lead-about">Each point is one setup; up and to the left is better on both. {weight(detection, basis)}</p></div></header>
+          <p className="lead-about">Each point is one setup; up and to the left is better on both. {weight(detection, basis)}</p>
+          <p className="lead-meta">{[`${basis.prs} PRs`, detection.band === 'all' ? `${basis.known} known problems` : `${basis.problems} of ${basis.known} known problems are ${lowerFirst(bandLabels[detection.band])}`,
+            basis.awaiting > 0 && `${basis.awaiting} awaiting a ruling`].filter(Boolean).join(' · ')}
+            <KeyTerms terms={['Review setup', 'Known problem', 'Impact band', 'Problems or PRs weighted equally', 'Refuted or unproven', 'Admitted review']} /></p></div></header>
         <Chart summaries={summaries} detection={detection} matching={matching} axis={axis} view="tradeoff" height={460} onSelect={onSelect}
           guide={<><span>Below this chart, each chart ranks the setups by one measure, on its own scale and in its own order; a setup without a value comes last. Point at a setup to find it in every chart, and select it to open its evidence.</span>
             <span>The charts stay separate on purpose: no single number ranks the setups.</span>
