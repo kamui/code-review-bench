@@ -8,20 +8,21 @@
     "reason": "The added line shares one context across all verify=True pools and the removed cert_verify() lines stop overwriting the pool's CA location; urllib3's loading of pool CA settings into the context it is given is unchanged. The probe shows no shared context and no change in what a plain Session accepts at the merge-base and at release 2.31.0."
   },
   "consequence": "After the adapter's first verify=True request, a plain Session and requests.get() return 200 from a server whose certificate chains only to the adapter's CA, where they raised CERTIFICATE_VERIFY_FAILED before. No error or warning is produced. The process-wide trust store holds one more CA (148 to 149 in the probe) until the process ends.",
-  "exposure": "Processes in which one component mounts an adapter that passes CA material through init_poolmanager with verify=True and another component makes ordinary verified requests. Whoever holds the key of that CA can then present certificates that every component of the process accepts for any host. Before the change ca_cert_data and ca_cert_dir worked per adapter; ca_certs had no effect with verify=True. Code search lists public projects that pass ca_cert_data alongside init_poolmanager; how they call requests was not checked. Present in releases 2.32.0 through 2.32.4.",
-  "controls": "Passing the CA through verify=<path> on the request or session instead of through the pool manager keeps it off the shared context: in the diff, pools for a string verify are not given it (read, not run for this purpose). Pinning requests below 2.32 or upgrading to 2.32.5 avoids it (run). Nothing in normal operation reveals it; comparing the shared context's cert_store_stats() before and after shows the added CA.",
+  "exposure": "Processes in which one component mounts an adapter that passes CA material through init_poolmanager, or sets conn.ca_certs in a cert_verify override, with verify=True and another component makes ordinary verified requests. Whoever holds the key of that CA can then present certificates that every component of the process accepts for any host. Before the change ca_cert_data and ca_cert_dir worked per adapter; ca_certs had no effect with verify=True. Code search lists public projects that pass ca_cert_data alongside init_poolmanager; how they call requests was not checked. Present in releases 2.32.0 through 2.32.4. Before the change a cert_verify override that set conn.ca_certs worked per adapter. A code search for cert_verify overrides that set conn.ca_certs read five public projects; all five clear it, and none sets a private CA. How common the pattern is was not established.",
+  "controls": "Passing the CA through verify=<path> on the request or session instead of through the pool manager keeps it off the shared context: in the diff, pools for a string verify are not given it (run at the head: a Session with verify=<path> reaches the private-CA server and a new plain Session still rejects it). Pinning requests below 2.32 or upgrading to 2.32.5 avoids it (run). Nothing in normal operation reveals it; comparing the shared context's cert_store_stats() before and after shows the added CA.",
   "reversibility": "The added CA cannot be removed from the context; restarting the process restores the default trust store until the adapter is used again. Connections accepted on the strength of that CA in the meantime have already exchanged data.",
   "workload": null,
   "change_activity": null,
   "grouping": {
     "state": "confirmed",
-    "reason": "ca_cert_data, ca_cert_dir and ca_certs all reach the same load_verify_locations call on the shared context, and both groups describe that call."
+    "reason": "ca_cert_data, ca_cert_dir and ca_certs, and CA files a cert_verify override sets on the pool, all reach the same load_verify_locations call on the shared context, and every group describes that call."
   },
   "limits": [
     "Run: each of the three settings at the merge-base and head, and against releases 2.31.0, 2.32.3, 2.32.4 and 2.32.5, with two local servers signed by a throwaway private CA and one signed by a CA in the default bundle.",
     "Not run: the public projects found by code search; a hostile holder of the CA key (a second server with a certificate from the same CA stands in).",
     "Read: the diff; the urllib3 lines as quoted in the pull request thread; a maintainer's statement of intent to disable the shared context for pool managers with any custom configuration keyword arguments; the source of 2.32.3, which checks only for an adapter ssl_context; the unmerged follow-up diff, which adds a client-certificate check and no CA check.",
-    "Reported: nothing; no user report of this was found."
+    "Reported: nothing; no user report of this was found.",
+    "Run: a cert_verify override that sets conn.ca_certs at the merge-base, head, head with the init_poolmanager-only fix and head with one context per pool (urllib3 2.8.0, OpenSSL 3.5.7). Not run: conn.ca_cert_dir in a cert_verify override."
   ],
   "evidence": [
     {
@@ -127,6 +128,34 @@
     {
       "path": "docs/research/cohort-rebuild-2026-10-05/candidates/i-requests-6667/upstream/codesearch-cacertdata-adapter.json",
       "sha256": "7569b924500d38181de99925a9c14ee20a7b92473de924dd0b16889b6210fa1b"
+    },
+    {
+      "path": "docs/research/owner-rulings-2026-11-04/rulings/02-requests-gt-i7-conn-ca-certs.md",
+      "sha256": "76858d48255a4f341ca58f9f4220522fe358d53c623c04c0fca98a7e084ed090"
+    },
+    {
+      "path": "docs/research/owner-rulings-2026-11-04/02-gt-i7/dossiers/NC-2a3425e24057.md",
+      "sha256": "7d4ce7a2cfc53d0af2bb83780589a0dcb588e84e28b31bb620293c12e1563a89"
+    },
+    {
+      "path": "docs/research/owner-rulings-2026-11-04/02-gt-i7/cases/conn-ca-certs.md",
+      "sha256": "9d2484cdb139f4cb162779fc9a203c3300b72bc155c90cb2a541c46a38f90d22"
+    },
+    {
+      "path": "docs/research/owner-rulings-2026-11-04/02-gt-i7/grouping-tests.md",
+      "sha256": "bff0cf0d57f31b4d5dfff5f1ce1b42b389df94cd15edb0d264a63c8a756854e5"
+    },
+    {
+      "path": "docs/research/audit-v2-r2-reconciliation-2026-11-04/probes/requests-6667-subclass-conn-ca-certs/output.txt",
+      "sha256": "44bd6e89ddb87ed9799062c91c9739961fa3faeffd1dcdbd9f4869fa5f6053bc"
+    },
+    {
+      "path": "docs/research/owner-rulings-2026-11-04/02-gt-i7/probes/one-context-per-pool/output.txt",
+      "sha256": "0fd6aa143ec938efe3f919dd87997714ebd87a1dd9e27a4e054eaea1aace2521"
+    },
+    {
+      "path": "docs/research/owner-rulings-2026-11-04/02-gt-i7/probes/documented-way/output.txt",
+      "sha256": "85a3a6964a7d7bf20f8c674d3cf0d2b911c78997d265427dd016bd2f14399868"
     }
   ]
 }
