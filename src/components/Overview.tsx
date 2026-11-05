@@ -12,7 +12,7 @@ import type { LabelSegment, Measure, OverviewColumn, Scorecard } from '../lib/sc
 import { axisLabels, Chart, Mark, reviewColor, SetupName, setupParts } from './Chart'
 import { segmentLabels, trueSegments } from './ClaimLabels'
 import { VendorMark } from './VendorMark'
-import { costScaleNote, costText, Notes, notesFor, PeerBadge, Value } from './Reading'
+import { costScaleNote, costText, Glossed, Notes, notesFor, PeerBadge, Value } from './Reading'
 
 type Column = Exclude<OverviewColumn, 'setup'>
 const columns: Column[] = ['detection', 'claims', 'doubt', 'cost', 'time']
@@ -152,7 +152,7 @@ export function Overview({ summaries, detection, matching, basis, onSelect }: {
         const panel = panels[column], id = `measure-${column}`
         return <section key={column} className="measure-card" data-lead={column === 'detection' || undefined} aria-labelledby={id}>
           <header className="measure-head">
-            <div><h3 id={id}>{panel.title}</h3><p>{panel.about}</p></div>
+            <div><h3 id={id}>{panel.title}</h3><p><Glossed text={panel.about} /></p></div>
             <span className="measure-order">{overviewFirstDirection[column] === 'ascending' ? <ArrowUp size={13} aria-hidden="true" /> : <ArrowDown size={13} aria-hidden="true" />}{panel.order}</span>
           </header>
           {panel.keys && <KeyList items={panel.keys} />}
