@@ -90,6 +90,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
   const [concern, setConcern] = useState<string | null>(null)
   const [findingConcern, setFindingConcern] = useState<string | null>(null)
   const [filtersOpen, setFiltersOpen] = useState(false)
+  const [optionsOpen, setOptionsOpen] = useState(false)
   const inspection = inspectionOf(search, dataset)
   const inspect = (section?: Section) => (next: Inspection | null, within = section) => onSearch(inspectionParams(next), within)
   const [sort, setSort] = useState<{ column: ResultsColumn; direction: 'ascending' | 'descending' }>({ column: 'setup', direction: 'ascending' })
@@ -210,12 +211,14 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
             }} data={(narrow ? views.filter(item => item.value === 'overview' || item.value === 'setups') : views).map(item => ({ value: item.value,
               label: <span className="switch-label"><item.icon size={15} strokeWidth={1.9} aria-hidden="true" />{item.label}</span> }))} />
             {narrow && <span className="view-note">A wider screen adds By method, By model and Frontier.</span>}
+            <Button variant="default" size="xs" className="filters-toggle" leftSection={<SlidersHorizontal size={14} aria-hidden="true" />} rightSection={<ChevronDown size={14} aria-hidden="true" />}
+              aria-expanded={optionsOpen} onClick={() => setOptionsOpen(open => !open)}>Chart options · {bandLabels[band]} · {configurations.filter(item => selected.includes(item.id)).length} of {configurations.length} setups</Button>
             {chartView !== 'overview' && chartView !== 'models' && <div className="axis-switch"><span className="control-label" id="axis-label">Plot against</span><SegmentedControl aria-label="Compare detection against" size="xs" value={axis} onChange={value => {
               const next = axes.find(item => item === value)
               if (next) onSearch({ axis: unlessDefault(next, 'cost') }, 'scorecard')
             }} data={[{ label: 'Cost', value: 'cost' }, { label: 'Tokens', value: 'tokens' }, { label: 'Refuted claims', value: 'refuted' }, { label: 'Time', value: 'time' }]} /></div>}
           </div>
-          <div className="filter-bar">
+          <div className="filter-bar" data-open={optionsOpen || undefined}>
             <div className="measure-controls">
               <Select label="Impact band" size="xs" w={200} allowDeselect={false} value={band} data={bands.filter(value => coverage.bands[value] > 0 || value === band).map(value => ({ value, label: `${bandLabels[value]} (${coverage.bands[value]})` }))}
                 onChange={value => { const next = bands.find(item => item === value); if (next) onSearch({ band: unlessDefault(next, 'all') }, 'scorecard') }} />

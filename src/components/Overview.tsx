@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Tooltip, VisuallyHidden } from '@mantine/core'
+import { Button, NativeSelect, Tooltip, VisuallyHidden } from '@mantine/core'
 import type { CSSProperties, FocusEvent, MouseEvent, ReactNode } from 'react'
 import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react'
 import { linearScale, position, ticks, tipPlace } from '../lib/chart'
@@ -110,6 +110,12 @@ export function Overview({ summaries, detection, sort, onSort, onSelect }: {
         <li className="key-break"><span className="overview-key-dot" aria-hidden="true" />Lower bound</li>
         <li><span className="overview-key-spread" aria-hidden="true" />Middle 50%</li></ul>
       <p className="overview-rule" aria-live="polite">{rule}</p>
+    </div>
+    <div className="overview-sort-select">
+      <NativeSelect size="xs" label="Sort by" value={sort.column} data={overviewColumns.map(column => ({ value: column, label: heads[column].short }))}
+        onChange={event => { const column = overviewColumns.find(item => item === event.currentTarget.value); if (column) onSort({ column, direction: overviewFirstDirection[column] }) }} />
+      <Button variant="default" size="xs" onClick={() => toggle(sort.column)} leftSection={sort.direction === 'ascending' ? <ArrowUp size={13} aria-hidden="true" /> : <ArrowDown size={13} aria-hidden="true" />}
+        aria-label={`Reverse the order: now ${active[sort.direction]}`}>{active[sort.direction].replace(/^./, letter => letter.toUpperCase())}</Button>
     </div>
     <div role="table" aria-label={`Overview of the selected setups. ${rule}`} className="overview-table">
       <div role="row" className="overview-head">{overviewColumns.map(column => {
