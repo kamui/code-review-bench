@@ -88,7 +88,6 @@ export const glossary: { term: string; definition: string; match?: RegExp }[] = 
   { term: '≥ value', definition: 'A lower bound. Usage was only partly recorded, so the true value is at least this.' },
 ]
 
-/** A table heading that uses a glossary term carries that term's definition on hover and focus. */
 const definition = (entry: (typeof glossary)[number]) => <span className="term-tip"><b>{entry.term}</b> {entry.definition}</span>
 
 const recordId = /\b(GT-[a-z]*\d+|blind-[0-9a-f]+ items? \d+)\b/g
@@ -110,10 +109,13 @@ export function KeyTerms({ terms }: { terms: string[] }) {
     <Tooltip key={entry.term} multiline w={300} withArrow label={definition(entry)}><span className="term" tabIndex={0}>{entry.term}</span></Tooltip>)}</span>
 }
 
+/** The glossary terms that already appear in these labels, so a table marks each term once. */
+const termsIn = (labels: string[]) => glossary.filter(entry => entry.match && labels.some(label => entry.match!.test(label))).map(entry => entry.term)
+
 /** Running text with the first use of each glossary term marked, its definition on hover and focus. */
-export function Glossed({ text }: { text: string }) {
+export function Glossed({ text, skip = [] }: { text: string; skip?: string[] }) {
   const parts: ReactNode[] = []
-  const unused = glossary.filter(entry => entry.match)
+  const unused = glossary.filter(entry => entry.match && !skip.includes(entry.term))
   let rest = text
   for (;;) {
     const hits = unused.flatMap(entry => {
@@ -133,12 +135,6 @@ export function Glossed({ text }: { text: string }) {
   return <>{parts}{rest}</>
 }
 
-export function TermLabel({ label }: { label: string }) {
-  const terms = glossary.filter(entry => entry.match?.test(label))
-  if (!terms.length) return label
-  return <Tooltip multiline w={300} withArrow label={terms.map(entry => <span key={entry.term}>{definition(entry)}</span>)}>
-    <span className="term" tabIndex={0}>{label}</span></Tooltip>
-}
 
 export function Tag({ children }: { children: ReactNode }) {
   return <span className="tag">{children}</span>
@@ -167,7 +163,7 @@ export function DataTable<Row>({ label, rows, columns, rowKey, minWidth, empty =
     {shared.length > 0 && <p className="shared-values"><span className="shared-title">Same for every setup</span>
       {shared.map(({ item, cell }) => <span key={item.label} className="shared-value"><span>{item.label}</span><b><Value cell={cell} notes={notes} /></b></span>)}</p>}
     <Table.ScrollContainer minWidth={Math.min(minWidth, 180 + shown.length * 84)} className="data-scroll"><Table aria-label={label} className="data-table dim-table">
-      <Table.Thead><Table.Tr>{shown.map(({ item, position }) => <Table.Th key={item.label} scope="col" data-numeric={numeric[position] || undefined}><TermLabel label={item.label} /></Table.Th>)}</Table.Tr></Table.Thead>
+      <Table.Thead><Table.Tr>{shown.map(({ item, position }, index) => <Table.Th key={item.label} scope="col" data-numeric={numeric[position] || undefined}><Glossed text={item.label} skip={termsIn(shown.slice(0, index).map(column => column.item.label))} /></Table.Th>)}</Table.Tr></Table.Thead>
       <Table.Tbody>{rows.map((row, index) => <Table.Tr key={rowKey(row)}>{shown.map(({ item, position }) => {
         const cell = cells[index]?.[position] ?? ''
         return position === 0 ? <Table.Th key={item.label} scope="row">{item.render ? item.render(row) : <Value cell={cell} notes={notes} />}</Table.Th>

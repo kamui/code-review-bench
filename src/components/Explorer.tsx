@@ -17,7 +17,7 @@ import { Chart, Mark, setupParts } from './Chart'
 import { EvidenceDrawer } from './EvidenceDrawer'
 import { MethodologyViews } from './MethodologyViews'
 import { Overview } from './Overview'
-import { costNote, costText, glossary, Glossed, Notes, notesFor, PeerNote, Tag, TermLabel, Value } from './Reading'
+import { costNote, costText, glossary, Glossed, Notes, notesFor, PeerNote, Tag, Value } from './Reading'
 import { VendorMark } from './VendorMark'
 
 export type Page = 'scorecard' | 'tasks' | 'methodology'
