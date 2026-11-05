@@ -5,8 +5,8 @@ import { Group, Paper, Select, Stack, Switch, Table, Tabs, Text, Title } from '@
 import type { Configuration, Dataset } from '../lib/data'
 import { bandLabels, compact, conditionDifferences, detectionLabel, foundLabels, duration, estimatorLabels, lowerFirst, measured, percent, perReview, points, reading, scaled, share } from '../lib/metrics'
 import type { DetectionView, Reading } from '../lib/metrics'
-import { bands, candidates as pendingFamilies, conditionalMetrics, estimators, matched, orderingConflicts, pairwise, pendingCandidates, preExistingLabels, recommend, referenceCoverage } from '../lib/scoring'
-import type { ConditionalMetric, Estimator, PreExistingLabel, Scorecard, Selection } from '../lib/scoring'
+import { bands, candidates as pendingFamilies, conditionalMetrics, estimators, matched, orderingConflicts, overviewOrder, pairwise, pendingCandidates, preExistingLabels, recommend, referenceCoverage } from '../lib/scoring'
+import type { ConditionalMetric, Estimator, OverviewSort, PreExistingLabel, Scorecard, Selection } from '../lib/scoring'
 import { scorecardTabs } from '../lib/view'
 import type { Inspection, ScorecardTab, Section } from '../lib/view'
 import { ClaimLabels } from './ClaimLabels'
@@ -31,8 +31,8 @@ function harm(card: Scorecard): Reading {
   return { text: 'Unavailable', reason: bound.kind === 'observed' ? `${unsafe} unsafe among ${safe + unsafe} assessed remedies so far. ${bound.reason}` : bound.reason }
 }
 
-export function MethodologyViews({ dataset, configurations, cards, selection, detection, now, onInspect, tab, onTab }: {
-  dataset: Dataset; configurations: Configuration[]; cards: Scorecard[]; selection: Selection; detection: DetectionView; now: Date
+export function MethodologyViews({ dataset, configurations, cards, selection, detection, sort, now, onInspect, tab, onTab }: {
+  dataset: Dataset; configurations: Configuration[]; cards: Scorecard[]; selection: Selection; detection: DetectionView; sort: OverviewSort; now: Date
   onInspect: (inspection: Inspection, section?: Section) => void; tab: ScorecardTab; onTab: (tab: ScorecardTab) => void
 }) {
   const tabList = useRef<HTMLDivElement>(null)
@@ -45,12 +45,13 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
   const [right, setRight] = useState<string | null>(null)
   const [metric, setMetric] = useState<ConditionalMetric>('refuted')
   const [showTables, setShowTables] = useState(false)
-  const rows = configurations.flatMap(configuration => {
+  const { band, estimator } = detection
+  const byName = configurations.flatMap(configuration => {
     const card = cards.find(item => item.configurationId === configuration.id)
     return card ? [{ configuration, card }] : []
   }).sort((left, right) => left.configuration.short.localeCompare(right.configuration.short))
+  const rows = overviewOrder(byName, row => ({ name: row.configuration.short, card: row.card }), sort, band, estimator)
   type Row = (typeof rows)[number]
-  const { band, estimator } = detection
   const key = (row: Row) => row.configuration.id
   const setup: Column<Row> = { label: 'Setup', value: row => row.configuration.short, render: row => <SetupName configuration={row.configuration} /> }
   const short = (id: string) => {
@@ -86,12 +87,13 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
     { label: 'Generic advisory dossiers, benefit unmeasured', value: row => String(row.card.advice.generic) }]} />
   return <Paper withBorder radius="lg" className="methodology-panel" id="dimensions">
     <div className="dimension-head"><Title order={3}>Each measure in detail</Title>
-      <Text className="subsection-lede">Every value comes from the shared scoring kernel for the selected setups and PRs. Dimensions stay separate: there is no blended score. Rows are in name order. A numbered mark explains a value in the notes below its table.</Text></div>
+      <Text className="subsection-lede">Every value comes from the shared scoring kernel for the selected setups and PRs. Dimensions stay separate: there is no blended score. Rows follow the Overview's order. A numbered mark explains a value in the notes below its table.</Text></div>
     <Tabs value={tab} onChange={value => { const next = scorecardTabs.find(item => item === value); if (next) onTab(next) }} className="dimension-tabs">
-      <Tabs.List ref={tabList}><Tabs.Tab value="detection">Detection</Tabs.Tab><Tabs.Tab value="misses">Serious misses</Tabs.Tab><Tabs.Tab value="delivery">Delivery</Tabs.Tab><Tabs.Tab value="reliability">Claim reliability</Tabs.Tab>
-        <Tabs.Tab value="remedies">Remedies</Tabs.Tab><Tabs.Tab value="controls">Controls</Tabs.Tab><Tabs.Tab value="pre-existing">Pre-existing problems</Tabs.Tab><Tabs.Tab value="advice">Advice benefit</Tabs.Tab>
-        <Tabs.Tab value="usage">Cost and time</Tabs.Tab><Tabs.Tab value="candidates" className="tab-tools-start">Pending candidates ({novel.length + awaiting.length})</Tabs.Tab>
-        <Tabs.Tab value="comparison">Compare setups</Tabs.Tab></Tabs.List>
+      <Tabs.List ref={tabList}>
+        <Tabs.Tab value="detection" data-group="What it finds">Detection</Tabs.Tab><Tabs.Tab value="misses">Serious misses</Tabs.Tab><Tabs.Tab value="pre-existing">Pre-existing problems</Tabs.Tab>
+        <Tabs.Tab value="reliability" data-group="How right it is" className="tab-group-start">Claim reliability</Tabs.Tab><Tabs.Tab value="remedies">Remedies</Tabs.Tab><Tabs.Tab value="advice">Advice benefit</Tabs.Tab><Tabs.Tab value="controls">Controls</Tabs.Tab>
+        <Tabs.Tab value="delivery" data-group="What it takes" className="tab-group-start">Delivery</Tabs.Tab><Tabs.Tab value="usage">Cost and time</Tabs.Tab>
+        <Tabs.Tab value="candidates" data-group="Tools" className="tab-group-start tab-tools-start">Pending candidates ({novel.length + awaiting.length})</Tabs.Tab><Tabs.Tab value="comparison">Compare setups</Tabs.Tab></Tabs.List>
 
       <Tabs.Panel value="detection" ><Stack>
         <TabIntro lede="How many known problems each setup caught, averaged over its repeated runs on each PR.">Recovery of each reference problem is averaged over the PR's scheduled trials; a resolved trial without an admitted review counts as not caught. Unresolved recoveries also receive zero credit and stay in the denominator, with an annotation counting affected problems and detection decisions. Both averages are shown. Problems weighted equally is the primary average for the serious and other-material bands; the unknown and all-reference bands have no preferred average. A serious reference is one the implementer had to be made aware of before release. An other-material reference earns credit when a review raises it but did not have to be raised.</TabIntro>
@@ -191,7 +193,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
             { label: 'Reviews assessed / admitted', value: row => `${row.card.preExisting.labels[label].assessed} / ${row.card.preExisting.labels[label].admitted}` },
             { label: 'Unresolved', value: row => String(row.card.preExisting.labels[label].unresolved) },
             { label: 'Pending candidates', value: row => String(row.card.preExisting.candidates.length) }]} />
-          <PreExistingMatrix label={label} rows={rows} name={name} />
+          <PreExistingMatrix label={label} rows={byName} name={name} />
         </Stack>)}
         <Text size="xs" c="dimmed">The catalog contains discovered cases, not every pre-existing fault. Assessment coverage does not establish historical audit coverage.</Text>
       </Stack></Tabs.Panel>

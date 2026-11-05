@@ -42,7 +42,7 @@ function panels(dataset: Dataset, taskIds = dataset.tasks.map(item => item.id)) 
   const selected = dataset.configurations.filter(configuration => !configuration.experimental)
   const board = leaderboard(dataset, { selected: selected.map(configuration => configuration.id), candidateTaskIds: taskIds, concern: null })
   return scorecardTabs.map(tab => text(renderToStaticMarkup(<MantineProvider><MethodologyViews dataset={dataset} configurations={selected} cards={board.cards}
-    selection={board.selection} detection={{ band: 'serious', estimator: 'equalProblem' }} now={now} onInspect={() => {}} tab={tab} onTab={() => {}} /></MantineProvider>))).join(' ')
+    selection={board.selection} detection={{ band: 'serious', estimator: 'equalProblem' }} sort={{ column: 'setup', direction: 'ascending' }} now={now} onInspect={() => {}} tab={tab} onTab={() => {}} /></MantineProvider>))).join(' ')
 }
 
 describe('scorecard page on the fixture', () => {
