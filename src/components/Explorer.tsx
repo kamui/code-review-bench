@@ -8,7 +8,7 @@ import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpDown, ArrowUpRight, ChartBa
 import type { LucideIcon } from 'lucide-react'
 import { fetchDataset, impactBands, skillReleaseLabel } from '../lib/data'
 import type { Configuration, Dataset, Task } from '../lib/data'
-import { bandLabels, compact, conditionDifferences, datasetStatus, detectionLabel, estimatorLabels, foundLabels, heroCounts, lowerBound, lowerFirst, measured, percent, perReview, reading, reasonCounts, share, summarize, upperFirst } from '../lib/metrics'
+import { bandLabels, compact, conditionDifferences, datasetStatus, detectionLabel, estimatorLabels, foundLabels, heroCounts, lowerBound, lowerFirst, measured, percent, reading, reasonCounts, share, summarize, upperFirst } from '../lib/metrics'
 import type { Axis, Reading } from '../lib/metrics'
 import { estimators, leaderboard, matched, meanTaskRecall, overviewOrder, pendingCandidates, referenceCoverage } from '../lib/scoring'
 import { axes, chartViews, clearedSearch, inspectionOf, inspectionParams, listParam, listValue, unlessDefault } from '../lib/view'
@@ -25,7 +25,7 @@ type LoadState = { kind: 'loading' } | { kind: 'failed'; message: string } | { k
 type MainView = (typeof chartViews)[number]
 const axisChoices: { label: string; value: Axis }[] = [{ label: 'Cost', value: 'cost' }, { label: 'Refuted or unproven', value: 'doubt' },
   { label: 'Refuted claims', value: 'refuted' }, { label: 'Tokens', value: 'tokens' }, { label: 'Time', value: 'time' }]
-type ResultsColumn = 'setup' | 'equalProblem' | 'equalPr' | 'seriousCaught' | 'repeatedMisses' | 'cost' | 'tokens' | 'doubt' | 'refuted' | 'completed'
+type ResultsColumn = 'setup' | 'equalProblem' | 'equalPr' | 'seriousCaught' | 'repeatedMisses' | 'cost' | 'tokens' | 'doubt' | 'completed'
 const bands = ['all', ...impactBands] as const
 const controlLabels: Record<Task['control'], string> = { 'audited-clean': 'Audited clean control', provisional: 'Provisional control',
   unaudited: 'Empty register, unaudited', 'known-problems': 'No approved reference' }
@@ -126,11 +126,10 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
     const cells: Record<Exclude<ResultsColumn, 'setup' | 'completed'>, Reading> = { equalProblem: share(recall.equalProblem, recall.zeroCredit.reason), equalPr: share(recall.equalPr, recall.zeroCredit.reason),
       seriousCaught: share(row.card.seriousCaught.equalPr, row.card.detection.serious.zeroCredit.reason), repeatedMisses: reading(row.card.seriousMisses.repeated, String),
       cost: reading(row.card.cost.perTrial, costText(row.configuration, tableShown)),
-      tokens: reading(row.card.tokens.perTrial, compact), doubt: share(row.card.reliability.reviewsWithDoubt.refutedOrUnproven, null, 0),
-      refuted: perReview(row.card.reliability.outcomes.refuted.perAdmittedReview) }
+      tokens: reading(row.card.tokens.perTrial, compact), doubt: share(row.card.reliability.reviewsWithDoubt.refutedOrUnproven, null, 0) }
     return { ...row, cells, order: { setup: row.configuration.short, equalProblem: measured(recall.equalProblem), equalPr: measured(recall.equalPr),
       seriousCaught: measured(row.card.seriousCaught.equalPr), repeatedMisses: measured(row.card.seriousMisses.repeated), cost: lowerBound(row.card.cost.perTrial), tokens: row.tokens,
-      doubt: measured(row.card.reliability.reviewsWithDoubt.refutedOrUnproven), refuted: measured(row.card.reliability.outcomes.refuted.perAdmittedReview), completed: row.completed } }
+      doubt: measured(row.card.reliability.reviewsWithDoubt.refutedOrUnproven), completed: row.completed } }
   }).sort((left, right) => {
     const a = left.order[sort.column], b = right.order[sort.column]
     if (a === null) return b === null ? 0 : 1
@@ -143,7 +142,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
     { key: 'setup', label: 'Review setup' }, { key: 'equalProblem', label: bandLabels[band], sub: 'equal problems' }, { key: 'equalPr', label: bandLabels[band], sub: 'equal PRs' },
     { key: 'seriousCaught', label: 'All serious', sub: 'caught' }, { key: 'repeatedMisses', label: 'Repeated', sub: 'serious misses' },
     { key: 'cost', label: 'Cost', sub: 'per trial' }, { key: 'tokens', label: 'Output', sub: 'tokens per trial' },
-    { key: 'doubt', label: 'Refuted or unproven', sub: 'share of reviews' }, { key: 'refuted', label: 'Refuted claims', sub: 'per review' }, { key: 'completed', label: 'Completed', sub: 'of trials' },
+    { key: 'doubt', label: 'Refuted or unproven', sub: 'share of reviews' }, { key: 'completed', label: 'Completed', sub: 'of trials' },
   ]
   const coverage = referenceCoverage(dataset, board.selection)
   const candidateCount = coverage.pendingFamilies + pendingCandidates(dataset, board.selection.taskIds, now).length
@@ -276,7 +275,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
         <header className="subsection-head" id="review-setups"><Title order={3}>All review setups</Title>
         <Text className="subsection-lede">Lists every setup, skill experiments included, whatever the selection above. Same {shared.length} comparison PRs as the chart, in the {bandLabels[band].toLowerCase()} band. Rows start with the most found, problems weighted equally; a column heading sorts by that one measure only.</Text></header>
         <details className="results-disclosure"><summary><ChevronRight className="chevron" size={16} aria-hidden="true" />Show every measure for all {tableRows.length} setups<span className="summary-hint">Sortable table</span></summary>
-        <div className="table-frame"><Table.ScrollContainer minWidth={1160}><Table verticalSpacing={6} horizontalSpacing="sm" className="leaderboard-table" aria-label="All review setup results">
+        <div className="table-frame"><Table.ScrollContainer minWidth={1050}><Table verticalSpacing={6} horizontalSpacing="xs" className="leaderboard-table" aria-label="All review setup results">
           <Table.Thead><Table.Tr>{resultsColumns.map(column => <Table.Th key={column.key} data-numeric={column.key !== 'setup' || undefined} aria-sort={sort.column === column.key ? sort.direction : 'none'}>
             <button className="text-button sort-heading" onClick={() => setSort(current => ({ column: column.key, direction: current.column === column.key && current.direction === 'ascending' ? 'descending' : 'ascending' }))}>
               <span className="th-title">{column.label}{column.sub && <span className="th-sub">{column.sub}</span>}</span>{sort.column === column.key ? sort.direction === 'ascending' ? <ArrowUp size={13} aria-hidden="true" /> : <ArrowDown size={13} aria-hidden="true" /> : <ArrowUpDown size={13} aria-hidden="true" />}
@@ -286,7 +285,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
             <Table.Td><button className="text-button setup-label" onClick={() => inspect('review-setups')({ kind: 'configuration', id: row.configuration.id })} aria-label={`${row.configuration.short}. Inspect evidence`}><Mark configuration={row.configuration} size={10} />
               <span><span className="setup-method">{setupParts(row.configuration).method}</span><span className="setup-model"><VendorMark configuration={row.configuration} />{[setupParts(row.configuration).model, setupParts(row.configuration).effort].filter(Boolean).join(' · ')}</span>
               <PeerNote configurations={[row.configuration]} className="setup-model" /></span></button></Table.Td>
-            {(['equalProblem', 'equalPr', 'seriousCaught', 'repeatedMisses', 'cost', 'tokens', 'doubt', 'refuted'] as const).map(column => <Table.Td key={column} data-numeric><Value cell={row.cells[column]} notes={tableNotes} /></Table.Td>)}
+            {(['equalProblem', 'equalPr', 'seriousCaught', 'repeatedMisses', 'cost', 'tokens', 'doubt'] as const).map(column => <Table.Td key={column} data-numeric><Value cell={row.cells[column]} notes={tableNotes} /></Table.Td>)}
             <Table.Td data-numeric><span className="completion-count">{row.completed}/{row.trials}</span></Table.Td>
             <Table.Td data-numeric>{row.tasks}/{shared.length}</Table.Td>
             <Table.Td><ActionIcon aria-label={`Inspect ${row.configuration.short}`} variant="subtle" color="gray" onClick={() => inspect('review-setups')({ kind: 'configuration', id: row.configuration.id })}><ChevronRight size={18} /></ActionIcon></Table.Td>
