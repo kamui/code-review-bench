@@ -3,10 +3,10 @@ import type { CSSProperties } from 'react'
 import { Accordion, Alert, Badge, Button, Code, Drawer, Group, Loader, Paper, Select, Stack, Tabs, Text, Title } from '@mantine/core'
 import { Download, ExternalLink, FileCheck2, FileClock, FileCode, FileJson, FileSearch, FileText } from 'lucide-react'
 import { SetupName, setupLabel } from './Chart'
-import { costText, Disclosure, humanize, Rich, Tag, Value } from './Reading'
+import { costText, Disclosure, humanize, Referenced, Rich, Tag, Value } from './Reading'
 import { fetchDetail, skillReleaseLabel } from '../lib/data'
 import type { Attempt, AttemptDetail, Configuration, Dataset, Task } from '../lib/data'
-import { bandLabels, compact, detectionLabel, foundLabels, duration, lowerFirst, money, perReview, reading, share } from '../lib/metrics'
+import { bandLabels, compact, detectionLabel, foundLabels, duration, lowerFirst, measured, money, perReview, reading, share } from '../lib/metrics'
 import { pendingCandidates, reviewFacts } from '../lib/scoring'
 import type { Band, Estimator, Scorecard } from '../lib/scoring'
 import { drawerTabs } from '../lib/view'
@@ -161,7 +161,7 @@ function InspectionBody({ dataset, results, band, estimator, configuration, task
         <PreExistingCatalog task={currentTask} />
         {novel.length > 0 && <><Title order={5}>Candidates awaiting a ruling</Title>
           {novel.map(candidate => <Paper withBorder p="sm" key={candidate.id}><Text size="xs" c="dimmed">{candidate.id} · recorded {candidate.recordedAt.slice(0, 10)}, {candidate.ageDays} {candidate.ageDays === 1 ? 'day' : 'days'} ago</Text>
-            <Text size="sm">{candidate.claim}</Text><Text size="sm"><strong>Evidence limits: </strong>{candidate.limits}</Text><Text size="sm"><strong>Decision relevance: </strong>{candidate.relevance}</Text></Paper>)}</>}
+            <Text size="sm">{candidate.claim}</Text><Text size="sm"><strong>Evidence limits: </strong><Referenced text={candidate.limits} task={currentTask} /></Text><Text size="sm"><strong>Decision relevance: </strong><Referenced text={candidate.relevance} task={currentTask} /></Text></Paper>)}</>}
         <Group><Button component="a" href={currentTask.registerUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<ExternalLink size={14} />}>Open current reference records</Button></Group>
       </Stack>}</Tabs.Panel>
       <Tabs.Panel value="coverage" pt="lg"><Stack>
@@ -215,10 +215,10 @@ function TaskResults({ task, results, band, onOpen }: { task: Task; results: Set
   const rows = results.flatMap(({ configuration, card }) => {
     const row = card.tasks.find(item => item.taskId === task.id)
     return row ? [{ configuration, row }] : []
-  }).sort((left, right) => left.configuration.short.localeCompare(right.configuration.short))
+  }).sort((left, right) => (measured(right.row.bands[band].recall) ?? -1) - (measured(left.row.bands[band].recall) ?? -1) || left.configuration.short.localeCompare(right.configuration.short))
   if (!rows.length) return null
   return <Paper withBorder radius="md" className="task-results">
-    <Text size="sm" fw={640}>{foundLabels[band]} on this PR</Text><Text size="xs" c="dimmed">Selected setups in name order.</Text>
+    <Text size="sm" fw={640}>{foundLabels[band]} on this PR</Text><Text size="xs" c="dimmed">Selected setups, most found first.</Text>
     <ul>{rows.map(({ configuration, row }) => {
       const first = row.trials.find(trial => trial.attemptId)?.attemptId
       return <li key={configuration.id}><SetupName configuration={configuration} />

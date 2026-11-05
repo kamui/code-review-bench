@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { groupPaths, linearScale, logScale, paretoFrontier, placeLabels, position, ticks } from './chart'
+import { groupPaths, linearScale, logScale, paretoFrontier, placeLabels, position, ticks, tipPlace } from './chart'
 
 describe('scales', () => {
   test('spans wide ranges in whole decades and narrow ranges on a 1-2-5 grid', () => {
@@ -51,5 +51,15 @@ describe('method groups', () => {
     const points = [{ x: 3, y: 60, g: 'a' }, { x: 1, y: 70, g: 'a' }, { x: 2, y: 80, g: 'b' }, { x: 2, y: 50, g: 'a' }]
     expect(groupPaths(points, point => point.g).map(group => [group.key, group.points.map(point => point.x)]))
       .toEqual([['a', [1, 2, 3]], ['b', [2]]])
+  })
+})
+
+describe('tooltip placement', () => {
+  const rect = (left: number, top: number, width: number, height: number): DOMRect =>
+    ({ left, top, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}) })
+  test('opens above a mark with room, and below a mark near the top of the shell or of the screen', () => {
+    expect(tipPlace(rect(0, 0, 800, 600), rect(400, 400, 10, 10), 160, 170).below).toBe(false)
+    expect(tipPlace(rect(0, 0, 800, 600), rect(400, 100, 10, 10), 160, 170).below).toBe(true)
+    expect(tipPlace(rect(0, -500, 800, 900), rect(400, 60, 10, 10), 160, 170).below).toBe(true)
   })
 })
