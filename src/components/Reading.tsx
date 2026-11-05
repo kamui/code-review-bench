@@ -6,7 +6,7 @@ import type { Configuration } from '../lib/data'
 import type { Reading } from '../lib/metrics'
 
 export type Cell = string | Reading
-export type Note = ReturnType<typeof reasonCounts>[number]
+export type Note = { reason: string; count: number; covers?: string[] }
 export type Column<Row> = { label: string; value: (row: Row) => Cell; render?: (row: Row) => ReactNode }
 
 export function PeerNote({ configurations, className }: { configurations: Configuration[]; className: string }) {
@@ -32,13 +32,25 @@ export const costScaleNote = (shown: Configuration[]) => shown.length && shown.e
 const lowerBound = (cell: Cell) => typeof cell !== 'string' && cell.text.startsWith('≥ ')
 
 // A lower bound already says what it is; its reason stays on the value instead of adding a numbered note.
-export const notesFor = (cells: Cell[]): Note[] => reasonCounts(cells.map(cell => typeof cell === 'string' || lowerBound(cell) ? null : cell.reason ?? cell.annotation ?? null))
+export const notesFor = (cells: Cell[]): Note[] => {
+  const groups = new Map<string, Note[]>()
+  for (const note of reasonCounts(cells.map(cell => typeof cell === 'string' || lowerBound(cell) ? null : cell.reason ?? cell.annotation ?? null))) {
+    const key = unresolvedDetection.test(note.reason) ? unresolvedSummary : note.reason
+    groups.set(key, [...groups.get(key) ?? [], note])
+  }
+  return Array.from(groups, ([reason, members]) => members.length === 1 ? members[0]!
+    : { reason, count: members.reduce((total, member) => total + member.count, 0), covers: members.map(member => member.reason) })
+}
+
+// Each value's own count stays in its hover text; the shared note says the rest once.
+const unresolvedDetection = /^\d+ unresolved detection decisions? across \d+ reference problems? counts? as zero credit\./
+const unresolvedSummary = 'Unresolved detection decisions count as zero credit; hover a marked value for its count. They remain in the denominator; confirmed detections still count.'
 
 export function Value({ cell, notes = [] }: { cell: Cell; notes?: Note[] }) {
   if (typeof cell === 'string') return cell
   const note = cell.reason ?? cell.annotation
   if (!note) return cell.text
-  const index = notes.findIndex(item => item.reason === note)
+  const index = notes.findIndex(item => item.reason === note || item.covers?.includes(note))
   return <span className={lowerBound(cell) ? 'annotated' : cell.reason ? 'unavailable' : undefined} title={note}>{cell.text}{index >= 0 && <sup aria-hidden="true">{index + 1}</sup>}<VisuallyHidden>: {note}</VisuallyHidden></span>
 }
 
@@ -109,7 +121,8 @@ export function DataTable<Row>({ label, rows, columns, rowKey, minWidth, empty =
       <Table.Tbody>{rows.map((row, index) => <Table.Tr key={rowKey(row)}>{shown.map(({ item, position }) => {
         const cell = cells[index]?.[position] ?? ''
         return position === 0 ? <Table.Th key={item.label} scope="row">{item.render ? item.render(row) : <Value cell={cell} notes={notes} />}</Table.Th>
-          : <Table.Td key={item.label} data-label={item.label} data-numeric={numeric[position] || undefined}><Value cell={cell} notes={notes} /></Table.Td>
+          : <Table.Td key={item.label} data-label={item.label} data-numeric={numeric[position] || undefined}><Value cell={cell} notes={notes} />
+            {typeof cell !== 'string' && cell.fraction !== undefined && <span className="cell-bar" aria-hidden="true"><span style={{ width: `${cell.fraction * 100}%` }} /></span>}</Table.Td>
       })}</Table.Tr>)}</Table.Tbody>
     </Table></Table.ScrollContainer>
     <Notes notes={notes} />

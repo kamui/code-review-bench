@@ -304,9 +304,9 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
 function DeltaPlot({ rows, a, b }: { rows: { id: string; label: string; delta: number }[]; a: string; b: string }) {
   if (!rows.length) return null
   const limit = Math.max(25, ...rows.map(row => Math.abs(row.delta)))
-  const at = (value: number) => 50 - value / limit * 50
+  const at = (value: number) => 50 + value / limit * 50
   return <div className="delta-plot" role="list" aria-label="A minus B detection difference per PR">
-    <div className="delta-head" aria-hidden="true"><span /><span className="delta-sides"><span><b>← A higher</b>{a}</span><span><b>B higher →</b>{b}</span></span></div>
+    <div className="delta-head" aria-hidden="true"><span /><span className="delta-sides"><span><b>← B higher</b>{b}</span><span><b>A higher →</b>{a}</span></span></div>
     {[...rows].sort((left, right) => right.delta - left.delta).map(row => <div role="listitem" key={row.id} className="delta-row"
       aria-label={`${row.label}: ${signed(row.delta)}`}>
       <span className="delta-label">{row.label}</span>
