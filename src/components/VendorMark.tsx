@@ -13,5 +13,5 @@ const vendorOf = (configuration: Pick<Configuration, 'models'>) => {
 
 export function VendorMark({ configuration }: { configuration: Pick<Configuration, 'models'> }) {
   const vendor = vendorOf(configuration)
-  return vendor && <svg className="vendor-mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d={paths[vendor]} /></svg>
+  return vendor && <svg className="vendor-mark" data-vendor={vendor} viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d={paths[vendor]} /></svg>
 }

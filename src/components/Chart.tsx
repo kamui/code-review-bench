@@ -159,7 +159,7 @@ function SetupRows({ points, notes, measure, axis, scale, frontier, onSelect, in
         <button type="button" className="rank-row" onClick={() => onSelect(configuration.id)} {...interactions(configuration.id)}
           aria-label={`${configuration.short}: ${measure} ${percent(score)}${range ? `, ${percent(range.low)} to ${percent(range.high)} leaving one PR out` : ''}; ${axisLabels[axis]} ${formatMetric(axis, metric, starred, bounded)}${frontier.has(configuration.id) ? '; on the frontier of these two measures' : ''}. Inspect evidence`}>
           <span className="rank-name"><Mark configuration={configuration} />
-            <span><strong>{method}</strong><span className="rank-model">{model}{effort && ` · ${effort}`}
+            <span><strong>{method}</strong><span className="rank-model"><VendorMark configuration={configuration} />{model}{effort && ` · ${effort}`}
               {frontier.has(configuration.id) && <span className="frontier-tag">On frontier</span>}</span></span></span>
           <span className="rank-cell"><span className="rank-value">{percent(score)}<NoteMark summary={summary} notes={notes} /></span>
             <span className="rank-track">{scoreTicks.map(tick => <span key={tick} className="rank-grid" style={{ left: `${tick}%` }} />)}
@@ -353,7 +353,7 @@ function Models({ points, notes, measure, onSelect, interactions }: { points: Po
       const scores = members.map(point => point.summary.detection ?? 0)
       const low = Math.min(...scores), high = Math.max(...scores)
       return <div role="listitem" key={model} className="model-row">
-        <span className="model-name">{model}</span>
+        <span className="model-name"><VendorMark configuration={members[0]!.summary.configuration} />{model}</span>
         <span className="rank-track">{scoreTicks.map(tick => <span key={tick} className="rank-grid" style={{ left: `${tick}%` }} />)}
           {members.length > 1 && <span className="model-span" style={{ left: `${low}%`, width: `${high - low}%` }} />}
           {members.map((point, index) => {

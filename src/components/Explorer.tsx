@@ -19,6 +19,7 @@ import { EvidenceDrawer } from './EvidenceDrawer'
 import { MethodologyViews } from './MethodologyViews'
 import { Overview } from './Overview'
 import { costNote, costText, glossary, Notes, notesFor, PeerNote, Tag, TermLabel, Value } from './Reading'
+import { VendorMark } from './VendorMark'
 
 export type Page = 'scorecard' | 'tasks' | 'methodology'
 type LoadState = { kind: 'loading' } | { kind: 'failed'; message: string } | { kind: 'ready'; dataset: Dataset }
@@ -186,7 +187,6 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
     <Container size="xl" component="main" className="main-content">
       {page === 'scorecard' && <><section className="intro">
         <div>
-          <p className="eyebrow">Code review benchmark</p>
           <Title order={1}>Good reviews find the problems that matter.</Title>
           <Text className="intro-description">Compare real code review setups by what they catch, what they cost, and how often they’re wrong.</Text>
         </div>
@@ -220,9 +220,9 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
           </div>
           <div className="filter-bar" data-open={optionsOpen || undefined}>
             <div className="measure-controls">
-              <Select label="Impact band" size="xs" w={200} allowDeselect={false} value={band} data={bands.filter(value => coverage.bands[value] > 0 || value === band).map(value => ({ value, label: `${bandLabels[value]} (${coverage.bands[value]})` }))}
+              <Select label="Impact band" size="xs" styles={{ wrapper: { width: 200 } }} allowDeselect={false} value={band} data={bands.filter(value => coverage.bands[value] > 0 || value === band).map(value => ({ value, label: `${bandLabels[value]} (${coverage.bands[value]})` }))}
                 onChange={value => { const next = bands.find(item => item === value); if (next) onSearch({ band: unlessDefault(next, 'all') }, 'scorecard') }} />
-              <Select label="Average" size="xs" w={220} allowDeselect={false} value={estimator} data={estimators.map(value => ({ value, label: estimatorLabels[value].replace(/^./, letter => letter.toUpperCase()) }))}
+              <Select label="Average" size="xs" styles={{ wrapper: { width: 210 } }} allowDeselect={false} value={estimator} data={estimators.map(value => ({ value, label: estimatorLabels[value].replace(/^./, letter => letter.toUpperCase()) }))}
                 onChange={value => { const next = estimators.find(item => item === value); if (next) onSearch({ average: unlessDefault(next, 'equalProblem') }, 'scorecard') }} />
             </div>
             <div className="method-filter" role="group" aria-label="Review methods">
@@ -247,7 +247,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
                     <Button variant="subtle" size="compact-xs" className="popover-action" onClick={() => setSelected([])}>Clear all</Button>
                   </Group></Group>
                   {editions.map(group => <div key={`${group.method}/${group.reviewEdition}`} className="refine-group"><span className="refine-group-title"><Mark configuration={group} size={9} />{methodName(group)}</span>
-                    {[...edition(group)].sort((left, right) => left.short.localeCompare(right.short)).map(configuration => <Checkbox key={configuration.id} label={[setupParts(configuration).model, setupParts(configuration).effort].filter(Boolean).join(' · ')} aria-label={configuration.short}
+                    {[...edition(group)].sort((left, right) => left.short.localeCompare(right.short)).map(configuration => <Checkbox key={configuration.id} label={<><VendorMark configuration={configuration} />{[setupParts(configuration).model, setupParts(configuration).effort].filter(Boolean).join(' · ')}</>} aria-label={configuration.short}
                       checked={selected.includes(configuration.id)} onChange={() => setSelected(selected.includes(configuration.id) ? selected.filter(id => id !== configuration.id) : [...selected, configuration.id])} size="xs" />)}</div>)}
                 </Stack></Popover.Dropdown>
               </Popover>
@@ -255,7 +255,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
                 <Popover.Target><Button variant="default" size="xs" className="refine-button" leftSection={<Cpu size={14} aria-hidden="true" />} rightSection={<ChevronDown size={14} aria-hidden="true" />}>Models ({selectedModels.length}/{modelChoices.length})</Button></Popover.Target>
                 <Popover.Dropdown className="refine-dropdown"><Stack gap="sm"><Group justify="space-between"><Text size="xs" fw={640}>Models</Text><Group gap="xs"><Button variant="subtle" size="compact-xs" className="popover-action" onClick={() => setSelectedModels(modelChoices.map(model => model.value))}>Select all</Button>
                   <Button variant="subtle" size="compact-xs" className="popover-action" onClick={() => setSelectedModels([])}>Clear all</Button></Group></Group>
-                  {modelChoices.map(model => <Checkbox key={model.value} label={model.label} checked={selectedModels.includes(model.value)} onChange={() => setSelectedModels(selectedModels.includes(model.value) ? selectedModels.filter(value => value !== model.value) : [...selectedModels, model.value])} size="xs" />)}
+                  {modelChoices.map(model => <Checkbox key={model.value} label={<><VendorMark configuration={{ models: [model.value] }} />{model.label}</>} aria-label={model.label} checked={selectedModels.includes(model.value)} onChange={() => setSelectedModels(selectedModels.includes(model.value) ? selectedModels.filter(value => value !== model.value) : [...selectedModels, model.value])} size="xs" />)}
                 </Stack></Popover.Dropdown>
               </Popover>
               <Switch className="experiments-switch" checked={includeExperiments} onChange={event => toggleExperiments(event.currentTarget.checked)} label="Include skill experiments" size="xs" />
@@ -293,7 +293,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
           </Table.Th>)}<Table.Th data-numeric><span className="th-title">PRs<span className="th-sub">covered</span></span></Table.Th><Table.Th /></Table.Tr></Table.Thead>
           <Table.Tbody>{tableRows.map(row => <Table.Tr key={row.configuration.id}>
             <Table.Td><button className="text-button setup-label" onClick={() => inspect('review-setups')({ kind: 'configuration', id: row.configuration.id })} aria-label={`${row.configuration.short}. Inspect evidence`}><Mark configuration={row.configuration} size={10} />
-              <span><span className="setup-method">{setupParts(row.configuration).method}</span><span className="setup-model">{[setupParts(row.configuration).model, setupParts(row.configuration).effort].filter(Boolean).join(' · ')}</span>
+              <span><span className="setup-method">{setupParts(row.configuration).method}</span><span className="setup-model"><VendorMark configuration={row.configuration} />{[setupParts(row.configuration).model, setupParts(row.configuration).effort].filter(Boolean).join(' · ')}</span>
               <PeerNote configurations={[row.configuration]} className="setup-model" /></span></button></Table.Td>
             {(['equalProblem', 'equalPr', 'seriousCaught', 'repeatedMisses', 'cost', 'tokens', 'refuted'] as const).map(column => <Table.Td key={column} data-numeric><Value cell={row.cells[column]} notes={tableNotes} /></Table.Td>)}
             <Table.Td data-numeric><span className="completion-count">{row.completed}/{row.trials}</span></Table.Td>

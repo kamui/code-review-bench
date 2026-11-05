@@ -14,6 +14,7 @@ import { SetupName, setupLabel, setupParts } from './Chart'
 import { costNote, costText, DataTable, Disclosure, Rich, Value } from './Reading'
 import { SeriousMisses } from './SeriousMisses'
 import type { Column } from './Reading'
+import { VendorMark } from './VendorMark'
 
 const signed = (value: number) => `${value > 0 ? '+' : value < 0 ? '−' : ''}${Math.abs(value).toFixed(1)} pp`
 const span = (range: { low: number; high: number }) => `${percent(range.low * 100)} to ${percent(range.high * 100)}`
@@ -337,7 +338,7 @@ function PreExistingMatrix({ label, rows, name }: { label: PreExistingLabel; row
       <Table.Thead>
         <Table.Tr><Table.Th scope="col" rowSpan={2} className="pre-sticky">Problem</Table.Th>
           {groups.map((group, index) => <Table.Th key={`${group.method}-${index}`} scope="colgroup" colSpan={group.span} className="pre-method">{group.method}</Table.Th>)}</Table.Tr>
-        <Table.Tr>{rows.map(row => <Table.Th key={row.configuration.id} scope="col" data-numeric>{[setupParts(row.configuration).model, setupParts(row.configuration).effort].filter(Boolean).join(' · ')}</Table.Th>)}</Table.Tr>
+        <Table.Tr>{rows.map(row => <Table.Th key={row.configuration.id} scope="col" data-numeric><VendorMark configuration={row.configuration} />{[setupParts(row.configuration).model, setupParts(row.configuration).effort].filter(Boolean).join(' · ')}</Table.Th>)}</Table.Tr>
       </Table.Thead>
       <Table.Tbody>{problems.map(problem => <Table.Tr key={`${problem.taskId}/${problem.problemId}`}>
         <Table.Th scope="row" className="pre-sticky"><Rich text={problem.title} /><Text size="xs" c="dimmed">{name(problem.taskId)}</Text></Table.Th>
