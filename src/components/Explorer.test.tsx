@@ -244,7 +244,7 @@ describe('overview', () => {
   const card = (index: number) => setups(measureCards).slice(index * selected.length, (index + 1) * selected.length)
 
   test('is the default view and leads with serious problems found against cost, plotted against the measure every view shares', () => {
-    expect(shown).toContain('Serious problems found against cost per trial')
+    expect(shown).toContain('Serious problems found against cost and refuted or unproven claims')
     expect(shown).toContain('Plot against Cost Refuted or unproven Refuted claims Tokens Time')
     expect(text(overview)).toContain('The 9 known problems weigh the same, so one problem caught in every review is 11.1 points.')
   })
@@ -369,7 +369,7 @@ describe('chart', () => {
 
   test('the scatter says its lines join each review method\'s setups and are not a trend', () => {
     expect(chart(fixture, { band: 'all', estimator: 'equalPr' }, 'tradeoff'))
-      .toContain('A faint line joins each review method\'s setups from left to right, and comes forward when you point at one of them.')
+      .toContain('In the left panel, a faint line joins each review method\'s setups from left to right, and comes forward when you point at one of them.')
   })
 })
 
