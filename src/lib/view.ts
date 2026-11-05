@@ -20,6 +20,7 @@ export const explorerSearch = z.object({
   dimension: lenient(z.enum(scorecardTabs)), inspect: lenient(z.string()), attempt: lenient(z.string()), drawer: lenient(z.enum(drawerTabs)),
 })
 export type ExplorerSearch = z.infer<typeof explorerSearch>
+export const clearedSearch = Object.fromEntries(Object.keys(explorerSearch.shape).map(key => [key, undefined])) as ExplorerSearch
 
 export const unlessDefault = <T>(value: T, fallback: T) => value === fallback ? undefined : value
 
