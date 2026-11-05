@@ -283,7 +283,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
             {differing.length > 0 && ` The selected setups differ in recorded ${differing.join(', ')}; a difference between setups includes those conditions. Compare two setups below to see the values.`}</span></div>
         </Paper>
         <header className="subsection-head" id="review-setups"><Title order={3}>All review setups</Title>
-        <Text className="subsection-lede">Includes skill experiments. Same {shared.length} comparison PRs as the chart, in the {bandLabels[band].toLowerCase()} band. Rows start in name order; a column heading sorts by that one measure only.</Text></header>
+        <Text className="subsection-lede">Lists every setup, skill experiments included, whatever the selection above. Same {shared.length} comparison PRs as the chart, in the {bandLabels[band].toLowerCase()} band. Rows start in name order; a column heading sorts by that one measure only.</Text></header>
         <details className="results-disclosure"><summary><ChevronRight className="chevron" size={16} aria-hidden="true" />Show every measure for all {tableRows.length} setups<span className="summary-hint">Sortable table</span></summary>
         <div className="table-frame"><Table.ScrollContainer minWidth={1050}><Table verticalSpacing="sm" horizontalSpacing="sm" className="leaderboard-table" aria-label="All review setup results">
           <Table.Thead><Table.Tr>{resultsColumns.map(column => <Table.Th key={column.key} data-numeric={column.key !== 'setup' || undefined} aria-sort={sort.column === column.key ? sort.direction : 'none'}>
