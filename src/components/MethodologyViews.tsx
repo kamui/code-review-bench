@@ -85,15 +85,21 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
     { label: 'Sampled: unresolved', value: row => String(row.card.advice.unresolved) },
     { label: 'Reviews sampled / admitted', value: row => `${row.card.advice.sampledReviews} / ${row.card.advice.admitted}` },
     { label: 'Generic advisory dossiers, benefit unmeasured', value: row => String(row.card.advice.generic) }]} />
+  const groups: { group: string; tabs: { value: ScorecardTab; label: string }[] }[] = [
+    { group: 'What it finds', tabs: [{ value: 'detection', label: 'Detection' }, { value: 'misses', label: 'Serious misses' }, { value: 'pre-existing', label: 'Pre-existing problems' }] },
+    { group: 'How right it is', tabs: [{ value: 'reliability', label: 'Claim reliability' }, { value: 'remedies', label: 'Remedies' }, { value: 'advice', label: 'Advice benefit' }, { value: 'controls', label: 'Controls' }] },
+    { group: 'What it takes', tabs: [{ value: 'delivery', label: 'Delivery' }, { value: 'usage', label: 'Cost and time' }] },
+    { group: 'Tools', tabs: [{ value: 'candidates', label: `Pending candidates (${novel.length + awaiting.length})` }, { value: 'comparison', label: 'Compare setups' }] },
+  ]
   return <Paper withBorder radius="lg" className="methodology-panel" id="dimensions">
     <div className="dimension-head"><Title order={3}>Each measure in detail</Title>
       <Text className="subsection-lede">Every value comes from the shared scoring kernel for the selected setups and PRs. Dimensions stay separate: there is no blended score. Rows start with the most known problems found. A numbered mark explains a value in the notes below its table.</Text></div>
     <Tabs value={tab} onChange={value => { const next = scorecardTabs.find(item => item === value); if (next) onTab(next) }} className="dimension-tabs">
+      <Select className="dimension-select" aria-label="Measure" size="sm" allowDeselect={false} value={tab} onChange={value => { const next = scorecardTabs.find(item => item === value); if (next) onTab(next) }}
+        data={groups.map(group => ({ group: group.group, items: group.tabs }))} />
       <Tabs.List ref={tabList}>
-        <Tabs.Tab value="detection" data-group="What it finds">Detection</Tabs.Tab><Tabs.Tab value="misses">Serious misses</Tabs.Tab><Tabs.Tab value="pre-existing">Pre-existing problems</Tabs.Tab>
-        <Tabs.Tab value="reliability" data-group="How right it is" className="tab-group-start">Claim reliability</Tabs.Tab><Tabs.Tab value="remedies">Remedies</Tabs.Tab><Tabs.Tab value="advice">Advice benefit</Tabs.Tab><Tabs.Tab value="controls">Controls</Tabs.Tab>
-        <Tabs.Tab value="delivery" data-group="What it takes" className="tab-group-start">Delivery</Tabs.Tab><Tabs.Tab value="usage">Cost and time</Tabs.Tab>
-        <Tabs.Tab value="candidates" data-group="Tools" className="tab-group-start tab-tools-start">Pending candidates ({novel.length + awaiting.length})</Tabs.Tab><Tabs.Tab value="comparison">Compare setups</Tabs.Tab></Tabs.List>
+        {groups.flatMap((group, groupIndex) => group.tabs.map((item, index) => <Tabs.Tab key={item.value} value={item.value} data-group={index === 0 ? group.group : undefined}
+          className={index > 0 || groupIndex === 0 ? undefined : group.group === 'Tools' ? 'tab-group-start tab-tools-start' : 'tab-group-start'}>{item.label}</Tabs.Tab>))}</Tabs.List>
 
       <Tabs.Panel value="detection" ><Stack>
         <TabIntro lede="How many known problems each setup caught, averaged over its repeated runs on each PR.">Recovery of each reference problem is averaged over the PR's scheduled trials; a resolved trial without an admitted review counts as not caught. Unresolved recoveries also receive zero credit and stay in the denominator, with an annotation counting affected problems and detection decisions. Both averages are shown. Problems weighted equally is the primary average for the serious and other-material bands; the unknown and all-reference bands have no preferred average. A serious reference is one the implementer had to be made aware of before release. An other-material reference earns credit when a review raises it but did not have to be raised.</TabIntro>
