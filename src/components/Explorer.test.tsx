@@ -15,6 +15,7 @@ import { scorecardTabs } from '../lib/view'
 import type { ExplorerSearch } from '../lib/view'
 import { MethodologyViews } from './MethodologyViews'
 import { Overview } from './Overview'
+import { firstLine, Markdown } from './Reading'
 import { SeriousMisses } from './SeriousMisses'
 
 const now = new Date('2026-10-03T12:00:00Z')
@@ -119,7 +120,7 @@ describe('scorecard page on the fixture', () => {
     expect(rendered).toContain('example/empty #505 : unaudited. No audit has been performed')
     expect(rendered).toContain('example/novel #606 : provisional. Independently audited; a novel candidate awaits a ruling')
     expect(rendered).toContain('Empty register, unaudited')
-    expect(rendered).toContain('example/novel #606 13 days since 2026-09-20 A cache key omits the tenant and can serve another tenant\'s entry. Record NC-00000000f1c5')
+    expect(rendered).toContain('example/novel #606 13 days since 2026-09-20 A cache key omits the tenant and can serve another tenant\'s entry.')
     expect(rendered).toContain('Read from the diff only; no reproduction was run.')
     expect(rendered).toContain('Pending candidates (2)')
     expect(rendered).toContain('The selected setups differ in recorded client, network access, sandbox')
@@ -240,12 +241,18 @@ describe('overview', () => {
     ? [summarize(configuration, card, { band: 'all', estimator: 'equalProblem' }, { kind: 'unavailable', reason: 'Not compared.' })] : []))
   const overview = renderToStaticMarkup(<MantineProvider><Overview summaries={summaries} detection={{ band: 'all', estimator: 'equalProblem' }} axis="cost"
     matching={{ included: 0, excluded: 0 }} basis={{ problems: 9, known: 9, prs: 6, awaiting: 0 }} onSelect={() => {}} /></MantineProvider>)
-  const card = (index: number) => setups(overview).slice(index * selected.length, (index + 1) * selected.length)
+  const measureCards = overview.slice(overview.indexOf('</section>', overview.indexOf('id="measure-lead"')))
+  const card = (index: number) => setups(measureCards).slice(index * selected.length, (index + 1) * selected.length)
 
   test('is the default view and leads with serious problems found against cost, plotted against the measure every view shares', () => {
-    expect(shown).toContain('Serious problems found against cost per trial')
+    expect(shown).toContain('Serious problems found against cost and refuted or unproven claims')
     expect(shown).toContain('Plot against Cost Refuted or unproven Refuted claims Tokens Time')
     expect(text(overview)).toContain('The 9 known problems weigh the same, so one problem caught in every review is 11.1 points.')
+  })
+
+  test('the lead chart key lists review methods from most found, each with its top setup', () => {
+    expect(text(overview)).toContain('The key gives each method\'s top setup.')
+    expect(text(overview)).toMatch(/ce-code-review Fixture A 85% · \$2\.50 .*Claude built-in Fixture A 78% · \$1\.20/)
   })
 
   test('ranks each measure in its own chart, in that measure\'s order, with setups lacking a value last', () => {
@@ -363,7 +370,7 @@ describe('chart', () => {
 
   test('the scatter says its lines join each review method\'s setups and are not a trend', () => {
     expect(chart(fixture, { band: 'all', estimator: 'equalPr' }, 'tradeoff'))
-      .toContain('A line joins each review method\'s setups from left to right. It shows one method across models; the points between are not measured.')
+      .toContain('In each panel, a faint line joins each review method\'s setups from left to right, and comes forward when you point at one of them.')
   })
 })
 
@@ -384,4 +391,21 @@ describe('a linked view', () => {
     expect(shown).toContain('Review setups (2/6)')
     expect(shown).toContain('Models (1/4)')
   })
+})
+
+describe('review text', () => {
+  const rendered = renderToStaticMarkup(<Markdown text={'## Finding 1\n**Wrong day** in `date_picker.ts`\n\n- one\n- two\n\n| TZ | Day |\n|---|---|\n| UTC | Fri |\n\n<script>alert(1)</script>'} />)
+
+  test('renders the Markdown a review writes, with code, lists and tables', () => {
+    expect(rendered).toContain('<p class="md-heading">Finding 1</p>')
+    expect(rendered).toContain('<strong>Wrong day</strong>')
+    expect(rendered).toContain('<code class="inline-code">date_picker.ts</code>')
+    expect(rendered).toContain('<li>two</li>')
+    expect(rendered).toContain('<td>UTC</td>')
+  })
+
+  test('never renders raw HTML from a review', () => expect(rendered).not.toContain('<script>'))
+
+  test('titles a finding with its first line, without Markdown markers', () =>
+    expect(firstLine('## **Finding 1** — `x` breaks\n\nDetails')).toBe('Finding 1 — `x` breaks'))
 })

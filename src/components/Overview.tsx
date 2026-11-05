@@ -55,6 +55,7 @@ const weight = ({ band, estimator }: DetectionView, { problems, prs }: Basis) =>
   : estimator === 'equalProblem' ? `The ${problems} ${band === 'all' ? 'known' : lowerFirst(bandLabels[band])} problems weigh the same, so one problem caught in every review is ${(100 / problems).toFixed(1)} points.`
     : `The ${prs} PRs weigh the same, so each PR is ${(100 / prs).toFixed(0)} points, shared among its problems.`
 
+const pairedLabels: Record<ChartAxis, string> = { cost: 'cost', doubt: 'refuted or unproven claims', refuted: 'refuted claims', tokens: 'output tokens', time: 'time' }
 const orderText: Record<Column, string> = { detection: 'Most first', claims: 'Most first', doubt: 'Fewest first', cost: 'Lowest first', time: 'Shortest first' }
 
 export function Overview({ summaries, detection, axis, matching, basis, onSelect }: {
@@ -62,6 +63,9 @@ export function Overview({ summaries, detection, axis, matching, basis, onSelect
 }) {
   const [tipState, setTip] = useState<Tip | null>(null)
   const [focus, setFocus] = useState<string | null>(null)
+  const [pinned, setPinned] = useState<string | null>(null)
+  const active = focus ?? pinned
+  const pin = (id: string) => setPinned(current => current === id ? null : id)
   if (!summaries.length) return <div className="plot-empty" role="status"><span>Select at least one review method and model.</span></div>
   const shown = summaries.map(summary => summary.configuration)
   const ordered = (column: Column) => overviewOrder(summaries, summary => ({ name: summary.configuration.short, card: summary.card }),
@@ -134,16 +138,16 @@ export function Overview({ summaries, detection, axis, matching, basis, onSelect
     }
   }
 
-  return <div className="overview" data-focusing={focus ? '' : undefined} onMouseLeave={() => { setTip(null); setFocus(null) }}>
+  return <div className="overview" data-focusing={active ? '' : undefined} onMouseLeave={() => { setTip(null); setFocus(null) }}>
     <div className="measure-grid">
       <section className="measure-card lead-card" data-lead aria-labelledby="measure-lead">
-        <header className="measure-head"><div><h3 id="measure-lead">{foundLabels[detection.band]} against {lowerFirst(axisLabels[axis])}</h3>
-          <p className="lead-about">Each point is one setup; up and to the left is better on both. {weight(detection, basis)}</p>
-          <p className="lead-meta">{[`${basis.prs} PRs`, detection.band === 'all' ? `${basis.known} known problems` : `${basis.problems} of ${basis.known} known problems are ${lowerFirst(bandLabels[detection.band])}`,
-            basis.awaiting > 0 && `${basis.awaiting} awaiting a ruling`].filter(Boolean).join(' · ')}
-            <KeyTerms terms={['Review setup', 'Known problem', 'Impact band', 'Problems or PRs weighted equally', 'Refuted or unproven', 'Admitted review']} /></p></div></header>
-        <Chart summaries={summaries} detection={detection} matching={matching} axis={axis} view="tradeoff" height={460} onSelect={onSelect}
-          guide={<><span>Below this chart, each chart ranks the setups by one measure, on its own scale and in its own order; a setup without a value comes last. Point at a setup to find it in every chart, and select it to open its evidence.</span>
+        <header className="measure-head"><div><h3 id="measure-lead">{foundLabels[detection.band]} against {pairedLabels[axis]} and {pairedLabels[axis === 'doubt' ? 'cost' : 'doubt']}</h3>
+          <p className="lead-about">Each setup sits at the same height in both panels; up and left is better. The key gives each method's top setup. <span className="lead-scope">{[`${basis.prs} PRs`,
+            detection.band === 'all' ? `${basis.known} known problems` : `${basis.problems} of ${basis.known} known problems are ${lowerFirst(bandLabels[detection.band])}`,
+            basis.awaiting > 0 && `${basis.awaiting} awaiting a ruling`].filter(Boolean).join(' · ')}</span></p></div></header>
+        <Chart summaries={summaries} detection={detection} matching={matching} axis={axis} view="tradeoff" height={370} onSelect={onSelect} linked={{ id: active, point: setFocus, pin }}
+          aside={<KeyTerms terms={['Review setup', 'Known problem', 'Impact band', 'Problems or PRs weighted equally', 'Refuted or unproven', 'Admitted review']} />}
+          guide={<>{weight(detection, basis) && <span>{weight(detection, basis)}</span>}<span>Below this chart, each chart ranks the setups by one measure, on its own scale and in its own order; a setup without a value comes last. Point at a setup to find it in every chart, and select it to open its evidence.</span>
             <span>The charts stay separate on purpose: no single number ranks the setups.</span>
             {summaries.some(summary => summary.detectionNote) && <span>A dotted underline marks a value that counts unresolved detection decisions as zero credit; point at it for the count.</span>}</>} />
       </section>
@@ -165,9 +169,9 @@ export function Overview({ summaries, detection, axis, matching, basis, onSelect
               const cell = readings.get(configuration.id)![column]
               const { draw, more, description } = marks(column, summary)
               const lines = [{ label: panel.title, value: cell.text, note: cell.reason ?? cell.annotation }, ...more]
-              return <div role="row" key={configuration.id} className="measure-row" data-focus={focus === configuration.id || undefined}
-                style={{ '--mark-color': reviewColor(configuration) } as CSSProperties} onMouseEnter={() => setFocus(configuration.id)} onClick={() => onSelect(configuration.id)}>
-                <div role="rowheader" className="measure-name"><SetupButton configuration={configuration} badges={column === 'detection'} onSelect={onSelect} onFocus={() => setFocus(configuration.id)} /></div>
+              return <div role="row" key={configuration.id} className="measure-row" data-focus={active === configuration.id || undefined}
+                style={{ '--mark-color': reviewColor(configuration) } as CSSProperties} onMouseEnter={() => setFocus(configuration.id)} onClick={() => { pin(configuration.id); onSelect(configuration.id) }}>
+                <div role="rowheader" className="measure-name"><SetupButton configuration={configuration} badges={column === 'detection'} onSelect={id => { pin(id); onSelect(id) }} onFocus={() => setFocus(configuration.id)} /></div>
                 <div role="cell" className={cell.text === 'Unavailable' ? 'measure-value missing' : 'measure-value'}><Value cell={cell} notes={notes} />{description && <VisuallyHidden>{description}</VisuallyHidden>}</div>
                 <span className="measure-track" aria-hidden="true" onMouseEnter={show(configuration, lines)} onMouseLeave={() => setTip(null)}>
                   {panel.axis.map(tick => <span key={tick.at} className="rank-grid" style={{ left: `${tick.at}%` }} />)}{draw}</span>

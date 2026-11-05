@@ -1,6 +1,9 @@
 import { Table, Text, Tooltip, VisuallyHidden } from '@mantine/core'
 import type { ReactNode } from 'react'
 import { ChevronRight } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import type { Components } from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { money, peerLabel, reasonCounts } from '../lib/metrics'
 import type { Configuration, Task } from '../lib/data'
 import type { Reading } from '../lib/metrics'
@@ -92,13 +95,14 @@ const definition = (entry: (typeof glossary)[number]) => <span className="term-t
 
 const recordId = /\b(GT-[a-z]*\d+|blind-[0-9a-f]+ items? \d+)\b/g
 
-/** Grading records cite known problems and blind-graded review items by ID; each ID shows what it names on hover. */
+/** Grading records cite known problems and blind-graded review items by ID; each reads by name, with its ID on hover. */
 export function Referenced({ text, task }: { text: string; task: Task | undefined }) {
   return text.split(recordId).map((part, index) => {
     if (index % 2 === 0) return part
     const problem = task?.families.find(family => family.id === part)
-    const label = problem ? `Known problem ${part}: ${problem.title}` : part.startsWith('blind-') ? 'A claim in one review, named by the anonymous ID its graders saw.' : null
-    return label ? <Tooltip key={index} multiline w={320} withArrow label={label}><span className="term" tabIndex={0}>{part}</span></Tooltip> : part
+    const [shown, label] = problem ? [`“${problem.shortLabel}”`, `Known problem ${part}: ${problem.title}`]
+      : part.startsWith('blind-') ? [`a review's finding`, `${part}: a finding in one review, named by the anonymous ID its graders saw.`] : [part, null]
+    return label ? <Tooltip key={index} multiline w={320} withArrow label={label}><span className="term" tabIndex={0}>{shown}</span></Tooltip> : part
   })
 }
 
@@ -144,6 +148,19 @@ export function Rich({ text }: { text: string }) {
   return text.split(/(`[^`]+`)/).map((part, index) => part.length > 2 && part.startsWith('`') && part.endsWith('`')
     ? <code key={index} className="inline-code">{part.slice(1, -1)}</code> : part)
 }
+
+const heading: Components['h1'] = ({ children }) => <p className="md-heading">{children}</p>
+const markdownParts: Components = {
+  h1: heading, h2: heading, h3: heading, h4: heading, h5: heading, h6: heading,
+  a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer">{children}</a>,
+  code: ({ children }) => <code className="inline-code">{children}</code>,
+  table: ({ children }) => <div className="md-table"><table>{children}</table></div>,
+}
+
+/** Review text written in Markdown; raw HTML in it is shown as text, not run. */
+export const Markdown = ({ text }: { text: string }) => <div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownParts}>{text}</ReactMarkdown></div>
+
+export const firstLine = (text: string) => text.trim().split('\n')[0]!.replace(/^(#{1,6}|[-*]|\d+\.)\s+/, '').replace(/\*\*|__/g, '')
 
 export const humanize = (slug: string) => slug.replace(/-/g, ' ').replace(/^./, letter => letter.toUpperCase())
 
