@@ -78,6 +78,8 @@ export function Chart({ summaries, detection, matching, axis, view, showAllLabel
 }) {
   const measure = detectionLabel(detection), dimensions = `${lowerFirst(measure)} against ${lowerFirst(axisLabels[axis])}`
   const [hovered, setHovered] = useState<({ id: string } & TipPlace) | null>(null)
+  const [spotlight, setSpotlight] = useState<{ method: string; pinned: boolean } | null>(null)
+  const preview = (method: string | null) => () => setSpotlight(current => current?.pinned ? current : method === null ? null : { method, pinned: false })
   const shown = summaries.map(summary => summary.configuration)
   const points: Point[] = summaries.filter(summary => summary.detection !== null).map(summary => ({
     summary, range: summary.range, metric: metricOf(summary, axis), bounded: boundedOn(summary, axis), starred: costStarred(summary.configuration, shown),
@@ -107,7 +109,7 @@ export function Chart({ summaries, detection, matching, axis, view, showAllLabel
       <span>No other impact band or average is substituted. Choose them above.</span></div>
       : view === 'setups' ? <SetupRows points={points} notes={notes} measure={measure} axis={axis} scale={scale} frontier={frontier} onSelect={onSelect} interactions={interactions} />
         : view === 'tradeoff' ? <Scatter points={measured} dimensions={dimensions} axis={axis} scale={scale} frontier={frontier} showAllLabels={showAllLabels}
-          hovered={hovered?.id ?? null} onSelect={onSelect} interactions={interactions} yTitle={foundLabels[detection.band]} height={height} />
+          hovered={hovered?.id ?? null} spotlight={spotlight?.method ?? null} onSelect={onSelect} interactions={interactions} yTitle={foundLabels[detection.band]} height={height} />
         : view === 'skills' ? <MethodPanels points={measured} axis={axis} scale={scale} onSelect={onSelect} interactions={interactions} />
           : <Models points={points} notes={notes} measure={measure} onSelect={onSelect} interactions={interactions} />}
     {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={measure} axes={view === 'models' ? [] : [axis]} place={hovered} />}
@@ -115,7 +117,9 @@ export function Chart({ summaries, detection, matching, axis, view, showAllLabel
       {view === 'setups' && <li><span className="whisker-key" aria-hidden="true" />Range with any one PR left out</li>}
       {view === 'skills' && <li><span className="context-key" aria-hidden="true" />Other selected setups</li>}
       {view === 'tradeoff' && [...new Map(measured.map(point => [setupParts(point.summary.configuration).method, point.summary.configuration])).entries()]
-        .sort(([left, one], [right, other]) => Number(other.builtin) - Number(one.builtin) || left.localeCompare(right)).map(([method, configuration]) => <li key={method}><Mark configuration={configuration} size={10} />{method}</li>)}
+        .sort(([left, one], [right, other]) => Number(other.builtin) - Number(one.builtin) || left.localeCompare(right)).map(([method, configuration]) => <li key={method}>
+          <button type="button" className="key-button" aria-pressed={spotlight?.method === method && spotlight.pinned} onMouseEnter={preview(method)} onMouseLeave={preview(null)} onFocus={preview(method)} onBlur={preview(null)}
+            onClick={() => setSpotlight(current => current?.pinned && current.method === method ? null : { method, pinned: true })}><Mark configuration={configuration} size={10} />{method}</button></li>)}
       {view === 'tradeoff' && <li className="key-break"><span className="frontier-key" aria-hidden="true" />Frontier: no other setup finds more for {frontierCost[axis]}</li>}
       {view === 'tradeoff' && <li><span className="faded-key" aria-hidden="true"><span /><span /></span>Not on the frontier, paler</li>}
       {bounded && <li><span className="bound-key" aria-hidden="true" />Lower bound{view === 'skills' ? '' : ', left out of the frontier'}</li>}
@@ -124,6 +128,7 @@ export function Chart({ summaries, detection, matching, axis, view, showAllLabel
       {guide}
       {view === 'setups' && <span><span className="whisker-key" aria-hidden="true" />Rows are ordered by {lowerFirst(measure)}. The whisker spans this average with any one whole PR left out: sensitivity to these PRs, not a confidence interval.</span>}
       {view === 'skills' && <span>Each panel shows one review method on every model it ran on, with detection against {lowerFirst(axisLabels[axis])} on shared axes. Gray dots are the other selected setups, for context.</span>}
+      {view === 'tradeoff' && <span>Point at a review method in the key to pick out its setups; select it to keep them picked out.</span>}
       {view === 'tradeoff' && axis === 'doubt' && <span>An unproven claim is not shown to be false.</span>}
       {view === 'tradeoff' && <span><span className="frontier-key" aria-hidden="true" />Frontier of {dimensions}: no other selected setup is at least as good on both measures and strictly better on one. Identical results share the frontier. It says nothing about any other measure.</span>}
       {view === 'models' && <span>Each row is one model, in name order. Marks show {lowerFirst(measure)} for each review method that ran on it.</span>}
@@ -206,9 +211,9 @@ const labelOf = (points: Point[], withMethod = false) => {
 
 type Plotted = Point & { x: number; y: number }
 
-function Scatter({ points, dimensions, axis, scale, frontier, showAllLabels, hovered, onSelect, interactions, yTitle, height = 400 }: {
+function Scatter({ points, dimensions, axis, scale, frontier, showAllLabels, hovered, spotlight, onSelect, interactions, yTitle, height = 400 }: {
   dimensions: string; points: Plotted[]; axis: Axis; scale: Scale; frontier: Set<string>; showAllLabels: boolean
-  hovered: string | null; onSelect: (id: string) => void; interactions: Interactions; yTitle: string; height?: number
+  hovered: string | null; spotlight: string | null; onSelect: (id: string) => void; interactions: Interactions; yTitle: string; height?: number
 }) {
   const { ref, width } = useElementSize()
   const margin = { top: 18, right: 22, bottom: 50, left: 62 }
@@ -229,9 +234,10 @@ function Scatter({ points, dimensions, axis, scale, frontier, showAllLabels, hov
   ]
   const prominent = (point: Point) => frontier.has(point.summary.configuration.id) || point.bounded
   const leading = new Set(paretoFrontier(points).map(point => point.summary.configuration.id))
-  const requested = ordered.filter(point => showAllLabels || frontier.has(point.summary.configuration.id) || leading.has(point.summary.configuration.id) || hovered === point.summary.configuration.id)
+  const outside = (point: Point) => spotlight !== null && setupParts(point.summary.configuration).method !== spotlight
+  const requested = ordered.filter(point => !outside(point)).filter(point => showAllLabels || spotlight !== null || frontier.has(point.summary.configuration.id) || leading.has(point.summary.configuration.id) || hovered === point.summary.configuration.id)
     .sort((left, right) => Number(frontier.has(right.summary.configuration.id)) - Number(frontier.has(left.summary.configuration.id)))
-  const dimmed = (point: Point) => !prominent(point) && hovered !== point.summary.configuration.id
+  const dimmed = (point: Point) => spotlight === null && !prominent(point) && hovered !== point.summary.configuration.id
   const labels = width ? placeLabels(requested.map(point => ({
     id: point.summary.configuration.id, x: px(point.x), y: py(point.y), width: textWidth(labelText(point.summary.configuration)), height: 16,
   })), obstacles, { left: plot.left + 2, right: plot.right, top: 2, bottom: plot.bottom - 2 }) : []
@@ -252,7 +258,7 @@ function Scatter({ points, dimensions, axis, scale, frontier, showAllLabels, hov
         const point = points.find(item => item.summary.configuration.id === label.id)
         return point && <line key={`leader-${label.id}`} x1={px(point.x)} y1={py(point.y)} x2={label.anchor === 'middle' ? label.x : label.x + (label.anchor === 'start' ? -3 : 3)} y2={label.y} className="leader-line" />
       })}
-      {ordered.map(point => <ChartPoint key={point.summary.configuration.id} point={point} axis={axis} x={px(point.x)} y={py(point.y)} faded={dimmed(point)}
+      {ordered.map(point => <ChartPoint key={point.summary.configuration.id} point={point} axis={axis} x={px(point.x)} y={py(point.y)} faded={dimmed(point)} muted={outside(point)}
         frontier={frontier.has(point.summary.configuration.id)} onSelect={onSelect} interactions={interactions} />)}
       {labels.map(label => {
         const point = points.find(item => item.summary.configuration.id === label.id)
@@ -279,11 +285,11 @@ function Axes({ plot, axis, scale, xTicks, px, py, height, compact = false, yTit
   </>
 }
 
-function ChartPoint({ point, axis, x, y, faded, frontier, onSelect, interactions }: {
-  point: Plotted; axis: Axis; x: number; y: number; faded: boolean; frontier: boolean; onSelect: (id: string) => void; interactions: Interactions
+function ChartPoint({ point, axis, x, y, faded, muted = false, frontier, onSelect, interactions }: {
+  point: Plotted; axis: Axis; x: number; y: number; faded: boolean; muted?: boolean; frontier: boolean; onSelect: (id: string) => void; interactions: Interactions
 }) {
   const { configuration } = point.summary
-  return <g role="button" tabIndex={0} className={faded ? 'chart-point faded' : 'chart-point'}
+  return <g role="button" tabIndex={0} className={['chart-point', faded && 'faded', muted && 'muted'].filter(Boolean).join(' ')}
     aria-label={`${configuration.short}: ${percent(point.y)}, ${formatMetric(axis, point.x, point.starred, point.bounded)}${frontier ? ', on the frontier of these two measures' : ''}. Inspect evidence`}
     onClick={() => onSelect(configuration.id)} {...interactions(configuration.id)}
     onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(configuration.id) } }}>
