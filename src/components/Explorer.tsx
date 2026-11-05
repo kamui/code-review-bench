@@ -20,7 +20,7 @@ import { MethodologyViews } from './MethodologyViews'
 import { Overview } from './Overview'
 import { Notes, notesFor, PeerNote, Tag, Value } from './Reading'
 
-export type Page = 'scorecard' | 'tasks'
+export type Page = 'scorecard' | 'tasks' | 'methodology'
 type LoadState = { kind: 'loading' } | { kind: 'failed'; message: string } | { kind: 'ready'; dataset: Dataset }
 type MainView = (typeof chartViews)[number]
 type ResultsColumn = 'setup' | 'equalProblem' | 'equalPr' | 'seriousCaught' | 'repeatedMisses' | 'cost' | 'tokens' | 'refuted' | 'completed'
@@ -31,12 +31,14 @@ const controlLabels: Record<Task['control'], string> = { 'audited-clean': 'Audit
 export function Explorer() {
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
   const [reload, setReload] = useState(0)
-  const page: Page = useMatch({ from: '/_explorer/tasks', shouldThrow: false }) ? 'tasks' : 'scorecard'
+  const tasksPage = useMatch({ from: '/_explorer/tasks', shouldThrow: false })
+  const methodologyPage = useMatch({ from: '/_explorer/methodology', shouldThrow: false })
+  const page: Page = tasksPage ? 'tasks' : methodologyPage ? 'methodology' : 'scorecard'
   const hash = useLocation({ select: location => location.hash })
   const search = useSearch({ from: '/_explorer' })
   const navigate = useNavigate()
   // A state change keeps the section in the link but must not scroll the page to it.
-  const onSearch = (patch: ExplorerSearch, section?: Section) => navigate({ to: page === 'tasks' ? '/tasks' : '/', search: current => ({ ...current, ...patch }),
+  const onSearch = (patch: ExplorerSearch, section?: Section) => navigate({ to: page === 'scorecard' ? '/' : `/${page}`, search: current => ({ ...current, ...patch }),
     hash: section ?? true, replace: true, resetScroll: false, hashScrollIntoView: false })
   useEffect(() => {
     if (state.kind === 'ready' && hash) document.getElementById(hash)?.scrollIntoView()
@@ -49,7 +51,7 @@ export function Explorer() {
     return () => { cancelled = true }
   }, [reload])
   const loading = <div className="loading"><Loader /><Text>Loading benchmark evidence…</Text></div>
-  if (page === 'scorecard' && hash === 'tasks') return <><Navigate to="/tasks" replace />{loading}</>
+  if (page === 'scorecard' && (hash === 'tasks' || hash === 'methodology')) return <><Navigate to={`/${hash}`} replace />{loading}</>
   if (state.kind === 'loading') return loading
   if (state.kind === 'failed') return <Container size="sm" py={100}><Alert color="red" title="Benchmark unavailable">{state.message}</Alert><Button mt="md" onClick={() => setReload(value => value + 1)}>Retry</Button></Container>
   return <Dashboard dataset={state.dataset} page={page} search={search} onSearch={onSearch} />
@@ -165,12 +167,11 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
     concern && { label: `Task concern: ${concern}`, clear: () => setConcern(null) }, findingConcern && { label: `Findings: ${findingConcern}`, clear: () => setFindingConcern(null) },
   ].flatMap(item => item ? [item] : [])
   const hero = heroCounts(dataset)
-  const current = page === 'tasks' ? 'tasks' : hash === 'methodology' ? 'methodology' : 'scorecard'
   return <>
     <header className="site-header"><Container size="xl" className="nav-inner">
       <Link className="brand" to="/" aria-label="codereviewbench home"><span className="brand-mark"><CodeXml size={22} strokeWidth={2} /></span><span>code<span className="brand-review">review</span>bench<span className="brand-dot">.</span></span></Link>
       <div className="header-links">
-        <nav className="top-nav" aria-label="Main navigation"><Link className="section-link" data-current={current === 'scorecard' || undefined} to="/" hash="scorecard" resetScroll={false} activeOptions={{ includeHash: true }}>Scorecard</Link><Link to="/tasks">Tasks</Link><Link className="section-link" data-current={current === 'methodology' || undefined} to="/" hash="methodology" resetScroll={false} activeOptions={{ includeHash: true }}>Methodology</Link></nav>
+        <nav className="top-nav" aria-label="Main navigation"><Link className="section-link" data-current={page === 'scorecard' || undefined} to="/" hash="scorecard" resetScroll={false} activeOptions={{ includeHash: true }}>Scorecard</Link><Link to="/tasks">Tasks</Link><Link to="/methodology">Methodology</Link></nav>
         <a className="github-link" href="https://github.com/kamui/code-review-bench" target="_blank" rel="noreferrer" aria-label="GitHub repository">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4" />
@@ -346,7 +347,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
         </Tabs>
       </section>}
 
-      {page === 'scorecard' && <section id="methodology" className="methodology-section"><div><Title order={2}>What the numbers mean</Title><Text className="section-lede" maw={620}>Finding a real problem, giving a useful fix, and avoiding false alarms are different skills. We keep them visible separately.</Text></div>
+      {page === 'methodology' && <section id="methodology" className="methodology-section"><div><p className="eyebrow">Methodology</p><Title order={2}>What the numbers mean</Title><Text className="section-lede" maw={620}>Finding a real problem, giving a useful fix, and avoiding false alarms are different skills. We keep them visible separately.</Text></div>
         <div className="methodology-grid">
           <article className="principle"><span className="principle-icon" aria-hidden="true"><Crosshair size={17} strokeWidth={2} /></span><h3>Detection, two averages, three bands</h3><p>Each reference problem counts once per review. Recovery is averaged over a PR's scheduled trials, then reported with problems weighted equally and with PRs weighted equally, for serious, other-material and unknown-impact references. The chart plots the band and average you select.</p></article>
           <article className="principle"><span className="principle-icon" aria-hidden="true"><ShieldCheck size={17} strokeWidth={2} /></span><h3>Serious means the implementer had to know</h3><p>A reference problem is serious when the implementer has to be made aware of it before release. If it ships without them knowing, the review has failed. Once aware, they may fix it, or accept it and document it. Other material is a real problem that earns credit when a review raises it but does not have to be raised. The label decides which band counts a problem and changes no score.</p></article>
@@ -354,12 +355,12 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
           <article className="principle"><span className="principle-icon" aria-hidden="true"><FileCheck2 size={17} strokeWidth={2} /></span><h3>Clean controls are audited</h3><p>A PR with no reference problem tests false alarms only after an independent audit and a saved ruling. The audit reads the change and every saved review comment on it. A comment that several reviews raise is a claim to test, so a disputed path that can be run is run. Each control's record says what its audit covered.</p></article>
           <article className="principle"><span className="principle-icon" aria-hidden="true"><Grid3x3 size={17} strokeWidth={2} /></span><h3>Separate dimensions, no blended score</h3><p>Delivery, claim reliability, remedy sufficiency and safety, audited controls, advice benefit, cost and time are reported beside detection. Refuted claims and fixes never change detection, and nothing combines them into one rank.</p></article>
           <article className="principle"><span className="principle-icon" aria-hidden="true"><EyeOff size={17} strokeWidth={2} /></span><h3>Unknown stays unknown</h3><p>Unresolved detection outcomes receive zero credit, with the affected problems and decisions explained. This does not adjudicate them as misses. Unknown impact stays in its own band; measures blocked by missing judgments, unassessed remedies or unaudited controls are unavailable with their reasons. Candidates wait for a saved human ruling. Saved reviews, failures and rulings stay linked from every setup and PR.</p></article></div>
-        <h3 className="glossary-title">Terms used on this page</h3>
+        <h3 className="glossary-title">Terms used on the scorecard</h3>
         <dl className="glossary">
           <div><dt>Review setup</dt><dd>A review method run on one model at one effort, with its client and settings.</dd></div>
           <div><dt>Scheduled trial</dt><dd>One planned run of a setup on a PR. Replacement attempts after an infrastructure failure stay inside it.</dd></div>
           <div><dt>Admitted review</dt><dd>A trial whose last attempt delivered a usable review.</dd></div>
-          <div><dt>Reference problem</dt><dd>An accepted problem, backed by a saved ruling, that reviews are checked against. The set can be incomplete.</dd></div>
+          <div><dt>Known problem</dt><dd>A reference problem: an accepted problem, backed by a saved ruling, that reviews are checked against. The set can be incomplete.</dd></div>
           <div><dt>Candidate</dt><dd>A problem a review reported that is not yet a reference. It earns no credit until a human rules on it.</dd></div>
           <div><dt>Impact band</dt><dd>Serious, other material, or unknown. Unknown is never treated as low impact.</dd></div>
           <div><dt>Refuted or unproven</dt><dd>Evidence contradicts a refuted claim. An unproven claim lacks the evidence to stand and is not proven false.</dd></div>
