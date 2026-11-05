@@ -52,6 +52,8 @@ export const setupLabel = (configuration: Configuration) => Object.values(setupP
 const metricOf = (summary: Summary, axis: Axis) => axis === 'time' ? summary.time ? summary.time.median / 60 : null : summary[axis]
 const boundedOn = (summary: Summary, axis: Axis) => (axis === 'cost' || axis === 'tokens') && summary.card[axis].perTrial.kind === 'atLeast'
 
+const stripValue = (text: string) => text === 'Unavailable' ? 'strip-value missing' : 'strip-value'
+
 function formatMetric(axis: Axis, value: number | null, starred: boolean, bounded = false, digits = 1) {
   if (value === null) return 'Unavailable'
   const text = `${bounded ? '≥ ' : ''}${axis === 'cost' ? money(value) : axis === 'tokens' ? compact(value) : axis === 'time' ? duration(value * 60) : axis === 'doubt' ? percent(value, digits) : value.toFixed(2)}`
@@ -127,7 +129,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
           : <Models points={points} measure={measure} onSelect={onSelect} interactions={interactions} />}
     {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={measure} axes={view === 'models' ? [] : view === 'tradeoff' ? [axis, pair] : [axis]} place={hovered} />}
     {view === 'tradeoff' && methodTops.size > 0 && <div className="method-strip">
-      <div className="strip-row strip-head" aria-hidden="true"><span>Review method</span><span>Top setup</span><span>Found</span><span>{shortAxis[axis]}</span><span>{shortAxis[pair]}</span></div>
+      <div className="strip-row strip-head" aria-hidden="true"><span>Review method</span><span>Top setup (most found)</span><span>Found</span><span>{shortAxis[axis]}</span><span>{shortAxis[pair]}</span></div>
       <ul aria-label="Each review method's top setup, from the method that finds the most">{[...methodTops].map(([method, top]) => {
         const { configuration } = top.summary, { model, effort } = setupParts(configuration)
         const second = metricOf(top.summary, pair), secondText = formatMetric(pair, second, top.starred, boundedOn(top.summary, pair), 0)
@@ -137,10 +139,10 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
           onMouseEnter={() => { preview(method)(); linked?.point(configuration.id) }} onMouseLeave={() => { preview(null)(); linked?.point(null) }}
           onFocus={() => { preview(method)(); linked?.point(configuration.id) }} onBlur={() => { preview(null)(); linked?.point(null) }}
           onClick={() => setSpotlight(current => current?.pinned && current.method === method ? null : { method, pinned: true })}>
-          <span className="strip-method"><Mark configuration={configuration} size={11} />{method}</span>
+          <span className="strip-method"><Mark configuration={configuration} size={11} />{method}{configuration.experimental && <span className="row-tag">Experiment</span>}</span>
           <span className="strip-model"><VendorMark configuration={configuration} />{model}{effort && effort !== 'High' && <span className="measure-effort"> · {effort}</span>}</span>
-          <span className="strip-value" data-label="Found"><Score summary={top.summary} /></span><span className="strip-value" data-label={shortAxis[axis]}>{first}</span>
-          <span className="strip-value" data-label={shortAxis[pair]}>{secondText}</span></button></li>
+          <span className="strip-value" data-label="Found"><Score summary={top.summary} /></span><span className={stripValue(first)} data-label={shortAxis[axis]}>{first}</span>
+          <span className={stripValue(secondText)} data-label={shortAxis[pair]}>{secondText}</span></button></li>
       })}</ul></div>}
     {points.length > 0 && view !== 'models' && (view !== 'tradeoff' || bounded || aside) && <ul className="chart-keys" aria-label="Chart key">
       {view === 'setups' && <li><span className="whisker-key" aria-hidden="true" />Range with any one PR left out</li>}
