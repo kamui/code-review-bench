@@ -6,7 +6,6 @@ import type { Dataset } from '../lib/data'
 import { assessment, build, claim, claims, family, preExistingScorecardFixture, remedy, review, scorecardFixture, task } from '../lib/fixture'
 import { summarize } from '../lib/metrics'
 import type { DetectionView } from '../lib/metrics'
-import type { OverviewSort } from '../lib/scoring'
 import { leaderboard, matched, scorecard } from '../lib/scoring'
 import { Chart } from './Chart'
 import { PreExistingCatalog } from './EvidenceDrawer'
@@ -42,7 +41,7 @@ function panels(dataset: Dataset, taskIds = dataset.tasks.map(item => item.id)) 
   const selected = dataset.configurations.filter(configuration => !configuration.experimental)
   const board = leaderboard(dataset, { selected: selected.map(configuration => configuration.id), candidateTaskIds: taskIds, concern: null })
   return scorecardTabs.map(tab => text(renderToStaticMarkup(<MantineProvider><MethodologyViews dataset={dataset} configurations={selected} cards={board.cards}
-    selection={board.selection} detection={{ band: 'serious', estimator: 'equalProblem' }} sort={{ column: 'setup', direction: 'ascending' }} now={now} onInspect={() => {}} tab={tab} onTab={() => {}} /></MantineProvider>))).join(' ')
+    selection={board.selection} detection={{ band: 'serious', estimator: 'equalProblem' }} now={now} onInspect={() => {}} tab={tab} onTab={() => {}} /></MantineProvider>))).join(' ')
 }
 
 describe('scorecard page on the fixture', () => {
@@ -138,7 +137,7 @@ describe('scorecard page on the fixture', () => {
   })
 
   test('the task catalog mean says how many selected setups it covers and why the others are left out', () => {
-    expect(rendered).toContain('43.8% Mean of 4 of 6 selected setups. Not included: 1 scheduled trial awaits execution. (1 setup) 1 admitted review awaits assessment. (1 setup)')
+    expect(rendered).toContain('54.2% Mean of 4 of 6 selected setups. Not included: 1 scheduled trial awaits execution. (1 setup) 1 admitted review awaits assessment. (1 setup)')
     expect(rendered).toContain('Unavailable : No references in this band. (6 setups)')
   })
 
@@ -206,12 +205,13 @@ describe('pre-existing problems raised on the fixture', () => {
   test('gives each count separately for serious and for other-material problems', () => {
     const rendered = panels(fixture, ['payments', 'queue', 'docs', 'audited', 'empty'])
     expect(rendered).toContain(`Serious pre-existing problems ${columns} ce-code-review / Fixture A / High 1 Unavailable 1 : Whether a pre-existing problem was raised is unresolved.`)
-    expect(rendered).toContain('ce-code-review / Fixture B / High 1 0 0 0 0 3 / 3 0 0 ce-code-review / Fixture C')
-    expect(rendered).toContain('Claude built-in / Fixture A / High 1 3 1 3 3 3 / 3 0 0 Claude built-in / Fixture B')
-    expect(rendered).toContain(`Other material pre-existing problems ${columns} ce-code-review / Fixture A / High 1 0 0 0 0 3 / 3 0 0 ce-code-review / Fixture B / High 1 1 1 1 1 3 / 3 0 0`)
-    expect(rendered).toContain('Claude built-in / Fixture A / High 1 2 1 2 2 3 / 3 0 0 Claude built-in / Fixture B')
+    expect(rendered).toContain('ce-code-review / Fixture B / High 1 0 0 0 0 3 / 3 0 0 Claude built-in / Fixture C')
+    expect(rendered).toContain('Claude built-in / Fixture A / High 1 3 1 3 3 3 / 3 0 0 ce-code-review / Fixture B')
+    expect(rendered).toContain(`Other material pre-existing problems ${columns} ce-code-review / Fixture A / High 1 0 0 0 0 3 / 3 0 0 Claude built-in / Fixture A / High 1 2 1 2 2 3 / 3 0 0 ce-code-review / Fixture B / High 1 1 1 1 1 3 / 3 0 0`)
+    expect(rendered).toContain('Claude built-in / Fixture A / High 1 2 1 2 2 3 / 3 0 0 ce-code-review / Fixture B')
     for (const note of ['Whether a pre-existing problem was raised is unresolved. (3 values)', 'No admitted reviews for the pre-existing-problem catalog. (3 values)', 'Admitted reviews await pre-existing-problem assessment. (3 values)']) expect(rendered).toContain(note)
-    expect(rendered).toContain('Claude built-in / Fixture B / High 1 0 0 0 0 3 / 3 0 0 Claude built-in / Fixture C / High 1 Unavailable 1 : No admitted reviews for the pre-existing-problem catalog.')
+    expect(rendered).toContain('Claude built-in / Fixture B / High 1 0 0 0 0 3 / 3 0 0')
+    expect(rendered).toContain('Claude built-in / Fixture C / High 1 Unavailable 1 : No admitted reviews for the pre-existing-problem catalog.')
   })
 
   test('withholds the final counts while a candidate awaits admission, for a label with no problem and for a selection with none', () => {
@@ -234,45 +234,40 @@ describe('overview', () => {
   const dashboard = markup(fixture, 'scorecard')
   const shown = text(dashboard)
   const setups = (rendered: string) => [...rendered.matchAll(/aria-label="([^"]+?)\. Inspect evidence"/g)].map(match => match[1])
-  function overview(sort: OverviewSort) {
-    const selected = fixture.configurations.filter(configuration => !configuration.experimental)
-    const board = leaderboard(fixture, { selected: selected.map(item => item.id), candidateTaskIds: fixture.tasks.map(item => item.id), concern: null })
-    const summaries = selected.flatMap(configuration => board.cards.flatMap(card => card.configurationId === configuration.id
-      ? [summarize(configuration, card, { band: 'all', estimator: 'equalProblem' }, { kind: 'unavailable', reason: 'Not compared.' })] : []))
-    return renderToStaticMarkup(<MantineProvider><Overview summaries={summaries} detection={{ band: 'all', estimator: 'equalProblem' }} sort={sort} onSort={() => {}} onSelect={() => {}} /></MantineProvider>)
-  }
+  const selected = fixture.configurations.filter(configuration => !configuration.experimental)
+  const board = leaderboard(fixture, { selected: selected.map(item => item.id), candidateTaskIds: fixture.tasks.map(item => item.id), concern: null })
+  const summaries = selected.flatMap(configuration => board.cards.flatMap(card => card.configurationId === configuration.id
+    ? [summarize(configuration, card, { band: 'all', estimator: 'equalProblem' }, { kind: 'unavailable', reason: 'Not compared.' })] : []))
+  const overview = renderToStaticMarkup(<MantineProvider><Overview summaries={summaries} detection={{ band: 'all', estimator: 'equalProblem' }}
+    matching={{ included: 0, excluded: 0 }} basis={{ problems: 9, prs: 6 }} onSelect={() => {}} /></MantineProvider>)
+  const card = (index: number) => setups(overview).slice(index * selected.length, (index + 1) * selected.length)
 
-  test('is the default view, sorted by detection, and hides the detection axis control', () => {
-    expect(shown).toContain('Sorted by known problems found, problems weighted equally, most first.')
+  test('is the default view and leads with serious problems found against cost, switchable to refuted or unproven claims', () => {
+    expect(shown).toContain('Serious problems found against cost per trial')
     expect(dashboard).not.toContain('Compare detection against')
-    expect(dashboard).toMatch(/aria-sort="descending"[^>]*>(?:<[^>]+>)*<span class="overview-title">Known problems found/)
-    expect(setups(dashboard).slice(0, 6)).toEqual(['ce-code-review / Fixture A / High', 'Claude built-in / Fixture A / High', 'ce-code-review / Fixture B / High',
+    expect(text(overview)).toContain('The 9 known problems weigh the same, so one problem caught in every review is 11.1 points.')
+  })
+
+  test('ranks each measure in its own chart, in that measure\'s order, with setups lacking a value last', () => {
+    expect(text(overview)).toContain('each chart ranks the setups by one measure, on its own scale and in its own order; a setup without a value comes last.')
+    expect(card(0)).toEqual(['ce-code-review / Fixture A / High', 'Claude built-in / Fixture A / High', 'ce-code-review / Fixture B / High',
       'Claude built-in / Fixture C / High', 'ce-code-review / Fixture C / High', 'Claude built-in / Fixture B / High'])
-    expect(shown).toContain('Problem claims per review Unavailable 1 : 4 admitted reviews were graded before these labels.')
-    expect(shown).toContain('Refuted or unproven 22.2%')
-    expect(shown).toContain('Cost per trial ≥ $0.37')
-    expect(shown).toContain('Refuted or unproven: Share of admitted reviews with at least one refuted or unproven claim. Hatched: reviews whose only doubt is an unresolved claim.')
+    expect(card(3)).toEqual(['Claude built-in / Fixture C / High', 'ce-code-review / Fixture B / High', 'ce-code-review / Fixture C / High',
+      'Claude built-in / Fixture A / High', 'ce-code-review / Fixture A / High', 'Claude built-in / Fixture B / High'])
+    expect(overview).toContain('aria-label="Cost per trial, lowest first"')
+    expect(text(overview)).toContain('Unavailable 1 : 4 admitted reviews were graded before these labels.')
+    expect(text(overview)).toContain('22.2%')
+    expect(text(overview)).toContain('≥ $0.37')
   })
 
   test('the claims breakdown names each label and rate, and for a problem the known problems of its band caught', () => {
-    expect(shown).toContain('Problem, other material 0.33 per review, Other material known problems caught 2 of 3')
-    expect(shown).toMatch(/Minor defect 0\.17 per review(, Suggestion|\s)/)
-  })
-
-  test('a header sort states its rule and keeps setups without the value last in both directions', () => {
-    const cheapest = overview({ column: 'cost', direction: 'ascending' }), dearest = overview({ column: 'cost', direction: 'descending' })
-    expect(text(cheapest)).toContain('Sorted by cost per scheduled trial, lowest first. A lower-bound cost sorts by its bound. Setups without a value come last.')
-    expect(setups(cheapest)).toEqual(['Claude built-in / Fixture C / High', 'ce-code-review / Fixture B / High', 'ce-code-review / Fixture C / High',
-      'Claude built-in / Fixture A / High', 'ce-code-review / Fixture A / High', 'Claude built-in / Fixture B / High'])
-    expect(setups(dearest)).toEqual(['ce-code-review / Fixture A / High', 'Claude built-in / Fixture A / High', 'ce-code-review / Fixture C / High',
-      'ce-code-review / Fixture B / High', 'Claude built-in / Fixture C / High', 'Claude built-in / Fixture B / High'])
-    expect(cheapest).toMatch(/aria-sort="ascending"[^>]*>(?:<[^>]+>)*<span class="overview-title">Cost per trial/)
-    expect(text(overview({ column: 'setup', direction: 'ascending' }))).toContain('Sorted by setup name, A to Z.')
+    expect(text(overview)).toContain('Problem, other material 0.33 per review, Other material known problems caught 2 of 3')
+    expect(text(overview)).toMatch(/Minor defect 0\.17 per review(, Suggestion|\s)/)
   })
 
   test('says what to select when no setup is selected', () => {
     const empty = renderToStaticMarkup(<MantineProvider><Overview summaries={[]} detection={{ band: 'all', estimator: 'equalProblem' }}
-      sort={{ column: 'claims', direction: 'descending' }} onSort={() => {}} onSelect={() => {}} /></MantineProvider>)
+      matching={{ included: 0, excluded: 0 }} basis={{ problems: 0, prs: 0 }} onSelect={() => {}} /></MantineProvider>)
     expect(empty).toContain('role="status"')
     expect(text(empty)).toContain('Select at least one review method and model.')
   })

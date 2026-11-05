@@ -31,7 +31,7 @@ export function linearScale(values: number[]): Scale {
 /** A square-root scale from zero spreads values that crowd near zero while keeping their order. */
 export const sqrtScale = (values: number[]): Scale => ({ ...linearScale(values), kind: 'sqrt' })
 
-export function ticks(scale: Scale): number[] {
+export function ticks(scale: Scale, dense = false): number[] {
   if (scale.kind === 'sqrt') {
     const grid: number[] = []
     for (let exponent = Math.floor(Math.log10(scale.max)) - 2; exponent <= Math.ceil(Math.log10(scale.max)); exponent++)
@@ -47,7 +47,7 @@ export function ticks(scale: Scale): number[] {
     return Array.from({ length: Math.round(scale.max / step) + 1 }, (_, index) => clean(index * step))
   }
   const decades = Math.log10(scale.max / scale.min)
-  const multiples = decades <= 2.2 ? [1, 2, 5] : [1]
+  const multiples = dense || decades <= 2.2 ? [1, 2, 5] : [1]
   const values: number[] = []
   for (let exponent = Math.floor(Math.log10(scale.min)); exponent <= Math.ceil(Math.log10(scale.max)); exponent++) {
     for (const multiple of multiples) {
@@ -87,7 +87,7 @@ export function placeLabels(requests: LabelRequest[], obstacles: Box[], bounds: 
   const taken = [...obstacles]
   const placed: LabelPlacement[] = []
   for (const request of requests) {
-    const found = [10, 24, 40, 58, 76].flatMap(distance => {
+    const found = [12, 24, 40, 58, 76].flatMap(distance => {
       const diagonal = distance * 0.72
       const candidates: [number, number, LabelPlacement['anchor']][] = [
         [distance, 0, 'start'], [-distance, 0, 'end'], [diagonal, -diagonal, 'start'], [diagonal, diagonal, 'start'],
@@ -97,7 +97,7 @@ export function placeLabels(requests: LabelRequest[], obstacles: Box[], bounds: 
         const x = request.x + dx, y = request.y + dy
         const left = anchor === 'start' ? x : anchor === 'end' ? x - request.width : x - request.width / 2
         const box = { left: left - 2, top: y - request.height / 2 - 1, right: left + request.width + 2, bottom: y + request.height / 2 + 1 }
-        return { id: request.id, x, y, anchor, box, leader: distance > 10 }
+        return { id: request.id, x, y, anchor, box, leader: distance > 12 }
       })
     }).find(candidate => candidate.box.left >= bounds.left && candidate.box.right <= bounds.right &&
       candidate.box.top >= bounds.top && candidate.box.bottom <= bounds.bottom && !taken.some(box => overlaps(box, candidate.box)))
