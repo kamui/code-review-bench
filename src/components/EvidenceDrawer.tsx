@@ -84,7 +84,7 @@ function InspectionBody({ dataset, results, band, estimator, configuration, task
   const novel = currentTask ? pendingCandidates(dataset, [currentTask.id], now) : []
   return <Stack gap="lg">
     {configuration && <><SetupResults result={results.find(item => item.configuration.id === configuration.id)} band={band} estimator={estimator} />
-      <Stack gap={4}>{!configuration.builtin && <Group gap="xs"><Badge variant="outline" color="gray" radius="sm">{skillReleaseLabel([configuration])}</Badge></Group>}<Disclosure title="Run notes"><div className="disclosure-body">
+      <Stack gap={4}>{!configuration.builtin && <Group gap="xs"><Tag>{skillReleaseLabel([configuration])}</Tag></Group>}<Disclosure title="Run notes"><div className="disclosure-body">
         <Text size="sm">{configuration.note}</Text>
         <ul className="source-links">
           {Array.from(new Set(configuration.skillReleases.map(release => release.provenanceUrl))).map(url => <li key={url}><a href={url} target="_blank" rel="noreferrer">Skill release provenance<ExternalLink size={12} aria-hidden="true" /></a></li>)}
