@@ -215,7 +215,7 @@ function Scatter({ points, dimensions, axis, scale, frontier, showAllLabels, hov
   const segment = (x1: number, y1: number, x2: number, y2: number) =>
     ({ left: Math.min(x1, x2) - 2, top: Math.min(y1, y2) - 2, right: Math.max(x1, x2) + 2, bottom: Math.max(y1, y2) + 2 })
   const obstacles = [
-    ...ordered.map(point => ({ left: px(point.x) - 8, top: py(point.y) - 8, right: px(point.x) + 8, bottom: py(point.y) + 8 })),
+    ...ordered.map(point => ({ left: px(point.x) - 10, top: py(point.y) - 10, right: px(point.x) + 10, bottom: py(point.y) + 10 })),
     ...steps.slice(1).flatMap((point, index) => {
       const previous = steps[index]!
       return [segment(px(previous.x), py(previous.y), px(point.x), py(previous.y)), segment(px(point.x), py(previous.y), px(point.x), py(point.y))]
@@ -308,7 +308,7 @@ function MethodPanel({ members, context, axis, scale, labelText, onSelect, inter
   const first = members[0]!.summary.configuration
   const labels = width ? placeLabels([...members].sort((left, right) => right.y - left.y).map(point => ({
     id: point.summary.configuration.id, x: px(point.x), y: py(point.y), width: textWidth(labelText(point.summary.configuration)), height: 14,
-  })), members.map(point => ({ left: px(point.x) - 8, top: py(point.y) - 8, right: px(point.x) + 8, bottom: py(point.y) + 8 })),
+  })), [...members, ...context].map(point => ({ left: px(point.x) - 10, top: py(point.y) - 10, right: px(point.x) + 10, bottom: py(point.y) + 10 })),
   { left: plot.left + 2, right: plot.right, top: 2, bottom: plot.bottom - 2 }) : []
   return <div role="listitem" className="method-panel">
     <div className="panel-head"><span className="configuration-name"><Mark configuration={first} size={10} />{setupParts(first).method}</span>
