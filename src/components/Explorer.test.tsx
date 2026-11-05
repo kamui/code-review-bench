@@ -240,7 +240,7 @@ describe('overview', () => {
     ? [summarize(configuration, card, { band: 'all', estimator: 'equalProblem' }, { kind: 'unavailable', reason: 'Not compared.' })] : []))
   const overview = renderToStaticMarkup(<MantineProvider><Overview summaries={summaries} detection={{ band: 'all', estimator: 'equalProblem' }} axis="cost"
     matching={{ included: 0, excluded: 0 }} basis={{ problems: 9, known: 9, prs: 6, awaiting: 0 }} onSelect={() => {}} /></MantineProvider>)
-  const measureCards = overview.slice(overview.indexOf('</section>', overview.indexOf('id="measure-tradeoff"')))
+  const measureCards = overview.slice(overview.indexOf('</section>', overview.indexOf('id="measure-lead"')))
   const card = (index: number) => setups(measureCards).slice(index * selected.length, (index + 1) * selected.length)
 
   test('is the default view and leads with serious problems found against cost, plotted against the measure every view shares', () => {
@@ -249,11 +249,9 @@ describe('overview', () => {
     expect(text(overview)).toContain('The 9 known problems weigh the same, so one problem caught in every review is 11.1 points.')
   })
 
-  test('leads with one group per review method, starting with the method whose setup finds the most, each listing its models from most found to least', () => {
-    expect(shown).toContain('Serious problems found and cost per trial, by review method')
-    expect(setups(overview).slice(0, 4)).toEqual(['ce-code-review / Fixture A / High: 85.2%, Cost per trial $2.50',
-      'ce-code-review / Fixture B / High: 25.9%, Cost per trial ≥ $0.37', 'Claude built-in / Fixture A / High: 77.8%, Cost per trial $1.20',
-      'Claude built-in / Fixture C / High: 0.0%, Cost per trial $0.10'])
+  test('the lead chart key lists review methods from most found, each with its top setup', () => {
+    expect(text(overview)).toContain('The key lists review methods from most found, each with its top setup.')
+    expect(text(overview)).toMatch(/ce-code-review Fixture A 85% · \$2\.50 .*Claude built-in Fixture A 78% · \$1\.20/)
   })
 
   test('ranks each measure in its own chart, in that measure\'s order, with setups lacking a value last', () => {
