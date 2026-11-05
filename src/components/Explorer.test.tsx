@@ -42,7 +42,7 @@ function panels(dataset: Dataset, taskIds = dataset.tasks.map(item => item.id)) 
   const selected = dataset.configurations.filter(configuration => !configuration.experimental)
   const board = leaderboard(dataset, { selected: selected.map(configuration => configuration.id), candidateTaskIds: taskIds, concern: null })
   return scorecardTabs.map(tab => text(renderToStaticMarkup(<MantineProvider><MethodologyViews dataset={dataset} configurations={selected} cards={board.cards}
-    selection={board.selection} detection={{ band: 'serious', estimator: 'equalProblem' }} now={now} onInspect={() => {}} tab={tab} onTab={() => {}} /></MantineProvider>))).join(' ')
+    selection={board.selection} detection={{ band: 'serious', estimator: 'equalProblem' }} sort={{ column: 'setup', direction: 'ascending' }} now={now} onInspect={() => {}} tab={tab} onTab={() => {}} /></MantineProvider>))).join(' ')
 }
 
 describe('scorecard page on the fixture', () => {
@@ -242,22 +242,21 @@ describe('overview', () => {
     return renderToStaticMarkup(<MantineProvider><Overview summaries={summaries} detection={{ band: 'all', estimator: 'equalProblem' }} sort={sort} onSort={() => {}} onSelect={() => {}} /></MantineProvider>)
   }
 
-  test('is the default view, sorted by problem claims per review with unavailable values last, and hides the detection axis control', () => {
-    expect(shown).toContain('Sorted by problem claims per review, most first. Setups without a value come last.')
+  test('is the default view, sorted by detection, and hides the detection axis control', () => {
+    expect(shown).toContain('Sorted by known problems found, problems weighted equally, most first.')
     expect(dashboard).not.toContain('Compare detection against')
-    expect(dashboard).toMatch(/aria-sort="descending"[^>]*>(?:<[^>]+>)*<span class="overview-title">Problem claims per review/)
+    expect(dashboard).toMatch(/aria-sort="descending"[^>]*>(?:<[^>]+>)*<span class="overview-title">Known problems found/)
     expect(setups(dashboard).slice(0, 6)).toEqual(['ce-code-review / Fixture A / High', 'Claude built-in / Fixture A / High', 'ce-code-review / Fixture B / High',
-      'ce-code-review / Fixture C / High', 'Claude built-in / Fixture B / High', 'Claude built-in / Fixture C / High'])
+      'Claude built-in / Fixture C / High', 'ce-code-review / Fixture C / High', 'Claude built-in / Fixture B / High'])
     expect(shown).toContain('Problem claims per review Unavailable 1 : 4 admitted reviews were graded before these labels.')
     expect(shown).toContain('Refuted or unproven 22.2%')
     expect(shown).toContain('Cost per trial ≥ $0.37')
     expect(shown).toContain('Refuted or unproven: Share of admitted reviews with at least one refuted or unproven claim. Hatched: reviews whose only doubt is an unresolved claim.')
   })
 
-  test('each claim segment names its label and rate, and a problem segment the known problems of its band caught', () => {
-    expect(dashboard).toContain('aria-label="Problem, other material · 0.33 claims per review · caught 2 of 3 other material known problems"')
-    expect(dashboard).toContain('aria-label="Minor defect · 0.17 claims per review"')
-    expect(dashboard).not.toMatch(/aria-label="Minor defect[^"]*caught/)
+  test('the claims breakdown names each label and rate, and for a problem the known problems of its band caught', () => {
+    expect(shown).toContain('Problem, other material 0.33 per review, Other material known problems caught 2 of 3')
+    expect(shown).toMatch(/Minor defect 0\.17 per review(, Suggestion|\s)/)
   })
 
   test('a header sort states its rule and keeps setups without the value last in both directions', () => {
@@ -284,12 +283,12 @@ describe('chart', () => {
 
   test('plots the selected band and average and names the setups it cannot plot', () => {
     const serious = chart(fixture, { band: 'serious', estimator: 'equalProblem' })
-    expect(serious).toContain('Serious detection, problems weighted equally')
-    expect(serious).toContain('Rows are ordered by serious detection, problems weighted equally.')
+    expect(serious).toContain('Serious problems found, problems weighted equally')
+    expect(serious).toContain('Rows are ordered by serious problems found, problems weighted equally.')
     expect(serious).toContain('sensitivity to these PRs, not a confidence interval')
-    expect(serious).toContain('Not plotted, serious detection, problems weighted equally unavailable: 1 scheduled trial awaits execution. (1 setup) 1 admitted review awaits assessment. (1 setup)')
-    expect(serious).toContain('Cost per scheduled trial')
-    expect(chart(fixture, { band: 'serious', estimator: 'equalPr' })).toContain('Serious detection, PRs weighted equally')
+    expect(serious).toContain('Not plotted, serious problems found, problems weighted equally unavailable: 1 scheduled trial awaits execution. (1 setup) 1 admitted review awaits assessment. (1 setup)')
+    expect(serious).toContain('Cost per trial')
+    expect(chart(fixture, { band: 'serious', estimator: 'equalPr' })).toContain('Serious problems found, PRs weighted equally')
   })
 
   test('plots unresolved detection with numbered table notes and an explanation in every chart view', () => {
@@ -323,7 +322,7 @@ describe('chart', () => {
     const dataset = build([subject], { a: [[subject, [review(subject, ['s'], { cost: null })]]] })
     const models = chart(dataset, { band: 'serious', estimator: 'equalProblem' }, 'models')
     expect(models).toContain('100.0%')
-    expect(models).toContain('No cost per scheduled trial for a (1 attempt has no recorded usage.).')
+    expect(models).toContain('No cost per trial for a (1 attempt has no recorded usage.).')
   })
 
   test('a lower-bound cost is shown with its reason in the table and plotted as a bound outside the frontier', () => {
@@ -337,15 +336,15 @@ describe('chart', () => {
     expect(whole).toContain('≥ marks a lower bound where usage was only partly recorded')
     const setups = chart(dataset, { band: 'all', estimator: 'equalProblem' })
     expect(setups).toContain('a 100.0% ≥ $0.75 b On frontier 50.0% $1.00')
-    expect(setups).toContain('Hollow marks show a lower bound of cost per scheduled trial')
-    expect(setups).not.toContain('No cost per scheduled trial for a')
+    expect(setups).toContain('Hollow marks show a lower bound of cost per trial')
+    expect(setups).not.toContain('No cost per trial for a')
   })
 
   test('an unlabelled dataset leaves serious detection unavailable instead of falling back to all references', () => {
     const subject = task('pr', [family('u1'), family('u2')])
     const unlabelled = build([subject], { a: [[subject, [review(subject, ['u1'])]]], b: [[subject, [review(subject, ['u1', 'u2'])]]] })
     const serious = chart(unlabelled, { band: 'serious', estimator: 'equalProblem' })
-    expect(serious).toContain('Serious detection, problems weighted equally is unavailable')
+    expect(serious).toContain('Serious problems found, problems weighted equally is unavailable')
     expect(serious).toContain('No references in this band. (2 setups)')
     expect(serious).toContain('No other impact band or average is substituted.')
     expect(serious).not.toContain('%')
@@ -361,7 +360,7 @@ describe('chart', () => {
     expect(everyone).toContain('unavailable')
     expect(everyone).toContain('(No PR is commonly admitted and sufficiently assessed.)')
     const delivered = chart(fixture, { band: 'serious', estimator: 'equalProblem' }, 'setups', 'refuted', ['silent', 'waiting', 'ungraded'])
-    expect(delivered).toContain('Refuted claims per admitted review on matched PRs')
+    expect(delivered).toContain('Refuted claims per review on matched PRs')
     expect(delivered).toContain('Refuted claims are compared on the 6 of 6 selected PRs')
     expect(delivered).toContain('0.33')
     expect(delivered).not.toContain('0.13')
@@ -369,7 +368,7 @@ describe('chart', () => {
 
   test('the frontier view names the two measures it compares', () => {
     expect(chart(fixture, { band: 'all', estimator: 'equalPr' }, 'tradeoff'))
-      .toContain('Frontier of all references detection, PRs weighted equally against cost per scheduled trial')
+      .toContain('Frontier of known problems found, PRs weighted equally against cost per trial')
   })
 })
 

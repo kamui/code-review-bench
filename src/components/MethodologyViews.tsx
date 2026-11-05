@@ -3,10 +3,10 @@ import type { ReactNode } from 'react'
 import { ArrowLeftRight } from 'lucide-react'
 import { Group, Paper, Select, Stack, Switch, Table, Tabs, Text, Title } from '@mantine/core'
 import type { Configuration, Dataset } from '../lib/data'
-import { bandLabels, compact, conditionDifferences, detectionLabel, duration, estimatorLabels, lowerFirst, measured, percent, perReview, points, reading, scaled, share } from '../lib/metrics'
+import { bandLabels, compact, conditionDifferences, detectionLabel, foundLabels, duration, estimatorLabels, lowerFirst, measured, percent, perReview, points, reading, scaled, share } from '../lib/metrics'
 import type { DetectionView, Reading } from '../lib/metrics'
-import { bands, candidates as pendingFamilies, conditionalMetrics, estimators, matched, orderingConflicts, pairwise, pendingCandidates, preExistingLabels, recommend, referenceCoverage } from '../lib/scoring'
-import type { ConditionalMetric, Estimator, PreExistingLabel, Scorecard, Selection } from '../lib/scoring'
+import { bands, candidates as pendingFamilies, conditionalMetrics, estimators, matched, orderingConflicts, overviewOrder, pairwise, pendingCandidates, preExistingLabels, recommend, referenceCoverage } from '../lib/scoring'
+import type { ConditionalMetric, Estimator, OverviewSort, PreExistingLabel, Scorecard, Selection } from '../lib/scoring'
 import { scorecardTabs } from '../lib/view'
 import type { Inspection, ScorecardTab, Section } from '../lib/view'
 import { ClaimLabels } from './ClaimLabels'
@@ -14,14 +14,15 @@ import { SetupName, setupLabel, setupParts } from './Chart'
 import { costNote, costText, DataTable, Disclosure, Rich, Value } from './Reading'
 import { SeriousMisses } from './SeriousMisses'
 import type { Column } from './Reading'
+import { VendorMark } from './VendorMark'
 
 const signed = (value: number) => `${value > 0 ? '+' : value < 0 ? '−' : ''}${Math.abs(value).toFixed(1)} pp`
 const span = (range: { low: number; high: number }) => `${percent(range.low * 100)} to ${percent(range.high * 100)}`
 const reasons = (counts: Record<string, number>) => Object.entries(counts).map(([reason, count]) => `${count} ${reason}`).join('; ') || 'None'
 const averages: Record<Estimator, string> = { equalProblem: 'equal problems', equalPr: 'equal PRs' }
 const matchedLabels: Record<ConditionalMetric, string> = {
-  refuted: 'Refuted claims per admitted review', unsupported: 'Unsupported claims per admitted review', unresolved: 'Unresolved claims per admitted review',
-  harmful: 'Unsafe recommendations per admitted review', clean: 'Correctly silent share of admitted control reviews',
+  refuted: 'Refuted claims per review', unsupported: 'Unproven claims per review', unresolved: 'Unresolved claims per review',
+  harmful: 'Unsafe fixes per review', clean: 'Correctly silent share of admitted control reviews',
 }
 
 function harm(card: Scorecard): Reading {
@@ -30,8 +31,8 @@ function harm(card: Scorecard): Reading {
   return { text: 'Unavailable', reason: bound.kind === 'observed' ? `${unsafe} unsafe among ${safe + unsafe} assessed remedies so far. ${bound.reason}` : bound.reason }
 }
 
-export function MethodologyViews({ dataset, configurations, cards, selection, detection, now, onInspect, tab, onTab }: {
-  dataset: Dataset; configurations: Configuration[]; cards: Scorecard[]; selection: Selection; detection: DetectionView; now: Date
+export function MethodologyViews({ dataset, configurations, cards, selection, detection, sort, now, onInspect, tab, onTab }: {
+  dataset: Dataset; configurations: Configuration[]; cards: Scorecard[]; selection: Selection; detection: DetectionView; sort: OverviewSort; now: Date
   onInspect: (inspection: Inspection, section?: Section) => void; tab: ScorecardTab; onTab: (tab: ScorecardTab) => void
 }) {
   const tabList = useRef<HTMLDivElement>(null)
@@ -44,12 +45,13 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
   const [right, setRight] = useState<string | null>(null)
   const [metric, setMetric] = useState<ConditionalMetric>('refuted')
   const [showTables, setShowTables] = useState(false)
-  const rows = configurations.flatMap(configuration => {
+  const { band, estimator } = detection
+  const byName = configurations.flatMap(configuration => {
     const card = cards.find(item => item.configurationId === configuration.id)
     return card ? [{ configuration, card }] : []
   }).sort((left, right) => left.configuration.short.localeCompare(right.configuration.short))
+  const rows = overviewOrder(byName, row => ({ name: row.configuration.short, card: row.card }), sort, band, estimator)
   type Row = (typeof rows)[number]
-  const { band, estimator } = detection
   const key = (row: Row) => row.configuration.id
   const setup: Column<Row> = { label: 'Setup', value: row => row.configuration.short, render: row => <SetupName configuration={row.configuration} /> }
   const short = (id: string) => {
@@ -85,12 +87,13 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
     { label: 'Generic advisory dossiers, benefit unmeasured', value: row => String(row.card.advice.generic) }]} />
   return <Paper withBorder radius="lg" className="methodology-panel" id="dimensions">
     <div className="dimension-head"><Title order={3}>Each measure in detail</Title>
-      <Text className="subsection-lede">Every value comes from the shared scoring kernel for the selected setups and PRs. Dimensions stay separate: there is no blended score. Rows are in name order. A numbered mark explains a value in the notes below its table.</Text></div>
+      <Text className="subsection-lede">Every value comes from the shared scoring kernel for the selected setups and PRs. Dimensions stay separate: there is no blended score. Rows follow the Overview's order. A numbered mark explains a value in the notes below its table.</Text></div>
     <Tabs value={tab} onChange={value => { const next = scorecardTabs.find(item => item === value); if (next) onTab(next) }} className="dimension-tabs">
-      <Tabs.List ref={tabList}><Tabs.Tab value="detection">Detection</Tabs.Tab><Tabs.Tab value="misses">Serious misses</Tabs.Tab><Tabs.Tab value="delivery">Delivery</Tabs.Tab><Tabs.Tab value="reliability">Claim reliability</Tabs.Tab>
-        <Tabs.Tab value="remedies">Remedies</Tabs.Tab><Tabs.Tab value="controls">Controls</Tabs.Tab><Tabs.Tab value="pre-existing">Pre-existing problems</Tabs.Tab><Tabs.Tab value="advice">Advice benefit</Tabs.Tab>
-        <Tabs.Tab value="usage">Cost and time</Tabs.Tab><Tabs.Tab value="candidates" className="tab-tools-start">Pending candidates ({novel.length + awaiting.length})</Tabs.Tab>
-        <Tabs.Tab value="comparison">Compare setups</Tabs.Tab></Tabs.List>
+      <Tabs.List ref={tabList}>
+        <Tabs.Tab value="detection" data-group="What it finds">Detection</Tabs.Tab><Tabs.Tab value="misses">Serious misses</Tabs.Tab><Tabs.Tab value="pre-existing">Pre-existing problems</Tabs.Tab>
+        <Tabs.Tab value="reliability" data-group="How right it is" className="tab-group-start">Claim reliability</Tabs.Tab><Tabs.Tab value="remedies">Remedies</Tabs.Tab><Tabs.Tab value="advice">Advice benefit</Tabs.Tab><Tabs.Tab value="controls">Controls</Tabs.Tab>
+        <Tabs.Tab value="delivery" data-group="What it takes" className="tab-group-start">Delivery</Tabs.Tab><Tabs.Tab value="usage">Cost and time</Tabs.Tab>
+        <Tabs.Tab value="candidates" data-group="Tools" className="tab-group-start tab-tools-start">Pending candidates ({novel.length + awaiting.length})</Tabs.Tab><Tabs.Tab value="comparison">Compare setups</Tabs.Tab></Tabs.List>
 
       <Tabs.Panel value="detection" ><Stack>
         <TabIntro lede="How many known problems each setup caught, averaged over its repeated runs on each PR.">Recovery of each reference problem is averaged over the PR's scheduled trials; a resolved trial without an admitted review counts as not caught. Unresolved recoveries also receive zero credit and stay in the denominator, with an annotation counting affected problems and detection decisions. Both averages are shown. Problems weighted equally is the primary average for the serious and other-material bands; the unknown and all-reference bands have no preferred average. A serious reference is one the implementer had to be made aware of before release. An other-material reference earns credit when a review raises it but did not have to be raised.</TabIntro>
@@ -103,7 +106,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
         <Text size="xs" c="dimmed" className="footnote">All labelled serious caught is the share of scheduled trials that caught every serious reference of a PR, averaged over PRs with one. A repeated serious miss is a serious reference not caught in two or more scheduled trials.</Text>
         {conflicts.length > 0 && <div><Text size="sm" mb={8}>In the {bandLabels[band].toLowerCase()} band the two averages order {conflicts.length === 1 ? 'this pair' : 'these pairs'} differently. That ordering depends on the average chosen.</Text>
           <ul className="pair-list">{conflicts.map(pair => <li key={`${pair.a}/${pair.b}`}>{short(pair.a)}<ArrowLeftRight size={14} aria-label="and" />{short(pair.b)}</li>)}</ul></div>}
-        <Disclosure title={`Counts behind ${bandLabels[band].toLowerCase()} detection`}><DataTable label={`Counts behind ${bandLabels[band].toLowerCase()} detection`} rows={rows} rowKey={key} minWidth={1000} columns={[setup,
+        <Disclosure title={`Counts behind ${lowerFirst(foundLabels[band])}`}><DataTable label={`Counts behind ${lowerFirst(foundLabels[band])}`} rows={rows} rowKey={key} minWidth={1000} columns={[setup,
           { label: 'Problems / PRs with one', value: row => `${row.card.detection[band].problems} / ${row.card.detection[band].prs}` },
           { label: 'Observed caught / determined', value: row => `${row.card.detection[band].observed.caught} / ${row.card.detection[band].observed.determined}` },
           { label: 'Admitted reviews / scheduled trials', value: row => `${row.card.detection[band].admittedOnly.admittedReviews} / ${row.card.detection[band].admittedOnly.scheduledTrials}` },
@@ -132,20 +135,20 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
 
       <Tabs.Panel value="reliability" ><Stack>
         <TabIntro lede="How often a delivered review made a claim that was wrong or not shown to be right.">Rates divide distinct claims by admitted reviews, the denominator shown beside them. Unsupported claims are not proven false. A setup with no admitted review has no rate: silence from a failed trial is not reliability. Rates stay unavailable while a trial is pending or an admitted review awaits assessment.</TabIntro>
-        <Title order={4}>Claim outcomes per admitted review</Title>
-        <DataTable label="Claim outcomes per admitted review" rows={rows} rowKey={key} minWidth={1300} columns={[setup,
+        <Title order={4}>Claim outcomes per review</Title>
+        <DataTable label="Claim outcomes per review" rows={rows} rowKey={key} minWidth={1300} columns={[setup,
           { label: 'Admitted / scheduled', value: row => `${row.card.delivery.admitted} / ${row.card.delivery.scheduled}` },
           { label: 'Assessed / admitted', value: row => `${row.card.reliability.assessed} / ${row.card.reliability.admitted}` },
-          { label: 'Items per admitted review', value: row => perReview(row.card.reliability.itemsPerAdmittedReview) },
-          { label: 'Refuted per admitted review', value: row => perReview(row.card.reliability.outcomes.refuted.perAdmittedReview) },
-          { label: 'Unsupported per admitted review', value: row => perReview(row.card.reliability.outcomes.unsupported.perAdmittedReview) },
-          { label: 'Unresolved per admitted review', value: row => perReview(row.card.reliability.outcomes.unresolved.perAdmittedReview) },
+          { label: 'Items per review', value: row => perReview(row.card.reliability.itemsPerAdmittedReview) },
+          { label: 'Refuted per review', value: row => perReview(row.card.reliability.outcomes.refuted.perAdmittedReview) },
+          { label: 'Unproven per review', value: row => perReview(row.card.reliability.outcomes.unsupported.perAdmittedReview) },
+          { label: 'Unresolved per review', value: row => perReview(row.card.reliability.outcomes.unresolved.perAdmittedReview) },
           { label: 'Reviews with a refuted claim', value: row => share(row.card.reliability.outcomes.refuted.reviewFraction) },
-          { label: 'Reviews with an unsupported claim', value: row => share(row.card.reliability.outcomes.unsupported.reviewFraction) },
-          { label: 'Scope exclusions', value: row => String(row.card.reliability.outcomes['scope-excluded'].distinct) },
-          { label: 'Repeated claims', value: row => String(row.card.reliability.duplicates) }, { label: 'Mixed items', value: row => String(row.card.reliability.mixedItems) }]} />
+          { label: 'Reviews with an unproven claim', value: row => share(row.card.reliability.outcomes.unsupported.reviewFraction) },
+          { label: 'Claims ruled out of scope', value: row => String(row.card.reliability.outcomes['scope-excluded'].distinct) },
+          { label: 'Repeated claims', value: row => String(row.card.reliability.duplicates) }, { label: 'Items with mixed outcomes', value: row => String(row.card.reliability.mixedItems) }]} />
         <Text size="xs" c="dimmed" className="footnote">Claim counts are distinct claims in assessed admitted reviews. Repeated claims count extra occurrences; mixed items hold claims with different outcomes. Item counts measure volume, not reading time.</Text>
-        <Title order={4}>Claim labels per admitted review</Title>
+        <Title order={4}>Claim labels per review</Title>
         <ClaimLabels rows={rows.map(row => ({ id: key(row), configuration: row.configuration, rates: row.card.reliability.labelsPerAdmittedReview }))} />
         <Title order={4}>Matched on commonly admitted PRs</Title>
         <Group align="end"><Select label="Matched measure" aria-label="Matched measure" value={metric} w={360} allowDeselect={false}
@@ -169,7 +172,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
           { label: 'Inventoried / admitted reviews', value: row => `${row.card.remedies.inventoried} / ${row.card.remedies.admitted}` },
           { label: 'Recommendations', value: row => String(row.card.remedies.recommendations) }, { label: 'Assessed safe', value: row => String(row.card.remedies.safe) },
           { label: 'Assessed unsafe', value: row => String(row.card.remedies.unsafe) }, { label: 'Safety unassessed', value: row => String(row.card.remedies.unassessed) },
-          { label: 'Unsafe per admitted review', value: row => harm(row.card) },
+          { label: 'Unsafe fixes per review', value: row => harm(row.card) },
           { label: 'Unsafe share of assessed remedies', value: row => share(row.card.remedies.unsafePerAssessedRemedy) },
           { label: 'Caught problems: fix sufficient', value: row => String(row.card.remedies.sufficiency.sufficient) },
           { label: 'Partial', value: row => String(row.card.remedies.sufficiency.partial) },
@@ -190,7 +193,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
             { label: 'Reviews assessed / admitted', value: row => `${row.card.preExisting.labels[label].assessed} / ${row.card.preExisting.labels[label].admitted}` },
             { label: 'Unresolved', value: row => String(row.card.preExisting.labels[label].unresolved) },
             { label: 'Pending candidates', value: row => String(row.card.preExisting.candidates.length) }]} />
-          <PreExistingMatrix label={label} rows={rows} name={name} />
+          <PreExistingMatrix label={label} rows={byName} name={name} />
         </Stack>)}
         <Text size="xs" c="dimmed">The catalog contains discovered cases, not every pre-existing fault. Assessment coverage does not establish historical audit coverage.</Text>
       </Stack></Tabs.Panel>
@@ -337,7 +340,7 @@ function PreExistingMatrix({ label, rows, name }: { label: PreExistingLabel; row
       <Table.Thead>
         <Table.Tr><Table.Th scope="col" rowSpan={2} className="pre-sticky">Problem</Table.Th>
           {groups.map((group, index) => <Table.Th key={`${group.method}-${index}`} scope="colgroup" colSpan={group.span} className="pre-method">{group.method}</Table.Th>)}</Table.Tr>
-        <Table.Tr>{rows.map(row => <Table.Th key={row.configuration.id} scope="col" data-numeric>{[setupParts(row.configuration).model, setupParts(row.configuration).effort].filter(Boolean).join(' · ')}</Table.Th>)}</Table.Tr>
+        <Table.Tr>{rows.map(row => <Table.Th key={row.configuration.id} scope="col" data-numeric><VendorMark configuration={row.configuration} />{[setupParts(row.configuration).model, setupParts(row.configuration).effort].filter(Boolean).join(' · ')}</Table.Th>)}</Table.Tr>
       </Table.Thead>
       <Table.Tbody>{problems.map(problem => <Table.Tr key={`${problem.taskId}/${problem.problemId}`}>
         <Table.Th scope="row" className="pre-sticky"><Rich text={problem.title} /><Text size="xs" c="dimmed">{name(problem.taskId)}</Text></Table.Th>

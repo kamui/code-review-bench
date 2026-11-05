@@ -44,7 +44,7 @@ describe('scorecard display', () => {
   test('plots only the selected band and average and never substitutes another', () => {
     const serious = summarize(configuration('steady'), card('steady'), { band: 'serious', estimator: 'equalProblem' }, own('steady'))
     expect(serious).toMatchObject({ detection: 100, reasons: { detection: null } })
-    expect(detectionLabel({ band: 'serious', estimator: 'equalProblem' })).toBe('Serious detection, problems weighted equally')
+    expect(detectionLabel({ band: 'serious', estimator: 'equalProblem' })).toBe('Serious problems found, problems weighted equally')
     const unlabelled = { taskIds: ['docs'], concern: null }
     const empty = summarize(configuration('steady'), card('steady', unlabelled), { band: 'serious', estimator: 'equalProblem' }, own('steady', unlabelled))
     expect(empty).toMatchObject({ detection: null, range: null, reasons: { detection: 'No references in this band.' } })

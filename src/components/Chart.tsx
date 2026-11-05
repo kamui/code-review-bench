@@ -10,6 +10,7 @@ import type { Configuration } from '../lib/data'
 import { skillReleaseLabel } from '../lib/data'
 import { ChartGuide, costNote, costStarred, Notes } from './Reading'
 import type { Note } from './Reading'
+import { VendorMark } from './VendorMark'
 
 export type ChartView = 'skills' | 'setups' | 'models' | 'tradeoff'
 type Range = { low: number; high: number } | null
@@ -32,12 +33,12 @@ export function Mark({ configuration, size = 12, hollow = false }: { configurati
 export function SetupName({ configuration, mark = true }: { configuration: Configuration; mark?: boolean }) {
   const { method, model, effort } = setupParts(configuration)
   return <span className="setup-name">{mark && <Mark configuration={configuration} size={10} />}
-    <span className="setup-name-text"><span className="setup-method">{method}</span>{model && <><span className="setup-sep"> / </span><span className="setup-model">{model}
+    <span className="setup-name-text"><span className="setup-method">{method}</span>{model && <><span className="setup-sep"> / </span><span className="setup-model"><VendorMark configuration={configuration} />{model}
       {effort && <><span className="setup-sep setup-dot"> / </span>{effort}</>}</span></>}</span></span>
 }
 
 export const axisLabels: Record<Axis, string> = {
-  cost: 'Cost per scheduled trial', tokens: 'Output tokens per scheduled trial', refuted: 'Refuted claims per admitted review on matched PRs', time: 'Median completed-trial time',
+  cost: 'Cost per trial', tokens: 'Output tokens per trial', refuted: 'Refuted claims per review on matched PRs', time: 'Median time',
 }
 const setups = (count: number) => `${count} ${count === 1 ? 'setup' : 'setups'}`
 
@@ -158,7 +159,7 @@ function SetupRows({ points, notes, measure, axis, scale, frontier, onSelect, in
         <button type="button" className="rank-row" onClick={() => onSelect(configuration.id)} {...interactions(configuration.id)}
           aria-label={`${configuration.short}: ${measure} ${percent(score)}${range ? `, ${percent(range.low)} to ${percent(range.high)} leaving one PR out` : ''}; ${axisLabels[axis]} ${formatMetric(axis, metric, starred, bounded)}${frontier.has(configuration.id) ? '; on the frontier of these two measures' : ''}. Inspect evidence`}>
           <span className="rank-name"><Mark configuration={configuration} />
-            <span><strong>{method}</strong><span className="rank-model">{model}{effort && ` · ${effort}`}
+            <span><strong>{method}</strong><span className="rank-model"><VendorMark configuration={configuration} />{model}{effort && ` · ${effort}`}
               {frontier.has(configuration.id) && <span className="frontier-tag">On frontier</span>}</span></span></span>
           <span className="rank-cell"><span className="rank-value">{percent(score)}<NoteMark summary={summary} notes={notes} /></span>
             <span className="rank-track">{scoreTicks.map(tick => <span key={tick} className="rank-grid" style={{ left: `${tick}%` }} />)}
@@ -214,7 +215,7 @@ function Scatter({ points, dimensions, axis, scale, frontier, showAllLabels, hov
   const segment = (x1: number, y1: number, x2: number, y2: number) =>
     ({ left: Math.min(x1, x2) - 2, top: Math.min(y1, y2) - 2, right: Math.max(x1, x2) + 2, bottom: Math.max(y1, y2) + 2 })
   const obstacles = [
-    ...ordered.map(point => ({ left: px(point.x) - 8, top: py(point.y) - 8, right: px(point.x) + 8, bottom: py(point.y) + 8 })),
+    ...ordered.map(point => ({ left: px(point.x) - 10, top: py(point.y) - 10, right: px(point.x) + 10, bottom: py(point.y) + 10 })),
     ...steps.slice(1).flatMap((point, index) => {
       const previous = steps[index]!
       return [segment(px(previous.x), py(previous.y), px(point.x), py(previous.y)), segment(px(point.x), py(previous.y), px(point.x), py(point.y))]
@@ -307,7 +308,7 @@ function MethodPanel({ members, context, axis, scale, labelText, onSelect, inter
   const first = members[0]!.summary.configuration
   const labels = width ? placeLabels([...members].sort((left, right) => right.y - left.y).map(point => ({
     id: point.summary.configuration.id, x: px(point.x), y: py(point.y), width: textWidth(labelText(point.summary.configuration)), height: 14,
-  })), members.map(point => ({ left: px(point.x) - 8, top: py(point.y) - 8, right: px(point.x) + 8, bottom: py(point.y) + 8 })),
+  })), [...members, ...context].map(point => ({ left: px(point.x) - 10, top: py(point.y) - 10, right: px(point.x) + 10, bottom: py(point.y) + 10 })),
   { left: plot.left + 2, right: plot.right, top: 2, bottom: plot.bottom - 2 }) : []
   return <div role="listitem" className="method-panel">
     <div className="panel-head"><span className="configuration-name"><Mark configuration={first} size={10} />{setupParts(first).method}</span>
@@ -352,7 +353,7 @@ function Models({ points, notes, measure, onSelect, interactions }: { points: Po
       const scores = members.map(point => point.summary.detection ?? 0)
       const low = Math.min(...scores), high = Math.max(...scores)
       return <div role="listitem" key={model} className="model-row">
-        <span className="model-name">{model}</span>
+        <span className="model-name"><VendorMark configuration={members[0]!.summary.configuration} />{model}</span>
         <span className="rank-track">{scoreTicks.map(tick => <span key={tick} className="rank-grid" style={{ left: `${tick}%` }} />)}
           {members.length > 1 && <span className="model-span" style={{ left: `${low}%`, width: `${high - low}%` }} />}
           {members.map((point, index) => {
