@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { groupPaths, linearScale, logScale, paretoFrontier, placeLabels, position, segmentObstacles, ticks } from './chart'
+import { groupPaths, linearScale, logScale, paretoFrontier, placeLabels, position, ticks } from './chart'
 
 describe('scales', () => {
   test('spans wide ranges in whole decades and narrow ranges on a 1-2-5 grid', () => {
@@ -46,16 +46,10 @@ describe('label placement', () => {
   })
 })
 
-describe('method paths', () => {
-  test('joins each group left to right and keeps groups apart', () => {
+describe('method groups', () => {
+  test('groups points left to right and keeps groups apart', () => {
     const points = [{ x: 3, y: 60, g: 'a' }, { x: 1, y: 70, g: 'a' }, { x: 2, y: 80, g: 'b' }, { x: 2, y: 50, g: 'a' }]
     expect(groupPaths(points, point => point.g).map(group => [group.key, group.points.map(point => point.x)]))
       .toEqual([['a', [1, 2, 3]], ['b', [2]]])
-  })
-  test('covers a line with obstacles from end to end', () => {
-    const boxes = segmentObstacles([{ x: 0, y: 0 }, { x: 70, y: 0 }], 7, 2)
-    expect(boxes.at(0)).toEqual({ left: -2, top: -2, right: 2, bottom: 2 })
-    expect(boxes.at(-1)).toEqual({ left: 68, top: -2, right: 72, bottom: 2 })
-    expect(boxes.every((box, index) => index === 0 || box.left - boxes[index - 1]!.left <= 7)).toBe(true)
   })
 })

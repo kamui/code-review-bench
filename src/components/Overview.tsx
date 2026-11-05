@@ -2,15 +2,15 @@ import { useState } from 'react'
 import { Tooltip, VisuallyHidden } from '@mantine/core'
 import type { CSSProperties, FocusEvent, MouseEvent, ReactNode } from 'react'
 import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react'
-import { linearScale, position, ticks } from '../lib/chart'
-import type { Scale } from '../lib/chart'
+import { linearScale, position, ticks, tipPlace } from '../lib/chart'
+import type { Scale, TipPlace } from '../lib/chart'
 import { bandLabels, detectionLabel, duration, estimatorLabels, lowerFirst, measured, money, perReview, reading, share } from '../lib/metrics'
 import type { DetectionView, Reading, Summary } from '../lib/metrics'
 import { labelSegments, overviewColumns, overviewFirstDirection, overviewKey, overviewOrder } from '../lib/scoring'
 import type { Band, LabelSegment, OverviewColumn, OverviewSort, Scorecard } from '../lib/scoring'
 import { Mark, reviewColor, setupParts } from './Chart'
 import { segmentClass, segmentLabels, swatch, trueSegments } from './ClaimLabels'
-import { Notes, notesFor, PeerNote, Value } from './Reading'
+import { ChartGuide, Notes, notesFor, PeerNote, Value } from './Reading'
 
 const costScale: Scale = { kind: 'log', min: 0.001, max: 10 }
 const costTicks = [0.001, 0.01, 0.1, 1, 10]
@@ -29,7 +29,7 @@ function segmentTip(card: Scorecard, segment: LabelSegment, value: number) {
   return caught.kind === 'available' ? `${text} · caught ${caught.value.caught} of ${caught.value.known} ${known}` : `${text} · ${known} caught: unavailable. ${caught.reason}`
 }
 
-type Tip = { text: string; left: number; top: number }
+type Tip = { text: string } & TipPlace
 const doubtMeaning = 'Share of admitted reviews with at least one refuted or unproven claim. Hatched: reviews whose only doubt is an unresolved claim.'
 
 const foundLabels: Record<Band, string> = { serious: 'Serious problems found', 'other-material': 'Other material problems found', unknown: 'Unknown-impact problems found', all: 'Known problems found' }
@@ -40,21 +40,29 @@ function headings(detection: DetectionView, claimsMax: number): Record<OverviewC
   return {
     setup: { title: 'Setup', short: 'Setup', measure: 'setup name', ascending: 'A to Z', descending: 'Z to A' },
     detection: { title: foundLabels[detection.band], note: estimatorLabels[detection.estimator], short: foundLabels[detection.band], measure: lowerFirst(detectionLabel(detection)), ascending: 'least first', descending: 'most first', ends: ['0%', '100%'] },
-    claims: { title: 'True claims', note: 'per review; number: problems', short: 'Problem claims per review', measure: 'problem claims per review', ascending: 'fewest first', descending: 'most first', ends: ['0', String(claimsMax)] },
+    claims: { title: 'Problem claims per review', note: 'bar adds other true claims', short: 'Problem claims per review', measure: 'problem claims per review', ascending: 'fewest first', descending: 'most first', ends: ['0', String(claimsMax)] },
     doubt: { title: 'Refuted or unproven', note: 'share of reviews', short: 'Refuted or unproven', hint: doubtMeaning, measure: 'share of reviews with a refuted or unproven claim', ascending: 'fewest first', descending: 'most first', ends: ['0%', '100%'] },
     cost: { title: 'Cost per trial', short: 'Cost per trial', measure: 'cost per scheduled trial', ascending: 'lowest first', descending: 'highest first', note: 'log scale', ends: ['$0.001', '$10'] },
     time: { title: 'Median time', short: 'Median time', measure: 'median completed-trial time', ascending: 'shortest first', descending: 'longest first', note: 'log scale', ends: ['20 s', '30 min'] },
   }
 }
 
+const keyGroups: { label: string; segments: LabelSegment[] }[] = [
+  { label: 'Problem, serious to unknown impact', segments: ['problem:serious', 'problem:other-material', 'problem:unknown'] },
+  { label: 'Minor defect', segments: ['minor-defect'] },
+  { label: 'Suggestion, four kinds', segments: ['suggestion:improvement', 'suggestion:outside-supported-use', 'suggestion:relied-on', 'suggestion:known-cause'] },
+  { label: 'Outside this change', segments: ['outside-this-change'] },
+]
+
 export function Overview({ summaries, detection, sort, onSort, onSelect }: {
   summaries: Summary[]; detection: DetectionView; sort: OverviewSort; onSort: (sort: OverviewSort) => void; onSelect: (id: string) => void
 }) {
-  const [tip, setTip] = useState<Tip | null>(null)
+  const [tipState, setTip] = useState<Tip | null>(null)
   const show = (text: string) => (event: MouseEvent<Element> | FocusEvent<Element>) => {
     const shell = event.currentTarget.closest('.overview')?.getBoundingClientRect(), box = event.currentTarget.getBoundingClientRect()
-    if (shell) setTip({ text, left: box.left + box.width / 2 - shell.left, top: box.top - shell.top })
+    if (shell) setTip({ text, ...tipPlace(shell, box, 160, Infinity) })
   }
+  const tip = { show, hide: () => setTip(null) }
   const rows = overviewOrder(summaries, summary => ({ name: summary.configuration.short, card: summary.card }), sort, detection.band, detection.estimator)
   const claimScale = linearScale(rows.map(summary => trueSegments.reduce((total, segment) => total + (measured(summary.card.reliability.labelsPerAdmittedReview[segment]) ?? 0), 0)))
   const heads = headings(detection, claimScale.max)
@@ -79,7 +87,16 @@ export function Overview({ summaries, detection, sort, onSort, onSelect }: {
     ? { column, direction: sort.direction === 'ascending' ? 'descending' : 'ascending' } : { column, direction: overviewFirstDirection[column] })
   if (!rows.length) return <div className="plot-empty" role="status"><span>Select at least one review method and model.</span></div>
   return <div className="overview" onMouseLeave={() => setTip(null)}>
-    <p className="overview-rule" aria-live="polite">{rule}</p>
+    <div className="overview-keys">
+      <ul className="label-legend" aria-label="Overview key">
+        {keyGroups.map(group => <li key={group.label}><span className="key-ramp">{group.segments.map(segment =>
+          <span key={segment} className={segmentClass('label-swatch', segment)} style={swatch(segment)} aria-hidden="true" />)}</span>{group.label}</li>)}
+        <li className="key-break"><span className="label-swatch" style={swatch('refuted')} aria-hidden="true" />Refuted or unproven</li>
+        <li><span className={segmentClass('label-swatch', 'unresolved')} style={swatch('unresolved')} aria-hidden="true" />Only doubt is unresolved</li>
+        <li className="key-break"><span className="overview-key-dot" aria-hidden="true" />Lower-bound cost</li>
+        <li><span className="overview-key-spread" aria-hidden="true" />Middle 50% of trials</li></ul>
+      <p className="overview-rule" aria-live="polite">{rule}</p>
+    </div>
     <div role="table" aria-label={`Overview of the selected setups. ${rule}`} className="overview-table">
       <div role="row" className="overview-head">{overviewColumns.map(column => {
         const heading = heads[column], current = sort.column === column
@@ -108,9 +125,9 @@ export function Overview({ summaries, detection, sort, onSort, onSelect }: {
               <Mark configuration={configuration} /><span><strong>{method}</strong><span className="rank-model">{model}{effort && ` · ${effort}`}</span><PeerNote configurations={[configuration]} className="rank-model" /></span>
             </button>
           </div>
-          <Cell label={heads.detection.short} cell={cells.detection} notes={notes} grid={shareTicks}>
+          <Cell sorted={sort.column === 'detection'} label={heads.detection.short} cell={cells.detection} notes={notes} tip={tip} grid={shareTicks}>
             {summary.detection !== null && <span className="overview-bar" style={{ width: `${summary.detection}%` }} />}</Cell>
-          <Cell label={heads.claims.short} cell={cells.claims} notes={notes} grid={ticks(claimScale).map(tick => at(claimScale, tick))} interactive>
+          <Cell sorted={sort.column === 'claims'} label={heads.claims.short} cell={cells.claims} notes={notes} tip={tip} grid={ticks(claimScale).map(tick => at(claimScale, tick))} interactive>
             {!cells.claims.reason && trueSegments.map(segment => {
               const value = measured(rates[segment]) ?? 0
               if (value <= 0) return null
@@ -121,42 +138,38 @@ export function Overview({ summaries, detection, sort, onSort, onSelect }: {
                 onMouseEnter={show(text)} onFocus={show(text)} onMouseLeave={() => setTip(null)} onBlur={() => setTip(null)}
                 style={{ ...swatch(segment), left: `${at(claimScale, start)}%`, width: `${at(claimScale, value)}%` }} />
             })}</Cell>
-          <Cell label={heads.doubt.short} cell={cells.doubt} notes={notes} grid={shareTicks} description={unresolved ? `, and ${cells.unresolved.text} whose only doubt is unresolved` : undefined}>
-            {doubt !== null && <span className="overview-segment" style={{ ...swatch('refuted'), left: 0, width: `${doubt * 100}%` }} title={`Refuted or unproven, ${cells.doubt.text} of reviews`} />}
-            {doubt !== null && unresolved !== null && unresolved > 0 && <span className={segmentClass('overview-segment', 'unresolved')} title={`Only doubt is unresolved, ${cells.unresolved.text} of reviews`}
+          <Cell sorted={sort.column === 'doubt'} label={heads.doubt.short} cell={cells.doubt} notes={notes} tip={tip} grid={shareTicks} description={unresolved ? `, and ${cells.unresolved.text} whose only doubt is unresolved` : undefined}>
+            {doubt !== null && <span className="overview-segment" style={{ ...swatch('refuted'), left: 0, width: `${doubt * 100}%` }} />}
+            {doubt !== null && unresolved !== null && unresolved > 0 && <span className={segmentClass('overview-segment', 'unresolved')}
               style={{ ...swatch('unresolved'), left: `${doubt * 100}%`, width: `${unresolved * 100}%` }} />}</Cell>
-          <Cell label={heads.cost.short} cell={cells.cost} notes={notes} grid={costTicks.map(tick => at(costScale, tick))} floor>
+          <Cell sorted={sort.column === 'cost'} label={heads.cost.short} cell={cells.cost} notes={notes} tip={tip} grid={costTicks.map(tick => at(costScale, tick))} floor>
             {cost.kind !== 'unavailable' && <Stem left={at(costScale, cost.value)} hollow={cost.kind === 'atLeast'} />}</Cell>
-          <Cell label={heads.time.short} cell={cells.time} notes={notes} grid={timeTicks.map(tick => at(timeScale, tick))} floor>
+          <Cell sorted={sort.column === 'time'} label={heads.time.short} cell={cells.time} notes={notes} tip={tip} grid={timeTicks.map(tick => at(timeScale, tick))} floor>
             {time && <span className="overview-spread" style={{ left: `${at(timeScale, time.q1)}%`, width: `${at(timeScale, time.q3) - at(timeScale, time.q1)}%` }} />}
             {time && <Stem left={at(timeScale, time.median)} />}</Cell>
         </div>
       })}
     </div>
-    {tip && <div className="chart-tip" role="presentation" style={{ left: tip.left, top: tip.top }}>{tip.text}</div>}
-    <ul className="label-legend overview-legend" aria-label="Overview key">
-      {trueSegments.map(segment => <li key={segment}><span className={segmentClass('label-swatch', segment)} style={swatch(segment)} aria-hidden="true" />{segmentLabels[segment]}</li>)}
-      <li><span className="label-swatch" style={swatch('refuted')} aria-hidden="true" />Refuted or unproven</li>
-      <li><span className="label-swatch hatched" style={swatch('unresolved')} aria-hidden="true" />Only doubt is unresolved</li>
-      <li><span className="overview-key-dot" aria-hidden="true" />Lower-bound cost</li>
-      <li><span className="overview-key-spread" aria-hidden="true" />Middle 50% of completed trials</li>
-    </ul>
-    <Notes notes={notes} />
-    <div className="plot-caption">
-      <span>Each column has its own scale; a header sorts by that column. Problems found uses the impact band and average chosen above. True claims stack every true label from 0, and the number is problem claims per review. Refuted, unproven and unresolved claims are not drawn there.</span>
+    {tipState && <div className={tipState.below ? 'chart-tip below' : 'chart-tip'} role="presentation" style={{ left: tipState.left, top: tipState.top }}>{tipState.text}</div>}
+    <ChartGuide><div className="plot-caption">
+      <span>Each column has its own scale; a header sorts by that column. Problems found uses the impact band and average chosen above. Problem claims per review: the number counts problem claims, shown in indigo; the bar continues with the other true claims, in gray and sand. Refuted, unproven and unresolved claims are not drawn there.</span>
       <span>Refuted or unproven: {doubtMeaning} An unproven claim is not shown to be false.</span>
       <span>Cost and time use log scales from a marked floor; a value below the floor sits on it. Cost adds every attempt, retries included, per scheduled trial. Time covers completed trials only.</span>
       {rows.some(summary => summary.configuration.billing === 'list-price-equivalent') && <span>* Subscription usage valued at token list prices, not a bill or quota measurement.</span>}
-    </div>
+    </div></ChartGuide>
+    <Notes notes={notes} />
   </div>
 }
 
-function Cell({ label, cell, notes, grid, floor, interactive, description, children }: {
-  label: string; cell: Reading; notes: ReturnType<typeof notesFor>; grid: number[]; floor?: true; interactive?: true; description?: string; children: ReactNode
+function Cell({ sorted, label, cell, notes, grid, floor, interactive, description, tip, children }: {
+  sorted: boolean; label: string; cell: Reading; notes: ReturnType<typeof notesFor>; grid: number[]; floor?: true; interactive?: true; description?: string
+  tip: { show: (text: string) => (event: MouseEvent<Element>) => void; hide: () => void }; children: ReactNode
 }) {
-  return <div role="cell" className={cell.text === 'Unavailable' ? 'overview-cell missing' : 'overview-cell'}><span className="overview-label" aria-hidden="true">{label}</span>
+  const note = cell.reason ?? cell.annotation
+  return <div role="cell" className={cell.text === 'Unavailable' ? 'overview-cell missing' : 'overview-cell'} data-sorted={sorted || undefined}><span className="overview-label" aria-hidden="true">{label}</span>
     <span className="overview-value"><Value cell={cell} notes={notes} />{description && <VisuallyHidden>{description}</VisuallyHidden>}</span>
-    <span className="overview-track" aria-hidden={interactive ? undefined : true}>{grid.map(left => <span key={left} className="rank-grid" style={{ left: `${left}%` }} />)}
+    <span className="overview-track" aria-hidden={interactive ? undefined : true}
+      onMouseEnter={tip.show(`${label}: ${cell.text}${description ?? ''}${note ? `. ${note}` : ''}`)} onMouseLeave={tip.hide}>{grid.map(left => <span key={left} className="rank-grid" style={{ left: `${left}%` }} />)}
       {floor && <span className="overview-floor" />}{children}</span></div>
 }
 

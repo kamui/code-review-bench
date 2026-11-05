@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { Badge, Button, Chip, Group, Popover, Stack, Switch, Table, Text, Tooltip } from '@mantine/core'
+import { Button, Chip, Group, Popover, Stack, Switch, Table, Text, Tooltip } from '@mantine/core'
 import type { Configuration, Dataset, Family, Task } from '../lib/data'
 import { seriousMatrix, skillsPerModel } from '../lib/scoring'
 import type { FamilyRow, Scorecard, Selection, TrialOutcome, Verdict } from '../lib/scoring'
 import type { Inspection } from '../lib/view'
 import { setupParts } from './Chart'
+import { Tag } from './Reading'
 
 type Column = { configuration: Configuration; card: Scorecard; skill: string; model: string; label: string }
 
@@ -78,13 +79,12 @@ export function SeriousMisses({ dataset, configurations, cards, selection, onIns
             const task = dataset.tasks.find(item => item.id === row.taskId)
             if (!task) return null
             return [<Table.Tr key={task.id} className="miss-pr">
-              <Table.Th scope="rowgroup" className="miss-sticky">
+              <Table.Th scope="rowgroup" colSpan={shown.length + 1} className="miss-band"><div className="miss-band-body">
                 <button type="button" className="text-button task-name" onClick={() => onInspect({ kind: 'task', id: task.id })}>{task.repo}<span>#{task.pr}</span></button>
-                <Group gap={4} mt={4}>{[...task.profile.changeKinds, ...task.profile.technologies].map(tag => <Badge key={tag} variant="outline" color="gray" size="xs">{tag}</Badge>)}</Group>
-                <Text size="xs" c="dimmed" mt={4} fw={400}>{task.shape}</Text>
-                <Text size="xs" mt={2} fw={500}>{problems(row.serious)}</Text>
-              </Table.Th>
-              {shown.map((column, index) => <Table.Td key={column.configuration.id} className={highlight(index)} onMouseEnter={enter(index)} />)}
+                {[...task.profile.changeKinds, ...task.profile.technologies].map(tag => <Tag key={tag}>{tag}</Tag>)}
+                <span className="miss-band-shape">{task.shape}</span>
+                <span className="miss-band-count">{problems(row.serious)}</span>
+              </div></Table.Th>
             </Table.Tr>,
             ...row.problems.map(problem => {
               const family = task.families.find(item => item.id === problem.familyId)
@@ -116,7 +116,7 @@ function Problem({ task, family, familyId, onInspect }: { task: Task; family: Fa
       <Popover.Target><button type="button" className="text-button short-label" onClick={() => setOpened(value => !value)}>{label}</button></Popover.Target>
       <Popover.Dropdown><Stack gap={6}>
         <Text size="xs" c="dimmed">{task.repo} #{task.pr}</Text>
-        <Text size="sm" fw={600}>{label}</Text>
+        <Text size="sm" fw={640}>{label}</Text>
         <Text size="sm">{family?.title ?? familyId}</Text>
         <Button size="xs" variant="light" onClick={() => { setOpened(false); onInspect({ kind: 'task', id: task.id }) }}>Open PR evidence</Button>
       </Stack></Popover.Dropdown>
@@ -127,7 +127,7 @@ function Problem({ task, family, familyId, onInspect }: { task: Task; family: Fa
 
 function Dot({ trial, position, total, setup, onOpen }: { trial: FamilyRow['trials'][number]; position: number; total: number; setup: string; onOpen: (attemptId: string) => void }) {
   const description = `${setup}, run ${position} of ${total}: ${outcomeText[trial.verdict]}`
-  const card = <Stack gap={2}><Text size="xs" fw={600}>{setup}</Text><Text size="xs">Run {position} of {total}</Text><Text size="xs">{outcomeText[trial.verdict]}</Text></Stack>
+  const card = <Stack gap={2}><Text size="xs" fw={640}>{setup}</Text><Text size="xs">Run {position} of {total}</Text><Text size="xs">{outcomeText[trial.verdict]}</Text></Stack>
   const { attemptId } = trial
   return <Tooltip label={card} withArrow multiline w={260}>
     {attemptId ? <button type="button" className={`miss-dot ${trial.outcome}`} aria-label={`${description} Open this review.`} onClick={() => onOpen(attemptId)} />

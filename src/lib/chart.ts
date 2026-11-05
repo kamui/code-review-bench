@@ -99,13 +99,12 @@ export function groupPaths<T extends { x: number; y: number }>(points: T[], key:
   return Array.from(groups, ([groupKey, members]) => ({ key: groupKey, points: [...members].sort((left, right) => left.x - right.x || left.y - right.y) }))
 }
 
-export function segmentObstacles(points: { x: number; y: number }[], spacing = 7, radius = 2.5): Box[] {
-  return points.slice(1).flatMap((point, index) => {
-    const previous = points[index]!
-    const count = Math.max(1, Math.ceil(Math.hypot(point.x - previous.x, point.y - previous.y) / spacing))
-    return Array.from({ length: count + 1 }, (_, step) => {
-      const x = previous.x + (point.x - previous.x) * step / count, y = previous.y + (point.y - previous.y) * step / count
-      return { left: x - radius, top: y - radius, right: x + radius, bottom: y + radius }
-    })
-  })
+export type TipPlace = { left: number; top: number; below: boolean }
+
+/** Places a tooltip over the mark, or under it when the mark is near the top, kept inside the shell. */
+export function tipPlace(shell: DOMRect, mark: DOMRect, half = 160, headroom = 170): TipPlace {
+  const center = mark.left + mark.width / 2 - shell.left
+  const left = Math.min(Math.max(center, half), Math.max(half, shell.width - half))
+  const below = mark.top - shell.top < headroom
+  return { left, top: below ? mark.bottom - shell.top : mark.top - shell.top, below }
 }
