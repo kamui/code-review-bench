@@ -1,11 +1,11 @@
 import { useState } from 'react'
-import { SegmentedControl, VisuallyHidden } from '@mantine/core'
+import { VisuallyHidden } from '@mantine/core'
 import type { CSSProperties, FocusEvent, MouseEvent, ReactNode } from 'react'
 import { ArrowDown, ArrowUp } from 'lucide-react'
 import { linearScale, logScale, position, ticks, tipPlace } from '../lib/chart'
 import type { Scale, TipPlace } from '../lib/chart'
 import { bandLabels, duration, estimatorLabels, foundLabels, lowerFirst, measured, perReview, reading, share } from '../lib/metrics'
-import type { DetectionView, Reading, Summary } from '../lib/metrics'
+import type { Axis as ChartAxis, DetectionView, Reading, Summary } from '../lib/metrics'
 import type { Configuration } from '../lib/data'
 import { labelSegments, overviewFirstDirection, overviewOrder } from '../lib/scoring'
 import type { LabelSegment, Measure, OverviewColumn, Scorecard } from '../lib/scoring'
@@ -54,17 +54,13 @@ const weight = ({ band, estimator }: DetectionView, { problems, prs }: { problem
   : estimator === 'equalProblem' ? `The ${problems} ${band === 'all' ? 'known' : lowerFirst(bandLabels[band])} problems weigh the same, so one problem caught in every review is ${(100 / problems).toFixed(1)} points.`
     : `The ${prs} PRs weigh the same, so each PR is ${(100 / prs).toFixed(0)} points, shared among its problems.`
 
-type LeadAxis = 'cost' | 'doubt'
-const leadAxes: { value: LeadAxis; label: string }[] = [{ value: 'cost', label: 'Cost' }, { value: 'doubt', label: 'Refuted or unproven' }]
-
 const orderText: Record<Column, string> = { detection: 'Most first', claims: 'Most first', doubt: 'Fewest first', cost: 'Lowest first', time: 'Shortest first' }
 
-export function Overview({ summaries, detection, matching, basis, onSelect }: {
-  summaries: Summary[]; detection: DetectionView; matching: { included: number; excluded: number }; basis: { problems: number; prs: number }; onSelect: (id: string) => void
+export function Overview({ summaries, detection, axis, matching, basis, onSelect }: {
+  summaries: Summary[]; detection: DetectionView; axis: ChartAxis; matching: { included: number; excluded: number }; basis: { problems: number; prs: number }; onSelect: (id: string) => void
 }) {
   const [tipState, setTip] = useState<Tip | null>(null)
   const [focus, setFocus] = useState<string | null>(null)
-  const [against, setAgainst] = useState<LeadAxis>('cost')
   if (!summaries.length) return <div className="plot-empty" role="status"><span>Select at least one review method and model.</span></div>
   const shown = summaries.map(summary => summary.configuration)
   const ordered = (column: Column) => overviewOrder(summaries, summary => ({ name: summary.configuration.short, card: summary.card }),
@@ -99,7 +95,7 @@ export function Overview({ summaries, detection, matching, basis, onSelect }: {
     }
     return [configuration.id, cells]
   }))
-  const notes = notesFor([...readings.values()].flatMap(cells => columns.map(column => cells[column])))
+  const notes = notesFor(columns.flatMap(column => ordered(column).map(summary => readings.get(summary.configuration.id)![column])))
   const show = (configuration: Configuration, lines: TipLine[]) => (event: MouseEvent<Element> | FocusEvent<Element>) => {
     const shell = event.currentTarget.closest('.overview')?.getBoundingClientRect(), box = event.currentTarget.getBoundingClientRect()
     if (shell) setTip({ configuration, lines, ...tipPlace(shell, box, 160, Infinity) })
@@ -140,11 +136,9 @@ export function Overview({ summaries, detection, matching, basis, onSelect }: {
   return <div className="overview" data-focusing={focus ? '' : undefined} onMouseLeave={() => { setTip(null); setFocus(null) }}>
     <div className="measure-grid">
       <section className="measure-card lead-card" data-lead aria-labelledby="measure-lead">
-        <header className="measure-head"><div><h3 id="measure-lead">{foundLabels[detection.band]} against {lowerFirst(axisLabels[against])}</h3>
-          <p className="lead-about">Each point is one setup; up and to the left is better on both. {weight(detection, basis)}</p></div>
-          <SegmentedControl size="xs" aria-label={`Plot ${lowerFirst(foundLabels[detection.band])} against`} value={against} data={leadAxes}
-            onChange={value => { const next = leadAxes.find(item => item.value === value); if (next) setAgainst(next.value) }} /></header>
-        <Chart summaries={summaries} detection={detection} matching={matching} axis={against} view="tradeoff" showAllLabels height={460} withNotes={false} onSelect={onSelect}
+        <header className="measure-head"><div><h3 id="measure-lead">{foundLabels[detection.band]} against {lowerFirst(axisLabels[axis])}</h3>
+          <p className="lead-about">Each point is one setup; up and to the left is better on both. {weight(detection, basis)}</p></div></header>
+        <Chart summaries={summaries} detection={detection} matching={matching} axis={axis} view="tradeoff" height={460} withNotes={false} onSelect={onSelect}
           guide={<><span>Below this chart, each chart ranks the setups by one measure, on its own scale and in its own order; a setup without a value comes last. Point at a setup to find it in every chart, and select it to open its evidence.</span>
             <span>The charts stay separate on purpose: no single number ranks the setups.</span></>} />
       </section>
@@ -190,7 +184,7 @@ function SetupButton({ configuration, badges, onSelect, onFocus }: { configurati
   return <button type="button" className="text-button measure-setup" onFocus={onFocus} onClick={event => { event.stopPropagation(); onSelect(configuration.id) }}
     aria-label={`${configuration.short}. Inspect evidence`}>
     <Mark configuration={configuration} size={10} /><strong>{method}</strong>
-    <span className="measure-model"><VendorMark configuration={configuration} />{model}{effort && ` · ${effort}`}</span>
+    <span className="measure-model"><VendorMark configuration={configuration} />{model}{effort && <span className="measure-effort">&nbsp;· {effort}</span>}</span>
     {badges && <PeerBadge configuration={configuration} />}{configuration.experimental && <span className="row-tag">Experiment</span>}
   </button>
 }

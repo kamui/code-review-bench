@@ -3,14 +3,14 @@ import { ActionIcon, Alert, Anchor, Badge, Button, Checkbox, Container, Group, L
   SegmentedControl, Select, Stack, Switch, Table, Tabs, Text, TextInput, Title, Tooltip, VisuallyHidden, useComputedColorScheme, useMantineColorScheme } from '@mantine/core'
 import { useMediaQuery } from '@mantine/hooks'
 import { Link, Navigate, useLocation, useMatch, useNavigate, useSearch } from '@tanstack/react-router'
-import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpDown, ArrowUpRight, ChartBarStacked, ChartNoAxesGantt, ChartScatter, Check, ChevronDown, ChevronRight, CodeXml, Cpu, Crosshair, Database,
+import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpDown, ArrowUpRight, ChartBarStacked, ChartNoAxesGantt, Check, ChevronDown, ChevronRight, CodeXml, Cpu, Crosshair, Database,
   EyeOff, FileCheck2, Grid3x3, Hourglass, LayoutGrid, Moon, RotateCcw, Scale, Search, ShieldCheck, SlidersHorizontal, Sun, X } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { fetchDataset, impactBands, skillReleaseLabel } from '../lib/data'
 import type { Configuration, Dataset, Task } from '../lib/data'
 import { bandLabels, compact, conditionDifferences, datasetStatus, detectionLabel, estimatorLabels, foundLabels, heroCounts, lowerBound, lowerFirst, measured, percent, perReview, reading, reasonCounts, share, summarize } from '../lib/metrics'
-import type { Reading } from '../lib/metrics'
-import { estimators, leaderboard, matched, meanTaskRecall, pendingCandidates, referenceCoverage } from '../lib/scoring'
+import type { Axis, Reading } from '../lib/metrics'
+import { estimators, leaderboard, matched, meanTaskRecall, overviewOrder, pendingCandidates, referenceCoverage } from '../lib/scoring'
 import { axes, chartViews, clearedSearch, inspectionOf, inspectionParams, listParam, listValue, unlessDefault } from '../lib/view'
 import type { ExplorerSearch, Inspection, Section } from '../lib/view'
 import { Chart, Mark, setupParts } from './Chart'
@@ -23,6 +23,8 @@ import { VendorMark } from './VendorMark'
 export type Page = 'scorecard' | 'tasks' | 'methodology'
 type LoadState = { kind: 'loading' } | { kind: 'failed'; message: string } | { kind: 'ready'; dataset: Dataset }
 type MainView = (typeof chartViews)[number]
+const axisChoices: { label: string; value: Axis }[] = [{ label: 'Cost', value: 'cost' }, { label: 'Refuted or unproven', value: 'doubt' },
+  { label: 'Refuted claims', value: 'refuted' }, { label: 'Tokens', value: 'tokens' }, { label: 'Time', value: 'time' }]
 type ResultsColumn = 'setup' | 'equalProblem' | 'equalPr' | 'seriousCaught' | 'repeatedMisses' | 'cost' | 'tokens' | 'refuted' | 'completed'
 const bands = ['all', ...impactBands] as const
 const controlLabels: Record<Task['control'], string> = { 'audited-clean': 'Audited clean control', provisional: 'Provisional control',
@@ -77,11 +79,14 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
   const estimator = search.average ?? 'equalProblem'
   const detection = { band, estimator }
   const view: MainView = search.chart ?? 'overview'
-  const showAllLabels = search.labels ?? false
   const narrow = useMediaQuery('(max-width: 700px)') ?? false
   const chartView = narrow && view !== 'overview' ? 'setups' : view
   const views: { label: string; value: MainView; icon: LucideIcon }[] = [{ label: 'Overview', value: 'overview', icon: ChartBarStacked }, { label: 'By method', value: 'skills', icon: LayoutGrid },
-    { label: 'By setup', value: 'setups', icon: ChartNoAxesGantt }, { label: 'By model', value: 'models', icon: Cpu }, { label: 'Frontier', value: 'tradeoff', icon: ChartScatter }]
+    { label: 'By setup', value: 'setups', icon: ChartNoAxesGantt }, { label: 'By model', value: 'models', icon: Cpu }]
+  const plotAgainst = (value: string | null) => {
+    const next = axes.find(item => item === value)
+    if (next) onSearch({ axis: unlessDefault(next, 'cost') }, 'scorecard')
+  }
   const [query, setQuery] = useState('')
   const [area, setArea] = useState<string | null>(null)
   const [change, setChange] = useState<string | null>(null)
@@ -113,8 +118,8 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
     return card ? [summarize(configuration, card, detection, matchedRefuted.rows.find(row => row.configurationId === configuration.id)?.equalPr
       ?? { kind: 'unavailable', reason: 'Not among the selected setups.' })] : []
   })
-  const summaries = comparisonSummaries.filter(row => activeIds.includes(row.configuration.id))
-    .sort((left, right) => (right.detection ?? -1) - (left.detection ?? -1))
+  const summaries = overviewOrder(comparisonSummaries.filter(row => activeIds.includes(row.configuration.id)),
+    row => ({ name: row.configuration.short, card: row.card }), { column: 'detection', direction: 'descending' }, band, estimator)
   const tableShown = comparisonSummaries.map(row => row.configuration)
   const tableRows = comparisonSummaries.map(row => {
     const recall = row.card.detection[band]
@@ -207,13 +212,12 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
               if (next) onSearch({ chart: unlessDefault(next.value, 'overview') }, 'scorecard')
             }} data={(narrow ? views.filter(item => item.value === 'overview' || item.value === 'setups') : views).map(item => ({ value: item.value,
               label: <span className="switch-label"><item.icon size={15} strokeWidth={1.9} aria-hidden="true" />{item.label}</span> }))} />
-            {narrow && <span className="view-note">A wider screen adds By method, By model and Frontier.</span>}
+            {narrow && <span className="view-note">A wider screen adds By method and By model.</span>}
             <Button variant="default" size="xs" className="filters-toggle" leftSection={<SlidersHorizontal size={14} aria-hidden="true" />} rightSection={<ChevronDown size={14} aria-hidden="true" />}
               aria-expanded={optionsOpen} onClick={() => setOptionsOpen(open => !open)}>Chart options · {bandLabels[band]} · {configurations.filter(item => selected.includes(item.id)).length} of {configurations.length} setups</Button>
-            {chartView !== 'overview' && chartView !== 'models' && <div className="axis-switch"><span className="control-label" id="axis-label">Plot against</span><SegmentedControl aria-label="Compare detection against" size="xs" value={axis} onChange={value => {
-              const next = axes.find(item => item === value)
-              if (next) onSearch({ axis: unlessDefault(next, 'cost') }, 'scorecard')
-            }} data={[{ label: 'Cost', value: 'cost' }, { label: 'Tokens', value: 'tokens' }, { label: 'Refuted claims', value: 'refuted' }, { label: 'Time', value: 'time' }]} /></div>}
+            {chartView !== 'models' && <div className="axis-switch"><span className="control-label" id="axis-label">Plot against</span>{narrow
+              ? <Select aria-label="Compare detection against" size="xs" allowDeselect={false} value={axis} onChange={plotAgainst} data={axisChoices} />
+              : <SegmentedControl aria-label="Compare detection against" size="xs" value={axis} onChange={plotAgainst} data={axisChoices} />}</div>}
           </div>
           <div className="filter-bar" data-open={optionsOpen || undefined}>
             <div className="measure-controls">
@@ -221,19 +225,6 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
                 onChange={value => { const next = bands.find(item => item === value); if (next) onSearch({ band: unlessDefault(next, 'serious') }, 'scorecard') }} />
               <Select label="Average" size="xs" styles={{ wrapper: { width: 210 } }} allowDeselect={false} value={estimator} data={estimators.map(value => ({ value, label: estimatorLabels[value].replace(/^./, letter => letter.toUpperCase()) }))}
                 onChange={value => { const next = estimators.find(item => item === value); if (next) onSearch({ average: unlessDefault(next, 'equalProblem') }, 'scorecard') }} />
-            </div>
-            <div className="method-filter" role="group" aria-label="Review methods">
-              <span className="control-label">Review methods <span className="control-count">{editions.filter(edition => editionIds(edition).some(id => selected.includes(id))).length} selected</span></span>
-              <div className="method-chips">{[...editions].sort((left, right) => Number(left.experimental) - Number(right.experimental)).map(configuration => {
-                const ids = editionIds(configuration), all = ids.every(id => selected.includes(id)), some = ids.some(id => selected.includes(id))
-                return <button type="button" role="checkbox" aria-checked={all ? true : some ? 'mixed' : false} key={`${configuration.method}/${configuration.reviewEdition}`}
-                  className="method-chip" data-state={all ? 'on' : some ? 'mixed' : 'off'} onClick={() => toggleEdition(configuration)}>
-                  <Mark configuration={configuration} size={11} /><span className="configuration-name">{methodName(configuration)}</span>
-                  {configuration.experimental && <span className="chip-partial">experiment</span>}
-                  {some && !all && <span className="chip-partial">partial</span>}
-                  {(all || !some) && <Check size={14} aria-hidden="true" className="chip-check" data-off={!all || undefined} />}
-                </button>
-              })}</div>
             </div>
             <div className="refine-controls">
               <Popover position="bottom-start" width={340} withArrow arrowPosition="side" trapFocus returnFocus>
@@ -243,9 +234,11 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
                     <Button variant="subtle" size="compact-xs" className="popover-action" onClick={() => setSelected(configurations.map(item => item.id))}>Select all</Button>
                     <Button variant="subtle" size="compact-xs" className="popover-action" onClick={() => setSelected([])}>Clear all</Button>
                   </Group></Group>
-                  {editions.map(group => <div key={`${group.method}/${group.reviewEdition}`} className="refine-group"><span className="refine-group-title"><Mark configuration={group} size={9} />{methodName(group)}</span>
+                  {editions.map(group => { const ids = editionIds(group), all = ids.every(id => selected.includes(id)), some = ids.some(id => selected.includes(id))
+                    return <div key={`${group.method}/${group.reviewEdition}`} className="refine-group"><Checkbox size="xs" className="refine-group-title" checked={all} indeterminate={some && !all} onChange={() => toggleEdition(group)}
+                      label={<><Mark configuration={group} size={9} />{methodName(group)}{group.experimental && <span className="chip-partial">experiment</span>}</>} />
                     {[...edition(group)].sort((left, right) => left.short.localeCompare(right.short)).map(configuration => <Checkbox key={configuration.id} label={<><VendorMark configuration={configuration} />{[setupParts(configuration).model, setupParts(configuration).effort].filter(Boolean).join(' · ')}</>} aria-label={configuration.short}
-                      checked={selected.includes(configuration.id)} onChange={() => setSelected(selected.includes(configuration.id) ? selected.filter(id => id !== configuration.id) : [...selected, configuration.id])} size="xs" />)}</div>)}
+                      checked={selected.includes(configuration.id)} onChange={() => setSelected(selected.includes(configuration.id) ? selected.filter(id => id !== configuration.id) : [...selected, configuration.id])} size="xs" />)}</div> })}
                 </Stack></Popover.Dropdown>
               </Popover>
               <Popover position="bottom-start" width={240} withArrow arrowPosition="side" trapFocus returnFocus>
@@ -263,11 +256,10 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
               <span className="basis-chip"><Glossed text={`${detectionLabel(detection)} · ${plural(shared.length, 'PR')} · ${coverage.bands[band]} of ${coverage.bands.all} known problems in this band${candidateCount > 0 ? ` · ${candidateCount} awaiting a ruling` : ''}`} /></span>
               {activeFilters.map(item => <button type="button" key={item.label} className="filter-chip" onClick={item.clear} aria-label={`Remove filter ${item.label}`}>{item.label}<X size={12} aria-hidden="true" /></button>)}
               {activeFilters.length > 0 && <Link className="filter-link" to="/tasks">Edit filters</Link>}
-              {chartView === 'tradeoff' && <Switch className="label-switch" checked={showAllLabels} onChange={event => onSearch({ labels: event.currentTarget.checked || undefined }, 'scorecard')} label="Label every point" size="xs" />}
             </div>
-            {chartView === 'overview' ? <Overview summaries={summaries} detection={detection} matching={{ included: matchedRefuted.included.length, excluded: matchedRefuted.excluded.length }}
+            {chartView === 'overview' ? <Overview summaries={summaries} detection={detection} axis={axis} matching={{ included: matchedRefuted.included.length, excluded: matchedRefuted.excluded.length }}
               basis={{ problems: coverage.bands[band], prs: shared.length }} onSelect={id => inspect('scorecard')({ kind: 'configuration', id })} />
-              : <Chart summaries={summaries} detection={detection} matching={{ included: matchedRefuted.included.length, excluded: matchedRefuted.excluded.length }} axis={axis} view={chartView} showAllLabels={showAllLabels} onSelect={id => inspect('scorecard')({ kind: 'configuration', id })} />}
+              : <Chart summaries={summaries} detection={detection} matching={{ included: matchedRefuted.included.length, excluded: matchedRefuted.excluded.length }} axis={axis} view={chartView} onSelect={id => inspect('scorecard')({ kind: 'configuration', id })} />}
           </div>
           <div className="edition-notes" aria-label="Review method editions">
             <span className="shape-key"><span><Mark configuration={{ method: '', reviewEdition: '', builtin: true }} size={10} /> Built-in reviewer</span><span><Mark configuration={{ method: '', reviewEdition: '', builtin: false }} size={10} /> Skill</span></span>

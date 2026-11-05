@@ -36,7 +36,7 @@ export function EvidenceDrawer({ dataset, results, band, estimator, inspection, 
   const configuration = inspection?.kind === 'configuration' ? dataset.configurations.find(item => item.id === inspection.id) : undefined
   const task = inspection?.kind === 'task' ? dataset.tasks.find(item => item.id === inspection.id) : undefined
   return <Drawer opened={inspection !== null} onClose={() => onChange(null)} position="right" size="xl"
-    title={task ? `${task.repo} #${task.pr}` : configuration ? <SetupName configuration={configuration} /> : 'Evidence'}
+    title={task ? <span className="setup-name"><span className="setup-name-text"><span className="setup-method">{task.repo} #{task.pr}</span><span className="setup-model">{task.shape}</span></span></span> : configuration ? <SetupName configuration={configuration} /> : 'Evidence'}
     classNames={{ title: 'drawer-title' }}>
     {inspection && <InspectionBody key={`${inspection.kind}:${inspection.id}`} dataset={dataset} results={results} band={band} estimator={estimator}
       configuration={configuration} task={task} inspection={inspection} onChange={onChange} now={now} />}
@@ -90,7 +90,7 @@ function InspectionBody({ dataset, results, band, estimator, configuration, task
       {configuration.skillProvenanceUrl && <Button component="a" href={configuration.skillProvenanceUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Skill commits & timestamps</Button>}
       <Disclosure title="Comparison conditions">
         <dl className="conditions">{configuration.conditions.map(condition => <div key={condition.name}><dt>{condition.name}</dt><dd>{condition.values.map(conditionValue).join(', ')}</dd></div>)}</dl></Disclosure></Stack></>}
-    {task && <><Text>{task.shape}</Text><Group gap="xs">{task.profile.concerns.map(concern => <Tag key={concern}>{concern}</Tag>)}</Group>
+    {task && <><Group gap="xs">{task.profile.concerns.map(concern => <Tag key={concern}>{concern}</Tag>)}</Group>
       <Group><Button component="a" href={task.sourceUrl} target="_blank" rel="noreferrer" variant="default" size="xs" leftSection={<ExternalLink size={14} />}>Original PR</Button>
         <Button component="a" href={task.packetUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileText size={14} />}>Review packet</Button></Group>
       <Text size="xs" c="dimmed">Revision {task.head.slice(0, 10)}. Each reference shows its own eligibility and impact state.</Text>

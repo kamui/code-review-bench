@@ -34,7 +34,7 @@ function chart(dataset: Dataset, detection: DetectionView, view: 'setups' | 'tra
     return card.configurationId === configuration.id && refuted ? [summarize(configuration, card, detection, refuted.equalPr)] : []
   }))
   return text(renderToStaticMarkup(<MantineProvider><Chart summaries={summaries} detection={detection} matching={{ included: common.included.length, excluded: common.excluded.length }}
-    axis={axis} view={view} showAllLabels={false} onSelect={() => {}} /></MantineProvider>))
+    axis={axis} view={view} onSelect={() => {}} /></MantineProvider>))
 }
 
 function panels(dataset: Dataset, taskIds = dataset.tasks.map(item => item.id)) {
@@ -238,13 +238,13 @@ describe('overview', () => {
   const board = leaderboard(fixture, { selected: selected.map(item => item.id), candidateTaskIds: fixture.tasks.map(item => item.id), concern: null })
   const summaries = selected.flatMap(configuration => board.cards.flatMap(card => card.configurationId === configuration.id
     ? [summarize(configuration, card, { band: 'all', estimator: 'equalProblem' }, { kind: 'unavailable', reason: 'Not compared.' })] : []))
-  const overview = renderToStaticMarkup(<MantineProvider><Overview summaries={summaries} detection={{ band: 'all', estimator: 'equalProblem' }}
+  const overview = renderToStaticMarkup(<MantineProvider><Overview summaries={summaries} detection={{ band: 'all', estimator: 'equalProblem' }} axis="cost"
     matching={{ included: 0, excluded: 0 }} basis={{ problems: 9, prs: 6 }} onSelect={() => {}} /></MantineProvider>)
   const card = (index: number) => setups(overview).slice(index * selected.length, (index + 1) * selected.length)
 
-  test('is the default view and leads with serious problems found against cost, switchable to refuted or unproven claims', () => {
+  test('is the default view and leads with serious problems found against cost, plotted against the measure every view shares', () => {
     expect(shown).toContain('Serious problems found against cost per trial')
-    expect(dashboard).not.toContain('Compare detection against')
+    expect(shown).toContain('Plot against Cost Refuted or unproven Refuted claims Tokens Time')
     expect(text(overview)).toContain('The 9 known problems weigh the same, so one problem caught in every review is 11.1 points.')
   })
 
@@ -255,7 +255,7 @@ describe('overview', () => {
     expect(card(3)).toEqual(['Claude built-in / Fixture C / High', 'ce-code-review / Fixture B / High', 'ce-code-review / Fixture C / High',
       'Claude built-in / Fixture A / High', 'ce-code-review / Fixture A / High', 'Claude built-in / Fixture B / High'])
     expect(overview).toContain('aria-label="Cost per trial, lowest first"')
-    expect(text(overview)).toContain('Unavailable 1 : 4 admitted reviews were graded before these labels.')
+    expect(text(overview)).toContain('Unavailable 3 : 4 admitted reviews were graded before these labels.')
     expect(text(overview)).toContain('22.2%')
     expect(text(overview)).toContain('≥ $0.37')
   })
@@ -266,7 +266,7 @@ describe('overview', () => {
   })
 
   test('says what to select when no setup is selected', () => {
-    const empty = renderToStaticMarkup(<MantineProvider><Overview summaries={[]} detection={{ band: 'all', estimator: 'equalProblem' }}
+    const empty = renderToStaticMarkup(<MantineProvider><Overview summaries={[]} detection={{ band: 'all', estimator: 'equalProblem' }} axis="cost"
       matching={{ included: 0, excluded: 0 }} basis={{ problems: 0, prs: 0 }} onSelect={() => {}} /></MantineProvider>)
     expect(empty).toContain('role="status"')
     expect(text(empty)).toContain('Select at least one review method and model.')

@@ -4,11 +4,11 @@ import { useElementSize } from '@mantine/hooks'
 import { ArrowUpLeft } from 'lucide-react'
 import { groupPaths, logScale, paretoFrontier, placeLabels, position, sqrtScale, ticks, tipPlace } from '../lib/chart'
 import type { Scale, TipPlace } from '../lib/chart'
-import { compact, detectionLabel, foundLabels, duration, lowerFirst, money, percent, reasonCounts } from '../lib/metrics'
+import { compact, detectionLabel, foundLabels, duration, lowerFirst, money, percent, reasonCounts, share } from '../lib/metrics'
 import type { Axis, DetectionView, Summary } from '../lib/metrics'
 import type { Configuration } from '../lib/data'
 import { skillReleaseLabel } from '../lib/data'
-import { ChartGuide, costNote, costStarred, Notes } from './Reading'
+import { ChartGuide, costNote, costStarred, Notes, notesFor } from './Reading'
 import type { Note } from './Reading'
 import { VendorMark } from './VendorMark'
 
@@ -72,8 +72,8 @@ const fraction = (scale: Scale, value: number) => position(scale, value, 0, 100)
 const scoreTicks = [0, 25, 50, 75, 100]
 const frontierCost: Record<Axis, string> = { cost: 'less money', tokens: 'fewer tokens', refuted: 'fewer refuted claims', doubt: 'fewer doubtful reviews', time: 'less time' }
 
-export function Chart({ summaries, detection, matching, axis, view, showAllLabels, onSelect, guide, height, withNotes = true }: {
-  summaries: Summary[]; detection: DetectionView; matching: { included: number; excluded: number }; axis: Axis; view: ChartView; showAllLabels: boolean; onSelect: (id: string) => void
+export function Chart({ summaries, detection, matching, axis, view, onSelect, guide, height, withNotes = true }: {
+  summaries: Summary[]; detection: DetectionView; matching: { included: number; excluded: number }; axis: Axis; view: ChartView; onSelect: (id: string) => void
   guide?: ReactNode; height?: number; withNotes?: boolean
 }) {
   const measure = detectionLabel(detection), dimensions = `${lowerFirst(measure)} against ${lowerFirst(axisLabels[axis])}`
@@ -101,14 +101,14 @@ export function Chart({ summaries, detection, matching, axis, view, showAllLabel
   })
   const unplotted = points.filter(point => point.metric === null)
   const bounded = measured.some(point => point.bounded)
-  const notes = reasonCounts(points.map(point => point.summary.detectionNote ?? null))
+  const notes = notesFor(points.map(point => share(point.summary.card.detection[detection.band][detection.estimator], point.summary.detectionNote)))
   return <div className="plot-shell" onMouseLeave={() => setHovered(null)}>
     {!points.length ? <div className="plot-empty" role="status"><strong>{measure} is unavailable</strong>
       {summaries.length ? <ul className="reason-list">{withheld.map(row => <li key={row.reason}>{row.reason} ({setups(row.count)})</li>)}</ul>
         : <span>Select at least one review method and model.</span>}
       <span>No other impact band or average is substituted. Choose them above.</span></div>
       : view === 'setups' ? <SetupRows points={points} notes={notes} measure={measure} axis={axis} scale={scale} frontier={frontier} onSelect={onSelect} interactions={interactions} />
-        : view === 'tradeoff' ? <Scatter points={measured} dimensions={dimensions} axis={axis} scale={scale} frontier={frontier} showAllLabels={showAllLabels}
+        : view === 'tradeoff' ? <Scatter points={measured} dimensions={dimensions} axis={axis} scale={scale} frontier={frontier}
           hovered={hovered?.id ?? null} spotlight={spotlight?.method ?? null} onSelect={onSelect} interactions={interactions} yTitle={foundLabels[detection.band]} height={height} />
         : view === 'skills' ? <MethodPanels points={measured} axis={axis} scale={scale} onSelect={onSelect} interactions={interactions} />
           : <Models points={points} notes={notes} measure={measure} onSelect={onSelect} interactions={interactions} />}
@@ -121,8 +121,8 @@ export function Chart({ summaries, detection, matching, axis, view, showAllLabel
           <button type="button" className="key-button" aria-pressed={spotlight?.method === method && spotlight.pinned} onMouseEnter={preview(method)} onMouseLeave={preview(null)} onFocus={preview(method)} onBlur={preview(null)}
             onClick={() => setSpotlight(current => current?.pinned && current.method === method ? null : { method, pinned: true })}><Mark configuration={configuration} size={10} />{method}</button></li>)}
       {view === 'tradeoff' && <li className="key-break"><span className="frontier-key" aria-hidden="true" />Frontier: no other setup finds more for {frontierCost[axis]}</li>}
-      {view === 'tradeoff' && <li><span className="faded-key" aria-hidden="true"><span /><span /></span>Not on the frontier, paler</li>}
-      {bounded && <li><span className="bound-key" aria-hidden="true" />Lower bound{view === 'skills' ? '' : ', left out of the frontier'}</li>}
+      {view === 'tradeoff' && <li><span className="faded-key" aria-hidden="true"><span /><span /></span>Off the frontier</li>}
+      {bounded && <li><span className="bound-key" aria-hidden="true" />Lower bound</li>}
     </ul>}
     {points.length > 0 && <ChartGuide title={guide ? 'How to read these charts' : undefined}><div className="plot-caption">
       {guide}
@@ -144,7 +144,7 @@ export function Chart({ summaries, detection, matching, axis, view, showAllLabel
 }
 
 function NoteMark({ summary, notes }: { summary: Summary; notes: Note[] }) {
-  const index = notes.findIndex(note => note.reason === summary.detectionNote)
+  const index = notes.findIndex(note => note.reason === summary.detectionNote || (summary.detectionNote !== null && note.covers?.includes(summary.detectionNote)))
   return index >= 0 && <sup aria-hidden="true">{index + 1}</sup>
 }
 
@@ -211,8 +211,8 @@ const labelOf = (points: Point[], withMethod = false) => {
 
 type Plotted = Point & { x: number; y: number }
 
-function Scatter({ points, dimensions, axis, scale, frontier, showAllLabels, hovered, spotlight, onSelect, interactions, yTitle, height = 400 }: {
-  dimensions: string; points: Plotted[]; axis: Axis; scale: Scale; frontier: Set<string>; showAllLabels: boolean
+function Scatter({ points, dimensions, axis, scale, frontier, hovered, spotlight, onSelect, interactions, yTitle, height = 400 }: {
+  dimensions: string; points: Plotted[]; axis: Axis; scale: Scale; frontier: Set<string>
   hovered: string | null; spotlight: string | null; onSelect: (id: string) => void; interactions: Interactions; yTitle: string; height?: number
 }) {
   const { ref, width } = useElementSize()
@@ -233,9 +233,8 @@ function Scatter({ points, dimensions, axis, scale, frontier, showAllLabels, hov
     }),
   ]
   const prominent = (point: Point) => frontier.has(point.summary.configuration.id) || point.bounded
-  const leading = new Set(paretoFrontier(points).map(point => point.summary.configuration.id))
   const outside = (point: Point) => spotlight !== null && setupParts(point.summary.configuration).method !== spotlight
-  const requested = ordered.filter(point => !outside(point)).filter(point => showAllLabels || spotlight !== null || frontier.has(point.summary.configuration.id) || leading.has(point.summary.configuration.id) || hovered === point.summary.configuration.id)
+  const requested = ordered.filter(point => !outside(point))
     .sort((left, right) => Number(frontier.has(right.summary.configuration.id)) - Number(frontier.has(left.summary.configuration.id)))
   const dimmed = (point: Point) => spotlight === null && !prominent(point) && hovered !== point.summary.configuration.id
   const labels = width ? placeLabels(requested.map(point => ({
@@ -247,7 +246,7 @@ function Scatter({ points, dimensions, axis, scale, frontier, showAllLabels, hov
   }).join('')
   const xTicks = ticks(scale, width > 700)
   return <div ref={ref} className="tradeoff">
-    {width > 0 && <svg width={width} height={height} role="group" aria-label={`Plot of ${dimensions}. ${frontier.size} setups on the frontier of these two measures are labelled.`}>
+    {width > 0 && <svg width={width} height={height} role="group" aria-label={`Plot of ${dimensions}. ${frontier.size} of ${points.length} setups are on the frontier of these two measures.`}>
       <defs><linearGradient id="better-corner" x1="0" y1="0" x2="1" y2="1">
         <stop offset="0" stopColor="var(--brand-accent)" stopOpacity="0.09" /><stop offset="0.45" stopColor="var(--brand-accent)" stopOpacity="0" />
       </linearGradient></defs>
