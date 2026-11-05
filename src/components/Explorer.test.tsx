@@ -249,7 +249,7 @@ describe('overview', () => {
   })
 
   test('ranks each measure in its own chart, in that measure\'s order, with setups lacking a value last', () => {
-    expect(text(overview)).toContain('Each chart has its own scale and its own order. A setup without a value comes last.')
+    expect(text(overview)).toContain('each chart ranks the setups by one measure, on its own scale and in its own order; a setup without a value comes last.')
     expect(card(0)).toEqual(['ce-code-review / Fixture A / High', 'Claude built-in / Fixture A / High', 'ce-code-review / Fixture B / High',
       'Claude built-in / Fixture C / High', 'ce-code-review / Fixture C / High', 'Claude built-in / Fixture B / High'])
     expect(card(3)).toEqual(['Claude built-in / Fixture C / High', 'ce-code-review / Fixture B / High', 'ce-code-review / Fixture C / High',

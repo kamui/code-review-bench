@@ -72,8 +72,8 @@ const fraction = (scale: Scale, value: number) => position(scale, value, 0, 100)
 const scoreTicks = [0, 25, 50, 75, 100]
 const pairAxes: Axis[] = ['cost', 'doubt']
 
-export function Chart({ summaries, detection, matching, axis, view, showAllLabels, onSelect }: {
-  summaries: Summary[]; detection: DetectionView; matching: { included: number; excluded: number }; axis: Axis; view: ChartView; showAllLabels: boolean; onSelect: (id: string) => void
+export function Chart({ summaries, detection, matching, axis, view, showAllLabels, onSelect, guide }: {
+  summaries: Summary[]; detection: DetectionView; matching: { included: number; excluded: number }; axis: Axis; view: ChartView; showAllLabels: boolean; onSelect: (id: string) => void; guide?: ReactNode
 }) {
   const measure = detectionLabel(detection), dimensions = `${lowerFirst(measure)} against ${lowerFirst(axisLabels[axis])}`
   const [hovered, setHovered] = useState<({ id: string } & TipPlace) | null>(null)
@@ -112,7 +112,7 @@ export function Chart({ summaries, detection, matching, axis, view, showAllLabel
       : view === 'pair' ? <div className="scatter-pair">{sides.map(side => <figure key={side.axis} className="scatter-panel">
         <figcaption>Against {lowerFirst(axisLabels[side.axis])}</figcaption>
         <Scatter points={side.measured} dimensions={`${lowerFirst(measure)} against ${lowerFirst(axisLabels[side.axis])}`} axis={side.axis} scale={side.scale} frontier={side.frontier}
-          showAllLabels={showAllLabels} hovered={hovered?.id ?? null} onSelect={onSelect} interactions={interactions} yTitle={foundLabels[detection.band]} /></figure>)}</div>
+          showAllLabels={showAllLabels} hovered={hovered?.id ?? null} onSelect={onSelect} interactions={interactions} yTitle={foundLabels[detection.band]} height={340} /></figure>)}</div>
       : view === 'setups' ? <SetupRows points={points} notes={notes} measure={measure} axis={axis} scale={scale} frontier={frontier} onSelect={onSelect} interactions={interactions} />
         : view === 'tradeoff' ? <Scatter points={measured} dimensions={dimensions} axis={axis} scale={scale} frontier={frontier} showAllLabels={showAllLabels}
           hovered={hovered?.id ?? null} onSelect={onSelect} interactions={interactions} yTitle={foundLabels[detection.band]} />
@@ -128,7 +128,8 @@ export function Chart({ summaries, detection, matching, axis, view, showAllLabel
       {scatter && <li><span className="faded-key" aria-hidden="true"><span /><span /></span>Not on the frontier, paler</li>}
       {bounded && <li><span className="bound-key" aria-hidden="true" />Lower bound{view === 'skills' ? '' : ', left out of the frontier'}</li>}
     </ul>}
-    {points.length > 0 && <ChartGuide><div className="plot-caption">
+    {points.length > 0 && <ChartGuide title={guide ? 'How to read these charts' : undefined}><div className="plot-caption">
+      {guide}
       {view === 'setups' && <span><span className="whisker-key" aria-hidden="true" />Rows are ordered by {lowerFirst(measure)}. The whisker spans this average with any one whole PR left out: sensitivity to these PRs, not a confidence interval.</span>}
       {view === 'skills' && <span>Each panel shows one review method on every model it ran on, with detection against {lowerFirst(axisLabels[axis])} on shared axes. Gray dots are the other selected setups, for context.</span>}
       {view === 'pair' && <span>Each panel plots {lowerFirst(measure)} against one cost of a review: what a trial costs, and how often a review makes a claim that was refuted or not proven. An unproven claim is not shown to be false. Up and to the left is better on both.</span>}
@@ -213,12 +214,12 @@ const labelOf = (points: Point[], withMethod = false) => {
 
 type Plotted = Point & { x: number; y: number }
 
-function Scatter({ points, dimensions, axis, scale, frontier, showAllLabels, hovered, onSelect, interactions, yTitle }: {
+function Scatter({ points, dimensions, axis, scale, frontier, showAllLabels, hovered, onSelect, interactions, yTitle, height = 400 }: {
   dimensions: string; points: Plotted[]; axis: Axis; scale: Scale; frontier: Set<string>; showAllLabels: boolean
-  hovered: string | null; onSelect: (id: string) => void; interactions: Interactions; yTitle: string
+  hovered: string | null; onSelect: (id: string) => void; interactions: Interactions; yTitle: string; height?: number
 }) {
   const { ref, width } = useElementSize()
-  const height = 400, margin = { top: 18, right: 22, bottom: 50, left: 62 }
+  const margin = { top: 18, right: 22, bottom: 50, left: 62 }
   const plot = { left: margin.left, right: Math.max(margin.left + 1, width - margin.right), top: margin.top, bottom: height - margin.bottom }
   const px = (value: number) => position(scale, value, plot.left, plot.right)
   const py = (value: number) => plot.bottom - value / 100 * (plot.bottom - plot.top)

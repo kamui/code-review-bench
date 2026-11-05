@@ -12,7 +12,7 @@ import type { LabelSegment, Measure, OverviewColumn, Scorecard } from '../lib/sc
 import { Chart, Mark, reviewColor, SetupName, setupParts } from './Chart'
 import { segmentLabels, trueSegments } from './ClaimLabels'
 import { VendorMark } from './VendorMark'
-import { costNote, costScaleNote, costText, Notes, notesFor, PeerBadge, Value } from './Reading'
+import { costScaleNote, costText, Notes, notesFor, PeerBadge, Value } from './Reading'
 
 type Column = Exclude<OverviewColumn, 'setup'>
 const columns: Column[] = ['detection', 'claims', 'doubt', 'cost', 'time']
@@ -137,8 +137,10 @@ export function Overview({ summaries, detection, matching, basis, onSelect }: {
     <div className="measure-grid">
       <section className="measure-card lead-card" data-lead aria-labelledby="measure-lead">
         <header className="measure-head"><div><h3 id="measure-lead">{foundLabels[detection.band]} against cost and refuted or unproven claims</h3>
-          <p>Each point is one setup; up and to the left is better on both. {weight(detection, basis)}</p></div></header>
-        <Chart summaries={summaries} detection={detection} matching={matching} axis="cost" view="pair" showAllLabels={false} onSelect={onSelect} />
+          <p className="lead-about">Each point is one setup; up and to the left is better on both. {weight(detection, basis)}</p></div></header>
+        <Chart summaries={summaries} detection={detection} matching={matching} axis="cost" view="pair" showAllLabels={false} onSelect={onSelect}
+          guide={<><span>Below the scatters, each chart ranks the setups by one measure, on its own scale and in its own order; a setup without a value comes last. Point at a setup to find it in every chart, and select it to open its evidence.</span>
+            <span>The charts stay separate on purpose: no single number ranks the setups.</span></>} />
       </section>
       {columns.map(column => {
         const panel = panels[column], id = `measure-${column}`
@@ -169,18 +171,8 @@ export function Overview({ summaries, detection, matching, basis, onSelect }: {
           </div>
         </section>
       })}
-      <section className="measure-card measure-guide" data-lead aria-labelledby="measure-guide">
-        <header className="measure-head"><div><h3 id="measure-guide">Reading these charts</h3></div></header>
-        <ul>
-          <li>Each chart has its own scale and its own order. A setup without a value comes last.</li>
-          <li>Point at a setup to find it in every chart; select it to open its evidence.</li>
-          <li>{foundLabels[detection.band]} follows the impact band and average chosen above.</li>
-          <li>The charts stay separate on purpose: no single number ranks the setups.</li>
-          {costNote(shown) && <li>{costNote(shown)}</li>}
-        </ul>
-        <Notes notes={notes} />
-      </section>
     </div>
+    <Notes notes={notes} />
     {tipState && <div className={tipState.below ? 'chart-tip below' : 'chart-tip'} role="presentation" style={{ left: tipState.left, top: tipState.top }}>
       <strong><SetupName configuration={tipState.configuration} mark={false} /></strong>
       {tipState.lines.map(line => <span key={line.label} className="tip-row"><span className="tip-label">{line.label}</span><b>{line.value}</b>{line.note && <span className="tip-note">{line.note}</span>}</span>)}</div>}

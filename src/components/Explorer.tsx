@@ -4,7 +4,7 @@ import { ActionIcon, Alert, Anchor, Badge, Button, Checkbox, Container, Group, L
 import { useMediaQuery } from '@mantine/hooks'
 import { Link, Navigate, useLocation, useMatch, useNavigate, useSearch } from '@tanstack/react-router'
 import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpDown, ArrowUpRight, ChartBarStacked, ChartNoAxesGantt, ChartScatter, Check, ChevronDown, ChevronRight, CodeXml, Cpu, Crosshair, Database,
-  EyeOff, FileCheck2, Grid3x3, Hourglass, Info, LayoutGrid, Moon, RotateCcw, Scale, Search, ShieldCheck, SlidersHorizontal, Sun, X } from 'lucide-react'
+  EyeOff, FileCheck2, Grid3x3, Hourglass, LayoutGrid, Moon, RotateCcw, Scale, Search, ShieldCheck, SlidersHorizontal, Sun, X } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { fetchDataset, impactBands, skillReleaseLabel } from '../lib/data'
 import type { Configuration, Dataset, Task } from '../lib/data'
@@ -186,7 +186,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
       {page === 'scorecard' && <><section className="intro">
         <div>
           <Title order={1}>Good reviews find the problems that matter.</Title>
-          <Text className="intro-description">Compare real code review setups by what they catch, how often they’re wrong, and what they cost. Each measure stays separate; no single number ranks the setups.</Text>
+          <Text className="intro-description">Compare code review setups by what they catch, how often they’re wrong, and what they cost.</Text>
           <div className="intro-meta"><Badge variant="outline" color="gray" radius="sm" className="status-badge">{status.label}</Badge>
             {(!status.complete || unresolved) && <StatusNotice limits={status.limits} unresolved={unresolved} />}</div>
         </div>
@@ -276,9 +276,9 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
               <PeerNote configurations={edition(configuration)} className="edition-peer" />
               {configuration.reviewChange && <Anchor className="edition-change" href={configuration.reviewChange.url} target="_blank" rel="noreferrer" title={configuration.reviewChange.summary}>Review changed<ArrowUpRight size={12} aria-hidden="true" /></Anchor>}
             </span>)}
+            <p className="comparison-note">Chart and table use the PRs every selected standard setup ran. Method, model and task filters change the comparison. Experiments do not shrink its PR coverage.
+              {differing.length > 0 && ` The selected setups differ in recorded ${differing.join(', ')}; a difference between setups includes those conditions. Compare setups below to see the values.`}</p>
           </div>
-          <div className="comparison-strip"><Info size={15} aria-hidden="true" /><span>Chart and table use the PRs every selected standard setup ran. Method, model and task filters change the comparison. Experiments do not shrink its PR coverage.
-            {differing.length > 0 && ` The selected setups differ in recorded ${differing.join(', ')}; a difference between setups includes those conditions. Compare setups below to see the values.`}</span></div>
         </Paper>
         <header className="subsection-head" id="review-setups"><Title order={3}>All review setups</Title>
         <Text className="subsection-lede">Lists every setup, skill experiments included, whatever the selection above. Same {shared.length} comparison PRs as the chart, in the {bandLabels[band].toLowerCase()} band. Rows start in name order; a column heading sorts by that one measure only.</Text></header>
@@ -309,7 +309,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
       </section></>}
 
       {page === 'tasks' && <section id="tasks" className="tasks-section">
-        <header className="section-head"><div><p className="eyebrow">Corpus</p><div className="title-row"><Title order={2}>Explore the tasks</Title><Badge variant="outline" color="gray" radius="sm" className="status-badge">{candidates.length} of {dataset.tasks.length} tasks</Badge></div><Text className="section-lede">A small, varied corpus. Find the gaps before drawing conclusions.</Text></div></header>
+        <header className="section-head page-head"><div><div className="title-row"><Title order={1} className="page-title">Explore the tasks</Title><Badge variant="outline" color="gray" radius="sm" className="status-badge">{candidates.length} of {dataset.tasks.length} tasks</Badge></div><Text className="section-lede">A small, varied corpus. Find the gaps before drawing conclusions.</Text></div></header>
         <Button variant="default" className="filters-toggle" leftSection={<SlidersHorizontal size={15} aria-hidden="true" />} rightSection={<ChevronDown size={14} aria-hidden="true" />}
           aria-expanded={filtersOpen} onClick={() => setFiltersOpen(open => !open)}>Filters{activeTaskFilters > 0 && ` · ${activeTaskFilters} active`}</Button>
         <Paper withBorder radius="lg" p="lg" className="filter-panel" data-open={filtersOpen || undefined}>
@@ -349,7 +349,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
         </Tabs>
       </section>}
 
-      {page === 'methodology' && <section id="methodology" className="methodology-section"><div><p className="eyebrow">Methodology</p><Title order={2}>What the numbers mean</Title><Text className="section-lede" maw={620}>Finding a real problem, giving a useful fix, and avoiding false alarms are different skills. We keep them visible separately.</Text></div>
+      {page === 'methodology' && <section id="methodology" className="methodology-section"><div className="page-head"><Title order={1} className="page-title">What the numbers mean</Title><Text className="section-lede" maw={620}>Finding a real problem, giving a useful fix, and avoiding false alarms are different skills. We keep them visible separately.</Text></div>
         <div className="methodology-grid">
           <article className="principle"><span className="principle-icon" aria-hidden="true"><Crosshair size={17} strokeWidth={2} /></span><h3>Detection, two averages, three bands</h3><p>Each reference problem counts once per review. Recovery is averaged over a PR's scheduled trials, then reported with problems weighted equally and with PRs weighted equally, for serious, other-material and unknown-impact references. The chart plots the band and average you select.</p></article>
           <article className="principle"><span className="principle-icon" aria-hidden="true"><ShieldCheck size={17} strokeWidth={2} /></span><h3>Serious means the implementer had to know</h3><p>A reference problem is serious when the implementer has to be made aware of it before release. If it ships without them knowing, the review has failed. Once aware, they may fix it, or accept it and document it. Other material is a real problem that earns credit when a review raises it but does not have to be raised. The label decides which band counts a problem and changes no score.</p></article>
