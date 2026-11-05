@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { CSSProperties } from 'react'
-import { Accordion, Alert, Badge, Button, Code, Drawer, Group, Loader, Paper, Select, Stack, Tabs, Text, Title } from '@mantine/core'
+import { Accordion, Alert, Badge, Button, Code, CopyButton, Drawer, Group, Loader, Paper, Select, Stack, Tabs, Text, Title } from '@mantine/core'
 import { Download, ExternalLink, FileCheck2, FileClock, FileCode, FileJson, FileSearch, FileText } from 'lucide-react'
 import { SetupName, setupLabel } from './Chart'
 import { costText, Disclosure, humanize, Referenced, Rich, Tag, Value } from './Reading'
@@ -109,8 +109,8 @@ function InspectionBody({ dataset, results, band, estimator, configuration, task
             <Text size="sm">{detail.record.observed.harness} {detail.record.observed.cli_version}</Text>
             <Text size="sm">Models: {detail.record.observed.models.join(', ')} · Effort: {detail.record.observed.effort ?? 'Not reported'}</Text>
             <Text size="xs" c="dimmed">Prompt identity: {detail.record.observed.prompt_registry_match ?? 'No registry match recorded'}</Text>
-            <Code block>{detail.record.observed.prompt_hash ?? 'Prompt hash unavailable'}</Code>
-            {detail.record.observed.skill_tree && <><Text size="xs" c="dimmed">Skill tree revision</Text><Code block>{detail.record.observed.skill_tree}</Code></>}
+            {detail.record.observed.prompt_hash ? <HashLine label="Prompt hash" value={detail.record.observed.prompt_hash} /> : <Text size="xs" c="dimmed">Prompt hash unavailable</Text>}
+            {detail.record.observed.skill_tree && <HashLine label="Skill tree revision" value={detail.record.observed.skill_tree} />}
             <Text size="xs" c="dimmed">Subagents: {detail.record.observed.subagent_count} · Client-reported sandbox: {detail.record.observed.sandbox ?? 'Not reported'}</Text>
           </Stack></Paper><Group gap="xs">
             <Button component="a" href={detail.recordUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileJson size={14} />}>Attempt record</Button>
@@ -244,3 +244,8 @@ function ReviewSummary({ attempt }: { attempt: Attempt }) {
 }
 
 const attemptName = (attempt: Attempt) => attempt.label.replace(/^att-0*/, 'attempt ')
+
+const HashLine = ({ label, value }: { label: string; value: string }) => <Group gap={6} wrap="nowrap">
+  <Text size="xs" c="dimmed">{label}</Text><Code title={value}>{value.length > 16 ? `${value.slice(0, 12)}…` : value}</Code>
+  <CopyButton value={value}>{({ copied, copy }) => <Button variant="subtle" size="compact-xs" onClick={copy}>{copied ? 'Copied' : 'Copy'}</Button>}</CopyButton>
+</Group>
