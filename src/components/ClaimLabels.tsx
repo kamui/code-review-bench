@@ -20,7 +20,7 @@ const hatched: LabelSegment[] = ['outside-this-change', 'unresolved']
 type Row = { id: string; configuration: Configuration; rates: Record<LabelSegment, Measure> }
 
 export const swatch = (segment: LabelSegment) => ({ background: `var(--label-${segment.replace(':', '-')})` })
-export const segmentClass = (base: string, segment: LabelSegment) => hatched.includes(segment) ? `${base} hatched` : base
+export const segmentClass = (base: string, segment: LabelSegment) => `${base} segment-${segment}${hatched.includes(segment) ? ' hatched' : ''}`
 const tickStep = (extent: number) => extent <= 3 ? 0.5 : extent <= 8 ? 1 : extent <= 16 ? 2 : 5
 const blocked = (row: Row) => labelSegments.map(segment => row.rates[segment]).find(rate => rate.kind === 'unavailable')
 const length = (row: Row, segments: LabelSegment[]) => segments.reduce((total, segment) => total + (measured(row.rates[segment]) ?? 0), 0)

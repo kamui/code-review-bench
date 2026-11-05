@@ -6,12 +6,12 @@ import type { Configuration, Dataset } from '../lib/data'
 import { bandLabels, compact, conditionDifferences, detectionLabel, duration, estimatorLabels, lowerFirst, measured, money, percent, perReview, points, reading, scaled, share } from '../lib/metrics'
 import type { DetectionView, Reading } from '../lib/metrics'
 import { bands, candidates as pendingFamilies, conditionalMetrics, estimators, matched, orderingConflicts, pairwise, pendingCandidates, preExistingLabels, recommend, referenceCoverage } from '../lib/scoring'
-import type { ConditionalMetric, Estimator, Scorecard, Selection } from '../lib/scoring'
+import type { ConditionalMetric, Estimator, PreExistingLabel, Scorecard, Selection } from '../lib/scoring'
 import { scorecardTabs } from '../lib/view'
 import type { Inspection, ScorecardTab, Section } from '../lib/view'
 import { ClaimLabels } from './ClaimLabels'
-import { SetupName, setupLabel } from './Chart'
-import { DataTable, Disclosure, Value } from './Reading'
+import { SetupName, setupLabel, setupParts } from './Chart'
+import { DataTable, Disclosure, Rich, Value } from './Reading'
 import { SeriousMisses } from './SeriousMisses'
 import type { Column } from './Reading'
 
@@ -180,8 +180,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
             { label: 'Reviews assessed / admitted', value: row => `${row.card.preExisting.labels[label].assessed} / ${row.card.preExisting.labels[label].admitted}` },
             { label: 'Unresolved', value: row => String(row.card.preExisting.labels[label].unresolved) },
             { label: 'Pending candidates', value: row => String(row.card.preExisting.candidates.length) }]} />
-          {rows.map(row => <div key={key(row)}><Text size="sm" fw={640}><SetupName configuration={row.configuration} mark={false} /></Text>
-            <ul>{row.card.preExisting.labels[label].rows.map(problem => <li key={problem.problemId}>{problem.title}: observed raised {problem.raised} times; {problem.assessed} assessments, {problem.unresolved} unresolved.</li>)}</ul></div>)}
+          <PreExistingMatrix label={label} rows={rows} name={name} />
         </Stack>)}
         <Text size="xs" c="dimmed">The catalog contains discovered cases, not every pre-existing fault. Assessment coverage does not establish historical audit coverage.</Text>
       </Stack></Tabs.Panel>
@@ -295,9 +294,9 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
 function DeltaPlot({ rows, a, b }: { rows: { id: string; label: string; delta: number }[]; a: string; b: string }) {
   if (!rows.length) return null
   const limit = Math.max(25, ...rows.map(row => Math.abs(row.delta)))
-  const at = (value: number) => 50 + value / limit * 50
+  const at = (value: number) => 50 - value / limit * 50
   return <div className="delta-plot" role="list" aria-label="A minus B detection difference per PR">
-    <div className="delta-head" aria-hidden="true"><span /><span className="delta-sides"><span><b>← B higher</b>{b}</span><span><b>A higher →</b>{a}</span></span></div>
+    <div className="delta-head" aria-hidden="true"><span /><span className="delta-sides"><span><b>← A higher</b>{a}</span><span><b>B higher →</b>{b}</span></span></div>
     {[...rows].sort((left, right) => right.delta - left.delta).map(row => <div role="listitem" key={row.id} className="delta-row"
       aria-label={`${row.label}: ${signed(row.delta)}`}>
       <span className="delta-label">{row.label}</span>
@@ -312,4 +311,32 @@ function DeltaPlot({ rows, a, b }: { rows: { id: string; label: string; delta: n
 function TabIntro({ lede, children }: { lede: string; children?: ReactNode }) {
   return <div className="tab-intro"><Text className="tab-lede">{lede}</Text>
     {children && <Disclosure title="How this is measured"><Text size="sm" className="disclosure-body">{children}</Text></Disclosure>}</div>
+}
+
+function PreExistingMatrix({ label, rows, name }: { label: PreExistingLabel; rows: { configuration: Configuration; card: Scorecard }[]; name: (taskId: string) => string }) {
+  const problems = rows[0]?.card.preExisting.labels[label].rows ?? []
+  if (!problems.length) return null
+  const groups = rows.reduce<{ method: string; span: number }[]>((all, row) => {
+    const { method } = setupParts(row.configuration)
+    const last = all.at(-1)
+    return last?.method === method ? [...all.slice(0, -1), { method, span: last.span + 1 }] : [...all, { method, span: 1 }]
+  }, [])
+  return <>
+    <Text size="sm">Each cell is how many assessed admitted reviews raised the problem, out of those assessed.</Text>
+    <Table.ScrollContainer minWidth={320 + rows.length * 104}><Table aria-label={`${bandLabels[label]} pre-existing problems raised, by setup`} className="data-table pre-matrix">
+      <Table.Thead>
+        <Table.Tr><Table.Th scope="col" rowSpan={2} className="pre-sticky">Problem</Table.Th>
+          {groups.map((group, index) => <Table.Th key={`${group.method}-${index}`} scope="colgroup" colSpan={group.span} className="pre-method">{group.method}</Table.Th>)}</Table.Tr>
+        <Table.Tr>{rows.map(row => <Table.Th key={row.configuration.id} scope="col" data-numeric>{[setupParts(row.configuration).model, setupParts(row.configuration).effort].filter(Boolean).join(' · ')}</Table.Th>)}</Table.Tr>
+      </Table.Thead>
+      <Table.Tbody>{problems.map(problem => <Table.Tr key={`${problem.taskId}/${problem.problemId}`}>
+        <Table.Th scope="row" className="pre-sticky"><Rich text={problem.title} /><Text size="xs" c="dimmed">{name(problem.taskId)}</Text></Table.Th>
+        {rows.map(row => {
+          const cell = row.card.preExisting.labels[label].rows.find(item => item.problemId === problem.problemId && item.taskId === problem.taskId)
+          return <Table.Td key={row.configuration.id} data-numeric data-raised={cell && cell.raised > 0 ? true : undefined}>
+            {cell ? <>{cell.raised}<span className="pre-of"> / {cell.assessed}</span>{cell.unresolved > 0 && <span className="pre-open">{cell.unresolved} open</span>}</> : '—'}</Table.Td>
+        })}
+      </Table.Tr>)}</Table.Tbody>
+    </Table></Table.ScrollContainer>
+  </>
 }

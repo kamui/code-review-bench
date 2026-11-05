@@ -87,6 +87,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
   const [technology, setTechnology] = useState<string | null>(null)
   const [concern, setConcern] = useState<string | null>(null)
   const [findingConcern, setFindingConcern] = useState<string | null>(null)
+  const [filtersOpen, setFiltersOpen] = useState(false)
   const inspection = inspectionOf(search, dataset)
   const inspect = (section?: Section) => (next: Inspection | null, within = section) => onSearch(inspectionParams(next), within)
   const [sort, setSort] = useState<{ column: ResultsColumn; direction: 'ascending' | 'descending' }>({ column: 'setup', direction: 'ascending' })
@@ -141,6 +142,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
   const status = datasetStatus(dataset)
   const differing = conditionDifferences(summaries.map(row => row.configuration)).map(difference => difference.name.toLowerCase())
   const labels = (key: keyof Task['profile']) => Array.from(new Set(dataset.tasks.flatMap(task => task.profile[key]))).sort()
+  const activeTaskFilters = [query, area, change, technology, concern, findingConcern].filter(Boolean).length
   const approvedFamilies = candidates.flatMap(task => task.families.filter(family => family.eligibility === 'approved'))
   const findingConcerns = Array.from(new Set([...approvedFamilies.flatMap(family => family.concerns), ...findingConcern ? [findingConcern] : []])).sort()
     .map(value => ({ value, label: `${value} (${approvedFamilies.filter(family => family.concerns.includes(value)).length})` }))
@@ -305,7 +307,9 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
 
       {page === 'tasks' && <section id="tasks" className="tasks-section">
         <header className="section-head"><div><p className="eyebrow">Corpus</p><div className="title-row"><Title order={2}>Explore the tasks</Title><Badge variant="outline" color="gray" radius="sm" className="status-badge">{candidates.length} of {dataset.tasks.length} tasks</Badge></div><Text className="section-lede">A small, varied corpus. Find the gaps before drawing conclusions.</Text></div></header>
-        <Paper withBorder radius="lg" p="lg" className="filter-panel">
+        <Button variant="default" className="filters-toggle" leftSection={<SlidersHorizontal size={15} aria-hidden="true" />} rightSection={<ChevronDown size={14} aria-hidden="true" />}
+          aria-expanded={filtersOpen} onClick={() => setFiltersOpen(open => !open)}>Filters{activeTaskFilters > 0 && ` · ${activeTaskFilters} active`}</Button>
+        <Paper withBorder radius="lg" p="lg" className="filter-panel" data-open={filtersOpen || undefined}>
           <div className="task-filters"><TextInput label="Search" aria-label="Search tasks" placeholder="Search repository, PR, or behavior" value={query} onChange={event => setQuery(event.currentTarget.value)} leftSection={<Search size={16} />} />
             <Select label="Code area" aria-label="Code area" placeholder="All code areas" data={labels('areas')} value={area} onChange={setArea} clearable />
             <Select label="Change kind" aria-label="Change kind" placeholder="All change kinds" data={labels('changeKinds')} value={change} onChange={setChange} clearable />
@@ -333,6 +337,8 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
                   : <Tooltip label="At least one selected setup has no result for this PR"><Text size="xs" c="dimmed" className="missing-label">Missing results</Text></Tooltip>}</Table.Td>
                 <Table.Td className="row-open"><ActionIcon aria-label={`Inspect ${task.repo} PR ${task.pr}`} variant="subtle" color="gray" onClick={() => inspect()({ kind: 'task', id: task.id })}><ChevronRight size={18} /></ActionIcon></Table.Td></Table.Tr>
             })}</Table.Tbody></Table></Table.ScrollContainer>
+            {candidates.some(task => meanTaskRecall(board.cards.filter(card => activeIds.includes(card.configurationId)), task.id, band).annotations.length > 0)
+              && <Text size="xs" c="dimmed" mt="sm" className="footnote">A dotted underline marks a mean that counts unresolved detection decisions as zero credit; hover it for the count.</Text>}
             {!candidates.length && <Paper ta="center" py="xl"><Text fw={640}>No tasks match these filters</Text><Button variant="subtle" mt="sm" onClick={resetFilters}>Show all tasks</Button></Paper>}
           </Tabs.Panel>
           <Tabs.Panel value="coverage" pt="lg"><CoverageMatrix tasks={dataset.tasks} />
@@ -398,7 +404,7 @@ function DetectionBar({ result }: { result: ReturnType<typeof meanTaskRecall> })
   return <span className="detection-cell"><span className="detection-bar"><Tooltip label={notes} disabled={!notes} multiline w={280} withArrow>
     <span className={notes ? 'annotated' : undefined}>{value}{notes && <VisuallyHidden>: {notes}</VisuallyHidden>}</span></Tooltip>
     <span className="detection-track" aria-hidden="true"><span style={{ width: value }} /></span></span>
-    <Text size="xs" c="dimmed" component="span">Mean of {result.included} of {plural(result.selected, 'selected setup')}{withheld && `. Not included: ${withheld}`}{notes && '. Underlined: counts unresolved decisions as zero credit'}</Text></span>
+    <Text size="xs" c="dimmed" component="span">Mean of {result.included} of {plural(result.selected, 'selected setup')}{withheld && `. Not included: ${withheld}`}</Text></span>
 }
 
 const concerns = ['Security', 'Performance', 'Scalability', 'Architecture', 'Reliability', 'Maintainability', 'Functional', 'Testing']

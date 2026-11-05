@@ -92,7 +92,7 @@ export function Overview({ summaries, detection, sort, onSort, onSelect }: {
         {keyGroups.map(group => <li key={group.label}><span className="key-ramp">{group.segments.map(segment =>
           <span key={segment} className={segmentClass('label-swatch', segment)} style={swatch(segment)} aria-hidden="true" />)}</span>{group.label}</li>)}
         <li className="key-break"><span className="label-swatch" style={swatch('refuted')} aria-hidden="true" />Refuted or unproven</li>
-        <li><span className="label-swatch hatched" style={swatch('unresolved')} aria-hidden="true" />Only doubt is unresolved</li>
+        <li><span className={segmentClass('label-swatch', 'unresolved')} style={swatch('unresolved')} aria-hidden="true" />Only doubt is unresolved</li>
         <li className="key-break"><span className="overview-key-dot" aria-hidden="true" />Lower-bound cost</li>
         <li><span className="overview-key-spread" aria-hidden="true" />Middle 50% of trials</li></ul>
       <p className="overview-rule" aria-live="polite">{rule}</p>

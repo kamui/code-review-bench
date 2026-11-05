@@ -40,7 +40,6 @@ function InspectionBody({ dataset, results, band, configuration, task, inspectio
   const outcomes = dataset.outcomes.filter(outcome => configuration ? outcome.configurationId === configuration.id : outcome.taskId === task?.id)
   const allowed = new Set(outcomes.flatMap(outcome => outcome.attemptIds))
   const attempts = dataset.attempts.filter(attempt => allowed.has(attempt.id))
-  const attemptId = attempts.find(item => item.id === inspection.attemptId)?.id ?? attempts[0]?.id ?? null
   const tab = inspection.tab ?? 'reviews'
   const taskName = (id: string) => {
     const entry = dataset.tasks.find(item => item.id === id)
@@ -57,7 +56,8 @@ function InspectionBody({ dataset, results, band, configuration, task, inspectio
     const group = configuration ? taskName(item.taskId) : setup ? setupLabel(setup) : item.runId
     groups.set(group, [...groups.get(group) ?? [], { value: item.id, label: `Trial ${item.replicate} · ${attemptName(item)}${item.complete ? '' : ' · incomplete or invalid'}` }])
   }
-  const attemptGroups = Array.from(groups, ([group, items]) => ({ group, items }))
+  const attemptGroups = Array.from(groups, ([group, items]) => ({ group, items })).sort((left, right) => left.group.localeCompare(right.group))
+  const attemptId = attempts.find(item => item.id === inspection.attemptId)?.id ?? attemptGroups[0]?.items[0]?.value ?? null
   const currentGroup = attemptGroups.find(entry => entry.items.some(item => item.value === attemptId))?.group
   const [detail, setDetail] = useState<AttemptDetail | null>(null)
   const [error, setError] = useState('')
@@ -85,7 +85,7 @@ function InspectionBody({ dataset, results, band, configuration, task, inspectio
         <Button component="a" href={task.packetUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileText size={14} />}>Review packet</Button></Group>
       <Text size="xs" c="dimmed">Revision {task.head.slice(0, 10)}. Each reference shows its own eligibility and impact state.</Text>
       <TaskResults task={task} results={results} band={band} onOpen={attemptId => onChange({ ...inspection, attemptId, tab: 'reviews' })} /></>}
-    <Tabs value={tab} onChange={value => { const next = drawerTabs.find(item => item === value); if (next) onChange({ ...inspection, tab: next }) }}>
+    <Tabs className="drawer-tabs" value={tab} onChange={value => { const next = drawerTabs.find(item => item === value); if (next) onChange({ ...inspection, tab: next }) }}>
       <Tabs.List><Tabs.Tab value="reviews">Reviews ({attempts.length})</Tabs.Tab><Tabs.Tab value="references">References and candidates</Tabs.Tab><Tabs.Tab value="coverage">Coverage & failures</Tabs.Tab></Tabs.List>
       <Tabs.Panel value="reviews" pt="lg">
         <Stack gap="md">
