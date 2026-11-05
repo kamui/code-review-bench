@@ -70,9 +70,9 @@ const scaleFor = (axis: Axis, values: number[]): Scale => axis === 'refuted' || 
 const fraction = (scale: Scale, value: number) => position(scale, value, 0, 100)
 const scoreTicks = [0, 25, 50, 75, 100]
 
-export function Chart({ summaries, detection, matching, axis, view, onSelect, guide, height }: {
+export function Chart({ summaries, detection, matching, axis, view, onSelect, guide, aside, height }: {
   summaries: Summary[]; detection: DetectionView; matching: { included: number; excluded: number }; axis: Axis; view: ChartView; onSelect: (id: string) => void
-  guide?: ReactNode; height?: number
+  guide?: ReactNode; aside?: ReactNode; height?: number
 }) {
   const measure = detectionLabel(detection), dimensions = `${lowerFirst(measure)} against ${lowerFirst(axisLabels[axis])}`
   const [hovered, setHovered] = useState<({ id: string } & TipPlace) | null>(null)
@@ -106,7 +106,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
       <span>No other impact band or average is substituted. Choose them above.</span></div>
       : view === 'setups' ? <SetupRows points={points} measure={measure} axis={axis} scale={scale} frontier={frontier} onSelect={onSelect} interactions={interactions} />
         : view === 'tradeoff' ? <Scatter points={measured} dimensions={dimensions} axis={axis} scale={scale}
-          spotlight={spotlight?.method ?? null} onSelect={onSelect} interactions={interactions} yTitle={foundLabels[detection.band]} height={height} />
+          spotlight={spotlight?.method ?? null} hovered={hovered?.id ?? null} onSelect={onSelect} interactions={interactions} yTitle={foundLabels[detection.band]} height={height} />
         : view === 'skills' ? <MethodPanels points={measured} axis={axis} scale={scale} onSelect={onSelect} interactions={interactions} />
           : <Models points={points} measure={measure} onSelect={onSelect} interactions={interactions} />}
     {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={measure} axes={view === 'models' ? [] : [axis]} place={hovered} />}
@@ -118,6 +118,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
           <button type="button" className="key-button" aria-pressed={spotlight?.method === method && spotlight.pinned} onMouseEnter={preview(method)} onMouseLeave={preview(null)} onFocus={preview(method)} onBlur={preview(null)}
             onClick={() => setSpotlight(current => current?.pinned && current.method === method ? null : { method, pinned: true })}><Mark configuration={configuration} size={10} />{method}</button></li>)}
       {bounded && <li><span className="bound-key" aria-hidden="true" />Lower bound</li>}
+      {aside && <li className="key-aside">{aside}</li>}
     </ul>}
     {points.length > 0 && <ChartGuide title={guide ? 'How to read these charts' : undefined}><div className="plot-caption">
       {guide}
@@ -125,7 +126,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
       {view === 'skills' && <span>Each panel shows one review method on every model it ran on, with detection against {lowerFirst(axisLabels[axis])} on shared axes. Gray dots are the other selected setups, for context.</span>}
       {view === 'tradeoff' && <span>Point at a review method in the key to pick out its setups; select it to keep them picked out.</span>}
       {view === 'tradeoff' && axis === 'doubt' && <span>An unproven claim is not shown to be false.</span>}
-      {view === 'tradeoff' && <span>A line joins each review method's setups from left to right. It shows one method across models; the points between are not measured.</span>}
+      {view === 'tradeoff' && <span>A faint line joins each review method's setups from left to right, and comes forward when you point at one of them. It shows one method across models; the points between are not measured.</span>}
       {view === 'models' && <span>Each row is one model, in name order. Marks show {lowerFirst(measure)} for each review method that ran on it, listed from most found to least.</span>}
       {withheld.length > 0 && <span>Not plotted, {lowerFirst(measure)} unavailable: {withheld.map(row => `${row.reason} (${setups(row.count)})`).join(' ')}</span>}
       {view !== 'models' && bounded && <span><span className="bound-key" aria-hidden="true" />Hollow marks show a lower bound of {lowerFirst(axisLabels[axis])}: some attempts recorded only part of their usage, so the true value may be higher.{view === 'setups' && ' They are left out of the frontier.'}</span>}
@@ -204,8 +205,8 @@ const labelOf = (points: Point[], withMethod = false) => {
 
 type Plotted = Point & { x: number; y: number }
 
-function Scatter({ points, dimensions, axis, scale, spotlight, onSelect, interactions, yTitle, height = 400 }: {
-  dimensions: string; points: Plotted[]; axis: Axis; scale: Scale; spotlight: string | null; onSelect: (id: string) => void; interactions: Interactions; yTitle: string; height?: number
+function Scatter({ points, dimensions, axis, scale, spotlight, hovered, onSelect, interactions, yTitle, height = 400 }: {
+  dimensions: string; points: Plotted[]; axis: Axis; scale: Scale; spotlight: string | null; hovered: string | null; onSelect: (id: string) => void; interactions: Interactions; yTitle: string; height?: number
 }) {
   const { ref, width } = useElementSize()
   const margin = { top: 18, right: 22, bottom: 50, left: 62 }
@@ -215,6 +216,8 @@ function Scatter({ points, dimensions, axis, scale, spotlight, onSelect, interac
   const labelText = labelOf(points)
   const ordered = [...points].sort((left, right) => right.y - left.y)
   const outside = (point: Point) => spotlight !== null && setupParts(point.summary.configuration).method !== spotlight
+  const hoveredPoint = points.find(point => point.summary.configuration.id === hovered)
+  const active = spotlight ?? (hoveredPoint ? setupParts(hoveredPoint.summary.configuration).method : null)
   const lines = groupPaths(points, point => methodKey(point.summary.configuration)).filter(group => group.points.length > 1)
   const along = (from: Plotted, to: Plotted) => {
     const steps = Math.ceil(Math.hypot(px(to.x) - px(from.x), py(to.y) - py(from.y)) / 6)
@@ -229,7 +232,7 @@ function Scatter({ points, dimensions, axis, scale, spotlight, onSelect, interac
   ]
   const labels = width ? placeLabels(ordered.filter(point => !outside(point)).map(point => ({
     id: point.summary.configuration.id, x: px(point.x), y: py(point.y), width: textWidth(labelText(point.summary.configuration)), height: 16,
-  })), obstacles, { left: plot.left + 2, right: plot.right, top: 2, bottom: plot.bottom - 2 }) : []
+  })), obstacles, { left: plot.left + 2, right: plot.right, top: 2, bottom: plot.bottom - 2 }, width < 600 ? [12, 22] : [12, 24, 36]) : []
   const xTicks = ticks(scale, width > 700)
   return <div ref={ref} className="tradeoff">
     {width > 0 && <svg width={width} height={height} role="group" aria-label={`Plot of ${dimensions}. A line joins the setups of each review method.`}>
@@ -239,7 +242,7 @@ function Scatter({ points, dimensions, axis, scale, spotlight, onSelect, interac
       <rect x={plot.left} y={plot.top} width={plot.right - plot.left} height={plot.bottom - plot.top} fill="url(#better-corner)" />
       <Axes plot={plot} axis={axis} scale={scale} xTicks={xTicks} px={px} py={py} height={height} yTitle={yTitle} />
       {lines.map(group => <polyline key={group.key} points={group.points.map(point => `${px(point.x)},${py(point.y)}`).join(' ')}
-        className={outside(group.points[0]!) ? 'method-line muted' : 'method-line'} style={{ stroke: reviewColor(group.points[0]!.summary.configuration) }} />)}
+        className={outside(group.points[0]!) ? 'method-line muted' : setupParts(group.points[0]!.summary.configuration).method === active ? 'method-line active' : 'method-line'} style={{ stroke: reviewColor(group.points[0]!.summary.configuration) }} />)}
       {labels.filter(label => label.leader).map(label => {
         const point = points.find(item => item.summary.configuration.id === label.id)
         return point && <line key={`leader-${label.id}`} x1={px(point.x)} y1={py(point.y)} x2={label.anchor === 'middle' ? label.x : label.x + (label.anchor === 'start' ? -3 : 3)} y2={label.y} className="leader-line" />

@@ -83,11 +83,11 @@ export type LabelPlacement = { id: string; x: number; y: number; anchor: 'start'
 const overlaps = (a: Box, b: Box) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
 
 /** Greedy placement in request order; a label that fits nowhere is left to the tooltip rather than drawn over data. */
-export function placeLabels(requests: LabelRequest[], obstacles: Box[], bounds: Box): LabelPlacement[] {
+export function placeLabels(requests: LabelRequest[], obstacles: Box[], bounds: Box, distances = [12, 24, 40, 58, 76]): LabelPlacement[] {
   const taken = [...obstacles]
   const placed: LabelPlacement[] = []
   for (const request of requests) {
-    const found = [12, 24, 40, 58, 76].flatMap(distance => {
+    const found = distances.flatMap(distance => {
       const diagonal = distance * 0.72
       const candidates: [number, number, LabelPlacement['anchor']][] = [
         [distance, 0, 'start'], [-distance, 0, 'end'], [diagonal, -diagonal, 'start'], [diagonal, diagonal, 'start'],

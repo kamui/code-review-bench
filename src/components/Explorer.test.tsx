@@ -363,7 +363,7 @@ describe('chart', () => {
 
   test('the scatter says its lines join each review method\'s setups and are not a trend', () => {
     expect(chart(fixture, { band: 'all', estimator: 'equalPr' }, 'tradeoff'))
-      .toContain('A line joins each review method\'s setups from left to right. It shows one method across models; the points between are not measured.')
+      .toContain('A faint line joins each review method\'s setups from left to right, and comes forward when you point at one of them.')
   })
 })
 
