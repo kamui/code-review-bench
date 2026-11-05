@@ -84,7 +84,7 @@ function InspectionBody({ dataset, results, band, estimator, configuration, task
   const novel = currentTask ? pendingCandidates(dataset, [currentTask.id], now) : []
   return <Stack gap="lg">
     {configuration && <><SetupResults result={results.find(item => item.configuration.id === configuration.id)} band={band} estimator={estimator} />
-      <Stack gap={4}>{!configuration.builtin && <Group gap="xs"><Badge variant="outline" color="gray" radius="sm">{skillReleaseLabel([configuration])}</Badge></Group>}<Disclosure title="Run notes"><div className="disclosure-body">
+      <Stack gap={4}>{!configuration.builtin && <Group gap="xs"><Tag>{skillReleaseLabel([configuration])}</Tag></Group>}<Disclosure title="Run notes"><div className="disclosure-body">
         <Text size="sm">{configuration.note}</Text>
         <ul className="source-links">
           {Array.from(new Set(configuration.skillReleases.map(release => release.provenanceUrl))).map(url => <li key={url}><a href={url} target="_blank" rel="noreferrer">Skill release provenance<ExternalLink size={12} aria-hidden="true" /></a></li>)}
@@ -131,7 +131,7 @@ function InspectionBody({ dataset, results, band, estimator, configuration, task
               : 'This attempt returned no usable findings. Its failure and usage remain in the evidence.'}</Alert>}
             <Accordion variant="separated">{detail.items.map((item, index) => <Accordion.Item key={item.id} value={item.id}>
               <Accordion.Control><Group gap="xs" mb={6}><Text size="xs" c="dimmed" fw={560}>Finding {index + 1}</Text><Outcome assignment={item.assignment} /></Group>
-                <Text size="sm" className="finding-claim"><Rich text={firstLine(item.claim)} /></Text></Accordion.Control>
+                <Text size="sm" className="finding-claim"><Rich text={firstLine(item.claim).replace(/^Finding \d+\s*[—–:-]\s*/, '')} /></Text></Accordion.Control>
               <Accordion.Panel><Stack gap="sm"><Text size="xs" c="dimmed">{item.file}{item.line === null ? '' : `:${item.line}`}</Text>
                 {item.claim.trim().includes('\n') && <Text size="sm" component="div"><Markdown text={item.claim} /></Text>}
                 <Text size="sm" component="div"><Markdown text={item.consequence} /></Text>
