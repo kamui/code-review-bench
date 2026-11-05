@@ -120,7 +120,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
         : <span>Select at least one review method and model.</span>}
       <span>No other impact band or average is substituted. Choose them above.</span></div>
       : view === 'setups' ? <SetupRows points={points} measure={measure} axis={axis} scale={scale} frontier={frontier} onSelect={onSelect} interactions={interactions} />
-        : view === 'tradeoff' ? <div className="twin">{panels.map((panel, index) => <Scatter key={panel.on} joined={index === 0} points={panel.points} dimensions={`${lowerFirst(measure)} against ${lowerFirst(axisLabels[panel.on])}`}
+        : view === 'tradeoff' ? <div className="twin">{panels.map(panel => <Scatter key={panel.on} points={panel.points} dimensions={`${lowerFirst(measure)} against ${lowerFirst(axisLabels[panel.on])}`}
           axis={panel.on} scale={panel.scale} spotlight={spotlight?.method ?? null} marked={hovered?.id ?? linked?.id ?? null} onSelect={pinAndSelect} interactions={interactions} yTitle={foundLabels[detection.band]} height={height} />)}</div>
         : view === 'skills' ? <MethodPanels points={measured} axis={axis} scale={scale} onSelect={onSelect} interactions={interactions} />
           : <Models points={points} measure={measure} onSelect={onSelect} interactions={interactions} />}
@@ -142,7 +142,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
       {view === 'tradeoff' && <span>Point at a review method in the key to pick out its setups; select it to keep them picked out.</span>}
       {view === 'tradeoff' && <span>Both panels plot the same setups at the same height. Point at a setup, or select it, to mark it and show its name in both.</span>}
       {(view === 'tradeoff' || axis === 'doubt') && <span>An unproven claim is not shown to be false.</span>}
-      {view === 'tradeoff' && <span>In the left panel, a faint line joins each review method's setups from left to right, and comes forward when you point at one of them. It shows one method across models; the points between are not measured.</span>}
+      {view === 'tradeoff' && <span>{view === 'tradeoff' ? 'In each panel, a' : 'A'} faint line joins each review method's setups from left to right, and comes forward when you point at one of them. It shows one method across models; the points between are not measured.</span>}
       {view === 'models' && <span>Each row is one model; rows start with the model whose setup finds the most. Marks show {lowerFirst(measure)} for each review method that ran on it, listed from most found to least.</span>}
       {withheld.length > 0 && <span>Not plotted, {lowerFirst(measure)} unavailable: {withheld.map(row => `${row.reason} (${setups(row.count)})`).join(' ')}</span>}
       {view !== 'models' && bounded && <span><span className="bound-key" aria-hidden="true" />Hollow marks show a lower bound of {lowerFirst(axisLabels[boundedAxis])}: some attempts recorded only part of their usage, so the true value may be higher.{view === 'setups' && ' They are left out of the frontier.'}</span>}
@@ -221,8 +221,8 @@ const labelOf = (points: Point[], withMethod = false) => {
 
 type Plotted = Point & { x: number; y: number }
 
-function Scatter({ points, dimensions, axis, scale, spotlight, marked, onSelect, interactions, yTitle, height = 400, joined = true }: {
-  joined?: boolean; dimensions: string; points: Plotted[]; axis: Axis; scale: Scale; spotlight: string | null; marked: string | null; onSelect: (id: string) => void; interactions: Interactions; yTitle: string; height?: number
+function Scatter({ points, dimensions, axis, scale, spotlight, marked, onSelect, interactions, yTitle, height = 400 }: {
+  dimensions: string; points: Plotted[]; axis: Axis; scale: Scale; spotlight: string | null; marked: string | null; onSelect: (id: string) => void; interactions: Interactions; yTitle: string; height?: number
 }) {
   const { ref, width } = useElementSize()
   const corner = useId()
@@ -235,7 +235,7 @@ function Scatter({ points, dimensions, axis, scale, spotlight, marked, onSelect,
   const outside = (point: Point) => spotlight !== null && setupParts(point.summary.configuration).method !== spotlight
   const markedPoint = points.find(point => point.summary.configuration.id === marked)
   const active = spotlight ?? (markedPoint ? setupParts(markedPoint.summary.configuration).method : null)
-  const lines = joined ? groupPaths(points, point => methodKey(point.summary.configuration)).filter(group => group.points.length > 1) : []
+  const lines = groupPaths(points, point => methodKey(point.summary.configuration)).filter(group => group.points.length > 1)
   const along = (from: Plotted, to: Plotted) => {
     const steps = Math.ceil(Math.hypot(px(to.x) - px(from.x), py(to.y) - py(from.y)) / 6)
     return Array.from({ length: steps }, (_, index) => {
@@ -254,7 +254,7 @@ function Scatter({ points, dimensions, axis, scale, spotlight, marked, onSelect,
     ? [{ id: markedPoint.summary.configuration.id, x: px(markedPoint.x) + 12, y: py(markedPoint.y), anchor: 'start' as const, leader: false }, ...placed] : placed
   const xTicks = ticks(scale, width > 700)
   return <div ref={ref} className="tradeoff">
-    {width > 0 && <svg width={width} height={height} role="group" aria-label={`Plot of ${dimensions}.${joined ? ' A line joins the setups of each review method.' : ''}`}>
+    {width > 0 && <svg width={width} height={height} role="group" aria-label={`Plot of ${dimensions}. A line joins the setups of each review method.`}>
       <defs><linearGradient id={corner} x1="0" y1="0" x2="1" y2="1">
         <stop offset="0" stopColor="var(--brand-accent)" stopOpacity="0.09" /><stop offset="0.45" stopColor="var(--brand-accent)" stopOpacity="0" />
       </linearGradient></defs>
