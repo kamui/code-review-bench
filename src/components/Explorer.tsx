@@ -316,11 +316,11 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
           aria-expanded={filtersOpen} onClick={() => setFiltersOpen(open => !open)}>Filters{activeTaskFilters > 0 && ` · ${activeTaskFilters} active`}</Button>
         <Paper withBorder radius="lg" p="lg" className="filter-panel" data-open={filtersOpen || undefined}>
           <div className="task-filters"><TextInput label="Search" aria-label="Search tasks" placeholder="Search repository, PR, or behavior" value={query} onChange={event => setQuery(event.currentTarget.value)} leftSection={<Search size={16} />} />
-            <Select label="Code area" aria-label="Code area" placeholder="All code areas" data={labels('areas')} value={area} onChange={setArea} clearable />
-            <Select label="Change kind" aria-label="Change kind" placeholder="All change kinds" data={labels('changeKinds')} value={change} onChange={setChange} clearable />
-            <Select label="Technology" aria-label="Technology" placeholder="All technologies" data={labels('technologies')} value={technology} onChange={setTechnology} clearable />
-            <Select label="Review concern" aria-label="Task review concern" placeholder="All review concerns" data={labels('concerns')} value={concern} onChange={setConcern} clearable />
-            <Select label="Count only references about" aria-label="Finding concern" placeholder="All finding concerns" data={findingConcerns} value={findingConcern} onChange={setFindingConcern} clearable />
+            <FilterSelect label="Code area" aria-label="Code area" all="All code areas" data={labels('areas')} value={area} onChange={setArea} />
+            <FilterSelect label="Change kind" aria-label="Change kind" all="All change kinds" data={labels('changeKinds')} value={change} onChange={setChange} />
+            <FilterSelect label="Technology" aria-label="Technology" all="All technologies" data={labels('technologies')} value={technology} onChange={setTechnology} />
+            <FilterSelect label="Review concern" aria-label="Task review concern" all="All review concerns" data={labels('concerns')} value={concern} onChange={setConcern} />
+            <FilterSelect label="Count only references about" aria-label="Finding concern" all="All finding concerns" data={findingConcerns} value={findingConcern} onChange={setFindingConcern} />
           </div>
           <div className="task-filters-foot">
             <Text size="xs" c="dimmed">{findingConcern ? `Detection counts only the ${plural(concernReferences, `${findingConcern.toLowerCase()} reference`)} on these PRs.` : 'Detection counts every approved reference.'} Filters also narrow the <Link className="filter-link" to="/" hash="scorecard">scorecard</Link> comparison.</Text>
@@ -402,6 +402,14 @@ function DetectionBar({ result }: { result: ReturnType<typeof meanTaskRecall> })
 }
 
 const concerns = ['Security', 'Performance', 'Scalability', 'Architecture', 'Reliability', 'Maintainability', 'Functional', 'Testing']
+const anyValue = '*'
+
+// The "All …" choice stands for no filter, so the list always shows which choice is current.
+function FilterSelect({ all, data, value, onChange, ...props }: { label: string; 'aria-label': string; all: string; data: (string | { value: string; label: string })[]; value: string | null; onChange: (value: string | null) => void }) {
+  return <Select {...props} allowDeselect={false} data={[{ value: anyValue, label: all }, ...data.map(item => typeof item === 'string' ? { value: item, label: item } : item)]} value={value ?? anyValue}
+    onChange={next => onChange(next === anyValue ? null : next)} />
+}
+
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
 
 export function CoverageMatrix({ tasks }: { tasks: Task[] }) {
