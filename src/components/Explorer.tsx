@@ -8,7 +8,7 @@ import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpDown, ArrowUpRight, ChartNo
 import type { LucideIcon } from 'lucide-react'
 import { fetchDataset, impactBands, skillReleaseLabel } from '../lib/data'
 import type { Configuration, Dataset, Task } from '../lib/data'
-import { bandLabels, compact, conditionDifferences, datasetStatus, detectionLabel, estimatorLabels, heroCounts, lowerBound, lowerFirst, measured, money, percent, perReview, reading, reasonCounts, share, summarize } from '../lib/metrics'
+import { bandLabels, compact, conditionDifferences, datasetStatus, detectionLabel, estimatorLabels, heroCounts, lowerBound, lowerFirst, measured, percent, perReview, reading, reasonCounts, share, summarize } from '../lib/metrics'
 import type { Reading } from '../lib/metrics'
 import { estimators, leaderboard, matched, meanTaskRecall, pendingCandidates, referenceCoverage } from '../lib/scoring'
 import type { OverviewSort } from '../lib/scoring'
@@ -18,7 +18,7 @@ import { Chart, Mark, setupParts } from './Chart'
 import { EvidenceDrawer } from './EvidenceDrawer'
 import { MethodologyViews } from './MethodologyViews'
 import { Overview } from './Overview'
-import { Notes, notesFor, PeerNote, Tag, Value } from './Reading'
+import { costNote, costText, Notes, notesFor, PeerNote, Tag, Value } from './Reading'
 
 export type Page = 'scorecard' | 'tasks' | 'methodology'
 type LoadState = { kind: 'loading' } | { kind: 'failed'; message: string } | { kind: 'ready'; dataset: Dataset }
@@ -115,11 +115,12 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
   })
   const summaries = comparisonSummaries.filter(row => activeIds.includes(row.configuration.id))
     .sort((left, right) => (right.detection ?? -1) - (left.detection ?? -1))
+  const tableShown = comparisonSummaries.map(row => row.configuration)
   const tableRows = comparisonSummaries.map(row => {
     const recall = row.card.detection[band]
     const cells: Record<Exclude<ResultsColumn, 'setup' | 'completed'>, Reading> = { equalProblem: share(recall.equalProblem, recall.zeroCredit.reason), equalPr: share(recall.equalPr, recall.zeroCredit.reason),
       seriousCaught: share(row.card.seriousCaught.equalPr, row.card.detection.serious.zeroCredit.reason), repeatedMisses: reading(row.card.seriousMisses.repeated, String),
-      cost: reading(row.card.cost.perTrial, value => `${money(value)}${row.configuration.billing === 'list-price-equivalent' ? '*' : ''}`),
+      cost: reading(row.card.cost.perTrial, costText(row.configuration, tableShown)),
       tokens: reading(row.card.tokens.perTrial, compact), refuted: perReview(row.card.reliability.outcomes.refuted.perAdmittedReview) }
     return { ...row, cells, order: { setup: row.configuration.short, equalProblem: measured(recall.equalProblem), equalPr: measured(recall.equalPr),
       seriousCaught: measured(row.card.seriousCaught.equalPr), repeatedMisses: measured(row.card.seriousMisses.repeated), cost: lowerBound(row.card.cost.perTrial), tokens: row.tokens,
@@ -299,7 +300,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
         </Table></Table.ScrollContainer></div>
         <Notes notes={tableNotes} />
         {!shared.length && <Text ta="center" c="dimmed" py="xl">No PR is shared by the selected standard setups with these filters.</Text>}
-        <Text size="xs" c="dimmed" mt="sm" className="footnote">Cost and output tokens add every attempt, retries included, and divide by scheduled trials. ≥ marks a lower bound where usage was only partly recorded; hover it for the count. * Subscription usage is valued at token list prices. Output includes reasoning and subagents. Refuted claims and proposed fixes never change detection.</Text>
+        <Text size="xs" c="dimmed" mt="sm" className="footnote">Cost and output tokens add every attempt, retries included, and divide by scheduled trials. ≥ marks a lower bound where usage was only partly recorded; hover it for the count. {costNote(tableShown)} Output includes reasoning and subagents. Refuted claims and proposed fixes never change detection.</Text>
         <Text size="sm" mt="sm"><Anchor href="https://github.com/kamui/code-review-bench/blob/main/docs/research/skill-matrix-2026-10-02/README.md#time-and-cost" target="_blank" rel="noreferrer">October 2 time and cost report</Anchor> · Per-setup and per-task totals, including failed attempts and held runs, with grading listed separately. This report covers a fixed batch.</Text>
         </details>
         <MethodologyViews dataset={dataset} configurations={configurations.filter(c => activeIds.includes(c.id))} cards={board.cards} selection={board.selection} detection={detection} now={now} onInspect={inspect('dimensions')}

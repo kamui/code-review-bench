@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Accordion, Alert, Badge, Button, Code, Drawer, Group, Loader, Paper, Select, Stack, Tabs, Text, Title } from '@mantine/core'
 import { Download, ExternalLink, FileCheck2, FileClock, FileCode, FileJson, FileSearch, FileText } from 'lucide-react'
 import { SetupName, setupLabel } from './Chart'
-import { Disclosure, humanize, Rich, Tag, Value } from './Reading'
+import { costText, Disclosure, humanize, Rich, Tag, Value } from './Reading'
 import { fetchDetail, skillReleaseLabel } from '../lib/data'
 import type { Attempt, AttemptDetail, Configuration, Dataset, Task } from '../lib/data'
 import { bandLabels, compact, detectionLabel, duration, lowerFirst, money, perReview, reading, share } from '../lib/metrics'
@@ -11,7 +11,12 @@ import type { Band, Estimator, Scorecard } from '../lib/scoring'
 import { drawerTabs } from '../lib/view'
 import type { Inspection } from '../lib/view'
 
-const outcomeColors: Record<string, string> = { eligible: 'teal', refuted: 'red', unsupported: 'red', unresolved: 'yellow' }
+const outcomeColors: Record<string, string> = { eligible: 'teal', problem: 'indigo', 'minor-defect': 'dark', suggestion: 'yellow', refuted: 'red', unsupported: 'red', unproven: 'orange', unresolved: 'gray' }
+
+// A finding or claim can carry several labels at once, as a comma-separated list.
+function Outcome({ assignment, size }: { assignment: string; size?: 'sm' }) {
+  return <>{assignment.split(', ').map(part => <Badge key={part} size={size} radius="sm" variant="light" color={outcomeColors[part] ?? 'gray'}>{humanize(part)}</Badge>)}</>
+}
 const controlText: Record<Task['control'], string> = {
   'audited-clean': 'Audited clean control: an independent audit found no eligible problem.',
   provisional: 'Provisional control: audited, but a candidate on this PR awaits a ruling, so silence here is not yet counted as correct.',
@@ -75,12 +80,12 @@ function InspectionBody({ dataset, results, band, estimator, configuration, task
   const novel = currentTask ? pendingCandidates(dataset, [currentTask.id], now) : []
   return <Stack gap="lg">
     {configuration && <><SetupResults result={results.find(item => item.configuration.id === configuration.id)} band={band} estimator={estimator} />
-      {!configuration.builtin && <Group gap="xs"><Badge variant="light" radius="sm">{skillReleaseLabel([configuration])}</Badge></Group>}<Disclosure title="Run notes"><Text size="sm" className="disclosure-body">{configuration.note}</Text></Disclosure>
+      <Stack gap={4}>{!configuration.builtin && <Group gap="xs"><Badge variant="light" radius="sm">{skillReleaseLabel([configuration])}</Badge></Group>}<Disclosure title="Run notes"><Text size="sm" className="disclosure-body">{configuration.note}</Text></Disclosure>
       {Array.from(new Set(configuration.skillReleases.map(release => release.provenanceUrl))).map(url => <Button key={url} component="a" href={url} target="_blank" rel="noreferrer" variant="subtle" size="xs">Skill release provenance</Button>)}
       {configuration.reviewChange && <Button component="a" href={configuration.reviewChange.url} target="_blank" rel="noreferrer" variant="subtle" size="xs">Review change: {configuration.reviewChange.summary}</Button>}
       {configuration.skillProvenanceUrl && <Button component="a" href={configuration.skillProvenanceUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Skill commits & timestamps</Button>}
       <Disclosure title="Comparison conditions">
-        <dl className="conditions">{configuration.conditions.map(condition => <div key={condition.name}><dt>{condition.name}</dt><dd>{condition.values.map(conditionValue).join(', ')}</dd></div>)}</dl></Disclosure></>}
+        <dl className="conditions">{configuration.conditions.map(condition => <div key={condition.name}><dt>{condition.name}</dt><dd>{condition.values.map(conditionValue).join(', ')}</dd></div>)}</dl></Disclosure></Stack></>}
     {task && <><Text>{task.shape}</Text><Group gap="xs">{task.profile.concerns.map(concern => <Tag key={concern}>{concern}</Tag>)}</Group>
       <Group><Button component="a" href={task.sourceUrl} target="_blank" rel="noreferrer" variant="default" size="xs" leftSection={<ExternalLink size={14} />}>Original PR</Button>
         <Button component="a" href={task.packetUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileText size={14} />}>Review packet</Button></Group>
@@ -118,12 +123,12 @@ function InspectionBody({ dataset, results, band, estimator, configuration, task
               ? 'This review reported no findings. An empty review does not establish that the change is free of problems.'
               : 'This attempt returned no usable findings. Its failure and usage remain in the evidence.'}</Alert>}
             <Accordion variant="separated">{detail.items.map((item, index) => <Accordion.Item key={item.id} value={item.id}>
-              <Accordion.Control><Group gap="xs" mb={6}><Text size="xs" c="dimmed" fw={560}>Finding {index + 1}</Text><Badge size="sm" radius="sm" color={outcomeColors[item.assignment] ?? 'gray'} variant="light">{humanize(item.assignment)}</Badge></Group>
+              <Accordion.Control><Group gap="xs" mb={6}><Text size="xs" c="dimmed" fw={560}>Finding {index + 1}</Text><Outcome assignment={item.assignment} size="sm" /></Group>
                 <Text size="sm" className="finding-claim"><Rich text={item.claim} /></Text></Accordion.Control>
               <Accordion.Panel><Stack gap="sm"><Text size="xs" c="dimmed">{item.file}{item.line === null ? '' : `:${item.line}`}</Text><Text size="sm"><Rich text={item.consequence} /></Text>
                 <Paper p="sm" className="evidence-note"><Text size="xs" fw={640} mb={5}>Current assessment</Text><Text size="sm"><Rich text={item.notes} /></Text></Paper>
                 {item.claims?.map(claim => <Paper withBorder p="sm" key={claim.id}><Stack gap="xs">
-                  <Badge variant="light" radius="sm" color={outcomeColors[claim.assignment] ?? 'gray'}>{humanize(claim.assignment)}</Badge>
+                  <Group gap={6}><Outcome assignment={claim.assignment} /></Group>
                   {claim.quote.trim() !== item.claim.trim() && <Text size="sm"><Rich text={claim.quote} /></Text>}<Text size="sm"><Rich text={claim.notes} /></Text>
                   {claim.knownProblems?.map(fact => <Text size="xs" key={fact.familyId}>{familyName(fact.familyId)}: says what goes wrong, {fact.saysWhat}; identifies the cause, {fact.identifiesCause}. {fact.reason}</Text>)}
                   {claim.preExistingProblems?.map(fact => <Text size="xs" key={fact.problemId}>Pre-existing problem {fact.problemId}: says what goes wrong, {fact.saysWhat}; identifies the cause, {fact.identifiesCause}. {fact.reason}</Text>)}
@@ -196,7 +201,7 @@ function SetupResults({ result, band, estimator }: { result?: SetupResult; band:
     { label: detectionLabel({ band, estimator }), cell: share(card.detection[band][estimator], card.detection[band].zeroCredit.reason) },
     { label: 'Problem claims per review', cell: perReview(card.reliability.problemClaimsPerReview) },
     { label: 'Reviews with a refuted or unproven claim', cell: share(card.reliability.reviewsWithDoubt.refutedOrUnproven) },
-    { label: 'Cost per trial', cell: reading(card.cost.perTrial, value => `${money(value)}${configuration.billing === 'list-price-equivalent' ? '*' : ''}`) },
+    { label: 'Cost per trial', cell: reading(card.cost.perTrial, costText(configuration, [configuration])) },
     { label: 'Median time', cell: reading(card.time.summary, value => duration(value.median)) },
   ]
   return <dl className="setup-results">{items.map(item => <div key={item.label}><dt>{item.label}</dt><dd><Value cell={item.cell} /></dd></div>)}</dl>
@@ -228,7 +233,7 @@ function ReviewSummary({ attempt }: { attempt: Attempt }) {
     <Badge color={attempt.complete ? 'teal' : 'orange'} variant="light">{attempt.complete ? 'Completed' : attempt.admitted ? 'Incomplete coverage' : 'Stopped / invalid'}</Badge>
     <Text size="sm">{attempt.cost === null && attempt.costLowerBound !== null ? `≥ ${money(attempt.costLowerBound)}` : money(attempt.cost)}{attempt.billing === 'list-price-equivalent' ? ' list-price equivalent' : ''} · {attempt.outputTokens === null && attempt.outputTokensLowerBound !== null ? `≥ ${compact(attempt.outputTokensLowerBound)}` : compact(attempt.outputTokens)} output tokens</Text>
   </Group><Text size="sm" mt="sm">{!facts ? 'Current claim and remedy judgments are unavailable.'
-    : `${facts.caught} reference problems found · ${facts.outcomes.refuted.distinct} refuted and ${facts.outcomes.unsupported.distinct} unsupported claims · ${facts.outcomes.inconsequential.distinct} non-material observations`}</Text>
+    : `${facts.caught} reference ${facts.caught === 1 ? 'problem' : 'problems'} found · ${facts.outcomes.refuted.distinct} refuted and ${facts.outcomes.unsupported.distinct} unsupported claims · ${facts.outcomes.inconsequential.distinct} non-material observations`}</Text>
     {attempt.predecessor && <Text size="xs" c="dimmed" mt="xs">Replacement for {attempt.predecessor}. Trial costs include the original attempt.</Text>}
   </Paper>
 }

@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
-import { ArrowLeftRight } from 'lucide-react'
+import { ArrowLeftRight, GitCompareArrows, Hourglass } from 'lucide-react'
 import { Group, Paper, Select, Stack, Switch, Table, Tabs, Text, Title } from '@mantine/core'
 import type { Configuration, Dataset } from '../lib/data'
-import { bandLabels, compact, conditionDifferences, detectionLabel, duration, estimatorLabels, lowerFirst, measured, money, percent, perReview, points, reading, scaled, share } from '../lib/metrics'
+import { bandLabels, compact, conditionDifferences, detectionLabel, duration, estimatorLabels, lowerFirst, measured, percent, perReview, points, reading, scaled, share } from '../lib/metrics'
 import type { DetectionView, Reading } from '../lib/metrics'
 import { bands, candidates as pendingFamilies, conditionalMetrics, estimators, matched, orderingConflicts, pairwise, pendingCandidates, preExistingLabels, recommend, referenceCoverage } from '../lib/scoring'
 import type { ConditionalMetric, Estimator, PreExistingLabel, Scorecard, Selection } from '../lib/scoring'
@@ -11,7 +11,7 @@ import { scorecardTabs } from '../lib/view'
 import type { Inspection, ScorecardTab, Section } from '../lib/view'
 import { ClaimLabels } from './ClaimLabels'
 import { SetupName, setupLabel, setupParts } from './Chart'
-import { DataTable, Disclosure, Rich, Value } from './Reading'
+import { costNote, costText, DataTable, Disclosure, Rich, Value } from './Reading'
 import { SeriousMisses } from './SeriousMisses'
 import type { Column } from './Reading'
 
@@ -83,7 +83,8 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
     <Tabs value={tab} onChange={value => { const next = scorecardTabs.find(item => item === value); if (next) onTab(next) }} className="dimension-tabs">
       <Tabs.List><Tabs.Tab value="detection">Detection</Tabs.Tab><Tabs.Tab value="delivery">Delivery</Tabs.Tab><Tabs.Tab value="reliability">Claim reliability</Tabs.Tab>
         <Tabs.Tab value="remedies">Remedies</Tabs.Tab><Tabs.Tab value="controls">Controls</Tabs.Tab><Tabs.Tab value="pre-existing">Pre-existing problems raised</Tabs.Tab><Tabs.Tab value="advice">Advice benefit</Tabs.Tab>
-        <Tabs.Tab value="usage">Cost and time</Tabs.Tab><Tabs.Tab value="candidates">Pending candidates ({novel.length + awaiting.length})</Tabs.Tab><Tabs.Tab value="comparison">Compare two setups</Tabs.Tab></Tabs.List>
+        <Tabs.Tab value="usage">Cost and time</Tabs.Tab><Tabs.Tab value="candidates" className="tab-tool tab-tools-start" leftSection={<Hourglass size={14} aria-hidden="true" />}>Pending candidates ({novel.length + awaiting.length})</Tabs.Tab>
+        <Tabs.Tab value="comparison" className="tab-tool" leftSection={<GitCompareArrows size={14} aria-hidden="true" />}>Compare two setups</Tabs.Tab></Tabs.List>
 
       <Tabs.Panel value="detection" ><Stack>
         <TabIntro lede="How many known problems each setup caught, averaged over its repeated runs on each PR.">Recovery of each reference problem is averaged over the PR's scheduled trials; a resolved trial without an admitted review counts as not caught. Unresolved recoveries also receive zero credit and stay in the denominator, with an annotation counting affected problems and detection decisions. Both averages are shown. Problems weighted equally is the primary average for the serious and other-material bands; the unknown and all-reference bands have no preferred average. A serious reference is one the implementer had to be made aware of before release. An other-material reference earns credit when a review raises it but did not have to be raised.</TabIntro>
@@ -209,7 +210,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
       <Tabs.Panel value="usage" ><Stack>
         <TabIntro lede="What each scheduled trial cost in money, output tokens and time.">Cost and output tokens add every attempt, retries included, and divide by scheduled trials. Time covers completed trials only and includes their replaced attempts; it excludes gaps between attempts, provisioning and grading.</TabIntro>
         <DataTable label="Cost and time" rows={rows} rowKey={key} minWidth={1250} columns={[setup,
-          { label: 'Cost per scheduled trial', value: row => reading(row.card.cost.perTrial, value => `${money(value)}${row.configuration.billing === 'list-price-equivalent' ? '*' : ''}`) },
+          { label: 'Cost per scheduled trial', value: row => reading(row.card.cost.perTrial, costText(row.configuration, rows.map(item => item.configuration))) },
           { label: 'Output tokens per scheduled trial', value: row => reading(row.card.tokens.perTrial, compact) },
           { label: 'Attempts with usage / attempts', value: row => `${row.card.cost.measuredAttempts} / ${row.card.cost.attempts}` },
           { label: 'Median completed-trial time', value: row => reading(row.card.time.summary, summary => duration(summary.median)) },
@@ -217,7 +218,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
           { label: 'Completed / scheduled trials', value: row => `${row.card.time.completed} / ${row.card.time.scheduled}` },
           { label: 'Failed', value: row => String(row.card.time.failed) }, { label: 'Incomplete', value: row => String(row.card.time.incomplete) },
           { label: 'Pending', value: row => String(row.card.time.pending) }, { label: 'Completed without a duration', value: row => String(row.card.time.missing) }]} />
-        <Text size="xs" c="dimmed" className="footnote">* Subscription usage valued at token list prices, not a bill or quota measurement. Output tokens include reasoning and subagents.</Text>
+        <Text size="xs" c="dimmed" className="footnote">{costNote(rows.map(row => row.configuration))} Output tokens include reasoning and subagents.</Text>
       </Stack></Tabs.Panel>
 
       <Tabs.Panel value="candidates" ><Stack>
@@ -323,7 +324,7 @@ function PreExistingMatrix({ label, rows, name }: { label: PreExistingLabel; row
   }, [])
   return <>
     <Text size="sm">Each cell is how many assessed admitted reviews raised the problem, out of those assessed.</Text>
-    <Table.ScrollContainer minWidth={320 + rows.length * 104}><Table aria-label={`${bandLabels[label]} pre-existing problems raised, by setup`} className="data-table pre-matrix">
+    <Table.ScrollContainer className="matrix-scroll" minWidth={320 + rows.length * 104}><Table aria-label={`${bandLabels[label]} pre-existing problems raised, by setup`} className="data-table pre-matrix">
       <Table.Thead>
         <Table.Tr><Table.Th scope="col" rowSpan={2} className="pre-sticky">Problem</Table.Th>
           {groups.map((group, index) => <Table.Th key={`${group.method}-${index}`} scope="colgroup" colSpan={group.span} className="pre-method">{group.method}</Table.Th>)}</Table.Tr>

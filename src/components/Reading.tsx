@@ -1,7 +1,7 @@
 import { Table, Text, VisuallyHidden } from '@mantine/core'
 import type { ReactNode } from 'react'
 import { ChevronRight } from 'lucide-react'
-import { peerLabel, reasonCounts } from '../lib/metrics'
+import { money, peerLabel, reasonCounts } from '../lib/metrics'
 import type { Configuration } from '../lib/data'
 import type { Reading } from '../lib/metrics'
 
@@ -13,6 +13,16 @@ export function PeerNote({ configurations, className }: { configurations: Config
   const label = peerLabel(configurations)
   return label && <span className={className}>{label}</span>
 }
+
+const listPriced = (configuration: Configuration) => configuration.billing === 'list-price-equivalent'
+const listPriceMeaning = 'subscription usage valued at token list prices, not a bill or quota measurement'
+
+// When every shown setup is list-priced, one note covers them all instead of an asterisk on each cost.
+export const costStarred = (configuration: Configuration, shown: Configuration[]) => listPriced(configuration) && !shown.every(listPriced)
+export const costText = (configuration: Configuration, shown: Configuration[]) => (value: number) => `${money(value)}${costStarred(configuration, shown) ? '*' : ''}`
+export const costNote = (shown: Configuration[]) => !shown.some(listPriced) ? null
+  : shown.every(listPriced) ? `Every cost is ${listPriceMeaning}.` : `* ${listPriceMeaning.replace(/^./, letter => letter.toUpperCase())}.`
+export const costScaleNote = (shown: Configuration[]) => shown.length && shown.every(listPriced) ? 'list prices, log scale' : 'log scale'
 
 const lowerBound = (cell: Cell) => typeof cell !== 'string' && cell.text.startsWith('≥ ')
 
