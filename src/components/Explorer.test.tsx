@@ -303,7 +303,7 @@ describe('chart', () => {
       for (const estimator of ['equalProblem', 'equalPr'] as const) {
         for (const view of ['setups', 'tradeoff', 'models'] as const) {
           const rendered = chart(dataset, { band, estimator }, view)
-          expect(rendered).toContain(`Notes on marked values 1 ${note}`)
+          expect(rendered).toContain(`Notes on marked values ${note}`)
           expect(rendered).not.toContain('Not plotted,')
           expect(rendered).toContain('1 attempt has no recorded usage.')
         }
@@ -352,7 +352,7 @@ describe('chart', () => {
     expect(chart(unlabelled, { band: 'unknown', estimator: 'equalProblem' })).toContain('100.0%')
     const whole = page(unlabelled)
     expect(whole).toMatch(/Unavailable \d+ : No reference is labelled serious\./)
-    expect(whole).toContain('No reference on the selected PRs is labelled serious, so serious misses cannot be listed.')
+    expect(panels(unlabelled)).toContain('No reference on the selected PRs is labelled serious, so serious misses cannot be listed.')
   })
 
   test('the refuted-claims axis plots the matched rate and states its PR coverage', () => {

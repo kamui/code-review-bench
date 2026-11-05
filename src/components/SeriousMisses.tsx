@@ -67,7 +67,7 @@ export function SeriousMisses({ dataset, configurations, cards, selection, onIns
     </Group>
     <Switch size="xs" checked={showAll} onChange={event => setShowAll(event.currentTarget.checked)} label={`Show problems no setup missed (${matrix.unmissed})`} className="nowrap-switch" />
     {!visible.length ? <Text size="sm" c="dimmed">No determined miss of a serious reference for the selected setups.</Text>
-      : <Table.ScrollContainer minWidth={280 + shown.length * 96}>
+      : <Table.ScrollContainer className="matrix-scroll" minWidth={280 + shown.length * 96}>
         <Table aria-label="Serious references not caught" className="data-table miss-matrix" withRowBorders={false} onMouseLeave={() => setHovered(null)}>
           <Table.Thead>
             <Table.Tr><Table.Th scope="col" rowSpan={2} className="miss-sticky">Serious problem</Table.Th>

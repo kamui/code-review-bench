@@ -74,7 +74,7 @@ describe('scorecard display', () => {
     expect(share(card('waiting').detection.serious.equalProblem)).toEqual({ text: 'Unavailable', reason: '1 scheduled trial awaits execution.' })
     expect(share(card('ungraded').detection.serious.equalProblem)).toEqual({ text: 'Unavailable', reason: '1 admitted review awaits assessment.' })
     expect(share(card('sparse').detection.serious.equalProblem)).toEqual({ text: 'Unavailable', reason: 'Ran 2 of 6 selected PRs.' })
-    expect(share(card('steady').detection.serious.equalProblem)).toEqual({ text: '100.0%', reason: null })
+    expect(share(card('steady').detection.serious.equalProblem)).toEqual({ text: '100.0%', reason: null, fraction: 1 })
     expect(reasonCounts(['a', null, 'b', 'a'])).toEqual([{ reason: 'a', count: 2 }, { reason: 'b', count: 1 }])
   })
 

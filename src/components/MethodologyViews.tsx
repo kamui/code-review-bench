@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { ArrowLeftRight } from 'lucide-react'
 import { Group, Paper, Select, Stack, Switch, Table, Tabs, Text, Title } from '@mantine/core'
 import type { Configuration, Dataset } from '../lib/data'
-import { bandLabels, compact, conditionDifferences, detectionLabel, duration, estimatorLabels, lowerFirst, measured, money, percent, perReview, points, reading, scaled, share } from '../lib/metrics'
+import { bandLabels, compact, conditionDifferences, detectionLabel, duration, estimatorLabels, lowerFirst, measured, percent, perReview, points, reading, scaled, share } from '../lib/metrics'
 import type { DetectionView, Reading } from '../lib/metrics'
 import { bands, candidates as pendingFamilies, conditionalMetrics, estimators, matched, orderingConflicts, pairwise, pendingCandidates, preExistingLabels, recommend, referenceCoverage } from '../lib/scoring'
 import type { ConditionalMetric, Estimator, PreExistingLabel, Scorecard, Selection } from '../lib/scoring'
@@ -11,7 +11,7 @@ import { scorecardTabs } from '../lib/view'
 import type { Inspection, ScorecardTab, Section } from '../lib/view'
 import { ClaimLabels } from './ClaimLabels'
 import { SetupName, setupLabel, setupParts } from './Chart'
-import { DataTable, Disclosure, Rich, Value } from './Reading'
+import { costNote, costText, DataTable, Disclosure, Rich, Value } from './Reading'
 import { SeriousMisses } from './SeriousMisses'
 import type { Column } from './Reading'
 
@@ -34,6 +34,12 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
   dataset: Dataset; configurations: Configuration[]; cards: Scorecard[]; selection: Selection; detection: DetectionView; now: Date
   onInspect: (inspection: Inspection, section?: Section) => void; tab: ScorecardTab; onTab: (tab: ScorecardTab) => void
 }) {
+  const tabList = useRef<HTMLDivElement>(null)
+  // A deep link to a later tab must not leave it scrolled out of the strip; scrolling the strip alone keeps the page still.
+  useEffect(() => {
+    const list = tabList.current, active = list?.querySelector<HTMLElement>('[data-active]')
+    if (list && active) list.scrollLeft = Math.max(0, active.offsetLeft - (list.clientWidth - active.offsetWidth) / 2)
+  }, [tab])
   const [left, setLeft] = useState<string | null>(null)
   const [right, setRight] = useState<string | null>(null)
   const [metric, setMetric] = useState<ConditionalMetric>('refuted')
@@ -78,12 +84,13 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
     { label: 'Reviews sampled / admitted', value: row => `${row.card.advice.sampledReviews} / ${row.card.advice.admitted}` },
     { label: 'Generic advisory dossiers, benefit unmeasured', value: row => String(row.card.advice.generic) }]} />
   return <Paper withBorder radius="lg" className="methodology-panel" id="dimensions">
-    <div className="dimension-head"><Title order={3}>The scorecard, dimension by dimension</Title>
+    <div className="dimension-head"><Title order={3}>Each measure in detail</Title>
       <Text className="subsection-lede">Every value comes from the shared scoring kernel for the selected setups and PRs. Dimensions stay separate: there is no blended score. Rows are in name order. A numbered mark explains a value in the notes below its table.</Text></div>
     <Tabs value={tab} onChange={value => { const next = scorecardTabs.find(item => item === value); if (next) onTab(next) }} className="dimension-tabs">
-      <Tabs.List><Tabs.Tab value="detection">Detection</Tabs.Tab><Tabs.Tab value="delivery">Delivery</Tabs.Tab><Tabs.Tab value="reliability">Claim reliability</Tabs.Tab>
-        <Tabs.Tab value="remedies">Remedies</Tabs.Tab><Tabs.Tab value="controls">Controls</Tabs.Tab><Tabs.Tab value="pre-existing">Pre-existing problems raised</Tabs.Tab><Tabs.Tab value="advice">Advice benefit</Tabs.Tab>
-        <Tabs.Tab value="usage">Cost and time</Tabs.Tab><Tabs.Tab value="candidates">Pending candidates ({novel.length + awaiting.length})</Tabs.Tab><Tabs.Tab value="comparison">Compare two setups</Tabs.Tab></Tabs.List>
+      <Tabs.List ref={tabList}><Tabs.Tab value="detection">Detection</Tabs.Tab><Tabs.Tab value="misses">Serious misses</Tabs.Tab><Tabs.Tab value="delivery">Delivery</Tabs.Tab><Tabs.Tab value="reliability">Claim reliability</Tabs.Tab>
+        <Tabs.Tab value="remedies">Remedies</Tabs.Tab><Tabs.Tab value="controls">Controls</Tabs.Tab><Tabs.Tab value="pre-existing">Pre-existing problems</Tabs.Tab><Tabs.Tab value="advice">Advice benefit</Tabs.Tab>
+        <Tabs.Tab value="usage">Cost and time</Tabs.Tab><Tabs.Tab value="candidates" className="tab-tools-start">Pending candidates ({novel.length + awaiting.length})</Tabs.Tab>
+        <Tabs.Tab value="comparison">Compare setups</Tabs.Tab></Tabs.List>
 
       <Tabs.Panel value="detection" ><Stack>
         <TabIntro lede="How many known problems each setup caught, averaged over its repeated runs on each PR.">Recovery of each reference problem is averaged over the PR's scheduled trials; a resolved trial without an admitted review counts as not caught. Unresolved recoveries also receive zero credit and stay in the denominator, with an annotation counting affected problems and detection decisions. Both averages are shown. Problems weighted equally is the primary average for the serious and other-material bands; the unknown and all-reference bands have no preferred average. A serious reference is one the implementer had to be made aware of before release. An other-material reference earns credit when a review raises it but did not have to be raised.</TabIntro>
@@ -96,16 +103,19 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
         <Text size="xs" c="dimmed" className="footnote">All labelled serious caught is the share of scheduled trials that caught every serious reference of a PR, averaged over PRs with one. A repeated serious miss is a serious reference not caught in two or more scheduled trials.</Text>
         {conflicts.length > 0 && <div><Text size="sm" mb={8}>In the {bandLabels[band].toLowerCase()} band the two averages order {conflicts.length === 1 ? 'this pair' : 'these pairs'} differently. That ordering depends on the average chosen.</Text>
           <ul className="pair-list">{conflicts.map(pair => <li key={`${pair.a}/${pair.b}`}>{short(pair.a)}<ArrowLeftRight size={14} aria-label="and" />{short(pair.b)}</li>)}</ul></div>}
-        <Title order={4}>{bandLabels[band]} band counts</Title>
-        <DataTable label={`Counts behind ${bandLabels[band].toLowerCase()} detection`} rows={rows} rowKey={key} minWidth={1000} columns={[setup,
+        <Disclosure title={`Counts behind ${bandLabels[band].toLowerCase()} detection`}><DataTable label={`Counts behind ${bandLabels[band].toLowerCase()} detection`} rows={rows} rowKey={key} minWidth={1000} columns={[setup,
           { label: 'Problems / PRs with one', value: row => `${row.card.detection[band].problems} / ${row.card.detection[band].prs}` },
           { label: 'Observed caught / determined', value: row => `${row.card.detection[band].observed.caught} / ${row.card.detection[band].observed.determined}` },
           { label: 'Admitted reviews / scheduled trials', value: row => `${row.card.detection[band].admittedOnly.admittedReviews} / ${row.card.detection[band].admittedOnly.scheduledTrials}` },
           { label: `Admitted reviews only, ${averages[estimator]}`, value: row => share(row.card.detection[band].admittedOnly[estimator], row.card.detection[band].zeroCredit.reason) },
           { label: 'Range with one PR left out', value: row => reading(row.card.detection[band].omissions[estimator], span) },
           { label: 'Each linked claim as its own unit', value: row => reading(row.card.detection[band].grouping, grouping => `${percent(grouping[estimator] * 100)} over ${grouping.units} units`) }]} />
-        <Text size="xs" c="dimmed" className="footnote">Observed counts are outcomes determined so far and are not a final rate. The admitted-only figure excludes failed trials, so it describes delivered reviews rather than the setup. The left-out range shows sensitivity to these PRs, not a confidence interval.</Text>
-        <Title order={4} id="serious-misses">Serious references not caught</Title>
+        <Text size="xs" c="dimmed" className="footnote">Observed counts are outcomes determined so far and are not a final rate. The admitted-only figure excludes failed trials, so it describes delivered reviews rather than the setup. The left-out range shows sensitivity to these PRs, not a confidence interval.</Text></Disclosure>
+      </Stack></Tabs.Panel>
+
+      <Tabs.Panel value="misses" ><Stack>
+        <TabIntro lede="Which serious known problems each setup did not catch, trial by trial." />
+        <Title order={4} id="serious-misses" className="visually-hidden">Serious references not caught</Title>
         <SeriousMisses dataset={dataset} configurations={configurations} cards={cards} selection={selection} onInspect={inspection => onInspect(inspection, 'serious-misses')} />
       </Stack></Tabs.Panel>
 
@@ -209,7 +219,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
       <Tabs.Panel value="usage" ><Stack>
         <TabIntro lede="What each scheduled trial cost in money, output tokens and time.">Cost and output tokens add every attempt, retries included, and divide by scheduled trials. Time covers completed trials only and includes their replaced attempts; it excludes gaps between attempts, provisioning and grading.</TabIntro>
         <DataTable label="Cost and time" rows={rows} rowKey={key} minWidth={1250} columns={[setup,
-          { label: 'Cost per scheduled trial', value: row => reading(row.card.cost.perTrial, value => `${money(value)}${row.configuration.billing === 'list-price-equivalent' ? '*' : ''}`) },
+          { label: 'Cost per scheduled trial', value: row => reading(row.card.cost.perTrial, costText(row.configuration, rows.map(item => item.configuration))) },
           { label: 'Output tokens per scheduled trial', value: row => reading(row.card.tokens.perTrial, compact) },
           { label: 'Attempts with usage / attempts', value: row => `${row.card.cost.measuredAttempts} / ${row.card.cost.attempts}` },
           { label: 'Median completed-trial time', value: row => reading(row.card.time.summary, summary => duration(summary.median)) },
@@ -217,7 +227,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
           { label: 'Completed / scheduled trials', value: row => `${row.card.time.completed} / ${row.card.time.scheduled}` },
           { label: 'Failed', value: row => String(row.card.time.failed) }, { label: 'Incomplete', value: row => String(row.card.time.incomplete) },
           { label: 'Pending', value: row => String(row.card.time.pending) }, { label: 'Completed without a duration', value: row => String(row.card.time.missing) }]} />
-        <Text size="xs" c="dimmed" className="footnote">* Subscription usage valued at token list prices, not a bill or quota measurement. Output tokens include reasoning and subagents.</Text>
+        <Text size="xs" c="dimmed" className="footnote">{costNote(rows.map(row => row.configuration))} Output tokens include reasoning and subagents.</Text>
       </Stack></Tabs.Panel>
 
       <Tabs.Panel value="candidates" ><Stack>
@@ -285,7 +295,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
           </Table></Table.ScrollContainer></>}
           {!comparison.rows.length && <Text>No shared PR has {scope} references under these filters.</Text>}
         </>}
-        <Text size="xs" c="dimmed">Each omission removes the entire PR and all its repetitions. Repetition indices are not matched experimental seeds.</Text>
+        <Text size="xs" c="dimmed" className="footnote">Each omission removes the entire PR and all its repetitions. Repetition indices are not matched experimental seeds.</Text>
       </Stack></Tabs.Panel>
     </Tabs>
   </Paper>
@@ -294,9 +304,9 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
 function DeltaPlot({ rows, a, b }: { rows: { id: string; label: string; delta: number }[]; a: string; b: string }) {
   if (!rows.length) return null
   const limit = Math.max(25, ...rows.map(row => Math.abs(row.delta)))
-  const at = (value: number) => 50 - value / limit * 50
+  const at = (value: number) => 50 + value / limit * 50
   return <div className="delta-plot" role="list" aria-label="A minus B detection difference per PR">
-    <div className="delta-head" aria-hidden="true"><span /><span className="delta-sides"><span><b>← A higher</b>{a}</span><span><b>B higher →</b>{b}</span></span></div>
+    <div className="delta-head" aria-hidden="true"><span /><span className="delta-sides"><span><b>← B higher</b>{b}</span><span><b>A higher →</b>{a}</span></span></div>
     {[...rows].sort((left, right) => right.delta - left.delta).map(row => <div role="listitem" key={row.id} className="delta-row"
       aria-label={`${row.label}: ${signed(row.delta)}`}>
       <span className="delta-label">{row.label}</span>
@@ -323,7 +333,7 @@ function PreExistingMatrix({ label, rows, name }: { label: PreExistingLabel; row
   }, [])
   return <>
     <Text size="sm">Each cell is how many assessed admitted reviews raised the problem, out of those assessed.</Text>
-    <Table.ScrollContainer minWidth={320 + rows.length * 104}><Table aria-label={`${bandLabels[label]} pre-existing problems raised, by setup`} className="data-table pre-matrix">
+    <Table.ScrollContainer className="matrix-scroll" minWidth={320 + rows.length * 104}><Table aria-label={`${bandLabels[label]} pre-existing problems raised, by setup`} className="data-table pre-matrix">
       <Table.Thead>
         <Table.Tr><Table.Th scope="col" rowSpan={2} className="pre-sticky">Problem</Table.Th>
           {groups.map((group, index) => <Table.Th key={`${group.method}-${index}`} scope="colgroup" colSpan={group.span} className="pre-method">{group.method}</Table.Th>)}</Table.Tr>
