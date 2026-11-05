@@ -2,7 +2,7 @@ import { Table, Text, Tooltip, VisuallyHidden } from '@mantine/core'
 import type { ReactNode } from 'react'
 import { ChevronRight } from 'lucide-react'
 import { money, peerLabel, reasonCounts } from '../lib/metrics'
-import type { Configuration } from '../lib/data'
+import type { Configuration, Task } from '../lib/data'
 import type { Reading } from '../lib/metrics'
 
 export type Cell = string | Reading
@@ -90,6 +90,18 @@ export const glossary: { term: string; definition: string; match?: RegExp }[] = 
 const definition = (entry: (typeof glossary)[number]) => <span className="term-tip"><b>{entry.term}</b> {entry.definition}</span>
 
 /** Running text with the first use of each glossary term marked, its definition on hover and focus. */
+const recordId = /\b(GT-[a-z]*\d+|blind-[0-9a-f]+ items? \d+)\b/g
+
+/** Grading records cite known problems and blind-graded review items by ID; each ID shows what it names on hover. */
+export function Referenced({ text, task }: { text: string; task: Task | undefined }) {
+  return text.split(recordId).map((part, index) => {
+    if (index % 2 === 0) return part
+    const problem = task?.families.find(family => family.id === part)
+    const label = problem ? `Known problem ${part}: ${problem.title}` : part.startsWith('blind-') ? 'A claim in one review, named by the anonymous ID its graders saw.' : null
+    return label ? <Tooltip key={index} multiline w={320} withArrow label={label}><span className="term" tabIndex={0}>{part}</span></Tooltip> : part
+  })
+}
+
 export function Glossed({ text }: { text: string }) {
   const parts: ReactNode[] = []
   const unused = glossary.filter(entry => entry.match)
