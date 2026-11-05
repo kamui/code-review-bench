@@ -17,7 +17,7 @@ import { Chart, Mark, setupParts } from './Chart'
 import { EvidenceDrawer } from './EvidenceDrawer'
 import { MethodologyViews } from './MethodologyViews'
 import { Overview } from './Overview'
-import { costNote, costText, glossary, Notes, notesFor, PeerNote, Tag, TermLabel, Value } from './Reading'
+import { costNote, costText, glossary, Glossed, Notes, notesFor, PeerNote, Tag, TermLabel, Value } from './Reading'
 import { VendorMark } from './VendorMark'
 
 export type Page = 'scorecard' | 'tasks' | 'methodology'
@@ -260,7 +260,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
           </div>
           <div className="chart-main">
             <div className="chart-context">
-              <span className="basis-chip">{detectionLabel(detection)} · {plural(shared.length, 'PR')} · {coverage.bands[band]} of {coverage.bands.all} known problems in this band{candidateCount > 0 && ` · ${candidateCount} awaiting a ruling`}</span>
+              <span className="basis-chip"><Glossed text={`${detectionLabel(detection)} · ${plural(shared.length, 'PR')} · ${coverage.bands[band]} of ${coverage.bands.all} known problems in this band${candidateCount > 0 ? ` · ${candidateCount} awaiting a ruling` : ''}`} /></span>
               {activeFilters.map(item => <button type="button" key={item.label} className="filter-chip" onClick={item.clear} aria-label={`Remove filter ${item.label}`}>{item.label}<X size={12} aria-hidden="true" /></button>)}
               {activeFilters.length > 0 && <Link className="filter-link" to="/tasks">Edit filters</Link>}
               {chartView === 'tradeoff' && <Switch className="label-switch" checked={showAllLabels} onChange={event => onSearch({ labels: event.currentTarget.checked || undefined }, 'scorecard')} label="Label every point" size="xs" />}

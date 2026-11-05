@@ -11,12 +11,13 @@ export type Column<Row> = { label: string; value: (row: Row) => Cell; render?: (
 
 export function PeerNote({ configurations, className }: { configurations: Configuration[]; className: string }) {
   const label = peerLabel(configurations)
-  return label && <span className={className}>{label}</span>
+  return label && <span className={className}><Glossed text={label} /></span>
 }
 
 export function PeerBadge({ configuration }: { configuration: Configuration }) {
   const label = peerLabel([configuration])
-  return label && <Tooltip label={label} withArrow><span className="peer-badge"><span aria-hidden="true">{label.replace(/^Cross-model peer /, 'Peer ').replace(/ \(.*\)$/, '')}</span><VisuallyHidden>{label}</VisuallyHidden></span></Tooltip>
+  const entry = glossary.find(item => item.term === 'Cross-model peer')!
+  return label && <Tooltip multiline w={300} label={<>{label}. {entry.definition}</>} withArrow><span className="peer-badge"><span aria-hidden="true">{label.replace(/^Cross-model peer /, 'Peer ').replace(/ \(.*\)$/, '')}</span><VisuallyHidden>{label}</VisuallyHidden></span></Tooltip>
 }
 
 const listPriced = (configuration: Configuration) => configuration.billing === 'list-price-equivalent'
@@ -78,16 +79,43 @@ export const glossary: { term: string; definition: string; match?: RegExp }[] = 
   { term: 'Candidate', definition: 'A problem a review reported that is not yet a reference. It earns no credit until a human rules on it.', match: /candidate/i },
   { term: 'Impact band', definition: 'Serious, other material, or unknown. Unknown is never treated as low impact.' },
   { term: 'Refuted or unproven', definition: 'Evidence contradicts a refuted claim. An unproven claim lacks the evidence to stand and is not proven false.', match: /refuted|unproven/i },
-  { term: 'Problems or PRs weighted equally', definition: 'Each reference problem counts the same, or each PR counts the same however many problems it has.' },
+  { term: 'Problems or PRs weighted equally', definition: 'Each reference problem counts the same, or each PR counts the same however many problems it has.', match: /weighted equally/i },
+  { term: 'Matched PRs', definition: 'The selected PRs on which every selected setup has admitted, assessed reviews, so each setup is measured on the same PRs.', match: /matched PRs?/i },
+  { term: 'Cross-model peer', definition: 'A second review by a model from another provider, which some skills can run. Off: the run used a single provider, so the skill ran without it.', match: /cross-model peer|peer off/i },
   { term: 'pp', definition: 'Percentage points: the difference between two percentages.', match: /\bpp\b/ },
   { term: '≥ value', definition: 'A lower bound. Usage was only partly recorded, so the true value is at least this.' },
 ]
 
 /** A table heading that uses a glossary term carries that term's definition on hover and focus. */
+const definition = (entry: (typeof glossary)[number]) => <span className="term-tip"><b>{entry.term}</b> {entry.definition}</span>
+
+/** Running text with the first use of each glossary term marked, its definition on hover and focus. */
+export function Glossed({ text }: { text: string }) {
+  const parts: ReactNode[] = []
+  const unused = glossary.filter(entry => entry.match)
+  let rest = text
+  for (;;) {
+    const hits = unused.flatMap(entry => {
+      const found = entry.match!.exec(rest)
+      return found ? [{ entry, start: found.index, end: found.index + found[0].length }] : []
+    }).sort((left, right) => left.start - right.start)
+    const hit = hits[0]
+    if (!hit) break
+    let { start, end } = hit
+    while (start > 0 && /\w/.test(rest[start - 1]!)) start--
+    while (end < rest.length && /\w/.test(rest[end]!)) end++
+    parts.push(rest.slice(0, start), <Tooltip key={parts.length} multiline w={300} withArrow label={definition(hit.entry)}>
+      <span className="term" tabIndex={0}>{rest.slice(start, end)}</span></Tooltip>)
+    unused.splice(unused.indexOf(hit.entry), 1)
+    rest = rest.slice(end)
+  }
+  return <>{parts}{rest}</>
+}
+
 export function TermLabel({ label }: { label: string }) {
   const terms = glossary.filter(entry => entry.match?.test(label))
   if (!terms.length) return label
-  return <Tooltip multiline w={300} withArrow label={terms.map(entry => <span key={entry.term} className="term-tip"><b>{entry.term}</b> {entry.definition}</span>)}>
+  return <Tooltip multiline w={300} withArrow label={terms.map(entry => <span key={entry.term}>{definition(entry)}</span>)}>
     <span className="term" tabIndex={0}>{label}</span></Tooltip>
 }
 
