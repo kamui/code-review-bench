@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import type { CSSProperties } from 'react'
 import { Accordion, Alert, Badge, Button, Code, Drawer, Group, Loader, Paper, Select, Stack, Tabs, Text, Title } from '@mantine/core'
 import { Download, ExternalLink, FileCheck2, FileClock, FileCode, FileJson, FileSearch, FileText } from 'lucide-react'
 import { SetupName, setupLabel } from './Chart'
@@ -11,11 +12,14 @@ import type { Band, Estimator, Scorecard } from '../lib/scoring'
 import { drawerTabs } from '../lib/view'
 import type { Inspection } from '../lib/view'
 
-const outcomeColors: Record<string, string> = { eligible: 'teal', problem: 'indigo', 'minor-defect': 'dark', suggestion: 'yellow', refuted: 'red', unsupported: 'red', unproven: 'orange', unresolved: 'gray' }
+// The same color tokens as the claim segments on the scorecard.
+const outcomeTokens: Record<string, string> = { problem: 'problem-other-material', 'minor-defect': 'minor-defect', suggestion: 'suggestion-relied-on',
+  'outside-this-change': 'outside-this-change', refuted: 'refuted', unsupported: 'refuted', unproven: 'unproven', unresolved: 'unresolved' }
 
 // A finding or claim can carry several labels at once, as a comma-separated list.
-function Outcome({ assignment, size }: { assignment: string; size?: 'sm' }) {
-  return <>{assignment.split(', ').map(part => <Badge key={part} size={size} radius="sm" variant="light" color={outcomeColors[part] ?? 'gray'}>{humanize(part)}</Badge>)}</>
+function Outcome({ assignment }: { assignment: string }) {
+  return <>{assignment.split(', ').map(part => <span key={part} className="outcome-badge"
+    style={{ '--outcome': outcomeTokens[part] ? `var(--label-${outcomeTokens[part]})` : 'var(--muted)' } as CSSProperties}>{humanize(part)}</span>)}</>
 }
 const controlText: Record<Task['control'], string> = {
   'audited-clean': 'Audited clean control: an independent audit found no eligible problem.',
@@ -123,7 +127,7 @@ function InspectionBody({ dataset, results, band, estimator, configuration, task
               ? 'This review reported no findings. An empty review does not establish that the change is free of problems.'
               : 'This attempt returned no usable findings. Its failure and usage remain in the evidence.'}</Alert>}
             <Accordion variant="separated">{detail.items.map((item, index) => <Accordion.Item key={item.id} value={item.id}>
-              <Accordion.Control><Group gap="xs" mb={6}><Text size="xs" c="dimmed" fw={560}>Finding {index + 1}</Text><Outcome assignment={item.assignment} size="sm" /></Group>
+              <Accordion.Control><Group gap="xs" mb={6}><Text size="xs" c="dimmed" fw={560}>Finding {index + 1}</Text><Outcome assignment={item.assignment} /></Group>
                 <Text size="sm" className="finding-claim"><Rich text={item.claim} /></Text></Accordion.Control>
               <Accordion.Panel><Stack gap="sm"><Text size="xs" c="dimmed">{item.file}{item.line === null ? '' : `:${item.line}`}</Text><Text size="sm"><Rich text={item.consequence} /></Text>
                 <Paper p="sm" className="evidence-note"><Text size="xs" fw={640} mb={5}>Current assessment</Text><Text size="sm"><Rich text={item.notes} /></Text></Paper>

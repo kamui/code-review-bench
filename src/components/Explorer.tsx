@@ -4,7 +4,7 @@ import { ActionIcon, Alert, Anchor, Badge, Button, Checkbox, Container, Group, L
 import { useMediaQuery } from '@mantine/hooks'
 import { Link, Navigate, useLocation, useMatch, useNavigate, useSearch } from '@tanstack/react-router'
 import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpDown, ArrowUpRight, ChartBarStacked, ChartNoAxesGantt, ChartScatter, Check, ChevronDown, ChevronRight, CodeXml, Cpu, Crosshair, Database,
-  EyeOff, FileCheck2, Grid3x3, Hourglass, Info, LayoutGrid, Moon, Scale, Search, ShieldCheck, SlidersHorizontal, Sun, X } from 'lucide-react'
+  EyeOff, FileCheck2, Grid3x3, Hourglass, Info, LayoutGrid, Moon, RotateCcw, Scale, Search, ShieldCheck, SlidersHorizontal, Sun, X } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { fetchDataset, impactBands, skillReleaseLabel } from '../lib/data'
 import type { Configuration, Dataset, Task } from '../lib/data'
@@ -251,7 +251,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
                       checked={selected.includes(configuration.id)} onChange={() => setSelected(selected.includes(configuration.id) ? selected.filter(id => id !== configuration.id) : [...selected, configuration.id])} size="xs" />)}</div>)}
                 </Stack></Popover.Dropdown>
               </Popover>
-              <Popover position="bottom-start" width={340} withArrow arrowPosition="side">
+              <Popover position="bottom-start" width={240} withArrow arrowPosition="side">
                 <Popover.Target><Button variant="default" size="xs" className="refine-button" leftSection={<Cpu size={14} aria-hidden="true" />} rightSection={<ChevronDown size={14} aria-hidden="true" />}>Models ({selectedModels.length}/{modelChoices.length})</Button></Popover.Target>
                 <Popover.Dropdown className="refine-dropdown"><Stack gap="sm"><Group justify="space-between"><Text size="xs" fw={640}>Models</Text><Group gap="xs"><Button variant="subtle" size="compact-xs" className="popover-action" onClick={() => setSelectedModels(modelChoices.map(model => model.value))}>Select all</Button>
                   <Button variant="subtle" size="compact-xs" className="popover-action" onClick={() => setSelectedModels([])}>Clear all</Button></Group></Group>
@@ -324,7 +324,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
           </div>
           <div className="task-filters-foot">
             <Text size="xs" c="dimmed">{findingConcern ? `Detection counts only the ${plural(concernReferences, `${findingConcern.toLowerCase()} reference`)} on these PRs.` : 'Detection counts every approved reference.'} Filters also narrow the <Link className="filter-link" to="/" hash="scorecard">scorecard</Link> comparison.</Text>
-            <Button variant="subtle" color="gray" size="xs" onClick={resetFilters}>Reset filters</Button>
+            <Button variant="default" size="xs" leftSection={<RotateCcw size={13} aria-hidden="true" />} onClick={resetFilters}>Reset filters</Button>
           </div>
         </Paper>
         <Tabs defaultValue="catalog" className="task-tabs"><Tabs.List><Tabs.Tab value="catalog" leftSection={<Database size={15} />}>Task catalog</Tabs.Tab><Tabs.Tab value="coverage" leftSection={<Grid3x3 size={15} />}>Coverage gaps</Tabs.Tab></Tabs.List>
