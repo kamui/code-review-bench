@@ -289,7 +289,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
           </Table></Table.ScrollContainer></>}
           {!comparison.rows.length && <Text>No shared PR has {scope} references under these filters.</Text>}
         </>}
-        <Text size="xs" c="dimmed">Each omission removes the entire PR and all its repetitions. Repetition indices are not matched experimental seeds.</Text>
+        <Text size="xs" c="dimmed" className="footnote">Each omission removes the entire PR and all its repetitions. Repetition indices are not matched experimental seeds.</Text>
       </Stack></Tabs.Panel>
     </Tabs>
   </Paper>
