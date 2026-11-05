@@ -361,9 +361,9 @@ describe('chart', () => {
     expect(delivered).not.toContain('0.13')
   })
 
-  test('the frontier view names the two measures it compares', () => {
+  test('the scatter says its lines join each review method\'s setups and are not a trend', () => {
     expect(chart(fixture, { band: 'all', estimator: 'equalPr' }, 'tradeoff'))
-      .toContain('Frontier of known problems found, PRs weighted equally against cost per trial')
+      .toContain('A line joins each review method\'s setups from left to right. It shows one method across models; the points between are not measured.')
   })
 })
 
