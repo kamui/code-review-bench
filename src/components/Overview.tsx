@@ -138,7 +138,7 @@ export function Overview({ summaries, detection, axis, matching, basis, onSelect
     <div className="measure-grid">
       <section className="measure-card lead-card" data-lead aria-labelledby="measure-lead">
         <header className="measure-head"><div><h3 id="measure-lead">{foundLabels[detection.band]} and {lowerFirst(axisLabels[axis])}, by review method</h3>
-          <p className="lead-about">Each row is one review method and each mark one model it ran on, and the solid mark is the model that finds the most with it. Compare methods first, then the models within one. <span className="lead-scope">{[`${basis.prs} PRs`,
+          <p className="lead-about">Each group is one review method, with a line for each model it ran on. Compare methods first, then the models within one. <span className="lead-scope">{[`${basis.prs} PRs`,
             detection.band === 'all' ? `${basis.known} known problems` : `${basis.problems} of ${basis.known} known problems are ${lowerFirst(bandLabels[detection.band])}`,
             basis.awaiting > 0 && `${basis.awaiting} awaiting a ruling`].filter(Boolean).join(' · ')}</span></p></div></header>
         <Chart summaries={summaries} detection={detection} matching={matching} axis={axis} view="methods" onSelect={onSelect}

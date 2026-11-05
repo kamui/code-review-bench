@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { CSSProperties, DOMAttributes, FocusEvent, MouseEvent, ReactNode } from 'react'
 import { useElementSize } from '@mantine/hooks'
 import { ArrowUpLeft } from 'lucide-react'
-import { groupPaths, logScale, paretoFrontier, placeLabels, position, sqrtScale, ticks, tipPlace } from '../lib/chart'
+import { groupPaths, linearScale, logScale, paretoFrontier, placeLabels, position, sqrtScale, ticks, tipPlace } from '../lib/chart'
 import type { Scale, TipPlace } from '../lib/chart'
 import { compact, detectionLabel, foundLabels, duration, lowerFirst, money, percent, reasonCounts, share } from '../lib/metrics'
 import type { Axis, DetectionView, Summary } from '../lib/metrics'
@@ -108,7 +108,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
         : view === 'tradeoff' ? <Scatter points={measured} dimensions={dimensions} axis={axis} scale={scale}
           spotlight={spotlight?.method ?? null} hovered={hovered?.id ?? null} onSelect={onSelect} interactions={interactions} yTitle={foundLabels[detection.band]} height={height} />
         : view === 'skills' ? <MethodPanels points={measured} axis={axis} scale={scale} onSelect={onSelect} interactions={interactions} />
-          : view === 'methods' ? <Methods points={points} axis={axis} scale={scale} measure={measure} onSelect={onSelect} interactions={interactions} />
+          : view === 'methods' ? <Methods points={points} axis={axis} measure={measure} onSelect={onSelect} interactions={interactions} />
           : <Models points={points} measure={measure} onSelect={onSelect} interactions={interactions} />}
     {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={measure} axes={view === 'models' ? [] : [axis]} place={hovered} />}
     {points.length > 0 && view !== 'models' && <ul className="chart-keys" aria-label="Chart key">
@@ -118,7 +118,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
         .sort(([left, one], [right, other]) => Number(other.builtin) - Number(one.builtin) || left.localeCompare(right)).map(([method, configuration]) => <li key={method}>
           <button type="button" className="key-button" aria-pressed={spotlight?.method === method && spotlight.pinned} onMouseEnter={preview(method)} onMouseLeave={preview(null)} onFocus={preview(method)} onBlur={preview(null)}
             onClick={() => setSpotlight(current => current?.pinned && current.method === method ? null : { method, pinned: true })}><Mark configuration={configuration} size={10} />{method}</button></li>)}
-      {bounded && <li><span className="bound-key" aria-hidden="true" />Lower bound</li>}
+      {bounded && <li><span className={view === 'methods' ? 'bound-key bar' : 'bound-key'} aria-hidden="true" />Lower bound</li>}
       {aside && <li className="key-aside">{aside}</li>}
     </ul>}
     {points.length > 0 && <ChartGuide title={guide ? 'How to read these charts' : undefined}><div className="plot-caption">
@@ -128,10 +128,10 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
       {view === 'tradeoff' && <span>Point at a review method in the key to pick out its setups; select it to keep them picked out.</span>}
       {view === 'tradeoff' && axis === 'doubt' && <span>An unproven claim is not shown to be false.</span>}
       {view === 'tradeoff' && <span>A faint line joins each review method's setups from left to right, and comes forward when you point at one of them. It shows one method across models; the points between are not measured.</span>}
-      {view === 'methods' && <span>Each row is one review method, and each mark one model it ran on: on the left {lowerFirst(measure)}, on the right {lowerFirst(axisLabels[axis])}. The bar spans the method's models, and the solid mark is the model that finds the most with it, the first chip. Rows start with the method whose setup finds the most, and the chips list its models from most found to least.</span>}
+      {view === 'methods' && <span>Each group is one review method, and each line one model it ran on, with {lowerFirst(measure)} on the left and {lowerFirst(axisLabels[axis])} on the right. Both bars start at zero on a linear scale, so their lengths compare directly. Groups start with the method whose setup finds the most, and each lists its models from most found to least.</span>}
       {view === 'models' && <span>Each row is one model, in name order. Marks show {lowerFirst(measure)} for each review method that ran on it, listed from most found to least.</span>}
       {withheld.length > 0 && <span>Not plotted, {lowerFirst(measure)} unavailable: {withheld.map(row => `${row.reason} (${setups(row.count)})`).join(' ')}</span>}
-      {view !== 'models' && bounded && <span><span className="bound-key" aria-hidden="true" />Hollow marks show a lower bound of {lowerFirst(axisLabels[axis])}: some attempts recorded only part of their usage, so the true value may be higher.{view === 'setups' && ' They are left out of the frontier.'}</span>}
+      {view !== 'models' && bounded && <span><span className={view === 'methods' ? 'bound-key bar' : 'bound-key'} aria-hidden="true" />{view === 'methods' ? 'A dotted tail on a bar marks' : 'Hollow marks show'} a lower bound of {lowerFirst(axisLabels[axis])}: some attempts recorded only part of their usage, so the true value may be higher.{view === 'setups' && ' They are left out of the frontier.'}</span>}
       {unplotted.length > 0 && <span>No {lowerFirst(axisLabels[axis])} for {unplotted.map(point => `${setupLabel(point.summary.configuration)} (${point.summary.reasons[axis]})`).join('; ')}.</span>}
       {axis === 'refuted' && <span>Refuted claims are compared on the {matching.included} of {matching.included + matching.excluded} selected PRs where every selected setup has admitted, assessed reviews, with PRs weighted equally. A setup that admitted only some trials of a matched PR is measured on the reviews it delivered; the tooltip gives its admitted trials.</span>}
       {axis === 'time' && <span>Completed trials only. Includes replacement attempts; excludes gaps between attempts, provisioning, and grading.</span>}
@@ -340,43 +340,38 @@ function PointMark({ configuration, x, y, hollow }: { configuration: Configurati
     : <path d={`M${x},${y - 8}L${x + 8},${y}L${x},${y + 8}L${x - 8},${y}Z`} {...props} />
 }
 
-function Methods({ points, axis, scale, measure, onSelect, interactions }: { points: Point[]; axis: Axis; scale: Scale; measure: string; onSelect: (id: string) => void; interactions: Interactions }) {
+function Methods({ points, axis, measure, onSelect, interactions }: { points: Point[]; axis: Axis; measure: string; onSelect: (id: string) => void; interactions: Interactions }) {
   const byScore = (left: Point, right: Point) => (right.summary.detection ?? -1) - (left.summary.detection ?? -1) || left.summary.configuration.short.localeCompare(right.summary.configuration.short)
   const rows = groupPaths(points.map(point => ({ ...point, x: 0, y: 0 })), point => methodKey(point.summary.configuration))
     .map(group => ({ key: group.key, members: [...group.points].sort(byScore) }))
     .sort((left, right) => byScore(left.members[0]!, right.members[0]!))
+  const scale = linearScale(points.flatMap(point => point.metric === null ? [] : [point.metric]))
   const metricTicks = ticks(scale)
-  const track = (members: Point[], color: string, gridAt: number[], at: (point: Point) => number | null) => {
-    const placed = members.flatMap(point => { const left = at(point); return left === null ? [] : [{ point, left }] })
-    const lefts = placed.map(entry => entry.left)
-    return <span className="rank-track">{gridAt.map(tick => <span key={tick} className="rank-grid" style={{ left: `${tick}%` }} />)}
-      {placed.length > 1 && <span className="model-span" style={{ left: `${Math.min(...lefts)}%`, width: `${Math.max(...lefts) - Math.min(...lefts)}%`, background: color }} />}
-      {placed.map(({ point, left }, index) => {
-        const stacked = placed.slice(0, index).filter(other => Math.abs(other.left - left) < 1.5).length
-        return <span key={point.summary.configuration.id} className={point === members[0] ? 'rank-dot top' : 'rank-dot'} style={{ left: `${left}%`, marginTop: stacked * 9 - (stacked ? 2 : 0) }}
-          {...interactions(point.summary.configuration.id)}><Mark configuration={point.summary.configuration} size={13} hollow={point.bounded} /></span>
-      })}</span>
-  }
+  const grid = (at: number[]) => at.map(tick => <span key={tick} className="rank-grid" style={{ left: `${tick}%` }} />)
   return <div className="methods" role="list" aria-label={`${measure} and ${lowerFirst(axisLabels[axis])} by review method, each method's models from most found to least`}>
-    <div className="method-head" aria-hidden="true"><span>Review method</span>
+    <div className="method-head" aria-hidden="true"><span>Review method and model</span>
       <span className="rank-axis"><span className="rank-axis-title">{measure}</span>
         <span className="rank-ticks score-ticks">{scoreTicks.map(tick => <span key={tick} style={{ left: `${tick}%` }}>{tick}%</span>)}</span></span>
-      <span className="rank-axis"><span className="rank-axis-title">{axisLabels[axis]}{scale.kind !== 'linear' && <em>{scaleNames[scale.kind]}</em>}</span>
+      <span className="rank-axis"><span className="rank-axis-title">{axisLabels[axis]}</span>
         <span className={metricTicks.length > 4 ? 'rank-ticks sparse' : 'rank-ticks'}>{metricTicks.map(tick => <span key={tick} style={{ left: `${fraction(scale, tick)}%` }}>{tickLabel(axis, tick)}</span>)}</span></span></div>
     {rows.map(({ key, members }) => {
       const first = members[0]!.summary.configuration
-      return <div role="listitem" key={key} className="method-row">
+      return <div role="listitem" key={key} className="method-group" style={{ '--mark-color': reviewColor(first) } as CSSProperties}>
         <span className="method-name"><Mark configuration={first} size={11} />{setupParts(first).method}</span>
-        {track(members, reviewColor(first), scoreTicks, point => point.summary.detection ?? 0)}
-        {track(members, reviewColor(first), metricTicks.map(tick => fraction(scale, tick)), point => point.metric === null ? null : fraction(scale, point.metric))}
-        <span className="method-entries">{members.map(point => {
+        {members.map(point => {
           const { configuration } = point.summary
-          return <button type="button" key={configuration.id} className="method-entry" onClick={() => onSelect(configuration.id)} {...interactions(configuration.id)}
+          const { model, effort } = setupParts(configuration)
+          return <button type="button" key={configuration.id} className="method-setup" onClick={() => onSelect(configuration.id)} {...interactions(configuration.id)}
             aria-label={`${configuration.short}: ${percent(point.summary.detection)}${noted(point.summary)}, ${axisLabels[axis]} ${formatMetric(axis, point.metric, point.starred, point.bounded)}. Inspect evidence`}>
-            <VendorMark configuration={configuration} /><span className="method-entry-model">{setupParts(configuration).model}</span>
-            <strong><Score summary={point.summary} /></strong><span className="method-entry-metric">{formatMetric(axis, point.metric, point.starred, point.bounded)}</span>
+            <span className="method-model"><VendorMark configuration={configuration} />{model}{effort && effort !== 'High' && <span className="measure-effort"> · {effort}</span>}</span>
+            <span className="rank-cell"><span className="rank-value"><Score summary={point.summary} /></span>
+              <span className="rank-track">{grid(scoreTicks)}<span className="method-bar" style={{ width: `${point.summary.detection ?? 0}%` }} /></span></span>
+            <span className="rank-cell"><span className="rank-value method-metric">{formatMetric(axis, point.metric, point.starred, point.bounded)}</span>
+              <span className="rank-track">{grid(metricTicks.map(tick => fraction(scale, tick)))}
+                {point.metric === null ? <span className="rank-missing">unavailable</span>
+                  : <span className={point.bounded ? 'method-bar metric bounded' : 'method-bar metric'} style={{ width: `${fraction(scale, point.metric)}%` }} />}</span></span>
           </button>
-        })}</span>
+        })}
       </div>
     })}
   </div>
