@@ -137,15 +137,20 @@ export function Overview({ summaries, detection, axis, matching, basis, onSelect
   return <div className="overview" data-focusing={focus ? '' : undefined} onMouseLeave={() => { setTip(null); setFocus(null) }}>
     <div className="measure-grid">
       <section className="measure-card lead-card" data-lead aria-labelledby="measure-lead">
-        <header className="measure-head"><div><h3 id="measure-lead">{foundLabels[detection.band]} against {lowerFirst(axisLabels[axis])}</h3>
-          <p className="lead-about">Each point is one setup; up and to the left is better on both. <span className="lead-scope">{[`${basis.prs} PRs`,
+        <header className="measure-head"><div><h3 id="measure-lead">{foundLabels[detection.band]} and {lowerFirst(axisLabels[axis])}, by review method</h3>
+          <p className="lead-about">Each row is one review method and each mark one model it ran on, and the solid mark is the model that finds the most with it. Compare methods first, then the models within one. <span className="lead-scope">{[`${basis.prs} PRs`,
             detection.band === 'all' ? `${basis.known} known problems` : `${basis.problems} of ${basis.known} known problems are ${lowerFirst(bandLabels[detection.band])}`,
             basis.awaiting > 0 && `${basis.awaiting} awaiting a ruling`].filter(Boolean).join(' · ')}</span></p></div></header>
-        <Chart summaries={summaries} detection={detection} matching={matching} axis={axis} view="tradeoff" height={460} onSelect={onSelect}
+        <Chart summaries={summaries} detection={detection} matching={matching} axis={axis} view="methods" onSelect={onSelect}
           aside={<KeyTerms terms={['Review setup', 'Known problem', 'Impact band', 'Problems or PRs weighted equally', 'Refuted or unproven', 'Admitted review']} />}
-          guide={<>{weight(detection, basis) && <span>{weight(detection, basis)}</span>}<span>Below this chart, each chart ranks the setups by one measure, on its own scale and in its own order; a setup without a value comes last. Point at a setup to find it in every chart, and select it to open its evidence.</span>
+          guide={<>{weight(detection, basis) && <span>{weight(detection, basis)}</span>}<span>Below this chart, a scatter sets each setup's detection against {lowerFirst(axisLabels[axis])}, and then each chart ranks the setups by one measure, on its own scale and in its own order; a setup without a value comes last. Point at a setup to find it in every chart, and select it to open its evidence.</span>
             <span>The charts stay separate on purpose: no single number ranks the setups.</span>
             {summaries.some(summary => summary.detectionNote) && <span>A dotted underline marks a value that counts unresolved detection decisions as zero credit; point at it for the count.</span>}</>} />
+      </section>
+      <section className="measure-card lead-card" data-lead aria-labelledby="measure-tradeoff">
+        <header className="measure-head"><div><h3 id="measure-tradeoff">{foundLabels[detection.band]} against {lowerFirst(axisLabels[axis])}</h3>
+          <p className="lead-about">Each point is one setup; up and to the left is better on both. "Plot against" above changes the measure.</p></div></header>
+        <Chart summaries={summaries} detection={detection} matching={matching} axis={axis} view="tradeoff" height={460} onSelect={onSelect} />
       </section>
       {columns.map(column => {
         const panel = panels[column], id = `measure-${column}`
