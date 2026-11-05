@@ -256,7 +256,7 @@ describe('overview', () => {
       'Claude built-in / Fixture A / High', 'ce-code-review / Fixture A / High', 'Claude built-in / Fixture B / High'])
     expect(overview).toContain('aria-label="Cost per trial, lowest first"')
     expect(text(overview)).toContain('Unavailable 3 : 4 admitted reviews were graded before these labels.')
-    expect(text(overview)).toContain('22.2%')
+    expect(text(overview)).toContain('22%')
     expect(text(overview)).toContain('≥ $0.37')
   })
 
@@ -286,7 +286,7 @@ describe('chart', () => {
     expect(chart(fixture, { band: 'serious', estimator: 'equalPr' })).toContain('Serious problems found, PRs weighted equally')
   })
 
-  test('plots unresolved detection with numbered table notes and an explanation in every chart view', () => {
+  test('explains unresolved detection counted as zero credit in every chart view', () => {
     const subject = task('pr', [family('s', 'serious'), family('m', 'other-material')])
     const open = review(subject, null, { cost: null, assessment: assessment(subject, ['s'], { families: [
       { familyId: 's', outcome: 'caught', sufficiency: 'absent', claimIds: ['c-s'] },
@@ -297,13 +297,13 @@ describe('chart', () => {
       for (const estimator of ['equalProblem', 'equalPr'] as const) {
         for (const view of ['setups', 'tradeoff', 'models'] as const) {
           const rendered = chart(dataset, { band, estimator }, view)
-          expect(rendered).toContain(`Notes on marked values ${note}`)
+          expect(rendered).toContain('unresolved detection decisions as zero credit; point at a setup for the count.')
           expect(rendered).not.toContain('Not plotted,')
           expect(rendered).toContain('1 attempt has no recorded usage.')
         }
       }
     }
-    expect(chart(dataset, { band: 'serious', estimator: 'equalProblem' })).not.toContain(note)
+    expect(chart(dataset, { band: 'serious', estimator: 'equalProblem' })).not.toContain('zero credit')
     const rendered = panels(dataset)
     expect(rendered).toContain('0.0%')
     expect(rendered).toContain('50.0%')
@@ -316,7 +316,7 @@ describe('chart', () => {
     const subject = task('pr', [family('s', 'serious')])
     const dataset = build([subject], { a: [[subject, [review(subject, ['s'], { cost: null })]]] })
     const models = chart(dataset, { band: 'serious', estimator: 'equalProblem' }, 'models')
-    expect(models).toContain('100.0%')
+    expect(models).toContain('100%')
     expect(models).toContain('No cost per trial for a (1 attempt has no recorded usage.).')
   })
 
@@ -330,7 +330,7 @@ describe('chart', () => {
     expect(whole).toContain("≥ $0.75 : 1 attempt's usage was only partly recorded.")
     expect(whole).toContain('≥ marks a lower bound where usage was only partly recorded')
     const setups = chart(dataset, { band: 'all', estimator: 'equalProblem' })
-    expect(setups).toContain('a 100.0% ≥ $0.75 b On frontier 50.0% $1.00')
+    expect(setups).toContain('a 100% ≥ $0.75 b On frontier 50% $1.00')
     expect(setups).toContain('Hollow marks show a lower bound of cost per trial')
     expect(setups).not.toContain('No cost per trial for a')
   })
@@ -343,7 +343,7 @@ describe('chart', () => {
     expect(serious).toContain('No references in this band. (2 setups)')
     expect(serious).toContain('No other impact band or average is substituted.')
     expect(serious).not.toContain('%')
-    expect(chart(unlabelled, { band: 'unknown', estimator: 'equalProblem' })).toContain('100.0%')
+    expect(chart(unlabelled, { band: 'unknown', estimator: 'equalProblem' })).toContain('100%')
     const whole = page(unlabelled)
     expect(whole).toMatch(/Unavailable \d+ : No reference is labelled serious\./)
     expect(panels(unlabelled)).toContain('No reference on the selected PRs is labelled serious, so serious misses cannot be listed.')

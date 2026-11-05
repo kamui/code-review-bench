@@ -52,6 +52,8 @@ export function Value({ cell, notes = [] }: { cell: Cell; notes?: Note[] }) {
   const note = cell.reason ?? cell.annotation
   if (!note) return cell.text
   const index = notes.findIndex(item => item.reason === note || item.covers?.includes(note))
+  if (index < 0 && !cell.reason && !lowerBound(cell))
+    return <Tooltip multiline w={300} withArrow label={note}><span className="annotated" tabIndex={0}>{cell.text}</span></Tooltip>
   return <span className={lowerBound(cell) ? 'annotated' : cell.reason ? 'unavailable' : undefined} title={note}>{cell.text}{index >= 0 && <sup aria-hidden="true">{index + 1}</sup>}<VisuallyHidden>: {note}</VisuallyHidden></span>
 }
 

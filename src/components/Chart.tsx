@@ -8,8 +8,7 @@ import { compact, detectionLabel, foundLabels, duration, lowerFirst, money, perc
 import type { Axis, DetectionView, Summary } from '../lib/metrics'
 import type { Configuration } from '../lib/data'
 import { skillReleaseLabel } from '../lib/data'
-import { ChartGuide, costNote, costStarred, Notes, notesFor } from './Reading'
-import type { Note } from './Reading'
+import { ChartGuide, costNote, costStarred } from './Reading'
 import { VendorMark } from './VendorMark'
 
 export type ChartView = 'skills' | 'setups' | 'models' | 'tradeoff'
@@ -71,9 +70,9 @@ const scaleFor = (axis: Axis, values: number[]): Scale => axis === 'refuted' || 
 const fraction = (scale: Scale, value: number) => position(scale, value, 0, 100)
 const scoreTicks = [0, 25, 50, 75, 100]
 
-export function Chart({ summaries, detection, matching, axis, view, onSelect, guide, height, withNotes = true }: {
+export function Chart({ summaries, detection, matching, axis, view, onSelect, guide, height }: {
   summaries: Summary[]; detection: DetectionView; matching: { included: number; excluded: number }; axis: Axis; view: ChartView; onSelect: (id: string) => void
-  guide?: ReactNode; height?: number; withNotes?: boolean
+  guide?: ReactNode; height?: number
 }) {
   const measure = detectionLabel(detection), dimensions = `${lowerFirst(measure)} against ${lowerFirst(axisLabels[axis])}`
   const [hovered, setHovered] = useState<({ id: string } & TipPlace) | null>(null)
@@ -100,17 +99,16 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
   })
   const unplotted = points.filter(point => point.metric === null)
   const bounded = measured.some(point => point.bounded)
-  const notes = notesFor(points.map(point => share(point.summary.card.detection[detection.band][detection.estimator], point.summary.detectionNote)))
   return <div className="plot-shell" onMouseLeave={() => setHovered(null)}>
     {!points.length ? <div className="plot-empty" role="status"><strong>{measure} is unavailable</strong>
       {summaries.length ? <ul className="reason-list">{withheld.map(row => <li key={row.reason}>{row.reason} ({setups(row.count)})</li>)}</ul>
         : <span>Select at least one review method and model.</span>}
       <span>No other impact band or average is substituted. Choose them above.</span></div>
-      : view === 'setups' ? <SetupRows points={points} notes={notes} measure={measure} axis={axis} scale={scale} frontier={frontier} onSelect={onSelect} interactions={interactions} />
+      : view === 'setups' ? <SetupRows points={points} measure={measure} axis={axis} scale={scale} frontier={frontier} onSelect={onSelect} interactions={interactions} />
         : view === 'tradeoff' ? <Scatter points={measured} dimensions={dimensions} axis={axis} scale={scale}
           spotlight={spotlight?.method ?? null} onSelect={onSelect} interactions={interactions} yTitle={foundLabels[detection.band]} height={height} />
         : view === 'skills' ? <MethodPanels points={measured} axis={axis} scale={scale} onSelect={onSelect} interactions={interactions} />
-          : <Models points={points} notes={notes} measure={measure} onSelect={onSelect} interactions={interactions} />}
+          : <Models points={points} measure={measure} onSelect={onSelect} interactions={interactions} />}
     {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={measure} axes={view === 'models' ? [] : [axis]} place={hovered} />}
     {points.length > 0 && view !== 'models' && <ul className="chart-keys" aria-label="Chart key">
       {view === 'setups' && <li><span className="whisker-key" aria-hidden="true" />Range with any one PR left out</li>}
@@ -128,27 +126,25 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
       {view === 'tradeoff' && <span>Point at a review method in the key to pick out its setups; select it to keep them picked out.</span>}
       {view === 'tradeoff' && axis === 'doubt' && <span>An unproven claim is not shown to be false.</span>}
       {view === 'tradeoff' && <span>A line joins each review method's setups from left to right. It shows one method across models; the points between are not measured.</span>}
-      {view === 'models' && <span>Each row is one model, in name order. Marks show {lowerFirst(measure)} for each review method that ran on it.</span>}
+      {view === 'models' && <span>Each row is one model, in name order. Marks show {lowerFirst(measure)} for each review method that ran on it, listed from most found to least.</span>}
       {withheld.length > 0 && <span>Not plotted, {lowerFirst(measure)} unavailable: {withheld.map(row => `${row.reason} (${setups(row.count)})`).join(' ')}</span>}
       {view !== 'models' && bounded && <span><span className="bound-key" aria-hidden="true" />Hollow marks show a lower bound of {lowerFirst(axisLabels[axis])}: some attempts recorded only part of their usage, so the true value may be higher.{view === 'setups' && ' They are left out of the frontier.'}</span>}
       {unplotted.length > 0 && <span>No {lowerFirst(axisLabels[axis])} for {unplotted.map(point => `${setupLabel(point.summary.configuration)} (${point.summary.reasons[axis]})`).join('; ')}.</span>}
       {axis === 'refuted' && <span>Refuted claims are compared on the {matching.included} of {matching.included + matching.excluded} selected PRs where every selected setup has admitted, assessed reviews, with PRs weighted equally. A setup that admitted only some trials of a matched PR is measured on the reviews it delivered; the tooltip gives its admitted trials.</span>}
       {axis === 'time' && <span>Completed trials only. Includes replacement attempts; excludes gaps between attempts, provisioning, and grading.</span>}
       {axis === 'cost' && costNote(shown) && <span>{costNote(shown)}</span>}
+      {points.some(point => point.summary.detectionNote) && <span>{view === 'tradeoff' ? 'Some setups count' : 'A dotted underline marks a value that counts'} unresolved detection decisions as zero credit; point at a setup for the count.</span>}
     </div></ChartGuide>}
-    {withNotes && <Notes notes={notes} />}
   </div>
 }
 
-function NoteMark({ summary, notes }: { summary: Summary; notes: Note[] }) {
-  const index = notes.findIndex(note => note.reason === summary.detectionNote || (summary.detectionNote !== null && note.covers?.includes(summary.detectionNote)))
-  return index >= 0 && <sup aria-hidden="true">{index + 1}</sup>
-}
+const noted = (summary: Summary) => summary.detectionNote ? ` (${summary.detectionNote.replace(/\.$/, '')})` : ''
+const Score = ({ summary }: { summary: Summary }) => <span className={summary.detectionNote ? 'annotated' : undefined}>{percent(summary.detection, 0)}</span>
 
 type Interactions = (id: string) => Pick<DOMAttributes<Element>, 'onMouseEnter' | 'onFocus' | 'onMouseLeave' | 'onBlur'>
 
-function SetupRows({ points, notes, measure, axis, scale, frontier, onSelect, interactions }: {
-  points: Point[]; notes: Note[]; measure: string; axis: Axis; scale: Scale; frontier: Set<string>; onSelect: (id: string) => void; interactions: Interactions
+function SetupRows({ points, measure, axis, scale, frontier, onSelect, interactions }: {
+  points: Point[]; measure: string; axis: Axis; scale: Scale; frontier: Set<string>; onSelect: (id: string) => void; interactions: Interactions
 }) {
   const metricTicks = ticks(scale)
   return <div role="list" aria-label={`Setups ordered by ${lowerFirst(measure)}, with ${lowerFirst(axisLabels[axis])}`}>
@@ -165,11 +161,11 @@ function SetupRows({ points, notes, measure, axis, scale, frontier, onSelect, in
       const score = summary.detection ?? 0
       return <div role="listitem" key={configuration.id}>
         <button type="button" className="rank-row" onClick={() => onSelect(configuration.id)} {...interactions(configuration.id)}
-          aria-label={`${configuration.short}: ${measure} ${percent(score)}${range ? `, ${percent(range.low)} to ${percent(range.high)} leaving one PR out` : ''}; ${axisLabels[axis]} ${formatMetric(axis, metric, starred, bounded)}${frontier.has(configuration.id) ? '; on the frontier of these two measures' : ''}. Inspect evidence`}>
+          aria-label={`${configuration.short}: ${measure} ${percent(score)}${noted(summary)}${range ? `, ${percent(range.low)} to ${percent(range.high)} leaving one PR out` : ''}; ${axisLabels[axis]} ${formatMetric(axis, metric, starred, bounded)}${frontier.has(configuration.id) ? '; on the frontier of these two measures' : ''}. Inspect evidence`}>
           <span className="rank-name"><Mark configuration={configuration} />
             <span><strong>{method}</strong><span className="rank-model"><VendorMark configuration={configuration} />{model}{effort && ` · ${effort}`}
               {frontier.has(configuration.id) && <span className="frontier-tag">On frontier</span>}</span></span></span>
-          <span className="rank-cell"><span className="rank-value">{percent(score)}<NoteMark summary={summary} notes={notes} /></span>
+          <span className="rank-cell"><span className="rank-value"><Score summary={summary} /></span>
             <span className="rank-track">{scoreTicks.map(tick => <span key={tick} className="rank-grid" style={{ left: `${tick}%` }} />)}
               {range && <span className="rank-whisker" style={{ left: `${range.low}%`, width: `${range.high - range.low}%` }} />}
               <span className="rank-dot" style={{ left: `${score}%` }}><Mark configuration={configuration} /></span></span></span>
@@ -279,7 +275,7 @@ function ChartPoint({ point, axis, x, y, muted = false, onSelect, interactions }
 }) {
   const { configuration } = point.summary
   return <g role="button" tabIndex={0} className={muted ? 'chart-point muted' : 'chart-point'}
-    aria-label={`${configuration.short}: ${percent(point.y)}, ${formatMetric(axis, point.x, point.starred, point.bounded)}. Inspect evidence`}
+    aria-label={`${configuration.short}: ${percent(point.y)}${noted(point.summary)}, ${formatMetric(axis, point.x, point.starred, point.bounded)}. Inspect evidence`}
     onClick={() => onSelect(configuration.id)} {...interactions(configuration.id)}
     onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(configuration.id) } }}>
     <circle cx={x} cy={y} r={14} fill="transparent" />
@@ -339,7 +335,7 @@ function PointMark({ configuration, x, y, hollow }: { configuration: Configurati
     : <path d={`M${x},${y - 8}L${x + 8},${y}L${x},${y + 8}L${x - 8},${y}Z`} {...props} />
 }
 
-function Models({ points, notes, measure, onSelect, interactions }: { points: Point[]; notes: Note[]; measure: string; onSelect: (id: string) => void; interactions: Interactions }) {
+function Models({ points, measure, onSelect, interactions }: { points: Point[]; measure: string; onSelect: (id: string) => void; interactions: Interactions }) {
   const groups = new Map<string, Point[]>()
   for (const point of points) {
     const { model, effort } = setupParts(point.summary.configuration)
@@ -364,12 +360,12 @@ function Models({ points, notes, measure, onSelect, interactions }: { points: Po
             return <span key={point.summary.configuration.id} className="rank-dot" style={{ left: `${score}%`, marginTop: stacked * 9 - (stacked ? 2 : 0) }}>
               <Mark configuration={point.summary.configuration} size={13} /></span>
           })}</span>
-        <span className="model-entries">{[...members].sort((left, right) => left.summary.configuration.short.localeCompare(right.summary.configuration.short)).map(point => {
+        <span className="model-entries">{[...members].sort((left, right) => (right.summary.detection ?? -1) - (left.summary.detection ?? -1) || left.summary.configuration.short.localeCompare(right.summary.configuration.short)).map(point => {
           const { configuration } = point.summary
           return <button type="button" key={configuration.id} className="model-entry" onClick={() => onSelect(configuration.id)} {...interactions(configuration.id)}
-            aria-label={`${configuration.short}: ${percent(point.summary.detection)}. Inspect evidence`}>
+            aria-label={`${configuration.short}: ${percent(point.summary.detection)}${noted(point.summary)}. Inspect evidence`}>
             <Mark configuration={configuration} size={10} /><span>{setupParts(configuration).method}</span>
-            <strong>{percent(point.summary.detection)}<NoteMark summary={point.summary} notes={notes} /></strong>
+            <strong><Score summary={point.summary} /></strong>
           </button>
         })}</span>
       </div>

@@ -95,14 +95,14 @@ export function peerLabel(configurations: Configuration[]): string | null {
   return values.size ? `Cross-model peer ${Array.from(values).join(', ')}` : null
 }
 
-export const percent = (value: number | null): string => value === null ? '—' : `${value.toFixed(1)}%`
+export const percent = (value: number | null, digits = 1): string => value === null ? '—' : `${value.toFixed(digits)}%`
 export const money = (value: number | null): string => value === null ? '—' : `$${value.toFixed(value > 0 && value < 0.01 ? 4 : 2)}`
 export const compact = (value: number | null): string => value === null ? '—'
   : new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value)
 
 export const duration = (seconds: number): string => seconds < 60 ? `${Math.round(seconds)} s` : `${(seconds / 60).toFixed(1)} min`
-export const share = (measure: Measure, annotation: string | null = null): Reading => ({
-  ...reading(measure, value => percent(value * 100)),
+export const share = (measure: Measure, annotation: string | null = null, digits = 1): Reading => ({
+  ...reading(measure, value => percent(value * 100, digits)),
   ...measure.kind === 'available' && annotation ? { annotation } : {},
   ...measure.kind === 'available' ? { fraction: measure.value } : {},
 })
