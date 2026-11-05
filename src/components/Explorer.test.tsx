@@ -251,7 +251,7 @@ describe('overview', () => {
   })
 
   test('the lead chart key lists review methods from most found, each with its top setup', () => {
-    expect(text(overview)).toContain('The key lists review methods from most found, each with its top setup.')
+    expect(text(overview)).toContain('The key gives each method\'s top setup.')
     expect(text(overview)).toMatch(/ce-code-review Fixture A 85% · \$2\.50 .*Claude built-in Fixture A 78% · \$1\.20/)
   })
 

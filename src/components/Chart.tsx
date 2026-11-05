@@ -143,7 +143,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
       {view === 'tradeoff' && <span>Both panels plot the same setups at the same height. Point at a setup, or select it, to mark it and show its name in both.</span>}
       {(view === 'tradeoff' || axis === 'doubt') && <span>An unproven claim is not shown to be false.</span>}
       {view === 'tradeoff' && <span>In the left panel, a faint line joins each review method's setups from left to right, and comes forward when you point at one of them. It shows one method across models; the points between are not measured.</span>}
-      {view === 'models' && <span>Each row is one model, in name order. Marks show {lowerFirst(measure)} for each review method that ran on it, listed from most found to least.</span>}
+      {view === 'models' && <span>Each row is one model; rows start with the model whose setup finds the most. Marks show {lowerFirst(measure)} for each review method that ran on it, listed from most found to least.</span>}
       {withheld.length > 0 && <span>Not plotted, {lowerFirst(measure)} unavailable: {withheld.map(row => `${row.reason} (${setups(row.count)})`).join(' ')}</span>}
       {view !== 'models' && bounded && <span><span className="bound-key" aria-hidden="true" />Hollow marks show a lower bound of {lowerFirst(axisLabels[boundedAxis])}: some attempts recorded only part of their usage, so the true value may be higher.{view === 'setups' && ' They are left out of the frontier.'}</span>}
       {unplotted.length > 0 && <span>No {lowerFirst(axisLabels[axis])} for {unplotted.map(point => `${setupLabel(point.summary.configuration)} (${point.summary.reasons[axis]})`).join('; ')}.</span>}
@@ -366,7 +366,7 @@ function Models({ points, measure, onSelect, interactions }: { points: Point[]; 
     groups.set(key, [...groups.get(key) ?? [], point])
   }
   const rows = Array.from(groups, ([model, members]) => ({ model, members: [...members].sort((a, b) => (b.summary.detection ?? 0) - (a.summary.detection ?? 0)) }))
-    .sort((left, right) => left.model.localeCompare(right.model))
+    .sort((left, right) => (right.members[0]!.summary.detection ?? 0) - (left.members[0]!.summary.detection ?? 0) || left.model.localeCompare(right.model))
   return <div className="models" role="list" aria-label={`${measure} by model and review method`}>
     <div className="model-head" aria-hidden="true"><span>Model</span>
       <span className="rank-ticks">{scoreTicks.map(tick => <span key={tick} style={{ left: `${tick}%` }}>{tick}%</span>)}</span></div>

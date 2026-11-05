@@ -84,10 +84,13 @@ function InspectionBody({ dataset, results, band, estimator, configuration, task
   const novel = currentTask ? pendingCandidates(dataset, [currentTask.id], now) : []
   return <Stack gap="lg">
     {configuration && <><SetupResults result={results.find(item => item.configuration.id === configuration.id)} band={band} estimator={estimator} />
-      <Stack gap={4}>{!configuration.builtin && <Group gap="xs"><Badge variant="light" radius="sm">{skillReleaseLabel([configuration])}</Badge></Group>}<Disclosure title="Run notes"><Text size="sm" className="disclosure-body">{configuration.note}</Text></Disclosure>
-      {Array.from(new Set(configuration.skillReleases.map(release => release.provenanceUrl))).map(url => <Button key={url} component="a" href={url} target="_blank" rel="noreferrer" variant="subtle" size="xs">Skill release provenance</Button>)}
-      {configuration.reviewChange && <Button component="a" href={configuration.reviewChange.url} target="_blank" rel="noreferrer" variant="subtle" size="xs">Review change: {configuration.reviewChange.summary}</Button>}
-      {configuration.skillProvenanceUrl && <Button component="a" href={configuration.skillProvenanceUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Skill commits & timestamps</Button>}
+      <Stack gap={4}>{!configuration.builtin && <Group gap="xs"><Badge variant="outline" color="gray" radius="sm">{skillReleaseLabel([configuration])}</Badge></Group>}<Disclosure title="Run notes"><div className="disclosure-body">
+        <Text size="sm">{configuration.note}</Text>
+        <ul className="source-links">
+          {Array.from(new Set(configuration.skillReleases.map(release => release.provenanceUrl))).map(url => <li key={url}><a href={url} target="_blank" rel="noreferrer">Skill release provenance<ExternalLink size={12} aria-hidden="true" /></a></li>)}
+          {configuration.reviewChange && <li><a href={configuration.reviewChange.url} target="_blank" rel="noreferrer">Review change: {configuration.reviewChange.summary}<ExternalLink size={12} aria-hidden="true" /></a></li>}
+          {configuration.skillProvenanceUrl && <li><a href={configuration.skillProvenanceUrl} target="_blank" rel="noreferrer">Skill commits &amp; timestamps<ExternalLink size={12} aria-hidden="true" /></a></li>}
+        </ul></div></Disclosure>
       <Disclosure title="Comparison conditions">
         <dl className="conditions">{configuration.conditions.map(condition => <div key={condition.name}><dt>{condition.name}</dt><dd>{condition.values.map(conditionValue).join(', ')}</dd></div>)}</dl></Disclosure></Stack></>}
     {task && <><Group gap="xs">{task.profile.concerns.map(concern => <Tag key={concern}>{concern}</Tag>)}</Group>
@@ -96,7 +99,7 @@ function InspectionBody({ dataset, results, band, estimator, configuration, task
       <Text size="xs" c="dimmed">Revision {task.head.slice(0, 10)}. Each reference shows its own eligibility and impact state.</Text>
       <TaskResults task={task} results={results} band={band} onOpen={attemptId => onChange({ ...inspection, attemptId, tab: 'reviews' })} /></>}
     <Tabs className="drawer-tabs" value={tab} onChange={value => { const next = drawerTabs.find(item => item === value); if (next) onChange({ ...inspection, tab: next }) }}>
-      <Tabs.List><Tabs.Tab value="reviews">Reviews ({attempts.length})</Tabs.Tab><Tabs.Tab value="references">References and candidates</Tabs.Tab><Tabs.Tab value="coverage">Coverage and failures</Tabs.Tab></Tabs.List>
+      <Tabs.List><Tabs.Tab value="reviews">Reviews ({attempts.length})</Tabs.Tab><Tabs.Tab value="references">References<span className="wide-only"> and candidates</span></Tabs.Tab><Tabs.Tab value="coverage">Coverage<span className="wide-only"> and failures</span></Tabs.Tab></Tabs.List>
       <Tabs.Panel value="reviews" pt="lg">
         <Stack gap="md">
           <Select label="Review attempt" description={currentGroup} searchable value={attemptId} onChange={value => onChange({ ...inspection, attemptId: value ?? undefined })}

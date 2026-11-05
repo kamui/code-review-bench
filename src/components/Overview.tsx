@@ -142,10 +142,10 @@ export function Overview({ summaries, detection, axis, matching, basis, onSelect
     <div className="measure-grid">
       <section className="measure-card lead-card" data-lead aria-labelledby="measure-lead">
         <header className="measure-head"><div><h3 id="measure-lead">{foundLabels[detection.band]} against {pairedLabels[axis]} and {pairedLabels[axis === 'doubt' ? 'cost' : 'doubt']}</h3>
-          <p className="lead-about">Each setup appears in both panels at the same height; up and to the left is better. The key lists review methods from most found, each with its top setup. <span className="lead-scope">{[`${basis.prs} PRs`,
+          <p className="lead-about">Each setup sits at the same height in both panels; up and left is better. The key gives each method's top setup. <span className="lead-scope">{[`${basis.prs} PRs`,
             detection.band === 'all' ? `${basis.known} known problems` : `${basis.problems} of ${basis.known} known problems are ${lowerFirst(bandLabels[detection.band])}`,
             basis.awaiting > 0 && `${basis.awaiting} awaiting a ruling`].filter(Boolean).join(' · ')}</span></p></div></header>
-        <Chart summaries={summaries} detection={detection} matching={matching} axis={axis} view="tradeoff" height={400} onSelect={onSelect} linked={{ id: active, point: setFocus, pin }}
+        <Chart summaries={summaries} detection={detection} matching={matching} axis={axis} view="tradeoff" height={370} onSelect={onSelect} linked={{ id: active, point: setFocus, pin }}
           aside={<KeyTerms terms={['Review setup', 'Known problem', 'Impact band', 'Problems or PRs weighted equally', 'Refuted or unproven', 'Admitted review']} />}
           guide={<>{weight(detection, basis) && <span>{weight(detection, basis)}</span>}<span>Below this chart, each chart ranks the setups by one measure, on its own scale and in its own order; a setup without a value comes last. Point at a setup to find it in every chart, and select it to open its evidence.</span>
             <span>The charts stay separate on purpose: no single number ranks the setups.</span>
