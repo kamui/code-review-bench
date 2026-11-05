@@ -87,15 +87,15 @@ export function Overview({ summaries, detection, axis, matching, basis, onSelect
     const { card, configuration } = summary
     const labels = labelSegments.map(segment => card.reliability.labelsPerAdmittedReview[segment]).find(rate => rate.kind === 'unavailable')
     const cells: Record<Column, Reading> & { unresolved: Reading } = {
-      detection: share(card.detection[detection.band][detection.estimator], summary.detectionNote),
+      detection: share(card.detection[detection.band][detection.estimator], summary.detectionNote, 0),
       claims: labels?.kind === 'unavailable' ? reading(labels, String) : perReview(card.reliability.problemClaimsPerReview),
-      doubt: share(card.reliability.reviewsWithDoubt.refutedOrUnproven), unresolved: share(card.reliability.reviewsWithDoubt.onlyUnresolved),
+      doubt: share(card.reliability.reviewsWithDoubt.refutedOrUnproven, null, 0), unresolved: share(card.reliability.reviewsWithDoubt.onlyUnresolved, null, 0),
       cost: reading(card.cost.perTrial, costText(configuration, shown)),
       time: reading(card.time.summary, value => duration(value.median)),
     }
     return [configuration.id, cells]
   }))
-  const notes = notesFor(columns.flatMap(column => ordered(column).map(summary => readings.get(summary.configuration.id)![column])))
+  const notes = notesFor(columns.flatMap(column => ordered(column).map(summary => readings.get(summary.configuration.id)![column])).filter(cell => cell.reason))
   const show = (configuration: Configuration, lines: TipLine[]) => (event: MouseEvent<Element> | FocusEvent<Element>) => {
     const shell = event.currentTarget.closest('.overview')?.getBoundingClientRect(), box = event.currentTarget.getBoundingClientRect()
     if (shell) setTip({ configuration, lines, ...tipPlace(shell, box, 160, Infinity) })
@@ -138,9 +138,10 @@ export function Overview({ summaries, detection, axis, matching, basis, onSelect
       <section className="measure-card lead-card" data-lead aria-labelledby="measure-lead">
         <header className="measure-head"><div><h3 id="measure-lead">{foundLabels[detection.band]} against {lowerFirst(axisLabels[axis])}</h3>
           <p className="lead-about">Each point is one setup; up and to the left is better on both. {weight(detection, basis)}</p></div></header>
-        <Chart summaries={summaries} detection={detection} matching={matching} axis={axis} view="tradeoff" height={460} withNotes={false} onSelect={onSelect}
+        <Chart summaries={summaries} detection={detection} matching={matching} axis={axis} view="tradeoff" height={460} onSelect={onSelect}
           guide={<><span>Below this chart, each chart ranks the setups by one measure, on its own scale and in its own order; a setup without a value comes last. Point at a setup to find it in every chart, and select it to open its evidence.</span>
-            <span>The charts stay separate on purpose: no single number ranks the setups.</span></>} />
+            <span>The charts stay separate on purpose: no single number ranks the setups.</span>
+            {summaries.some(summary => summary.detectionNote) && <span>A dotted underline marks a value that counts unresolved detection decisions as zero credit; point at it for the count.</span>}</>} />
       </section>
       {columns.map(column => {
         const panel = panels[column], id = `measure-${column}`

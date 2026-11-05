@@ -11,7 +11,7 @@ import { scorecardTabs } from '../lib/view'
 import type { Inspection, ScorecardTab, Section } from '../lib/view'
 import { ClaimLabels } from './ClaimLabels'
 import { SetupName, setupLabel, setupParts } from './Chart'
-import { costNote, costText, DataTable, Disclosure, Rich, Value } from './Reading'
+import { costNote, costText, DataTable, Disclosure, Referenced, Rich, Value } from './Reading'
 import { SeriousMisses } from './SeriousMisses'
 import type { Column } from './Reading'
 import { VendorMark } from './VendorMark'
@@ -240,7 +240,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
           <Table.Thead><Table.Tr><Table.Th scope="col">PR</Table.Th><Table.Th scope="col">Age</Table.Th><Table.Th scope="col">Claim</Table.Th><Table.Th scope="col">Evidence limits</Table.Th><Table.Th scope="col">Decision relevance</Table.Th></Table.Tr></Table.Thead>
           <Table.Tbody>{novel.map(candidate => <Table.Tr key={candidate.id}><Table.Th scope="row"><button className="text-button" onClick={() => onInspect({ kind: 'task', id: candidate.taskId })}>{name(candidate.taskId)}</button></Table.Th>
             <Table.Td>{candidate.ageDays} {candidate.ageDays === 1 ? 'day' : 'days'}<Text size="xs" c="dimmed" className="nowrap">since {candidate.recordedAt.slice(0, 10)}</Text></Table.Td>
-            <Table.Td>{candidate.claim}<Text size="xs" c="dimmed" className="candidate-id">Record {candidate.id}</Text></Table.Td><Table.Td>{candidate.limits}</Table.Td><Table.Td>{candidate.relevance}</Table.Td></Table.Tr>)}</Table.Tbody>
+            <Table.Td>{candidate.claim}<Text size="xs" c="dimmed" className="candidate-id">Record {candidate.id}</Text></Table.Td><Table.Td><Referenced text={candidate.limits} task={task(candidate.taskId)} /></Table.Td><Table.Td><Referenced text={candidate.relevance} task={task(candidate.taskId)} /></Table.Td></Table.Tr>)}</Table.Tbody>
         </Table></Table.ScrollContainer> : <Text size="sm" c="dimmed">No novel candidate awaits a ruling on the selected PRs.</Text>}
         <Title order={4}>Reference families awaiting eligibility</Title>
         {awaiting.length ? <Table.ScrollContainer minWidth={700}><Table aria-label="Reference families awaiting eligibility" className="data-table">
