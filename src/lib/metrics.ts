@@ -3,7 +3,7 @@ import type { Band, Bounded, Estimator, Measure, Scorecard } from './scoring'
 
 export type Axis = 'cost' | 'tokens' | 'refuted' | 'time'
 export type DetectionView = { band: Band; estimator: Estimator }
-export type Reading = { text: string; reason: string | null; annotation?: string }
+export type Reading = { text: string; reason: string | null; annotation?: string; fraction?: number }
 
 export const bandLabels: Record<Band, string> = { serious: 'Serious', 'other-material': 'Other material', unknown: 'Unknown impact', all: 'All references' }
 export const estimatorLabels: Record<Estimator, string> = { equalProblem: 'problems weighted equally', equalPr: 'PRs weighted equally' }
@@ -102,5 +102,6 @@ export const duration = (seconds: number): string => seconds < 60 ? `${Math.roun
 export const share = (measure: Measure, annotation: string | null = null): Reading => ({
   ...reading(measure, value => percent(value * 100)),
   ...measure.kind === 'available' && annotation ? { annotation } : {},
+  ...measure.kind === 'available' ? { fraction: measure.value } : {},
 })
 export const perReview = (measure: Measure): Reading => reading(measure, value => value.toFixed(2))

@@ -1,4 +1,4 @@
-export type Scale = { kind: 'log' | 'linear'; min: number; max: number }
+export type Scale = { kind: 'log' | 'linear' | 'sqrt'; min: number; max: number }
 
 const steps = [1, 2, 5, 10]
 const clean = (value: number) => Number(value.toPrecision(12))
@@ -28,7 +28,20 @@ export function linearScale(values: number[]): Scale {
   return { kind: 'linear', min: 0, max: clean(Math.ceil(max / step - 1e-9) * step) }
 }
 
+/** A square-root scale from zero spreads values that crowd near zero while keeping their order. */
+export const sqrtScale = (values: number[]): Scale => ({ ...linearScale(values), kind: 'sqrt' })
+
 export function ticks(scale: Scale): number[] {
+  if (scale.kind === 'sqrt') {
+    const grid: number[] = []
+    for (let exponent = Math.floor(Math.log10(scale.max)) - 2; exponent <= Math.ceil(Math.log10(scale.max)); exponent++)
+      for (const multiple of [1, 2, 5]) grid.push(clean(multiple * 10 ** exponent))
+    const values = [0]
+    for (const value of grid.filter(item => item <= scale.max * (1 + 1e-9))) {
+      if (Math.sqrt(value / scale.max) - Math.sqrt((values.at(-1) ?? 0) / scale.max) >= 0.14) values.push(value)
+    }
+    return values
+  }
   if (scale.kind === 'linear') {
     const step = gridCeil(scale.max / 4)
     return Array.from({ length: Math.round(scale.max / step) + 1 }, (_, index) => clean(index * step))
@@ -47,9 +60,9 @@ export function ticks(scale: Scale): number[] {
 
 export function position(scale: Scale, value: number, from: number, to: number) {
   const clamped = Math.min(scale.max, Math.max(scale.min, value))
-  const fraction = scale.kind === 'log'
-    ? Math.log(clamped / scale.min) / Math.log(scale.max / scale.min)
-    : (clamped - scale.min) / (scale.max - scale.min)
+  const fraction = scale.kind === 'log' ? Math.log(clamped / scale.min) / Math.log(scale.max / scale.min)
+    : scale.kind === 'sqrt' ? Math.sqrt((clamped - scale.min) / (scale.max - scale.min))
+      : (clamped - scale.min) / (scale.max - scale.min)
   return from + fraction * (to - from)
 }
 
@@ -74,7 +87,7 @@ export function placeLabels(requests: LabelRequest[], obstacles: Box[], bounds: 
   const taken = [...obstacles]
   const placed: LabelPlacement[] = []
   for (const request of requests) {
-    const found = [10, 24, 40].flatMap(distance => {
+    const found = [10, 24, 40, 58, 76].flatMap(distance => {
       const diagonal = distance * 0.72
       const candidates: [number, number, LabelPlacement['anchor']][] = [
         [distance, 0, 'start'], [-distance, 0, 'end'], [diagonal, -diagonal, 'start'], [diagonal, diagonal, 'start'],
