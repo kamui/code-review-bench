@@ -6,7 +6,7 @@ import type { Configuration, Dataset } from '../lib/data'
 import { bandLabels, compact, conditionDifferences, detectionLabel, foundLabels, duration, estimatorLabels, lowerFirst, measured, percent, perReview, points, reading, scaled, share } from '../lib/metrics'
 import type { DetectionView, Reading } from '../lib/metrics'
 import { bands, candidates as pendingFamilies, conditionalMetrics, estimators, matched, orderingConflicts, overviewOrder, pairwise, pendingCandidates, preExistingLabels, recommend, referenceCoverage } from '../lib/scoring'
-import type { ConditionalMetric, Estimator, OverviewSort, PreExistingLabel, Scorecard, Selection } from '../lib/scoring'
+import type { ConditionalMetric, Estimator, PreExistingLabel, Scorecard, Selection } from '../lib/scoring'
 import { scorecardTabs } from '../lib/view'
 import type { Inspection, ScorecardTab, Section } from '../lib/view'
 import { ClaimLabels } from './ClaimLabels'
@@ -31,8 +31,8 @@ function harm(card: Scorecard): Reading {
   return { text: 'Unavailable', reason: bound.kind === 'observed' ? `${unsafe} unsafe among ${safe + unsafe} assessed remedies so far. ${bound.reason}` : bound.reason }
 }
 
-export function MethodologyViews({ dataset, configurations, cards, selection, detection, sort, now, onInspect, tab, onTab }: {
-  dataset: Dataset; configurations: Configuration[]; cards: Scorecard[]; selection: Selection; detection: DetectionView; sort: OverviewSort; now: Date
+export function MethodologyViews({ dataset, configurations, cards, selection, detection, now, onInspect, tab, onTab }: {
+  dataset: Dataset; configurations: Configuration[]; cards: Scorecard[]; selection: Selection; detection: DetectionView; now: Date
   onInspect: (inspection: Inspection, section?: Section) => void; tab: ScorecardTab; onTab: (tab: ScorecardTab) => void
 }) {
   const tabList = useRef<HTMLDivElement>(null)
@@ -50,7 +50,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
     const card = cards.find(item => item.configurationId === configuration.id)
     return card ? [{ configuration, card }] : []
   }).sort((left, right) => left.configuration.short.localeCompare(right.configuration.short))
-  const rows = overviewOrder(byName, row => ({ name: row.configuration.short, card: row.card }), sort, band, estimator)
+  const rows = overviewOrder(byName, row => ({ name: row.configuration.short, card: row.card }), { column: 'detection', direction: 'descending' }, band, estimator)
   type Row = (typeof rows)[number]
   const key = (row: Row) => row.configuration.id
   const setup: Column<Row> = { label: 'Setup', value: row => row.configuration.short, render: row => <SetupName configuration={row.configuration} /> }
@@ -87,7 +87,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
     { label: 'Generic advisory dossiers, benefit unmeasured', value: row => String(row.card.advice.generic) }]} />
   return <Paper withBorder radius="lg" className="methodology-panel" id="dimensions">
     <div className="dimension-head"><Title order={3}>Each measure in detail</Title>
-      <Text className="subsection-lede">Every value comes from the shared scoring kernel for the selected setups and PRs. Dimensions stay separate: there is no blended score. Rows follow the Overview's order. A numbered mark explains a value in the notes below its table.</Text></div>
+      <Text className="subsection-lede">Every value comes from the shared scoring kernel for the selected setups and PRs. Dimensions stay separate: there is no blended score. Rows start with the most known problems found. A numbered mark explains a value in the notes below its table.</Text></div>
     <Tabs value={tab} onChange={value => { const next = scorecardTabs.find(item => item === value); if (next) onTab(next) }} className="dimension-tabs">
       <Tabs.List ref={tabList}>
         <Tabs.Tab value="detection" data-group="What it finds">Detection</Tabs.Tab><Tabs.Tab value="misses">Serious misses</Tabs.Tab><Tabs.Tab value="pre-existing">Pre-existing problems</Tabs.Tab>

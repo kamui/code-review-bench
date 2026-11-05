@@ -66,7 +66,7 @@ export function Disclosure({ title, children }: { title: string; children: React
   return <details className="chart-guide"><summary><ChevronRight className="chevron" size={14} aria-hidden="true" />{title}</summary>{children}</details>
 }
 
-export const ChartGuide = ({ children }: { children: ReactNode }) => <Disclosure title="How to read this chart">{children}</Disclosure>
+export const ChartGuide = ({ children, title = 'How to read this chart' }: { children: ReactNode; title?: string }) => <Disclosure title={title}>{children}</Disclosure>
 
 // Saved review text marks code with Markdown backticks.
 export const glossary: { term: string; definition: string; match?: RegExp }[] = [
