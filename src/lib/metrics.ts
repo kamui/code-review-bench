@@ -7,7 +7,8 @@ export type Reading = { text: string; reason: string | null; annotation?: string
 
 export const bandLabels: Record<Band, string> = { serious: 'Serious', 'other-material': 'Other material', unknown: 'Unknown impact', all: 'All references' }
 export const estimatorLabels: Record<Estimator, string> = { equalProblem: 'problems weighted equally', equalPr: 'PRs weighted equally' }
-export const detectionLabel = (view: DetectionView) => `${bandLabels[view.band]} detection, ${estimatorLabels[view.estimator]}`
+export const foundLabels: Record<Band, string> = { serious: 'Serious problems found', 'other-material': 'Other material problems found', unknown: 'Unknown-impact problems found', all: 'Known problems found' }
+export const detectionLabel = (view: DetectionView) => `${foundLabels[view.band]}, ${estimatorLabels[view.estimator]}`
 export const lowerFirst = (label: string) => label.charAt(0).toLowerCase() + label.slice(1)
 
 export const measured = <T>(measure: Bounded<T>): T | null => measure.kind === 'available' ? measure.value : null
