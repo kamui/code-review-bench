@@ -107,9 +107,11 @@ export function Referenced({ text, task }: { text: string; task: Task | undefine
 }
 
 /** A short list of glossary terms, each with its definition on hover and focus. */
+export const GuideItem = ({ label, children }: { label: string; children: ReactNode }) => <span className="guide-item"><strong>{label}</strong><span>{children}</span></span>
+
 export function KeyTerms({ terms }: { terms: string[] }) {
   const entries = glossary.filter(entry => terms.includes(entry.term))
-  return <span className="key-terms"><span className="key-terms-label">Terms</span>{entries.map(entry =>
+  return <span className="key-terms">{entries.map(entry =>
     <Tooltip key={entry.term} multiline w={300} withArrow label={definition(entry)}><span className="term" tabIndex={0}>{entry.term}</span></Tooltip>)}</span>
 }
 
@@ -179,7 +181,7 @@ export function DataTable<Row>({ label, rows, columns, rowKey, minWidth, empty =
   return <>
     {shared.length > 0 && <p className="shared-values"><span className="shared-title">Same for every setup</span>
       {shared.map(({ item, cell }) => <span key={item.label} className="shared-value"><span>{item.label}</span><b><Value cell={cell} notes={notes} /></b></span>)}</p>}
-    <Table.ScrollContainer minWidth={Math.min(minWidth, 180 + shown.length * 84)} className="data-scroll"><Table aria-label={label} className="data-table dim-table">
+    <Table.ScrollContainer minWidth={Math.min(minWidth, 180 + shown.length * 84)} className="data-scroll"><Table aria-label={label} className={shown.length <= 4 ? 'data-table dim-table few-columns' : 'data-table dim-table'}>
       <Table.Thead><Table.Tr>{shown.map(({ item, position }, index) => <Table.Th key={item.label} scope="col" data-numeric={numeric[position] || undefined}><Glossed text={item.label} skip={termsIn(shown.slice(0, index).map(column => column.item.label))} /></Table.Th>)}</Table.Tr></Table.Thead>
       <Table.Tbody>{rows.map((row, index) => <Table.Tr key={rowKey(row)}>{shown.map(({ item, position }) => {
         const cell = cells[index]?.[position] ?? ''

@@ -123,7 +123,7 @@ describe('scorecard page on the fixture', () => {
     expect(rendered).toContain('example/novel #606 13 days since 2026-09-20 A cache key omits the tenant and can serve another tenant\'s entry.')
     expect(rendered).toContain('Read from the diff only; no reproduction was run.')
     expect(rendered).toContain('Pending candidates (2)')
-    expect(rendered).toContain('The selected setups differ in recorded client, network access, sandbox')
+    expect(rendered).toContain('Setups also differ in client, network access, sandbox')
   })
 
   test('shows claim labels per admitted review, each suggestion kind apart, and why a setup has none', () => {
@@ -139,7 +139,7 @@ describe('scorecard page on the fixture', () => {
 
   test('the task catalog mean says how many selected setups it covers and why the others are left out', () => {
     expect(rendered).toContain('54.2% Mean of 4 of 6 selected setups. Not included: 1 scheduled trial awaits execution. (1 setup) 1 admitted review awaits assessment. (1 setup)')
-    expect(rendered).toContain('Unavailable : No references in this band. (6 setups)')
+    expect(rendered).toContain('Unavailable No references in this band. Included')
   })
 
   test('keeps the task catalog on its own page, reached from the navigation and the filter chips', () => {
@@ -250,13 +250,12 @@ describe('overview', () => {
     expect(text(overview)).toContain('The 9 known problems weigh the same, so one problem caught in every review is 11.1 points.')
   })
 
-  test('the lead chart key lists review methods from most found, each with its top setup', () => {
-    expect(text(overview)).toContain('The key gives each method\'s top setup.')
-    expect(text(overview)).toMatch(/ce-code-review Fixture A 85% · \$2\.50 .*Claude built-in Fixture A 78% · \$1\.20/)
+  test('the lead chart lists each review method\'s top setup, from most found, with its found share and cost', () => {
+    expect(text(overview)).toMatch(/ce-code-review Fixture A 85% \$2\.50 .*Claude built-in Fixture A 78% \$1\.20/)
   })
 
   test('ranks each measure in its own chart, in that measure\'s order, with setups lacking a value last', () => {
-    expect(text(overview)).toContain('each chart ranks the setups by one measure, on its own scale and in its own order; a setup without a value comes last.')
+    expect(text(overview)).toContain('Each ranks the setups by one measure, on its own scale; a setup without a value comes last.')
     expect(card(0)).toEqual(['ce-code-review / Fixture A / High', 'Claude built-in / Fixture A / High', 'ce-code-review / Fixture B / High',
       'Claude built-in / Fixture C / High', 'ce-code-review / Fixture C / High', 'Claude built-in / Fixture B / High'])
     expect(card(3)).toEqual(['Claude built-in / Fixture C / High', 'ce-code-review / Fixture B / High', 'ce-code-review / Fixture C / High',
@@ -304,7 +303,7 @@ describe('chart', () => {
       for (const estimator of ['equalProblem', 'equalPr'] as const) {
         for (const view of ['setups', 'tradeoff', 'models'] as const) {
           const rendered = chart(dataset, { band, estimator }, view)
-          expect(rendered).toContain('unresolved detection decisions as zero credit; point at a setup for the count.')
+          expect(rendered).toContain('unresolved detection decisions as zero credit; point at it for the count.')
           expect(rendered).not.toContain('Not plotted,')
           expect(rendered).toContain('1 attempt has no recorded usage.')
         }
@@ -338,7 +337,7 @@ describe('chart', () => {
     expect(whole).toContain('≥ marks a lower bound where usage was only partly recorded')
     const setups = chart(dataset, { band: 'all', estimator: 'equalProblem' })
     expect(setups).toContain('a 100% ≥ $0.75 b On frontier 50% $1.00')
-    expect(setups).toContain('Hollow marks show a lower bound of cost per trial')
+    expect(setups).toContain('Hollow marks A lower bound of cost per trial')
     expect(setups).not.toContain('No cost per trial for a')
   })
 
@@ -370,7 +369,7 @@ describe('chart', () => {
 
   test('the scatter says its lines join each review method\'s setups and are not a trend', () => {
     expect(chart(fixture, { band: 'all', estimator: 'equalPr' }, 'tradeoff'))
-      .toContain('In each panel, a faint line joins each review method\'s setups from left to right, and comes forward when you point at one of them.')
+      .toContain('In each panel, a faint line joins one review method\'s setups across models, from left to right; the points between are not measured.')
   })
 })
 
