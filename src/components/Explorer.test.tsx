@@ -250,9 +250,8 @@ describe('overview', () => {
     expect(text(overview)).toContain('The 9 known problems weigh the same, so one problem caught in every review is 11.1 points.')
   })
 
-  test('the lead chart key lists review methods from most found, each with its top setup', () => {
-    expect(text(overview)).toContain('The key gives each method\'s top setup.')
-    expect(text(overview)).toMatch(/ce-code-review Fixture A 85% · \$2\.50 .*Claude built-in Fixture A 78% · \$1\.20/)
+  test('the lead chart lists each review method\'s top setup, from most found, with its found share and cost', () => {
+    expect(text(overview)).toMatch(/ce-code-review Fixture A 85% \$2\.50 .*Claude built-in Fixture A 78% \$1\.20/)
   })
 
   test('ranks each measure in its own chart, in that measure\'s order, with setups lacking a value last', () => {

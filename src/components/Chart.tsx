@@ -36,6 +36,7 @@ export function SetupName({ configuration, mark = true }: { configuration: Confi
       {effort && <><span className="setup-sep setup-dot"> / </span>{effort}</>}</span></>}</span></span>
 }
 
+const shortAxis: Record<Axis, string> = { cost: 'Cost per trial', doubt: 'Refuted or unproven', refuted: 'Refuted claims', tokens: 'Output tokens', time: 'Median time' }
 export const axisLabels: Record<Axis, string> = {
   cost: 'Cost per trial', tokens: 'Output tokens per trial', refuted: 'Refuted claims per review on matched PRs', doubt: 'Reviews with a refuted or unproven claim', time: 'Median time',
 }
@@ -51,9 +52,9 @@ export const setupLabel = (configuration: Configuration) => Object.values(setupP
 const metricOf = (summary: Summary, axis: Axis) => axis === 'time' ? summary.time ? summary.time.median / 60 : null : summary[axis]
 const boundedOn = (summary: Summary, axis: Axis) => (axis === 'cost' || axis === 'tokens') && summary.card[axis].perTrial.kind === 'atLeast'
 
-function formatMetric(axis: Axis, value: number | null, starred: boolean, bounded = false) {
+function formatMetric(axis: Axis, value: number | null, starred: boolean, bounded = false, digits = 1) {
   if (value === null) return 'Unavailable'
-  const text = `${bounded ? '≥ ' : ''}${axis === 'cost' ? money(value) : axis === 'tokens' ? compact(value) : axis === 'time' ? duration(value * 60) : axis === 'doubt' ? percent(value) : value.toFixed(2)}`
+  const text = `${bounded ? '≥ ' : ''}${axis === 'cost' ? money(value) : axis === 'tokens' ? compact(value) : axis === 'time' ? duration(value * 60) : axis === 'doubt' ? percent(value, digits) : value.toFixed(2)}`
   return axis === 'cost' && starred ? `${text}*` : text
 }
 
@@ -125,13 +126,25 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
         : view === 'skills' ? <MethodPanels points={measured} axis={axis} scale={scale} onSelect={onSelect} interactions={interactions} />
           : <Models points={points} measure={measure} onSelect={onSelect} interactions={interactions} />}
     {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={measure} axes={view === 'models' ? [] : view === 'tradeoff' ? [axis, pair] : [axis]} place={hovered} />}
-    {points.length > 0 && view !== 'models' && <ul className="chart-keys" aria-label="Chart key">
+    {view === 'tradeoff' && methodTops.size > 0 && <div className="method-strip">
+      <div className="strip-row strip-head" aria-hidden="true"><span>Review method</span><span>Top setup</span><span>Found</span><span>{shortAxis[axis]}</span><span>{shortAxis[pair]}</span></div>
+      <ul aria-label="Each review method's top setup, from the method that finds the most">{[...methodTops].map(([method, top]) => {
+        const { configuration } = top.summary, { model, effort } = setupParts(configuration)
+        const second = metricOf(top.summary, pair), secondText = formatMetric(pair, second, top.starred, boundedOn(top.summary, pair), 0)
+        const first = formatMetric(axis, top.x, top.starred, top.bounded, 0)
+        return <li key={method}><button type="button" className="strip-row" aria-pressed={spotlight?.method === method && spotlight.pinned}
+          aria-label={`${method}: top setup ${model}${effort ? ` ${effort}` : ''}, ${percent(top.y, 0)} found, ${axisLabels[axis]} ${first}, ${axisLabels[pair]} ${secondText}. Select to keep this method picked out`}
+          onMouseEnter={() => { preview(method)(); linked?.point(configuration.id) }} onMouseLeave={() => { preview(null)(); linked?.point(null) }}
+          onFocus={() => { preview(method)(); linked?.point(configuration.id) }} onBlur={() => { preview(null)(); linked?.point(null) }}
+          onClick={() => setSpotlight(current => current?.pinned && current.method === method ? null : { method, pinned: true })}>
+          <span className="strip-method"><Mark configuration={configuration} size={11} />{method}</span>
+          <span className="strip-model"><VendorMark configuration={configuration} />{model}{effort && effort !== 'High' && <span className="measure-effort"> · {effort}</span>}</span>
+          <span className="strip-value" data-label="Found"><Score summary={top.summary} /></span><span className="strip-value" data-label={shortAxis[axis]}>{first}</span>
+          <span className="strip-value" data-label={shortAxis[pair]}>{secondText}</span></button></li>
+      })}</ul></div>}
+    {points.length > 0 && view !== 'models' && (view !== 'tradeoff' || bounded || aside) && <ul className="chart-keys" aria-label="Chart key">
       {view === 'setups' && <li><span className="whisker-key" aria-hidden="true" />Range with any one PR left out</li>}
       {view === 'skills' && <li><span className="context-key" aria-hidden="true" />Other selected setups</li>}
-      {view === 'tradeoff' && [...methodTops].map(([method, top]) => <li key={method}>
-          <button type="button" className="key-button" aria-pressed={spotlight?.method === method && spotlight.pinned} onMouseEnter={preview(method)} onMouseLeave={preview(null)} onFocus={preview(method)} onBlur={preview(null)}
-            onClick={() => setSpotlight(current => current?.pinned && current.method === method ? null : { method, pinned: true })}><Mark configuration={top.summary.configuration} size={10} />{method}
-            <span className="key-top"><span>{setupParts(top.summary.configuration).model}</span> {percent(top.y, 0)} · {formatMetric(axis, top.x, top.starred, top.bounded)}</span></button></li>)}
       {bounded && <li><span className="bound-key" aria-hidden="true" />Lower bound</li>}
       {aside && <li className="key-aside">{aside}</li>}
     </ul>}
@@ -139,7 +152,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
       {guide}
       {view === 'setups' && <span><span className="whisker-key" aria-hidden="true" />Rows are ordered by {lowerFirst(measure)}. The whisker spans this average with any one whole PR left out: sensitivity to these PRs, not a confidence interval.</span>}
       {view === 'skills' && <span>Each panel shows one review method on every model it ran on, with detection against {lowerFirst(axisLabels[axis])} on shared axes. Gray dots are the other selected setups, for context.</span>}
-      {view === 'tradeoff' && <span>Point at a review method in the key to pick out its setups; select it to keep them picked out.</span>}
+      {view === 'tradeoff' && <span>The table above the panels lists each review method's setup that finds the most, from the method whose setup finds the most. Point at a method there to pick out its setups and mark its top setup; select it to keep them picked out.</span>}
       {view === 'tradeoff' && <span>Both panels plot the same setups at the same height. Point at a setup, or select it, to mark it and show its name in both.</span>}
       {(view === 'tradeoff' || axis === 'doubt') && <span>An unproven claim is not shown to be false.</span>}
       {view === 'tradeoff' && <span>{view === 'tradeoff' ? 'In each panel, a' : 'A'} faint line joins each review method's setups from left to right, and comes forward when you point at one of them. It shows one method across models; the points between are not measured.</span>}
