@@ -4,7 +4,7 @@ import { useElementSize } from '@mantine/hooks'
 import { ArrowUpLeft } from 'lucide-react'
 import { groupPaths, logScale, paretoFrontier, placeLabels, position, sqrtScale, ticks, tipPlace } from '../lib/chart'
 import type { Scale, TipPlace } from '../lib/chart'
-import { compact, detectionLabel, duration, lowerFirst, money, percent, reasonCounts } from '../lib/metrics'
+import { compact, detectionLabel, foundLabels, duration, lowerFirst, money, percent, reasonCounts } from '../lib/metrics'
 import type { Axis, DetectionView, Summary } from '../lib/metrics'
 import type { Configuration } from '../lib/data'
 import { skillReleaseLabel } from '../lib/data'
@@ -12,7 +12,7 @@ import { ChartGuide, costNote, costStarred, Notes } from './Reading'
 import type { Note } from './Reading'
 import { VendorMark } from './VendorMark'
 
-export type ChartView = 'skills' | 'setups' | 'models' | 'tradeoff'
+export type ChartView = 'skills' | 'setups' | 'models' | 'tradeoff' | 'pair'
 type Range = { low: number; high: number } | null
 type Point = { summary: Summary; range: Range; metric: number | null; bounded: boolean; starred: boolean }
 
@@ -69,6 +69,7 @@ const scaleNames: Record<Scale['kind'], string> = { log: 'log scale', sqrt: 'squ
 const scaleFor = (axis: Axis, values: number[]): Scale => axis === 'refuted' ? sqrtScale(values) : logScale(values)
 const fraction = (scale: Scale, value: number) => position(scale, value, 0, 100)
 const scoreTicks = [0, 25, 50, 75, 100]
+const pairAxes: Axis[] = ['cost', 'refuted']
 
 export function Chart({ summaries, detection, matching, axis, view, showAllLabels, onSelect }: {
   summaries: Summary[]; detection: DetectionView; matching: { included: number; excluded: number }; axis: Axis; view: ChartView; showAllLabels: boolean; onSelect: (id: string) => void
@@ -76,13 +77,18 @@ export function Chart({ summaries, detection, matching, axis, view, showAllLabel
   const measure = detectionLabel(detection), dimensions = `${lowerFirst(measure)} against ${lowerFirst(axisLabels[axis])}`
   const [hovered, setHovered] = useState<({ id: string } & TipPlace) | null>(null)
   const shown = summaries.map(summary => summary.configuration)
-  const points: Point[] = summaries.filter(summary => summary.detection !== null).map(summary => ({
-    summary, range: summary.range, metric: metricOf(summary, axis), bounded: boundedOn(summary, axis), starred: costStarred(summary.configuration, shown),
-  }))
-  const measured = points.flatMap(point => point.metric === null ? [] : [{ ...point, x: point.metric, y: point.summary.detection ?? 0 }])
+  const plotted = (axis: Axis) => {
+    const points: Point[] = summaries.filter(summary => summary.detection !== null).map(summary => ({
+      summary, range: summary.range, metric: metricOf(summary, axis), bounded: boundedOn(summary, axis), starred: costStarred(summary.configuration, shown),
+    }))
+    const measured = points.flatMap(point => point.metric === null ? [] : [{ ...point, x: point.metric, y: point.summary.detection ?? 0 }])
+    const frontier = new Set(paretoFrontier(measured.filter(point => !point.bounded)).map(point => point.summary.configuration.id))
+    return { axis, points, measured, frontier, scale: scaleFor(axis, measured.map(point => point.x)), unplotted: points.filter(point => point.metric === null) }
+  }
+  const axes: Axis[] = view === 'pair' ? pairAxes : view === 'models' ? [] : [axis]
+  const sides = (view === 'pair' ? pairAxes : [axis]).map(plotted)
+  const { points, measured, frontier, scale } = sides[0]!
   const withheld = reasonCounts(summaries.map(summary => summary.reasons.detection))
-  const frontier = new Set(paretoFrontier(measured.filter(point => !point.bounded)).map(point => point.summary.configuration.id))
-  const scale = scaleFor(axis, measured.map(point => point.x))
   const hoveredPoint = points.find(point => point.summary.configuration.id === hovered?.id)
   const hover = (id: string, element: Element) => {
     const shell = element.closest('.plot-shell')?.getBoundingClientRect()
@@ -94,41 +100,47 @@ export function Chart({ summaries, detection, matching, axis, view, showAllLabel
     onFocus: (event: FocusEvent<Element>) => hover(id, event.currentTarget),
     onMouseLeave: () => setHovered(null), onBlur: () => setHovered(null),
   })
-  const unplotted = points.filter(point => point.metric === null)
+  const scatter = view === 'tradeoff' || view === 'pair'
+  const bounded = sides.some(side => side.measured.some(point => point.bounded))
   const notes = reasonCounts(points.map(point => point.summary.detectionNote ?? null))
   return <div className="plot-shell" onMouseLeave={() => setHovered(null)}>
     {!points.length ? <div className="plot-empty" role="status"><strong>{measure} is unavailable</strong>
       {summaries.length ? <ul className="reason-list">{withheld.map(row => <li key={row.reason}>{row.reason} ({setups(row.count)})</li>)}</ul>
         : <span>Select at least one review method and model.</span>}
       <span>No other impact band or average is substituted. Choose them above.</span></div>
+      : view === 'pair' ? <div className="scatter-pair">{sides.map(side => <figure key={side.axis} className="scatter-panel">
+        <figcaption>Against {lowerFirst(axisLabels[side.axis])}</figcaption>
+        <Scatter points={side.measured} dimensions={`${lowerFirst(measure)} against ${lowerFirst(axisLabels[side.axis])}`} axis={side.axis} scale={side.scale} frontier={side.frontier}
+          showAllLabels={showAllLabels} hovered={hovered?.id ?? null} onSelect={onSelect} interactions={interactions} yTitle={foundLabels[detection.band]} /></figure>)}</div>
       : view === 'setups' ? <SetupRows points={points} notes={notes} measure={measure} axis={axis} scale={scale} frontier={frontier} onSelect={onSelect} interactions={interactions} />
         : view === 'tradeoff' ? <Scatter points={measured} dimensions={dimensions} axis={axis} scale={scale} frontier={frontier} showAllLabels={showAllLabels}
-          hovered={hovered?.id ?? null} onSelect={onSelect} interactions={interactions} />
+          hovered={hovered?.id ?? null} onSelect={onSelect} interactions={interactions} yTitle={foundLabels[detection.band]} />
         : view === 'skills' ? <MethodPanels points={measured} axis={axis} scale={scale} onSelect={onSelect} interactions={interactions} />
           : <Models points={points} notes={notes} measure={measure} onSelect={onSelect} interactions={interactions} />}
-    {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={measure} axis={view === 'models' ? null : axis} place={hovered} />}
+    {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={measure} axes={axes} place={hovered} />}
     {points.length > 0 && view !== 'models' && <ul className="chart-keys" aria-label="Chart key">
       {view === 'setups' && <li><span className="whisker-key" aria-hidden="true" />Range with any one PR left out</li>}
       {view === 'skills' && <li><span className="context-key" aria-hidden="true" />Other selected setups</li>}
-      {view === 'tradeoff' && [...new Map(measured.map(point => [setupParts(point.summary.configuration).method, point.summary.configuration])).entries()]
+      {scatter && [...new Map(measured.map(point => [setupParts(point.summary.configuration).method, point.summary.configuration])).entries()]
         .sort(([left, one], [right, other]) => Number(other.builtin) - Number(one.builtin) || left.localeCompare(right)).map(([method, configuration]) => <li key={method}><Mark configuration={configuration} size={10} />{method}</li>)}
-      {view === 'tradeoff' && <li className="key-break"><span className="frontier-key" aria-hidden="true" />Frontier</li>}
-      {view === 'tradeoff' && <li><span className="faded-key" aria-hidden="true"><span /><span /></span>Not on the frontier, paler</li>}
-      {measured.some(point => point.bounded) && <li><span className="bound-key" aria-hidden="true" />Lower bound{view === 'skills' ? '' : ', left out of the frontier'}</li>}
+      {scatter && <li className="key-break"><span className="frontier-key" aria-hidden="true" />Frontier</li>}
+      {scatter && <li><span className="faded-key" aria-hidden="true"><span /><span /></span>Not on the frontier, paler</li>}
+      {bounded && <li><span className="bound-key" aria-hidden="true" />Lower bound{view === 'skills' ? '' : ', left out of the frontier'}</li>}
     </ul>}
     {points.length > 0 && <ChartGuide><div className="plot-caption">
       {view === 'setups' && <span><span className="whisker-key" aria-hidden="true" />Rows are ordered by {lowerFirst(measure)}. The whisker spans this average with any one whole PR left out: sensitivity to these PRs, not a confidence interval.</span>}
       {view === 'skills' && <span>Each panel shows one review method on every model it ran on, with detection against {lowerFirst(axisLabels[axis])} on shared axes. Gray dots are the other selected setups, for context.</span>}
-      {view === 'tradeoff' && <span><span className="frontier-key" aria-hidden="true" />Frontier of {dimensions}: no other selected setup is at least as good on both measures and strictly better on one. Identical results share the frontier. It says nothing about any other measure.</span>}
+      {view === 'pair' && <span>Each panel plots {lowerFirst(measure)} against one cost of a review: what a trial costs, and how many of its claims were shown to be wrong. Up and to the left is better on both.</span>}
+      {scatter && <span><span className="frontier-key" aria-hidden="true" />Frontier of {view === 'pair' ? 'each panel' : dimensions}: no other selected setup is at least as good on both measures and strictly better on one. Identical results share the frontier. It says nothing about any other measure.</span>}
       {view === 'models' && <span>Each row is one model, in name order. Marks show {lowerFirst(measure)} for each review method that ran on it.</span>}
       {withheld.length > 0 && <span>Not plotted, {lowerFirst(measure)} unavailable: {withheld.map(row => `${row.reason} (${setups(row.count)})`).join(' ')}</span>}
-      {view !== 'models' && measured.some(point => point.bounded) && <span><span className="bound-key" aria-hidden="true" />Hollow marks show a lower bound of {lowerFirst(axisLabels[axis])}: some attempts recorded only part of their usage, so the true value may be higher.{view !== 'skills' && ' They are left out of the frontier.'}</span>}
-      {unplotted.length > 0 && <span>No {lowerFirst(axisLabels[axis])} for {unplotted.map(point => `${setupLabel(point.summary.configuration)} (${point.summary.reasons[axis]})`).join('; ')}.</span>}
-      {axis === 'refuted' && <span>Refuted claims are compared on the {matching.included} of {matching.included + matching.excluded} selected PRs where every selected setup has admitted, assessed reviews, with PRs weighted equally. A setup that admitted only some trials of a matched PR is measured on the reviews it delivered; the tooltip gives its admitted trials.</span>}
-      {axis === 'time' && <span>Completed trials only. Includes replacement attempts; excludes gaps between attempts, provisioning, and grading.</span>}
-      {axis === 'cost' && costNote(shown) && <span>{costNote(shown)}</span>}
+      {view !== 'models' && bounded && <span><span className="bound-key" aria-hidden="true" />Hollow marks show a lower bound of {lowerFirst(sides.filter(side => side.measured.some(point => point.bounded)).map(side => axisLabels[side.axis]).join(' or '))}: some attempts recorded only part of their usage, so the true value may be higher.{view !== 'skills' && ' They are left out of the frontier.'}</span>}
+      {sides.map(side => side.unplotted.length > 0 && <span key={side.axis}>No {lowerFirst(axisLabels[side.axis])} for {side.unplotted.map(point => `${setupLabel(point.summary.configuration)} (${point.summary.reasons[side.axis]})`).join('; ')}.</span>)}
+      {axes.includes('refuted') && <span>Refuted claims are compared on the {matching.included} of {matching.included + matching.excluded} selected PRs where every selected setup has admitted, assessed reviews, with PRs weighted equally. A setup that admitted only some trials of a matched PR is measured on the reviews it delivered; the tooltip gives its admitted trials.</span>}
+      {axes.includes('time') && <span>Completed trials only. Includes replacement attempts; excludes gaps between attempts, provisioning, and grading.</span>}
+      {axes.includes('cost') && costNote(shown) && <span>{costNote(shown)}</span>}
     </div></ChartGuide>}
-    <Notes notes={notes} />
+    {view !== 'pair' && <Notes notes={notes} />}
   </div>
 }
 
@@ -200,9 +212,9 @@ const labelOf = (points: Point[], withMethod = false) => {
 
 type Plotted = Point & { x: number; y: number }
 
-function Scatter({ points, dimensions, axis, scale, frontier, showAllLabels, hovered, onSelect, interactions }: {
+function Scatter({ points, dimensions, axis, scale, frontier, showAllLabels, hovered, onSelect, interactions, yTitle }: {
   dimensions: string; points: Plotted[]; axis: Axis; scale: Scale; frontier: Set<string>; showAllLabels: boolean
-  hovered: string | null; onSelect: (id: string) => void; interactions: Interactions
+  hovered: string | null; onSelect: (id: string) => void; interactions: Interactions; yTitle: string
 }) {
   const { ref, width } = useElementSize()
   const height = 400, margin = { top: 18, right: 22, bottom: 50, left: 62 }
@@ -239,7 +251,7 @@ function Scatter({ points, dimensions, axis, scale, frontier, showAllLabels, hov
         <stop offset="0" stopColor="var(--brand-accent)" stopOpacity="0.09" /><stop offset="0.45" stopColor="var(--brand-accent)" stopOpacity="0" />
       </linearGradient></defs>
       <rect x={plot.left} y={plot.top} width={plot.right - plot.left} height={plot.bottom - plot.top} fill="url(#better-corner)" />
-      <Axes plot={plot} axis={axis} scale={scale} xTicks={xTicks} px={px} py={py} height={height} />
+      <Axes plot={plot} axis={axis} scale={scale} xTicks={xTicks} px={px} py={py} height={height} yTitle={yTitle} />
       {steps.length > 1 && <path d={stepPath} className="frontier-line" />}
       {labels.filter(label => label.leader).map(label => {
         const point = points.find(item => item.summary.configuration.id === label.id)
@@ -257,9 +269,9 @@ function Scatter({ points, dimensions, axis, scale, frontier, showAllLabels, hov
   </div>
 }
 
-function Axes({ plot, axis, scale, xTicks, px, py, height, compact = false }: {
+function Axes({ plot, axis, scale, xTicks, px, py, height, compact = false, yTitle = 'Detection' }: {
   plot: { left: number; right: number; top: number; bottom: number }; axis: Axis; scale: Scale; xTicks: number[]
-  px: (value: number) => number; py: (value: number) => number; height: number; compact?: boolean
+  px: (value: number) => number; py: (value: number) => number; height: number; compact?: boolean; yTitle?: string
 }) {
   const yTicks = compact ? [0, 50, 100] : scoreTicks
   return <>
@@ -267,7 +279,7 @@ function Axes({ plot, axis, scale, xTicks, px, py, height, compact = false }: {
       <text x={plot.left - 8} y={py(tick)} className="tick-label" textAnchor="end" dominantBaseline="middle">{tick}%</text></g>)}
     {xTicks.map(tick => <g key={tick}><line x1={px(tick)} x2={px(tick)} y1={plot.top} y2={plot.bottom} className="grid-line" />
       <text x={px(tick)} y={plot.bottom + 17} className="tick-label" textAnchor="middle">{tickLabel(axis, tick)}</text></g>)}
-    <text x={14} y={(plot.top + plot.bottom) / 2} className="axis-title" textAnchor="middle" transform={`rotate(-90 14 ${(plot.top + plot.bottom) / 2})`}>Detection</text>
+    <text x={14} y={(plot.top + plot.bottom) / 2} className="axis-title" textAnchor="middle" transform={`rotate(-90 14 ${(plot.top + plot.bottom) / 2})`}>{yTitle}</text>
     <text x={(plot.left + plot.right) / 2} y={height - 8} className="axis-title" textAnchor="middle">{axisLabels[axis]}{scale.kind === 'linear' ? '' : ` (${scaleNames[scale.kind]})`}</text>
   </>
 }
@@ -375,15 +387,18 @@ function Models({ points, notes, measure, onSelect, interactions }: { points: Po
   </div>
 }
 
-function Tooltip({ point, measure, axis, place }: { point: Point; measure: string; axis: Axis | null; place: TipPlace }) {
+function Tooltip({ point, measure, axes, place }: { point: Point; measure: string; axes: Axis[]; place: TipPlace }) {
   const { summary, range } = point
   const row = (key: string, label: string, value: ReactNode, note?: ReactNode) =>
     <span key={key} className="tip-row"><span className="tip-label">{label}</span><b>{value}</b>{note && <span className="tip-note">{note}</span>}</span>
   const lines: ReactNode[] = [
     row('score', measure, percent(summary.detection), range && `${percent(range.low)} to ${percent(range.high)} leaving one PR out; sensitivity, not a confidence interval`),
     summary.detectionNote && <span key="zero-credit" className="tip-note">{summary.detectionNote}</span>,
-    axis && row('metric', axisLabels[axis], formatMetric(axis, point.metric, point.starred, point.bounded), (point.metric === null || point.bounded) && summary.reasons[axis]),
-    axis === 'time' && summary.time && <span key="time" className="tip-note">Mean {duration(summary.time.mean)} · middle 50% {duration(summary.time.q1)} to {duration(summary.time.q3)} · {summary.time.reviews} timed trials</span>,
+    ...axes.map(axis => {
+      const metric = metricOf(summary, axis), bounded = boundedOn(summary, axis)
+      return row(axis, axisLabels[axis], formatMetric(axis, metric, point.starred, bounded), (metric === null || bounded) && summary.reasons[axis])
+    }),
+    axes.includes('time') && summary.time && <span key="time" className="tip-note">Mean {duration(summary.time.mean)} · middle 50% {duration(summary.time.q1)} to {duration(summary.time.q3)} · {summary.time.reviews} timed trials</span>,
     row('count', 'Trials admitted', `${summary.admitted} of ${summary.trials}`, `${summary.tasks} PRs · ${summary.completed} complete`),
     !summary.configuration.builtin && row('skill', 'Skill', skillReleaseLabel([summary.configuration])),
   ]

@@ -11,7 +11,6 @@ import type { Configuration, Dataset, Task } from '../lib/data'
 import { bandLabels, compact, conditionDifferences, datasetStatus, detectionLabel, estimatorLabels, foundLabels, heroCounts, lowerBound, lowerFirst, measured, percent, perReview, reading, reasonCounts, share, summarize } from '../lib/metrics'
 import type { Reading } from '../lib/metrics'
 import { estimators, leaderboard, matched, meanTaskRecall, pendingCandidates, referenceCoverage } from '../lib/scoring'
-import type { OverviewSort } from '../lib/scoring'
 import { axes, chartViews, clearedSearch, inspectionOf, inspectionParams, listParam, listValue, unlessDefault } from '../lib/view'
 import type { ExplorerSearch, Inspection, Section } from '../lib/view'
 import { Chart, Mark, setupParts } from './Chart'
@@ -74,11 +73,10 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
   const selectedModels = listValue(search.models, modelIds, modelIds)
   const setSelectedModels = (models: string[]) => onSearch({ models: listParam(models, modelIds, modelIds) }, 'scorecard')
   const axis = search.axis ?? 'cost'
-  const band = search.band ?? 'all'
+  const band = search.band ?? 'serious'
   const estimator = search.average ?? 'equalProblem'
   const detection = { band, estimator }
   const view: MainView = search.chart ?? 'overview'
-  const [overviewSort, setOverviewSort] = useState<OverviewSort>({ column: 'detection', direction: 'descending' })
   const showAllLabels = search.labels ?? false
   const narrow = useMediaQuery('(max-width: 700px)') ?? false
   const chartView = narrow && view !== 'overview' ? 'setups' : view
@@ -188,7 +186,9 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
       {page === 'scorecard' && <><section className="intro">
         <div>
           <Title order={1}>Good reviews find the problems that matter.</Title>
-          <Text className="intro-description">Compare real code review setups by what they catch, what they cost, and how often they’re wrong.</Text>
+          <Text className="intro-description">Compare real code review setups by what they catch, how often they’re wrong, and what they cost. Each measure stays separate; no single number ranks the setups.</Text>
+          <div className="intro-meta"><Badge variant="outline" color="gray" radius="sm" className="status-badge">{status.label}</Badge>
+            {(!status.complete || unresolved) && <StatusNotice limits={status.limits} unresolved={unresolved} />}</div>
         </div>
         <div className="corpus"><dl className="corpus-stats" aria-label="Benchmark statistics">
           <div><dt>PR tasks</dt><dd>{hero.tasks}</dd></div>
@@ -199,10 +199,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
       </section>
 
       <section id="scorecard" className="leaderboard-section">
-        <header className="section-head"><div><div className="title-row"><Title order={2}>The scorecard</Title><Badge variant="outline" color="gray" radius="sm" className="status-badge">{status.label}</Badge></div>
-          <Text className="section-lede">Detection, delivery, claim reliability, remedies, controls and cost stay separate. No single number ranks the setups.</Text></div>
-          {(!status.complete || unresolved) && <StatusNotice limits={status.limits} unresolved={unresolved} />}
-        </header>
+        <VisuallyHidden><Title order={2}>The scorecard</Title></VisuallyHidden>
         <Paper withBorder radius="lg" className="leaderboard-paper">
           <div className="chart-toolbar">
             <SegmentedControl aria-label="Chart view" className="view-switch" value={chartView} onChange={value => {
@@ -221,7 +218,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
           <div className="filter-bar" data-open={optionsOpen || undefined}>
             <div className="measure-controls">
               <Select label="Impact band" size="xs" styles={{ wrapper: { width: 200 } }} allowDeselect={false} value={band} data={bands.filter(value => coverage.bands[value] > 0 || value === band).map(value => ({ value, label: `${bandLabels[value]} (${coverage.bands[value]})` }))}
-                onChange={value => { const next = bands.find(item => item === value); if (next) onSearch({ band: unlessDefault(next, 'all') }, 'scorecard') }} />
+                onChange={value => { const next = bands.find(item => item === value); if (next) onSearch({ band: unlessDefault(next, 'serious') }, 'scorecard') }} />
               <Select label="Average" size="xs" styles={{ wrapper: { width: 210 } }} allowDeselect={false} value={estimator} data={estimators.map(value => ({ value, label: estimatorLabels[value].replace(/^./, letter => letter.toUpperCase()) }))}
                 onChange={value => { const next = estimators.find(item => item === value); if (next) onSearch({ average: unlessDefault(next, 'equalProblem') }, 'scorecard') }} />
             </div>
@@ -268,7 +265,8 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
               {activeFilters.length > 0 && <Link className="filter-link" to="/tasks">Edit filters</Link>}
               {chartView === 'tradeoff' && <Switch className="label-switch" checked={showAllLabels} onChange={event => onSearch({ labels: event.currentTarget.checked || undefined }, 'scorecard')} label="Label every point" size="xs" />}
             </div>
-            {chartView === 'overview' ? <Overview summaries={summaries} detection={detection} sort={overviewSort} onSort={setOverviewSort} onSelect={id => inspect('scorecard')({ kind: 'configuration', id })} />
+            {chartView === 'overview' ? <Overview summaries={summaries} detection={detection} matching={{ included: matchedRefuted.included.length, excluded: matchedRefuted.excluded.length }}
+              basis={{ problems: coverage.bands[band], prs: shared.length }} onSelect={id => inspect('scorecard')({ kind: 'configuration', id })} />
               : <Chart summaries={summaries} detection={detection} matching={{ included: matchedRefuted.included.length, excluded: matchedRefuted.excluded.length }} axis={axis} view={chartView} showAllLabels={showAllLabels} onSelect={id => inspect('scorecard')({ kind: 'configuration', id })} />}
           </div>
           <div className="edition-notes" aria-label="Review method editions">
@@ -306,7 +304,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
         <Text size="xs" c="dimmed" mt="sm" className="footnote">Cost and output tokens add every attempt, retries included, and divide by scheduled trials. ≥ marks a lower bound where usage was only partly recorded; hover it for the count. {costNote(tableShown)} Output includes reasoning and subagents. Refuted claims and proposed fixes never change detection.</Text>
         <Text size="sm" mt="sm"><Anchor href="https://github.com/kamui/code-review-bench/blob/main/docs/research/skill-matrix-2026-10-02/README.md#time-and-cost" target="_blank" rel="noreferrer">October 2 time and cost report</Anchor> · Per-setup and per-task totals, including failed attempts and held runs, with grading listed separately. This report covers a fixed batch.</Text>
         </details>
-        <MethodologyViews dataset={dataset} configurations={configurations.filter(c => activeIds.includes(c.id))} cards={board.cards} selection={board.selection} detection={detection} sort={overviewSort} now={now} onInspect={inspect('dimensions')}
+        <MethodologyViews dataset={dataset} configurations={configurations.filter(c => activeIds.includes(c.id))} cards={board.cards} selection={board.selection} detection={detection} now={now} onInspect={inspect('dimensions')}
           tab={search.dimension ?? 'detection'} onTab={tab => onSearch({ dimension: unlessDefault(tab, 'detection') }, 'dimensions')} />
       </section></>}
 
