@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { CSSProperties, DOMAttributes, FocusEvent, MouseEvent, ReactNode } from 'react'
 import { useElementSize } from '@mantine/hooks'
 import { ArrowUpLeft } from 'lucide-react'
-import { groupPaths, logScale, paretoFrontier, placeLabels, position, sqrtScale, ticks, tipPlace } from '../lib/chart'
+import { groupPaths, linearScale, logScale, paretoFrontier, placeLabels, position, sqrtScale, ticks, tipPlace } from '../lib/chart'
 import type { Scale, TipPlace } from '../lib/chart'
 import { compact, detectionLabel, foundLabels, duration, lowerFirst, money, percent, reasonCounts } from '../lib/metrics'
 import type { Axis, DetectionView, Summary } from '../lib/metrics'
@@ -38,7 +38,7 @@ export function SetupName({ configuration, mark = true }: { configuration: Confi
 }
 
 export const axisLabels: Record<Axis, string> = {
-  cost: 'Cost per trial', tokens: 'Output tokens per trial', refuted: 'Refuted claims per review on matched PRs', time: 'Median time',
+  cost: 'Cost per trial', tokens: 'Output tokens per trial', refuted: 'Refuted claims per review on matched PRs', doubt: 'Reviews with a refuted or unproven claim', time: 'Median time',
 }
 const setups = (count: number) => `${count} ${count === 1 ? 'setup' : 'setups'}`
 
@@ -54,22 +54,23 @@ const boundedOn = (summary: Summary, axis: Axis) => (axis === 'cost' || axis ===
 
 function formatMetric(axis: Axis, value: number | null, starred: boolean, bounded = false) {
   if (value === null) return 'Unavailable'
-  const text = `${bounded ? '≥ ' : ''}${axis === 'cost' ? money(value) : axis === 'tokens' ? compact(value) : axis === 'time' ? duration(value * 60) : value.toFixed(2)}`
+  const text = `${bounded ? '≥ ' : ''}${axis === 'cost' ? money(value) : axis === 'tokens' ? compact(value) : axis === 'time' ? duration(value * 60) : axis === 'doubt' ? percent(value) : value.toFixed(2)}`
   return axis === 'cost' && starred ? `${text}*` : text
 }
 
 function tickLabel(axis: Axis, value: number) {
   if (axis === 'cost') return value >= 1 ? `$${value}` : value >= 0.01 ? `$${value.toFixed(2)}` : `$${value}`
   if (axis === 'tokens') return compact(value)
+  if (axis === 'doubt') return `${value}%`
   if (axis === 'time') return value < 1 ? `${Math.round(value * 60)} s` : `${value} min`
   return String(value)
 }
 
 const scaleNames: Record<Scale['kind'], string> = { log: 'log scale', sqrt: 'square-root scale', linear: 'linear scale' }
-const scaleFor = (axis: Axis, values: number[]): Scale => axis === 'refuted' ? sqrtScale(values) : logScale(values)
+const scaleFor = (axis: Axis, values: number[]): Scale => axis === 'refuted' ? sqrtScale(values) : axis === 'doubt' ? linearScale(values) : logScale(values)
 const fraction = (scale: Scale, value: number) => position(scale, value, 0, 100)
 const scoreTicks = [0, 25, 50, 75, 100]
-const pairAxes: Axis[] = ['cost', 'refuted']
+const pairAxes: Axis[] = ['cost', 'doubt']
 
 export function Chart({ summaries, detection, matching, axis, view, showAllLabels, onSelect }: {
   summaries: Summary[]; detection: DetectionView; matching: { included: number; excluded: number }; axis: Axis; view: ChartView; showAllLabels: boolean; onSelect: (id: string) => void
@@ -130,7 +131,7 @@ export function Chart({ summaries, detection, matching, axis, view, showAllLabel
     {points.length > 0 && <ChartGuide><div className="plot-caption">
       {view === 'setups' && <span><span className="whisker-key" aria-hidden="true" />Rows are ordered by {lowerFirst(measure)}. The whisker spans this average with any one whole PR left out: sensitivity to these PRs, not a confidence interval.</span>}
       {view === 'skills' && <span>Each panel shows one review method on every model it ran on, with detection against {lowerFirst(axisLabels[axis])} on shared axes. Gray dots are the other selected setups, for context.</span>}
-      {view === 'pair' && <span>Each panel plots {lowerFirst(measure)} against one cost of a review: what a trial costs, and how many of its claims were shown to be wrong. Up and to the left is better on both.</span>}
+      {view === 'pair' && <span>Each panel plots {lowerFirst(measure)} against one cost of a review: what a trial costs, and how often a review makes a claim that was refuted or not proven. An unproven claim is not shown to be false. Up and to the left is better on both.</span>}
       {scatter && <span><span className="frontier-key" aria-hidden="true" />Frontier of {view === 'pair' ? 'each panel' : dimensions}: no other selected setup is at least as good on both measures and strictly better on one. Identical results share the frontier. It says nothing about any other measure.</span>}
       {view === 'models' && <span>Each row is one model, in name order. Marks show {lowerFirst(measure)} for each review method that ran on it.</span>}
       {withheld.length > 0 && <span>Not plotted, {lowerFirst(measure)} unavailable: {withheld.map(row => `${row.reason} (${setups(row.count)})`).join(' ')}</span>}
@@ -234,7 +235,8 @@ function Scatter({ points, dimensions, axis, scale, frontier, showAllLabels, hov
     }),
   ]
   const prominent = (point: Point) => frontier.has(point.summary.configuration.id) || point.bounded
-  const requested = ordered.filter(point => showAllLabels || prominent(point) || hovered === point.summary.configuration.id)
+  const leading = new Set(paretoFrontier(points).map(point => point.summary.configuration.id))
+  const requested = ordered.filter(point => showAllLabels || frontier.has(point.summary.configuration.id) || leading.has(point.summary.configuration.id) || hovered === point.summary.configuration.id)
     .sort((left, right) => Number(frontier.has(right.summary.configuration.id)) - Number(frontier.has(left.summary.configuration.id)))
   const dimmed = (point: Point) => !prominent(point) && hovered !== point.summary.configuration.id
   const labels = width ? placeLabels(requested.map(point => ({
@@ -265,7 +267,7 @@ function Scatter({ points, dimensions, axis, scale, frontier, showAllLabels, hov
           className={frontier.has(label.id) ? 'point-label' : 'point-label secondary'}>{labelText(point.summary.configuration)}</text>
       })}
     </svg>}
-    <span className="better-hint" style={{ left: plot.left + 10, top: plot.top + 8 }}><ArrowUpLeft size={13} aria-hidden="true" />Higher detection, lower {lowerFirst(axisLabels[axis])}</span>
+    <span className="better-hint" style={{ left: plot.left + 10, top: plot.top + 8 }}><ArrowUpLeft size={13} aria-hidden="true" />Higher detection, {axis === 'doubt' ? 'fewer' : 'lower'} {lowerFirst(axisLabels[axis])}</span>
   </div>
 }
 

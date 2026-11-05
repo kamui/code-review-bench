@@ -242,8 +242,8 @@ describe('overview', () => {
     matching={{ included: 0, excluded: 0 }} basis={{ problems: 9, prs: 6 }} onSelect={() => {}} /></MantineProvider>)
   const card = (index: number) => setups(overview).slice(index * selected.length, (index + 1) * selected.length)
 
-  test('is the default view and leads with serious problems found against cost and refuted claims', () => {
-    expect(shown).toContain('Serious problems found against cost and refuted claims')
+  test('is the default view and leads with serious problems found against cost and refuted or unproven claims', () => {
+    expect(shown).toContain('Serious problems found against cost and refuted or unproven claims')
     expect(dashboard).not.toContain('Compare detection against')
     expect(text(overview)).toContain('The 9 known problems weigh the same, so one problem caught in every review is 11.1 points.')
   })

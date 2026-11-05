@@ -236,7 +236,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
               })}</div>
             </div>
             <div className="refine-controls">
-              <Popover position="bottom-start" width={340} withArrow arrowPosition="side">
+              <Popover position="bottom-start" width={340} withArrow arrowPosition="side" trapFocus returnFocus>
                 <Popover.Target><Button variant="default" size="xs" className="refine-button" leftSection={<SlidersHorizontal size={14} aria-hidden="true" />} rightSection={<ChevronDown size={14} aria-hidden="true" />}>Review setups ({configurations.filter(item => selected.includes(item.id)).length}/{configurations.length})</Button></Popover.Target>
                 <Popover.Dropdown className="refine-dropdown" style={{ maxHeight: '70vh', overflowY: 'auto', maxWidth: 'calc(100vw - 24px)' }}><Stack gap="sm">
                   <Group justify="space-between"><Text size="xs" fw={640}>Review setups</Text><Group gap="xs">
@@ -248,7 +248,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
                       checked={selected.includes(configuration.id)} onChange={() => setSelected(selected.includes(configuration.id) ? selected.filter(id => id !== configuration.id) : [...selected, configuration.id])} size="xs" />)}</div>)}
                 </Stack></Popover.Dropdown>
               </Popover>
-              <Popover position="bottom-start" width={240} withArrow arrowPosition="side">
+              <Popover position="bottom-start" width={240} withArrow arrowPosition="side" trapFocus returnFocus>
                 <Popover.Target><Button variant="default" size="xs" className="refine-button" leftSection={<Cpu size={14} aria-hidden="true" />} rightSection={<ChevronDown size={14} aria-hidden="true" />}>Models ({selectedModels.length}/{modelChoices.length})</Button></Popover.Target>
                 <Popover.Dropdown className="refine-dropdown"><Stack gap="sm"><Group justify="space-between"><Text size="xs" fw={640}>Models</Text><Group gap="xs"><Button variant="subtle" size="compact-xs" className="popover-action" onClick={() => setSelectedModels(modelChoices.map(model => model.value))}>Select all</Button>
                   <Button variant="subtle" size="compact-xs" className="popover-action" onClick={() => setSelectedModels([])}>Clear all</Button></Group></Group>

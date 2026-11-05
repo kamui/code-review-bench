@@ -1,7 +1,7 @@
 import type { Configuration, Dataset } from './data'
 import type { Band, Bounded, Estimator, Measure, Scorecard } from './scoring'
 
-export type Axis = 'cost' | 'tokens' | 'refuted' | 'time'
+export type Axis = 'cost' | 'tokens' | 'refuted' | 'doubt' | 'time'
 export type DetectionView = { band: Band; estimator: Estimator }
 export type Reading = { text: string; reason: string | null; annotation?: string; fraction?: number }
 
@@ -37,6 +37,7 @@ export type Summary = {
   cost: number | null
   tokens: number | null
   refuted: number | null
+  doubt: number | null
   time: { median: number; mean: number; q1: number; q3: number; reviews: number; tasks: number } | null
   reasons: Record<'detection' | Axis, string | null>
   admitted: number
@@ -52,10 +53,10 @@ export function summarize(configuration: Configuration, card: Scorecard, view: D
   return {
     configuration, card, detection: points(recall[view.estimator]), detectionNote: recall.zeroCredit.reason,
     range: range && { low: range.low * 100, high: range.high * 100 },
-    cost: lowerBound(card.cost.perTrial), tokens: lowerBound(card.tokens.perTrial), refuted: measured(refuted),
+    cost: lowerBound(card.cost.perTrial), tokens: lowerBound(card.tokens.perTrial), refuted: measured(refuted), doubt: points(card.reliability.reviewsWithDoubt.refutedOrUnproven),
     time: time && { ...time, reviews: card.time.completed, tasks: card.time.tasks },
     reasons: { detection: reasonOf(recall[view.estimator]), cost: reasonOf(card.cost.perTrial), tokens: reasonOf(card.tokens.perTrial),
-      refuted: reasonOf(refuted), time: reasonOf(card.time.summary) },
+      refuted: reasonOf(refuted), doubt: reasonOf(card.reliability.reviewsWithDoubt.refutedOrUnproven), time: reasonOf(card.time.summary) },
     admitted: card.delivery.admitted, completed: card.delivery.complete, trials: card.delivery.scheduled, tasks: card.coverage.ran,
   }
 }

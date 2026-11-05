@@ -136,7 +136,7 @@ export function Overview({ summaries, detection, matching, basis, onSelect }: {
   return <div className="overview" data-focusing={focus ? '' : undefined} onMouseLeave={() => { setTip(null); setFocus(null) }}>
     <div className="measure-grid">
       <section className="measure-card lead-card" data-lead aria-labelledby="measure-lead">
-        <header className="measure-head"><div><h3 id="measure-lead">{foundLabels[detection.band]} against cost and refuted claims</h3>
+        <header className="measure-head"><div><h3 id="measure-lead">{foundLabels[detection.band]} against cost and refuted or unproven claims</h3>
           <p>Each point is one setup; up and to the left is better on both. {weight(detection, basis)}</p></div></header>
         <Chart summaries={summaries} detection={detection} matching={matching} axis="cost" view="pair" showAllLabels={false} onSelect={onSelect} />
       </section>
