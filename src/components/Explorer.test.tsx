@@ -15,6 +15,7 @@ import { scorecardTabs } from '../lib/view'
 import type { ExplorerSearch } from '../lib/view'
 import { MethodologyViews } from './MethodologyViews'
 import { Overview } from './Overview'
+import { firstLine, Markdown } from './Reading'
 import { SeriousMisses } from './SeriousMisses'
 
 const now = new Date('2026-10-03T12:00:00Z')
@@ -390,4 +391,21 @@ describe('a linked view', () => {
     expect(shown).toContain('Review setups (2/6)')
     expect(shown).toContain('Models (1/4)')
   })
+})
+
+describe('review text', () => {
+  const rendered = renderToStaticMarkup(<Markdown text={'## Finding 1\n**Wrong day** in `date_picker.ts`\n\n- one\n- two\n\n| TZ | Day |\n|---|---|\n| UTC | Fri |\n\n<script>alert(1)</script>'} />)
+
+  test('renders the Markdown a review writes, with code, lists and tables', () => {
+    expect(rendered).toContain('<p class="md-heading">Finding 1</p>')
+    expect(rendered).toContain('<strong>Wrong day</strong>')
+    expect(rendered).toContain('<code class="inline-code">date_picker.ts</code>')
+    expect(rendered).toContain('<li>two</li>')
+    expect(rendered).toContain('<td>UTC</td>')
+  })
+
+  test('never renders raw HTML from a review', () => expect(rendered).not.toContain('<script>'))
+
+  test('titles a finding with its first line, without Markdown markers', () =>
+    expect(firstLine('## **Finding 1** — `x` breaks\n\nDetails')).toBe('Finding 1 — `x` breaks'))
 })

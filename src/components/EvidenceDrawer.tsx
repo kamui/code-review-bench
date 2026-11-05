@@ -3,7 +3,7 @@ import type { CSSProperties } from 'react'
 import { Accordion, Alert, Badge, Button, Code, CopyButton, Drawer, Group, Loader, Paper, Select, Stack, Tabs, Text, Title } from '@mantine/core'
 import { Download, ExternalLink, FileCheck2, FileClock, FileCode, FileJson, FileSearch, FileText } from 'lucide-react'
 import { SetupName, setupLabel } from './Chart'
-import { costText, Disclosure, humanize, Referenced, Rich, Tag, Value } from './Reading'
+import { costText, Disclosure, firstLine, humanize, Markdown, Referenced, Rich, Tag, Value } from './Reading'
 import { fetchDetail, skillReleaseLabel } from '../lib/data'
 import type { Attempt, AttemptDetail, Configuration, Dataset, Task } from '../lib/data'
 import { bandLabels, compact, estimatorLabels, foundLabels, duration, lowerFirst, measured, money, upperFirst, perReview, reading, share } from '../lib/metrics'
@@ -128,12 +128,14 @@ function InspectionBody({ dataset, results, band, estimator, configuration, task
               : 'This attempt returned no usable findings. Its failure and usage remain in the evidence.'}</Alert>}
             <Accordion variant="separated">{detail.items.map((item, index) => <Accordion.Item key={item.id} value={item.id}>
               <Accordion.Control><Group gap="xs" mb={6}><Text size="xs" c="dimmed" fw={560}>Finding {index + 1}</Text><Outcome assignment={item.assignment} /></Group>
-                <Text size="sm" className="finding-claim"><Rich text={item.claim} /></Text></Accordion.Control>
-              <Accordion.Panel><Stack gap="sm"><Text size="xs" c="dimmed">{item.file}{item.line === null ? '' : `:${item.line}`}</Text><Text size="sm"><Rich text={item.consequence} /></Text>
-                <Paper p="sm" className="evidence-note"><Text size="xs" fw={640} mb={5}>Current assessment</Text><Text size="sm"><Rich text={item.notes} /></Text></Paper>
+                <Text size="sm" className="finding-claim"><Rich text={firstLine(item.claim)} /></Text></Accordion.Control>
+              <Accordion.Panel><Stack gap="sm"><Text size="xs" c="dimmed">{item.file}{item.line === null ? '' : `:${item.line}`}</Text>
+                {item.claim.trim().includes('\n') && <Text size="sm" component="div"><Markdown text={item.claim} /></Text>}
+                <Text size="sm" component="div"><Markdown text={item.consequence} /></Text>
+                <Paper p="sm" className="evidence-note"><Text size="xs" fw={640} mb={5}>Current assessment</Text><Text size="sm" component="div"><Markdown text={item.notes} /></Text></Paper>
                 {item.claims?.map(claim => <Paper withBorder p="sm" key={claim.id}><Stack gap="xs">
                   <Group gap={6}><Outcome assignment={claim.assignment} /></Group>
-                  {claim.quote.trim() !== item.claim.trim() && <Text size="sm"><Rich text={claim.quote} /></Text>}<Text size="sm"><Rich text={claim.notes} /></Text>
+                  {claim.quote.trim() !== item.claim.trim() && <Text size="sm" component="div"><Markdown text={claim.quote} /></Text>}<Text size="sm" component="div"><Markdown text={claim.notes} /></Text>
                   {claim.knownProblems?.map(fact => <Text size="xs" key={fact.familyId}>{familyName(fact.familyId)}: says what goes wrong, {fact.saysWhat}; identifies the cause, {fact.identifiesCause}. {fact.reason}</Text>)}
                   {claim.preExistingProblems?.map(fact => <Text size="xs" key={fact.problemId}>Pre-existing problem {fact.problemId}: says what goes wrong, {fact.saysWhat}; identifies the cause, {fact.identifiesCause}. {fact.reason}</Text>)}
                   {claim.preExistingCandidateId && <Text size="xs">Pre-existing-problem candidate {claim.preExistingCandidateId} awaits admission and does not count as raised.</Text>}

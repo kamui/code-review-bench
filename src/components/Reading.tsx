@@ -1,6 +1,9 @@
 import { Table, Text, Tooltip, VisuallyHidden } from '@mantine/core'
 import type { ReactNode } from 'react'
 import { ChevronRight } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import type { Components } from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { money, peerLabel, reasonCounts } from '../lib/metrics'
 import type { Configuration, Task } from '../lib/data'
 import type { Reading } from '../lib/metrics'
@@ -144,6 +147,19 @@ export function Rich({ text }: { text: string }) {
   return text.split(/(`[^`]+`)/).map((part, index) => part.length > 2 && part.startsWith('`') && part.endsWith('`')
     ? <code key={index} className="inline-code">{part.slice(1, -1)}</code> : part)
 }
+
+const heading: Components['h1'] = ({ children }) => <p className="md-heading">{children}</p>
+const markdownParts: Components = {
+  h1: heading, h2: heading, h3: heading, h4: heading, h5: heading, h6: heading,
+  a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer">{children}</a>,
+  code: ({ children }) => <code className="inline-code">{children}</code>,
+  table: ({ children }) => <div className="md-table"><table>{children}</table></div>,
+}
+
+/** Review text written in Markdown; raw HTML in it is shown as text, not run. */
+export const Markdown = ({ text }: { text: string }) => <div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownParts}>{text}</ReactMarkdown></div>
+
+export const firstLine = (text: string) => text.trim().split('\n')[0]!.replace(/^(#{1,6}|[-*]|\d+\.)\s+/, '').replace(/\*\*|__/g, '')
 
 export const humanize = (slug: string) => slug.replace(/-/g, ' ').replace(/^./, letter => letter.toUpperCase())
 
