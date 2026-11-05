@@ -104,8 +104,9 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
           { label: 'All labelled serious caught', value: row => share(row.card.seriousCaught.equalPr, row.card.detection.serious.zeroCredit.reason) },
           { label: 'Repeated serious misses', value: row => reading(row.card.seriousMisses.repeated, String) }]} />
         <Text size="xs" c="dimmed" className="footnote">All labelled serious caught is the share of scheduled trials that caught every serious reference of a PR, averaged over PRs with one. A repeated serious miss is a serious reference not caught in two or more scheduled trials.</Text>
-        {conflicts.length > 0 && <div><Text size="sm" mb={8}>In the {bandLabels[band].toLowerCase()} band the two averages order {conflicts.length === 1 ? 'this pair' : 'these pairs'} differently. That ordering depends on the average chosen.</Text>
-          <ul className="pair-list">{conflicts.map(pair => <li key={`${pair.a}/${pair.b}`}>{short(pair.a)}<ArrowLeftRight size={14} aria-label="and" />{short(pair.b)}</li>)}</ul></div>}
+        {conflicts.length > 0 && <Disclosure title={`The two averages order ${conflicts.length === 1 ? 'one pair' : `${conflicts.length} pairs`} of setups differently`}>
+          <Text size="sm" mb={8}>In the {bandLabels[band].toLowerCase()} band, which of these setups finds more depends on the average chosen.</Text>
+          <ul className="pair-list">{conflicts.map(pair => <li key={`${pair.a}/${pair.b}`}>{short(pair.a)}<ArrowLeftRight size={14} aria-label="and" />{short(pair.b)}</li>)}</ul></Disclosure>}
         <Disclosure title={`Counts behind ${lowerFirst(foundLabels[band])}`}><DataTable label={`Counts behind ${lowerFirst(foundLabels[band])}`} rows={rows} rowKey={key} minWidth={1000} columns={[setup,
           { label: 'Problems / PRs with one', value: row => `${row.card.detection[band].problems} / ${row.card.detection[band].prs}` },
           { label: 'Observed caught / determined', value: row => `${row.card.detection[band].observed.caught} / ${row.card.detection[band].observed.determined}` },
