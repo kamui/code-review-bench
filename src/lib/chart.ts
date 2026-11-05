@@ -74,7 +74,7 @@ export function placeLabels(requests: LabelRequest[], obstacles: Box[], bounds: 
   const taken = [...obstacles]
   const placed: LabelPlacement[] = []
   for (const request of requests) {
-    const found = [10, 24, 40].flatMap(distance => {
+    const found = [10, 24, 40, 58, 76].flatMap(distance => {
       const diagonal = distance * 0.72
       const candidates: [number, number, LabelPlacement['anchor']][] = [
         [distance, 0, 'start'], [-distance, 0, 'end'], [diagonal, -diagonal, 'start'], [diagonal, diagonal, 'start'],

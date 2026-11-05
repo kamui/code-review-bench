@@ -85,7 +85,7 @@ export function Chart({ summaries, detection, matching, axis, view, showAllLabel
   const hover = (id: string, element: Element) => {
     const shell = element.closest('.plot-shell')?.getBoundingClientRect()
     const box = element.getBoundingClientRect()
-    if (shell) setHovered({ id, ...tipPlace(shell, box) })
+    if (shell) setHovered({ id, ...tipPlace(shell, box, 160, 260) })
   }
   const interactions = (id: string) => ({
     onMouseEnter: (event: MouseEvent<Element>) => hover(id, event.currentTarget),
@@ -183,7 +183,7 @@ function textWidth(text: string) {
 
 const methodKey = (configuration: Configuration) => `${configuration.method}/${configuration.reviewEdition}`
 
-const labelOf = (points: Point[]) => {
+const labelOf = (points: Point[], withMethod = false) => {
   const models = new Map<string, number>()
   for (const point of points) {
     const { method, model } = setupParts(point.summary.configuration)
@@ -191,7 +191,8 @@ const labelOf = (points: Point[]) => {
   }
   return (configuration: Configuration) => {
     const { method, model, effort } = setupParts(configuration)
-    return (models.get(`${method}/${model}`) ?? 0) > 1 ? `${model} · ${effort}` : model
+    const label = (models.get(`${method}/${model}`) ?? 0) > 1 ? `${model} · ${effort}` : model
+    return withMethod ? `${method.replace(/ built-in$/, '')} · ${label}` : label
   }
 }
 
@@ -206,7 +207,7 @@ function Scatter({ points, dimensions, axis, scale, frontier, showAllLabels, hov
   const plot = { left: margin.left, right: Math.max(margin.left + 1, width - margin.right), top: margin.top, bottom: height - margin.bottom }
   const px = (value: number) => position(scale, value, plot.left, plot.right)
   const py = (value: number) => plot.bottom - value / 100 * (plot.bottom - plot.top)
-  const labelText = labelOf(points)
+  const labelText = labelOf(points, true)
   const ordered = [...points].sort((left, right) => right.y - left.y)
   const steps = paretoFrontier(points.filter(point => !point.bounded))
   const segment = (x1: number, y1: number, x2: number, y2: number) =>

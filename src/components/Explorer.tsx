@@ -18,7 +18,7 @@ import { Chart, Mark, setupParts } from './Chart'
 import { EvidenceDrawer } from './EvidenceDrawer'
 import { MethodologyViews } from './MethodologyViews'
 import { Overview } from './Overview'
-import { costNote, costText, Notes, notesFor, PeerNote, Tag, Value } from './Reading'
+import { costNote, costText, glossary, Notes, notesFor, PeerNote, Tag, TermLabel, Value } from './Reading'
 
 export type Page = 'scorecard' | 'tasks' | 'methodology'
 type LoadState = { kind: 'loading' } | { kind: 'failed'; message: string } | { kind: 'ready'; dataset: Dataset }
@@ -234,7 +234,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
                   <Mark configuration={configuration} size={11} /><span className="configuration-name">{methodName(configuration)}</span>
                   {configuration.experimental && <span className="chip-partial">experiment</span>}
                   {some && !all && <span className="chip-partial">partial</span>}
-                  {all && <Check size={14} aria-hidden="true" className="chip-check" />}
+                  {(all || !some) && <Check size={14} aria-hidden="true" className="chip-check" data-off={!all || undefined} />}
                 </button>
               })}</div>
             </div>
@@ -263,7 +263,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
           </div>
           <div className="chart-main">
             <div className="chart-context">
-              <span className="basis-chip">{detectionLabel(detection)} · {plural(shared.length, 'PR')} · {coverage.bands[band]} of {coverage.bands.all} known problems in this band{candidateCount > 0 && ` · ${candidateCount} awaiting eligibility`}</span>
+              <span className="basis-chip">{detectionLabel(detection)} · {plural(shared.length, 'PR')} · {coverage.bands[band]} of {coverage.bands.all} known problems in this band{candidateCount > 0 && ` · ${candidateCount} awaiting a ruling`}</span>
               {activeFilters.map(item => <button type="button" key={item.label} className="filter-chip" onClick={item.clear} aria-label={`Remove filter ${item.label}`}>{item.label}<X size={12} aria-hidden="true" /></button>)}
               {activeFilters.length > 0 && <Link className="filter-link" to="/tasks">Edit filters</Link>}
               {chartView === 'tradeoff' && <Switch className="label-switch" checked={showAllLabels} onChange={event => onSearch({ labels: event.currentTarget.checked || undefined }, 'scorecard')} label="Label every point" size="xs" />}
@@ -280,7 +280,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
             </span>)}
           </div>
           <div className="comparison-strip"><Info size={15} aria-hidden="true" /><span>Chart and table use the PRs every selected standard setup ran. Method, model and task filters change the comparison. Experiments do not shrink its PR coverage.
-            {differing.length > 0 && ` The selected setups differ in recorded ${differing.join(', ')}; a difference between setups includes those conditions. Compare two setups below to see the values.`}</span></div>
+            {differing.length > 0 && ` The selected setups differ in recorded ${differing.join(', ')}; a difference between setups includes those conditions. Compare setups below to see the values.`}</span></div>
         </Paper>
         <header className="subsection-head" id="review-setups"><Title order={3}>All review setups</Title>
         <Text className="subsection-lede">Lists every setup, skill experiments included, whatever the selection above. Same {shared.length} comparison PRs as the chart, in the {bandLabels[band].toLowerCase()} band. Rows start in name order; a column heading sorts by that one measure only.</Text></header>
@@ -360,18 +360,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
           <article className="principle"><span className="principle-icon" aria-hidden="true"><Grid3x3 size={17} strokeWidth={2} /></span><h3>Separate dimensions, no blended score</h3><p>Delivery, claim reliability, remedy sufficiency and safety, audited controls, advice benefit, cost and time are reported beside detection. Refuted claims and fixes never change detection, and nothing combines them into one rank.</p></article>
           <article className="principle"><span className="principle-icon" aria-hidden="true"><EyeOff size={17} strokeWidth={2} /></span><h3>Unknown stays unknown</h3><p>Unresolved detection outcomes receive zero credit, with the affected problems and decisions explained. This does not adjudicate them as misses. Unknown impact stays in its own band; measures blocked by missing judgments, unassessed remedies or unaudited controls are unavailable with their reasons. Candidates wait for a saved human ruling. Saved reviews, failures and rulings stay linked from every setup and PR.</p></article></div>
         <h3 className="glossary-title">Terms used on the scorecard</h3>
-        <dl className="glossary">
-          <div><dt>Review setup</dt><dd>A review method run on one model at one effort, with its client and settings.</dd></div>
-          <div><dt>Scheduled trial</dt><dd>One planned run of a setup on a PR. Replacement attempts after an infrastructure failure stay inside it.</dd></div>
-          <div><dt>Admitted review</dt><dd>A trial whose last attempt delivered a usable review.</dd></div>
-          <div><dt>Known problem</dt><dd>A reference problem: an accepted problem, backed by a saved ruling, that reviews are checked against. The set can be incomplete.</dd></div>
-          <div><dt>Candidate</dt><dd>A problem a review reported that is not yet a reference. It earns no credit until a human rules on it.</dd></div>
-          <div><dt>Impact band</dt><dd>Serious, other material, or unknown. Unknown is never treated as low impact.</dd></div>
-          <div><dt>Refuted or unproven</dt><dd>Evidence contradicts a refuted claim. An unproven claim lacks the evidence to stand and is not proven false.</dd></div>
-          <div><dt>Problems or PRs weighted equally</dt><dd>Each reference problem counts the same, or each PR counts the same however many problems it has.</dd></div>
-          <div><dt>pp</dt><dd>Percentage points: the difference between two percentages.</dd></div>
-          <div><dt>≥ value</dt><dd>A lower bound. Usage was only partly recorded, so the true value is at least this.</dd></div>
-        </dl>
+        <dl className="glossary">{glossary.map(entry => <div key={entry.term}><dt>{entry.term}</dt><dd>{entry.definition}</dd></div>)}</dl>
         <Group gap="md" mt="lg"><Anchor href={`${import.meta.env.BASE_URL}data/benchmark.json`} download size="sm" className="data-download"><ArrowDownToLine size={15} aria-hidden="true" />Download explorer data</Anchor></Group>
         <Text size="xs" c="dimmed" mt="lg">Imported from skills revision {dataset.revision.slice(0, 10)}. {dataset.import.files.toLocaleString()} preserved source files and {dataset.import.transcripts} transcript references. {dataset.import.mismatches} superseded archive references have recorded hash mismatches; the two main run archives are verified. Evidence hash {dataset.evidence.datasetHash.slice(0, 12)} identifies the exported current records.</Text>
       </section>}
