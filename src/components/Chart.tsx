@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { CSSProperties, DOMAttributes, FocusEvent, MouseEvent, ReactNode } from 'react'
 import { useElementSize } from '@mantine/hooks'
 import { ArrowUpLeft } from 'lucide-react'
-import { groupPaths, linearScale, logScale, paretoFrontier, placeLabels, position, ticks, tipPlace } from '../lib/chart'
+import { groupPaths, logScale, paretoFrontier, placeLabels, position, sqrtScale, ticks, tipPlace } from '../lib/chart'
 import type { Scale, TipPlace } from '../lib/chart'
 import { compact, detectionLabel, duration, lowerFirst, money, percent, reasonCounts } from '../lib/metrics'
 import type { Axis, DetectionView, Summary } from '../lib/metrics'
@@ -64,7 +64,8 @@ function tickLabel(axis: Axis, value: number) {
   return String(value)
 }
 
-const scaleFor = (axis: Axis, values: number[]): Scale => axis === 'refuted' ? linearScale(values) : logScale(values)
+const scaleNames: Record<Scale['kind'], string> = { log: 'log scale', sqrt: 'square-root scale', linear: 'linear scale' }
+const scaleFor = (axis: Axis, values: number[]): Scale => axis === 'refuted' ? sqrtScale(values) : logScale(values)
 const fraction = (scale: Scale, value: number) => position(scale, value, 0, 100)
 const scoreTicks = [0, 25, 50, 75, 100]
 
@@ -146,7 +147,7 @@ function SetupRows({ points, notes, measure, axis, scale, frontier, onSelect, in
       <span>Review setup</span>
       <span className="rank-axis"><span className="rank-axis-title">{measure}</span>
         <span className="rank-ticks score-ticks">{scoreTicks.map(tick => <span key={tick} style={{ left: `${tick}%` }}>{tick}%</span>)}</span></span>
-      <span className="rank-axis"><span className="rank-axis-title">{axisLabels[axis]}{scale.kind === 'log' && <em>log scale</em>}</span>
+      <span className="rank-axis"><span className="rank-axis-title">{axisLabels[axis]}{scale.kind !== 'linear' && <em>{scaleNames[scale.kind]}</em>}</span>
         <span className={metricTicks.length > 4 ? 'rank-ticks sparse' : 'rank-ticks'}>{metricTicks.map(tick => <span key={tick} style={{ left: `${fraction(scale, tick)}%` }}>{tickLabel(axis, tick)}</span>)}</span></span>
     </div>
     {points.map(({ summary, range, metric, bounded, starred }) => {
@@ -266,7 +267,7 @@ function Axes({ plot, axis, scale, xTicks, px, py, height, compact = false }: {
     {xTicks.map(tick => <g key={tick}><line x1={px(tick)} x2={px(tick)} y1={plot.top} y2={plot.bottom} className="grid-line" />
       <text x={px(tick)} y={plot.bottom + 17} className="tick-label" textAnchor="middle">{tickLabel(axis, tick)}</text></g>)}
     <text x={14} y={(plot.top + plot.bottom) / 2} className="axis-title" textAnchor="middle" transform={`rotate(-90 14 ${(plot.top + plot.bottom) / 2})`}>Detection</text>
-    <text x={(plot.left + plot.right) / 2} y={height - 8} className="axis-title" textAnchor="middle">{axisLabels[axis]}{scale.kind === 'log' ? ' (log scale)' : ''}</text>
+    <text x={(plot.left + plot.right) / 2} y={height - 8} className="axis-title" textAnchor="middle">{axisLabels[axis]}{scale.kind === 'linear' ? '' : ` (${scaleNames[scale.kind]})`}</text>
   </>
 }
 
