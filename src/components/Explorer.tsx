@@ -80,9 +80,8 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
   const detection = { band, estimator }
   const view: MainView = search.chart ?? 'overview'
   const narrow = useMediaQuery('(max-width: 700px)') ?? false
-  const chartView = narrow && view !== 'overview' ? 'setups' : view
-  const views: { label: string; value: MainView; icon: LucideIcon }[] = [{ label: 'Overview', value: 'overview', icon: ChartBarStacked }, { label: 'By method', value: 'skills', icon: LayoutGrid },
-    { label: 'By setup', value: 'setups', icon: ChartNoAxesGantt }, { label: 'By model', value: 'models', icon: Cpu }]
+  const views: { label: string; short: string; value: MainView; icon: LucideIcon }[] = [{ label: 'Overview', short: 'Overview', value: 'overview', icon: ChartBarStacked },
+    { label: 'By method', short: 'Methods', value: 'skills', icon: LayoutGrid }, { label: 'By setup', short: 'Setups', value: 'setups', icon: ChartNoAxesGantt }, { label: 'By model', short: 'Models', value: 'models', icon: Cpu }]
   const plotAgainst = (value: string | null) => {
     const next = axes.find(item => item === value)
     if (next) onSearch({ axis: unlessDefault(next, 'cost') }, 'scorecard')
@@ -207,17 +206,16 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
         <VisuallyHidden><Title order={2}>The scorecard</Title></VisuallyHidden>
         <Paper withBorder radius="lg" className="leaderboard-paper">
           <div className="chart-toolbar">
-            <SegmentedControl aria-label="Chart view" className="view-switch" value={chartView} onChange={value => {
+            <SegmentedControl aria-label="Chart view" className="view-switch" value={view} onChange={value => {
               const next = views.find(item => item.value === value)
               if (next) onSearch({ chart: unlessDefault(next.value, 'overview') }, 'scorecard')
-            }} data={(narrow ? views.filter(item => item.value === 'overview' || item.value === 'setups') : views).map(item => ({ value: item.value,
-              label: <span className="switch-label"><item.icon size={15} strokeWidth={1.9} aria-hidden="true" />{item.label}</span> }))} />
-            {narrow && <span className="view-note">A wider screen adds By method and By model.</span>}
+            }} data={views.map(item => ({ value: item.value,
+              label: narrow ? item.short : <span className="switch-label"><item.icon size={15} strokeWidth={1.9} aria-hidden="true" />{item.label}</span> }))} />
             <Button variant="default" size="xs" className="filters-toggle" leftSection={<SlidersHorizontal size={14} aria-hidden="true" />} rightSection={<ChevronDown size={14} aria-hidden="true" />}
               aria-expanded={optionsOpen} onClick={() => setOptionsOpen(open => !open)}>Chart options · {bandLabels[band]} · {configurations.filter(item => selected.includes(item.id)).length} of {configurations.length} setups</Button>
-            <div className="axis-switch" title={chartView === 'models' ? 'By model plots detection only' : undefined}><span className="control-label" id="axis-label">Plot against</span>{narrow
-              ? <Select aria-label="Compare detection against" size="xs" allowDeselect={false} disabled={chartView === 'models'} value={axis} onChange={plotAgainst} data={axisChoices} />
-              : <SegmentedControl aria-label="Compare detection against" size="xs" disabled={chartView === 'models'} value={axis} onChange={plotAgainst} data={axisChoices} />}</div>
+            <div className="axis-switch" title={view === 'models' ? 'By model plots detection only' : undefined}><span className="control-label" id="axis-label">Plot against</span>{narrow
+              ? <Select aria-label="Compare detection against" size="xs" allowDeselect={false} disabled={view === 'models'} value={axis} onChange={plotAgainst} data={axisChoices} />
+              : <SegmentedControl aria-label="Compare detection against" size="xs" disabled={view === 'models'} value={axis} onChange={plotAgainst} data={axisChoices} />}</div>
           </div>
           <div className="filter-bar" data-open={optionsOpen || undefined}>
             <div className="measure-controls">
@@ -252,14 +250,14 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
             </div>
           </div>
           <div className="chart-main">
-            {(chartView !== 'overview' || activeFilters.length > 0) && <div className="chart-context">
-              {chartView !== 'overview' && <span className="basis-chip"><Glossed text={`${detectionLabel(detection)} · ${plural(shared.length, 'PR')} · ${coverage.bands[band]} of ${coverage.bands.all} known problems in this band${candidateCount > 0 ? ` · ${candidateCount} awaiting a ruling` : ''}`} /></span>}
+            {(view !== 'overview' || activeFilters.length > 0) && <div className="chart-context">
+              {view !== 'overview' && <span className="basis-chip"><Glossed text={`${detectionLabel(detection)} · ${plural(shared.length, 'PR')} · ${coverage.bands[band]} of ${coverage.bands.all} known problems in this band${candidateCount > 0 ? ` · ${candidateCount} awaiting a ruling` : ''}`} /></span>}
               {activeFilters.map(item => <button type="button" key={item.label} className="filter-chip" onClick={item.clear} aria-label={`Remove filter ${item.label}`}>{item.label}<X size={12} aria-hidden="true" /></button>)}
               {activeFilters.length > 0 && <Link className="filter-link" to="/tasks">Edit filters</Link>}
             </div>}
-            {chartView === 'overview' ? <Overview summaries={summaries} detection={detection} axis={axis} matching={{ included: matchedRefuted.included.length, excluded: matchedRefuted.excluded.length }}
+            {view === 'overview' ? <Overview summaries={summaries} detection={detection} axis={axis} matching={{ included: matchedRefuted.included.length, excluded: matchedRefuted.excluded.length }}
               basis={{ problems: coverage.bands[band], known: coverage.bands.all, prs: shared.length, awaiting: candidateCount }} onSelect={id => inspect('scorecard')({ kind: 'configuration', id })} />
-              : <Chart summaries={summaries} detection={detection} matching={{ included: matchedRefuted.included.length, excluded: matchedRefuted.excluded.length }} axis={axis} view={chartView} onSelect={id => inspect('scorecard')({ kind: 'configuration', id })} />}
+              : <Chart summaries={summaries} detection={detection} matching={{ included: matchedRefuted.included.length, excluded: matchedRefuted.excluded.length }} axis={axis} view={view} onSelect={id => inspect('scorecard')({ kind: 'configuration', id })} />}
           </div>
           <div className="edition-notes" aria-label="Review method editions">
             <span className="shape-key"><span><Mark configuration={{ method: '', reviewEdition: '', builtin: true }} size={10} /> Built-in reviewer</span><span><Mark configuration={{ method: '', reviewEdition: '', builtin: false }} size={10} /> Skill</span></span>
