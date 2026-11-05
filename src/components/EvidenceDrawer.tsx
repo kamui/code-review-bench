@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
 import type { CSSProperties } from 'react'
-import { Accordion, Alert, Badge, Button, Code, Drawer, Group, Loader, Paper, Select, Stack, Tabs, Text, Title } from '@mantine/core'
+import { Accordion, Alert, Badge, Button, Code, CopyButton, Drawer, Group, Loader, Paper, Select, Stack, Tabs, Text, Title } from '@mantine/core'
 import { Download, ExternalLink, FileCheck2, FileClock, FileCode, FileJson, FileSearch, FileText } from 'lucide-react'
 import { SetupName, setupLabel } from './Chart'
-import { costText, Disclosure, humanize, Referenced, Rich, Tag, Value } from './Reading'
+import { costText, Disclosure, firstLine, humanize, Markdown, Referenced, Rich, Tag, Value } from './Reading'
 import { fetchDetail, skillReleaseLabel } from '../lib/data'
 import type { Attempt, AttemptDetail, Configuration, Dataset, Task } from '../lib/data'
 import { bandLabels, compact, estimatorLabels, foundLabels, duration, lowerFirst, measured, money, upperFirst, perReview, reading, share } from '../lib/metrics'
@@ -84,10 +84,13 @@ function InspectionBody({ dataset, results, band, estimator, configuration, task
   const novel = currentTask ? pendingCandidates(dataset, [currentTask.id], now) : []
   return <Stack gap="lg">
     {configuration && <><SetupResults result={results.find(item => item.configuration.id === configuration.id)} band={band} estimator={estimator} />
-      <Stack gap={4}>{!configuration.builtin && <Group gap="xs"><Badge variant="light" radius="sm">{skillReleaseLabel([configuration])}</Badge></Group>}<Disclosure title="Run notes"><Text size="sm" className="disclosure-body">{configuration.note}</Text></Disclosure>
-      {Array.from(new Set(configuration.skillReleases.map(release => release.provenanceUrl))).map(url => <Button key={url} component="a" href={url} target="_blank" rel="noreferrer" variant="subtle" size="xs">Skill release provenance</Button>)}
-      {configuration.reviewChange && <Button component="a" href={configuration.reviewChange.url} target="_blank" rel="noreferrer" variant="subtle" size="xs">Review change: {configuration.reviewChange.summary}</Button>}
-      {configuration.skillProvenanceUrl && <Button component="a" href={configuration.skillProvenanceUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Skill commits & timestamps</Button>}
+      <Stack gap={4}>{!configuration.builtin && <Group gap="xs"><Badge variant="outline" color="gray" radius="sm">{skillReleaseLabel([configuration])}</Badge></Group>}<Disclosure title="Run notes"><div className="disclosure-body">
+        <Text size="sm">{configuration.note}</Text>
+        <ul className="source-links">
+          {Array.from(new Set(configuration.skillReleases.map(release => release.provenanceUrl))).map(url => <li key={url}><a href={url} target="_blank" rel="noreferrer">Skill release provenance<ExternalLink size={12} aria-hidden="true" /></a></li>)}
+          {configuration.reviewChange && <li><a href={configuration.reviewChange.url} target="_blank" rel="noreferrer">Review change: {configuration.reviewChange.summary}<ExternalLink size={12} aria-hidden="true" /></a></li>}
+          {configuration.skillProvenanceUrl && <li><a href={configuration.skillProvenanceUrl} target="_blank" rel="noreferrer">Skill commits &amp; timestamps<ExternalLink size={12} aria-hidden="true" /></a></li>}
+        </ul></div></Disclosure>
       <Disclosure title="Comparison conditions">
         <dl className="conditions">{configuration.conditions.map(condition => <div key={condition.name}><dt>{condition.name}</dt><dd>{condition.values.map(conditionValue).join(', ')}</dd></div>)}</dl></Disclosure></Stack></>}
     {task && <><Group gap="xs">{task.profile.concerns.map(concern => <Tag key={concern}>{concern}</Tag>)}</Group>
@@ -96,7 +99,7 @@ function InspectionBody({ dataset, results, band, estimator, configuration, task
       <Text size="xs" c="dimmed">Revision {task.head.slice(0, 10)}. Each reference shows its own eligibility and impact state.</Text>
       <TaskResults task={task} results={results} band={band} onOpen={attemptId => onChange({ ...inspection, attemptId, tab: 'reviews' })} /></>}
     <Tabs className="drawer-tabs" value={tab} onChange={value => { const next = drawerTabs.find(item => item === value); if (next) onChange({ ...inspection, tab: next }) }}>
-      <Tabs.List><Tabs.Tab value="reviews">Reviews ({attempts.length})</Tabs.Tab><Tabs.Tab value="references">References and candidates</Tabs.Tab><Tabs.Tab value="coverage">Coverage and failures</Tabs.Tab></Tabs.List>
+      <Tabs.List><Tabs.Tab value="reviews">Reviews ({attempts.length})</Tabs.Tab><Tabs.Tab value="references">References<span className="wide-only"> and candidates</span></Tabs.Tab><Tabs.Tab value="coverage">Coverage<span className="wide-only"> and failures</span></Tabs.Tab></Tabs.List>
       <Tabs.Panel value="reviews" pt="lg">
         <Stack gap="md">
           <Select label="Review attempt" description={currentGroup} searchable value={attemptId} onChange={value => onChange({ ...inspection, attemptId: value ?? undefined })}
@@ -109,8 +112,8 @@ function InspectionBody({ dataset, results, band, estimator, configuration, task
             <Text size="sm">{detail.record.observed.harness} {detail.record.observed.cli_version}</Text>
             <Text size="sm">Models: {detail.record.observed.models.join(', ')} · Effort: {detail.record.observed.effort ?? 'Not reported'}</Text>
             <Text size="xs" c="dimmed">Prompt identity: {detail.record.observed.prompt_registry_match ?? 'No registry match recorded'}</Text>
-            <Code block>{detail.record.observed.prompt_hash ?? 'Prompt hash unavailable'}</Code>
-            {detail.record.observed.skill_tree && <><Text size="xs" c="dimmed">Skill tree revision</Text><Code block>{detail.record.observed.skill_tree}</Code></>}
+            {detail.record.observed.prompt_hash ? <HashLine label="Prompt hash" value={detail.record.observed.prompt_hash} /> : <Text size="xs" c="dimmed">Prompt hash unavailable</Text>}
+            {detail.record.observed.skill_tree && <HashLine label="Skill tree revision" value={detail.record.observed.skill_tree} />}
             <Text size="xs" c="dimmed">Subagents: {detail.record.observed.subagent_count} · Client-reported sandbox: {detail.record.observed.sandbox ?? 'Not reported'}</Text>
           </Stack></Paper><Group gap="xs">
             <Button component="a" href={detail.recordUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileJson size={14} />}>Attempt record</Button>
@@ -128,12 +131,14 @@ function InspectionBody({ dataset, results, band, estimator, configuration, task
               : 'This attempt returned no usable findings. Its failure and usage remain in the evidence.'}</Alert>}
             <Accordion variant="separated">{detail.items.map((item, index) => <Accordion.Item key={item.id} value={item.id}>
               <Accordion.Control><Group gap="xs" mb={6}><Text size="xs" c="dimmed" fw={560}>Finding {index + 1}</Text><Outcome assignment={item.assignment} /></Group>
-                <Text size="sm" className="finding-claim"><Rich text={item.claim} /></Text></Accordion.Control>
-              <Accordion.Panel><Stack gap="sm"><Text size="xs" c="dimmed">{item.file}{item.line === null ? '' : `:${item.line}`}</Text><Text size="sm"><Rich text={item.consequence} /></Text>
-                <Paper p="sm" className="evidence-note"><Text size="xs" fw={640} mb={5}>Current assessment</Text><Text size="sm"><Rich text={item.notes} /></Text></Paper>
+                <Text size="sm" className="finding-claim"><Rich text={firstLine(item.claim)} /></Text></Accordion.Control>
+              <Accordion.Panel><Stack gap="sm"><Text size="xs" c="dimmed">{item.file}{item.line === null ? '' : `:${item.line}`}</Text>
+                {item.claim.trim().includes('\n') && <Text size="sm" component="div"><Markdown text={item.claim} /></Text>}
+                <Text size="sm" component="div"><Markdown text={item.consequence} /></Text>
+                <Paper p="sm" className="evidence-note"><Text size="xs" fw={640} mb={5}>Current assessment</Text><Text size="sm" component="div"><Markdown text={item.notes} /></Text></Paper>
                 {item.claims?.map(claim => <Paper withBorder p="sm" key={claim.id}><Stack gap="xs">
                   <Group gap={6}><Outcome assignment={claim.assignment} /></Group>
-                  {claim.quote.trim() !== item.claim.trim() && <Text size="sm"><Rich text={claim.quote} /></Text>}<Text size="sm"><Rich text={claim.notes} /></Text>
+                  {claim.quote.trim() !== item.claim.trim() && <Text size="sm" component="div"><Markdown text={claim.quote} /></Text>}<Text size="sm" component="div"><Markdown text={claim.notes} /></Text>
                   {claim.knownProblems?.map(fact => <Text size="xs" key={fact.familyId}>{familyName(fact.familyId)}: says what goes wrong, {fact.saysWhat}; identifies the cause, {fact.identifiesCause}. {fact.reason}</Text>)}
                   {claim.preExistingProblems?.map(fact => <Text size="xs" key={fact.problemId}>Pre-existing problem {fact.problemId}: says what goes wrong, {fact.saysWhat}; identifies the cause, {fact.identifiesCause}. {fact.reason}</Text>)}
                   {claim.preExistingCandidateId && <Text size="xs">Pre-existing-problem candidate {claim.preExistingCandidateId} awaits admission and does not count as raised.</Text>}
@@ -244,3 +249,8 @@ function ReviewSummary({ attempt }: { attempt: Attempt }) {
 }
 
 const attemptName = (attempt: Attempt) => attempt.label.replace(/^att-0*/, 'attempt ')
+
+const HashLine = ({ label, value }: { label: string; value: string }) => <Group gap={6} wrap="nowrap">
+  <Text size="xs" c="dimmed">{label}</Text><Code title={value}>{value.length > 16 ? `${value.slice(0, 12)}…` : value}</Code>
+  <CopyButton value={value}>{({ copied, copy }) => <Button variant="subtle" size="compact-xs" onClick={copy}>{copied ? 'Copied' : 'Copy'}</Button>}</CopyButton>
+</Group>
