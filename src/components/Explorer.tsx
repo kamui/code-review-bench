@@ -208,7 +208,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
             }} data={(narrow ? views.filter(item => item.value === 'overview' || item.value === 'setups') : views).map(item => ({ value: item.value,
               label: <span className="switch-label"><item.icon size={15} strokeWidth={1.9} aria-hidden="true" />{item.label}</span> }))} />
             {narrow && <span className="view-note">A wider screen adds By method, By model and Frontier.</span>}
-            {chartView !== 'overview' && <div className="axis-switch"><span className="control-label" id="axis-label">Plot against</span><SegmentedControl aria-label="Compare detection against" size="xs" value={axis} onChange={value => {
+            {chartView !== 'overview' && chartView !== 'models' && <div className="axis-switch"><span className="control-label" id="axis-label">Plot against</span><SegmentedControl aria-label="Compare detection against" size="xs" value={axis} onChange={value => {
               const next = axes.find(item => item === value)
               if (next) onSearch({ axis: unlessDefault(next, 'cost') }, 'scorecard')
             }} data={[{ label: 'Cost', value: 'cost' }, { label: 'Tokens', value: 'tokens' }, { label: 'Refuted claims', value: 'refuted' }, { label: 'Time', value: 'time' }]} /></div>}
@@ -372,7 +372,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
       </section>}
       <footer className="site-footer"><span>code<span className="brand-review">review</span>bench.</span><Anchor href="https://deepswe.datacurve.ai/" target="_blank" rel="noreferrer" size="xs" c="dimmed">Inspired by DeepSWE</Anchor></footer>
     </Container>
-    <EvidenceDrawer dataset={dataset} results={summaries} band={band} inspection={inspection} now={now} onChange={inspect()} />
+    <EvidenceDrawer dataset={dataset} results={summaries} band={band} estimator={estimator} inspection={inspection} now={now} onChange={inspect()} />
   </>
 }
 

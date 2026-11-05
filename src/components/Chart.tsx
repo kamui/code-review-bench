@@ -102,8 +102,8 @@ export function Chart({ summaries, detection, matching, axis, view, showAllLabel
         : view === 'tradeoff' ? <Scatter points={measured} dimensions={dimensions} axis={axis} scale={scale} frontier={frontier} showAllLabels={showAllLabels}
           hovered={hovered?.id ?? null} onSelect={onSelect} interactions={interactions} />
         : view === 'skills' ? <MethodPanels points={measured} axis={axis} scale={scale} onSelect={onSelect} interactions={interactions} />
-          : <Models points={points} notes={notes} measure={measure} axis={axis} onSelect={onSelect} interactions={interactions} />}
-    {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={measure} axis={axis} left={hovered.left} top={hovered.top} />}
+          : <Models points={points} notes={notes} measure={measure} onSelect={onSelect} interactions={interactions} />}
+    {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={measure} axis={view === 'models' ? null : axis} left={hovered.left} top={hovered.top} />}
     {points.length > 0 && view !== 'models' && <ul className="chart-keys" aria-label="Chart key">
       {view === 'setups' && <li><span className="whisker-key" aria-hidden="true" />Range with any one PR left out</li>}
       {view === 'skills' && <li><span className="context-key" aria-hidden="true" />Other selected setups</li>}
@@ -331,7 +331,7 @@ function PointMark({ configuration, x, y, hollow }: { configuration: Configurati
     : <path d={`M${x},${y - 8}L${x + 8},${y}L${x},${y + 8}L${x - 8},${y}Z`} {...props} />
 }
 
-function Models({ points, notes, measure, axis, onSelect, interactions }: { points: Point[]; notes: Note[]; measure: string; axis: Axis; onSelect: (id: string) => void; interactions: Interactions }) {
+function Models({ points, notes, measure, onSelect, interactions }: { points: Point[]; notes: Note[]; measure: string; onSelect: (id: string) => void; interactions: Interactions }) {
   const groups = new Map<string, Point[]>()
   for (const point of points) {
     const { model, effort } = setupParts(point.summary.configuration)
@@ -359,9 +359,9 @@ function Models({ points, notes, measure, axis, onSelect, interactions }: { poin
         <span className="model-entries">{[...members].sort((left, right) => left.summary.configuration.short.localeCompare(right.summary.configuration.short)).map(point => {
           const { configuration } = point.summary
           return <button type="button" key={configuration.id} className="model-entry" onClick={() => onSelect(configuration.id)} {...interactions(configuration.id)}
-            aria-label={`${configuration.short}: ${percent(point.summary.detection)}, ${axisLabels[axis]} ${formatMetric(axis, point.metric, configuration, point.bounded)}. Inspect evidence`}>
+            aria-label={`${configuration.short}: ${percent(point.summary.detection)}. Inspect evidence`}>
             <Mark configuration={configuration} size={10} /><span>{setupParts(configuration).method}</span>
-            <strong>{percent(point.summary.detection)}<NoteMark summary={point.summary} notes={notes} /></strong><span className="model-metric">{formatMetric(axis, point.metric, configuration, point.bounded)}</span>
+            <strong>{percent(point.summary.detection)}<NoteMark summary={point.summary} notes={notes} /></strong>
           </button>
         })}</span>
       </div>
@@ -369,14 +369,14 @@ function Models({ points, notes, measure, axis, onSelect, interactions }: { poin
   </div>
 }
 
-function Tooltip({ point, measure, axis, left, top }: { point: Point; measure: string; axis: Axis; left: number; top: number }) {
+function Tooltip({ point, measure, axis, left, top }: { point: Point; measure: string; axis: Axis | null; left: number; top: number }) {
   const { summary, range } = point
   const row = (key: string, label: string, value: ReactNode, note?: ReactNode) =>
     <span key={key} className="tip-row"><span className="tip-label">{label}</span><b>{value}</b>{note && <span className="tip-note">{note}</span>}</span>
   const lines: ReactNode[] = [
     row('score', measure, percent(summary.detection), range && `${percent(range.low)} to ${percent(range.high)} leaving one PR out; sensitivity, not a confidence interval`),
     summary.detectionNote && <span key="zero-credit" className="tip-note">{summary.detectionNote}</span>,
-    row('metric', axisLabels[axis], formatMetric(axis, point.metric, summary.configuration, point.bounded), (point.metric === null || point.bounded) && summary.reasons[axis]),
+    axis && row('metric', axisLabels[axis], formatMetric(axis, point.metric, summary.configuration, point.bounded), (point.metric === null || point.bounded) && summary.reasons[axis]),
     axis === 'time' && summary.time && <span key="time" className="tip-note">Mean {duration(summary.time.mean)} · middle 50% {duration(summary.time.q1)} to {duration(summary.time.q3)} · {summary.time.reviews} timed trials</span>,
     row('count', 'Trials admitted', `${summary.admitted} of ${summary.trials}`, `${summary.tasks} PRs · ${summary.completed} complete`),
     !summary.configuration.builtin && row('skill', 'Skill', skillReleaseLabel([summary.configuration])),

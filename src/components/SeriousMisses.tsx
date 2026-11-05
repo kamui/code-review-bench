@@ -79,13 +79,12 @@ export function SeriousMisses({ dataset, configurations, cards, selection, onIns
             const task = dataset.tasks.find(item => item.id === row.taskId)
             if (!task) return null
             return [<Table.Tr key={task.id} className="miss-pr">
-              <Table.Th scope="rowgroup" className="miss-sticky">
+              <Table.Th scope="rowgroup" colSpan={shown.length + 1} className="miss-band"><div className="miss-band-body">
                 <button type="button" className="text-button task-name" onClick={() => onInspect({ kind: 'task', id: task.id })}>{task.repo}<span>#{task.pr}</span></button>
-                <Group gap={4} mt={4}>{[...task.profile.changeKinds, ...task.profile.technologies].map(tag => <Tag key={tag}>{tag}</Tag>)}</Group>
-                <Text size="xs" c="dimmed" mt={4} fw={400}>{task.shape}</Text>
-                <Text size="xs" mt={2} fw={560}>{problems(row.serious)}</Text>
-              </Table.Th>
-              {shown.map((column, index) => <Table.Td key={column.configuration.id} className={highlight(index)} onMouseEnter={enter(index)} />)}
+                {[...task.profile.changeKinds, ...task.profile.technologies].map(tag => <Tag key={tag}>{tag}</Tag>)}
+                <span className="miss-band-shape">{task.shape}</span>
+                <span className="miss-band-count">{problems(row.serious)}</span>
+              </div></Table.Th>
             </Table.Tr>,
             ...row.problems.map(problem => {
               const family = task.families.find(item => item.id === problem.familyId)

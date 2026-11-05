@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react'
 import { Accordion, Alert, Badge, Button, Code, Drawer, Group, Loader, Paper, Select, Stack, Tabs, Text, Title } from '@mantine/core'
-import { ExternalLink, FileText, Download } from 'lucide-react'
+import { Download, ExternalLink, FileCheck2, FileClock, FileCode, FileJson, FileSearch, FileText } from 'lucide-react'
 import { SetupName, setupLabel } from './Chart'
 import { Disclosure, humanize, Rich, Tag, Value } from './Reading'
 import { fetchDetail, skillReleaseLabel } from '../lib/data'
 import type { Attempt, AttemptDetail, Configuration, Dataset, Task } from '../lib/data'
-import { bandLabels, compact, lowerFirst, money, share } from '../lib/metrics'
+import { bandLabels, compact, detectionLabel, duration, lowerFirst, money, perReview, reading, share } from '../lib/metrics'
 import { pendingCandidates, reviewFacts } from '../lib/scoring'
-import type { Band, Scorecard } from '../lib/scoring'
+import type { Band, Estimator, Scorecard } from '../lib/scoring'
 import { drawerTabs } from '../lib/view'
 import type { Inspection } from '../lib/view'
 
@@ -21,21 +21,21 @@ const controlText: Record<Task['control'], string> = {
 
 export type SetupResult = { configuration: Configuration; card: Scorecard }
 
-export function EvidenceDrawer({ dataset, results, band, inspection, now, onChange }: {
-  dataset: Dataset; results: SetupResult[]; band: Band; inspection: Inspection | null; now: Date; onChange: (inspection: Inspection | null) => void
+export function EvidenceDrawer({ dataset, results, band, estimator, inspection, now, onChange }: {
+  dataset: Dataset; results: SetupResult[]; band: Band; estimator: Estimator; inspection: Inspection | null; now: Date; onChange: (inspection: Inspection | null) => void
 }) {
   const configuration = inspection?.kind === 'configuration' ? dataset.configurations.find(item => item.id === inspection.id) : undefined
   const task = inspection?.kind === 'task' ? dataset.tasks.find(item => item.id === inspection.id) : undefined
   return <Drawer opened={inspection !== null} onClose={() => onChange(null)} position="right" size="xl"
     title={task ? `${task.repo} #${task.pr}` : configuration ? <SetupName configuration={configuration} /> : 'Evidence'}
     classNames={{ title: 'drawer-title' }}>
-    {inspection && <InspectionBody key={`${inspection.kind}:${inspection.id}`} dataset={dataset} results={results} band={band}
+    {inspection && <InspectionBody key={`${inspection.kind}:${inspection.id}`} dataset={dataset} results={results} band={band} estimator={estimator}
       configuration={configuration} task={task} inspection={inspection} onChange={onChange} now={now} />}
   </Drawer>
 }
 
-function InspectionBody({ dataset, results, band, configuration, task, inspection, onChange, now }: {
-  dataset: Dataset; results: SetupResult[]; band: Band; configuration?: Configuration; task?: Task; inspection: Inspection; onChange: (inspection: Inspection) => void; now: Date
+function InspectionBody({ dataset, results, band, estimator, configuration, task, inspection, onChange, now }: {
+  dataset: Dataset; results: SetupResult[]; band: Band; estimator: Estimator; configuration?: Configuration; task?: Task; inspection: Inspection; onChange: (inspection: Inspection) => void; now: Date
 }) {
   const outcomes = dataset.outcomes.filter(outcome => configuration ? outcome.configurationId === configuration.id : outcome.taskId === task?.id)
   const allowed = new Set(outcomes.flatMap(outcome => outcome.attemptIds))
@@ -74,19 +74,20 @@ function InspectionBody({ dataset, results, band, configuration, task, inspectio
   const familyName = (id: string) => currentTask?.families.find(family => family.id === id)?.shortLabel ?? id
   const novel = currentTask ? pendingCandidates(dataset, [currentTask.id], now) : []
   return <Stack gap="lg">
-    {configuration && <>{!configuration.builtin && <Group gap="xs"><Badge variant="light" radius="sm">{skillReleaseLabel([configuration])}</Badge></Group>}<Disclosure title="Run notes"><Text size="sm" className="disclosure-body">{configuration.note}</Text></Disclosure>
+    {configuration && <><SetupResults result={results.find(item => item.configuration.id === configuration.id)} band={band} estimator={estimator} />
+      {!configuration.builtin && <Group gap="xs"><Badge variant="light" radius="sm">{skillReleaseLabel([configuration])}</Badge></Group>}<Disclosure title="Run notes"><Text size="sm" className="disclosure-body">{configuration.note}</Text></Disclosure>
       {Array.from(new Set(configuration.skillReleases.map(release => release.provenanceUrl))).map(url => <Button key={url} component="a" href={url} target="_blank" rel="noreferrer" variant="subtle" size="xs">Skill release provenance</Button>)}
       {configuration.reviewChange && <Button component="a" href={configuration.reviewChange.url} target="_blank" rel="noreferrer" variant="subtle" size="xs">Review change: {configuration.reviewChange.summary}</Button>}
       {configuration.skillProvenanceUrl && <Button component="a" href={configuration.skillProvenanceUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Skill commits & timestamps</Button>}
-      <Paper withBorder p="md" radius="md"><Text size="sm" fw={640} mb={5}>Comparison conditions</Text>
-        <dl className="conditions">{configuration.conditions.map(condition => <div key={condition.name}><dt>{condition.name}</dt><dd>{condition.values.map(conditionValue).join(', ')}</dd></div>)}</dl></Paper></>}
+      <Disclosure title="Comparison conditions">
+        <dl className="conditions">{configuration.conditions.map(condition => <div key={condition.name}><dt>{condition.name}</dt><dd>{condition.values.map(conditionValue).join(', ')}</dd></div>)}</dl></Disclosure></>}
     {task && <><Text>{task.shape}</Text><Group gap="xs">{task.profile.concerns.map(concern => <Tag key={concern}>{concern}</Tag>)}</Group>
       <Group><Button component="a" href={task.sourceUrl} target="_blank" rel="noreferrer" variant="default" size="xs" leftSection={<ExternalLink size={14} />}>Original PR</Button>
         <Button component="a" href={task.packetUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileText size={14} />}>Review packet</Button></Group>
       <Text size="xs" c="dimmed">Revision {task.head.slice(0, 10)}. Each reference shows its own eligibility and impact state.</Text>
       <TaskResults task={task} results={results} band={band} onOpen={attemptId => onChange({ ...inspection, attemptId, tab: 'reviews' })} /></>}
     <Tabs className="drawer-tabs" value={tab} onChange={value => { const next = drawerTabs.find(item => item === value); if (next) onChange({ ...inspection, tab: next }) }}>
-      <Tabs.List><Tabs.Tab value="reviews">Reviews ({attempts.length})</Tabs.Tab><Tabs.Tab value="references">References and candidates</Tabs.Tab><Tabs.Tab value="coverage">Coverage & failures</Tabs.Tab></Tabs.List>
+      <Tabs.List><Tabs.Tab value="reviews">Reviews ({attempts.length})</Tabs.Tab><Tabs.Tab value="references">References and candidates</Tabs.Tab><Tabs.Tab value="coverage">Coverage and failures</Tabs.Tab></Tabs.List>
       <Tabs.Panel value="reviews" pt="lg">
         <Stack gap="md">
           <Select label="Review attempt" description={currentGroup} searchable value={attemptId} onChange={value => onChange({ ...inspection, attemptId: value ?? undefined })}
@@ -103,12 +104,12 @@ function InspectionBody({ dataset, results, band, configuration, task, inspectio
             {detail.record.observed.skill_tree && <><Text size="xs" c="dimmed">Skill tree revision</Text><Code block>{detail.record.observed.skill_tree}</Code></>}
             <Text size="xs" c="dimmed">Subagents: {detail.record.observed.subagent_count} · Client-reported sandbox: {detail.record.observed.sandbox ?? 'Not reported'}</Text>
           </Stack></Paper><Group gap="xs">
-            <Button component="a" href={detail.recordUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileText size={14} />}>Attempt record</Button>
+            <Button component="a" href={detail.recordUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileJson size={14} />}>Attempt record</Button>
             {detail.billingCorrectionUrl && <Button component="a" href={detail.billingCorrectionUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Billing correction</Button>}
-            {detail.usageCorrectionUrl && <Button component="a" href={detail.usageCorrectionUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileText size={14} />}>Usage lower bound</Button>}
-            {detail.normalizedUrl && <Button component="a" href={detail.normalizedUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileText size={14} />}>Review JSON</Button>}
-            {detail.assessment.receiptUrl && <Button component="a" href={detail.assessment.receiptUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileText size={14} />}>Current assessment receipt</Button>}
-            {detail.assessment.verdictsUrl && <Button component="a" href={detail.assessment.verdictsUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileText size={14} />}>Assessor verdicts</Button>}
+            {detail.usageCorrectionUrl && <Button component="a" href={detail.usageCorrectionUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileClock size={14} />}>Usage lower bound</Button>}
+            {detail.normalizedUrl && <Button component="a" href={detail.normalizedUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileCode size={14} />}>Review JSON</Button>}
+            {detail.assessment.receiptUrl && <Button component="a" href={detail.assessment.receiptUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileCheck2 size={14} />}>Current assessment receipt</Button>}
+            {detail.assessment.verdictsUrl && <Button component="a" href={detail.assessment.verdictsUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileSearch size={14} />}>Assessor verdicts</Button>}
             {detail.archiveUrl && <Button component="a" href={detail.archiveUrl} download variant="subtle" size="xs" leftSection={<Download size={14} />}>Raw transcript</Button>}
           </Group>
             {!detail.archiveUrl && <Text size="xs" c="dimmed">Transcript archive: {detail.archiveStatus}. No verified download is available.</Text>}
@@ -152,7 +153,7 @@ function InspectionBody({ dataset, results, band, configuration, task, inspectio
         {novel.length > 0 && <><Title order={5}>Candidates awaiting a ruling</Title>
           {novel.map(candidate => <Paper withBorder p="sm" key={candidate.id}><Text size="xs" c="dimmed">{candidate.id} · recorded {candidate.recordedAt.slice(0, 10)}, {candidate.ageDays} {candidate.ageDays === 1 ? 'day' : 'days'} ago</Text>
             <Text size="sm">{candidate.claim}</Text><Text size="sm"><strong>Evidence limits: </strong>{candidate.limits}</Text><Text size="sm"><strong>Decision relevance: </strong>{candidate.relevance}</Text></Paper>)}</>}
-        <Button component="a" href={currentTask.registerUrl} target="_blank" rel="noreferrer" variant="light" size="xs">Open current reference records</Button>
+        <Group><Button component="a" href={currentTask.registerUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<ExternalLink size={14} />}>Open current reference records</Button></Group>
       </Stack>}</Tabs.Panel>
       <Tabs.Panel value="coverage" pt="lg"><Stack>
         <Text size="sm" c="dimmed">All attempts remain visible. Replacements do not erase failed attempts or their usage.</Text>
@@ -186,6 +187,19 @@ export function PreExistingCatalog({ task }: { task: Task }) {
       </Stack></Accordion.Panel>
     </Accordion.Item>)}</Accordion>
   </>
+}
+
+function SetupResults({ result, band, estimator }: { result?: SetupResult; band: Band; estimator: Estimator }) {
+  if (!result) return null
+  const { card, configuration } = result
+  const items = [
+    { label: detectionLabel({ band, estimator }), cell: share(card.detection[band][estimator], card.detection[band].zeroCredit.reason) },
+    { label: 'Problem claims per review', cell: perReview(card.reliability.problemClaimsPerReview) },
+    { label: 'Reviews with a refuted or unproven claim', cell: share(card.reliability.reviewsWithDoubt.refutedOrUnproven) },
+    { label: 'Cost per trial', cell: reading(card.cost.perTrial, value => `${money(value)}${configuration.billing === 'list-price-equivalent' ? '*' : ''}`) },
+    { label: 'Median time', cell: reading(card.time.summary, value => duration(value.median)) },
+  ]
+  return <dl className="setup-results">{items.map(item => <div key={item.label}><dt>{item.label}</dt><dd><Value cell={item.cell} /></dd></div>)}</dl>
 }
 
 function TaskResults({ task, results, band, onOpen }: { task: Task; results: SetupResult[]; band: Band; onOpen: (attemptId: string) => void }) {

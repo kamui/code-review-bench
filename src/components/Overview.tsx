@@ -40,7 +40,7 @@ function headings(detection: DetectionView, claimsMax: number): Record<OverviewC
   return {
     setup: { title: 'Setup', short: 'Setup', measure: 'setup name', ascending: 'A to Z', descending: 'Z to A' },
     detection: { title: foundLabels[detection.band], note: estimatorLabels[detection.estimator], short: foundLabels[detection.band], measure: lowerFirst(detectionLabel(detection)), ascending: 'least first', descending: 'most first', ends: ['0%', '100%'] },
-    claims: { title: 'Claims per review', note: 'number: problems · bar: all true claims', short: 'Problem claims per review', measure: 'problem claims per review', ascending: 'fewest first', descending: 'most first', ends: ['0', String(claimsMax)] },
+    claims: { title: 'Problem claims per review', note: 'bar adds other true claims', short: 'Problem claims per review', measure: 'problem claims per review', ascending: 'fewest first', descending: 'most first', ends: ['0', String(claimsMax)] },
     doubt: { title: 'Refuted or unproven', note: 'share of reviews', short: 'Refuted or unproven', hint: doubtMeaning, measure: 'share of reviews with a refuted or unproven claim', ascending: 'fewest first', descending: 'most first', ends: ['0%', '100%'] },
     cost: { title: 'Cost per trial', short: 'Cost per trial', measure: 'cost per scheduled trial', ascending: 'lowest first', descending: 'highest first', note: 'log scale', ends: ['$0.001', '$10'] },
     time: { title: 'Median time', short: 'Median time', measure: 'median completed-trial time', ascending: 'shortest first', descending: 'longest first', note: 'log scale', ends: ['20 s', '30 min'] },
@@ -152,7 +152,7 @@ export function Overview({ summaries, detection, sort, onSort, onSelect }: {
     </div>
     {tipState && <div className="chart-tip" role="presentation" style={{ left: tipState.left, top: tipState.top }}>{tipState.text}</div>}
     <ChartGuide><div className="plot-caption">
-      <span>Each column has its own scale; a header sorts by that column. Problems found uses the impact band and average chosen above. Claims per review: the number counts problem claims; the bar stacks every true claim label from 0. Refuted, unproven and unresolved claims are not drawn there.</span>
+      <span>Each column has its own scale; a header sorts by that column. Problems found uses the impact band and average chosen above. Problem claims per review: the number counts problem claims, shown in indigo; the bar continues with the other true claims, in gray and sand. Refuted, unproven and unresolved claims are not drawn there.</span>
       <span>Refuted or unproven: {doubtMeaning} An unproven claim is not shown to be false.</span>
       <span>Cost and time use log scales from a marked floor; a value below the floor sits on it. Cost adds every attempt, retries included, per scheduled trial. Time covers completed trials only.</span>
       {rows.some(summary => summary.configuration.billing === 'list-price-equivalent') && <span>* Subscription usage valued at token list prices, not a bill or quota measurement.</span>}
