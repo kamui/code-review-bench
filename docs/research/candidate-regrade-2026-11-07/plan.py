@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Plan the regrade of the batches the filing of round candidate-rulings-2026-11-07 (receipt cohort-rebuild.v19.md) made stale.
 
+Version 2 (*.v2.json) plans the same 35 batches after the owner approved revised GT-p8 reference text
+(docs/research/candidate-rulings-2026-11-07/p-hono-5067/wording.approved.md), which changed the Hono batches' inputs;
+the *.v1.json files were written before it and are not run.
+
     BENCH_RUNTIME_STORE=<store> python3 -I docs/research/candidate-regrade-2026-11-07/plan.py
 
 Run from the repository root after `bench-tools grade invalidate`. This is the node regrade's plan.py with this
@@ -57,7 +61,7 @@ def earlier_queues():
 
 
 def main():
-    full = HERE / "source-plan.full.v1.json"
+    full = HERE / "source-plan.full.v2.json"
     if full.exists():
         raise SystemExit(f"{full.name} exists")
     subprocess.run([str(TOOL), "methodology", "--out", str(full)], cwd=ROOT, check=True)
@@ -84,8 +88,8 @@ def main():
         part["reviews"] = [review for review in plan["reviews"] if (review["run"], review["target"]) in wanted]
         targets = {target for _, target in keys}
         part["sharedClaimItems"] = [item for item in plan["sharedClaimItems"] if item["target"] in targets]
-        write(HERE / f"source-plan.{name}.v1.json", part)
-        write(HERE / f"execution-plan.{name}.v1.json", {
+        write(HERE / f"source-plan.{name}.v2.json", part)
+        write(HERE / f"execution-plan.{name}.v2.json", {
             "workspaceRoot": f".local/candidate-regrade/{name}/workspaces",
             "archiveRoot": f"bench/regrading/candidate-regrade-2026-11-07-{name}",
             "cacheRoot": ".local/regrade-v5-2/dependency-cache",

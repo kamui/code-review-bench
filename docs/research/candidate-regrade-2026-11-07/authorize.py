@@ -65,7 +65,7 @@ def main():
     runtimes = json.loads(subprocess.run([str(ROOT / "bench/tools/bench-tools"), "runtime", "pin"], cwd=ROOT, capture_output=True, text=True, check=True).stdout)
     queues = {}
     for name, replacement in QUEUES.items():
-        path = HERE / f"execution-plan.{name}.v1.json"
+        path = HERE / f"execution-plan.{name}.v2.json"
         if path.exists():
             order = json.loads(path.read_text())["order"]
             queues[name] = (replacement, order, opus_price({(batch["run"], batch["target"]) for batch in order}))
@@ -83,8 +83,8 @@ def main():
                        "selection": {"speaker": "user", "text": "1", "context": "Approval of 2026-11-03 for the rule-version-5 regrade, kept for every regrade since: grader Claude Opus 5.5 at high effort."},
                        "client": {"speaker": "user", "text": "Pin the client at the current local cli version when grading is started for that batch",
                                   "context": f"Answer on 2026-10-07, kept for every regrade since. Claude Code {CLIENT}, the version the rule-version-5 regrade pinned on this host, comes first on the driver's PATH."}},
-            "sourcePlan": pin((HERE / f"source-plan.{name}.v1.json").relative_to(ROOT)),
-            "executionPlan": pin((HERE / f"execution-plan.{name}.v1.json").relative_to(ROOT)),
+            "sourcePlan": pin((HERE / f"source-plan.{name}.v2.json").relative_to(ROOT)),
+            "executionPlan": pin((HERE / f"execution-plan.{name}.v2.json").relative_to(ROOT)),
             "runtimes": runtimes,
             "runnerDeviations": [pin(path) for path in PINNED],
             "quotaStopPercent": 90,
@@ -94,7 +94,7 @@ def main():
         }
         if replacement:
             value["cacheReplacements"] = pin(replacement)
-        (HERE / f"authorization.{name}.v1.json").write_text(json.dumps(value, indent=2) + "\n")
+        (HERE / f"authorization.{name}.v2.json").write_text(json.dumps(value, indent=2) + "\n")
         print(f"{name}: {len(order)} batches, cap ${cap:.2f} (Opus price ${price:.2f})")
     print(f"expected ${expected:.2f} at the latest Opus grades' list prices; cap ${TOTAL:.2f}")
 
