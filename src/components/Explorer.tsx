@@ -92,8 +92,8 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
   const detection = { band, estimator }
   const view: MainView = search.chart ?? 'overview'
   const narrow = useMediaQuery('(max-width: 700px)') ?? false
-  const views: { label: string; short: string; value: MainView; icon: LucideIcon }[] = [{ label: 'Overview', short: 'Overview', value: 'overview', icon: ChartBarStacked },
-    { label: 'By method', short: 'Methods', value: 'skills', icon: LayoutGrid }, { label: 'By setup', short: 'Setups', value: 'setups', icon: ChartNoAxesGantt }, { label: 'By model', short: 'Models', value: 'models', icon: Cpu }]
+  const views: { label: string; value: MainView; icon: LucideIcon }[] = [{ label: 'Overview', value: 'overview', icon: ChartBarStacked },
+    { label: 'By method', value: 'skills', icon: LayoutGrid }, { label: 'By setup', value: 'setups', icon: ChartNoAxesGantt }, { label: 'By model', value: 'models', icon: Cpu }]
   const plotAgainst = (value: string | null) => {
     const next = axes.find(item => item === value)
     if (next) onSearch({ axis: unlessDefault(next, 'cost') }, 'scorecard')
@@ -222,7 +222,7 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
               const next = views.find(item => item.value === value)
               if (next) onSearch({ chart: unlessDefault(next.value, 'overview') }, 'scorecard')
             }} data={views.map(item => ({ value: item.value,
-              label: narrow ? item.short : <span className="switch-label"><item.icon size={15} strokeWidth={1.9} aria-hidden="true" />{item.label}</span> }))} />
+              label: narrow ? item.label : <span className="switch-label"><item.icon size={15} strokeWidth={1.9} aria-hidden="true" />{item.label}</span> }))} />
             <Button variant="default" size="xs" className="filters-toggle" leftSection={<SlidersHorizontal size={14} aria-hidden="true" />} rightSection={<ChevronDown size={14} aria-hidden="true" />}
               aria-expanded={optionsOpen} onClick={() => setOptionsOpen(open => !open)}>Chart options · {bandLabels[band]} · {configurations.filter(item => selected.includes(item.id)).length} of {configurations.length} setups</Button>
             <div className="axis-switch" title={view === 'models' ? 'By model plots detection only' : undefined}><span className="control-label" id="axis-label">Plot against</span>{narrow
