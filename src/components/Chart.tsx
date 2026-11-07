@@ -93,7 +93,8 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
   const hover = (id: string, element: Element) => {
     const shell = element.closest('.plot-shell')?.getBoundingClientRect()
     const box = element.getBoundingClientRect()
-    if (shell) setHovered({ id, ...tipPlace(shell, box, 160, 260) })
+    const frame = element.closest('.leaderboard-paper, .measure-card')?.getBoundingClientRect()
+    if (shell) setHovered({ id, ...tipPlace(shell, box, 160, 260, window.innerHeight, frame?.top ?? shell.top) })
     linked?.point(id)
   }
   const unhover = () => { setHovered(null); linked?.point(null) }
@@ -157,7 +158,14 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
           <span className={stripValue(secondText)} data-label={shortAxis[pair]}>{secondText}</span>
           <span className="strip-low" data-label={`Lowest ${lowerFirst(shortAxis[axis])}`}>{low && <><span className="strip-low-model">{lowModel}</span><span className="strip-low-value">{lowText}</span><span className="strip-low-found">{percent(low.y, 0)} found</span></>}</span></button></li>
       })}</ul></div>}
-    {points.length > 0 && view !== 'models' && (view !== 'tradeoff' || bounded) && <ul className="chart-keys" aria-label="Chart key">
+    {view === 'tradeoff' && points.length > 0 && <ul className="chart-keys twin-key" aria-label="Chart key">
+      <li><Mark configuration={{ method: '', reviewEdition: '', builtin: true }} size={10} />Built-in reviewer</li>
+      <li><Mark configuration={{ method: '', reviewEdition: '', builtin: false }} size={10} />Skill</li>
+      {bounded && <li><span className="bound-key" aria-hidden="true" />Lower bound</li>}
+      <li><span className="line-key" aria-hidden="true" />One method across models</li>
+      {summaries.some(summary => summary.configuration.experimental) && <li><span className="line-key dashed" aria-hidden="true" />Skill experiment</li>}
+    </ul>}
+    {points.length > 0 && view !== 'models' && view !== 'tradeoff' && <ul className="chart-keys" aria-label="Chart key">
       {view === 'setups' && <li><span className="whisker-key" aria-hidden="true" />Range with any one PR left out</li>}
       {view === 'setups' && frontier.size > 0 && <li><span className="frontier-tag">On frontier</span>No other setup finds more at a lower {lowerFirst(axisLabels[axis])}</li>}
       {view === 'skills' && <li><span className="context-key" aria-hidden="true" />Other selected setups</li>}
@@ -280,7 +288,7 @@ function Scatter({ points, dimensions, axis, scale, spotlight, marked, named, on
   const first = (point: Plotted) => point === markedPoint || spotlight !== null || !named || named.has(point.summary.configuration.id)
   const shown = ordered.filter(point => point !== markedPoint && !outside(point))
   const leading = width ? placeLabels([...(markedPoint ? [markedPoint] : []), ...shown.filter(first)].map(request), obstacles, bounds, width < 600 ? [12, 22] : [12, 24, 36, 48]) : []
-  const placed = width ? [...leading, ...placeLabels(shown.filter(point => !first(point)).map(request), [...obstacles, ...leading.map(label => label.box)], bounds, [12])] : []
+  const placed = width ? [...leading, ...placeLabels(shown.filter(point => !first(point)).map(request), [...obstacles, ...leading.map(label => label.box)], bounds, width < 600 ? [12] : [12, 22])] : []
   const labels = markedPoint && width && !placed.some(label => label.id === marked)
     ? [{ id: markedPoint.summary.configuration.id, x: px(markedPoint.x) + 12, y: py(markedPoint.y), anchor: 'start' as const, leader: false }, ...placed] : placed
   const xTicks = ticks(scale, width > 700)

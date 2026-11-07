@@ -67,6 +67,8 @@ export function heroCounts(dataset: Dataset) {
   const families = dataset.tasks.flatMap(task => task.families)
   return { tasks: dataset.tasks.length, problems: families.length, awaitingEligibility: families.filter(family => family.eligibility !== 'approved').length,
     methods: new Set(dataset.configurations.map(configuration => configuration.method)).size,
+    experiments: [...new Set(dataset.configurations.map(configuration => configuration.method))]
+      .filter(method => dataset.configurations.every(configuration => configuration.method !== method || configuration.experimental)).length,
     models: new Set(dataset.configurations.flatMap(configuration => configuration.models)).size }
 }
 

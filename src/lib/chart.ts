@@ -114,11 +114,11 @@ export function groupPaths<T extends { x: number; y: number }>(points: T[], key:
 
 export type TipPlace = { left: number; top: number; below: boolean }
 
-/** Places a tooltip over the mark, or under it when the mark is near the top of the shell or of the viewport and there is more room under it, kept inside the shell. */
-export function tipPlace(shell: DOMRect, mark: DOMRect, half = 160, headroom = 170, viewport = typeof window === 'undefined' ? Infinity : window.innerHeight): TipPlace {
+/** Places a tooltip over the mark, or under it when the mark is near the ceiling (the top of the clipping frame, or of the viewport) and there is more room under it, kept inside the shell's width. */
+export function tipPlace(shell: DOMRect, mark: DOMRect, half = 160, headroom = 170, viewport = typeof window === 'undefined' ? Infinity : window.innerHeight, ceiling = shell.top): TipPlace {
   const center = mark.left + mark.width / 2 - shell.left
   const left = Math.min(Math.max(center, half), Math.max(half, shell.width - half))
-  const above = mark.top - Math.max(shell.top, 0)
+  const above = mark.top - Math.max(ceiling, 0)
   const below = above < headroom && viewport - mark.bottom > above
   return { left, top: below ? mark.bottom - shell.top : mark.top - shell.top, below }
 }
