@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { Accordion, Alert, Badge, Button, Code, CopyButton, Drawer, Group, Loader, Paper, Select, Stack, Tabs, Text, Title } from '@mantine/core'
 import { Download, ExternalLink, FileCheck2, FileClock, FileCode, FileJson, FileSearch, FileText } from 'lucide-react'
-import { SetupName, setupLabel } from './Chart'
+import { reviewColor, SetupName, setupLabel } from './Chart'
 import { costText, Disclosure, firstLine, humanize, Markdown, Referenced, Rich, Tag, Value } from './Reading'
 import { fetchDetail, skillReleaseLabel } from '../lib/data'
 import type { Attempt, AttemptDetail, Configuration, Dataset, Task } from '../lib/data'
@@ -232,7 +232,7 @@ function TaskResults({ task, results, band, onOpen }: { task: Task; results: Set
       const first = row.trials.find(trial => trial.attemptId)?.attemptId
       const cell = share(row.bands[band].recall, row.bands[band].zeroCredit.reason)
       return <li key={configuration.id}><SetupName configuration={configuration} />
-        <span className="task-result-value"><Value cell={cell} />{typeof cell !== 'string' && cell.fraction !== undefined && <span className="cell-bar" aria-hidden="true"><span style={{ width: `${cell.fraction * 100}%` }} /></span>}</span>
+        <span className="task-result-value"><Value cell={cell} />{typeof cell !== 'string' && cell.fraction !== undefined && <span className="cell-bar" aria-hidden="true"><span style={{ width: `${cell.fraction * 100}%`, background: reviewColor(configuration) }} /></span>}</span>
         <span className="task-result-trials">{row.trials.filter(trial => trial.state === 'admitted').length} of {row.trials.length} trials admitted</span>
         {first && <Button variant="subtle" size="compact-xs" onClick={() => onOpen(first)}>Reviews</Button>}</li>
     })}</ul>
