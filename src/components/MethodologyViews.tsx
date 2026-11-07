@@ -146,14 +146,14 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
         <DataTable label="Claim outcomes per review" rows={rows} rowKey={key} minWidth={1300} columns={[setup,
           { label: 'Admitted / scheduled', value: row => `${row.card.delivery.admitted} / ${row.card.delivery.scheduled}` },
           { label: 'Assessed / admitted', value: row => `${row.card.reliability.assessed} / ${row.card.reliability.admitted}` },
-          { label: 'Items per review', value: row => perReview(row.card.reliability.itemsPerAdmittedReview) },
-          { label: 'Refuted per review', value: row => perReview(row.card.reliability.outcomes.refuted.perAdmittedReview) },
-          { label: 'Unproven per review', value: row => perReview(row.card.reliability.outcomes.unsupported.perAdmittedReview) },
-          { label: 'Unresolved per review', value: row => perReview(row.card.reliability.outcomes.unresolved.perAdmittedReview) },
-          { label: 'Reviews with a refuted claim', value: row => share(row.card.reliability.outcomes.refuted.reviewFraction) },
-          { label: 'Reviews with an unproven claim', value: row => share(row.card.reliability.outcomes.unsupported.reviewFraction) },
-          { label: 'Claims ruled out of scope', value: row => String(row.card.reliability.outcomes['scope-excluded'].distinct) },
-          { label: 'Repeated claims', value: row => String(row.card.reliability.duplicates) }, { label: 'Items with mixed outcomes', value: row => String(row.card.reliability.mixedItems) }]} />
+          { label: 'Per review, items', value: row => perReview(row.card.reliability.itemsPerAdmittedReview) },
+          { label: 'Per review, refuted', value: row => perReview(row.card.reliability.outcomes.refuted.perAdmittedReview) },
+          { label: 'Per review, unproven', value: row => perReview(row.card.reliability.outcomes.unsupported.perAdmittedReview) },
+          { label: 'Per review, unresolved', value: row => perReview(row.card.reliability.outcomes.unresolved.perAdmittedReview) },
+          { label: 'Reviews with a claim, refuted', value: row => share(row.card.reliability.outcomes.refuted.reviewFraction) },
+          { label: 'Reviews with a claim, unproven', value: row => share(row.card.reliability.outcomes.unsupported.reviewFraction) },
+          { label: 'Claims, out of scope', value: row => String(row.card.reliability.outcomes['scope-excluded'].distinct) },
+          { label: 'Claims, repeated', value: row => String(row.card.reliability.duplicates) }, { label: 'Items with mixed outcomes', value: row => String(row.card.reliability.mixedItems) }]} />
         <Text size="xs" c="dimmed" className="footnote">Claim counts are distinct claims in assessed admitted reviews. Repeated claims count extra occurrences; mixed items hold claims with different outcomes. Item counts measure volume, not reading time.</Text>
         <Title order={4}>Claim labels per review</Title>
         <ClaimLabels rows={rows.map(row => ({ id: key(row), configuration: row.configuration, rates: row.card.reliability.labelsPerAdmittedReview }))} />
@@ -281,7 +281,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
             {differences.length ? <ul className="reason-list">{differences.map(difference => <li key={difference.name}>{difference.name}: {difference.values.map(row => `${row.value} (${row.configuration.short})`).join(' against ')}</li>)}</ul>
               : <Text size="sm">The recorded client, effort, permissions and billing basis match.</Text>}
             <Text size="xs" c="dimmed" className="footnote">A difference between two setups includes these conditions; it does not isolate the review method or the model.</Text></div>
-          <Group justify="space-between"><Text size="xs" c="dimmed" className="footnote">Per-PR differences weight that PR's problems equally. Ties use a 0.0000001 percentage-point tolerance for floating-point arithmetic. This is not a significance threshold.</Text>
+          <Group justify="space-between"><Text size="xs" c="dimmed" className="footnote">Per-PR differences weight that PR's problems equally. A tie means the two values are equal up to rounding; it is not a significance test.</Text>
             <Switch size="xs" checked={showTables} onChange={event => setShowTables(event.currentTarget.checked)} label="Show per-PR tables" className="nowrap-switch" /></Group>
           {showTables && <><Table.ScrollContainer minWidth={800}><Table aria-label="Per-PR detection and repetition variation">
             <Table.Thead><Table.Tr><Table.Th>PR</Table.Th><Table.Th>References</Table.Th><Table.Th>A mean</Table.Th><Table.Th>B mean</Table.Th><Table.Th>A minus B</Table.Th><Table.Th>Individual repetitions</Table.Th></Table.Tr></Table.Thead>
