@@ -9,7 +9,7 @@ import type { Axis as ChartAxis, DetectionView, Reading, Summary } from '../lib/
 import type { Configuration } from '../lib/data'
 import { labelSegments, overviewFirstDirection, overviewOrder } from '../lib/scoring'
 import type { LabelSegment, Measure, OverviewColumn, Scorecard } from '../lib/scoring'
-import { axisLabels, Chart, Mark, reviewColor, SetupName, setupParts } from './Chart'
+import { axisLabels, Chart, Mark, pairedAxis, reviewColor, SetupName, setupParts } from './Chart'
 import { segmentLabels, trueSegments } from './ClaimLabels'
 import { VendorMark } from './VendorMark'
 import { costScaleNote, costText, Glossed, GuideItem, KeyTerms, Notes, notesFor, PeerBadge, Value } from './Reading'
@@ -141,7 +141,7 @@ export function Overview({ summaries, detection, axis, matching, basis, onSelect
   return <div className="overview" data-focusing={active ? '' : undefined} onMouseLeave={() => { setTip(null); setFocus(null) }}>
     <div className="measure-grid">
       <section className="measure-card lead-card" data-lead aria-labelledby="measure-lead">
-        <header className="measure-head"><div><h3 id="measure-lead">{foundLabels[detection.band]} against {pairedLabels[axis]} and {pairedLabels[axis === 'doubt' ? 'cost' : 'doubt']}</h3>
+        <header className="measure-head"><div><h3 id="measure-lead">{foundLabels[detection.band]} against {pairedLabels[axis]} and {pairedLabels[pairedAxis(axis)]}</h3>
           <p className="lead-about">Each setup sits at the same height in both panels; up and left is better. <span className="lead-scope">{[`${basis.prs} PRs`,
             detection.band === 'all' ? `${basis.known} known problems` : `${basis.problems} of ${basis.known} known problems are ${lowerFirst(bandLabels[detection.band])}`,
             basis.awaiting > 0 && `${basis.awaiting} awaiting a ruling`].filter(Boolean).join(' · ')}</span></p></div></header>

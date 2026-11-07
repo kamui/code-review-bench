@@ -36,6 +36,8 @@ export function SetupName({ configuration, mark = true }: { configuration: Confi
       {effort && <><span className="setup-sep setup-dot"> / </span>{effort}</>}</span></>}</span></span>
 }
 
+/** The second Overview panel: the refuted or unproven share, or cost when the first panel already measures refuted claims. */
+export const pairedAxis = (axis: Axis): Axis => axis === 'doubt' || axis === 'refuted' ? 'cost' : 'doubt'
 const shortAxis: Record<Axis, string> = { cost: 'Cost per trial', doubt: 'Refuted or unproven', refuted: 'Refuted per review', tokens: 'Output tokens', time: 'Median time' }
 export const axisLabels: Record<Axis, string> = {
   cost: 'Cost per trial', tokens: 'Output tokens per trial', refuted: 'Refuted claims per review on matched PRs', doubt: 'Reviews with a refuted or unproven claim', time: 'Median time',
@@ -121,7 +123,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
   }
   const methodLows = lowest(point => point.x)
   const named = new Set([...methodTops.values(), ...lowest(point => metricOf(point.summary, 'cost')).values()].map(point => point.summary.configuration.id))
-  const pair: Axis = axis === 'doubt' ? 'cost' : 'doubt'
+  const pair = pairedAxis(axis)
   const plotted = (on: Axis): Plotted[] => points.flatMap(point => {
     const metric = metricOf(point.summary, on)
     return metric === null ? [] : [{ ...point, metric, bounded: boundedOn(point.summary, on), x: metric, y: point.summary.detection ?? 0 }]
@@ -301,7 +303,7 @@ function Scatter({ points, dimensions, axis, scale, spotlight, marked, named, on
   const first = (point: Plotted) => point === markedPoint || spotlight !== null || !named || named.has(point.summary.configuration.id)
   const shown = ordered.filter(point => point !== markedPoint && !outside(point))
   const leading = width ? placeLabels([...(markedPoint ? [markedPoint] : []), ...shown.filter(first)].map(request), obstacles, bounds, width < 600 ? [12, 22] : [12, 24, 36, 48]) : []
-  const placed = width ? [...leading, ...placeLabels(shown.filter(point => !first(point)).map(request), [...obstacles, ...leading.map(label => label.box)], bounds, width < 600 ? [12] : [12, 22])] : []
+  const placed = width ? [...leading, ...placeLabels(shown.filter(point => !first(point)).map(request), [...obstacles, ...leading.map(label => label.box)], bounds, width < 600 ? [12, 20] : [12, 22, 34, 46])] : []
   const labels = markedPoint && width && !placed.some(label => label.id === marked)
     ? [{ id: markedPoint.summary.configuration.id, x: sx(markedPoint) + 12, y: py(markedPoint.y), anchor: 'start' as const, leader: false }, ...placed] : placed
   const xTicks = ticks(scale, width > 700)
