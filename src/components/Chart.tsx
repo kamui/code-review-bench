@@ -330,7 +330,7 @@ function Scatter({ points, dimensions, axis, scale, spotlight, marked, named, on
           className={label.id === marked ? 'point-label marked' : 'point-label'}>{labelText(point.summary.configuration)}</text>
       })}
     </svg>}
-    <span className="better-hint" style={{ left: plot.left + 10, top: plot.top + 8 }}><ArrowUpLeft size={13} aria-hidden="true" />Higher detection, {axis === 'doubt' ? 'fewer' : 'lower'} {lowerFirst(axisLabels[axis])}</span>
+    <span className="better-hint" style={{ left: plot.left + 10, top: plot.top + 8 }}><ArrowUpLeft size={13} aria-hidden="true" />Higher detection, {axis === 'doubt' ? 'fewer' : 'lower'} {lowerFirst((width < 600 ? shortAxis : axisLabels)[axis])}</span>
   </div>
 }
 

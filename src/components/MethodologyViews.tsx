@@ -243,7 +243,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
       <Tabs.Panel value="candidates" ><Stack>
         <TabIntro lede="Problems that reviews reported but that are not yet references, waiting for a human ruling.">A candidate is a reported problem that is not yet a reference. Only a saved human ruling makes it one, and then every selected review of that PR is graded again. Until then it earns no credit, impact and reliability recommendations on its PR are withheld, and an audited control on its PR is provisional.</TabIntro>
         <Title order={4}>Novel candidates awaiting a ruling</Title>
-        {novel.length ? <Table.ScrollContainer minWidth={900}><Table aria-label="Novel candidates awaiting a ruling" className="data-table">
+        {novel.length ? <Table.ScrollContainer minWidth={900}><Table aria-label="Novel candidates awaiting a ruling" className="data-table prose-table">
           <Table.Thead><Table.Tr><Table.Th scope="col">PR</Table.Th><Table.Th scope="col">Age</Table.Th><Table.Th scope="col">Claim</Table.Th><Table.Th scope="col">Evidence limits</Table.Th><Table.Th scope="col">Decision relevance</Table.Th></Table.Tr></Table.Thead>
           <Table.Tbody>{novel.map(candidate => <Table.Tr key={candidate.id}><Table.Th scope="row"><button className="text-button" onClick={() => onInspect({ kind: 'task', id: candidate.taskId })}>{name(candidate.taskId)}</button></Table.Th>
             <Table.Td>{candidate.ageDays} {candidate.ageDays === 1 ? 'day' : 'days'}<Text size="xs" c="dimmed" className="nowrap">since {candidate.recordedAt.slice(0, 10)}</Text></Table.Td>
