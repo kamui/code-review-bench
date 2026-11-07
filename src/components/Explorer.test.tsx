@@ -139,7 +139,7 @@ describe('scorecard page on the fixture', () => {
       claim('tip', 'advisory', { nativeOutcome: 'suggestion', kind: 'known-cause' }), claim('wrong', 'refuted', { nativeOutcome: 'refuted' })])
     const shown = panels(build([subject], { labelled: [[subject, [labelled]]], older: [[subject, [claims(subject, [claim('old', 'advisory')])]]] }))
     expect(shown).toContain('Suggestion: relied on, not promised Suggestion: cause of a known problem Outside this change Refuted Unproven Unresolved '
-      + 'labelled 1.00 0.00 0.00 0.00 0.00 0.00 0.00 1.00 0.00 1.00 0.00 0.00')
+      + 'Problem, serious Problem, other material Problem, unknown impact labelled 1.00 0.00 0.00 0.00 0.00 0.00 0.00 1.00 0.00 1.00 0.00 0.00')
     expect(shown).toContain('older Unavailable 1 : 1 admitted review was graded before these labels.')
     for (const retired of ['Advisory claims', 'Non-material observations']) expect(shown).not.toContain(retired)
   })
