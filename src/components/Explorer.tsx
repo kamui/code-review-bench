@@ -24,7 +24,7 @@ export type Page = 'scorecard' | 'tasks' | 'methodology'
 type LoadState = { kind: 'loading' } | { kind: 'failed'; message: string } | { kind: 'ready'; dataset: Dataset }
 type MainView = (typeof chartViews)[number]
 const axisChoices: { label: string; value: Axis }[] = [{ label: 'Cost', value: 'cost' }, { label: 'Refuted or unproven', value: 'doubt' },
-  { label: 'Refuted claims', value: 'refuted' }, { label: 'Tokens', value: 'tokens' }, { label: 'Time', value: 'time' }]
+  { label: 'Refuted per review', value: 'refuted' }, { label: 'Tokens', value: 'tokens' }, { label: 'Time', value: 'time' }]
 type ResultsColumn = 'setup' | 'equalProblem' | 'equalPr' | 'seriousCaught' | 'repeatedMisses' | 'cost' | 'tokens' | 'doubt' | 'completed'
 const bands = ['all', ...impactBands] as const
 const controlLabels: Record<Task['control'], string> = { 'audited-clean': 'Audited clean control', provisional: 'Provisional control',
@@ -328,14 +328,14 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
           </div>
         </Paper>
         <Tabs defaultValue="catalog" className="task-tabs"><Tabs.List><Tabs.Tab value="catalog" leftSection={<Database size={15} />}>Task catalog</Tabs.Tab><Tabs.Tab value="coverage" leftSection={<Grid3x3 size={15} />}>Coverage gaps</Tabs.Tab></Tabs.List>
-          <Tabs.Panel value="catalog" pt="md"><Table.ScrollContainer minWidth={720}><Table verticalSpacing="md" className="task-table" highlightOnHover>
+          <Tabs.Panel value="catalog" pt="md"><Table.ScrollContainer minWidth={720}><Table verticalSpacing="sm" className="task-table" highlightOnHover>
             <Table.Thead><Table.Tr><Table.Th>Pull request</Table.Th><Table.Th>Profile</Table.Th><Table.Th>References</Table.Th><Table.Th>{foundLabels[band]}, mean of selected setups</Table.Th><Table.Th>In comparison</Table.Th><Table.Th /></Table.Tr></Table.Thead>
             <Table.Tbody>{candidates.map(task => {
               const approved = task.families.filter(family => family.eligibility === 'approved').length
               const pending = task.families.length - approved
               const open = (event: { stopPropagation: () => void }) => { event.stopPropagation(); inspect()({ kind: 'task', id: task.id }) }
               return <Table.Tr key={task.id} className="task-row" onClick={open}><Table.Td><button className="text-button task-name" onClick={open}>{task.repo}<span>#{task.pr}</span></button><TaskShape task={task} /></Table.Td>
-                <Table.Td data-label="Profile"><Group gap={5} maw={220}>{[...task.profile.technologies, ...task.profile.changeKinds].map(label => <Tag key={label}>{label}</Tag>)}</Group></Table.Td>
+                <Table.Td data-label="Profile"><Group gap={5} maw={220}>{task.profile.technologies.map(label => <Tag key={label} filled>{label}</Tag>)}{task.profile.changeKinds.map(label => <Tag key={label}>{label}</Tag>)}</Group></Table.Td>
                 <Table.Td data-label="References">{approved ? <Text size="sm">{plural(approved, 'problem')}</Text> : <Tag>{controlLabels[task.control]}</Tag>}
                   {pending > 0 && <Text size="xs" c="dimmed" mt={4}>{pending} awaiting eligibility</Text>}
                   {!!task.preExistingProblems?.length && <Text size="xs" c="dimmed" mt={4}>{plural(task.preExistingProblems.length, 'pre-existing problem')}</Text>}</Table.Td>

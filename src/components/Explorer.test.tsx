@@ -253,7 +253,7 @@ describe('overview', () => {
 
   test('is the default view and leads with serious problems found against cost, plotted against the measure every view shares', () => {
     expect(shown).toContain('Serious problems found against cost and refuted or unproven claims')
-    expect(shown).toContain('Plot against Cost Refuted or unproven Refuted claims Tokens Time')
+    expect(shown).toContain('Plot against Cost Refuted or unproven Refuted per review Tokens Time')
     expect(text(overview)).toContain('The 9 known problems weigh the same, so one problem caught in every review is 11.1 points.')
   })
 

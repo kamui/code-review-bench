@@ -36,7 +36,7 @@ export function SetupName({ configuration, mark = true }: { configuration: Confi
       {effort && <><span className="setup-sep setup-dot"> / </span>{effort}</>}</span></>}</span></span>
 }
 
-const shortAxis: Record<Axis, string> = { cost: 'Cost per trial', doubt: 'Refuted or unproven', refuted: 'Refuted claims', tokens: 'Output tokens', time: 'Median time' }
+const shortAxis: Record<Axis, string> = { cost: 'Cost per trial', doubt: 'Refuted or unproven', refuted: 'Refuted per review', tokens: 'Output tokens', time: 'Median time' }
 export const axisLabels: Record<Axis, string> = {
   cost: 'Cost per trial', tokens: 'Output tokens per trial', refuted: 'Refuted claims per review on matched PRs', doubt: 'Reviews with a refuted or unproven claim', time: 'Median time',
 }
@@ -96,7 +96,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
     const shell = element.closest('.plot-shell')?.getBoundingClientRect()
     const box = element.getBoundingClientRect()
     const frame = element.closest('.leaderboard-paper, .measure-card')?.getBoundingClientRect()
-    if (shell) setHovered({ id, ...tipPlace(shell, box, 160, 260, window.innerHeight, frame?.top ?? shell.top) })
+    if (shell) setHovered({ id, ...tipPlace(shell, box, 160, 320, window.innerHeight, frame?.top ?? shell.top) })
     linked?.point(id)
   }
   const unhover = () => { setHovered(null); linked?.point(null) }
@@ -142,7 +142,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
           : <Models points={points} measure={measure} onSelect={onSelect} interactions={interactions} />}
     {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={measure} axes={view === 'models' ? [] : view === 'tradeoff' ? [axis, pair] : [axis]} place={hovered} />}
     {view === 'tradeoff' && methodTops.size > 0 && <div className="method-strip">
-      <div className="strip-row strip-head" aria-hidden="true"><span>Review method</span><span>Top setup (most found)</span><span>Found</span><span>{shortAxis[axis]}</span><span>{shortAxis[pair]}</span><span>Lowest {lowerFirst(shortAxis[axis])}</span></div>
+      <div className="strip-row strip-head" aria-hidden="true"><span>Review method</span><span>Top setup (most found)</span><span>Found</span><span>{shortAxis[axis]}</span><span>{shortAxis[pair]}</span><span className="strip-low-head">Lowest {lowerFirst(shortAxis[axis])}</span></div>
       <ul aria-label="Each review method's top setup, from the method that finds the most">{[...methodTops].map(([method, top]) => {
         const { configuration } = top.summary, { model, effort } = setupParts(configuration)
         const second = metricOf(top.summary, pair), secondText = formatMetric(pair, second, top.starred, boundedOn(top.summary, pair), 0)
@@ -158,7 +158,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
           <span className="strip-model"><VendorMark configuration={configuration} />{model}{effort && <span className="measure-effort"> · {effort}</span>}</span>
           <span className="strip-value" data-label="Found"><Score summary={top.summary} /></span><span className={stripValue(first)} data-label={shortAxis[axis]}>{first}</span>
           <span className={stripValue(secondText)} data-label={shortAxis[pair]}>{secondText}</span>
-          <span className="strip-low" data-label={`Lowest ${lowerFirst(shortAxis[axis])}`}>{low && <><span className="strip-low-model">{lowModel}</span><span className="strip-low-value">{lowText}</span><span className="strip-low-found">{percent(low.y, 0)} found</span></>}</span></button></li>
+          <span className="strip-low" data-label={axis === 'cost' ? 'Lowest cost' : `Lowest ${lowerFirst(shortAxis[axis])}`}>{low && <><span className="strip-low-model">{lowModel}</span><span className="strip-low-value">{lowText}</span><span className="strip-low-found">{percent(low.y, 0)} found</span></>}</span></button></li>
       })}</ul></div>}
     {view === 'tradeoff' && points.length > 0 && <ul className="chart-keys twin-key" aria-label="Chart key">
       <li><Mark configuration={{ method: '', reviewEdition: '', builtin: true }} size={10} />Built-in reviewer</li>
@@ -271,29 +271,39 @@ function Scatter({ points, dimensions, axis, scale, spotlight, marked, named, on
   const py = (value: number) => plot.bottom - value / 100 * (plot.bottom - plot.top)
   const labelText = labelOf(points)
   const ordered = [...points].sort((left, right) => right.y - left.y)
+  const nudge = new Map<string, number>()
+  const drawn: { x: number; y: number }[] = []
+  for (const point of ordered) {
+    const y = py(point.y)
+    let x = px(point.x)
+    while (drawn.some(other => Math.hypot(other.x - x, other.y - y) < 8)) x += 9
+    drawn.push({ x, y })
+    nudge.set(point.summary.configuration.id, x - px(point.x))
+  }
+  const sx = (point: Plotted) => px(point.x) + (nudge.get(point.summary.configuration.id) ?? 0)
   const outside = (point: Point) => spotlight !== null && setupParts(point.summary.configuration).method !== spotlight
   const markedPoint = points.find(point => point.summary.configuration.id === marked)
   const active = spotlight ?? (markedPoint ? setupParts(markedPoint.summary.configuration).method : null)
   const lines = groupPaths(points, point => methodKey(point.summary.configuration)).filter(group => group.points.length > 1)
   const along = (from: Plotted, to: Plotted) => {
-    const steps = Math.ceil(Math.hypot(px(to.x) - px(from.x), py(to.y) - py(from.y)) / 6)
+    const steps = Math.ceil(Math.hypot(sx(to) - sx(from), py(to.y) - py(from.y)) / 6)
     return Array.from({ length: steps }, (_, index) => {
-      const x = px(from.x) + (px(to.x) - px(from.x)) * index / steps, y = py(from.y) + (py(to.y) - py(from.y)) * index / steps
+      const x = sx(from) + (sx(to) - sx(from)) * index / steps, y = py(from.y) + (py(to.y) - py(from.y)) * index / steps
       return { left: x - 2, top: y - 2, right: x + 2, bottom: y + 2 }
     })
   }
   const obstacles = [
-    ...ordered.map(point => ({ left: px(point.x) - 10, top: py(point.y) - 10, right: px(point.x) + 10, bottom: py(point.y) + 10 })),
+    ...ordered.map(point => ({ left: sx(point) - 10, top: py(point.y) - 10, right: sx(point) + 10, bottom: py(point.y) + 10 })),
     ...lines.flatMap(group => group.points.slice(1).flatMap((point, index) => along(group.points[index]!, point))),
   ]
-  const request = (point: Plotted) => ({ id: point.summary.configuration.id, x: px(point.x), y: py(point.y), width: textWidth(labelText(point.summary.configuration)), height: 16 })
+  const request = (point: Plotted) => ({ id: point.summary.configuration.id, x: sx(point), y: py(point.y), width: textWidth(labelText(point.summary.configuration)), height: 16 })
   const bounds = { left: plot.left + 2, right: plot.right, top: 2, bottom: plot.bottom - 2 }
   const first = (point: Plotted) => point === markedPoint || spotlight !== null || !named || named.has(point.summary.configuration.id)
   const shown = ordered.filter(point => point !== markedPoint && !outside(point))
   const leading = width ? placeLabels([...(markedPoint ? [markedPoint] : []), ...shown.filter(first)].map(request), obstacles, bounds, width < 600 ? [12, 22] : [12, 24, 36, 48]) : []
   const placed = width ? [...leading, ...placeLabels(shown.filter(point => !first(point)).map(request), [...obstacles, ...leading.map(label => label.box)], bounds, width < 600 ? [12] : [12, 22])] : []
   const labels = markedPoint && width && !placed.some(label => label.id === marked)
-    ? [{ id: markedPoint.summary.configuration.id, x: px(markedPoint.x) + 12, y: py(markedPoint.y), anchor: 'start' as const, leader: false }, ...placed] : placed
+    ? [{ id: markedPoint.summary.configuration.id, x: sx(markedPoint) + 12, y: py(markedPoint.y), anchor: 'start' as const, leader: false }, ...placed] : placed
   const xTicks = ticks(scale, width > 700)
   return <div ref={ref} className="tradeoff">
     {width > 0 && <svg width={width} height={height} role="group" aria-label={`Plot of ${dimensions}. A line joins the setups of each review method.`}>
@@ -302,14 +312,14 @@ function Scatter({ points, dimensions, axis, scale, spotlight, marked, named, on
       </linearGradient></defs>
       <rect x={plot.left} y={plot.top} width={plot.right - plot.left} height={plot.bottom - plot.top} fill={`url(#${corner})`} />
       <Axes plot={plot} axis={axis} scale={scale} xTicks={xTicks} px={px} py={py} height={height} yTitle={yTitle} scaleNote={width > 480} />
-      {lines.map(group => <polyline key={group.key} points={group.points.map(point => `${px(point.x)},${py(point.y)}`).join(' ')}
+      {lines.map(group => <polyline key={group.key} points={group.points.map(point => `${sx(point)},${py(point.y)}`).join(' ')}
         className={[outside(group.points[0]!) ? 'method-line muted' : setupParts(group.points[0]!.summary.configuration).method === active ? 'method-line active' : 'method-line', group.points[0]!.summary.configuration.experimental ? 'experiment' : ''].join(' ').trim()} style={{ stroke: reviewColor(group.points[0]!.summary.configuration) }} />)}
       {labels.filter(label => label.leader).map(label => {
         const point = points.find(item => item.summary.configuration.id === label.id)
-        return point && <line key={`leader-${label.id}`} x1={px(point.x)} y1={py(point.y)} x2={label.anchor === 'middle' ? label.x : label.x + (label.anchor === 'start' ? -3 : 3)} y2={label.y} className="leader-line" />
+        return point && <line key={`leader-${label.id}`} x1={sx(point)} y1={py(point.y)} x2={label.anchor === 'middle' ? label.x : label.x + (label.anchor === 'start' ? -3 : 3)} y2={label.y} className="leader-line" />
       })}
-      {markedPoint && <circle cx={px(markedPoint.x)} cy={py(markedPoint.y)} r={12} className="mark-ring" style={{ stroke: reviewColor(markedPoint.summary.configuration) }} />}
-      {ordered.map(point => <ChartPoint key={point.summary.configuration.id} point={point} axis={axis} x={px(point.x)} y={py(point.y)} muted={outside(point)} onSelect={onSelect} interactions={interactions} />)}
+      {markedPoint && <circle cx={sx(markedPoint)} cy={py(markedPoint.y)} r={12} className="mark-ring" style={{ stroke: reviewColor(markedPoint.summary.configuration) }} />}
+      {ordered.map(point => <ChartPoint key={point.summary.configuration.id} point={point} axis={axis} x={sx(point)} y={py(point.y)} muted={outside(point)} onSelect={onSelect} interactions={interactions} />)}
       {labels.map(label => {
         const point = points.find(item => item.summary.configuration.id === label.id)
         return point && <text key={`label-${label.id}`} x={label.x} y={label.y} textAnchor={label.anchor} dominantBaseline="middle"

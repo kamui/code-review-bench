@@ -146,8 +146,8 @@ export function Glossed({ text, skip = [] }: { text: string; skip?: string[] }) 
 }
 
 
-export function Tag({ children }: { children: ReactNode }) {
-  return <span className="tag">{children}</span>
+export function Tag({ children, filled = false }: { children: ReactNode; filled?: boolean }) {
+  return <span className={filled ? 'tag filled' : 'tag'}>{children}</span>
 }
 
 export function Rich({ text }: { text: string }) {
