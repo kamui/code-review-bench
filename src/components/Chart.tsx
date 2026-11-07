@@ -140,7 +140,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
           onFocus={() => { preview(method)(); linked?.point(configuration.id) }} onBlur={() => { preview(null)(); linked?.point(null) }}
           onClick={() => setSpotlight(current => current?.pinned && current.method === method ? null : { method, pinned: true })}>
           <span className="strip-method"><Mark configuration={configuration} size={11} />{method}{configuration.experimental && <span className="row-tag">Experiment</span>}</span>
-          <span className="strip-model"><VendorMark configuration={configuration} />{model}{effort && effort !== 'High' && <span className="measure-effort"> · {effort}</span>}</span>
+          <span className="strip-model"><VendorMark configuration={configuration} />{model}{effort && <span className="measure-effort"> · {effort}</span>}</span>
           <span className="strip-value" data-label="Found"><Score summary={top.summary} /></span><span className={stripValue(first)} data-label={shortAxis[axis]}>{first}</span>
           <span className={stripValue(secondText)} data-label={shortAxis[pair]}>{secondText}</span></button></li>
       })}</ul></div>}
@@ -377,7 +377,7 @@ function Models({ points, measure, onSelect, interactions }: { points: Point[]; 
   const groups = new Map<string, Point[]>()
   for (const point of points) {
     const { model, effort } = setupParts(point.summary.configuration)
-    const key = `${model}${effort && effort !== 'High' ? ` · ${effort}` : ''}`
+    const key = `${model}${effort ? ` · ${effort}` : ''}`
     groups.set(key, [...groups.get(key) ?? [], point])
   }
   const rows = Array.from(groups, ([model, members]) => ({ model, members: [...members].sort((a, b) => (b.summary.detection ?? 0) - (a.summary.detection ?? 0)) }))

@@ -59,9 +59,21 @@ export function Explorer() {
   return <Dashboard dataset={state.dataset} page={page} search={search} onSearch={onSearch} />
 }
 
-export function Dashboard({ dataset, page, search, onSearch, now = new Date() }: {
+/** Every setup at one effort: say it once instead of on every setup name. */
+function withoutSharedEffort(dataset: Dataset) {
+  const efforts = new Set(dataset.configurations.map(configuration => setupParts(configuration).effort))
+  const [effort] = efforts
+  if (efforts.size !== 1 || !effort) return { dataset, effort: null }
+  return { effort, dataset: { ...dataset, configurations: dataset.configurations.map(configuration => {
+    const { method, model } = setupParts(configuration)
+    return { ...configuration, short: model ? `${method} / ${model}` : method }
+  }) } }
+}
+
+export function Dashboard({ dataset: recorded, page, search, onSearch, now = new Date() }: {
   dataset: Dataset; page: Page; search: ExplorerSearch; onSearch: (patch: ExplorerSearch, section?: Section) => void; now?: Date
 }) {
+  const { dataset, effort } = useMemo(() => withoutSharedEffort(recorded), [recorded])
   const hash = useLocation({ select: location => location.hash })
   const setupIds = dataset.configurations.map(item => item.id)
   const defaultSetups = (experiments: boolean) => dataset.configurations.filter(item => experiments || !item.experimental).map(item => item.id)
@@ -69,7 +81,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
   const selected = listValue(search.setups, setupIds, defaultSetups(includeExperiments))
   const setSelected = (ids: string[]) => onSearch({ setups: listParam(ids, setupIds, defaultSetups(includeExperiments)) }, 'scorecard')
   const modelChoices = dataset.configurations.flatMap(configuration => configuration.models.map(model => ({
-    value: model, label: configuration.short.split(' / ').at(-2) ?? model,
+    value: model, label: setupParts(configuration).model || model,
   }))).filter((model, index, choices) => choices.findIndex(choice => choice.value === model.value) === index).sort((left, right) => left.label.localeCompare(right.label))
   const modelIds = modelChoices.map(model => model.value)
   const selectedModels = listValue(search.models, modelIds, modelIds)
@@ -266,7 +278,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
               <PeerNote configurations={edition(configuration)} className="edition-peer" />
               {configuration.reviewChange && <Anchor className="edition-change" href={configuration.reviewChange.url} target="_blank" rel="noreferrer" title={configuration.reviewChange.summary}>Review changed<ArrowUpRight size={12} aria-hidden="true" /></Anchor>}
             </span>)}
-            <ul className="comparison-note"><li>Every selected setup is compared on the same {plural(shared.length, 'PR')}: the ones all selected standard setups ran. Filters change them; experiments never shrink them.</li>
+            <ul className="comparison-note">{effort && <li>Every setup runs at {effort.toLowerCase()} reasoning effort.</li>}<li>Every selected setup is compared on the same {plural(shared.length, 'PR')}: the ones all selected standard setups ran. Filters change them; experiments never shrink them.</li>
               {differing.length > 0 && <li>Setups also differ in {differing.join(', ')}, so a gap between two setups includes those. Compare setups, below, lists the values.</li>}</ul>
           </div>
         </Paper>
