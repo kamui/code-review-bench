@@ -26,6 +26,8 @@
 //! Exit codes: 0 done; 1 a check failed, one line per failure on stdout; 2 an input cannot be read, a pinned
 //! revision is missing or a git command failed.
 
+pub mod fetch;
+
 use crate::grade::provision::{apply_replacement, remove_tree};
 use crate::provision_sandbox::{Network, Sandbox};
 use crate::pyjson::{self, Dumps, Object, Value};

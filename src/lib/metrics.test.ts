@@ -44,7 +44,7 @@ describe('scorecard display', () => {
   test('plots only the selected band and average and never substitutes another', () => {
     const serious = summarize(configuration('steady'), card('steady'), { band: 'serious', estimator: 'equalProblem' }, own('steady'))
     expect(serious).toMatchObject({ detection: 100, reasons: { detection: null } })
-    expect(detectionLabel({ band: 'serious', estimator: 'equalProblem' })).toBe('Serious detection, problems weighted equally')
+    expect(detectionLabel({ band: 'serious', estimator: 'equalProblem' })).toBe('Serious problems found, problems weighted equally')
     const unlabelled = { taskIds: ['docs'], concern: null }
     const empty = summarize(configuration('steady'), card('steady', unlabelled), { band: 'serious', estimator: 'equalProblem' }, own('steady', unlabelled))
     expect(empty).toMatchObject({ detection: null, range: null, reasons: { detection: 'No references in this band.' } })
@@ -74,17 +74,17 @@ describe('scorecard display', () => {
     expect(share(card('waiting').detection.serious.equalProblem)).toEqual({ text: 'Unavailable', reason: '1 scheduled trial awaits execution.' })
     expect(share(card('ungraded').detection.serious.equalProblem)).toEqual({ text: 'Unavailable', reason: '1 admitted review awaits assessment.' })
     expect(share(card('sparse').detection.serious.equalProblem)).toEqual({ text: 'Unavailable', reason: 'Ran 2 of 6 selected PRs.' })
-    expect(share(card('steady').detection.serious.equalProblem)).toEqual({ text: '100.0%', reason: null })
+    expect(share(card('steady').detection.serious.equalProblem)).toEqual({ text: '100.0%', reason: null, fraction: 1 })
     expect(reasonCounts(['a', null, 'b', 'a'])).toEqual([{ reason: 'a', count: 2 }, { reason: 'b', count: 1 }])
   })
 
   test('hero counts cover the whole export and ignore effort, client and repetition variations', () => {
-    expect(heroCounts(fixture)).toEqual({ tasks: 6, problems: 10, awaitingEligibility: 1, methods: 2, models: 4 })
+    expect(heroCounts(fixture)).toEqual({ tasks: 6, problems: 10, awaitingEligibility: 1, methods: 2, experiments: 0, models: 4 })
     const subject = task('pr', [family('f')])
     const cells = { a: [[subject, [review(subject, []), review(subject, [])]]], b: [[subject, [review(subject, [])]]], c: [[subject, [review(subject, [])]]] } satisfies Parameters<typeof build>[1]
     const varied = build([subject], cells, { experimental: ['c'], configurations: { a: { method: 'codex', models: ['m1'], reasoningEffort: 'high', version: 'codex-cli 1' },
       b: { method: 'codex', models: ['m1'], reasoningEffort: 'medium', version: 'codex-cli 2' }, c: { method: 'review-code', builtin: false, models: ['m2'] } } })
-    expect(heroCounts(varied)).toEqual({ tasks: 1, problems: 1, awaitingEligibility: 0, methods: 2, models: 2 })
+    expect(heroCounts(varied)).toEqual({ tasks: 1, problems: 1, awaitingEligibility: 0, methods: 2, experiments: 1, models: 2 })
   })
 
   test('a preview with missing assessments or no audit is never labelled the completed dataset', () => {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { groupPaths, linearScale, logScale, paretoFrontier, placeLabels, position, segmentObstacles, ticks } from './chart'
+import { groupPaths, linearScale, logScale, paretoFrontier, placeLabels, position, sideTip, ticks, tipPlace } from './chart'
 
 describe('scales', () => {
   test('spans wide ranges in whole decades and narrow ranges on a 1-2-5 grid', () => {
@@ -46,16 +46,26 @@ describe('label placement', () => {
   })
 })
 
-describe('method paths', () => {
-  test('joins each group left to right and keeps groups apart', () => {
+describe('method groups', () => {
+  test('groups points left to right and keeps groups apart', () => {
     const points = [{ x: 3, y: 60, g: 'a' }, { x: 1, y: 70, g: 'a' }, { x: 2, y: 80, g: 'b' }, { x: 2, y: 50, g: 'a' }]
     expect(groupPaths(points, point => point.g).map(group => [group.key, group.points.map(point => point.x)]))
       .toEqual([['a', [1, 2, 3]], ['b', [2]]])
   })
-  test('covers a line with obstacles from end to end', () => {
-    const boxes = segmentObstacles([{ x: 0, y: 0 }, { x: 70, y: 0 }], 7, 2)
-    expect(boxes.at(0)).toEqual({ left: -2, top: -2, right: 2, bottom: 2 })
-    expect(boxes.at(-1)).toEqual({ left: 68, top: -2, right: 72, bottom: 2 })
-    expect(boxes.every((box, index) => index === 0 || box.left - boxes[index - 1]!.left <= 7)).toBe(true)
+})
+
+describe('tooltip placement', () => {
+  const rect = (left: number, top: number, width: number, height: number): DOMRect =>
+    ({ left, top, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}) })
+  test('opens above a mark with room, and below a mark near the top of the shell or of the screen', () => {
+    expect(tipPlace(rect(0, 0, 800, 600), rect(400, 400, 10, 10), 160, 170).below).toBe(false)
+    expect(tipPlace(rect(0, 0, 800, 600), rect(400, 100, 10, 10), 160, 170).below).toBe(true)
+    expect(tipPlace(rect(0, -500, 800, 900), rect(400, 60, 10, 10), 160, 170).below).toBe(true)
+    expect(tipPlace(rect(0, 500, 800, 400), rect(400, 760, 10, 10), 160, 300, 900).below).toBe(false)
+  })
+  test('beside a mark, opens toward the middle of the shell and stays clear of the viewport edges', () => {
+    expect(sideTip(rect(0, 0, 800, 400), rect(100, 200, 10, 10), 900)).toMatchObject({ side: 'right', left: 110, top: 205 })
+    expect(sideTip(rect(0, 0, 800, 400), rect(700, 20, 10, 10), 900)).toMatchObject({ side: 'left', left: 700, top: 160 })
+    expect(sideTip(rect(0, 0, 800, 400), rect(100, 120, 10, 10), 900, 160, 100)).toMatchObject({ top: 260 })
   })
 })

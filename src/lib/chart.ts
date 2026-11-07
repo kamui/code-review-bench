@@ -1,4 +1,4 @@
-export type Scale = { kind: 'log' | 'linear'; min: number; max: number }
+export type Scale = { kind: 'log' | 'linear' | 'sqrt'; min: number; max: number }
 
 const steps = [1, 2, 5, 10]
 const clean = (value: number) => Number(value.toPrecision(12))
@@ -28,13 +28,26 @@ export function linearScale(values: number[]): Scale {
   return { kind: 'linear', min: 0, max: clean(Math.ceil(max / step - 1e-9) * step) }
 }
 
-export function ticks(scale: Scale): number[] {
+/** A square-root scale from zero spreads values that crowd near zero while keeping their order. */
+export const sqrtScale = (values: number[]): Scale => ({ ...linearScale(values), kind: 'sqrt' })
+
+export function ticks(scale: Scale, dense = false): number[] {
+  if (scale.kind === 'sqrt') {
+    const grid: number[] = []
+    for (let exponent = Math.floor(Math.log10(scale.max)) - 2; exponent <= Math.ceil(Math.log10(scale.max)); exponent++)
+      for (const multiple of [1, 2, 5]) grid.push(clean(multiple * 10 ** exponent))
+    const values = [0]
+    for (const value of grid.filter(item => item <= scale.max * (1 + 1e-9))) {
+      if (Math.sqrt(value / scale.max) - Math.sqrt((values.at(-1) ?? 0) / scale.max) >= 0.14) values.push(value)
+    }
+    return values
+  }
   if (scale.kind === 'linear') {
     const step = gridCeil(scale.max / 4)
     return Array.from({ length: Math.round(scale.max / step) + 1 }, (_, index) => clean(index * step))
   }
   const decades = Math.log10(scale.max / scale.min)
-  const multiples = decades <= 2.2 ? [1, 2, 5] : [1]
+  const multiples = dense || decades <= 2.2 ? [1, 2, 5] : [1]
   const values: number[] = []
   for (let exponent = Math.floor(Math.log10(scale.min)); exponent <= Math.ceil(Math.log10(scale.max)); exponent++) {
     for (const multiple of multiples) {
@@ -47,9 +60,9 @@ export function ticks(scale: Scale): number[] {
 
 export function position(scale: Scale, value: number, from: number, to: number) {
   const clamped = Math.min(scale.max, Math.max(scale.min, value))
-  const fraction = scale.kind === 'log'
-    ? Math.log(clamped / scale.min) / Math.log(scale.max / scale.min)
-    : (clamped - scale.min) / (scale.max - scale.min)
+  const fraction = scale.kind === 'log' ? Math.log(clamped / scale.min) / Math.log(scale.max / scale.min)
+    : scale.kind === 'sqrt' ? Math.sqrt((clamped - scale.min) / (scale.max - scale.min))
+      : (clamped - scale.min) / (scale.max - scale.min)
   return from + fraction * (to - from)
 }
 
@@ -70,11 +83,11 @@ export type LabelPlacement = { id: string; x: number; y: number; anchor: 'start'
 const overlaps = (a: Box, b: Box) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
 
 /** Greedy placement in request order; a label that fits nowhere is left to the tooltip rather than drawn over data. */
-export function placeLabels(requests: LabelRequest[], obstacles: Box[], bounds: Box): LabelPlacement[] {
+export function placeLabels(requests: LabelRequest[], obstacles: Box[], bounds: Box, distances = [12, 24, 40, 58, 76]): LabelPlacement[] {
   const taken = [...obstacles]
   const placed: LabelPlacement[] = []
   for (const request of requests) {
-    const found = [10, 24, 40].flatMap(distance => {
+    const found = distances.flatMap(distance => {
       const diagonal = distance * 0.72
       const candidates: [number, number, LabelPlacement['anchor']][] = [
         [distance, 0, 'start'], [-distance, 0, 'end'], [diagonal, -diagonal, 'start'], [diagonal, diagonal, 'start'],
@@ -84,7 +97,7 @@ export function placeLabels(requests: LabelRequest[], obstacles: Box[], bounds: 
         const x = request.x + dx, y = request.y + dy
         const left = anchor === 'start' ? x : anchor === 'end' ? x - request.width : x - request.width / 2
         const box = { left: left - 2, top: y - request.height / 2 - 1, right: left + request.width + 2, bottom: y + request.height / 2 + 1 }
-        return { id: request.id, x, y, anchor, box, leader: distance > 10 }
+        return { id: request.id, x, y, anchor, box, leader: distance > 12 }
       })
     }).find(candidate => candidate.box.left >= bounds.left && candidate.box.right <= bounds.right &&
       candidate.box.top >= bounds.top && candidate.box.bottom <= bounds.bottom && !taken.some(box => overlaps(box, candidate.box)))
@@ -99,13 +112,22 @@ export function groupPaths<T extends { x: number; y: number }>(points: T[], key:
   return Array.from(groups, ([groupKey, members]) => ({ key: groupKey, points: [...members].sort((left, right) => left.x - right.x || left.y - right.y) }))
 }
 
-export function segmentObstacles(points: { x: number; y: number }[], spacing = 7, radius = 2.5): Box[] {
-  return points.slice(1).flatMap((point, index) => {
-    const previous = points[index]!
-    const count = Math.max(1, Math.ceil(Math.hypot(point.x - previous.x, point.y - previous.y) / spacing))
-    return Array.from({ length: count + 1 }, (_, step) => {
-      const x = previous.x + (point.x - previous.x) * step / count, y = previous.y + (point.y - previous.y) * step / count
-      return { left: x - radius, top: y - radius, right: x + radius, bottom: y + radius }
-    })
-  })
+export type TipPlace = { left: number; top: number; below: boolean; side?: 'left' | 'right' }
+
+/** Places a tooltip beside the mark, toward the middle of the shell, below the ceiling and inside the viewport where it fits. */
+export function sideTip(shell: DOMRect, mark: DOMRect, viewport = typeof window === 'undefined' ? Infinity : window.innerHeight, half = 160, ceiling = 0): TipPlace {
+  const side = mark.left + mark.width / 2 - shell.left < shell.width / 2 ? 'right' : 'left'
+  const highest = Math.max(half, viewport - half)
+  const lowest = Math.min(Math.max(half, Math.max(ceiling, 0) + half), highest)
+  const middle = Math.min(Math.max(mark.top + mark.height / 2, lowest), highest)
+  return { left: (side === 'right' ? mark.right : mark.left) - shell.left, top: middle - shell.top, below: false, side }
+}
+
+/** Places a tooltip over the mark, or under it when the mark is near the ceiling (the top of the clipping frame, or of the viewport) and there is more room under it, kept inside the shell's width. */
+export function tipPlace(shell: DOMRect, mark: DOMRect, half = 160, headroom = 170, viewport = typeof window === 'undefined' ? Infinity : window.innerHeight, ceiling = shell.top): TipPlace {
+  const center = mark.left + mark.width / 2 - shell.left
+  const left = Math.min(Math.max(center, half), Math.max(half, shell.width - half))
+  const above = mark.top - Math.max(ceiling, 0)
+  const below = above < headroom && viewport - mark.bottom > above
+  return { left, top: below ? mark.bottom - shell.top : mark.top - shell.top, below }
 }

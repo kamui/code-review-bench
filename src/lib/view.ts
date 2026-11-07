@@ -2,9 +2,9 @@ import { z } from 'zod'
 import type { Dataset } from './data'
 import { bands, estimators } from './scoring'
 
-export const chartViews = ['overview', 'skills', 'setups', 'models', 'tradeoff'] as const
-export const axes = ['cost', 'tokens', 'refuted', 'time'] as const
-export const scorecardTabs = ['detection', 'delivery', 'reliability', 'remedies', 'controls', 'pre-existing', 'advice', 'usage', 'candidates', 'comparison'] as const
+export const chartViews = ['overview', 'skills', 'setups', 'models'] as const
+export const axes = ['cost', 'doubt', 'refuted', 'tokens', 'time'] as const
+export const scorecardTabs = ['detection', 'misses', 'delivery', 'reliability', 'remedies', 'controls', 'pre-existing', 'advice', 'usage', 'candidates', 'comparison'] as const
 export const drawerTabs = ['reviews', 'references', 'coverage'] as const
 export type ScorecardTab = (typeof scorecardTabs)[number]
 export type DrawerTab = (typeof drawerTabs)[number]
@@ -16,10 +16,11 @@ const lenient = <T extends z.ZodType>(schema: T) => schema.optional().catch(unde
 
 export const explorerSearch = z.object({
   chart: lenient(z.enum(chartViews)), axis: lenient(z.enum(axes)), band: lenient(z.enum(bands)), average: lenient(z.enum(estimators)),
-  experiments: lenient(z.boolean()), labels: lenient(z.boolean()), setups: lenient(z.string()), models: lenient(z.string()),
+  experiments: lenient(z.boolean()), setups: lenient(z.string()), models: lenient(z.string()),
   dimension: lenient(z.enum(scorecardTabs)), inspect: lenient(z.string()), attempt: lenient(z.string()), drawer: lenient(z.enum(drawerTabs)),
 })
 export type ExplorerSearch = z.infer<typeof explorerSearch>
+export const clearedSearch = Object.fromEntries(Object.keys(explorerSearch.shape).map(key => [key, undefined])) as ExplorerSearch
 
 export const unlessDefault = <T>(value: T, fallback: T) => value === fallback ? undefined : value
 

@@ -1,14 +1,16 @@
 import type { Configuration, Dataset } from './data'
 import type { Band, Bounded, Estimator, Measure, Scorecard } from './scoring'
 
-export type Axis = 'cost' | 'tokens' | 'refuted' | 'time'
+export type Axis = 'cost' | 'tokens' | 'refuted' | 'doubt' | 'time'
 export type DetectionView = { band: Band; estimator: Estimator }
-export type Reading = { text: string; reason: string | null; annotation?: string }
+export type Reading = { text: string; reason: string | null; annotation?: string; fraction?: number }
 
 export const bandLabels: Record<Band, string> = { serious: 'Serious', 'other-material': 'Other material', unknown: 'Unknown impact', all: 'All references' }
 export const estimatorLabels: Record<Estimator, string> = { equalProblem: 'problems weighted equally', equalPr: 'PRs weighted equally' }
-export const detectionLabel = (view: DetectionView) => `${bandLabels[view.band]} detection, ${estimatorLabels[view.estimator]}`
+export const foundLabels: Record<Band, string> = { serious: 'Serious problems found', 'other-material': 'Other material problems found', unknown: 'Unknown-impact problems found', all: 'Known problems found' }
+export const detectionLabel = (view: DetectionView) => `${foundLabels[view.band]}, ${estimatorLabels[view.estimator]}`
 export const lowerFirst = (label: string) => label.charAt(0).toLowerCase() + label.slice(1)
+export const upperFirst = (label: string) => label.charAt(0).toUpperCase() + label.slice(1)
 
 export const measured = <T>(measure: Bounded<T>): T | null => measure.kind === 'available' ? measure.value : null
 export const lowerBound = (measure: Bounded): number | null => measure.kind === 'unavailable' ? null : measure.value
@@ -36,6 +38,7 @@ export type Summary = {
   cost: number | null
   tokens: number | null
   refuted: number | null
+  doubt: number | null
   time: { median: number; mean: number; q1: number; q3: number; reviews: number; tasks: number } | null
   reasons: Record<'detection' | Axis, string | null>
   admitted: number
@@ -51,10 +54,10 @@ export function summarize(configuration: Configuration, card: Scorecard, view: D
   return {
     configuration, card, detection: points(recall[view.estimator]), detectionNote: recall.zeroCredit.reason,
     range: range && { low: range.low * 100, high: range.high * 100 },
-    cost: lowerBound(card.cost.perTrial), tokens: lowerBound(card.tokens.perTrial), refuted: measured(refuted),
+    cost: lowerBound(card.cost.perTrial), tokens: lowerBound(card.tokens.perTrial), refuted: measured(refuted), doubt: points(card.reliability.reviewsWithDoubt.refutedOrUnproven),
     time: time && { ...time, reviews: card.time.completed, tasks: card.time.tasks },
     reasons: { detection: reasonOf(recall[view.estimator]), cost: reasonOf(card.cost.perTrial), tokens: reasonOf(card.tokens.perTrial),
-      refuted: reasonOf(refuted), time: reasonOf(card.time.summary) },
+      refuted: reasonOf(refuted), doubt: reasonOf(card.reliability.reviewsWithDoubt.refutedOrUnproven), time: reasonOf(card.time.summary) },
     admitted: card.delivery.admitted, completed: card.delivery.complete, trials: card.delivery.scheduled, tasks: card.coverage.ran,
   }
 }
@@ -64,6 +67,8 @@ export function heroCounts(dataset: Dataset) {
   const families = dataset.tasks.flatMap(task => task.families)
   return { tasks: dataset.tasks.length, problems: families.length, awaitingEligibility: families.filter(family => family.eligibility !== 'approved').length,
     methods: new Set(dataset.configurations.map(configuration => configuration.method)).size,
+    experiments: [...new Set(dataset.configurations.map(configuration => configuration.method))]
+      .filter(method => dataset.configurations.every(configuration => configuration.method !== method || configuration.experimental)).length,
     models: new Set(dataset.configurations.flatMap(configuration => configuration.models)).size }
 }
 
@@ -93,14 +98,19 @@ export function peerLabel(configurations: Configuration[]): string | null {
   return values.size ? `Cross-model peer ${Array.from(values).join(', ')}` : null
 }
 
-export const percent = (value: number | null): string => value === null ? '—' : `${value.toFixed(1)}%`
-export const money = (value: number | null): string => value === null ? '—' : `$${value.toFixed(value > 0 && value < 0.01 ? 4 : 2)}`
+export const percent = (value: number | null, digits = 1): string => value === null ? '—' : `${value.toFixed(digits)}%`
+export const money = (value: number | null): string => {
+  if (value === null) return '—'
+  const amount = value > 0 && Number(value.toPrecision(2)) < 1 ? value.toPrecision(2) : value.toFixed(2)
+  return `$${amount}`
+}
 export const compact = (value: number | null): string => value === null ? '—'
   : new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value)
 
 export const duration = (seconds: number): string => seconds < 60 ? `${Math.round(seconds)} s` : `${(seconds / 60).toFixed(1)} min`
-export const share = (measure: Measure, annotation: string | null = null): Reading => ({
-  ...reading(measure, value => percent(value * 100)),
+export const share = (measure: Measure, annotation: string | null = null, digits = 1): Reading => ({
+  ...reading(measure, value => percent(value * 100, digits)),
   ...measure.kind === 'available' && annotation ? { annotation } : {},
+  ...measure.kind === 'available' ? { fraction: measure.value } : {},
 })
 export const perReview = (measure: Measure): Reading => reading(measure, value => value.toFixed(2))

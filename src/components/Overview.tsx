@@ -1,165 +1,211 @@
 import { useState } from 'react'
-import { Tooltip, VisuallyHidden } from '@mantine/core'
+import { VisuallyHidden } from '@mantine/core'
+import { useMediaQuery } from '@mantine/hooks'
 import type { CSSProperties, FocusEvent, MouseEvent, ReactNode } from 'react'
-import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react'
-import { linearScale, position, ticks } from '../lib/chart'
-import type { Scale } from '../lib/chart'
-import { bandLabels, detectionLabel, duration, estimatorLabels, lowerFirst, measured, money, perReview, reading, share } from '../lib/metrics'
-import type { DetectionView, Reading, Summary } from '../lib/metrics'
-import { labelSegments, overviewColumns, overviewFirstDirection, overviewKey, overviewOrder } from '../lib/scoring'
-import type { Band, LabelSegment, OverviewColumn, OverviewSort, Scorecard } from '../lib/scoring'
-import { Mark, reviewColor, setupParts } from './Chart'
-import { segmentClass, segmentLabels, swatch, trueSegments } from './ClaimLabels'
-import { Notes, notesFor, PeerNote, Value } from './Reading'
+import { ArrowDown, ArrowUp, ChevronDown, ChevronUp } from 'lucide-react'
+import { linearScale, logScale, position, ticks, tipPlace } from '../lib/chart'
+import type { Scale, TipPlace } from '../lib/chart'
+import { bandLabels, duration, estimatorLabels, foundLabels, lowerFirst, measured, perReview, reading, share } from '../lib/metrics'
+import type { Axis as ChartAxis, DetectionView, Reading, Summary } from '../lib/metrics'
+import type { Configuration } from '../lib/data'
+import { labelSegments, overviewFirstDirection, overviewOrder } from '../lib/scoring'
+import type { LabelSegment, Measure, OverviewColumn, Scorecard } from '../lib/scoring'
+import { axisLabels, Chart, Mark, pairedAxis, reviewColor, SetupName, setupParts } from './Chart'
+import { segmentLabels, trueSegments } from './ClaimLabels'
+import { VendorMark } from './VendorMark'
+import { costScaleNote, costText, Glossed, GuideItem, KeyTerms, Notes, notesFor, PeerBadge, Value } from './Reading'
 
-const costScale: Scale = { kind: 'log', min: 0.001, max: 10 }
-const costTicks = [0.001, 0.01, 0.1, 1, 10]
-const timeScale: Scale = { kind: 'log', min: 20, max: 1800 }
-const timeTicks = [20, 60, 300, 1800]
-const shareTicks = [0, 25, 50, 75, 100]
+type Column = Exclude<OverviewColumn, 'setup'>
+const columns: Column[] = ['detection', 'claims', 'doubt', 'cost', 'time']
+const firstRows = { phone: 5, wide: 10 }
+
+const money = (value: number) => value >= 1 ? `$${value}` : `$${value.toFixed(Math.max(2, -Math.floor(Math.log10(value))))}`
+const timeMarks: [number, string][] = [[10, '10 s'], [30, '30 s'], [60, '1 min'], [300, '5 min'], [600, '10 min'], [1800, '30 min'], [3600, '1 h'], [7200, '2 h']]
+function timeScale(values: number[]): { scale: Scale; marks: [number, string][] } {
+  const low = Math.min(...values, 60), high = Math.max(...values, 300)
+  const min = [...timeMarks].reverse().find(([seconds]) => seconds <= low)?.[0] ?? timeMarks[0]![0]
+  const max = timeMarks.find(([seconds]) => seconds >= high)?.[0] ?? timeMarks.at(-1)![0]
+  return { scale: { kind: 'log', min, max }, marks: timeMarks.filter(([seconds]) => seconds >= min && seconds <= max) }
+}
 const at = (scale: Scale, value: number) => position(scale, value, 0, 100)
+const spaced = (axis: Axis, gap: number): Axis => axis.reduce<{ kept: Axis; last: number }>(({ kept, last }, tick) =>
+  tick.label && tick.at - last >= gap ? { kept: [...kept, tick], last: tick.at } : { kept: [...kept, { at: tick.at }], last }, { kept: [], last: -Infinity }).kept
 
 const problemBands: Partial<Record<LabelSegment, 'serious' | 'other-material' | 'unknown'>> = { 'problem:serious': 'serious', 'problem:other-material': 'other-material', 'problem:unknown': 'unknown' }
+const problemSegments = trueSegments.filter(segment => segment in problemBands)
+const sum = (rates: Record<LabelSegment, Measure>, segments: LabelSegment[]) => segments.reduce((total, segment) => total + (measured(rates[segment]) ?? 0), 0)
 
-function segmentTip(card: Scorecard, segment: LabelSegment, value: number) {
-  const text = `${segmentLabels[segment]} · ${value.toFixed(2)} claims per review`
+function segmentLines(card: Scorecard, segment: LabelSegment, value: number): TipLine[] {
+  const lines = [{ label: segmentLabels[segment], value: `${value.toFixed(2)} per review` }]
   const band = problemBands[segment]
-  if (!band) return text
-  const caught = card.problemsCaught[band], known = `${bandLabels[band].toLowerCase()} known problems`
-  return caught.kind === 'available' ? `${text} · caught ${caught.value.caught} of ${caught.value.known} ${known}` : `${text} · ${known} caught: unavailable. ${caught.reason}`
+  if (!band) return lines
+  const caught = card.problemsCaught[band], label = `${bandLabels[band]} known problems caught`
+  return [...lines, caught.kind === 'available' ? { label, value: `${caught.value.caught} of ${caught.value.known}` } : { label, value: 'Unavailable', note: caught.reason }]
 }
 
-type Tip = { text: string; left: number; top: number }
-const doubtMeaning = 'Share of admitted reviews with at least one refuted or unproven claim. Hatched: reviews whose only doubt is an unresolved claim.'
+type TipLine = { label: string; value: string; note?: string }
+type Tip = { configuration: Configuration; lines: TipLine[] } & TipPlace
+type Key = { label: string; className: string }
+type Axis = { at: number; label?: string }[]
+type Panel = { title: string; about: string; order: string; keys?: Key[]; axis: Axis }
 
-const foundLabels: Record<Band, string> = { serious: 'Serious problems found', 'other-material': 'Other material problems found', unknown: 'Unknown-impact problems found', all: 'Known problems found' }
+const KeyList = ({ items }: { items: Key[] }) => <span className="column-keys">{items.map(item =>
+  <span key={item.label}><span className={`column-key ${item.className}`} aria-hidden="true" />{item.label}</span>)}</span>
 
-type Heading = { title: string; short: string; hint?: string; note?: string; measure: string; ascending: string; descending: string; ends?: [string, string] }
+type Basis = { problems: number; known: number; prs: number; awaiting: number }
+const weight = ({ band, estimator }: DetectionView, { problems, prs }: Basis) => !problems || !prs ? ''
+  : estimator === 'equalProblem' ? `The ${problems} ${band === 'all' ? 'known' : lowerFirst(bandLabels[band])} problems weigh the same, so one problem caught in every review is ${(100 / problems).toFixed(1)} points.`
+    : `The ${prs} PRs weigh the same, so each PR is ${(100 / prs).toFixed(0)} points, shared among its problems.`
 
-function headings(detection: DetectionView, claimsMax: number): Record<OverviewColumn, Heading> {
-  return {
-    setup: { title: 'Setup', short: 'Setup', measure: 'setup name', ascending: 'A to Z', descending: 'Z to A' },
-    detection: { title: foundLabels[detection.band], note: estimatorLabels[detection.estimator], short: foundLabels[detection.band], measure: lowerFirst(detectionLabel(detection)), ascending: 'least first', descending: 'most first', ends: ['0%', '100%'] },
-    claims: { title: 'True claims', note: 'per review; number: problems', short: 'Problem claims per review', measure: 'problem claims per review', ascending: 'fewest first', descending: 'most first', ends: ['0', String(claimsMax)] },
-    doubt: { title: 'Refuted or unproven', note: 'share of reviews', short: 'Refuted or unproven', hint: doubtMeaning, measure: 'share of reviews with a refuted or unproven claim', ascending: 'fewest first', descending: 'most first', ends: ['0%', '100%'] },
-    cost: { title: 'Cost per trial', short: 'Cost per trial', measure: 'cost per scheduled trial', ascending: 'lowest first', descending: 'highest first', note: 'log scale', ends: ['$0.001', '$10'] },
-    time: { title: 'Median time', short: 'Median time', measure: 'median completed-trial time', ascending: 'shortest first', descending: 'longest first', note: 'log scale', ends: ['20 s', '30 min'] },
-  }
-}
+const pairedLabels: Record<ChartAxis, string> = { cost: 'cost', doubt: 'refuted or unproven claims', refuted: 'refuted claims', tokens: 'output tokens', time: 'time' }
+const orderText: Record<Column, string> = { detection: 'Most first', claims: 'Most first', doubt: 'Fewest first', cost: 'Lowest first', time: 'Shortest first' }
 
-export function Overview({ summaries, detection, sort, onSort, onSelect }: {
-  summaries: Summary[]; detection: DetectionView; sort: OverviewSort; onSort: (sort: OverviewSort) => void; onSelect: (id: string) => void
+export function Overview({ summaries, detection, axis, matching, basis, onSelect }: {
+  summaries: Summary[]; detection: DetectionView; axis: ChartAxis; matching: { included: number; excluded: number }; basis: Basis; onSelect: (id: string) => void
 }) {
-  const [tip, setTip] = useState<Tip | null>(null)
-  const show = (text: string) => (event: MouseEvent<Element> | FocusEvent<Element>) => {
-    const shell = event.currentTarget.closest('.overview')?.getBoundingClientRect(), box = event.currentTarget.getBoundingClientRect()
-    if (shell) setTip({ text, left: box.left + box.width / 2 - shell.left, top: box.top - shell.top })
+  const [tipState, setTip] = useState<Tip | null>(null)
+  const [focus, setFocus] = useState<string | null>(null)
+  const [pinned, setPinned] = useState<string | null>(null)
+  const [opened, setOpened] = useState<Column[]>([])
+  const phone = useMediaQuery('(max-width: 700px)')
+  const limit = phone ? firstRows.phone : firstRows.wide
+  const active = focus ?? pinned
+  const pin = (id: string) => setPinned(current => current === id ? null : id)
+  if (!summaries.length) return <div className="plot-empty" role="status"><span>Select at least one review method and model.</span></div>
+  const shown = summaries.map(summary => summary.configuration)
+  const ordered = (column: Column) => overviewOrder(summaries, summary => ({ name: summary.configuration.short, card: summary.card }),
+    { column, direction: overviewFirstDirection[column] }, detection.band, detection.estimator)
+  const claimScale = linearScale(summaries.map(summary => sum(summary.card.reliability.labelsPerAdmittedReview, trueSegments)))
+  const costs = summaries.flatMap(summary => summary.card.cost.perTrial.kind === 'unavailable' ? [] : [summary.card.cost.perTrial.value])
+  const costScale = logScale(costs.length ? costs : [0.1, 1])
+  const times = summaries.flatMap(summary => { const time = measured(summary.card.time.summary); return time ? [time.q1, time.q3] : [] })
+  const time = timeScale(times)
+  const shareAxis: Axis = [0, 25, 50, 75, 100].map(value => ({ at: value, label: `${value}%` }))
+  const halfAxis: Axis = shareAxis.map(tick => tick.at % 50 ? { at: tick.at } : tick)
+  const panels: Record<Column, Panel> = {
+    detection: { title: foundLabels[detection.band], about: `Share of the band’s known problems that reviews caught, ${estimatorLabels[detection.estimator]}.`, order: orderText.detection, axis: shareAxis },
+    claims: { title: 'Problem claims per review', about: 'True claims that name a problem. The bar continues with the review’s other true claims.', order: orderText.claims,
+      keys: [{ label: 'Problem', className: 'key-solid' }, { label: 'Other true', className: 'key-rest' }], axis: ticks(claimScale).map(value => ({ at: at(claimScale, value), label: String(value) })) },
+    doubt: { title: 'Refuted or unproven', about: 'Share of admitted reviews with at least one refuted or unproven claim. An unproven claim is not shown to be false.', order: orderText.doubt,
+      keys: [{ label: 'Refuted or unproven', className: 'key-solid' }, { label: 'Only doubt unresolved', className: 'key-hatched' }], axis: halfAxis },
+    cost: { title: 'Cost per trial', about: `Every attempt, retries included, per scheduled trial; ${costScaleNote(shown)}. A dashed dot is a lower bound.`, order: orderText.cost,
+      axis: spaced(ticks(costScale).map(value => ({ at: at(costScale, value), ...Number.isInteger(Math.log10(value)) ? { label: money(value) } : {} })), 26) },
+    time: { title: 'Median time', about: 'Completed trials only; the band spans the middle half of trials. Log scale.', order: orderText.time,
+      axis: spaced(time.marks.map(([seconds, label]) => ({ at: at(time.scale, seconds), label })), 22) },
   }
-  const rows = overviewOrder(summaries, summary => ({ name: summary.configuration.short, card: summary.card }), sort, detection.band, detection.estimator)
-  const claimScale = linearScale(rows.map(summary => trueSegments.reduce((total, segment) => total + (measured(summary.card.reliability.labelsPerAdmittedReview[segment]) ?? 0), 0)))
-  const heads = headings(detection, claimScale.max)
-  const readings = rows.map(summary => {
+  const readings = new Map(summaries.map(summary => {
     const { card, configuration } = summary
-    const recall = card.detection[detection.band][detection.estimator]
     const labels = labelSegments.map(segment => card.reliability.labelsPerAdmittedReview[segment]).find(rate => rate.kind === 'unavailable')
-    return {
-      detection: share(recall, summary.detectionNote),
+    const cells: Record<Column, Reading> & { unresolved: Reading } = {
+      detection: share(card.detection[detection.band][detection.estimator], summary.detectionNote, 0),
       claims: labels?.kind === 'unavailable' ? reading(labels, String) : perReview(card.reliability.problemClaimsPerReview),
-      doubt: share(card.reliability.reviewsWithDoubt.refutedOrUnproven), unresolved: share(card.reliability.reviewsWithDoubt.onlyUnresolved),
-      cost: reading(card.cost.perTrial, value => `${money(value)}${configuration.billing === 'list-price-equivalent' ? '*' : ''}`),
+      doubt: share(card.reliability.reviewsWithDoubt.refutedOrUnproven, null, 0), unresolved: share(card.reliability.reviewsWithDoubt.onlyUnresolved, null, 0),
+      cost: reading(card.cost.perTrial, costText(configuration, shown)),
       time: reading(card.time.summary, value => duration(value.median)),
     }
-  })
-  const notes = notesFor(readings.flatMap(cells => [cells.detection, cells.claims, cells.doubt, cells.cost, cells.time]))
-  const active = heads[sort.column]
-  const missing = sort.column !== 'setup' && rows.some(summary => overviewKey(summary.card, sort.column as Exclude<OverviewColumn, 'setup'>, detection.band, detection.estimator) === null)
-  const bounded = sort.column === 'cost' && rows.some(summary => summary.card.cost.perTrial.kind === 'atLeast')
-  const rule = `Sorted by ${active.measure}, ${active[sort.direction]}.${bounded ? ' A lower-bound cost sorts by its bound.' : ''}${missing ? ' Setups without a value come last.' : ''}`
-  const toggle = (column: OverviewColumn) => onSort(column === sort.column
-    ? { column, direction: sort.direction === 'ascending' ? 'descending' : 'ascending' } : { column, direction: overviewFirstDirection[column] })
-  if (!rows.length) return <div className="plot-empty" role="status"><span>Select at least one review method and model.</span></div>
-  return <div className="overview" onMouseLeave={() => setTip(null)}>
-    <p className="overview-rule" aria-live="polite">{rule}</p>
-    <div role="table" aria-label={`Overview of the selected setups. ${rule}`} className="overview-table">
-      <div role="row" className="overview-head">{overviewColumns.map(column => {
-        const heading = heads[column], current = sort.column === column
-        return <div role="columnheader" key={column} className="overview-axis" aria-sort={current ? sort.direction : 'none'}>
-          <Tooltip label={heading.hint} disabled={!heading.hint} multiline w={280} withArrow>
-            <button type="button" className="text-button sort-heading overview-sort" onClick={() => toggle(column)} aria-description={heading.hint}>
-              <span className="overview-title">{heading.title}{heading.note && <em>{heading.note}</em>}</span><span className="overview-short">{heading.short}</span>
-              {current ? sort.direction === 'ascending' ? <ArrowUp size={13} aria-hidden="true" /> : <ArrowDown size={13} aria-hidden="true" /> : <ArrowUpDown size={13} aria-hidden="true" />}
-            </button>
-          </Tooltip>
-          {heading.ends && <span className="overview-ends" aria-hidden="true"><span>{heading.ends[0]}</span><span>{heading.ends[1]}</span></span>}
-        </div>
-      })}</div>
-      {rows.map((summary, index) => {
-        const { configuration, card } = summary
-        const cells = readings[index]!
-        const { method, model, effort } = setupParts(configuration)
-        const rates = card.reliability.labelsPerAdmittedReview
+    return [configuration.id, cells]
+  }))
+  const notes = notesFor(columns.flatMap(column => ordered(column).map(summary => readings.get(summary.configuration.id)![column])).filter(cell => cell.reason))
+  const show = (configuration: Configuration, lines: TipLine[]) => (event: MouseEvent<Element> | FocusEvent<Element>) => {
+    const shell = event.currentTarget.closest('.overview')?.getBoundingClientRect(), box = event.currentTarget.getBoundingClientRect()
+    if (shell) setTip({ configuration, lines, ...tipPlace(shell, box, 160, Infinity) })
+  }
+
+  function marks(column: Column, summary: Summary): { draw: ReactNode; more: TipLine[]; description?: string } {
+    const { card } = summary
+    const cells = readings.get(summary.configuration.id)!
+    switch (column) {
+      case 'detection': return { draw: summary.detection !== null && <span className="measure-bar" style={{ width: `${summary.detection}%` }} />, more: [] }
+      case 'claims': {
+        if (cells.claims.reason) return { draw: null, more: [] }
+        const rates = card.reliability.labelsPerAdmittedReview, problems = sum(rates, problemSegments), others = sum(rates, trueSegments) - problems
+        const more = trueSegments.flatMap(segment => { const value = measured(rates[segment]) ?? 0; return value > 0 ? segmentLines(card, segment, value) : [] })
+        return { more, description: more.length ? `. By label: ${more.map(line => `${line.label} ${line.value}`).join(', ')}` : undefined,
+          draw: <><span className="measure-bar" style={{ width: `${at(claimScale, problems)}%` }} />
+            {others > 0 && <span className="measure-bar measure-rest" style={{ left: `${at(claimScale, problems)}%`, width: `${at(claimScale, others)}%` }} />}</> }
+      }
+      case 'doubt': {
         const doubt = measured(card.reliability.reviewsWithDoubt.refutedOrUnproven), unresolved = measured(card.reliability.reviewsWithDoubt.onlyUnresolved)
-        const cost = card.cost.perTrial, time = measured(card.time.summary)
-        let offset = 0
-        return <div role="row" key={configuration.id} className="overview-row" style={{ '--mark-color': reviewColor(configuration) } as CSSProperties} onClick={() => onSelect(configuration.id)}>
-          <div role="rowheader" className="overview-name">
-            <button type="button" className="text-button rank-name" onClick={event => { event.stopPropagation(); onSelect(configuration.id) }}
-              aria-label={`${configuration.short}. Inspect evidence`}>
-              <Mark configuration={configuration} /><span><strong>{method}</strong><span className="rank-model">{model}{effort && ` · ${effort}`}</span><PeerNote configurations={[configuration]} className="rank-model" /></span>
-            </button>
+        return { more: unresolved ? [{ label: 'Only doubt unresolved', value: cells.unresolved.text }] : [], description: unresolved ? `, and ${cells.unresolved.text} whose only doubt is unresolved` : undefined,
+          draw: doubt !== null && <><span className="measure-bar" style={{ width: `${doubt * 100}%` }} />
+            {unresolved !== null && unresolved > 0 && <span className="measure-bar measure-unresolved" style={{ left: `${doubt * 100}%`, width: `${unresolved * 100}%` }} />}</> }
+      }
+      case 'cost': {
+        const cost = card.cost.perTrial
+        return { more: [], draw: cost.kind !== 'unavailable' && <Stem left={at(costScale, cost.value)} hollow={cost.kind === 'atLeast'} /> }
+      }
+      case 'time': {
+        const spread = measured(card.time.summary)
+        return { more: spread ? [{ label: 'Middle half', value: `${duration(spread.q1)} to ${duration(spread.q3)}` }] : [],
+          draw: spread && <><span className="measure-spread" style={{ left: `${at(time.scale, spread.q1)}%`, width: `${at(time.scale, spread.q3) - at(time.scale, spread.q1)}%` }} />
+            <Stem left={at(time.scale, spread.median)} /></> }
+      }
+    }
+  }
+
+  return <div className="overview" data-focusing={active ? '' : undefined} onMouseLeave={() => { setTip(null); setFocus(null) }}>
+    <div className="measure-grid">
+      <section className="measure-card lead-card" data-lead aria-labelledby="measure-lead">
+        <header className="measure-head"><div><h3 id="measure-lead">{foundLabels[detection.band]} against {pairedLabels[axis]} and {pairedLabels[pairedAxis(axis)]}</h3>
+          <p className="lead-about">Each setup sits at the same height in both panels; up and left is better. <span className="lead-scope">This comparison: {[`${basis.prs} PRs`,
+            detection.band === 'all' ? `${basis.known} known problems` : `${basis.problems} of ${basis.known} known problems are ${lowerFirst(bandLabels[detection.band])}`,
+            basis.awaiting > 0 && `${basis.awaiting} awaiting a ruling`].filter(Boolean).join(' · ')}</span></p></div></header>
+        <Chart summaries={summaries} detection={detection} matching={matching} axis={axis} view="tradeoff" height={290} onSelect={onSelect} linked={{ id: active, point: setFocus, pin }}
+          guide={<><GuideItem label="Terms"><KeyTerms terms={['Review setup', 'Known problem', 'Impact band', 'Problems or PRs weighted equally', 'Refuted or unproven', 'Admitted review']} /></GuideItem>
+            {weight(detection, basis) && <GuideItem label="Weight">{weight(detection, basis)}</GuideItem>}
+            <GuideItem label="Charts below">Each ranks the setups by one measure, on its own scale; a setup without a value comes last. No single number ranks the setups. Select a setup to open its evidence.</GuideItem></>} />
+      </section>
+      <header className="measure-section-head"><h3>Each measure, ranked on its own</h3><p>Every chart below sorts the setups by one measure, on its own scale.</p></header>
+      {columns.map(column => {
+        const panel = panels[column], id = `measure-${column}`
+        return <section key={column} className="measure-card" data-lead={column === 'detection' || undefined} aria-labelledby={id}>
+          <header className="measure-head">
+            <div><h3 id={id}>{panel.title}</h3><p><Glossed text={panel.about} /></p></div>
+            <span className="measure-order">{overviewFirstDirection[column] === 'ascending' ? <ArrowUp size={13} aria-hidden="true" /> : <ArrowDown size={13} aria-hidden="true" />}{panel.order}</span>
+          </header>
+          {panel.keys && <KeyList items={panel.keys} />}
+          <div role="table" aria-label={`${panel.title}, ${panel.order.toLowerCase()}`} className="measure-rows">
+            <div role="row" className="measure-axis">
+              <VisuallyHidden role="columnheader">Setup</VisuallyHidden><VisuallyHidden role="columnheader">{panel.title}</VisuallyHidden>
+              <span className="measure-ticks" aria-hidden="true">{panel.axis.map(tick => tick.label && <span key={tick.at} data-edge={tick.at <= 0 ? 'start' : tick.at >= 100 ? 'end' : undefined} style={{ left: `${tick.at}%` }}>{tick.label}</span>)}</span>
+            </div>
+            {ordered(column).filter((summary, index) => opened.includes(column) || index < limit || summary.configuration.id === active).map(summary => {
+              const { configuration } = summary
+              const cell = readings.get(configuration.id)![column]
+              const { draw, more, description } = marks(column, summary)
+              const lines = [{ label: panel.title, value: cell.text, note: cell.reason ?? cell.annotation }, ...more]
+              return <div role="row" key={configuration.id} className="measure-row" data-focus={active === configuration.id || undefined}
+                style={{ '--mark-color': reviewColor(configuration) } as CSSProperties} onMouseEnter={() => setFocus(configuration.id)} onClick={() => { pin(configuration.id); onSelect(configuration.id) }}>
+                <div role="rowheader" className="measure-name"><SetupButton configuration={configuration} badges={column === 'detection'} onSelect={id => { pin(id); onSelect(id) }} onFocus={() => setFocus(configuration.id)} /></div>
+                <div role="cell" className={cell.text === 'Unavailable' ? 'measure-value missing' : 'measure-value'}><Value cell={cell} notes={notes} />{description && <VisuallyHidden>{description}</VisuallyHidden>}</div>
+                <span className="measure-track" aria-hidden="true" onMouseEnter={show(configuration, lines)} onMouseLeave={() => setTip(null)}>
+                  {panel.axis.map(tick => <span key={tick.at} className="rank-grid" style={{ left: `${tick.at}%` }} />)}{draw}</span>
+              </div>
+            })}
           </div>
-          <Cell label={heads.detection.short} cell={cells.detection} notes={notes} grid={shareTicks}>
-            {summary.detection !== null && <span className="overview-bar" style={{ width: `${summary.detection}%` }} />}</Cell>
-          <Cell label={heads.claims.short} cell={cells.claims} notes={notes} grid={ticks(claimScale).map(tick => at(claimScale, tick))} interactive>
-            {!cells.claims.reason && trueSegments.map(segment => {
-              const value = measured(rates[segment]) ?? 0
-              if (value <= 0) return null
-              const start = offset
-              offset += value
-              const text = segmentTip(card, segment, value)
-              return <span key={segment} className={segmentClass('overview-segment', segment)} role="img" tabIndex={0} aria-label={text}
-                onMouseEnter={show(text)} onFocus={show(text)} onMouseLeave={() => setTip(null)} onBlur={() => setTip(null)}
-                style={{ ...swatch(segment), left: `${at(claimScale, start)}%`, width: `${at(claimScale, value)}%` }} />
-            })}</Cell>
-          <Cell label={heads.doubt.short} cell={cells.doubt} notes={notes} grid={shareTicks} description={unresolved ? `, and ${cells.unresolved.text} whose only doubt is unresolved` : undefined}>
-            {doubt !== null && <span className="overview-segment" style={{ ...swatch('refuted'), left: 0, width: `${doubt * 100}%` }} title={`Refuted or unproven, ${cells.doubt.text} of reviews`} />}
-            {doubt !== null && unresolved !== null && unresolved > 0 && <span className={segmentClass('overview-segment', 'unresolved')} title={`Only doubt is unresolved, ${cells.unresolved.text} of reviews`}
-              style={{ ...swatch('unresolved'), left: `${doubt * 100}%`, width: `${unresolved * 100}%` }} />}</Cell>
-          <Cell label={heads.cost.short} cell={cells.cost} notes={notes} grid={costTicks.map(tick => at(costScale, tick))} floor>
-            {cost.kind !== 'unavailable' && <Stem left={at(costScale, cost.value)} hollow={cost.kind === 'atLeast'} />}</Cell>
-          <Cell label={heads.time.short} cell={cells.time} notes={notes} grid={timeTicks.map(tick => at(timeScale, tick))} floor>
-            {time && <span className="overview-spread" style={{ left: `${at(timeScale, time.q1)}%`, width: `${at(timeScale, time.q3) - at(timeScale, time.q1)}%` }} />}
-            {time && <Stem left={at(timeScale, time.median)} />}</Cell>
-        </div>
+          {summaries.length > limit && <button type="button" className="text-button show-rows" aria-expanded={opened.includes(column)}
+            onClick={() => setOpened(current => current.includes(column) ? current.filter(item => item !== column) : [...current, column])}>
+            {opened.includes(column) ? <><ChevronUp size={14} aria-hidden="true" />Show the first {limit}</> : <><ChevronDown size={14} aria-hidden="true" />Show all {summaries.length} setups</>}</button>}
+        </section>
       })}
     </div>
-    {tip && <div className="chart-tip" role="presentation" style={{ left: tip.left, top: tip.top }}>{tip.text}</div>}
-    <ul className="label-legend overview-legend" aria-label="Overview key">
-      {trueSegments.map(segment => <li key={segment}><span className={segmentClass('label-swatch', segment)} style={swatch(segment)} aria-hidden="true" />{segmentLabels[segment]}</li>)}
-      <li><span className="label-swatch" style={swatch('refuted')} aria-hidden="true" />Refuted or unproven</li>
-      <li><span className="label-swatch hatched" style={swatch('unresolved')} aria-hidden="true" />Only doubt is unresolved</li>
-      <li><span className="overview-key-dot" aria-hidden="true" />Lower-bound cost</li>
-      <li><span className="overview-key-spread" aria-hidden="true" />Middle 50% of completed trials</li>
-    </ul>
     <Notes notes={notes} />
-    <div className="plot-caption">
-      <span>Each column has its own scale; a header sorts by that column. Problems found uses the impact band and average chosen above. True claims stack every true label from 0, and the number is problem claims per review. Refuted, unproven and unresolved claims are not drawn there.</span>
-      <span>Refuted or unproven: {doubtMeaning} An unproven claim is not shown to be false.</span>
-      <span>Cost and time use log scales from a marked floor; a value below the floor sits on it. Cost adds every attempt, retries included, per scheduled trial. Time covers completed trials only.</span>
-      {rows.some(summary => summary.configuration.billing === 'list-price-equivalent') && <span>* Subscription usage valued at token list prices, not a bill or quota measurement.</span>}
-    </div>
+    {tipState && <div className={tipState.below ? 'chart-tip below' : 'chart-tip'} role="presentation" style={{ left: tipState.left, top: tipState.top }}>
+      <strong><SetupName configuration={tipState.configuration} mark={false} /></strong>
+      {tipState.lines.map(line => <span key={line.label} className="tip-row"><span className="tip-label">{line.label}</span><b>{line.value}</b>{line.note && <span className="tip-note">{line.note}</span>}</span>)}</div>}
   </div>
 }
 
-function Cell({ label, cell, notes, grid, floor, interactive, description, children }: {
-  label: string; cell: Reading; notes: ReturnType<typeof notesFor>; grid: number[]; floor?: true; interactive?: true; description?: string; children: ReactNode
-}) {
-  return <div role="cell" className={cell.text === 'Unavailable' ? 'overview-cell missing' : 'overview-cell'}><span className="overview-label" aria-hidden="true">{label}</span>
-    <span className="overview-value"><Value cell={cell} notes={notes} />{description && <VisuallyHidden>{description}</VisuallyHidden>}</span>
-    <span className="overview-track" aria-hidden={interactive ? undefined : true}>{grid.map(left => <span key={left} className="rank-grid" style={{ left: `${left}%` }} />)}
-      {floor && <span className="overview-floor" />}{children}</span></div>
+function SetupButton({ configuration, badges, onSelect, onFocus }: { configuration: Configuration; badges: boolean; onSelect: (id: string) => void; onFocus: () => void }) {
+  const { method, model, effort } = setupParts(configuration)
+  return <button type="button" className="text-button measure-setup" onFocus={onFocus} onClick={event => { event.stopPropagation(); onSelect(configuration.id) }}
+    aria-label={`${configuration.short}. Inspect evidence`}>
+    <Mark configuration={configuration} size={10} /><strong>{method}</strong>
+    <span className="measure-model"><VendorMark configuration={configuration} />{model}{effort && <span className="measure-effort">&nbsp;· {effort}</span>}</span>
+    {badges && <PeerBadge configuration={configuration} />}{configuration.experimental && <span className="row-tag">Experiment</span>}
+  </button>
 }
 
 function Stem({ left, hollow = false }: { left: number; hollow?: boolean }) {
-  return <><span className="overview-stem" style={{ width: `${left}%` }} /><span className={hollow ? 'overview-dot hollow' : 'overview-dot'} style={{ left: `${left}%` }} /></>
+  return <><span className="measure-stem" style={{ width: `${left}%` }} /><span className={hollow ? 'measure-dot hollow' : 'measure-dot'} style={{ left: `${left}%` }} /></>
 }

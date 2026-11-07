@@ -1,7 +1,9 @@
 import { Text } from '@mantine/core'
+import type { Configuration } from '../lib/data'
 import { measured, perReview } from '../lib/metrics'
 import type { LabelSegment, Measure } from '../lib/scoring'
 import { labelSegments } from '../lib/scoring'
+import { SetupName } from './Chart'
 import { DataTable, Notes, notesFor, Value } from './Reading'
 import type { Column } from './Reading'
 
@@ -15,10 +17,10 @@ const untrueSegments: LabelSegment[] = ['refuted', 'unproven', 'unresolved']
 export const trueSegments = labelSegments.filter(segment => !untrueSegments.includes(segment))
 const hatched: LabelSegment[] = ['outside-this-change', 'unresolved']
 
-type Row = { id: string; label: string; rates: Record<LabelSegment, Measure> }
+type Row = { id: string; configuration: Configuration; rates: Record<LabelSegment, Measure> }
 
 export const swatch = (segment: LabelSegment) => ({ background: `var(--label-${segment.replace(':', '-')})` })
-export const segmentClass = (base: string, segment: LabelSegment) => hatched.includes(segment) ? `${base} hatched` : base
+export const segmentClass = (base: string, segment: LabelSegment) => `${base} segment-${segment}${hatched.includes(segment) ? ' hatched' : ''}`
 const tickStep = (extent: number) => extent <= 3 ? 0.5 : extent <= 8 ? 1 : extent <= 16 ? 2 : 5
 const blocked = (row: Row) => labelSegments.map(segment => row.rates[segment]).find(rate => rate.kind === 'unavailable')
 const length = (row: Row, segments: LabelSegment[]) => segments.reduce((total, segment) => total + (measured(row.rates[segment]) ?? 0), 0)
@@ -32,7 +34,7 @@ function Segments({ row, segments, origin, direction, scale }: { row: Row; segme
     offset += value
     const left = direction === 1 ? origin + start * scale : origin - offset * scale
     return [<span key={segment} className={segmentClass('label-segment', segment)} style={{ ...swatch(segment), left: `${left}%`, width: `${value * scale}%` }}
-      title={`${row.label}: ${segmentLabels[segment]}, ${value.toFixed(2)} per admitted review`} />]
+      title={`${row.configuration.short}: ${segmentLabels[segment]}, ${value.toFixed(2)} per review`} />]
   })
 }
 
@@ -48,21 +50,21 @@ export function ClaimLabels({ rows }: { rows: Row[] }) {
     return rate?.kind === 'unavailable' ? { text: 'Unavailable', reason: rate.reason } : ''
   }
   const notes = notesFor(rows.map(unavailable))
-  const columns: Column<Row>[] = [{ label: 'Setup', value: row => row.label },
+  const columns: Column<Row>[] = [{ label: 'Setup', value: row => row.configuration.short, render: row => <SetupName configuration={row.configuration} /> },
     ...labelSegments.map((segment): Column<Row> => ({ label: segmentLabels[segment], value: row => perReview(row.rates[segment]) }))]
   return <>
     <Text size="sm" className="footnote">Each distinct claim in an assessed admitted review has one label. Only a problem matches a reference problem, so only a problem has an impact band: the most severe band among the references it says what goes wrong for. True claims extend right of the line; refuted, unproven and unresolved claims extend left. These labels have no answer key, so none of them is a miss, and detection stays in its own chart.</Text>
     <ul className="label-legend" aria-label="Claim labels">{labelSegments.map(segment => <li key={segment}>
       <span className={segmentClass('label-swatch', segment)} style={swatch(segment)} aria-hidden="true" />{segmentLabels[segment]}</li>)}</ul>
-    <div className="label-plot" role="list" aria-label="Claim labels per admitted review">
+    <div className="label-plot" role="list" aria-label="Claim labels per review">
       {shown.length > 0 && <div className="label-row label-axis" aria-hidden="true"><span />
         <span className="label-sides">{left > 0 && <span style={{ right: `${100 - origin}%` }}>Refuted, unproven or unresolved</span>}
           <span style={{ left: `${origin}%` }}>True claims</span></span></div>}
       {rows.map(row => {
         const missing = unavailable(row)
         return <div role="listitem" key={row.id} className="label-row"
-          aria-label={missing ? `${row.label}: unavailable. ${missing.reason}` : `${row.label}: ${labelSegments.map(segment => `${segmentLabels[segment]} ${perReview(row.rates[segment]).text}`).join(', ')}`}>
-          <span className="label-name">{row.label}</span>
+          aria-label={missing ? `${row.configuration.short}: unavailable. ${missing.reason}` : `${row.configuration.short}: ${labelSegments.map(segment => `${segmentLabels[segment]} ${perReview(row.rates[segment]).text}`).join(', ')}`}>
+          <span className="label-name"><SetupName configuration={row.configuration} /></span>
           {missing ? <Text size="xs" c="dimmed"><Value cell={missing} notes={notes} /></Text>
             : <span className="label-track" aria-hidden="true">
               <Segments row={row} segments={untrueSegments} origin={origin} direction={-1} scale={scale} />
@@ -74,6 +76,6 @@ export function ClaimLabels({ rows }: { rows: Row[] }) {
         <span className="label-ticks">{ticks.map(tick => <span key={tick} style={{ left: `${(tick + left) * scale}%` }}>{Math.abs(tick)}</span>)}</span></div>}
     </div>
     <Notes notes={notes} />
-    <DataTable label="Claim labels per admitted review" rows={rows} rowKey={row => row.id} minWidth={1600} columns={columns} />
+    <DataTable label="Claim labels per review" rows={rows} rowKey={row => row.id} minWidth={1600} columns={columns} />
   </>
 }
