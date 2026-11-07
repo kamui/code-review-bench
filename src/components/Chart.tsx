@@ -108,6 +108,12 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
     const { method } = setupParts(point.summary.configuration)
     if (!methodTops.has(method)) methodTops.set(method, point)
   }
+  const methodLows = new Map<string, (typeof measured)[number]>()
+  for (const point of [...measured].sort((left, right) => left.x - right.x || right.y - left.y)) {
+    const { method } = setupParts(point.summary.configuration)
+    if (!methodLows.has(method)) methodLows.set(method, point)
+  }
+  const named = new Set([...methodTops.values(), ...methodLows.values()].map(point => point.summary.configuration.id))
   const pair: Axis = axis === 'doubt' ? 'cost' : 'doubt'
   const plotted = (on: Axis): Plotted[] => points.flatMap(point => {
     const metric = metricOf(point.summary, on)
@@ -124,7 +130,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
       <span>No other impact band or average is substituted. Choose them above.</span></div>
       : view === 'setups' ? <SetupRows points={points} measure={measure} axis={axis} scale={scale} frontier={frontier} onSelect={onSelect} interactions={interactions} />
         : view === 'tradeoff' ? <div className="twin">{panels.map(panel => <Scatter key={panel.on} points={panel.points} dimensions={`${lowerFirst(measure)} against ${lowerFirst(axisLabels[panel.on])}`}
-          axis={panel.on} scale={panel.scale} spotlight={spotlight?.method ?? null} marked={hovered?.id ?? linked?.id ?? null} onSelect={pinAndSelect} interactions={interactions} yTitle={foundLabels[detection.band]} height={height} />)}</div>
+          axis={panel.on} scale={panel.scale} spotlight={spotlight?.method ?? null} marked={hovered?.id ?? linked?.id ?? null} named={named} onSelect={pinAndSelect} interactions={interactions} yTitle={foundLabels[detection.band]} height={height} />)}</div>
         : view === 'skills' ? <MethodPanels points={measured} axis={axis} scale={scale} yTitle={foundLabels[detection.band]} onSelect={onSelect} interactions={interactions} />
           : <Models points={points} measure={measure} onSelect={onSelect} interactions={interactions} />}
     {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={measure} axes={view === 'models' ? [] : view === 'tradeoff' ? [axis, pair] : [axis]} place={hovered} />}
@@ -236,8 +242,8 @@ const labelOf = (points: Point[], withMethod = false) => {
 
 type Plotted = Point & { x: number; y: number }
 
-function Scatter({ points, dimensions, axis, scale, spotlight, marked, onSelect, interactions, yTitle, height = 400 }: {
-  dimensions: string; points: Plotted[]; axis: Axis; scale: Scale; spotlight: string | null; marked: string | null; onSelect: (id: string) => void; interactions: Interactions; yTitle: string; height?: number
+function Scatter({ points, dimensions, axis, scale, spotlight, marked, named, onSelect, interactions, yTitle, height = 400 }: {
+  dimensions: string; points: Plotted[]; axis: Axis; scale: Scale; spotlight: string | null; marked: string | null; named?: Set<string>; onSelect: (id: string) => void; interactions: Interactions; yTitle: string; height?: number
 }) {
   const { ref, width } = useElementSize()
   const corner = useId()
@@ -262,7 +268,7 @@ function Scatter({ points, dimensions, axis, scale, spotlight, marked, onSelect,
     ...ordered.map(point => ({ left: px(point.x) - 10, top: py(point.y) - 10, right: px(point.x) + 10, bottom: py(point.y) + 10 })),
     ...lines.flatMap(group => group.points.slice(1).flatMap((point, index) => along(group.points[index]!, point))),
   ]
-  const placed = width ? placeLabels([...(markedPoint ? [markedPoint] : []), ...ordered.filter(point => point !== markedPoint && !outside(point))].map(point => ({
+  const placed = width ? placeLabels([...(markedPoint ? [markedPoint] : []), ...ordered.filter(point => point !== markedPoint && !outside(point) && (spotlight !== null || !named || named.has(point.summary.configuration.id)))].map(point => ({
     id: point.summary.configuration.id, x: px(point.x), y: py(point.y), width: textWidth(labelText(point.summary.configuration)), height: 16,
   })), obstacles, { left: plot.left + 2, right: plot.right, top: 2, bottom: plot.bottom - 2 }, width < 600 ? [12, 22] : [12, 24, 36, 48]) : []
   const labels = markedPoint && width && !placed.some(label => label.id === marked)
