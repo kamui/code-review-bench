@@ -139,13 +139,14 @@ with the Python normalizers.
 Copy the same object into the queue file as `runtimes`. Set `runtime_store` when the store is not
 the default. Before every launch, `bench-tools queue` checks the following:
 
-- Each run's `runtimes.frozen.json` equals the queue's `runtimes`, which must pin `bench-tools`, since it runs
-  the cells. A run without the file runs only from its own freeze checkout. A run whose `freeze_commit` has
-  `rust/bench-tools` must pin `bench-tools`.
+- Each run's `runtimes.frozen.json`, as its [runtime deviations](#deviations) moved it, equals the queue's
+  `runtimes`, which must pin `bench-tools`, since it runs the cells. A run without the file runs only from its own
+  freeze checkout. A run whose `freeze_commit` has `rust/bench-tools` must pin `bench-tools`.
 - The executable and receipt hash to the pin, and the executable is a regular executable file.
 - The receipt's target is this host's, the host is a supported target (below), and the host has the
   receipt's C library at the same or a newer version.
-- The receipt's crate tree equals the crate tree at each run's `freeze_commit`.
+- The receipt's crate tree equals the crate tree at each run's `freeze_commit`, or, for a pin a deviation moved,
+  at the commit its own receipt names.
 - `RUNTIME_PATHS` now includes `rust`, so changed Rust sources, `Cargo.lock` or toolchain files in
   the checkout also differ from `freeze_commit`.
 
@@ -170,7 +171,8 @@ everything else, printing the install command:
 
 1. `BENCH_RUST_<NAME>` with `BENCH_RUST_<NAME>_SHA256`, as a queue launch sets them. The file must be an
    absolute path to an executable that hashes to the second variable. Setting only one of them is refused.
-2. With `--run`, the pin for the name in the run's `runtimes.frozen.json`, checked as a queue checks it. A run
+2. With `--run`, the pin for the name in the run's `runtimes.frozen.json`, as its runtime deviations moved it,
+   checked as a queue checks it. A run
    without that pin is refused, naming the freeze commit to run it from; the selection is never read.
 3. Otherwise the store's selected version, checked against its pin and this host, only while its receipt's crate
    tree is the crate tree at the checkout's `HEAD`. A commit that changes the crate needs a new install.
@@ -187,8 +189,8 @@ it as no dedicated toolchain; activate the manager or run the command under `mis
 ## Upgrade and rollback
 
 To upgrade, install the new version and select it (`runtime install --select`, or `runtime select SHA256`). Only
-runs frozen after that take it. An unfinished run keeps its frozen pin until it ends. Never edit a started run's
-`runtimes.frozen.json`.
+runs frozen after that take it. An unfinished run keeps its frozen pin until it ends, unless a
+[runtime deviation](#deviations) moves it. Never edit a started run's `runtimes.frozen.json`.
 
 `runtime rollback` selects the version that was selected before the current one. Like `select`, it changes
 only `selected.json` and appends to `selections.jsonl`. It reads the current selection and writes the
@@ -200,7 +202,7 @@ possibly successful side effect is therefore never replayed through another impl
 
 ## Deviations
 
-When a run needs another runtime, freeze a new run, or record the change and settle it by hand:
+When a started run needs another runtime, freeze a new run, or record the change:
 
 ```sh
 bench/tools/bench-tools runtime deviation --run bench/runs/<run> \
@@ -209,8 +211,16 @@ bench/tools/bench-tools runtime deviation --run bench/runs/<run> \
 
 This writes `deviations/runtime-<name>-<old>-to-<new>.v1.json` with schema
 `rust-runtime-deviation/1`. The record holds both pins and receipts and the four statements, and the
-tool never overwrites it. It has no `predecessor` or `cause`, so attempt-diagnosis readers pass over
-it. No check reads it as permission: the queue still requires the frozen pin.
+tool never overwrites it. `--from` must be the pin the run holds now. It has no `predecessor` or `cause`, so
+attempt-diagnosis readers pass over it.
+
+The record moves the run: `run-cell`, its `--file`, the skill runners, `prune-workspace`, `runtime resolve --run`
+and `bench-tools queue` read the run's pins as `runtimes.frozen.json` with each record applied in `recorded_at`
+order, and each record must start from the pin the run held then. The queue then pins the new version, which must
+come from the crate tree at its own receipt's commit; the runner files in the checkout must still match the
+freeze commit. A later record can move the run back. `runtimes.frozen.json` stays as frozen. Record the reason, the
+authorization and the difference between the two crate trees in the statements, because the record is the whole
+account of the change.
 
 ## Platform coverage
 

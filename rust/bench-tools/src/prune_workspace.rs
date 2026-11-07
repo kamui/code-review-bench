@@ -5,7 +5,7 @@
 //! A review attempt is pruned only when it was filed `valid completed`, its native artifacts and transcript archive
 //! verify, its clone was observed unchanged and is still at the target's head with a clean tree, and its usage is
 //! metered or a line of the run's `charges.jsonl` reconciles it. Its `forge/bench-tools` goes only when it is the
-//! runtime the run's `runtimes.frozen.json` pins, so the pin restores its bytes; the rest of `forge` stays. A grading workspace is pruned only when the saved
+//! runtime the run's `runtimes.frozen.json` pins, as its runtime deviations moved it, so the pin restores its bytes; the rest of `forge` stays. A grading workspace is pruned only when the saved
 //! assessment receipt names its verdicts and, for a dispatched session, its clean, priced exit. Everything else in the
 //! workspace stays.
 //!
@@ -384,10 +384,14 @@ fn file_digest(mut file: std::fs::File) -> R<String> {
     }
 }
 
-/// The digest `runtimes.frozen.json` pins, once the forge bench-tools copy is found to match it: only that runtime can
-/// restore its bytes.
+/// The digest `runtimes.frozen.json` pins, as the run's runtime deviations moved it, once the forge bench-tools copy
+/// is found to match it: only that runtime can restore its bytes.
 fn pinned_runtime(copy: &PyPath, run: &PyPath) -> R<String> {
-    let pinned = read(&run.join(b"runtimes.frozen.json"))?;
+    let frozen = run.join(b"runtimes.frozen.json");
+    read(&frozen)?;
+    let pinned = crate::grade::runtime::run_pins(&run.to_path_buf())
+        .map_err(|why| failed(format!("{}: {why}", frozen.display())))?
+        .pins;
     let pinned = at(at(&pinned, "bench-tools"), "sha256").as_str();
     match pinned {
         Some(pinned) if pinned == digest(copy)? => Ok(pinned.to_string()),

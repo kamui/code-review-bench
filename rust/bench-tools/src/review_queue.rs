@@ -33,10 +33,11 @@
 //!
 //! `runtimes` pins Rust executables that `bench-tools runtime` retained, by the pins `runtime pin` prints, in the
 //! store that `runtime_store` names (default `~/.t3/bench-runtime`). Each run's `runtimes.frozen.json`, written when
-//! the run is frozen, must hold the same pins. Before every launch each pinned executable and receipt must hash to
-//! the pin, suit this host's target and C library, and come from the crate tree at each run's `freeze_commit`. A
-//! launch gets the executable as `BENCH_RUST_<NAME>` with `BENCH_RUST_<NAME>_SHA256`, and its launch record keeps
-//! the pins. A missing or changed pinned version blocks the queue: nothing falls back to the store's selected
+//! the run is frozen, must hold the same pins, after the `rust-runtime-deviation/1` records in its `deviations/` move
+//! them. Before every launch each pinned executable and receipt must hash to the pin, suit this host's target and C
+//! library, and come from the crate tree at each run's `freeze_commit`, or for a pin a record moved, at its own
+//! receipt's commit. A launch gets the executable as `BENCH_RUST_<NAME>` with `BENCH_RUST_<NAME>_SHA256`, and its
+//! launch record keeps the pins. A missing or changed pinned version blocks the queue: nothing falls back to the store's selected
 //! version, and `runtime rollback` changes only what new runs freeze. Each cell runs through the pinned
 //! `bench-tools run-cell`, so a queue whose runs froze `rust/bench-tools` and that pins no `bench-tools` is refused
 //! before any launch.
@@ -1018,11 +1019,10 @@ fn verify(queue: &Queue, runs: &[Run], pin: bool, effects: &Effects<'_>) -> Q<La
                 run.id
             ));
         }
-        let frozen = run.dir.join("runtimes.frozen.json");
-        let saved = if is_file(&frozen)? {
-            read_json(&frozen)?
-        } else {
-            Value::Object(Object::default())
+        let pinned = rust_runtime::run_pins(&run.dir).map_err(Failure::Input)?;
+        let saved = match pinned.pins {
+            Value::Null => Value::Object(Object::default()),
+            pins => pins,
         };
         if !saved.py_eq(&frozen_runtimes) {
             return blocked(format!(
@@ -1044,8 +1044,10 @@ fn verify(queue: &Queue, runs: &[Run], pin: bool, effects: &Effects<'_>) -> Q<La
             ));
         }
         for (name, runtime) in &checked {
+            let source =
+                rust_runtime::source_commit(&runtime.receipt, pinned.moved.contains(name), &commit);
             if let Some(problem) =
-                rust_runtime::source_problem(&runtime.receipt, Some(&commit), &effects.repo)
+                rust_runtime::source_problem(&runtime.receipt, Some(source), &effects.repo)
             {
                 return blocked(format!("{}: the {name} Rust runtime: {problem}", run.id));
             }

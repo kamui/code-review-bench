@@ -24,6 +24,13 @@
 //!   a skill timeout is not a rerun opportunity.
 //! - Attempts claimed plus this one must fit `max_attempts`; replacements used plus this one must fit
 //!   `replacements`; attempts in flight must be fewer than `max_in_flight`.
+//! - A caps extension, `deviations/caps-extension.v1.json` (`caps-extension/1`), records an allowance the owner
+//!   granted after the run froze: `added` more attempts, and `added` replacements kept apart from the frozen cap for
+//!   replacing an attempt whose diagnosis is `deviations/<applies_to.diagnosis>.<attempt>.v<N>.json` with
+//!   `applies_to.cause`. Such replacements count against `added` alone, and every other replacement against the
+//!   frozen `replacements`. It must give a `reason` and the authorization's `by`, `decided_on` and `verbatim` text,
+//!   or the run does not load. A run that pins no bench-tools ignores the file. Spend, per-attempt and in-flight caps stay as frozen. The claim of a covered
+//!   replacement names the extension's hash in `caps_extension`, and `--status` reports both caps.
 //! - Spend must fit: filed attempts at their priced total (when the total is unknown, the attempt's whole
 //!   reservation, or its captured minimum when that is larger), plus `charges.jsonl`, plus the reserved bound of
 //!   every attempt in flight, plus this attempt's bound (`caps.attempt_usd`, else the arm's
@@ -39,8 +46,9 @@
 //! `unknown`), the attempts, spend and cells in flight at claim time, and the bound reserved. `--dry-run` prints
 //! that record and claims nothing.
 //!
-//! Every command but `--status` refuses unless the run's `runtimes.frozen.json` pins this bench-tools, naming the
-//! freeze commit to run an older run from. The launch gets it as `BENCH_RUST_BENCH_TOOLS` with its SHA-256.
+//! Every command but `--status` refuses unless the run's `runtimes.frozen.json`, as its runtime deviations moved it,
+//! pins this bench-tools, naming the freeze commit to run an older run from. The launch gets it as
+//! `BENCH_RUST_BENCH_TOOLS` with its SHA-256.
 //!
 //! Before claiming a real attempt, rates-check-v1 compares the model's frozen dated rate with official provider
 //! prices. A change or unavailable source refuses dispatch. The verified rate is saved to the attempt's
@@ -474,6 +482,81 @@ pub(crate) fn parse_key(key: &str) -> R<Value> {
 
 // --- the run's state -------------------------------------------------------------------------
 
+const CAPS_EXTENSION: &str = "deviations/caps-extension.v1.json";
+const CAPS_EXTENSION_SCHEMA: &str = "caps-extension/1";
+/// The diagnosis causes `bench-tools queue replace` acts on.
+const REPLACED_CAUSES: [&str; 3] = ["harness-invalid", "harness-stop", "transient-capacity"];
+
+/// An allowance the owner granted after the run froze: `added` more replacements, and as many more attempts, for
+/// replacing an attempt whose diagnosis is `deviations/<diagnosis>.<attempt>.v<N>.json` with `cause`. Every other
+/// replacement keeps the frozen cap.
+struct Extension {
+    diagnosis: String,
+    cause: String,
+    added: i64,
+    sha256: String,
+}
+
+fn extension(dir: &Path) -> R<Option<Extension>> {
+    let path = dir.join(CAPS_EXTENSION);
+    // A run that pins no bench-tools runs from its freeze checkout, whose runner reads its own records; the Python
+    // runner's caps-extension.v1.json in 2026-10-02-codex-ce-luna-high-selected has another shape.
+    if !is_file(&dir.join("runtimes.frozen.json"))? || !is_file(&path)? {
+        return Ok(None);
+    }
+    let record = read_json(&path)?;
+    let malformed = |why: &str| input(format!("{}: {why}", path.display()));
+    let filled = |value: &Value| {
+        value
+            .as_str()
+            .is_some_and(|text| !pytext::strip(text).is_empty())
+    };
+    if !pyvalue_is(get(&record, "schema"), CAPS_EXTENSION_SCHEMA) {
+        return malformed(&format!("schema is not {CAPS_EXTENSION_SCHEMA}"));
+    }
+    let applies = get(&record, "applies_to");
+    let diagnosis = get(applies, "diagnosis").as_str().unwrap_or("");
+    if diagnosis.is_empty()
+        || !diagnosis
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    {
+        return malformed(
+            "applies_to.diagnosis is a diagnosis file name's first part, in lowercase letters, digits and hyphens",
+        );
+    }
+    let cause = get(applies, "cause").as_str().unwrap_or("");
+    if !REPLACED_CAUSES.contains(&cause) {
+        return malformed(&format!(
+            "applies_to.cause is one of {}",
+            REPLACED_CAUSES.join(", ")
+        ));
+    }
+    let added = match get(&record, "added") {
+        Value::Int(digits) => digits.parse::<i64>().ok().filter(|added| *added > 0),
+        _ => None,
+    };
+    let Some(added) = added else {
+        return malformed("added is a whole number above zero");
+    };
+    let authorization = get(&record, "authorization");
+    if !filled(get(&record, "reason"))
+        || !["by", "decided_on", "verbatim"]
+            .iter()
+            .all(|key| filled(get(authorization, key)))
+    {
+        return malformed(
+            "it gives a reason and the authorization's by, decided_on and verbatim text",
+        );
+    }
+    Ok(Some(Extension {
+        diagnosis: diagnosis.to_string(),
+        cause: cause.to_string(),
+        added,
+        sha256: sha256_file(&path)?,
+    }))
+}
+
 /// The frozen manifest plus what the filed records, the charges and the work directory say.
 pub(crate) struct Run {
     pub(crate) dir: PathBuf,
@@ -485,6 +568,7 @@ pub(crate) struct Run {
     pub(crate) filed: BTreeMap<String, Value>,
     pub(crate) claimed: BTreeMap<String, Value>,
     charges: Vec<Value>,
+    extension: Option<Extension>,
 }
 
 impl Run {
@@ -569,6 +653,7 @@ impl Run {
                 (id, path)
             })
             .collect();
+        let extension = extension(&dir)?;
         Ok(Self {
             dir,
             work: work.to_path_buf(),
@@ -579,6 +664,7 @@ impl Run {
             filed,
             claimed,
             charges,
+            extension,
         })
     }
 
@@ -652,6 +738,44 @@ impl Run {
             .iter()
             .filter(|attempt| get(self.record(attempt), "predecessor").truthy())
             .count()
+    }
+
+    /// Whether the caps extension covers replacing `attempt`: a diagnosis file it names holds the attempt as
+    /// `predecessor` with its `cause`.
+    fn extends(&self, attempt: &str) -> R<bool> {
+        let Some(extension) = &self.extension else {
+            return Ok(false);
+        };
+        let directory = self.dir.join("deviations");
+        let prefix = format!("{}.{attempt}.v", extension.diagnosis);
+        for name in names(&directory)? {
+            let version = name
+                .strip_prefix(&prefix)
+                .and_then(|rest| rest.strip_suffix(".json"));
+            if version.is_some_and(|version| {
+                !version.is_empty() && version.bytes().all(|byte| byte.is_ascii_digit())
+            }) {
+                let row = read_json(&directory.join(&name))?;
+                if pyvalue_is(get(&row, "predecessor"), attempt)
+                    && pyvalue_is(get(&row, "cause"), &extension.cause)
+                {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    /// The replacements the caps extension covers, which the frozen cap does not count.
+    fn extended_replacements(&self) -> R<usize> {
+        let mut count = 0;
+        for attempt in self.attempt_ids() {
+            let predecessor = get(self.record(&attempt), "predecessor");
+            if predecessor.truthy() && self.extends(&predecessor.py_str())? {
+                count += 1;
+            }
+        }
+        Ok(count)
     }
 
     pub(crate) fn attempt_bound(&self, arm: &str) -> R<f64> {
@@ -990,16 +1114,33 @@ fn choose(run: &Run, choice: &Choice, reason: Option<&str>) -> R<Object> {
         ));
     }
     let caps = run.caps();
-    let max_attempts = integer(get(caps, "max_attempts"), "caps.max_attempts")?;
+    let added = run
+        .extension
+        .as_ref()
+        .map_or(0, |extension| extension.added);
+    let max_attempts = integer(get(caps, "max_attempts"), "caps.max_attempts")? + added;
     if i64::try_from(run.attempt_ids().len()).unwrap_or(i64::MAX) + 1 > max_attempts {
         return refuse(format!("max_attempts {max_attempts} reached"));
     }
     let mut index = None;
-    if predecessor.is_some() {
-        let cap = integer(get(caps, "replacements"), "caps.replacements")?;
-        let next = i64::try_from(run.replacements_used()).unwrap_or(i64::MAX) + 1;
+    let mut extended = None;
+    if let Some(predecessor) = &predecessor {
+        let covered = run.extended_replacements()?;
+        let (used, cap) = if run.extends(predecessor)? {
+            extended = run.extension.as_ref();
+            (covered, added)
+        } else {
+            let cap = integer(get(caps, "replacements"), "caps.replacements")?;
+            (run.replacements_used() - covered, cap)
+        };
+        let next = i64::try_from(used).unwrap_or(i64::MAX) + 1;
         if next > cap {
-            return refuse(format!("replacement {next} exceeds the cap of {cap}"));
+            return refuse(match extended {
+                Some(_) => {
+                    format!("replacement {next} exceeds the {cap} that {CAPS_EXTENSION} adds")
+                }
+                None => format!("replacement {next} exceeds the cap of {cap}"),
+            });
         }
         index = Some(next);
     }
@@ -1026,7 +1167,7 @@ fn choose(run: &Run, choice: &Choice, reason: Option<&str>) -> R<Object> {
     }
     let optional = |value: Option<String>| value.map_or(Value::Null, |value| text(&value));
     let retry_reason = predecessor.as_ref().and(reason.map(str::to_string));
-    Ok([
+    let mut chosen: Object = [
         ("cell", cell),
         ("predecessor", optional(predecessor)),
         ("retry_reason", optional(retry_reason)),
@@ -1039,7 +1180,38 @@ fn choose(run: &Run, choice: &Choice, reason: Option<&str>) -> R<Object> {
     ]
     .into_iter()
     .map(|(key, value)| (key.to_string(), value))
-    .collect())
+    .collect();
+    if let Some(extension) = extended {
+        chosen.insert(
+            "caps_extension".to_string(),
+            object(vec![
+                ("path", text(CAPS_EXTENSION)),
+                ("sha256", text(&extension.sha256)),
+                ("replacements", Value::Int(extension.added.to_string())),
+            ]),
+        );
+    }
+    Ok(chosen)
+}
+
+/// The claim's `kind`: a first attempt, or replacement k of the cap that applies.
+fn kind(run: &Run, claim: &Object) -> String {
+    if !get(&Value::Object(claim.clone()), "predecessor").truthy() {
+        return "first attempt".to_string();
+    }
+    let index = claim
+        .get("replacement_index")
+        .map_or_else(String::new, Value::py_str);
+    match claim.get("caps_extension") {
+        Some(extension) => format!(
+            "replacement {index} of the {} that {CAPS_EXTENSION} adds",
+            get(extension, "replacements").py_str()
+        ),
+        None => format!(
+            "replacement {index} of {}",
+            get(run.caps(), "replacements").py_str()
+        ),
+    }
 }
 
 fn next_attempt_id(run: &Run) -> R<String> {
@@ -1136,7 +1308,8 @@ pub(crate) fn status(run: &Run) -> R<Value> {
         .map(Value::py_str)
         .find(|key| !attempted.contains(key));
     let count = |n: usize| Value::Int(n.to_string());
-    Ok(object(vec![
+    let covered = run.extended_replacements()?;
+    let mut rows = vec![
         ("run", text(&run.id)),
         (
             "planned_cells",
@@ -1158,13 +1331,40 @@ pub(crate) fn status(run: &Run) -> R<Value> {
             ]),
         ),
         ("in_flight", texts(&run.in_flight())),
-        ("replacements_used", count(run.replacements_used())),
+        (
+            "replacements_used",
+            count(run.replacements_used() - covered),
+        ),
         ("replacement_cap", get(caps, "replacements").clone()),
+    ];
+    if let Some(extension) = &run.extension {
+        rows.push((
+            "caps_extension",
+            object(vec![
+                ("path", text(CAPS_EXTENSION)),
+                ("sha256", text(&extension.sha256)),
+                ("diagnosis", text(&extension.diagnosis)),
+                ("cause", text(&extension.cause)),
+                ("replacements_used", count(covered)),
+                ("replacement_cap", Value::Int(extension.added.to_string())),
+                (
+                    "max_attempts",
+                    Value::Int(
+                        (integer(get(caps, "max_attempts"), "caps.max_attempts")?
+                            + extension.added)
+                            .to_string(),
+                    ),
+                ),
+            ]),
+        ));
+    }
+    rows.extend([
         ("over_reservation", texts(&run.over_reservation()?)),
         ("spend_usd", spent.value()),
         ("room_usd", Value::Float(usage::round_to(room, 4))),
         ("next_cell", next.map_or(Value::Null, |key| text(&key))),
-    ]))
+    ]);
+    Ok(object(rows))
 }
 
 // --- effects ---------------------------------------------------------------------------------
@@ -1998,17 +2198,7 @@ fn claim_and_run(
     claim.insert("billing_mode".to_string(), billing_mode.clone());
     let target_dir = check_target(&run, context, &get(&cell, "target").py_str())?;
     let attempt = next_attempt_id(&run)?;
-    let kind = if get(&Value::Object(claim.clone()), "predecessor").truthy() {
-        format!(
-            "replacement {} of {}",
-            claim
-                .get("replacement_index")
-                .map_or_else(String::new, Value::py_str),
-            get(run.caps(), "replacements").py_str()
-        )
-    } else {
-        "first attempt".to_string()
-    };
+    let kind = kind(&run, &claim);
     let quota = quota.filter(|quota| !quota.is_empty());
     for (key, value) in [
         ("attempt_id", text(&attempt)),
@@ -2873,6 +3063,194 @@ mod tests {
         assert_eq!(run.spend().expect("spend"), spend(5.4, 0.0, 6.4));
         assert_eq!(run.replacements_used(), 1);
         assert_eq!(run.attempt_ids(), ["att-001", "att-002"]);
+    }
+
+    const EXTENSION: &str = r#"{"schema": "caps-extension/1", "recorded_at": "2026-01-01T00:00:00Z",
+        "applies_to": {"cause": "harness-stop", "diagnosis": "clone-write"}, "added": 2,
+        "reason": "The reviewer wrote a file into the clone.",
+        "authorization": {"by": "owner", "decided_on": "2026-01-01", "verbatim": "Allow more reruns"}}"#;
+
+    impl Fixture {
+        fn diagnose(&self, file: &str, attempt: &str, cause: &str) {
+            put(
+                &self.run_dir.join("deviations").join(file),
+                &format!(r#"{{"predecessor": "{attempt}", "cause": "{cause}", "reason": "r"}}"#),
+            );
+        }
+    }
+
+    fn keys(value: &Value) -> Vec<String> {
+        value
+            .as_object()
+            .map(|object| object.iter().map(|(key, _)| key.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn a_caps_extension_adds_replacements_only_for_the_diagnoses_it_names() {
+        let fixture = fixture();
+        put(&fixture.run_dir.join("runtimes.frozen.json"), "{}");
+        fixture.plan(&Plan {
+            spend_usd: 100.0,
+            max_attempts: 4,
+            attempt_usd: Some(1.0),
+            ..Plan::default()
+        });
+        let stopped = "stopped: review clone tree identity changed";
+        fixture.file_record("att-001", "t1/arm-a/1", stopped, "0.1", "");
+        fixture.file_record(
+            "att-002",
+            "t1/arm-a/1",
+            stopped,
+            "0.1",
+            r#", "predecessor": "att-001""#,
+        );
+        fixture.file_record("att-003", "t1/arm-b/1", stopped, "0.1", "");
+        fixture.diagnose("clone-write.att-001.v1.json", "att-001", "harness-stop");
+        fixture.diagnose("clone-write.att-002.v1.json", "att-002", "harness-stop");
+        fixture.diagnose("session-limit.att-003.v1.json", "att-003", "harness-stop");
+
+        // Without the extension every replacement counts against the frozen cap of 1, byte for byte as before.
+        let before = status(&fixture.run()).expect("status");
+        let pick = choose(&fixture.run(), &Choice::Next, None).expect("a cell");
+        assert!(pick.get("caps_extension").is_none());
+        for attempt in ["att-002", "att-003"] {
+            refused(
+                &fixture.run(),
+                &replace(attempt, true),
+                Some("clone write"),
+                "replacement 2 exceeds the cap of 1",
+            );
+        }
+
+        put(&fixture.run_dir.join(CAPS_EXTENSION), EXTENSION);
+        let run = fixture.run();
+        let pick = choose(&run, &replace("att-002", true), Some("clone write")).expect("covered");
+        assert!(picked(&pick, "replacement_index").py_eq(&Value::Int("2".into())));
+        let extension = picked(&pick, "caps_extension");
+        assert!(get(&extension, "path").py_eq(&text(CAPS_EXTENSION)));
+        assert!(get(&extension, "replacements").py_eq(&Value::Int("2".into())));
+        assert_eq!(
+            kind(&run, &pick),
+            "replacement 2 of the 2 that deviations/caps-extension.v1.json adds"
+        );
+        // A replacement the extension does not name takes the frozen cap, of which none is used.
+        let pick = choose(&run, &replace("att-003", true), Some("limit")).expect("frozen cap");
+        assert!(picked(&pick, "replacement_index").py_eq(&Value::Int("1".into())));
+        assert!(pick.get("caps_extension").is_none());
+        assert_eq!(kind(&run, &pick), "replacement 1 of 1");
+
+        let summary = status(&run).expect("status");
+        let mut expected = keys(&before);
+        let at = expected
+            .iter()
+            .position(|key| key == "replacement_cap")
+            .unwrap()
+            + 1;
+        expected.insert(at, "caps_extension".to_string());
+        assert_eq!(keys(&summary), expected);
+        assert!(get(&before, "replacements_used").py_eq(&Value::Int("1".into())));
+        assert!(get(&summary, "replacements_used").py_eq(&Value::Int("0".into())));
+        assert!(get(&summary, "caps_extension").py_eq(&json(&format!(
+            r#"{{"path": "{CAPS_EXTENSION}", "sha256": "{}", "diagnosis": "clone-write", "cause": "harness-stop",
+            "replacements_used": 1, "replacement_cap": 2, "max_attempts": 6}}"#,
+            sha256_file(&fixture.run_dir.join(CAPS_EXTENSION)).unwrap()
+        ))));
+
+        // max_attempts 4 grows by 2: the fifth and sixth attempts fit, a seventh does not.
+        fixture.file_record(
+            "att-004",
+            "t1/arm-a/1",
+            stopped,
+            "0.1",
+            r#", "predecessor": "att-002""#,
+        );
+        fixture.diagnose("clone-write.att-004.v1.json", "att-004", "harness-stop");
+        refused(
+            &fixture.run(),
+            &replace("att-004", true),
+            Some("clone write"),
+            "replacement 3 exceeds the 2 that deviations/caps-extension.v1.json adds",
+        );
+        fixture.file_record(
+            "att-005",
+            "t1/arm-b/1",
+            stopped,
+            "0.1",
+            r#", "predecessor": "att-003""#,
+        );
+        fixture.diagnose("session-limit.att-005.v1.json", "att-005", "harness-stop");
+        refused(
+            &fixture.run(),
+            &replace("att-005", true),
+            Some("limit"),
+            "replacement 2 exceeds the cap of 1",
+        );
+        // A diagnosis file the extension names but with another cause is not covered.
+        fixture.diagnose("clone-write.att-004.v1.json", "att-004", "harness-invalid");
+        refused(
+            &fixture.run(),
+            &replace("att-004", true),
+            Some("clone write"),
+            "replacement 2 exceeds the cap of 1",
+        );
+        fixture.claim("att-006", "t1/arm-a/2", 1.0, "");
+        refused(
+            &fixture.run(),
+            &Choice::Next,
+            None,
+            "max_attempts 6 reached",
+        );
+    }
+
+    #[test]
+    fn a_malformed_caps_extension_is_refused() {
+        let fixture = fixture();
+        put(&fixture.run_dir.join("runtimes.frozen.json"), "{}");
+        for (change, problem) in [
+            (
+                ("\"caps-extension/1\"", "\"caps-extension/2\""),
+                "schema is not caps-extension/1",
+            ),
+            (
+                ("\"added\": 2", "\"added\": 0"),
+                "added is a whole number above zero",
+            ),
+            (
+                ("\"added\": 2", "\"added\": \"2\""),
+                "added is a whole number above zero",
+            ),
+            (
+                ("\"harness-stop\"", "\"skill-timeout\""),
+                "applies_to.cause is one of",
+            ),
+            (
+                ("\"clone-write\"", "\"clone.write\""),
+                "applies_to.diagnosis is",
+            ),
+            (
+                ("\"Allow more reruns\"", "\" \""),
+                "the authorization's by, decided_on and verbatim",
+            ),
+        ] {
+            put(
+                &fixture.run_dir.join(CAPS_EXTENSION),
+                &EXTENSION.replace(change.0, change.1),
+            );
+            match Run::open(&fixture.run_dir, &fixture.work) {
+                Err(Failure::Input(message)) => {
+                    assert!(message.contains(problem), "{problem}: {message}")
+                }
+                Err(Failure::Refused(message)) => {
+                    panic!("{problem}: refused, not an input error: {message}")
+                }
+                Ok(_) => panic!("{problem}: loaded"),
+            }
+        }
+        // A run frozen before it pinned bench-tools keeps the Python runner's record, which this runner never reads.
+        fs::remove_file(fixture.run_dir.join("runtimes.frozen.json")).expect("remove");
+        let run = Run::open(&fixture.run_dir, &fixture.work).expect("the run loads");
+        assert!(run.extension.is_none());
     }
 
     #[test]

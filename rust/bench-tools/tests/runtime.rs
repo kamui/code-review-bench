@@ -634,12 +634,13 @@ fn a_build_that_reads_the_environment_or_an_untracked_file_is_refused() {
 }
 
 #[test]
-fn a_runtime_deviation_records_both_identities_once() {
+fn a_runtime_deviation_records_both_identities_once_and_moves_the_runs_pin() {
     let fixture = Fixture::new("deviation");
-    let one = fixture.install(false);
+    let one = fixture.install(true);
+    let pin_one = stdout(&fixture.runtime(&["pin"]));
     fixture.version("two");
     let two = fixture.install(false);
-    let run = fixture.run_dir("deviating", None);
+    let run = fixture.run_dir("deviating", Some(&pin_one));
     let record = |old: &str, new: &str, reason: &str| {
         fixture.runtime(&[
             "deviation",
@@ -661,6 +662,10 @@ fn a_runtime_deviation_records_both_identities_once() {
     };
     assert_eq!(record(&one, &two, " ").status.code(), Some(2));
     assert_eq!(record(&one, &one, "why").status.code(), Some(2));
+    let stale = record(&two, &one, "why");
+    assert_eq!(stale.status.code(), Some(2), "{}", text(&stale));
+    assert!(stderr(&stale).contains(&format!("now pins bench-tools {one}, not {two}")));
+    assert_eq!(stdout(&fixture.exec(Some(&run), &["0", "a"])), "one 0 a\n");
     let done = record(&one, &two, "a fix");
     assert!(done.status.success(), "{}", text(&done));
     let path = json_field(&stdout(&done), "recorded");
@@ -673,6 +678,14 @@ fn a_runtime_deviation_records_both_identities_once() {
     ] {
         assert!(saved.contains(expected), "{expected}: {saved}");
     }
+    let moved = fixture.exec(Some(&run), &["0", "a"]);
+    assert_eq!(stdout(&moved), "two 0 a\n", "{}", text(&moved));
+    let again = record(&one, &two, "a fix");
+    assert_eq!(again.status.code(), Some(2), "{}", text(&again));
+    assert!(stderr(&again).contains(&format!("now pins bench-tools {two}, not {one}")));
+    let back = record(&two, &one, "roll back");
+    assert!(back.status.success(), "{}", text(&back));
+    assert_eq!(stdout(&fixture.exec(Some(&run), &["0", "a"])), "one 0 a\n");
     let again = record(&one, &two, "a fix");
     assert_eq!(again.status.code(), Some(1), "{}", text(&again));
     assert!(stderr(&again).contains("a record is never overwritten"));
