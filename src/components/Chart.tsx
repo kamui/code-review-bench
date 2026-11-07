@@ -159,7 +159,9 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
           onClick={() => setSpotlight(current => current?.pinned && current.method === method ? null : { method, pinned: true })}>
           <span className="strip-method"><Mark configuration={configuration} size={11} />{method}{configuration.experimental && <span className="row-tag">Experiment</span>}</span>
           <span className="strip-model"><VendorMark configuration={configuration} />{model}{effort && <span className="measure-effort"> · {effort}</span>}</span>
-          <span className="strip-value strip-found" data-label="Found"><span className="strip-bar" aria-hidden="true" style={{ '--mark-color': reviewColor(configuration), '--share': `${top.y}%` } as CSSProperties} /><Score summary={top.summary} /></span><span className={stripValue(first)} data-label={shortAxis[axis]}>{first}</span>
+          <span className="strip-value strip-found" data-label="Found"><span className="strip-dots" aria-hidden="true" style={{ '--mark-color': reviewColor(configuration) } as CSSProperties}>
+            {measured.filter(point => setupParts(point.summary.configuration).method === method).map(point =>
+              <span key={point.summary.configuration.id} className={point === top ? 'strip-dot top' : 'strip-dot'} style={{ left: `${point.y}%` }} />)}</span><Score summary={top.summary} /></span><span className={stripValue(first)} data-label={shortAxis[axis]}>{first}</span>
           <span className={stripValue(secondText)} data-label={shortAxis[pair]}>{secondText}</span>
           <span className="strip-low" data-label={axis === 'cost' ? 'Lowest cost' : `Lowest ${lowerFirst(shortAxis[axis])}`}>{low && <><span className="strip-low-model">{lowModel}</span><span className="strip-low-value">{lowText}</span><span className="strip-low-found">{percent(low.y, 0)}<span className="found-word"> found</span></span></>}</span></button></li>
       })}</ul></div>}
@@ -168,6 +170,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
       <li><Mark configuration={{ method: '', reviewEdition: '', builtin: false }} size={10} />Skill</li>
       {bounded && <li><svg className="bound-key" width="16" height="16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" /></svg>Lower bound, ≥ in the table</li>}
       <li><span className="line-key" aria-hidden="true" />One method across models</li>
+      <li><span className="dots-key" aria-hidden="true"><span /><span /><span /></span>Found by each model in the method; the large dot is the top setup</li>
       {summaries.some(summary => summary.configuration.experimental) && <li><span className="line-key dashed" aria-hidden="true" />Skill experiment</li>}
     </ul>}
     {points.length > 0 && view !== 'models' && view !== 'tradeoff' && <ul className="chart-keys" aria-label="Chart key">
