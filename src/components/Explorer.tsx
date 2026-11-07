@@ -380,7 +380,7 @@ function Limit({ text }: { text: string }) {
 }
 
 function StatusNotice({ limits, unresolved }: { limits: string[]; unresolved: boolean }) {
-  const title = limits.length ? 'Provisional results: grading is still in progress' : 'Reliability measurements are provisional'
+  const title = limits.length ? <>Provisional results<span className="status-title-rest">: grading is still in progress</span></> : 'Reliability measurements are provisional'
   const summary = <p className="status-summary">{limits.length > 0 && 'Saved reviews, delivery and usage remain available. Unresolved detection outcomes receive zero credit, with an explanation. Measures blocked by missing evidence are unavailable, with their reasons. '}
     {unresolved && 'Some claim assessments are unresolved. Reliability measurements are provisional.'}</p>
   const icon = <Hourglass className="status-icon" size={15} strokeWidth={2} aria-hidden="true" />
