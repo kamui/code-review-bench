@@ -8,7 +8,7 @@ import { compact, detectionLabel, foundLabels, duration, lowerFirst, money, perc
 import type { Axis, DetectionView, Summary } from '../lib/metrics'
 import type { Configuration } from '../lib/data'
 import { skillReleaseLabel } from '../lib/data'
-import { ChartGuide, costNote, costStarred, GuideItem } from './Reading'
+import { ChartGuide, costNote, costStarred, Glossed, GuideItem } from './Reading'
 import { VendorMark } from './VendorMark'
 
 export type ChartView = 'skills' | 'setups' | 'models' | 'tradeoff'
@@ -144,7 +144,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
           : <Models points={points} measure={measure} onSelect={onSelect} interactions={interactions} />}
     {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={measure} axes={view === 'models' ? [] : view === 'tradeoff' ? [axis, pair] : [axis]} place={hovered} />}
     {view === 'tradeoff' && methodTops.size > 0 && <div className="method-strip">
-      <div className="strip-row strip-head" aria-hidden="true"><span>Review method</span><span>Top setup (most found)</span><span>Found</span><span>{shortAxis[axis]}</span><span>{shortAxis[pair]}</span><span className="strip-low-head">Lowest {lowerFirst(shortAxis[axis])}</span></div>
+      <div className="strip-row strip-head"><span>Review method</span><span>Top setup (most found)</span><span>Found</span><span><Glossed text={shortAxis[axis]} /></span><span><Glossed text={shortAxis[pair]} /></span><span className="strip-low-head">Lowest {lowerFirst(shortAxis[axis])}</span></div>
       <ul aria-label="Each review method's top setup, from the method that finds the most">{[...methodTops].map(([method, top]) => {
         const { configuration } = top.summary, { model, effort } = setupParts(configuration)
         const second = metricOf(top.summary, pair), secondText = formatMetric(pair, second, top.starred, boundedOn(top.summary, pair), 0)
