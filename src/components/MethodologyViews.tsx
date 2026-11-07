@@ -27,7 +27,7 @@ const matchedLabels: Record<ConditionalMetric, string> = {
 
 function harm(card: Scorecard): Reading {
   const { harm: bound, safe, unsafe } = card.remedies
-  if (bound.kind === 'lower-bound') return { text: `At least ${bound.perAdmittedReview.toFixed(2)}`, reason: null }
+  if (bound.kind === 'lower-bound') return { text: `≥ ${bound.perAdmittedReview.toFixed(2)}`, reason: null }
   return { text: 'Unavailable', reason: bound.kind === 'observed' ? `${unsafe} unsafe among ${safe + unsafe} assessed remedies so far. ${bound.reason}` : bound.reason }
 }
 
