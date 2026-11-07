@@ -177,14 +177,14 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
         <TabIntro lede="Whether proposed fixes would solve their problem, and whether applying them would do harm.">Sufficiency asks whether a recommendation resolves the problem it addresses; safety asks, independently, whether applying it does harm. New first-grader assessments check safety only for sufficient or partial fixes; the second grader omits safety. Historical assessments retain their original coverage. A recommendation without a safety assessment is unassessed, never safe. The assessed subset is selected for usefulness, so its unsafe share does not describe all advice. Only when admission is final and no trial is pending are unsafe recommendations per admitted review a lower bound, because unassessed ones could add to it. Pending cohorts show observed counts and assessed exposure without a final-cohort bound.</TabIntro>
         <DataTable label="Remedy sufficiency and safety" rows={rows} rowKey={key} minWidth={1250} columns={[setup,
           { label: 'Inventoried / admitted reviews', value: row => `${row.card.remedies.inventoried} / ${row.card.remedies.admitted}` },
-          { label: 'Recommendations', value: row => String(row.card.remedies.recommendations) }, { label: 'Assessed safe', value: row => String(row.card.remedies.safe) },
-          { label: 'Assessed unsafe', value: row => String(row.card.remedies.unsafe) }, { label: 'Safety unassessed', value: row => String(row.card.remedies.unassessed) },
+          { label: 'Recommendations', value: row => String(row.card.remedies.recommendations) }, { label: 'Safety, assessed safe', value: row => String(row.card.remedies.safe) },
+          { label: 'Safety, assessed unsafe', value: row => String(row.card.remedies.unsafe) }, { label: 'Safety, unassessed', value: row => String(row.card.remedies.unassessed) },
           { label: 'Unsafe fixes per review', value: row => harm(row.card) },
           { label: 'Unsafe share of assessed remedies', value: row => share(row.card.remedies.unsafePerAssessedRemedy) },
-          { label: 'Caught problems: fix sufficient', value: row => String(row.card.remedies.sufficiency.sufficient) },
-          { label: 'Partial', value: row => String(row.card.remedies.sufficiency.partial) },
-          { label: 'Ineffective', value: row => String(row.card.remedies.sufficiency.ineffective) }, { label: 'No fix offered', value: row => String(row.card.remedies.sufficiency.absent) },
-          { label: 'Sufficiency unassessed', value: row => String(row.card.remedies.sufficiency.unassessed) }]} />
+          { label: 'Fix for a caught problem, sufficient', value: row => String(row.card.remedies.sufficiency.sufficient) },
+          { label: 'Fix for a caught problem, partial', value: row => String(row.card.remedies.sufficiency.partial) },
+          { label: 'Fix for a caught problem, ineffective', value: row => String(row.card.remedies.sufficiency.ineffective) }, { label: 'Fix for a caught problem, none offered', value: row => String(row.card.remedies.sufficiency.absent) },
+          { label: 'Fix for a caught problem, unassessed', value: row => String(row.card.remedies.sufficiency.unassessed) }]} />
       </Stack></Tabs.Panel>
 
       <Tabs.Panel value="pre-existing" ><Stack>
@@ -232,8 +232,8 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
           { label: 'Cost per scheduled trial', value: row => reading(row.card.cost.perTrial, costText(row.configuration, rows.map(item => item.configuration))) },
           { label: 'Output tokens per scheduled trial', value: row => reading(row.card.tokens.perTrial, compact) },
           { label: 'Attempts with usage / attempts', value: row => `${row.card.cost.measuredAttempts} / ${row.card.cost.attempts}` },
-          { label: 'Median completed-trial time', value: row => reading(row.card.time.summary, summary => duration(summary.median)) },
-          { label: 'Middle 50%', value: row => reading(row.card.time.summary, summary => `${duration(summary.q1)} to ${duration(summary.q3)}`.replace(/ /g, '\u00a0')) },
+          { label: 'Completed-trial time, median', value: row => reading(row.card.time.summary, summary => duration(summary.median)) },
+          { label: 'Completed-trial time, middle 50%', value: row => reading(row.card.time.summary, summary => `${duration(summary.q1)} to ${duration(summary.q3)}`.replace(/ /g, '\u00a0')) },
           { label: 'Completed / scheduled trials', value: row => `${row.card.time.completed} / ${row.card.time.scheduled}` },
           { label: 'Failed', value: row => String(row.card.time.failed) }, { label: 'Incomplete', value: row => String(row.card.time.incomplete) },
           { label: 'Pending', value: row => String(row.card.time.pending) }, { label: 'Completed without a duration', value: row => String(row.card.time.missing) }]} />

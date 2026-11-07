@@ -115,7 +115,7 @@ describe('scorecard page on the fixture', () => {
     expect(rendered).toContain('1 Stopped attempt awaits replacement.')
     expect(rendered).toContain('2 harness-invalid: audit')
     expect(rendered).toContain('Matched PRs admitted only in part')
-    expect(rendered).toContain('Safety unassessed')
+    expect(rendered).toContain('Safety, unassessed')
     expect(rendered).toContain('At least 0.17')
     expect(rendered).toContain('example/empty #505 : unaudited. No audit has been performed')
     expect(rendered).toContain('example/novel #606 : provisional. Independently audited; a novel candidate awaits a ruling')
