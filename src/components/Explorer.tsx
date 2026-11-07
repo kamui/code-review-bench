@@ -284,7 +284,7 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
         </Paper>
         <header className="subsection-head" id="review-setups"><Title order={3}>All review setups</Title>
         <Text className="subsection-lede">Lists every setup, skill experiments included, whatever the selection above. Same {shared.length} comparison PRs as the chart, in the {bandLabels[band].toLowerCase()} band. Rows start with the most found, problems weighted equally; a column heading sorts by that one measure only.</Text></header>
-        <details className="results-disclosure"><summary><ChevronRight className="chevron" size={16} aria-hidden="true" />Show every measure for all {tableRows.length} setups<span className="summary-hint">Sortable table</span></summary>
+        <details className="results-disclosure"><summary><ChevronRight className="chevron" size={16} aria-hidden="true" />Show every measure for all {tableRows.length} setups{tableRows.length > summaries.length && `, ${summaries.length} of them selected`}<span className="summary-hint">Sortable table</span></summary>
         <div className="table-frame"><Table.ScrollContainer minWidth={1050}><Table verticalSpacing={6} horizontalSpacing="xs" className="leaderboard-table" aria-label="All review setup results">
           <Table.Thead><Table.Tr>{resultsColumns.map(column => <Table.Th key={column.key} data-numeric={column.key !== 'setup' || undefined} aria-sort={sort.column === column.key ? sort.direction : 'none'}>
             <button className="text-button sort-heading" onClick={() => setSort(current => ({ column: column.key, direction: current.column === column.key && current.direction === 'ascending' ? 'descending' : 'ascending' }))}>
