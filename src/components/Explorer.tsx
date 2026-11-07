@@ -206,12 +206,12 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
           <div className="intro-meta"><Badge variant="outline" color="gray" radius="sm" className="status-badge">{status.label}</Badge>
             {(!status.complete || unresolved) && <StatusNotice limits={status.limits} unresolved={unresolved} />}</div>
         </div>
-        <div className="corpus"><dl className="corpus-stats" aria-label="Benchmark statistics">
+        <div className="corpus"><p className="corpus-title">Whole benchmark</p><dl className="corpus-stats" aria-label="Benchmark statistics">
           <div><dt>PR tasks</dt><dd>{hero.tasks}</dd></div>
           <div><dt>{hero.awaitingEligibility ? 'provisional problems' : 'known problems'}</dt><dd>{hero.problems}</dd></div>
           <div><dt>review methods</dt><dd>{hero.methods}</dd></div>
           <div><dt>models tested</dt><dd>{hero.models}</dd></div>
-        </dl><p className="corpus-note">Whole corpus. The scorecard compares the PRs that every selected setup ran.</p></div>
+        </dl><p className="corpus-note">The charts compare only the PRs that every selected setup ran.</p></div>
       </section>
 
       <section id="scorecard" className="leaderboard-section">
@@ -225,7 +225,7 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
               label: narrow ? item.label : <span className="switch-label"><item.icon size={15} strokeWidth={1.9} aria-hidden="true" />{item.label}</span> }))} />
             <Button variant="default" size="xs" className="filters-toggle" leftSection={<SlidersHorizontal size={14} aria-hidden="true" />} rightSection={<ChevronDown size={14} aria-hidden="true" />}
               aria-expanded={optionsOpen} onClick={() => setOptionsOpen(open => !open)}>Chart options · {bandLabels[band]} · {configurations.filter(item => selected.includes(item.id)).length} of {configurations.length} setups</Button>
-            <div className="axis-switch" title={view === 'models' ? 'By model plots detection only' : undefined}><span className="control-label" id="axis-label">Plot against</span>{narrow
+            <div className="axis-switch" title={view === 'models' ? 'By model plots detection only' : undefined}><span className="control-label" id="axis-label">Plot against{view === 'models' && <span className="axis-off"> · not used in By model</span>}</span>{narrow
               ? <Select aria-label="Compare detection against" size="xs" allowDeselect={false} disabled={view === 'models'} value={axis} onChange={plotAgainst} data={axisChoices} />
               : <SegmentedControl aria-label="Compare detection against" size="xs" disabled={view === 'models'} value={axis} onChange={plotAgainst} data={axisChoices} />}</div>
           </div>
@@ -240,7 +240,7 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
               <Popover position="bottom-start" width={340} withArrow arrowPosition="side" trapFocus returnFocus>
                 <Popover.Target><Button variant="default" size="xs" className="refine-button" leftSection={<SlidersHorizontal size={14} aria-hidden="true" />} rightSection={<ChevronDown size={14} aria-hidden="true" />}>Review setups ({configurations.filter(item => selected.includes(item.id)).length}/{configurations.length})</Button></Popover.Target>
                 <Popover.Dropdown className="refine-dropdown" style={{ maxHeight: '70vh', overflowY: 'auto', maxWidth: 'calc(100vw - 24px)' }}><Stack gap="sm">
-                  <Group justify="space-between"><Text size="xs" fw={640}>Review setups</Text><Group gap="xs">
+                  <Group justify="space-between"><Text size="xs" fw={700}>Review setups</Text><Group gap="xs">
                     <Button variant="subtle" size="compact-xs" className="popover-action" onClick={() => setSelected(configurations.map(item => item.id))}>Select all</Button>
                     <Button variant="subtle" size="compact-xs" className="popover-action" onClick={() => setSelected([])}>Clear all</Button>
                   </Group></Group>
@@ -253,7 +253,7 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
               </Popover>
               <Popover position="bottom-start" width={240} withArrow arrowPosition="side" trapFocus returnFocus>
                 <Popover.Target><Button variant="default" size="xs" className="refine-button" leftSection={<Cpu size={14} aria-hidden="true" />} rightSection={<ChevronDown size={14} aria-hidden="true" />}>Models ({selectedModels.length}/{modelChoices.length})</Button></Popover.Target>
-                <Popover.Dropdown className="refine-dropdown"><Stack gap="sm"><Group justify="space-between"><Text size="xs" fw={640}>Models</Text><Group gap="xs"><Button variant="subtle" size="compact-xs" className="popover-action" onClick={() => setSelectedModels(modelChoices.map(model => model.value))}>Select all</Button>
+                <Popover.Dropdown className="refine-dropdown"><Stack gap="sm"><Group justify="space-between"><Text size="xs" fw={700}>Models</Text><Group gap="xs"><Button variant="subtle" size="compact-xs" className="popover-action" onClick={() => setSelectedModels(modelChoices.map(model => model.value))}>Select all</Button>
                   <Button variant="subtle" size="compact-xs" className="popover-action" onClick={() => setSelectedModels([])}>Clear all</Button></Group></Group>
                   {modelChoices.map(model => <Checkbox key={model.value} label={<><VendorMark configuration={{ models: [model.value] }} />{model.label}</>} aria-label={model.label} checked={selectedModels.includes(model.value)} onChange={() => setSelectedModels(selectedModels.includes(model.value) ? selectedModels.filter(value => value !== model.value) : [...selectedModels, model.value])} size="xs" />)}
                 </Stack></Popover.Dropdown>
@@ -345,7 +345,7 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
             })}</Table.Tbody></Table></Table.ScrollContainer>
             {candidates.some(task => meanTaskRecall(board.cards.filter(card => activeIds.includes(card.configurationId)), task.id, band).annotations.length > 0)
               && <Text size="xs" c="dimmed" mt="sm" className="footnote">A dotted underline marks a mean that counts unresolved detection decisions as zero credit; hover it for the count.</Text>}
-            {!candidates.length && <Paper ta="center" py="xl"><Text fw={640}>No tasks match these filters</Text><Button variant="subtle" mt="sm" onClick={resetFilters}>Show all tasks</Button></Paper>}
+            {!candidates.length && <Paper ta="center" py="xl"><Text fw={700}>No tasks match these filters</Text><Button variant="subtle" mt="sm" onClick={resetFilters}>Show all tasks</Button></Paper>}
           </Tabs.Panel>
           <Tabs.Panel value="coverage" pt="lg"><CoverageMatrix tasks={dataset.tasks} />
             <Text size="xs" c="dimmed" mt="md" className="footnote">Coverage describes the full corpus; labels can overlap, and only approved references are counted. Problems without a concern label appear in their own row. These counts do not establish comparability or statistical reliability. A task with no reference findings has no recall, and tests false alarms only once it is an audited clean control.</Text></Tabs.Panel>
@@ -425,7 +425,7 @@ export function CoverageMatrix({ tasks }: { tasks: Task[] }) {
   return <Table.ScrollContainer minWidth={560}><Table className="coverage-table" verticalSpacing="sm" aria-label="Review concern coverage">
     <Table.Thead><Table.Tr><Table.Th>Concern</Table.Th><Table.Th>Tasks tagged</Table.Th><Table.Th>Approved reference problems</Table.Th></Table.Tr></Table.Thead>
     <Table.Tbody>{rows.map(row => <Table.Tr key={row.concern}>
-      <Table.Td fw={640}>{row.concern}</Table.Td>
+      <Table.Td fw={700}>{row.concern}</Table.Td>
       <Table.Td><span className="coverage-cell"><span>{row.tagged} of {tasks.length}</span><span className="coverage-track" aria-hidden="true"><span style={{ width: `${tasks.length ? row.tagged / tasks.length * 100 : 0}%` }} /></span></span></Table.Td>
       <Table.Td><span className="coverage-cell"><span>{row.references}</span><span className="coverage-track" aria-hidden="true">
         <span style={{ width: `${row.references / maxReferences * 100}%` }} /></span></span></Table.Td>

@@ -93,7 +93,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
   ]
   return <Paper withBorder radius="lg" className="methodology-panel" id="dimensions">
     <div className="dimension-head"><Title order={3}>Each measure in detail</Title>
-      <Text className="subsection-lede">Every value comes from the shared scoring kernel for the selected setups and PRs. Dimensions stay separate: there is no blended score. Rows start with the most known problems found. A numbered mark explains a value in the notes below its table.</Text></div>
+      <Text className="subsection-lede">Each measure stands on its own, for the selected setups and PRs; no single score combines them. Rows start with the setup that finds the most known problems. A small number beside a value points to a note under its table.</Text></div>
     <Tabs value={tab} onChange={value => { const next = scorecardTabs.find(item => item === value); if (next) onTab(next) }} className="dimension-tabs">
       <Select className="dimension-select" aria-label="Measure" size="sm" allowDeselect={false} value={tab} onChange={value => { const next = scorecardTabs.find(item => item === value); if (next) onTab(next) }}
         data={groups.map(group => ({ group: group.group, items: group.tabs }))} />
@@ -169,7 +169,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
           { label: `${matchedLabels[metric]}, matched PRs`, value: row => metric === 'clean' ? share(row.equalPr) : perReview(row.equalPr) },
           { label: 'Admitted / scheduled, all selected PRs', value: row => `${row.delivery.admitted} / ${row.delivery.scheduled}` },
           { label: 'Matched PRs admitted only in part', value: row => String(row.selectivelyAdmitted) }]} />
-        {common.excluded.length > 0 && <div><Text size="sm" fw={640}>Excluded PRs</Text><ul className="reason-list">{common.excluded.map(row => <li key={row.taskId}>{name(row.taskId)}: {row.reason}</li>)}</ul></div>}
+        {common.excluded.length > 0 && <div><Text size="sm" fw={700}>Excluded PRs</Text><ul className="reason-list">{common.excluded.map(row => <li key={row.taskId}>{name(row.taskId)}: {row.reason}</li>)}</ul></div>}
         <Text size="xs" c="dimmed" className="footnote">Matching removes PRs a setup did not deliver on. A setup that admitted only some trials of a matched PR is still measured on the reviews it delivered, so that selection remains.</Text>
       </Stack></Tabs.Panel>
 
@@ -275,9 +275,9 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
             const value = points(row.delta)
             return value === null ? [] : [{ id: row.taskId, label: name(row.taskId), delta: value }]
           })} a={setupLabel(a.configuration)} b={setupLabel(b.configuration)} />
-          {advice && <div className="compare-block"><Text size="sm" fw={640}>What the evidence supports</Text>{recommendation('Serious-impact preference', advice.impact)}{recommendation('Claim-reliability preference', advice.reliability)}
+          {advice && <div className="compare-block"><Text size="sm" fw={700}>What the evidence supports</Text>{recommendation('Serious-impact preference', advice.impact)}{recommendation('Claim-reliability preference', advice.reliability)}
             <Text size="xs" c="dimmed" className="footnote">A preference is limited to its own dimension. Nothing here names a best setup overall.</Text></div>}
-          <div className="compare-block"><Text size="sm" fw={640}>Comparison conditions</Text>
+          <div className="compare-block"><Text size="sm" fw={700}>Comparison conditions</Text>
             {differences.length ? <ul className="reason-list">{differences.map(difference => <li key={difference.name}>{difference.name}: {difference.values.map(row => `${row.value} (${row.configuration.short})`).join(' against ')}</li>)}</ul>
               : <Text size="sm">The recorded client, effort, permissions and billing basis match.</Text>}
             <Text size="xs" c="dimmed" className="footnote">A difference between two setups includes these conditions; it does not isolate the review method or the model.</Text></div>

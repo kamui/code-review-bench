@@ -108,12 +108,16 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
     const { method } = setupParts(point.summary.configuration)
     if (!methodTops.has(method)) methodTops.set(method, point)
   }
-  const methodLows = new Map<string, (typeof measured)[number]>()
-  for (const point of [...measured].sort((left, right) => left.x - right.x || right.y - left.y)) {
-    const { method } = setupParts(point.summary.configuration)
-    if (!methodLows.has(method)) methodLows.set(method, point)
+  const lowest = (on: (point: (typeof measured)[number]) => number | null) => {
+    const lows = new Map<string, (typeof measured)[number]>()
+    for (const point of measured.filter(point => on(point) !== null).sort((left, right) => on(left)! - on(right)! || right.y - left.y)) {
+      const { method } = setupParts(point.summary.configuration)
+      if (!lows.has(method)) lows.set(method, point)
+    }
+    return lows
   }
-  const named = new Set([...methodTops.values(), ...methodLows.values()].map(point => point.summary.configuration.id))
+  const methodLows = lowest(point => point.x)
+  const named = new Set([...methodTops.values(), ...lowest(point => metricOf(point.summary, 'cost')).values()].map(point => point.summary.configuration.id))
   const pair: Axis = axis === 'doubt' ? 'cost' : 'doubt'
   const plotted = (on: Axis): Plotted[] => points.flatMap(point => {
     const metric = metricOf(point.summary, on)
@@ -143,7 +147,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
         const low = methodLows.get(method), lowText = low ? formatMetric(axis, low.x, low.starred, low.bounded, 0) : null
         const lowModel = low ? setupParts(low.summary.configuration).model : null
         return <li key={method}><button type="button" className="strip-row" aria-pressed={spotlight?.method === method && spotlight.pinned}
-          aria-label={`${method}: top setup ${model}${effort ? ` ${effort}` : ''}, ${percent(top.y, 0)} found, ${axisLabels[axis]} ${first}, ${axisLabels[pair]} ${secondText}${low ? `, lowest ${lowerFirst(axisLabels[axis])} ${lowText} with ${lowModel}` : ''}. Select to keep this method picked out`}
+          aria-label={`${method}: top setup ${model}${effort ? ` ${effort}` : ''}, ${percent(top.y, 0)} found, ${axisLabels[axis]} ${first}, ${axisLabels[pair]} ${secondText}${low ? `, lowest ${lowerFirst(axisLabels[axis])} ${lowText} with ${lowModel}, ${percent(low.y, 0)} found` : ''}. Select to keep this method picked out`}
           onMouseEnter={() => { preview(method)(); linked?.point(configuration.id) }} onMouseLeave={() => { preview(null)(); linked?.point(null) }}
           onFocus={() => { preview(method)(); linked?.point(configuration.id) }} onBlur={() => { preview(null)(); linked?.point(null) }}
           onClick={() => setSpotlight(current => current?.pinned && current.method === method ? null : { method, pinned: true })}>
@@ -151,7 +155,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
           <span className="strip-model"><VendorMark configuration={configuration} />{model}{effort && <span className="measure-effort"> · {effort}</span>}</span>
           <span className="strip-value" data-label="Found"><Score summary={top.summary} /></span><span className={stripValue(first)} data-label={shortAxis[axis]}>{first}</span>
           <span className={stripValue(secondText)} data-label={shortAxis[pair]}>{secondText}</span>
-          <span className="strip-low" data-label={`Lowest ${lowerFirst(shortAxis[axis])}`}>{low && <><span className="strip-low-model">{lowModel}</span><span className="strip-low-value">{lowText}</span></>}</span></button></li>
+          <span className="strip-low" data-label={`Lowest ${lowerFirst(shortAxis[axis])}`}>{low && <><span className="strip-low-model">{lowModel}</span><span className="strip-low-value">{lowText}</span><span className="strip-low-found">{percent(low.y, 0)} found</span></>}</span></button></li>
       })}</ul></div>}
     {points.length > 0 && view !== 'models' && (view !== 'tradeoff' || bounded) && <ul className="chart-keys" aria-label="Chart key">
       {view === 'setups' && <li><span className="whisker-key" aria-hidden="true" />Range with any one PR left out</li>}
@@ -271,9 +275,12 @@ function Scatter({ points, dimensions, axis, scale, spotlight, marked, named, on
     ...ordered.map(point => ({ left: px(point.x) - 10, top: py(point.y) - 10, right: px(point.x) + 10, bottom: py(point.y) + 10 })),
     ...lines.flatMap(group => group.points.slice(1).flatMap((point, index) => along(group.points[index]!, point))),
   ]
-  const placed = width ? placeLabels([...(markedPoint ? [markedPoint] : []), ...ordered.filter(point => point !== markedPoint && !outside(point) && (spotlight !== null || !named || named.has(point.summary.configuration.id)))].map(point => ({
-    id: point.summary.configuration.id, x: px(point.x), y: py(point.y), width: textWidth(labelText(point.summary.configuration)), height: 16,
-  })), obstacles, { left: plot.left + 2, right: plot.right, top: 2, bottom: plot.bottom - 2 }, width < 600 ? [12, 22] : [12, 24, 36, 48]) : []
+  const request = (point: Plotted) => ({ id: point.summary.configuration.id, x: px(point.x), y: py(point.y), width: textWidth(labelText(point.summary.configuration)), height: 16 })
+  const bounds = { left: plot.left + 2, right: plot.right, top: 2, bottom: plot.bottom - 2 }
+  const first = (point: Plotted) => point === markedPoint || spotlight !== null || !named || named.has(point.summary.configuration.id)
+  const shown = ordered.filter(point => point !== markedPoint && !outside(point))
+  const leading = width ? placeLabels([...(markedPoint ? [markedPoint] : []), ...shown.filter(first)].map(request), obstacles, bounds, width < 600 ? [12, 22] : [12, 24, 36, 48]) : []
+  const placed = width ? [...leading, ...placeLabels(shown.filter(point => !first(point)).map(request), [...obstacles, ...leading.map(label => label.box)], bounds, [12])] : []
   const labels = markedPoint && width && !placed.some(label => label.id === marked)
     ? [{ id: markedPoint.summary.configuration.id, x: px(markedPoint.x) + 12, y: py(markedPoint.y), anchor: 'start' as const, leader: false }, ...placed] : placed
   const xTicks = ticks(scale, width > 700)
@@ -425,7 +432,7 @@ function Tooltip({ point, measure, axes, place }: { point: Point; measure: strin
   const row = (key: string, label: string, value: ReactNode, note?: ReactNode) =>
     <span key={key} className="tip-row"><span className="tip-label">{label}</span><b>{value}</b>{note && <span className="tip-note">{note}</span>}</span>
   const lines: ReactNode[] = [
-    row('score', measure, percent(summary.detection), range && `${percent(range.low)} to ${percent(range.high)} leaving one PR out; sensitivity, not a confidence interval`),
+    row('score', measure, percent(summary.detection), range && `${percent(range.low)} to ${percent(range.high)} with any one PR left out`),
     summary.detectionNote && <span key="zero-credit" className="tip-note">{summary.detectionNote}</span>,
     ...axes.map(axis => {
       const metric = metricOf(summary, axis), bounded = boundedOn(summary, axis)

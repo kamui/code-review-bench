@@ -61,5 +61,6 @@ describe('tooltip placement', () => {
     expect(tipPlace(rect(0, 0, 800, 600), rect(400, 400, 10, 10), 160, 170).below).toBe(false)
     expect(tipPlace(rect(0, 0, 800, 600), rect(400, 100, 10, 10), 160, 170).below).toBe(true)
     expect(tipPlace(rect(0, -500, 800, 900), rect(400, 60, 10, 10), 160, 170).below).toBe(true)
+    expect(tipPlace(rect(0, 500, 800, 400), rect(400, 760, 10, 10), 160, 300, 900).below).toBe(false)
   })
 })
