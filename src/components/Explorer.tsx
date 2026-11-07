@@ -319,8 +319,8 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
             <FilterSelect label="Code area" aria-label="Code area" all="All code areas" data={labels('areas')} value={area} onChange={setArea} />
             <FilterSelect label="Change kind" aria-label="Change kind" all="All change kinds" data={labels('changeKinds')} value={change} onChange={setChange} />
             <FilterSelect label="Technology" aria-label="Technology" all="All technologies" data={labels('technologies')} value={technology} onChange={setTechnology} />
-            <FilterSelect label="Review concern" aria-label="Task review concern" all="All review concerns" data={labels('concerns')} value={concern} onChange={setConcern} />
-            <FilterSelect label="Count problems about" aria-label="Finding concern" all="Any concern" data={findingConcerns} value={findingConcern} onChange={setFindingConcern} />
+            <FilterSelect label="Tasks tagged" aria-label="Task review concern" all="Any task tag" data={labels('concerns')} value={concern} onChange={setConcern} />
+            <FilterSelect label="Count problems tagged" aria-label="Finding concern" all="Any problem tag" data={findingConcerns} value={findingConcern} onChange={setFindingConcern} />
           </div>
           <div className="task-filters-foot">
             <Text size="xs" c="dimmed">{findingConcern ? `Detection counts only the ${plural(concernReferences, `${findingConcern.toLowerCase()} reference`)} on these PRs.` : 'Detection counts every approved reference.'} Filters also narrow the <Link className="filter-link" to="/" hash="scorecard">scorecard</Link> comparison.</Text>
@@ -419,11 +419,11 @@ export function CoverageMatrix({ tasks }: { tasks: Task[] }) {
   const labels = Array.from(new Set([...concerns, ...tasks.flatMap(task => [...task.profile.concerns, ...task.families.flatMap(family => family.concerns)])]))
   const rows = labels.map(concern => ({ concern, tagged: tasks.filter(task => task.profile.concerns.includes(concern)).length,
     references: tasks.flatMap(task => task.families).filter(family => family.eligibility === 'approved' && family.concerns.includes(concern)).length }))
-  rows.push({ concern: 'No concern tag', tagged: tasks.filter(task => !task.profile.concerns.length).length,
+  rows.push({ concern: 'No tag', tagged: tasks.filter(task => !task.profile.concerns.length).length,
     references: tasks.flatMap(task => task.families).filter(family => family.eligibility === 'approved' && !family.concerns.length).length })
   const maxReferences = Math.max(1, ...rows.map(row => row.references))
   return <Table.ScrollContainer minWidth={560}><Table className="coverage-table" verticalSpacing="sm" aria-label="Review concern coverage">
-    <Table.Thead><Table.Tr><Table.Th>Concern</Table.Th><Table.Th>Tasks tagged</Table.Th><Table.Th>Approved reference problems</Table.Th></Table.Tr></Table.Thead>
+    <Table.Thead><Table.Tr><Table.Th>Concern</Table.Th><Table.Th>Tasks with this tag</Table.Th><Table.Th>Approved problems with this tag</Table.Th></Table.Tr></Table.Thead>
     <Table.Tbody>{rows.map(row => <Table.Tr key={row.concern}>
       <Table.Td fw={700}>{row.concern}</Table.Td>
       <Table.Td><span className="coverage-cell"><span>{row.tagged} of {tasks.length}</span><span className="coverage-track" aria-hidden="true"><span style={{ width: `${tasks.length ? row.tagged / tasks.length * 100 : 0}%` }} /></span></span></Table.Td>
