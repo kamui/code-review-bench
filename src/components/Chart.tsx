@@ -164,7 +164,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
       {view === 'skills' && <span>Each panel shows one review method on every model it ran on, with detection against {lowerFirst(axisLabels[axis])} on shared axes. Gray dots are the other selected setups, for context.</span>}
       {view === 'tradeoff' && <GuideItem label="Table">Each review method's setup that finds the most. Point at a method to pick out its setups; select it to keep them picked out.</GuideItem>}
       {view === 'tradeoff' && <GuideItem label="Panels">The same setups at the same height in both. Point at or select a setup to name it in both and in every chart below.</GuideItem>}
-      {view === 'tradeoff' && <GuideItem label="Lines">In each panel, a faint line joins one review method's setups across models, from left to right; the points between are not measured.</GuideItem>}
+      {view === 'tradeoff' && <GuideItem label="Lines">In each panel, a faint line joins one review method's setups across models, from left to right; the points between are not measured.{summaries.some(summary => summary.configuration.experimental) && ' A dashed line joins a skill experiment.'}</GuideItem>}
       {(view === 'tradeoff' || axis === 'doubt') && <GuideItem label="Unproven">An unproven claim is not shown to be false.</GuideItem>}
       {view === 'models' && <span>Each row is one model; rows start with the model whose setup finds the most. Marks show {lowerFirst(measure)} for each review method that ran on it, listed from most found to least.</span>}
       {withheld.length > 0 && <span>Not plotted, {lowerFirst(measure)} unavailable: {withheld.map(row => `${row.reason} (${setups(row.count)})`).join(' ')}</span>}
@@ -285,7 +285,7 @@ function Scatter({ points, dimensions, axis, scale, spotlight, marked, named, on
       <rect x={plot.left} y={plot.top} width={plot.right - plot.left} height={plot.bottom - plot.top} fill={`url(#${corner})`} />
       <Axes plot={plot} axis={axis} scale={scale} xTicks={xTicks} px={px} py={py} height={height} yTitle={yTitle} scaleNote={width > 480} />
       {lines.map(group => <polyline key={group.key} points={group.points.map(point => `${px(point.x)},${py(point.y)}`).join(' ')}
-        className={outside(group.points[0]!) ? 'method-line muted' : setupParts(group.points[0]!.summary.configuration).method === active ? 'method-line active' : 'method-line'} style={{ stroke: reviewColor(group.points[0]!.summary.configuration) }} />)}
+        className={[outside(group.points[0]!) ? 'method-line muted' : setupParts(group.points[0]!.summary.configuration).method === active ? 'method-line active' : 'method-line', group.points[0]!.summary.configuration.experimental ? 'experiment' : ''].join(' ').trim()} style={{ stroke: reviewColor(group.points[0]!.summary.configuration) }} />)}
       {labels.filter(label => label.leader).map(label => {
         const point = points.find(item => item.summary.configuration.id === label.id)
         return point && <line key={`leader-${label.id}`} x1={px(point.x)} y1={py(point.y)} x2={label.anchor === 'middle' ? label.x : label.x + (label.anchor === 'start' ? -3 : 3)} y2={label.y} className="leader-line" />
