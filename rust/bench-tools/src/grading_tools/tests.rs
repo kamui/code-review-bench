@@ -946,6 +946,24 @@ fn a_runtime_root_holding_a_protected_path_refuses_the_sandbox() {
 }
 
 #[test]
+fn a_system_runtime_outside_the_default_path_is_on_the_sandbox_path() {
+    let fixture = fixture("usr-runtime");
+    let node = PathBuf::from("/usr/bench-tools-absent/bin/node");
+    let which = |name: &str| (name == "node").then(|| node.clone());
+    let found = tools(&fixture, python_policy(), &which);
+    let command = sandbox(&found, &["/usr/bin/true".into()], ".", &[], None).unwrap();
+    let path = [
+        "--setenv",
+        "PATH",
+        "/usr/bench-tools-absent/bin:/usr/bin:/bin",
+    ];
+    assert!(command.windows(3).any(|window| window == path));
+    let (mounts, _) =
+        runtime_mounts(&found.work, &found.policy, &found.protected, &found.host).unwrap();
+    assert!(!mounts.iter().any(|(source, _)| source == &node));
+}
+
+#[test]
 fn a_version_manager_shim_on_path_yields_to_the_installation_after_it() {
     let fixture = fixture("shim");
     let executable = |path: &Path| {
