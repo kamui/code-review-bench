@@ -11,7 +11,7 @@ Part of issue #30. After the rule-version-6 regrade (`../rule-v6-regrade-2026-11
 | 5 | `NC-cf43c4347d82` | r-base-ui-5460 | A controlled `Field.Control` renders twice on the first keystroke | Suggestion, under `CL-r-flip-render`, medium |
 | 6 | `NC-fa83fdbcea6f` | v-django-17914 | Pooled sessions with health checks off are handed out broken | Suggestion, low |
 
-[`QUESTIONS.md`](QUESTIONS.md) holds the questions in the order to ask them, starting with question 0 (see Blind answers).
+[`QUESTIONS.md`](QUESTIONS.md) holds the questions in the order to ask them, starting with question 0, which the owner has answered (see Blind answers).
 
 ## How it was prepared
 
@@ -23,14 +23,28 @@ Part of issue #30. After the rule-version-6 regrade (`../rule-v6-regrade-2026-11
 
 ## Blind answers
 
-A candidate before-record needs two blind answers from a model family other than the recommender's, unless an owner receipt allows same-family answers for the named round (`docs/adjudication-record.md`). The recommender is Claude and the owner's rule is Claude-only. No receipt names this round, so no blind session ran and no before-record is in `rulings/` yet. Question 0 asks for the permission. The three earlier receipts (`bench/grading/rulings/same-family-blind.v1.md` to `v3.md`) were each saved before that round's records or blind answers, and this round keeps that order.
+A candidate before-record needs two blind answers from a model family other than the recommender's, unless an owner receipt allows same-family answers for the named round (`docs/adjudication-record.md`). The recommender is Claude and the owner's rule is Claude-only. Question 0 asked for the permission. The owner answered "Yes, Claude blind (Recommended)" on 2026-11-07, and the receipt [`same-family-blind.v4.md`](../../../bench/grading/rulings/same-family-blind.v4.md) was saved before any blind session ran (`07c74419c`). It allows one Opus 5.5 and one Sonnet 5.5 session at high effort per case file, without fast mode, at most 14 sessions and $5. [`blind-limits.v1.json`](blind-limits.v1.json) copies those limits.
 
-Once the owner allows it and the receipt is saved:
+- [`blind/run.py`](blind/run.py) is the previous round's script for this round's six case files. Each session ran `claude -p --safe-mode` (Claude Code 2.1.318) in a fresh home and a working directory under `~/.cache/candidate-rulings-2026-11-07-blind/`, outside every git repository, holding only `rule.md` (`bench/rubric/rules.pre-existing.v4.md`), `earlier-rulings.md` (the sheet) and its case file. It had no setting sources or MCP servers, only Read, Write, Glob and Grep, and the prompt [`blind/brief-candidates.md`](blind/brief-candidates.md). Fast mode was off: `CLAUDE_CODE_DISABLE_FAST_MODE=1` and the setting `fastMode: false`. Every session's start event reports `fast_mode_state: off` and its result reports speed `standard`, which `run.py check` requires. Every session read only its three files. The credentials copied into each home were deleted after the session.
+- 12 sessions ran, one Sonnet session first as a trial, then the other 11. None failed or was rerun. The cost was $3.38 at list price, within the limits ([`usage.v1.json`](usage.v1.json)). The answers and notes are in `blind/answers/<target>/<opus|sonnet>/`.
+- [`records.py`](records.py) wrote the seven before-records in `rulings/` from `recommender.v1.json` and the saved blind answers, with the receipt in `same_family_blind`. Where it changed a blind answer's declared confidence, as the tool requires, a `.declared.json` beside the record keeps the declared one. Each record's note lists every difference from the saved answer files.
+- `bench-tools ruling check` accepts all seven records, and `ruling route` sends all seven to ASK. [`round.py`](round.py) wrote one ruling file per question in `rulings/` with both outputs. `bench-tools ruling summary --round candidate-rulings-2026-11-07` lists the seven as pending, and the full `ruling summary` still runs.
 
-1. Run two blind sessions per case file (Opus 5.5 and Sonnet 5.5 at high effort, in fresh homes outside every git repository, as `../owner-rulings-2026-11-04/blind/run.py` did), each given only `rule.md` (`bench/rubric/rules.pre-existing.v4.md`), `earlier-rulings.md` (the sheet) and its case. The six cases are `i-requests-6667/cases/N1.md`, `n-ripgrep-2957/cases/N1.md`, `o-astro-16079/cases/N1.md` (one case for both Astro records), `p-hono-5067/cases/N1.md`, `r-base-ui-5460/cases/N1.md` and `v-django-17914/cases/N1a.md`. Save each to `blind/answers/<target>/<opus|sonnet>/answers.json` with the party fields added.
-2. `python3 -I docs/research/candidate-rulings-2026-11-07/records.py <receipt>`, then `bench-tools ruling check` and `ruling route` on each record, and reconcile any differing pick before asking.
+| Question | Recommender | Opus 5.5 (blind) | Sonnet 5.5 (blind) |
+| --- | --- | --- | --- |
+| 1 requests, `NC-7b18f986a6f0` | part of GT-i2, high | part of GT-i2, medium | part of GT-i2, low |
+| 2 ripgrep, `NC-896d9ea6c530` | false, medium | false, low | **part of GT-n5**, low |
+| 3 Astro, `NC-de9bfe6de5b8` and `NC-a0a4cf9ad59c` | not shown, low | **can't tell**, low | **part of GT-o1**, low |
+| 4 Hono, `NC-6f7e0c93f8ec` | new problem, high | new problem, medium | new problem, medium |
+| 5 Base UI, `NC-cf43c4347d82` | suggestion, medium | suggestion, medium | suggestion, medium |
+| 6 Django, `NC-fa83fdbcea6f` | suggestion, low | suggestion, low | **minor defect**, low |
 
-`records.py --draft` wrote recommender-only records into the scratch directory. `bench-tools ruling check` refused each one for one reason only: "the record needs two blind answers from another model family than the recommender's". With two synthetic blind answers added in scratch (never saved), `ruling check` accepted all seven. Questions 2, 3, 5 and 6 then stay with the owner for the recommender's own reasons; questions 1 and 4 have none, and would still go to the owner because policy v2 has not earned level 1 for candidates and same-family records always route to ASK. `bench-tools ruling summary --round candidate-rulings-2026-11-07` reports "unknown round" until a record exists.
+The four differing picks are in bold. Each recommendation stays as written in its before-record. `QUESTIONS.md` gives, under each question, what the session said, what I checked and why the recommendation stands:
+
+- Ripgrep, Sonnet: it reads the sentence as GT-n5's script reached under another name, and calls that reading "a stretch". The sentence puts the sourcing before the completion call, and in that order the first Tab completes at the head.
+- Astro, Opus: a fact nobody can check leaves the claim open. A Vercel deployment could check it, and this round's checks found nothing either way, which is the rule's "not shown". The "Test on Vercel first" option is close to this answer.
+- Astro, Sonnet: the same lines and cause sentence as GT-o1, with the platform order unproven. No run shows the visitor's value taking effect on Vercel.
+- Django, Sonnet: it sorts the untrue code comment, not the failing requests the candidate is about. The current grade already scores the review's separate claim about that comment as a minor defect.
 
 ## What each answer would make stale
 
@@ -45,7 +59,7 @@ Candidates are outside a batch's input fingerprint (`docs/current-grading.md`, "
 | 5 Base UI | suggestion | 1 | $1.87 | part of GT-r10 | 16 | $18.19 |
 | 6 Django | suggestion | 1 | $2.15 | new problem | 5 | $9.20 |
 
-All six recommendations together: 37 batches, about $47.88. A full regrade of all 194 batches is about $188.35 at the same receipts. Blind sessions for question 0 are about $2.80 (the previous round's 4 sessions cost $0.93). No target with an audited-clean control is touched.
+All six recommendations together: 37 batches, about $47.88. A full regrade of all 194 batches is about $188.35 at the same receipts. The blind sessions cost $3.38. No target with an audited-clean control is touched.
 
 ## Notes for the asking session
 
