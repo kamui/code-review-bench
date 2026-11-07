@@ -227,8 +227,9 @@ function TaskResults({ task, results, band, onOpen }: { task: Task; results: Set
     <Text size="sm" fw={700}>{foundLabels[band]} on this PR</Text><Text size="xs" c="dimmed">Selected setups, most found first.</Text>
     <ul>{rows.map(({ configuration, row }) => {
       const first = row.trials.find(trial => trial.attemptId)?.attemptId
+      const cell = share(row.bands[band].recall, row.bands[band].zeroCredit.reason)
       return <li key={configuration.id}><SetupName configuration={configuration} />
-        <span className="task-result-value"><Value cell={share(row.bands[band].recall, row.bands[band].zeroCredit.reason)} /></span>
+        <span className="task-result-value"><Value cell={cell} />{typeof cell !== 'string' && cell.fraction !== undefined && <span className="cell-bar" aria-hidden="true"><span style={{ width: `${cell.fraction * 100}%` }} /></span>}</span>
         <span className="task-result-trials">{row.trials.filter(trial => trial.state === 'admitted').length} of {row.trials.length} trials admitted</span>
         {first && <Button variant="subtle" size="compact-xs" onClick={() => onOpen(first)}>Reviews</Button>}</li>
     })}</ul>

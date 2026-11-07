@@ -98,7 +98,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
     const shell = element.closest('.plot-shell')?.getBoundingClientRect()
     const box = element.getBoundingClientRect()
     const frame = element.closest('.leaderboard-paper, .measure-card')?.getBoundingClientRect()
-    if (shell) setHovered({ id, ...tipPlace(shell, box, 160, 320, window.innerHeight, frame?.top ?? shell.top) })
+    if (shell) setHovered({ id, ...tipPlace(shell, box, 160, view === 'tradeoff' ? Infinity : 320, window.innerHeight, frame?.top ?? shell.top) })
     linked?.point(id)
   }
   const unhover = () => { setHovered(null); linked?.point(null) }
