@@ -3,7 +3,7 @@ import { ActionIcon, Alert, Anchor, Badge, Button, Checkbox, Container, Group, L
   SegmentedControl, Select, Stack, Switch, Table, Tabs, Text, TextInput, Title, Tooltip, VisuallyHidden, useComputedColorScheme, useMantineColorScheme } from '@mantine/core'
 import { useMediaQuery } from '@mantine/hooks'
 import { Link, Navigate, useLocation, useMatch, useNavigate, useSearch } from '@tanstack/react-router'
-import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpDown, ArrowUpRight, ChartBarStacked, ChartNoAxesGantt, Check, ChevronDown, ChevronRight, CodeXml, Cpu, Crosshair, Database,
+import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpDown, ArrowUpRight, ChartBarStacked, ChartNoAxesGantt, Check, ChevronDown, ChevronRight, CircleDashed, CodeXml, Cpu, Crosshair, Database,
   EyeOff, FileCheck2, Grid3x3, Hourglass, LayoutGrid, Moon, RotateCcw, Scale, Search, ShieldCheck, SlidersHorizontal, Sun, X } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { fetchDataset, impactBands, skillReleaseLabel } from '../lib/data'
@@ -17,14 +17,14 @@ import { Chart, Mark, setupParts } from './Chart'
 import { EvidenceDrawer } from './EvidenceDrawer'
 import { MethodologyViews } from './MethodologyViews'
 import { Overview } from './Overview'
-import { costNote, costText, glossary, Glossed, Notes, notesFor, PeerNote, Tag, Value } from './Reading'
+import { costNote, costText, Disclosure, glossary, Glossed, Notes, notesFor, PeerNote, Tag, Value } from './Reading'
 import { VendorMark } from './VendorMark'
 
 export type Page = 'scorecard' | 'tasks' | 'methodology'
 type LoadState = { kind: 'loading' } | { kind: 'failed'; message: string } | { kind: 'ready'; dataset: Dataset }
 type MainView = (typeof chartViews)[number]
 const axisChoices: { label: string; value: Axis }[] = [{ label: 'Cost', value: 'cost' }, { label: 'Refuted or unproven', value: 'doubt' },
-  { label: 'Refuted claims', value: 'refuted' }, { label: 'Tokens', value: 'tokens' }, { label: 'Time', value: 'time' }]
+  { label: 'Refuted per review', value: 'refuted' }, { label: 'Tokens', value: 'tokens' }, { label: 'Time', value: 'time' }]
 type ResultsColumn = 'setup' | 'equalProblem' | 'equalPr' | 'seriousCaught' | 'repeatedMisses' | 'cost' | 'tokens' | 'doubt' | 'completed'
 const bands = ['all', ...impactBands] as const
 const controlLabels: Record<Task['control'], string> = { 'audited-clean': 'Audited clean control', provisional: 'Provisional control',
@@ -59,9 +59,21 @@ export function Explorer() {
   return <Dashboard dataset={state.dataset} page={page} search={search} onSearch={onSearch} />
 }
 
-export function Dashboard({ dataset, page, search, onSearch, now = new Date() }: {
+/** Every setup at one effort: say it once instead of on every setup name. */
+function withoutSharedEffort(dataset: Dataset) {
+  const efforts = new Set(dataset.configurations.map(configuration => setupParts(configuration).effort))
+  const [effort] = efforts
+  if (efforts.size !== 1 || !effort) return { dataset, effort: null }
+  return { effort, dataset: { ...dataset, configurations: dataset.configurations.map(configuration => {
+    const { method, model } = setupParts(configuration)
+    return { ...configuration, short: model ? `${method} / ${model}` : method }
+  }) } }
+}
+
+export function Dashboard({ dataset: recorded, page, search, onSearch, now = new Date() }: {
   dataset: Dataset; page: Page; search: ExplorerSearch; onSearch: (patch: ExplorerSearch, section?: Section) => void; now?: Date
 }) {
+  const { dataset, effort } = useMemo(() => withoutSharedEffort(recorded), [recorded])
   const hash = useLocation({ select: location => location.hash })
   const setupIds = dataset.configurations.map(item => item.id)
   const defaultSetups = (experiments: boolean) => dataset.configurations.filter(item => experiments || !item.experimental).map(item => item.id)
@@ -69,7 +81,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
   const selected = listValue(search.setups, setupIds, defaultSetups(includeExperiments))
   const setSelected = (ids: string[]) => onSearch({ setups: listParam(ids, setupIds, defaultSetups(includeExperiments)) }, 'scorecard')
   const modelChoices = dataset.configurations.flatMap(configuration => configuration.models.map(model => ({
-    value: model, label: configuration.short.split(' / ').at(-2) ?? model,
+    value: model, label: setupParts(configuration).model || model,
   }))).filter((model, index, choices) => choices.findIndex(choice => choice.value === model.value) === index).sort((left, right) => left.label.localeCompare(right.label))
   const modelIds = modelChoices.map(model => model.value)
   const selectedModels = listValue(search.models, modelIds, modelIds)
@@ -80,8 +92,8 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
   const detection = { band, estimator }
   const view: MainView = search.chart ?? 'overview'
   const narrow = useMediaQuery('(max-width: 700px)') ?? false
-  const views: { label: string; short: string; value: MainView; icon: LucideIcon }[] = [{ label: 'Overview', short: 'Overview', value: 'overview', icon: ChartBarStacked },
-    { label: 'By method', short: 'Methods', value: 'skills', icon: LayoutGrid }, { label: 'By setup', short: 'Setups', value: 'setups', icon: ChartNoAxesGantt }, { label: 'By model', short: 'Models', value: 'models', icon: Cpu }]
+  const views: { label: string; value: MainView; icon: LucideIcon }[] = [{ label: 'Overview', value: 'overview', icon: ChartBarStacked },
+    { label: 'By method', value: 'skills', icon: LayoutGrid }, { label: 'By setup', value: 'setups', icon: ChartNoAxesGantt }, { label: 'By model', value: 'models', icon: Cpu }]
   const plotAgainst = (value: string | null) => {
     const next = axes.find(item => item === value)
     if (next) onSearch({ axis: unlessDefault(next, 'cost') }, 'scorecard')
@@ -194,12 +206,12 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
           <div className="intro-meta"><Badge variant="outline" color="gray" radius="sm" className="status-badge">{status.label}</Badge>
             {(!status.complete || unresolved) && <StatusNotice limits={status.limits} unresolved={unresolved} />}</div>
         </div>
-        <div className="corpus"><dl className="corpus-stats" aria-label="Benchmark statistics">
+        <div className="corpus"><p className="corpus-title">Whole benchmark</p><dl className="corpus-stats" aria-label="Benchmark statistics">
           <div><dt>PR tasks</dt><dd>{hero.tasks}</dd></div>
           <div><dt>{hero.awaitingEligibility ? 'provisional problems' : 'known problems'}</dt><dd>{hero.problems}</dd></div>
           <div><dt>review methods</dt><dd>{hero.methods}</dd></div>
           <div><dt>models tested</dt><dd>{hero.models}</dd></div>
-        </dl><p className="corpus-note">Whole corpus. The scorecard compares the PRs that every selected setup ran.</p></div>
+        </dl><p className="corpus-note">{hero.experiments > 0 && `${hero.experiments === 1 ? '1 method is a skill experiment' : `${hero.experiments} methods are skill experiments`}, off by default. `}Charts use the PRs every selected setup ran.</p></div>
       </section>
 
       <section id="scorecard" className="leaderboard-section">
@@ -210,10 +222,10 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
               const next = views.find(item => item.value === value)
               if (next) onSearch({ chart: unlessDefault(next.value, 'overview') }, 'scorecard')
             }} data={views.map(item => ({ value: item.value,
-              label: narrow ? item.short : <span className="switch-label"><item.icon size={15} strokeWidth={1.9} aria-hidden="true" />{item.label}</span> }))} />
+              label: narrow ? item.label : <span className="switch-label"><item.icon size={15} strokeWidth={1.9} aria-hidden="true" />{item.label}</span> }))} />
             <Button variant="default" size="xs" className="filters-toggle" leftSection={<SlidersHorizontal size={14} aria-hidden="true" />} rightSection={<ChevronDown size={14} aria-hidden="true" />}
               aria-expanded={optionsOpen} onClick={() => setOptionsOpen(open => !open)}>Chart options · {bandLabels[band]} · {configurations.filter(item => selected.includes(item.id)).length} of {configurations.length} setups</Button>
-            <div className="axis-switch" title={view === 'models' ? 'By model plots detection only' : undefined}><span className="control-label" id="axis-label">Plot against</span>{narrow
+            <div className="axis-switch" title={view === 'models' ? 'By model plots detection only' : undefined}><span className="control-label" id="axis-label">Plot against{view === 'models' && <span className="axis-off"> · not used in By model</span>}</span>{narrow
               ? <Select aria-label="Compare detection against" size="xs" allowDeselect={false} disabled={view === 'models'} value={axis} onChange={plotAgainst} data={axisChoices} />
               : <SegmentedControl aria-label="Compare detection against" size="xs" disabled={view === 'models'} value={axis} onChange={plotAgainst} data={axisChoices} />}</div>
           </div>
@@ -228,7 +240,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
               <Popover position="bottom-start" width={340} withArrow arrowPosition="side" trapFocus returnFocus>
                 <Popover.Target><Button variant="default" size="xs" className="refine-button" leftSection={<SlidersHorizontal size={14} aria-hidden="true" />} rightSection={<ChevronDown size={14} aria-hidden="true" />}>Review setups ({configurations.filter(item => selected.includes(item.id)).length}/{configurations.length})</Button></Popover.Target>
                 <Popover.Dropdown className="refine-dropdown" style={{ maxHeight: '70vh', overflowY: 'auto', maxWidth: 'calc(100vw - 24px)' }}><Stack gap="sm">
-                  <Group justify="space-between"><Text size="xs" fw={640}>Review setups</Text><Group gap="xs">
+                  <Group justify="space-between"><Text size="xs" fw={700}>Review setups</Text><Group gap="xs">
                     <Button variant="subtle" size="compact-xs" className="popover-action" onClick={() => setSelected(configurations.map(item => item.id))}>Select all</Button>
                     <Button variant="subtle" size="compact-xs" className="popover-action" onClick={() => setSelected([])}>Clear all</Button>
                   </Group></Group>
@@ -241,7 +253,7 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
               </Popover>
               <Popover position="bottom-start" width={240} withArrow arrowPosition="side" trapFocus returnFocus>
                 <Popover.Target><Button variant="default" size="xs" className="refine-button" leftSection={<Cpu size={14} aria-hidden="true" />} rightSection={<ChevronDown size={14} aria-hidden="true" />}>Models ({selectedModels.length}/{modelChoices.length})</Button></Popover.Target>
-                <Popover.Dropdown className="refine-dropdown"><Stack gap="sm"><Group justify="space-between"><Text size="xs" fw={640}>Models</Text><Group gap="xs"><Button variant="subtle" size="compact-xs" className="popover-action" onClick={() => setSelectedModels(modelChoices.map(model => model.value))}>Select all</Button>
+                <Popover.Dropdown className="refine-dropdown"><Stack gap="sm"><Group justify="space-between"><Text size="xs" fw={700}>Models</Text><Group gap="xs"><Button variant="subtle" size="compact-xs" className="popover-action" onClick={() => setSelectedModels(modelChoices.map(model => model.value))}>Select all</Button>
                   <Button variant="subtle" size="compact-xs" className="popover-action" onClick={() => setSelectedModels([])}>Clear all</Button></Group></Group>
                   {modelChoices.map(model => <Checkbox key={model.value} label={<><VendorMark configuration={{ models: [model.value] }} />{model.label}</>} aria-label={model.label} checked={selectedModels.includes(model.value)} onChange={() => setSelectedModels(selectedModels.includes(model.value) ? selectedModels.filter(value => value !== model.value) : [...selectedModels, model.value])} size="xs" />)}
                 </Stack></Popover.Dropdown>
@@ -266,13 +278,13 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
               <PeerNote configurations={edition(configuration)} className="edition-peer" />
               {configuration.reviewChange && <Anchor className="edition-change" href={configuration.reviewChange.url} target="_blank" rel="noreferrer" title={configuration.reviewChange.summary}>Review changed<ArrowUpRight size={12} aria-hidden="true" /></Anchor>}
             </span>)}
-            <ul className="comparison-note"><li>Every selected setup is compared on the same {plural(shared.length, 'PR')}: the ones all selected standard setups ran. Filters change them; experiments never shrink them.</li>
-              {differing.length > 0 && <li>Setups also differ in {differing.join(', ')}, so a gap between two setups includes those. Compare setups, below, lists the values.</li>}</ul>
+            <div className="comparison-details"><Disclosure title="Comparison conditions"><ul className="comparison-note">{effort && <li>Every setup runs at {effort.toLowerCase()} reasoning effort.</li>}<li>Every selected setup is compared on the same {plural(shared.length, 'PR')}: the ones all selected standard setups ran. Filters change them; experiments never shrink them.</li>
+              {differing.length > 0 && <li>Setups also differ in {differing.join(', ')}, so a gap between two setups includes those. Compare setups, below, lists the values.</li>}</ul></Disclosure></div>
           </div>
         </Paper>
         <header className="subsection-head" id="review-setups"><Title order={3}>All review setups</Title>
         <Text className="subsection-lede">Lists every setup, skill experiments included, whatever the selection above. Same {shared.length} comparison PRs as the chart, in the {bandLabels[band].toLowerCase()} band. Rows start with the most found, problems weighted equally; a column heading sorts by that one measure only.</Text></header>
-        <details className="results-disclosure"><summary><ChevronRight className="chevron" size={16} aria-hidden="true" />Show every measure for all {tableRows.length} setups<span className="summary-hint">Sortable table</span></summary>
+        <details className="results-disclosure"><summary><ChevronRight className="chevron" size={16} aria-hidden="true" />Show every measure for all {tableRows.length} setups{tableRows.length > summaries.length && `, ${summaries.length} of them selected`}<span className="summary-hint">Sortable table</span></summary>
         <div className="table-frame"><Table.ScrollContainer minWidth={1050}><Table verticalSpacing={6} horizontalSpacing="xs" className="leaderboard-table" aria-label="All review setup results">
           <Table.Thead><Table.Tr>{resultsColumns.map(column => <Table.Th key={column.key} data-numeric={column.key !== 'setup' || undefined} aria-sort={sort.column === column.key ? sort.direction : 'none'}>
             <button className="text-button sort-heading" onClick={() => setSort(current => ({ column: column.key, direction: current.column === column.key && current.direction === 'ascending' ? 'descending' : 'ascending' }))}>
@@ -307,8 +319,8 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
             <FilterSelect label="Code area" aria-label="Code area" all="All code areas" data={labels('areas')} value={area} onChange={setArea} />
             <FilterSelect label="Change kind" aria-label="Change kind" all="All change kinds" data={labels('changeKinds')} value={change} onChange={setChange} />
             <FilterSelect label="Technology" aria-label="Technology" all="All technologies" data={labels('technologies')} value={technology} onChange={setTechnology} />
-            <FilterSelect label="Review concern" aria-label="Task review concern" all="All review concerns" data={labels('concerns')} value={concern} onChange={setConcern} />
-            <FilterSelect label="Count only references about" aria-label="Finding concern" all="All finding concerns" data={findingConcerns} value={findingConcern} onChange={setFindingConcern} />
+            <FilterSelect label="Tasks tagged" aria-label="Task review concern" all="Any task tag" data={labels('concerns')} value={concern} onChange={setConcern} />
+            <FilterSelect label="Count problems tagged" aria-label="Finding concern" all="Any problem tag" data={findingConcerns} value={findingConcern} onChange={setFindingConcern} />
           </div>
           <div className="task-filters-foot">
             <Text size="xs" c="dimmed">{findingConcern ? `Detection counts only the ${plural(concernReferences, `${findingConcern.toLowerCase()} reference`)} on these PRs.` : 'Detection counts every approved reference.'} Filters also narrow the <Link className="filter-link" to="/" hash="scorecard">scorecard</Link> comparison.</Text>
@@ -316,23 +328,24 @@ export function Dashboard({ dataset, page, search, onSearch, now = new Date() }:
           </div>
         </Paper>
         <Tabs defaultValue="catalog" className="task-tabs"><Tabs.List><Tabs.Tab value="catalog" leftSection={<Database size={15} />}>Task catalog</Tabs.Tab><Tabs.Tab value="coverage" leftSection={<Grid3x3 size={15} />}>Coverage gaps</Tabs.Tab></Tabs.List>
-          <Tabs.Panel value="catalog" pt="md"><Table.ScrollContainer minWidth={720}><Table verticalSpacing="md" className="task-table" highlightOnHover>
-            <Table.Thead><Table.Tr><Table.Th>Pull request</Table.Th><Table.Th>Profile</Table.Th><Table.Th>References</Table.Th><Table.Th>{foundLabels[band]}, mean of selected setups</Table.Th><Table.Th>In comparison</Table.Th><Table.Th /></Table.Tr></Table.Thead>
+          <Tabs.Panel value="catalog" pt="md"><Table.ScrollContainer minWidth={720}><Table verticalSpacing="sm" className="task-table" highlightOnHover>
+            <Table.Thead><Table.Tr><Table.Th>Pull request</Table.Th><Table.Th>Profile</Table.Th><Table.Th>References</Table.Th><Table.Th>{foundLabels[band]}</Table.Th><Table.Th>In comparison</Table.Th><Table.Th /></Table.Tr></Table.Thead>
             <Table.Tbody>{candidates.map(task => {
               const approved = task.families.filter(family => family.eligibility === 'approved').length
               const pending = task.families.length - approved
-              return <Table.Tr key={task.id}><Table.Td><button className="text-button task-name" onClick={() => inspect()({ kind: 'task', id: task.id })}>{task.repo}<span>#{task.pr}</span></button><TaskShape task={task} /></Table.Td>
-                <Table.Td data-label="Profile"><Group gap={5} maw={220}>{[...task.profile.technologies, ...task.profile.changeKinds].map(label => <Tag key={label}>{label}</Tag>)}</Group></Table.Td>
+              const open = (event: { stopPropagation: () => void }) => { event.stopPropagation(); inspect()({ kind: 'task', id: task.id }) }
+              return <Table.Tr key={task.id} className="task-row" onClick={open}><Table.Td><button className="text-button task-name" onClick={open}>{task.repo}<span>#{task.pr}</span></button><TaskShape task={task} /></Table.Td>
+                <Table.Td data-label="Profile"><Group gap={5} maw={220}>{task.profile.technologies.map(label => <Tag key={label} filled>{label}</Tag>)}{task.profile.changeKinds.map(label => <Tag key={label}>{label}</Tag>)}</Group></Table.Td>
                 <Table.Td data-label="References">{approved ? <Text size="sm">{plural(approved, 'problem')}</Text> : <Tag>{controlLabels[task.control]}</Tag>}
                   {pending > 0 && <Text size="xs" c="dimmed" mt={4}>{pending} awaiting eligibility</Text>}
                   {!!task.preExistingProblems?.length && <Text size="xs" c="dimmed" mt={4}>{plural(task.preExistingProblems.length, 'pre-existing problem')}</Text>}</Table.Td>
-                <Table.Td data-label="Mean detection"><DetectionBar result={meanTaskRecall(board.cards.filter(card => activeIds.includes(card.configurationId)), task.id, band)} /></Table.Td><Table.Td data-label="In comparison">{sharedIds.has(task.id) ? <span className="included-label"><Check size={14} aria-hidden="true" /> Included</span>
-                  : <Tooltip label="At least one selected setup has no result for this PR"><Text size="xs" c="dimmed" className="missing-label">Missing results</Text></Tooltip>}</Table.Td>
-                <Table.Td className="row-open"><ActionIcon aria-label={`Inspect ${task.repo} PR ${task.pr}`} variant="subtle" color="gray" onClick={() => inspect()({ kind: 'task', id: task.id })}><ChevronRight size={18} /></ActionIcon></Table.Td></Table.Tr>
+                <Table.Td data-label={foundLabels[band]}><DetectionBar result={meanTaskRecall(board.cards.filter(card => activeIds.includes(card.configurationId)), task.id, band)} /></Table.Td><Table.Td data-label="In comparison">{sharedIds.has(task.id) ? <span className="included-label"><Check size={14} aria-hidden="true" /> Included</span>
+                  : <Tooltip label="At least one selected setup has no result for this PR"><span className="missing-label" tabIndex={0}><CircleDashed size={14} aria-hidden="true" /> Missing results</span></Tooltip>}</Table.Td>
+                <Table.Td className="row-open"><ActionIcon aria-label={`Inspect ${task.repo} PR ${task.pr}`} variant="subtle" color="gray" onClick={open}><ChevronRight size={18} /></ActionIcon></Table.Td></Table.Tr>
             })}</Table.Tbody></Table></Table.ScrollContainer>
             {candidates.some(task => meanTaskRecall(board.cards.filter(card => activeIds.includes(card.configurationId)), task.id, band).annotations.length > 0)
               && <Text size="xs" c="dimmed" mt="sm" className="footnote">A dotted underline marks a mean that counts unresolved detection decisions as zero credit; hover it for the count.</Text>}
-            {!candidates.length && <Paper ta="center" py="xl"><Text fw={640}>No tasks match these filters</Text><Button variant="subtle" mt="sm" onClick={resetFilters}>Show all tasks</Button></Paper>}
+            {!candidates.length && <Paper ta="center" py="xl"><Text fw={700}>No tasks match these filters</Text><Button variant="subtle" mt="sm" onClick={resetFilters}>Show all tasks</Button></Paper>}
           </Tabs.Panel>
           <Tabs.Panel value="coverage" pt="lg"><CoverageMatrix tasks={dataset.tasks} />
             <Text size="xs" c="dimmed" mt="md" className="footnote">Coverage describes the full corpus; labels can overlap, and only approved references are counted. Problems without a concern label appear in their own row. These counts do not establish comparability or statistical reliability. A task with no reference findings has no recall, and tests false alarms only once it is an audited clean control.</Text></Tabs.Panel>
@@ -367,7 +380,7 @@ function Limit({ text }: { text: string }) {
 }
 
 function StatusNotice({ limits, unresolved }: { limits: string[]; unresolved: boolean }) {
-  const title = limits.length ? 'Provisional results: grading is still in progress' : 'Reliability measurements are provisional'
+  const title = limits.length ? <>Provisional results<span className="status-title-rest">: grading is still in progress</span></> : 'Reliability measurements are provisional'
   const summary = <p className="status-summary">{limits.length > 0 && 'Saved reviews, delivery and usage remain available. Unresolved detection outcomes receive zero credit, with an explanation. Measures blocked by missing evidence are unavailable, with their reasons. '}
     {unresolved && 'Some claim assessments are unresolved. Reliability measurements are provisional.'}</p>
   const icon = <Hourglass className="status-icon" size={15} strokeWidth={2} aria-hidden="true" />
@@ -406,13 +419,13 @@ export function CoverageMatrix({ tasks }: { tasks: Task[] }) {
   const labels = Array.from(new Set([...concerns, ...tasks.flatMap(task => [...task.profile.concerns, ...task.families.flatMap(family => family.concerns)])]))
   const rows = labels.map(concern => ({ concern, tagged: tasks.filter(task => task.profile.concerns.includes(concern)).length,
     references: tasks.flatMap(task => task.families).filter(family => family.eligibility === 'approved' && family.concerns.includes(concern)).length }))
-  rows.push({ concern: 'No concern tag', tagged: tasks.filter(task => !task.profile.concerns.length).length,
+  rows.push({ concern: 'No tag', tagged: tasks.filter(task => !task.profile.concerns.length).length,
     references: tasks.flatMap(task => task.families).filter(family => family.eligibility === 'approved' && !family.concerns.length).length })
   const maxReferences = Math.max(1, ...rows.map(row => row.references))
   return <Table.ScrollContainer minWidth={560}><Table className="coverage-table" verticalSpacing="sm" aria-label="Review concern coverage">
-    <Table.Thead><Table.Tr><Table.Th>Concern</Table.Th><Table.Th>Tasks tagged</Table.Th><Table.Th>Approved reference problems</Table.Th></Table.Tr></Table.Thead>
+    <Table.Thead><Table.Tr><Table.Th>Concern</Table.Th><Table.Th>Tasks with this tag</Table.Th><Table.Th>Approved problems with this tag</Table.Th></Table.Tr></Table.Thead>
     <Table.Tbody>{rows.map(row => <Table.Tr key={row.concern}>
-      <Table.Td fw={640}>{row.concern}</Table.Td>
+      <Table.Td fw={700}>{row.concern}</Table.Td>
       <Table.Td><span className="coverage-cell"><span>{row.tagged} of {tasks.length}</span><span className="coverage-track" aria-hidden="true"><span style={{ width: `${tasks.length ? row.tagged / tasks.length * 100 : 0}%` }} /></span></span></Table.Td>
       <Table.Td><span className="coverage-cell"><span>{row.references}</span><span className="coverage-track" aria-hidden="true">
         <span style={{ width: `${row.references / maxReferences * 100}%` }} /></span></span></Table.Td>

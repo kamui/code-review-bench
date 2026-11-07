@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { VisuallyHidden } from '@mantine/core'
+import { useMediaQuery } from '@mantine/hooks'
 import type { CSSProperties, FocusEvent, MouseEvent, ReactNode } from 'react'
-import { ArrowDown, ArrowUp } from 'lucide-react'
+import { ArrowDown, ArrowUp, ChevronDown, ChevronUp } from 'lucide-react'
 import { linearScale, logScale, position, ticks, tipPlace } from '../lib/chart'
 import type { Scale, TipPlace } from '../lib/chart'
 import { bandLabels, duration, estimatorLabels, foundLabels, lowerFirst, measured, perReview, reading, share } from '../lib/metrics'
@@ -9,13 +10,14 @@ import type { Axis as ChartAxis, DetectionView, Reading, Summary } from '../lib/
 import type { Configuration } from '../lib/data'
 import { labelSegments, overviewFirstDirection, overviewOrder } from '../lib/scoring'
 import type { LabelSegment, Measure, OverviewColumn, Scorecard } from '../lib/scoring'
-import { axisLabels, Chart, Mark, reviewColor, SetupName, setupParts } from './Chart'
+import { axisLabels, Chart, Mark, pairedAxis, reviewColor, SetupName, setupParts } from './Chart'
 import { segmentLabels, trueSegments } from './ClaimLabels'
 import { VendorMark } from './VendorMark'
 import { costScaleNote, costText, Glossed, GuideItem, KeyTerms, Notes, notesFor, PeerBadge, Value } from './Reading'
 
 type Column = Exclude<OverviewColumn, 'setup'>
 const columns: Column[] = ['detection', 'claims', 'doubt', 'cost', 'time']
+const firstRows = { phone: 5, wide: 10 }
 
 const money = (value: number) => value >= 1 ? `$${value}` : `$${value.toFixed(Math.max(2, -Math.floor(Math.log10(value))))}`
 const timeMarks: [number, string][] = [[10, '10 s'], [30, '30 s'], [60, '1 min'], [300, '5 min'], [600, '10 min'], [1800, '30 min'], [3600, '1 h'], [7200, '2 h']]
@@ -64,6 +66,9 @@ export function Overview({ summaries, detection, axis, matching, basis, onSelect
   const [tipState, setTip] = useState<Tip | null>(null)
   const [focus, setFocus] = useState<string | null>(null)
   const [pinned, setPinned] = useState<string | null>(null)
+  const [opened, setOpened] = useState<Column[]>([])
+  const phone = useMediaQuery('(max-width: 700px)')
+  const limit = phone ? firstRows.phone : firstRows.wide
   const active = focus ?? pinned
   const pin = (id: string) => setPinned(current => current === id ? null : id)
   if (!summaries.length) return <div className="plot-empty" role="status"><span>Select at least one review method and model.</span></div>
@@ -83,7 +88,7 @@ export function Overview({ summaries, detection, axis, matching, basis, onSelect
       keys: [{ label: 'Problem', className: 'key-solid' }, { label: 'Other true', className: 'key-rest' }], axis: ticks(claimScale).map(value => ({ at: at(claimScale, value), label: String(value) })) },
     doubt: { title: 'Refuted or unproven', about: 'Share of admitted reviews with at least one refuted or unproven claim. An unproven claim is not shown to be false.', order: orderText.doubt,
       keys: [{ label: 'Refuted or unproven', className: 'key-solid' }, { label: 'Only doubt unresolved', className: 'key-hatched' }], axis: halfAxis },
-    cost: { title: 'Cost per trial', about: `Every attempt, retries included, per scheduled trial; ${costScaleNote(shown)}. A hollow dot is a lower bound.`, order: orderText.cost,
+    cost: { title: 'Cost per trial', about: `Every attempt, retries included, per scheduled trial; ${costScaleNote(shown)}. A dashed dot is a lower bound.`, order: orderText.cost,
       axis: spaced(ticks(costScale).map(value => ({ at: at(costScale, value), ...Number.isInteger(Math.log10(value)) ? { label: money(value) } : {} })), 26) },
     time: { title: 'Median time', about: 'Completed trials only; the band spans the middle half of trials. Log scale.', order: orderText.time,
       axis: spaced(time.marks.map(([seconds, label]) => ({ at: at(time.scale, seconds), label })), 22) },
@@ -141,15 +146,16 @@ export function Overview({ summaries, detection, axis, matching, basis, onSelect
   return <div className="overview" data-focusing={active ? '' : undefined} onMouseLeave={() => { setTip(null); setFocus(null) }}>
     <div className="measure-grid">
       <section className="measure-card lead-card" data-lead aria-labelledby="measure-lead">
-        <header className="measure-head"><div><h3 id="measure-lead">{foundLabels[detection.band]} against {pairedLabels[axis]} and {pairedLabels[axis === 'doubt' ? 'cost' : 'doubt']}</h3>
-          <p className="lead-about">Each setup sits at the same height in both panels; up and left is better. <span className="lead-scope">{[`${basis.prs} PRs`,
+        <header className="measure-head"><div><h3 id="measure-lead">{foundLabels[detection.band]} against {pairedLabels[axis]} and {pairedLabels[pairedAxis(axis)]}</h3>
+          <p className="lead-about">Each setup sits at the same height in both panels; up and left is better. <span className="lead-scope">This comparison: {[`${basis.prs} PRs`,
             detection.band === 'all' ? `${basis.known} known problems` : `${basis.problems} of ${basis.known} known problems are ${lowerFirst(bandLabels[detection.band])}`,
             basis.awaiting > 0 && `${basis.awaiting} awaiting a ruling`].filter(Boolean).join(' · ')}</span></p></div></header>
-        <Chart summaries={summaries} detection={detection} matching={matching} axis={axis} view="tradeoff" height={325} onSelect={onSelect} linked={{ id: active, point: setFocus, pin }}
+        <Chart summaries={summaries} detection={detection} matching={matching} axis={axis} view="tradeoff" height={290} onSelect={onSelect} linked={{ id: active, point: setFocus, pin }}
           guide={<><GuideItem label="Terms"><KeyTerms terms={['Review setup', 'Known problem', 'Impact band', 'Problems or PRs weighted equally', 'Refuted or unproven', 'Admitted review']} /></GuideItem>
             {weight(detection, basis) && <GuideItem label="Weight">{weight(detection, basis)}</GuideItem>}
             <GuideItem label="Charts below">Each ranks the setups by one measure, on its own scale; a setup without a value comes last. No single number ranks the setups. Select a setup to open its evidence.</GuideItem></>} />
       </section>
+      <header className="measure-section-head"><h3>Each measure, ranked on its own</h3><p>Every chart below sorts the setups by one measure, on its own scale.</p></header>
       {columns.map(column => {
         const panel = panels[column], id = `measure-${column}`
         return <section key={column} className="measure-card" data-lead={column === 'detection' || undefined} aria-labelledby={id}>
@@ -163,7 +169,7 @@ export function Overview({ summaries, detection, axis, matching, basis, onSelect
               <VisuallyHidden role="columnheader">Setup</VisuallyHidden><VisuallyHidden role="columnheader">{panel.title}</VisuallyHidden>
               <span className="measure-ticks" aria-hidden="true">{panel.axis.map(tick => tick.label && <span key={tick.at} data-edge={tick.at <= 0 ? 'start' : tick.at >= 100 ? 'end' : undefined} style={{ left: `${tick.at}%` }}>{tick.label}</span>)}</span>
             </div>
-            {ordered(column).map(summary => {
+            {ordered(column).filter((summary, index) => opened.includes(column) || index < limit || summary.configuration.id === active).map(summary => {
               const { configuration } = summary
               const cell = readings.get(configuration.id)![column]
               const { draw, more, description } = marks(column, summary)
@@ -177,6 +183,9 @@ export function Overview({ summaries, detection, axis, matching, basis, onSelect
               </div>
             })}
           </div>
+          {summaries.length > limit && <button type="button" className="text-button show-rows" aria-expanded={opened.includes(column)}
+            onClick={() => setOpened(current => current.includes(column) ? current.filter(item => item !== column) : [...current, column])}>
+            {opened.includes(column) ? <><ChevronUp size={14} aria-hidden="true" />Show the first {limit}</> : <><ChevronDown size={14} aria-hidden="true" />Show all {summaries.length} setups</>}</button>}
         </section>
       })}
     </div>
