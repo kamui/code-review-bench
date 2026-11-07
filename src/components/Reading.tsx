@@ -87,7 +87,6 @@ export const glossary: { term: string; definition: string; match?: RegExp }[] = 
   { term: 'Problems or PRs weighted equally', definition: 'Each reference problem counts the same, or each PR counts the same however many problems it has.', match: /weighted equally/i },
   { term: 'Matched PRs', definition: 'The selected PRs on which every selected setup has admitted, assessed reviews, so each setup is measured on the same PRs.', match: /matched PRs?/i },
   { term: 'Cross-model peer', definition: 'A second review by a model from another provider, which some skills can run. Off: the run used a single provider, so the skill ran without it.', match: /cross-model peer|peer off/i },
-  { term: 'pp', definition: 'Percentage points: the difference between two percentages.', match: /\bpp\b/ },
   { term: '≥ value', definition: 'A lower bound. Usage was only partly recorded, so the true value is at least this.' },
 ]
 

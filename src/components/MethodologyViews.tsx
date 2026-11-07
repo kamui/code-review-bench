@@ -16,7 +16,7 @@ import { SeriousMisses } from './SeriousMisses'
 import type { Column } from './Reading'
 import { VendorMark } from './VendorMark'
 
-const signed = (value: number) => `${value > 0 ? '+' : value < 0 ? '−' : ''}${Math.abs(value).toFixed(1)} pp`
+const signed = (value: number) => `${value > 0 ? '+' : value < 0 ? '−' : ''}${Math.abs(value).toFixed(1)} points`
 const span = (range: { low: number; high: number }) => `${percent(range.low * 100)} to ${percent(range.high * 100)}`
 const reasons = (counts: Record<string, number>) => Object.entries(counts).map(([reason, count]) => `${count} ${reason}`).join('; ') || 'None'
 const averages: Record<Estimator, string> = { equalProblem: 'equal problems', equalPr: 'equal PRs' }
