@@ -135,20 +135,23 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
           : <Models points={points} measure={measure} onSelect={onSelect} interactions={interactions} />}
     {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={measure} axes={view === 'models' ? [] : view === 'tradeoff' ? [axis, pair] : [axis]} place={hovered} />}
     {view === 'tradeoff' && methodTops.size > 0 && <div className="method-strip">
-      <div className="strip-row strip-head" aria-hidden="true"><span>Review method</span><span>Top setup (most found)</span><span>Found</span><span>{shortAxis[axis]}</span><span>{shortAxis[pair]}</span></div>
+      <div className="strip-row strip-head" aria-hidden="true"><span>Review method</span><span>Top setup (most found)</span><span>Found</span><span>{shortAxis[axis]}</span><span>{shortAxis[pair]}</span><span>Lowest {lowerFirst(shortAxis[axis])}</span></div>
       <ul aria-label="Each review method's top setup, from the method that finds the most">{[...methodTops].map(([method, top]) => {
         const { configuration } = top.summary, { model, effort } = setupParts(configuration)
         const second = metricOf(top.summary, pair), secondText = formatMetric(pair, second, top.starred, boundedOn(top.summary, pair), 0)
         const first = formatMetric(axis, top.x, top.starred, top.bounded, 0)
+        const low = methodLows.get(method), lowText = low ? formatMetric(axis, low.x, low.starred, low.bounded, 0) : null
+        const lowModel = low ? setupParts(low.summary.configuration).model : null
         return <li key={method}><button type="button" className="strip-row" aria-pressed={spotlight?.method === method && spotlight.pinned}
-          aria-label={`${method}: top setup ${model}${effort ? ` ${effort}` : ''}, ${percent(top.y, 0)} found, ${axisLabels[axis]} ${first}, ${axisLabels[pair]} ${secondText}. Select to keep this method picked out`}
+          aria-label={`${method}: top setup ${model}${effort ? ` ${effort}` : ''}, ${percent(top.y, 0)} found, ${axisLabels[axis]} ${first}, ${axisLabels[pair]} ${secondText}${low ? `, lowest ${lowerFirst(axisLabels[axis])} ${lowText} with ${lowModel}` : ''}. Select to keep this method picked out`}
           onMouseEnter={() => { preview(method)(); linked?.point(configuration.id) }} onMouseLeave={() => { preview(null)(); linked?.point(null) }}
           onFocus={() => { preview(method)(); linked?.point(configuration.id) }} onBlur={() => { preview(null)(); linked?.point(null) }}
           onClick={() => setSpotlight(current => current?.pinned && current.method === method ? null : { method, pinned: true })}>
           <span className="strip-method"><Mark configuration={configuration} size={11} />{method}{configuration.experimental && <span className="row-tag">Experiment</span>}</span>
           <span className="strip-model"><VendorMark configuration={configuration} />{model}{effort && <span className="measure-effort"> · {effort}</span>}</span>
           <span className="strip-value" data-label="Found"><Score summary={top.summary} /></span><span className={stripValue(first)} data-label={shortAxis[axis]}>{first}</span>
-          <span className={stripValue(secondText)} data-label={shortAxis[pair]}>{secondText}</span></button></li>
+          <span className={stripValue(secondText)} data-label={shortAxis[pair]}>{secondText}</span>
+          <span className="strip-low" data-label={`Lowest ${lowerFirst(shortAxis[axis])}`}>{low && <><span className="strip-low-model">{lowModel}</span><span className="strip-low-value">{lowText}</span></>}</span></button></li>
       })}</ul></div>}
     {points.length > 0 && view !== 'models' && (view !== 'tradeoff' || bounded) && <ul className="chart-keys" aria-label="Chart key">
       {view === 'setups' && <li><span className="whisker-key" aria-hidden="true" />Range with any one PR left out</li>}
