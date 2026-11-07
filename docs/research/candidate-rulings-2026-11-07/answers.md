@@ -40,3 +40,6 @@ The owner gave no reason beyond the chosen options, so every after-record's `gro
    - Options shown: "Yes, one Claude" (recommended: "run the one check, then ask you the label"), "Yes, Opus and Sonnet" ("run two checks instead"), "Not now" ("leave the label for later").
    - Chosen: "Yes one claude".
    - The receipt is [`bench/grading/rulings/same-family-blind.v5.md`](../../../bench/grading/rulings/same-family-blind.v5.md) (commit `efcc4b2c9`).
+
+9. The Hono label (question 9 of [`QUESTIONS.md`](QUESTIONS.md)), asked in the chat. The session showed question 9's facts in plain words, ending "Label the new Hono JSON problem serious? Reply "serious" (recommended) or "other-material"."
+   - The owner answered: "serious".
