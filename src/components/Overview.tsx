@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { VisuallyHidden } from '@mantine/core'
+import { useMediaQuery } from '@mantine/hooks'
 import type { CSSProperties, FocusEvent, MouseEvent, ReactNode } from 'react'
-import { ArrowDown, ArrowUp } from 'lucide-react'
+import { ArrowDown, ArrowUp, ChevronDown } from 'lucide-react'
 import { linearScale, logScale, position, ticks, tipPlace } from '../lib/chart'
 import type { Scale, TipPlace } from '../lib/chart'
 import { bandLabels, duration, estimatorLabels, foundLabels, lowerFirst, measured, perReview, reading, share } from '../lib/metrics'
@@ -16,6 +17,7 @@ import { costScaleNote, costText, Glossed, GuideItem, KeyTerms, Notes, notesFor,
 
 type Column = Exclude<OverviewColumn, 'setup'>
 const columns: Column[] = ['detection', 'claims', 'doubt', 'cost', 'time']
+const phoneRows = 5
 
 const money = (value: number) => value >= 1 ? `$${value}` : `$${value.toFixed(Math.max(2, -Math.floor(Math.log10(value))))}`
 const timeMarks: [number, string][] = [[10, '10 s'], [30, '30 s'], [60, '1 min'], [300, '5 min'], [600, '10 min'], [1800, '30 min'], [3600, '1 h'], [7200, '2 h']]
@@ -64,6 +66,8 @@ export function Overview({ summaries, detection, axis, matching, basis, onSelect
   const [tipState, setTip] = useState<Tip | null>(null)
   const [focus, setFocus] = useState<string | null>(null)
   const [pinned, setPinned] = useState<string | null>(null)
+  const [opened, setOpened] = useState<Column[]>([])
+  const phone = useMediaQuery('(max-width: 700px)')
   const active = focus ?? pinned
   const pin = (id: string) => setPinned(current => current === id ? null : id)
   if (!summaries.length) return <div className="plot-empty" role="status"><span>Select at least one review method and model.</span></div>
@@ -163,7 +167,7 @@ export function Overview({ summaries, detection, axis, matching, basis, onSelect
               <VisuallyHidden role="columnheader">Setup</VisuallyHidden><VisuallyHidden role="columnheader">{panel.title}</VisuallyHidden>
               <span className="measure-ticks" aria-hidden="true">{panel.axis.map(tick => tick.label && <span key={tick.at} data-edge={tick.at <= 0 ? 'start' : tick.at >= 100 ? 'end' : undefined} style={{ left: `${tick.at}%` }}>{tick.label}</span>)}</span>
             </div>
-            {ordered(column).map(summary => {
+            {ordered(column).filter((summary, index) => !phone || opened.includes(column) || index < phoneRows || summary.configuration.id === active).map(summary => {
               const { configuration } = summary
               const cell = readings.get(configuration.id)![column]
               const { draw, more, description } = marks(column, summary)
@@ -177,6 +181,8 @@ export function Overview({ summaries, detection, axis, matching, basis, onSelect
               </div>
             })}
           </div>
+          {phone && !opened.includes(column) && summaries.length > phoneRows && <button type="button" className="text-button show-rows" onClick={() => setOpened(current => [...current, column])}>
+            <ChevronDown size={14} aria-hidden="true" />Show all {summaries.length} setups</button>}
         </section>
       })}
     </div>
