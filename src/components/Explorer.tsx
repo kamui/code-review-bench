@@ -17,7 +17,7 @@ import { Chart, Mark, setupParts } from './Chart'
 import { EvidenceDrawer } from './EvidenceDrawer'
 import { MethodologyViews } from './MethodologyViews'
 import { Overview } from './Overview'
-import { costNote, costText, glossary, Glossed, Notes, notesFor, PeerNote, Tag, Value } from './Reading'
+import { costNote, costText, Disclosure, glossary, Glossed, Notes, notesFor, PeerNote, Tag, Value } from './Reading'
 import { VendorMark } from './VendorMark'
 
 export type Page = 'scorecard' | 'tasks' | 'methodology'
@@ -278,8 +278,8 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
               <PeerNote configurations={edition(configuration)} className="edition-peer" />
               {configuration.reviewChange && <Anchor className="edition-change" href={configuration.reviewChange.url} target="_blank" rel="noreferrer" title={configuration.reviewChange.summary}>Review changed<ArrowUpRight size={12} aria-hidden="true" /></Anchor>}
             </span>)}
-            <ul className="comparison-note">{effort && <li>Every setup runs at {effort.toLowerCase()} reasoning effort.</li>}<li>Every selected setup is compared on the same {plural(shared.length, 'PR')}: the ones all selected standard setups ran. Filters change them; experiments never shrink them.</li>
-              {differing.length > 0 && <li>Setups also differ in {differing.join(', ')}, so a gap between two setups includes those. Compare setups, below, lists the values.</li>}</ul>
+            <div className="comparison-details"><Disclosure title="Comparison conditions"><ul className="comparison-note">{effort && <li>Every setup runs at {effort.toLowerCase()} reasoning effort.</li>}<li>Every selected setup is compared on the same {plural(shared.length, 'PR')}: the ones all selected standard setups ran. Filters change them; experiments never shrink them.</li>
+              {differing.length > 0 && <li>Setups also differ in {differing.join(', ')}, so a gap between two setups includes those. Compare setups, below, lists the values.</li>}</ul></Disclosure></div>
           </div>
         </Paper>
         <header className="subsection-head" id="review-setups"><Title order={3}>All review setups</Title>
