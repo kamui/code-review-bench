@@ -1,0 +1,30 @@
+# cwd: scratch; change.txt = upstream/N1-change.txt
+# query: rg -n -i "import|empty|malformed|invalid|bundle|load_verify|certificates|error" change.txt
+6:@@ -26,6 +26,7 @@ from urllib3.poolmanager import PoolManager, proxy_from_url
+7: from urllib3.util import Timeout as TimeoutSauce
+8: from urllib3.util import parse_url
+9: from urllib3.util.retry import Retry
+10:+from urllib3.util.ssl_ import create_urllib3_context
+12: from .auth import _basic_auth_str
+13: from .compat import basestring, urlparse
+19:+_preloaded_ssl_context.load_verify_locations(
+20:+    extract_zipped_paths(DEFAULT_CA_BUNDLE_PATH)
+50:+            # Only load the CA certificates if 'verify' is a string indicating the CA bundle to use.
+52:+            # the connection will be using a context with the default certificates already loaded,
+53:+            # and this avoids a call to the slow load_verify_locations()
+59:-                cert_loc = extract_zipped_paths(DEFAULT_CA_BUNDLE_PATH)
+62:-                raise OSError(
+63:-                    f"Could not find a suitable TLS CA certificate bundle, "
+64:-                    f"invalid path: {cert_loc}"
+67:+                    raise OSError(
+68:+                        f"Could not find a suitable TLS CA certificate bundle, "
+69:+                        f"invalid path: {cert_loc}"
+93:from time import time
+94:from threading import Thread
+95:import requests
+96:import urllib3
+129:30/1    0.681    0.023    0.002    0.002 {method 'load_verify_locations' of '_ssl._SSLContext' objects}
+143:In the first case, a full 0.68 seconds are spent in the `load_verify_locations()` function of the `ssl` module, which configures a `SSLContext` object to use a set of CA certificates for validation. Inside it, there is a C FFI call to OpenSSL's `SSL_CTX_load_verify_locations()` which [is known](https://github.com/python/cpython/issues/95031) to be [quite slow](https://github.com/openssl/openssl/issues/16871). This happens once per request (hence the `30` on the left).
+151:It isn't possible to skip loading root CA certificates entirely, but it isn't necessary to do it on every request. More specifically, a call to `load_verify_locations()` happens when:
+159:The second one is addressed in this PR. If a verified connection is requested, `_urllib3_request_context()` already makes it so that a connection pool using a `SSLContext` with all relevant certificates loaded is always used. Hence, there is no need to trigger a call to `load_verify_locations()` again.
+161:You can test against https://invalid.badssl.com to check that `verify=True` and `verify=False` still behave as expected and are now equally fast.
