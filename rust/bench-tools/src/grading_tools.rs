@@ -169,13 +169,13 @@ fn runtime_mounts(
             continue;
         };
         let binary = resolve(&found);
+        if let Some(parent) = binary.parent() {
+            paths.insert(parent.to_path_buf());
+        }
         if binary.as_os_str().as_bytes().starts_with(b"/usr/") {
             continue;
         }
         mounts.insert((binary.clone(), binary.clone()));
-        if let Some(parent) = binary.parent() {
-            paths.insert(parent.to_path_buf());
-        }
         if executable == "go" {
             let root = binary
                 .parent()
