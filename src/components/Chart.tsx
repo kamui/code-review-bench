@@ -305,7 +305,8 @@ function Scatter({ points, dimensions, axis, scale, spotlight, marked, named, on
   const first = (point: Plotted) => point === markedPoint || spotlight !== null || !named || named.has(point.summary.configuration.id)
   const shown = ordered.filter(point => point !== markedPoint && !outside(point))
   const leading = width ? placeLabels([...(markedPoint ? [markedPoint] : []), ...shown.filter(first)].map(request), obstacles, bounds, width < 600 ? [12, 22] : [12, 24, 36, 48]) : []
-  const placed = width ? [...leading, ...placeLabels(shown.filter(point => !first(point)).map(request), [...obstacles, ...leading.map(label => label.box)], bounds, width < 600 ? [12, 20] : [12, 22, 34, 46])] : []
+  const alone = (point: Plotted) => ordered.every(other => other === point || Math.hypot(sx(other) - sx(point), py(other.y) - py(point.y)) > 24)
+  const placed = width ? [...leading, ...placeLabels(shown.filter(point => !first(point) && alone(point)).map(request), [...obstacles, ...leading.map(label => label.box)], bounds, width < 600 ? [12, 20] : [12, 22, 34, 46])] : []
   const labels = markedPoint && width && !placed.some(label => label.id === marked)
     ? [{ id: markedPoint.summary.configuration.id, x: sx(markedPoint) + 12, y: py(markedPoint.y), anchor: 'start' as const, leader: false }, ...placed] : placed
   const xTicks = ticks(scale, width > 700)
