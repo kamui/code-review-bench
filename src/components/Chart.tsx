@@ -413,6 +413,17 @@ function PointMark({ configuration, x, y, hollow }: { configuration: Configurati
     : <path d={`M${x},${y - 8}L${x + 8},${y}L${x},${y + 8}L${x - 8},${y}Z`} {...props} />
 }
 
+/** Neighbours closer than `near` points, chained, so each mark belongs to one group. */
+const clusters = (members: Point[], near: number) => {
+  const groups: Point[][] = []
+  for (const point of [...members].sort((left, right) => (right.summary.detection ?? 0) - (left.summary.detection ?? 0))) {
+    const last = groups.at(-1)
+    if (last && (last.at(-1)!.summary.detection ?? 0) - (point.summary.detection ?? 0) < near) last.push(point)
+    else groups.push([point])
+  }
+  return groups
+}
+
 function Models({ points, measure, onSelect, interactions }: { points: Point[]; measure: string; onSelect: (id: string) => void; interactions: Interactions }) {
   const groups = new Map<string, Point[]>()
   for (const point of points) {
@@ -422,7 +433,10 @@ function Models({ points, measure, onSelect, interactions }: { points: Point[]; 
   }
   const rows = Array.from(groups, ([model, members]) => ({ model, members: [...members].sort((a, b) => (b.summary.detection ?? 0) - (a.summary.detection ?? 0)) }))
     .sort((left, right) => (right.members[0]!.summary.detection ?? 0) - (left.members[0]!.summary.detection ?? 0) || left.model.localeCompare(right.model))
-  return <div className="models" role="list" aria-label={`${measure} by model and review method`}>
+  const { ref, width } = useElementSize()
+  const track = width > 700 ? width - 200 : width
+  const near = track ? 15 / track * 100 : 1.5
+  return <div ref={ref} className="models" role="list" aria-label={`${measure} by model and review method`}>
     <div className="model-head" aria-hidden="true"><span>Model</span>
       <span className="rank-ticks">{scoreTicks.map(tick => <span key={tick} style={{ left: `${tick}%` }}>{tick}%</span>)}</span></div>
     {rows.map(({ model, members }) => {
@@ -432,10 +446,11 @@ function Models({ points, measure, onSelect, interactions }: { points: Point[]; 
         <span className="model-name"><VendorMark configuration={members[0]!.summary.configuration} />{model}</span>
         <span className="rank-track">{scoreTicks.map(tick => <span key={tick} className="rank-grid" style={{ left: `${tick}%` }} />)}
           {members.length > 1 && <span className="model-span" style={{ left: `${low}%`, width: `${high - low}%` }} />}
-          {members.map((point, index) => {
+          {members.map(point => {
             const score = point.summary.detection ?? 0
-            const stacked = members.slice(0, index).filter(other => Math.abs((other.summary.detection ?? 0) - score) < 1.5).length
-            return <span key={point.summary.configuration.id} className="rank-dot" style={{ left: `${score}%`, marginTop: stacked * 9 - (stacked ? 2 : 0) }}>
+            const cluster = clusters(members, near).find(group => group.includes(point))!
+            const offset = (cluster.indexOf(point) - (cluster.length - 1) / 2) * 14
+            return <span key={point.summary.configuration.id} className="rank-dot" style={{ left: `${score}%`, marginTop: offset }}>
               <Mark configuration={point.summary.configuration} size={13} /></span>
           })}</span>
         <span className="model-entries">{[...members].sort((left, right) => (right.summary.detection ?? -1) - (left.summary.detection ?? -1) || left.summary.configuration.short.localeCompare(right.summary.configuration.short)).map(point => {
