@@ -65,8 +65,11 @@ function InspectionBody({ dataset, results, band, estimator, configuration, task
     const group = configuration ? taskName(item.taskId) : setup ? setupLabel(setup) : item.runId
     groups.set(group, [...groups.get(group) ?? [], { value: item.id, label: `Trial ${item.replicate} · ${attemptName(item)}${item.complete ? '' : ' · incomplete or invalid'}` }])
   }
-  const attemptGroups = Array.from(groups, ([group, items]) => ({ group, items })).sort((left, right) => left.group.localeCompare(right.group))
-  const attemptId = attempts.find(item => item.id === inspection.attemptId)?.id ?? attemptGroups[0]?.items[0]?.value ?? null
+  const attemptGroups = Array.from(groups, ([group, items]) => ({ group, items: items.sort((left, right) => left.label.localeCompare(right.label, 'en', { numeric: true })) }))
+    .sort((left, right) => left.group.localeCompare(right.group))
+  const opening = attemptGroups[0]?.items
+  const attemptId = attempts.find(item => item.id === inspection.attemptId)?.id
+    ?? opening?.find(item => attempts.find(entry => entry.id === item.value)?.complete)?.value ?? opening?.[0]?.value ?? null
   const currentGroup = attemptGroups.find(entry => entry.items.some(item => item.value === attemptId))?.group
   const [detail, setDetail] = useState<AttemptDetail | null>(null)
   const [error, setError] = useState('')
