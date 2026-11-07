@@ -321,7 +321,7 @@ function Scatter({ points, dimensions, axis, scale, spotlight, marked, named, on
         className={[outside(group.points[0]!) ? 'method-line muted' : setupParts(group.points[0]!.summary.configuration).method === active ? 'method-line active' : 'method-line', group.points[0]!.summary.configuration.experimental ? 'experiment' : ''].join(' ').trim()} style={{ stroke: reviewColor(group.points[0]!.summary.configuration) }} />)}
       {labels.filter(label => label.leader).map(label => {
         const point = points.find(item => item.summary.configuration.id === label.id)
-        return point && <line key={`leader-${label.id}`} x1={sx(point)} y1={py(point.y)} x2={label.anchor === 'middle' ? label.x : label.x + (label.anchor === 'start' ? -3 : 3)} y2={label.y} className="leader-line" />
+        return point && <line key={`leader-${label.id}`} x1={sx(point)} y1={py(point.y)} x2={label.anchor === 'middle' ? label.x : label.x + (label.anchor === 'start' ? -3 : 3)} y2={label.y} className="leader-line" style={{ stroke: reviewColor(point.summary.configuration) }} />
       })}
       {markedPoint && <circle cx={sx(markedPoint)} cy={py(markedPoint.y)} r={12} className="mark-ring" style={{ stroke: reviewColor(markedPoint.summary.configuration) }} />}
       {ordered.map(point => <ChartPoint key={point.summary.configuration.id} point={point} axis={axis} x={sx(point)} y={py(point.y)} muted={outside(point)} onSelect={onSelect} interactions={interactions} />)}
