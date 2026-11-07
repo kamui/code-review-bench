@@ -155,6 +155,7 @@ export function Overview({ summaries, detection, axis, matching, basis, onSelect
             {weight(detection, basis) && <GuideItem label="Weight">{weight(detection, basis)}</GuideItem>}
             <GuideItem label="Charts below">Each ranks the setups by one measure, on its own scale; a setup without a value comes last. No single number ranks the setups. Select a setup to open its evidence.</GuideItem></>} />
       </section>
+      <header className="measure-section-head"><h3>Each measure, ranked on its own</h3><p>Every chart below sorts the setups by one measure, on its own scale.</p></header>
       {columns.map(column => {
         const panel = panels[column], id = `measure-${column}`
         return <section key={column} className="measure-card" data-lead={column === 'detection' || undefined} aria-labelledby={id}>
