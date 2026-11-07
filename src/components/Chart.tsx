@@ -2,7 +2,7 @@ import { useId, useState } from 'react'
 import type { CSSProperties, DOMAttributes, FocusEvent, MouseEvent, ReactNode } from 'react'
 import { useElementSize } from '@mantine/hooks'
 import { ArrowUpLeft } from 'lucide-react'
-import { groupPaths, logScale, paretoFrontier, placeLabels, position, sqrtScale, ticks, tipPlace } from '../lib/chart'
+import { groupPaths, logScale, paretoFrontier, placeLabels, position, sideTip, sqrtScale, ticks, tipPlace } from '../lib/chart'
 import type { Scale, TipPlace } from '../lib/chart'
 import { compact, detectionLabel, foundLabels, duration, lowerFirst, money, percent, reasonCounts, share } from '../lib/metrics'
 import type { Axis, DetectionView, Summary } from '../lib/metrics'
@@ -98,7 +98,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
     const shell = element.closest('.plot-shell')?.getBoundingClientRect()
     const box = element.getBoundingClientRect()
     const frame = element.closest('.leaderboard-paper, .measure-card')?.getBoundingClientRect()
-    if (shell) setHovered({ id, ...tipPlace(shell, box, 160, view === 'tradeoff' ? Infinity : 320, window.innerHeight, frame?.top ?? shell.top) })
+    if (shell) setHovered({ id, ...view === 'tradeoff' ? sideTip(shell, box, window.innerHeight, 175, element.closest('.twin')?.getBoundingClientRect().top) : tipPlace(shell, box, 160, 320, window.innerHeight, frame?.top ?? shell.top) })
     linked?.point(id)
   }
   const unhover = () => { setHovered(null); linked?.point(null) }
@@ -466,5 +466,5 @@ function Tooltip({ point, measure, axes, place }: { point: Point; measure: strin
     row('count', 'Trials admitted', `${summary.admitted} of ${summary.trials}`, `${summary.tasks} PRs · ${summary.completed} complete`),
     !summary.configuration.builtin && row('skill', 'Skill', skillReleaseLabel([summary.configuration])),
   ]
-  return <div className={place.below ? 'chart-tip below' : 'chart-tip'} role="presentation" style={{ left: place.left, top: place.top }}><strong><SetupName configuration={summary.configuration} mark={false} /></strong>{lines}</div>
+  return <div className={place.side ? `chart-tip side-${place.side}` : place.below ? 'chart-tip below' : 'chart-tip'} role="presentation" style={{ left: place.left, top: place.top }}><strong><SetupName configuration={summary.configuration} mark={false} /></strong>{lines}</div>
 }

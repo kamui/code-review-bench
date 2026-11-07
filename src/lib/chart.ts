@@ -112,7 +112,16 @@ export function groupPaths<T extends { x: number; y: number }>(points: T[], key:
   return Array.from(groups, ([groupKey, members]) => ({ key: groupKey, points: [...members].sort((left, right) => left.x - right.x || left.y - right.y) }))
 }
 
-export type TipPlace = { left: number; top: number; below: boolean }
+export type TipPlace = { left: number; top: number; below: boolean; side?: 'left' | 'right' }
+
+/** Places a tooltip beside the mark, toward the middle of the shell, below the ceiling and inside the viewport where it fits. */
+export function sideTip(shell: DOMRect, mark: DOMRect, viewport = typeof window === 'undefined' ? Infinity : window.innerHeight, half = 160, ceiling = 0): TipPlace {
+  const side = mark.left + mark.width / 2 - shell.left < shell.width / 2 ? 'right' : 'left'
+  const highest = Math.max(half, viewport - half)
+  const lowest = Math.min(Math.max(half, Math.max(ceiling, 0) + half), highest)
+  const middle = Math.min(Math.max(mark.top + mark.height / 2, lowest), highest)
+  return { left: (side === 'right' ? mark.right : mark.left) - shell.left, top: middle - shell.top, below: false, side }
+}
 
 /** Places a tooltip over the mark, or under it when the mark is near the ceiling (the top of the clipping frame, or of the viewport) and there is more room under it, kept inside the shell's width. */
 export function tipPlace(shell: DOMRect, mark: DOMRect, half = 160, headroom = 170, viewport = typeof window === 'undefined' ? Infinity : window.innerHeight, ceiling = shell.top): TipPlace {
