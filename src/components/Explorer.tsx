@@ -3,7 +3,7 @@ import { ActionIcon, Alert, Anchor, Badge, Button, Checkbox, Container, Group, L
   SegmentedControl, Select, Stack, Switch, Table, Tabs, Text, TextInput, Title, Tooltip, VisuallyHidden, useComputedColorScheme, useMantineColorScheme } from '@mantine/core'
 import { useMediaQuery } from '@mantine/hooks'
 import { Link, Navigate, useLocation, useMatch, useNavigate, useSearch } from '@tanstack/react-router'
-import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpDown, ArrowUpRight, ChartBarStacked, ChartNoAxesGantt, Check, ChevronDown, ChevronRight, CodeXml, Cpu, Crosshair, Database,
+import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpDown, ArrowUpRight, ChartBarStacked, ChartNoAxesGantt, Check, ChevronDown, ChevronRight, CircleDashed, CodeXml, Cpu, Crosshair, Database,
   EyeOff, FileCheck2, Grid3x3, Hourglass, LayoutGrid, Moon, RotateCcw, Scale, Search, ShieldCheck, SlidersHorizontal, Sun, X } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { fetchDataset, impactBands, skillReleaseLabel } from '../lib/data'
@@ -329,7 +329,7 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
         </Paper>
         <Tabs defaultValue="catalog" className="task-tabs"><Tabs.List><Tabs.Tab value="catalog" leftSection={<Database size={15} />}>Task catalog</Tabs.Tab><Tabs.Tab value="coverage" leftSection={<Grid3x3 size={15} />}>Coverage gaps</Tabs.Tab></Tabs.List>
           <Tabs.Panel value="catalog" pt="md"><Table.ScrollContainer minWidth={720}><Table verticalSpacing="sm" className="task-table" highlightOnHover>
-            <Table.Thead><Table.Tr><Table.Th>Pull request</Table.Th><Table.Th>Profile</Table.Th><Table.Th>References</Table.Th><Table.Th>{foundLabels[band]}, mean of selected setups</Table.Th><Table.Th>In comparison</Table.Th><Table.Th /></Table.Tr></Table.Thead>
+            <Table.Thead><Table.Tr><Table.Th>Pull request</Table.Th><Table.Th>Profile</Table.Th><Table.Th>References</Table.Th><Table.Th>{foundLabels[band]}</Table.Th><Table.Th>In comparison</Table.Th><Table.Th /></Table.Tr></Table.Thead>
             <Table.Tbody>{candidates.map(task => {
               const approved = task.families.filter(family => family.eligibility === 'approved').length
               const pending = task.families.length - approved
@@ -340,7 +340,7 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
                   {pending > 0 && <Text size="xs" c="dimmed" mt={4}>{pending} awaiting eligibility</Text>}
                   {!!task.preExistingProblems?.length && <Text size="xs" c="dimmed" mt={4}>{plural(task.preExistingProblems.length, 'pre-existing problem')}</Text>}</Table.Td>
                 <Table.Td data-label="Mean detection"><DetectionBar result={meanTaskRecall(board.cards.filter(card => activeIds.includes(card.configurationId)), task.id, band)} /></Table.Td><Table.Td data-label="In comparison">{sharedIds.has(task.id) ? <span className="included-label"><Check size={14} aria-hidden="true" /> Included</span>
-                  : <Tooltip label="At least one selected setup has no result for this PR"><Text size="xs" c="dimmed" className="missing-label">Missing results</Text></Tooltip>}</Table.Td>
+                  : <Tooltip label="At least one selected setup has no result for this PR"><span className="missing-label" tabIndex={0}><CircleDashed size={14} aria-hidden="true" /> Missing results</span></Tooltip>}</Table.Td>
                 <Table.Td className="row-open"><ActionIcon aria-label={`Inspect ${task.repo} PR ${task.pr}`} variant="subtle" color="gray" onClick={open}><ChevronRight size={18} /></ActionIcon></Table.Td></Table.Tr>
             })}</Table.Tbody></Table></Table.ScrollContainer>
             {candidates.some(task => meanTaskRecall(board.cards.filter(card => activeIds.includes(card.configurationId)), task.id, band).annotations.length > 0)

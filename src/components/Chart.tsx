@@ -159,14 +159,14 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
           onClick={() => setSpotlight(current => current?.pinned && current.method === method ? null : { method, pinned: true })}>
           <span className="strip-method"><Mark configuration={configuration} size={11} />{method}{configuration.experimental && <span className="row-tag">Experiment</span>}</span>
           <span className="strip-model"><VendorMark configuration={configuration} />{model}{effort && <span className="measure-effort"> · {effort}</span>}</span>
-          <span className="strip-value" data-label="Found"><Score summary={top.summary} /></span><span className={stripValue(first)} data-label={shortAxis[axis]}>{first}</span>
+          <span className="strip-value strip-found" data-label="Found"><span className="strip-bar" aria-hidden="true" style={{ '--mark-color': reviewColor(configuration), '--share': `${top.y}%` } as CSSProperties} /><Score summary={top.summary} /></span><span className={stripValue(first)} data-label={shortAxis[axis]}>{first}</span>
           <span className={stripValue(secondText)} data-label={shortAxis[pair]}>{secondText}</span>
           <span className="strip-low" data-label={axis === 'cost' ? 'Lowest cost' : `Lowest ${lowerFirst(shortAxis[axis])}`}>{low && <><span className="strip-low-model">{lowModel}</span><span className="strip-low-value">{lowText}</span><span className="strip-low-found">{percent(low.y, 0)}<span className="found-word"> found</span></span></>}</span></button></li>
       })}</ul></div>}
     {view === 'tradeoff' && points.length > 0 && <ul className="chart-keys twin-key" aria-label="Chart key">
       <li><Mark configuration={{ method: '', reviewEdition: '', builtin: true }} size={10} />Built-in reviewer</li>
       <li><Mark configuration={{ method: '', reviewEdition: '', builtin: false }} size={10} />Skill</li>
-      {bounded && <li><span className="bound-key" aria-hidden="true" />Lower bound</li>}
+      {bounded && <li><span className="bound-key" aria-hidden="true" />Lower bound, ≥ in the table</li>}
       <li><span className="line-key" aria-hidden="true" />One method across models</li>
       {summaries.some(summary => summary.configuration.experimental) && <li><span className="line-key dashed" aria-hidden="true" />Skill experiment</li>}
     </ul>}
@@ -175,7 +175,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
       {view === 'setups' && frontier.size > 0 && <li><span className="frontier-tag">On frontier</span>No other setup finds more at a lower {lowerFirst(axisLabels[axis])}</li>}
       {view === 'setups' && undecided.size > 0 && <li><span className="frontier-tag unknown">Frontier unknown</span>Its {lowerFirst(axisLabels[axis])} is a lower bound that no other setup beats</li>}
       {view === 'skills' && <li><span className="context-key" aria-hidden="true" />Other selected setups</li>}
-      {bounded && <li><span className="bound-key" aria-hidden="true" />Lower bound</li>}
+      {bounded && <li><span className="bound-key" aria-hidden="true" />Lower bound, ≥ in the table</li>}
     </ul>}
     {points.length > 0 && <ChartGuide title={guide ? 'How to read these charts' : undefined}><div className="plot-caption">
       {view === 'setups' && <span><span className="whisker-key" aria-hidden="true" />Rows are ordered by {lowerFirst(measure)}. The whisker spans this average with any one whole PR left out: sensitivity to these PRs, not a confidence interval.</span>}
@@ -223,7 +223,8 @@ function SetupRows({ points, measure, axis, scale, frontier, undecided, onSelect
           aria-label={`${configuration.short}: ${measure} ${percent(score)}${noted(summary)}${range ? `, ${percent(range.low)} to ${percent(range.high)} leaving one PR out` : ''}; ${axisLabels[axis]} ${formatMetric(axis, metric, starred, bounded)}${frontier.has(configuration.id) ? '; on the frontier of these two measures' : ''}. Inspect evidence`}>
           <span className="rank-name"><Mark configuration={configuration} />
             <span><strong>{method}</strong><span className="rank-model"><VendorMark configuration={configuration} />{model}{effort && ` · ${effort}`}
-              {frontier.has(configuration.id) ? <span className="frontier-tag">On frontier</span> : undecided.has(configuration.id) && <span className="frontier-tag unknown">Frontier unknown</span>}</span></span></span>
+              {frontier.has(configuration.id) ? <span className="frontier-tag" title={`No other setup finds more at a lower ${lowerFirst(axisLabels[axis])}`}>On frontier</span>
+                : undecided.has(configuration.id) && <span className="frontier-tag unknown" title={`Its ${lowerFirst(axisLabels[axis])} is a lower bound that no other setup beats`}>Frontier unknown</span>}</span></span></span>
           <span className="rank-cell"><span className="rank-value"><Score summary={summary} /></span>
             <span className="rank-track">{scoreTicks.map(tick => <span key={tick} className="rank-grid" style={{ left: `${tick}%` }} />)}
               {range && <span className="rank-whisker" style={{ left: `${range.low}%`, width: `${range.high - range.low}%` }} />}

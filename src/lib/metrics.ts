@@ -99,7 +99,11 @@ export function peerLabel(configurations: Configuration[]): string | null {
 }
 
 export const percent = (value: number | null, digits = 1): string => value === null ? '—' : `${value.toFixed(digits)}%`
-export const money = (value: number | null): string => value === null ? '—' : `$${value.toFixed(value > 0 && value < 0.01 ? 4 : 2)}`
+export const money = (value: number | null): string => {
+  if (value === null) return '—'
+  const amount = value > 0 && Number(value.toPrecision(2)) < 1 ? value.toPrecision(2) : value.toFixed(2)
+  return `$${amount}`
+}
 export const compact = (value: number | null): string => value === null ? '—'
   : new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value)
 
