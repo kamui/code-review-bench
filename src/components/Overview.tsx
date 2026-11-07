@@ -145,7 +145,7 @@ export function Overview({ summaries, detection, axis, matching, basis, onSelect
           <p className="lead-about">Each setup sits at the same height in both panels; up and left is better. <span className="lead-scope">{[`${basis.prs} PRs`,
             detection.band === 'all' ? `${basis.known} known problems` : `${basis.problems} of ${basis.known} known problems are ${lowerFirst(bandLabels[detection.band])}`,
             basis.awaiting > 0 && `${basis.awaiting} awaiting a ruling`].filter(Boolean).join(' · ')}</span></p></div></header>
-        <Chart summaries={summaries} detection={detection} matching={matching} axis={axis} view="tradeoff" height={320} onSelect={onSelect} linked={{ id: active, point: setFocus, pin }}
+        <Chart summaries={summaries} detection={detection} matching={matching} axis={axis} view="tradeoff" height={305} onSelect={onSelect} linked={{ id: active, point: setFocus, pin }}
           guide={<><GuideItem label="Terms"><KeyTerms terms={['Review setup', 'Known problem', 'Impact band', 'Problems or PRs weighted equally', 'Refuted or unproven', 'Admitted review']} /></GuideItem>
             {weight(detection, basis) && <GuideItem label="Weight">{weight(detection, basis)}</GuideItem>}
             <GuideItem label="Charts below">Each ranks the setups by one measure, on its own scale; a setup without a value comes last. No single number ranks the setups. Select a setup to open its evidence.</GuideItem></>} />
