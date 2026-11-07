@@ -142,7 +142,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
           axis={panel.on} scale={panel.scale} spotlight={spotlight?.method ?? null} marked={hovered?.id ?? linked?.id ?? null} named={named} onSelect={pinAndSelect} interactions={interactions} yTitle={foundLabels[detection.band]} height={height} />)}</div>
         : view === 'skills' ? <MethodPanels points={measured} axis={axis} scale={scale} yTitle={foundLabels[detection.band]} onSelect={onSelect} interactions={interactions} />
           : <Models points={points} measure={measure} onSelect={onSelect} interactions={interactions} />}
-    {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={measure} axes={view === 'models' ? [] : view === 'tradeoff' ? [axis, pair] : [axis]} place={hovered} />}
+    {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={view === 'tradeoff' ? 'Found' : measure} axes={view === 'models' ? [] : view === 'tradeoff' ? [axis, pair] : [axis]} place={hovered} />}
     {view === 'tradeoff' && methodTops.size > 0 && <div className="method-strip">
       <div className="strip-row strip-head"><span>Review method</span><span>Top setup (most found)</span><span>Found</span><span><Glossed text={shortAxis[axis]} /></span><span><Glossed text={shortAxis[pair]} /></span><span className="strip-low strip-low-head"><span className="strip-low-title">Lowest {lowerFirst(shortAxis[axis])} in the method</span>
         <span className="strip-low-model">Model</span><span className="strip-low-value">{axis === 'cost' ? 'Cost' : 'Value'}</span><span className="strip-low-found">Found</span></span></div>
@@ -472,14 +472,14 @@ function Tooltip({ point, measure, axes, place }: { point: Point; measure: strin
   const row = (key: string, label: string, value: ReactNode, note?: ReactNode) =>
     <span key={key} className="tip-row"><span className="tip-label">{label}</span><b>{value}</b>{note && <span className="tip-note">{note}</span>}</span>
   const lines: ReactNode[] = [
-    row('score', measure, percent(summary.detection), range && `${percent(range.low)} to ${percent(range.high)} with any one PR left out`),
+    row('score', measure, percent(summary.detection), range && `${percent(range.low)} to ${percent(range.high)} leaving one PR out`),
     summary.detectionNote && <span key="zero-credit" className="tip-note">{summary.detectionNote}</span>,
     ...axes.map(axis => {
       const metric = metricOf(summary, axis), bounded = boundedOn(summary, axis)
-      return row(axis, axisLabels[axis], formatMetric(axis, metric, point.starred, bounded), (metric === null || bounded) && summary.reasons[axis])
+      return row(axis, shortAxis[axis], formatMetric(axis, metric, point.starred, bounded), (metric === null || bounded) && summary.reasons[axis])
     }),
     axes.includes('time') && summary.time && <span key="time" className="tip-note">Mean {duration(summary.time.mean)} · middle 50% {duration(summary.time.q1)} to {duration(summary.time.q3)} · {summary.time.reviews} timed trials</span>,
-    row('count', 'Trials admitted', `${summary.admitted} of ${summary.trials}`, `${summary.tasks} PRs · ${summary.completed} complete`),
+    row('count', `Trials admitted, ${summary.tasks} PRs`, `${summary.admitted} of ${summary.trials}`, summary.completed < summary.trials && `${summary.completed} complete`),
     !summary.configuration.builtin && row('skill', 'Skill', skillReleaseLabel([summary.configuration])),
   ]
   return <div className={place.side ? `chart-tip side-${place.side}` : place.below ? 'chart-tip below' : 'chart-tip'} role="presentation" style={{ left: place.left, top: place.top }}><strong><SetupName configuration={summary.configuration} mark={false} /></strong>{lines}</div>
