@@ -125,7 +125,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
       : view === 'setups' ? <SetupRows points={points} measure={measure} axis={axis} scale={scale} frontier={frontier} onSelect={onSelect} interactions={interactions} />
         : view === 'tradeoff' ? <div className="twin">{panels.map(panel => <Scatter key={panel.on} points={panel.points} dimensions={`${lowerFirst(measure)} against ${lowerFirst(axisLabels[panel.on])}`}
           axis={panel.on} scale={panel.scale} spotlight={spotlight?.method ?? null} marked={hovered?.id ?? linked?.id ?? null} onSelect={pinAndSelect} interactions={interactions} yTitle={foundLabels[detection.band]} height={height} />)}</div>
-        : view === 'skills' ? <MethodPanels points={measured} axis={axis} scale={scale} onSelect={onSelect} interactions={interactions} />
+        : view === 'skills' ? <MethodPanels points={measured} axis={axis} scale={scale} yTitle={foundLabels[detection.band]} onSelect={onSelect} interactions={interactions} />
           : <Models points={points} measure={measure} onSelect={onSelect} interactions={interactions} />}
     {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={measure} axes={view === 'models' ? [] : view === 'tradeoff' ? [axis, pair] : [axis]} place={hovered} />}
     {view === 'tradeoff' && methodTops.size > 0 && <div className="method-strip">
@@ -321,21 +321,21 @@ function ChartPoint({ point, axis, x, y, muted = false, onSelect, interactions }
   </g>
 }
 
-function MethodPanels({ points, axis, scale, onSelect, interactions }: {
-  points: Plotted[]; axis: Axis; scale: Scale; onSelect: (id: string) => void; interactions: Interactions
+function MethodPanels({ points, axis, scale, yTitle, onSelect, interactions }: {
+  points: Plotted[]; axis: Axis; scale: Scale; yTitle: string; onSelect: (id: string) => void; interactions: Interactions
 }) {
   const order = ['claude-builtin', 'codex']
   const rank = (key: string) => { const found = order.findIndex(method => key.startsWith(`${method}/`)); return found < 0 ? order.length : found }
   const groups = groupPaths(points, point => methodKey(point.summary.configuration)).sort((left, right) => rank(left.key) - rank(right.key) || left.key.localeCompare(right.key))
   const labelText = labelOf(points)
-  return <div className="multiples" role="list" aria-label={`Detection against ${lowerFirst(axisLabels[axis])}, one panel per review method`}>
+  return <div className="multiples" role="list" aria-label={`${yTitle} against ${lowerFirst(axisLabels[axis])}, one panel per review method`}>
     {groups.map(group => <MethodPanel key={group.key} members={group.points} context={points.filter(point => !group.points.includes(point))}
-      axis={axis} scale={scale} labelText={labelText} onSelect={onSelect} interactions={interactions} />)}
+      axis={axis} scale={scale} yTitle={yTitle} labelText={labelText} onSelect={onSelect} interactions={interactions} />)}
   </div>
 }
 
-function MethodPanel({ members, context, axis, scale, labelText, onSelect, interactions }: {
-  members: Plotted[]; context: Plotted[]; axis: Axis; scale: Scale; labelText: (configuration: Configuration) => string; onSelect: (id: string) => void; interactions: Interactions
+function MethodPanel({ members, context, axis, scale, yTitle, labelText, onSelect, interactions }: {
+  members: Plotted[]; context: Plotted[]; axis: Axis; scale: Scale; yTitle: string; labelText: (configuration: Configuration) => string; onSelect: (id: string) => void; interactions: Interactions
 }) {
   const { ref, width } = useElementSize()
   const height = 262, plot = { left: 60, right: Math.max(61, width - 16), top: 12, bottom: height - 46 }
@@ -350,7 +350,7 @@ function MethodPanel({ members, context, axis, scale, labelText, onSelect, inter
     <div className="panel-head"><span className="configuration-name"><Mark configuration={first} size={10} />{setupParts(first).method}</span>
       <span className="panel-meta">{members.length} {members.length === 1 ? 'model' : 'models'}</span></div>
     <div ref={ref} className="panel-plot">{width > 0 && <svg width={width} height={height} role="group" aria-label={`${setupParts(first).method}: ${members.map(point => `${labelText(point.summary.configuration)} ${percent(point.y)}`).join(', ')}`}>
-      <Axes plot={plot} axis={axis} scale={scale} xTicks={ticks(scale)} px={px} py={py} height={height} compact />
+      <Axes plot={plot} axis={axis} scale={scale} xTicks={ticks(scale)} px={px} py={py} height={height} compact yTitle={yTitle} />
       {context.map(point => <circle key={point.summary.configuration.id} cx={px(point.x)} cy={py(point.y)} r={3.5} className="context-dot" />)}
       {labels.filter(label => label.leader).map(label => {
         const point = members.find(item => item.summary.configuration.id === label.id)

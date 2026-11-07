@@ -320,7 +320,7 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
             <FilterSelect label="Change kind" aria-label="Change kind" all="All change kinds" data={labels('changeKinds')} value={change} onChange={setChange} />
             <FilterSelect label="Technology" aria-label="Technology" all="All technologies" data={labels('technologies')} value={technology} onChange={setTechnology} />
             <FilterSelect label="Review concern" aria-label="Task review concern" all="All review concerns" data={labels('concerns')} value={concern} onChange={setConcern} />
-            <FilterSelect label="Count only references about" aria-label="Finding concern" all="All finding concerns" data={findingConcerns} value={findingConcern} onChange={setFindingConcern} />
+            <FilterSelect label="Count problems about" aria-label="Finding concern" all="Any concern" data={findingConcerns} value={findingConcern} onChange={setFindingConcern} />
           </div>
           <div className="task-filters-foot">
             <Text size="xs" c="dimmed">{findingConcern ? `Detection counts only the ${plural(concernReferences, `${findingConcern.toLowerCase()} reference`)} on these PRs.` : 'Detection counts every approved reference.'} Filters also narrow the <Link className="filter-link" to="/" hash="scorecard">scorecard</Link> comparison.</Text>
@@ -333,14 +333,15 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
             <Table.Tbody>{candidates.map(task => {
               const approved = task.families.filter(family => family.eligibility === 'approved').length
               const pending = task.families.length - approved
-              return <Table.Tr key={task.id}><Table.Td><button className="text-button task-name" onClick={() => inspect()({ kind: 'task', id: task.id })}>{task.repo}<span>#{task.pr}</span></button><TaskShape task={task} /></Table.Td>
+              const open = (event: { stopPropagation: () => void }) => { event.stopPropagation(); inspect()({ kind: 'task', id: task.id }) }
+              return <Table.Tr key={task.id} className="task-row" onClick={open}><Table.Td><button className="text-button task-name" onClick={open}>{task.repo}<span>#{task.pr}</span></button><TaskShape task={task} /></Table.Td>
                 <Table.Td data-label="Profile"><Group gap={5} maw={220}>{[...task.profile.technologies, ...task.profile.changeKinds].map(label => <Tag key={label}>{label}</Tag>)}</Group></Table.Td>
                 <Table.Td data-label="References">{approved ? <Text size="sm">{plural(approved, 'problem')}</Text> : <Tag>{controlLabels[task.control]}</Tag>}
                   {pending > 0 && <Text size="xs" c="dimmed" mt={4}>{pending} awaiting eligibility</Text>}
                   {!!task.preExistingProblems?.length && <Text size="xs" c="dimmed" mt={4}>{plural(task.preExistingProblems.length, 'pre-existing problem')}</Text>}</Table.Td>
                 <Table.Td data-label="Mean detection"><DetectionBar result={meanTaskRecall(board.cards.filter(card => activeIds.includes(card.configurationId)), task.id, band)} /></Table.Td><Table.Td data-label="In comparison">{sharedIds.has(task.id) ? <span className="included-label"><Check size={14} aria-hidden="true" /> Included</span>
                   : <Tooltip label="At least one selected setup has no result for this PR"><Text size="xs" c="dimmed" className="missing-label">Missing results</Text></Tooltip>}</Table.Td>
-                <Table.Td className="row-open"><ActionIcon aria-label={`Inspect ${task.repo} PR ${task.pr}`} variant="subtle" color="gray" onClick={() => inspect()({ kind: 'task', id: task.id })}><ChevronRight size={18} /></ActionIcon></Table.Td></Table.Tr>
+                <Table.Td className="row-open"><ActionIcon aria-label={`Inspect ${task.repo} PR ${task.pr}`} variant="subtle" color="gray" onClick={open}><ChevronRight size={18} /></ActionIcon></Table.Td></Table.Tr>
             })}</Table.Tbody></Table></Table.ScrollContainer>
             {candidates.some(task => meanTaskRecall(board.cards.filter(card => activeIds.includes(card.configurationId)), task.id, band).annotations.length > 0)
               && <Text size="xs" c="dimmed" mt="sm" className="footnote">A dotted underline marks a mean that counts unresolved detection decisions as zero credit; hover it for the count.</Text>}

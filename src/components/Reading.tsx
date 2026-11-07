@@ -17,10 +17,15 @@ export function PeerNote({ configurations, className }: { configurations: Config
   return label && <span className={className}><Glossed text={label} /></span>
 }
 
+const peerBadgeText = (label: string) => {
+  const plain = label.match(/\(([^)]+)\)$/)?.[1]
+  return plain ? plain.replace(/^./, letter => letter.toUpperCase()) : label.replace(/^Cross-model peer /, 'Peer ')
+}
+
 export function PeerBadge({ configuration }: { configuration: Configuration }) {
   const label = peerLabel([configuration])
   const entry = glossary.find(item => item.term === 'Cross-model peer')!
-  return label && <Tooltip multiline w={300} label={<>{label}. {entry.definition}</>} withArrow><span className="peer-badge"><span aria-hidden="true">{label.replace(/^Cross-model peer /, 'Peer ').replace(/ \(.*\)$/, '')}</span><VisuallyHidden>{label}</VisuallyHidden></span></Tooltip>
+  return label && <Tooltip multiline w={300} label={<>{label}. {entry.definition}</>} withArrow><span className="peer-badge"><span aria-hidden="true">{peerBadgeText(label)}</span><VisuallyHidden>{label}</VisuallyHidden></span></Tooltip>
 }
 
 const listPriced = (configuration: Configuration) => configuration.billing === 'list-price-equivalent'
