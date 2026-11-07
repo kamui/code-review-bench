@@ -86,7 +86,9 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
     summary, range: summary.range, metric: metricOf(summary, axis), bounded: boundedOn(summary, axis), starred: costStarred(summary.configuration, shown),
   }))
   const measured = points.flatMap(point => point.metric === null ? [] : [{ ...point, x: point.metric, y: point.summary.detection ?? 0 }])
-  const frontier = new Set(paretoFrontier(measured.filter(point => !point.bounded)).map(point => point.summary.configuration.id))
+  const exact = measured.filter(point => !point.bounded)
+  const frontier = new Set(paretoFrontier(exact).map(point => point.summary.configuration.id))
+  const undecided = new Set(measured.filter(point => point.bounded && paretoFrontier([...exact, point]).includes(point)).map(point => point.summary.configuration.id))
   const scale = scaleFor(axis, measured.map(point => point.x))
   const withheld = reasonCounts(summaries.map(summary => summary.reasons.detection))
   const hoveredPoint = points.find(point => point.summary.configuration.id === hovered?.id)
@@ -133,7 +135,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
       {summaries.length ? <ul className="reason-list">{withheld.map(row => <li key={row.reason}>{row.reason} ({setups(row.count)})</li>)}</ul>
         : <span>Select at least one review method and model.</span>}
       <span>No other impact band or average is substituted. Choose them above.</span></div>
-      : view === 'setups' ? <SetupRows points={points} measure={measure} axis={axis} scale={scale} frontier={frontier} onSelect={onSelect} interactions={interactions} />
+      : view === 'setups' ? <SetupRows points={points} measure={measure} axis={axis} scale={scale} frontier={frontier} undecided={undecided} onSelect={onSelect} interactions={interactions} />
         : view === 'tradeoff' ? <div className="twin">{panels.map(panel => <Scatter key={panel.on} points={panel.points} dimensions={`${lowerFirst(measure)} against ${lowerFirst(axisLabels[panel.on])}`}
           axis={panel.on} scale={panel.scale} spotlight={spotlight?.method ?? null} marked={hovered?.id ?? linked?.id ?? null} named={named} onSelect={pinAndSelect} interactions={interactions} yTitle={foundLabels[detection.band]} height={height} />)}</div>
         : view === 'skills' ? <MethodPanels points={measured} axis={axis} scale={scale} yTitle={foundLabels[detection.band]} onSelect={onSelect} interactions={interactions} />
@@ -168,6 +170,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
     {points.length > 0 && view !== 'models' && view !== 'tradeoff' && <ul className="chart-keys" aria-label="Chart key">
       {view === 'setups' && <li><span className="whisker-key" aria-hidden="true" />Range with any one PR left out</li>}
       {view === 'setups' && frontier.size > 0 && <li><span className="frontier-tag">On frontier</span>No other setup finds more at a lower {lowerFirst(axisLabels[axis])}</li>}
+      {view === 'setups' && undecided.size > 0 && <li><span className="frontier-tag unknown">Frontier unknown</span>Its {lowerFirst(axisLabels[axis])} is a lower bound that no other setup beats</li>}
       {view === 'skills' && <li><span className="context-key" aria-hidden="true" />Other selected setups</li>}
       {bounded && <li><span className="bound-key" aria-hidden="true" />Lower bound</li>}
     </ul>}
@@ -196,8 +199,8 @@ const Score = ({ summary }: { summary: Summary }) => <span className={summary.de
 
 type Interactions = (id: string) => Pick<DOMAttributes<Element>, 'onMouseEnter' | 'onFocus' | 'onMouseLeave' | 'onBlur'>
 
-function SetupRows({ points, measure, axis, scale, frontier, onSelect, interactions }: {
-  points: Point[]; measure: string; axis: Axis; scale: Scale; frontier: Set<string>; onSelect: (id: string) => void; interactions: Interactions
+function SetupRows({ points, measure, axis, scale, frontier, undecided, onSelect, interactions }: {
+  points: Point[]; measure: string; axis: Axis; scale: Scale; frontier: Set<string>; undecided: Set<string>; onSelect: (id: string) => void; interactions: Interactions
 }) {
   const metricTicks = ticks(scale)
   return <div role="list" aria-label={`Setups ordered by ${lowerFirst(measure)}, with ${lowerFirst(axisLabels[axis])}`}>
@@ -217,7 +220,7 @@ function SetupRows({ points, measure, axis, scale, frontier, onSelect, interacti
           aria-label={`${configuration.short}: ${measure} ${percent(score)}${noted(summary)}${range ? `, ${percent(range.low)} to ${percent(range.high)} leaving one PR out` : ''}; ${axisLabels[axis]} ${formatMetric(axis, metric, starred, bounded)}${frontier.has(configuration.id) ? '; on the frontier of these two measures' : ''}. Inspect evidence`}>
           <span className="rank-name"><Mark configuration={configuration} />
             <span><strong>{method}</strong><span className="rank-model"><VendorMark configuration={configuration} />{model}{effort && ` · ${effort}`}
-              {frontier.has(configuration.id) && <span className="frontier-tag">On frontier</span>}</span></span></span>
+              {frontier.has(configuration.id) ? <span className="frontier-tag">On frontier</span> : undecided.has(configuration.id) && <span className="frontier-tag unknown">Frontier unknown</span>}</span></span></span>
           <span className="rank-cell"><span className="rank-value"><Score summary={summary} /></span>
             <span className="rank-track">{scoreTicks.map(tick => <span key={tick} className="rank-grid" style={{ left: `${tick}%` }} />)}
               {range && <span className="rank-whisker" style={{ left: `${range.low}%`, width: `${range.high - range.low}%` }} />}
