@@ -344,7 +344,7 @@ describe('chart', () => {
     expect(whole).toContain('≥ marks a lower bound where usage was only partly recorded')
     const setups = chart(dataset, { band: 'all', estimator: 'equalProblem' })
     expect(setups).toContain('a Frontier unknown 100% ≥ $0.75 b On frontier 50% $1.00')
-    expect(setups).toContain('Hollow marks A lower bound of cost per trial')
+    expect(setups).toContain('Dashed marks A lower bound of cost per trial')
     expect(setups).not.toContain('No cost per trial for a')
   })
 

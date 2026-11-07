@@ -87,7 +87,7 @@ export function Overview({ summaries, detection, axis, matching, basis, onSelect
       keys: [{ label: 'Problem', className: 'key-solid' }, { label: 'Other true', className: 'key-rest' }], axis: ticks(claimScale).map(value => ({ at: at(claimScale, value), label: String(value) })) },
     doubt: { title: 'Refuted or unproven', about: 'Share of admitted reviews with at least one refuted or unproven claim. An unproven claim is not shown to be false.', order: orderText.doubt,
       keys: [{ label: 'Refuted or unproven', className: 'key-solid' }, { label: 'Only doubt unresolved', className: 'key-hatched' }], axis: halfAxis },
-    cost: { title: 'Cost per trial', about: `Every attempt, retries included, per scheduled trial; ${costScaleNote(shown)}. A hollow dot is a lower bound.`, order: orderText.cost,
+    cost: { title: 'Cost per trial', about: `Every attempt, retries included, per scheduled trial; ${costScaleNote(shown)}. A dashed dot is a lower bound.`, order: orderText.cost,
       axis: spaced(ticks(costScale).map(value => ({ at: at(costScale, value), ...Number.isInteger(Math.log10(value)) ? { label: money(value) } : {} })), 26) },
     time: { title: 'Median time', about: 'Completed trials only; the band spans the middle half of trials. Log scale.', order: orderText.time,
       axis: spaced(time.marks.map(([seconds, label]) => ({ at: at(time.scale, seconds), label })), 22) },
