@@ -947,21 +947,20 @@ fn a_runtime_root_holding_a_protected_path_refuses_the_sandbox() {
 
 #[test]
 fn a_system_runtime_outside_the_default_path_is_on_the_sandbox_path() {
-    let fixture = fixture("usr-local");
-    let node = PathBuf::from("/usr/local/bin/node");
+    let fixture = fixture("usr-runtime");
+    let node = PathBuf::from("/usr/bench-tools-absent/bin/node");
     let which = |name: &str| (name == "node").then(|| node.clone());
     let found = tools(&fixture, python_policy(), &which);
     let command = sandbox(&found, &["/usr/bin/true".into()], ".", &[], None).unwrap();
-    assert!(
-        command
-            .windows(3)
-            .any(|window| window == ["--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin"])
-    );
-    assert!(
-        !binds(&command)
-            .iter()
-            .any(|(source, _)| source == "/usr/local/bin/node")
-    );
+    let path = [
+        "--setenv",
+        "PATH",
+        "/usr/bench-tools-absent/bin:/usr/bin:/bin",
+    ];
+    assert!(command.windows(3).any(|window| window == path));
+    let (mounts, _) =
+        runtime_mounts(&found.work, &found.policy, &found.protected, &found.host).unwrap();
+    assert!(!mounts.iter().any(|(source, _)| source == &node));
 }
 
 #[test]
