@@ -14,3 +14,7 @@ Given on 2026-11-08 through the question tool, one question at a time. The askin
    - Chosen: "Part of GT-i1 (Recommended)".
 
 The owner gave no reason beyond the chosen options, so both after-records' `ground` is null. Each decision is the recommender's first answer, asked once, so `miss` is null.
+
+3. GT-i4's and GT-i1's widened wording. The session showed the draft, [`i-requests-6667/wording.md`](i-requests-6667/wording.md), in the chat outside the question tool, after an unslop pass and an accuracy check. The owner ran `/unslop-revise` with "the wordings and present them again"; the session ran a second pass and showed the result.
+   - Chosen: "accept".
+   - The approved text is [`i-requests-6667/wording.approved.md`](i-requests-6667/wording.approved.md) (commit `ddd57cc5f`), which records the exchange and the changes of the second pass.
