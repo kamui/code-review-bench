@@ -1,0 +1,316 @@
+#!/usr/bin/env python3
+#
+# Upload and publish an entire directory tree via exodus-gw.
+#
+# This command behaves similar to a recursive scp or rsync.
+# It'll walk all files in a source directory and upload them.
+#
+# Once all files have been uploaded, they will be atomically
+# published to destination paths matching the source paths,
+# relative to the top-level directory.
+#
+# Example:
+#
+#  examples/exodus-sync . /sync-test
+#
+# ...would publish the exodus-gw source tree under a 'sync-test' prefix.
+#
+
+import argparse
+import hashlib
+import logging
+import os
+import threading
+from collections import namedtuple
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
+from urllib.parse import urljoin
+
+import backoff
+import boto3
+import boto3.session
+import requests
+from botocore.config import Config
+from botocore.exceptions import ClientError
+
+# How many items we'll add to a publish per request.
+ITEM_BATCH_SIZE = 5000
+
+# Represents a single item to be uploaded & published.
+Item = namedtuple("Item", ["src_path", "dest_path", "object_key"])
+
+# Holder for thread-local clients.
+tls = threading.local()
+
+
+def get_object_key(filename):
+    with open(filename, "rb") as f:
+        hasher = hashlib.sha256()
+        while True:
+            chunk = f.read(1024 * 1024 * 10)
+            if not chunk:
+                break
+            hasher.update(chunk)
+        return hasher.hexdigest()
+
+
+def get_items(args):
+    # Walk the source tree and get all items to be processed.
+    items = []
+
+    for dirpath, _, filenames in os.walk(args.src):
+        dirpath_rel = os.path.relpath(dirpath, args.src)
+        for filename in filenames:
+            src_path = os.path.join(dirpath, filename)
+            src_path = os.path.normpath(src_path)
+
+            dest_path = os.path.join(args.dest, dirpath_rel, filename)
+            dest_path = os.path.normpath(dest_path)
+
+            object_key = get_object_key(src_path)
+            items.append(Item(src_path, dest_path, object_key))
+
+    return items
+
+
+def new_s3_resource(args):
+    s3_endpoint = urljoin(args.exodus_gw_url, "upload")
+    session = boto3.session.Session()
+
+    config = Config()
+    if args.cert:
+        config = config.merge(Config(client_cert=(args.cert, args.key)))
+
+    return session.resource(
+        "s3",
+        # In a typical setup using PKI auth, these values are not used during
+        # auth to exodus-gw, but boto client always insists on having *some* keys.
+        # Dummy values can be provided to prevent boto looking for credentials
+        # in config files.
+        aws_access_key_id="dummy",
+        aws_secret_access_key="dummy",
+        endpoint_url=s3_endpoint,
+        config=config,
+    )
+
+
+def new_requests_session(args):
+    session = requests.Session()
+    if args.cert:
+        session.cert = (args.cert, args.key)
+    return session
+
+
+def upload_in_thread(args, item):
+    s3 = getattr(tls, "s3", None)
+
+    if not s3:
+        s3 = new_s3_resource(args)
+        tls.s3 = s3
+
+    bucket = s3.Bucket(args.env)
+    object = bucket.Object(item.object_key)
+
+    # Check if object is present in the bucket using object.load(),
+    # catching ClientErrors raised for non-2xx codes.
+    # Upload the file object only when it isn't already present.
+    try:
+        object.load()
+        print("Skipped {} <= {}".format(item.object_key, item.src_path))
+        return False
+    except ClientError as exc_info:
+        if exc_info.response["Error"]["Code"] == "404":
+            object.upload_file(item.src_path)
+            print("Uploaded {} <= {}".format(item.object_key, item.src_path))
+            return True
+
+        raise
+
+
+def upload_items(args, items):
+    # Upload all of the items.
+    #
+    # This will ensure all blobs exist in the CDN's s3 bucket (if they weren't
+    # already), but won't yet publish them, so they won't be exposed to clients
+    # of the CDN.
+
+    print("Uploading {} item(s) via {}".format(len(items), args.exodus_gw_url))
+
+    upload_one = partial(upload_in_thread, args)
+
+    upload_count = 0
+    skip_count = 0
+
+    with ThreadPoolExecutor() as executor:
+        for result in executor.map(upload_one, items):
+            if result:
+                upload_count += 1
+            else:
+                skip_count += 1
+
+    print(
+        "Upload summary: {} uploaded, {} skipped".format(
+            upload_count, skip_count
+        )
+    )
+
+
+@backoff.on_predicate(
+    wait_gen=backoff.expo,
+    predicate=lambda task: task["state"] not in ("FAILED", "COMPLETE"),
+    max_time=1800,
+)
+def poll_commit_completion(args, commit):
+    session = new_requests_session(args)
+
+    task_url = urljoin(args.exodus_gw_url, commit["links"]["self"])
+
+    r = session.get(task_url)
+    r.raise_for_status()
+    task = r.json()
+
+    print("Task state: {}".format(task["state"]))
+
+    return task
+
+
+def publish_items(args, items):
+    # Publish all the items which have previously been uploaded. This
+    # will make the items downloadable from the CDN via exodus-lambda,
+    # near-atomically.
+
+    session = new_requests_session(args)
+
+    r = session.post(os.path.join(args.exodus_gw_url, args.env, "publish"))
+    r.raise_for_status()
+    publish = r.json()
+
+    print("Created publish {}".format(publish))
+
+    put_url = urljoin(args.exodus_gw_url, publish["links"]["self"])
+    total = 0
+    while items:
+        batch = items[0:ITEM_BATCH_SIZE]
+        items = items[ITEM_BATCH_SIZE:]
+
+        r = session.put(
+            put_url,
+            json=[
+                {
+                    "web_uri": item.dest_path,
+                    "object_key": item.object_key,
+                }
+                for item in batch
+            ],
+        )
+        r.raise_for_status()
+
+        total += len(batch)
+        print(
+            "Publish item count:", total, "(...in progress)" if items else ""
+        )
+
+    commit_url = urljoin(args.exodus_gw_url, publish["links"]["commit"])
+
+    r = session.post(commit_url)
+    r.raise_for_status()
+    commit = r.json()
+
+    print("Started commit of publish: {}".format(commit))
+
+    print("Polling for commit completion. . .")
+    task = poll_commit_completion(args, commit)
+
+    print("Publish complete: {}".format(task))
+
+
+def check_service(args):
+    session = new_requests_session(args)
+
+    r = session.get("{}/healthcheck".format(args.exodus_gw_url))
+    r.raise_for_status()
+    print("exodus-gw healthcheck:", r.json())
+
+    r = session.get("{}/healthcheck-worker".format(args.exodus_gw_url))
+    r.raise_for_status()
+    print("exodus-gw worker healthcheck:", r.json())
+
+    r = session.get("{}/whoami".format(args.exodus_gw_url))
+    r.raise_for_status()
+    context = r.json()
+
+    for user_type, ident in (
+        ("client", "serviceAccountId"),
+        ("user", "internalUsername"),
+    ):
+        typed_ctx = context[user_type]
+        if typed_ctx["authenticated"]:
+            print(
+                "You are authenticated as {} {} with roles: {}".format(
+                    user_type, typed_ctx[ident], typed_ctx["roles"]
+                )
+            )
+            break
+    else:
+        print("Warning: you are not authenticated with exodus-gw.")
+
+
+def check_cert_args(args):
+    if args.cert and not os.path.exists(args.cert):
+        print(
+            "Warning: no cert found at {}, authentication may fail".format(
+                args.cert
+            )
+        )
+        args.cert = None
+        args.key = None
+
+    if args.key and not os.path.exists(args.key):
+        print(
+            "Warning: no key found at {}, authentication may fail".format(
+                args.key
+            )
+        )
+        args.cert = None
+        args.key = None
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--debug", action="store_true", help="Enable verbose logging"
+    )
+
+    parser.add_argument(
+        "--cert",
+        default=os.path.expandvars("${HOME}/certs/${USER}.crt"),
+        help="Certificate for HTTPS authentication with exodus-gw (must match --key)",
+    )
+    parser.add_argument(
+        "--key",
+        default=os.path.expandvars("${HOME}/certs/${USER}.key"),
+        help="Private key for HTTPS authentication with exodus-gw (must match --cert)",
+    )
+    parser.add_argument("--exodus-gw-url", default="https://localhost:8010")
+
+    parser.add_argument("--env", default="test")
+    parser.add_argument("src", help="source directory")
+    parser.add_argument(
+        "dest", nargs="?", default="/exodus-sync", help="target directory"
+    )
+
+    args = parser.parse_args()
+
+    if args.debug:
+        logging.basicConfig(level=logging.DEBUG)
+
+    check_cert_args(args)
+    check_service(args)
+
+    items = get_items(args)
+    upload_items(args, items)
+    publish_items(args, items)
+
+
+if __name__ == "__main__":
+    main()
