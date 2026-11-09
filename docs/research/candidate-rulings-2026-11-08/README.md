@@ -43,3 +43,7 @@ The owner answered both questions on 2026-11-08 and accepted the widened wording
 - **Cut-off.** `packet.json` gives the merge time as `cutoff`; the brief uses the last push, 2024-05-15T09:56:42Z. N2's public-code reads used the merge time as the date limit; no file read has a commit between the two.
 - **Another session** committed the Astro Vercel run and the owner's Astro ruling in this checkout while this round was prepared (`745de25ec`, `a38479ca4`). They touch only `candidate-rulings-2026-11-07/`. The Astro ruling is not yet in the rulings index, so the sheet does not list it; it is not a requests case.
 - **No cards.** Both recommendations are "part of" a known problem. If the owner rules either a separate problem, its card and a label inspector come next.
+
+## Closed
+
+The owner decided both records on 2026-11-08 (`22b8c1991`), and the filing is receipt `cohort-rebuild.v20.md`. `bench-tools ruling summary --round candidate-rulings-2026-11-08` is saved as [`summary.v1.md`](summary.v1.md). No miss. No decision was settled by agents.
