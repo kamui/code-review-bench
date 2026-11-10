@@ -5,8 +5,8 @@
 
 Run from the repository root after plan.py, and only once `approval.v1.json` here saves the user's answer to the spend
 question. This is `docs/research/candidate-regrade-2026-11-08/authorize.py` for the queues plan.py writes here, with a
-$34 cap. Each queue's cap is its share of $34 by its batches' latest Opus grades, never below its Opus price plus the $6
-largest reservation. The grader is Claude Opus 5.5 at high effort on Claude Code 2.1.317, with the 90% weekly quota
+$34 cap. Each queue's cap is its Opus price plus the $6 largest reservation, and a share of what is left of $34 by its
+batches' latest Opus grades. The grader is Claude Opus 5.5 at high effort on Claude Code 2.1.317, with the 90% weekly quota
 stop."""
 import glob
 import hashlib
@@ -76,7 +76,9 @@ def main():
             order = json.loads(path.read_text())["order"]
             queues[name] = (replacement, order, opus_price({(batch["run"], batch["target"]) for batch in order}))
     expected = sum(price for _, _, price in queues.values())
-    caps = {name: max(math.floor(TOTAL * price / expected * 100) / 100, math.ceil((price + 6) * 100) / 100)
+    floors = {name: math.ceil((price + 6) * 100) / 100 for name, (_, _, price) in queues.items()}
+    spare = TOTAL - sum(floors.values())
+    caps = {name: math.floor((floors[name] + max(spare, 0) * price / expected) * 100) / 100
             for name, (_, _, price) in queues.items()}
     if sum(caps.values()) > TOTAL:
         raise SystemExit(f"the queues' caps, each at least its Opus price plus the $6 reservation, add up to "
@@ -89,7 +91,7 @@ def main():
             "scope": f"Issue 30: grade again under rule version 6 the batches the filing under cohort-rebuild.v21.md (the audit round 3 corrections) made stale; the {name} queue, {len(order)} batches; no review reruns; stop at 90% weekly Claude use; ${TOTAL:.2f} list-price cap across the queues",
             "budgetCapUsd": cap,
             "budgetReceipt": {"speaker": "user", "text": answer["text"],
-                              "context": f"Answer of {answer['at']} recorded in approval.v1.json. The coordinating session set a ${TOTAL:.2f} list-price cap across the queues and a $6 maximum per session. This queue's cap is its share of ${TOTAL:.2f} by the list price of its batches' latest Opus grades, ${price:.2f} of ${expected:.2f}.",
+                              "context": f"Answer of {answer['at']} recorded in approval.v1.json. The coordinating session set a ${TOTAL:.2f} list-price cap across the queues and a $6 maximum per session. This queue's cap is its Opus price plus $6, and a share of the rest of ${TOTAL:.2f} by the list price of its batches' latest Opus grades, ${price:.2f} of ${expected:.2f}.",
                               "ref": pin(approval)},
             "grader": {"model": "claude-opus-5-5", "effort": "high", "cliVersion": CLIENT, "timeoutSeconds": 2700,
                        "selection": {"speaker": "user", "text": "1", "context": "Approval of 2026-11-03 for the rule-version-5 regrade, kept for every regrade since: grader Claude Opus 5.5 at high effort."},
