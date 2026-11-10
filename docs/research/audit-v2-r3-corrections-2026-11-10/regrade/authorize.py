@@ -5,7 +5,7 @@
 
 Run from the repository root after plan.py, and only once `approval.v1.json` here saves the user's answer to the spend
 question. This is `docs/research/candidate-regrade-2026-11-08/authorize.py` for the queues plan.py writes here, with a
-$25 cap. Each queue's cap is its share of $25 by its batches' latest Opus grades, never below its Opus price plus the $6
+$34 cap. Each queue's cap is its share of $34 by its batches' latest Opus grades, never below its Opus price plus the $6
 largest reservation. The grader is Claude Opus 5.5 at high effort on Claude Code 2.1.317, with the 90% weekly quota
 stop."""
 import glob
@@ -17,7 +17,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[3]
-TOTAL = 25.0
+TOTAL = 34.0
 CLIENT = "2.1.317"
 QUEUES = {
     "rebuilt": "docs/research/provision-sandbox-cache-2026-10-22/cache-replacements.v2.json",
