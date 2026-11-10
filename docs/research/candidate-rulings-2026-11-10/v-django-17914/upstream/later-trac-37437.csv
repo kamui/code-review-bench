@@ -1,0 +1,59 @@
+﻿id,summary,reporter,owner,description,type,status,component,version,severity,resolution,keywords,cc,stage,has_patch,needs_docs,needs_tests,needs_better_patch,easy,ui_ux
+37437,PostgreSQL connections time out when both assume_role and connection pooling are enabled,moas,ansh_gautam,"When both `assume_role` and `pool` are set in a PostgreSQL database's OPTIONS,
+no connection can ever be obtained: every checkout fails with `PoolTimeout: couldn't get a connection after N sec`.
+
+Reproduced with Django 6.0.7, psycopg 3.3.4, psycopg_pool 3.3.3,
+PostgreSQL 17/18. 
+
+Minimal reproduction (role `app_role` exists and is granted to `owner`):
+
+{{{#!python
+import django
+from django.conf import settings
+
+settings.configure(DATABASES={""default"": {
+    ""ENGINE"": ""django.db.backends.postgresql"",
+    ""NAME"": ""db"", ""USER"": ""owner"", ""PASSWORD"": ""..."", ""HOST"": ""127.0.0.1"",
+    ""OPTIONS"": {""assume_role"": ""app_role"", ""pool"": {""min_size"": 1, ""timeout"": 5}},
+}})
+django.setup()
+
+from django.db import connection
+with connection.cursor() as c:  # OperationalError: couldn't get a connection after 5.00 sec
+    c.execute(""SELECT current_user"")
+}}}
+
+Removing `assume_role` (keeping `pool`) works. Removing `pool` (keeping
+`assume_role`) works.
+
+**Cause**
+
+The pool is created with `configure=self._configure_connection`. For a new
+connection, `_configure_role(connection)` builds the statement with
+`self.ops.compose_sql(""SET ROLE %s"", [new_role])`, which calls
+`mogrify(sql, params, self.connection)`. With psycopg 3, `mogrify()` does
+`with connection.cursor()` on the *DatabaseWrapper*, which calls
+`ensure_connection()` -> `get_new_connection()` -> `pool.getconn()`.
+
+So the configure callback, while running inside the pool for a connection that
+is not yet in the pool, asks the same pool for a connection. It waits until
+`timeout` and raises `PoolTimeout`. The pool logs
+`error connecting in 'pool-1': couldn't get a connection after N sec` and
+retries forever.
+
+`_configure_timezone()` is not affected because it uses the raw `connection`
+argument. Only the role path goes through `self.ops`. The original 5.1 code
+had a comment in `_configure_connection` warning that it must not access
+anything on `self` because it runs inside the pool. The role path breaks that
+rule.
+
+The test suite does not catch this because `test_connect_role` runs under
+`no_pool_connection()`.
+
+**Impact**
+
+- With pooling enabled, the database is unusable as soon as `assume_role` is set.
+- In addition, psycopg_pool does not close the connection when `configure`
+  raises, so every retry leaks an idle server session. In production this
+  eventually exhausts `max_connections` (""too many clients""). I observed
+  7 -> 19 idle sessions in 80 s with 2 processes.",Bug,assigned,contrib.postgres,6.0,Normal,,pool assume_role postgresql,moas,Accepted,1,0,0,1,0,0

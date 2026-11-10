@@ -1,0 +1,61 @@
+--- a/django/db/backends/postgresql/base.py
++++ b/django/db/backends/postgresql/base.py
+@@ -98,8 +98,9 @@
+ def ensure_role(connection, ops, role_name):
+     if role_name:
+         with connection.cursor() as cursor:
+-            sql = ops.compose_sql("SET ROLE %s", [role_name])
+-            cursor.execute(sql)
++            from psycopg import sql
++
++            cursor.execute(sql.SQL("SET ROLE {}").format(sql.Identifier(role_name)))
+         return True
+     return False
+ 
+@@ -205,7 +206,12 @@
+         if self.alias == NO_DB_ALIAS or not pool_options:
+             return None
+ 
+-        if self.alias not in self._connection_pools:
++        key = (
++            self.alias,
++            self.settings_dict.get("TIME_ZONE"),
++            self.settings_dict["OPTIONS"].get("assume_role"),
++        )
++        if key not in self._connection_pools:
+             if self.settings_dict.get("CONN_MAX_AGE", 0) != 0:
+                 raise ImproperlyConfigured(
+                     "Pooling doesn't support persistent connections."
+@@ -236,14 +242,17 @@
+             # parallel. Since we do not open the pool during it's init above,
+             # this means that at worst during startup multiple threads generate
+             # pool objects and the first to set it wins.
+-            self._connection_pools.setdefault(self.alias, pool)
++            self._connection_pools.setdefault(key, pool)
+ 
+-        return self._connection_pools[self.alias]
++        return self._connection_pools[key]
+ 
+     def close_pool(self):
+         if self.pool:
+-            self.pool.close()
+-            del self._connection_pools[self.alias]
++            pool = self.pool
++            pool.close()
++            for key, value in list(self._connection_pools.items()):
++                if value is pool:
++                    del self._connection_pools[key]
+ 
+     def get_database_version(self):
+         """
+--- a/django/test/signals.py
++++ b/django/test/signals.py
+@@ -70,7 +70,7 @@
+ 
+     # Reset the database connections' time zone
+     if setting in {"TIME_ZONE", "USE_TZ"}:
+-        for conn in connections.all(initialized_only=True):
++        for conn in connections.all():
+             try:
+                 del conn.timezone
+             except AttributeError:
