@@ -11,7 +11,7 @@ test('selected recoveries retain their failed attempts and usage', () => {
   const attempts = new Map(inventory.attempts.map(attempt => [attempt.id, attempt]))
   for (const [configuration, run, predecessor, recovered] of [
     ['codex-ce-luna-high', 'runs/2026-10-10-last-push-codex-ce-luna', 'att-023', 'att-024'],
-    ['codex-thermo-luna-high', 'runs/2026-09-29-codex-thermo-high', 'att-026', 'att-038'],
+    ['codex-builtin-astra-high', 'runs/2026-09-29-codex-astra-high-clean', 'att-002', 'att-008'],
   ] as const) {
     const cell = inventory.cells.find(cell => cell.configuration === configuration && cell.run === run
       && cell.attempts.some(attempt => attempt.endsWith(`/${predecessor}`)))

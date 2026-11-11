@@ -16,7 +16,7 @@ type Range = { low: number; high: number } | null
 type Point = { summary: Summary; range: Range; metric: number | null; bounded: boolean; starred: boolean }
 
 const seriesKeys: Record<string, string> = {
-  'claude-builtin': 'claude', codex: 'codex', 'ce-code-review': 'ce', 'thermo-nuclear-review': 'thermo-nuclear', 'thermo-nuclear-code-quality-review': 'thermo',
+  'claude-builtin': 'claude', codex: 'codex', 'ce-code-review': 'ce', 'thermo-nuclear-review': 'thermo-nuclear',
   'review-code/v5b-30-x382': 'review-a',
 }
 
