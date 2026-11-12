@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Exercise second_pass.py's run loop against a fake bench-tools and a fake claude; no model, no repository writes.
+"""Exercise second_pass.py's run loop against a fake bench-tools and a fake claude, and check that authorize.v1.py
+refuses without the round's approval; no model, no repository writes.
 
     python3 -I docs/research/audit-v2-r4-2026-11-11/second-pass/test_second_pass.py
 """
@@ -13,6 +14,7 @@ import tempfile
 from pathlib import Path
 
 DRIVER = Path(__file__).resolve().parent / "second_pass.py"
+AUTHORIZE = DRIVER.parent / "authorize.v1.py"
 ROUND = "evaluator-audit-v2-2026-10-29-round-4"
 PIN = {"bench-tools": {"sha256": "a" * 64, "receipt_sha256": "b" * 64}}
 
@@ -222,9 +224,21 @@ def refuses_fast_mode(root):
     assert code == 2 and "fast mode" in out and not (root / ".local/q").exists(), out
 
 
+def authorize_refuses_without_approval(root):
+    build(root, ["t0"])
+    here = root / "docs/research/round/second-pass"
+    here.mkdir(parents=True)
+    shutil.copy(AUTHORIZE, here / AUTHORIZE.name)
+    done = subprocess.run([sys.executable, "-I", str(here / AUTHORIZE.name)], cwd=root, capture_output=True, text=True)
+    out = done.stdout + done.stderr
+    assert done.returncode != 0 and "no owner approval of round 4" in out, out
+    assert not (here.parent / "authorization.second-pass.v1.json").exists(), "an authorization was written"
+
+
 if __name__ == "__main__":
     results = [case(f.__name__, f) for f in (completes, limit_then_resume, budget_stop, quota_stop,
                                               failure_stops_and_retries, resave_after_second_fails,
-                                              refuses_changed_runtime, refuses_fast_mode, runs_after_grades_change)]
+                                              refuses_changed_runtime, refuses_fast_mode, runs_after_grades_change,
+                                              authorize_refuses_without_approval)]
     shutil.rmtree(DRIVER.parent / "__pycache__", ignore_errors=True)
     sys.exit(0 if all(results) else 1)
