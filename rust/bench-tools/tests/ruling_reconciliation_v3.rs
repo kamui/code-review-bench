@@ -368,6 +368,33 @@ fn refile(root: &Root, path: &str) {
     open(root);
 }
 
+fn seed_of(plan: Option<&Value>) -> Option<&str> {
+    plan?.as_object()?.get("seed")?.as_str()
+}
+
+/// Makes the copied round the plan file's own unassessed round. The saved plan file records that round as its
+/// plan until a later round supersedes it, so the fixture takes it from wherever the file holds it now.
+fn as_the_plans_round(object: &mut Object) {
+    if seed_of(object.get("plan")) == Some(SEED) {
+        return;
+    }
+    let Some(Value::Array(superseded)) = object.get_mut("superseded") else {
+        panic!("the plan file lists no superseded round");
+    };
+    let at = superseded
+        .iter()
+        .position(|closed| {
+            seed_of(closed.as_object().and_then(|closed| closed.get("plan"))) == Some(SEED)
+        })
+        .expect("the plan file records the copied round");
+    let Value::Object(closed) = superseded.remove(at) else {
+        panic!("a superseded round is not an object");
+    };
+    object.insert("plan".into(), closed.get("plan").unwrap().clone());
+    object.insert("state".into(), text("unassessed"));
+    object.insert("evidence".into(), Value::Array(Vec::new()));
+}
+
 /// The corpus with a closed round of fifteen agreed reconciliations, an adopted policy v3, a copy of the saved audit
 /// round `evaluator-audit-v2-2026-10-29` (its plan, sample, own grades, second assessments and comparison), and an
 /// open round with one before-record for each disputed unit, filed when `filed`. Unless `plan`, the copied round is
@@ -399,6 +426,7 @@ fn fixture_with(name: &str, filed: bool, plan: bool) -> Root {
         AUDITS,
         &std::fs::read_to_string(repository().join(AUDITS)).unwrap(),
     );
+    root.edit(AUDITS, as_the_plans_round);
     let directory = root.0.join(AUDIT);
     std::fs::create_dir_all(&directory).unwrap();
     for name in ["sample.json", "comparison.json", "grades.json"] {
