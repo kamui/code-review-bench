@@ -1,8 +1,8 @@
 # Settle adjudications on agreement
 
-Status: proposed on 2026-11-11 for issue [#59](https://github.com/kamui/code-review-bench/issues/59), and not adopted. [Policy v3](../../bench/grading/delegation.v3.json) is `proposed` with no receipt. The tool routes a round under v3 only when the round's opening pins an adopted v3 file. No such file exists, so nothing settles under v3. [ADR-0007](0007-settle-adjudications-on-earned-confidence.md) stays in force until the owner adopts this text with a saved receipt.
+Status: adopted on 2026-11-12 for issue [#59](https://github.com/kamui/code-review-bench/issues/59). The [owner's receipt](../../bench/grading/rulings/delegation.v3.md) adopts this text as it stood at `02bfd1c57b0346377fc033b1be0f5b3c505c55ab`, and [policy v3](../../bench/grading/delegation.v3.json) pins that receipt. The tool routes a round under v3 only when the round's opening pins the adopted file. A round whose opening pins no policy runs under [ADR-0007](0007-settle-adjudications-on-earned-confidence.md). Adoption settles no live case and changes no existing record.
 
-The owner confirmed the drafted terms on 2026-11-12. The [saved answer](../../bench/grading/rulings/delegation.v3-terms.v1.md) holds the terms as listed and the owner's words. That confirms the draft and is not the adoption.
+Before adopting, the owner confirmed the drafted terms on 2026-11-12. The [saved answer](../../bench/grading/rulings/delegation.v3-terms.v1.md) holds the terms as listed and the owner's words.
 
 ## Why policy v2 settled nothing
 
@@ -12,7 +12,7 @@ The owner settled all 463 decisions recorded in the 20 rounds from 2026-10-05 to
 - Its gate needs both blind assessors at high confidence. High confidence needs an earlier ruling of the same shape under the current reading, and rounds in that period ran under rule versions 3, 4 and 5.
 - A decision type needs 15 matches on 4 pull requests since its last miss. One miss returns the count to zero.
 
-## Proposed policy
+## Adopted policy
 
 An answer counts as it does under v2: contract 2, not reconstructed, written before the question, and no blind answer from the recommender's model family.
 
@@ -88,15 +88,16 @@ The replay does not apply the five audit calls, suspension or the digest. With t
 - The tool reads order within a round from the ruling file names, as under v2. It does not catch a record that is named to sort before an owner's review and settled after it.
 - The tool does not read history. It cannot see that an owner's approved label was deleted and replaced. Review of changes to `bench/grading/current/` is the control for that.
 
-## What adoption needs
+## After adoption
 
-1. The owner's saved receipt at `bench/grading/rulings/delegation.v3.md` naming the adopted commit, then `status: "adopted"`, the receipt pin and its scope in the policy file.
-2. A round opening that pins the adopted file. Rounds whose opening pins no policy keep running under v2.
-3. A restated closing test for issue #59. Its current test counts settlements under policy v2.
+Two things remain before agents settle a decision:
+
+1. A round opening that pins the adopted file. Rounds whose opening pins no policy keep running under v2.
+2. A restated closing test for issue #59. Its current test counts settlements under policy v2.
 
 Enforcement is built for three of the four gated types: candidates, reconciliations and first labels of problems the owner admitted in a v3 round. See [Round opening and policy v3](../adjudication-record.md#round-opening-and-policy-v3). Two parts are not built, and the tool sends these decisions to the owner until they are:
 
 - Filing for pre-existing admissions. Admissions meet the entry bar, and every one still goes to the owner.
 - Labels on pre-existing problems, which need a checked link from a candidate's admission to the problem it admitted.
 
-On adoption this replaces ADR-0007's gate and levels and its reservation of bands and reconciliations, and it closes credit. [Pre-existing problems](../pre-existing-problems.md) gives its decision types no delegation, and adoption opens admission only. [ADR-0006](0006-settle-eligibility-by-delegation-on-heavy-evidence.md) keeps its separate route.
+For a round that pins it, this policy replaces ADR-0007's gate and levels and its reservation of bands and reconciliations, and it closes credit. [Pre-existing problems](../pre-existing-problems.md) gives its decision types no delegation, and this policy opens admission only. [ADR-0006](0006-settle-eligibility-by-delegation-on-heavy-evidence.md) keeps its separate route.

@@ -43,7 +43,7 @@ The label changes no score. It selects which families the default chart, the per
 4. Record the inspector's result in the decision's `independent_checks`: `confirmed` when the bands agree, `refuted` with the inspector's band and reason when they differ. A disagreement stays in the record after a ruling. Before the user is asked, write the label's record with the proposal and each inspector's label as first answers, as [the adjudication record](adjudication-record.md) describes.
 5. Ask the user. Save the ruling as a receipt, set the decision to `approved` with `authority: "human"`, the receipt pin and the receipt passage as `receipt_scope`, then set the family's band and `impact.adjudication`. A `serious` band also needs a `confirmed` independent check.
 
-Policy v3 is proposed. Under it, the first label of a problem the owner admitted in a v3 round is prepared after the admission is filed, and [agents settle it when the proposal and the inspector agree](adjudication-record.md#impact-labels-under-policy-v3). Every other label is still the user's.
+Under policy v3, the first label of a problem the owner admitted in a v3 round is prepared after the admission is filed, and [agents settle it when the proposal and the inspector agree](adjudication-record.md#impact-labels-under-policy-v3). Every other label is still the user's.
 
 A family without an approved decision stays `unknown` with its reason. A proposal is never read as a label, and `unknown` is never read as low impact. Eligibility can be approved while impact is unknown.
 

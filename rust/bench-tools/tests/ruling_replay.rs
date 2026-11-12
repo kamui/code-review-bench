@@ -424,7 +424,7 @@ fn a_reconciliation_gate_with_no_blind_answers_passes_a_medium_or_high_call_only
 }
 
 #[test]
-fn the_shipped_proposed_policy_parses() {
+fn the_shipped_policy_parses() {
     let root = repository();
     let repo = Repo::new(root.as_os_str().as_encoded_bytes());
     let source = PyPath::new(root.join(POLICY).as_os_str().as_encoded_bytes());
