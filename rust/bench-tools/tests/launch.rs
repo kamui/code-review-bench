@@ -1243,9 +1243,10 @@ struct ClaudeRun {
 
 /// A stand-in for Claude Code print mode. Like the client, it resolves the Agent tool's `haiku`, `sonnet` and `opus`
 /// through `ANTHROPIC_DEFAULT_<ALIAS>_MODEL`, and `CLAUDE_CODE_SUBAGENT_MODEL` overrides every subagent. It saves
-/// its arguments and environment beside the clone, writes a root transcript on `--model` that starts one subagent
-/// per alias, each billed one request of a million input tokens, plus one on the model the attempt's
-/// `stray-model.txt` names, and the report the thermo normalizer reads.
+/// its arguments and environment beside the clone, writes a root transcript on `--model` whose Agent calls start one
+/// subagent per alias, each billed one request of a million input tokens, and the report the thermo normalizer
+/// reads. When the attempt holds `stray-model.txt`, `<alias> <model>`, one more call asks for that alias and its
+/// subagent runs that model anyway, as a client that ignored the argument would.
 const CLAUDE_STAND_IN: &str = r#"#!/bin/sh
 [ "$1" = --version ] && { echo "2.1.294 (Claude Code)"; exit 0; }
 attempt=$(dirname "$PWD")
@@ -1270,17 +1271,20 @@ reply() {
 }
 project="$HOME/.claude/projects/-clone"
 mkdir -p "$project/$session/subagents"
-stray=$(cat "$attempt/stray-model.txt" 2>/dev/null)
-usage=""
-for alias in haiku sonnet opus stray; do
-  if [ $alias = stray ]; then model=$stray; else model=$(resolve $alias); fi
-  [ -n "$model" ] || continue
-  { echo '{"type": "user", "message": {"content": "brief"}}'; reply "r-$alias" "$model"; } > "$project/$session/subagents/agent-$alias.jsonl"
+printf '{"type": "user", "message": {"content": "%s"}}\n' "$prompt" > "$project/$session.jsonl"
+start() {
+  echo "{\"type\": \"assistant\", \"effort\": \"high\", \"message\": {\"model\": \"$root_model\", \"content\": [{\"type\": \"tool_use\", \"id\": \"t-$1\", \"name\": \"Agent\", \"input\": {\"model\": \"$2\", \"prompt\": \"brief\"}}]}}" >> "$project/$session.jsonl"
+  echo "{\"type\": \"user\", \"toolUseResult\": {\"agentId\": \"$1\"}, \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t-$1\"}]}}" >> "$project/$session.jsonl"
+  { echo '{"type": "user", "message": {"content": "brief"}}'; reply "r-$1" "$3"; } > "$project/$session/subagents/agent-$1.jsonl"
+}
+for alias in haiku sonnet opus; do
+  start $alias $alias "$(resolve $alias)"
 done
-{
-  printf '{"type": "user", "message": {"content": "%s"}}\n' "$prompt"
-  reply r-root "$root_model"
-} > "$project/$session.jsonl"
+if [ -f "$attempt/stray-model.txt" ]; then
+  read -r alias model < "$attempt/stray-model.txt"
+  start stray "$alias" "$model"
+fi
+reply r-root "$root_model" >> "$project/$session.jsonl"
 report="$PWD-work/report"
 mkdir -p "$report"
 echo 'No actionable findings.' > "$report/summary.md"
@@ -1427,7 +1431,7 @@ impl ClaudeRun {
         }
     }
 
-    /// One attempt on a fresh copy of the clone, with an extra subagent on `stray` when given.
+    /// One attempt on a fresh copy of the clone, with `stray`, `<alias> <model>`, as its `stray-model.txt` when given.
     fn launch(&self, id: &str, stray: Option<&str>) -> (Output, PathBuf) {
         let attempt = self.temp.0.join(id);
         let clone = attempt.join("clone");
@@ -1473,9 +1477,9 @@ fn cost(record: &Value) -> f64 {
 }
 
 /// The step-model adapter end to end, with a stand-in in place of Claude Code: the runner resolves each alias to its
-/// mapped model through the client's variables, accepts a subagent on each mapped model, prices every transcript at
-/// its own model's rate, fails an attempt whose transcripts show a model outside the map, and refuses before the
-/// client starts when a mapped model has no rate. An arm without the map still pins every subagent to its model.
+/// mapped model through the client's variables, accepts each subagent on the model its call's alias maps to, prices
+/// every transcript at its own model's rate, fails an attempt whose subagent runs another model than its call's
+/// alias maps to, inside the map or outside it, and refuses before the client starts when a mapped model has no rate. An arm without the map still pins every subagent to its model.
 #[test]
 fn a_claude_skill_runs_each_step_on_its_mapped_model_and_prices_it_at_that_models_rate() {
     let rates = [
@@ -1530,16 +1534,28 @@ fn a_claude_skill_runs_each_step_on_its_mapped_model_and_prices_it_at_that_model
         "{dispatch}"
     );
 
-    let (done, attempt) = fixture.launch("att-002", Some("claude-haiku-4-5"));
-    assert_eq!(done.status.code(), Some(1), "{}", both(&done));
-    let record = evidence(&attempt);
-    assert!((cost(&record) - 11.1).abs() < 1e-9, "{record:?}");
-    let violations = field(&record, "violations").as_array().unwrap().to_vec();
-    assert_eq!(violations.len(), 1, "{violations:?}");
-    assert!(
-        text(&violations[0]).contains("agent-stray.jsonl: models ['claude-haiku-4-5']"),
-        "{violations:?}"
-    );
+    for (id, stray, cost_usd, problem) in [
+        (
+            "att-002",
+            "haiku claude-haiku-4-5",
+            11.1,
+            "agent-stray.jsonl: it ran claude-haiku-4-5, and its Agent call asked for haiku",
+        ),
+        (
+            "att-003",
+            "haiku claude-opus-5-5",
+            14.1,
+            "agent-stray.jsonl: it ran claude-opus-5-5, and its Agent call asked for haiku, which maps to claude-haiku-5-5",
+        ),
+    ] {
+        let (done, attempt) = fixture.launch(id, Some(stray));
+        assert_eq!(done.status.code(), Some(1), "{}", both(&done));
+        let record = evidence(&attempt);
+        assert!((cost(&record) - cost_usd).abs() < 1e-9, "{record:?}");
+        let violations = field(&record, "violations").as_array().unwrap().to_vec();
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert!(text(&violations[0]).contains(problem), "{violations:?}");
+    }
 
     let unpriced = ClaudeRun::new("claude-steps-unpriced", true, &rates[..2]);
     let (done, attempt) = unpriced.launch("att-001", None);

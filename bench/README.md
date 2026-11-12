@@ -181,7 +181,8 @@ effort, isolation, and the adapter, including the prompt-variant hashes the arm 
 harness registries. Nothing in it is observed. A `claude-skill` arm may add `step_models`, which maps each
 model alias the skill's prompt names (`haiku`, `sonnet`, `opus`) to an exact model: the skill runner resolves
 each alias to its model through the client's `ANTHROPIC_DEFAULT_<ALIAS>_MODEL`, keeps the root on the arm's
-model, accepts a subagent only on a mapped model, and prices each transcript at its own model's rate.
+model, accepts a subagent only on the model mapped to the alias its Agent call named, and prices each
+transcript at its own model's rate.
 
 `bench-tools file-attempt` turns one attempt directory written by `dispatch.sh` into
 `runs/<run>/attempts/<attempt>/attempt.json` plus its small artifacts. Every observed field comes

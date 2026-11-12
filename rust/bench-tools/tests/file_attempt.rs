@@ -1620,12 +1620,19 @@ fn truncated_child_repaired_from_its_receipt_files_the_receipt_output_and_where_
     );
 }
 
-/// A `claude-skill` attempt whose arm maps `haiku` to `m-2`: the root on `step_root`, one subagent on `step_sub`,
-/// with session totals for both and `rates` as the attempt's rates file.
-fn step_attempt(f: &Fixture, id: &str, step_root: &str, step_sub: &str, rates: &str) -> PathBuf {
+/// A `claude-skill` attempt whose arm maps `haiku` to `m-2` and `sonnet` to `m-3`: the root on `step_root` starts
+/// one subagent with an Agent call whose `model` is the JSON `call`, the subagent runs `step_sub`, the session
+/// totals cover both, and `rates` is the attempt's rates file.
+fn step_attempt(
+    f: &Fixture,
+    id: &str,
+    step_root: &str,
+    (call, step_sub): (&str, &str),
+    rates: &str,
+) -> PathBuf {
     write(
         &f.root().join("bench/arms/arm-claude.json"),
-        r#"{"id": "arm-claude", "kind": "claude-skill", "model": "m-1", "effort": "high", "step_models": {"haiku": "m-2"}}"#,
+        r#"{"id": "arm-claude", "kind": "claude-skill", "model": "m-1", "effort": "high", "step_models": {"haiku": "m-2", "sonnet": "m-3"}}"#,
     );
     let attempt = f.attempt(id, Harness::Claude, Some(0));
     let on = |model: &str, request: &str| {
@@ -1643,6 +1650,11 @@ fn step_attempt(f: &Fixture, id: &str, step_root: &str, step_sub: &str, rates: &
         &attempt.join("home/.claude/projects/p/s1.jsonl"),
         lines(&[
             user(PROMPT),
+            format!(
+                r#"{{"type": "assistant", "effort": "high", "message": {{"model": "{step_root}", "content": [{{"type": "tool_use", "id": "t1", "name": "Agent", "input": {{"model": {call}}}}}]}}}}"#
+            ),
+            r#"{"type": "user", "toolUseResult": {"agentId": "a1"}, "message": {"content": [{"type": "tool_result", "tool_use_id": "t1"}]}}"#
+                .to_string(),
             on(step_root, "r0"),
             format!(
                 r#"{{"type": "cost-state", "sessionId": "s1", "modelUsage": {{{}, {}}}}}"#,
@@ -1673,7 +1685,8 @@ fn step_attempt(f: &Fixture, id: &str, step_root: &str, step_sub: &str, rates: &
 const STEP_RATES: &str = r#"{"rates": [{"model": "m-1", "as_of": "2026-01-01", "input": 2.0, "output": 10.0, "cache_read": 0.2, "cache_write_5m": 2.5, "cache_write_1h": 4.0, "billing": "api-dollars"}, {"model": "m-2", "as_of": "2026-01-02", "input": 0.1, "output": 0.5, "cache_read": 0.01, "cache_write_5m": 0.125, "cache_write_1h": 0.2, "billing": "api-dollars"}, {"model": "m-3", "as_of": "2026-01-03", "input": 1.0, "output": 5.0, "cache_read": 0.1, "cache_write_5m": 1.25, "cache_write_1h": 2.0, "billing": "api-dollars"}]}"#;
 
 #[test]
-fn a_step_model_arm_prices_each_transcript_at_its_own_model_and_refuses_an_unmapped_one() {
+fn a_step_model_arm_prices_each_transcript_at_its_own_model_and_refuses_a_step_off_its_named_model()
+{
     let f = Fixture::new("step-models");
     // Each request: 10 input, 100 five-minute cache writes, 1,000 cache reads and 50 output tokens.
     let at = |input: f64, write: f64, read: f64, output: f64| {
@@ -1685,7 +1698,8 @@ fn a_step_model_arm_prices_each_transcript_at_its_own_model_and_refuses_an_unmap
         at(1.0, 1.25, 0.1, 5.0),
     );
 
-    let attempt = step_attempt(&f, "att-001", "m-1", "m-2", STEP_RATES);
+    let haiku = |model| (r#""haiku""#, model);
+    let attempt = step_attempt(&f, "att-001", "m-1", haiku("m-2"), STEP_RATES);
     let record = f.filed(&attempt, Harness::Claude);
     assert_eq!(
         text(field(&record, "disposition")),
@@ -1699,15 +1713,15 @@ fn a_step_model_arm_prices_each_transcript_at_its_own_model_and_refuses_an_unmap
         "m-1 2026-01-01, m-2 2026-01-02"
     );
 
-    let attempt = step_attempt(&f, "att-002", "m-1", "m-3", STEP_RATES);
+    let attempt = step_attempt(&f, "att-002", "m-1", haiku("m-3"), STEP_RATES);
     let record = f.filed(&attempt, Harness::Claude);
     assert_eq!(
         text(field(&record, "disposition")),
-        "harness-invalid: agent-a1.jsonl: model m-3, a subagent requires one of haiku=m-2"
+        "harness-invalid: agent-a1.jsonl: it ran m-3, and its Agent call asked for haiku, which maps to m-2"
     );
     assert_complete(&record, round6(m1 + m3));
 
-    let attempt = step_attempt(&f, "att-003", "m-2", "m-2", STEP_RATES);
+    let attempt = step_attempt(&f, "att-003", "m-2", haiku("m-2"), STEP_RATES);
     let record = f.filed(&attempt, Harness::Claude);
     assert_eq!(
         text(field(&record, "disposition")),
@@ -1715,7 +1729,7 @@ fn a_step_model_arm_prices_each_transcript_at_its_own_model_and_refuses_an_unmap
     );
 
     let unpriced = STEP_RATES.replace(r#""model": "m-2""#, r#""model": "m-9""#);
-    let attempt = step_attempt(&f, "att-004", "m-1", "m-2", &unpriced);
+    let attempt = step_attempt(&f, "att-004", "m-1", haiku("m-2"), &unpriced);
     let record = f.filed(&attempt, Harness::Claude);
     assert_unknown_total(&record, None);
     assert!(
@@ -1725,6 +1739,13 @@ fn a_step_model_arm_prices_each_transcript_at_its_own_model_and_refuses_an_unmap
         ),
         "{:?}",
         notes(&record)
+    );
+
+    let attempt = step_attempt(&f, "att-005", "m-1", ("null", "m-2"), STEP_RATES);
+    let record = f.filed(&attempt, Harness::Claude);
+    assert_eq!(
+        text(field(&record, "disposition")),
+        "harness-invalid: agent-a1.jsonl: its Agent call asked for model None, not a mapped alias (haiku=m-2 sonnet=m-3)"
     );
 }
 

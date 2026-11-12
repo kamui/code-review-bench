@@ -3,8 +3,13 @@
 //! Claude Code resolves the aliases `haiku`, `sonnet` and `opus`, which its Agent tool takes as a subagent's model,
 //! through `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL` and `ANTHROPIC_DEFAULT_OPUS_MODEL`. An arm
 //! without the map keeps `CLAUDE_CODE_SUBAGENT_MODEL`, which puts every subagent on the arm's model.
+//!
+//! A subagent is bound to the Agent call that started it: the tool result of that call names the agent's id, which
+//! is the name of its transcript, `agent-<id>.jsonl`. The call must name a mapped alias, and the transcript must run
+//! that alias's model and no other.
 
 use crate::pyjson::{Object, Value};
+use std::collections::BTreeMap;
 
 pub const ALIASES: [&str; 3] = ["haiku", "sonnet", "opus"];
 
@@ -76,8 +81,33 @@ impl StepModels {
         models
     }
 
-    pub fn accepts(&self, model: &str) -> bool {
-        self.0.iter().any(|(_, mapped)| mapped == model)
+    /// Why the subagent `agent`, whose transcript records `models`, broke the map, or `None` when the Agent call
+    /// that started it named a mapped alias and the transcript ran only that alias's model.
+    pub fn subagent_problem(
+        &self,
+        agent: Option<&str>,
+        models: &[&str],
+        started: &BTreeMap<String, Value>,
+    ) -> Option<String> {
+        let Some(requested) = agent.and_then(|agent| started.get(agent)) else {
+            return Some("no Agent call that started it was found".to_string());
+        };
+        let Some((alias, model)) = requested
+            .as_str()
+            .and_then(|alias| self.0.iter().find(|(mapped, _)| *mapped == alias))
+        else {
+            return Some(format!(
+                "its Agent call asked for model {}, not a mapped alias ({})",
+                requested.py_repr(),
+                self.describe()
+            ));
+        };
+        (models != [model.as_str()]).then(|| {
+            format!(
+                "it ran {}, and its Agent call asked for {alias}, which maps to {model}",
+                models.join(", ")
+            )
+        })
     }
 
     /// `haiku=<model> sonnet=<model> ...`, for a dispatch record or a message.
@@ -107,6 +137,64 @@ impl StepModels {
         }
         models
     }
+}
+
+/// The id of the subagent whose transcript is named `name`, `agent-<id>.jsonl`.
+pub fn agent_id(name: &str) -> Option<&str> {
+    name.strip_prefix("agent-")?
+        .strip_suffix(".jsonl")
+        .filter(|id| !id.is_empty())
+}
+
+/// The `model` argument of the Agent call that started each subagent, by agent id, from the Agent calls and their
+/// tool results in `records`, which may come from any transcript of the attempt. A call without the argument maps
+/// to null.
+pub fn started_models<'a>(records: impl IntoIterator<Item = &'a Value>) -> BTreeMap<String, Value> {
+    let field = |value: &'a Value, key: &str| value.as_object().and_then(|object| object.get(key));
+    let mut calls: BTreeMap<String, Value> = BTreeMap::new();
+    let mut agents: Vec<(String, String)> = Vec::new();
+    for record in records {
+        let message = field(record, "message");
+        let blocks = message
+            .and_then(|message| field(message, "content"))
+            .and_then(Value::as_array)
+            .unwrap_or_default();
+        match field(record, "type").and_then(Value::as_str) {
+            Some("assistant") => {
+                for block in blocks {
+                    let name = field(block, "name").and_then(Value::as_str);
+                    if field(block, "type").and_then(Value::as_str) == Some("tool_use")
+                        && matches!(name, Some("Agent" | "Task"))
+                        && let Some(id) = field(block, "id").and_then(Value::as_str)
+                    {
+                        let model = field(block, "input")
+                            .and_then(|input| field(input, "model"))
+                            .cloned()
+                            .unwrap_or(Value::Null);
+                        calls.insert(id.to_string(), model);
+                    }
+                }
+            }
+            Some("user") => {
+                let Some(agent) = field(record, "toolUseResult")
+                    .and_then(|result| field(result, "agentId"))
+                    .and_then(Value::as_str)
+                else {
+                    continue;
+                };
+                for block in blocks {
+                    if let Some(id) = field(block, "tool_use_id").and_then(Value::as_str) {
+                        agents.push((agent.to_string(), id.to_string()));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    agents
+        .into_iter()
+        .filter_map(|(agent, id)| calls.get(&id).map(|model| (agent, model.clone())))
+        .collect()
 }
 
 #[cfg(test)]
@@ -144,7 +232,6 @@ mod tests {
             ]
             .map(|(name, model)| (name.to_string(), model.to_string()))
         );
-        assert!(map.accepts("claude-haiku-5-5") && !map.accepts("claude-haiku-4-5"));
         assert_eq!(
             map.priced("claude-opus-5-5"),
             ["claude-opus-5-5", "claude-haiku-5-5", "claude-sonnet-5-5"]
@@ -153,6 +240,60 @@ mod tests {
             map.describe(),
             "haiku=claude-haiku-5-5 sonnet=claude-sonnet-5-5 opus=claude-opus-5-5"
         );
+    }
+
+    #[test]
+    fn a_subagent_must_run_the_model_its_agent_call_named() {
+        let map = read(&arm(
+            r#", "step_models": {"haiku": "claude-haiku-5-5", "opus": "claude-opus-5-5"}"#,
+        ))
+        .unwrap()
+        .unwrap();
+        let records: Vec<Value> = [
+            r#"{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Agent", "input": {"model": "haiku"}}, {"type": "tool_use", "id": "t2", "name": "Agent", "input": {}}, {"type": "tool_use", "id": "t3", "name": "Agent", "input": {"model": "sonnet"}}]}}"#,
+            r#"{"type": "user", "toolUseResult": {"agentId": "a1"}, "message": {"content": [{"type": "tool_result", "tool_use_id": "t1"}]}}"#,
+            r#"{"type": "user", "toolUseResult": {"agentId": "a2"}, "message": {"content": [{"type": "tool_result", "tool_use_id": "t2"}]}}"#,
+            r#"{"type": "user", "toolUseResult": {"agentId": "a3"}, "message": {"content": [{"type": "tool_result", "tool_use_id": "t3"}]}}"#,
+        ]
+        .iter()
+        .map(|line| pyjson::loads(line, Duplicates::KeepLast).unwrap())
+        .collect();
+        let started = started_models(&records);
+        assert_eq!(agent_id("agent-a1.jsonl"), Some("a1"));
+        assert_eq!(
+            map.subagent_problem(Some("a1"), &["claude-haiku-5-5"], &started),
+            None
+        );
+        for (agent, models, expected) in [
+            (
+                "a1",
+                &["claude-opus-5-5"][..],
+                "it ran claude-opus-5-5, and its Agent call asked for haiku",
+            ),
+            (
+                "a1",
+                &["claude-haiku-5-5", "claude-opus-5-5"][..],
+                "asked for haiku, which maps to claude-haiku-5-5",
+            ),
+            (
+                "a2",
+                &["claude-opus-5-5"][..],
+                "asked for model None, not a mapped alias",
+            ),
+            (
+                "a3",
+                &["claude-sonnet-5-5"][..],
+                "asked for model 'sonnet', not a mapped alias",
+            ),
+            (
+                "a9",
+                &["claude-haiku-5-5"][..],
+                "no Agent call that started it",
+            ),
+        ] {
+            let problem = map.subagent_problem(Some(agent), models, &started).unwrap();
+            assert!(problem.contains(expected), "{agent}: {problem}");
+        }
     }
 
     #[test]
