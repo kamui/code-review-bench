@@ -680,6 +680,7 @@ fn cargo_metadata(env: &Environment, manifest: &Path) -> R<Value> {
 
 struct Described {
     identity: Vec<(&'static str, Value)>,
+    tree: String,
     bin: String,
     target: String,
     tracked: BTreeSet<PathBuf>,
@@ -899,6 +900,7 @@ fn describe(checkout: &Path, source: &Path, host: &Environment) -> R<Described> 
     ];
     Ok(Described {
         identity,
+        tree,
         bin,
         target: target.to_string(),
         tracked,
@@ -914,15 +916,20 @@ fn build(checkout: &Path, scratch: &Path, host: &Environment) -> R<(PathBuf, Val
     let target_dir = scratch.join("target");
     let Described {
         identity,
+        tree,
         bin,
         target,
         tracked,
         mut env,
     } = describe(checkout, &source, host)?;
-    // The snapshot lies inside the Cargo home, and rustc applies the last matching prefix.
+    // The snapshot lies inside the Cargo home, and rustc applies the last matching prefix. Entries are keyed by the
+    // executable's hash and the launcher by the crate tree, so the tree goes into symbol mangling: a change that
+    // compiles to the same code, such as one to the crate's tests, still gets an executable and an entry of its own.
+    let metadata = format!("-Cmetadata={tree}");
     let flags = [
         format!("--remap-path-prefix={}=/cargo", shown(&home)),
         format!("--remap-path-prefix={}=/source", shown(&source)),
+        metadata.clone(),
     ];
     let command = [
         "cargo",
@@ -988,6 +995,7 @@ fn build(checkout: &Path, scratch: &Path, host: &Environment) -> R<(PathBuf, Val
                     Value::Array(vec![
                         text("--remap-path-prefix=<cargo home>=/cargo"),
                         text("--remap-path-prefix=<crate>=/source"),
+                        text(&metadata),
                     ]),
                 ),
                 ("environment", Value::Array(passed)),

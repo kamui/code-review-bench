@@ -413,6 +413,42 @@ fn a_declared_version_is_kept_without_a_release_date() {
 }
 
 #[test]
+fn a_claude_code_plugin_takes_its_version_from_its_manifest() {
+    let skill = Skill::new("plugin");
+    fs::remove_dir_all(skill.root().join("skill")).unwrap();
+    skill.write(
+        "commands/review.md",
+        "---\ndescription: Review\n---\nReview\n",
+    );
+    skill.write(".claude-plugin/plugin.json", r#"{"name": "review"}"#);
+    skill.write("README.md", "About the plugin\n");
+    skill.commit("2026-02-01T12:00:00Z");
+    let unversioned = skill.collect(None, None, &[]).unwrap();
+    assert!(matches!(field(&unversioned, "version"), Value::Null));
+
+    skill.write(
+        ".claude-plugin/plugin.json",
+        r#"{"name": "review", "version": "1.0.1"}"#,
+    );
+    skill.commit("2026-03-01T12:00:00Z");
+    let frozen = skill.root().join("skill");
+    let record = skill.collect(Some(&frozen), None, &[]).unwrap();
+    assert_eq!(skill_provenance::label(&record), "1.0.1 · 2026-03-01");
+    let paths: Vec<&str> = field(&record, "runtime_files")
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| text(field(file, "path")))
+        .collect();
+    assert_eq!(paths, [".claude-plugin/plugin.json", "commands/review.md"]);
+
+    fs::remove_dir_all(skill.root().join("skill/.claude-plugin")).unwrap();
+    skill.commit("2026-04-01T12:00:00Z");
+    let error = skill.collect(None, None, &[]).unwrap_err();
+    assert!(error.contains("must contain SKILL.md"), "{error}");
+}
+
+#[test]
 fn empty_and_null_versions_are_omitted() {
     let skill = Skill::new("versions");
     for version in ["", "null", "\"\"", "# undeclared"] {

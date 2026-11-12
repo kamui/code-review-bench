@@ -18,6 +18,8 @@ const EXCLUDED_NAMES: [&str; 7] = [
     "third_party_notices.md",
 ];
 
+const PLUGIN_MANIFEST: &str = ".claude-plugin/plugin.json";
+
 pub struct Request<'a> {
     pub repository: &'a Path,
     pub revision: &'a str,
@@ -193,6 +195,19 @@ fn declared_version(skill: &[u8]) -> Option<String> {
     (!["null", "~"].contains(&version.to_lowercase().as_str())).then(|| version.to_string())
 }
 
+/// A Claude Code plugin's version, which its manifest declares in place of a skill's front matter.
+fn plugin_version(manifest: &[u8]) -> Result<Option<String>, String> {
+    let parsed = pyjson::loads(
+        &String::from_utf8_lossy(manifest),
+        pyjson::Duplicates::KeepLast,
+    )
+    .map_err(|error| format!("{PLUGIN_MANIFEST}: {error}"))?;
+    Ok(text_of(member(&parsed, "version"))
+        .map(str::trim)
+        .filter(|version| !version.is_empty())
+        .map(str::to_string))
+}
+
 fn string(text: &str) -> Value {
     Value::Str(text.to_string())
 }
@@ -275,8 +290,14 @@ pub fn collect(request: &Request<'_>) -> Result<Value, String> {
         &["rev-parse", &format!("{commit}:{}", request.skill_path)],
     )?;
     let files = source_files(repository, &commit, request)?;
-    let Some(skill) = files.get("SKILL.md") else {
-        return Err("skill source must contain SKILL.md".to_string());
+    let mut version = match (files.get("SKILL.md"), files.get(PLUGIN_MANIFEST)) {
+        (Some(skill), _) => declared_version(skill),
+        (None, Some(manifest)) => plugin_version(manifest)?,
+        (None, None) => {
+            return Err(format!(
+                "skill source must contain SKILL.md, or {PLUGIN_MANIFEST} for a Claude Code plugin"
+            ));
+        }
     };
     if let Some(frozen) = request.frozen {
         let mut copied = BTreeMap::new();
@@ -297,7 +318,6 @@ pub fn collect(request: &Request<'_>) -> Result<Value, String> {
     let Some((_, changed, changed_at)) = latest_runtime_change(request, &commit)? else {
         return Err("no runtime-file commit found; fetch the complete skill history".to_string());
     };
-    let mut version = declared_version(skill);
     let mut release = Value::Null;
     let mut dated = changed_at.clone();
     if let Some(given) = request.release {

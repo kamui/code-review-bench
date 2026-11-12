@@ -23,7 +23,7 @@ Both files are read-only. The tool never overwrites or removes an entry. The rec
   `Cargo.lock` and `rust-toolchain.toml`, and the `origin` URL when it is a network URL.
 - `toolchain`: the pinned channel, `rustc -vV` and `cargo -V`.
 - `target` and `libc`: the target triple and the C library of the build host.
-- `build`: the command, the path remapping flags, and the names of the `PATH`, `HOME`, `CARGO_HOME`,
+- `build`: the command, the path remapping flags, the crate tree passed as `-C metadata`, and the names of the `PATH`, `HOME`, `CARGO_HOME`,
   `RUSTUP_HOME`, `RUSTUP_TOOLCHAIN` and `TMPDIR` variables the build saw.
 - `artifact`: the file name, SHA-256 and size.
 
@@ -100,7 +100,10 @@ The build sees only `PATH`, led by the selected toolchain's `bin` directory, `HO
 `RUSTFLAGS`, wrappers, profile overrides and any variable a crate reads with `env!` are absent. A
 build is refused when rustc's dep-info or a build script's `rerun-if-env-changed` shows it read one of
 those six. A build script that reads a variable without declaring it is not detected. The build also
-remaps the snapshot and private `CARGO_HOME` paths. Installing the same build again keeps the existing entry.
+remaps the snapshot and private `CARGO_HOME` paths, and passes the crate tree to rustc as `-C metadata`, which goes
+into symbol mangling. Two crate trees therefore never build the same executable, even when a change, such as one to
+the crate's tests, compiles to the same code; before this, such a change was refused here while the launcher refused
+the old entry for its tree. Installing the same build again keeps the existing entry.
 An entry with the same hash but another receipt is refused.
 
 The store is `BENCH_RUNTIME_STORE`, else `~/.t3/bench-runtime`, for every command.

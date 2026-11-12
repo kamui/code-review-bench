@@ -312,6 +312,22 @@ fn install_retains_read_only_entries_and_rollback_returns_to_the_replaced_select
 }
 
 #[test]
+fn a_crate_change_that_compiles_to_the_same_code_installs_and_runs() {
+    let fixture = Fixture::new("same-code");
+    let one = fixture.install(true);
+    fs::write(fixture.crate_dir().join("NOTES.md"), "Not compiled\n").unwrap();
+    fixture.commit("notes");
+    let stale = fixture.exec(None, &["0"]);
+    assert_eq!(stale.status.code(), Some(1), "{}", text(&stale));
+
+    let two = fixture.install(true);
+    assert_ne!(one, two);
+    let ran = fixture.exec(None, &["5"]);
+    assert_eq!(ran.status.code(), Some(5), "{}", text(&ran));
+    assert_eq!(stdout(&ran), "one 5\n");
+}
+
+#[test]
 fn the_selection_runs_only_while_its_crate_tree_is_the_one_at_head() {
     let fixture = Fixture::new("head");
     let missing = fixture.exec(None, &["3"]);
