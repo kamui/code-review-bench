@@ -1620,6 +1620,114 @@ fn truncated_child_repaired_from_its_receipt_files_the_receipt_output_and_where_
     );
 }
 
+/// A `claude-skill` attempt whose arm maps `haiku` to `m-2`: the root on `step_root`, one subagent on `step_sub`,
+/// with session totals for both and `rates` as the attempt's rates file.
+fn step_attempt(f: &Fixture, id: &str, step_root: &str, step_sub: &str, rates: &str) -> PathBuf {
+    write(
+        &f.root().join("bench/arms/arm-claude.json"),
+        r#"{"id": "arm-claude", "kind": "claude-skill", "model": "m-1", "effort": "high", "step_models": {"haiku": "m-2"}}"#,
+    );
+    let attempt = f.attempt(id, Harness::Claude, Some(0));
+    let on = |model: &str, request: &str| {
+        Reply::default()
+            .json()
+            .replace(r#""m-1""#, &format!("\"{model}\""))
+            .replace(r#""r1""#, &format!("\"{request}\""))
+    };
+    let totals = |model: &str| {
+        format!(
+            r#""{model}": {{"inputTokens": 10, "cacheCreationInputTokens": 100, "cacheReadInputTokens": 1000, "outputTokens": 50}}"#
+        )
+    };
+    write(
+        &attempt.join("home/.claude/projects/p/s1.jsonl"),
+        lines(&[
+            user(PROMPT),
+            on(step_root, "r0"),
+            format!(
+                r#"{{"type": "cost-state", "sessionId": "s1", "modelUsage": {{{}, {}}}}}"#,
+                totals(step_root),
+                totals(step_sub)
+            ),
+        ]),
+    );
+    write(
+        &attempt.join("home/.claude/projects/p/s1/subagents/agent-a1.jsonl"),
+        lines(&[user("brief"), on(step_sub, "r1")]),
+    );
+    write(&attempt.join("rates.json"), rates);
+    let review = br#"{"status": "complete", "findings": []}"#;
+    write(&attempt.join("reports/review.json"), review);
+    write(
+        &attempt.join("native-artifacts.json"),
+        format!(
+            r#"{{"root": {}, "files": [{{"path": "review.json", "bytes": {}, "sha256": "{}"}}]}}"#,
+            quoted(&attempt.join("reports").to_string_lossy()),
+            review.len(),
+            sha(review)
+        ),
+    );
+    attempt
+}
+
+const STEP_RATES: &str = r#"{"rates": [{"model": "m-1", "as_of": "2026-01-01", "input": 2.0, "output": 10.0, "cache_read": 0.2, "cache_write_5m": 2.5, "cache_write_1h": 4.0, "billing": "api-dollars"}, {"model": "m-2", "as_of": "2026-01-02", "input": 0.1, "output": 0.5, "cache_read": 0.01, "cache_write_5m": 0.125, "cache_write_1h": 0.2, "billing": "api-dollars"}, {"model": "m-3", "as_of": "2026-01-03", "input": 1.0, "output": 5.0, "cache_read": 0.1, "cache_write_5m": 1.25, "cache_write_1h": 2.0, "billing": "api-dollars"}]}"#;
+
+#[test]
+fn a_step_model_arm_prices_each_transcript_at_its_own_model_and_refuses_an_unmapped_one() {
+    let f = Fixture::new("step-models");
+    // Each request: 10 input, 100 five-minute cache writes, 1,000 cache reads and 50 output tokens.
+    let at = |input: f64, write: f64, read: f64, output: f64| {
+        round6((10.0 * input + 100.0 * write + 1000.0 * read + 50.0 * output) / 1e6)
+    };
+    let (m1, m2, m3) = (
+        at(2.0, 2.5, 0.2, 10.0),
+        at(0.1, 0.125, 0.01, 0.5),
+        at(1.0, 1.25, 0.1, 5.0),
+    );
+
+    let attempt = step_attempt(&f, "att-001", "m-1", "m-2", STEP_RATES);
+    let record = f.filed(&attempt, Harness::Claude);
+    assert_eq!(
+        text(field(&record, "disposition")),
+        "valid completed",
+        "{:?}",
+        notes(&record)
+    );
+    assert_complete(&record, round6(m1 + m2));
+    assert_eq!(
+        text(field(&record, "usage.rates_as_of")),
+        "m-1 2026-01-01, m-2 2026-01-02"
+    );
+
+    let attempt = step_attempt(&f, "att-002", "m-1", "m-3", STEP_RATES);
+    let record = f.filed(&attempt, Harness::Claude);
+    assert_eq!(
+        text(field(&record, "disposition")),
+        "harness-invalid: agent-a1.jsonl: model m-3, a subagent requires one of haiku=m-2"
+    );
+    assert_complete(&record, round6(m1 + m3));
+
+    let attempt = step_attempt(&f, "att-003", "m-2", "m-2", STEP_RATES);
+    let record = f.filed(&attempt, Harness::Claude);
+    assert_eq!(
+        text(field(&record, "disposition")),
+        "harness-invalid: s1.jsonl: model m-2, the root requires m-1"
+    );
+
+    let unpriced = STEP_RATES.replace(r#""model": "m-2""#, r#""model": "m-9""#);
+    let attempt = step_attempt(&f, "att-004", "m-1", "m-2", &unpriced);
+    let record = f.filed(&attempt, Harness::Claude);
+    assert_unknown_total(&record, None);
+    assert!(
+        has_note(
+            &record,
+            "observed models ['m-1', 'm-2'] do not each have a rates.json entry"
+        ),
+        "{:?}",
+        notes(&record)
+    );
+}
+
 #[test]
 fn audit_invalid_completion_keeps_its_complete_usage() {
     let f = Fixture::new("audit-invalid");

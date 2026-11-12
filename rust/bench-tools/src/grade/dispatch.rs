@@ -467,6 +467,7 @@ fn meter(paths: &[PathBuf], rate: &Value) -> Result<Value, String> {
             .collect(),
         receipts: Vec::new(),
         prices,
+        model_prices: Vec::new(),
         report: None,
         timing: None,
         by_kind: false,

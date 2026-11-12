@@ -77,6 +77,10 @@ pub struct Options {
     /// Transcripts that are not metered but may hold completion receipts or session totals, such as a parent's.
     pub receipts: Vec<Vec<u8>>,
     pub prices: Prices,
+    /// Prices by model. When any are given, each transcript is priced at the prices of the one model its requests
+    /// name, `prices` is not used, the total is the sum of the transcripts' costs, and only `Output::Json` without a
+    /// report is supported.
+    pub model_prices: Vec<(String, Prices)>,
     pub report: Option<Vec<u8>>,
     pub timing: Option<Vec<u8>>,
     pub by_kind: bool,
@@ -91,6 +95,10 @@ pub fn run(options: &Options) -> Outcome {
 }
 
 fn meter(options: &Options) -> Result<Outcome, String> {
+    let per_model = !options.model_prices.is_empty();
+    if per_model && (!matches!(options.output, Output::Json) || options.report.is_some()) {
+        return Err("per-model prices are supported only with --json and no --report".into());
+    }
     let timing = match &options.timing {
         Some(path) => read_timing(path).map_err(|message| {
             format!(
@@ -131,15 +139,29 @@ fn meter(options: &Options) -> Result<Outcome, String> {
         total.absorb(usage)?;
     }
     let prices = &options.prices;
+    let priced = transcripts
+        .iter()
+        .map(|transcript| transcript_prices(transcript, options))
+        .collect::<Result<Vec<_>, _>>()?;
     let stdout = match &options.output {
         Output::Row(label) => format!("{}\n", row_line(&total, label, prices, report_tokens)),
         Output::Json => {
             let mut data = Object::default();
-            data.insert("prices".into(), Value::Object(prices_fields(prices)));
+            let shown = if per_model {
+                options
+                    .model_prices
+                    .iter()
+                    .map(|(model, prices)| (model.clone(), Value::Object(prices_fields(prices))))
+                    .collect()
+            } else {
+                prices_fields(prices)
+            };
+            data.insert("prices".into(), Value::Object(shown));
             let entries = usages
                 .iter()
                 .zip(&transcripts)
-                .map(|(usage, transcript)| {
+                .zip(&priced)
+                .map(|((usage, transcript), prices)| {
                     let mut entry = usage.fields();
                     entry.insert("path".into(), Value::os_text(&transcript.path));
                     add_costs(&mut entry, usage, prices);
@@ -156,7 +178,12 @@ fn meter(options: &Options) -> Result<Outcome, String> {
                 "agent_span_sum_seconds".into(),
                 Value::Float(round_to(total.wall_seconds, 3)),
             );
-            add_costs(&mut entry, &total, prices);
+            if per_model {
+                let parts: Vec<(&Usage, &Prices)> = usages.iter().zip(priced).collect();
+                add_summed_costs(&mut entry, &parts);
+            } else {
+                add_costs(&mut entry, &total, prices);
+            }
             if options.by_kind {
                 entry.insert("by_kind".into(), total.by_kind());
             }
@@ -205,6 +232,33 @@ fn meter(options: &Options) -> Result<Outcome, String> {
         }
     };
     Ok(Outcome::success(stdout.into_bytes()))
+}
+
+/// The prices `transcript` is costed at: its one model's under per-model prices, else the single prices.
+fn transcript_prices<'a>(
+    transcript: &Transcript,
+    options: &'a Options,
+) -> Result<&'a Prices, String> {
+    if options.model_prices.is_empty() {
+        return Ok(&options.prices);
+    }
+    let shown = pytext::stderr_text(&transcript.path);
+    let [model] = transcript.models.as_slice() else {
+        return Err(format!(
+            "{shown}: per-model prices need requests on one model, found {}",
+            if transcript.models.is_empty() {
+                "none named".to_string()
+            } else {
+                transcript.models.join(", ")
+            }
+        ));
+    };
+    options
+        .model_prices
+        .iter()
+        .find(|(priced, _)| priced == model)
+        .map(|(_, prices)| prices)
+        .ok_or_else(|| format!("{shown}: no price for model {model}"))
 }
 
 /// One request's counts as its lines record them: the largest of each, or absent or invalid.
@@ -1289,7 +1343,41 @@ fn unknown_bounds(prices: &Prices) -> (f64, f64) {
 }
 
 fn add_costs(entry: &mut Object, usage: &Usage, prices: &Prices) {
-    let summary = usage.cost_summary(prices, usage.output);
+    insert_costs(entry, usage.cost_summary(prices, usage.output));
+}
+
+/// The sum of each transcript's costs at its own model's prices.
+fn add_summed_costs(entry: &mut Object, parts: &[(&Usage, &Prices)]) {
+    let (mut estimate, mut low, mut high, mut unknown) = (0.0, 0.0, 0.0, 0u64);
+    for (usage, prices) in parts {
+        let summary = usage.cost_summary(prices, usage.output);
+        estimate += summary.estimate;
+        low += summary.low;
+        high += summary.high;
+        unknown = unknown.saturating_add(summary.unknown);
+    }
+    let assumption = if unknown == 0 {
+        "all cache-write tiers known".to_string()
+    } else {
+        format!(
+            "{} unknown-tier cache-write tokens priced at their model's 5m multiplier in the estimate and at the \
+             lower / higher of its two multipliers in the bounds",
+            thousands(unknown)
+        )
+    };
+    insert_costs(
+        entry,
+        CostSummary {
+            estimate,
+            low,
+            high,
+            unknown,
+            assumption,
+        },
+    );
+}
+
+fn insert_costs(entry: &mut Object, summary: CostSummary) {
     entry.insert("cost".into(), Value::Float(round_to(summary.estimate, 6)));
     let mut bounds = Object::default();
     bounds.insert("low".into(), Value::Float(round_to(summary.low, 6)));

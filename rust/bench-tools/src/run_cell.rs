@@ -43,7 +43,8 @@
 //! freeze commit to run an older run from. The launch gets it as `BENCH_RUST_BENCH_TOOLS` with its SHA-256.
 //!
 //! Before claiming a real attempt, rates-check-v1 compares the model's frozen dated rate with official provider
-//! prices. A change or unavailable source refuses dispatch. The verified rate is saved to the attempt's
+//! prices, and for an arm with `step_models` each mapped model's as well, so a mapped model without a frozen pin
+//! refuses dispatch. A change or unavailable source refuses dispatch. The verified rate is saved to the attempt's
 //! `rates.json` and used for metering; `cell.json` retains the source hashes. Dry runs, status and filing
 //! already-dispatched attempts do not fetch prices.
 //!
@@ -104,6 +105,7 @@ use crate::removal;
 use crate::schema::{SchemaError, Validator};
 use crate::sha256;
 use crate::skill_runner::Ran;
+use crate::step_models;
 use crate::usage;
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions, TryLockError};
@@ -1900,6 +1902,10 @@ fn check_dispatch_rates(run: &Run, context: &Context<'_>, cell: &Value) -> R<(Va
         ));
     }
     let model = model.py_str();
+    let step = step_models::read(&arm).or_else(refuse)?;
+    let models = step
+        .as_ref()
+        .map_or_else(|| vec![model.clone()], |step| step.priced(&model));
     let catalog_path = context
         .set("BENCH_RATES")
         .map_or_else(|| run.bench.join("rates.current.json"), PathBuf::from);
@@ -1911,30 +1917,36 @@ fn check_dispatch_rates(run: &Run, context: &Context<'_>, cell: &Value) -> R<(Va
         &PyPath::new(catalog_path.as_os_str().as_bytes()),
     )
     .map_err(|(rates::Failure::Rate(message) | rates::Failure::Input(message))| failed(message))?;
-    let pins: Vec<&Value> = get(&run.manifest, "rates")
-        .as_array()
-        .unwrap_or(&[])
-        .iter()
-        .filter(|row| pyvalue_is(get(row, "model"), &model))
-        .collect();
-    let [pin] = pins.as_slice() else {
-        return refuse(format!(
-            "manifest needs exactly one dated rate pin for {model}"
-        ));
-    };
-    let selected: Vec<Value> = get(&catalog, "rates")
-        .as_array()
-        .unwrap_or(&[])
-        .iter()
-        .filter(|row| {
-            pyvalue_is(get(row, "model"), &model) && get(row, "as_of").py_eq(get(pin, "as_of"))
-        })
-        .cloned()
-        .collect();
-    if selected.len() != 1 {
-        return refuse(format!(
-            "catalog has no rate matching the frozen pin for {model}"
-        ));
+    let mut pins = Vec::new();
+    let mut selected = Vec::new();
+    for model in &models {
+        let pinned: Vec<&Value> = get(&run.manifest, "rates")
+            .as_array()
+            .unwrap_or(&[])
+            .iter()
+            .filter(|row| pyvalue_is(get(row, "model"), model))
+            .collect();
+        let [pin] = pinned.as_slice() else {
+            return refuse(format!(
+                "manifest needs exactly one dated rate pin for {model}"
+            ));
+        };
+        let rows: Vec<Value> = get(&catalog, "rates")
+            .as_array()
+            .unwrap_or(&[])
+            .iter()
+            .filter(|row| {
+                pyvalue_is(get(row, "model"), model) && get(row, "as_of").py_eq(get(pin, "as_of"))
+            })
+            .cloned()
+            .collect();
+        if rows.len() != 1 {
+            return refuse(format!(
+                "catalog has no rate matching the frozen pin for {model}"
+            ));
+        }
+        pins.push((*pin).clone());
+        selected.extend(rows);
     }
     let snapshot = object(vec![
         ("schema_version", Value::Int("1".to_string())),
@@ -1946,7 +1958,7 @@ fn check_dispatch_rates(run: &Run, context: &Context<'_>, cell: &Value) -> R<(Va
         .collect();
     let report = rates::inspect(
         &snapshot,
-        Some(std::slice::from_ref(&model)),
+        Some(&models),
         &sources,
         context.fetch,
         &rates::utc_timestamp((context.now)()),
@@ -1957,8 +1969,9 @@ fn check_dispatch_rates(run: &Run, context: &Context<'_>, cell: &Value) -> R<(Va
         .is_some_and(|changes| !changes.is_empty())
     {
         return refuse(format!(
-            "provider prices differ from the frozen rate for {model}; run bun run rates:refresh and freeze a new \
-             run with the updated rate pin"
+            "provider prices differ from the frozen rate for {}; run bun run rates:refresh and freeze a new \
+             run with the updated rate pin",
+            models.join(", ")
         ));
     }
     let Value::Object(mut report) = report else {
@@ -1970,7 +1983,10 @@ fn check_dispatch_rates(run: &Run, context: &Context<'_>, cell: &Value) -> R<(Va
         text(&String::from_utf8_lossy(&resolved)),
     );
     report.insert("policy".to_string(), text("rates-check-v1"));
-    report.insert("rate_pin".to_string(), (*pin).clone());
+    report.insert("rate_pin".to_string(), pins[0].clone());
+    if step.is_some() {
+        report.insert("rate_pins".to_string(), Value::Array(pins));
+    }
     Ok((Value::Object(report), snapshot))
 }
 
@@ -3233,6 +3249,60 @@ mod tests {
         let resolved =
             String::from_utf8(pyfs::resolve(display(&catalog).as_bytes())).expect("utf-8");
         assert!(get(&report, "catalog").py_eq(&text(&resolved)));
+    }
+
+    #[test]
+    fn the_rates_check_needs_a_frozen_pin_for_every_step_model() {
+        let fixture = fixture();
+        let step_rate = r#"{"model": "gpt-6-luna", "as_of": "2026-01-02", "input": 0.1, "output": 0.5,
+            "cache_read": 0.01, "cache_write_5m": 0.125, "cache_write_1h": 0.125, "source": "original evidence",
+            "billing": "list-price-equivalent"}"#;
+        let catalog = fixture.priced(
+            Some("subscription"),
+            &[rate("2026-01-01", 10), step_rate.to_string()],
+        );
+        put(
+            &fixture.base.join("bench/arms/arm-b.json"),
+            &format!(
+                r#"{{"id": "arm-b", "kind": "claude-skill", "model": "{MODEL}", "budget_usd_per_attempt": 2.0,
+                "step_models": {{"haiku": "gpt-6-luna", "opus": "{MODEL}"}}}}"#
+            ),
+        );
+        let env = vec![("BENCH_RATES".to_string(), display(&catalog))];
+        let mut context = fixture.context(&unused_tool, env);
+        context.fetch = &Pricing;
+        let cell = parse_key("t1/arm-b/1").expect("key");
+        match check_dispatch_rates(&fixture.run(), &context, &cell) {
+            Err(Failure::Refused(message)) => assert_eq!(
+                message,
+                "manifest needs exactly one dated rate pin for gpt-6-luna"
+            ),
+            _ => panic!("a step model without a frozen pin was not refused"),
+        }
+
+        let path = fixture.run_dir.join("manifest.json");
+        let Value::Object(mut manifest) = read_json(&path).expect("manifest") else {
+            panic!("not an object")
+        };
+        manifest.insert(
+            "rates".to_string(),
+            json(&format!(
+                r#"[{{"model": "{MODEL}", "as_of": "2026-01-01"}}, {{"model": "gpt-6-luna", "as_of": "2026-01-02"}}]"#
+            )),
+        );
+        put(&path, &indented(&Value::Object(manifest)));
+        let (report, snapshot) =
+            check_dispatch_rates(&fixture.run(), &context, &cell).expect("checked");
+        assert!(
+            get(&snapshot, "rates")
+                .py_eq(&json(&format!("[{}, {step_rate}]", rate("2026-01-01", 10))))
+        );
+        assert!(get(&report, "changes").py_eq(&json("[]")));
+        assert!(get(get(&report, "rate_pin"), "model").py_eq(&text(MODEL)));
+        assert_eq!(
+            get(&report, "rate_pins").as_array().map(<[Value]>::len),
+            Some(2)
+        );
     }
 
     #[test]

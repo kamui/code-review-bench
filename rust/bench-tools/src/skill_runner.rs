@@ -22,8 +22,10 @@
 //! is read-only: the work directory is writable, and a cache an interpreter writes there, such as the
 //! `__pycache__` of the skill's Python, would change the tree the runner checks after the review.
 //! `CLAUDE_CODE_SUBAGENT_MODEL` pins every Agent call to the arm's model, and the transcripts are then checked
-//! request by request. Both environments are built from scratch, so the orchestrating session's variables never
-//! reach the reviewer.
+//! request by request. An arm with `step_models` instead sets each mapped alias's `ANTHROPIC_DEFAULT_<ALIAS>_MODEL`
+//! ([`step_models`]); the root must run the arm's model and each subagent one mapped model, every transcript is
+//! priced at its own model's rate, and a mapped model the rates file lacks is refused before the client starts.
+//! Both environments are built from scratch, so the orchestrating session's variables never reach the reviewer.
 //!
 //! Exit codes: 0 the session completed and every observed reviewer context used the pinned model and effort; 1 the
 //! session completed with a pin or policy violation; 2 an input is missing, a setup command fails, or the reviewer
@@ -40,6 +42,7 @@ use crate::pyjson::{self, Dumps, Duplicates, Object, Value};
 use crate::pytext::{self, PyPath};
 use crate::review_isolation::{self, resolve};
 use crate::sha256;
+use crate::step_models::{self, StepModels};
 use crate::usage;
 use std::ffi::OsStr;
 use std::fmt::Write as _;
@@ -555,6 +558,24 @@ fn rates_for(path: &Path, model: &str) -> R<Value> {
     })
 }
 
+/// `usage claude --model-prices` for each of `models`, refused when the rates file lacks one of them.
+fn model_prices(path: &Path, models: &[String]) -> R<Vec<String>> {
+    models
+        .iter()
+        .map(|model| {
+            let rate = rates_for(path, model)?;
+            Ok(format!(
+                "{model}={},{},{},{},{}",
+                get(&rate, "input").py_str(),
+                get(&rate, "output").py_str(),
+                ratio(&rate, "cache_read")?,
+                ratio(&rate, "cache_write_5m")?,
+                ratio(&rate, "cache_write_1h")?
+            ))
+        })
+        .collect()
+}
+
 // --- the frozen run --------------------------------------------------------------------------
 
 struct Prepared {
@@ -564,6 +585,7 @@ struct Prepared {
     entry: Value,
     model: String,
     effort: String,
+    step_models: Option<StepModels>,
     skill_source: PathBuf,
     tree_hash: String,
     runner: Value,
@@ -690,6 +712,7 @@ fn prepare_attempt(arguments: &Arguments, client: Client) -> R<Prepared> {
         }
         _ => return Err("the arm must pin both model and reasoning effort".to_string()),
     };
+    let step_models = step_models::read(&arm)?;
     if get(&entry, "arm_file_sha256").as_str() != Some(&sha_of(&read_bytes(&arm_path)?)) {
         return Err("arm file hash differs from the frozen run manifest".to_string());
     }
@@ -841,6 +864,7 @@ fn prepare_attempt(arguments: &Arguments, client: Client) -> R<Prepared> {
         entry,
         model,
         effort,
+        step_models,
         skill_source,
         tree_hash,
         runner,
@@ -2354,24 +2378,33 @@ mod claude {
         })
     }
 
+    /// Every context must run one model at the arm's effort: the root the arm's model, and a subagent the arm's
+    /// model or, when the arm has step models, one of the mapped models.
     pub(super) fn policy_violations(
         observed: &Transcripts,
         model: &str,
         effort: &str,
+        step: Option<&StepModels>,
     ) -> Vec<String> {
         let mut violations = Vec::new();
-        let only = |value: &Value, pinned: &str| {
+        let only = |value: &Value, allowed: &dyn Fn(&str) -> bool| {
             value
                 .as_array()
-                .is_some_and(|items| items.len() == 1 && items[0].as_str() == Some(pinned))
+                .is_some_and(|items| items.len() == 1 && items[0].as_str().is_some_and(allowed))
         };
         for context in &observed.contexts {
             let (models, efforts) = (get(context, "models"), get(context, "efforts"));
+            let mapped = step.filter(|_| !get(context, "root").truthy());
+            let allowed = |seen: &str| mapped.map_or(seen == model, |step| step.accepts(seen));
+            let required = mapped.map_or_else(
+                || model.to_string(),
+                |step| format!("one of {}", step.describe()),
+            );
             if get(context, "assistant_records").truthy()
-                && (!only(models, model) || !only(efforts, effort))
+                && (!only(models, &allowed) || !only(efforts, &|seen| seen == effort))
             {
                 violations.push(format!(
-                    "{}: models {} efforts {}, arm requires {model} at {effort}",
+                    "{}: models {} efforts {}, arm requires {required} at {effort}",
                     get(context, "transcript").py_str(),
                     models.py_str(),
                     efforts.py_str()
@@ -2432,6 +2465,9 @@ mod claude {
     pub(super) fn launch(prepared: &Prepared, rates_path: &Path) -> R<Outcome> {
         let (attempt, clone) = (&prepared.attempt, &prepared.clone);
         let (model, effort) = (prepared.model.as_str(), prepared.effort.as_str());
+        if let Some(step) = &prepared.step_models {
+            model_prices(&resolve(rates_path), &step.priced(model))?;
+        }
         let (executable, executable_hash) = pinned_client(&prepared.runner, "claude", "Claude")?;
         let source = source_home();
         let credentials = source.join(".claude/.credentials.json");
@@ -2457,8 +2493,11 @@ mod claude {
             ("LANG".into(), "C.UTF-8".into()),
             ("LC_ALL".into(), "C.UTF-8".into()),
             ("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS".into(), "0".into()),
-            ("CLAUDE_CODE_SUBAGENT_MODEL".into(), model.into()),
         ];
+        match &prepared.step_models {
+            Some(step) => env.extend(step.environment()),
+            None => env.push(("CLAUDE_CODE_SUBAGENT_MODEL".into(), model.into())),
+        }
         let artifact_env = get(&prepared.runner, "artifact_root_env");
         if artifact_env.truthy() {
             env.push((artifact_env.py_str(), path(&prepared.artifact_root)));
@@ -2551,6 +2590,12 @@ mod claude {
                     compact(&texts(&command))
                 ),
             )?;
+            if let Some(step) = &prepared.step_models {
+                append(
+                    &attempt.join("dispatch.txt"),
+                    &format!("step_models={}\n", step.describe()),
+                )?;
+            }
             started = Instant::now();
             let exit = review(&command, attempt, &prepared.input, clone, &env, timeout)?;
             Ok((cli_version, exit))
@@ -2575,7 +2620,12 @@ mod claude {
         };
         let observed = match load_transcripts(&home, &session, &prepared.prompt) {
             Ok(observed) => {
-                violations.extend(policy_violations(&observed, model, effort));
+                violations.extend(policy_violations(
+                    &observed,
+                    model,
+                    effort,
+                    prepared.step_models.as_ref(),
+                ));
                 observed
             }
             Err(error) => {
@@ -2590,7 +2640,11 @@ mod claude {
         };
         let mut usage = Value::Null;
         let metered = (|| -> R<()> {
-            let rate = rates_for(&resolve(rates_path), model)?;
+            let rates = resolve(rates_path);
+            let rate = match &prepared.step_models {
+                None => Some(rates_for(&rates, model)?),
+                Some(_) => None,
+            };
             let paths: Vec<String> = observed
                 .roots
                 .iter()
@@ -2600,26 +2654,41 @@ mod claude {
             if paths.is_empty() {
                 return Ok(());
             }
-            let prices = format!(
-                "{},{}",
-                get(&rate, "input").py_str(),
-                get(&rate, "output").py_str()
-            );
             let mut command = tool_command(prepared, &["usage", "claude"]);
             command.extend(paths);
-            for argument in [
-                "--prices".to_string(),
-                prices,
-                "--cache-read-mult".to_string(),
-                ratio(&rate, "cache_read")?,
-                "--cache-write-mult".to_string(),
-                ratio(&rate, "cache_write_5m")?,
-                "--cache-write-1h-mult".to_string(),
-                ratio(&rate, "cache_write_1h")?,
-                "--json".to_string(),
-            ] {
-                command.push(argument);
+            if let Some(rate) = rate {
+                command.extend([
+                    "--prices".to_string(),
+                    format!(
+                        "{},{}",
+                        get(&rate, "input").py_str(),
+                        get(&rate, "output").py_str()
+                    ),
+                    "--cache-read-mult".to_string(),
+                    ratio(&rate, "cache_read")?,
+                    "--cache-write-mult".to_string(),
+                    ratio(&rate, "cache_write_5m")?,
+                    "--cache-write-1h-mult".to_string(),
+                    ratio(&rate, "cache_write_1h")?,
+                ]);
             }
+            if let Some(step) = &prepared.step_models {
+                let mut priced = step.priced(model);
+                for context in &observed.contexts {
+                    for seen in get(context, "models").as_array().unwrap_or_default() {
+                        if let Some(seen) = seen.as_str()
+                            && !priced.iter().any(|known| known == seen)
+                            && rates_for(&rates, seen).is_ok()
+                        {
+                            priced.push(seen.to_string());
+                        }
+                    }
+                }
+                for prices in model_prices(&rates, &priced)? {
+                    command.extend(["--model-prices".to_string(), prices]);
+                }
+            }
+            command.push("--json".to_string());
             let done = run(&command, None)?;
             write(
                 &attempt.join("usage.txt"),
@@ -2760,7 +2829,7 @@ mod claude {
                     .cloned(),
             );
         }
-        let record = object(vec![
+        let mut record = object(vec![
             ("root_session_id", text(&session)),
             ("contexts", Value::Array(observed.contexts.clone())),
             ("models", Value::Array(distinct(models))),
@@ -2781,6 +2850,9 @@ mod claude {
             ("native_artifacts", Value::Array(rows.clone())),
             ("violations", texts(&violations)),
         ]);
+        if let (Some(step), Value::Object(fields)) = (&prepared.step_models, &mut record) {
+            fields.insert("step_models".to_string(), step.to_value());
+        }
         let summary = if violations.is_empty() {
             cost_summary(&session, rows.len(), &usage)?
         } else {
@@ -2857,6 +2929,7 @@ mod claude {
                     &load_transcripts(&self.0, SESSION, PROMPT).unwrap(),
                     "claude-sonnet-5-5",
                     "high",
+                    None,
                 )
             }
         }
@@ -2902,6 +2975,68 @@ mod claude {
                 ],
             );
             assert_eq!(home.violations(), [] as [String; 0]);
+        }
+
+        fn plugin_steps() -> StepModels {
+            let arm = pyjson::loads(
+                r#"{"kind": "claude-skill", "step_models": {"haiku": "claude-haiku-5-5", "sonnet": "claude-sonnet-5-5", "opus": "claude-opus-5-5"}}"#,
+                Duplicates::KeepLast,
+            )
+            .unwrap();
+            step_models::read(&arm).unwrap().unwrap()
+        }
+
+        fn step_violations(home: &Home) -> Vec<String> {
+            policy_violations(
+                &load_transcripts(&home.0, SESSION, PROMPT).unwrap(),
+                "claude-opus-5-5",
+                "high",
+                Some(&plugin_steps()),
+            )
+        }
+
+        #[test]
+        fn step_models_accept_each_mapped_subagent_model() {
+            let home = Home::new();
+            let call = r#"[{"type": "tool_use", "id": "t1", "name": "Agent", "input": {"model": "haiku", "prompt": "x"}}]"#;
+            home.root(PROMPT, &[assistant("claude-opus-5-5", "\"high\"", call)]);
+            home.sub("a1", &[ok("claude-haiku-5-5", "high")]);
+            home.sub("a2", &[ok("claude-sonnet-5-5", "high")]);
+            home.sub("a3", &[ok("claude-opus-5-5", "high")]);
+            assert_eq!(step_violations(&home), [] as [String; 0]);
+            let observed = load_transcripts(&home.0, SESSION, PROMPT).unwrap();
+            assert!(get(&observed.agent_calls[0], "model").py_eq(&text("haiku")));
+        }
+
+        #[test]
+        fn step_models_refuse_an_unmapped_model_an_off_effort_step_and_a_mapped_root() {
+            let home = Home::new();
+            home.root(PROMPT, &[ok("claude-opus-5-5", "high")]);
+            home.sub("a1", &[ok("claude-haiku-4-5-20251001", "high")]);
+            home.sub("a2", &[ok("claude-sonnet-5-5", "medium")]);
+            home.sub(
+                "a3",
+                &[
+                    ok("claude-sonnet-5-5", "high"),
+                    ok("claude-haiku-5-5", "high"),
+                ],
+            );
+            let violations = step_violations(&home);
+            assert_eq!(violations.len(), 3, "{violations:?}");
+            assert!(
+                violations[0].contains("agent-a1.jsonl")
+                    && violations[0].contains("arm requires one of haiku=claude-haiku-5-5"),
+                "{violations:?}"
+            );
+
+            let home = Home::new();
+            home.root(PROMPT, &[ok("claude-haiku-5-5", "high")]);
+            let violations = step_violations(&home);
+            assert_eq!(violations.len(), 1, "{violations:?}");
+            assert!(
+                violations[0].contains("arm requires claude-opus-5-5 at high"),
+                "{violations:?}"
+            );
         }
 
         #[test]
@@ -3139,6 +3274,7 @@ mod tests {
             entry: Value::Null,
             model: String::new(),
             effort: String::new(),
+            step_models: None,
             skill_source: PathBuf::new(),
             tree_hash: String::new(),
             runner: Value::Null,
@@ -3678,6 +3814,7 @@ mod tests {
             entry: Value::Null,
             model: String::new(),
             effort: String::new(),
+            step_models: None,
             skill_source: PathBuf::new(),
             tree_hash: String::new(),
             runner: Value::Null,
