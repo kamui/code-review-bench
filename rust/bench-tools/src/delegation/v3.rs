@@ -35,7 +35,7 @@ const GATE_KEYS: [&str; 3] = ["blind_answers", "recommender_confidence", "asked"
 const GAP_NAMES: [&str; 2] = ["gap", "conflict"];
 
 /// The decision types whose agent settlements can be filed under policy v3; every other open type still asks.
-pub const ENFORCED: [&str; 2] = ["candidate", "reconciliation"];
+pub const ENFORCED: [&str; 3] = ["candidate", "reconciliation", "band"];
 /// The reconciliations of each audit round that go to the owner without the reconciler's call.
 pub const AUDIT_CALLS: usize = 5;
 

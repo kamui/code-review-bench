@@ -78,7 +78,7 @@ The replay does not apply the five audit calls. All 47 reconciliations come from
 ## What adoption needs
 
 1. The owner's saved receipt naming the adopted commit, then `status: "adopted"`, the receipt pin and its scope in the policy file.
-2. Enforcement. Routing by the policy a round opening pins, the entry check at opening, suspension, the settlement check, candidate and reconciliation filing, the five audit calls and the digest are built; see [Round opening and policy v3](../adjudication-record.md#round-opening-and-policy-v3). Still to build: filing for label and admission settlements.
+2. Enforcement. Routing by the policy a round opening pins, the entry check at opening, suspension, the settlement check, candidate, reconciliation and label filing, the five audit calls and the digest are built; see [Round opening and policy v3](../adjudication-record.md#round-opening-and-policy-v3). Still to build: filing for admission settlements, and labels on pre-existing problems.
 3. A restated closing test for issue #59.
 
 On adoption this replaces ADR-0007's gate and levels, and its reservation of bands. [Pre-existing problems](../pre-existing-problems.md) gives its decision types no delegation; adoption would open admission only. [ADR-0006](0006-settle-eligibility-by-delegation-on-heavy-evidence.md) keeps its separate route.

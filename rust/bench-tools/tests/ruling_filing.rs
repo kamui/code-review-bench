@@ -222,10 +222,10 @@ fn filing_faults_match_the_recorded_outcomes() {
     }
 }
 
-/// An agent-settled current decision of a dimension whose filing is not enforced is refused with its reason; one the
-/// owner settled is checked as before.
+/// An agent-settled control or advice decision is refused with its reason, and an agent-settled impact decision is
+/// checked as a label filing; one the owner settled is checked as before.
 #[test]
-fn agents_file_no_impact_control_or_advice_decision() {
+fn agents_file_no_control_or_advice_decision_and_an_impact_one_needs_its_settlement() {
     let empty =
         std::env::temp_dir().join(format!("ruling-filing-dimensions-{}", std::process::id()));
     std::fs::create_dir_all(&empty).unwrap();
@@ -236,13 +236,11 @@ fn agents_file_no_impact_control_or_advice_decision() {
         ))
     };
     let faults = |dimension: &str, settled_by: &str| {
-        delegation::decision_faults(&repo, &decision(dimension, settled_by)).unwrap()
+        delegation::decision_faults(&repo, &decision(dimension, settled_by), &[]).unwrap()
     };
     assert_eq!(
         faults("impact", "agents"),
-        [
-            "policy v3 filing for an impact label (band) is not enforced yet, so an agent-settled impact decision is refused"
-        ]
+        ["agent-settled current decision needs its pinned after-record"]
     );
     assert_eq!(
         faults("control", "agents"),

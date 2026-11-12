@@ -540,6 +540,17 @@ fn route_v3(
         reasons.push("a review of a saved ruling always goes to the owner".into());
     }
     reasons.extend(v3::answer_reasons(before, policy.gaps_ask)?);
+    let labelled = gate.is_some() && pyvalue::is(kind, BAND);
+    if labelled {
+        for answer in pyvalue::iterate(item(before, "answers")?)? {
+            if pyvalue::is(item(&answer, "outcome")?, NOT_NEEDED) {
+                reasons.push(format!(
+                    "{}: {NOT_NEEDED}: a label is not needed, which the owner decides",
+                    item(&answer, "by")?.py_str()
+                ));
+            }
+        }
+    }
     if let Some(gate) = gate
         && !v3::agreement(repo, before, gate)?
     {
@@ -563,6 +574,9 @@ fn route_v3(
         }
         return Ok(routed(reasons, withheld));
     };
+    if labelled && filing_fault(repo, before, kind)?.is_none() {
+        reasons.extend(band_reasons(repo, pairs, position)?);
+    }
     if let Some(audit) = &audit {
         let call = withheld.iter().any(|reason| reason == AUDIT_CALL);
         for reason in round_audit_reasons(repo, pairs, position, audit, call)? {
@@ -618,6 +632,11 @@ fn route_v3(
 }
 
 const RECONCILIATION: &str = "reconciliation";
+const BAND: &str = "band";
+const CARDS: &str = "bench/grading/current/impact-cards";
+const ADJUDICATIONS: &str = "bench/grading/current/adjudications.json";
+const CLAIMS: &str = "bench/grading/current/claims.json";
+const NOT_NEEDED: &str = "not-applicable";
 pub const AUDIT_CALL: &str = "this unit is one of its audit round's five calls, which the owner decides without the reconciler's call";
 const SHARES_AUDIT_CALL: &str = "this unit shares its question with one of the audit round's five calls, so the owner decides the question whole";
 const UNCOVERED: &str = "the round's reconciliation before-records must file each disputed unit of the pinned comparison exactly once, and no other";
@@ -635,15 +654,36 @@ fn filing_fault(repo: &Repo, before: &Value, kind: &Value) -> Py<Option<String>>
             && matches!(get(filing, "unit")?, Value::Str(unit) if !unit.is_empty())
             && get(filing, "unit")?.py_eq(item(before, "group")?)
     } else {
-        members.len() == 2
+        let labelled = pyvalue::is(kind, BAND);
+        members.len() == if labelled { 6 } else { 2 }
             && matches!(get(filing, "revision")?, Value::Object(revision) if !revision.is_empty())
             && matches!(get(filing, "subject")?, Value::Str(subject) if !crate::pytext::strip(subject).is_empty())
+            && (!labelled
+                || {
+                    let card = format!("{CARDS}/{}.json", get(filing, "subject")?.py_str());
+                    let names_card = match get(filing, "card")? {
+                        Value::Object(pin) => {
+                            pin.len() == 2
+                                && pin.get("path").is_some_and(|path| pyvalue::is(path, &card))
+                                && matches!(pin.get("sha256"), Some(Value::Str(_)))
+                        }
+                        _ => false,
+                    };
+                    matches!(get(filing, "candidate")?, Value::Str(candidate) if !crate::pytext::strip(candidate).is_empty())
+                        && record::pinned(repo, get(filing, "admission")?)?
+                        && names_card
+                        && record::pinned(repo, get(filing, "boundary")?)?
+                })
     };
     Ok((!bound).then(|| filing_shape(kind)))
 }
 
 fn filing_shape(kind: &Value) -> String {
-    if pyvalue::is(kind, RECONCILIATION) {
+    if pyvalue::is(kind, BAND) {
+        format!(
+            "the before-record's `filing` must bind the label it files: exactly `revision` and `subject`, copied from the current record, `candidate`, the candidate the admission decided, and pins of `admission`, the admitting after-record, `card`, the subject's card under {CARDS}, and `boundary`, the impact boundary in force"
+        )
+    } else if pyvalue::is(kind, RECONCILIATION) {
         "the before-record's `filing` must bind the audit unit it files: exactly `comparison`, the pinned comparison.json of the audit, and `unit`, the record's `group`".into()
     } else {
         format!(
@@ -723,6 +763,287 @@ fn round_audit_reasons(
         reasons.push(SHARES_AUDIT_CALL.to_string());
     }
     Ok(reasons)
+}
+
+/// The fields of an impact card the parties must have read: each must appear word for word in the case file.
+fn card_text(card: &Value) -> Py<Vec<String>> {
+    let mut found = Vec::new();
+    let mut add = |value: &Value| {
+        if let Value::Str(text) = value {
+            found.push(text.clone());
+        }
+    };
+    add(get(card, "domain")?);
+    for part in ["attribution", "grouping"] {
+        let section = get(card, part)?;
+        if matches!(section, Value::Object(_)) {
+            add(get(section, "reason")?);
+        }
+    }
+    for field in [
+        "consequence",
+        "exposure",
+        "controls",
+        "reversibility",
+        "workload",
+        "change_activity",
+    ] {
+        add(get(card, field)?);
+    }
+    for limit in pyvalue::iterate(get(card, "limits")?)? {
+        add(&limit);
+    }
+    Ok(found)
+}
+
+/// Whether `card` passes what `calibration check` requires of the card an impact decision pins: the card schema,
+/// its pins, its family and target, an attribution of `pre-existing` exactly for a pre-existing problem, and the
+/// workload or change activity its domain needs.
+fn valid_card(
+    repo: &Repo,
+    card: &Value,
+    subject: &Value,
+    target: &Value,
+    pre_existing: bool,
+) -> bool {
+    let Ok(root) = crate::current_grading::Root::new(repo.root.as_bytes()) else {
+        return false;
+    };
+    let read = |field: &str| get(card, field).cloned().unwrap_or(Value::Null);
+    root.validate_schema("impact-card", card).is_ok()
+        && crate::current_grading::verify_pins(&root, card).is_ok()
+        && read("family").py_eq(subject)
+        && read("target").py_eq(target)
+        && get(&read("attribution"), "relation")
+            .is_ok_and(|relation| pyvalue::is(relation, "pre-existing") == pre_existing)
+        && !(pyvalue::is(&read("domain"), "performance") && matches!(read("workload"), Value::Null))
+        && !(pyvalue::is(&read("domain"), "architecture-maintenance")
+            && matches!(read("change_activity"), Value::Null))
+}
+
+/// The boundary in force: the one pin every approved impact decision the owner settled shares, `None` when there is
+/// none or they differ. Nothing else in the records names it.
+fn boundary_in_force(decisions: &[Value]) -> Py<Option<Value>> {
+    let mut found: Option<Value> = None;
+    for decision in decisions {
+        if !pyvalue::is(get(decision, "dimension")?, "impact")
+            || !pyvalue::is(get(decision, "status")?, "approved")
+            || pyvalue::is(get(decision, "settled_by")?, "agents")
+        {
+            continue;
+        }
+        let boundary = get(decision, "boundary")?;
+        match &found {
+            Some(known) if !known.py_eq(boundary) => return Ok(None),
+            Some(_) => {}
+            None => found = Some(boundary.clone()),
+        }
+    }
+    Ok(found.filter(Value::truthy))
+}
+
+/// Whether the current records show `candidate`, a canonical claim, admitted as the family `subject` on `target`: the
+/// claim names the family and its approved eligibility decision, and the family's own eligibility is approved, both
+/// settled by the owner and citing the same saved receipt, the one ruling that admitted the claim as that family.
+/// The claim's link to a family is what `current-grading check` enforces; the shared receipt ties it to this one.
+fn admitted_as(
+    repo: &Repo,
+    candidate: &Value,
+    subject: &Value,
+    target: &Value,
+    decisions: &[Value],
+) -> Py<bool> {
+    let claims = repo.join(CLAIMS);
+    if !pyvalue::is_file(&claims) {
+        return Ok(false);
+    }
+    let receipt = |id: &Value, named: &Value| -> Py<Option<Value>> {
+        for decision in decisions {
+            if get(decision, "id")?.py_eq(id) {
+                let approved = pyvalue::is(get(decision, "dimension")?, "eligibility")
+                    && get(decision, "subject")?.py_eq(named)
+                    && get(decision, "target")?.py_eq(target)
+                    && pyvalue::is(get(decision, "status")?, "approved")
+                    && pyvalue::is(get(decision, "outcome")?, "eligible")
+                    && !pyvalue::is(get(decision, "settled_by")?, "agents")
+                    && get(decision, "receipt")?.truthy();
+                return Ok(
+                    approved.then(|| get(decision, "receipt").cloned().unwrap_or(Value::Null))
+                );
+            }
+        }
+        Ok(None)
+    };
+    let mut family = Vec::new();
+    for decision in decisions {
+        if pyvalue::is(get(decision, "dimension")?, "eligibility")
+            && get(decision, "subject")?.py_eq(subject)
+            && let Some(cited) = receipt(get(decision, "id")?, subject)?
+        {
+            family.push(cited);
+        }
+    }
+    for claim in pyvalue::iterate(item(&repo.load(&claims)?, "claims")?)? {
+        if get(&claim, "id")?.py_eq(candidate)
+            && get(&claim, "target")?.py_eq(target)
+            && get(&claim, "family_id")?.py_eq(subject)
+        {
+            let Some(cited) = receipt(get(&claim, "adjudication")?, candidate)? else {
+                return Ok(false);
+            };
+            return Ok(family.iter().any(|known| known.py_eq(&cited)));
+        }
+    }
+    Ok(false)
+}
+
+/// The current adjudications as saved, or none.
+fn saved_decisions(repo: &Repo) -> Py<Vec<Value>> {
+    let path = repo.join(ADJUDICATIONS);
+    if !pyvalue::is_file(&path) {
+        return Ok(Vec::new());
+    }
+    pyvalue::iterate(item(&repo.load(&path)?, "decisions")?)
+}
+
+const NOT_ADMITTED: &str = "a label is asked only after the problem is admitted: `filing.admission` must pin the owner's after-record, earlier in the records and in a round under an adopted policy v3, on the same target, of a `problem` candidate whose own `filing` names `filing.candidate`, and that decision must still stand";
+const PRE_EXISTING_LINK: &str = "a pre-existing problem's label stays with the owner: no record that `current-grading check` validates links an admitted candidate to the pre-existing problem it became";
+
+/// Why a label at `position` is not one agents may settle under policy v3 (ADR-0008): it is not asked after an
+/// admission that stands in a round under policy v3, or the subject was labelled before. While the label is
+/// pending, the current records must also show the admitted candidate as the subject, the boundary pinned must be
+/// the one in force, and the case the parties read must state the card, which must be one `calibration check`
+/// accepts. Those reads of the current records are not repeated once the label is decided, so a later change to
+/// them leaves a settlement as it was made.
+fn band_reasons(repo: &Repo, pairs: &[Pair], position: usize) -> Py<Vec<String>> {
+    let before = &pairs[position].before;
+    let filing = item(before, "filing")?;
+    let subject = item(filing, "subject")?;
+    let candidate = item(filing, "candidate")?;
+    let target = item(before, "target")?;
+    let admission = item(filing, "admission")?;
+    let mut reasons = Vec::new();
+    let admitting = pairs[..position].iter().position(|pair| {
+        pair.after.truthy()
+            && pyvalue::is(
+                item(admission, "path").unwrap_or(&Value::Null),
+                &pair.path.replace(".before.json", ".after.json"),
+            )
+    });
+    let Some(at) = admitting else {
+        reasons.push(NOT_ADMITTED.to_string());
+        return Ok(reasons);
+    };
+    let pair = &pairs[at];
+    let kind = item(&pair.before, "decision_type")?;
+    let outcome = item(&pair.after, "outcome")?;
+    if pyvalue::is(kind, "pre-existing-admission") && pyvalue::is(outcome, "admitted") {
+        reasons.push(PRE_EXISTING_LINK.to_string());
+        return Ok(reasons);
+    }
+    let mut stands = true;
+    for decision in summary::final_decisions(repo, at, pairs)? {
+        stands &= get(&decision, "outcome")?.py_eq(outcome);
+    }
+    let names_candidate = match get(&pair.before, "filing")? {
+        Value::Object(own) => own
+            .get("subject")
+            .is_some_and(|named| named.py_eq(candidate)),
+        _ => false,
+    };
+    let admitted = pyvalue::is(kind, "candidate")
+        && pyvalue::is(outcome, "problem")
+        && stands
+        && names_candidate
+        && pyvalue::is(get(&pair.after, "settled_by")?, "owner")
+        && !item(&pair.before, "reviews")?.truthy()
+        && item(&pair.before, "target")?.py_eq(target)
+        && under_adopted_v3(repo, &pair.before)?;
+    if !admitted {
+        reasons.push(NOT_ADMITTED.to_string());
+        return Ok(reasons);
+    }
+    let question = summary::ruling(repo, &pair.before)?;
+    let confirmations = confirmations(repo, pairs, position)?;
+    let mut labelled_before = false;
+    for (other, earlier) in pairs.iter().enumerate() {
+        if other == position
+            || confirmations.contains(&other)
+            || !earlier.after.truthy()
+            || !pyvalue::is(item(&earlier.before, "decision_type")?, BAND)
+        {
+            continue;
+        }
+        let same_subject = match get(&earlier.before, "filing")? {
+            Value::Object(named) => named
+                .get("subject")
+                .is_some_and(|named| named.py_eq(subject)),
+            _ => false,
+        };
+        if same_subject
+            || (item(&earlier.before, "target")?.py_eq(target)
+                && earlier.round.py_eq(&pair.round)
+                && summary::ruling(repo, &earlier.before)?.py_eq(&question))
+        {
+            labelled_before = true;
+        }
+    }
+    if !pairs[position].after.truthy() {
+        let decisions = saved_decisions(repo)?;
+        for decision in &decisions {
+            labelled_before |= pyvalue::is(get(decision, "dimension")?, "impact")
+                && get(decision, "subject")?.py_eq(subject)
+                && pyvalue::is(get(decision, "status")?, "approved");
+        }
+        if !admitted_as(repo, candidate, subject, target, &decisions)? {
+            reasons.push(format!(
+                "the current records must show {} admitted as {}: the claim names the family, and its eligibility and the family's are approved by the owner",
+                candidate.py_str(),
+                subject.py_str()
+            ));
+        }
+        let pinned = item(filing, "boundary")?;
+        if !boundary_in_force(&decisions)?.is_some_and(|boundary| boundary.py_eq(pinned)) {
+            reasons.push("`filing.boundary` must be the boundary in force: the one every approved impact decision the owner settled pins".to_string());
+        }
+    }
+    match read_card(repo, before)? {
+        CardRead::Read(Some(reason)) => reasons.push(reason),
+        CardRead::Changed if !pairs[position].after.truthy() => reasons.push(card_changed(subject)),
+        CardRead::Read(None) | CardRead::Changed => {}
+    }
+    if labelled_before {
+        reasons.push(format!(
+            "{} has a label already, or one asked with its admission; agents settle a first label only, and a relabel is the owner's",
+            subject.py_str()
+        ));
+    }
+    Ok(reasons)
+}
+
+/// The reviews of the decided label at `position` that confirm it: the owner confirming a settled label does not
+/// label its subject again. A review counts only in a round whose opening pins the label's round as closed, because
+/// order within a round comes from file names, which the label's author chose. Empty while the label is pending or
+/// once any review in its chain decided otherwise.
+fn confirmations(repo: &Repo, pairs: &[Pair], position: usize) -> Py<Vec<usize>> {
+    if !pairs[position].after.truthy() || v3::changed(repo, position, pairs, None)? {
+        return Ok(Vec::new());
+    }
+    let round = &pairs[position].round;
+    let mut confirming = Vec::new();
+    let mut chain = summary::successors(repo, position, pairs)?;
+    while let Some(review) = chain.pop() {
+        let closed = match opening_rounds(repo, review, pairs) {
+            Ok(closed) => closed,
+            Err(Raised::Value(_)) => Vec::new(),
+            Err(other) => return Err(other),
+        };
+        if closed.iter().any(|known| known.py_eq(round)) && !confirming.contains(&review) {
+            confirming.push(review);
+        }
+        chain.extend(summary::successors(repo, review, pairs)?);
+    }
+    Ok(confirming)
 }
 
 pub const GAP_REASON: &str = "gap or conflict in the rule";
@@ -854,22 +1175,22 @@ const CANDIDATE_FILINGS: [(&str, &str); 6] = [
     ("duplicate", "eligible"),
 ];
 
-/// Why a current adjudication other than an admission cannot stand as filed. An eligibility decision, and any
-/// decision the owner settled, is checked as a candidate filing; agents file no other dimension yet.
-pub fn decision_faults(repo: &Repo, decision: &Value) -> Py<Vec<String>> {
+/// Why a current adjudication other than an admission cannot stand as filed, among every current adjudication in
+/// `decisions`. An eligibility decision, and any decision the owner settled, is checked as a candidate filing; an
+/// agent-settled impact decision as a label; agents file no other dimension.
+pub fn decision_faults(repo: &Repo, decision: &Value, decisions: &[Value]) -> Py<Vec<String>> {
     let dimension = item(decision, "dimension")?;
     if pyvalue::is(dimension, "eligibility") || !pyvalue::is(get(decision, "settled_by")?, "agents")
     {
         return filing_faults(repo, decision, Filed::Candidate);
     }
-    Ok(vec![if pyvalue::is(dimension, "impact") {
-        "policy v3 filing for an impact label (band) is not enforced yet, so an agent-settled impact decision is refused".to_string()
-    } else {
-        format!(
-            "agents settle no {} decision; it stays with the owner",
-            dimension.py_str()
-        )
-    }])
+    if pyvalue::is(dimension, "impact") {
+        return filing_faults(repo, decision, Filed::Band(decisions));
+    }
+    Ok(vec![format!(
+        "agents settle no {} decision; it stays with the owner",
+        dimension.py_str()
+    )])
 }
 
 /// What a current record files from an agent settlement, and so the settlement's decision type and the shape its
@@ -882,6 +1203,8 @@ pub enum Filed<'a> {
     Credit,
     /// A row of an evaluator audit's reconciliation, with the pin of the comparison its conclusion reads.
     Reconciliation(&'a Value),
+    /// A current impact decision, with every current adjudication.
+    Band(&'a [Value]),
 }
 
 impl Filed<'_> {
@@ -890,6 +1213,7 @@ impl Filed<'_> {
             Filed::Candidate => "candidate",
             Filed::Credit => "recovery",
             Filed::Reconciliation(_) => RECONCILIATION,
+            Filed::Band(_) => BAND,
         }
     }
 }
@@ -943,7 +1267,7 @@ pub fn filing_faults(repo: &Repo, decision: &Value, filed: Filed) -> Py<Vec<Stri
     }
     let other_target = match filed {
         Filed::Reconciliation(_) => false,
-        Filed::Candidate | Filed::Credit => {
+        Filed::Candidate | Filed::Credit | Filed::Band(_) => {
             !item(&before, "target")?.py_eq(item(decision, "target")?)
         }
     };
@@ -966,6 +1290,14 @@ pub fn filing_faults(repo: &Repo, decision: &Value, filed: Filed) -> Py<Vec<Stri
         Filed::Reconciliation(comparison) => vec![
             ("comparison", comparison.clone()),
             ("unit", item(decision, "unit")?.clone()),
+        ],
+        Filed::Band(_) => vec![
+            ("revision", item(decision, "revision")?.clone()),
+            ("subject", item(decision, "subject")?.clone()),
+            ("candidate", get(filing, "candidate")?.clone()),
+            ("admission", get(filing, "admission")?.clone()),
+            ("card", get(filing, "card")?.clone()),
+            ("boundary", item(decision, "boundary")?.clone()),
         ],
     };
     let expected = Value::Object(
@@ -1021,6 +1353,9 @@ pub fn filing_faults(repo: &Repo, decision: &Value, filed: Filed) -> Py<Vec<Stri
                 found.push("reconciliation filing differs from the settled finding".into());
             }
         }
+        Filed::Band(decisions) => found.extend(band_filing_faults(
+            repo, decision, &before, &after, filing, decisions,
+        )?),
     }
     let adoption = filed_under(repo, &before)?;
     let cited = match &adoption.cited {
@@ -1109,4 +1444,131 @@ fn filed_under(repo: &Repo, before: &Value) -> Py<Adoption> {
             credit: false,
         }),
     }
+}
+
+/// Why a current impact decision does not file the label its settlement agreed: another outcome or dimension, a card
+/// or boundary other than the ones the settlement read, no confirmed inspection sourced from the settled
+/// before-record, or a subject whose approved admission does not hold the admitting after-record.
+fn band_filing_faults(
+    repo: &Repo,
+    decision: &Value,
+    before: &Value,
+    after: &Value,
+    filing: &Value,
+    decisions: &[Value],
+) -> Py<Vec<String>> {
+    let mut found = Vec::new();
+    let differs = !pyvalue::is(get(decision, "dimension")?, "impact")
+        || !pyvalue::is(get(decision, "status")?, "approved")
+        || !pyvalue::is(get(decision, "authority")?, "human")
+        || !get(decision, "outcome")?.py_eq(get(after, "outcome")?);
+    if differs {
+        found.push("impact filing differs from the settled label".into());
+    }
+    let card = get(filing, "card")?;
+    let evidence = pyvalue::iterate(get(decision, "evidence")?)?;
+    if !card.truthy() || !evidence.iter().any(|pin| pin.py_eq(card)) {
+        found.push("impact filing must pin the card the settlement read".into());
+    }
+    let (_, first) = record::recommender(before)?;
+    let recommender = get(&first, "model")?.py_str();
+    let mut inspectors = Vec::new();
+    for answer in pyvalue::iterate(item(before, "answers")?)? {
+        if item(&answer, "blind")?.truthy() {
+            inspectors.push(get(&answer, "model")?.py_str());
+        }
+    }
+    let mut inspected = false;
+    for check in pyvalue::iterate(get(decision, "independent_checks")?)? {
+        let checker = get(&check, "checker")?.py_str();
+        inspected |= pyvalue::is(get(&check, "result")?, "confirmed")
+            && get(&check, "source")?.py_eq(get(after, "before")?)
+            && inspectors
+                .iter()
+                .any(|model| !model.is_empty() && checker.contains(model.as_str()))
+            && !recommender.is_empty()
+            && !checker.contains(recommender.as_str())
+            && get(&check, "independent_of")?
+                .py_str()
+                .contains(recommender.as_str());
+    }
+    if !inspected {
+        found.push(
+            "impact filing needs a confirmed independent check whose source is the settled before-record, whose `checker` names a blind inspector's model and whose `independent_of` names the recommender's".into(),
+        );
+    }
+    if !boundary_in_force(decisions)?.is_some_and(|boundary| {
+        get(decision, "boundary").is_ok_and(|pinned| boundary.py_eq(pinned))
+    }) {
+        found.push("impact filing must pin the boundary in force: the one every approved impact decision the owner settled pins".into());
+    }
+    let subject = get(decision, "subject")?;
+    if !admitted_as(
+        repo,
+        get(filing, "candidate")?,
+        subject,
+        get(before, "target")?,
+        decisions,
+    )? {
+        found.push(
+            "the current records must show the settled candidate admitted as this subject: the claim names the family, and its eligibility and the family's are approved by the owner".into(),
+        );
+    }
+    match read_card(repo, before)? {
+        CardRead::Changed => found.push(card_changed(subject)),
+        CardRead::Read(Some(reason)) => found.push(reason),
+        CardRead::Read(None) => {}
+    }
+    let mut others = false;
+    for other in decisions {
+        others |= pyvalue::is(get(other, "dimension")?, "impact")
+            && get(other, "subject")?.py_eq(subject)
+            && !get(other, "id")?.py_eq(get(decision, "id")?);
+    }
+    if others {
+        found.push("an agent-filed label must be its subject's only impact decision; a relabel is the owner's".into());
+    }
+    Ok(found)
+}
+
+/// What the card a label's `filing` names shows about the case the parties read.
+enum CardRead {
+    /// The card no longer has the hash the filing pins.
+    Changed,
+    /// The card as pinned, with why it fails: not one `calibration check` accepts, or not stated in the case.
+    Read(Option<String>),
+}
+
+fn card_changed(subject: &Value) -> String {
+    format!(
+        "`filing.card` must pin the card of {} as it is, one that `calibration check` accepts",
+        subject.py_str()
+    )
+}
+
+/// Read the card the band before-record's `filing` names against the case file it pins: the card must be one
+/// `calibration check` accepts, and the case must state each of its fields word for word.
+fn read_card(repo: &Repo, before: &Value) -> Py<CardRead> {
+    let filing = item(before, "filing")?;
+    let subject = item(filing, "subject")?;
+    let target = item(before, "target")?;
+    let pin = item(filing, "card")?;
+    if !record::pinned(repo, pin)? {
+        return Ok(CardRead::Changed);
+    }
+    let card = repo.load(&repo.path(item(pin, "path")?)?)?;
+    if !valid_card(repo, &card, subject, target, false) {
+        return Ok(CardRead::Read(Some(card_changed(subject))));
+    }
+    let case = pyvalue::read_text(&repo.path(item(item(before, "case")?, "path")?)?)?;
+    let mut held = true;
+    for text in card_text(&card)? {
+        held &= case.contains(&text);
+    }
+    Ok(CardRead::Read((!held).then(|| {
+        format!(
+            "the case the parties read must state the filed card of {} word for word: its domain, attribution, consequence, exposure, controls, reversibility, workload, change activity, grouping and limits",
+            subject.py_str()
+        )
+    })))
 }

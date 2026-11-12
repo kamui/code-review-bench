@@ -1785,6 +1785,7 @@ pub fn validate_documents(
     )?;
     let mut families = Dict::default();
     let mut pre_existing = Dict::default();
+    let every: Vec<Value> = decisions.values().cloned().collect();
     for decision in decisions.values() {
         let dimension = item(decision, "dimension")?;
         let admission = is(dimension, "pre-existing-admission");
@@ -1797,7 +1798,7 @@ pub fn validate_documents(
         let faults = if admission {
             Vec::new()
         } else {
-            delegation::decision_faults(&root.repo, decision)?
+            delegation::decision_faults(&root.repo, decision, &every)?
         };
         require(
             faults.is_empty(),
