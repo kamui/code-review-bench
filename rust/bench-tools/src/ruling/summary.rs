@@ -1082,10 +1082,10 @@ fn entry(
             }
         }
         if item(after, "asked")?.truthy() {
-            let routed = delegation::route(
+            let routed = delegation::route_under(
                 repo,
                 before,
-                &repo.join(delegation::POLICY),
+                None,
                 Some(&pairs[..=*position]),
                 Some(&repo.join(&pair.path)),
             )?;

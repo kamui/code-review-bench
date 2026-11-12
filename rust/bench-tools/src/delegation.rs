@@ -8,6 +8,8 @@ use crate::pyvalue::{self, Py, Raised, get, item};
 use crate::ruling::summary::{self, Pair};
 use crate::ruling::{Repo, record};
 
+pub mod v3;
+
 pub const POLICY: &str = "bench/grading/delegation.v2.json";
 const GATE: &str = r#"{"blind_answers": 2, "blind_confidence": "high", "recommender": "same-outcome",
     "recommender_confidence": "medium-or-high", "written": "before-question"}"#;
@@ -179,11 +181,149 @@ pub fn opening_rounds(repo: &Repo, current: usize, pairs: &[Pair]) -> Py<Vec<Val
 /// The level a decision earned and every reason it goes to the owner; an empty list means agents settle it.
 pub struct Routed {
     pub level: u64,
+    /// The policy version that routed it, 0 when its round's policy is refused; version 3 settles on agreement,
+    /// with no level.
+    pub version: u64,
     pub reasons: Vec<String>,
 }
 
-/// `route(before, root, policy_path, pairs, before_path)`.
+/// The `policy` pin of the opening the before-record pins, `None` for a round that runs under policy v2 as it
+/// always has. An opening that cannot be read is left to policy v2, which refuses it.
+fn round_pin(repo: &Repo, before: &Value) -> Option<Value> {
+    let opening = get(before, "round_opening").ok()?;
+    if !record::pinned(repo, opening).ok()? {
+        return None;
+    }
+    let snapshot = repo
+        .load(&repo.path(item(opening, "path").ok()?).ok()?)
+        .ok()?;
+    snapshot.as_object()?.get("policy").cloned()
+}
+
+/// The policy a round opening pins, read for routing.
+enum Governing {
+    V2(PyPath),
+    V3(Box<v3::Policy>),
+    /// Why the pin grants nothing: every decision of the round goes to the owner.
+    Refused(String),
+}
+
+fn governing(repo: &Repo, pin: &Value) -> Py<(Option<PyPath>, Governing)> {
+    if !record::pinned(repo, pin).unwrap_or(false) {
+        return Ok((
+            None,
+            Governing::Refused(
+                "the round opening's `policy` must pin a policy file by path and sha256".into(),
+            ),
+        ));
+    }
+    let named = item(pin, "path")?;
+    let path = repo.path(named)?;
+    let read = if pyvalue::is(named, POLICY) {
+        policy(repo, &path).map(|_| Governing::V2(path.clone()))
+    } else if pyvalue::is(named, v3::POLICY) {
+        v3::policy(repo, &path).and_then(|policy| {
+            Ok(if v3::enforced_terms(repo, &path)? {
+                Governing::V3(Box::new(policy))
+            } else {
+                Governing::Refused(
+                    "the round opening's policy v3 states terms other than those this tool enforces; a changed rule needs a new version".into(),
+                )
+            })
+        })
+    } else {
+        Ok(Governing::Refused(format!(
+            "the round opening's `policy` must pin {POLICY} or {}",
+            v3::POLICY
+        )))
+    };
+    let governing = read.unwrap_or_else(|raised| {
+        Governing::Refused(format!(
+            "the round opening's policy is refused: {}",
+            raised
+                .caught()
+                .map_or_else(|| raised.describe(), str::to_string)
+        ))
+    });
+    Ok((Some(path), governing))
+}
+
+/// `route(before, root, policy_path, pairs, before_path)`, with `policy_path` named by the caller.
 pub fn route(
+    repo: &Repo,
+    before: &Value,
+    policy_path: &PyPath,
+    pairs: Option<&[Pair]>,
+    before_path: Option<&PyPath>,
+) -> Py<Routed> {
+    route_under(repo, before, Some(policy_path), pairs, before_path)
+}
+
+/// Route a before-record under the policy its round opening pins, or policy v2 at `named` (by default
+/// [`POLICY`]) for a round whose opening pins none. A `named` policy that is not the pinned one is a reason to ask,
+/// never an override.
+pub fn route_under(
+    repo: &Repo,
+    before: &Value,
+    named: Option<&PyPath>,
+    pairs: Option<&[Pair]>,
+    before_path: Option<&PyPath>,
+) -> Py<Routed> {
+    let Some(pin) = round_pin(repo, before) else {
+        let default = repo.join(POLICY);
+        return route_v2(repo, before, named.unwrap_or(&default), pairs, before_path);
+    };
+    let (path, governing) = governing(repo, &pin)?;
+    let mut reasons = Vec::new();
+    if let Some(named) = named
+        && path.as_ref().is_none_or(|path| {
+            crate::pyfs::resolve(named.as_bytes()) != crate::pyfs::resolve(path.as_bytes())
+        })
+    {
+        reasons.push(format!(
+            "the policy named for routing, {}, is not the one the round opening pins",
+            crate::pytext::stderr_text(named.as_bytes())
+        ));
+    }
+    let mut routed = match governing {
+        Governing::V2(path) => route_v2(repo, before, &path, pairs, before_path)?,
+        Governing::V3(policy) => route_v3(repo, before, &policy, pairs, before_path)?,
+        Governing::Refused(reason) => {
+            let mut refused = vec![reason];
+            refused.extend(record::reasons(repo, before)?);
+            Routed {
+                level: 0,
+                version: 0,
+                reasons: refused,
+            }
+        }
+    };
+    reasons.append(&mut routed.reasons);
+    routed.reasons = reasons;
+    Ok(routed)
+}
+
+/// The position of the before-record among `pairs`, by `before_path` when given.
+fn position(
+    repo: &Repo,
+    before: &Value,
+    pairs: &[Pair],
+    before_path: Option<&PyPath>,
+) -> Py<Option<usize>> {
+    Ok(match before_path {
+        Some(path) => {
+            let resolved = crate::pyfs::resolve(path.as_bytes());
+            let name =
+                crate::pyfs::relative_to(&resolved, repo.root.as_bytes()).map_err(Raised::Value)?;
+            pairs
+                .iter()
+                .position(|pair| pair.path.as_bytes() == name.as_slice())
+        }
+        None => pairs.iter().position(|pair| pair.before.py_eq(before)),
+    })
+}
+
+fn route_v2(
     repo: &Repo,
     before: &Value,
     policy_path: &PyPath,
@@ -194,7 +334,11 @@ pub fn route(
         let mut reasons =
             vec!["no policy is adopted, so agents settle nothing beyond ADR-0006".to_string()];
         reasons.extend(record::reasons(repo, before)?);
-        return Ok(Routed { level: 0, reasons });
+        return Ok(Routed {
+            level: 0,
+            version: 2,
+            reasons,
+        });
     }
     let mut reasons = Vec::new();
     let kind = item(before, "decision_type")?;
@@ -232,20 +376,13 @@ pub fn route(
             &owned
         }
     };
-    let current = match before_path {
-        Some(path) => {
-            let resolved = crate::pyfs::resolve(path.as_bytes());
-            let name =
-                crate::pyfs::relative_to(&resolved, repo.root.as_bytes()).map_err(Raised::Value)?;
-            pairs
-                .iter()
-                .position(|pair| pair.path.as_bytes() == name.as_slice())
-        }
-        None => pairs.iter().position(|pair| pair.before.py_eq(before)),
-    };
-    let Some(position) = current else {
+    let Some(position) = position(repo, before, pairs, before_path)? else {
         reasons.push("the before-record must belong to a recorded round".into());
-        return Ok(Routed { level: 0, reasons });
+        return Ok(Routed {
+            level: 0,
+            version: 2,
+            reasons,
+        });
     };
     let history = &pairs[..position];
     for pair in history {
@@ -258,7 +395,11 @@ pub fn route(
         Ok(closed) => closed,
         Err(Raised::Value(message)) => {
             reasons.push(message);
-            return Ok(Routed { level: 0, reasons });
+            return Ok(Routed {
+                level: 0,
+                version: 2,
+                reasons,
+            });
         }
         Err(other) => return Err(other),
     };
@@ -295,7 +436,134 @@ pub fn route(
     if level == 0 {
         reasons.push("this decision type has not earned level 1 from earlier closed rounds".into());
     }
-    Ok(Routed { level, reasons })
+    Ok(Routed {
+        level,
+        version: 2,
+        reasons,
+    })
+}
+
+/// ADR-0008: agents settle an open type when the parties give the agreement its gate names, the type met the entry
+/// bar in the rounds closed at opening, and no owner change suspended it earlier in the round.
+fn route_v3(
+    repo: &Repo,
+    before: &Value,
+    policy: &v3::Policy,
+    pairs: Option<&[Pair]>,
+    before_path: Option<&PyPath>,
+) -> Py<Routed> {
+    let routed = |reasons| Routed {
+        level: 0,
+        version: 3,
+        reasons,
+    };
+    if !v3::adopted(repo, policy)? {
+        let mut reasons =
+            vec!["policy v3 is not adopted, so agents settle nothing beyond ADR-0006".to_string()];
+        reasons.extend(record::reasons(repo, before)?);
+        return Ok(routed(reasons));
+    }
+    let mut reasons = Vec::new();
+    let kind = item(before, "decision_type")?;
+    pyvalue::hashable(kind)?;
+    let gate = policy.gate(kind);
+    match gate {
+        None => reasons.push(format!(
+            "{} stays with the owner under policy v3",
+            kind.py_str()
+        )),
+        Some(_) if !v3::ENFORCED.iter().any(|name| pyvalue::is(kind, name)) => {
+            reasons.push(format!(
+                "policy v3 filing for {} is not enforced yet",
+                kind.py_str()
+            ));
+        }
+        Some(_) => {}
+    }
+    if record::same_family(before)? {
+        reasons.push(record::SAME_FAMILY_REASON.into());
+    } else if !summary::eligible(before)? {
+        reasons.push("only contract 2 first answers written before the question qualify".into());
+    }
+    if item(before, "reviews")?.truthy() {
+        reasons.push("a review of a saved ruling always goes to the owner".into());
+    }
+    reasons.extend(v3::answer_reasons(before, policy.gaps_ask)?);
+    if let Some(gate) = gate
+        && !v3::agreement(repo, before, gate)?
+    {
+        reasons.push(format!(
+            "the parties did not give the agreement policy v3 needs: {}",
+            gate.describe()
+        ));
+    }
+    let owned;
+    let pairs = match pairs {
+        Some(pairs) => pairs,
+        None => {
+            owned = summary::records(repo)?;
+            &owned
+        }
+    };
+    let Some(position) = position(repo, before, pairs, before_path)? else {
+        reasons.push("the before-record must belong to a recorded round".into());
+        return Ok(routed(reasons));
+    };
+    let closed = match opening_rounds(repo, position, pairs) {
+        Ok(closed) => closed,
+        Err(Raised::Value(message)) => {
+            reasons.push(message);
+            return Ok(routed(reasons));
+        }
+        Err(other) => return Err(other),
+    };
+    if let Some(gate) = gate {
+        let entry = v3::entry(repo, pairs, kind, gate, policy.gaps_ask, &closed)?;
+        if !policy
+            .bar
+            .met(entry.passed, entry.pull_requests, entry.stands)
+        {
+            let percent = (entry.stands * 100).checked_div(entry.passed).unwrap_or(0);
+            reasons.push(format!(
+                "{} has not met policy v3's entry bar in the rounds closed at opening: {} decisions passed the gate (needs {}), on {} pull requests (needs {}), and {percent}% of them stand (needs {}%)",
+                kind.py_str(),
+                entry.passed,
+                policy.bar.decisions,
+                entry.pull_requests,
+                policy.bar.pull_requests,
+                policy.bar.agreement_percent
+            ));
+        }
+    }
+    let round = &pairs[position].round;
+    let seen = if pairs[position].after.truthy() {
+        &pairs[..position]
+    } else {
+        pairs
+    };
+    'settlements: for (at, pair) in seen.iter().enumerate() {
+        let settled = pair.after.truthy()
+            && item(&pair.before, "decision_type")?.py_eq(kind)
+            && pyvalue::is(get(&pair.after, "settled_by")?, "agents");
+        if !settled {
+            continue;
+        }
+        let mut chain = summary::successors(repo, at, seen)?;
+        while let Some(review) = chain.pop() {
+            if !seen[review].round.py_eq(round) {
+                continue;
+            }
+            if !summary::agrees(&pair.after, std::slice::from_ref(&seen[review].after))? {
+                reasons.push(
+                    "a review in this round changed an agent settlement of this decision type, so policy v3 suspends it for the rest of the round"
+                        .into(),
+                );
+                break 'settlements;
+            }
+            chain.extend(summary::successors(repo, review, seen)?);
+        }
+    }
+    Ok(routed(reasons))
 }
 
 pub const GAP_REASON: &str = "gap or conflict in the rule";
@@ -341,8 +609,8 @@ pub fn answer_reasons(before: &Value) -> Py<Vec<String>> {
     Ok(reasons)
 }
 
-/// Why an after-record settled by agents could not be: empty when the owner settled it, or when policy v2
-/// routes it to agents and the settlement repeats the agreed answer.
+/// Why an after-record settled by agents could not be: empty when the owner settled it, or when the policy its
+/// round runs under routes it to agents and the settlement repeats the agreed answer.
 pub fn settlement_faults(
     repo: &Repo,
     before: &Value,
@@ -353,8 +621,9 @@ pub fn settlement_faults(
     if !pyvalue::is(get(after, "settled_by")?, "agents") {
         return Ok(Vec::new());
     }
+    let round = round_pin(repo, before);
     let policy_path = repo.join(POLICY);
-    if policy(repo, &policy_path)?.is_none() {
+    if round.is_none() && policy(repo, &policy_path)?.is_none() {
         return Ok(vec!["`settled_by` is `agents`, and the decision is the user's: no policy is adopted, so agents settle nothing beyond ADR-0006".into()]);
     }
     let two = Value::Int("2".into());
@@ -364,10 +633,24 @@ pub fn settlement_faults(
         ]);
     }
     let pin = get(after, "policy")?;
-    if !record::pinned(repo, pin)? || !pyvalue::is(item(pin, "path")?, POLICY) {
-        return Ok(vec![
-            "agent settlement must pin the policy v2 in force".into(),
-        ]);
+    match &round {
+        None => {
+            if !record::pinned(repo, pin)? || !pyvalue::is(item(pin, "path")?, POLICY) {
+                return Ok(vec![
+                    "agent settlement must pin the policy v2 in force".into(),
+                ]);
+            }
+        }
+        Some(round) => {
+            let same = record::pinned(repo, pin)?
+                && get(pin, "path")?.py_eq(get(round, "path")?)
+                && get(pin, "sha256")?.py_eq(get(round, "sha256")?);
+            if !same {
+                return Ok(vec![
+                    "agent settlement must pin the policy its round opening pins".into(),
+                ]);
+            }
+        }
     }
     if let Some(path) = before_path {
         let pinned =
@@ -378,7 +661,10 @@ pub fn settlement_faults(
             ]);
         }
     }
-    let routed = route(repo, before, &policy_path, pairs, before_path)?;
+    let routed = match round {
+        None => route(repo, before, &policy_path, pairs, before_path)?,
+        Some(_) => route_under(repo, before, None, pairs, before_path)?,
+    };
     let mut found: Vec<String> = routed
         .reasons
         .iter()
@@ -418,6 +704,10 @@ pub fn filing_faults(repo: &Repo, decision: &Value, decision_type: &str) -> Py<V
         let cites = settlement.truthy()
             || match &adopted {
                 Some(adopted) => get(decision, "receipt")?.py_eq(item(adopted, "receipt")?),
+                None => false,
+            }
+            || match v3_receipt(repo) {
+                Some(receipt) => get(decision, "receipt")?.py_eq(&receipt),
                 None => false,
             };
         return Ok(if cites {
@@ -507,22 +797,86 @@ pub fn filing_faults(repo: &Repo, decision: &Value, decision_type: &str) -> Py<V
             }
         }
     }
-    let adopted = policy(repo, &repo.join(POLICY))?;
-    let cited = match &adopted {
-        Some(adopted) => {
-            item(decision, "receipt")?.py_eq(item(adopted, "receipt")?)
-                && item(decision, "receipt_scope")?.py_eq(item(adopted, "adoption_scope")?)
+    let adoption = filed_under(repo, &before)?;
+    let cited = match &adoption.cited {
+        Some((receipt, scope)) => {
+            item(decision, "receipt")?.py_eq(receipt)
+                && item(decision, "receipt_scope")?.py_eq(scope)
         }
         None => false,
     };
     if !cited {
         found.push("agent settlement must cite the owner's saved policy adoption".into());
     }
+    if !adoption.credit && decision_type != "candidate" {
+        found.push(format!(
+            "credit stays with the owner under {}; agents settle no credit decision",
+            adoption.name
+        ));
+    }
     let reason = item(decision, "reason")?;
-    if !pyvalue::contains(reason, &pyvalue::text("policy v2"))?
+    if !pyvalue::contains(reason, &pyvalue::text(adoption.name))?
         || !pyvalue::contains(reason, &pyvalue::text("agents"))?
     {
-        found.push("reason must say agents settled under policy v2".into());
+        found.push(format!(
+            "reason must say agents settled under {}",
+            adoption.name
+        ));
     }
     Ok(found)
+}
+
+/// The receipt of the policy v3 file at [`v3::POLICY`] when the owner adopted it; a file that cannot be read as
+/// the enforced policy adopts nothing.
+fn v3_receipt(repo: &Repo) -> Option<Value> {
+    let path = repo.join(v3::POLICY);
+    if !pyvalue::is_file(&path) || !v3::enforced_terms(repo, &path).ok()? {
+        return None;
+    }
+    let policy = v3::policy(repo, &path).ok()?;
+    v3::adopted(repo, &policy)
+        .ok()?
+        .then(|| policy.receipt.clone())
+}
+
+/// The adoption an agent-settled filing cites: the policy its before-record's round runs under.
+struct Adoption {
+    name: &'static str,
+    /// The receipt and `adoption_scope`, `None` when that policy is not adopted.
+    cited: Option<(Value, Value)>,
+    /// Whether agents may settle credit under it.
+    credit: bool,
+}
+
+fn filed_under(repo: &Repo, before: &Value) -> Py<Adoption> {
+    let v2 = |adopted: Option<Value>| -> Py<Adoption> {
+        Ok(Adoption {
+            name: "policy v2",
+            cited: match adopted {
+                Some(adopted) => Some((
+                    item(&adopted, "receipt")?.clone(),
+                    item(&adopted, "adoption_scope")?.clone(),
+                )),
+                None => None,
+            },
+            credit: true,
+        })
+    };
+    let Some(pin) = round_pin(repo, before) else {
+        return v2(policy(repo, &repo.join(POLICY))?);
+    };
+    match governing(repo, &pin)?.1 {
+        Governing::V2(path) => v2(policy(repo, &path)?),
+        Governing::V3(policy) => Ok(Adoption {
+            name: "policy v3",
+            cited: v3::adopted(repo, &policy)?
+                .then(|| (policy.receipt.clone(), policy.adoption_scope.clone())),
+            credit: false,
+        }),
+        Governing::Refused(_) => Ok(Adoption {
+            name: "policy v3",
+            cited: None,
+            credit: false,
+        }),
+    }
 }

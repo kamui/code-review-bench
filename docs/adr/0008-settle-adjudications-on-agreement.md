@@ -60,7 +60,7 @@ The replay does not apply the five audit calls. All 47 reconciliations come from
 
 ## Tradeoffs
 
-**Keeping v2's gap and conflict term.** With it, the gates pass 65 decisions and 63 stand; the admission and candidate types pass 8 and 10 and do not meet the entry bar. The 35 agreed answers that the term holds all stand. Restoring `gap` and `conflict` to `always_ask` in the policy file keeps the term. Shown both replays on 2026-11-11, with dropping the term and listing each stated gap in the digest as the recommendation, the owner answered: "I agree with your recommendation." That settles this term of the draft. It is not the adoption.
+**Keeping v2's gap and conflict term.** With it, the gates pass 65 decisions and 63 stand; the admission and candidate types pass 8 and 10 and do not meet the entry bar. The 35 agreed answers that the term holds all stand. Restoring `gap` and `conflict` to `always_ask` in the policy file, and in the terms built into the tool, keeps the term. Shown both replays on 2026-11-11, with dropping the term and listing each stated gap in the digest as the recommendation, the owner answered: "I agree with your recommendation." That settles this term of the draft. It is not the adoption.
 
 **Agreed admissions.** An agreed `admitted` adds a pre-existing problem to the current records without an owner ruling; 21 of the 23 passing admissions are `admitted`. Pre-existing problems are reported apart from detection. A new problem on the answer key still needs the owner.
 
@@ -78,7 +78,7 @@ The replay does not apply the five audit calls. All 47 reconciliations come from
 ## What adoption needs
 
 1. The owner's saved receipt naming the adopted commit, then `status: "adopted"`, the receipt pin and its scope in the policy file.
-2. Enforcement: `route` and the settlement check under v3, filing for band, admission and reconciliation settlements, the entry check at round opening, and the digest lines for stated gaps and conflicts.
+2. Enforcement. Routing by the policy a round opening pins, the entry check at opening, suspension, the settlement check and candidate filing are built; see [Round opening and policy v3](../adjudication-record.md#round-opening-and-policy-v3). Still to build: filing for label, admission and reconciliation settlements, a routing-time rule for the five audit calls, and the digest.
 3. A restated closing test for issue #59.
 
 On adoption this replaces ADR-0007's gate and levels, and its reservation of bands. [Pre-existing problems](../pre-existing-problems.md) gives its decision types no delegation; adoption would open admission only. [ADR-0006](0006-settle-eligibility-by-delegation-on-heavy-evidence.md) keeps its separate route.
