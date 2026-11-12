@@ -1,0 +1,6 @@
+- Only one case (u28). No stray files seen beyond rule.md, earlier-rulings.md, cases/u28.md.
+- Hard part: the sentence is a generic "rejects inputs parseBody accepts" within a drift/duplication finding, with no named input like the space before ';'.
+- Rule says not to add conditions the comment lacks; the comment's "unusual headers" is vague, so says_what rests on "validator rejects what parseBody accepts" being a result one step away.
+- The sentence lumps in the multipart pattern (a different known problem) and jsonRegex; I judged only the urlencoded part, as the case directs.
+- The cause test (naming the fault) is satisfied by "require ;\s*name=value syntax" being given as the reason for rejection, which is the rigid urlencodedRegex.
+- Earlier rulings give no exact precedent (the Hono GT-p3 ruling is a different problem).

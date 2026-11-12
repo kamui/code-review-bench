@@ -1,0 +1,53 @@
+--- a/src/requests/adapters.py	2024-05-15 09:48:24.000000000 +0000
++++ b/src/requests/adapters.py	2026-11-07 08:57:21.588244112 +0000
+@@ -28,6 +28,11 @@
+ from urllib3.util.retry import Retry
+ from urllib3.util.ssl_ import create_urllib3_context
+ 
++try:
++    from ssl import SSLError as _StdlibSSLError
++except ImportError:
++    _StdlibSSLError = ()
++
+ from .auth import _basic_auth_str
+ from .compat import basestring, urlparse
+ from .cookies import extract_cookies_to_jar
+@@ -72,10 +77,20 @@
+ DEFAULT_RETRIES = 0
+ DEFAULT_POOL_TIMEOUT = None
+ 
+-_preloaded_ssl_context = create_urllib3_context()
+-_preloaded_ssl_context.load_verify_locations(
+-    extract_zipped_paths(DEFAULT_CA_BUNDLE_PATH)
+-)
++_preloaded_ssl_context = None
++
++
++def _get_preloaded_ssl_context():
++    global _preloaded_ssl_context
++    if _preloaded_ssl_context is None:
++        cert_loc = extract_zipped_paths(DEFAULT_CA_BUNDLE_PATH)
++        context = create_urllib3_context()
++        try:
++            context.load_verify_locations(cert_loc)
++        except _StdlibSSLError:
++            return None
++        _preloaded_ssl_context = context
++    return _preloaded_ssl_context
+ 
+ 
+ def _urllib3_request_context(
+@@ -92,7 +107,12 @@
+     if verify is False:
+         cert_reqs = "CERT_NONE"
+     elif verify is True:
+-        pool_kwargs["ssl_context"] = _preloaded_ssl_context
++        if scheme == "https":
++            context = _get_preloaded_ssl_context()
++            if context is not None:
++                pool_kwargs["ssl_context"] = context
++            else:
++                pool_kwargs["ca_certs"] = extract_zipped_paths(DEFAULT_CA_BUNDLE_PATH)
+     elif isinstance(verify, str):
+         if not os.path.isdir(verify):
+             pool_kwargs["ca_certs"] = verify
