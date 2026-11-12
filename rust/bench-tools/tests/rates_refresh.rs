@@ -2,9 +2,14 @@ use bench_tools::pyjson::{self, Duplicates, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 const OPENAI: &str = include_str!("fixtures/rates/openai-pricing.md");
 const MODEL: &str = "gpt-6.1-sol";
+
+/// Numbers this process's fixtures. The clock cannot name them: tests start together, and where it ticks in
+/// microseconds two of them get one directory.
+static NEXT: AtomicUsize = AtomicUsize::new(0);
 
 /// A root holding the rates schema, a catalog with one row per model and a saved OpenAI pricing page.
 struct Fixture {
@@ -31,11 +36,9 @@ impl Fixture {
             .join(format!(
                 "r-{}-{}",
                 std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos()
+                NEXT.fetch_add(1, Ordering::Relaxed)
             ));
+        let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("bench/schema")).unwrap();
         fs::copy(
             repository.join("bench/schema/rates.schema.json"),
