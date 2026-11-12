@@ -313,7 +313,15 @@ The last reason applies to `band`, `pre-existing-admission` and `reconciliation`
 - `ruling check` and `ruling summary` accept an agent-settled after-record in a v3 round only when it pins the round's policy, `route` gives no reason at its place in history, and it repeats the agreed answer with `asked: 0` and `ground: null`.
 - A current candidate decision filed from it cites the v3 adoption receipt and its `adoption_scope`, and its reason names policy v3 and agents. A credit filing that pins a v3 settlement is refused, and so is an owner's decision that cites the v3 adoption receipt.
 
-These parts of ADR-0008 are not enforced yet: filing for the other three types, the pin that shows a label was asked after admission, a routing-time rule for the five audit calls, and the digest (the lines for stated gaps and conflicts, the one-in-five reading, and the full reading after a model is replaced).
+For a round under an adopted policy v3, `ruling summary` adds the digest the owner reads. Each decision type with agent settlements in the round gets:
+
+- Every settlement, one line each, with `[read]` on those the owner reads.
+- The reading for the round. The owner reads every settlement when this is the first v3 round with an agent settlement of the type, when a counted record of the type in the round names a party model that differs from the latest earlier counted record of the type, when the round's first agent settlement of the type differs from the latest agent settlement of the type in an earlier round, or when a review in the round changed an agent settlement of the type, even when a later review restored its outcome. Otherwise the owner reads one in five, ordered by before-record hash and starting with the first. The line gives the reason.
+- Each gap or conflict a party stated on a settled decision, with the party and its sentence.
+
+`--json` holds the same in `reading`, `stated_gaps` and each digest entry's `read`. A round under policy v2 prints none of this.
+
+These parts of ADR-0008 are not enforced yet: filing for the other three types, the pin that shows a label was asked after admission, and a routing-time rule for the five audit calls.
 
 ## Filing a policy v2 settlement
 

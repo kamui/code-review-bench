@@ -248,6 +248,18 @@ fn governing(repo: &Repo, pin: &Value) -> Py<(Option<PyPath>, Governing)> {
     Ok((Some(path), governing))
 }
 
+/// Whether the before-record's round runs under an adopted policy v3: the same reading of the opening's pin that
+/// routing uses. A round whose pin is refused runs under no policy.
+pub fn under_adopted_v3(repo: &Repo, before: &Value) -> Py<bool> {
+    let Some(pin) = round_pin(repo, before) else {
+        return Ok(false);
+    };
+    match governing(repo, &pin)?.1 {
+        Governing::V3(policy) => v3::adopted(repo, &policy),
+        Governing::V2(_) | Governing::Refused(_) => Ok(false),
+    }
+}
+
 /// `route(before, root, policy_path, pairs, before_path)`, with `policy_path` named by the caller.
 pub fn route(
     repo: &Repo,
@@ -541,26 +553,16 @@ fn route_v3(
     } else {
         pairs
     };
-    'settlements: for (at, pair) in seen.iter().enumerate() {
+    for (at, pair) in seen.iter().enumerate() {
         let settled = pair.after.truthy()
             && item(&pair.before, "decision_type")?.py_eq(kind)
             && pyvalue::is(get(&pair.after, "settled_by")?, "agents");
-        if !settled {
-            continue;
-        }
-        let mut chain = summary::successors(repo, at, seen)?;
-        while let Some(review) = chain.pop() {
-            if !seen[review].round.py_eq(round) {
-                continue;
-            }
-            if !summary::agrees(&pair.after, std::slice::from_ref(&seen[review].after))? {
-                reasons.push(
-                    "a review in this round changed an agent settlement of this decision type, so policy v3 suspends it for the rest of the round"
-                        .into(),
-                );
-                break 'settlements;
-            }
-            chain.extend(summary::successors(repo, review, seen)?);
+        if settled && v3::changed(repo, at, seen, Some(round))? {
+            reasons.push(
+                "a review in this round changed an agent settlement of this decision type, so policy v3 suspends it for the rest of the round"
+                    .into(),
+            );
+            break;
         }
     }
     Ok(routed(reasons))

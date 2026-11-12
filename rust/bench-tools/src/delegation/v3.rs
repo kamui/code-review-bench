@@ -365,10 +365,14 @@ fn settled_by_agents(pair: &Pair) -> Py<bool> {
     Ok(pyvalue::is(get(&pair.after, "settled_by")?, "agents"))
 }
 
-/// Whether any review in the chain descending from the settlement at `at` decided other than it.
-fn changed(repo: &Repo, at: usize, pairs: &[Pair]) -> Py<bool> {
+/// Whether any review in the chain descending from the settlement at `at` decided other than it. With `round`, the
+/// walk keeps to the reviews saved in that round.
+pub fn changed(repo: &Repo, at: usize, pairs: &[Pair], round: Option<&Value>) -> Py<bool> {
     let mut chain = summary::successors(repo, at, pairs)?;
     while let Some(review) = chain.pop() {
+        if round.is_some_and(|round| !pairs[review].round.py_eq(round)) {
+            continue;
+        }
         if !summary::agrees(&pairs[at].after, std::slice::from_ref(&pairs[review].after))? {
             return Ok(true);
         }
@@ -410,8 +414,8 @@ pub fn entry(
             stands: standing, ..
         } = count(repo, position, &closed_pairs, gate, gaps_ask)?
         {
-            let standing =
-                standing && !(settled_by_agents(pair)? && changed(repo, position, &closed_pairs)?);
+            let standing = standing
+                && !(settled_by_agents(pair)? && changed(repo, position, &closed_pairs, None)?);
             passed += 1;
             stands += u64::from(standing);
             let target = item(&pair.before, "target")?;
