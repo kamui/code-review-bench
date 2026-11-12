@@ -857,6 +857,8 @@ fn a_policy_named_for_routing_that_the_opening_does_not_pin_asks() {
         [format!(
             "the policy named for routing, {}, is not the one the round opening pins",
             root.path()
+                .canonicalize()
+                .unwrap()
                 .join("bench/grading/delegation.v2.json")
                 .display()
         )]
