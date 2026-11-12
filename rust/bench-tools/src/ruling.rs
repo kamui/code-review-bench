@@ -4,6 +4,7 @@
 
 pub mod dossier;
 pub mod record;
+pub mod replay;
 pub mod summary;
 
 use crate::pyfs;

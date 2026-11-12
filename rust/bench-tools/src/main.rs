@@ -812,6 +812,16 @@ enum RulingCommand {
         #[arg(long, default_value = ".", allow_negative_numbers = true)]
         root: OsString,
     },
+    /// Replay a version 3 delegation policy's gates over the saved decisions; settles nothing.
+    #[command(infer_long_args = true)]
+    Replay {
+        #[arg(long, default_value = ruling::replay::POLICY, allow_negative_numbers = true)]
+        policy: OsString,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value = ".", allow_negative_numbers = true)]
+        root: OsString,
+    },
     /// Write a new sheet of earlier owner rulings of one decision type.
     #[command(infer_long_args = true)]
     Precedents {
@@ -4875,6 +4885,33 @@ fn run_ruling_summary(
     }
 }
 
+fn run_ruling_replay(policy: &OsStr, json: bool, root: &OsStr) -> Result<ExitCode, ExitCode> {
+    let repo = ruling::Repo::new(pytext::os_bytes(root));
+    let outcome = (|| -> pyvalue::Py<String> {
+        let source = pytext::stderr_text(pytext::os_bytes(policy));
+        let policy = ruling::replay::policy(&repo, &repo.root.join(pytext::os_bytes(policy)))?;
+        let pairs = ruling::summary::records(&repo)?;
+        let replay = ruling::replay::replay(&repo, &pairs, policy, &source)?;
+        if json {
+            let options = pyjson::Dumps {
+                ensure_ascii: false,
+                indent: Some(2),
+                ..pyjson::Dumps::default()
+            };
+            Ok(format!("{}\n", pyjson::dumps(&replay.to_value(), &options)))
+        } else {
+            Ok(format!("{}\n", replay.render()))
+        }
+    })();
+    match outcome {
+        Ok(output) => {
+            write_stdout(output.as_bytes())?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(raised) => Err(ruling_failed(&raised)),
+    }
+}
+
 fn run_ruling_precedents(
     kind: &str,
     exclude: &OsStr,
@@ -4946,6 +4983,7 @@ fn run_ruling(command: RulingCommand) -> Result<ExitCode, ExitCode> {
         RulingCommand::Summary { round, json, root } => {
             run_ruling_summary(round.as_deref(), json, &root)
         }
+        RulingCommand::Replay { policy, json, root } => run_ruling_replay(&policy, json, &root),
         RulingCommand::Precedents {
             kind,
             exclude,

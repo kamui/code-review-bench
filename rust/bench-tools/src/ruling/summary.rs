@@ -442,7 +442,7 @@ pub fn ruling(repo: &Repo, before: &Value) -> Py<Value> {
 }
 
 /// The later records that review this pair's ruling, by position.
-fn successors(repo: &Repo, at: usize, pairs: &[Pair]) -> Py<Vec<usize>> {
+pub fn successors(repo: &Repo, at: usize, pairs: &[Pair]) -> Py<Vec<usize>> {
     let pair = &pairs[at];
     let name = ruling(repo, &pair.before)?;
     let mut found = Vec::new();
@@ -616,6 +616,23 @@ pub fn consensus(repo: &Repo, before: &Value) -> Py<bool> {
     Ok(outcome(&blind[0])?.eq(&outcome(&blind[1])?)
         && outcome(&first)?.eq(&outcome(&blind[0])?)
         && pyvalue::one_of(item(&first, "confidence")?, &["medium", "high"]))
+}
+
+/// At least `blind` blind answers, every one independent and with the recommender's outcome, whatever their
+/// confidence.
+pub fn unanimous(repo: &Repo, before: &Value, blind: usize) -> Py<bool> {
+    let answers = blind_answers(&pyvalue::iterate(item(before, "answers")?)?)?;
+    let (_, first) = record::recommender(before)?;
+    if answers.len() < blind {
+        return Ok(false);
+    }
+    let agreed = outcome(&first)?;
+    for answer in &answers {
+        if !independent(repo, answer, before)? || !outcome(answer)?.eq(&agreed) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// A contract 2 record whose first answers were all written before the question, and whose blind answers do not

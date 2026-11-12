@@ -261,6 +261,30 @@ Only the rounds pinned at opening can raise that round's level. A trust miss or 
 
 Only explicit owner decisions count toward trust. An agent settlement and silence after a digest add no match. A fresh owner confirmation can count through its own record. The complete credit decision includes both `says_what` and `identifies_cause`; disagreement or cannot-tell on either goes to the owner, and a changed fact is a miss even if the outcome word stays the same.
 
+## Replay a proposed policy
+
+[ADR-0008](adr/0008-settle-adjudications-on-agreement.md) proposes policy v3, which settles on agreement instead of an earned streak. It is not adopted, and policy v2 above stays in force. To see what its gates would have passed among the saved decisions, run:
+
+```sh
+bench/tools/bench-tools ruling replay [--policy bench/grading/delegation.v3.json] [--json]
+```
+
+The command reads a version 3 policy file, proposed or adopted, and every decided record under `docs/research/`. For each decision type it prints:
+
+- The gate, or `owner` for a type the policy keeps with the owner.
+- The decisions, and the labels that were never needed because the decision that stands is `not-applicable`.
+- The decisions on which the parties agreed as the gate requires, and those that also passed the gate.
+- How many of the passing answers are the decision that stands, counting a later review as the summary does, and on how many pull requests.
+- Whether the type meets the policy's entry bar.
+
+It then lists why an agreed answer would still go to the owner, the passing answers by outcome, and each decision that differs from its agreed answer. An agent settlement that no owner record reviews counts on neither side.
+
+The command applies each type's gate and `always_ask`. It does not apply the five audit calls that go to the owner in each audit round, the owner's reading of the digest, or suspension.
+
+The command refuses a policy it would not apply as written: another version, a gate field it does not read, a blind-answer count that differs from the records', or an `always_ask` other than policy v2's list with or without `gap` and `conflict`. To compare a variant, copy the policy file, edit the copy and pass it with `--policy`.
+
+A replay settles nothing and grants no authority. The owner made the replayed decisions with the parties' picks visible, so its agreement is an upper bound.
+
 ## Filing a policy v2 settlement
 
 Keep the existing candidate and credit formats. Add `settled_by: "agents"` and `settlement`, a path/SHA-256 pin to the after-record. The after-record pins the policy in force and the before-record, has `asked: 0`, `ground: null`, and records the agreed answer without alteration. Its policy adoption receipt is the current decision's `receipt`; `receipt_scope` is the exact `adoption_scope`. The reason says agents settled under policy v2. Existing owner and ADR-0006 records need no new fields.

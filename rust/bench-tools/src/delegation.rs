@@ -31,6 +31,11 @@ fn literal(text: &str) -> Value {
     pyvalue::loads(text).unwrap_or(Value::Null)
 }
 
+/// The `always_ask` list that [`answer_reasons`] and the saved-ruling check apply.
+pub fn always_ask() -> Value {
+    literal(ALWAYS_ASK)
+}
+
 fn types() -> Value {
     Value::Object(
         TYPES
@@ -212,43 +217,7 @@ pub fn route(
     if item(before, "reviews")?.truthy() {
         reasons.push("a review of a saved ruling always goes to the owner".into());
     }
-    for answer in pyvalue::iterate(item(before, "answers")?)? {
-        let outcome = item(&answer, "outcome")?;
-        let owner_outcomes =
-            [record::COULD_NOT_TELL.as_slice(), &["relied-on", "problem"]].concat();
-        if pyvalue::one_of(outcome, &owner_outcomes) {
-            reasons.push(format!(
-                "{}: {} stays with the owner",
-                item(&answer, "by")?.py_str(),
-                outcome.py_str()
-            ));
-        }
-        if item(&answer, "rule_gap")?.truthy() || item(&answer, "conflict")?.truthy() {
-            reasons.push(format!(
-                "{}: gap or conflict in the rule",
-                item(&answer, "by")?.py_str()
-            ));
-        }
-        let facts = get(&answer, "facts")?;
-        let could_not_tell = match facts {
-            Value::Object(facts) => facts
-                .iter()
-                .any(|(_, value)| pyvalue::is(value, "cannot-tell")),
-            other if !other.truthy() => false,
-            other => {
-                return Err(Raised::Attribute(format!(
-                    "'{}' object has no attribute 'values'",
-                    other.type_name()
-                )));
-            }
-        };
-        if could_not_tell {
-            reasons.push(format!(
-                "{}: could not tell a credit fact",
-                item(&answer, "by")?.py_str()
-            ));
-        }
-    }
+    reasons.extend(answer_reasons(before)?);
     if !summary::consensus(repo, before)? {
         reasons.push(
             "two blind high-confidence answers and the medium-or-high recommender must agree"
@@ -327,6 +296,49 @@ pub fn route(
         reasons.push("this decision type has not earned level 1 from earlier closed rounds".into());
     }
     Ok(Routed { level, reasons })
+}
+
+pub const GAP_REASON: &str = "gap or conflict in the rule";
+
+/// Why the first answers alone keep a decision with the owner under `always_ask`: an outcome reserved to the
+/// owner, a gap or conflict in the rule, or a credit fact nobody could tell.
+pub fn answer_reasons(before: &Value) -> Py<Vec<String>> {
+    let mut reasons = Vec::new();
+    for answer in pyvalue::iterate(item(before, "answers")?)? {
+        let outcome = item(&answer, "outcome")?;
+        let owner_outcomes =
+            [record::COULD_NOT_TELL.as_slice(), &["relied-on", "problem"]].concat();
+        if pyvalue::one_of(outcome, &owner_outcomes) {
+            reasons.push(format!(
+                "{}: {} stays with the owner",
+                item(&answer, "by")?.py_str(),
+                outcome.py_str()
+            ));
+        }
+        if item(&answer, "rule_gap")?.truthy() || item(&answer, "conflict")?.truthy() {
+            reasons.push(format!("{}: {GAP_REASON}", item(&answer, "by")?.py_str()));
+        }
+        let facts = get(&answer, "facts")?;
+        let could_not_tell = match facts {
+            Value::Object(facts) => facts
+                .iter()
+                .any(|(_, value)| pyvalue::is(value, "cannot-tell")),
+            other if !other.truthy() => false,
+            other => {
+                return Err(Raised::Attribute(format!(
+                    "'{}' object has no attribute 'values'",
+                    other.type_name()
+                )));
+            }
+        };
+        if could_not_tell {
+            reasons.push(format!(
+                "{}: could not tell a credit fact",
+                item(&answer, "by")?.py_str()
+            ));
+        }
+    }
+    Ok(reasons)
 }
 
 /// Why an after-record settled by agents could not be: empty when the owner settled it, or when policy v2
