@@ -4854,6 +4854,18 @@ fn run_ruling_route(
             };
             return Ok((settle.into_bytes(), 0));
         }
+        if !routed.withheld.is_empty() {
+            let listed: Vec<String> = routed
+                .withheld
+                .iter()
+                .map(|reason| format!("- {reason}"))
+                .collect();
+            let question = ruling::record::withheld_question(&repo, &record)?;
+            return Ok((
+                format!("ASK\n{}\n\n{question}\n", listed.join("\n")).into_bytes(),
+                0,
+            ));
+        }
         let listed: Vec<String> = routed
             .reasons
             .iter()

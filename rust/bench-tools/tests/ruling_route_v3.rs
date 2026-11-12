@@ -19,6 +19,7 @@ const V3: &str = "bench/grading/delegation.v3.json";
 const RECEIPT: &str = "bench/grading/rulings/delegation.v3.md";
 const SCOPE: &str = "Adopt policy v3 as written";
 const DOSSIER: &str = "docs/research/shared/dossier";
+const CANDIDATE_FILING: &str = r#"{"revision": {"head": "h1"}, "subject": "S1"}"#;
 const ALWAYS_ASK: &str =
     r#"["cannot-tell", "gap", "conflict", "relied-on", "problem", "reviews-saved-ruling"]"#;
 const SETTLE: &str = "SETTLE under policy v3, on agreement\n";
@@ -194,6 +195,9 @@ fn convert(object: &mut Object, kind: &str, outcome: &str) {
     if object.get("decision_type").is_some() {
         object.insert("decision_type".into(), text(kind));
         object.insert("dossier".into(), text(DOSSIER));
+        if kind == "candidate" {
+            object.insert("filing".into(), json(CANDIDATE_FILING));
+        }
         for answer in answers(object) {
             answer.insert("outcome".into(), text(outcome));
             *answer = without(answer, "facts");
@@ -962,7 +966,11 @@ fn a_candidate_settled_under_policy_v3_files_with_its_receipt() {
         ))
     };
     let faults = |decision: &Value, kind: &str| {
-        delegation::filing_faults(&root.repo(), decision, kind).unwrap()
+        let filed = match kind {
+            "candidate" => delegation::Filed::Candidate,
+            _ => delegation::Filed::Credit,
+        };
+        delegation::filing_faults(&root.repo(), decision, filed).unwrap()
     };
     let v3 = decision(RECEIPT, SCOPE, "Settled by agents under policy v3.");
     assert_eq!(faults(&v3, "candidate"), Vec::<String>::new());
@@ -995,4 +1003,23 @@ fn a_candidate_settled_under_policy_v3_files_with_its_receipt() {
         faults(&owner, "candidate"),
         ["a settlement pin or policy adoption receipt requires settled_by agents"]
     );
+}
+
+#[test]
+fn a_candidate_without_its_filing_shape_asks() {
+    let shape = "the before-record's `filing` must bind the candidate it files: exactly `revision` and `subject`, copied from the current record";
+    for filing in [
+        "null",
+        r#"{"revision": {"head": "h1"}}"#,
+        r#"{"revision": {}, "subject": "S1"}"#,
+        r#"{"revision": {"head": "h1"}, "subject": " "}"#,
+        r#"{"revision": {"head": "h1"}, "subject": "S1", "review": "r1"}"#,
+    ] {
+        let root = candidates("filing-shape");
+        root.edit(BEFORE, |object| {
+            object.insert("filing".into(), json(filing));
+        });
+        open(&root);
+        assert_eq!(reasons(&root.route(BEFORE, &[])), [shape], "{filing}");
+    }
 }

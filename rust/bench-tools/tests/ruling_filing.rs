@@ -123,7 +123,11 @@ fn pin(root: &Path, path: &str) -> String {
 
 fn rust(root: &Path, decision: &Value, kind: &str) -> String {
     let repo = Repo::new(root.as_os_str().as_encoded_bytes());
-    match delegation::filing_faults(&repo, decision, kind) {
+    let filed = match kind {
+        "candidate" => delegation::Filed::Candidate,
+        _ => delegation::Filed::Credit,
+    };
+    match delegation::filing_faults(&repo, decision, filed) {
         Ok(found) => dumps(&Value::Array(found.into_iter().map(Value::Str).collect())),
         Err(raised) => format!("RAISED {}", raised.describe()),
     }
@@ -216,4 +220,44 @@ fn filing_faults_match_the_recorded_outcomes() {
             dumps(&decision)
         );
     }
+}
+
+/// An agent-settled current decision of a dimension whose filing is not enforced is refused with its reason; one the
+/// owner settled is checked as before.
+#[test]
+fn agents_file_no_impact_control_or_advice_decision() {
+    let empty =
+        std::env::temp_dir().join(format!("ruling-filing-dimensions-{}", std::process::id()));
+    std::fs::create_dir_all(&empty).unwrap();
+    let repo = Repo::new(empty.as_os_str().as_encoded_bytes());
+    let decision = |dimension: &str, settled_by: &str| {
+        json(&format!(
+            "{{\"dimension\": \"{dimension}\", \"settled_by\": \"{settled_by}\", \"settlement\": null, \"receipt\": null}}"
+        ))
+    };
+    let faults = |dimension: &str, settled_by: &str| {
+        delegation::decision_faults(&repo, &decision(dimension, settled_by)).unwrap()
+    };
+    assert_eq!(
+        faults("impact", "agents"),
+        [
+            "policy v3 filing for an impact label (band) is not enforced yet, so an agent-settled impact decision is refused"
+        ]
+    );
+    assert_eq!(
+        faults("control", "agents"),
+        ["agents settle no control decision; it stays with the owner"]
+    );
+    assert_eq!(
+        faults("advice-benefit", "agents"),
+        ["agents settle no advice-benefit decision; it stays with the owner"]
+    );
+    for dimension in ["impact", "control", "advice-benefit"] {
+        assert_eq!(faults(dimension, "owner"), Vec::<String>::new());
+    }
+    assert_eq!(
+        faults("eligibility", "agents"),
+        ["agent-settled current decision needs its pinned after-record"]
+    );
+    let _ = std::fs::remove_dir_all(&empty);
 }

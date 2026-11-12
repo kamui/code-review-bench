@@ -92,6 +92,30 @@ fn compare_keys(left: &(Value, Vec<Natural>), right: &(Value, Vec<Natural>)) -> 
 /// Every before-record under docs/research with its after-record, in the order rounds opened. Refuses a bad
 /// record, pin or round file.
 pub fn records(repo: &Repo) -> Py<Vec<Pair>> {
+    let mut pairs = ordered_records(repo)?;
+    for position in 0..pairs.len() {
+        if !pairs[position].after.truthy() {
+            continue;
+        }
+        let pair = &pairs[position];
+        let problems = delegation::settlement_faults(
+            repo,
+            &pair.before,
+            &pair.after,
+            Some(&repo.join(&pair.path)),
+            Some(&pairs[..=position]),
+        )?;
+        if !problems.is_empty() {
+            return value_error(format!("{}: {}", pair.path, problems.join("; ")));
+        }
+    }
+    declared_answers(repo, &mut pairs)?;
+    Ok(pairs)
+}
+
+/// The records as [`records`] orders them, each checked alone: an agent settlement is not yet checked against the
+/// history before it, and no declared answers are restored.
+pub fn ordered_records(repo: &Repo) -> Py<Vec<Pair>> {
     let research = repo.join("docs/research");
     for round_path in rglob(&research, "round.json")? {
         let directory = PyPath::new(parent_bytes(round_path.as_bytes()));
@@ -195,28 +219,10 @@ pub fn records(repo: &Repo) -> Py<Vec<Pair>> {
         walk.visit(name)?;
     }
     let ordered = walk.ordered;
-    let mut pairs: Vec<Pair> = ordered
+    Ok(ordered
         .into_iter()
         .map(|position| pairs[position].clone())
-        .collect();
-    for position in 0..pairs.len() {
-        if !pairs[position].after.truthy() {
-            continue;
-        }
-        let pair = &pairs[position];
-        let problems = delegation::settlement_faults(
-            repo,
-            &pair.before,
-            &pair.after,
-            Some(&repo.join(&pair.path)),
-            Some(&pairs[..=position]),
-        )?;
-        if !problems.is_empty() {
-            return value_error(format!("{}: {}", pair.path, problems.join("; ")));
-        }
-    }
-    declared_answers(repo, &mut pairs)?;
-    Ok(pairs)
+        .collect())
 }
 
 fn parent_bytes(path: &[u8]) -> &[u8] {
@@ -900,6 +906,80 @@ fn under_v3(repo: &Repo, pair: &Pair, known: &mut Vec<(Value, bool)>) -> Py<bool
     Ok(under)
 }
 
+/// The before-records of the owner's audit calls among the reconciliations at `selected`. A round under policy v3
+/// takes the five its audit's seed ranks first among the disputed units of the comparison its records pin. Other
+/// rounds keep the earlier rule: the five decided records at `decided` with the lowest before-record hashes. A record
+/// of a round under policy v3 whose call cannot be told is listed with the reason, never left out.
+fn audit_calls(
+    repo: &Repo,
+    pairs: &[Pair],
+    decided: &[usize],
+    selected: &[usize],
+) -> Py<Vec<String>> {
+    let mut known = Vec::new();
+    let mut earlier = Vec::new();
+    for position in decided {
+        if !under_v3(repo, &pairs[*position], &mut known)? {
+            earlier.push(*position);
+        }
+    }
+    earlier.sort_by(|left, right| pairs[*left].hash.cmp(&pairs[*right].hash));
+    let mut calls: Vec<String> = earlier
+        .into_iter()
+        .take(delegation::v3::AUDIT_CALLS)
+        .map(|position| pairs[position].path.clone())
+        .collect();
+    let mut filed: Vec<(usize, Value)> = Vec::new();
+    let mut undetermined = Vec::new();
+    for position in selected {
+        if !under_v3(repo, &pairs[*position], &mut known)? {
+            continue;
+        }
+        match get(&pairs[*position].before, "filing")? {
+            Value::Object(filing) if filing.get("comparison").is_some() => {
+                filed.push((
+                    *position,
+                    filing.get("comparison").cloned().unwrap_or(Value::Null),
+                ));
+            }
+            _ => undetermined.push(format!(
+                "{} (undetermined: its filing pins no comparison)",
+                pairs[*position].path
+            )),
+        }
+    }
+    let mut comparisons: Vec<&Value> = Vec::new();
+    for (_, comparison) in &filed {
+        if !comparisons.iter().any(|known| known.py_eq(comparison)) {
+            comparisons.push(comparison);
+        }
+    }
+    for comparison in comparisons {
+        let Some(audit) = delegation::v3::audit(repo, comparison)? else {
+            for (position, pinned) in &filed {
+                if pinned.py_eq(comparison) {
+                    undetermined.push(format!(
+                        "{} (undetermined: the comparison it pins is not one its audit's records derive)",
+                        pairs[*position].path
+                    ));
+                }
+            }
+            continue;
+        };
+        for call in audit.calls() {
+            for (position, pinned) in &filed {
+                if pinned.py_eq(comparison)
+                    && pyvalue::is(get(&pairs[*position].before, "group")?, &call)
+                {
+                    calls.push(pairs[*position].path.clone());
+                }
+            }
+        }
+    }
+    calls.extend(undetermined);
+    Ok(calls)
+}
+
 fn settled_by_agents(pair: &Pair, kind: &Value) -> Py<bool> {
     Ok(pair.after.truthy()
         && item(&pair.before, "decision_type")?.py_eq(kind)
@@ -1393,15 +1473,11 @@ fn entry(
                 );
             }
         }
-        let audit_calls = (kind == "reconciliation").then(|| {
-            let mut ordered = group.clone();
-            ordered.sort_by(|left, right| pairs[*left].hash.cmp(&pairs[*right].hash));
-            ordered
-                .into_iter()
-                .take(5)
-                .map(|position| pairs[position].path.clone())
-                .collect()
-        });
+        let audit_calls = if kind == "reconciliation" {
+            Some(audit_calls(repo, pairs, &group, &selected_pairs)?)
+        } else {
+            None
+        };
         trust = Some(Trust {
             earned: earned_now,
             round_level,

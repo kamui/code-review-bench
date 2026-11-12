@@ -16,6 +16,7 @@ const V3: &str = "bench/grading/delegation.v3.json";
 const RECEIPT: &str = "bench/grading/rulings/delegation.v3.md";
 const SCOPE: &str = "Adopt policy v3 as written";
 const DOSSIER: &str = "docs/research/shared/dossier";
+const CANDIDATE_FILING: &str = r#"{"revision": {"head": "h1"}, "subject": "S1"}"#;
 
 fn repository() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -167,6 +168,7 @@ fn convert(object: &mut Object) {
     if object.get("decision_type").is_some() {
         object.insert("decision_type".into(), text("candidate"));
         object.insert("dossier".into(), text(DOSSIER));
+        object.insert("filing".into(), json(CANDIDATE_FILING));
         for answer in answers(object) {
             answer.insert("outcome".into(), text("refuted"));
             *answer = without(answer, "facts");

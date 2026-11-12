@@ -1992,8 +1992,18 @@ fn assessments(batch: &PyPath) -> R<Vec<PyPath>> {
 
 fn comparison_of(directory: &PyPath, sample: &Value, root: &Root) -> R<Result<Value, Vec<String>>> {
     let grades = current_grading::read_json(&grades_path(root, directory, sample)?)?;
+    comparison_from(&grades, directory, sample, root)
+}
+
+/// The comparison of `sample` with the latest second assessments, the first grades read from `grades`.
+fn comparison_from(
+    grades: &Value,
+    directory: &PyPath,
+    sample: &Value,
+    root: &Root,
+) -> R<Result<Value, Vec<String>>> {
     let mut graded: Map<Value> = Map::default();
-    for batch in each(at(&grades, "batches")?)?.iter() {
+    for batch in each(at(grades, "batches")?)?.iter() {
         graded.insert(
             tuple_key(&[at(batch, "run")?, at(batch, "target")?])?,
             batch.clone(),
@@ -2234,13 +2244,12 @@ fn filled(value: Option<&Value>) -> R<bool> {
     Ok(!pytext::strip(&text).is_empty())
 }
 
-fn conclude(root: &Root, current_arg: &[u8], reconciliation_path: &[u8]) -> R<Done> {
-    let current = root.local(current_arg)?;
-    let (directory, sample) = drawn_sample(root, current_arg)?;
-    let comparison = current_grading::read_json(&directory.join(b"comparison.json"))?;
-    let mut audit = current_grading::read_json(&current.join(b"audits.json"))?;
-    let mut pins = vec![at(&comparison, "sample")?.clone()];
-    pins.extend(each(at(&comparison, "second")?)?.iter().cloned());
+const SETTLEMENT_FIELDS: [&str; 4] = ["settled_by", "settlement", "receipt", "receipt_scope"];
+
+/// The files a comparison pins, its sample and the second assessments, that changed since it was saved.
+fn changed_since(root: &Root, comparison: &Value) -> R<Vec<Value>> {
+    let mut pins = vec![at(comparison, "sample")?.clone()];
+    pins.extend(each(at(comparison, "second")?)?.iter().cloned());
     let mut changed = Vec::new();
     for pin in &pins {
         let path = at(pin, "path")?;
@@ -2248,6 +2257,358 @@ fn conclude(root: &Root, current_arg: &[u8], reconciliation_path: &[u8]) -> R<Do
             changed.push(path.clone());
         }
     }
+    Ok(changed)
+}
+
+/// The comparison as `compare` derives it, without the time it was saved.
+fn as_derived(comparison: &Value) -> Value {
+    Value::Object(
+        comparison
+            .as_object()
+            .into_iter()
+            .flat_map(Object::iter)
+            .filter(|(field, _)| field.as_str() != "compared_at")
+            .map(|(field, value)| (field.clone(), value.clone()))
+            .collect(),
+    )
+}
+
+/// Whether the audit round in `directory` holds the comparison that `conclude` accepts: the files it pins are
+/// unchanged and it is the comparison of its `sample.json` with the latest second assessments. The first grades are
+/// the ones the sample pins: from the live file when `live_only`, otherwise from the round's own copy or the live
+/// file, so a grade corrected after a closed round still leaves its comparison derivable.
+pub fn derives(root: &Root, directory: &PyPath, live_only: bool) -> R<bool> {
+    let comparison = current_grading::read_json(&directory.join(b"comparison.json"))?;
+    let sample = current_grading::read_json(&directory.join(b"sample.json"))?;
+    if !changed_since(root, &comparison)?.is_empty() {
+        return Ok(false);
+    }
+    let pinned = at(at(&sample, "grades")?, "sha256")?;
+    let copy = directory.join(b"grades.json");
+    let live = under(root, at(at(&sample, "grades")?, "path")?)?;
+    let mut drawn = None;
+    let candidates = if live_only {
+        vec![live]
+    } else {
+        vec![copy, live]
+    };
+    for path in candidates {
+        if pyvalue::exists(&path) && Value::Str(current_grading::file_hash(&path)?).py_eq(pinned) {
+            drawn = Some(path);
+            break;
+        }
+    }
+    let Some(grades) = drawn else {
+        return Ok(false);
+    };
+    let grades = current_grading::read_json(&grades)?;
+    Ok(comparison_from(&grades, directory, &sample, root)?
+        .is_ok_and(|derived| derived.py_eq(&as_derived(&comparison))))
+}
+
+/// Whether the plan's sample is the draw that `compare` and `conclude` redraw from the inventory, the pinned grades,
+/// the task facts, the declared sizes and the seed.
+pub fn redraws_plan_sample(root: &Root, current: &[u8]) -> bool {
+    drawn_sample(root, current).is_ok()
+}
+
+fn named_settlement(row: &Value) -> R<bool> {
+    let mut named = false;
+    for field in SETTLEMENT_FIELDS {
+        named |= pyvalue::has(row, field)?;
+    }
+    Ok(named)
+}
+
+/// Why each reconciliation row of an audit cannot stand as filed, as `<unit>: <fault>`, given the pin of the
+/// comparison its conclusion reads. A row that names an agent settlement must file it under policy v3 and may not be
+/// an owner's call. When a ruling record binds any unit of the comparison through its `filing`, every row must be
+/// the decision that stands in the ruling records for its unit; an audit with no such record, as every audit saved
+/// before policy v3, is checked as before.
+pub fn reconciliation_faults(root: &Root, rows: &[Value], comparison: &Value) -> R<Vec<String>> {
+    let repo = &root.repo;
+    let pairs = crate::ruling::summary::ordered_records(repo)?;
+    let mut units = Vec::new();
+    if crate::ruling::record::pinned(repo, comparison)? {
+        let compared = repo.load(&repo.path(at(comparison, "path")?)?)?;
+        for row in each(pyvalue::get(&compared, "units")?)?.iter() {
+            units.push(at(row, "id")?.clone());
+        }
+    }
+    let mut bound = false;
+    for pair in &pairs {
+        if let Some(unit) = bound_unit(pair, comparison)? {
+            bound |= units.iter().any(|known| known.py_eq(&unit));
+        }
+    }
+    let mut audit = None;
+    let mut found = Vec::new();
+    for row in rows {
+        let unit = at(row, "unit")?;
+        let mut faults = Vec::new();
+        if named_settlement(row)? {
+            if audit.is_none() {
+                audit = Some(crate::delegation::v3::audit(repo, comparison)?);
+            }
+            faults.extend(marked_faults(
+                root,
+                row,
+                comparison,
+                audit.as_ref().and_then(Option::as_ref),
+                &pairs,
+            )?);
+        }
+        if bound {
+            faults.extend(standing_faults(repo, row, comparison, &pairs)?);
+        }
+        found.extend(
+            faults
+                .into_iter()
+                .map(|fault| format!("{}: {fault}", unit.py_str())),
+        );
+    }
+    Ok(found)
+}
+
+/// The unit a reconciliation record files against `comparison`: its `filing` is exactly that comparison's pin and
+/// one unit. A record with any other `filing`, or none, binds nothing.
+fn bound_unit(pair: &crate::ruling::summary::Pair, comparison: &Value) -> R<Option<Value>> {
+    if !is(
+        pyvalue::get(&pair.before, "decision_type")?,
+        "reconciliation",
+    ) {
+        return Ok(None);
+    }
+    Ok(match pyvalue::get(&pair.before, "filing")? {
+        Value::Object(filing)
+            if filing.len() == 2
+                && filing
+                    .get("comparison")
+                    .is_some_and(|pinned| pinned.py_eq(comparison)) =>
+        {
+            filing.get("unit").cloned()
+        }
+        _ => None,
+    })
+}
+
+/// Why a row that names a settlement cannot stand: an agent settlement lacks a field, is of an owner's call or of a
+/// unit in its question, or does not file the settlement it pins.
+fn marked_faults(
+    root: &Root,
+    row: &Value,
+    comparison: &Value,
+    audit: Option<&crate::delegation::v3::Audit>,
+    pairs: &[crate::ruling::summary::Pair],
+) -> R<Vec<String>> {
+    if is(pyvalue::get(row, "settled_by")?, "agents") {
+        let mut missing = Vec::new();
+        for field in SETTLEMENT_FIELDS.iter().chain(&["reason"]) {
+            if !pyvalue::has(row, field)? {
+                missing.push(*field);
+            }
+        }
+        if !missing.is_empty() {
+            return Ok(vec![format!(
+                "an agent-settled reconciliation needs {}",
+                missing.join(", ")
+            )]);
+        }
+        let Some(audit) = audit else {
+            return Ok(vec![
+                "the comparison is not one its audit's records derive, so no agent settlement can be filed against it"
+                    .into(),
+            ]);
+        };
+        let unit = at(row, "unit")?;
+        let calls = audit.calls();
+        if calls.iter().any(|call| is(unit, call)) {
+            return Ok(vec![
+                "the unit is one of its audit round's five calls, which the owner decides; agents settle none".into(),
+            ]);
+        }
+        if shares_a_call(&root.repo, unit, comparison, &calls, pairs)? {
+            return Ok(vec![
+                "the unit shares its question with one of its audit round's five calls, which the owner decides whole"
+                    .into(),
+            ]);
+        }
+    }
+    Ok(crate::delegation::filing_faults(
+        &root.repo,
+        row,
+        crate::delegation::Filed::Reconciliation(comparison),
+    )?)
+}
+
+/// Whether a record that files `unit` against `comparison` decides the same question, in the same round, as a record
+/// that files one of the audit's calls.
+fn shares_a_call(
+    repo: &crate::ruling::Repo,
+    unit: &Value,
+    comparison: &Value,
+    calls: &[String],
+    pairs: &[crate::ruling::summary::Pair],
+) -> R<bool> {
+    let mut filed = Vec::new();
+    for pair in pairs {
+        if let Some(bound) = bound_unit(pair, comparison)? {
+            filed.push((pair, bound));
+        }
+    }
+    for (mine, _) in filed.iter().filter(|(_, bound)| bound.py_eq(unit)) {
+        let question = crate::ruling::summary::ruling(repo, &mine.before)?;
+        for (other, bound) in &filed {
+            if other.round.py_eq(&mine.round)
+                && calls.iter().any(|call| is(bound, call))
+                && crate::ruling::summary::ruling(repo, &other.before)?.py_eq(&question)
+            {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// The record at `at` and every review that replaced it, in order.
+fn chain(
+    repo: &crate::ruling::Repo,
+    at: usize,
+    pairs: &[crate::ruling::summary::Pair],
+) -> R<Vec<usize>> {
+    let mut found = vec![at];
+    for review in crate::ruling::summary::successors(repo, at, pairs)? {
+        found.extend(chain(repo, review, pairs)?);
+    }
+    Ok(found)
+}
+
+/// Each agent-settled after-record in the chain at `at` that could not have been settled, with why: a review settled
+/// by agents, or a settlement that fails at its place in the records.
+fn invalid_settlements(
+    repo: &crate::ruling::Repo,
+    at: usize,
+    pairs: &[crate::ruling::summary::Pair],
+) -> R<Vec<(usize, String)>> {
+    let mut faults = Vec::new();
+    for position in chain(repo, at, pairs)? {
+        let pair = &pairs[position];
+        if !pair.after.truthy() || !is(pyvalue::get(&pair.after, "settled_by")?, "agents") {
+            continue;
+        }
+        if pyvalue::get(&pair.before, "reviews")?.truthy() {
+            faults.push((
+                position,
+                format!(
+                    "{}: a review of a saved ruling settled by agents is never valid, so it does not stand",
+                    pair.path
+                ),
+            ));
+            continue;
+        }
+        let found = crate::delegation::settlement_faults(
+            repo,
+            &pair.before,
+            &pair.after,
+            Some(&repo.join(&pair.path)),
+            Some(&pairs[..=position]),
+        )?;
+        if !found.is_empty() {
+            faults.push((
+                position,
+                format!(
+                    "{}: its agent settlement is not valid, so it does not stand: {}",
+                    pair.path,
+                    found.join("; ")
+                ),
+            ));
+        }
+    }
+    Ok(faults)
+}
+
+/// Why a row of an audit reconciled through ruling records is not the decision that stands for its unit, among the
+/// records that file the unit against this audit's comparison. An agent settlement that could not have been made,
+/// and every review settled by agents, never stands; a row that differs from what does stand names it.
+fn standing_faults(
+    repo: &crate::ruling::Repo,
+    row: &Value,
+    comparison: &Value,
+    pairs: &[crate::ruling::summary::Pair],
+) -> R<Vec<String>> {
+    let unit = at(row, "unit")?;
+    let mut originals = Vec::new();
+    for (position, pair) in pairs.iter().enumerate() {
+        if !pyvalue::get(&pair.before, "reviews")?.truthy()
+            && bound_unit(pair, comparison)?.is_some_and(|bound| bound.py_eq(unit))
+        {
+            originals.push(position);
+        }
+    }
+    if originals.is_empty() {
+        return Ok(vec![
+            "an audit reconciled through ruling records needs one for every row, and no ruling record decides this unit"
+                .into(),
+        ]);
+    }
+    let mut faults = Vec::new();
+    for position in originals {
+        let invalid = invalid_settlements(repo, position, pairs)?;
+        let standing: Vec<crate::ruling::summary::Pair>;
+        let pairs: &[crate::ruling::summary::Pair] = if invalid.is_empty() {
+            pairs
+        } else {
+            standing = pairs
+                .iter()
+                .enumerate()
+                .map(|(at, pair)| {
+                    let mut pair = pair.clone();
+                    if invalid.iter().any(|(bad, _)| *bad == at) {
+                        pair.after = Value::Null;
+                    }
+                    pair
+                })
+                .collect();
+            &standing
+        };
+        let named = invalid.into_iter().map(|(_, fault)| fault);
+        let decisions = crate::ruling::summary::final_decisions(repo, position, pairs)?;
+        if decisions.is_empty() {
+            faults.push("the unit's ruling record is not decided".to_string());
+            faults.extend(named);
+            continue;
+        }
+        for decision in &decisions {
+            if !pyvalue::get(decision, "outcome")?.py_eq(pyvalue::get(row, "finding")?) {
+                faults.push(
+                    "the row's finding is not the decision that stands for the unit".to_string(),
+                );
+                faults.extend(named);
+                break;
+            }
+        }
+        let unreviewed = crate::ruling::summary::successors(repo, position, pairs)?.is_empty();
+        if unreviewed
+            && is(
+                pyvalue::get(&pairs[position].after, "settled_by")?,
+                "agents",
+            )
+            && !is(pyvalue::get(row, "settled_by")?, "agents")
+        {
+            faults.push(
+                "agents settled the unit and no owner review changed it, so its row must carry the settlement".into(),
+            );
+        }
+    }
+    Ok(faults)
+}
+
+fn conclude(root: &Root, current_arg: &[u8], reconciliation_path: &[u8]) -> R<Done> {
+    let current = root.local(current_arg)?;
+    let (directory, sample) = drawn_sample(root, current_arg)?;
+    let comparison = current_grading::read_json(&directory.join(b"comparison.json"))?;
+    let mut audit = current_grading::read_json(&current.join(b"audits.json"))?;
+    let changed = changed_since(root, &comparison)?;
     if !changed.is_empty() {
         return Err(Failure::Inconsistent(
             format!(
@@ -2258,14 +2619,7 @@ fn conclude(root: &Root, current_arg: &[u8], reconciliation_path: &[u8]) -> R<Do
         ));
     }
     let derived = comparison_of(&directory, &sample, root)?;
-    let recorded: Object = comparison
-        .as_object()
-        .into_iter()
-        .flat_map(Object::iter)
-        .filter(|(field, _)| field.as_str() != "compared_at")
-        .map(|(field, value)| (field.clone(), value.clone()))
-        .collect();
-    if !derived.is_ok_and(|derived| derived.py_eq(&Value::Object(recorded))) {
+    if !derived.is_ok_and(|derived| derived.py_eq(&as_derived(&comparison))) {
         return Err(Failure::Inconsistent(
             b"comparison.json is not the comparison of sample.json with the latest second assessment of each \
               sampled batch, so nothing was concluded"
@@ -2309,6 +2663,8 @@ fn conclude(root: &Root, current_arg: &[u8], reconciliation_path: &[u8]) -> R<Do
     }
     let ordered = sorted_items(decisions.0.clone())?;
     let finding = |decision: &Value| -> R<Value> { Ok(pyvalue::get(decision, "finding")?.clone()) };
+    let compared = root.pin_file(&directory.join(b"comparison.json"))?;
+    problems.extend(reconciliation_faults(root, &each(listed)?, &compared)?);
     for (unit, decision) in &ordered {
         let found = finding(decision)?;
         let named = FINDINGS.iter().any(|known| is(&found, known));

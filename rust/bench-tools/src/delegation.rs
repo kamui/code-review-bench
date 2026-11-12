@@ -185,6 +185,9 @@ pub struct Routed {
     /// with no level.
     pub version: u64,
     pub reasons: Vec<String>,
+    /// Why the reconciler's call is withheld from the owner: empty unless the decision is a reconciliation in a round
+    /// under an adopted policy v3 that is not shown to be outside its audit round's five calls and their questions.
+    pub withheld: Vec<String>,
 }
 
 /// The `policy` pin of the opening the before-record pins, `None` for a round that runs under policy v2 as it
@@ -307,6 +310,7 @@ pub fn route_under(
                 level: 0,
                 version: 0,
                 reasons: refused,
+                withheld: Vec::new(),
             }
         }
     };
@@ -350,6 +354,7 @@ fn route_v2(
             level: 0,
             version: 2,
             reasons,
+            withheld: Vec::new(),
         });
     }
     let mut reasons = Vec::new();
@@ -394,6 +399,7 @@ fn route_v2(
             level: 0,
             version: 2,
             reasons,
+            withheld: Vec::new(),
         });
     };
     let history = &pairs[..position];
@@ -411,6 +417,7 @@ fn route_v2(
                 level: 0,
                 version: 2,
                 reasons,
+                withheld: Vec::new(),
             });
         }
         Err(other) => return Err(other),
@@ -452,6 +459,7 @@ fn route_v2(
         level,
         version: 2,
         reasons,
+        withheld: Vec::new(),
     })
 }
 
@@ -464,33 +472,64 @@ fn route_v3(
     pairs: Option<&[Pair]>,
     before_path: Option<&PyPath>,
 ) -> Py<Routed> {
-    let routed = |reasons| Routed {
+    let routed = |reasons, withheld| Routed {
         level: 0,
         version: 3,
         reasons,
+        withheld,
     };
     if !v3::adopted(repo, policy)? {
         let mut reasons =
             vec!["policy v3 is not adopted, so agents settle nothing beyond ADR-0006".to_string()];
         reasons.extend(record::reasons(repo, before)?);
-        return Ok(routed(reasons));
+        return Ok(routed(reasons, Vec::new()));
     }
     let mut reasons = Vec::new();
     let kind = item(before, "decision_type")?;
     pyvalue::hashable(kind)?;
     let gate = policy.gate(kind);
+    let enforced = v3::ENFORCED.iter().any(|name| pyvalue::is(kind, name));
     match gate {
         None => reasons.push(format!(
             "{} stays with the owner under policy v3",
             kind.py_str()
         )),
-        Some(_) if !v3::ENFORCED.iter().any(|name| pyvalue::is(kind, name)) => {
+        Some(_) if !enforced => {
             reasons.push(format!(
                 "policy v3 filing for {} is not enforced yet",
                 kind.py_str()
             ));
         }
-        Some(_) => {}
+        Some(_) => {
+            if let Some(reason) = filing_fault(repo, before, kind)? {
+                reasons.push(reason);
+            }
+        }
+    }
+    let reconciled = gate.is_some() && pyvalue::is(kind, RECONCILIATION);
+    let mut withheld = Vec::new();
+    let mut audit = None;
+    if reconciled {
+        if let Some(shape) = filing_fault(repo, before, kind)? {
+            withheld.push(shape);
+        } else {
+            audit = filed_audit(repo, before)?;
+            match &audit {
+                None => {
+                    reasons.push(UNREADABLE_AUDIT.into());
+                    withheld.push(UNREADABLE_AUDIT.into());
+                }
+                Some(audit)
+                    if audit.calls().iter().any(|call| {
+                        pyvalue::is(item(before, "group").unwrap_or(&Value::Null), call)
+                    }) =>
+                {
+                    reasons.push(AUDIT_CALL.into());
+                    withheld.push(AUDIT_CALL.into());
+                }
+                Some(_) => {}
+            }
+        }
     }
     if record::same_family(before)? {
         reasons.push(record::SAME_FAMILY_REASON.into());
@@ -519,13 +558,23 @@ fn route_v3(
     };
     let Some(position) = position(repo, before, pairs, before_path)? else {
         reasons.push("the before-record must belong to a recorded round".into());
-        return Ok(routed(reasons));
+        if reconciled {
+            withheld.push("the before-record must belong to a recorded round".into());
+        }
+        return Ok(routed(reasons, withheld));
     };
+    if let Some(audit) = &audit {
+        let call = withheld.iter().any(|reason| reason == AUDIT_CALL);
+        for reason in round_audit_reasons(repo, pairs, position, audit, call)? {
+            reasons.push(reason.clone());
+            withheld.push(reason);
+        }
+    }
     let closed = match opening_rounds(repo, position, pairs) {
         Ok(closed) => closed,
         Err(Raised::Value(message)) => {
             reasons.push(message);
-            return Ok(routed(reasons));
+            return Ok(routed(reasons, withheld));
         }
         Err(other) => return Err(other),
     };
@@ -565,7 +614,115 @@ fn route_v3(
             break;
         }
     }
-    Ok(routed(reasons))
+    Ok(routed(reasons, withheld))
+}
+
+const RECONCILIATION: &str = "reconciliation";
+pub const AUDIT_CALL: &str = "this unit is one of its audit round's five calls, which the owner decides without the reconciler's call";
+const SHARES_AUDIT_CALL: &str = "this unit shares its question with one of the audit round's five calls, so the owner decides the question whole";
+const UNCOVERED: &str = "the round's reconciliation before-records must file each disputed unit of the pinned comparison exactly once, and no other";
+const UNREADABLE_AUDIT: &str = "the comparison the filing pins cannot be read as an evaluator audit's: its units and the seed of the sample it pins";
+
+/// Why the before-record's `filing` does not bind the one subject its decision type files, or `None`.
+fn filing_fault(repo: &Repo, before: &Value, kind: &Value) -> Py<Option<String>> {
+    let filing = get(before, "filing")?;
+    let Value::Object(members) = filing else {
+        return Ok(Some(filing_shape(kind)));
+    };
+    let bound = if pyvalue::is(kind, RECONCILIATION) {
+        members.len() == 2
+            && record::pinned(repo, get(filing, "comparison")?)?
+            && matches!(get(filing, "unit")?, Value::Str(unit) if !unit.is_empty())
+            && get(filing, "unit")?.py_eq(item(before, "group")?)
+    } else {
+        members.len() == 2
+            && matches!(get(filing, "revision")?, Value::Object(revision) if !revision.is_empty())
+            && matches!(get(filing, "subject")?, Value::Str(subject) if !crate::pytext::strip(subject).is_empty())
+    };
+    Ok((!bound).then(|| filing_shape(kind)))
+}
+
+fn filing_shape(kind: &Value) -> String {
+    if pyvalue::is(kind, RECONCILIATION) {
+        "the before-record's `filing` must bind the audit unit it files: exactly `comparison`, the pinned comparison.json of the audit, and `unit`, the record's `group`".into()
+    } else {
+        format!(
+            "the before-record's `filing` must bind the {} it files: exactly `revision` and `subject`, copied from the current record",
+            kind.py_str()
+        )
+    }
+}
+
+/// The audit whose comparison the before-record's `filing` pins, `None` when it pins none that can be read.
+fn filed_audit(repo: &Repo, before: &Value) -> Py<Option<v3::Audit>> {
+    let filing = get(before, "filing")?;
+    if !matches!(filing, Value::Object(_)) {
+        return Ok(None);
+    }
+    v3::audit(repo, get(filing, "comparison")?)
+}
+
+/// Why the round of the reconciliation at `position` keeps it with the owner: its records do not file the audit's
+/// disputed units each once, or the unit shares its question with an audit call. It reads every before-record in
+/// the round's directory, because a settlement is checked against `pairs` cut at its own place in the round. A review
+/// of a saved ruling files no unit, so coverage leaves it out; questions compare by their names in the ruling index.
+fn round_audit_reasons(
+    repo: &Repo,
+    pairs: &[Pair],
+    position: usize,
+    audit: &v3::Audit,
+    audit_call: bool,
+) -> Py<Vec<String>> {
+    let calls = audit.calls();
+    let before = &pairs[position].before;
+    let question = summary::ruling(repo, before)?;
+    let comparison = item(item(before, "filing")?, "comparison")?;
+    let directory = repo.join(summary::parent(&pairs[position].path));
+    let mut names: Vec<std::ffi::OsString> = match std::fs::read_dir(directory.to_path_buf()) {
+        Ok(entries) => entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name())
+            .filter(|name| name.as_encoded_bytes().ends_with(b".before.json"))
+            .collect(),
+        Err(_) => return Ok(vec![UNCOVERED.to_string()]),
+    };
+    names.sort();
+    let mut filed = Vec::new();
+    let mut covered = true;
+    let mut shares = false;
+    for name in names {
+        let path = directory.join(name.as_encoded_bytes());
+        let record = record::read_before(repo, &path)?;
+        if !pyvalue::is(get(&record, "decision_type")?, RECONCILIATION) {
+            continue;
+        }
+        let filing = get(&record, "filing")?;
+        let same =
+            matches!(filing, Value::Object(_)) && get(filing, "comparison")?.py_eq(comparison);
+        let group = get(&record, "group")?;
+        if !get(&record, "reviews")?.truthy() {
+            match group {
+                Value::Str(unit) if same => filed.push(unit.clone()),
+                _ => covered = false,
+            }
+        }
+        if summary::ruling(repo, &record)?.py_eq(&question)
+            && calls.iter().any(|call| pyvalue::is(group, call))
+        {
+            shares = true;
+        }
+    }
+    filed.sort();
+    let mut disputed = audit.disputed.clone();
+    disputed.sort();
+    let mut reasons = Vec::new();
+    if !covered || filed != disputed || disputed.windows(2).any(|pair| pair[0] == pair[1]) {
+        reasons.push(UNCOVERED.to_string());
+    }
+    if shares && !audit_call {
+        reasons.push(SHARES_AUDIT_CALL.to_string());
+    }
+    Ok(reasons)
 }
 
 pub const GAP_REASON: &str = "gap or conflict in the rule";
@@ -697,9 +854,49 @@ const CANDIDATE_FILINGS: [(&str, &str); 6] = [
     ("duplicate", "eligible"),
 ];
 
-/// Why a current candidate or credit decision filed as agent-settled does not bind its saved settlement; a
-/// decision filed as the owner's may carry no settlement pin or policy receipt.
-pub fn filing_faults(repo: &Repo, decision: &Value, decision_type: &str) -> Py<Vec<String>> {
+/// Why a current adjudication other than an admission cannot stand as filed. An eligibility decision, and any
+/// decision the owner settled, is checked as a candidate filing; agents file no other dimension yet.
+pub fn decision_faults(repo: &Repo, decision: &Value) -> Py<Vec<String>> {
+    let dimension = item(decision, "dimension")?;
+    if pyvalue::is(dimension, "eligibility") || !pyvalue::is(get(decision, "settled_by")?, "agents")
+    {
+        return filing_faults(repo, decision, Filed::Candidate);
+    }
+    Ok(vec![if pyvalue::is(dimension, "impact") {
+        "policy v3 filing for an impact label (band) is not enforced yet, so an agent-settled impact decision is refused".to_string()
+    } else {
+        format!(
+            "agents settle no {} decision; it stays with the owner",
+            dimension.py_str()
+        )
+    }])
+}
+
+/// What a current record files from an agent settlement, and so the settlement's decision type and the shape its
+/// before-record's `filing` binds.
+#[derive(Clone, Copy)]
+pub enum Filed<'a> {
+    /// A current eligibility decision on a candidate.
+    Candidate,
+    /// A current credit ruling.
+    Credit,
+    /// A row of an evaluator audit's reconciliation, with the pin of the comparison its conclusion reads.
+    Reconciliation(&'a Value),
+}
+
+impl Filed<'_> {
+    fn decision_type(self) -> &'static str {
+        match self {
+            Filed::Candidate => "candidate",
+            Filed::Credit => "recovery",
+            Filed::Reconciliation(_) => RECONCILIATION,
+        }
+    }
+}
+
+/// Why a current decision filed as agent-settled does not bind its saved settlement; a decision filed as the
+/// owner's may carry no settlement pin or policy receipt.
+pub fn filing_faults(repo: &Repo, decision: &Value, filed: Filed) -> Py<Vec<String>> {
     let settlement = get(decision, "settlement")?;
     if !pyvalue::is(get(decision, "settled_by")?, "agents") {
         let adopted = policy(repo, &repo.join(POLICY))?;
@@ -744,23 +941,32 @@ pub fn filing_faults(repo: &Repo, decision: &Value, decision_type: &str) -> Py<V
     if !pyvalue::is(get(&after, "settled_by")?, "agents") {
         found.push("the pinned record was not settled by agents".into());
     }
-    if !pyvalue::is(item(&before, "decision_type")?, decision_type)
-        || !item(&before, "target")?.py_eq(item(decision, "target")?)
-    {
+    let other_target = match filed {
+        Filed::Reconciliation(_) => false,
+        Filed::Candidate | Filed::Credit => {
+            !item(&before, "target")?.py_eq(item(decision, "target")?)
+        }
+    };
+    if !pyvalue::is(item(&before, "decision_type")?, filed.decision_type()) || other_target {
         found.push("settlement is for another decision type or target".into());
     }
     let filing = get(&before, "filing")?;
-    let expected: Vec<(&str, Value)> = if decision_type == "candidate" {
-        vec![
+    let expected: Vec<(&str, Value)> = match filed {
+        Filed::Candidate => vec![
             ("revision", item(decision, "revision")?.clone()),
             ("subject", get(decision, "subject")?.clone()),
-        ]
-    } else {
-        let mut members = Vec::new();
-        for key in ["revision", "review", "attempt_id", "item_id", "family_id"] {
-            members.push((key, item(decision, key)?.clone()));
+        ],
+        Filed::Credit => {
+            let mut members = Vec::new();
+            for key in ["revision", "review", "attempt_id", "item_id", "family_id"] {
+                members.push((key, item(decision, key)?.clone()));
+            }
+            members
         }
-        members
+        Filed::Reconciliation(comparison) => vec![
+            ("comparison", comparison.clone()),
+            ("unit", item(decision, "unit")?.clone()),
+        ],
     };
     let expected = Value::Object(
         expected
@@ -773,29 +979,46 @@ pub fn filing_faults(repo: &Repo, decision: &Value, decision_type: &str) -> Py<V
             "before-record filing does not bind this exact subject, revision and source".into(),
         );
     }
-    if decision_type == "candidate" {
-        let differs = !pyvalue::is(get(decision, "dimension")?, "eligibility")
-            || !pyvalue::is(get(decision, "status")?, "approved")
-            || !pyvalue::is(get(decision, "authority")?, "human")
-            || {
-                let outcome = item(&after, "outcome")?;
-                pyvalue::hashable(outcome)?;
-                let mapped = CANDIDATE_FILINGS
-                    .iter()
-                    .find(|(settled, _)| pyvalue::is(outcome, settled))
-                    .map_or(Value::Null, |(_, filed)| pyvalue::text(filed));
-                !mapped.py_eq(item(decision, "outcome")?)
-            };
-        if differs {
-            found.push("candidate filing differs from the settled eligibility outcome".into());
+    match filed {
+        Filed::Candidate => {
+            let differs = !pyvalue::is(get(decision, "dimension")?, "eligibility")
+                || !pyvalue::is(get(decision, "status")?, "approved")
+                || !pyvalue::is(get(decision, "authority")?, "human")
+                || {
+                    let outcome = item(&after, "outcome")?;
+                    pyvalue::hashable(outcome)?;
+                    let mapped = CANDIDATE_FILINGS
+                        .iter()
+                        .find(|(settled, _)| pyvalue::is(outcome, settled))
+                        .map_or(Value::Null, |(_, filed)| pyvalue::text(filed));
+                    !mapped.py_eq(item(decision, "outcome")?)
+                };
+            if differs {
+                found.push("candidate filing differs from the settled eligibility outcome".into());
+            }
         }
-    } else {
-        let empty = Value::Object(crate::pyjson::Object::default());
-        let facts = pyvalue::get_or(&after, "facts", &empty)?;
-        for field in record::FACTS {
-            if !get(decision, field)?.py_eq(get(facts, field)?) {
-                found.push("credit filing differs from the settled facts".into());
-                break;
+        Filed::Credit => {
+            let empty = Value::Object(crate::pyjson::Object::default());
+            let facts = pyvalue::get_or(&after, "facts", &empty)?;
+            for field in record::FACTS {
+                if !get(decision, field)?.py_eq(get(facts, field)?) {
+                    found.push("credit filing differs from the settled facts".into());
+                    break;
+                }
+            }
+        }
+        Filed::Reconciliation(comparison) => {
+            let unit = item(decision, "unit")?;
+            if !item(&before, "group")?.py_eq(unit) {
+                found.push("the settled before-record's `group` is not the reconciled unit".into());
+            }
+            let disputed = v3::audit(repo, comparison)?
+                .is_some_and(|audit| audit.disputed.iter().any(|known| pyvalue::is(unit, known)));
+            if !disputed {
+                found.push("the unit is not a disputed unit of the pinned comparison".into());
+            }
+            if !get(decision, "finding")?.py_eq(item(&after, "outcome")?) {
+                found.push("reconciliation filing differs from the settled finding".into());
             }
         }
     }
@@ -810,11 +1033,16 @@ pub fn filing_faults(repo: &Repo, decision: &Value, decision_type: &str) -> Py<V
     if !cited {
         found.push("agent settlement must cite the owner's saved policy adoption".into());
     }
-    if !adoption.credit && decision_type != "candidate" {
-        found.push(format!(
+    match filed {
+        Filed::Credit if !adoption.credit => found.push(format!(
             "credit stays with the owner under {}; agents settle no credit decision",
             adoption.name
-        ));
+        )),
+        Filed::Reconciliation(_) if adoption.credit => found.push(format!(
+            "a reconciliation stays on its reconciler route under {}; agents file one only under policy v3",
+            adoption.name
+        )),
+        _ => {}
     }
     let reason = item(decision, "reason")?;
     if !pyvalue::contains(reason, &pyvalue::text(adoption.name))?

@@ -306,12 +306,37 @@ Under an adopted policy v3, `route` prints `SETTLE under policy v3, on agreement
 - The round opening is refused.
 - The type has not met the entry bar. The count covers the rounds the opening pins as closed and follows the replay's rules, so a review saved after the opening counts from the next round. Unlike the replay, the count takes an agent settlement that a review changed as not standing, even when a later review restored its outcome.
 - A review saved in this round changed an agent settlement of the type, from this round or an earlier one. The review suspends each record after it in the round, and each record still pending when it is saved. A later review that restores the settlement's outcome does not lift the suspension. As under policy v2, the tool reads order from the ruling file names.
+- The record's `filing` is missing or does not have its decision type's shape.
 - Filing for the type is not enforced yet.
 
-The last reason applies to `band`, `pre-existing-admission` and `reconciliation`. Their gates are evaluated, and the replay counts them, but an agent settlement of one cannot be filed yet. Only `candidate` settles end to end:
+The last reason applies to `band` and `pre-existing-admission`. Their gates are evaluated, and the replay counts them, but an agent settlement of one cannot be filed yet. `candidate` and `reconciliation` settle end to end:
 
 - `ruling check` and `ruling summary` accept an agent-settled after-record in a v3 round only when it pins the round's policy, `route` gives no reason at its place in history, and it repeats the agreed answer with `asked: 0` and `ground: null`.
 - A current candidate decision filed from it cites the v3 adoption receipt and its `adoption_scope`, and its reason names policy v3 and agents. A credit filing that pins a v3 settlement is refused, and so is an owner's decision that cites the v3 adoption receipt.
+- An agent-settled impact, control or admission decision in the current records is refused.
+
+### Reconciliation under policy v3
+
+A reconciliation before-record binds its unit in `filing`: `comparison`, a path/SHA-256 pin to the audit's `comparison.json`, and `unit`, the unit's id, which is also the record's `group`.
+
+The tool reads an audit only from `bench/grading/current/audit/<seed>/`, for the plan's seed or a superseded seed in `audits.json`. The comparison must pin the `sample.json` beside it and equal what the tool derives from that sample. For the plan's seed the sample must also be the one the tool draws again from the inventory, with the live grades. An audit that `audits.json` records as assessed, with its conclusion and comparison pinned, is checked against its own saved grades, so a grade corrected after the conclusion does not fail it. A comparison that fails any of these sends every reconciliation of the round to the owner. A plan audit that failed and is not yet superseded cannot be drawn again once its grades are corrected, so its reconciliations go to the owner.
+
+The owner's five audit calls are fixed before any record exists. They are the disputed units with the five lowest SHA-256 of `<audit seed>:reconciliation:<unit id>`. The owner chose the seed and the comparison holds the unit ids, so the session that prepares the round cannot choose the calls. A round under policy v2 keeps its earlier selection by before-record hash.
+
+`route` settles a reconciliation only when, beyond the reasons above:
+
+- The round's reconciliation before-records, leaving out reviews of a saved ruling, cover the comparison's disputed units once each.
+- The unit is not one of the five calls and shares no question with one. A question is one `ruling` name in the rulings index, so a grouped question that holds a call goes to the owner whole.
+
+For a reconciliation it cannot show to be outside the five calls, `route` withholds every first answer. It prints the case file and the reason, without the reconciler's call or confidence. `ruling summary` lists the five calls for the round and names a record it cannot place.
+
+An agent-settled row in the audit's `reconciliation.json` holds `settled_by: "agents"`, `settlement` (the after-record's pin), `receipt`, `receipt_scope` and a reason that names policy v3 and agents. `evaluator-audit conclude` and `calibration check` refuse:
+
+- A row for a unit outside the pinned comparison, for one of the five calls or for a unit that shares a question with one.
+- A row whose `finding` is not the settled outcome, or whose settlement pins another comparison.
+- Once a ruling record binds any unit of the audit, a row with no bound record, a row whose `finding` is not the decision that stands for its unit, and a row for an agent-settled unit that lacks the settlement fields.
+
+A record binds a row only when its `filing` holds this audit's comparison pin and the row's unit. An agent-settled review never stands, and an agent-settled record counts only when it passes the settlement check. An audit with no bound record, as every audit saved so far, is checked as before.
 
 For a round under an adopted policy v3, `ruling summary` adds the digest the owner reads. Each decision type with agent settlements in the round gets:
 
@@ -321,7 +346,7 @@ For a round under an adopted policy v3, `ruling summary` adds the digest the own
 
 `--json` holds the same in `reading`, `stated_gaps` and each digest entry's `read`. A round under policy v2 prints none of this.
 
-These parts of ADR-0008 are not enforced yet: filing for the other three types, the pin that shows a label was asked after admission, and a routing-time rule for the five audit calls.
+These parts of ADR-0008 are not enforced yet: filing for labels and pre-existing admissions, and the pin that shows a label was asked after admission.
 
 ## Filing a policy v2 settlement
 
