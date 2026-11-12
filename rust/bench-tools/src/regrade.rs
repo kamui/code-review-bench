@@ -27,7 +27,7 @@ const QUOTA_STOP_PERCENT: f64 = 95.0;
 const QUOTA_MAX_AGE_SECONDS: f64 = 300.0;
 const DEFAULT_TIMEOUT_SECONDS: u64 = 900;
 const CONTRACT: &str = "current-reconciliation/v1";
-const HANDED_OVER: &str = "BENCH_REGRADE_PINNED_RUNTIME";
+pub(crate) const HANDED_OVER: &str = "BENCH_REGRADE_PINNED_RUNTIME";
 
 type R<T> = Result<T, String>;
 
@@ -85,15 +85,15 @@ impl Usd {
         self.to_string().parse().unwrap_or(f64::NAN)
     }
 
-    fn json(self) -> Value {
+    pub(crate) fn json(self) -> Value {
         Value::Float(self.as_f64())
     }
 
-    fn times(self, count: usize) -> Usd {
+    pub(crate) fn times(self, count: usize) -> Usd {
         Usd(self.0 * count as i128)
     }
 
-    fn plus(self, other: Usd) -> Usd {
+    pub(crate) fn plus(self, other: Usd) -> Usd {
         Usd(self.0 + other.0)
     }
 
@@ -141,27 +141,27 @@ fn reserved_total(outstanding: &[Option<Usd>]) -> Option<Usd> {
         .map(|known| sum(&known))
 }
 
-fn field<'v>(value: &'v Value, key: &str) -> R<&'v Value> {
+pub(crate) fn field<'v>(value: &'v Value, key: &str) -> R<&'v Value> {
     value
         .as_object()
         .and_then(|object| object.get(key))
         .ok_or_else(|| format!("missing field {}", pytext::repr_str(key)))
 }
 
-fn optional<'v>(value: &'v Value, key: &str) -> Option<&'v Value> {
+pub(crate) fn optional<'v>(value: &'v Value, key: &str) -> Option<&'v Value> {
     value
         .as_object()
         .and_then(|object| object.get(key))
         .filter(|found| !matches!(found, Value::Null))
 }
 
-fn text<'v>(value: &'v Value, key: &str) -> R<&'v str> {
+pub(crate) fn text<'v>(value: &'v Value, key: &str) -> R<&'v str> {
     field(value, key)?
         .as_str()
         .ok_or_else(|| format!("field {} is not a string", pytext::repr_str(key)))
 }
 
-fn list<'v>(value: &'v Value, key: &str) -> R<&'v [Value]> {
+pub(crate) fn list<'v>(value: &'v Value, key: &str) -> R<&'v [Value]> {
     field(value, key)?
         .as_array()
         .ok_or_else(|| format!("field {} is not a list", pytext::repr_str(key)))
@@ -183,7 +183,7 @@ fn int(number: usize) -> Value {
     Value::Int(number.to_string())
 }
 
-fn shown(path: &Path) -> String {
+pub(crate) fn shown(path: &Path) -> String {
     pytext::stderr_text(pytext::os_bytes(path.as_os_str()))
 }
 
@@ -191,7 +191,7 @@ fn path_value(path: &Path) -> Value {
     string(shown(path))
 }
 
-fn read_json(path: &Path) -> R<Value> {
+pub(crate) fn read_json(path: &Path) -> R<Value> {
     let raw =
         std::fs::read(path).map_err(|error| format!("cannot read {}: {error}", shown(path)))?;
     let decoded = String::from_utf8(raw).map_err(|_| format!("{} is not UTF-8", shown(path)))?;
@@ -199,22 +199,22 @@ fn read_json(path: &Path) -> R<Value> {
         .map_err(|error| format!("{} is not JSON: {error}", shown(path)))
 }
 
-fn digest(path: &Path) -> R<String> {
+pub(crate) fn digest(path: &Path) -> R<String> {
     std::fs::read(path)
         .map(|raw| sha256::hex_digest(&raw))
         .map_err(|error| format!("cannot read {}: {error}", shown(path)))
 }
 
-fn exists(path: &Path) -> R<bool> {
+pub(crate) fn exists(path: &Path) -> R<bool> {
     path.try_exists()
         .map_err(|error| format!("cannot inspect {}: {error}", shown(path)))
 }
 
-fn dumps(value: &Value) -> String {
+pub(crate) fn dumps(value: &Value) -> String {
     pyjson::dumps(value, &pyjson::Dumps::default())
 }
 
-fn indented(value: &Value) -> String {
+pub(crate) fn indented(value: &Value) -> String {
     let options = pyjson::Dumps {
         indent: Some(2),
         ..pyjson::Dumps::default()
@@ -222,7 +222,7 @@ fn indented(value: &Value) -> String {
     pyjson::dumps(value, &options) + "\n"
 }
 
-fn create_new(path: &Path, contents: &str) -> R<()> {
+pub(crate) fn create_new(path: &Path, contents: &str) -> R<()> {
     std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -231,7 +231,7 @@ fn create_new(path: &Path, contents: &str) -> R<()> {
         .map_err(|error| format!("cannot create {}: {error}", shown(path)))
 }
 
-fn entries(directory: &Path) -> R<Vec<PathBuf>> {
+pub(crate) fn entries(directory: &Path) -> R<Vec<PathBuf>> {
     let failed = |error: std::io::Error| format!("cannot list {}: {error}", shown(directory));
     match std::fs::read_dir(directory) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
@@ -242,7 +242,7 @@ fn entries(directory: &Path) -> R<Vec<PathBuf>> {
     }
 }
 
-fn attempt_number(path: &Path) -> Option<u64> {
+pub(crate) fn attempt_number(path: &Path) -> Option<u64> {
     path.file_name()?
         .to_str()?
         .strip_prefix("attempt-")?
@@ -281,7 +281,7 @@ fn reservations(directory: &Path) -> R<Vec<PathBuf>> {
 }
 
 /// The path a `work` pointer leads to, whether or not its workspace exists yet.
-fn resolved(pointer: &Path) -> R<PathBuf> {
+pub(crate) fn resolved(pointer: &Path) -> R<PathBuf> {
     match pointer.canonicalize() {
         Ok(path) => Ok(path),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound && pointer.is_symlink() => {
@@ -308,7 +308,7 @@ fn unused_log(path: &Path) -> R<PathBuf> {
     Ok(candidate)
 }
 
-fn hex_id() -> R<String> {
+pub(crate) fn hex_id() -> R<String> {
     Ok(clean_context::uuid4()?.replace('-', ""))
 }
 
@@ -318,7 +318,7 @@ fn tail(path: &Path, characters: usize) -> String {
     text.chars().skip(skip).collect()
 }
 
-fn say(line: &str) {
+pub(crate) fn say(line: &str) {
     let mut out = std::io::stdout().lock();
     let _ = writeln!(out, "{line}");
     let _ = out.flush();
@@ -447,7 +447,7 @@ pub struct Authorization {
 }
 
 /// `ROOT / ref["path"]`, once it still hashes to `ref["sha256"]`.
-fn checked(root: &Path, reference: &Value) -> R<PathBuf> {
+pub(crate) fn checked(root: &Path, reference: &Value) -> R<PathBuf> {
     let relative = text(reference, "path")?;
     let path = root.join(relative);
     if digest(&path)? != text(reference, "sha256")? {
@@ -502,6 +502,36 @@ pub fn pinned_runtime(authorization: &Value, running: &Path) -> R<PathBuf> {
     }
 }
 
+/// The running bench-tools once it is the one the authorization pins. Another runtime hands the command, with its
+/// arguments, to the pinned one and never returns.
+pub(crate) fn hand_over(authorization: &Value) -> R<PathBuf> {
+    let running = std::env::current_exe()
+        .and_then(|path| path.canonicalize())
+        .map_err(|error| format!("cannot locate the running bench-tools: {error}"))?;
+    let pinned = pinned_runtime(authorization, &running)?;
+    let pinned = pinned
+        .canonicalize()
+        .map_err(|error| format!("cannot resolve {}: {error}", shown(&pinned)))?;
+    if pinned == running {
+        return Ok(running);
+    }
+    if std::env::var_os(HANDED_OVER).is_some() {
+        return Err(format!(
+            "the pinned bench-tools {} did not start as itself",
+            shown(&pinned)
+        ));
+    }
+    use std::os::unix::process::CommandExt;
+    let error = std::process::Command::new(&pinned)
+        .args(std::env::args_os().skip(1))
+        .env(HANDED_OVER, "1")
+        .exec();
+    Err(format!(
+        "cannot start the pinned bench-tools {}: {error}",
+        shown(&pinned)
+    ))
+}
+
 /// What a `regrade run` was asked to do.
 pub struct Options {
     pub root: PathBuf,
@@ -533,30 +563,7 @@ fn start(options: &Options) -> R<u8> {
         .canonicalize()
         .map_err(|error| format!("cannot resolve {}: {error}", shown(&options.root)))?;
     let authorization = authorize(&root, &options.authorization)?;
-    let running = std::env::current_exe()
-        .and_then(|path| path.canonicalize())
-        .map_err(|error| format!("cannot locate the running bench-tools: {error}"))?;
-    let pinned = pinned_runtime(&authorization.value, &running)?;
-    let pinned = pinned
-        .canonicalize()
-        .map_err(|error| format!("cannot resolve {}: {error}", shown(&pinned)))?;
-    if pinned != running {
-        if std::env::var_os(HANDED_OVER).is_some() {
-            return Err(format!(
-                "the pinned bench-tools {} did not start as itself",
-                shown(&pinned)
-            ));
-        }
-        use std::os::unix::process::CommandExt;
-        let error = std::process::Command::new(&pinned)
-            .args(std::env::args_os().skip(1))
-            .env(HANDED_OVER, "1")
-            .exec();
-        return Err(format!(
-            "cannot start the pinned bench-tools {}: {error}",
-            shown(&pinned)
-        ));
-    }
+    let running = hand_over(&authorization.value)?;
     std::fs::create_dir_all(&options.directory)
         .map_err(|error| format!("cannot create {}: {error}", shown(&options.directory)))?;
     let directory = options
@@ -630,12 +637,13 @@ fn authorized_cap(authorization: &Value) -> R<Option<Usd>> {
     Usd::of(cap).map(Some)
 }
 
-fn quota_stop_percent(authorization: &Value) -> R<f64> {
+/// The authorization's `quotaStopPercent`, `default` when it names none.
+pub(crate) fn quota_stop_percent(authorization: &Value, default: f64) -> R<f64> {
     let percent = match authorization
         .as_object()
         .and_then(|object| object.get("quotaStopPercent"))
     {
-        None => Some(QUOTA_STOP_PERCENT),
+        None => Some(default),
         Some(Value::Int(digits)) => digits.parse().ok(),
         Some(Value::Float(number)) => Some(*number),
         Some(_) => None,
@@ -727,13 +735,12 @@ fn copied_digest(kind: Kind, bin: &Path) -> Option<String> {
 /// `(version, PATH)` of the client this queue grades with. The first run of a queue copies the client installed
 /// then into the queue directory, and every run executes that copy, so an update of the installed client during or
 /// between runs changes no batch's client.
-fn pin_client(
+pub(crate) fn pin_client(
     effects: &dyn Effects,
     directory: &Path,
-    grader: &Grader,
+    kind: Kind,
     expected: Option<&str>,
 ) -> R<(String, OsString)> {
-    let kind = grader.kind();
     let name = kind.name();
     let record = directory.join("client.json");
     let bin = directory.join("client-bin");
@@ -773,7 +780,7 @@ fn pin_client(
             shown(&record)
         ));
     }
-    if let Some(wanted) = expected.or(grader.cli_version.as_deref())
+    if let Some(wanted) = expected
         && wanted != version
     {
         return Err(format!(
@@ -822,6 +829,69 @@ fn run_name(run: &str) -> &str {
         .unwrap_or(run)
 }
 
+/// The subscription meters' verdict on new launches, from a reading kept up to five minutes.
+pub(crate) struct QuotaGate {
+    clients: Vec<Pinned>,
+    stop_percent: f64,
+    /// What must not be running when the sign-in is renewed.
+    work: &'static str,
+    /// The last reading that gave a verdict.
+    pub(crate) reading: Option<Value>,
+    read_at: f64,
+}
+
+impl QuotaGate {
+    pub(crate) fn new(clients: Vec<Pinned>, stop_percent: f64, work: &'static str) -> Self {
+        QuotaGate {
+            clients,
+            stop_percent,
+            work,
+            reading: None,
+            read_at: 0.0,
+        }
+    }
+
+    fn verdict(&self, usage: &Value, moment: f64) -> Result<(Option<String>, bool), Unreadable> {
+        let usage = subscription_meters::checked(&self.clients, usage.clone())?;
+        let stop = subscription_meters::quota_stop(&usage, self.stop_percent, moment, self.work)
+            .map_err(|message| Unreadable {
+                message,
+                sign_in: false,
+            })?;
+        Ok((stop, subscription_meters::sign_in_expiring(&usage, moment)))
+    }
+
+    /// The reason the plan's meters stop new launches, from a reading no older than five minutes. A sign-in that
+    /// the reading shows about to expire is read again, since a person may have renewed it.
+    pub(crate) fn stop(&mut self, effects: &dyn Effects, path: &OsStr) -> Option<String> {
+        let moment = effects.now();
+        let outcome = (|| {
+            let mut verdict = None;
+            if let Some(usage) = &self.reading
+                && moment - self.read_at <= QUOTA_MAX_AGE_SECONDS
+            {
+                verdict = Some(self.verdict(usage, moment)?);
+            }
+            match verdict {
+                Some((stop, false)) => Ok(stop),
+                _ => {
+                    let usage = effects.meters(&self.clients, path)?;
+                    let (stop, _) = self.verdict(&usage, moment)?;
+                    self.reading = Some(usage);
+                    self.read_at = moment;
+                    Ok(stop)
+                }
+            }
+        })();
+        outcome.unwrap_or_else(|error: Unreadable| {
+            Some(format!(
+                "The subscription meters could not be read: {}",
+                error.message
+            ))
+        })
+    }
+}
+
 /// What `launch` did with the row at the head of the queue.
 enum Launched {
     /// The row left the queue, with the dispatch to start when it reserved one.
@@ -865,11 +935,10 @@ struct Controller<'e> {
     authorization: &'e Authorization,
     plan: Value,
     cap: Option<Usd>,
-    stop_percent: f64,
+    gate: QuotaGate,
     grader: Grader,
     cli_version: String,
     client_path: OsString,
-    clients: Vec<Pinned>,
     workspaces: PathBuf,
     archives: PathBuf,
     groups: HashMap<Batch, Vec<Value>>,
@@ -882,7 +951,6 @@ struct Controller<'e> {
     queue: VecDeque<usize>,
     stopped: Option<Stop>,
     completed: usize,
-    read_at: f64,
 }
 
 /// Grade the queue the authorization pins; the exit code: 0 once every batch is mapped or the limit is reached,
@@ -907,13 +975,15 @@ impl<'e> Controller<'e> {
             );
         }
         let cap = authorized_cap(value)?;
-        let stop_percent = quota_stop_percent(value)?;
+        let stop_percent = quota_stop_percent(value, QUOTA_STOP_PERCENT)?;
         let grader = Grader::of(value)?;
         let (cli_version, client_path) = pin_client(
             effects,
             &run.directory,
-            &grader,
-            run.expected_cli_version.as_deref(),
+            grader.kind(),
+            run.expected_cli_version
+                .as_deref()
+                .or(grader.cli_version.as_deref()),
         )?;
         let clients = match grader.kind() {
             Kind::Pi => Vec::new(),
@@ -1035,11 +1105,10 @@ impl<'e> Controller<'e> {
                 .to_vec(),
             plan,
             cap,
-            stop_percent,
+            gate: QuotaGate::new(clients, stop_percent, "grading session"),
             grader,
             cli_version,
             client_path,
-            clients,
             workspaces,
             archives,
             groups,
@@ -1051,7 +1120,6 @@ impl<'e> Controller<'e> {
             queue: VecDeque::new(),
             stopped: None,
             completed: 0,
-            read_at: 0.0,
         })
     }
 
@@ -1258,45 +1326,12 @@ impl<'e> Controller<'e> {
         }
     }
 
-    fn verdict(&self, usage: &Value, moment: f64) -> Result<(Option<String>, bool), Unreadable> {
-        let usage = subscription_meters::checked(&self.clients, usage.clone())?;
-        let stop =
-            subscription_meters::quota_stop(&usage, self.stop_percent, moment, "grading session")
-                .map_err(|message| Unreadable {
-                message,
-                sign_in: false,
-            })?;
-        Ok((stop, subscription_meters::sign_in_expiring(&usage, moment)))
-    }
-
-    /// The reason the plan's meters stop new launches, from a reading no older than five minutes. A sign-in that
-    /// the reading shows about to expire is read again, since a person may have renewed it.
     fn quota(&mut self) -> Option<String> {
-        let moment = self.effects.now();
-        let outcome = (|| {
-            let mut verdict = None;
-            if let Some(usage) = self.invocation.get("meters")
-                && moment - self.read_at <= QUOTA_MAX_AGE_SECONDS
-            {
-                verdict = Some(self.verdict(usage, moment)?);
-            }
-            match verdict {
-                Some((stop, false)) => Ok(stop),
-                _ => {
-                    let usage = self.effects.meters(&self.clients, &self.client_path)?;
-                    let (stop, _) = self.verdict(&usage, moment)?;
-                    self.invocation.insert("meters".into(), usage);
-                    self.read_at = moment;
-                    Ok(stop)
-                }
-            }
-        })();
-        outcome.unwrap_or_else(|error: Unreadable| {
-            Some(format!(
-                "The subscription meters could not be read: {}",
-                error.message
-            ))
-        })
+        let stop = self.gate.stop(self.effects, &self.client_path);
+        if let Some(usage) = &self.gate.reading {
+            self.invocation.insert("meters".into(), usage.clone());
+        }
+        stop
     }
 
     fn within_quota(&mut self) -> R<bool> {

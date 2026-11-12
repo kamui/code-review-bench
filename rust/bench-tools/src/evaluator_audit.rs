@@ -4,6 +4,8 @@
 //! Every record of a round is written once under `<current>/audit/<seed>/`, except a second assessment, which is
 //! numbered under `second/` like a current assessment; each operation holds the record lock.
 
+pub mod second_pass;
+
 use crate::calibration::{Map, at, each, is, object, sorted, text};
 use crate::claim_grading;
 use crate::claims;
