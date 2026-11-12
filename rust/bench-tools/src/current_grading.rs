@@ -412,7 +412,7 @@ pub fn file_hash(path: &PyPath) -> R<String> {
 /// The repository a command reads, resolved as `Path(root).resolve()`.
 pub struct Root {
     pub path: PyPath,
-    repo: ruling::Repo,
+    pub(crate) repo: ruling::Repo,
     validator: std::cell::RefCell<Validator>,
     schemas: std::cell::RefCell<HashMap<&'static str, Value>>,
 }
@@ -1785,19 +1785,20 @@ pub fn validate_documents(
     )?;
     let mut families = Dict::default();
     let mut pre_existing = Dict::default();
+    let every: Vec<Value> = decisions.values().cloned().collect();
     for decision in decisions.values() {
         let dimension = item(decision, "dimension")?;
         let admission = is(dimension, "pre-existing-admission");
         if admission {
             require(
                 is(get_or(decision, "settled_by", &s("owner"))?, "owner"),
-                "pre-existing-problem admission stays with the owner",
+                "pre-existing-problem admission stays with the owner: policy v3 filing for pre-existing-admission is not enforced yet",
             )?;
         }
         let faults = if admission {
             Vec::new()
         } else {
-            delegation::filing_faults(&root.repo, decision, "candidate")?
+            delegation::decision_faults(&root.repo, decision, &every)?
         };
         require(
             faults.is_empty(),
@@ -2241,7 +2242,7 @@ pub fn validate_documents(
         let faults = if has_problem {
             Vec::new()
         } else {
-            delegation::filing_faults(&root.repo, ruling, "recovery")?
+            delegation::filing_faults(&root.repo, ruling, delegation::Filed::Credit)?
         };
         require(
             faults.is_empty(),

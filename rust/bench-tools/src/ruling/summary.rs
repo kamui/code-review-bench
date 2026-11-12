@@ -92,6 +92,30 @@ fn compare_keys(left: &(Value, Vec<Natural>), right: &(Value, Vec<Natural>)) -> 
 /// Every before-record under docs/research with its after-record, in the order rounds opened. Refuses a bad
 /// record, pin or round file.
 pub fn records(repo: &Repo) -> Py<Vec<Pair>> {
+    let mut pairs = ordered_records(repo)?;
+    for position in 0..pairs.len() {
+        if !pairs[position].after.truthy() {
+            continue;
+        }
+        let pair = &pairs[position];
+        let problems = delegation::settlement_faults(
+            repo,
+            &pair.before,
+            &pair.after,
+            Some(&repo.join(&pair.path)),
+            Some(&pairs[..=position]),
+        )?;
+        if !problems.is_empty() {
+            return value_error(format!("{}: {}", pair.path, problems.join("; ")));
+        }
+    }
+    declared_answers(repo, &mut pairs)?;
+    Ok(pairs)
+}
+
+/// The records as [`records`] orders them, each checked alone: an agent settlement is not yet checked against the
+/// history before it, and no declared answers are restored.
+pub fn ordered_records(repo: &Repo) -> Py<Vec<Pair>> {
     let research = repo.join("docs/research");
     for round_path in rglob(&research, "round.json")? {
         let directory = PyPath::new(parent_bytes(round_path.as_bytes()));
@@ -195,28 +219,10 @@ pub fn records(repo: &Repo) -> Py<Vec<Pair>> {
         walk.visit(name)?;
     }
     let ordered = walk.ordered;
-    let mut pairs: Vec<Pair> = ordered
+    Ok(ordered
         .into_iter()
         .map(|position| pairs[position].clone())
-        .collect();
-    for position in 0..pairs.len() {
-        if !pairs[position].after.truthy() {
-            continue;
-        }
-        let pair = &pairs[position];
-        let problems = delegation::settlement_faults(
-            repo,
-            &pair.before,
-            &pair.after,
-            Some(&repo.join(&pair.path)),
-            Some(&pairs[..=position]),
-        )?;
-        if !problems.is_empty() {
-            return value_error(format!("{}: {}", pair.path, problems.join("; ")));
-        }
-    }
-    declared_answers(repo, &mut pairs)?;
-    Ok(pairs)
+        .collect())
 }
 
 fn parent_bytes(path: &[u8]) -> &[u8] {
@@ -442,7 +448,7 @@ pub fn ruling(repo: &Repo, before: &Value) -> Py<Value> {
 }
 
 /// The later records that review this pair's ruling, by position.
-fn successors(repo: &Repo, at: usize, pairs: &[Pair]) -> Py<Vec<usize>> {
+pub fn successors(repo: &Repo, at: usize, pairs: &[Pair]) -> Py<Vec<usize>> {
     let pair = &pairs[at];
     let name = ruling(repo, &pair.before)?;
     let mut found = Vec::new();
@@ -616,6 +622,23 @@ pub fn consensus(repo: &Repo, before: &Value) -> Py<bool> {
     Ok(outcome(&blind[0])?.eq(&outcome(&blind[1])?)
         && outcome(&first)?.eq(&outcome(&blind[0])?)
         && pyvalue::one_of(item(&first, "confidence")?, &["medium", "high"]))
+}
+
+/// At least `blind` blind answers, every one independent and with the recommender's outcome, whatever their
+/// confidence.
+pub fn unanimous(repo: &Repo, before: &Value, blind: usize) -> Py<bool> {
+    let answers = blind_answers(&pyvalue::iterate(item(before, "answers")?)?)?;
+    let (_, first) = record::recommender(before)?;
+    if answers.len() < blind {
+        return Ok(false);
+    }
+    let agreed = outcome(&first)?;
+    for answer in &answers {
+        if !independent(repo, answer, before)? || !outcome(answer)?.eq(&agreed) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// A contract 2 record whose first answers were all written before the question, and whose blind answers do not
@@ -838,6 +861,269 @@ pub struct Entry {
     lessons: Vec<Value>,
     digest: Vec<Value>,
     contract_2: Option<Trust>,
+    v3_reading: Option<V3Reading>,
+}
+
+/// What the owner reads of a type's agent settlements in the rounds that run under policy v3, and the gaps and
+/// conflicts the agreed answers stated.
+struct V3Reading {
+    rounds: Vec<RoundReading>,
+    stated_gaps: Vec<Value>,
+}
+
+struct RoundReading {
+    round: Value,
+    read_all: bool,
+    reasons: Vec<String>,
+}
+
+impl RoundReading {
+    fn to_value(&self) -> Value {
+        let mode = if self.read_all { "all" } else { "one-in-five" };
+        object(vec![
+            ("round", self.round.clone()),
+            ("mode", pyvalue::text(mode)),
+            (
+                "reasons",
+                Value::Array(
+                    self.reasons
+                        .iter()
+                        .map(|reason| pyvalue::text(reason))
+                        .collect(),
+                ),
+            ),
+        ])
+    }
+}
+
+fn under_v3(repo: &Repo, pair: &Pair, known: &mut Vec<(Value, bool)>) -> Py<bool> {
+    pyvalue::hashable(&pair.round)?;
+    if let Some((_, under)) = known.iter().find(|(round, _)| round.py_eq(&pair.round)) {
+        return Ok(*under);
+    }
+    let under = delegation::under_adopted_v3(repo, &pair.before).unwrap_or(false);
+    known.push((pair.round.clone(), under));
+    Ok(under)
+}
+
+/// The before-records of the owner's audit calls among the reconciliations at `selected`. A round under policy v3
+/// takes the five its audit's seed ranks first among the disputed units of the comparison its records pin. Other
+/// rounds keep the earlier rule: the five decided records at `decided` with the lowest before-record hashes. A record
+/// of a round under policy v3 whose call cannot be told is listed with the reason, never left out.
+fn audit_calls(
+    repo: &Repo,
+    pairs: &[Pair],
+    decided: &[usize],
+    selected: &[usize],
+) -> Py<Vec<String>> {
+    let mut known = Vec::new();
+    let mut earlier = Vec::new();
+    for position in decided {
+        if !under_v3(repo, &pairs[*position], &mut known)? {
+            earlier.push(*position);
+        }
+    }
+    earlier.sort_by(|left, right| pairs[*left].hash.cmp(&pairs[*right].hash));
+    let mut calls: Vec<String> = earlier
+        .into_iter()
+        .take(delegation::v3::AUDIT_CALLS)
+        .map(|position| pairs[position].path.clone())
+        .collect();
+    let mut filed: Vec<(usize, Value)> = Vec::new();
+    let mut undetermined = Vec::new();
+    for position in selected {
+        if !under_v3(repo, &pairs[*position], &mut known)? {
+            continue;
+        }
+        match get(&pairs[*position].before, "filing")? {
+            Value::Object(filing) if filing.get("comparison").is_some() => {
+                filed.push((
+                    *position,
+                    filing.get("comparison").cloned().unwrap_or(Value::Null),
+                ));
+            }
+            _ => undetermined.push(format!(
+                "{} (undetermined: its filing pins no comparison)",
+                pairs[*position].path
+            )),
+        }
+    }
+    let mut comparisons: Vec<&Value> = Vec::new();
+    for (_, comparison) in &filed {
+        if !comparisons.iter().any(|known| known.py_eq(comparison)) {
+            comparisons.push(comparison);
+        }
+    }
+    for comparison in comparisons {
+        let Some(audit) = delegation::v3::audit(repo, comparison)? else {
+            for (position, pinned) in &filed {
+                if pinned.py_eq(comparison) {
+                    undetermined.push(format!(
+                        "{} (undetermined: the comparison it pins is not one its audit's records derive)",
+                        pairs[*position].path
+                    ));
+                }
+            }
+            continue;
+        };
+        for call in audit.calls() {
+            for (position, pinned) in &filed {
+                if pinned.py_eq(comparison)
+                    && pyvalue::is(get(&pairs[*position].before, "group")?, &call)
+                {
+                    calls.push(pairs[*position].path.clone());
+                }
+            }
+        }
+    }
+    calls.extend(undetermined);
+    Ok(calls)
+}
+
+fn settled_by_agents(pair: &Pair, kind: &Value) -> Py<bool> {
+    Ok(pair.after.truthy()
+        && item(&pair.before, "decision_type")?.py_eq(kind)
+        && pyvalue::is(get(&pair.after, "settled_by")?, "agents"))
+}
+
+/// The reading ADR-0008 gives the owner for the agent settlements of `kind` that sit at `at` in `pairs`, with
+/// `settled[n]` the digest entry of `at[n]`. Marks each such entry `read` and leaves entries of other rounds alone.
+fn v3_digest(
+    repo: &Repo,
+    pairs: &[Pair],
+    kind: &Value,
+    at: &[usize],
+    settled: &mut [Value],
+) -> Py<Option<V3Reading>> {
+    let mut known = Vec::new();
+    let mut members = Vec::new();
+    for (number, position) in at.iter().enumerate() {
+        if under_v3(repo, &pairs[*position], &mut known)? {
+            members.push(number);
+        }
+    }
+    if members.is_empty() {
+        return Ok(None);
+    }
+    let mut rounds: Vec<Value> = Vec::new();
+    for number in &members {
+        let round = &pairs[at[*number]].round;
+        if !rounds.iter().any(|known| known.py_eq(round)) {
+            rounds.push(round.clone());
+        }
+    }
+    let mut readings = Vec::new();
+    for round in rounds {
+        let mine: Vec<usize> = members
+            .iter()
+            .copied()
+            .filter(|number| pairs[at[*number]].round.py_eq(&round))
+            .collect();
+        let opened = pairs
+            .iter()
+            .position(|pair| pair.round.py_eq(&round))
+            .unwrap_or(0);
+        let mut reasons = Vec::new();
+        let mut earlier_settlement = false;
+        for pair in &pairs[..opened] {
+            if settled_by_agents(pair, kind)? && under_v3(repo, pair, &mut known)? {
+                earlier_settlement = true;
+                break;
+            }
+        }
+        if !earlier_settlement {
+            reasons.push(
+                "the first round under policy v3 with an agent settlement of this type".to_string(),
+            );
+        }
+        let mut latest = None;
+        let mut earlier_settled = None;
+        let mut compared = false;
+        for pair in pairs {
+            if !item(&pair.before, "decision_type")?.py_eq(kind) || !eligible(&pair.before)? {
+                continue;
+            }
+            let setup = delegation::setup(&pair.before)?;
+            let by_agents = settled_by_agents(pair, kind)?;
+            let here = pair.round.py_eq(&round);
+            let differs = |previous: &Option<(Value, Vec<Value>)>| {
+                previous
+                    .as_ref()
+                    .is_some_and(|previous| !delegation::same_setup(&setup, previous))
+            };
+            if !here {
+                if by_agents {
+                    earlier_settled = Some(setup.clone());
+                }
+            } else if differs(&latest) {
+                reasons.push(format!(
+                    "a party's model was replaced: {} differs from the latest earlier counted decision of this type",
+                    pair.path
+                ));
+                compared = true;
+            } else if by_agents && !compared && differs(&earlier_settled) {
+                reasons.push(format!(
+                    "a party's model was replaced: {} differs from the latest agent settlement of this type in an earlier round",
+                    pair.path
+                ));
+            }
+            if here && by_agents {
+                compared = true;
+            }
+            latest = Some(setup);
+        }
+        let mut suspended = false;
+        for (earlier_at, earlier) in pairs.iter().enumerate() {
+            if settled_by_agents(earlier, kind)?
+                && delegation::v3::changed(repo, earlier_at, pairs, Some(&round))?
+            {
+                suspended = true;
+                break;
+            }
+        }
+        if suspended {
+            reasons.push(
+                "an owner review in this round changed an agent settlement of this type, so the type is suspended for the rest of the round"
+                    .to_string(),
+            );
+        }
+        let read_all = !reasons.is_empty();
+        let mut order = mine.clone();
+        order.sort_by(|left, right| pairs[at[*left]].hash.cmp(&pairs[at[*right]].hash));
+        for (rank, number) in order.into_iter().enumerate() {
+            if let Value::Object(members) = &mut settled[number] {
+                members.insert("read".into(), Value::Bool(read_all || rank % 5 == 0));
+            }
+        }
+        readings.push(RoundReading {
+            round,
+            read_all,
+            reasons,
+        });
+    }
+    let mut stated_gaps = Vec::new();
+    for number in &members {
+        let before = &pairs[at[*number]].before;
+        for answer in pyvalue::iterate(item(before, "answers")?)? {
+            for stated in ["rule_gap", "conflict"] {
+                let said = get(&answer, stated)?;
+                if !matches!(said, Value::Null) {
+                    stated_gaps.push(object(vec![
+                        ("path", pyvalue::text(&pairs[at[*number]].path)),
+                        ("ruling", item(before, "ruling")?.clone()),
+                        ("group", item(before, "group")?.clone()),
+                        ("by", item(&answer, "by")?.clone()),
+                        ("stated", pyvalue::text(stated)),
+                        ("said", said.clone()),
+                    ]));
+                }
+            }
+        }
+    }
+    Ok(Some(V3Reading {
+        rounds: readings,
+        stated_gaps,
+    }))
 }
 
 struct Trust {
@@ -972,6 +1258,7 @@ fn entry(
     let mut parties: Vec<(Value, Vec<(Value, Counts)>)> = Vec::new();
     let (mut asks, mut misses) = (Counter::default(), Counter::default());
     let (mut lessons, mut settled) = (Vec::new(), Vec::new());
+    let mut settled_at: Vec<usize> = Vec::new();
     let (mut blind_high, mut unanimous) = (0, 0);
     let mut previous_fixes: Vec<(Value, String)> = Vec::new();
     let mut recurrence: Vec<(String, String)> = Vec::new();
@@ -1065,10 +1352,10 @@ fn entry(
             }
         }
         if item(after, "asked")?.truthy() {
-            let routed = delegation::route(
+            let routed = delegation::route_under(
                 repo,
                 before,
-                &repo.join(delegation::POLICY),
+                None,
                 Some(&pairs[..=*position]),
                 Some(&repo.join(&pair.path)),
             )?;
@@ -1105,6 +1392,7 @@ fn entry(
             for decision in &decisions {
                 outcomes.push(item(decision, "outcome")?.clone());
             }
+            settled_at.push(*position);
             settled.push(object(vec![
                 ("path", pyvalue::text(&pair.path)),
                 ("ruling", item(before, "ruling")?.clone()),
@@ -1133,6 +1421,7 @@ fn entry(
     let ask_reasons = asks.sorted()?;
     let misses = misses.sorted()?;
     let mut trust = None;
+    let mut v3_reading = None;
     if contract == 2 {
         let earned_now = earned(repo, pairs, &kind_value, None, None)?;
         let opening_pair = selected.iter().copied().find(|position| {
@@ -1184,21 +1473,18 @@ fn entry(
                 );
             }
         }
-        let audit_calls = (kind == "reconciliation").then(|| {
-            let mut ordered = group.clone();
-            ordered.sort_by(|left, right| pairs[*left].hash.cmp(&pairs[*right].hash));
-            ordered
-                .into_iter()
-                .take(5)
-                .map(|position| pairs[position].path.clone())
-                .collect()
-        });
+        let audit_calls = if kind == "reconciliation" {
+            Some(audit_calls(repo, pairs, &group, &selected_pairs)?)
+        } else {
+            None
+        };
         trust = Some(Trust {
             earned: earned_now,
             round_level,
             effective_round_level,
             audit_calls,
         });
+        v3_reading = v3_digest(repo, pairs, &kind_value, &settled_at, &mut settled)?;
     }
     Ok(Some(Entry {
         decisions: group.len(),
@@ -1212,6 +1498,7 @@ fn entry(
         lessons,
         digest: settled,
         contract_2: trust,
+        v3_reading,
     }))
 }
 
@@ -1289,6 +1576,13 @@ impl Entry {
                     Value::Array(calls.iter().map(|path| pyvalue::text(path)).collect()),
                 ));
             }
+        }
+        if let Some(reading) = &self.v3_reading {
+            members.push((
+                "reading",
+                Value::Array(reading.rounds.iter().map(RoundReading::to_value).collect()),
+            ));
+            members.push(("stated_gaps", Value::Array(reading.stated_gaps.clone())));
         }
         Ok(object(members))
     }
@@ -1415,7 +1709,7 @@ impl Summary {
                     ));
                     if let Some(level) = trust.effective_round_level {
                         lines.push(format!("Effective round level: {level}."));
-                        if level == 0 && !entry.digest.is_empty() {
+                        if level == 0 && !entry.digest.is_empty() && entry.v3_reading.is_none() {
                             lines
                                 .push("Read every settled decision in this round's digest.".into());
                         }
@@ -1461,13 +1755,51 @@ impl Summary {
                     } else {
                         ""
                     };
+                    let read = if get(settled, "read")?.truthy() {
+                        " [read]"
+                    } else {
+                        ""
+                    };
                     lines.push(format!(
-                        "- {} {}: {}. {}{sample}",
+                        "- {} {}: {}. {}{sample}{read}",
                         item(settled, "ruling")?.py_str(),
                         item(settled, "group")?.py_str(),
                         item(settled, "outcome")?.py_str(),
                         item(settled, "path")?.py_str()
                     ));
+                }
+                if let Some(reading) = &entry.v3_reading {
+                    lines.extend([String::new(), "Owner reading under policy v3:".into()]);
+                    for round in &reading.rounds {
+                        let line = if round.read_all {
+                            format!(
+                                "- round {}: read every settlement: {}",
+                                round.round.py_str(),
+                                round.reasons.join("; ")
+                            )
+                        } else {
+                            format!(
+                                "- round {}: read one in five, every fifth by before-record hash starting with the first",
+                                round.round.py_str()
+                            )
+                        };
+                        lines.push(line);
+                    }
+                    lines.extend([String::new(), "Stated gaps and conflicts:".into()]);
+                    if reading.stated_gaps.is_empty() {
+                        lines.push("- none".into());
+                    }
+                    for gap in &reading.stated_gaps {
+                        lines.push(format!(
+                            "- {} {}, {}: {}: {} {}",
+                            item(gap, "ruling")?.py_str(),
+                            item(gap, "group")?.py_str(),
+                            item(gap, "by")?.py_str(),
+                            item(gap, "stated")?.py_str(),
+                            item(gap, "said")?.py_str(),
+                            item(gap, "path")?.py_str()
+                        ));
+                    }
                 }
                 if let Some(calls) = entry
                     .contract_2

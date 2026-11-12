@@ -261,6 +261,127 @@ Only the rounds pinned at opening can raise that round's level. A trust miss or 
 
 Only explicit owner decisions count toward trust. An agent settlement and silence after a digest add no match. A fresh owner confirmation can count through its own record. The complete credit decision includes both `says_what` and `identifies_cause`; disagreement or cannot-tell on either goes to the owner, and a changed fact is a miss even if the outcome word stays the same.
 
+## Replay a proposed policy
+
+[ADR-0008](adr/0008-settle-adjudications-on-agreement.md) proposes policy v3, which settles on agreement instead of an earned streak. It is not adopted, and policy v2 above stays in force. To see what its gates would have passed among the saved decisions, run:
+
+```sh
+bench/tools/bench-tools ruling replay [--policy bench/grading/delegation.v3.json] [--json]
+```
+
+The command reads a version 3 policy file, proposed or adopted, and every decided record under `docs/research/`. For each decision type it prints:
+
+- The gate, or `owner` for a type the policy keeps with the owner.
+- The decisions, and the labels that were never needed because the decision that stands is `not-applicable`.
+- The decisions on which the parties agreed as the gate requires, and those that also passed the gate.
+- How many of the passing answers are the decision that stands, counting a later review as the summary does, and on how many pull requests.
+- Whether the type meets the policy's entry bar.
+
+It then lists why an agreed answer would still go to the owner, the passing answers by outcome, and each decision that differs from its agreed answer. An agent settlement that no owner record reviews counts on neither side.
+
+The command applies each type's gate and `always_ask`. It does not apply the five audit calls that go to the owner in each audit round, the owner's reading of the digest, or suspension.
+
+The command refuses a policy it would not apply as written: another version, a gate field it does not read, a blind-answer count that differs from the records', or an `always_ask` other than policy v2's list with or without `gap` and `conflict`. To compare a variant, copy the policy file, edit the copy and pass it with `--policy`.
+
+A replay settles nothing and grants no authority. The owner made the replayed decisions with the parties' picks visible, so its agreement is an upper bound.
+
+## Round opening and policy v3
+
+Policy v3 is proposed, so no round runs under it yet. The tool already routes a round by the policy its opening pins, which is how a round will start under v3 once the owner adopts it.
+
+A round's `opening.json` may hold `policy`, a path/SHA-256 pin to a policy file. A round whose opening holds no `policy` runs under policy v2, as every round saved so far does. A round whose opening pins a policy runs under that file for all its decisions:
+
+- `ruling route` reads the pinned policy. A `--policy` that names another file is a reason to ask, not an override.
+- The pin names `bench/grading/delegation.v2.json` or `bench/grading/delegation.v3.json`. A round cannot run under a policy file saved anywhere else.
+- A v3 file routes only when its terms equal the terms built into the tool, as policy v2's do. A changed term needs a new version. The replay still reads a variant.
+- A v3 file is adopted when its `status` is `adopted`, its receipt is the pinned file `bench/grading/rulings/delegation.v3.md`, and that receipt holds its `adoption_scope` word for word.
+- Any other pin sends every decision of the round to the owner: one that does not match its file, a `policy` of null, another path, another version, changed terms or a policy that is not adopted.
+
+Under an adopted policy v3, `route` prints `SETTLE under policy v3, on agreement` when none of these holds, and otherwise `ASK` with each one that does:
+
+- The policy keeps the decision type with the owner.
+- The first answers do not count, or the record reviews a saved ruling.
+- An answer is one that `always_ask` reserves.
+- The parties did not give the agreement the type's gate names.
+- The round opening is refused.
+- The type has not met the entry bar. The count covers the rounds the opening pins as closed and follows the replay's rules, so a review saved after the opening counts from the next round. Unlike the replay, the count takes an agent settlement that a review changed as not standing, even when a later review restored its outcome.
+- A review saved in this round changed an agent settlement of the type, from this round or an earlier one. The review suspends each record after it in the round, and each record still pending when it is saved. A later review that restores the settlement's outcome does not lift the suspension. As under policy v2, the tool reads order from the ruling file names.
+- The record's `filing` is missing or does not have its decision type's shape.
+- Filing for the type is not enforced yet.
+
+The last reason applies to `pre-existing-admission`. Its gate is evaluated, and the replay counts it, but an agent settlement of one cannot be filed yet. `candidate`, `reconciliation` and `band` settle end to end:
+
+- `ruling check` and `ruling summary` accept an agent-settled after-record in a v3 round only when it pins the round's policy, `route` gives no reason at its place in history, and it repeats the agreed answer with `asked: 0` and `ground: null`.
+- A current candidate decision filed from it cites the v3 adoption receipt and its `adoption_scope`, and its reason names policy v3 and agents. A credit filing that pins a v3 settlement is refused, and so is an owner's decision that cites the v3 adoption receipt.
+- An agent-settled control or admission decision in the current records is refused.
+
+### Impact labels under policy v3
+
+Agents settle the first label of a known problem that the owner admitted in a round under policy v3. Every other label goes to the owner: a label on a problem admitted before v3, a second label, a label on a pre-existing problem, and an answer of `not-applicable` or `unknown`.
+
+Prepare the label after the admission is filed. The band before-record's `filing` holds:
+
+- `revision` and `subject`, the family's id.
+- `candidate`, the id of the candidate that was admitted.
+- `admission`, a pin to the after-record of the pair that admitted it.
+- `card`, the path and SHA-256 of `bench/grading/current/impact-cards/<subject>.json`.
+- `boundary`, a pin to the impact boundary in force.
+
+Write the JSON card first, then copy its text fields into the case file word for word. The parties read the case file, and the tool compares the two, so the card that is filed is the card they read.
+
+`route` settles a label only when, beyond the reasons above:
+
+- The admitting pair is earlier on the same target, in a round under an adopted policy v3. The owner decided it `problem`, it is not a review, its decision still stands, and its own `filing.subject` is the label's `candidate`.
+- The current records show that candidate admitted as the subject. The claim has the subject as its `family_id`, and the claim's eligibility decision and the family's are approved, owner-settled and cite the same receipt.
+- No other decided band record binds the subject, and the subject has no approved impact decision. Once the label is decided, the owner's reviews of it do not count when they sit in a round whose opening pins the label's round as closed and no review in its chain decided otherwise. A review in the label's own round still counts, because order within a round comes from file names.
+- `boundary` is the pin that every approved, owner-settled impact decision shares.
+- The card passes the checks `calibration check` makes, and the case file states each of its text fields.
+
+The filed impact decision is an agent's when it holds `settled_by: "agents"`. `current-grading check` then requires all of the above again, and that:
+
+- The settlement is a valid v3 band settlement for the same target, revision, subject and boundary, and the decision's outcome is the settled label.
+- `evidence` holds the card at the path and hash in `filing.card`.
+- A `confirmed` independent check has the before-record as its `source`, names the inspector's model as its checker and names the recommender's model as the party it is independent of.
+- The decision is the subject's only impact decision, cites the v3 adoption receipt and its `adoption_scope`, and has a reason that names policy v3 and agents.
+
+Two limits remain, and review of the change to `bench/grading/current/` is the control for both:
+
+- The tool reads the records as they are and not their history. It cannot see that an owner's approved label was deleted and replaced.
+- The tool checks that an owner's eligibility decision quotes its receipt, as it always has, and not that the receipt rules on that subject. A session that writes an eligibility decision the owner never made, or points a claim at another family that cites the same receipt, can give a first label to a family the owner did not admit that way.
+
+### Reconciliation under policy v3
+
+A reconciliation before-record binds its unit in `filing`: `comparison`, a path/SHA-256 pin to the audit's `comparison.json`, and `unit`, the unit's id, which is also the record's `group`.
+
+The tool reads an audit only from `bench/grading/current/audit/<seed>/`, for the plan's seed or a superseded seed in `audits.json`. The comparison must pin the `sample.json` beside it and equal what the tool derives from that sample. For the plan's seed the sample must also be the one the tool draws again from the inventory, with the live grades. An audit that `audits.json` records as assessed, with its conclusion and comparison pinned, is checked against its own saved grades, so a grade corrected after the conclusion does not fail it. A comparison that fails any of these sends every reconciliation of the round to the owner. A plan audit that failed and is not yet superseded cannot be drawn again once its grades are corrected, so its reconciliations go to the owner.
+
+The owner's five audit calls are fixed before any record exists. They are the disputed units with the five lowest SHA-256 of `<audit seed>:reconciliation:<unit id>`. The owner chose the seed and the comparison holds the unit ids, so the session that prepares the round cannot choose the calls. A round under policy v2 keeps its earlier selection by before-record hash.
+
+`route` settles a reconciliation only when, beyond the reasons above:
+
+- The round's reconciliation before-records, leaving out reviews of a saved ruling, cover the comparison's disputed units once each.
+- The unit is not one of the five calls and shares no question with one. A question is one `ruling` name in the rulings index, so a grouped question that holds a call goes to the owner whole.
+
+For a reconciliation it cannot show to be outside the five calls, `route` withholds every first answer. It prints the case file and the reason, without the reconciler's call or confidence. `ruling summary` lists the five calls for the round and names a record it cannot place.
+
+An agent-settled row in the audit's `reconciliation.json` holds `settled_by: "agents"`, `settlement` (the after-record's pin), `receipt`, `receipt_scope` and a reason that names policy v3 and agents. `evaluator-audit conclude` and `calibration check` refuse:
+
+- A row for a unit outside the pinned comparison, for one of the five calls or for a unit that shares a question with one.
+- A row whose `finding` is not the settled outcome, or whose settlement pins another comparison.
+- Once a ruling record binds any unit of the audit, a row with no bound record, a row whose `finding` is not the decision that stands for its unit, and a row for an agent-settled unit that lacks the settlement fields.
+
+A record binds a row only when its `filing` holds this audit's comparison pin and the row's unit. An agent-settled review never stands, and an agent-settled record counts only when it passes the settlement check. An audit with no bound record, as every audit saved so far, is checked as before.
+
+For a round under an adopted policy v3, `ruling summary` adds the digest the owner reads. Each decision type with agent settlements in the round gets:
+
+- Every settlement, one line each, with `[read]` on those the owner reads.
+- The reading for the round. The owner reads every settlement when this is the first v3 round with an agent settlement of the type, when a counted record of the type in the round names a party model that differs from the latest earlier counted record of the type, when the round's first agent settlement of the type differs from the latest agent settlement of the type in an earlier round, or when a review in the round changed an agent settlement of the type, even when a later review restored its outcome. Otherwise the owner reads one in five, ordered by before-record hash and starting with the first. The line gives the reason.
+- Each gap or conflict a party stated on a settled decision, with the party and its sentence.
+
+`--json` holds the same in `reading`, `stated_gaps` and each digest entry's `read`. A round under policy v2 prints none of this.
+
+These parts of ADR-0008 are not enforced yet: filing for pre-existing admissions, and labels on pre-existing problems, which need a checked link from a candidate's admission to the problem it admitted.
+
 ## Filing a policy v2 settlement
 
 Keep the existing candidate and credit formats. Add `settled_by: "agents"` and `settlement`, a path/SHA-256 pin to the after-record. The after-record pins the policy in force and the before-record, has `asked: 0`, `ground: null`, and records the agreed answer without alteration. Its policy adoption receipt is the current decision's `receipt`; `receipt_scope` is the exact `adoption_scope`. The reason says agents settled under policy v2. Existing owner and ADR-0006 records need no new fields.

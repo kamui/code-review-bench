@@ -554,6 +554,48 @@ fn audit_problems(root: &Root, documents: &Documents) -> R<Vec<String>> {
     Ok(problems)
 }
 
+/// Each concluded audit round's reconciliation, read again so that a row edited after `evaluator-audit conclude`
+/// checked it cannot stand: the file its conclusion pins, and every row as `conclude` checks a filed settlement.
+fn reconciliation_problems(root: &Root, documents: &Documents, current: &[u8]) -> R<Vec<String>> {
+    let audit = documents.get("audit");
+    let none = Value::Array(Vec::new());
+    let mut seeds = vec![at(at(audit, "plan")?, "seed")?.clone()];
+    for round in each(pyvalue::get_or(audit, "superseded", &none)?)?.iter() {
+        seeds.push(at(at(round, "plan")?, "seed")?.clone());
+    }
+    let mut problems = Vec::new();
+    for seed in seeds {
+        let Value::Str(seed) = seed else { continue };
+        let directory = root.local(current)?.join(b"audit").join(seed.as_bytes());
+        let concluded = directory.join(b"conclusion.json");
+        if !pyvalue::is_file(&concluded) {
+            continue;
+        }
+        let conclusion = current_grading::read_json(&concluded)?;
+        let pin = at(&conclusion, "reconciliation")?;
+        let Value::Str(path) = at(pin, "path")? else {
+            problems.push(format!(
+                "audit {seed}: its conclusion pins no reconciliation by path"
+            ));
+            continue;
+        };
+        let saved = root.local(path.as_bytes())?;
+        if !text(&current_grading::file_hash(&saved)?).py_eq(at(pin, "sha256")?) {
+            problems.push(format!(
+                "audit {seed}: reconciliation.json changed since its conclusion"
+            ));
+            continue;
+        }
+        let comparison = at(&conclusion, "comparison")?;
+        let saved = current_grading::read_json(&saved)?;
+        let rows = each(at(&saved, "decisions")?)?;
+        for fault in evaluator_audit::reconciliation_faults(root, &rows, comparison)? {
+            problems.push(format!("audit {seed}: {fault}"));
+        }
+    }
+    Ok(problems)
+}
+
 fn summary(decision: Option<&Value>) -> R<Value> {
     let Some(decision) = decision else {
         return Ok(Value::Null);
@@ -1040,6 +1082,7 @@ fn check(root: &Root, current: &[u8]) -> R<(Vec<String>, Documents)> {
     problems.extend(scope_problems(root, &documents)?);
     problems.extend(control_problems(&documents)?);
     problems.extend(audit_problems(root, &documents)?);
+    problems.extend(reconciliation_problems(root, &documents, current)?);
     if problems.is_empty() {
         blinded_cards(root, &documents, &cards)?;
         let saved = current_grading::read_json(

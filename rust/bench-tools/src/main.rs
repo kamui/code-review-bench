@@ -16,6 +16,7 @@ use bench_tools::{
 };
 use clap::builder::PossibleValuesParser;
 use clap::error::ErrorKind;
+use clap::parser::ValueSource;
 use clap::{Args, CommandFactory, Parser, Subcommand};
 use std::ffi::{OsStr, OsString};
 use std::fmt::Display;
@@ -807,6 +808,16 @@ enum RulingCommand {
         // argparse took --r and --ro for --round before --root existed, so they stay its abbreviations.
         #[arg(long, aliases = ["r", "ro"], allow_negative_numbers = true)]
         round: Option<OsString>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value = ".", allow_negative_numbers = true)]
+        root: OsString,
+    },
+    /// Replay a version 3 delegation policy's gates over the saved decisions; settles nothing.
+    #[command(infer_long_args = true)]
+    Replay {
+        #[arg(long, default_value = ruling::replay::POLICY, allow_negative_numbers = true)]
+        policy: OsString,
         #[arg(long)]
         json: bool,
         #[arg(long, default_value = ".", allow_negative_numbers = true)]
@@ -4792,7 +4803,26 @@ fn run_ruling_check(
     }
 }
 
-fn run_ruling_route(before: &OsStr, policy: &OsStr, root: &OsStr) -> Result<ExitCode, ExitCode> {
+/// Whether `ruling route` was given `--policy`. Without it, a round runs under the policy its opening pins; when
+/// that cannot be told, the option counts as given, so a differing round policy asks.
+fn route_policy_given(arguments: &[OsString]) -> bool {
+    Cli::command()
+        .try_get_matches_from(attach_dash_led_values(arguments.to_vec()))
+        .ok()
+        .and_then(|matches| {
+            matches
+                .subcommand_matches("ruling")?
+                .subcommand_matches("route")?
+                .value_source("policy")
+        })
+        != Some(ValueSource::DefaultValue)
+}
+
+fn run_ruling_route(
+    before: &OsStr,
+    policy: Option<&OsStr>,
+    root: &OsStr,
+) -> Result<ExitCode, ExitCode> {
     let repo = ruling::Repo::new(pytext::os_bytes(root));
     let before_path = PyPath::new(pytext::os_bytes(before));
     let outcome = (|| -> pyvalue::Py<(Vec<u8>, u8)> {
@@ -4808,10 +4838,33 @@ fn run_ruling_route(before: &OsStr, policy: &OsStr, root: &OsStr) -> Result<Exit
         if !problems.is_empty() {
             return Ok((lines(&problems).into_bytes(), 1));
         }
-        let policy_path = repo.root.join(pytext::os_bytes(policy));
-        let routed = delegation::route(&repo, &record, &policy_path, None, Some(&before_path))?;
+        let policy_path = policy.map(|policy| repo.root.join(pytext::os_bytes(policy)));
+        let routed = delegation::route_under(
+            &repo,
+            &record,
+            policy_path.as_ref(),
+            None,
+            Some(&before_path),
+        )?;
         if routed.reasons.is_empty() {
-            return Ok((format!("SETTLE level {}\n", routed.level).into_bytes(), 0));
+            let settle = if routed.version == 3 {
+                "SETTLE under policy v3, on agreement\n".to_string()
+            } else {
+                format!("SETTLE level {}\n", routed.level)
+            };
+            return Ok((settle.into_bytes(), 0));
+        }
+        if !routed.withheld.is_empty() {
+            let listed: Vec<String> = routed
+                .withheld
+                .iter()
+                .map(|reason| format!("- {reason}"))
+                .collect();
+            let question = ruling::record::withheld_question(&repo, &record)?;
+            return Ok((
+                format!("ASK\n{}\n\n{question}\n", listed.join("\n")).into_bytes(),
+                0,
+            ));
         }
         let listed: Vec<String> = routed
             .reasons
@@ -4864,6 +4917,33 @@ fn run_ruling_summary(
             ))
         } else {
             Ok(format!("{}\n", summary.render()?))
+        }
+    })();
+    match outcome {
+        Ok(output) => {
+            write_stdout(output.as_bytes())?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(raised) => Err(ruling_failed(&raised)),
+    }
+}
+
+fn run_ruling_replay(policy: &OsStr, json: bool, root: &OsStr) -> Result<ExitCode, ExitCode> {
+    let repo = ruling::Repo::new(pytext::os_bytes(root));
+    let outcome = (|| -> pyvalue::Py<String> {
+        let source = pytext::stderr_text(pytext::os_bytes(policy));
+        let policy = ruling::replay::policy(&repo, &repo.root.join(pytext::os_bytes(policy)))?;
+        let pairs = ruling::summary::records(&repo)?;
+        let replay = ruling::replay::replay(&repo, &pairs, policy, &source)?;
+        if json {
+            let options = pyjson::Dumps {
+                ensure_ascii: false,
+                indent: Some(2),
+                ..pyjson::Dumps::default()
+            };
+            Ok(format!("{}\n", pyjson::dumps(&replay.to_value(), &options)))
+        } else {
+            Ok(format!("{}\n", replay.render()))
         }
     })();
     match outcome {
@@ -4931,7 +5011,7 @@ fn run_ruling_dossier(directory: &OsStr) -> Result<ExitCode, ExitCode> {
     }
 }
 
-fn run_ruling(command: RulingCommand) -> Result<ExitCode, ExitCode> {
+fn run_ruling(command: RulingCommand, arguments: &[OsString]) -> Result<ExitCode, ExitCode> {
     match command {
         RulingCommand::Check {
             before,
@@ -4942,10 +5022,15 @@ fn run_ruling(command: RulingCommand) -> Result<ExitCode, ExitCode> {
             before,
             policy,
             root,
-        } => run_ruling_route(&before, &policy, &root),
+        } => run_ruling_route(
+            &before,
+            route_policy_given(arguments).then_some(policy.as_os_str()),
+            &root,
+        ),
         RulingCommand::Summary { round, json, root } => {
             run_ruling_summary(round.as_deref(), json, &root)
         }
+        RulingCommand::Replay { policy, json, root } => run_ruling_replay(&policy, json, &root),
         RulingCommand::Precedents {
             kind,
             exclude,
@@ -5669,7 +5754,7 @@ fn main() -> ExitCode {
         Cli::Archive(ArchiveCommand::CheckScratch { archives }) => check_scratch(&archives),
         Cli::Evidence(command) => run_evidence(command),
         Cli::ImportBenchmark(arguments) => run_import_benchmark(arguments),
-        Cli::Ruling(command) => run_ruling(command),
+        Cli::Ruling(command) => run_ruling(command, &arguments),
         Cli::Grading(GradingCommand::Validate { verdicts, inputs }) => {
             run_grading_validate(&verdicts, &inputs)
         }
