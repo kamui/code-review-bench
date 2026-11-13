@@ -187,7 +187,7 @@ The run cap is 58 attempts at $20, the bound the approved plan already implies, 
 
 ## The probe
 
-`runtimes.frozen.json` must pin the `bench-tools` that the queue runs, in the store the queue names, and only the host that runs the queue can supply it. This record was written on another host. Before the probe, on the run host, at a commit whose `rust` tree is the freeze commit's, such as the merge of this change:
+`runtimes.frozen.json` must pin the `bench-tools` that the queue runs, in the store the queue names, and only the host that runs the queue can supply it. This record was written on another host. Before each launch the queue requires the checkout's runner files (`rust`, `bench/tools`, `bench/schema`, `bench/policies` and `docs/clean-context.md`) to equal the freeze commit's, and the pinned build's crate tree to be the freeze commit's. `main` has changed `rust` since the freeze commit (#466, #469), so a checkout of `main` after this change merges is refused until the run is refrozen there. As the 2026-10-28 gap runs did, launch from a checkout of this change's branch, `feat/skill-runner-step-models`, whose later commits touch no runner file. On the run host, in that checkout:
 
 ```sh
 export BENCH_RUNTIME_STORE=~/.t3/bench-runtimes/code-review-plugin-460
@@ -224,7 +224,7 @@ $1 to $4 a trial, $50 to $200 for 48 trials before replacements, is a guess of o
 
 ## What waits for the owner
 
-- On the run host: install and pin `bench-tools` as [The probe](#the-probe) shows, and commit `runtimes.frozen.json` with the probe queue's `runtimes`.
+- On the run host, in a checkout of this change's branch: install and pin `bench-tools` as [The probe](#the-probe) shows, and commit `runtimes.frozen.json` with the probe queue's `runtimes`. Launching from `main` instead needs the run refrozen there first.
 - The probe, one or two trials, which decision 4 approved.
 - A spend ceiling for full dispatch, set against the probe's cost per trial.
 - If the probe shows a step on another model or effort, the attempt fails and the owner decides how to proceed.
