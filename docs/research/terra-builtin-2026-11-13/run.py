@@ -57,7 +57,9 @@ def completed(rows: list[dict]) -> int:
 
 
 def main() -> int:
+    global RUN, WORK
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--run-id", choices=[RUN.name, RUN.name + "-matched"], default=RUN.name)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--all", action="store_true")
     mode.add_argument("--status", action="store_true")
@@ -65,6 +67,8 @@ def main() -> int:
     mode.add_argument("--replace")
     parser.add_argument("--reason")
     args = parser.parse_args()
+    RUN = RUN.with_name(args.run_id)
+    WORK = WORK.with_name(args.run_id)
     if args.replace and not args.reason:
         parser.error("--replace requires --reason")
     if args.self_test:
