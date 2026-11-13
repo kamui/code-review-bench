@@ -22,6 +22,7 @@ use bench_tools::sha256::hex_digest;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 const RECEIPTS: &str = "bench/grading/current/assessments";
 const ARCHIVES: &str = "bench/regrading";
@@ -676,6 +677,16 @@ const REPLAY_ASSESSOR: &str = r#"{"assessor": "replay fixture", "method": "the a
 /// Workspace members a manual assessor's map refuses, which only the archived dispatch left behind.
 const DISPATCH_ONLY: [&str; 2] = ["work/dispatch.json", "work/home/"];
 
+/// Serializes `git worktree add` and `remove`, which share the repository's `worktrees` directory:
+/// a `remove` deletes that directory once it is empty, under an `add` that has just created it.
+static WORKTREE_ADMIN: Mutex<()> = Mutex::new(());
+
+fn worktree_admin() -> MutexGuard<'static, ()> {
+    WORKTREE_ADMIN
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+}
+
 /// A disposable detached worktree of one commit, removed on drop.
 struct Worktree {
     root: PathBuf,
@@ -689,24 +700,29 @@ impl Worktree {
             path: path.to_path_buf(),
         };
         tree.remove();
-        let added = git(
-            root,
-            &[
-                "worktree",
-                "add",
-                "--quiet",
-                "--detach",
-                &path.to_string_lossy(),
-                commit,
-            ],
+        let added = {
+            let _admin = worktree_admin();
+            Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args(["worktree", "add", "--quiet", "--detach"])
+                .arg(path)
+                .arg(commit)
+                .output()
+                .unwrap()
+        };
+        assert!(
+            added.status.success(),
+            "cannot add a worktree of {commit}: {}",
+            String::from_utf8_lossy(&added.stderr)
         );
-        assert!(added.is_some(), "cannot add a worktree of {commit}");
         assert!(tree.written().is_empty(), "the worktree is not clean");
         tree
     }
 
     fn remove(&self) {
         if self.path.exists() {
+            let _admin = worktree_admin();
             git(
                 &self.root,
                 &[
