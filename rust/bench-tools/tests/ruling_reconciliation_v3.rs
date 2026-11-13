@@ -33,7 +33,7 @@ const LOW: &str = "the parties did not give the agreement policy v3 needs: the r
 const SHAPE: &str = "the before-record's `filing` must bind the audit unit it files: exactly `comparison`, the pinned comparison.json of the audit, and `unit`, the record's `group`";
 const UNREADABLE: &str = "the comparison the filing pins cannot be read as an evaluator audit's: its units and the seed of the sample it pins";
 const SUSPENDED: &str = "a review in this round changed an agent settlement of this decision type, so policy v3 suspends it for the rest of the round";
-const WITHHELD: &str = "First answers: withheld until the records show that this unit is neither one of its audit round's five calls nor in a question with one.";
+const WITHHELD: &str = "- First answers: withheld until the records show that this unit is neither one of its audit round's five calls nor in a question with one.";
 
 fn repository() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -556,13 +556,33 @@ fn calls_of(root: &Root) -> Vec<usize> {
 
 fn withheld(root: &Root, n: usize, reasons: &[&str]) {
     let routed = root.route(&before_path(n));
+    let record = json(&root.read(&before_path(n)));
+    let field = |name: &str| {
+        record
+            .as_object()
+            .unwrap()
+            .get(name)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
     let case = root.read(&format!("{ROUND}/cases/case-1.md"));
     let listed: Vec<String> = reasons.iter().map(|reason| format!("- {reason}")).collect();
     assert_eq!(
         routed,
         format!(
-            "ASK\n{}\n\nThe case, {ROUND}/cases/case-1.md:\n\n{}\n\n{WITHHELD}\n",
+            "ASK\n{}\n\nDecision card:\n\n\
+             - Decides: Which of two graders was right about a unit of the evaluator audit? (reconciliation, ruling {}, group {})\n\
+             - Pull request: {}\n\
+             {WITHHELD}\n\
+             - Case file: {} words, in full below.\n\n\
+             The case, {ROUND}/cases/case-1.md:\n\n{}\n",
             listed.join("\n"),
+            field("ruling"),
+            field("group"),
+            field("target"),
+            case.split_whitespace().count(),
             case.trim()
         )
     );
@@ -617,6 +637,52 @@ fn a_reconciler_call_at_medium_confidence_settles_and_at_low_confidence_asks() {
 fn an_owner_call_asks_without_the_reconcilers_call() {
     let root = fixture("owner-call");
     withheld(&root, calls()[0], &[AUDIT_CALL]);
+}
+
+#[test]
+fn a_withheld_card_shows_nothing_the_reconciler_answered_nor_turns_on() {
+    let root = fixture("owner-call-card");
+    let n = calls()[0];
+    root.edit(&before_path(n), |object| {
+        object.insert(
+            "turns_on".into(),
+            text("Whether the sentinel-turns-on fact holds."),
+        );
+        for answer in answers(object) {
+            answer.insert("confidence".into(), text("medium"));
+            answer.insert("short_of_high".into(), json(r#"["conflict"]"#));
+            answer.insert("would_settle".into(), Value::Bool(false));
+            answer.insert(
+                "conflict".into(),
+                text("Two rules, sentinel-conflict, point different ways."),
+            );
+            answer.insert(
+                "reason".into(),
+                text("The sentinel-reason fact decides it."),
+            );
+        }
+    });
+    open(&root);
+    let check = root.run(&["ruling", "check", &before_path(n)]);
+    assert!(!check.contains("turns_on"), "{check}");
+    let routed = root.route(&before_path(n));
+    let card = &routed[..routed.find("\n\nThe case, ").unwrap()];
+    assert!(card.contains(WITHHELD), "{card}");
+    for shown in [
+        "first-error",
+        "recommender",
+        "medium",
+        "conflict",
+        "sentinel",
+        "Turns on",
+        "Picks",
+        "Agreement",
+        "Nearest",
+        "Stated gaps",
+        "Reason",
+    ] {
+        assert!(!routed.contains(shown), "{shown} in {routed}");
+    }
 }
 
 #[test]

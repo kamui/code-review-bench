@@ -61,6 +61,7 @@ When a saved before-record normalized declared confidence for eligibility, keep 
 | `rulings` | The ruling index, which gives each ruling one name. |
 | `reviews` | Null, or the saved ruling being shown again, by its name in the index, with its `saved_outcome`. |
 | `answers` | Each party's first answer. |
+| `turns_on` | Optional. Null, or one sentence by the session that asks, naming the fact the decision turns on. `route` prints it on the card and nothing else reads it. A record without it is valid, and so is every record saved before the field existed. |
 | `same_family_blind` | Optional. The owner's saved permission for blind answers from the recommender's model family in one named round: `round`, the name the record's `round_opening` gives; `receipt`, the owner's receipt by `path` and `sha256`; and `scope`, the passage of the receipt that allows it, which names the round. See below. |
 
 `rule` pins a versioned file or the copy the round saved under `docs/research/`. It never pins a file that is edited in place. `bench/rubric/scoring.md` is replaced when the next rubric takes effect, and a record that pinned it would then fail its check.
@@ -180,9 +181,18 @@ The shared policy gate prints `ASK` with the reasons that keep the decision with
 
 After the reasons it prints the question to show the user:
 
-1. The whole case file that every blind party read.
-2. A table with one row for each party: its pick, its confidence with the conditions it falls short on, and its reason. A `recovery` pick shows the two facts. A `duplicate` or `same-family` pick names the known problem.
-3. Under "To reconcile before asking", each party whose pick differs from the recommender's, with its reason, or a line saying that every pick agrees. [Reconcile](claim-adjudication.md#prepare-a-ruling) says what the asking session does with them.
+1. A decision card, built from the before-record and the sheet of earlier rulings it pins. The card holds:
+   - What is decided, by its decision type, ruling and group, and on which pull request.
+   - The record's `turns_on` sentence, when it has one.
+   - Each party's pick, its confidence with the conditions it falls short on, and its reason. A `recovery` pick shows the two facts. A `duplicate` or `same-family` pick names the known problem.
+   - Whether every pick is the recommender's, and which parties differ.
+   - The nearest earlier rulings each party named, each with its outcome as the sheet in `case.precedents` states it. The card says when no sheet was given or the sheet does not hold the ruling.
+   - Each rule gap or conflict a party stated, with the party.
+   - The case file's length in words.
+2. Under "To reconcile before asking", each party whose pick differs from the recommender's, with its reason, or a line saying that every pick agrees. [Reconcile](claim-adjudication.md#prepare-a-ruling) says what the asking session does with them.
+3. The whole case file that every blind party read.
+
+The card changes no routing. `SETTLE` and `ASK`, the reasons, settlement and filing do not read it, and the case file still prints in full.
 
 `route` needs a contract 2 record, because contract 1 pins no case file.
 
@@ -362,7 +372,7 @@ The owner's five audit calls are fixed before any record exists. They are the di
 - The round's reconciliation before-records, leaving out reviews of a saved ruling, cover the comparison's disputed units once each.
 - The unit is not one of the five calls and shares no question with one. A question is one `ruling` name in the rulings index, so a grouped question that holds a call goes to the owner whole.
 
-For a reconciliation it cannot show to be outside the five calls, `route` withholds every first answer. It prints the case file and the reason, without the reconciler's call or confidence. `ruling summary` lists the five calls for the round and names a record it cannot place.
+For a reconciliation it cannot show to be outside the five calls, `route` withholds every first answer. It prints the reasons, a card and the case file. The card says what is decided, on which pull request, that the first answers are withheld and how long the case file is. It shows no pick, confidence, condition, reason, earlier ruling, gap or conflict of the reconciler's, and no `turns_on`, because the session that asks writes that sentence knowing the call. `ruling summary` lists the five calls for the round and names a record it cannot place.
 
 An agent-settled row in the audit's `reconciliation.json` holds `settled_by: "agents"`, `settlement` (the after-record's pin), `receipt`, `receipt_scope` and a reason that names policy v3 and agents. `evaluator-audit conclude` and `calibration check` refuse:
 
