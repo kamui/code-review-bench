@@ -192,3 +192,13 @@ bench/tools/bench-tools evidence recover --source local-capture-2026-10-08-v1
 Use `--path <logical-member>` for selective retrieval and `--offline` for a verified local cache. The other source names are `local-pilot-2026-10-08-v1` and `local-git-fallbacks-2026-10-08-v1`. This recovery release shares the repository and GitHub account with the originals. It covers individual asset or release loss; an independently administered copy is still needed to cover repository, account or provider loss. The [recovery exercise](research/evidence-completion-2026-10-08/recovery-verification.json) downloaded and checked every member while deliberately refusing the original releases.
 
 The [2026-10-08 local publication](research/evidence-migration-2026-10-08/README.md) records the first production release, original-path restoration, cold-consumer checks and remaining migration blockers.
+
+## Account redaction of 2026-11-13
+
+The owner authorised one exception to this contract. [The record](research/account-redaction-2026-11-13/README.md) replaced account identifiers in every session transcript, rewrote the Git history and published every manifest again from a new repository.
+
+- Packages that held an identifier were repacked. They replace the earlier ones under the same manifest names and release tags, and the record maps each earlier package and member to its replacement.
+- `attempt.json` keeps the hash of each archive as it was first saved. For a redacted archive that hash differs from `transcripts.json`, from `bench/import-manifest.json` and from the published bytes, so `evidence collect` and `prune-workspace` refuse those runs.
+- The three `history-recovery-*` manifests, `local-capture-2026-10-08-v1`, `local-git-fallbacks-2026-10-08-v1` and `withheld-2026-10-08-v1` name the private archive repository. Their packages are not public.
+- The `evidence-recovery-2026-10-08-v1` release and its index stay in the archive, so `evidence recover` does not work from this repository.
+- Commits from before the rewrite, and the recovery bundles that keep them, are in the archive.
