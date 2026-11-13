@@ -12,8 +12,9 @@
 //! validator inputs and verdicts must give the stdout and exit status `EXPECTATIONS` records. Last it replays the
 //! mapping: `bench-tools grade map` maps every restorable archive's workspace and key with a fixture `--assessor`,
 //! through `--root`, into a disposable worktree of the commit that filed its receipt, and must end with the recorded
-//! exit status and lines and write nothing. `EXPECTATIONS` holds the retained Python's outcomes, recorded before
-//! `grade.py` lost `validate` and `map`. A verdict contract no replay accepts must name its fixture case in
+//! exit status and lines and write nothing. With `BENCH_MAPPING_REPLAY=subset`, which pull requests set, it maps one
+//! archive of each filing commit, contract and recorded outcome instead. `EXPECTATIONS` holds the retained Python's
+//! outcomes, recorded before `grade.py` lost `validate` and `map`. A verdict contract no replay accepts must name its fixture case in
 //! `FIXTURE_CASES`.
 
 use bench_tools::archive;
@@ -850,9 +851,96 @@ struct MappingCounts {
     refused: usize,
 }
 
+/// Selects the mapping replay's archives: `full`, or unset, replays every archive with a recorded outcome, and
+/// `subset` only the `representative` ones. Pull-request CI sets `subset`.
+const MAPPING_SWEEP: &str = "BENCH_MAPPING_REPLAY";
+
+#[derive(Clone, Copy)]
+enum Sweep {
+    Full,
+    Subset,
+}
+
+fn mapping_sweep() -> Sweep {
+    match std::env::var(MAPPING_SWEEP) {
+        Err(std::env::VarError::NotPresent) => Sweep::Full,
+        Ok(value) if value == "full" => Sweep::Full,
+        Ok(value) if value == "subset" => Sweep::Subset,
+        other => panic!("{MAPPING_SWEEP} must be full or subset, not {other:?}"),
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Replay<'a> {
+    commit: &'a str,
+    evidence: &'a str,
+    contract: &'a str,
+}
+
+/// The first replay, in `replays`' order, of each filing commit, contract and recorded outcome.
+fn representative<'a>(
+    replays: &[Replay<'a>],
+    recorded: &BTreeMap<String, Value>,
+) -> Vec<Replay<'a>> {
+    let mut seen = std::collections::BTreeSet::new();
+    replays
+        .iter()
+        .filter(|replay| {
+            seen.insert((
+                replay.commit,
+                replay.contract,
+                recorded[replay.evidence].py_repr(),
+            ))
+        })
+        .copied()
+        .collect()
+}
+
+#[test]
+fn the_mapping_subset_keeps_one_archive_of_each_commit_contract_and_outcome() {
+    let refused = o(vec![("exit_code", n(2)), ("stderr", s("refused"))]);
+    let failed = o(vec![("exit_code", n(1)), ("stderr", s("failed"))]);
+    let recorded: BTreeMap<String, Value> = [
+        ("a", &refused),
+        ("b", &refused),
+        ("c", &failed),
+        ("d", &refused),
+        ("e", &refused),
+        ("f", &failed),
+    ]
+    .into_iter()
+    .map(|(evidence, outcome)| (evidence.to_string(), outcome.clone()))
+    .collect();
+    let replay = |commit, evidence, contract| Replay {
+        commit,
+        evidence,
+        contract,
+    };
+    let replays = [
+        replay("c1", "a", "v1"),
+        replay("c1", "b", "v1"),
+        replay("c1", "c", "v1"),
+        replay("c2", "d", "v1"),
+        replay("c1", "e", "v2"),
+        replay("c1", "f", "v1"),
+    ];
+    let chosen = |replays: &[Replay]| -> Vec<String> {
+        representative(replays, &recorded)
+            .iter()
+            .map(|replay| replay.evidence.to_string())
+            .collect()
+    };
+    assert_eq!(chosen(&replays), ["a", "c", "d", "e"]);
+    assert_eq!(chosen(&replays), chosen(&replays));
+    let mut reversed = replays;
+    reversed.reverse();
+    assert_eq!(chosen(&reversed), ["f", "e", "d", "b"]);
+}
+
 #[test]
 #[ignore = "needs the restored repository evidence and full history; the Pages build job runs it"]
 fn the_mapping_replays_every_restorable_archive_identically() {
+    let sweep = mapping_sweep();
     let root = repository();
     let value = inventory(&root);
     let archives = archives(&root);
@@ -865,7 +953,7 @@ fn the_mapping_replays_every_restorable_archive_identically() {
         "an accepted mapping outcome needs its records in {EXPECTATIONS}"
     );
     let scratch = Path::new(env!("CARGO_TARGET_TMPDIR")).join("mapping-replay");
-    let mut by_commit: BTreeMap<&str, Vec<(&str, &str)>> = BTreeMap::new();
+    let mut replays = Vec::new();
     let mut unrecorded = 0;
     for row in field(&value, &["receipts"])
         .and_then(Value::as_array)
@@ -880,16 +968,34 @@ fn the_mapping_replays_every_restorable_archive_identically() {
                 unrecorded += 1;
                 continue;
             }
-            by_commit
-                .entry(commit)
-                .or_default()
-                .push((evidence, text(row, &["contract"]).unwrap()));
+            replays.push(Replay {
+                commit,
+                evidence,
+                contract: text(row, &["contract"]).unwrap(),
+            });
         }
     }
-    let workers = std::thread::available_parallelism().map_or(1, |count| count.get().min(4));
+    let (mode, selected) = match sweep {
+        Sweep::Full => ("full sweep", replays.clone()),
+        Sweep::Subset => ("representative subset", representative(&replays, &recorded)),
+    };
+    println!(
+        "{mode}: replaying {} of the {} restorable archives with a recorded outcome",
+        selected.len(),
+        replays.len()
+    );
+    let mut by_commit: BTreeMap<&str, Vec<(&str, &str)>> = BTreeMap::new();
+    for replay in &selected {
+        by_commit
+            .entry(replay.commit)
+            .or_default()
+            .push((replay.evidence, replay.contract));
+    }
+    let parallelism = std::thread::available_parallelism().map_or(1, |count| count.get().min(4));
     let mut counts: BTreeMap<String, MappingCounts> = BTreeMap::new();
     let mut differences = Vec::new();
     for (commit, rows) in &by_commit {
+        let workers = parallelism.min(rows.len());
         let results: Vec<Vec<(&str, &str, Option<String>)>> = std::thread::scope(|scope| {
             let handles: Vec<_> = (0..workers)
                 .map(|worker| {
