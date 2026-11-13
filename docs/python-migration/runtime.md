@@ -219,25 +219,24 @@ it. No check reads it as permission: the queue still requires the frozen pin.
 
 The [script policy](../agents/scripts.md) supports macOS on Apple Silicon and Linux on x86_64 or aarch64.
 `SUPPORTED_TARGETS` holds one target for each of those hosts, and the `Rust runtime` workflow runs on a
-matching GitHub runner for each: the runtime tests (`tests/runtime.rs`) with real cargo builds and
-[`rollback.sh`](runtime-evidence/rollback.sh). It also checks `bench-tools` with
-`cargo fmt`, `clippy` and `cargo test`, installs it, runs its corpora and `roster` on the repository. The
+matching GitHub runner for each: the runtime tests (`tests/runtime.rs`) with real cargo builds. It also checks
+`bench-tools` with `cargo fmt`, `clippy` and `cargo test`, installs it, runs its corpora and `roster` on the
+repository. The
 `CI and GitHub Pages` workflow installs `bench-tools` the same way, once per crate tree, and its other jobs restore
 that store for the explorer export and grading.
 
 The x86_64 Linux target splits its checks into two parallel jobs: formatting, Clippy, every test, and the behavior
 contracts run with no Python on `PATH`; and install and rollback. The runtime job
-runs `rollback.sh`, then, through the version it leaves selected, files a
+runs [`rollback.sh`](runtime-evidence/rollback.sh), then, through the version it leaves selected, files a
 [fake-client cell](../../tools/fake-client-cell.sh) through a frozen run's pin and writes the explorer export and the
 scorecard, all with no Python on `PATH`
 ([`tools/without-python.sh`](../../tools/without-python.sh)). Pull requests run the full suite
 on x86_64 Linux. On aarch64 Linux and macOS they run the
-runtime pinning, retention and rollback tests with real cargo builds, install `bench-tools`,
-run `roster`, and run the `diff-identity` corpus. The full
-aarch64 Linux and macOS lint, test and second-version rollback suites run on pushes to `main`, where `roster` runs
-through the version the rollback leaves selected.
-This keeps native installation coverage before merge while deferring broader aarch64 regression
-detection until after merge. Merge a change to the runtime only after every target's job passes.
+runtime pinning, retention and rollback tests with real cargo builds and the `diff-identity` corpus, and install
+nothing. On pushes to `main` those targets run the full lint and test suite, install `bench-tools` once with
+`runtime install --select`, and run `runtime resolve` and `roster` through it. Only x86_64 Linux rolls back across
+two real installs. An install failure or broader regression specific to aarch64 Linux or macOS therefore first shows
+on `main` after merge. Merge a change to the runtime only after every target's job passes.
 
 | Target | Runner | Local run |
 | --- | --- | --- |
