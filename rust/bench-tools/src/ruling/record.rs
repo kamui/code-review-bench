@@ -963,8 +963,9 @@ pub fn reasons(repo: &Repo, record: &Value) -> Py<Vec<String>> {
     Ok(found)
 }
 
-/// The answer's pick: its outcome, the problem it names and its two facts.
-pub fn pick(answer: &Value) -> Py<String> {
+/// An answer's pick in its parts: the outcome with the problem it names, then what goes wrong and the cause when the
+/// answer states its two facts.
+fn parts(answer: &Value) -> Py<(String, Option<(String, String)>)> {
     let facts = get(answer, "facts")?;
     let outcome = item(answer, "outcome")?;
     let same = get(answer, "same_fault_as")?;
@@ -980,24 +981,45 @@ pub fn pick(answer: &Value) -> Py<String> {
         )));
     };
     let stated = if facts.truthy() {
-        format!(
-            " (says what goes wrong: {}, identifies the cause as a fault: {})",
+        Some((
             item(facts, "says_what")?.py_str(),
-            item(facts, "identifies_cause")?.py_str()
-        )
+            item(facts, "identifies_cause")?.py_str(),
+        ))
     } else {
-        String::new()
+        None
     };
-    Ok(format!("{outcome}{named}{stated}"))
+    Ok((format!("{outcome}{named}"), stated))
 }
 
-/// docs/claim-adjudication.md, "Reconcile": each party whose pick is not the recommender's.
-fn disagreements(record: &Value) -> Py<Vec<Value>> {
+/// The answer's pick: its outcome, the problem it names and its two facts.
+pub fn pick(answer: &Value) -> Py<String> {
+    let (outcome, facts) = parts(answer)?;
+    Ok(match facts {
+        Some((what, cause)) => format!(
+            "{outcome} (says what goes wrong: {what}, identifies the cause as a fault: {cause})"
+        ),
+        None => outcome,
+    })
+}
+
+/// docs/claim-adjudication.md, "Reconcile": each party whose pick is not the recommender's, with which of the pick's
+/// parts differ: its outcome, what goes wrong, the cause.
+fn disagreements(record: &Value) -> Py<Vec<(Value, [bool; 3])>> {
     let (position, first) = recommender(record)?;
+    let (outcome, facts) = parts(&first)?;
     let mut found = Vec::new();
     for (at, answer) in answers(record)?.into_iter().enumerate() {
-        if at != position && pick(&answer)? != pick(&first)? {
-            found.push(answer);
+        if at == position {
+            continue;
+        }
+        let (theirs, stated) = parts(&answer)?;
+        let differs = [
+            theirs != outcome,
+            stated.as_ref().map(|fact| &fact.0) != facts.as_ref().map(|fact| &fact.0),
+            stated.as_ref().map(|fact| &fact.1) != facts.as_ref().map(|fact| &fact.1),
+        ];
+        if differs.contains(&true) {
+            found.push((answer, differs));
         }
     }
     Ok(found)
@@ -1054,9 +1076,45 @@ fn grouped(count: usize) -> String {
     out
 }
 
-/// The card's opening lines, which say what is decided, on which pull request, how long the case file is, and
-/// nothing a party answered.
-fn card_head(record: &Value, case_text: &str) -> Py<(Vec<String>, String)> {
+const LABEL_WIDTH: usize = 10;
+
+/// One entry of the card's top block: its label, padded so that every entry's lines start in one column.
+fn labelled(label: &str, rows: &[String]) -> Vec<String> {
+    rows.iter()
+        .enumerate()
+        .map(|(at, row)| {
+            let label = if at == 0 { label } else { "" };
+            format!("{label:<LABEL_WIDTH$}{row}").trim_end().to_string()
+        })
+        .collect()
+}
+
+/// Rows of cells as columns two spaces apart, each as wide as its widest cell; a column empty in every row takes no
+/// space.
+fn columns<const N: usize>(rows: &[[String; N]]) -> Vec<String> {
+    let widths: Vec<usize> = (0..N)
+        .map(|at| {
+            rows.iter()
+                .map(|row| row[at].chars().count())
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+    rows.iter()
+        .map(|row| {
+            row.iter()
+                .zip(&widths)
+                .filter(|(_, width)| **width > 0)
+                .map(|(cell, &width)| format!("{cell:<width$}"))
+                .collect::<Vec<_>>()
+                .join("  ")
+        })
+        .collect()
+}
+
+/// The card's opening lines and its case file line, which say what is decided, on which pull request, how long the
+/// case file is, and nothing a party answered.
+fn card_head(record: &Value, case_text: &str) -> Py<(Vec<String>, Vec<String>)> {
     let kind = item(record, "decision_type")?.py_str();
     let decides = DECIDES
         .iter()
@@ -1064,21 +1122,25 @@ fn card_head(record: &Value, case_text: &str) -> Py<(Vec<String>, String)> {
         .map_or("", |(_, words)| words);
     let words = pyvalue::split_whitespace(case_text).len();
     let noun = if words == 1 { "word" } else { "words" };
-    Ok((
-        vec![
-            "Decision card:".into(),
-            String::new(),
+    let mut lines = vec!["Decision card:".into(), String::new()];
+    lines.extend(labelled(
+        "DECIDE",
+        &[
+            decides.to_string(),
             format!(
-                "- Decides: {decides} ({kind}, ruling {}, group {})",
+                "{kind}, ruling {}, group {}, pull request {}",
                 flat(&item(record, "ruling")?.py_str()),
-                flat(&item(record, "group")?.py_str())
-            ),
-            format!(
-                "- Pull request: {}",
+                flat(&item(record, "group")?.py_str()),
                 flat(&item(record, "target")?.py_str())
             ),
         ],
-        format!("- Case file: {} {noun}, in full below.", grouped(words)),
+    ));
+    Ok((
+        lines,
+        labelled(
+            "CASE",
+            &[format!("{} {noun}, in full below", grouped(words))],
+        ),
     ))
 }
 
@@ -1144,20 +1206,34 @@ fn decided(
     })
 }
 
-/// What the user is shown: a card that sums up the before-record, the picks to reconcile, then the whole case file
-/// every blind party read.
+/// What the user is shown: a card whose top block sums up the before-record and whose detail holds the rest of it,
+/// the picks to reconcile, then the whole case file every blind party read.
 pub fn question(repo: &Repo, record: &Value) -> Py<String> {
     let case = item(item(record, "case")?, "path")?;
     let text = pyvalue::read_text(&repo.path(case)?)?;
     let (mut lines, length) = card_head(record, &text)?;
     let turns_on = get(record, TURNS_ON)?;
     if turns_on.truthy() {
-        lines.push(format!("- Turns on: {}", flat(&turns_on.py_str())));
+        lines.extend(labelled("TURNS ON", &[flat(&turns_on.py_str())]));
     }
     let all = answers(record)?;
     let (_, first) = recommender(record)?;
-    lines.push("- Picks:".into());
+    let mut picks = Vec::new();
+    let mut detail = vec![
+        String::new(),
+        "Detail:".into(),
+        String::new(),
+        "- Reasons:".into(),
+    ];
     for answer in &all {
+        let by = flat(&item(answer, "by")?.py_str());
+        let (outcome, facts) = parts(answer)?;
+        let (what, cause) = facts.map_or_else(Default::default, |(what, cause)| {
+            (
+                format!("what: {}", flat(&what)),
+                format!("cause: {}", flat(&cause)),
+            )
+        });
         let confidence = item(answer, "confidence")?;
         let confidence = if confidence.truthy() {
             confidence.py_str()
@@ -1171,69 +1247,104 @@ pub fn question(repo: &Repo, record: &Value) -> Py<String> {
         } else {
             String::new()
         };
-        lines.push(format!(
-            "  - {}: {}; {confidence}{short}. Reason: {}",
-            flat(&item(answer, "by")?.py_str()),
-            flat(&pick(answer)?),
+        detail.push(format!(
+            "  - {by} ({confidence}{short}): {}",
             flat(&item(answer, "reason")?.py_str())
         ));
+        picks.push([by, flat(&outcome), what, cause, confidence]);
     }
-    let differ = disagreements(record)?;
-    lines.push(if all.len() < 2 {
-        "- Agreement: only the recommender answered.".into()
-    } else if differ.is_empty() {
-        "- Agreement: every party's pick is the recommender's.".into()
+    lines.extend(labelled("PICKS", &columns(&picks)));
+    let differing = disagreements(record)?;
+    let agree = if all.len() < 2 {
+        "Only the recommender answered.".to_string()
+    } else if differing.is_empty() {
+        format!("All {} give the same pick.", all.len())
     } else {
-        let names = differ
-            .iter()
-            .map(|answer| Ok(flat(&item(answer, "by")?.py_str())))
-            .collect::<Py<Vec<_>>>()?;
-        format!(
-            "- Agreement: split. {} differ{} from the recommender.",
-            names.join(", "),
-            if names.len() == 1 { "s" } else { "" }
-        )
-    });
+        let mut said = Vec::new();
+        for (part, name) in ["Outcome", "What goes wrong", "Cause"]
+            .into_iter()
+            .enumerate()
+        {
+            let parties = differing
+                .iter()
+                .filter(|(_, differs)| differs[part])
+                .map(|(answer, _)| Ok(flat(&item(answer, "by")?.py_str())))
+                .collect::<Py<Vec<_>>>()?;
+            if !parties.is_empty() {
+                let verb = if parties.len() == 1 {
+                    "differs"
+                } else {
+                    "differ"
+                };
+                said.push(format!(
+                    "{name}: {} {verb} from the recommender.",
+                    parties.join(", ")
+                ));
+            } else if part == 0 {
+                said.push(format!("Outcome: all {}.", all.len()));
+            }
+        }
+        said.join(" ")
+    };
+    lines.extend(labelled("AGREE", &[agree]));
     let rulings = tables(repo, record)?.1;
     let given = sheet(repo, record)?;
-    lines.push("- Nearest earlier rulings:".into());
+    detail.push("- Nearest earlier rulings:".into());
     for answer in &all {
         let by = flat(&item(answer, "by")?.py_str());
         let named = pyvalue::iterate(item(answer, "nearest")?)?;
         if named.is_empty() {
-            lines.push(format!("  - {by}: none named"));
+            detail.push(format!("  - {by}: none named"));
         }
         for name in named {
-            lines.push(format!(
+            detail.push(format!(
                 "  - {by}, {}: {}",
                 flat(&name.py_str()),
                 decided(&name, &rulings, given.as_deref())?
             ));
         }
     }
+    let kinds = [("rule_gap", "rule gap"), ("conflict", "conflict")];
+    let mut flagged: [Vec<String>; 2] = Default::default();
     let mut stated = Vec::new();
     for answer in &all {
-        for (field, label) in [("rule_gap", "rule gap"), ("conflict", "conflict")] {
+        for (at, (field, label)) in kinds.into_iter().enumerate() {
             let sentence = item(answer, field)?;
             if sentence.truthy() {
-                stated.push(format!(
-                    "  - {}, {label}: {}",
-                    flat(&item(answer, "by")?.py_str()),
-                    flat(&sentence.py_str())
-                ));
+                let by = flat(&item(answer, "by")?.py_str());
+                stated.push(format!("  - {by}, {label}: {}", flat(&sentence.py_str())));
+                flagged[at].push(by);
             }
         }
     }
+    let flags: Vec<String> = kinds
+        .into_iter()
+        .zip(&flagged)
+        .filter(|(_, parties)| !parties.is_empty())
+        .map(|((_, label), parties)| {
+            let plural = if parties.len() == 1 { "" } else { "s" };
+            format!("{} {label}{plural} ({})", parties.len(), parties.join(", "))
+        })
+        .collect();
+    lines.extend(labelled(
+        "FLAGGED",
+        &[if flags.is_empty() {
+            "none".into()
+        } else {
+            flags.join("; ")
+        }],
+    ));
+    lines.extend(length);
     if stated.is_empty() {
-        lines.push("- Stated gaps and conflicts: none.".into());
+        detail.push("- Stated gaps and conflicts: none.".into());
     } else {
-        lines.push("- Stated gaps and conflicts:".into());
-        lines.extend(stated);
+        detail.push("- Stated gaps and conflicts:".into());
+        detail.extend(stated);
     }
-    lines.push(length);
-    let mut differing = Vec::new();
-    for answer in &differ {
-        differing.push(format!(
+    lines.extend(detail);
+    let mut reconcile = Vec::new();
+    for (answer, _) in &differing {
+        reconcile.push(format!(
             "- {} picks {} where the recommender picks {}. Its reason: {}",
             item(answer, "by")?.py_str(),
             pick(answer)?,
@@ -1241,15 +1352,15 @@ pub fn question(repo: &Repo, record: &Value) -> Py<String> {
             flat(&item(answer, "reason")?.py_str())
         ));
     }
-    if differing.is_empty() {
-        differing.push("- None: every party's pick is the recommender's.".into());
+    if reconcile.is_empty() {
+        reconcile.push("- None: every party's pick is the recommender's.".into());
     }
     lines.extend([
         String::new(),
         "To reconcile before asking:".into(),
         String::new(),
     ]);
-    lines.extend(differing);
+    lines.extend(reconcile);
     lines.extend([
         String::new(),
         format!("The case, {}:", case.py_str()),
@@ -1267,8 +1378,8 @@ pub fn withheld_question(repo: &Repo, record: &Value) -> Py<String> {
     let case = item(item(record, "case")?, "path")?;
     let text = pyvalue::read_text(&repo.path(case)?)?;
     let (mut lines, length) = card_head(record, &text)?;
-    lines.push(format!("- First answers: {WITHHELD}"));
-    lines.push(length);
+    lines.extend(labelled("PICKS", &[WITHHELD.into()]));
+    lines.extend(length);
     lines.extend([
         String::new(),
         format!("The case, {}:", case.py_str()),

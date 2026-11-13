@@ -127,7 +127,8 @@ The decisions record each difference from the retained Python:
 
 [`ruling-record-decisions.v5.json`](../../tools/behavior_contracts/ruling-record-decisions.v5.json) records a change
 made on purpose for [#470](https://github.com/kamui/code-review-bench/issues/470): `route` prints a decision card
-first, then the picks to reconcile, then the case file. The 15 cases whose `route` asks expect the new question. Their
+first, a short labelled top block with every other card fact under "Detail", then the picks to reconcile, then the
+case file. The 15 cases whose `route` asks expect the new question. Their
 reasons, exit codes and stderr are unchanged.
 
 `tests/ruling_filing.rs` compares `filing_faults` with `delegation.py` for each refusal, since no command reaches it.
