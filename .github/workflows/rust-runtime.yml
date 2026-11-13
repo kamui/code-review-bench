@@ -23,15 +23,14 @@ jobs:
     outputs:
       rust: ${{ steps.diff.outputs.rust }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - name: Check whether the Rust runtime is affected
         id: diff
         env:
+          TOKEN: ${{ github.token }}
           BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
           HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           RANGE: ${{ github.event_name == 'pull_request' && '...' || '..' }}
+          BASE_TIP: ${{ github.event_name == 'pull_request' && format('refs/heads/{0}', github.event.pull_request.base.ref) || github.sha }}
           RUST_RUNTIME_PATHS: |-
             ^rust/
             ^bench/tools/(bench-tools|dispatch\.sh)$
@@ -43,11 +42,23 @@ jobs:
             ^tools/behavior_contracts/
             ^docs/python-migration/runtime-evidence/rollback\.sh$
             ^\.github/workflows/rust-runtime\.yml$
+        # The changed paths come from commits and trees alone, so the gate fetches history without file contents.
+        # GitHub serves a commit by SHA even after a force push leaves it on no branch, so the base counts as found only
+        # when the base branch, or for a push the pushed commit, contains it.
         run: |
           rust=true
-          if git cat-file -e "$BASE^{commit}" 2> /dev/null; then
-            changed=$(git diff --no-renames --name-only "$BASE$RANGE$HEAD")
-            grep -qE -f <(printf '%s\n' "$RUST_RUNTIME_PATHS") <<< "$changed" || rust=false
+          auth=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
+          git init -q --bare "$RUNNER_TEMP/history"
+          cd "$RUNNER_TEMP/history"
+          if git -c http.extraheader="AUTHORIZATION: basic $auth" fetch -q --no-tags --filter=blob:none \
+              "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "$BASE" "$HEAD" "+$BASE_TIP:refs/base-tip" &&
+            git merge-base --is-ancestor "$BASE" refs/base-tip &&
+            changed=$(git diff --no-renames --name-only "$BASE$RANGE$HEAD"); then
+            matched=0
+            printf '%s\n' "$changed" | grep -qE -f <(printf '%s\n' "$RUST_RUNTIME_PATHS") || matched=$?
+            if [ "$matched" = 1 ]; then
+              rust=false
+            fi
           fi
           echo "rust=$rust" >> "$GITHUB_OUTPUT"
 
