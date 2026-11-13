@@ -112,7 +112,7 @@ describe('scorecard display', () => {
     const subject = task('pr', [family('f')])
     const status = datasetStatus(build([subject], { a: [[subject, [review(subject, ['f'])]]] },
       { coverage: { requiredReviews: 1, assessedReviews: 1, complete: false, reason: 'Judgments remain unresolved.', unresolvedRecoveries: 2, unresolvedClaims: 1 } }))
-    expect(status.limits).toEqual(['Judgments remain unresolved. 1 of 1 admitted reviews are assessed.',
+    expect(status.limits).toEqual(['Judgments remain unresolved.',
       '2 unresolved detection decisions receive zero credit.', '1 claim remains unresolved.'])
     expect(status.label).toBe('v1 preview')
   })
@@ -124,7 +124,7 @@ describe('current graded record', () => {
       complete: false, reason: 'Current judgment coverage is incomplete.' })
     expect(imported.evidence.audit.state).toBe('unassessed')
     expect(datasetStatus(imported)).toMatchObject({ label: 'v1 preview', complete: false, limits: [
-      'Current judgment coverage is incomplete. 615 of 615 admitted reviews are assessed.',
+      'Current judgment coverage is incomplete.',
       '14 claims remain unresolved.', expect.stringMatching(/^The evaluator audit is unassessed\./)] })
     expect(imported.configurations).toHaveLength(16)
     expect(imported.attempts).toHaveLength(653)
