@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -22,15 +21,6 @@ WORK = ROOT / ".local" / RUN.name
 def environment() -> dict[str, str]:
     pin = json.loads((RUN / "clients.frozen.json").read_text(encoding="utf-8"))["codex"]
     env = os.environ.copy()
-    node = json.loads((RUN / "toolchain-pin.v1.json").read_text(encoding="utf-8"))["node"]
-    executable = Path(node["path"])
-    digest = hashlib.sha256()
-    with executable.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    if digest.hexdigest() != node["sha256"]:
-        raise ValueError("pinned Node executable changed")
-    env["PATH"] = str(executable.parent) + os.pathsep + env["PATH"]
     env.update(
         BENCH_CODEX=pin["path"], BENCH_CODEX_SHA256=pin["sha256"],
         BENCH_CODEX_VERSION=pin["version"],
@@ -40,9 +30,7 @@ def environment() -> dict[str, str]:
         BENCH_RATES=str(ROOT / "bench/rates.current.json"),
         BENCH_ARCHIVE_ROOT=str(ROOT / "artifacts/transcripts"),
         BENCH_CACHE_ROOT=str(Path.home() / ".t3/bench-cache"),
-        BENCH_CACHE_REPLACEMENTS=os.pathsep.join(
-            str(ROOT / "docs/research" / name / "cache-replacements.v1.json")
-            for name in ("original-cache-rebuild-2026-10-02", "selected-cache-rebuild-2026-10-02")),
+        BENCH_CACHE_REPLACEMENTS=str(Path(__file__).with_name("cache-replacements.v1.json")),
     )
     return env
 
