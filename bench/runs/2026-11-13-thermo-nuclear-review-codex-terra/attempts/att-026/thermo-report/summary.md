@@ -1,0 +1,15 @@
+**P2 — Preserve change handling for checked inputs** — `packages/react/src/field/control/FieldControl.tsx:142-145`
+
+A `Field.Control` can render a checkbox or radio with a fixed `value` and a changing `checked` prop. Such a control is classified as controlled solely because `value` is present, so its change handler now returns; toggling `checked` does not change `serializedValue`, so the new effect does not run either. Previously each toggle reached `validation.change` and cleared form errors. Consequently on-change validation and error clearing stop working for these controls, including required checkboxes.
+
+**P2 — Honor cancellation for controlled changes** — `packages/react/src/field/control/FieldControl.tsx:105-114`
+
+For a controlled input, the handler returns before checking either `details.isCanceled` or `event.nativeEvent.defaultPrevented`. If its callback updates the value and cancels the event, or the native input event was prevented, the prop update still runs this effect, clears server errors, and calls `validation.change`. The existing prevented-event test covers only an uncontrolled input; before this change the native prevention check also protected controlled inputs. This breaks consumers that suppress validation or error clearing for a particular change.
+
+**P2 — Validate the actual value of normalized inputs** — `packages/react/src/field/control/FieldControl.tsx:110-114`
+
+The effect passes `String(value)` to the validator and uses it for filled and dirty state without reading the input. Native inputs can sanitize a prop: for example, assigning `"bad"` to a date input leaves its DOM value empty. A programmatic update to that value therefore marks the field filled and validates `"bad"` while the actual form value is `""`; custom validation can approve the wrong value and disagree with native validity and submission. The previous event path passed `event.currentTarget.value`, and form value collection still reads the DOM.
+
+**P2 — Reset filled state when an empty control is mounted** — `packages/react/src/field/control/FieldControl.tsx:99-103`
+
+This mount effect only sets filled to true. If a persistent `Field.Root` swaps a filled control for a newly mounted controlled control with `value=""`, the root retains `data-filled`: the new effect does nothing and `useValueChanged` does not fire for its initial value. The previous effect explicitly set filled to false for an empty controlled value. Labels and other UI driven by the field state therefore remain in the filled state for an empty replacement input.

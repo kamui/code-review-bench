@@ -1,0 +1,9 @@
+**P2 — Preserve the member when an update recreates the value** — `weed/filer/redis2/universal_redis_store.go:245-247`
+
+An update can recreate the value after this existence check returns zero. For example, a writer can read an existing entry, its Redis TTL can expire, and a listing can observe the missing value, remove the index member, and receive `exists == 0` before the writer calls `UpdateEntry`. `Filer.CreateEntry` selects `UpdateEntry` when it already read an old entry, and redis2 `UpdateEntry` only writes the value; it does not add the directory member. The successful update is then permanently invisible to directory listings until a later insert of the same path, even though the value is present. The check and the update need a protocol that also covers updates, not just inserts.
+
+**P2 — Do not leave a recreated entry unindexed when repair fails** — `weed/filer/redis2/universal_redis_store.go:237-250`
+
+A concurrent `InsertEntry` can finish its SET and no-op `ZAddNX` after the listing observes a missing value but before this helper removes the old member. If the listing context is then canceled, Redis becomes unavailable, or the restoring `ZAddNX` otherwise fails, the removal has already succeeded but the restoration does not; its error is discarded. A ZREM whose reply is lost can likewise have removed the member despite the early return on error. The insert has reported success, yet its value is absent from subsequent directory listings indefinitely, and `UpdateEntry` cannot restore the member. Returning a listing error alone cannot repair that persistent inconsistency; cleanup must remain safe when any of these operations fails.
+
+The focused package test could not start: the configured Go launcher attempted to install Go into a read-only location. Live Redis was unavailable.

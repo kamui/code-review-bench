@@ -1,0 +1,3 @@
+[P3] Preserve the stackless original error fixture — `src/error/__tests__/GraphQLError-test.js:57-58`
+
+`new Error('original')` has a stack in Node, so this test now takes the `originalError.stack` branch in `GraphQLError` and duplicates the preceding test instead of exercising the fallback that creates a new stack. The previous plain object had no stack, and no other test supplies a stackless original error. Consequently a regression that leaves wrapped errors without a stack when their original error has none would pass this test. Use a Flow-compatible error with its stack removed and assert that the generated stack is present.

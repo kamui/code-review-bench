@@ -1,0 +1,21 @@
+# Review findings
+
+### P2 — Preserve prevented-event handling for controlled inputs
+
+packages/react/src/field/control/FieldControl.tsx:105–114
+
+The controlled-value effect clears errors and calls `validation.change` without knowing whether the originating input event was prevented. Previously the change handler skipped both operations when `event.nativeEvent.defaultPrevented` was true. With a controlled input whose `onValueChange` updates its value, a canceled native input event now reaches this effect and runs validation and clears server errors anyway. The existing prevented-event test covers only an uncontrolled input; a controlled reproduction invokes the validator once for the same prevented event.
+
+### P2 — Stop field-state updates when a change is canceled
+
+packages/react/src/field/control/FieldControl.tsx:148–153
+
+`details.cancel()` is checked only after `setDirty` and `setFilled`. For an uncontrolled input, canceling the first change still marks the field dirty and filled, even though the event-details contract says cancellation stops Base UI handling. This can display dirty-dependent UI and alter later validation through `markedDirtyRef`. A focused test that cancels `onValueChange` confirms both attributes are set; the added test checks only that the validator is not called.
+
+### P2 — Do not validate disabled controls on a prop update
+
+packages/react/src/field/control/FieldControl.tsx:105–114
+
+The new controlled-value effect runs even when the field or control is disabled, despite the registration immediately above being disabled. With `validationMode="onChange"`, changing a disabled input from application code calls the custom validator and can install a custom validity error on the disabled element. When the field is enabled again, that error becomes visible and can block submission, even though the change happened while the control was excluded from validation. A focused reproduction changes the value while disabled and observes the validator run and `data-invalid` appear on re-enabling.
+
+The existing FieldControl jsdom suite passed (26 passed, 1 skipped). Three focused scratch tests reproduced the behaviors above.
