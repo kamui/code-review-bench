@@ -178,7 +178,11 @@ machine rebuilds and records its own. The requests virtualenv's interpreter live
 
 An arm file (`arms/<id>.json`) is a reviewer configuration as data: kind, requested model and
 effort, isolation, and the adapter, including the prompt-variant hashes the arm expects from the
-harness registries. Nothing in it is observed.
+harness registries. Nothing in it is observed. A `claude-skill` arm may add `step_models`, which maps each
+model alias the skill's prompt names (`haiku`, `sonnet`, `opus`) to an exact model: the skill runner resolves
+each alias to its model through the client's `ANTHROPIC_DEFAULT_<ALIAS>_MODEL`, keeps the root on the arm's
+model, accepts a subagent only on the model mapped to the alias its Agent call named, and prices each
+transcript at its own model's rate.
 
 `bench-tools file-attempt` turns one attempt directory written by `dispatch.sh` into
 `runs/<run>/attempts/<attempt>/attempt.json` plus its small artifacts. Every observed field comes
@@ -188,7 +192,8 @@ Codex turn context; the prompt hash from the transcript (the built-in's prompt b
 diff ranges resolved in the clone against the target's merge-base and head. The disposition is
 `stopped` on a stop record or non-zero exit, `harness-invalid` on a tree change, an audit
 violation, a model, effort or prompt the arm does not expect, or a wrong range, and otherwise
-`valid completed`. It meters usage at the `rates.json` entry for the observed model, writes
+`valid completed`. It meters usage at the `rates.json` entry for the observed model (each transcript's own
+model for an arm with `step_models`), writes
 per-request records, and archives the transcripts outside the repository with a hash and a
 restoration check. The total is priced only when the native return is recorded and every stream
 shows its own end: a Claude `stdout.jsonl` that ends with the session's `result` record and

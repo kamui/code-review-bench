@@ -24,7 +24,7 @@ Keep required evidence shared through the [evidence storage contract](docs/evide
 
 The explorer and `bun run scorecard` show the current v1 scorecard only. Every rate, average and recommendation comes from `src/lib/scoring.ts`; display code formats kernel results and never computes or substitutes one. Keep an unavailable value unavailable with its reason, keep the dimensions separate, and add no blended score, ranking or winner rule. A list may start sorted by one stated measure; that order is a sort, not a score. Check display changes with `bun run dev:fixture`; its fixture is never benchmark evidence. See the [explorer scorecard](docs/current-grading.md#explorer-scorecard).
 
-After publishing a new benchmark in the current scoreboard registry, regenerate the explorer data and verify the hero's task, known-problem, skill, and model counts. Follow the counting rules in [Future benchmark runs](README.md#future-benchmark-runs); totals cover the full published dataset, not the active chart filters.
+After publishing a new benchmark in the current scoreboard registry, regenerate the explorer data and verify the hero's task, known-problem, skill, and model counts. Follow the counting rules in [Future benchmark runs](docs/maintaining.md#future-benchmark-runs); totals cover the full published dataset, not the active chart filters.
 
 Write commits and PRs as the user's work, without model attribution or co-author trailers. Never bypass commit hooks.
 

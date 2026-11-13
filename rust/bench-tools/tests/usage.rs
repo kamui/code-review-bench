@@ -294,3 +294,110 @@ fn sums_that_differ_from_the_session_totals_are_incomplete() {
     let alone = meter(&[agent], &[]);
     assert_eq!(problems(&alone), ["no session totals to reconcile against"]);
 }
+
+/// One request on `model` with `input` uncached tokens, `read` cache reads and `output` output tokens.
+fn priced_request(request: &str, model: &str, input: u64, read: u64, output: u64) -> String {
+    format!(
+        r#"{{"type":"assistant","requestId":"{request}","message":{{"model":"{model}","stop_reason":"end_turn","usage":{{"input_tokens":{input},"cache_creation_input_tokens":0,"cache_read_input_tokens":{read},"output_tokens":{output}}},"content":[{{"type":"text","text":"x"}}]}}}}"#
+    )
+}
+
+fn usage_claude(arguments: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_bench-tools"))
+        .args(["usage", "claude"])
+        .args(arguments)
+        .output()
+        .unwrap()
+}
+
+fn cost(value: &Value) -> f64 {
+    match value {
+        Value::Float(number) => *number,
+        other => panic!("not a cost: {}", other.py_repr()),
+    }
+}
+
+#[test]
+fn model_prices_price_each_transcript_at_its_own_model() {
+    let case = Case::new("per-model");
+    let session = r#"{"type":"cost-state","sessionId":"s","modelUsage":{"big":{"inputTokens":1000000,"outputTokens":100000,"cacheReadInputTokens":1000000,"cacheCreationInputTokens":0},"small":{"inputTokens":2000000,"outputTokens":0,"cacheReadInputTokens":0,"cacheCreationInputTokens":0}}}"#;
+    let root = case.write(
+        "root.jsonl",
+        &[
+            priced_request("r1", "big", 1_000_000, 1_000_000, 100_000),
+            session.to_string(),
+        ],
+    );
+    let agent = case.write(
+        "agent-a1.jsonl",
+        &[priced_request("r2", "small", 2_000_000, 0, 0)],
+    );
+    let (root, agent) = (root.to_str().unwrap(), agent.to_str().unwrap());
+    let done = usage_claude(&[
+        root,
+        agent,
+        "--model-prices",
+        "big=4,20,0.05,1.25,2",
+        "--model-prices",
+        "small=0.1,0.5,0.1,1.25,2",
+        "--json",
+    ]);
+    assert!(
+        done.status.success(),
+        "{}",
+        String::from_utf8_lossy(&done.stderr)
+    );
+    let data = pyjson::loads(
+        &String::from_utf8(done.stdout).unwrap(),
+        Duplicates::KeepLast,
+    )
+    .unwrap();
+    assert!(complete(&data), "{:?}", problems(&data));
+    // big: 1M input at $4, 1M cache reads at 0.05 x $4, 100k output at $20; small: 2M input at $0.10.
+    assert!((cost(at(&data, &["transcripts", "0", "cost"])) - 6.2).abs() < 1e-9);
+    assert!((cost(at(&data, &["transcripts", "1", "cost"])) - 0.2).abs() < 1e-9);
+    assert!((cost(at(&data, &["total", "cost"])) - 6.4).abs() < 1e-9);
+    assert!((cost(at(&data, &["total", "cost_bounds", "high"])) - 6.4).abs() < 1e-9);
+    assert!(at(&data, &["prices", "small", "input"]).py_eq(&Value::Float(0.1)));
+
+    let mixed = case.write(
+        "agent-a2.jsonl",
+        &[
+            priced_request("r3", "big", 1, 0, 1),
+            priced_request("r4", "small", 1, 0, 1),
+        ],
+    );
+    let refused = usage_claude(&[
+        mixed.to_str().unwrap(),
+        "--model-prices",
+        "big=4,20,0.05,1.25,2",
+        "--model-prices",
+        "small=0.1,0.5,0.1,1.25,2",
+        "--json",
+    ]);
+    assert_eq!(refused.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&refused.stderr)
+            .contains("need requests on one model, found big, small"),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    let unpriced = usage_claude(&[agent, "--model-prices", "big=4,20,0.05,1.25,2", "--json"]);
+    assert_eq!(unpriced.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&unpriced.stderr).contains("no price for model small"));
+    for arguments in [
+        vec![
+            agent,
+            "--model-prices",
+            "small=0.1,0.5,0.1,1.25,2",
+            "--prices",
+            "1,2",
+            "--json",
+        ],
+        vec![agent, "--model-prices", "small=0.1,0.5,0.1,1.25,2"],
+        vec![agent, "--model-prices", "small=0.1,0.5", "--json"],
+    ] {
+        let misused = usage_claude(&arguments);
+        assert_eq!(misused.status.code(), Some(2), "{arguments:?}");
+    }
+}

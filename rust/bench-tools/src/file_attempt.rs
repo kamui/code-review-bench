@@ -21,14 +21,15 @@
 //!
 //! Disposition, first rule that applies: `stopped: <reason>` on an `interruption.json`, a `stop.json` or a
 //! non-zero exit; `harness-invalid: <reason>` on a tree-identity change, an audit violation or network command,
-//! a confirmed leak, a model or effort other than the arm's, a prompt hash outside the arm's expected variants, an executed range
+//! a confirmed leak, a model or effort other than the arm's (or its step models'), a prompt hash outside the arm's expected variants, an executed range
 //! other than the pinned one, or a CLI version or skill tree other than the run pinned; otherwise
 //! `valid completed`.
 //!
 //! Usage is priced from the rates file by the observed model, and only when the capture is proven complete;
-//! otherwise the captured requests price a lower bound. The transcripts are archived to
-//! `<archive-root>/<run>/<attempt>.tar.gz` and checked. `attempt.json` is written last and replaced in one step,
-//! so its presence means a finished filing.
+//! otherwise the captured requests price a lower bound. An arm with `step_models` prices each transcript at its own
+//! model's rate; its root must run the arm's model and each subagent the model mapped to the alias its Agent call
+//! named. The transcripts are archived to `<archive-root>/<run>/<attempt>.tar.gz` and checked. `attempt.json` is
+//! written last and replaced in one step, so its presence means a finished filing.
 //!
 //! Exit codes: 0 filed; 1 the record does not validate, one line per violation on stdout; 2 the run's
 //! `runtimes.frozen.json` does not pin this bench-tools (checked before anything is written), an input is missing
@@ -45,6 +46,7 @@ use crate::pytext::{self, PyPath};
 use crate::review_isolation;
 use crate::schema::Validator;
 use crate::sha256;
+use crate::step_models;
 use crate::usage;
 use std::collections::HashSet;
 use std::fmt::Write as _;
@@ -1022,6 +1024,50 @@ struct Rate {
     billing: Value,
 }
 
+/// The rates an attempt is priced at: one for every request, or each observed model's own, for an arm with
+/// step models.
+enum Pricing {
+    One(Box<Rate>),
+    PerModel(Vec<(String, Rate)>),
+}
+
+impl Pricing {
+    fn rate_of(&self, model: &Value) -> Option<&Rate> {
+        match self {
+            Self::One(rate) => Some(rate),
+            Self::PerModel(rates) => rates
+                .iter()
+                .find(|(priced, _)| is(model, priced))
+                .map(|(_, rate)| rate),
+        }
+    }
+
+    fn as_of(&self) -> Value {
+        match self {
+            Self::One(rate) => rate.as_of.clone(),
+            Self::PerModel(rates) => text(
+                &rates
+                    .iter()
+                    .map(|(model, rate)| format!("{model} {}", rate.as_of.py_str()))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
+        }
+    }
+
+    fn list_price(&self) -> bool {
+        let listed = |rate: &Rate| {
+            rate.billing
+                .as_str()
+                .is_some_and(|billing| billing.starts_with("list-price"))
+        };
+        match self {
+            Self::One(rate) => listed(rate),
+            Self::PerModel(rates) => rates.iter().all(|(_, rate)| listed(rate)),
+        }
+    }
+}
+
 /// The newest rate for `model`; of rates with the same date, the last listed.
 fn rate_for(rates_path: &str, rates: &Value, model: &str) -> Result<Option<Rate>> {
     let mut best: Option<&Value> = None;
@@ -1118,10 +1164,13 @@ impl Harness {
 /// A floor on the cost of the captured requests, for when the meter cannot read the whole stream. It never
 /// overstates: a Claude cache-write split that is missing, short or larger than the total leaves the rest priced
 /// at the cheaper tier, and a Codex prompt whose cached and cache-write parts exceed it is priced at its cheapest
-/// rate.
-fn captured_minimum(harness: Harness, captured: &[Value], rate: &Rate) -> f64 {
+/// rate. A request on a model with no rate adds nothing.
+fn captured_minimum(harness: Harness, captured: &[Value], pricing: &Pricing) -> f64 {
     let mut total = 0.0;
     for row in captured {
+        let Some(rate) = pricing.rate_of(at(row, "model")) else {
+            continue;
+        };
         if harness == Harness::Codex {
             let prompt = count(at(row, "input_tokens"));
             let (cached, written) = (
@@ -1821,9 +1870,21 @@ fn meter(
     root: &Value,
     meter_paths: &[String],
     transcript_paths: &[String],
-    rate: &Rate,
+    pricing: &Pricing,
 ) -> std::result::Result<Metered, (String, bool)> {
     let executable = own_executable().map_err(|FileError(message)| (message, false))?;
+    let rate = match pricing {
+        Pricing::One(rate) => rate,
+        Pricing::PerModel(rates) if harness == Harness::Claude => {
+            return meter_per_model(executable, meter_paths, transcript_paths, rates);
+        }
+        Pricing::PerModel(_) => {
+            return Err((
+                "per-model prices apply only to Claude transcripts".into(),
+                false,
+            ));
+        }
+    };
     let general = |price: f64| usage::general(price / rate.input);
     let prices = format!("{},{}", rate.spelled.0, rate.spelled.1);
     let (argv, outcome) = if harness == Harness::Codex {
@@ -1922,6 +1983,7 @@ fn meter(
                     .map(|path| path.clone().into_bytes())
                     .collect(),
                 prices,
+                model_prices: Vec::new(),
                 report: None,
                 timing: None,
                 by_kind: false,
@@ -1936,6 +1998,88 @@ fn meter(
         };
         (argv, outcome)
     };
+    read_metered(harness, &argv, &outcome)
+}
+
+/// `usage claude` with each transcript priced at its own model's rate.
+fn meter_per_model(
+    executable: String,
+    meter_paths: &[String],
+    transcript_paths: &[String],
+    rates: &[(String, Rate)],
+) -> std::result::Result<Metered, (String, bool)> {
+    let mut argv = [
+        vec![executable, "usage".into(), "claude".into()],
+        meter_paths.to_vec(),
+        vec!["--receipts".into()],
+        transcript_paths.to_vec(),
+    ]
+    .concat();
+    let mut model_prices = Vec::new();
+    for (model, rate) in rates {
+        let prices = usage::claude::Prices {
+            input: rate.input,
+            output: rate.output,
+            write_5m_mult: multiplier(rate.cache_write_5m, rate.input),
+            write_1h_mult: multiplier(rate.cache_write_1h, rate.input),
+            read_mult: multiplier(rate.cache_read, rate.input),
+        };
+        if ![
+            prices.input,
+            prices.output,
+            prices.write_5m_mult,
+            prices.write_1h_mult,
+            prices.read_mult,
+        ]
+        .iter()
+        .all(|value| value.is_finite() && *value >= 0.0)
+        {
+            return Err((
+                format!("the rate for {model}: prices must be finite and non-negative"),
+                false,
+            ));
+        }
+        argv.extend([
+            "--model-prices".to_string(),
+            format!(
+                "{model}={},{},{},{},{}",
+                rate.spelled.0,
+                rate.spelled.1,
+                usage::general(prices.read_mult),
+                usage::general(prices.write_5m_mult),
+                usage::general(prices.write_1h_mult)
+            ),
+        ]);
+        model_prices.push((model.clone(), prices));
+    }
+    argv.push("--json".into());
+    let outcome = usage::claude::run(&usage::claude::Options {
+        transcripts: meter_paths
+            .iter()
+            .map(|path| path.clone().into_bytes())
+            .collect(),
+        receipts: transcript_paths
+            .iter()
+            .map(|path| path.clone().into_bytes())
+            .collect(),
+        prices: model_prices
+            .first()
+            .map(|(_, prices)| *prices)
+            .ok_or_else(|| ("no model to price".to_string(), false))?,
+        model_prices,
+        report: None,
+        timing: None,
+        by_kind: false,
+        output: usage::claude::Output::Json,
+    });
+    read_metered(Harness::Claude, &argv, &outcome)
+}
+
+fn read_metered(
+    harness: Harness,
+    argv: &[String],
+    outcome: &usage::Outcome,
+) -> std::result::Result<Metered, (String, bool)> {
     let out = String::from_utf8_lossy(&outcome.stdout).into_owned();
     if outcome.code == 2 || (outcome.code != 0 && pytext::strip(&out).is_empty()) {
         return Err((
@@ -2045,6 +2189,8 @@ fn file_attempt(arguments: &Arguments) -> Result<(Value, String)> {
     let a = |name: &str| join(&attempt_dir, name);
     let arm = read_json(&arguments.arm)?;
     let kind = kind_of(arguments, &arm)?;
+    let step =
+        step_models::read(&arm).or_else(|error| refuse(format!("{}: {error}", arguments.arm)))?;
     let target_path = join(&arguments.target, "target.json");
     let target = read_json(&target_path)?;
     let rates = read_json(&arguments.rates)?;
@@ -2380,35 +2526,71 @@ fn file_attempt(arguments: &Arguments) -> Result<(Value, String)> {
     };
     let (mut priced, mut low, mut high) = (Value::Null, Value::Null, Value::Null);
     let mut status = "complete";
-    let rate = match models.as_slice() {
-        [model] => rate_for(&arguments.rates, &rates, model)?,
-        _ => None,
+    let mut transcript_models = Vec::new();
+    let mut started = std::collections::BTreeMap::new();
+    if step.is_some() {
+        let mut every_record = Vec::new();
+        for path in &transcript_paths {
+            let observed = claude_observed(std::slice::from_ref(path), false)?.models;
+            transcript_models.push((path.clone(), observed));
+            every_record.extend(records(path)?);
+        }
+        started = step_models::started_models(&every_record);
+    }
+    let rate = match (&step, models.as_slice()) {
+        (None, [model]) => {
+            rate_for(&arguments.rates, &rates, model)?.map(|rate| Pricing::One(Box::new(rate)))
+        }
+        (None, _) | (Some(_), []) => None,
+        (Some(_), observed) => {
+            let mut found = Vec::new();
+            for model in observed {
+                if let Some(rate) = rate_for(&arguments.rates, &rates, model)? {
+                    found.push((model.clone(), rate));
+                }
+            }
+            (found.len() == observed.len()).then_some(Pricing::PerModel(found))
+        }
     };
     let billing_label = match arguments.billing_mode {
         Some(BillingMode::Subscription) => "list-price-equivalent",
         Some(BillingMode::Api) => "api-dollars",
-        None if rate
-            .as_ref()
-            .and_then(|rate| rate.billing.as_str())
-            .is_some_and(|billing| billing.starts_with("list-price")) =>
-        {
-            "list-price-equivalent"
-        }
+        None if rate.as_ref().is_some_and(Pricing::list_price) => "list-price-equivalent",
         None => "api-dollars",
     };
     let mut unmetered = None;
     let mut failure = None;
     let mut completeness = Value::Null;
     let root_value = root.clone().unwrap_or(Value::Null);
+    let mixed: Vec<String> = transcript_models
+        .iter()
+        .filter(|(path, observed)| meter_paths.contains(path) && observed.len() != 1)
+        .map(|(path, observed)| format!("{} ({})", basename(path), observed.join(", ")))
+        .collect();
+    let listed = || {
+        if models.is_empty() {
+            "none".to_string()
+        } else {
+            Value::Array(models.iter().map(|model| text(model)).collect()).py_repr()
+        }
+    };
     match &rate {
-        None => {
-            let listed = if models.is_empty() {
-                "none".to_string()
-            } else {
-                Value::Array(models.iter().map(|model| text(model)).collect()).py_repr()
-            };
+        None if step.is_some() => {
             unmetered = Some(format!(
-                "observed models {listed} do not map to one rates.json entry"
+                "observed models {} do not each have a rates.json entry",
+                listed()
+            ));
+        }
+        None => {
+            unmetered = Some(format!(
+                "observed models {} do not map to one rates.json entry",
+                listed()
+            ));
+        }
+        Some(_) if !mixed.is_empty() => {
+            unmetered = Some(format!(
+                "each transcript is priced at its own model's rate, and these name other than one model: {}",
+                mixed.join("; ")
             ));
         }
         Some(_) if harness == Harness::Codex && !root_value.truthy() => {
@@ -2417,14 +2599,14 @@ fn file_attempt(arguments: &Arguments) -> Result<(Value, String)> {
         Some(_) if harness == Harness::Claude && meter_paths.is_empty() => {
             unmetered = Some("no metered transcript was observed".to_string());
         }
-        Some(rate) => {
+        Some(pricing) => {
             match meter(
                 harness,
                 &attempt_dir,
                 &root_value,
                 &meter_paths,
                 &transcript_paths,
-                rate,
+                pricing,
             ) {
                 Ok(metered) => {
                     priced = metered.priced;
@@ -2591,7 +2773,29 @@ fn file_attempt(arguments: &Arguments) -> Result<(Value, String)> {
     }
     let only =
         |observed: &[String], required: &Value| matches!(observed, [one] if is(required, one));
-    if arm_model.truthy() && !models.is_empty() && !only(&models, arm_model) {
+    if let (Some(step), Some(arm_model)) = (&step, arm_model.as_str()) {
+        for (path, observed) in &transcript_models {
+            if observed.is_empty() {
+                continue;
+            }
+            let name = basename(path);
+            if roots.contains(path) {
+                if !matches!(observed.as_slice(), [one] if one == arm_model) {
+                    problems.push(format!(
+                        "{name}: model {}, the root requires {arm_model}",
+                        observed.join(", ")
+                    ));
+                }
+            } else {
+                let seen: Vec<&str> = observed.iter().map(String::as_str).collect();
+                if let Some(problem) =
+                    step.subagent_problem(step_models::agent_id(name), &seen, &started)
+                {
+                    problems.push(format!("{name}: {problem}"));
+                }
+            }
+        }
+    } else if arm_model.truthy() && !models.is_empty() && !only(&models, arm_model) {
         problems.push(format!(
             "model {}, arm requires {}",
             models.join(", "),
@@ -2911,8 +3115,7 @@ fn file_attempt(arguments: &Arguments) -> Result<(Value, String)> {
         ),
         (
             "rates_as_of",
-            rate.as_ref()
-                .map_or_else(|| text("n/a"), |rate| rate.as_of.clone()),
+            rate.as_ref().map_or_else(|| text("n/a"), Pricing::as_of),
         ),
         ("billing", text(billing_label)),
         (

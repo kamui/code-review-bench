@@ -88,8 +88,9 @@ Each of these runs the host's `python3`. On CI it comes with the runner image; n
 
 - `tools/without-python.sh` removes interpreters from `PATH` only. A program that names one by absolute path is not
   stopped; every maintained caller finds programs on `PATH`.
-- The fake-client cell runs only on Linux, as `dispatch.sh` does. aarch64 Linux and macOS run the runtime tests,
-  install and rollback in CI; neither was run locally.
+- The fake-client cell runs only on Linux, as `dispatch.sh` does. aarch64 Linux and macOS run the runtime tests in CI
+  and install once on pushes to `main`; neither was run locally. Only x86_64 Linux rolls back across two real installs,
+  on pushes to `main` and on pull requests that change what the rollback reads.
 - The Python launcher's `python3` could be a version manager's shim that put the manager's tools on `PATH`. The shell
   launcher passes the environment through, so on such a host the grading sandbox refuses a shimmed `go` until the
   manager is activated ([runtime](runtime.md#running-a-maintained-command)).

@@ -1,0 +1,21 @@
+# Code review — bokeh/bokeh#9232
+
+Range reviewed: `main...review-head` (`ccb4bcb4c2b841d89b0e88303a97bf4604a5795f..36549bca3a63d581f7b68d08054a7813c1e6a499`).
+
+No CLAUDE.md files apply to the changed paths, so the CLAUDE.md compliance check found nothing. One bug was found and confirmed by the validation step.
+
+## Issues
+
+### 1. `_unlocal_date` now shows server-supplied dates one day early in UTC− timezones
+
+- **Reason flagged:** bug (regression)
+- **File / lines:** `bokehjs/src/lib/models/widgets/date_picker.ts` lines 82-83 (inside `_unlocal_date`, lines 78-87). It affects the callers at lines 68, 70 and 71 (`defaultDate`, `minDate`, `maxDate`).
+- **Description:** The new code always runs `date.setTime(date.getTime() - date.getTimezoneOffset() * 60000)` before reading the UTC calendar day from `toISOString()`. That shift is correct only when the input is local midnight. A value the user picked is local midnight, because `_on_select` stores `toDateString()` and `new Date(...)` parses that string as local time. Values sent from Python are not. `DatePicker.value`, `min_date` and `max_date` are `Date` properties, and `convert_datetime_type` in `bokeh/util/serialization.py` serializes them as milliseconds since the epoch at UTC midnight. The removed comment said the same: "the date comes in as a UTC timestamp". In UTC− zones `getTimezoneOffset()` is positive, so the shift moves those instants back into the previous UTC day.
+- **Why it fails:** Take `DatePicker(value=date(2019, 9, 20), min_date=date(2019, 9, 1), max_date=date(2019, 9, 30))`. Its value is sent as `1568937600000` (2019-09-20T00:00Z).
+  - In America/New_York or America/Los_Angeles, the picker now shows Thu Sep 19 2019. Before this PR it showed Fri Sep 20 2019.
+  - The allowed range moves to Aug 31–Sep 29. The valid Sep 30 can no longer be picked, and the invalid Aug 31 can be.
+  - In Europe/Paris, Asia/Tokyo and UTC the server value still shows correctly.
+  - The issue's own repro, `DatePicker(value=datetime.date.today())`, now shows yesterday to users in the Americas.
+  - These results come from running the old and new function in node under each TZ.
+
+  The PR fixes the after-pick display for UTC+ users and in exchange breaks the initial value and the min/max bounds for UTC− users. The two input forms (a local-midnight date string and a UTC-midnight timestamp) need different handling.

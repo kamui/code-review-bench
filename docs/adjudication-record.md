@@ -61,6 +61,7 @@ When a saved before-record normalized declared confidence for eligibility, keep 
 | `rulings` | The ruling index, which gives each ruling one name. |
 | `reviews` | Null, or the saved ruling being shown again, by its name in the index, with its `saved_outcome`. |
 | `answers` | Each party's first answer. |
+| `turns_on` | Optional. Null, or one sentence by the session that asks, naming the fact the decision turns on. `route` prints it on the card. No routing, settlement or filing decision reads its text. The record check refuses one that is neither null nor written text, and `check`, `route`, `summary` and filing all run that check. A record without it is valid, and so is every record saved before the field existed. |
 | `same_family_blind` | Optional. The owner's saved permission for blind answers from the recommender's model family in one named round: `round`, the name the record's `round_opening` gives; `receipt`, the owner's receipt by `path` and `sha256`; and `scope`, the passage of the receipt that allows it, which names the round. See below. |
 
 `rule` pins a versioned file or the copy the round saved under `docs/research/`. It never pins a file that is edited in place. `bench/rubric/scoring.md` is replaced when the next rubric takes effect, and a record that pinned it would then fail its check.
@@ -180,9 +181,24 @@ The shared policy gate prints `ASK` with the reasons that keep the decision with
 
 After the reasons it prints the question to show the user:
 
-1. The whole case file that every blind party read.
-2. A table with one row for each party: its pick, its confidence with the conditions it falls short on, and its reason. A `recovery` pick shows the two facts. A `duplicate` or `same-family` pick names the known problem.
-3. Under "To reconcile before asking", each party whose pick differs from the recommender's, with its reason, or a line saying that every pick agrees. [Reconcile](claim-adjudication.md#prepare-a-ruling) says what the asking session does with them.
+1. A decision card, built from the before-record and the sheet of earlier rulings it pins. Its top block holds what the owner rules from, one labelled entry each:
+   - `DECIDE`: what is decided, then its decision type, ruling, group and pull request.
+   - `TURNS ON`: the record's `turns_on` sentence, when it has one.
+   - `PICKS`: one aligned row for each party, with its pick and confidence. A `recovery` pick shows the two facts as `what:` and `cause:`. A `duplicate` or `same-family` pick names the known problem.
+   - `AGREE`: whether every pick is the recommender's and, when not, which parties differ on the outcome, on what goes wrong and on the cause.
+   - `FLAGGED`: how many rule gaps and conflicts the parties stated, and which parties stated them.
+   - `CASE`: the case file's length in words.
+
+   Under "Detail" the card holds the rest:
+   - Each party's reason, with its confidence and the conditions it falls short on.
+   - The nearest earlier rulings each party named, each with its outcome as the sheet in `case.precedents` states it. The card says when no sheet was given or the sheet does not hold the ruling.
+   - Each rule gap or conflict a party stated, with the party.
+2. Under "To reconcile before asking", each party whose pick differs from the recommender's, with its reason, or a line saying that every pick agrees. [Reconcile](claim-adjudication.md#prepare-a-ruling) says what the asking session does with them.
+3. The whole case file that every blind party read.
+
+The card changes no routing. `SETTLE` and `ASK`, the reasons, settlement and filing do not read it, and the case file still prints in full.
+
+The session that asks shows the user this output as printed and saves the message it showed. [Prepare a ruling](claim-adjudication.md#prepare-a-ruling) gives the rule. No tool checks it.
 
 `route` needs a contract 2 record, because contract 1 pins no case file.
 
@@ -309,7 +325,7 @@ Under an adopted policy v3, `route` prints `SETTLE under policy v3, on agreement
 - The record's `filing` is missing or does not have its decision type's shape.
 - Filing for the type is not enforced yet.
 
-The last reason applies to `pre-existing-admission`. Its gate is evaluated, and the replay counts it, but an agent settlement of one cannot be filed yet. `candidate`, `reconciliation` and `band` settle end to end:
+The last reason applies to `pre-existing-admission`. Its gate is evaluated, and the replay counts it, but an agent settlement of one cannot be filed. The owner decided on 2026-11-13 to keep admissions, as [issue #59](https://github.com/kamui/code-review-bench/issues/59) records, so this filing is not planned work. `candidate`, `reconciliation` and `band` settle end to end:
 
 - `ruling check` and `ruling summary` accept an agent-settled after-record in a v3 round only when it pins the round's policy, `route` gives no reason at its place in history, and it repeats the agreed answer with `asked: 0` and `ground: null`.
 - A current candidate decision filed from it cites the v3 adoption receipt and its `adoption_scope`, and its reason names policy v3 and agents. A credit filing that pins a v3 settlement is refused, and so is an owner's decision that cites the v3 adoption receipt.
@@ -362,7 +378,7 @@ The owner's five audit calls are fixed before any record exists. They are the di
 - The round's reconciliation before-records, leaving out reviews of a saved ruling, cover the comparison's disputed units once each.
 - The unit is not one of the five calls and shares no question with one. A question is one `ruling` name in the rulings index, so a grouped question that holds a call goes to the owner whole.
 
-For a reconciliation it cannot show to be outside the five calls, `route` withholds every first answer. It prints the case file and the reason, without the reconciler's call or confidence. `ruling summary` lists the five calls for the round and names a record it cannot place.
+For a reconciliation it cannot show to be outside the five calls, `route` withholds every first answer. It prints the reasons, a card and the case file. The card holds only its `DECIDE` entry, a `PICKS` entry that says the first answers are withheld, and its `CASE` entry. It shows no pick, confidence, condition, reason, earlier ruling, gap or conflict of the reconciler's, and no `turns_on`, because the session that asks writes that sentence knowing the call. `ruling summary` lists the five calls for the round and names a record it cannot place.
 
 An agent-settled row in the audit's `reconciliation.json` holds `settled_by: "agents"`, `settlement` (the after-record's pin), `receipt`, `receipt_scope` and a reason that names policy v3 and agents. `evaluator-audit conclude` and `calibration check` refuse:
 
@@ -380,7 +396,7 @@ For a round under an adopted policy v3, `ruling summary` adds the digest the own
 
 `--json` holds the same in `reading`, `stated_gaps` and each digest entry's `read`. A round under policy v2 prints none of this.
 
-These parts of ADR-0008 are not enforced yet: filing for pre-existing admissions, and labels on pre-existing problems, which need a checked link from a candidate's admission to the problem it admitted.
+Two parts of ADR-0008 are not enforced. Filing for pre-existing admissions stays unbuilt by the owner's decision of 2026-11-13. Labels on pre-existing problems are not built yet; they need a checked link from a candidate's admission to the problem it admitted.
 
 ## Filing a policy v2 settlement
 

@@ -64,6 +64,7 @@ pub mod sha256;
 pub mod shlex;
 pub mod skill_provenance;
 pub mod skill_runner;
+pub mod step_models;
 pub mod subscription_meters;
 pub mod timeout;
 pub mod upstream;

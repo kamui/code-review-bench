@@ -33,7 +33,7 @@ const LOW: &str = "the parties did not give the agreement policy v3 needs: the r
 const SHAPE: &str = "the before-record's `filing` must bind the audit unit it files: exactly `comparison`, the pinned comparison.json of the audit, and `unit`, the record's `group`";
 const UNREADABLE: &str = "the comparison the filing pins cannot be read as an evaluator audit's: its units and the seed of the sample it pins";
 const SUSPENDED: &str = "a review in this round changed an agent settlement of this decision type, so policy v3 suspends it for the rest of the round";
-const WITHHELD: &str = "First answers: withheld until the records show that this unit is neither one of its audit round's five calls nor in a question with one.";
+const WITHHELD: &str = "PICKS     withheld until the records show that this unit is neither one of its audit round's five calls nor in a question with one.";
 
 fn repository() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -395,6 +395,21 @@ fn as_the_plans_round(object: &mut Object) {
     object.insert("evidence".into(), Value::Array(Vec::new()));
 }
 
+/// Save the owner's receipt and policy v3 as adopted by it.
+fn adopt(root: &Root) {
+    root.write(
+        RECEIPT,
+        &format!("# Policy v3 adoption\n\nThe owner answered: {SCOPE}.\n"),
+    );
+    let mut policy = json(&std::fs::read_to_string(repository().join(V3)).unwrap());
+    if let Value::Object(object) = &mut policy {
+        object.insert("status".into(), text("adopted"));
+        object.insert("receipt".into(), root.pin(RECEIPT));
+        object.insert("adoption_scope".into(), text(SCOPE));
+    }
+    root.write(V3, &dumps(&policy));
+}
+
 /// The corpus with a closed round of fifteen agreed reconciliations, an adopted policy v3, a copy of the saved audit
 /// round `evaluator-audit-v2-2026-10-29` (its plan, sample, own grades, second assessments and comparison), and an
 /// open round with one before-record for each disputed unit, filed when `filed`. Unless `plan`, the copied round is
@@ -402,10 +417,7 @@ fn as_the_plans_round(object: &mut Object) {
 /// redraw from an inventory this root does not hold.
 fn fixture_with(name: &str, filed: bool, plan: bool) -> Root {
     let root = corpus(name);
-    root.write(
-        RECEIPT,
-        &format!("# Policy v3 adoption\n\nThe owner answered: {SCOPE}.\n"),
-    );
+    adopt(&root);
     for n in 1..=15 {
         let before = format!("{EARNED}/case-{n}.before.json");
         root.edit(&before, reconciliation);
@@ -415,13 +427,6 @@ fn fixture_with(name: &str, filed: bool, plan: bool) -> Root {
             object.insert("before".into(), root.pin(&before));
         });
     }
-    let mut policy = json(&std::fs::read_to_string(repository().join(V3)).unwrap());
-    if let Value::Object(object) = &mut policy {
-        object.insert("status".into(), text("adopted"));
-        object.insert("receipt".into(), root.pin(RECEIPT));
-        object.insert("adoption_scope".into(), text(SCOPE));
-    }
-    root.write(V3, &dumps(&policy));
     root.write(
         AUDITS,
         &std::fs::read_to_string(repository().join(AUDITS)).unwrap(),
@@ -556,13 +561,33 @@ fn calls_of(root: &Root) -> Vec<usize> {
 
 fn withheld(root: &Root, n: usize, reasons: &[&str]) {
     let routed = root.route(&before_path(n));
+    let record = json(&root.read(&before_path(n)));
+    let field = |name: &str| {
+        record
+            .as_object()
+            .unwrap()
+            .get(name)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
     let case = root.read(&format!("{ROUND}/cases/case-1.md"));
     let listed: Vec<String> = reasons.iter().map(|reason| format!("- {reason}")).collect();
     assert_eq!(
         routed,
         format!(
-            "ASK\n{}\n\nThe case, {ROUND}/cases/case-1.md:\n\n{}\n\n{WITHHELD}\n",
+            "ASK\n{}\n\nDecision card:\n\n\
+             DECIDE    Which of two graders was right about a unit of the evaluator audit?\n          \
+             reconciliation, ruling {}, group {}, pull request {}\n\
+             {WITHHELD}\n\
+             CASE      {} words, in full below\n\n\
+             The case, {ROUND}/cases/case-1.md:\n\n{}\n",
             listed.join("\n"),
+            field("ruling"),
+            field("group"),
+            field("target"),
+            case.split_whitespace().count(),
             case.trim()
         )
     );
@@ -617,6 +642,73 @@ fn a_reconciler_call_at_medium_confidence_settles_and_at_low_confidence_asks() {
 fn an_owner_call_asks_without_the_reconcilers_call() {
     let root = fixture("owner-call");
     withheld(&root, calls()[0], &[AUDIT_CALL]);
+}
+
+#[test]
+fn a_withheld_card_shows_nothing_the_reconciler_answered_nor_turns_on() {
+    let root = corpus("withheld-card");
+    adopt(&root);
+    let before = before_path(1);
+    root.edit(&before, |object| {
+        reconciliation(object);
+        object.insert("filing".into(), Value::Null);
+        object.insert(
+            "turns_on".into(),
+            text("Whether the sentinel-turns-on fact holds."),
+        );
+        for answer in answers(object) {
+            answer.insert("confidence".into(), text("medium"));
+            answer.insert("short_of_high".into(), json(r#"["conflict"]"#));
+            answer.insert("would_settle".into(), Value::Bool(false));
+            answer.insert(
+                "conflict".into(),
+                text("Two rules, sentinel-conflict, point different ways."),
+            );
+            answer.insert(
+                "reason".into(),
+                text("The sentinel-reason fact decides it."),
+            );
+        }
+    });
+    open(&root);
+    assert!(!root.0.join(AUDITS).exists());
+    let check = root.run(&["ruling", "check", &before]);
+    assert!(!check.contains("turns_on"), "{check}");
+    let routed = root.route(&before);
+    assert!(
+        routed.starts_with(&format!("ASK\n- {SHAPE}\n\nDecision card:\n")),
+        "{routed}"
+    );
+    let card =
+        &routed[routed.find("Decision card:\n\n").unwrap()..routed.find("\n\nThe case, ").unwrap()];
+    let lines: Vec<&str> = card.lines().skip(2).collect();
+    assert_eq!(lines.len(), 4, "{card}");
+    assert!(lines[0].starts_with("DECIDE    "), "{card}");
+    assert!(
+        lines[1].starts_with("          reconciliation, ruling "),
+        "{card}"
+    );
+    assert_eq!(lines[2], WITHHELD, "{card}");
+    assert!(lines[3].starts_with("CASE      "), "{card}");
+    for shown in [
+        "first-error",
+        "recommender",
+        "medium",
+        "conflict",
+        "sentinel",
+        "Turns on",
+        "TURNS ON",
+        "AGREE",
+        "FLAGGED",
+        "Detail",
+        "what:",
+        "cause:",
+        "Nearest",
+        "Stated gaps",
+        "Reason",
+    ] {
+        assert!(!routed.contains(shown), "{shown} in {routed}");
+    }
 }
 
 #[test]
