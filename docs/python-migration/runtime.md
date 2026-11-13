@@ -226,8 +226,11 @@ repository. The
 that store for the explorer export and grading.
 
 The x86_64 Linux target splits its checks into two parallel jobs: formatting, Clippy, every test, and the behavior
-contracts run with no Python on `PATH`; and install and rollback. The runtime job
-runs [`rollback.sh`](runtime-evidence/rollback.sh), then, through the version it leaves selected, files a
+contracts run with no Python on `PATH`; and install and rollback. On pushes to `main`, and on pull requests that change
+a path `rollback.sh`, the launcher or the store code reads (`ROLLBACK_PATHS` in the workflow), the runtime job
+runs [`rollback.sh`](runtime-evidence/rollback.sh). Other pull requests install once with `runtime install --select`
+and run `runtime resolve`, so a change outside those paths that breaks the two-install rollback first shows on `main`
+after merge. Through the version either path leaves selected, the job then files a
 [fake-client cell](../../tools/fake-client-cell.sh) through a frozen run's pin and writes the explorer export and the
 scorecard, all with no Python on `PATH`
 ([`tools/without-python.sh`](../../tools/without-python.sh)). Pull requests run the full suite

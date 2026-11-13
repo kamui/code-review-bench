@@ -22,11 +22,13 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       rust: ${{ steps.diff.outputs.rust }}
+      rollback: ${{ steps.diff.outputs.rollback }}
     steps:
       - name: Check whether the Rust runtime is affected
         id: diff
         env:
           TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
           BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
           HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           RANGE: ${{ github.event_name == 'pull_request' && '...' || '..' }}
@@ -42,11 +44,27 @@ jobs:
             ^tools/behavior_contracts/
             ^docs/python-migration/runtime-evidence/rollback\.sh$
             ^\.github/workflows/rust-runtime\.yml$
+          # What rollback.sh, the launcher and the store code read, with the modules the store parses, hashes and writes
+          # its records through; modules it reaches only for a timestamp or an error type or message are left out. A
+          # pull request that changes none installs once.
+          ROLLBACK_PATHS: |-
+            ^docs/python-migration/runtime-evidence/rollback\.sh$
+            ^bench/tools/bench-tools$
+            ^tools/without-python\.sh$
+            ^rust/bench-tools/src/(main|runtime_store|grade/runtime|pyjson|pyfs|pytext|pyvalue|sha256)\.rs$
+            ^rust/bench-tools/(Cargo\.toml|Cargo\.lock|rust-toolchain\.toml)$
+            ^\.github/workflows/rust-runtime\.yml$
         # The changed paths come from commits and trees alone, so the gate fetches history without file contents.
         # GitHub serves a commit by SHA even after a force push leaves it on no branch, so the base counts as found only
         # when the base branch, or for a push the pushed commit, contains it.
         run: |
           rust=true
+          rollback=true
+          unmatched() {
+            matched=0
+            printf '%s\n' "$changed" | grep -qE -f <(printf '%s\n' "$1") || matched=$?
+            [ "$matched" = 1 ]
+          }
           auth=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
           git init -q --bare "$RUNNER_TEMP/history"
           cd "$RUNNER_TEMP/history"
@@ -54,13 +72,15 @@ jobs:
               "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "$BASE" "$HEAD" "+$BASE_TIP:refs/base-tip" &&
             git merge-base --is-ancestor "$BASE" refs/base-tip &&
             changed=$(git diff --no-renames --name-only "$BASE$RANGE$HEAD"); then
-            matched=0
-            printf '%s\n' "$changed" | grep -qE -f <(printf '%s\n' "$RUST_RUNTIME_PATHS") || matched=$?
-            if [ "$matched" = 1 ]; then
+            if unmatched "$RUST_RUNTIME_PATHS"; then
               rust=false
+            fi
+            if [ "$EVENT" = pull_request ] && unmatched "$ROLLBACK_PATHS"; then
+              rollback=false
             fi
           fi
           echo "rust=$rust" >> "$GITHUB_OUTPUT"
+          echo "rollback=$rollback" >> "$GITHUB_OUTPUT"
 
   rust-runtime:
     needs: changes
@@ -169,14 +189,23 @@ jobs:
         if: matrix.part == 'all' && github.event_name == 'pull_request'
         working-directory: rust/bench-tools
         run: 'cargo test --locked --test behavior_contracts -- diff-identity::'
-      # rollback.sh ends with its first install, built from HEAD's crate tree, selected in $RUNNER_TEMP/rollback/store.
-      # The steps after it run that install rather than building a third copy of the same tree.
+      # Either install step leaves an install of HEAD's crate tree selected in $RUNNER_TEMP/rollback/store: rollback.sh
+      # ends with its first install. The steps after it run that install rather than building another copy of the tree.
       - name: Install two versions and roll back with no Python on PATH
-        if: matrix.part == 'runtime'
+        if: matrix.part == 'runtime' && needs.changes.outputs.rollback != 'false'
         env:
           # rust-cache turns incremental builds off; the second install rebuilds its clone's installer incrementally.
           CARGO_INCREMENTAL: '1'
         run: tools/without-python.sh docs/python-migration/runtime-evidence/rollback.sh "$RUNNER_TEMP/rollback" "$(git rev-parse HEAD)"
+      - name: Install once with no Python on PATH
+        if: matrix.part == 'runtime' && needs.changes.outputs.rollback == 'false'
+        env:
+          BENCH_RUNTIME_STORE: ${{ runner.temp }}/rollback/store
+        run: |
+          tools/without-python.sh sh -euc '
+            bench/tools/bench-tools runtime install --select
+            bench/tools/bench-tools runtime resolve
+          '
       - uses: oven-sh/setup-bun@v2
         if: matrix.part == 'runtime'
         with:
@@ -184,7 +213,7 @@ jobs:
       - name: Install the explorer's dependencies
         if: matrix.part == 'runtime'
         run: bun install --frozen-lockfile
-      # The maintained engine needs no Python: install (in the rollback above), a fake-client cell filed through a
+      # The maintained engine needs no Python: install (either step above), a fake-client cell filed through a
       # frozen run's pin, the freeze-commit fetch, the explorer export and the scorecard all run with every Python
       # interpreter removed from PATH. The transcripts are fetched by manifest first, as the Pages build does: the export
       # restores a missing file one at a time, which took about five minutes here.
