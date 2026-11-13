@@ -1137,6 +1137,17 @@ enum UsageCommand {
         /// Dollars per million input and output tokens, e.g. 2,10.
         #[arg(long, value_name = "IN,OUT", allow_negative_numbers = true)]
         prices: Option<String>,
+        /// One model's prices: dollars per million input and output tokens, then the cache-read, five-minute and
+        /// one-hour cache-write multiples of the input price. Repeat it per model to price each transcript at its
+        /// own model's prices; it needs --json and replaces --prices and the multiplier options.
+        #[arg(
+            long = "model-prices",
+            value_name = "MODEL=IN,OUT,READ,WRITE,WRITE_1H",
+            conflicts_with_all = ["prices", "cache_write_mult", "cache_write_1h_mult", "cache_read_mult", "report", "row", "header"],
+            requires = "json",
+            allow_negative_numbers = true
+        )]
+        model_prices: Vec<String>,
         /// Five-minute cache-write price as a multiple of the input price; also the price of unknown-tier writes.
         #[arg(long, default_value = "1.25", allow_negative_numbers = true)]
         cache_write_mult: String,
@@ -2543,6 +2554,7 @@ fn run_usage(command: UsageCommand) -> Result<ExitCode, ExitCode> {
             transcripts,
             receipts,
             prices,
+            model_prices,
             cache_write_mult,
             cache_write_1h_mult,
             cache_read_mult,
@@ -2598,19 +2610,57 @@ fn run_usage(command: UsageCommand) -> Result<ExitCode, ExitCode> {
             if transcripts.is_empty() {
                 return Err(misused("at least one transcript path is required".into()));
             }
-            let Some((input, output)) = parsed_prices else {
-                return Err(misused("--prices IN,OUT is required".into()));
-            };
-            let options = usage::claude::Options {
-                transcripts: transcripts.into_iter().map(bytes).collect(),
-                receipts: receipts.into_iter().map(bytes).collect(),
-                prices: usage::claude::Prices {
+            let mut by_model: Vec<(String, usage::claude::Prices)> = Vec::new();
+            for spec in &model_prices {
+                let invalid = |reason: &str| {
+                    misused(format!(
+                        "argument --model-prices: {reason}: {}",
+                        pytext::repr_str(spec)
+                    ))
+                };
+                let Some((model, numbers)) =
+                    spec.split_once('=').filter(|(model, _)| !model.is_empty())
+                else {
+                    return Err(invalid("expected MODEL=IN,OUT,READ,WRITE,WRITE_1H"));
+                };
+                let values: Option<Vec<f64>> = numbers.split(',').map(usage::float).collect();
+                let values = values.ok_or_else(|| invalid("not numbers"))?;
+                let [input, output, read_mult, write_5m_mult, write_1h_mult] = values[..] else {
+                    return Err(invalid("expected five numbers after MODEL="));
+                };
+                if values.iter().any(|value| *value < 0.0) {
+                    return Err(invalid("prices must not be negative"));
+                }
+                if by_model.iter().any(|(known, _)| known == model) {
+                    return Err(invalid("the model is priced twice"));
+                }
+                by_model.push((
+                    model.to_string(),
+                    usage::claude::Prices {
+                        input,
+                        output,
+                        write_5m_mult,
+                        write_1h_mult,
+                        read_mult,
+                    },
+                ));
+            }
+            let prices = match (parsed_prices, by_model.first()) {
+                (Some((input, output)), _) => usage::claude::Prices {
                     input,
                     output,
                     write_5m_mult,
                     write_1h_mult,
                     read_mult,
                 },
+                (None, Some((_, first))) => *first,
+                (None, None) => return Err(misused("--prices IN,OUT is required".into())),
+            };
+            let options = usage::claude::Options {
+                transcripts: transcripts.into_iter().map(bytes).collect(),
+                receipts: receipts.into_iter().map(bytes).collect(),
+                prices,
+                model_prices: by_model,
                 report: report.map(bytes),
                 timing: timing.map(bytes),
                 by_kind,

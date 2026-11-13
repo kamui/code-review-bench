@@ -1227,3 +1227,357 @@ printf '%s\n' '{{"type": "session_meta", "payload": {{"id": "child", "parent_thr
         fs::read_to_string(&expected).unwrap()
     );
 }
+
+/// A frozen `claude-skill` run for the Claude stand-in below: a one-file skill, a `thermo` normalizer, no sandbox
+/// and no network, pinned to this bench-tools. The arm runs `claude-opus-5-5` and maps the three model aliases
+/// unless `step_models` is false.
+struct ClaudeRun {
+    temp: Temp,
+    run: PathBuf,
+    arm: PathBuf,
+    rates: PathBuf,
+    packet: PathBuf,
+    source_home: PathBuf,
+    target: (String, String),
+}
+
+/// A stand-in for Claude Code print mode. Like the client, it resolves the Agent tool's `haiku`, `sonnet` and `opus`
+/// through `ANTHROPIC_DEFAULT_<ALIAS>_MODEL`, and `CLAUDE_CODE_SUBAGENT_MODEL` overrides every subagent. It saves
+/// its arguments and environment beside the clone, writes a root transcript on `--model` whose Agent calls start one
+/// subagent per alias, each billed one request of a million input tokens, and the report the thermo normalizer
+/// reads. When the attempt holds `stray-model.txt`, `<alias> <model>`, one more call asks for that alias and its
+/// subagent runs that model anyway, as a client that ignored the argument would.
+const CLAUDE_STAND_IN: &str = r#"#!/bin/sh
+[ "$1" = --version ] && { echo "2.1.294 (Claude Code)"; exit 0; }
+attempt=$(dirname "$PWD")
+printf '%s\n' "$@" > "$attempt/claude-argv.txt"
+env | sort > "$attempt/claude-env.txt"
+while [ $# -gt 0 ]; do
+  case $1 in --session-id) session=$2 ;; --model) root_model=$2 ;; esac
+  shift
+done
+prompt=$(sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }')
+resolve() {
+  case $1 in
+    haiku) model=${ANTHROPIC_DEFAULT_HAIKU_MODEL:-claude-haiku-4-5} ;;
+    sonnet) model=${ANTHROPIC_DEFAULT_SONNET_MODEL:-claude-sonnet-4-5} ;;
+    *) model=${ANTHROPIC_DEFAULT_OPUS_MODEL:-claude-opus-4-5} ;;
+  esac
+  [ -n "$CLAUDE_CODE_SUBAGENT_MODEL" ] && model=$CLAUDE_CODE_SUBAGENT_MODEL
+  echo "$model"
+}
+reply() {
+  echo "{\"type\": \"assistant\", \"requestId\": \"$1\", \"effort\": \"high\", \"message\": {\"model\": \"$2\", \"stop_reason\": \"end_turn\", \"usage\": {\"input_tokens\": 1000000, \"cache_creation_input_tokens\": 0, \"cache_read_input_tokens\": 0, \"output_tokens\": 0}, \"content\": [{\"type\": \"text\", \"text\": \"ok\"}]}}"
+}
+project="$HOME/.claude/projects/-clone"
+mkdir -p "$project/$session/subagents"
+printf '{"type": "user", "message": {"content": "%s"}}\n' "$prompt" > "$project/$session.jsonl"
+start() {
+  echo "{\"type\": \"assistant\", \"effort\": \"high\", \"message\": {\"model\": \"$root_model\", \"content\": [{\"type\": \"tool_use\", \"id\": \"t-$1\", \"name\": \"Agent\", \"input\": {\"model\": \"$2\", \"prompt\": \"brief\"}}]}}" >> "$project/$session.jsonl"
+  echo "{\"type\": \"user\", \"toolUseResult\": {\"agentId\": \"$1\"}, \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t-$1\"}]}}" >> "$project/$session.jsonl"
+  { echo '{"type": "user", "message": {"content": "brief"}}'; reply "r-$1" "$3"; } > "$project/$session/subagents/agent-$1.jsonl"
+}
+for alias in haiku sonnet opus; do
+  start $alias $alias "$(resolve $alias)"
+done
+if [ -f "$attempt/stray-model.txt" ]; then
+  read -r alias model < "$attempt/stray-model.txt"
+  start stray "$alias" "$model"
+fi
+reply r-root "$root_model" >> "$project/$session.jsonl"
+report="$PWD-work/report"
+mkdir -p "$report"
+echo 'No actionable findings.' > "$report/summary.md"
+echo '{"findings": [], "questions": []}' > "$report/finding-index.json"
+echo '{"type": "result", "subtype": "success", "is_error": false, "session_id": "'"$session"'"}'
+"#;
+
+impl ClaudeRun {
+    fn new(name: &str, step_models: bool, rates: &[(&str, f64)]) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = Temp::new(name);
+        let root = temp.0.clone();
+        let run = root.join("bench/runs/2026-01-01-claude-steps");
+        let inputs = run.join("inputs");
+        let template = root.join("template-clone");
+        fs::create_dir_all(&template).unwrap();
+        git(&template, &["init", "-q", "-b", "main"]);
+        write(&template.join("app.py"), "x = 1\n");
+        git(&template, &["add", "."]);
+        git_at(
+            &template,
+            &["commit", "-qm", "base"],
+            Some("2026-01-01T00:00:00Z"),
+        );
+        git(&template, &["checkout", "-qb", "review-head"]);
+        write(&template.join("app.py"), "x = 2\n");
+        git_at(
+            &template,
+            &["commit", "-qam", "head"],
+            Some("2026-01-01T00:00:00Z"),
+        );
+        let target = (
+            git(&template, &["rev-parse", "main"]),
+            git(&template, &["rev-parse", "review-head"]),
+        );
+
+        let packet_text = "# Review packet\n\nChange x.\n";
+        let packet = root.join("bench/targets/t-1/packet.md");
+        write(&packet, packet_text);
+        write(
+            &root.join("bench/targets/t-1/target.json"),
+            format!(
+                r#"{{"id": "t-1", "head": "{}", "merge_base": "{}", "packet_sha256": "{}", "diff_manifest_sha256": "d", "provisioning": {{"allowance": "Run nothing.", "unavailable": "Nothing else."}}}}"#,
+                target.1,
+                target.0,
+                sha256::hex_digest(packet_text.as_bytes())
+            ),
+        );
+
+        let client = root.join("client/claude");
+        write(&client, CLAUDE_STAND_IN);
+        fs::set_permissions(&client, fs::Permissions::from_mode(0o755)).unwrap();
+        write(
+            &inputs.join("skill/SKILL.md"),
+            "Launch a haiku agent, a sonnet agent and an opus agent, then report.\n",
+        );
+        let (tree, files) =
+            bench_tools::skill_runner::skill_tree_hash(&inputs.join("skill")).unwrap();
+        write(
+            &inputs.join("skill-pin.json"),
+            format!(
+                r#"{{"skill_id": "steps", "tree_hash": "{tree}", "files": {}}}"#,
+                pyjson::dumps(&Value::Array(files), &pyjson::Dumps::default())
+            ),
+        );
+        let runner = format!(
+            r#"{{"schema_version": 1, "claude_executable": "{}", "claude_executable_sha256": "{}", "artifact_root": "report", "normalizer": {{"kind": "thermo"}}, "timeout_seconds": 60, "budget_usd": 1, "network_allowed": false}}"#,
+            client.display(),
+            sha256::hex_digest(&fs::read(&client).unwrap())
+        );
+        let pinned = [
+            (
+                "invocation.md",
+                "Run the command at `{SKILL_PATH}` on `{BASE_SHA}..{HEAD_SHA}` as `{MODEL}` at `{EFFORT}`; write the report under `{REPORT_ROOT}`.\n".to_string(),
+            ),
+            ("runner.json", runner),
+            ("shared-policy.md", "## Review context\n\nUse only this task.\n".to_string()),
+        ];
+        let mut rows = Vec::new();
+        for (name, content) in &pinned {
+            write(&inputs.join(name), content);
+            rows.push(format!(
+                r#"{{"path": "{name}", "bytes": {}, "sha256": "{}"}}"#,
+                content.len(),
+                sha256::hex_digest(content.as_bytes())
+            ));
+        }
+        write(
+            &inputs.join("input-pin.json"),
+            format!(r#"{{"files": [{}]}}"#, rows.join(", ")),
+        );
+
+        let arm = root.join("arm.json");
+        let steps = if step_models {
+            r#", "step_models": {"haiku": "claude-haiku-5-5", "sonnet": "claude-sonnet-5-5", "opus": "claude-opus-5-5"}"#
+        } else {
+            ""
+        };
+        write(
+            &arm,
+            format!(
+                r#"{{"id": "claude-steps", "kind": "claude-skill", "model": "claude-opus-5-5", "effort": "high"{steps}}}"#
+            ),
+        );
+        write(
+            &run.join("manifest.json"),
+            format!(
+                r#"{{"run_id": "2026-01-01-claude-steps", "frozen_at": "2026-01-01T00:00:00Z", "freeze_commit": "ffff", "arms": [{{"id": "claude-steps", "arm_file_sha256": "{}", "resolved_skill_tree": "{tree}", "expected_cli_version": "claude-code 2.1.294"}}], "cohort": [{{"target": "t-1", "packet_sha256": "{}", "diff_manifest_sha256": "d"}}], "execution_policy": {{"branch_layout": "Local branch `main` is the merge-base.", "allowance": "Reading the clone is permitted."}}}}"#,
+                sha256::hex_digest(&fs::read(&arm).unwrap()),
+                sha256::hex_digest(packet_text.as_bytes())
+            ),
+        );
+        write(
+            &run.join("runtimes.frozen.json"),
+            format!(
+                r#"{{"bench-tools": {{"sha256": "{}"}}}}"#,
+                sha256::hex_digest(&fs::read(env!("CARGO_BIN_EXE_bench-tools")).unwrap())
+            ),
+        );
+        let rates_path = root.join("rates.json");
+        let rows: Vec<String> = rates
+            .iter()
+            .map(|(model, input)| {
+                format!(
+                    r#"{{"model": "{model}", "as_of": "2026-01-01", "input": {input}, "output": 5.0, "cache_read": 0.1, "cache_write_5m": 1.25, "cache_write_1h": 2.0}}"#
+                )
+            })
+            .collect();
+        write(
+            &rates_path,
+            format!(r#"{{"rates": [{}]}}"#, rows.join(", ")),
+        );
+        let source_home = root.join("source-home");
+        write(&source_home.join(".claude/.credentials.json"), "{}");
+        write(&source_home.join(".claude.json"), r#"{"userID": "u"}"#);
+        Self {
+            temp,
+            run,
+            arm,
+            rates: rates_path,
+            packet,
+            source_home,
+            target,
+        }
+    }
+
+    /// One attempt on a fresh copy of the clone, with `stray`, `<alias> <model>`, as its `stray-model.txt` when given.
+    fn launch(&self, id: &str, stray: Option<&str>) -> (Output, PathBuf) {
+        let attempt = self.temp.0.join(id);
+        let clone = attempt.join("clone");
+        let copied = Command::new("git")
+            .args(["clone", "-q", "--no-local"])
+            .arg(self.temp.0.join("template-clone"))
+            .arg(&clone)
+            .output()
+            .unwrap();
+        assert!(copied.status.success(), "{}", both(&copied));
+        git(&clone, &["branch", "-q", "-f", "main", &self.target.0]);
+        git(
+            &clone,
+            &["checkout", "-q", "-B", "review-head", &self.target.1],
+        );
+        git(&clone, &["remote", "remove", "origin"]);
+        if let Some(model) = stray {
+            write(&attempt.join("stray-model.txt"), model);
+        }
+        let done = Command::new(env!("CARGO_BIN_EXE_bench-tools"))
+            .args(["skill-runner", "claude", "--run", s(&self.run)])
+            .args(["--attempt-dir", s(&attempt), "--clone", s(&clone)])
+            .args(["--packet", s(&self.packet), "--arm", s(&self.arm)])
+            .args(["--target", "t-1", "--rates", s(&self.rates)])
+            .env("HOME", &self.source_home)
+            .env_remove("BENCH_SANDBOX")
+            .env_remove("BENCH_NETWORK_ALLOWED")
+            .output()
+            .unwrap();
+        (done, attempt)
+    }
+}
+
+fn evidence(attempt: &Path) -> Value {
+    parse(&fs::read_to_string(attempt.join("skill-attempt.json")).unwrap_or_default())
+}
+
+fn cost(record: &Value) -> f64 {
+    match field(record, "usage.total.cost") {
+        Value::Float(cost) => *cost,
+        other => panic!("no cost: {}", other.py_repr()),
+    }
+}
+
+/// The step-model adapter end to end, with a stand-in in place of Claude Code: the runner resolves each alias to its
+/// mapped model through the client's variables, accepts each subagent on the model its call's alias maps to, prices
+/// every transcript at its own model's rate, fails an attempt whose subagent runs another model than its call's
+/// alias maps to, inside the map or outside it, and refuses before the client starts when a mapped model has no rate. An arm without the map still pins every subagent to its model.
+#[test]
+fn a_claude_skill_runs_each_step_on_its_mapped_model_and_prices_it_at_that_models_rate() {
+    let rates = [
+        ("claude-opus-5-5", 4.0),
+        ("claude-sonnet-5-5", 2.0),
+        ("claude-haiku-5-5", 0.1),
+        ("claude-haiku-4-5", 1.0),
+    ];
+    let fixture = ClaudeRun::new("claude-steps", true, &rates);
+    let (done, attempt) = fixture.launch("att-001", None);
+    let record = evidence(&attempt);
+    assert_eq!(done.status.code(), Some(0), "{}\n{record:?}", both(&done));
+    let environment = fs::read_to_string(attempt.join("claude-env.txt")).unwrap();
+    for line in [
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-5-5",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5-5",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-5-5",
+    ] {
+        assert!(
+            environment.lines().any(|seen| seen == line),
+            "{line} missing from {environment}"
+        );
+    }
+    assert!(
+        !environment.contains("CLAUDE_CODE_SUBAGENT_MODEL"),
+        "{environment}"
+    );
+    let argv = fs::read_to_string(attempt.join("claude-argv.txt")).unwrap();
+    assert!(argv.contains("--model\nclaude-opus-5-5\n"), "{argv}");
+    let mut models: Vec<String> = field(&record, "models")
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|model| text(model).to_string())
+        .collect();
+    models.sort();
+    assert_eq!(
+        models,
+        ["claude-haiku-5-5", "claude-opus-5-5", "claude-sonnet-5-5"]
+    );
+    // A million input tokens each: the root and the opus step at $4, the sonnet step at $2, the haiku step at $0.10.
+    assert!((cost(&record) - 10.1).abs() < 1e-9, "{record:?}");
+    assert_eq!(
+        text(field(&record, "step_models.haiku")),
+        "claude-haiku-5-5"
+    );
+    let dispatch = fs::read_to_string(attempt.join("dispatch.txt")).unwrap();
+    assert!(
+        dispatch.contains(
+            "step_models=haiku=claude-haiku-5-5 sonnet=claude-sonnet-5-5 opus=claude-opus-5-5\n"
+        ),
+        "{dispatch}"
+    );
+
+    for (id, stray, cost_usd, problem) in [
+        (
+            "att-002",
+            "haiku claude-haiku-4-5",
+            11.1,
+            "agent-stray.jsonl: it ran claude-haiku-4-5, and its Agent call asked for haiku",
+        ),
+        (
+            "att-003",
+            "haiku claude-opus-5-5",
+            14.1,
+            "agent-stray.jsonl: it ran claude-opus-5-5, and its Agent call asked for haiku, which maps to claude-haiku-5-5",
+        ),
+    ] {
+        let (done, attempt) = fixture.launch(id, Some(stray));
+        assert_eq!(done.status.code(), Some(1), "{}", both(&done));
+        let record = evidence(&attempt);
+        assert!((cost(&record) - cost_usd).abs() < 1e-9, "{record:?}");
+        let violations = field(&record, "violations").as_array().unwrap().to_vec();
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert!(text(&violations[0]).contains(problem), "{violations:?}");
+    }
+
+    let unpriced = ClaudeRun::new("claude-steps-unpriced", true, &rates[..2]);
+    let (done, attempt) = unpriced.launch("att-001", None);
+    assert_eq!(done.status.code(), Some(2), "{}", both(&done));
+    assert!(
+        both(&done).contains("no dated rate entry for requested model 'claude-haiku-5-5'"),
+        "{}",
+        both(&done)
+    );
+    assert!(!attempt.join("home").exists() && !attempt.join("claude-argv.txt").exists());
+
+    let pinned = ClaudeRun::new("claude-pinned", false, &rates[..1]);
+    let (done, attempt) = pinned.launch("att-001", None);
+    let record = evidence(&attempt);
+    assert_eq!(done.status.code(), Some(0), "{}\n{record:?}", both(&done));
+    let environment = fs::read_to_string(attempt.join("claude-env.txt")).unwrap();
+    assert!(
+        environment
+            .lines()
+            .any(|line| line == "CLAUDE_CODE_SUBAGENT_MODEL=claude-opus-5-5")
+    );
+    assert!(!environment.contains("ANTHROPIC_DEFAULT_"), "{environment}");
+    assert!((cost(&record) - 16.0).abs() < 1e-9, "{record:?}");
+    assert!(record.as_object().unwrap().get("step_models").is_none());
+}
