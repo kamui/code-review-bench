@@ -154,7 +154,7 @@ describe('scorecard page on the fixture', () => {
     expect(text(scorecard)).toContain('The scorecard')
     expect(text(scorecard)).not.toContain('Explore the tasks')
     expect(text(tasks)).toContain('Explore the tasks')
-    for (const heading of ['The scorecard', 'What the numbers mean', 'PR tasks']) expect(text(tasks)).not.toContain(heading)
+    for (const heading of ['The scorecard', 'How the benchmark is run and judged', 'PR tasks']) expect(text(tasks)).not.toContain(heading)
     for (const rendered of [scorecard, tasks]) expect(rendered).toContain('<a href="/tasks"')
     expect(tasks).toContain('href="/#scorecard"')
   })
