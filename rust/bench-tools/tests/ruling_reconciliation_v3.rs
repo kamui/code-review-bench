@@ -395,11 +395,6 @@ fn as_the_plans_round(object: &mut Object) {
     object.insert("evidence".into(), Value::Array(Vec::new()));
 }
 
-/// The corpus with a closed round of fifteen agreed reconciliations, an adopted policy v3, a copy of the saved audit
-/// round `evaluator-audit-v2-2026-10-29` (its plan, sample, own grades, second assessments and comparison), and an
-/// open round with one before-record for each disputed unit, filed when `filed`. Unless `plan`, the copied round is
-/// recorded as superseded, its sample pinned by the plan file as a closed round's is; as the plan's own round it must
-/// redraw from an inventory this root does not hold.
 /// Save the owner's receipt and policy v3 as adopted by it.
 fn adopt(root: &Root) {
     root.write(
@@ -415,6 +410,11 @@ fn adopt(root: &Root) {
     root.write(V3, &dumps(&policy));
 }
 
+/// The corpus with a closed round of fifteen agreed reconciliations, an adopted policy v3, a copy of the saved audit
+/// round `evaluator-audit-v2-2026-10-29` (its plan, sample, own grades, second assessments and comparison), and an
+/// open round with one before-record for each disputed unit, filed when `filed`. Unless `plan`, the copied round is
+/// recorded as superseded, its sample pinned by the plan file as a closed round's is; as the plan's own round it must
+/// redraw from an inventory this root does not hold.
 fn fixture_with(name: &str, filed: bool, plan: bool) -> Root {
     let root = corpus(name);
     adopt(&root);
