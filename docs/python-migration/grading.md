@@ -125,6 +125,12 @@ The decisions record each difference from the retained Python:
 - `Path.stem`, `**` inside a glob component and `is_file` under an unsearchable directory follow Python 3.14's
   pathlib.
 
+[`ruling-record-decisions.v5.json`](../../tools/behavior_contracts/ruling-record-decisions.v5.json) records a change
+made on purpose for [#470](https://github.com/kamui/code-review-bench/issues/470): `route` prints a decision card
+first, a short labelled top block with every other card fact under "Detail", then the picks to reconcile, then the
+case file. The 15 cases whose `route` asks expect the new question. Their
+reasons, exit codes and stderr are unchanged.
+
 `tests/ruling_filing.rs` compares `filing_faults` with `delegation.py` for each refusal, since no command reaches it.
 
 The four Python modules stay byte-unchanged as the baseline: `current_grading.py` imports `delegation`, and the
