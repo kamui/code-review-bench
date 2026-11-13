@@ -400,12 +400,24 @@ fn as_the_plans_round(object: &mut Object) {
 /// open round with one before-record for each disputed unit, filed when `filed`. Unless `plan`, the copied round is
 /// recorded as superseded, its sample pinned by the plan file as a closed round's is; as the plan's own round it must
 /// redraw from an inventory this root does not hold.
-fn fixture_with(name: &str, filed: bool, plan: bool) -> Root {
-    let root = corpus(name);
+/// Save the owner's receipt and policy v3 as adopted by it.
+fn adopt(root: &Root) {
     root.write(
         RECEIPT,
         &format!("# Policy v3 adoption\n\nThe owner answered: {SCOPE}.\n"),
     );
+    let mut policy = json(&std::fs::read_to_string(repository().join(V3)).unwrap());
+    if let Value::Object(object) = &mut policy {
+        object.insert("status".into(), text("adopted"));
+        object.insert("receipt".into(), root.pin(RECEIPT));
+        object.insert("adoption_scope".into(), text(SCOPE));
+    }
+    root.write(V3, &dumps(&policy));
+}
+
+fn fixture_with(name: &str, filed: bool, plan: bool) -> Root {
+    let root = corpus(name);
+    adopt(&root);
     for n in 1..=15 {
         let before = format!("{EARNED}/case-{n}.before.json");
         root.edit(&before, reconciliation);
@@ -415,13 +427,6 @@ fn fixture_with(name: &str, filed: bool, plan: bool) -> Root {
             object.insert("before".into(), root.pin(&before));
         });
     }
-    let mut policy = json(&std::fs::read_to_string(repository().join(V3)).unwrap());
-    if let Value::Object(object) = &mut policy {
-        object.insert("status".into(), text("adopted"));
-        object.insert("receipt".into(), root.pin(RECEIPT));
-        object.insert("adoption_scope".into(), text(SCOPE));
-    }
-    root.write(V3, &dumps(&policy));
     root.write(
         AUDITS,
         &std::fs::read_to_string(repository().join(AUDITS)).unwrap(),
@@ -641,9 +646,12 @@ fn an_owner_call_asks_without_the_reconcilers_call() {
 
 #[test]
 fn a_withheld_card_shows_nothing_the_reconciler_answered_nor_turns_on() {
-    let root = fixture("owner-call-card");
-    let n = calls()[0];
-    root.edit(&before_path(n), |object| {
+    let root = corpus("withheld-card");
+    adopt(&root);
+    let before = before_path(1);
+    root.edit(&before, |object| {
+        reconciliation(object);
+        object.insert("filing".into(), Value::Null);
         object.insert(
             "turns_on".into(),
             text("Whether the sentinel-turns-on fact holds."),
@@ -663,9 +671,14 @@ fn a_withheld_card_shows_nothing_the_reconciler_answered_nor_turns_on() {
         }
     });
     open(&root);
-    let check = root.run(&["ruling", "check", &before_path(n)]);
+    assert!(!root.0.join(AUDITS).exists());
+    let check = root.run(&["ruling", "check", &before]);
     assert!(!check.contains("turns_on"), "{check}");
-    let routed = root.route(&before_path(n));
+    let routed = root.route(&before);
+    assert!(
+        routed.starts_with(&format!("ASK\n- {SHAPE}\n\nDecision card:\n")),
+        "{routed}"
+    );
     let card = &routed[..routed.find("\n\nThe case, ").unwrap()];
     assert!(card.contains(WITHHELD), "{card}");
     for shown in [
