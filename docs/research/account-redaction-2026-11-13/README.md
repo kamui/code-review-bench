@@ -76,7 +76,7 @@ A data export built from the earlier history and one built from the redacted rep
 
 ## Verification
 
-Run on a fresh clone holding only redacted evidence, with no network:
+Run before publication on a clone holding only redacted evidence, with no network:
 
 | Check | Result |
 | --- | --- |
@@ -91,6 +91,8 @@ Run on a fresh clone holding only redacted evidence, with no network:
 | `grading_replay`: inventory, validator replay and full mapping replay | pass, 946 restorable archives as before, 333 of 333 mapped |
 | `export-explorer`, `bun test ./src`, type check and site build | 16 tasks, 16 configurations, 653 attempts; pass |
 | `cargo fmt`, `cargo clippy`, the `behavior_contracts` and `runtime` tests | pass |
+
+After publication the same checks were run from a fresh clone of the new repository, restoring evidence from the new releases. All passed, and the redaction pass over that clone covered 101,228 files with 0 to change.
 
 Tests that need persistent disk, a real `node` binary or a signed-in client did not run on the build machine. CI in the new repository runs them.
 
