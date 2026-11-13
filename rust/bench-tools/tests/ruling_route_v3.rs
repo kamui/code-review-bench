@@ -243,6 +243,10 @@ fn policy_text(root: &Root, adopted: bool, change: impl FnOnce(&mut Object)) -> 
         object.insert("status".into(), text("adopted"));
         object.insert("receipt".into(), root.pin(RECEIPT));
         object.insert("adoption_scope".into(), text(SCOPE));
+    } else {
+        object.insert("status".into(), text("proposed"));
+        object.insert("receipt".into(), Value::Null);
+        object.insert("adoption_scope".into(), Value::Null);
     }
     change(object);
     dumps(&value)

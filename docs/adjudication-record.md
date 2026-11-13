@@ -261,9 +261,9 @@ Only the rounds pinned at opening can raise that round's level. A trust miss or 
 
 Only explicit owner decisions count toward trust. An agent settlement and silence after a digest add no match. A fresh owner confirmation can count through its own record. The complete credit decision includes both `says_what` and `identifies_cause`; disagreement or cannot-tell on either goes to the owner, and a changed fact is a miss even if the outcome word stays the same.
 
-## Replay a proposed policy
+## Replay a policy
 
-[ADR-0008](adr/0008-settle-adjudications-on-agreement.md) proposes policy v3, which settles on agreement instead of an earned streak. It is not adopted, and policy v2 above stays in force. To see what its gates would have passed among the saved decisions, run:
+[ADR-0008](adr/0008-settle-adjudications-on-agreement.md) records policy v3, which settles on agreement instead of an earned streak. To see what its gates would have passed among the saved decisions, run:
 
 ```sh
 bench/tools/bench-tools ruling replay [--policy bench/grading/delegation.v3.json] [--json]
@@ -287,7 +287,7 @@ A replay settles nothing and grants no authority. The owner made the replayed de
 
 ## Round opening and policy v3
 
-Policy v3 is proposed, so no round runs under it yet. The tool already routes a round by the policy its opening pins, which is how a round will start under v3 once the owner adopts it.
+The owner adopted policy v3 on 2026-11-12; the [receipt](../bench/grading/rulings/delegation.v3.md) holds the answer. A round runs under v3 only when its opening pins the adopted file, so a round whose opening pins no policy keeps running under policy v2.
 
 A round's `opening.json` may hold `policy`, a path/SHA-256 pin to a policy file. A round whose opening holds no `policy` runs under policy v2, as every round saved so far does. A round whose opening pins a policy runs under that file for all its decisions:
 
