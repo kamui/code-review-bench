@@ -86,6 +86,8 @@ Every basis projects $19 to $50 before replacements. The Sol-based figures also 
 
 Options for the owner: freeze at a $60 cap with a $3 reservation, or run the setup probe alone and decide from its metered cost. Either option needs only cap edits to this unfrozen manifest, followed by the freeze.
 
+**Owner ruling, 2026-11-13** (verbatim answer "1"): freeze the ce run with a $60 run cap and a $3 per-attempt reservation. Run it after the thermo run is filed, checked, pruned and committed, with the same setup-probe inspection and stop rules. The unfrozen manifest and the arm's `budget_usd_per_attempt` were changed to those values, and the manifest records the ruling as the deviation `owner-cap-ruling-v1`. [`queue.codex-ce.v1.json`](queue.codex-ce.v1.json) is a separate queue with a $60 Codex ceiling, a stop at 95% of plan quota and its own work root, `~/.t3/bench-runs-lanes/terra-ce-codex`. It carries the ruling as its authorization.
+
 ## Deviations
 
 Each frozen manifest lists its deviations. thermo: `thermo-pr-discussion-cut-v1` (unchanged from Sol), `terra-thermo-v1` and `terra-skills-runtime-v1`. ce (unfrozen): `terra-ce-v1`, `ce-provenance-copy-v1` and `terra-skills-runtime-v1`.
