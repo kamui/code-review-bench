@@ -88,6 +88,8 @@ Options for the owner: freeze at a $60 cap with a $3 reservation, or run the set
 
 **Owner ruling, 2026-11-13** (verbatim answer "1"): freeze the ce run with a $60 run cap and a $3 per-attempt reservation. Run it after the thermo run is filed, checked, pruned and committed, with the same setup-probe inspection and stop rules. The unfrozen manifest and the arm's `budget_usd_per_attempt` were changed to those values, and the manifest records the ruling as the deviation `owner-cap-ruling-v1`. [`queue.codex-ce.v1.json`](queue.codex-ce.v1.json) is a separate queue with a $60 Codex ceiling, a stop at 95% of plan quota and its own work root, `~/.t3/bench-runs-lanes/terra-ce-codex`. It carries the ruling as its authorization.
 
+**Owner ruling, 2026-11-13** (verbatim: "if ce stops on quota, the queue should wait until session/weekly reset and resume"): when the ce queue reaches its 95% quota stop on the 5-hour or the weekly window, the controller waits for that window's reset and resumes the queue. It repeats until all 48 trials are valid or a non-quota stop rule applies: the run cap, a model or skill rejection, a failed setup probe or the replacement limit. Before each wait it posts the trials filed, the usage, the window and its reset time. The frozen manifest and queue file are unchanged; `bench-tools queue run` already exits at the quota stop and continues from the filed claims when run again.
+
 ## Deviations
 
 Each frozen manifest lists its deviations. thermo: `thermo-pr-discussion-cut-v1` (unchanged from Sol), `terra-thermo-v1` and `terra-skills-runtime-v1`. ce (unfrozen): `terra-ce-v1`, `ce-provenance-copy-v1` and `terra-skills-runtime-v1`.
