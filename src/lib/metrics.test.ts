@@ -6,6 +6,7 @@ import { build, family, review, scorecardFixture, setup, task } from './fixture'
 import { conditionDifferences, datasetStatus, detectionLabel, duration, heroCounts, money, perReview, reasonCounts, share, summarize } from './metrics'
 import { leaderboard, matched, pairwise, recommend, scorecard } from './scoring'
 
+const exportedFile = (url: string) => `public${url.slice((process.env.BASE_PATH ?? '').replace(/\/+$/, '').length)}`
 const imported = datasetSchema.parse(JSON.parse(await readFile('public/data/benchmark.json', 'utf8')))
 const standard = imported.configurations.filter(configuration => !configuration.experimental)
 const board = leaderboard(imported, { selected: standard.map(configuration => configuration.id),
@@ -159,14 +160,14 @@ describe('current graded record', () => {
 
   test('every exported attempt has matching source evidence and verified downloads', async () => {
     for (const attempt of imported.attempts) {
-      const detail = detailSchema.parse(JSON.parse(await readFile(`public${attempt.detailUrl}`, 'utf8')))
+      const detail = detailSchema.parse(JSON.parse(await readFile(exportedFile(attempt.detailUrl), 'utf8')))
       expect(detail.id).toBe(attempt.id)
-      const source = z.object({ usage: z.object({ metering_status: z.string().optional() }) }).parse(await Bun.file(`public${detail.recordUrl}`).json())
+      const source = z.object({ usage: z.object({ metering_status: z.string().optional() }) }).parse(await Bun.file(exportedFile(detail.recordUrl)).json())
       if (source.usage.metering_status === 'complete' && !detail.usageCorrectionUrl) expect(attempt.outputTokens).not.toBeNull()
       else expect(attempt.outputTokens).toBeNull()
       if (detail.usageCorrectionUrl) expect(attempt.cost).toBeNull()
       for (const url of [detail.recordUrl, detail.normalizedUrl, detail.archiveUrl]) {
-        if (url) expect((await Bun.file(`public${url}`).stat()).size).toBeGreaterThan(0)
+        if (url) expect((await Bun.file(exportedFile(url)).stat()).size).toBeGreaterThan(0)
       }
       if (detail.archiveUrl) expect(detail.archiveStatus).toBe('verified')
     }
