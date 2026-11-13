@@ -1,0 +1,117 @@
+{
+  "arm": "claude-builtin",
+  "parse_status": "parsed",
+  "native_verdict": "findings",
+  "verdict_source": "final_text json",
+  "items": [
+    {
+      "file": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+      "line_start": 24,
+      "line_end": 24,
+      "claim": "The path override is now gated only on a request header (`x-vercel-isr: 1`), and the same entrypoint is bundled into the non-ISR `_render` function, so a spoofed header re-opens the override that #15959 closed.",
+      "consequence": "Confirmed in-process on the built `_render` handler: `GET /api/public?x_astro_path=/api/private` with header `x-vercel-isr: 1` returns `{\"id\":\"private\"}`. If Vercel does not strip this header from client requests (not checkable here), any client can make `_render` serve a different route than the one Vercel's routing, firewall or path rules matched. The existing path-override-security tests still pass because they never send the header. Gate on something the client cannot set, such as a build-time flag for the `_isr` function.",
+      "proposed_fix": null,
+      "native_priority": null,
+      "native_action": null,
+      "native_confidence": null,
+      "kind": "finding"
+    },
+    {
+      "file": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+      "line_start": 25,
+      "line_end": 25,
+      "claim": "The `_isr` function trusts any `x_astro_path` value, so requesting `/_isr?x_astro_path=<route>` directly renders and caches arbitrary routes, including `isr.exclude` routes and ones meant to go through edge middleware.",
+      "consequence": "Confirmed in-process on the isr fixture's `_isr` handler with the ISR header set: `/_isr?x_astro_path=/two` (excluded) returns the Two page and `/_isr?x_astro_path=/api/foo` (excluded by `/^\\/api/`) returns `OK foo`. On Vercel the platform would set the header itself for a direct `/_isr` hit, so no spoofing is needed. Excluded routes that the build routes to `_middleware` would be rendered without the middleware, and a personalised response could be stored in the ISR cache under a URL an attacker can re-fetch. The resolved route is never checked against the ISR-eligible set.",
+      "proposed_fix": null,
+      "native_priority": null,
+      "native_action": null,
+      "native_confidence": null,
+      "kind": "finding"
+    },
+    {
+      "file": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+      "line_start": 28,
+      "line_end": 28,
+      "claim": "`url.pathname = realPath` percent-encodes `?`, so the middleware branch (whose header value is path plus query) 404s for any request with a query string; the PR rewrites this block and leaves the bug in place.",
+      "consequence": "Confirmed in-process on the middleware-with-edge-file fixture with `fetch` stubbed to the built `_render` handler: `/` returns 200, but `/?a=1` sends `x-astro-path: /?a=1`, the pathname becomes `/%3Fa=1`, and the response is 404. The query string is also lost. Parse the override with `new URL(realPath, url)` and assign pathname and search separately.",
+      "proposed_fix": null,
+      "native_priority": null,
+      "native_action": null,
+      "native_confidence": null,
+      "kind": "finding"
+    },
+    {
+      "file": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+      "line_start": 25,
+      "line_end": 25,
+      "claim": "`searchParams.get()` form-decodes the ISR path, so paths containing `&`, `+`, `%2F`, `%26` or `%2B` resolve to a different route or different params than the same path served directly.",
+      "consequence": "Confirmed in-process, direct versus via `x_astro_path`: `/api/a+b` gives id `a+b` versus `a b`; `/api/a&b` gives `a&b` versus `a` (truncated at `&`); `/api/a%2Fb` gives 200 versus 404; `/api/a%26b` gives `a%26b` versus `a&b`. How Vercel encodes `$0` when substituting it into the dest could not be checked here, but if it is inserted raw, an ISR dynamic route renders and caches the wrong content for such slugs.",
+      "proposed_fix": null,
+      "native_priority": null,
+      "native_action": null,
+      "native_confidence": null,
+      "kind": "finding"
+    },
+    {
+      "file": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+      "line_start": 28,
+      "line_end": 28,
+      "claim": "Only the pathname is rewritten for ISR requests; the internal `x_astro_path` parameter stays in the URL passed to `app.render`.",
+      "consequence": "By reading the code: for `/one` served via ISR, `Astro.url.href` is `https://site/one?x_astro_path=%2Fone`. Canonical or og:url tags, redirects and pagination links built from `Astro.url` embed the internal parameter, and user code reading `Astro.url.searchParams` sees a key it never sent. The fix is to `url.searchParams.delete(ASTRO_PATH_PARAM)` before rebuilding the request.",
+      "proposed_fix": null,
+      "native_priority": null,
+      "native_action": null,
+      "native_confidence": null,
+      "kind": "finding"
+    },
+    {
+      "file": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+      "line_start": 24,
+      "line_end": 24,
+      "claim": "The fix depends on a hard-coded, undocumented platform header (`x-vercel-isr`) being present with the exact value `'1'` on every ISR invocation.",
+      "consequence": "If Vercel omits or changes the header for some invocation type (for example on-demand revalidation via `x-prerender-revalidate` with the bypass token, background regeneration, or a future platform change), `realPath` stays undefined, the app matches `/_isr`, and a 404 is rendered and cached for the page. That is the same outage this PR fixes, and it would fail silently. The literal is also inline rather than a named constant next to `ASTRO_PATH_PARAM` in `index.ts`.",
+      "proposed_fix": null,
+      "native_priority": null,
+      "native_action": null,
+      "native_confidence": null,
+      "kind": "finding"
+    },
+    {
+      "file": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+      "line_start": 21,
+      "line_end": 21,
+      "claim": "No test covers the restored ISR rewrite or its trust boundary, although the missing handler-level ISR test is why #15959 broke ISR unnoticed.",
+      "consequence": "`test/isr.test.js` only asserts the generated config and routes, and `path-override-security.test.js` only covers requests without `x-vercel-isr`. A future change to this branch can again 404 every ISR page, or widen the override, with CI green. A test that calls the built `_isr` handler with `x_astro_path=/one` (expect the One page) and `_render` with header plus param (expect no override) would pin both.",
+      "proposed_fix": null,
+      "native_priority": null,
+      "native_action": null,
+      "native_confidence": null,
+      "kind": "finding"
+    },
+    {
+      "file": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+      "line_start": 22,
+      "line_end": 22,
+      "claim": "The new block is unformatted and loosely typed: `if(` without a space, a missing semicolon on line 23, and `let realPath = undefined` with no type annotation.",
+      "consequence": "The repo's Biome formatter will rewrite these lines (the history shows follow-up `[ci] format` commits). `realPath` loses the explicit `string | null` type the previous `const` had and relies on control-flow inference; `let realPath: string | null = null;` keeps the old contract.",
+      "proposed_fix": null,
+      "native_priority": null,
+      "native_action": null,
+      "native_confidence": null,
+      "kind": "finding"
+    },
+    {
+      "file": ".changeset/common-cats-travel.md",
+      "line_start": 5,
+      "line_end": 5,
+      "claim": "The changeset text \"Fix vercel ISR path rewrite\" does not describe the user-visible bug.",
+      "consequence": "Users reading the `@astrojs/vercel` changelog cannot tell that this release fixes every ISR-served page returning 404 since the previous patch. Something like \"Fixes a regression where pages served through ISR returned a 404\" would say so.",
+      "proposed_fix": null,
+      "native_priority": null,
+      "native_action": null,
+      "native_confidence": null,
+      "kind": "finding"
+    }
+  ],
+  "parse_notes": []
+}
