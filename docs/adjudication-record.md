@@ -198,6 +198,8 @@ After the reasons it prints the question to show the user:
 
 The card changes no routing. `SETTLE` and `ASK`, the reasons, settlement and filing do not read it, and the case file still prints in full.
 
+The session that asks shows the user this output as printed and saves the message it showed. [Prepare a ruling](claim-adjudication.md#prepare-a-ruling) gives the rule. No tool checks it.
+
 `route` needs a contract 2 record, because contract 1 pins no case file.
 
 ## The round file
@@ -323,7 +325,7 @@ Under an adopted policy v3, `route` prints `SETTLE under policy v3, on agreement
 - The record's `filing` is missing or does not have its decision type's shape.
 - Filing for the type is not enforced yet.
 
-The last reason applies to `pre-existing-admission`. Its gate is evaluated, and the replay counts it, but an agent settlement of one cannot be filed yet. `candidate`, `reconciliation` and `band` settle end to end:
+The last reason applies to `pre-existing-admission`. Its gate is evaluated, and the replay counts it, but an agent settlement of one cannot be filed. The owner decided on 2026-11-13 to keep admissions, as [issue #59](https://github.com/kamui/code-review-bench/issues/59) records, so this filing is not planned work. `candidate`, `reconciliation` and `band` settle end to end:
 
 - `ruling check` and `ruling summary` accept an agent-settled after-record in a v3 round only when it pins the round's policy, `route` gives no reason at its place in history, and it repeats the agreed answer with `asked: 0` and `ground: null`.
 - A current candidate decision filed from it cites the v3 adoption receipt and its `adoption_scope`, and its reason names policy v3 and agents. A credit filing that pins a v3 settlement is refused, and so is an owner's decision that cites the v3 adoption receipt.
@@ -394,7 +396,7 @@ For a round under an adopted policy v3, `ruling summary` adds the digest the own
 
 `--json` holds the same in `reading`, `stated_gaps` and each digest entry's `read`. A round under policy v2 prints none of this.
 
-These parts of ADR-0008 are not enforced yet: filing for pre-existing admissions, and labels on pre-existing problems, which need a checked link from a candidate's admission to the problem it admitted.
+Two parts of ADR-0008 are not enforced. Filing for pre-existing admissions stays unbuilt by the owner's decision of 2026-11-13. Labels on pre-existing problems are not built yet; they need a checked link from a candidate's admission to the problem it admitted.
 
 ## Filing a policy v2 settlement
 

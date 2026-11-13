@@ -97,7 +97,7 @@ Two things remain before agents settle a decision:
 
 Enforcement is built for three of the four gated types: candidates, reconciliations and first labels of problems the owner admitted in a v3 round. See [Round opening and policy v3](../adjudication-record.md#round-opening-and-policy-v3). Two parts are not built, and the tool sends these decisions to the owner until they are:
 
-- Filing for pre-existing admissions. Admissions meet the entry bar, and every one still goes to the owner.
+- Filing for pre-existing admissions. Admissions meet the entry bar, and every one still goes to the owner. On 2026-11-13 the owner decided to keep them, as issue #59 records, so this part is not planned.
 - Labels on pre-existing problems, which need a checked link from a candidate's admission to the problem it admitted.
 
 For a round that pins it, this policy replaces ADR-0007's gate and levels and its reservation of bands and reconciliations, and it closes credit. [Pre-existing problems](../pre-existing-problems.md) gives its decision types no delegation, and this policy opens admission only. [ADR-0006](0006-settle-eligibility-by-delegation-on-heavy-evidence.md) keeps its separate route.
