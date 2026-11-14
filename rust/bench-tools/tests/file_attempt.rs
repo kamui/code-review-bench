@@ -2664,3 +2664,56 @@ fn schema_problems_are_printed_with_the_record_still_written() {
         .collect();
     assert!(partials.is_empty());
 }
+
+#[test]
+fn files_redacted_copies_and_pins_the_filed_payload() {
+    let t = SelfTest::new("redacted-copies");
+    let root = t.root().to_path_buf();
+    let field_text = |name: &str, value: &str| format!("\"{name}\":\"{value}\"");
+    let prompt = format!(
+        "{{{}}}\n",
+        field_text("organizationUuid", "11111111-2222-3333-4444-555555555555")
+    );
+    let payload = format!("{{{}}}", field_text("plan_type", "plus"));
+    write(&t.att.join("prompt.txt"), &prompt);
+    write(&t.att.join("payload.json"), &payload);
+    let done = Command::new(env!("CARGO_BIN_EXE_bench-tools"))
+        .args(t.arguments("o", &[t.archive()], &["--legacy-rate-billing"]))
+        .env("BENCH_REDACTION_VALUES", root.join("no-values.json"))
+        .output()
+        .unwrap();
+    assert!(done.status.success(), "{}", report(&done));
+    let record = t.record("o");
+    assert_eq!(
+        fs::read_to_string(root.join("o/prompt.txt")).unwrap(),
+        format!(
+            "{{{}}}\n",
+            field_text("organizationUuid", "[redacted-organization]")
+        )
+    );
+    assert_eq!(
+        fs::read_to_string(t.att.join("prompt.txt")).unwrap(),
+        prompt
+    );
+    let filed = root.join("o/payload.json");
+    assert_eq!(
+        fs::read_to_string(&filed).unwrap(),
+        format!("{{{}}}", field_text("plan_type", "[redacted-plan]"))
+    );
+    assert_eq!(
+        text(field(&record, "native_payload.sha256")),
+        sha_file(&filed)
+    );
+    assert!(
+        has_note(
+            &record,
+            "replaced in the filed copies of prompt.txt, payload.json"
+        ),
+        "{:?}",
+        notes(&record)
+    );
+    assert_eq!(
+        text(field(&record, "transcript_archive.restoration_check")),
+        "passed"
+    );
+}

@@ -4,6 +4,7 @@ use bench_tools::evidence::publication::{self, PART_LIMIT};
 use bench_tools::evidence::{self, Disk, Error, Remote, Store, System, Upload};
 use bench_tools::pyjson::{self, Duplicates, Value};
 use bench_tools::pytext::PyPath;
+use bench_tools::redaction::Rules;
 use bench_tools::sha256;
 use std::fs::File;
 use std::io::{self, Write};
@@ -579,4 +580,74 @@ fn an_interrupted_publish_leaves_no_manifest_and_its_retry_uploads_nothing_more(
         assert_eq!(release.uploads, 1, "effect {fail_at}");
         std::fs::remove_dir_all(&root).unwrap();
     }
+}
+
+fn host_rules() -> Rules {
+    Rules::from_values(br#"{"schema_version": 1, "hosts": {"examplehost": "host-01-xyz"}}"#)
+        .unwrap()
+}
+
+#[test]
+fn pack_refuses_evidence_that_redaction_would_change() {
+    let root = scratch("pack-unredacted");
+    let selection = sources(&root);
+    std::fs::write(root.join("src/review.md"), b"user@examplehost:~$\n").unwrap();
+    let refused = publication::select_with(
+        &selection,
+        &py(&root.join("out")),
+        &PART_LIMIT.to_string(),
+        &py(&root),
+        &host_rules(),
+    )
+    .unwrap_err();
+    let message = refused.message();
+    assert!(
+        message.contains("redaction apply") && message.contains("src/review.md"),
+        "{message}"
+    );
+    assert!(!message.contains("examplehost"), "{message}");
+    assert!(!root.join("out").exists());
+}
+
+#[test]
+fn publish_refuses_a_package_with_an_unredacted_evidence_member() {
+    let root = scratch("publish-unredacted");
+    let selection = sources(&root);
+    std::fs::write(root.join("src/review.md"), b"user@examplehost:~$\n").unwrap();
+    let selected = publication::select_with(
+        &selection,
+        &py(&root.join("out")),
+        &PART_LIMIT.to_string(),
+        &py(&root),
+        &Rules::fields(),
+    )
+    .unwrap();
+    publication::write(&mut System, selected, &py(&root.join("out"))).unwrap();
+    let temporary = root.join("tmp");
+    std::fs::create_dir_all(&temporary).unwrap();
+    let mut release = Release::default();
+    let refused = {
+        let mut store = Store {
+            remote: &mut release,
+            disk: &mut System,
+            now: &fixed_clock,
+            temporary: py(&temporary),
+        };
+        publication::publish_with(
+            &mut store,
+            &py(&root.join("out/manifest.json")),
+            &py(&root.join("published.json")),
+            &host_rules(),
+        )
+        .unwrap_err()
+    };
+    assert!(
+        refused
+            .message()
+            .contains("!bench/runs/r1/attempts/att-001/review.md"),
+        "{}",
+        refused.message()
+    );
+    assert_eq!(release.uploads, 0);
+    assert!(!root.join("published.json").exists());
 }

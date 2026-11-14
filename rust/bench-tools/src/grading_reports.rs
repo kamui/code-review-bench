@@ -12,6 +12,7 @@ use crate::pysemantics::{
     object, optional, python_sum, read, read_bytes, read_text, text, to_float, type_error,
 };
 use crate::pytext::{self, PyPath};
+use crate::redaction::{self, Rules};
 use crate::sha256;
 use std::fmt::Write as _;
 use std::io::{self, Read, Write};
@@ -415,7 +416,21 @@ const EXCLUDED: [&str; 2] = [
 /// `ARCHIVES/<run>/<target>/<attempt>/evidence.tar.gz`, beside an `evidence.json` receipt, and returns the
 /// receipt's path relative to `root` and its SHA-256. A saved receipt is checked and returned; an existing
 /// archive without one is never rewritten.
+///
+/// Each member holds its file as [`redaction`] leaves it, under the rules of [`Rules::load`], and the receipt
+/// lists that member's hash. When redaction changed a member, the receipt says so under `redaction`.
 pub fn archive_attempt(root: &PyPath, attempt: &PyPath, archives: &PyPath) -> Result<Value> {
+    let rules = Rules::load().map_err(|error| Failure::new("ValueError", error.0))?;
+    archive_attempt_with(root, attempt, archives, &rules)
+}
+
+/// As [`archive_attempt`], under `rules`.
+pub fn archive_attempt_with(
+    root: &PyPath,
+    attempt: &PyPath,
+    archives: &PyPath,
+    rules: &Rules,
+) -> Result<Value> {
     let files = attempt_files(attempt)?;
     let components = parts(attempt);
     let count = components.len();
@@ -462,34 +477,37 @@ pub fn archive_attempt(root: &PyPath, attempt: &PyPath, archives: &PyPath) -> Re
     };
     let mut writer = PackageWriter::new(io::BufWriter::new(handle));
     let mut listed = Vec::with_capacity(members.len());
+    let mut redacted = 0;
     for (path, name) in &members {
-        let file = std::fs::File::open(path.to_path_buf())
+        let mut file = std::fs::File::open(path.to_path_buf())
             .map_err(|error| file_failure(&error, path.as_bytes()))?;
         let metadata = file
             .metadata()
             .map_err(|error| file_failure(&error, path.as_bytes()))?;
-        let mut hashing = Hashing {
-            inner: file,
-            digest: sha256::Sha256::new(),
-        };
+        let mut raw = Vec::new();
+        file.read_to_end(&mut raw)
+            .map_err(|error| file_failure(&error, path.as_bytes()))?;
+        let clean = redaction::redact(&raw, rules).data;
+        redacted += usize::from(clean.is_some());
+        let data = clean.as_deref().unwrap_or(&raw);
         writer
             .append(
                 name.as_bytes(),
-                metadata.len(),
+                data.len() as u64,
                 metadata.permissions().mode() & 0o7777,
-                &mut hashing,
+                &mut &data[..],
             )
             .map_err(|error| archive_failure(&error, &archive))?;
         listed.push(object(vec![
             ("path", text(name)),
-            ("sha256", text(&sha256::hex(&hashing.digest.finalize()))),
+            ("sha256", text(&sha256::hex_digest(data))),
         ]));
     }
     writer
         .finish()
         .and_then(|mut out| out.flush().map_err(ArchiveError::Io))
         .map_err(|error| archive_failure(&error, &archive))?;
-    let saved = object(vec![
+    let mut saved = object(vec![
         ("archive", reference(&archive, root)?),
         ("files", Value::Array(listed)),
         (
@@ -497,6 +515,16 @@ pub fn archive_attempt(root: &PyPath, attempt: &PyPath, archives: &PyPath) -> Re
             Value::Array(EXCLUDED.iter().map(|reason| text(reason)).collect()),
         ),
     ]);
+    if redacted > 0
+        && let Value::Object(fields) = &mut saved
+    {
+        fields.insert(
+            "redaction".to_string(),
+            text(&format!(
+                "Account identifiers or machine names replaced in {redacted} of the archived files when the archive was written."
+            )),
+        );
+    }
     let options = pyjson::Dumps {
         indent: Some(2),
         ..pyjson::Dumps::default()
@@ -516,20 +544,6 @@ fn archive_failure(error: &ArchiveError, archive: &PyPath) -> Failure {
     match error {
         ArchiveError::Io(error) => file_failure(error, archive.as_bytes()),
         ArchiveError::Refused(refusal) => Failure::new("ValueError", refusal.to_string()),
-    }
-}
-
-/// Feeds a member's bytes to the archive and hashes them on the way.
-struct Hashing<R> {
-    inner: R,
-    digest: sha256::Sha256,
-}
-
-impl<R: Read> Read for Hashing<R> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let read = self.inner.read(buf)?;
-        self.digest.update(&buf[..read]);
-        Ok(read)
     }
 }
 
@@ -1408,4 +1422,64 @@ fn markdown(summary: &Value) -> Result<String> {
         String::new(),
     ]);
     Ok(lines.join("\n"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn attempt(session: &str) -> (PyPath, PyPath) {
+        let base = crate::test_scratch("grading-archive").join(crate::evidence::random_name("g-"));
+        let attempt = base.join("queue/r1/t1/attempt-1");
+        let projects = attempt.join("work/home/.claude/projects/fixture");
+        std::fs::create_dir_all(&projects).unwrap();
+        std::fs::write(attempt.join("key.json"), "{}\n").unwrap();
+        std::fs::write(projects.join("session.jsonl"), session).unwrap();
+        let root = PyPath::new(base.as_os_str().as_encoded_bytes());
+        let attempt = root.join(b"queue/r1/t1/attempt-1");
+        (root, attempt)
+    }
+
+    fn receipt(root: &PyPath, attempt: &PyPath) -> Value {
+        let saved =
+            archive_attempt_with(root, attempt, &root.join(b"archives"), &Rules::fields()).unwrap();
+        read(&join(root, at(&saved, "path").unwrap()).unwrap()).unwrap()
+    }
+
+    fn listed(receipt: &Value, name: &str) -> String {
+        let files = iterate(at(receipt, "files").unwrap()).unwrap();
+        let file = files
+            .iter()
+            .find(|file| at(file, "path").unwrap().py_str() == name)
+            .unwrap();
+        at(file, "sha256").unwrap().py_str()
+    }
+
+    #[test]
+    fn the_receipt_lists_each_redacted_member() {
+        let session = format!("{{\"{}\":\"{}\"}}\n", "plan_type", "plus");
+        let (root, attempt) = attempt(&session);
+        let receipt = receipt(&root, &attempt);
+        let name = "work/home/.claude/projects/fixture/session.jsonl";
+        let clean = format!("{{\"{}\":\"{}\"}}\n", "plan_type", "[redacted-plan]");
+        assert_eq!(listed(&receipt, name), sha256::hex_digest(clean.as_bytes()));
+        assert_eq!(listed(&receipt, "key.json"), sha256::hex_digest(b"{}\n"));
+        assert!(
+            at(&receipt, "redaction")
+                .unwrap()
+                .py_str()
+                .contains("replaced in 1 of the archived files")
+        );
+        assert_eq!(
+            std::fs::read_to_string(attempt.join(name.as_bytes()).to_path_buf()).unwrap(),
+            session
+        );
+    }
+
+    #[test]
+    fn a_clean_receipt_names_no_redaction() {
+        let (root, attempt) = attempt("{\"type\": \"user\"}\n");
+        let receipt = receipt(&root, &attempt);
+        assert!(receipt.as_object().unwrap().get("redaction").is_none());
+    }
 }

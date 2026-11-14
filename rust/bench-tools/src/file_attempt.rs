@@ -43,6 +43,7 @@ use crate::packet_selection;
 use crate::pyfs;
 use crate::pyjson::{self, Dumps, Duplicates, Object, Value};
 use crate::pytext::{self, PyPath};
+use crate::redaction;
 use crate::review_isolation;
 use crate::schema::Validator;
 use crate::sha256;
@@ -337,6 +338,27 @@ fn copy2(source: &str, destination: &str) -> Result<()> {
     fs::File::open(destination)
         .and_then(|handle| handle.set_times(times))
         .map_err(failed)
+}
+
+/// `copy2` of the bytes redaction leaves; whether it changed them.
+fn copy2_redacted(source: &str, destination: &str, rules: &redaction::Rules) -> Result<bool> {
+    copy2(source, destination)?;
+    let failed = |error: std::io::Error| {
+        FileError(format!("cannot copy {source} to {destination}: {error}"))
+    };
+    let data = fs::read(destination).map_err(failed)?;
+    let Some(clean) = redaction::redact(&data, rules).data else {
+        return Ok(false);
+    };
+    let metadata = fs::metadata(source).map_err(failed)?;
+    fs::write(destination, clean).map_err(failed)?;
+    let times = FileTimes::new()
+        .set_accessed(metadata.accessed().map_err(failed)?)
+        .set_modified(metadata.modified().map_err(failed)?);
+    fs::File::open(destination)
+        .and_then(|handle| handle.set_times(times))
+        .map_err(failed)?;
+    Ok(true)
 }
 
 fn remove(path: &str) -> Result<()> {
@@ -2929,6 +2951,14 @@ fn file_attempt(arguments: &Arguments) -> Result<(Value, String)> {
     let out = abspath(&arguments.out)?;
     fs::create_dir_all(&out).map_err(|error| FileError(format!("cannot create {out}: {error}")))?;
     let o = |name: &str| join(&out, name);
+    let rules = redaction::Rules::load().map_err(|error| FileError(error.0))?;
+    let mut redacted_files = Vec::new();
+    let mut file = |source: &str, destination: &str| -> Result<()> {
+        if copy2_redacted(source, destination, &rules)? {
+            redacted_files.push(basename(destination).to_string());
+        }
+        Ok(())
+    };
     for name in [
         "dispatch.txt",
         "timing.json",
@@ -2946,7 +2976,7 @@ fn file_attempt(arguments: &Arguments) -> Result<(Value, String)> {
         "forge.json",
     ] {
         if exists(&a(name)) {
-            copy2(&a(name), &o(name))?;
+            file(&a(name), &o(name))?;
         } else if exists(&o(name)) {
             // A re-filing drops what the attempt directory no longer holds.
             remove(&o(name))?;
@@ -2957,13 +2987,13 @@ fn file_attempt(arguments: &Arguments) -> Result<(Value, String)> {
         ("network/gate.json", "network-gate.json"),
     ] {
         if is_file(&a(name)) {
-            copy2(&a(name), &o(filed))?;
+            file(&a(name), &o(filed))?;
         } else if exists(&o(filed)) {
             remove(&o(filed))?;
         }
     }
     if is_file(&a(crate::frozen_forge::LOG)) {
-        copy2(&a(crate::frozen_forge::LOG), &o("forge-calls.jsonl"))?;
+        file(&a(crate::frozen_forge::LOG), &o("forge-calls.jsonl"))?;
     } else if exists(&o("forge-calls.jsonl")) {
         remove(&o("forge-calls.jsonl"))?;
     }
@@ -2980,16 +3010,17 @@ fn file_attempt(arguments: &Arguments) -> Result<(Value, String)> {
             "session-id.txt",
         ] {
             if is_file(&a(name)) {
-                copy2(&a(name), &o(name))?;
+                file(&a(name), &o(name))?;
             } else if exists(&o(name)) {
                 remove(&o(name))?;
             }
         }
     }
     if is_file(&a("home/.codex/config.toml")) {
-        copy2(&a("home/.codex/config.toml"), &o("codex-config.toml"))?;
+        file(&a("home/.codex/config.toml"), &o("codex-config.toml"))?;
     }
     let mut native_name = basename(native_rel).to_string();
+    let mut filed_native = None;
     let mut artifact_storage = Value::Null;
     if let (true, Some(native_root)) = (skill_runner(kind), &native_root) {
         let index = PyPath::new(a("native-artifacts.json").as_bytes());
@@ -3015,7 +3046,7 @@ fn file_attempt(arguments: &Arguments) -> Result<(Value, String)> {
             ));
         }
         if exists(&a("skill-attempt.json")) {
-            copy2(&a("skill-attempt.json"), &o("skill-attempt.json"))?;
+            file(&a("skill-attempt.json"), &o("skill-attempt.json"))?;
         }
         if native_path.is_some() {
             native_name = format!(
@@ -3025,7 +3056,8 @@ fn file_attempt(arguments: &Arguments) -> Result<(Value, String)> {
             );
         }
     } else if let Some(native) = &native_path {
-        copy2(native, &o(&native_name))?;
+        file(native, &o(&native_name))?;
+        filed_native = Some(o(&native_name));
     } else if exists(&o(&native_name)) {
         remove(&o(&native_name))?;
     }
@@ -3054,15 +3086,28 @@ fn file_attempt(arguments: &Arguments) -> Result<(Value, String)> {
         .iter()
         .map(|path| path.clone().into_bytes())
         .collect();
-    let archived = transcripts::archive_transcripts(
+    let archived = transcripts::archive_transcripts_with(
         &mut evidence::System,
         &paths,
         attempt_dir.as_bytes(),
         destination.as_bytes(),
         out.as_bytes(),
         home.as_deref(),
+        &rules,
     )
     .map_err(|error| FileError(format!("transcript archive: {}", error.message())))?;
+    if !archived.redacted.is_empty() {
+        notes.push(format!(
+            "account identifiers or machine names replaced in {} archived transcripts",
+            archived.redacted.len()
+        ));
+    }
+    if !redacted_files.is_empty() {
+        notes.push(format!(
+            "account identifiers or machine names replaced in the filed copies of {}",
+            redacted_files.join(", ")
+        ));
+    }
     let archive = pyjson::loads(&archived.json(), Duplicates::KeepLast)
         .map_err(|error| FileError(format!("transcript archive: {error}")))?;
 
@@ -3102,7 +3147,10 @@ fn file_attempt(arguments: &Arguments) -> Result<(Value, String)> {
     let native_payload = match &native_path {
         Some(native) => object(vec![
             ("path", text(&native_name)),
-            ("sha256", text(&sha256_file(native)?)),
+            (
+                "sha256",
+                text(&sha256_file(filed_native.as_deref().unwrap_or(native))?),
+            ),
         ]),
         None => Value::Null,
     };

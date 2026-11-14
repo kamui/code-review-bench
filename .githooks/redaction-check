@@ -1,0 +1,27 @@
+#!/bin/sh
+# Runs `bench-tools redaction check` for the commit hooks and fails closed: any exit but 0 refuses the commit.
+#
+# The hooks do not go through bench/tools/bench-tools. That launcher runs only the runtime selected for HEAD's crate,
+# so a commit hook would force a new selection in the shared store after every Rust change. They run a build kept
+# under the user's cache instead, named by the redaction rules at HEAD; .githooks/build-redaction-tool makes it.
+set -u
+top=$(git rev-parse --show-toplevel) || exit 1
+tool=$("$top/.githooks/build-redaction-tool" --path) || exit 1
+if [ ! -x "$tool" ]; then
+    cat >&2 <<'MESSAGE'
+Commit refused: the redaction check for this version of the rules is not built on this machine.
+Build it once with: bun run hooks:tool
+MESSAGE
+    exit 1
+fi
+"$tool" redaction check "$@"
+status=$?
+if [ "$status" -ne 0 ]; then
+    cat >&2 <<'MESSAGE'
+Commit refused by the redaction check (docs/evidence-storage.md#redaction).
+- If a file is listed, run bench/tools/bench-tools redaction apply on it, stage it again and commit again.
+- If the commit message is listed, write it again without the identifier or machine name.
+- If the values file is missing, write it as that section describes.
+MESSAGE
+    exit 1
+fi

@@ -1,6 +1,10 @@
 //! Packing and publication, as `evidence_store.py`'s `pack` and `publish` do them, and the check a contributor runs
 //! on a package directory it packed earlier.
 //!
+//! Unlike the Python, `pack` refuses an `evidence` input and `publish` refuses a package with an `evidence` member
+//! that [`redaction`] would change or cannot rewrite. `reproducibility` inputs, such as dependency caches and
+//! toolchains, are not read for it.
+//!
 //! Unlike the Python, each package and manifest is written to a synced temporary file and hard-linked to its name,
 //! never replacing one, and the directory is synced, so `pack` and `publish` outputs survive a host restart once they
 //! exit 0, and an interrupted run leaves no manifest.
@@ -11,9 +15,10 @@ use super::{
     os_failure, parent, parents, read, sync_reaching, unpack, validate, verify_remote, violation,
     write_new,
 };
-use crate::archive::PackageWriter;
+use crate::archive::{self, Limits, PackageWriter};
 use crate::pyjson::{Object, Value};
 use crate::pytext::PyPath;
+use crate::redaction::{self, Rules};
 use std::collections::{BTreeSet, HashSet};
 use std::io;
 use std::os::unix::ffi::OsStringExt;
@@ -64,6 +69,27 @@ fn part_size(part_limit: &str) -> Result<u64> {
     }
 }
 
+fn load_rules() -> Result<Rules> {
+    Rules::load().map_err(|error| violation(error.0))
+}
+
+/// Refuse evidence that redaction would change, naming `shown` and each member, never a value.
+fn redacted_already(data: &[u8], shown: &str, rules: &Rules) -> Result<()> {
+    let findings = redaction::redact(data, rules).findings;
+    if findings.is_empty() {
+        return Ok(());
+    }
+    let lines: Vec<String> = findings
+        .iter()
+        .map(|finding| finding.describe(shown))
+        .collect();
+    Err(violation(format!(
+        "evidence holds account identifiers or machine names; run bench-tools redaction apply on it before \
+         anything pins its hash:\n{}",
+        lines.join("\n")
+    )))
+}
+
 /// The first half of `evidence_store.pack`: check the selection and `output`, then hash each input. `cwd` is what
 /// `Path.absolute()` joins a relative source to.
 pub fn select(
@@ -71,6 +97,17 @@ pub fn select(
     output: &PyPath,
     part_limit: &str,
     cwd: &PyPath,
+) -> Result<Selected> {
+    select_with(selection, output, part_limit, cwd, &load_rules()?)
+}
+
+/// As [`select`], under `rules`.
+pub fn select_with(
+    selection: &Value,
+    output: &PyPath,
+    part_limit: &str,
+    cwd: &PyPath,
+    rules: &Rules,
 ) -> Result<Selected> {
     let shape = || violation("selection requires repository, tag, subjects and files");
     let document = selection.as_object().ok_or_else(shape)?;
@@ -123,6 +160,11 @@ pub fn select(
             ));
         }
         paths.insert(path.clone());
+        if kind == "evidence" {
+            let data = std::fs::read(source.to_path_buf())
+                .map_err(|error| os_failure(&error, source.as_bytes()))?;
+            redacted_already(&data, &source.display(), rules)?;
+        }
         let sha256 = digest(&source)?;
         let found = metadata(&source)?;
         inputs.push(Input {
@@ -379,6 +421,61 @@ pub fn publish(
     manifest_path: &PyPath,
     destination: &PyPath,
 ) -> Result<Value> {
+    publish_with(store, manifest_path, destination, &load_rules()?)
+}
+
+/// Refuse a package whose `evidence` members redaction would change or cannot rewrite.
+fn package_redacted(
+    archive_path: &PyPath,
+    package: &Package,
+    entry: &Value,
+    rules: &Rules,
+) -> Result<()> {
+    let mut evidence = HashSet::new();
+    for member in array(field(object(entry)?, "members")?)? {
+        let member = object(member)?;
+        if field(member, "kind")?.as_str() == Some("evidence") {
+            evidence.insert(field(member, "path")?.py_str().into_bytes());
+        }
+    }
+    if evidence.is_empty() {
+        return Ok(());
+    }
+    let limits = Limits {
+        members: package.members.len() as u64,
+        payload: package
+            .members
+            .iter()
+            .map(|member| member.bytes)
+            .fold(0, u64::saturating_add),
+    };
+    let mut refused = Ok(());
+    archive::read_tar_gz(open(archive_path)?, &limits, |member, data| {
+        if refused.is_ok() && evidence.contains(&member.name) {
+            let mut bytes = Vec::new();
+            data.read_to_end(&mut bytes)?;
+            let shown = format!(
+                "{}!{}",
+                package.asset,
+                String::from_utf8_lossy(&member.name)
+            );
+            refused = redacted_already(&bytes, &shown, rules);
+        } else {
+            io::copy(data, &mut io::sink())?;
+        }
+        Ok(())
+    })
+    .map_err(|error| archive_failure(error, archive_path))?;
+    refused
+}
+
+/// As [`publish`], under `rules`.
+pub fn publish_with(
+    store: &mut Store<'_>,
+    manifest_path: &PyPath,
+    destination: &PyPath,
+    rules: &Rules,
+) -> Result<Value> {
     let mut document = read(manifest_path)?;
     let manifest = validate(&document, false)?;
     if exists(destination) {
@@ -392,6 +489,15 @@ pub fn publish(
         return Ok(existing);
     }
     let directory = parent(manifest_path);
+    for (package, entry) in manifest
+        .packages
+        .iter()
+        .zip(array(field(object(&document)?, "packages")?)?)
+    {
+        let archive = directory.join(package.asset.as_bytes());
+        checked_file(&archive, &package.sha256, package.bytes, None)?;
+        package_redacted(&archive, package, entry, rules)?;
+    }
     for (index, package) in manifest.packages.iter().enumerate() {
         let archive = directory.join(package.asset.as_bytes());
         checked_file(&archive, &package.sha256, package.bytes, None)?;

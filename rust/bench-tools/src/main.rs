@@ -10,9 +10,9 @@ use bench_tools::{
     derive_packet, diff_identity, evaluator_audit, evidence, evidence_inventory, export_explorer,
     file_attempt, freeze_commits, grade, grading_reports, grading_validation, import_benchmark,
     interrupt, methodology, native_artifacts, normalize_thermo, packet_selection, provision,
-    prune_workspace, pyfs, pyunicode, pyvalue, rates, regrade, removal, retire_workspace,
-    review_isolation, review_queue, roster, ruling, run_cell, seal, skill_provenance, skill_runner,
-    subscription_meters, upstream, usage,
+    prune_workspace, pyfs, pyunicode, pyvalue, rates, redaction, regrade, removal,
+    retire_workspace, review_isolation, review_queue, roster, ruling, run_cell, seal,
+    skill_provenance, skill_runner, subscription_meters, upstream, usage,
 };
 use clap::builder::PossibleValuesParser;
 use clap::error::ErrorKind;
@@ -194,6 +194,9 @@ enum Cli {
     /// the receipt. Linux only.
     #[command(infer_long_args = true)]
     RetireWorkspace(RetireWorkspaceArgs),
+    /// Find or replace account identifiers and machine names in evidence before anything pins its hash.
+    #[command(subcommand, infer_long_args = true)]
+    Redaction(RedactionCommand),
     /// Build, retain, select and run pinned bench-tools executables in the runtime store
     /// (BENCH_RUNTIME_STORE, else ~/.t3/bench-runtime). bench/tools/bench-tools runs every command through it.
     #[command(subcommand)]
@@ -1278,6 +1281,35 @@ struct ExportArgs {
     /// tools/export_explorer.py passed it.
     #[arg(long, hide = true)]
     restore: bool,
+}
+
+#[derive(Subcommand)]
+enum RedactionCommand {
+    /// Exit 1 and list each file, or member of an archive, that redaction would change or cannot rewrite; never
+    /// prints a matched value.
+    #[command(infer_long_args = true)]
+    Check {
+        /// Files or directories to read.
+        paths: Vec<PathBuf>,
+        /// Read the staged content of each file the index adds or changes.
+        #[arg(long)]
+        staged: bool,
+        /// Read a commit message file.
+        #[arg(long, value_name = "FILE")]
+        message: Option<PathBuf>,
+        /// Read the files that differ from the merge base of BASE and HEAD.
+        #[arg(long, value_name = "BASE")]
+        changed: Option<String>,
+        /// Fail when the private values file is absent, so only the field rules would apply.
+        #[arg(long)]
+        require_values: bool,
+    },
+    /// Rewrite in place each file that redaction changes, and print the path of each.
+    #[command(infer_long_args = true)]
+    Apply {
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -4745,6 +4777,80 @@ fn pytext_resolved(path: &Path) -> PathBuf {
     )))
 }
 
+/// `redaction check` and `redaction apply`: exit 0 when nothing is left, 1 when something is, 2 on an error.
+fn run_redaction(command: RedactionCommand) -> Result<ExitCode, ExitCode> {
+    let failed = |redaction::Error(message)| {
+        eprintln!("bench-tools redaction: {message}");
+        ExitCode::from(2)
+    };
+    let rules = redaction::Rules::load().map_err(failed)?;
+    match command {
+        RedactionCommand::Check {
+            paths,
+            staged,
+            message,
+            changed,
+            require_values,
+        } => {
+            if require_values && rules.values_file().is_none() {
+                let place = redaction::values_path().map_or_else(
+                    || {
+                        format!(
+                            "{} or {}",
+                            redaction::VALUES_VARIABLE,
+                            redaction::DEFAULT_VALUES
+                        )
+                    },
+                    |path| path.display().to_string(),
+                );
+                eprintln!(
+                    "bench-tools redaction: no redaction values file at {place}; only the field rules would \
+                     apply. Write it as docs/evidence-storage.md describes, or set {} to its path.",
+                    redaction::VALUES_VARIABLE
+                );
+                return Err(ExitCode::from(2));
+            }
+            let sources = redaction::Sources {
+                paths,
+                staged,
+                message,
+                changed,
+            };
+            if sources.paths.is_empty()
+                && !staged
+                && sources.message.is_none()
+                && sources.changed.is_none()
+            {
+                eprintln!(
+                    "bench-tools redaction: nothing to check; name paths, --staged, --message or --changed"
+                );
+                return Err(ExitCode::from(2));
+            }
+            let lines = redaction::check(&sources, &rules).map_err(failed)?;
+            if lines.is_empty() {
+                return Ok(ExitCode::SUCCESS);
+            }
+            write_stdout(format!("{}\n", lines.join("\n")).as_bytes())?;
+            eprintln!(
+                "bench-tools redaction: account identifiers or machine names remain; run bench-tools redaction \
+                 apply on each file before anything pins its hash, and never quote the values"
+            );
+            Ok(ExitCode::from(1))
+        }
+        RedactionCommand::Apply { paths } => {
+            let applied = redaction::apply(&paths, &rules).map_err(failed)?;
+            let lines: String = applied
+                .rewritten
+                .iter()
+                .map(|path| format!("redacted: {path}\n"))
+                .chain(applied.unredactable.iter().map(|line| format!("{line}\n")))
+                .collect();
+            write_stdout(lines.as_bytes())?;
+            Ok(ExitCode::from(u8::from(!applied.unredactable.is_empty())))
+        }
+    }
+}
+
 fn run_retire_workspace(arguments: RetireWorkspaceArgs) -> Result<ExitCode, ExitCode> {
     let outcome = retire_workspace::retire(
         &retire_workspace::Request {
@@ -6029,6 +6135,7 @@ fn main() -> ExitCode {
         Cli::PruneWorkspace(arguments) => run_prune_workspace(arguments),
         Cli::RetireWorkspace(arguments) => run_retire_workspace(arguments),
         Cli::Runtime(command) => run_runtime(command),
+        Cli::Redaction(command) => run_redaction(command),
         Cli::CurrentGrading(arguments) => run_current_grading(arguments),
         Cli::Methodology(arguments) => run_methodology(&arguments),
         Cli::Grade(command) => run_grade(command),
