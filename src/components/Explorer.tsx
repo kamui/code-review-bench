@@ -131,6 +131,8 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
   })
   const summaries = overviewOrder(comparisonSummaries.filter(row => activeIds.includes(row.configuration.id)),
     row => ({ name: row.configuration.short, card: row.card }), { column: 'detection', direction: 'descending' }, band, estimator)
+  const topFound = (group: Pick<Configuration, 'method' | 'reviewEdition'>) => Math.max(-1, ...summaries
+    .filter(row => row.configuration.method === group.method && row.configuration.reviewEdition === group.reviewEdition).map(row => row.detection ?? -1))
   const tableShown = comparisonSummaries.map(row => row.configuration)
   const tableRows = comparisonSummaries.map(row => {
     const recall = row.card.detection[band]
@@ -245,7 +247,7 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
                     <Button variant="subtle" size="compact-xs" className="popover-action" onClick={() => setSelected(configurations.map(item => item.id))}>Select all</Button>
                     <Button variant="subtle" size="compact-xs" className="popover-action" onClick={() => setSelected([])}>Clear all</Button>
                   </Group></Group>
-                  {editions.map(group => { const ids = editionIds(group), all = ids.every(id => selected.includes(id)), some = ids.some(id => selected.includes(id))
+                  {[...editions].sort((left, right) => topFound(right) - topFound(left)).map(group => { const ids = editionIds(group), all = ids.every(id => selected.includes(id)), some = ids.some(id => selected.includes(id))
                     return <div key={`${group.method}/${group.reviewEdition}`} className="refine-group"><Checkbox size="xs" className="refine-group-title" checked={all} indeterminate={some && !all} onChange={() => toggleEdition(group)}
                       label={<><Mark configuration={group} size={9} />{methodName(group)}{group.experimental && <span className="chip-partial">experiment</span>}</>} />
                     {[...edition(group)].sort((left, right) => left.short.localeCompare(right.short)).map(configuration => <Checkbox key={configuration.id} label={<><VendorMark configuration={configuration} />{[setupParts(configuration).model, setupParts(configuration).effort].filter(Boolean).join(' · ')}</>} aria-label={configuration.short}
