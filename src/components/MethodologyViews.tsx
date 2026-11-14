@@ -19,7 +19,7 @@ import { VendorMark } from './VendorMark'
 const signed = (value: number) => `${value > 0 ? '+' : value < 0 ? '−' : ''}${Math.abs(value).toFixed(1)} points`
 const span = (range: { low: number; high: number }) => `${percent(range.low * 100)} to ${percent(range.high * 100)}`
 const reasons = (counts: Record<string, number>) => Object.entries(counts).map(([reason, count]) => `${count} ${reason}`).join('; ') || 'None'
-const averages: Record<Estimator, string> = { equalProblem: 'equal problems', equalPr: 'equal PRs' }
+const averages: Record<Estimator, string> = { equalProblem: 'per problem', equalPr: 'per PR' }
 const matchedLabels: Record<ConditionalMetric, string> = {
   refuted: 'Refuted claims per review', unsupported: 'Unproven claims per review', unresolved: 'Unresolved claims per review',
   harmful: 'Unsafe fixes per review', clean: 'Correctly silent share of admitted control reviews',
@@ -84,16 +84,16 @@ export function MethodologyViews({ fullTable, dataset, configurations, cards, se
   const adviceTable = <DataTable label="Supported advice benefit, sampled" rows={rows} rowKey={key} tint={tint} minWidth={900} columns={[setup,
     { label: 'Sampled: benefit supported', value: row => String(row.card.advice.supported) }, { label: 'Sampled: benefit unsupported', value: row => String(row.card.advice.unsupported) },
     { label: 'Sampled: unresolved', value: row => String(row.card.advice.unresolved) },
-    { label: 'Reviews sampled / admitted', value: row => `${row.card.advice.sampledReviews} / ${row.card.advice.admitted}` },
+    { label: 'Reviews sampled / usable', value: row => `${row.card.advice.sampledReviews} / ${row.card.advice.admitted}` },
     { label: 'Generic advisory dossiers, benefit unmeasured', value: row => String(row.card.advice.generic) }]} />
   const groups: { group: string; tabs: { value: ScorecardTab; label: string }[] }[] = [
     { group: 'What it finds', tabs: [{ value: 'detection', label: 'Detection' }, { value: 'misses', label: 'Serious misses' }, { value: 'pre-existing', label: 'Pre-existing problems' }] },
     { group: 'How right it is', tabs: [{ value: 'reliability', label: 'Claim reliability' }, { value: 'remedies', label: 'Remedies' }, { value: 'advice', label: 'Advice benefit' }, { value: 'controls', label: 'Controls' }] },
     { group: 'What it takes', tabs: [{ value: 'delivery', label: 'Delivery' }, { value: 'usage', label: 'Cost and time' }] },
-    { group: 'Tools', tabs: [{ value: 'candidates', label: `Pending candidates (${novel.length + awaiting.length})` }, { value: 'comparison', label: 'Compare setups' }, { value: 'table', label: 'Full table' }] },
+    { group: 'Tools', tabs: [...novel.length + awaiting.length > 0 || tab === 'candidates' ? [{ value: 'candidates' as const, label: `Pending candidates (${novel.length + awaiting.length})` }] : [], { value: 'comparison', label: 'Compare setups' }, { value: 'table', label: 'Full table' }] },
   ]
   return <Paper withBorder radius="lg" className="methodology-panel" id="dimensions">
-    <div className="dimension-head"><Title order={3}>Each measure in detail</Title>
+    <div className="dimension-head"><Title order={3}>Detail tables</Title>
       <Text className="subsection-lede">Each measure stands on its own, for the selected setups and PRs; no single score combines them. Rows start with the setup that finds the most known problems. A small number beside a value points to a note under its table.</Text></div>
     <Tabs value={tab} onChange={value => { const next = scorecardTabs.find(item => item === value); if (next) onTab(next) }} className="dimension-tabs">
       <Select className="dimension-select" aria-label="Measure" size="sm" allowDeselect={false} value={tab} onChange={value => { const next = scorecardTabs.find(item => item === value); if (next) onTab(next) }}
@@ -118,7 +118,7 @@ export function MethodologyViews({ fullTable, dataset, configurations, cards, se
         <Disclosure title={`Counts behind ${lowerFirst(foundLabels[band])}`}><DataTable label={`Counts behind ${lowerFirst(foundLabels[band])}`} rows={rows} rowKey={key} tint={tint} minWidth={1000} columns={[setup,
           { label: 'Problems / PRs with one', value: row => `${row.card.detection[band].problems} / ${row.card.detection[band].prs}` },
           { label: 'Observed caught / determined', value: row => `${row.card.detection[band].observed.caught} / ${row.card.detection[band].observed.determined}` },
-          { label: 'Admitted reviews / scheduled trials', value: row => `${row.card.detection[band].admittedOnly.admittedReviews} / ${row.card.detection[band].admittedOnly.scheduledTrials}` },
+          { label: 'Usable reviews / trials', value: row => `${row.card.detection[band].admittedOnly.admittedReviews} / ${row.card.detection[band].admittedOnly.scheduledTrials}` },
           { label: `Admitted reviews only, ${averages[estimator]}`, value: row => share(row.card.detection[band].admittedOnly[estimator], row.card.detection[band].zeroCredit.reason) },
           { label: 'Range with one PR left out', value: row => reading(row.card.detection[band].omissions[estimator], span) },
           { label: 'Each linked claim as its own unit', value: row => reading(row.card.detection[band].grouping, grouping => `${percent(grouping[estimator] * 100)} over ${grouping.units} units`) }]} />
@@ -146,8 +146,8 @@ export function MethodologyViews({ fullTable, dataset, configurations, cards, se
         <TabIntro lede="How often a delivered review made a claim that was wrong or not shown to be right.">Rates divide distinct claims by admitted reviews, the denominator shown beside them. Unsupported claims are not proven false. A setup with no admitted review has no rate: silence from a failed trial is not reliability. Rates stay unavailable while a trial is pending or an admitted review awaits assessment.</TabIntro>
         <Title order={4}>Claim outcomes per review</Title>
         <DataTable label="Claim outcomes per review" rows={rows} rowKey={key} tint={tint} minWidth={1300} columns={[setup,
-          { label: 'Admitted / scheduled', value: row => `${row.card.delivery.admitted} / ${row.card.delivery.scheduled}` },
-          { label: 'Assessed / admitted', value: row => `${row.card.reliability.assessed} / ${row.card.reliability.admitted}` },
+          { label: 'Usable reviews / trials', value: row => `${row.card.delivery.admitted} / ${row.card.delivery.scheduled}` },
+          { label: 'Graded / usable reviews', value: row => `${row.card.reliability.assessed} / ${row.card.reliability.admitted}` },
           { label: 'Per review, items', value: row => perReview(row.card.reliability.itemsPerAdmittedReview) },
           { label: 'Per review, refuted', value: row => perReview(row.card.reliability.outcomes.refuted.perAdmittedReview) },
           { label: 'Per review, unproven', value: row => perReview(row.card.reliability.outcomes.unsupported.perAdmittedReview) },
@@ -155,7 +155,7 @@ export function MethodologyViews({ fullTable, dataset, configurations, cards, se
           { label: 'Reviews with a claim, refuted', value: row => share(row.card.reliability.outcomes.refuted.reviewFraction) },
           { label: 'Reviews with a claim, unproven', value: row => share(row.card.reliability.outcomes.unsupported.reviewFraction) },
           { label: 'Claims, out of scope', value: row => String(row.card.reliability.outcomes['scope-excluded'].distinct) },
-          { label: 'Claims, repeated', value: row => String(row.card.reliability.duplicates) }, { label: 'Items with mixed outcomes', value: row => String(row.card.reliability.mixedItems) }]} />
+          { label: 'Claims, repeated', value: row => String(row.card.reliability.duplicates) }, { label: 'Mixed-outcome items', value: row => String(row.card.reliability.mixedItems) }]} />
         <Text size="xs" c="dimmed" className="footnote">Claim counts are distinct claims in assessed admitted reviews. Repeated claims count extra occurrences; mixed items hold claims with different outcomes. Item counts measure volume, not reading time.</Text>
         <Title order={4}>Claim labels per review</Title>
         <ClaimLabels rows={rows.map(row => ({ id: key(row), configuration: row.configuration, rates: row.card.reliability.labelsPerAdmittedReview }))} />
@@ -169,7 +169,7 @@ export function MethodologyViews({ fullTable, dataset, configurations, cards, se
             return found ? <SetupName configuration={found} /> : short(row.configurationId)
           } },
           { label: `${matchedLabels[metric]}, matched PRs`, value: row => metric === 'clean' ? share(row.equalPr) : perReview(row.equalPr) },
-          { label: 'Admitted / scheduled, all selected PRs', value: row => `${row.delivery.admitted} / ${row.delivery.scheduled}` },
+          { label: 'Usable reviews / trials, all selected PRs', value: row => `${row.delivery.admitted} / ${row.delivery.scheduled}` },
           { label: 'Matched PRs admitted only in part', value: row => String(row.selectivelyAdmitted) }]} />
         {common.excluded.length > 0 && <div><Text size="sm" fw={700}>Excluded PRs</Text><ul className="reason-list">{common.excluded.map(row => <li key={row.taskId}>{name(row.taskId)}: {row.reason}</li>)}</ul></div>}
         <Text size="xs" c="dimmed" className="footnote">Matching removes PRs a setup did not deliver on. A setup that admitted only some trials of a matched PR is still measured on the reviews it delivered, so that selection remains.</Text>
@@ -178,7 +178,7 @@ export function MethodologyViews({ fullTable, dataset, configurations, cards, se
       <Tabs.Panel value="remedies" ><Stack>
         <TabIntro lede="Whether proposed fixes would solve their problem, and whether applying them would do harm.">Sufficiency asks whether a recommendation resolves the problem it addresses; safety asks, independently, whether applying it does harm. New first-grader assessments check safety only for sufficient or partial fixes; the second grader omits safety. Historical assessments retain their original coverage. A recommendation without a safety assessment is unassessed, never safe. The assessed subset is selected for usefulness, so its unsafe share does not describe all advice. Only when admission is final and no trial is pending are unsafe recommendations per admitted review a lower bound, because unassessed ones could add to it. Pending cohorts show observed counts and assessed exposure without a final-cohort bound.</TabIntro>
         <DataTable label="Remedy sufficiency and safety" rows={rows} rowKey={key} tint={tint} minWidth={1250} columns={[setup,
-          { label: 'Inventoried / admitted reviews', value: row => `${row.card.remedies.inventoried} / ${row.card.remedies.admitted}` },
+          { label: 'Reviews listed / usable', value: row => `${row.card.remedies.inventoried} / ${row.card.remedies.admitted}` },
           { label: 'Recommendations', value: row => String(row.card.remedies.recommendations) }, { label: 'Safety, assessed safe', value: row => String(row.card.remedies.safe) },
           { label: 'Safety, assessed unsafe', value: row => String(row.card.remedies.unsafe) }, { label: 'Safety, unassessed', value: row => String(row.card.remedies.unassessed) },
           { label: 'Unsafe fixes per review', value: row => harm(row.card) },
@@ -199,7 +199,7 @@ export function MethodologyViews({ fullTable, dataset, configurations, cards, se
             { label: 'Distinct problems raised', value: row => reading(row.card.preExisting.labels[label].problems, String) },
             { label: 'Reviews that raised one', value: row => reading(row.card.preExisting.labels[label].reviews, String) },
             { label: 'Observed raised', value: row => String(row.card.preExisting.labels[label].observed.raised) },
-            { label: 'Reviews assessed / admitted', value: row => `${row.card.preExisting.labels[label].assessed} / ${row.card.preExisting.labels[label].admitted}` },
+            { label: 'Reviews graded / usable', value: row => `${row.card.preExisting.labels[label].assessed} / ${row.card.preExisting.labels[label].admitted}` },
             { label: 'Unresolved', value: row => String(row.card.preExisting.labels[label].unresolved) },
             { label: 'Pending candidates', value: row => String(row.card.preExisting.candidates.length) }]} />
           <PreExistingMatrix label={label} rows={byName} name={name} />
@@ -210,7 +210,7 @@ export function MethodologyViews({ fullTable, dataset, configurations, cards, se
       <Tabs.Panel value="controls" ><Stack>
         <TabIntro lede="How often reviews stayed quiet on PRs audited to have no problems.">Only an independently audited clean control gets a correct-silence percentage, over the reviews that were delivered. An empty reference list is not an audit, and a failed trial is missing output, not silence.</TabIntro>
         <DataTable label="Audited controls" rows={rows} rowKey={key} tint={tint} minWidth={1150} columns={[setup,
-          { label: 'Audited controls', value: row => String(row.card.controls.audited) }, { label: 'Admitted control reviews', value: row => String(row.card.controls.admitted) },
+          { label: 'Audited controls', value: row => String(row.card.controls.audited) }, { label: 'Usable control reviews', value: row => String(row.card.controls.admitted) },
           { label: 'Without a refuted or unproven claim', value: row => share(row.card.controls.cleanFraction) },
           { label: 'With a refuted or unproven claim', value: row => String(row.card.controls.alarmed) }, { label: 'With an unresolved claim', value: row => String(row.card.controls.unresolved) },
           { label: 'Awaiting assessment', value: row => String(row.card.controls.unassessed) }, { label: 'Missing output', value: row => String(row.card.controls.missingOutput) },
@@ -300,7 +300,7 @@ export function MethodologyViews({ fullTable, dataset, configurations, cards, se
             })}</Table.Tbody>
           </Table></Table.ScrollContainer>
           <Table.ScrollContainer minWidth={700}><Table aria-label="Leave-one-PR-out detection comparison">
-            <Table.Thead><Table.Tr><Table.Th>Omitted PR</Table.Th><Table.Th>Remaining PRs</Table.Th><Table.Th>A detection</Table.Th><Table.Th>B detection</Table.Th><Table.Th>A minus B, equal PRs</Table.Th><Table.Th>A minus B, equal problems</Table.Th></Table.Tr></Table.Thead>
+            <Table.Thead><Table.Tr><Table.Th>Omitted PR</Table.Th><Table.Th>Remaining PRs</Table.Th><Table.Th>A detection</Table.Th><Table.Th>B detection</Table.Th><Table.Th>A minus B, per PR</Table.Th><Table.Th>A minus B, per problem</Table.Th></Table.Tr></Table.Thead>
             <Table.Tbody>{comparison.omissions.map(row => <Table.Tr key={row.taskId}><Table.Td>{name(row.taskId)}</Table.Td><Table.Td>{row.remaining}</Table.Td>
               <Table.Td><Value cell={share(row[estimator].a)} /></Table.Td><Table.Td><Value cell={share(row[estimator].b)} /></Table.Td>
               <Table.Td><Value cell={reading(row.equalPr.delta, value => signed(value * 100))} /></Table.Td><Table.Td><Value cell={reading(row.equalProblem.delta, value => signed(value * 100))} /></Table.Td></Table.Tr>)}</Table.Tbody>

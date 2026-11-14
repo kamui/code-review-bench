@@ -177,8 +177,8 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
     </ul>}
     {points.length > 0 && view !== 'models' && view !== 'tradeoff' && <ul className="chart-keys" aria-label="Chart key">
       {view === 'setups' && <li><span className="whisker-key" aria-hidden="true" />Range with any one PR left out</li>}
-      {view === 'setups' && frontier.size > 0 && <li><span className="frontier-tag">On frontier</span>No other setup finds more at a lower {lowerFirst(axisLabels[axis])}</li>}
-      {view === 'setups' && undecided.size > 0 && <li><span className="frontier-tag unknown">Frontier unknown</span>Its {lowerFirst(axisLabels[axis])} is a lower bound that no other setup beats</li>}
+      {view === 'setups' && frontier.size > 0 && <li><span className="frontier-tag">None finds more for less</span>No other setup finds more at a lower {lowerFirst(axisLabels[axis])}</li>}
+      {view === 'setups' && undecided.size > 0 && <li><span className="frontier-tag unknown">None known finds more for less</span>Its {lowerFirst(axisLabels[axis])} is a lower bound that no other setup beats</li>}
       {view === 'skills' && <li><span className="context-key" aria-hidden="true" />Other selected setups</li>}
       {bounded && <li><svg className="bound-key" width="16" height="16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" /></svg>Lower bound, ≥ in the table</li>}
     </ul>}
@@ -228,8 +228,8 @@ function SetupRows({ points, measure, axis, scale, frontier, undecided, onSelect
           aria-label={`${configuration.short}: ${measure} ${percent(score)}${noted(summary)}${range ? `, ${percent(range.low)} to ${percent(range.high)} leaving one PR out` : ''}; ${axisLabels[axis]} ${formatMetric(axis, metric, starred, bounded)}${frontier.has(configuration.id) ? '; on the frontier of these two measures' : ''}. Inspect evidence`}>
           <span className="rank-name"><Mark configuration={configuration} />
             <span><strong>{method}</strong><span className="rank-model"><VendorMark configuration={configuration} />{model}{effort && ` · ${effort}`}
-              {frontier.has(configuration.id) ? <span className="frontier-tag" title={`No other setup finds more at a lower ${lowerFirst(axisLabels[axis])}`}>On frontier</span>
-                : undecided.has(configuration.id) && <span className="frontier-tag unknown" title={`Its ${lowerFirst(axisLabels[axis])} is a lower bound that no other setup beats`}>Frontier unknown</span>}</span></span></span>
+              {frontier.has(configuration.id) ? <span className="frontier-tag" title={`No other setup finds more at a lower ${lowerFirst(axisLabels[axis])}`}>None finds more for less</span>
+                : undecided.has(configuration.id) && <span className="frontier-tag unknown" title={`Its ${lowerFirst(axisLabels[axis])} is a lower bound that no other setup beats`}>None known finds more for less</span>}</span></span></span>
           <span className="rank-cell"><span className="rank-value"><Score summary={summary} /></span>
             <span className="rank-track">{scoreTicks.map(tick => <span key={tick} className="rank-grid" style={{ left: `${tick}%` }} />)}
               {range && <span className="rank-whisker" style={{ left: `${range.low}%`, width: `${range.high - range.low}%` }} />}

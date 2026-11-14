@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 import { ActionIcon, Alert, Anchor, Badge, Button, Checkbox, Container, Group, Loader, Paper, Popover,
   SegmentedControl, Select, Stack, Switch, Table, Tabs, Text, TextInput, Title, Tooltip, VisuallyHidden, useComputedColorScheme, useMantineColorScheme } from '@mantine/core'
 import { useMediaQuery } from '@mantine/hooks'
@@ -152,7 +153,7 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
   })
   const tableNotes = notesFor(tableRows.flatMap(row => Object.values(row.cells)))
   const resultsColumns: { key: ResultsColumn; label: string; sub?: string }[] = [
-    { key: 'setup', label: 'Review setup' }, { key: 'equalProblem', label: bandLabels[band], sub: 'equal problems' }, { key: 'equalPr', label: bandLabels[band], sub: 'equal PRs' },
+    { key: 'setup', label: 'Review setup' }, { key: 'equalProblem', label: bandLabels[band], sub: 'per problem' }, { key: 'equalPr', label: bandLabels[band], sub: 'per PR' },
     { key: 'seriousCaught', label: 'All serious', sub: 'caught' }, { key: 'repeatedMisses', label: 'Repeated', sub: 'serious misses' },
     { key: 'cost', label: 'Cost', sub: 'per trial' }, { key: 'tokens', label: 'Output', sub: 'tokens per trial' },
     { key: 'doubt', label: 'Refuted or unproven', sub: 'share of reviews' }, { key: 'completed', label: 'Completed', sub: 'of trials' },
@@ -205,16 +206,19 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
         <div>
           <Title order={1}>Good reviews find the problems that matter.</Title>
           <Text className="intro-description">Compare code review setups by what they catch, how often they’re wrong, and what they cost.</Text>
-          <div className="intro-meta"><Badge variant="outline" color="gray" radius="sm" className="status-badge">{status.label}</Badge>
-            {(!status.complete || unresolved) && <StatusNotice limits={status.limits} unresolved={unresolved} />}</div>
+          {!status.complete || unresolved
+            ? <div className="intro-meta"><StatusNotice label={status.label} limits={status.limits} unresolved={unresolved}>
+              <p className="status-summary">Claude Opus 5.5 grades every review, and Claude models are among those compared.{dataset.evidence.audit.state !== 'assessed' && ' The audit of its grades has not passed yet.'} <Link to="/methodology">How the benchmark is run and judged</Link></p>
+              <p className="status-summary">{hero.experiments > 0 && `${hero.experiments === 1 ? '1 method is a skill experiment' : `${hero.experiments} methods are skill experiments`}, off by default. `}Charts use the PRs every selected setup ran.</p></StatusNotice></div>
+            : <><div className="intro-meta"><Badge variant="outline" color="gray" radius="sm" className="status-badge">{status.label}</Badge></div>
+              <p className="intro-disclosure">Claude Opus 5.5 grades every review, and Claude models are among those compared.{dataset.evidence.audit.state !== 'assessed' && ' The audit of its grades has not passed yet.'} <Link to="/methodology">How the benchmark is run and judged</Link></p></>}
         </div>
         <div className="corpus"><p className="corpus-title">Whole benchmark</p><dl className="corpus-stats" aria-label="Benchmark statistics">
           <div><dt>PR tasks</dt><dd>{hero.tasks}</dd></div>
           <div><dt>{hero.awaitingEligibility ? 'provisional problems' : 'known problems'}</dt><dd>{hero.problems}</dd></div>
           <div><dt>review methods</dt><dd>{hero.methods}</dd></div>
           <div><dt>models tested</dt><dd>{hero.models}</dd></div>
-        </dl><p className="corpus-note">{hero.experiments > 0 && `${hero.experiments === 1 ? '1 method is a skill experiment' : `${hero.experiments} methods are skill experiments`}, off by default. `}Charts use the PRs every selected setup ran.</p>
-          <p className="intro-disclosure">Claude Opus 5.5 grades every review, and Claude models are among those compared.{dataset.evidence.audit.state !== 'assessed' && ' The audit of its grades has not passed yet.'} <Link to="/methodology">How the benchmark is run and judged</Link></p></div>
+        </dl></div>
       </section>
 
       <section id="scorecard" className="leaderboard-section">
@@ -228,9 +232,9 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
               label: narrow ? item.label : <span className="switch-label"><item.icon size={15} strokeWidth={1.9} aria-hidden="true" />{item.label}</span> }))} />
             <Button variant="default" size="xs" className="filters-toggle" leftSection={<SlidersHorizontal size={14} aria-hidden="true" />} rightSection={<ChevronDown size={14} aria-hidden="true" />}
               aria-expanded={optionsOpen} onClick={() => setOptionsOpen(open => !open)}>Chart options · {bandLabels[band]} · {configurations.filter(item => selected.includes(item.id)).length} of {configurations.length} setups</Button>
-            <div className="axis-switch" title={view === 'models' ? 'By model plots detection only' : undefined}><span className="control-label" id="axis-label">Plot against{view === 'models' && <span className="axis-off"> · not used in By model</span>}</span>{narrow
-              ? <Select aria-label="Compare detection against" size="xs" allowDeselect={false} disabled={view === 'models'} value={axis} onChange={plotAgainst} data={axisChoices} />
-              : <SegmentedControl aria-label="Compare detection against" size="xs" disabled={view === 'models'} value={axis} onChange={plotAgainst} data={axisChoices} />}</div>
+            {view !== 'models' && <div className="axis-switch"><span className="control-label" id="axis-label">Plot against</span>{narrow
+              ? <Select aria-label="Compare detection against" size="xs" allowDeselect={false} value={axis} onChange={plotAgainst} data={axisChoices} />
+              : <SegmentedControl aria-label="Compare detection against" size="xs" value={axis} onChange={plotAgainst} data={axisChoices} />}</div>}
           </div>
           <div className="filter-bar" data-open={optionsOpen || undefined}>
             <div className="measure-controls">
@@ -383,15 +387,15 @@ function Limit({ text }: { text: string }) {
   return detail.length > 140 ? <li>{head}<details className="status-record"><summary>Details<ChevronDown size={13} aria-hidden="true" /></summary><p>{detail}</p></details></li> : <li>{text}</li>
 }
 
-function StatusNotice({ limits, unresolved }: { limits: string[]; unresolved: boolean }) {
-  const title = limits.length ? <>Provisional results<span className="status-title-rest">: some checks are still open</span></> : 'Reliability measurements are provisional'
+function StatusNotice({ label, limits, unresolved, children }: { label: string; limits: string[]; unresolved: boolean; children: ReactNode }) {
+  const title = limits.length ? <><span className="status-label">{label}</span>Provisional results<span className="status-title-rest">: some checks are still open</span></> : 'Reliability measurements are provisional'
   const summary = <p className="status-summary">{limits.length > 0 && 'Saved reviews, delivery and usage remain available. Unresolved detection outcomes receive zero credit, with an explanation. Measures blocked by missing evidence are unavailable, with their reasons. '}
     {unresolved && 'Some claim assessments are unresolved. Reliability measurements are provisional.'}</p>
   const icon = <Hourglass className="status-icon" size={15} strokeWidth={2} aria-hidden="true" />
   return <aside className="status-notice" aria-label="Result status">
     {limits.length ? <details className="status-details"><summary>{icon}<span className="status-title">{title}</span><span className="status-more">What is still open ({limits.length})<ChevronDown size={14} aria-hidden="true" /></span></summary>
-      <div className="status-body">{summary}<ul>{limits.map(limit => <Limit key={limit} text={limit} />)}</ul></div></details>
-      : <div className="status-line">{icon}<span className="status-title">{title}</span>{summary}</div>}
+      <div className="status-body">{summary}<ul>{limits.map(limit => <Limit key={limit} text={limit} />)}</ul>{children}</div></details>
+      : <div className="status-line">{icon}<span className="status-title"><span className="status-label">{label}</span>{title}</span>{summary}{children}</div>}
   </aside>
 }
 
