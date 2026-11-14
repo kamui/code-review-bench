@@ -2509,7 +2509,8 @@ mod tests {
         let texts = ("Run <clone> tests.".to_string(), "network".to_string());
         let policy = render_policy(&fixture.run().manifest, &texts);
         assert!(policy.starts_with("## Run policy\n\n`main` is the merge-base."));
-        assert!(policy.contains("Five minutes per command. Run <clone> tests."));
+        assert!(policy.contains("Five minutes per command. Run <clone> tests.\n"));
+        assert!(!policy.contains(crate::skill_runner::SKILL_SCRIPTS_ALLOWANCE));
         let target_dir = fixture.target();
         let directory = fixture.work.join("att-005");
         fs::create_dir_all(&directory).expect("mkdir");
