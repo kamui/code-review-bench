@@ -308,7 +308,7 @@ function Scatter({ points, dimensions, axis, scale, spotlight, marked, named, to
   const obstacles = [
     ...ordered.map(point => ({ left: sx(point) - 10, top: py(point.y) - 10, right: sx(point) + 10, bottom: py(point.y) + 10 })),
     ...lines.flatMap(group => group.points.slice(1).flatMap((point, index) => along(group.points[index]!, point))),
-    { left: plot.left, top: plot.top, right: plot.left + 30 + textWidth(hint), bottom: plot.top + 30 },
+    ...(width ? [{ left: plot.left, top: plot.top, right: plot.left + 30 + textWidth(hint), bottom: plot.top + 30 }] : []),
   ]
   const request = (point: Plotted) => ({ id: point.summary.configuration.id, x: sx(point), y: py(point.y), width: textWidth(labelText(point.summary.configuration)), height: 16 })
   const bounds = { left: plot.left + 2, right: plot.right, top: 2, bottom: plot.bottom - 2 }
