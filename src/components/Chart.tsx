@@ -237,7 +237,7 @@ function SetupRows({ points, measure, axis, scale, frontier, undecided, onSelect
           <span className="rank-cell"><span className="rank-value">{formatMetric(axis, metric, starred, bounded)}</span>
             <span className="rank-track">{metricTicks.map(tick => <span key={tick} className="rank-grid" style={{ left: `${fraction(scale, tick)}%` }} />)}
               {metric === null ? <span className="rank-missing">unavailable</span>
-                : <span className="rank-dot" style={{ left: `${fraction(scale, metric)}%` }}><Mark configuration={configuration} hollow={bounded} /></span>}</span></span>
+                : <span className="rank-dot" style={{ left: `${fraction(scale, metric)}%` }}><Mark configuration={configuration} hollow={bounded} size={bounded ? 14 : undefined} /></span>}</span></span>
         </button>
       </div>
     })}
@@ -338,7 +338,7 @@ function Scatter({ points, dimensions, axis, scale, spotlight, marked, named, to
       {labels.map(label => {
         const point = points.find(item => item.summary.configuration.id === label.id)
         return point && <text key={`label-${label.id}`} x={label.x} y={label.y} textAnchor={label.anchor} dominantBaseline="middle"
-          className={label.id === marked ? 'point-label marked' : marked ? 'point-label dimmed' : 'point-label'} style={{ fill: `color-mix(in srgb, ${reviewColor(point.summary.configuration)} 58%, var(--ink))` }}>{labelText(point.summary.configuration)}</text>
+          className={label.id === marked ? 'point-label marked' : marked ? 'point-label dimmed' : 'point-label'} style={{ fill: `color-mix(in srgb, ${reviewColor(point.summary.configuration)} 45%, var(--ink))` }}>{labelText(point.summary.configuration)}</text>
       })}
     </svg>}
     <span className="better-hint" style={{ left: plot.left + 10, top: plot.top + 8 }}><ArrowUpLeft size={13} aria-hidden="true" />Higher detection, {axis === 'doubt' ? 'fewer' : 'lower'} {lowerFirst((width < 600 ? shortAxis : axisLabels)[axis])}</span>
