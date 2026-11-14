@@ -49,6 +49,7 @@ pub mod pytext;
 pub mod pyunicode;
 pub mod pyvalue;
 pub mod rates;
+pub mod redaction;
 pub mod regrade;
 pub mod removal;
 pub mod retire_workspace;
