@@ -338,7 +338,7 @@ function Scatter({ points, dimensions, axis, scale, spotlight, marked, named, to
       {labels.map(label => {
         const point = points.find(item => item.summary.configuration.id === label.id)
         return point && <text key={`label-${label.id}`} x={label.x} y={label.y} textAnchor={label.anchor} dominantBaseline="middle"
-          className={label.id === marked ? 'point-label marked' : 'point-label'} style={{ fill: `color-mix(in srgb, ${reviewColor(point.summary.configuration)} 58%, var(--ink))` }}>{labelText(point.summary.configuration)}</text>
+          className={label.id === marked ? 'point-label marked' : marked ? 'point-label dimmed' : 'point-label'} style={{ fill: `color-mix(in srgb, ${reviewColor(point.summary.configuration)} 58%, var(--ink))` }}>{labelText(point.summary.configuration)}</text>
       })}
     </svg>}
     <span className="better-hint" style={{ left: plot.left + 10, top: plot.top + 8 }}><ArrowUpLeft size={13} aria-hidden="true" />Higher detection, {axis === 'doubt' ? 'fewer' : 'lower'} {lowerFirst((width < 600 ? shortAxis : axisLabels)[axis])}</span>
