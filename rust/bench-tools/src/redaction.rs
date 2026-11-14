@@ -7,10 +7,11 @@
 //! ([`values_path`]): each listed email address, organization id and account id becomes its placeholder, and each
 //! machine name becomes its stand-in of the same length. A missing file leaves the field rules alone.
 //!
-//! [`redact`] follows the bytes into what it can rewrite, as `redactlib.transform` of the 2026-11-13 redaction does:
-//! gzip streams and tar archives (rebuilt only when a member changes, keeping names, modes and order). A SQLite
-//! database, a SQLite write-ahead log or a zip member that would change is reported, never rewritten. An xz stream
-//! is not opened. Bytes no rule changes come back as `None`, so redaction never rewrites clean evidence.
+//! [`redact`] follows the bytes into what it can rewrite: gzip streams and tar archives (rebuilt only when a member
+//! changes, keeping names, modes and order). A SQLite database, a SQLite write-ahead log or a zip member that holds
+//! an identifier is reported as beyond rewriting and left as it is, because a replacement cannot keep a database
+//! valid without SQLite and a zip member would need the archive rebuilt. An xz stream is not opened. Bytes no rule
+//! changes come back as `None`, so redaction never rewrites clean evidence.
 
 use crate::archive;
 use crate::pyjson::{self, Duplicates, Value};
@@ -363,6 +364,29 @@ impl Finding {
             None => format!("would change: {shown}"),
         }
     }
+}
+
+impl Finding {
+    /// Whether the finding is something the tool cannot rewrite.
+    pub fn unredactable(&self) -> bool {
+        self.unredactable.is_some()
+    }
+}
+
+/// What to do about a file `redaction check` lists as one the tool cannot rewrite.
+pub const LEAVE_OUT: &str = "redact each file marked cannot redact by other means or leave it out, and do not commit or publish it";
+
+/// What a refusal tells the reader to do about `findings`: `redaction apply` for a file that would change, other
+/// means or leaving it out for a file the tool cannot rewrite.
+pub fn remedy(findings: &[Finding]) -> String {
+    let mut steps = Vec::new();
+    if findings.iter().any(|finding| !finding.unredactable()) {
+        steps.push("run bench-tools redaction apply on each file marked would change before anything pins its hash");
+    }
+    if findings.iter().any(Finding::unredactable) {
+        steps.push(LEAVE_OUT);
+    }
+    steps.join("; ")
 }
 
 /// The redacted bytes, when any rule changed them, and what was found.
@@ -752,16 +776,22 @@ fn shown(path: &Path) -> String {
     pytext::stderr_text(pytext::os_bytes(path.as_os_str()))
 }
 
-/// `redaction check`: one line for each file or member that redaction would change or cannot rewrite.
-pub fn check(sources: &Sources, rules: &Rules) -> Result<Vec<String>> {
-    let mut lines = Vec::new();
+/// What `redaction check` found: one line for each file or member that redaction would change or cannot rewrite,
+/// and the findings behind them.
+#[derive(Clone, Debug, Default)]
+pub struct Checked {
+    pub lines: Vec<String>,
+    pub findings: Vec<Finding>,
+}
+
+/// `redaction check`: what redaction would change or cannot rewrite in `sources`.
+pub fn check(sources: &Sources, rules: &Rules) -> Result<Checked> {
+    let mut checked = Checked::default();
     let mut scan = |name: &str, data: &[u8]| {
-        lines.extend(
-            redact(data, rules)
-                .findings
-                .iter()
-                .map(|finding| finding.describe(name)),
-        );
+        for finding in redact(data, rules).findings {
+            checked.lines.push(finding.describe(name));
+            checked.findings.push(finding);
+        }
     };
     let mut paths = Vec::new();
     for path in &sources.paths {
@@ -781,7 +811,7 @@ pub fn check(sources: &Sources, rules: &Rules) -> Result<Vec<String>> {
             scan(&path, &blob);
         }
     }
-    Ok(lines)
+    Ok(checked)
 }
 
 /// What `redaction apply` did: the files it rewrote, and a line for each member it cannot rewrite.
@@ -806,7 +836,7 @@ pub fn apply(paths: &[PathBuf], rules: &Rules) -> Result<Applied> {
             redacted
                 .findings
                 .iter()
-                .filter(|finding| finding.unredactable.is_some())
+                .filter(|finding| finding.unredactable())
                 .map(|finding| finding.describe(&name)),
         );
         if let Some(clean) = &redacted.data {

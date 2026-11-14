@@ -84,8 +84,8 @@ fn redacted_already(data: &[u8], shown: &str, rules: &Rules) -> Result<()> {
         .map(|finding| finding.describe(shown))
         .collect();
     Err(violation(format!(
-        "evidence holds account identifiers or machine names; run bench-tools redaction apply on it before \
-         anything pins its hash:\n{}",
+        "evidence holds account identifiers or machine names; {}:\n{}",
+        redaction::remedy(&findings),
         lines.join("\n")
     )))
 }

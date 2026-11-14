@@ -383,7 +383,55 @@ fn apply_rewrites_only_what_changes() {
         ..Sources::default()
     };
     assert_eq!(
-        check(&sources, &Rules::fields()).unwrap(),
+        check(&sources, &Rules::fields()).unwrap().lines,
         Vec::<String>::new()
     );
+}
+
+fn finding(unredactable: Option<&'static str>) -> Finding {
+    Finding {
+        member: vec![],
+        unredactable,
+    }
+}
+
+#[test]
+fn the_remedy_fits_each_kind_of_finding() {
+    let changes = remedy(&[finding(None)]);
+    assert!(changes.contains("redaction apply") && !changes.contains("leave it out"));
+    let beyond = remedy(&[finding(Some("SQLite files are not rewritten"))]);
+    assert!(!beyond.contains("redaction apply") && beyond.contains("leave it out"));
+    let both = remedy(&[
+        finding(None),
+        finding(Some("zip members are not rewritten")),
+    ]);
+    assert!(both.contains("redaction apply") && both.contains("leave it out"));
+}
+
+#[test]
+fn check_keeps_the_findings_behind_its_lines() {
+    let base = crate::test_scratch("redaction-tests").join(crate::evidence::random_name("k-"));
+    std::fs::create_dir_all(&base).unwrap();
+    let mut database = SQLITE.to_vec();
+    database.extend_from_slice(ADDRESS.as_bytes());
+    std::fs::write(base.join("a.db"), database).unwrap();
+    std::fs::write(base.join("b.txt"), "mail person@example.com").unwrap();
+    let sources = Sources {
+        paths: vec![base.clone()],
+        ..Sources::default()
+    };
+    let checked = check(&sources, &values()).unwrap();
+    assert_eq!(
+        checked.lines,
+        [
+            format!(
+                "cannot redact: {} (SQLite files are not rewritten)",
+                shown(&base.join("a.db"))
+            ),
+            format!("would change: {}", shown(&base.join("b.txt"))),
+        ]
+    );
+    let advice = remedy(&checked.findings);
+    assert!(advice.contains("redaction apply") && advice.contains("leave it out"));
+    assert!(!advice.contains("person@"));
 }

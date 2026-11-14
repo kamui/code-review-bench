@@ -610,6 +610,32 @@ fn pack_refuses_evidence_that_redaction_would_change() {
 }
 
 #[test]
+fn pack_refuses_a_database_it_cannot_rewrite_without_advising_apply() {
+    let root = scratch("pack-database");
+    let selection = sources(&root);
+    let mut database = b"SQLite format 3\0".to_vec();
+    database.extend_from_slice(b" user@examplehost:~$");
+    std::fs::write(root.join("src/review.md"), database).unwrap();
+    let refused = publication::select_with(
+        &selection,
+        &py(&root.join("out")),
+        &PART_LIMIT.to_string(),
+        &py(&root),
+        &host_rules(),
+    )
+    .unwrap_err();
+    let message = refused.message();
+    assert!(
+        message.contains("leave it out")
+            && message.contains("cannot redact: ")
+            && !message.contains("redaction apply"),
+        "{message}"
+    );
+    assert!(!message.contains("examplehost"), "{message}");
+    assert!(!root.join("out").exists());
+}
+
+#[test]
 fn publish_refuses_a_package_with_an_unredacted_evidence_member() {
     let root = scratch("publish-unredacted");
     let selection = sources(&root);

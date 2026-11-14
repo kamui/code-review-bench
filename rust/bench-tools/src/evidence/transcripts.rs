@@ -13,7 +13,7 @@ use super::{Disk, Error, make_dirs, os_failure, parents, random_name, sync_dirs,
 use crate::archive::{self, Limits, PackageWriter};
 use crate::pyfs::normpath;
 use crate::pytext::{self, PyPath};
-use crate::redaction::{self, Rules};
+use crate::redaction::{self, Finding, Rules};
 use crate::sha256::{self, Sha256};
 use std::collections::{BTreeSet, HashMap};
 use std::fs::File;
@@ -24,13 +24,14 @@ use std::os::unix::fs::MetadataExt;
 type Result<T> = std::result::Result<T, Error>;
 
 /// What `archive_transcripts` returns: the recorded path, the archive's SHA-256 and the restoration check, and the
-/// members redaction changed, which the record does not show.
+/// members redaction changed or could not rewrite, which the record does not show.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Archived {
     pub path: Vec<u8>,
     pub sha256: String,
     pub passed: bool,
     pub redacted: Vec<Vec<u8>>,
+    pub unredactable: Vec<Vec<u8>>,
 }
 
 impl Archived {
@@ -177,17 +178,24 @@ fn read_file(path: &[u8]) -> Result<Vec<u8>> {
         .map_err(|error| Error::Io(pytext::os_error(&error, path)))
 }
 
-/// A transcript's bytes as it is and as redaction leaves it.
+/// A transcript's bytes as it is and as redaction leaves it, and whether it holds something redaction cannot
+/// rewrite.
 struct Forms {
     raw: Vec<u8>,
     clean: Option<Vec<u8>>,
+    unredactable: bool,
 }
 
 impl Forms {
     fn read(path: &[u8], rules: &Rules) -> Result<Self> {
         let raw = read_file(path)?;
-        let clean = redaction::redact(&raw, rules).data;
-        Ok(Self { raw, clean })
+        let redacted = redaction::redact(&raw, rules);
+        let unredactable = redacted.findings.iter().any(Finding::unredactable);
+        Ok(Self {
+            raw,
+            clean: redacted.data,
+            unredactable,
+        })
     }
 
     fn clean(&self) -> &[u8] {
@@ -257,6 +265,7 @@ pub fn archive_transcripts_with(
     let mut expected = Vec::with_capacity(inputs.len());
     let mut unredacted = Vec::with_capacity(inputs.len());
     let mut redacted = Vec::new();
+    let mut unredactable = Vec::new();
     let mut named: HashMap<Vec<u8>, &[u8]> = HashMap::new();
     for path in &inputs {
         let name = relpath(path, attempt_dir)?;
@@ -280,6 +289,9 @@ pub fn archive_transcripts_with(
         let mode = metadata.mode() & 0o7777;
         if forms.clean.is_some() {
             redacted.push(name.clone());
+        }
+        if forms.unredactable {
+            unredactable.push(name.clone());
         }
         unredacted.push(Member {
             name: name.clone(),
@@ -357,6 +369,7 @@ pub fn archive_transcripts_with(
         sha256: hash_file(&dest)?,
         passed,
         redacted: if legacy { Vec::new() } else { redacted },
+        unredactable,
     })
 }
 
@@ -515,6 +528,25 @@ mod tests {
         let again = attempt.archive(&Rules::fields()).unwrap();
         assert_eq!(again.sha256, archived.sha256);
         assert!(again.passed);
+    }
+
+    #[test]
+    fn a_transcript_redaction_cannot_rewrite_is_archived_as_it_is_and_named() {
+        let content = b"SQLite format 3\0 mail person@example.com".to_vec();
+        let attempt = Attempt::new("u-", &content);
+        let rules =
+            Rules::from_values(br#"{"schema_version": 1, "email": ["person@example.com"]}"#)
+                .unwrap();
+        let archived = attempt.archive(&rules).unwrap();
+        assert!(archived.passed);
+        assert_eq!(archived.unredactable, [b"home/s1.jsonl".to_vec()]);
+        assert_eq!(archived.redacted, Vec::<Vec<u8>>::new());
+        assert_eq!(attempt.member(), content);
+        let clean = Attempt::new("v-", b"{\"type\": \"user\"}\n");
+        assert_eq!(
+            clean.archive(&rules).unwrap().unredactable,
+            Vec::<Vec<u8>>::new()
+        );
     }
 
     #[test]

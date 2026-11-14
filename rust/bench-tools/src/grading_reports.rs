@@ -418,7 +418,8 @@ const EXCLUDED: [&str; 2] = [
 /// archive without one is never rewritten.
 ///
 /// Each member holds its file as [`redaction`] leaves it, under the rules of [`Rules::load`], and the receipt
-/// lists that member's hash. When redaction changed a member, the receipt says so under `redaction`.
+/// lists that member's hash. When redaction changed a member, or a member holds an identifier it cannot rewrite,
+/// the receipt says so under `redaction`.
 pub fn archive_attempt(root: &PyPath, attempt: &PyPath, archives: &PyPath) -> Result<Value> {
     let rules = Rules::load().map_err(|error| Failure::new("ValueError", error.0))?;
     archive_attempt_with(root, attempt, archives, &rules)
@@ -478,6 +479,7 @@ pub fn archive_attempt_with(
     let mut writer = PackageWriter::new(io::BufWriter::new(handle));
     let mut listed = Vec::with_capacity(members.len());
     let mut redacted = 0;
+    let mut unredactable = 0;
     for (path, name) in &members {
         let mut file = std::fs::File::open(path.to_path_buf())
             .map_err(|error| file_failure(&error, path.as_bytes()))?;
@@ -487,9 +489,10 @@ pub fn archive_attempt_with(
         let mut raw = Vec::new();
         file.read_to_end(&mut raw)
             .map_err(|error| file_failure(&error, path.as_bytes()))?;
-        let clean = redaction::redact(&raw, rules).data;
-        redacted += usize::from(clean.is_some());
-        let data = clean.as_deref().unwrap_or(&raw);
+        let found = redaction::redact(&raw, rules);
+        redacted += usize::from(found.data.is_some());
+        unredactable += usize::from(found.findings.iter().any(redaction::Finding::unredactable));
+        let data = found.data.as_deref().unwrap_or(&raw);
         writer
             .append(
                 name.as_bytes(),
@@ -515,15 +518,21 @@ pub fn archive_attempt_with(
             Value::Array(EXCLUDED.iter().map(|reason| text(reason)).collect()),
         ),
     ]);
-    if redacted > 0
+    let mut sentences = Vec::new();
+    if redacted > 0 {
+        sentences.push(format!(
+            "Account identifiers or machine names replaced in {redacted} of the archived files when the archive was written."
+        ));
+    }
+    if unredactable > 0 {
+        sentences.push(format!(
+            "Account identifiers or machine names that redaction cannot rewrite remain in {unredactable} of the archived files."
+        ));
+    }
+    if !sentences.is_empty()
         && let Value::Object(fields) = &mut saved
     {
-        fields.insert(
-            "redaction".to_string(),
-            text(&format!(
-                "Account identifiers or machine names replaced in {redacted} of the archived files when the archive was written."
-            )),
-        );
+        fields.insert("redaction".to_string(), text(&sentences.join(" ")));
     }
     let options = pyjson::Dumps {
         indent: Some(2),
@@ -1474,6 +1483,24 @@ mod tests {
             std::fs::read_to_string(attempt.join(name.as_bytes()).to_path_buf()).unwrap(),
             session
         );
+    }
+
+    #[test]
+    fn the_receipt_names_a_member_redaction_cannot_rewrite() {
+        let session = b"SQLite format 3\0 mail person@example.com".to_vec();
+        let (root, attempt) = attempt("");
+        let name = "work/home/.claude/projects/fixture/session.jsonl";
+        std::fs::write(attempt.join(name.as_bytes()).to_path_buf(), &session).unwrap();
+        let rules =
+            Rules::from_values(br#"{"schema_version": 1, "email": ["person@example.com"]}"#)
+                .unwrap();
+        let saved = archive_attempt_with(&root, &attempt, &root.join(b"archives"), &rules).unwrap();
+        let receipt = read(&join(&root, at(&saved, "path").unwrap()).unwrap()).unwrap();
+        assert_eq!(
+            at(&receipt, "redaction").unwrap().py_str(),
+            "Account identifiers or machine names that redaction cannot rewrite remain in 1 of the archived files."
+        );
+        assert_eq!(listed(&receipt, name), sha256::hex_digest(&session));
     }
 
     #[test]
