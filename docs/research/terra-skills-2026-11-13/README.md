@@ -205,7 +205,15 @@ The probe failed, so the queue was not started.
 - **Why:** `att-021` (`l-bokeh-9232`, replicate 2) launched with the Codex 5-hour window at 94%, under the queue's 95% stop. It hit the usage limit mid-review, and is diagnosed `transient-capacity` and replaced. Ten reviews had filled about 96% of one window, so one ce review uses roughly 9 to 10% of it.
 - **The rule:** before every launch, including a replacement, the controller refuses to launch while the 5-hour or the weekly window is at or above 85%. It waits for that window's reset instead.
 - **How:** it reads fresh meters through `bench-tools queue check`, which launches nothing.
-- **What it does not change:** the guard lives in the local controller scripts under `~/.t3/bench-runs-lanes/terra-ce-codex-bwrap/controller/` (`guard.py`, sha256 `d127e817…`). The queue's 95% `quota_stop_percent`, the committed queue file, the runner and the run's frozen inputs are unchanged.
+- **What it does not change:** the guard lives in the local controller scripts under `~/.t3/bench-runs-lanes/terra-ce-codex-bwrap/controller/` (`guard.py`, sha256 `d127e817…` for v1, `5b5a2f9e…` after it was pointed at v2). The queue's 95% `quota_stop_percent`, the committed queue file, the runner and the run's frozen inputs are unchanged.
+
+**Host restart and queue v2 (2026-11-14, coordinator for the owner, option 1).**
+
+- **What happened:** the host container restarted at 20:11:00 UTC, two minutes after launch-0032 dispatched `att-032` (`w-graphql-js-3457`, replicate 2). The restart killed the reviewer, the launcher, the controller and the waiter.
+- **Handling of `att-032`:** two `/proc` readings showed its processes gone, and it was filed as interrupted through the pinned `run-cell --file --interrupted`. [`host-restart.att-032.v1.json`](../../../bench/runs/2026-11-14-codex-ce-terra61-high-bwrap/deviations/host-restart.att-032.v1.json) diagnoses it as `harness-stop` for replacement. Its workspace is kept.
+- **Why v1 was blocked:** the restart kept the boot id and PID namespace but regenerated `/etc/machine-id`. `bench-tools queue recover` therefore treats launch-0032 as a launch on another host and refuses to settle it, and no command clears that record.
+- **The new queue file:** [`queue.codex-ce-bwrap-2026-11-14.v2.json`](queue.codex-ce-bwrap-2026-11-14.v2.json) is v1 with only `queue_id` changed, to `2026-11-14-terra-ce-codex-bwrap-v2`. The work root, clients, $57 ceiling, environment, runtime pin and 95% quota stop are unchanged, so filings and spend carry over from the run's work root. The controller, the 85% guard and the replace script now point at v2.
+- **v1 kept as it is:** v1's state, `~/.t3/bench-queues/2026-11-14-terra-ce-codex-bwrap/`, is kept untouched, with launch-0032 unresolved.
 
 ## Resume after the repository rename
 
