@@ -38,7 +38,8 @@ export function SetupName({ configuration, mark = true }: { configuration: Confi
 
 /** The second Overview panel: the refuted or unproven share, or cost when the first panel already measures refuted claims. */
 export const pairedAxis = (axis: Axis): Axis => axis === 'doubt' || axis === 'refuted' ? 'cost' : 'doubt'
-const shortAxis: Record<Axis, string> = { cost: 'Cost per trial', doubt: 'Refuted or unproven', refuted: 'Refuted per review', tokens: 'Output tokens', time: 'Median time' }
+const lowValueHeads: Record<Axis, string> = { cost: 'Cost', doubt: 'Share', refuted: 'Refuted', tokens: 'Tokens', time: 'Time' }
+const shortAxis: Record<Axis, string> = { cost: 'Cost per trial', doubt: 'Refuted or unproven', refuted: 'Refuted claims per review', tokens: 'Output tokens', time: 'Median time' }
 export const axisLabels: Record<Axis, string> = {
   cost: 'Cost per trial', tokens: 'Output tokens per trial', refuted: 'Refuted claims per review on matched PRs', doubt: 'Reviews with a refuted or unproven claim', time: 'Median time',
 }
@@ -147,7 +148,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
     {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={view === 'tradeoff' ? 'Found' : measure} axes={view === 'models' ? [] : view === 'tradeoff' ? [axis, pair] : [axis]} place={hovered} />}
     {view === 'tradeoff' && methodTops.size > 0 && <div className={lowsAreTops ? 'method-strip lows-are-tops' : 'method-strip'}>
       <div className="strip-row strip-head"><span>Review method</span><span>Top setup (most found)</span><span>Found</span><span><Glossed text={shortAxis[axis]} /></span><span><Glossed text={shortAxis[pair]} /></span><span className="strip-low strip-low-head"><span className="strip-low-title">Lowest {lowerFirst(shortAxis[axis])} in the method</span>
-        <span className="strip-low-model">Model</span><span className="strip-low-value">{axis === 'cost' ? 'Cost' : 'Value'}</span><span className="strip-low-found">Found</span></span></div>
+        <span className="strip-low-model">Model</span><span className="strip-low-value">{lowValueHeads[axis]}</span><span className="strip-low-found">Found</span></span></div>
       <ul aria-label="Each review method's top setup, from the method that finds the most">{[...methodTops].map(([method, top]) => {
         const { configuration } = top.summary, { model, effort } = setupParts(configuration)
         const second = metricOf(top.summary, pair), secondText = formatMetric(pair, second, top.starred, boundedOn(top.summary, pair), 0)
@@ -303,15 +304,17 @@ function Scatter({ points, dimensions, axis, scale, spotlight, marked, named, to
       return { left: x - 2, top: y - 2, right: x + 2, bottom: y + 2 }
     })
   }
+  const hint = `Higher detection, ${axis === 'doubt' ? 'fewer' : 'lower'} ${lowerFirst((width < 600 ? shortAxis : axisLabels)[axis])}`
   const obstacles = [
     ...ordered.map(point => ({ left: sx(point) - 10, top: py(point.y) - 10, right: sx(point) + 10, bottom: py(point.y) + 10 })),
     ...lines.flatMap(group => group.points.slice(1).flatMap((point, index) => along(group.points[index]!, point))),
+    ...(width ? [{ left: plot.left, top: plot.top, right: plot.left + 30 + textWidth(hint), bottom: plot.top + 30 }] : []),
   ]
   const request = (point: Plotted) => ({ id: point.summary.configuration.id, x: sx(point), y: py(point.y), width: textWidth(labelText(point.summary.configuration)), height: 16 })
   const bounds = { left: plot.left + 2, right: plot.right, top: 2, bottom: plot.bottom - 2 }
   const first = (point: Plotted) => point === markedPoint || spotlight !== null || !named || named.has(point.summary.configuration.id)
   const shown = ordered.filter(point => point !== markedPoint && !outside(point))
-  const leading = width ? placeLabels([...(markedPoint ? [markedPoint] : []), ...shown.filter(first)].map(request), obstacles, bounds, width < 600 ? [12, 22] : [12, 24, 36, 48]) : []
+  const leading = width ? placeLabels([...(markedPoint ? [markedPoint] : []), ...shown.filter(first)].map(request), obstacles, bounds, width < 600 ? [12, 22] : [12, 24, 36, 48, 60]) : []
   const alone = (point: Plotted) => ordered.every(other => other === point || Math.hypot(sx(other) - sx(point), py(other.y) - py(point.y)) > 24)
   const placed = width ? [...leading, ...placeLabels(shown.filter(point => !first(point) && alone(point)).map(request), [...obstacles, ...leading.map(label => label.box)], bounds, width < 600 ? [12, 20] : [12, 22, 34, 46])] : []
   const labels = markedPoint && width && !placed.some(label => label.id === marked)
@@ -327,7 +330,7 @@ function Scatter({ points, dimensions, axis, scale, spotlight, marked, named, to
       </linearGradient></defs>
       <rect x={plot.left} y={plot.top} width={plot.right - plot.left} height={plot.bottom - plot.top} fill={`url(#${corner})`} />
       <Axes plot={plot} axis={axis} scale={scale} xTicks={xTicks} px={px} py={py} height={height} yTitle={yTitle} scaleNote={width > 480} />
-      {scale.kind !== 'log' && zeros > 2 && width > 480 && <text x={px(0)} y={plot.bottom + 33} className="tick-label zero-count" textAnchor="middle">{setups(zeros)}</text>}
+      {scale.kind !== 'log' && zeros > 2 && width > 480 && <text x={px(0)} y={plot.bottom + 33} className="tick-label zero-count" textAnchor="middle">{setups(zeros)} at 0%</text>}
       {lines.map(group => <polyline key={group.key} points={group.points.map(point => `${sx(point)},${py(point.y)}`).join(' ')}
         className={[outside(group.points[0]!) ? 'method-line muted' : setupParts(group.points[0]!.summary.configuration).method === active ? 'method-line active' : 'method-line', group.points[0]!.summary.configuration.experimental ? 'experiment' : ''].join(' ').trim()} style={{ stroke: reviewColor(group.points[0]!.summary.configuration) }} />)}
       {labels.filter(label => label.leader).map(label => {
@@ -342,7 +345,7 @@ function Scatter({ points, dimensions, axis, scale, spotlight, marked, named, to
           className={label.id === marked ? 'point-label marked' : marked ? 'point-label dimmed' : 'point-label'} style={{ fill: `color-mix(in srgb, ${reviewColor(point.summary.configuration)} 45%, var(--ink))` }}>{labelText(point.summary.configuration)}</text>
       })}
     </svg>}
-    <span className="better-hint" style={{ left: plot.left + 10, top: plot.top + 8 }}><ArrowUpLeft size={13} aria-hidden="true" />Higher detection, {axis === 'doubt' ? 'fewer' : 'lower'} {lowerFirst((width < 600 ? shortAxis : axisLabels)[axis])}</span>
+    <span className="better-hint" style={{ left: plot.left + 10, top: plot.top + 8 }}><ArrowUpLeft size={13} aria-hidden="true" />{hint}</span>
   </div>
 }
 

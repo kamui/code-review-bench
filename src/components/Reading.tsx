@@ -182,6 +182,7 @@ export function DataTable<Row>({ label, rows, columns, rowKey, minWidth, empty =
   const numeric = columns.map((_, position) => position > 0 && column(position).every(cell => /^(≥ |At least )?[$\d.,/ %KM*+-]+$|^[\d.]+% to [\d.]+%$|^[\d.]+\s(s|min)(\sto\s[\d.]+\s(s|min))?$|^Unavailable$|^None$/.test(text(cell))))
   const shown = columns.flatMap((item, position) => constant[position] ? [] : [{ item, position }])
   const shared = columns.flatMap((item, position) => constant[position] ? [{ item, cell: cells[0]?.[position] ?? '' }] : [])
+  const barred = shown.find(({ position }) => position > 0 && cells.some(row => { const cell = row[position]; return typeof cell === 'object' && cell.fraction !== undefined }))?.position
   const groups = groupHeads(shown)
   const grouped = groups.some(({ group }) => group !== null)
   return <>
@@ -199,7 +200,7 @@ export function DataTable<Row>({ label, rows, columns, rowKey, minWidth, empty =
         const cell = cells[index]?.[position] ?? ''
         return position === 0 ? <Table.Th key={item.label} scope="row">{item.render ? item.render(row) : <Value cell={cell} notes={notes} />}</Table.Th>
           : <Table.Td key={item.label} data-label={item.label} data-numeric={numeric[position] || undefined}><Value cell={cell} notes={notes} />
-            {typeof cell !== 'string' && cell.fraction !== undefined && <span className="cell-bar" aria-hidden="true"><span style={{ width: `${cell.fraction * 100}%` }} /></span>}</Table.Td>
+            {position === barred && typeof cell !== 'string' && cell.fraction !== undefined && <span className="cell-bar" aria-hidden="true"><span style={{ width: `${cell.fraction * 100}%` }} /></span>}</Table.Td>
       })}</Table.Tr>)}</Table.Tbody>
     </Table></Table.ScrollContainer>
     <Notes notes={notes} />
