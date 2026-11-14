@@ -24,7 +24,7 @@ const card = (dataset: Dataset, id: string) => scorecard(dataset, id, { taskIds:
 const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory() })
 const markup = (dataset: Dataset, view: Page, search: ExplorerSearch = {}) => renderToStaticMarkup(<RouterContextProvider router={router}><MantineProvider>
   <Dashboard dataset={dataset} page={view} search={search} onSearch={() => {}} now={now} /></MantineProvider></RouterContextProvider>)
-const page = (dataset: Dataset) => text(`${markup(dataset, 'scorecard')} ${markup(dataset, 'tasks')}`)
+const page = (dataset: Dataset) => text(`${markup(dataset, 'scorecard', { dimension: 'table' })} ${markup(dataset, 'tasks')}`)
 
 function chart(dataset: Dataset, detection: DetectionView, view: 'setups' | 'tradeoff' | 'models' = 'setups', axis: 'cost' | 'refuted' = 'cost', omit: string[] = []) {
   const selected = dataset.configurations.filter(configuration => !configuration.experimental && !omit.includes(configuration.id))
@@ -50,7 +50,7 @@ describe('scorecard page on the fixture', () => {
   const rendered = `${page(fixture)} ${panels(fixture)}`
 
   test('shows both averages for every band, serious-caught rates and repeated serious misses without a blended score', () => {
-    for (const heading of ['Serious, equal problems', 'Serious, equal PRs', 'Other material, equal problems', 'Unknown impact, equal PRs', 'All references, equal problems',
+    for (const heading of ['Serious, per problem', 'Serious, per PR', 'Other material, per problem', 'Unknown impact, per PR', 'All references, per problem',
       'All labelled serious caught', 'Repeated serious misses']) expect(rendered).toContain(heading)
     expect(rendered).toContain('Approved references on the selected PRs: 3 serious · 3 other material · 3 unknown impact · 9 all references. 1 more awaits an eligibility ruling.')
     for (const retired of ['Findings score', 'findings score', '80%', 'Best tradeoff', 'Highest', 'Cheapest', 'Critical', 'leaderboard', 'Ranking'])
@@ -175,7 +175,7 @@ describe('scorecard page on the fixture', () => {
   })
 
   test('notes the CE peer once in the method list and on each CE overview and table row, and never for a built-in', () => {
-    const scorecardPage = text(markup(fixture, 'scorecard'))
+    const scorecardPage = text(markup(fixture, 'scorecard', { dimension: 'table' }))
     expect(scorecardPage).toContain('/ce-code-review')
     const ce = fixture.configurations.filter(configuration => configuration.method === 'ce-code-review')
     const overviewRows = ce.filter(configuration => !configuration.experimental).length
@@ -208,7 +208,7 @@ describe('pre-existing problems raised on the fixture', () => {
   })
 
   const fixture = preExistingScorecardFixture()
-  const columns = 'Setup Approved catalog Times raised Distinct problems raised Reviews that raised one Observed raised Reviews assessed / admitted Unresolved Pending candidates'
+  const columns = 'Setup Approved catalog Times raised Distinct problems raised Reviews that raised one Observed raised Reviews graded / usable Unresolved Pending candidates'
 
   test('gives each count separately for serious and for other-material problems', () => {
     const rendered = panels(fixture, ['payments', 'queue', 'docs', 'audited', 'empty'])
@@ -232,7 +232,7 @@ describe('pre-existing problems raised on the fixture', () => {
 
   test('the controls table says refuted or unproven', () => {
     const rendered = panels(fixture)
-    for (const heading of ['Admitted control reviews', 'Without a refuted or unproven claim', 'With a refuted or unproven claim', 'With an unresolved claim']) expect(rendered).toContain(heading)
+    for (const heading of ['Usable control reviews', 'Without a refuted or unproven claim', 'With a refuted or unproven claim', 'With an unresolved claim']) expect(rendered).toContain(heading)
     expect(rendered).not.toContain('refuted or unsupported')
   })
 })
@@ -343,7 +343,7 @@ describe('chart', () => {
     expect(whole).toContain("≥ $0.75 : 1 attempt's usage was only partly recorded.")
     expect(whole).toContain('≥ marks a lower bound where usage was only partly recorded')
     const setups = chart(dataset, { band: 'all', estimator: 'equalProblem' })
-    expect(setups).toContain('a Frontier unknown 100% ≥ $0.75 b On frontier 50% $1.00')
+    expect(setups).toContain('a None known finds more for less 100% ≥ $0.75 b None finds more for less 50% $1.00')
     expect(setups).toContain('Dashed marks A lower bound of cost per trial')
     expect(setups).not.toContain('No cost per trial for a')
   })

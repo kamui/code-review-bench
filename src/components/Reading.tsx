@@ -1,5 +1,5 @@
 import { Table, Text, Tooltip, VisuallyHidden } from '@mantine/core'
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { ChevronRight } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import type { Components } from 'react-markdown'
@@ -53,7 +53,7 @@ export const notesFor = (cells: Cell[]): Note[] => {
 
 // Each value's own count stays in its hover text; the shared note says the rest once.
 const unresolvedDetection = /^\d+ unresolved detection decisions? across \d+ reference problems? counts? as zero credit\./
-const unresolvedSummary = 'Unresolved detection decisions count as zero credit; point at or tap a value marked * for its count. They remain in the denominator; confirmed detections still count.'
+const unresolvedSummary = 'Unresolved detection decisions count as zero credit; point at or tap a marked value for its count. They remain in the denominator; confirmed detections still count.'
 
 export function Value({ cell, notes = [] }: { cell: Cell; notes?: Note[] }) {
   if (typeof cell === 'string') return cell
@@ -83,13 +83,13 @@ export const ChartGuide = ({ children, title = 'How to read this chart' }: { chi
 export const glossary: { term: string; definition: string; match?: RegExp }[] = [
   { term: 'Review setup', definition: 'A review method run on one model at one effort, with its client and settings.' },
   { term: 'Scheduled trial', definition: 'One planned run of a setup on a PR. Replacement attempts after an infrastructure failure stay inside it.', match: /schedul/i },
-  { term: 'Admitted review', definition: 'A trial whose last attempt delivered a usable review.', match: /admitted/i },
+  { term: 'Admitted review', definition: 'A trial whose last attempt delivered a usable review.', match: /admitted|usable/i },
   { term: 'Per review', definition: 'Per admitted review: only trials that delivered a usable review count.', match: /per review/i },
   { term: 'Known problem', definition: 'A reference problem: an accepted problem, backed by a saved ruling, that reviews are checked against. The set can be incomplete.' },
   { term: 'Candidate', definition: 'A problem a review reported that is not yet a reference. It earns no credit until a human rules on it.', match: /candidate/i },
   { term: 'Impact band', definition: 'Serious, other material, or unknown. Unknown is never treated as low impact.' },
   { term: 'Refuted or unproven', definition: 'Evidence contradicts a refuted claim. An unproven claim lacks the evidence to stand and is not proven false.', match: /refuted|unproven/i },
-  { term: 'Problems or PRs weighted equally', definition: 'Each reference problem counts the same, or each PR counts the same however many problems it has.', match: /weighted equally/i },
+  { term: 'Problems or PRs weighted equally', definition: 'Each reference problem counts the same, or each PR counts the same however many problems it has.', match: /weighted equally|per problem|per PR\b/i },
   { term: 'Matched PRs', definition: 'The selected PRs on which every selected setup has admitted, assessed reviews, so each setup is measured on the same PRs.', match: /matched PRs?/i },
   { term: 'Cross-model peer', definition: 'A second review by a model from another provider, which some skills can run. Off: the run used a single provider, so the skill ran without it.', match: /cross-model peer|peer off/i },
   { term: '≥ value', definition: 'A lower bound. Usage was only partly recorded, so the true value is at least this.' },
@@ -170,8 +170,8 @@ export const firstLine = (text: string) => text.trim().split('\n')[0]!.replace(/
 
 export const humanize = (slug: string) => slug.replace(/-/g, ' ').replace(/^./, letter => letter.toUpperCase())
 
-export function DataTable<Row>({ label, rows, columns, rowKey, minWidth, empty = 'No selected setup.', foldShared = true }: {
-  label: string; rows: Row[]; columns: Column<Row>[]; rowKey: (row: Row) => string; minWidth: number; empty?: string; foldShared?: boolean
+export function DataTable<Row>({ label, rows, columns, rowKey, minWidth, empty = 'No selected setup.', foldShared = true, tint }: {
+  label: string; rows: Row[]; columns: Column<Row>[]; rowKey: (row: Row) => string; minWidth: number; empty?: string; foldShared?: boolean; tint?: (row: Row) => string
 }) {
   const cells = rows.map(row => columns.map(column => column.value(row)))
   const notes = notesFor(cells.flat())
@@ -195,7 +195,7 @@ export function DataTable<Row>({ label, rows, columns, rowKey, minWidth, empty =
           : <Table.Th key={group} scope="colgroup" colSpan={members.length} className="group-head"><Glossed text={group} skip={termsIn(shown.slice(0, members[0]!.index).map(column => column.item.label))} /></Table.Th>)}</Table.Tr>
         <Table.Tr>{groups.flatMap(({ group, members }) => group === null ? [] : members.map(({ item, position, part }) => <Table.Th key={item.label} scope="col" data-numeric={numeric[position] || undefined}><span className="visually-hidden">{group}, </span>{part}</Table.Th>))}</Table.Tr>
       </> : <Table.Tr>{shown.map(({ item, position }, index) => <Table.Th key={item.label} scope="col" data-numeric={numeric[position] || undefined}><Glossed text={item.label} skip={termsIn(shown.slice(0, index).map(column => column.item.label))} /></Table.Th>)}</Table.Tr>}</Table.Thead>
-      <Table.Tbody>{rows.map((row, index) => <Table.Tr key={rowKey(row)}>{shown.map(({ item, position }) => {
+      <Table.Tbody>{rows.map((row, index) => <Table.Tr key={rowKey(row)} style={tint && { '--mark-color': tint(row) } as CSSProperties}>{shown.map(({ item, position }) => {
         const cell = cells[index]?.[position] ?? ''
         return position === 0 ? <Table.Th key={item.label} scope="row">{item.render ? item.render(row) : <Value cell={cell} notes={notes} />}</Table.Th>
           : <Table.Td key={item.label} data-label={item.label} data-numeric={numeric[position] || undefined}><Value cell={cell} notes={notes} />
@@ -206,7 +206,7 @@ export function DataTable<Row>({ label, rows, columns, rowKey, minWidth, empty =
   </>
 }
 
-/** Neighbouring headings such as "Serious, equal problems" and "Serious, equal PRs" share one spanning heading. */
+/** Neighbouring headings such as "Serious, per problem" and "Serious, per PR" share one spanning heading. */
 function groupHeads<Item extends { item: { label: string }; position: number }>(shown: Item[]) {
   const groups: { group: string | null; members: (Item & { index: number; part: string })[] }[] = []
   shown.forEach((column, index) => {

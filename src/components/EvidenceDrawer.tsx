@@ -110,24 +110,7 @@ function InspectionBody({ dataset, results, band, estimator, configuration, task
           {error && <Alert color="red">{error}</Alert>}
           {attempt && <ReviewSummary attempt={attempt} />}
           {attempt && !detail && !error && <Loader size="sm" />}
-          {detail && <><Paper withBorder p="md" radius="md"><Stack gap="xs">
-            <Text size="sm" fw={700}>Observed review harness</Text>
-            <Text size="sm">{detail.record.observed.harness} {detail.record.observed.cli_version}</Text>
-            <Text size="sm">Models: {detail.record.observed.models.join(', ')} · Effort: {detail.record.observed.effort ?? 'Not reported'}</Text>
-            <Text size="xs" c="dimmed">Prompt identity: {detail.record.observed.prompt_registry_match ?? 'No registry match recorded'}</Text>
-            {detail.record.observed.prompt_hash ? <HashLine label="Prompt hash" value={detail.record.observed.prompt_hash} /> : <Text size="xs" c="dimmed">Prompt hash unavailable</Text>}
-            {detail.record.observed.skill_tree && <HashLine label="Skill tree revision" value={detail.record.observed.skill_tree} />}
-            <Text size="xs" c="dimmed">Subagents: {detail.record.observed.subagent_count} · Client-reported sandbox: {detail.record.observed.sandbox ?? 'Not reported'}</Text>
-          </Stack></Paper><Group gap="xs">
-            <Button component="a" href={detail.recordUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileJson size={14} />}>Attempt record</Button>
-            {detail.billingCorrectionUrl && <Button component="a" href={detail.billingCorrectionUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Billing correction</Button>}
-            {detail.usageCorrectionUrl && <Button component="a" href={detail.usageCorrectionUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileClock size={14} />}>Usage lower bound</Button>}
-            {detail.normalizedUrl && <Button component="a" href={detail.normalizedUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileCode size={14} />}>Review JSON</Button>}
-            {detail.assessment.receiptUrl && <Button component="a" href={detail.assessment.receiptUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileCheck2 size={14} />}>Current assessment receipt</Button>}
-            {detail.assessment.verdictsUrl && <Button component="a" href={detail.assessment.verdictsUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileSearch size={14} />}>Assessor verdicts</Button>}
-            {detail.archiveUrl && <Button component="a" href={detail.archiveUrl} download variant="subtle" size="xs" leftSection={<Download size={14} />}>Raw transcript</Button>}
-          </Group>
-            {!detail.archiveUrl && <Text size="xs" c="dimmed">Transcript archive: {detail.archiveStatus}. No verified download is available.</Text>}
+          {detail && <>            {!detail.archiveUrl && <Text size="xs" c="dimmed">Transcript archive: {detail.archiveStatus}. No verified download is available.</Text>}
             {detail.assessment.state === 'unassessed' && <Text size="xs" c="dimmed">No current assessment is saved for this review, so its claims have no outcome yet.</Text>}
             {!detail.items.length && <Alert color="gray">{attempt?.admitted
               ? 'This review reported no findings. An empty review does not establish that the change is free of problems.'
@@ -152,6 +135,23 @@ function InspectionBody({ dataset, results, band, estimator, configuration, task
                 <Text size="sm"><strong>Fix suggestion: </strong>{item.proposedFix ? <Rich text={item.proposedFix} /> : 'No separate suggestion captured. The assessment may discuss a remedy embedded in the finding.'}</Text>
                 <Badge variant="outline" color="gray" size="sm" radius="sm">Fix sufficiency: {humanize(item.fixSufficiency)}</Badge>
               </Stack></Accordion.Panel></Accordion.Item>)}</Accordion>
+            <Disclosure title="How this review was run"><Paper withBorder p="md" radius="md" mt="sm"><Stack gap="xs">
+            <Text size="sm" fw={700}>Observed review harness</Text>
+            <Text size="sm">{detail.record.observed.harness} {detail.record.observed.cli_version}</Text>
+            <Text size="sm">Models: {detail.record.observed.models.join(', ')} · Effort: {detail.record.observed.effort ?? 'Not reported'}</Text>
+            <Text size="xs" c="dimmed">Prompt identity: {detail.record.observed.prompt_registry_match ?? 'No registry match recorded'}</Text>
+            {detail.record.observed.prompt_hash ? <HashLine label="Prompt hash" value={detail.record.observed.prompt_hash} /> : <Text size="xs" c="dimmed">Prompt hash unavailable</Text>}
+            {detail.record.observed.skill_tree && <HashLine label="Skill tree revision" value={detail.record.observed.skill_tree} />}
+            <Text size="xs" c="dimmed">Subagents: {detail.record.observed.subagent_count} · Client-reported sandbox: {detail.record.observed.sandbox ?? 'Not reported'}</Text>
+          </Stack></Paper></Disclosure><Group gap="xs">
+            <Button component="a" href={detail.recordUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileJson size={14} />}>Attempt record</Button>
+            {detail.billingCorrectionUrl && <Button component="a" href={detail.billingCorrectionUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Billing correction</Button>}
+            {detail.usageCorrectionUrl && <Button component="a" href={detail.usageCorrectionUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileClock size={14} />}>Usage lower bound</Button>}
+            {detail.normalizedUrl && <Button component="a" href={detail.normalizedUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileCode size={14} />}>Review JSON</Button>}
+            {detail.assessment.receiptUrl && <Button component="a" href={detail.assessment.receiptUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileCheck2 size={14} />}>Current assessment receipt</Button>}
+            {detail.assessment.verdictsUrl && <Button component="a" href={detail.assessment.verdictsUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileSearch size={14} />}>Assessor verdicts</Button>}
+            {detail.archiveUrl && <Button component="a" href={detail.archiveUrl} download variant="subtle" size="xs" leftSection={<Download size={14} />}>Raw transcript</Button>}
+          </Group>
           </>}
         </Stack>
       </Tabs.Panel>
@@ -247,7 +247,7 @@ function ReviewSummary({ attempt }: { attempt: Attempt }) {
     <Badge color={attempt.complete ? 'teal' : 'orange'} variant="light">{attempt.complete ? 'Completed' : attempt.admitted ? 'Incomplete coverage' : 'Stopped / invalid'}</Badge>
     <Text size="sm">{attempt.cost === null && attempt.costLowerBound !== null ? `≥ ${money(attempt.costLowerBound)}` : money(attempt.cost)}{attempt.billing === 'list-price-equivalent' ? ' list-price equivalent' : ''} · {attempt.outputTokens === null && attempt.outputTokensLowerBound !== null ? `≥ ${compact(attempt.outputTokensLowerBound)}` : compact(attempt.outputTokens)} output tokens</Text>
   </Group><Text size="sm" mt="sm">{!facts ? 'Current claim and remedy judgments are unavailable.'
-    : `${facts.caught} reference ${facts.caught === 1 ? 'problem' : 'problems'} found · ${facts.outcomes.refuted.distinct} refuted and ${facts.outcomes.unsupported.distinct} unsupported claims · ${facts.outcomes.inconsequential.distinct} non-material observations`}</Text>
+    : `${facts.caught} of the PR's known problems found · ${facts.outcomes.refuted.distinct} refuted and ${facts.outcomes.unsupported.distinct} unproven claims · ${facts.outcomes.inconsequential.distinct} non-material observations`}</Text>
     {attempt.predecessor && <Text size="xs" c="dimmed" mt="xs">Replacement for {attempt.predecessor}. Trial costs include the original attempt.</Text>}
   </Paper>
 }
