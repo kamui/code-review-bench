@@ -24,7 +24,7 @@ const card = (dataset: Dataset, id: string) => scorecard(dataset, id, { taskIds:
 const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory() })
 const markup = (dataset: Dataset, view: Page, search: ExplorerSearch = {}) => renderToStaticMarkup(<RouterContextProvider router={router}><MantineProvider>
   <Dashboard dataset={dataset} page={view} search={search} onSearch={() => {}} now={now} /></MantineProvider></RouterContextProvider>)
-const page = (dataset: Dataset) => text(`${markup(dataset, 'scorecard')} ${markup(dataset, 'tasks')}`)
+const page = (dataset: Dataset) => text(`${markup(dataset, 'scorecard', { dimension: 'table' })} ${markup(dataset, 'tasks')}`)
 
 function chart(dataset: Dataset, detection: DetectionView, view: 'setups' | 'tradeoff' | 'models' = 'setups', axis: 'cost' | 'refuted' = 'cost', omit: string[] = []) {
   const selected = dataset.configurations.filter(configuration => !configuration.experimental && !omit.includes(configuration.id))
@@ -175,7 +175,7 @@ describe('scorecard page on the fixture', () => {
   })
 
   test('notes the CE peer once in the method list and on each CE overview and table row, and never for a built-in', () => {
-    const scorecardPage = text(markup(fixture, 'scorecard'))
+    const scorecardPage = text(markup(fixture, 'scorecard', { dimension: 'table' }))
     expect(scorecardPage).toContain('/ce-code-review')
     const ce = fixture.configurations.filter(configuration => configuration.method === 'ce-code-review')
     const overviewRows = ce.filter(configuration => !configuration.experimental).length

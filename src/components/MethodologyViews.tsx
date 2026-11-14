@@ -31,8 +31,8 @@ function harm(card: Scorecard): Reading {
   return { text: 'Unavailable', reason: bound.kind === 'observed' ? `${unsafe} unsafe among ${safe + unsafe} assessed remedies so far. ${bound.reason}` : bound.reason }
 }
 
-export function MethodologyViews({ dataset, configurations, cards, selection, detection, now, onInspect, tab, onTab }: {
-  dataset: Dataset; configurations: Configuration[]; cards: Scorecard[]; selection: Selection; detection: DetectionView; now: Date
+export function MethodologyViews({ fullTable, dataset, configurations, cards, selection, detection, now, onInspect, tab, onTab }: {
+  fullTable?: ReactNode; dataset: Dataset; configurations: Configuration[]; cards: Scorecard[]; selection: Selection; detection: DetectionView; now: Date
   onInspect: (inspection: Inspection, section?: Section) => void; tab: ScorecardTab; onTab: (tab: ScorecardTab) => void
 }) {
   const tabList = useRef<HTMLDivElement>(null)
@@ -90,7 +90,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
     { group: 'What it finds', tabs: [{ value: 'detection', label: 'Detection' }, { value: 'misses', label: 'Serious misses' }, { value: 'pre-existing', label: 'Pre-existing problems' }] },
     { group: 'How right it is', tabs: [{ value: 'reliability', label: 'Claim reliability' }, { value: 'remedies', label: 'Remedies' }, { value: 'advice', label: 'Advice benefit' }, { value: 'controls', label: 'Controls' }] },
     { group: 'What it takes', tabs: [{ value: 'delivery', label: 'Delivery' }, { value: 'usage', label: 'Cost and time' }] },
-    { group: 'Tools', tabs: [{ value: 'candidates', label: `Pending candidates (${novel.length + awaiting.length})` }, { value: 'comparison', label: 'Compare setups' }] },
+    { group: 'Tools', tabs: [{ value: 'candidates', label: `Pending candidates (${novel.length + awaiting.length})` }, { value: 'comparison', label: 'Compare setups' }, { value: 'table', label: 'Full table' }] },
   ]
   return <Paper withBorder radius="lg" className="methodology-panel" id="dimensions">
     <div className="dimension-head"><Title order={3}>Each measure in detail</Title>
@@ -102,6 +102,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
         {groups.flatMap((group, groupIndex) => group.tabs.map((item, index) => <Tabs.Tab key={item.value} value={item.value} data-group={index === 0 ? group.group : undefined}
           className={index > 0 || groupIndex === 0 ? undefined : group.group === 'Tools' ? 'tab-group-start tab-tools-start' : 'tab-group-start'}>{item.label}</Tabs.Tab>))}</Tabs.List>
 
+      <Tabs.Panel value="table">{fullTable}</Tabs.Panel>
       <Tabs.Panel value="detection" ><Stack>
         <TabIntro lede="How many known problems each setup caught, averaged over its repeated runs on each PR.">Recovery of each reference problem is averaged over the PR's scheduled trials; a resolved trial without an admitted review counts as not caught. Unresolved recoveries also receive zero credit and stay in the denominator, with an annotation counting affected problems and detection decisions. Both averages are shown. Problems weighted equally is the primary average for the serious and other-material bands; the unknown and all-reference bands have no preferred average. A serious reference is one the implementer had to be made aware of before release. An other-material reference earns credit when a review raises it but did not have to be raised.</TabIntro>
         <Text size="sm">Approved references on the selected PRs: {bands.map(item => `${coverage.bands[item]} ${bandLabels[item].toLowerCase()}`).join(' · ')}. {coverage.pendingFamilies} more {coverage.pendingFamilies === 1 ? 'awaits' : 'await'} an eligibility ruling.</Text>

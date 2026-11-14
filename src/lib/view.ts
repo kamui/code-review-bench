@@ -4,7 +4,7 @@ import { bands, estimators } from './scoring'
 
 export const chartViews = ['overview', 'skills', 'setups', 'models'] as const
 export const axes = ['cost', 'doubt', 'refuted', 'tokens', 'time'] as const
-export const scorecardTabs = ['detection', 'misses', 'delivery', 'reliability', 'remedies', 'controls', 'pre-existing', 'advice', 'usage', 'candidates', 'comparison'] as const
+export const scorecardTabs = ['detection', 'misses', 'delivery', 'reliability', 'remedies', 'controls', 'pre-existing', 'advice', 'usage', 'candidates', 'comparison', 'table'] as const
 export const drawerTabs = ['reviews', 'references', 'coverage'] as const
 export type ScorecardTab = (typeof scorecardTabs)[number]
 export type DrawerTab = (typeof drawerTabs)[number]

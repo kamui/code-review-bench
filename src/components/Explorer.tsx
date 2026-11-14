@@ -240,7 +240,7 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
             <div className="refine-controls">
               <Popover position="bottom-start" width={340} withArrow arrowPosition="side" trapFocus returnFocus>
                 <Popover.Target><Button variant="default" size="xs" className="refine-button" leftSection={<SlidersHorizontal size={14} aria-hidden="true" />} rightSection={<ChevronDown size={14} aria-hidden="true" />}>Review setups ({configurations.filter(item => selected.includes(item.id)).length}/{configurations.length})</Button></Popover.Target>
-                <Popover.Dropdown className="refine-dropdown" style={{ maxHeight: '70vh', overflowY: 'auto', maxWidth: 'calc(100vw - 24px)' }}><Stack gap="sm">
+                <Popover.Dropdown className="refine-dropdown" style={{ maxHeight: 'min(70vh, 520px)', overflowY: 'auto', maxWidth: 'calc(100vw - 24px)' }}><Stack gap="sm">
                   <Group justify="space-between"><Text size="xs" fw={700}>Review setups</Text><Group gap="xs">
                     <Button variant="subtle" size="compact-xs" className="popover-action" onClick={() => setSelected(configurations.map(item => item.id))}>Select all</Button>
                     <Button variant="subtle" size="compact-xs" className="popover-action" onClick={() => setSelected([])}>Clear all</Button>
@@ -283,9 +283,8 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
               {differing.length > 0 && <li>Setups also differ in {differing.join(', ')}, so a gap between two setups includes those. Compare setups, below, lists the values.</li>}</ul></Disclosure></div>
           </div>
         </Paper>
-        <header className="subsection-head" id="review-setups"><Title order={3}>All review setups</Title>
-        <Text className="subsection-lede">Lists every setup, skill experiments included, whatever the selection above. Same {shared.length} comparison PRs as the chart, in the {bandLabels[band].toLowerCase()} band. Rows start with the most found, problems weighted equally; a column heading sorts by that one measure only.</Text></header>
-        <details className="results-disclosure"><summary><ChevronRight className="chevron" size={16} aria-hidden="true" />Show every measure for all {tableRows.length} setups{tableRows.length > summaries.length && `, ${summaries.length} of them selected`}<span className="summary-hint">Sortable table</span></summary>
+        <MethodologyViews fullTable={<div id="review-setups" className="full-table">
+        <Text className="subsection-lede">Every measure for all {tableRows.length} setups, skill experiments included, whatever the selection above. Same {shared.length} comparison PRs as the chart, in the {bandLabels[band].toLowerCase()} band. Rows start with the most found, problems weighted equally; a column heading sorts by that one measure only.</Text>
         <div className="table-frame"><Table.ScrollContainer minWidth={1050}><Table verticalSpacing={6} horizontalSpacing="xs" className="leaderboard-table" aria-label="All review setup results">
           <Table.Thead><Table.Tr>{resultsColumns.map(column => <Table.Th key={column.key} data-numeric={column.key !== 'setup' || undefined} aria-sort={sort.column === column.key ? sort.direction : 'none'}>
             <button className="text-button sort-heading" onClick={() => setSort(current => ({ column: column.key, direction: current.column === column.key && current.direction === 'ascending' ? 'descending' : 'ascending' }))}>
@@ -306,8 +305,7 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
         {!shared.length && <Text ta="center" c="dimmed" py="xl">No PR is shared by the selected standard setups with these filters.</Text>}
         <Text size="xs" c="dimmed" mt="sm" className="footnote">Cost and output tokens add every attempt, retries included, and divide by scheduled trials. ≥ marks a lower bound where usage was only partly recorded; hover it for the count. {costNote(tableShown)} Output includes reasoning and subagents. Refuted claims and proposed fixes never change detection.</Text>
         <Text size="sm" mt="sm"><Anchor href="https://github.com/kamui/code-review-bench/blob/main/docs/research/skill-matrix-2026-10-02/README.md#time-and-cost" target="_blank" rel="noreferrer">October 2 time and cost report</Anchor> · Per-setup and per-task totals, including failed attempts and held runs, with grading listed separately. This report covers a fixed batch.</Text>
-        </details>
-        <MethodologyViews dataset={dataset} configurations={configurations.filter(c => activeIds.includes(c.id))} cards={board.cards} selection={board.selection} detection={detection} now={now} onInspect={inspect('dimensions')}
+          </div>} dataset={dataset} configurations={configurations.filter(c => activeIds.includes(c.id))} cards={board.cards} selection={board.selection} detection={detection} now={now} onInspect={inspect('dimensions')}
           tab={search.dimension ?? 'detection'} onTab={tab => onSearch({ dimension: unlessDefault(tab, 'detection') }, 'dimensions')} />
       </section></>}
 
