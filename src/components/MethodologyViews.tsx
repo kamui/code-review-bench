@@ -10,7 +10,7 @@ import type { ConditionalMetric, Estimator, PreExistingLabel, Scorecard, Selecti
 import { scorecardTabs } from '../lib/view'
 import type { Inspection, ScorecardTab, Section } from '../lib/view'
 import { ClaimLabels } from './ClaimLabels'
-import { SetupName, setupLabel, setupParts } from './Chart'
+import { reviewColor, SetupName, setupLabel, setupParts } from './Chart'
 import { costNote, costText, DataTable, Disclosure, Referenced, Rich, Value } from './Reading'
 import { SeriousMisses } from './SeriousMisses'
 import type { Column } from './Reading'
@@ -53,6 +53,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
   const rows = overviewOrder(byName, row => ({ name: row.configuration.short, card: row.card }), { column: 'detection', direction: 'descending' }, band, estimator)
   type Row = (typeof rows)[number]
   const key = (row: Row) => row.configuration.id
+  const tint = (row: Row) => reviewColor(row.configuration)
   const setup: Column<Row> = { label: 'Setup', value: row => row.configuration.short, render: row => <SetupName configuration={row.configuration} /> }
   const short = (id: string) => {
     const configuration = configurations.find(item => item.id === id)
@@ -80,7 +81,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
   const scope = band === 'all' ? 'any' : bandLabels[band].toLowerCase()
   const recommendation = (label: string, result: NonNullable<typeof advice>['impact']) => <Text size="sm">{label}: {result.kind === 'none' ? 'none'
     : `${result.kind}, ${result.prefer ? `prefers ${short(result.prefer)}` : 'no preference'}`}{result.reasons.length > 0 && `. ${result.reasons.join(' ')}`}</Text>
-  const adviceTable = <DataTable label="Supported advice benefit, sampled" rows={rows} rowKey={key} minWidth={900} columns={[setup,
+  const adviceTable = <DataTable label="Supported advice benefit, sampled" rows={rows} rowKey={key} tint={tint} minWidth={900} columns={[setup,
     { label: 'Sampled: benefit supported', value: row => String(row.card.advice.supported) }, { label: 'Sampled: benefit unsupported', value: row => String(row.card.advice.unsupported) },
     { label: 'Sampled: unresolved', value: row => String(row.card.advice.unresolved) },
     { label: 'Reviews sampled / admitted', value: row => `${row.card.advice.sampledReviews} / ${row.card.advice.admitted}` },
@@ -105,7 +106,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
         <TabIntro lede="How many known problems each setup caught, averaged over its repeated runs on each PR.">Recovery of each reference problem is averaged over the PR's scheduled trials; a resolved trial without an admitted review counts as not caught. Unresolved recoveries also receive zero credit and stay in the denominator, with an annotation counting affected problems and detection decisions. Both averages are shown. Problems weighted equally is the primary average for the serious and other-material bands; the unknown and all-reference bands have no preferred average. A serious reference is one the implementer had to be made aware of before release. An other-material reference earns credit when a review raises it but did not have to be raised.</TabIntro>
         <Text size="sm">Approved references on the selected PRs: {bands.map(item => `${coverage.bands[item]} ${bandLabels[item].toLowerCase()}`).join(' · ')}. {coverage.pendingFamilies} more {coverage.pendingFamilies === 1 ? 'awaits' : 'await'} an eligibility ruling.</Text>
         <Title order={4}>Detection by impact band and average</Title>
-        <DataTable label="Detection by impact band and average" rows={rows} rowKey={key} minWidth={1120} columns={[setup,
+        <DataTable label="Detection by impact band and average" rows={rows} rowKey={key} tint={tint} minWidth={1120} columns={[setup,
           ...bands.flatMap(item => estimators.map((average): Column<Row> => ({ label: `${bandLabels[item]}, ${averages[average]}`, value: row => share(row.card.detection[item][average], row.card.detection[item].zeroCredit.reason) }))),
           { label: 'All labelled serious caught', value: row => share(row.card.seriousCaught.equalPr, row.card.detection.serious.zeroCredit.reason) },
           { label: 'Repeated serious misses', value: row => reading(row.card.seriousMisses.repeated, String) }]} />
@@ -113,7 +114,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
         {conflicts.length > 0 && <Disclosure title={`The two averages order ${conflicts.length === 1 ? 'one pair' : `${conflicts.length} pairs`} of setups differently`}>
           <Text size="sm" mb={8}>In the {bandLabels[band].toLowerCase()} band, which of these setups finds more depends on the average chosen.</Text>
           <ul className="pair-list">{conflicts.map(pair => <li key={`${pair.a}/${pair.b}`}>{short(pair.a)}<ArrowLeftRight size={14} aria-label="and" />{short(pair.b)}</li>)}</ul></Disclosure>}
-        <Disclosure title={`Counts behind ${lowerFirst(foundLabels[band])}`}><DataTable label={`Counts behind ${lowerFirst(foundLabels[band])}`} rows={rows} rowKey={key} minWidth={1000} columns={[setup,
+        <Disclosure title={`Counts behind ${lowerFirst(foundLabels[band])}`}><DataTable label={`Counts behind ${lowerFirst(foundLabels[band])}`} rows={rows} rowKey={key} tint={tint} minWidth={1000} columns={[setup,
           { label: 'Problems / PRs with one', value: row => `${row.card.detection[band].problems} / ${row.card.detection[band].prs}` },
           { label: 'Observed caught / determined', value: row => `${row.card.detection[band].observed.caught} / ${row.card.detection[band].observed.determined}` },
           { label: 'Admitted reviews / scheduled trials', value: row => `${row.card.detection[band].admittedOnly.admittedReviews} / ${row.card.detection[band].admittedOnly.scheduledTrials}` },
@@ -131,7 +132,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
 
       <Tabs.Panel value="delivery" ><Stack>
         <TabIntro lede="Whether each planned run produced a usable review, and how many attempts that took.">A scheduled trial is one planned repetition on a PR. It is admitted when its last attempt delivered a usable review, failed when it resolved without one, and pending while a replacement is owed. Replaced attempts stay in the counts and in the cost.</TabIntro>
-        <DataTable label="Delivery and completion" rows={rows} rowKey={key} minWidth={1150} columns={[setup,
+        <DataTable label="Delivery and completion" rows={rows} rowKey={key} tint={tint} minWidth={1150} columns={[setup,
           { label: 'PRs run / selected', value: row => `${row.card.coverage.ran} / ${row.card.coverage.selected}` },
           { label: 'Scheduled trials', value: row => String(row.card.delivery.scheduled) }, { label: 'Admitted', value: row => String(row.card.delivery.admitted) },
           { label: 'Reported complete', value: row => String(row.card.delivery.complete) }, { label: 'Failed', value: row => String(row.card.delivery.unadmitted) },
@@ -143,7 +144,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
       <Tabs.Panel value="reliability" ><Stack>
         <TabIntro lede="How often a delivered review made a claim that was wrong or not shown to be right.">Rates divide distinct claims by admitted reviews, the denominator shown beside them. Unsupported claims are not proven false. A setup with no admitted review has no rate: silence from a failed trial is not reliability. Rates stay unavailable while a trial is pending or an admitted review awaits assessment.</TabIntro>
         <Title order={4}>Claim outcomes per review</Title>
-        <DataTable label="Claim outcomes per review" rows={rows} rowKey={key} minWidth={1300} columns={[setup,
+        <DataTable label="Claim outcomes per review" rows={rows} rowKey={key} tint={tint} minWidth={1300} columns={[setup,
           { label: 'Admitted / scheduled', value: row => `${row.card.delivery.admitted} / ${row.card.delivery.scheduled}` },
           { label: 'Assessed / admitted', value: row => `${row.card.reliability.assessed} / ${row.card.reliability.admitted}` },
           { label: 'Per review, items', value: row => perReview(row.card.reliability.itemsPerAdmittedReview) },
@@ -175,7 +176,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
 
       <Tabs.Panel value="remedies" ><Stack>
         <TabIntro lede="Whether proposed fixes would solve their problem, and whether applying them would do harm.">Sufficiency asks whether a recommendation resolves the problem it addresses; safety asks, independently, whether applying it does harm. New first-grader assessments check safety only for sufficient or partial fixes; the second grader omits safety. Historical assessments retain their original coverage. A recommendation without a safety assessment is unassessed, never safe. The assessed subset is selected for usefulness, so its unsafe share does not describe all advice. Only when admission is final and no trial is pending are unsafe recommendations per admitted review a lower bound, because unassessed ones could add to it. Pending cohorts show observed counts and assessed exposure without a final-cohort bound.</TabIntro>
-        <DataTable label="Remedy sufficiency and safety" rows={rows} rowKey={key} minWidth={1250} columns={[setup,
+        <DataTable label="Remedy sufficiency and safety" rows={rows} rowKey={key} tint={tint} minWidth={1250} columns={[setup,
           { label: 'Inventoried / admitted reviews', value: row => `${row.card.remedies.inventoried} / ${row.card.remedies.admitted}` },
           { label: 'Recommendations', value: row => String(row.card.remedies.recommendations) }, { label: 'Safety, assessed safe', value: row => String(row.card.remedies.safe) },
           { label: 'Safety, assessed unsafe', value: row => String(row.card.remedies.unsafe) }, { label: 'Safety, unassessed', value: row => String(row.card.remedies.unassessed) },
@@ -191,7 +192,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
         <TabIntro lede="How often reviews raised known problems that were already in the code before the PR.">An approved pre-existing problem counts as raised once for each admitted review that says what goes wrong. Silence creates no miss. Each count is given separately for serious and for other-material pre-existing problems. These counts do not change recall or recommendations.</TabIntro>
         {preExistingLabels.map(label => <Stack key={label}>
           <Title order={4}>{bandLabels[label]} pre-existing problems</Title>
-          <DataTable label={`${bandLabels[label]} pre-existing problems raised`} rows={rows} rowKey={key} minWidth={1150} foldShared={false} columns={[setup,
+          <DataTable label={`${bandLabels[label]} pre-existing problems raised`} rows={rows} rowKey={key} tint={tint} minWidth={1150} foldShared={false} columns={[setup,
             { label: 'Approved catalog', value: row => String(row.card.preExisting.labels[label].catalog) },
             { label: 'Times raised', value: row => reading(row.card.preExisting.labels[label].raised, String) },
             { label: 'Distinct problems raised', value: row => reading(row.card.preExisting.labels[label].problems, String) },
@@ -207,7 +208,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
 
       <Tabs.Panel value="controls" ><Stack>
         <TabIntro lede="How often reviews stayed quiet on PRs audited to have no problems.">Only an independently audited clean control gets a correct-silence percentage, over the reviews that were delivered. An empty reference list is not an audit, and a failed trial is missing output, not silence.</TabIntro>
-        <DataTable label="Audited controls" rows={rows} rowKey={key} minWidth={1150} columns={[setup,
+        <DataTable label="Audited controls" rows={rows} rowKey={key} tint={tint} minWidth={1150} columns={[setup,
           { label: 'Audited controls', value: row => String(row.card.controls.audited) }, { label: 'Admitted control reviews', value: row => String(row.card.controls.admitted) },
           { label: 'Without a refuted or unproven claim', value: row => share(row.card.controls.cleanFraction) },
           { label: 'With a refuted or unproven claim', value: row => String(row.card.controls.alarmed) }, { label: 'With an unresolved claim', value: row => String(row.card.controls.unresolved) },
@@ -228,7 +229,7 @@ export function MethodologyViews({ dataset, configurations, cards, selection, de
 
       <Tabs.Panel value="usage" ><Stack>
         <TabIntro lede="What each scheduled trial cost in money, output tokens and time.">Cost and output tokens add every attempt, retries included, and divide by scheduled trials. Time covers completed trials only and includes their replaced attempts; it excludes gaps between attempts, provisioning and grading.</TabIntro>
-        <DataTable label="Cost and time" rows={rows} rowKey={key} minWidth={1250} columns={[setup,
+        <DataTable label="Cost and time" rows={rows} rowKey={key} tint={tint} minWidth={1250} columns={[setup,
           { label: 'Cost per scheduled trial', value: row => reading(row.card.cost.perTrial, costText(row.configuration, rows.map(item => item.configuration))) },
           { label: 'Output tokens per scheduled trial', value: row => reading(row.card.tokens.perTrial, compact) },
           { label: 'Attempts with usage / attempts', value: row => `${row.card.cost.measuredAttempts} / ${row.card.cost.attempts}` },

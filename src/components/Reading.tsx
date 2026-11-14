@@ -1,5 +1,5 @@
 import { Table, Text, Tooltip, VisuallyHidden } from '@mantine/core'
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { ChevronRight } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import type { Components } from 'react-markdown'
@@ -170,8 +170,8 @@ export const firstLine = (text: string) => text.trim().split('\n')[0]!.replace(/
 
 export const humanize = (slug: string) => slug.replace(/-/g, ' ').replace(/^./, letter => letter.toUpperCase())
 
-export function DataTable<Row>({ label, rows, columns, rowKey, minWidth, empty = 'No selected setup.', foldShared = true }: {
-  label: string; rows: Row[]; columns: Column<Row>[]; rowKey: (row: Row) => string; minWidth: number; empty?: string; foldShared?: boolean
+export function DataTable<Row>({ label, rows, columns, rowKey, minWidth, empty = 'No selected setup.', foldShared = true, tint }: {
+  label: string; rows: Row[]; columns: Column<Row>[]; rowKey: (row: Row) => string; minWidth: number; empty?: string; foldShared?: boolean; tint?: (row: Row) => string
 }) {
   const cells = rows.map(row => columns.map(column => column.value(row)))
   const notes = notesFor(cells.flat())
@@ -195,7 +195,7 @@ export function DataTable<Row>({ label, rows, columns, rowKey, minWidth, empty =
           : <Table.Th key={group} scope="colgroup" colSpan={members.length} className="group-head"><Glossed text={group} skip={termsIn(shown.slice(0, members[0]!.index).map(column => column.item.label))} /></Table.Th>)}</Table.Tr>
         <Table.Tr>{groups.flatMap(({ group, members }) => group === null ? [] : members.map(({ item, position, part }) => <Table.Th key={item.label} scope="col" data-numeric={numeric[position] || undefined}><span className="visually-hidden">{group}, </span>{part}</Table.Th>))}</Table.Tr>
       </> : <Table.Tr>{shown.map(({ item, position }, index) => <Table.Th key={item.label} scope="col" data-numeric={numeric[position] || undefined}><Glossed text={item.label} skip={termsIn(shown.slice(0, index).map(column => column.item.label))} /></Table.Th>)}</Table.Tr>}</Table.Thead>
-      <Table.Tbody>{rows.map((row, index) => <Table.Tr key={rowKey(row)}>{shown.map(({ item, position }) => {
+      <Table.Tbody>{rows.map((row, index) => <Table.Tr key={rowKey(row)} style={tint && { '--mark-color': tint(row) } as CSSProperties}>{shown.map(({ item, position }) => {
         const cell = cells[index]?.[position] ?? ''
         return position === 0 ? <Table.Th key={item.label} scope="row">{item.render ? item.render(row) : <Value cell={cell} notes={notes} />}</Table.Th>
           : <Table.Td key={item.label} data-label={item.label} data-numeric={numeric[position] || undefined}><Value cell={cell} notes={notes} />
