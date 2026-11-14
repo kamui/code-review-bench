@@ -53,7 +53,7 @@ export const notesFor = (cells: Cell[]): Note[] => {
 
 // Each value's own count stays in its hover text; the shared note says the rest once.
 const unresolvedDetection = /^\d+ unresolved detection decisions? across \d+ reference problems? counts? as zero credit\./
-const unresolvedSummary = 'Unresolved detection decisions count as zero credit; point at or tap a value marked * for its count. They remain in the denominator; confirmed detections still count.'
+const unresolvedSummary = 'Unresolved detection decisions count as zero credit; point at or tap a marked value for its count. They remain in the denominator; confirmed detections still count.'
 
 export function Value({ cell, notes = [] }: { cell: Cell; notes?: Note[] }) {
   if (typeof cell === 'string') return cell
