@@ -146,7 +146,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
           : <Models points={points} measure={measure} onSelect={onSelect} interactions={interactions} />}
     {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={view === 'tradeoff' ? 'Found' : measure} axes={view === 'models' ? [] : view === 'tradeoff' ? [axis, pair] : [axis]} place={hovered} />}
     {view === 'tradeoff' && methodTops.size > 0 && <div className={lowsAreTops ? 'method-strip lows-are-tops' : 'method-strip'}>
-      <div className="strip-row strip-head"><span>Review method</span><span>Top setup (most found)</span><span>Found</span><span><Glossed text={shortAxis[axis]} /></span><span><Glossed text={shortAxis[pair]} /></span><span className="strip-low strip-low-head"><span className="strip-low-title">{lowsAreTops ? `Each top setup also has its method's lowest ${lowerFirst(shortAxis[axis])}` : `Lowest ${lowerFirst(shortAxis[axis])} in the method`}</span>
+      <div className="strip-row strip-head"><span>Review method</span><span>Top setup (most found)</span><span>Found</span><span><Glossed text={shortAxis[axis]} /></span><span><Glossed text={shortAxis[pair]} /></span><span className="strip-low strip-low-head"><span className="strip-low-title">Lowest {lowerFirst(shortAxis[axis])} in the method</span>
         <span className="strip-low-model">Model</span><span className="strip-low-value">{axis === 'cost' ? 'Cost' : 'Value'}</span><span className="strip-low-found">Found</span></span></div>
       <ul aria-label="Each review method's top setup, from the method that finds the most">{[...methodTops].map(([method, top]) => {
         const { configuration } = top.summary, { model, effort } = setupParts(configuration)
@@ -167,7 +167,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
               <span key={point.summary.configuration.id} className={point === top ? 'strip-dot top' : 'strip-dot'} style={{ left: `${point.y}%` }} />)}</span><Score summary={top.summary} /></span><span className={stripValue(first)} data-label={shortAxis[axis]}>{first}</span>
           <span className={stripValue(secondText)} data-label={shortAxis[pair]}>{secondText}</span>
           <span className="strip-low" data-label={axis === 'cost' ? 'Lowest cost' : `Lowest ${lowerFirst(shortAxis[axis])}`}>{low && low.summary.configuration.id === configuration.id ? !lowsAreTops && <span className="strip-low-same">Same as the top setup</span> : low && <><span className="strip-low-model">{lowModel}</span><span className="strip-low-value">{lowText}</span><span className="strip-low-found">{percent(low.y, 0)}<span className="found-word"> found</span></span></>}</span></button></li>
-      })}</ul></div>}
+      })}</ul>{lowsAreTops && <p className="strip-note">Each top setup also has its method's lowest {lowerFirst(shortAxis[axis])}.</p>}</div>}
     {view === 'tradeoff' && points.length > 0 && <ul className="chart-keys twin-key" aria-label="Chart key">
       <li><Mark configuration={{ method: '', reviewEdition: '', builtin: true }} size={10} />Built-in reviewer</li>
       <li><Mark configuration={{ method: '', reviewEdition: '', builtin: false }} size={10} />Skill</li>

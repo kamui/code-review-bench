@@ -88,7 +88,7 @@ export function MethodologyViews({ fullTable, dataset, configurations, cards, se
     { label: 'Generic advisory dossiers, benefit unmeasured', value: row => String(row.card.advice.generic) }]} />
   const groups: { group: string; tabs: { value: ScorecardTab; label: string }[] }[] = [
     { group: 'What it finds', tabs: [{ value: 'detection', label: 'Detection' }, { value: 'misses', label: 'Serious misses' }, { value: 'pre-existing', label: 'Pre-existing problems' }] },
-    { group: 'How right it is', tabs: [{ value: 'reliability', label: 'Claim reliability' }, { value: 'remedies', label: 'Remedies' }, { value: 'advice', label: 'Advice benefit' }, { value: 'controls', label: 'Controls' }] },
+    { group: 'How right it is', tabs: [{ value: 'reliability', label: 'Claim reliability' }, { value: 'remedies', label: 'Remedies' }, ...samples.length > 0 || tab === 'advice' ? [{ value: 'advice' as const, label: 'Advice benefit' }] : [], { value: 'controls', label: 'Controls' }] },
     { group: 'What it takes', tabs: [{ value: 'delivery', label: 'Delivery' }, { value: 'usage', label: 'Cost and time' }] },
     { group: 'Tools', tabs: [...novel.length + awaiting.length > 0 || tab === 'candidates' ? [{ value: 'candidates' as const, label: `Pending candidates (${novel.length + awaiting.length})` }] : [], { value: 'comparison', label: 'Compare setups' }, { value: 'table', label: 'Full table' }] },
   ]
