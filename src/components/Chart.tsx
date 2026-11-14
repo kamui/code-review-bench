@@ -304,15 +304,17 @@ function Scatter({ points, dimensions, axis, scale, spotlight, marked, named, to
       return { left: x - 2, top: y - 2, right: x + 2, bottom: y + 2 }
     })
   }
+  const hint = `Higher detection, ${axis === 'doubt' ? 'fewer' : 'lower'} ${lowerFirst((width < 600 ? shortAxis : axisLabels)[axis])}`
   const obstacles = [
     ...ordered.map(point => ({ left: sx(point) - 10, top: py(point.y) - 10, right: sx(point) + 10, bottom: py(point.y) + 10 })),
     ...lines.flatMap(group => group.points.slice(1).flatMap((point, index) => along(group.points[index]!, point))),
+    { left: plot.left, top: plot.top, right: plot.left + 30 + textWidth(hint), bottom: plot.top + 30 },
   ]
   const request = (point: Plotted) => ({ id: point.summary.configuration.id, x: sx(point), y: py(point.y), width: textWidth(labelText(point.summary.configuration)), height: 16 })
   const bounds = { left: plot.left + 2, right: plot.right, top: 2, bottom: plot.bottom - 2 }
   const first = (point: Plotted) => point === markedPoint || spotlight !== null || !named || named.has(point.summary.configuration.id)
   const shown = ordered.filter(point => point !== markedPoint && !outside(point))
-  const leading = width ? placeLabels([...(markedPoint ? [markedPoint] : []), ...shown.filter(first)].map(request), obstacles, bounds, width < 600 ? [12, 22] : [12, 24, 36, 48]) : []
+  const leading = width ? placeLabels([...(markedPoint ? [markedPoint] : []), ...shown.filter(first)].map(request), obstacles, bounds, width < 600 ? [12, 22] : [12, 24, 36, 48, 60]) : []
   const alone = (point: Plotted) => ordered.every(other => other === point || Math.hypot(sx(other) - sx(point), py(other.y) - py(point.y)) > 24)
   const placed = width ? [...leading, ...placeLabels(shown.filter(point => !first(point) && alone(point)).map(request), [...obstacles, ...leading.map(label => label.box)], bounds, width < 600 ? [12, 20] : [12, 22, 34, 46])] : []
   const labels = markedPoint && width && !placed.some(label => label.id === marked)
@@ -343,7 +345,7 @@ function Scatter({ points, dimensions, axis, scale, spotlight, marked, named, to
           className={label.id === marked ? 'point-label marked' : marked ? 'point-label dimmed' : 'point-label'} style={{ fill: `color-mix(in srgb, ${reviewColor(point.summary.configuration)} 45%, var(--ink))` }}>{labelText(point.summary.configuration)}</text>
       })}
     </svg>}
-    <span className="better-hint" style={{ left: plot.left + 10, top: plot.top + 8 }}><ArrowUpLeft size={13} aria-hidden="true" />Higher detection, {axis === 'doubt' ? 'fewer' : 'lower'} {lowerFirst((width < 600 ? shortAxis : axisLabels)[axis])}</span>
+    <span className="better-hint" style={{ left: plot.left + 10, top: plot.top + 8 }}><ArrowUpLeft size={13} aria-hidden="true" />{hint}</span>
   </div>
 }
 
