@@ -258,7 +258,11 @@ bench/tools/bench-tools redaction apply PATH...           # rewrite in place, pr
 
 `check` exits 0 when nothing would change, 1 listing each file, or `file!member` inside an archive, that would change or cannot be redacted, and 2 on an error. `--require-values` makes it fail when the values file is absent. Fix a refusal with `redaction apply` before any record pins the file's hash.
 
-The committed hooks in `.githooks/` run `check --staged --require-values` before each commit and `check --message --require-values` on each commit message. `bun install` installs them through the `hooks:install` script, which sets `core.hooksPath`. A hook refuses the commit when the check cannot run, for example when `bench/tools/bench-tools` has no runtime, its runtime is older than `HEAD`'s crate, or the values file is missing. CI runs `check --changed` on every pull request and push with the field rules only, since it holds no values.
+The committed hooks in `.githooks/` run `check --staged --require-values` before each commit and `check --message --require-values` on each commit message. `bun install` installs them through the `hooks:install` script, which sets `core.hooksPath`.
+
+The hooks do not use the runtime store. The launcher runs only the runtime selected for the crate at `HEAD`, so a hook that went through it would need a new selection after every Rust change. `bun run hooks:tool` builds the check once and keeps it under `~/.cache/code-review-bench/redaction-check/`, named by the Git blob of `rust/bench-tools/src/redaction.rs` at `HEAD`. Every checkout on the machine with the same rules shares that build, and a change to the rules asks for a new one. A hook refuses the commit when the check cannot run: when that build is absent, or when the values file is missing.
+
+CI runs `check --changed` on every pull request and push with the field rules only, since it holds no values.
 
 ## Account redaction of 2026-11-13
 
