@@ -193,6 +193,73 @@ Use `--path <logical-member>` for selective retrieval and `--offline` for a veri
 
 The [2026-10-08 local publication](research/evidence-migration-2026-10-08/README.md) records the first production release, original-path restoration, cold-consumer checks and remaining migration blockers.
 
+## Redaction
+
+Claude Code records the signed-in account's email address and organization id in every session, and Codex records its account ids and plan type. Transcripts and saved client configuration also name the machine that ran a review. `bench-tools` replaces these when it writes evidence, so the first hash any record pins is of clean bytes, and its checks refuse evidence that still holds one.
+
+### Rules
+
+Two groups of rules apply.
+
+The field rules need no private value and always apply:
+
+| Field | Replacement |
+| --- | --- |
+| The value of `organizationUuid` (36 hex digits and dashes) | `[redacted-organization]` |
+| The address in the sentence Claude Code writes, `The user's email address is` and the address | `[redacted-email]` |
+| The values of the Codex `creator_user_id` and `creator_account_id` fields | `[redacted-account]` |
+| The value of the Codex `plan_type` field | `[redacted-plan]` |
+
+They match plain JSON and JSON nested inside JSON strings, where each quote is escaped by any number of backslashes. A value that is already a placeholder is left alone, so a second pass changes nothing.
+
+The literal rules come from a private values file outside the repository: `BENCH_REDACTION_VALUES` when it is set, else `~/.config/code-review-bench/redaction.json`. Its shape:
+
+```json
+{
+  "schema_version": 1,
+  "email": ["<address>"],
+  "organization": ["<organization id>"],
+  "account": ["<account id>"],
+  "hosts": {"<machine name>": "host-01"}
+}
+```
+
+Every key except `schema_version` is optional. Each listed address, organization id and account id becomes its placeholder wherever it occurs, and each machine name becomes its stand-in wherever it occurs, as plain text. The tool refuses a file with an unknown key, a value shorter than 4 bytes, a stand-in whose length differs from its machine name, or a value that occurs inside a placeholder or stand-in. Plan names are not listed: they are common words, and the field rule already replaces the plan type wherever Codex records it. A missing file is not an error; only the field rules apply. Messages never quote a value. Keep the file out of every repository, and never write its values or the machine names in a commit, pull request, issue or document.
+
+### Formats
+
+- Text, JSON and anything else not listed below: each match is replaced.
+- SQLite databases and write-ahead logs: every replacement is padded with `-`, or written as `x` when the placeholder is longer, to the replaced value's length, because those formats record sizes.
+- gzip: the stream is decompressed, redacted and compressed again only when its content changed.
+- tar: each regular member is redacted, and the archive is rebuilt only when a member changed, keeping every name, mode and order.
+- zip: never rewritten. A member that would change is reported as one the tool cannot redact.
+- xz: not opened. The tool has no xz reader, so an identifier inside an xz stream is neither replaced nor found.
+
+The rules find only the fields above and the values the file lists. An identifier written in another form, or a value nobody listed, passes.
+
+### At write time
+
+- `file-attempt` and `evidence archive-transcripts` pack each transcript as redaction leaves it. The archive's member list and its restoration check compare with that form, and the transcripts in the attempt directory are not changed, so an archive written this way differs from the live files only in the replaced values. An existing archive whose members match the transcripts as they are, written before this change, is accepted as before.
+- `file-attempt` files redacted copies of the attempt's records, logs, `stdout.jsonl`, `codex-config.toml` and native payload, and `native_payload.sha256` in `attempt.json` is the hash of the filed copy. When anything was replaced, `attempt.json` says so in `notes`.
+- `regrade archive-attempt` packs each member as redaction leaves it, and `evidence.json` lists the hash of that member. When a member changed, `evidence.json` has a `redaction` entry.
+- `evidence pack` refuses an `evidence` input that redaction would change or cannot rewrite, and `evidence publish` refuses a package with such an `evidence` member before it uploads anything. `reproducibility` inputs, such as dependency caches and toolchains, are not read. To capture a workspace for retirement, redact it first, then take its inventory.
+
+When nothing matches, every output is byte for byte what it was before redaction existed.
+
+### Commands
+
+```sh
+bench/tools/bench-tools redaction check PATH...           # files or directories
+bench/tools/bench-tools redaction check --staged          # the staged content in the index
+bench/tools/bench-tools redaction check --message FILE    # a commit message
+bench/tools/bench-tools redaction check --changed BASE    # files that differ from the merge base with BASE
+bench/tools/bench-tools redaction apply PATH...           # rewrite in place, printing each path changed
+```
+
+`check` exits 0 when nothing would change, 1 listing each file, or `file!member` inside an archive, that would change or cannot be redacted, and 2 on an error. `--require-values` makes it fail when the values file is absent. Fix a refusal with `redaction apply` before any record pins the file's hash.
+
+The committed hooks in `.githooks/` run `check --staged --require-values` before each commit and `check --message --require-values` on each commit message. `bun install` installs them through the `hooks:install` script, which sets `core.hooksPath`. A hook refuses the commit when the check cannot run, for example when `bench/tools/bench-tools` has no runtime, its runtime is older than `HEAD`'s crate, or the values file is missing. CI runs `check --changed` on every pull request and push with the field rules only, since it holds no values.
+
 ## Account redaction of 2026-11-13
 
 The owner authorised one exception to this contract. [The record](research/account-redaction-2026-11-13/README.md) replaced account identifiers in every session transcript, rewrote the Git history and published every manifest again from a new repository.
