@@ -1,0 +1,62 @@
+[
+  {
+    "reviewer": "correctness",
+    "file": "src/requests/adapters.py",
+    "line": "95",
+    "title": "isolate client certificates from the shared context",
+    "why_it_matters": "A request with a client certificate modifies the shared context, so a later request without that certificate can present it to another server that requests client authentication. Concurrent requests with different certificates can also present the wrong identity. urllib3 loads each supplied certificate into the passed SSLContext, so use a separate context when a client certificate is supplied to keep identities isolated.",
+    "evidence": [
+      "src/requests/adapters.py:95 -- pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context",
+      "src/requests/adapters.py:102-105 -- if client_cert is not None: ... pool_kwargs[\"cert_file\"] = client_cert[0]",
+      "/usr/lib/python3.10/site-packages/pip/_vendor/urllib3/util/ssl_.py:416-418 -- if certfile: ... context.load_cert_chain(certfile, keyfile)"
+    ]
+  },
+  {
+    "reviewer": "correctness",
+    "file": "src/requests/adapters.py",
+    "line": "95",
+    "title": "preserve ssl settings supplied by custom adapters",
+    "why_it_matters": "Applications that configure an SSL context in a custom HTTPAdapter silently lose its TLS settings on default-verified requests, potentially breaking connections or weakening their chosen TLS policy. The per-request context overrides the pool manager's context, and a prebuilt context also bypasses urllib3's creation of a context using the pool's ssl_version setting, as used by the documented adapter example. Only select the shared context when the pool manager has no custom TLS context or settings.",
+    "evidence": [
+      "src/requests/adapters.py:95 -- pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context",
+      "src/requests/adapters.py:400-402 -- conn = self.poolmanager.connection_from_host(**host_params, pool_kwargs=pool_kwargs)",
+      "docs/user/advanced.rst:1030-1033 -- def init_poolmanager(self, connections, maxsize, block=False): ... block=block, ssl_version=ssl.PROTOCOL_SSLv3)",
+      "/usr/lib/python3.10/site-packages/pip/_vendor/urllib3/poolmanager.py:311-320 -- for key, value in override.items(): ... base_pool_kwargs[key] = value"
+    ]
+  },
+  {
+    "reviewer": "correctness",
+    "file": "src/requests/adapters.py",
+    "line": "76",
+    "title": "defer default ca loading until it is needed",
+    "why_it_matters": "If the default CA bundle is unavailable or invalid, importing requests now raises an exception even for HTTP-only applications and HTTPS users who supply their own CA bundle. Previously the bundle was loaded only for a default-verified HTTPS request, so those uses could continue. Lazy initialization confines a default bundle failure to requests that actually need it.",
+    "evidence": [
+      "src/requests/adapters.py:76 -- _preloaded_ssl_context.load_verify_locations(",
+      "src/requests/adapters.py:94-95 -- elif verify is True: pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context"
+    ]
+  },
+  {
+    "reviewer": "security",
+    "file": "src/requests/adapters.py",
+    "line": "95",
+    "title": "cwe-287: isolate contexts for client certificates",
+    "why_it_matters": "After a verified request uses a client certificate, a later verified request without a certificate can present that same identity to another server, and concurrent requests can use the wrong client identity. urllib3 loads client certificate chains into the supplied SSLContext, which is now shared globally across sessions and hosts; pool isolation therefore does not isolate the credentials. Use a separate context whenever a client certificate is specified so loading it cannot change the default context used by other requests.",
+    "evidence": [
+      "src/requests/adapters.py:95 --         pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context",
+      "src/requests/adapters.py:102-105 --     if client_cert is not None:\n        if isinstance(client_cert, tuple) and len(client_cert) == 2:\n            pool_kwargs[\"cert_file\"] = client_cert[0]\n            pool_kwargs[\"key_file\"] = client_cert[1]",
+      "src/requests/adapters.py:75 -- _preloaded_ssl_context = create_urllib3_context()"
+    ]
+  },
+  {
+    "reviewer": "adversarial",
+    "file": "src/requests/adapters.py",
+    "line": "95",
+    "title": "client certificates leak across default-verified requests",
+    "why_it_matters": "A request with a client certificate can cause later requests to unrelated servers, including requests from other sessions with no certificate configured, to present that certificate. Concurrent requests with different certificates can also use the wrong identity. All default-verified pools share this context, and urllib3 loads each supplied client certificate into it; isolate requests with client certificates so their mutable TLS state cannot contaminate the shared context.",
+    "evidence": [
+      "src/requests/adapters.py:95 --         pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context",
+      "src/requests/adapters.py:102-105 -- client certificate paths are supplied to the same pool independently of the context.",
+      "urllib3/util/ssl_.py:407,429-431 -- context = ssl_context; if certfile: context.load_cert_chain(certfile, keyfile). The context is subsequently used to wrap the socket at line 437."
+    ]
+  }
+]
