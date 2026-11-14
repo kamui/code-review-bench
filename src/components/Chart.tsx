@@ -318,6 +318,7 @@ function Scatter({ points, dimensions, axis, scale, spotlight, marked, named, to
       ? { id: markedPoint.summary.configuration.id, x: sx(markedPoint) - 12, y: py(markedPoint.y), anchor: 'end' as const, leader: false }
       : { id: markedPoint.summary.configuration.id, x: sx(markedPoint) + 12, y: py(markedPoint.y), anchor: 'start' as const, leader: false }, ...placed] : placed
   const xTicks = ticks(scale, width > 700)
+  const zeros = points.filter(point => point.x === 0).length
   return <div ref={ref} className="tradeoff">
     {width > 0 && <svg width={width} height={height} role="group" aria-label={`Plot of ${dimensions}. A line joins the setups of each review method.`}>
       <defs><linearGradient id={corner} x1="0" y1="0" x2="1" y2="1">
@@ -325,6 +326,7 @@ function Scatter({ points, dimensions, axis, scale, spotlight, marked, named, to
       </linearGradient></defs>
       <rect x={plot.left} y={plot.top} width={plot.right - plot.left} height={plot.bottom - plot.top} fill={`url(#${corner})`} />
       <Axes plot={plot} axis={axis} scale={scale} xTicks={xTicks} px={px} py={py} height={height} yTitle={yTitle} scaleNote={width > 480} />
+      {scale.kind !== 'log' && zeros > 2 && <text x={px(0)} y={plot.bottom + 33} className="tick-label zero-count" textAnchor="middle">{setups(zeros)}</text>}
       {lines.map(group => <polyline key={group.key} points={group.points.map(point => `${sx(point)},${py(point.y)}`).join(' ')}
         className={[outside(group.points[0]!) ? 'method-line muted' : setupParts(group.points[0]!.summary.configuration).method === active ? 'method-line active' : 'method-line', group.points[0]!.summary.configuration.experimental ? 'experiment' : ''].join(' ').trim()} style={{ stroke: reviewColor(group.points[0]!.summary.configuration) }} />)}
       {labels.filter(label => label.leader).map(label => {
