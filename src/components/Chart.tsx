@@ -276,7 +276,7 @@ function Scatter({ points, dimensions, axis, scale, spotlight, marked, named, to
   const corner = useId()
   const margin = { top: 18, right: 22, bottom: 50, left: 62 }
   const plot = { left: margin.left, right: Math.max(margin.left + 1, width - margin.right), top: margin.top, bottom: height - margin.bottom }
-  const px = (value: number) => position(scale, value, plot.left, plot.right)
+  const px = (value: number) => position(scale, value, plot.left + (scale.kind === 'log' ? 0 : 14), plot.right)
   const py = (value: number) => plot.bottom - value / 100 * (plot.bottom - plot.top)
   const modelLabel = labelOf(points), fullLabel = labelOf(points, true)
   const labelText = (configuration: Configuration) => configuration.id === marked || (width >= 600 && tops?.has(configuration.id)) ? fullLabel(configuration) : modelLabel(configuration)
