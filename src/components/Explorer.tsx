@@ -205,14 +205,14 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
           <Text className="intro-description">Compare code review setups by what they catch, how often they’re wrong, and what they cost.</Text>
           <div className="intro-meta"><Badge variant="outline" color="gray" radius="sm" className="status-badge">{status.label}</Badge>
             {(!status.complete || unresolved) && <StatusNotice limits={status.limits} unresolved={unresolved} />}</div>
-          <p className="intro-disclosure">Claude Opus 5.5 grades every review, and Claude models are among those compared.{dataset.evidence.audit.state !== 'assessed' && ' The audit of its grades has not passed yet.'} <Link to="/methodology">How the benchmark is run and judged</Link></p>
         </div>
         <div className="corpus"><p className="corpus-title">Whole benchmark</p><dl className="corpus-stats" aria-label="Benchmark statistics">
           <div><dt>PR tasks</dt><dd>{hero.tasks}</dd></div>
           <div><dt>{hero.awaitingEligibility ? 'provisional problems' : 'known problems'}</dt><dd>{hero.problems}</dd></div>
           <div><dt>review methods</dt><dd>{hero.methods}</dd></div>
           <div><dt>models tested</dt><dd>{hero.models}</dd></div>
-        </dl><p className="corpus-note">{hero.experiments > 0 && `${hero.experiments === 1 ? '1 method is a skill experiment' : `${hero.experiments} methods are skill experiments`}, off by default. `}Charts use the PRs every selected setup ran.</p></div>
+        </dl><p className="corpus-note">{hero.experiments > 0 && `${hero.experiments === 1 ? '1 method is a skill experiment' : `${hero.experiments} methods are skill experiments`}, off by default. `}Charts use the PRs every selected setup ran.</p>
+          <p className="intro-disclosure">Claude Opus 5.5 grades every review, and Claude models are among those compared.{dataset.evidence.audit.state !== 'assessed' && ' The audit of its grades has not passed yet.'} <Link to="/methodology">How the benchmark is run and judged</Link></p></div>
       </section>
 
       <section id="scorecard" className="leaderboard-section">

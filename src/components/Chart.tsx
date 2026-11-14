@@ -54,7 +54,7 @@ export const setupLabel = (configuration: Configuration) => Object.values(setupP
 const metricOf = (summary: Summary, axis: Axis) => axis === 'time' ? summary.time ? summary.time.median / 60 : null : summary[axis]
 const boundedOn = (summary: Summary, axis: Axis) => (axis === 'cost' || axis === 'tokens') && summary.card[axis].perTrial.kind === 'atLeast'
 
-const stripValue = (text: string) => text === 'Unavailable' ? 'strip-value missing' : 'strip-value'
+const stripValue = (text: string) => text === 'Unavailable' ? 'strip-value missing' : text.startsWith('≥') ? 'strip-value lower-bound' : 'strip-value'
 
 function formatMetric(axis: Axis, value: number | null, starred: boolean, bounded = false, digits = 1) {
   if (value === null) return 'Unavailable'
@@ -172,7 +172,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
       <li><Mark configuration={{ method: '', reviewEdition: '', builtin: false }} size={10} />Skill</li>
       {bounded && <li><svg className="bound-key" width="16" height="16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" /></svg>Lower bound, ≥ in the table</li>}
       <li><span className="line-key" aria-hidden="true" />One method across models</li>
-      <li><span className="dots-key" aria-hidden="true"><span /><span /><span /></span>Found by each model in the method, from 0% to 100% with a tick at 50%; the large dot is the top setup</li>
+      <li><span className="dots-key" aria-hidden="true"><span /><span /><span /></span>Found by each model, 0% to 100%; large dot is the top setup</li>
       {summaries.some(summary => summary.configuration.experimental) && <li><span className="line-key dashed" aria-hidden="true" />Skill experiment</li>}
     </ul>}
     {points.length > 0 && view !== 'models' && view !== 'tradeoff' && <ul className="chart-keys" aria-label="Chart key">
