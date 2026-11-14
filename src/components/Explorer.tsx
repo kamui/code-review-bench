@@ -25,7 +25,7 @@ export type Page = 'scorecard' | 'tasks' | 'methodology'
 type LoadState = { kind: 'loading' } | { kind: 'failed'; message: string } | { kind: 'ready'; dataset: Dataset }
 type MainView = (typeof chartViews)[number]
 const axisChoices: { label: string; value: Axis }[] = [{ label: 'Cost', value: 'cost' }, { label: 'Refuted or unproven', value: 'doubt' },
-  { label: 'Refuted per review', value: 'refuted' }, { label: 'Tokens', value: 'tokens' }, { label: 'Time', value: 'time' }]
+  { label: 'Refuted claims per review', value: 'refuted' }, { label: 'Tokens', value: 'tokens' }, { label: 'Time', value: 'time' }]
 type ResultsColumn = 'setup' | 'equalProblem' | 'equalPr' | 'seriousCaught' | 'repeatedMisses' | 'cost' | 'tokens' | 'doubt' | 'completed'
 const bands = ['all', ...impactBands] as const
 const controlLabels: Record<Task['control'], string> = { 'audited-clean': 'Audited clean control', provisional: 'Provisional control',
@@ -44,7 +44,12 @@ export function Explorer() {
   const onSearch = (patch: ExplorerSearch, section?: Section) => navigate({ to: page === 'scorecard' ? '/' : `/${page}`, search: current => ({ ...current, ...patch }),
     hash: section ?? true, replace: true, resetScroll: false, hashScrollIntoView: false })
   useEffect(() => {
-    if (state.kind === 'ready' && hash) document.getElementById(hash)?.scrollIntoView()
+    if (state.kind !== 'ready' || !hash) return
+    const scroll = () => document.getElementById(hash)?.scrollIntoView()
+    scroll()
+    // Charts take their height after the first paint, which moves the section.
+    const settled = setTimeout(scroll, 400)
+    return () => clearTimeout(settled)
   }, [state.kind])
   useEffect(() => {
     let cancelled = false
