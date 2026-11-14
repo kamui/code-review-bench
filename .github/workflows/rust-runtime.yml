@@ -237,9 +237,32 @@ jobs:
             test -s "$RUNNER_TEMP/scorecard.txt"
           '
 
+  # Every change is checked, whatever paths it touches. CI holds no private values, so only the field rules apply.
+  redaction:
+    name: Redaction check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install pinned Rust toolchain
+        working-directory: rust/bench-tools
+        run: rustup default "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust/bench-tools
+          key: redaction
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Check changed files for account identifiers and machine names
+        working-directory: rust/bench-tools
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: cargo run --locked --release -- redaction check --changed "$BASE"
+
   required:
     name: Rust runtime required
-    needs: [changes, rust-runtime]
+    needs: [changes, rust-runtime, redaction]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -247,6 +270,8 @@ jobs:
         env:
           CHANGES: ${{ needs.changes.result }}
           RUNTIME: ${{ needs.rust-runtime.result }}
+          REDACTION: ${{ needs.redaction.result }}
         run: |
           test "$CHANGES" = success
           test "$RUNTIME" = success || test "$RUNTIME" = skipped
+          test "$REDACTION" = success
