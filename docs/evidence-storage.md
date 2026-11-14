@@ -229,8 +229,7 @@ Every key except `schema_version` is optional. Each listed address, organization
 ### Formats
 
 - Text, JSON and anything else not listed below: each match is replaced.
-- SQLite databases: every replacement is padded with `-`, or written as `x` when the placeholder is longer, to the replaced value's length, because the format records sizes. A database is rewritten only when every replacement lies in the cells of a table leaf page, whose rows are ordered by row id. A value in an index, an overflow page or a page header could put the database out of order, so the database is reported as one the tool cannot redact.
-- SQLite write-ahead logs: never rewritten, because each frame's checksum covers the frames before it and a frame may hold an index page. A log that would change is reported as one the tool cannot redact.
+- SQLite databases and write-ahead logs: never rewritten. A file that would change is reported as one the tool cannot redact. Without SQLite the tool cannot keep a database valid: an index, a constraint or a full-text index may hold a value in another form, a write-ahead log beside the database may hold pages that index it, and each log frame's checksum covers the frames before it. Redact such a database with SQLite itself, then check it again.
 - gzip: the stream is decompressed, redacted and compressed again only when its content changed.
 - tar: each regular member is redacted, and the archive is rebuilt only when a member changed, keeping every name, mode and order.
 - zip: never rewritten. A member that would change is reported as one the tool cannot redact.

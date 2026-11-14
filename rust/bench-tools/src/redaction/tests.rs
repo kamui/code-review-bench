@@ -139,96 +139,24 @@ fn literals_replace_every_occurrence() {
     assert_eq!(text(b"user@examplehost:~$", &rules), "user@host-01-xyz:~$");
 }
 
-/// A database of 512-byte pages: page 1 an empty table leaf, then one page of each kind with its cells at the end.
-fn database(pages: &[(u8, &[u8])]) -> Vec<u8> {
-    const SIZE: usize = 512;
-    let mut data = vec![0; SIZE * (pages.len() + 1)];
-    data[..16].copy_from_slice(SQLITE);
-    data[16..18].copy_from_slice(&(SIZE as u16).to_be_bytes());
-    data[100] = TABLE_LEAF;
-    data[105..107].copy_from_slice(&(SIZE as u16).to_be_bytes());
-    for (index, (kind, cells)) in pages.iter().enumerate() {
-        let page = &mut data[SIZE * (index + 1)..SIZE * (index + 2)];
-        let content = SIZE - cells.len();
-        page[0] = *kind;
-        page[5..7].copy_from_slice(&(content as u16).to_be_bytes());
-        page[content..].copy_from_slice(cells);
-    }
-    data
-}
-
-const INDEX_LEAF: u8 = 0x0a;
-const OVERFLOW: u8 = 0;
-
 #[test]
-fn sqlite_table_cells_are_rewritten_at_their_length() {
+fn sqlite_files_are_reported_not_rewritten() {
     let rules = values();
-    let mut cells = pair("organizationUuid", ORGANIZATION_ID).into_bytes();
-    cells.extend_from_slice(b" person@example.com examplehost ");
-    cells.extend_from_slice(pair("plan_type", "plus").as_bytes());
-    let data = database(&[(TABLE_LEAF, &cells), (INDEX_LEAF, b"no values here")]);
-    assert!(redact(&database(&[(INDEX_LEAF, b"no values here")]), &rules).clean());
-    let redacted = redact(&data, &rules);
-    assert_eq!(
-        redacted.findings,
-        [Finding {
-            member: vec![],
-            unredactable: None
-        }]
-    );
-    let clean = redacted.data.unwrap();
-    assert_eq!(clean.len(), data.len());
-    assert_eq!(clean[..512], data[..512]);
-    assert_eq!(clean[1024..], data[1024..]);
-    let shown = String::from_utf8_lossy(&clean);
-    assert!(shown.contains(&pair(
-        "organizationUuid",
-        "[redacted-organization]-------------"
-    )));
-    assert!(shown.contains(" [redacted-email]-- host-01-xyz "));
-    assert!(shown.contains(&pair("plan_type", "xxxx")));
-    assert!(redact(&clean, &rules).clean());
-}
-
-#[test]
-fn sqlite_values_outside_table_cells_are_reported_not_rewritten() {
-    let rules = values();
-    for kind in [INDEX_LEAF, OVERFLOW] {
-        let data = database(&[
-            (TABLE_LEAF, b" person@example.com "),
-            (kind, b" person@example.com "),
-        ]);
+    for magic in [SQLITE, WAL[0], WAL[1]] {
+        let mut data = magic.to_vec();
+        data.extend_from_slice(b" plain pages ");
+        assert!(redact(&data, &rules).clean());
+        data.extend_from_slice(ADDRESS.as_bytes());
         let redacted = redact(&data, &rules);
         assert!(redacted.data.is_none());
         assert_eq!(
             redacted.findings,
             [Finding {
                 member: vec![],
-                unredactable: Some("a value lies outside the cells of a SQLite table leaf page")
+                unredactable: Some("SQLite files are not rewritten")
             }]
         );
     }
-    let mut header = database(&[(TABLE_LEAF, b"plain")]);
-    header[530..548].copy_from_slice(ADDRESS.as_bytes());
-    assert!(redact(&header, &rules).data.is_none());
-}
-
-#[test]
-fn sqlite_write_ahead_logs_are_reported_not_rewritten() {
-    let rules = values();
-    let mut wal = b"\x37\x7f\x06\x82".to_vec();
-    wal.extend_from_slice(b" plain frames");
-    assert!(redact(&wal, &rules).clean());
-    wal.extend_from_slice(b" acct-0000-example");
-    let redacted = redact(&wal, &rules);
-    assert!(redacted.data.is_none());
-    assert_eq!(
-        redacted.findings,
-        [Finding {
-            member: vec![],
-            unredactable: Some("SQLite write-ahead logs are not rewritten")
-        }]
-    );
 }
 
 fn gzip(data: &[u8]) -> Vec<u8> {
