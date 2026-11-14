@@ -135,7 +135,7 @@ function InspectionBody({ dataset, results, band, estimator, configuration, task
                 <Text size="sm"><strong>Fix suggestion: </strong>{item.proposedFix ? <Rich text={item.proposedFix} /> : 'No separate suggestion captured. The assessment may discuss a remedy embedded in the finding.'}</Text>
                 <Badge variant="outline" color="gray" size="sm" radius="sm">Fix sufficiency: {humanize(item.fixSufficiency)}</Badge>
               </Stack></Accordion.Panel></Accordion.Item>)}</Accordion>
-            <details className="harness-details"><summary>How this review was run</summary><Paper withBorder p="md" radius="md" mt="sm"><Stack gap="xs">
+            <Disclosure title="How this review was run"><Paper withBorder p="md" radius="md" mt="sm"><Stack gap="xs">
             <Text size="sm" fw={700}>Observed review harness</Text>
             <Text size="sm">{detail.record.observed.harness} {detail.record.observed.cli_version}</Text>
             <Text size="sm">Models: {detail.record.observed.models.join(', ')} · Effort: {detail.record.observed.effort ?? 'Not reported'}</Text>
@@ -143,7 +143,7 @@ function InspectionBody({ dataset, results, band, estimator, configuration, task
             {detail.record.observed.prompt_hash ? <HashLine label="Prompt hash" value={detail.record.observed.prompt_hash} /> : <Text size="xs" c="dimmed">Prompt hash unavailable</Text>}
             {detail.record.observed.skill_tree && <HashLine label="Skill tree revision" value={detail.record.observed.skill_tree} />}
             <Text size="xs" c="dimmed">Subagents: {detail.record.observed.subagent_count} · Client-reported sandbox: {detail.record.observed.sandbox ?? 'Not reported'}</Text>
-          </Stack></Paper></details><Group gap="xs">
+          </Stack></Paper></Disclosure><Group gap="xs">
             <Button component="a" href={detail.recordUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileJson size={14} />}>Attempt record</Button>
             {detail.billingCorrectionUrl && <Button component="a" href={detail.billingCorrectionUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs">Billing correction</Button>}
             {detail.usageCorrectionUrl && <Button component="a" href={detail.usageCorrectionUrl} target="_blank" rel="noreferrer" variant="subtle" size="xs" leftSection={<FileClock size={14} />}>Usage lower bound</Button>}
