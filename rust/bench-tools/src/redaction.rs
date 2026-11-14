@@ -9,9 +9,10 @@
 //!
 //! [`redact`] follows the bytes into what it can rewrite, as `redactlib.transform` of the 2026-11-13 redaction does:
 //! gzip streams, tar archives (rebuilt only when a member changes, keeping names, modes and order), and SQLite
-//! databases and write-ahead logs, where every replacement keeps the replaced value's length. A zip member that
-//! would change is reported, never rewritten. An xz stream is not opened. Bytes no rule changes come back as `None`,
-//! so redaction never rewrites clean evidence.
+//! databases, where every replacement keeps the replaced value's length and lies in the cells of a table leaf page.
+//! A SQLite value anywhere else, a SQLite write-ahead log or a zip member that would change is reported, never
+//! rewritten. An xz stream is not opened. Bytes no rule changes come back as `None`, so redaction never rewrites
+//! clean evidence.
 
 use crate::archive;
 use crate::pyjson::{self, Duplicates, Value};
@@ -422,6 +423,7 @@ pub fn would_change(data: &[u8], rules: &Rules) -> bool {
 }
 
 const XZ: &[u8] = b"\xfd7zXZ\x00";
+const SQLITE: &[u8] = b"SQLite format 3\0";
 const WAL: [&[u8]; 2] = [b"\x37\x7f\x06\x82", b"\x37\x7f\x06\x83"];
 
 fn transform(
@@ -443,12 +445,21 @@ fn transform(
         zip(data, rules, member, findings);
         return None;
     }
-    let mode = if data.starts_with(b"SQLite") || WAL.iter().any(|magic| data.starts_with(magic)) {
-        Mode::SameLength
-    } else {
-        Mode::Text
-    };
-    let changed = rules.apply(data, mode);
+    if data.starts_with(SQLITE) {
+        return sqlite(data, rules, member, findings);
+    }
+    // A frame's checksum covers its page and every frame before it, so a rewritten frame and all later ones would be
+    // dropped, and a frame may hold an index page.
+    if WAL.iter().any(|magic| data.starts_with(magic)) {
+        if rules.apply(data, Mode::SameLength).is_some() {
+            findings.push(Finding {
+                member: member.clone(),
+                unredactable: Some("SQLite write-ahead logs are not rewritten"),
+            });
+        }
+        return None;
+    }
+    let changed = rules.apply(data, Mode::Text);
     if changed.is_some() {
         findings.push(Finding {
             member: member.clone(),
@@ -456,6 +467,59 @@ fn transform(
         });
     }
     changed
+}
+
+/// Rewrite a SQLite database only where no order can change: the cell content of table leaf pages, whose keys are
+/// row ids. A replaced value in an index, an overflow chain, a header or a page of unknown kind would leave the
+/// database out of order, so the database is reported instead.
+fn sqlite(
+    data: &[u8],
+    rules: &Rules,
+    member: &[Vec<u8>],
+    findings: &mut Vec<Finding>,
+) -> Option<Vec<u8>> {
+    let changed = rules.apply(data, Mode::SameLength)?;
+    let rewritable = table_cells_only(data, &changed);
+    findings.push(Finding {
+        member: member.to_vec(),
+        unredactable: (!rewritable)
+            .then_some("a value lies outside the cells of a SQLite table leaf page"),
+    });
+    rewritable.then_some(changed)
+}
+
+const TABLE_LEAF: u8 = 0x0d;
+
+/// Whether every byte `changed` differs from `data` in falls in the cell content area of a table leaf page.
+fn table_cells_only(data: &[u8], changed: &[u8]) -> bool {
+    let (Some(size), Some(&reserved)) = (data.get(16..18), data.get(20)) else {
+        return false;
+    };
+    let size = match u16::from_be_bytes([size[0], size[1]]) {
+        1 => 65536,
+        size => usize::from(size),
+    };
+    if size < 512 || !size.is_power_of_two() || data.len() != changed.len() {
+        return false;
+    }
+    let usable = size - usize::from(reserved);
+    let in_table_cells = |at: usize| {
+        let (start, offset) = (at - at % size, at % size);
+        let header = start + if start == 0 { 100 } else { 0 };
+        let (Some(&kind), Some(content)) = (data.get(header), data.get(header + 5..header + 7))
+        else {
+            return false;
+        };
+        let content = match u16::from_be_bytes([content[0], content[1]]) {
+            0 => 65536,
+            content => usize::from(content),
+        };
+        kind == TABLE_LEAF && offset >= content && offset < usable
+    };
+    data.iter()
+        .zip(changed)
+        .enumerate()
+        .all(|(at, (before, after))| before == after || in_table_cells(at))
 }
 
 fn gzip(
