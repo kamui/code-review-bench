@@ -233,8 +233,8 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
             <Button variant="default" size="xs" className="filters-toggle" leftSection={<SlidersHorizontal size={14} aria-hidden="true" />} rightSection={<ChevronDown size={14} aria-hidden="true" />}
               aria-expanded={optionsOpen} onClick={() => setOptionsOpen(open => !open)}>Chart options · {bandLabels[band]} · {configurations.filter(item => selected.includes(item.id)).length} of {configurations.length} setups</Button>
             {view !== 'models' && <div className="axis-switch"><span className="control-label" id="axis-label">Plot against</span>{narrow
-              ? <Select aria-label="Compare detection against" size="xs" allowDeselect={false} value={axis} onChange={plotAgainst} data={axisChoices} />
-              : <SegmentedControl aria-label="Compare detection against" size="xs" value={axis} onChange={plotAgainst} data={axisChoices} />}</div>}
+              ? <Select aria-label="Plot against" size="xs" allowDeselect={false} value={axis} onChange={plotAgainst} data={axisChoices} />
+              : <SegmentedControl aria-label="Plot against" size="xs" value={axis} onChange={plotAgainst} data={axisChoices} />}</div>}
           </div>
           <div className="filter-bar" data-open={optionsOpen || undefined}>
             <div className="measure-controls">
