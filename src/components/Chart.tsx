@@ -122,6 +122,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
     return lows
   }
   const methodLows = lowest(point => point.x)
+  const topIds = new Set([...methodTops.values()].map(point => point.summary.configuration.id))
   const named = new Set([...methodTops.values(), ...lowest(point => metricOf(point.summary, 'cost')).values()].map(point => point.summary.configuration.id))
   const pair = pairedAxis(axis)
   const plotted = (on: Axis): Plotted[] => points.flatMap(point => {
@@ -139,7 +140,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
       <span>No other impact band or average is substituted. Choose them above.</span></div>
       : view === 'setups' ? <SetupRows points={points} measure={measure} axis={axis} scale={scale} frontier={frontier} undecided={undecided} onSelect={onSelect} interactions={interactions} />
         : view === 'tradeoff' ? <div className="twin">{panels.map(panel => <Scatter key={panel.on} points={panel.points} dimensions={`${lowerFirst(measure)} against ${lowerFirst(axisLabels[panel.on])}`}
-          axis={panel.on} scale={panel.scale} spotlight={spotlight?.method ?? null} marked={hovered?.id ?? linked?.id ?? null} named={named} onSelect={pinAndSelect} interactions={interactions} yTitle={foundLabels[detection.band]} height={height} />)}</div>
+          axis={panel.on} scale={panel.scale} spotlight={spotlight?.method ?? null} marked={hovered?.id ?? linked?.id ?? null} named={named} tops={topIds} onSelect={pinAndSelect} interactions={interactions} yTitle={foundLabels[detection.band]} height={height} />)}</div>
         : view === 'skills' ? <MethodPanels points={measured} axis={axis} scale={scale} yTitle={foundLabels[detection.band]} onSelect={onSelect} interactions={interactions} />
           : <Models points={points} measure={measure} onSelect={onSelect} interactions={interactions} />}
     {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={view === 'tradeoff' ? 'Found' : measure} axes={view === 'models' ? [] : view === 'tradeoff' ? [axis, pair] : [axis]} place={hovered} />}
@@ -268,8 +269,8 @@ const labelOf = (points: Point[], withMethod = false) => {
 
 type Plotted = Point & { x: number; y: number }
 
-function Scatter({ points, dimensions, axis, scale, spotlight, marked, named, onSelect, interactions, yTitle, height = 400 }: {
-  dimensions: string; points: Plotted[]; axis: Axis; scale: Scale; spotlight: string | null; marked: string | null; named?: Set<string>; onSelect: (id: string) => void; interactions: Interactions; yTitle: string; height?: number
+function Scatter({ points, dimensions, axis, scale, spotlight, marked, named, tops, onSelect, interactions, yTitle, height = 400 }: {
+  dimensions: string; points: Plotted[]; axis: Axis; scale: Scale; spotlight: string | null; marked: string | null; named?: Set<string>; tops?: Set<string>; onSelect: (id: string) => void; interactions: Interactions; yTitle: string; height?: number
 }) {
   const { ref, width } = useElementSize()
   const corner = useId()
@@ -278,7 +279,7 @@ function Scatter({ points, dimensions, axis, scale, spotlight, marked, named, on
   const px = (value: number) => position(scale, value, plot.left, plot.right)
   const py = (value: number) => plot.bottom - value / 100 * (plot.bottom - plot.top)
   const modelLabel = labelOf(points), fullLabel = labelOf(points, true)
-  const labelText = (configuration: Configuration) => configuration.id === marked ? fullLabel(configuration) : modelLabel(configuration)
+  const labelText = (configuration: Configuration) => configuration.id === marked || (width >= 600 && tops?.has(configuration.id)) ? fullLabel(configuration) : modelLabel(configuration)
   const ordered = [...points].sort((left, right) => right.y - left.y)
   const nudge = new Map<string, number>()
   const drawn: { x: number; y: number }[] = []
@@ -313,7 +314,9 @@ function Scatter({ points, dimensions, axis, scale, spotlight, marked, named, on
   const alone = (point: Plotted) => ordered.every(other => other === point || Math.hypot(sx(other) - sx(point), py(other.y) - py(point.y)) > 24)
   const placed = width ? [...leading, ...placeLabels(shown.filter(point => !first(point) && alone(point)).map(request), [...obstacles, ...leading.map(label => label.box)], bounds, width < 600 ? [12, 20] : [12, 22, 34, 46])] : []
   const labels = markedPoint && width && !placed.some(label => label.id === marked)
-    ? [{ id: markedPoint.summary.configuration.id, x: sx(markedPoint) + 12, y: py(markedPoint.y), anchor: 'start' as const, leader: false }, ...placed] : placed
+    ? [sx(markedPoint) + 12 + textWidth(labelText(markedPoint.summary.configuration)) > width
+      ? { id: markedPoint.summary.configuration.id, x: sx(markedPoint) - 12, y: py(markedPoint.y), anchor: 'end' as const, leader: false }
+      : { id: markedPoint.summary.configuration.id, x: sx(markedPoint) + 12, y: py(markedPoint.y), anchor: 'start' as const, leader: false }, ...placed] : placed
   const xTicks = ticks(scale, width > 700)
   return <div ref={ref} className="tradeoff">
     {width > 0 && <svg width={width} height={height} role="group" aria-label={`Plot of ${dimensions}. A line joins the setups of each review method.`}>
