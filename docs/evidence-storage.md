@@ -240,8 +240,8 @@ The rules find only the fields above and the values the file lists. An identifie
 ### At write time
 
 - `file-attempt` and `evidence archive-transcripts` pack each transcript as redaction leaves it. The archive's member list and its restoration check compare with that form, and the transcripts in the attempt directory are not changed, so an archive written this way differs from the live files only in the replaced values. An existing archive whose members match the transcripts as they are, written before this change, is accepted as before.
-- `file-attempt` files redacted copies of the attempt's records, logs, `stdout.jsonl`, `codex-config.toml` and native payload, and `native_payload.sha256` in `attempt.json` is the hash of the filed copy. When anything was replaced, `attempt.json` says so in `notes`.
-- `regrade archive-attempt` packs each member as redaction leaves it, and `evidence.json` lists the hash of that member. When a member changed, `evidence.json` has a `redaction` entry.
+- `file-attempt` files redacted copies of the attempt's records, logs, `stdout.jsonl`, `codex-config.toml` and native payload, and `native_payload.sha256` in `attempt.json` is the hash of the filed copy. When anything was replaced, `attempt.json` says so in `notes`. When an archived transcript or a filed copy holds an identifier the tool cannot rewrite, a note says how many transcripts and which copies; the command still succeeds, and the hooks and `evidence publish` refuse such a file.
+- `regrade archive-attempt` packs each member as redaction leaves it, and `evidence.json` lists the hash of that member. When a member changed, or holds an identifier the tool cannot rewrite, `evidence.json` has a `redaction` entry.
 - `evidence pack` refuses an `evidence` input that redaction would change or cannot rewrite, and `evidence publish` refuses a package with such an `evidence` member before it uploads anything. `reproducibility` inputs, such as dependency caches and toolchains, are not read. To capture a workspace for retirement, redact it first, then take its inventory.
 
 When nothing matches, every output is byte for byte what it was before redaction existed.
@@ -256,13 +256,17 @@ bench/tools/bench-tools redaction check --changed BASE    # files that differ fr
 bench/tools/bench-tools redaction apply PATH...           # rewrite in place, printing each path changed
 ```
 
-`check` exits 0 when nothing would change, 1 listing each file, or `file!member` inside an archive, that would change or cannot be redacted, and 2 on an error. `--require-values` makes it fail when the values file is absent. Fix a refusal with `redaction apply` before any record pins the file's hash.
+`check` exits 0 when nothing would change, 1 listing each file, or `file!member` inside an archive, that would change or cannot be redacted, and 2 on an error. `--require-values` makes it fail when the values file is absent. Fix a `would change` line with `redaction apply` before any record pins the file's hash. A `cannot redact` line names a file the tool does not rewrite, such as a SQLite database or a zip member: redact it by other means or leave it out, and do not commit or publish it.
 
 The committed hooks in `.githooks/` run `check --staged --require-values` before each commit and `check --message --require-values` on each commit message. `bun install` installs them through the `hooks:install` script, which sets `core.hooksPath`.
 
 The hooks do not use the runtime store. The launcher runs only the runtime selected for the crate at `HEAD`, so a hook that went through it would need a new selection after every Rust change. `bun run hooks:tool` builds the check once and keeps it under `~/.cache/code-review-bench/redaction-check/`, named by the Git blob of `rust/bench-tools/src/redaction.rs` at `HEAD`. Every checkout on the machine with the same rules shares that build, and a change to the rules asks for a new one. A hook refuses the commit when the check cannot run: when that build is absent, or when the values file is missing.
 
 CI runs `check --changed` on every pull request and push with the field rules only, since it holds no values.
+
+### Pushes
+
+`.githooks/pre-push` allows a push only when each pushed commit descends from one of the two commits the 2026-11-13 re-creation began with, because every earlier history holds unredacted evidence. A push from a shallow clone that lacks those commits is refused too, and so is a push of one of the few commits older than them; a push to a remote whose URL contains `code-review-bench-archive` goes through. It cannot guard a worktree checked out at an earlier commit: `core.hooksPath` is `.githooks`, so that worktree has no hooks, and the safe course is a fresh, full clone.
 
 ## Account redaction of 2026-11-13
 
