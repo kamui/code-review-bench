@@ -38,6 +38,7 @@ export function SetupName({ configuration, mark = true }: { configuration: Confi
 
 /** The second Overview panel: the refuted or unproven share, or cost when the first panel already measures refuted claims. */
 export const pairedAxis = (axis: Axis): Axis => axis === 'doubt' || axis === 'refuted' ? 'cost' : 'doubt'
+export const panelAxes = (axis: Axis): [Axis, Axis] => pairedAxis(axis) === 'cost' ? ['cost', axis] : [axis, pairedAxis(axis)]
 const lowValueHeads: Record<Axis, string> = { cost: 'Cost', doubt: 'Share', refuted: 'Refuted', tokens: 'Tokens', time: 'Time' }
 const shortAxis: Record<Axis, string> = { cost: 'Cost per trial', doubt: 'Refuted or unproven', refuted: 'Refuted claims per review', tokens: 'Output tokens', time: 'Median time' }
 export const axisLabels: Record<Axis, string> = {
@@ -126,12 +127,12 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
   const lowsAreTops = [...methodTops].every(([method, top]) => methodLows.get(method)?.summary.configuration.id === top.summary.configuration.id)
   const topIds = new Set([...methodTops.values()].map(point => point.summary.configuration.id))
   const named = new Set([...methodTops.values(), ...lowest(point => metricOf(point.summary, 'cost')).values()].map(point => point.summary.configuration.id))
-  const pair = pairedAxis(axis)
+  const pair = pairedAxis(axis), shownAxes = panelAxes(axis)
   const plotted = (on: Axis): Plotted[] => points.flatMap(point => {
     const metric = metricOf(point.summary, on)
     return metric === null ? [] : [{ ...point, metric, bounded: boundedOn(point.summary, on), x: metric, y: point.summary.detection ?? 0 }]
   })
-  const panels = view === 'tradeoff' ? [axis, pair].map(on => { const panel = plotted(on); return { on, points: panel, scale: scaleFor(on, panel.map(point => point.x)) } }) : []
+  const panels = view === 'tradeoff' ? shownAxes.map(on => { const panel = plotted(on); return { on, points: panel, scale: scaleFor(on, panel.map(point => point.x)) } }) : []
   const bounded = (view === 'tradeoff' ? panels.flatMap(panel => panel.points) : measured).some(point => point.bounded)
   const boundedAxis = view === 'tradeoff' && !measured.some(point => point.bounded) ? pair : axis
   const pinAndSelect = (id: string) => { linked?.pin(id); onSelect(id) }
@@ -145,18 +146,17 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
           axis={panel.on} scale={panel.scale} spotlight={spotlight?.method ?? null} marked={hovered?.id ?? linked?.id ?? null} named={named} tops={topIds} onSelect={pinAndSelect} interactions={interactions} yTitle={foundLabels[detection.band]} height={height} />)}</div>
         : view === 'skills' ? <MethodPanels points={measured} axis={axis} scale={scale} yTitle={foundLabels[detection.band]} onSelect={onSelect} interactions={interactions} />
           : <Models points={points} measure={measure} onSelect={onSelect} interactions={interactions} />}
-    {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={view === 'tradeoff' ? 'Found' : measure} axes={view === 'models' ? [] : view === 'tradeoff' ? [axis, pair] : [axis]} place={hovered} />}
+    {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={view === 'tradeoff' ? 'Found' : measure} axes={view === 'models' ? [] : view === 'tradeoff' ? shownAxes : [axis]} place={hovered} />}
     {view === 'tradeoff' && methodTops.size > 0 && <div className={lowsAreTops ? 'method-strip lows-are-tops' : 'method-strip'}>
-      <div className="strip-row strip-head"><span>Review method</span><span>Top setup (most found)</span><span>Found</span><span><Glossed text={shortAxis[axis]} /></span><span><Glossed text={shortAxis[pair]} /></span><span className="strip-low strip-low-head"><span className="strip-low-title">Lowest {lowerFirst(shortAxis[axis])} in the method</span>
+      <div className="strip-row strip-head"><span>Review method</span><span>Top setup (most found)</span><span>Found</span>{shownAxes.map(on => <span key={on}><Glossed text={shortAxis[on]} /></span>)}<span className="strip-low strip-low-head"><span className="strip-low-title">Lowest {lowerFirst(shortAxis[axis])} in the method</span>
         <span className="strip-low-model">Model</span><span className="strip-low-value">{lowValueHeads[axis]}</span><span className="strip-low-found">Found</span></span></div>
       <ul aria-label="Each review method's top setup, from the method that finds the most">{[...methodTops].map(([method, top]) => {
         const { configuration } = top.summary, { model, effort } = setupParts(configuration)
-        const second = metricOf(top.summary, pair), secondText = formatMetric(pair, second, top.starred, boundedOn(top.summary, pair), 0)
-        const first = formatMetric(axis, top.x, top.starred, top.bounded, 0)
+        const values = shownAxes.map(on => ({ on, text: formatMetric(on, metricOf(top.summary, on), top.starred, boundedOn(top.summary, on), 0) }))
         const low = methodLows.get(method), lowText = low ? formatMetric(axis, low.x, low.starred, low.bounded, 0) : null
         const lowModel = low ? setupParts(low.summary.configuration).model : null
         return <li key={method}><button type="button" className="strip-row" aria-pressed={spotlight?.method === method && spotlight.pinned}
-          aria-label={`${method}: top setup ${model}${effort ? ` ${effort}` : ''}, ${percent(top.y, 0)} found, ${axisLabels[axis]} ${first}, ${axisLabels[pair]} ${secondText}${low ? `, lowest ${lowerFirst(axisLabels[axis])} ${lowText} with ${lowModel}, ${percent(low.y, 0)} found` : ''}. Select to keep this method picked out`}
+          aria-label={`${method}: top setup ${model}${effort ? ` ${effort}` : ''}, ${percent(top.y, 0)} found, ${values.map(value => `${axisLabels[value.on]} ${value.text}`).join(', ')}${low ? `, lowest ${lowerFirst(axisLabels[axis])} ${lowText} with ${lowModel}, ${percent(low.y, 0)} found` : ''}. Select to keep this method picked out`}
           onMouseEnter={() => { preview(method)(); linked?.point(configuration.id) }} onMouseLeave={() => { preview(null)(); linked?.point(null) }}
           onFocus={() => { preview(method)(); linked?.point(configuration.id) }} onBlur={() => { preview(null)(); linked?.point(null) }}
           onClick={() => setSpotlight(current => current?.pinned && current.method === method ? null : { method, pinned: true })}>
@@ -165,8 +165,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
           <span className="strip-value strip-found" data-label="Found"><span className="strip-dots" aria-hidden="true" style={{ '--mark-color': reviewColor(configuration) } as CSSProperties}>
             {[0, 50, 100].map(tick => <span key={tick} className="strip-tick" style={{ left: `${tick}%` }} />)}
             {measured.filter(point => setupParts(point.summary.configuration).method === method).map(point =>
-              <span key={point.summary.configuration.id} className={point === top ? 'strip-dot top' : 'strip-dot'} style={{ left: `${point.y}%` }} />)}</span><Score summary={top.summary} /></span><span className={stripValue(first)} data-label={shortAxis[axis]}>{first}</span>
-          <span className={stripValue(secondText)} data-label={shortAxis[pair]}>{secondText}</span>
+              <span key={point.summary.configuration.id} className={point === top ? 'strip-dot top' : 'strip-dot'} style={{ left: `${point.y}%` }} />)}</span><Score summary={top.summary} /></span>{values.map(value => <span key={value.on} className={stripValue(value.text)} data-label={shortAxis[value.on]}>{value.text}</span>)}
           <span className="strip-low" data-label={axis === 'cost' ? 'Lowest cost' : `Lowest ${lowerFirst(shortAxis[axis])}`}>{low && low.summary.configuration.id === configuration.id ? !lowsAreTops && <span className="strip-low-same">Same as the top setup</span> : low && <><span className="strip-low-model">{lowModel}</span><span className="strip-low-value">{lowText}</span><span className="strip-low-found">{percent(low.y, 0)}<span className="found-word"> found</span></span></>}</span></button></li>
       })}</ul>{lowsAreTops && <p className="strip-note">Each top setup also has its method's lowest {lowerFirst(shortAxis[axis])}.</p>}</div>}
     {view === 'tradeoff' && points.length > 0 && <ul className="chart-keys twin-key" aria-label="Chart key">
