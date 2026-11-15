@@ -257,6 +257,10 @@ describe('overview', () => {
     expect(text(overview)).toContain('The 9 known problems weigh the same, so one problem caught in every review is 11.1 points.')
   })
 
+  test('keeps cost first when the plotted measure is paired with it', () => {
+    expect(text(markup(fixture, 'scorecard', { axis: 'refuted' }))).toContain('Serious problems found against cost and refuted claims')
+  })
+
   test('the lead chart lists each review method\'s top setup, from most found, with its found share and cost', () => {
     expect(text(overview)).toMatch(/ce-code-review Fixture A · High 85% \$2\.50 .*Claude built-in Fixture A · High 78% \$1\.20/)
   })
