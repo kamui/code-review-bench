@@ -1690,7 +1690,9 @@ pub fn round_faults(repo: &Repo, directory: &PyPath) -> Py<Vec<String>> {
             ));
         }
     }
-    if item(&sheet, "closed")?.truthy() {
+    if has(&sheet, "replaced_by")? {
+        found.extend(replaced_faults(repo, &sheet, &names)?);
+    } else if item(&sheet, "closed")?.truthy() {
         for (name, _) in glob(&names, &points_of("*.before.json"))? {
             let stem = &name[..name.len() - ".before.json".len()];
             let after = directory.join(&[stem, b".after.json"].concat());
@@ -1703,6 +1705,42 @@ pub fn round_faults(repo: &Repo, directory: &PyPath) -> Py<Vec<String>> {
         }
     }
     Ok(found)
+}
+
+/// What a round file that names its replacing round in `replaced_by` lacks: it is closed, its pin verifies and names
+/// another round's opening, and no decision was recorded in the round.
+fn replaced_faults(repo: &Repo, sheet: &Value, names: &[(Vec<u8>, Vec<u32>)]) -> Py<Vec<String>> {
+    let mut found = Vec::new();
+    if !matches!(item(sheet, "closed")?, Value::Bool(true)) {
+        found.push("a round with `replaced_by` must be closed: set `closed` to true".into());
+    }
+    let pin = item(sheet, "replaced_by")?;
+    if !pinned(repo, pin)? {
+        found.push(
+            "`replaced_by` must pin the opening.json of the round that replaces this one, by path and sha256".into(),
+        );
+    } else if !another_opening(repo, pin, item(sheet, "round")?)? {
+        found.push("`replaced_by` must pin the opening of another round: an opening.json whose `round` names the round that replaces this one".into());
+    }
+    for (name, _) in glob(names, &points_of("*.after.json"))? {
+        found.push(format!(
+            "{} is an after-record, so a decision was recorded in this round, and a round with a decision cannot be closed as replaced: remove `replaced_by` and close it with an after-record for every before-record",
+            pytext::stderr_text(&name)
+        ));
+    }
+    Ok(found)
+}
+
+/// Whether the pinned file is a round opening, with its round's name and its closed rounds, of a round other than
+/// `round`.
+fn another_opening(repo: &Repo, pin: &Value, round: &Value) -> Py<bool> {
+    let Ok(Value::Object(opening)) = repo.load(&repo.path(item(pin, "path")?)?) else {
+        return Ok(false);
+    };
+    Ok(
+        matches!(opening.get("round"), Some(Value::Str(name)) if !name.is_empty() && !round.py_eq(&pyvalue::text(name)))
+            && matches!(opening.get("closed_rounds"), Some(Value::Array(_))),
+    )
 }
 
 fn points_of(text: &str) -> Vec<u32> {
