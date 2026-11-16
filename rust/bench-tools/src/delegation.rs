@@ -1250,7 +1250,7 @@ pub fn filing_faults(repo: &Repo, decision: &Value, filed: Filed) -> Py<Vec<Stri
     }
     let before_path = repo.path(item(item(&after, "before")?, "path")?)?;
     let before = record::read_before(repo, &before_path)?;
-    let mut found = record::faults(repo, &before)?;
+    let mut found = record::faults(repo, &before, &before_path)?;
     if !found.is_empty() {
         return Ok(found);
     }

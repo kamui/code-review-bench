@@ -5050,7 +5050,7 @@ fn run_ruling_check(
     let mut output = Vec::new();
     let outcome = (|| -> pyvalue::Py<u8> {
         let record = ruling::record::read_before(&repo, &before_path)?;
-        let mut problems = ruling::record::faults(&repo, &record)?;
+        let mut problems = ruling::record::faults(&repo, &record, &before_path)?;
         let after = match after {
             Some(path) => repo.load(&PyPath::new(pytext::os_bytes(path)))?,
             None => bench_tools::pyjson::Value::Null,
@@ -5116,7 +5116,7 @@ fn run_ruling_route(
     let before_path = PyPath::new(pytext::os_bytes(before));
     let outcome = (|| -> pyvalue::Py<(Vec<u8>, u8)> {
         let record = ruling::record::read_before(&repo, &before_path)?;
-        let mut problems = ruling::record::faults(&repo, &record)?;
+        let mut problems = ruling::record::faults(&repo, &record, &before_path)?;
         let two = bench_tools::pyjson::Value::Int("2".into());
         if !pyvalue::get(&record, "contract")?.py_eq(&two) {
             problems.push(

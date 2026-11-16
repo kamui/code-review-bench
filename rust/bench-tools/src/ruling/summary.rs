@@ -131,7 +131,7 @@ pub fn ordered_records(repo: &Repo) -> Py<Vec<Pair>> {
     let mut pairs = Vec::new();
     for path in rglob(&research, "*.before.json")? {
         let before = record::read_before(repo, &path)?;
-        let mut problems = record::faults(repo, &before)?;
+        let mut problems = record::faults(repo, &before, &path)?;
         let directory = parent_bytes(path.as_bytes());
         let round_path = PyPath::new(directory).join(b"round.json");
         if !pyvalue::is_file(&round_path) {
@@ -225,7 +225,7 @@ pub fn ordered_records(repo: &Repo) -> Py<Vec<Pair>> {
         .collect())
 }
 
-fn parent_bytes(path: &[u8]) -> &[u8] {
+pub(super) fn parent_bytes(path: &[u8]) -> &[u8] {
     match path.iter().rposition(|byte| *byte == b'/') {
         Some(0) => b"/",
         Some(position) => &path[..position],

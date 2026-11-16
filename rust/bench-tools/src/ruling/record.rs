@@ -740,8 +740,62 @@ fn second_faults(repo: &Repo, record: &Value) -> Py<Vec<String>> {
     }
 }
 
-/// What the before-record lacks; empty when it follows docs/adjudication-record.md.
-pub fn faults(repo: &Repo, record: &Value) -> Py<Vec<String>> {
+/// What the before-record at `path` lacks; empty when it follows docs/adjudication-record.md.
+pub fn faults(repo: &Repo, record: &Value, path: &PyPath) -> Py<Vec<String>> {
+    let mut found = shape_faults(repo, record)?;
+    found.extend(policy_pin_faults(repo, record, path)?);
+    Ok(found)
+}
+
+/// The owner decided on 2026-11-16 that a round opened after this date must pin its policy, so that an opening copied
+/// from an older round cannot run the round under policy v2 unnoticed.
+const UNPINNED_THROUGH: &str = "2026-11-14";
+
+fn opened_later(opened: &Value) -> bool {
+    matches!(opened, Value::Str(opened) if pyvalue::is_date(opened) && opened.as_str() > UNPINNED_THROUGH)
+}
+
+/// Why `pin`, held in `field`, does not give a round opened after [`UNPINNED_THROUGH`] a policy; `None` when it pins
+/// an opening that holds `policy`.
+fn opening_policy_fault(repo: &Repo, pin: &Value, field: &str) -> Py<Option<String>> {
+    if !pinned(repo, pin)? {
+        return Ok(Some(format!(
+            "`{field}` must pin the round's opening.json by path and sha256: the round opened after {UNPINNED_THROUGH}, so its opening must hold a policy"
+        )));
+    }
+    let holds_policy = matches!(
+        repo.load(&repo.path(item(pin, "path")?)?),
+        Ok(Value::Object(snapshot)) if snapshot.get("policy").is_some()
+    );
+    Ok((!holds_policy).then(|| {
+        format!(
+            "a round opened after {UNPINNED_THROUGH} must pin a policy in its opening, and the opening.json that `{field}` pins holds no `policy`: before any answer, save an opening whose `policy` pins {}, the adopted policy, by path and sha256, or {} for a round meant to run under policy v2",
+            delegation::v3::POLICY,
+            delegation::POLICY
+        )
+    }))
+}
+
+/// The refusal of a record whose round opened after [`UNPINNED_THROUGH`], by the `opened` date of the `round.json`
+/// beside it. A round file that cannot be read is left to the checks that refuse it.
+fn policy_pin_faults(repo: &Repo, record: &Value, path: &PyPath) -> Py<Vec<String>> {
+    let sheet =
+        repo.load(&PyPath::new(super::summary::parent_bytes(path.as_bytes())).join(b"round.json"));
+    let later = matches!(
+        sheet.as_ref().map(|sheet| get(sheet, "opened")),
+        Ok(Ok(opened)) if opened_later(opened)
+    );
+    if !later {
+        return Ok(Vec::new());
+    }
+    Ok(
+        opening_policy_fault(repo, get(record, "round_opening")?, "round_opening")?
+            .into_iter()
+            .collect(),
+    )
+}
+
+fn shape_faults(repo: &Repo, record: &Value) -> Py<Vec<String>> {
     let contract = pyvalue::get_or(record, "contract", &Value::Int("1".into()))?.clone();
     if !contract.py_eq(&Value::Int("1".into())) {
         return if contract.py_eq(&Value::Int("2".into())) {
@@ -1585,6 +1639,13 @@ pub fn round_faults(repo: &Repo, directory: &PyPath) -> Py<Vec<String>> {
         || !matches!(item(&sheet, "closed")?, Value::Bool(_))
     {
         found.push("round.json needs `round`, its name, `opened`, a date as YYYY-MM-DD, and `closed`, true or false".into());
+    }
+    if opened_later(item(&sheet, "opened")?) {
+        found.extend(opening_policy_fault(
+            repo,
+            get(&sheet, "opening")?,
+            "opening",
+        )?);
     }
     let no_record = item(&sheet, "no_record")?;
     let reasons_given = match no_record {
