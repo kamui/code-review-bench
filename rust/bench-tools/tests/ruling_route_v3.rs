@@ -1,5 +1,6 @@
 //! A round whose opening pins policy v3 routes, settles and files on agreement (ADR-0008); a round whose opening
-//! pins no policy routes under policy v2 as before. These cases take the `ruling-route-settles-level-1` corpus case:
+//! pins no policy routes under policy v2 as before when it opened by 2026-11-14, and is refused when it opened later.
+//! These cases take the `ruling-route-settles-level-1` corpus case:
 //! a closed round of fifteen agreed credit decisions on four pull requests that the owner decided the same, and an
 //! open round with one agreed decision. Most cases turn every record into a candidate decision on `refuted`.
 
@@ -9,7 +10,7 @@ use bench_tools::pytext::PyPath;
 use bench_tools::ruling::{Repo, record, summary};
 use bench_tools::sha256::hex_digest;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 
 const EARNED: &str = "docs/research/earned-2026-01-01/rulings";
 const CURRENT: &str = "docs/research/current-2026-02-01/rulings";
@@ -112,14 +113,18 @@ impl Root {
         PyPath::new(self.0.join(path).as_os_str().as_encoded_bytes())
     }
 
-    /// `bench-tools ruling route BEFORE ARGS...` run from the root.
-    fn route(&self, before: &str, arguments: &[&str]) -> String {
-        let output = Command::new(env!("CARGO_BIN_EXE_bench-tools"))
-            .args(["ruling", "route", before])
+    /// `bench-tools ARGS...` run from the root.
+    fn run(&self, arguments: &[&str]) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_bench-tools"))
             .args(arguments)
             .current_dir(&self.0)
             .output()
-            .unwrap();
+            .unwrap()
+    }
+
+    /// `bench-tools ruling route BEFORE ARGS...` run from the root.
+    fn route(&self, before: &str, arguments: &[&str]) -> String {
+        let output = self.run(&[&["ruling", "route", before], arguments].concat());
         assert!(
             output.status.success(),
             "{}",
@@ -423,6 +428,76 @@ fn a_round_whose_opening_pins_no_policy_routes_under_policy_v2_beside_a_v3_file(
         root.route(BEFORE, &["--policy", "bench/grading/delegation.v2.json"]),
         "SETTLE level 1\n"
     );
+}
+
+const UNPINNED: &str = "a round opened after 2026-11-14 must pin a policy in its opening: give its opening.json a `policy` that pins bench/grading/delegation.v3.json, the adopted policy, by path and sha256, or bench/grading/delegation.v2.json for a round meant to run under policy v2";
+
+fn opened(root: &Root, date: &str) {
+    root.edit(&format!("{CURRENT}/round.json"), |object| {
+        object.insert("opened".into(), text(date));
+    });
+}
+
+fn stdout(output: &Output) -> String {
+    String::from_utf8(output.stdout.clone()).unwrap()
+}
+
+fn stderr(output: &Output) -> String {
+    String::from_utf8(output.stderr.clone()).unwrap()
+}
+
+#[test]
+fn a_round_opened_after_2026_11_14_whose_opening_pins_no_policy_is_refused() {
+    let root = corpus("unpinned-later");
+    opened(&root, "2026-11-15");
+    for command in ["check", "route"] {
+        let output = root.run(&["ruling", command, BEFORE]);
+        assert_eq!(output.status.code(), Some(1), "{command}");
+        assert_eq!(stdout(&output), format!("{UNPINNED}\n"), "{command}");
+    }
+    let output = root.run(&["ruling", "summary"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(stdout(&output), "");
+    assert!(
+        stderr(&output).ends_with(&format!("{BEFORE}: {UNPINNED}\n")),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_round_opened_on_or_before_2026_11_14_whose_opening_pins_no_policy_still_runs_under_policy_v2()
+{
+    let root = corpus("unpinned-earlier");
+    opened(&root, "2026-11-14");
+    let check = root.run(&["ruling", "check", BEFORE]);
+    assert_eq!(check.status.code(), Some(0), "{}", stdout(&check));
+    assert_eq!(root.route(BEFORE, &[]), "SETTLE level 1\n");
+    let summary = root.run(&["ruling", "summary"]);
+    assert_eq!(summary.status.code(), Some(0), "{}", stderr(&summary));
+}
+
+#[test]
+fn a_round_opened_after_2026_11_14_that_pins_policy_v3_or_v2_is_unaffected() {
+    for (at, policy) in [V3, "bench/grading/delegation.v2.json"]
+        .into_iter()
+        .enumerate()
+    {
+        let root = candidates(&format!("pinned-later-{at}"));
+        open_under(&root, policy, &[]);
+        let routed = root.route(BEFORE, &[]);
+        let summary = root.run(&["ruling", "summary"]);
+        assert_eq!(summary.status.code(), Some(0), "{}", stderr(&summary));
+        opened(&root, "2026-11-15");
+        let check = root.run(&["ruling", "check", BEFORE]);
+        assert_eq!(check.status.code(), Some(0), "{policy}: {}", stdout(&check));
+        assert_eq!(root.route(BEFORE, &[]), routed, "{policy}");
+        assert_eq!(
+            root.run(&["ruling", "summary"]).stdout,
+            summary.stdout,
+            "{policy}"
+        );
+    }
 }
 
 #[test]

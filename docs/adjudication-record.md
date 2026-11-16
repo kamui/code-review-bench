@@ -303,9 +303,9 @@ A replay settles nothing and grants no authority. The owner made the replayed de
 
 ## Round opening and policy v3
 
-The owner adopted policy v3 on 2026-11-12; the [receipt](../bench/grading/rulings/delegation.v3.md) holds the answer. A round runs under v3 only when its opening pins the adopted file, so a round whose opening pins no policy keeps running under policy v2.
+The owner adopted policy v3 on 2026-11-12; the [receipt](../bench/grading/rulings/delegation.v3.md) holds the answer. A round runs under v3 only when its opening pins the adopted file. On 2026-11-16 the owner made policy v3 the default for every new reconciliation round, and decided that the tool refuses a new round whose opening holds no `policy`.
 
-A round's `opening.json` may hold `policy`, a path/SHA-256 pin to a policy file. A round whose opening holds no `policy` runs under policy v2, as every round saved so far does. A round whose opening pins a policy runs under that file for all its decisions:
+A round's `opening.json` may hold `policy`, a path/SHA-256 pin to a policy file. A round opened on or before 2026-11-14 whose opening holds no `policy` runs under policy v2, as every such saved round does. A round opened later must hold `policy`. The date is `opened` in the round's `round.json`. `ruling check`, `ruling route`, `ruling summary` and filing stop on a record of a later round whose opening holds no `policy`, and the message says to pin `bench/grading/delegation.v3.json`, the adopted policy, or `bench/grading/delegation.v2.json` for a round meant to run under policy v2. A round whose opening pins a policy runs under that file for all its decisions:
 
 - `ruling route` reads the pinned policy. A `--policy` that names another file is a reason to ask, not an override.
 - The pin names `bench/grading/delegation.v2.json` or `bench/grading/delegation.v3.json`. A round cannot run under a policy file saved anywhere else.

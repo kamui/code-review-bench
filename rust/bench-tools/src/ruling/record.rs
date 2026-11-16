@@ -740,8 +740,47 @@ fn second_faults(repo: &Repo, record: &Value) -> Py<Vec<String>> {
     }
 }
 
-/// What the before-record lacks; empty when it follows docs/adjudication-record.md.
-pub fn faults(repo: &Repo, record: &Value) -> Py<Vec<String>> {
+/// What the before-record at `path` lacks; empty when it follows docs/adjudication-record.md.
+pub fn faults(repo: &Repo, record: &Value, path: &PyPath) -> Py<Vec<String>> {
+    let mut found = shape_faults(repo, record)?;
+    found.extend(policy_pin_faults(repo, record, path)?);
+    Ok(found)
+}
+
+/// The owner decided on 2026-11-16 that a round opened after this date must pin its policy, so that an opening copied
+/// from an older round cannot run the round under policy v2 unnoticed.
+const UNPINNED_THROUGH: &str = "2026-11-14";
+
+/// The refusal of a record whose round opened after [`UNPINNED_THROUGH`], by the `opened` date of the `round.json`
+/// beside it, and whose pinned opening holds no `policy`. A round file or opening that cannot be read is left to the
+/// checks that refuse it.
+fn policy_pin_faults(repo: &Repo, record: &Value, path: &PyPath) -> Py<Vec<String>> {
+    let sheet =
+        repo.load(&PyPath::new(super::summary::parent_bytes(path.as_bytes())).join(b"round.json"));
+    let opened_later = matches!(
+        sheet.as_ref().map(|sheet| get(sheet, "opened")),
+        Ok(Ok(Value::Str(opened))) if pyvalue::is_date(opened) && opened.as_str() > UNPINNED_THROUGH
+    );
+    let opening = get(record, "round_opening")?;
+    if !opened_later || !pinned(repo, opening)? {
+        return Ok(Vec::new());
+    }
+    let unpinned = matches!(
+        repo.load(&repo.path(item(opening, "path")?)?),
+        Ok(Value::Object(snapshot)) if snapshot.get("policy").is_none()
+    );
+    Ok(if unpinned {
+        vec![format!(
+            "a round opened after {UNPINNED_THROUGH} must pin a policy in its opening: give its opening.json a `policy` that pins {}, the adopted policy, by path and sha256, or {} for a round meant to run under policy v2",
+            delegation::v3::POLICY,
+            delegation::POLICY
+        )]
+    } else {
+        Vec::new()
+    })
+}
+
+fn shape_faults(repo: &Repo, record: &Value) -> Py<Vec<String>> {
     let contract = pyvalue::get_or(record, "contract", &Value::Int("1".into()))?.clone();
     if !contract.py_eq(&Value::Int("1".into())) {
         return if contract.py_eq(&Value::Int("2".into())) {

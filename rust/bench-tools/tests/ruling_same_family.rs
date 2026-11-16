@@ -115,12 +115,9 @@ fn state(
 ) -> (Vec<String>, Vec<String>, bool) {
     std::fs::write(root.join(BEFORE), edit(original)).unwrap();
     let repo = Repo::new(root.as_os_str().as_encoded_bytes());
-    let before = record::read_before(
-        &repo,
-        &PyPath::new(root.join(BEFORE).as_os_str().as_encoded_bytes()),
-    )
-    .unwrap();
-    let faults = record::faults(&repo, &before).unwrap();
+    let path = PyPath::new(root.join(BEFORE).as_os_str().as_encoded_bytes());
+    let before = record::read_before(&repo, &path).unwrap();
+    let faults = record::faults(&repo, &before, &path).unwrap();
     if !faults.is_empty() {
         return (faults, Vec::new(), false);
     }
