@@ -1691,7 +1691,7 @@ pub fn round_faults(repo: &Repo, directory: &PyPath) -> Py<Vec<String>> {
         }
     }
     if has(&sheet, "replaced_by")? {
-        found.extend(replaced_faults(repo, &sheet, &names)?);
+        found.extend(replaced_faults(repo, directory, &sheet, &names)?);
     } else if item(&sheet, "closed")?.truthy() {
         for (name, _) in glob(&names, &points_of("*.before.json"))? {
             let stem = &name[..name.len() - ".before.json".len()];
@@ -1709,7 +1709,12 @@ pub fn round_faults(repo: &Repo, directory: &PyPath) -> Py<Vec<String>> {
 
 /// What a round file that names its replacing round in `replaced_by` lacks: it is closed, its pin verifies and names
 /// another round's opening, and no decision was recorded in the round.
-fn replaced_faults(repo: &Repo, sheet: &Value, names: &[(Vec<u8>, Vec<u32>)]) -> Py<Vec<String>> {
+fn replaced_faults(
+    repo: &Repo,
+    directory: &PyPath,
+    sheet: &Value,
+    names: &[(Vec<u8>, Vec<u32>)],
+) -> Py<Vec<String>> {
     let mut found = Vec::new();
     if !matches!(item(sheet, "closed")?, Value::Bool(true)) {
         found.push("a round with `replaced_by` must be closed: set `closed` to true".into());
@@ -1721,8 +1726,8 @@ fn replaced_faults(repo: &Repo, sheet: &Value, names: &[(Vec<u8>, Vec<u32>)]) ->
         );
     } else if !another_opening(repo, pin, item(sheet, "round")?)? {
         found.push("`replaced_by` must pin the opening of another round: an opening.json whose `round` names the round that replaces this one".into());
-    } else if replaced_in_turn(repo, pin)? {
-        found.push("`replaced_by` must pin the opening of a round that is not replaced itself: pin the round in which the units are decided".into());
+    } else if replaced_in_a_circle(repo, directory, pin)? {
+        found.push("`replaced_by` leads back to a round it has already passed, so no round is left to decide the units: pin the opening of the round in which they are decided".into());
     }
     for (name, _) in glob(names, &points_of("*.after.json"))? {
         found.push(format!(
@@ -1745,14 +1750,35 @@ fn another_opening(repo: &Repo, pin: &Value, round: &Value) -> Py<bool> {
     )
 }
 
-/// Whether the round whose opening is pinned names a replacing round itself. Its round file is the `round.json` of the
-/// `rulings` directory beside the opening, and a round that has only opened holds none yet.
-fn replaced_in_turn(repo: &Repo, pin: &Value) -> Py<bool> {
-    let opening = repo.path(item(pin, "path")?)?;
-    let sheet = PyPath::new(super::summary::parent_bytes(opening.as_bytes()))
-        .join(b"rulings")
-        .join(b"round.json");
-    Ok(pyvalue::is_file(&sheet) && has(&repo.load(&sheet)?, "replaced_by")?)
+/// Whether following `replaced_by` from the round in `directory` comes back to a round already passed. A round's file
+/// is the `round.json` of the `rulings` directory beside its opening, and a round that has only opened holds none
+/// yet. A round file on the way that cannot be followed is left to its own check.
+fn replaced_in_a_circle(repo: &Repo, directory: &PyPath, pin: &Value) -> Py<bool> {
+    let mut passed = vec![crate::pyfs::resolve(
+        directory.join(b"round.json").as_bytes(),
+    )];
+    let mut pin = pin.clone();
+    loop {
+        let opening = repo.path(item(&pin, "path")?)?;
+        let sheet = PyPath::new(super::summary::parent_bytes(opening.as_bytes()))
+            .join(b"rulings")
+            .join(b"round.json");
+        let resolved = crate::pyfs::resolve(sheet.as_bytes());
+        if passed.contains(&resolved) {
+            return Ok(true);
+        }
+        passed.push(resolved);
+        if !pyvalue::is_file(&sheet) {
+            return Ok(false);
+        }
+        let Ok(Value::Object(next)) = repo.load(&sheet) else {
+            return Ok(false);
+        };
+        match next.get("replaced_by") {
+            Some(next) if pinned(repo, next)? => pin = next.clone(),
+            _ => return Ok(false),
+        }
+    }
 }
 
 fn points_of(text: &str) -> Vec<u32> {
