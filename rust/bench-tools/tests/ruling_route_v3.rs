@@ -430,7 +430,17 @@ fn a_round_whose_opening_pins_no_policy_routes_under_policy_v2_beside_a_v3_file(
     );
 }
 
-const UNPINNED: &str = "a round opened after 2026-11-14 must pin a policy in its opening: give its opening.json a `policy` that pins bench/grading/delegation.v3.json, the adopted policy, by path and sha256, or bench/grading/delegation.v2.json for a round meant to run under policy v2";
+fn unpinned(field: &str) -> String {
+    format!(
+        "a round opened after 2026-11-14 must pin a policy in its opening, and the opening.json that `{field}` pins holds no `policy`: before any answer, save an opening whose `policy` pins bench/grading/delegation.v3.json, the adopted policy, by path and sha256, or bench/grading/delegation.v2.json for a round meant to run under policy v2"
+    )
+}
+
+fn no_opening(field: &str) -> String {
+    format!(
+        "`{field}` must pin the round's opening.json by path and sha256: the round opened after 2026-11-14, so its opening must hold a policy"
+    )
+}
 
 fn opened(root: &Root, date: &str) {
     root.edit(&format!("{CURRENT}/round.json"), |object| {
@@ -446,6 +456,18 @@ fn stderr(output: &Output) -> String {
     String::from_utf8(output.stderr.clone()).unwrap()
 }
 
+/// `ruling summary` refused with `message` about the current round's round file.
+fn summary_refuses_the_round(root: &Root, message: &str) {
+    let output = root.run(&["ruling", "summary"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(stdout(&output), "");
+    assert!(
+        stderr(&output).ends_with(&format!("{CURRENT}/round.json: {message}\n")),
+        "{}",
+        stderr(&output)
+    );
+}
+
 #[test]
 fn a_round_opened_after_2026_11_14_whose_opening_pins_no_policy_is_refused() {
     let root = corpus("unpinned-later");
@@ -453,16 +475,40 @@ fn a_round_opened_after_2026_11_14_whose_opening_pins_no_policy_is_refused() {
     for command in ["check", "route"] {
         let output = root.run(&["ruling", command, BEFORE]);
         assert_eq!(output.status.code(), Some(1), "{command}");
-        assert_eq!(stdout(&output), format!("{UNPINNED}\n"), "{command}");
+        assert_eq!(
+            stdout(&output),
+            format!("{}\n", unpinned("round_opening")),
+            "{command}"
+        );
     }
-    let output = root.run(&["ruling", "summary"]);
-    assert_eq!(output.status.code(), Some(1));
-    assert_eq!(stdout(&output), "");
-    assert!(
-        stderr(&output).ends_with(&format!("{BEFORE}: {UNPINNED}\n")),
-        "{}",
-        stderr(&output)
-    );
+    summary_refuses_the_round(&root, &unpinned("opening"));
+}
+
+#[test]
+fn an_unpinned_round_opened_after_2026_11_14_is_refused_before_it_holds_a_record() {
+    let root = corpus("unpinned-later-empty");
+    opened(&root, "2026-11-15");
+    for entry in std::fs::read_dir(root.path().join(CURRENT)).unwrap() {
+        let path = entry.unwrap().path();
+        if path.file_name().unwrap() != "round.json" {
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+    summary_refuses_the_round(&root, &unpinned("opening"));
+}
+
+#[test]
+fn a_round_opened_after_2026_11_14_whose_pins_no_longer_match_its_opening_is_refused() {
+    let root = candidates("stale-later");
+    open(&root);
+    opened(&root, "2026-11-15");
+    root.edit(&format!("{ROUND}/opening.json"), |object| {
+        object.insert("source_commit".into(), text(&"b".repeat(40)));
+    });
+    let check = root.run(&["ruling", "check", BEFORE]);
+    assert_eq!(check.status.code(), Some(1));
+    assert_eq!(stdout(&check), format!("{}\n", no_opening("round_opening")));
+    summary_refuses_the_round(&root, &no_opening("opening"));
 }
 
 #[test]
