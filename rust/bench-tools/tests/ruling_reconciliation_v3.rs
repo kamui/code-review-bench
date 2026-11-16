@@ -957,6 +957,36 @@ fn an_unmarked_row_must_be_the_decision_that_stands() {
     );
 }
 
+/// A round that a later round replaces decided nothing, so its records bind no unit and the audit's rows are checked
+/// as an audit's with no bound record.
+#[test]
+fn the_records_of_a_replaced_round_bind_no_unit() {
+    let root = fixture("replaced");
+    let compared = comparison(&root);
+    let pending = others()[0];
+    assert_eq!(
+        row_faults(&root, &owner_row(pending, "first-error"), &compared),
+        ["the unit's ruling record is not decided"]
+    );
+    let replacing = "docs/research/replacing-2026-03-01/opening.json";
+    root.write(
+        replacing,
+        &format!(
+            r#"{{"round": "replacing", "source_commit": "{}", "closed_rounds": []}}"#,
+            "a".repeat(40)
+        ),
+    );
+    let pin = root.pin(replacing);
+    root.edit(&format!("{CURRENT}/round.json"), |object| {
+        object.insert("closed".into(), Value::Bool(true));
+        object.insert("replaced_by".into(), pin.clone());
+    });
+    assert_eq!(
+        row_faults(&root, &owner_row(pending, "first-error"), &compared),
+        Vec::<String>::new()
+    );
+}
+
 /// Ruling records that bind no unit through `filing`, as every saved audit's do, leave its rows as they were checked.
 #[test]
 fn a_legacy_audit_without_filed_records_validates_as_before() {
