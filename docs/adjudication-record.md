@@ -228,7 +228,7 @@ The tests fail when a round breaks one of these:
 - Every ruling file (`*.md`) has a before-record, or `no_record` gives the reason it has none.
 - In a closed round every before-record has its after-record, unless the round holds `replaced_by`.
 - Every directory that holds a before-record has a `round.json`.
-- A round that holds `replaced_by` is closed, its pin matches the file, the file is the opening of a round with another name, and the round holds no after-record. A round in which a decision was recorded cannot be closed this way.
+- A round that holds `replaced_by` is closed, its pin matches the file, the file is the opening of a round with another name that is not replaced itself, and the round holds no after-record. A round in which a decision was recorded cannot be closed this way.
 
 A round that a later round replaces decided nothing. The tools still check its before-records as they check every record, then leave them out: the summary does not list them as pending or count them, and neither routing, the replay, the sheet of earlier rulings nor the evaluator audit reads them. Its units are decided in the replacing round. A later opening may list it among `closed_rounds`; it adds nothing to any count.
 

@@ -1721,6 +1721,8 @@ fn replaced_faults(repo: &Repo, sheet: &Value, names: &[(Vec<u8>, Vec<u32>)]) ->
         );
     } else if !another_opening(repo, pin, item(sheet, "round")?)? {
         found.push("`replaced_by` must pin the opening of another round: an opening.json whose `round` names the round that replaces this one".into());
+    } else if replaced_in_turn(repo, pin)? {
+        found.push("`replaced_by` must pin the opening of a round that is not replaced itself: pin the round in which the units are decided".into());
     }
     for (name, _) in glob(names, &points_of("*.after.json"))? {
         found.push(format!(
@@ -1741,6 +1743,16 @@ fn another_opening(repo: &Repo, pin: &Value, round: &Value) -> Py<bool> {
         matches!(opening.get("round"), Some(Value::Str(name)) if !name.is_empty() && !round.py_eq(&pyvalue::text(name)))
             && matches!(opening.get("closed_rounds"), Some(Value::Array(_))),
     )
+}
+
+/// Whether the round whose opening is pinned names a replacing round itself. Its round file is the `round.json` of the
+/// `rulings` directory beside the opening, and a round that has only opened holds none yet.
+fn replaced_in_turn(repo: &Repo, pin: &Value) -> Py<bool> {
+    let opening = repo.path(item(pin, "path")?)?;
+    let sheet = PyPath::new(super::summary::parent_bytes(opening.as_bytes()))
+        .join(b"rulings")
+        .join(b"round.json");
+    Ok(pyvalue::is_file(&sheet) && has(&repo.load(&sheet)?, "replaced_by")?)
 }
 
 fn points_of(text: &str) -> Vec<u32> {

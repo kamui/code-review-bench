@@ -19,6 +19,7 @@ const LATER_BEFORE: &str = "docs/research/later-2026-04-01/rulings/case-1.before
 const NOT_CLOSED: &str = "a round with `replaced_by` must be closed: set `closed` to true";
 const UNPINNED: &str = "`replaced_by` must pin the opening.json of the round that replaces this one, by path and sha256";
 const NOT_ANOTHER: &str = "`replaced_by` must pin the opening of another round: an opening.json whose `round` names the round that replaces this one";
+const REPLACED_ITSELF: &str = "`replaced_by` must pin the opening of a round that is not replaced itself: pin the round in which the units are decided";
 const DECIDED: &str = "case-1.after.json is an after-record, so a decision was recorded in this round, and a round with a decision cannot be closed as replaced: remove `replaced_by` and close it with an after-record for every before-record";
 
 fn repository() -> PathBuf {
@@ -274,6 +275,20 @@ fn a_pin_to_the_rounds_own_opening_or_to_a_file_that_is_no_opening_is_refused() 
     assert_eq!(root.round_faults(), [NOT_ANOTHER]);
     replace(&root, root.pin(EARNED), true);
     assert_eq!(root.round_faults(), [NOT_ANOTHER]);
+}
+
+#[test]
+fn a_pin_to_the_opening_of_a_round_that_is_replaced_itself_is_refused() {
+    let root = replaced("chain");
+    root.passes(&["ruling", "summary"]);
+    let own = dumps(&root.pin(&format!("{CURRENT}/opening.json")));
+    root.write(
+        "docs/research/replacing-2026-03-01/rulings/round.json",
+        &format!(
+            r#"{{"round": "replacing", "opened": "2026-03-01", "closed": true, "no_record": {{}}, "replaced_by": {own}}}"#
+        ),
+    );
+    assert_eq!(root.round_faults(), [REPLACED_ITSELF]);
 }
 
 #[test]
