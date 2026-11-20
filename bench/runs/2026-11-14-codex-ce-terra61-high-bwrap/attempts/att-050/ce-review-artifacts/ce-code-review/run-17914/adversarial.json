@@ -1,0 +1,43 @@
+{
+  "reviewer": "adversarial",
+  "findings": [
+    {
+      "title": "Assumed role causes pool configuration to re-enter the pool",
+      "severity": "P1",
+      "file": "django/db/backends/postgresql/base.py",
+      "line": 101,
+      "why_it_matters": "With both pool and assume_role enabled, configuring a newly created physical connection calls ops.compose_sql(), which opens a cursor on the Django wrapper rather than the supplied physical connection. The pool worker consequently tries to borrow another connection before it can finish configuring the first; initial requests can time out waiting for connections and no connection becomes available. If the wrapper already has a connection, the worker instead attempts to use a wrapper owned by another thread.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Compose the SET ROLE statement using the supplied psycopg connection or cursor directly, without invoking the Django wrapper from the pool configuration callback.",
+      "confidence": 100,
+      "evidence": [
+        "django/db/backends/postgresql/base.py:101: sql = ops.compose_sql(\"SET ROLE %s\", [role_name])",
+        "The pool's configure callback is self._configure_connection (base.py:228-232), which calls ensure_role when assume_role is configured (base.py:380-381).",
+        "postgresql/operations.py:192-193 delegates compose_sql to mogrify with self.connection, the Django wrapper; postgresql/psycopg_any.py:20-22 calls wrapper.cursor(), which invokes ensure_connection and attempts pool.getconn() again."
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Session changes leak into later pooled requests",
+      "severity": "P1",
+      "file": "django/db/backends/postgresql/base.py",
+      "line": 395,
+      "why_it_matters": "A request can change session state such as search_path, role, or time zone and close its Django connection; the physical connection is returned to the shared pool without restoring those settings. A later request borrowing it inherits that state, potentially querying a different tenant's schema or running under the previous role. This also affects applications using CONN_MAX_AGE=0 that previously got a fresh session per request.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Reset session-level state when returning or borrowing a connection, and reapply Django's configured timezone and role before it is reused; verify reset behavior for prepared statements and configured connection options.",
+      "confidence": 75,
+      "evidence": [
+        "django/db/backends/postgresql/base.py:395: self.connection._pool.putconn(self.connection)",
+        "The pool is constructed with configure but no reset callback (base.py:228-233), and init_connection_state skips configuration for pooled connections (base.py:401-405).",
+        "docs/ref/databases.txt:92-98 describes connection settings being reinitialized per request unless persistent connections are enabled; pooling requires CONN_MAX_AGE=0 (base.py:208-212)."
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [],
+  "testing_gaps": []
+}
