@@ -100,6 +100,8 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
   const narrow = useMediaQuery('(max-width: 700px)') ?? false
   const views: { label: string; value: MainView; icon: LucideIcon }[] = [{ label: 'Overview', value: 'overview', icon: ChartBarStacked },
     { label: 'By method', value: 'skills', icon: LayoutGrid }, { label: 'By setup', value: 'setups', icon: ChartNoAxesGantt }, { label: 'By model', value: 'models', icon: Cpu }]
+  const plotChoices = view === 'overview' ? axisChoices.filter(choice => choice.value !== 'doubt') : axisChoices
+  const plotted = view === 'overview' && axis === 'doubt' ? 'cost' : axis
   const plotAgainst = (value: string | null) => {
     const next = axes.find(item => item === value)
     if (next) onSearch({ axis: unlessDefault(next, 'cost') }, 'scorecard')
@@ -238,8 +240,8 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
             <Button variant="default" size="xs" className="filters-toggle" leftSection={<SlidersHorizontal size={14} aria-hidden="true" />} rightSection={<ChevronDown size={14} aria-hidden="true" />}
               aria-expanded={optionsOpen} onClick={() => setOptionsOpen(open => !open)}>Chart options · {bandLabels[band]} · {configurations.filter(item => selected.includes(item.id)).length} of {configurations.length} setups</Button>
             {view !== 'models' && <div className="axis-switch"><span className="control-label" id="axis-label">Plot against</span>{narrow
-              ? <Select aria-label="Plot against" size="xs" allowDeselect={false} value={axis} onChange={plotAgainst} data={axisChoices} />
-              : <SegmentedControl aria-label="Plot against" size="xs" value={axis} onChange={plotAgainst} data={axisChoices} />}</div>}
+              ? <Select aria-label="Plot against" size="xs" allowDeselect={false} value={plotted} onChange={plotAgainst} data={plotChoices} />
+              : <SegmentedControl aria-label="Plot against" size="xs" value={plotted} onChange={plotAgainst} data={plotChoices} />}</div>}
           </div>
           <div className="filter-bar" data-open={optionsOpen || undefined}>
             <div className="measure-controls">
@@ -279,7 +281,7 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
               {activeFilters.map(item => <button type="button" key={item.label} className="filter-chip" onClick={item.clear} aria-label={`Remove filter ${item.label}`}>{item.label}<X size={12} aria-hidden="true" /></button>)}
               {activeFilters.length > 0 && <Link className="filter-link" to="/tasks">Edit filters</Link>}
             </div>}
-            {view === 'overview' ? <Overview summaries={summaries} detection={detection} axis={axis} matching={{ included: matchedRefuted.included.length, excluded: matchedRefuted.excluded.length }}
+            {view === 'overview' ? <Overview summaries={summaries} detection={detection} axis={plotted} matching={{ included: matchedRefuted.included.length, excluded: matchedRefuted.excluded.length }}
               basis={{ problems: coverage.bands[band], known: coverage.bands.all, prs: shared.length, awaiting: candidateCount }} onSelect={id => inspect('scorecard')({ kind: 'configuration', id })} />
               : <Chart summaries={summaries} detection={detection} matching={{ included: matchedRefuted.included.length, excluded: matchedRefuted.excluded.length }} axis={axis} view={view} onSelect={id => inspect('scorecard')({ kind: 'configuration', id })} />}
           </div>
