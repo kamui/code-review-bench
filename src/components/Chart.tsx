@@ -304,16 +304,19 @@ function Scatter({ points, dimensions, axis, scale, spotlight, marked, named, to
     })
   }
   const hint = `Higher detection, ${axis === 'doubt' ? 'fewer' : 'lower'} ${lowerFirst((width < 600 ? shortAxis : axisLabels)[axis])}`
-  const obstacles = [
+  const marks = [
     ...ordered.map(point => ({ left: sx(point) - 10, top: py(point.y) - 10, right: sx(point) + 10, bottom: py(point.y) + 10 })),
-    ...lines.flatMap(group => group.points.slice(1).flatMap((point, index) => along(group.points[index]!, point))),
     ...(width ? [{ left: plot.left, top: plot.top, right: plot.left + 30 + textWidth(hint), bottom: plot.top + 30 }] : []),
   ]
+  const obstacles = [...marks, ...lines.flatMap(group => group.points.slice(1).flatMap((point, index) => along(group.points[index]!, point)))]
   const request = (point: Plotted) => ({ id: point.summary.configuration.id, x: sx(point), y: py(point.y), width: textWidth(labelText(point.summary.configuration)), height: 16 })
   const bounds = { left: plot.left + 2, right: plot.right, top: 2, bottom: plot.bottom - 2 }
   const first = (point: Plotted) => point === markedPoint || spotlight !== null || !named || named.has(point.summary.configuration.id)
   const shown = ordered.filter(point => point !== markedPoint && !outside(point))
-  const leading = width ? placeLabels([...(markedPoint ? [markedPoint] : []), ...shown.filter(first)].map(request), obstacles, bounds, width < 600 ? [12, 22] : [12, 24, 36, 48, 60]) : []
+  const clear = width ? placeLabels([...(markedPoint ? [markedPoint] : []), ...shown.filter(first).sort((left, right) => Number(tops?.has(right.summary.configuration.id) ?? false) - Number(tops?.has(left.summary.configuration.id) ?? false))].map(request), obstacles, bounds, width < 600 ? [12, 22] : [12, 24, 36, 48, 60]) : []
+  // A method's top setup is always named, over a line if nothing else is free.
+  const forced = width >= 600 ? placeLabels(shown.filter(point => tops?.has(point.summary.configuration.id) && !clear.some(label => label.id === point.summary.configuration.id)).map(request), [...marks, ...clear.map(label => label.box)], bounds, [12, 24, 36, 48, 60]) : []
+  const leading = [...clear, ...forced]
   const alone = (point: Plotted) => ordered.every(other => other === point || Math.hypot(sx(other) - sx(point), py(other.y) - py(point.y)) > 24)
   const placed = width ? [...leading, ...placeLabels(shown.filter(point => !first(point) && alone(point)).map(request), [...obstacles, ...leading.map(label => label.box)], bounds, width < 600 ? [12, 20] : [12, 22, 34, 46])] : []
   const labels = markedPoint && width && !placed.some(label => label.id === marked)
