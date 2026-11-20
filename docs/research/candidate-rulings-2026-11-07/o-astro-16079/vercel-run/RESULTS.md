@@ -4,7 +4,7 @@ The owner chose "Test on Vercel first" for question 3 ([`../../answers.md`](../.
 
 ## Setup
 
-- **Account.** Vercel CLI 65.12.1 (`bunx vercel@65.12.1`), account `jack-7095`, team `jackchu-com`, Hobby plan. The owner gave a token that expired within an hour. It was read from the T3 secret file for each command, never saved in the vault or in any file here, and that file was deleted after the run. No log here contains it.
+- **Account.** Vercel CLI 65.12.1 (`bunx vercel@65.12.1`), account `[redacted-account]`, team `[redacted-account]`, Hobby plan. The owner gave a token that expired within an hour. It was read from the T3 secret file for each command, never saved in the vault or in any file here, and that file was deleted after the run. No log here contains it.
 - **Site.** [`app/`](app/): `@astrojs/vercel` 10.0.3 and `astro` 6.1.0 from the registry, exact versions (`bun.lock`), `isr: { expiration: 60, exclude: ['/account'], bypassToken }`. The bypass token was 40 random hex characters, and it is redacted here. `src/pages/[...slug].astro` echoes `Astro.url.pathname`, `Astro.request.url` and every `x_astro_path` value in order. `/account`, which is excluded from ISR, echoes the same.
 - **Build output.** `_isr.prerender-config.json` holds `allowQuery: ["x_astro_path"]`, `passQuery: true` and the bypass token. `config.json` routes `^(?:/(.*?))?/?$` and `^/404/?$` to `/_isr?x_astro_path=$0` ([`app/routes.txt`](app/routes.txt)).
 - **Deploy.** A new project `astro-xap-order-test`, `vercel deploy --prebuilt --prod --yes` at about 19:57 UTC ([`deploy.log`](deploy.log)).
@@ -37,4 +37,4 @@ This is Vercel's behaviour on 2026-11-08. It cannot show what Vercel did at the 
 
 ## Cleanup
 
-`vercel remove astro-xap-order-test --yes` at 20:01 UTC. Then `vercel project ls` reported "No projects found under jackchu-com", and the production and deployment URLs both answered 404 ([`cleanup.log`](cleanup.log)).
+`vercel remove astro-xap-order-test --yes` at 20:01 UTC. Then `vercel project ls` reported "No projects found under [redacted-account]", and the production and deployment URLs both answered 404 ([`cleanup.log`](cleanup.log)).

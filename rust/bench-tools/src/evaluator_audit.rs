@@ -2605,6 +2605,26 @@ fn standing_faults(
     Ok(faults)
 }
 
+/// Saves the grades file the sample pins as the round's own `grades.json`, before the conclusion, so that correcting
+/// a sampled grade afterwards leaves the round's comparison derivable and no conclusion stands without its copy.
+fn save_drawn_grades(root: &Root, sample: &Value, copy: &PyPath) -> R<()> {
+    let pinned = at(sample, "grades")?;
+    let drawn = read_bytes(&under(root, at(pinned, "path")?)?)?;
+    if let Err(failure) = write_new(copy, &drawn) {
+        let _ = std::fs::remove_file(copy.to_path_buf());
+        return Err(failure);
+    }
+    if Value::Str(current_grading::file_hash(copy)?).py_eq(at(pinned, "sha256")?) {
+        return Ok(());
+    }
+    std::fs::remove_file(copy.to_path_buf()).map_err(|error| os_failure(&error, copy))?;
+    Err(Failure::Inconsistent(
+        b"the copy of grades.json saved in the round's directory is not the file the sample pins, so it was removed \
+          and nothing was concluded"
+            .to_vec(),
+    ))
+}
+
 fn conclude(root: &Root, current_arg: &[u8], reconciliation_path: &[u8]) -> R<Done> {
     let current = root.local(current_arg)?;
     let (directory, sample) = drawn_sample(root, current_arg)?;
@@ -2745,21 +2765,31 @@ fn conclude(root: &Root, current_arg: &[u8], reconciliation_path: &[u8]) -> R<Do
             ]),
         ));
     }
+    let copy = directory.join(b"grades.json");
+    let copied = !pyvalue::exists(&copy);
+    if copied {
+        save_drawn_grades(root, &sample, &copy)?;
+    }
     let saved = directory.join(b"reconciliation.json");
-    write_new(&saved, &raw)?;
-    save_new(
-        &directory.join(b"conclusion.json"),
-        &object(vec![
-            ("contract", text("evaluator-audit-conclusion/v2")),
-            ("concluded_at", now()),
-            (
-                "comparison",
-                root.pin_file(&directory.join(b"comparison.json"))?,
-            ),
-            ("reconciliation", root.pin_file(&saved)?),
-            ("strata", Value::Array(strata.clone())),
-        ]),
-    )?;
+    let concluded = write_new(&saved, &raw).and_then(|()| {
+        save_new(
+            &directory.join(b"conclusion.json"),
+            &object(vec![
+                ("contract", text("evaluator-audit-conclusion/v2")),
+                ("concluded_at", now()),
+                (
+                    "comparison",
+                    root.pin_file(&directory.join(b"comparison.json"))?,
+                ),
+                ("reconciliation", root.pin_file(&saved)?),
+                ("strata", Value::Array(strata.clone())),
+            ]),
+        )
+    });
+    if concluded.is_err() && copied {
+        std::fs::remove_file(copy.to_path_buf()).map_err(|error| os_failure(&error, &copy))?;
+    }
+    concluded?;
     let mut failed = Vec::new();
     for stratum in &strata {
         if matches!(at(stratum, "within_tolerance")?, Value::Bool(false)) {
@@ -3161,6 +3191,41 @@ mod tests {
             &[batch("runs/a", "drawn"), batch("runs/new", "filed later")],
         );
         assert_eq!(marker(first()), "drawn");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn a_copy_of_the_grades_that_differs_from_the_pin_is_removed() {
+        let base =
+            std::env::temp_dir().join(format!("evaluator-audit-copy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let round = base.join("bench/grading/current/audit/seed-1");
+        std::fs::create_dir_all(&round).unwrap();
+        std::fs::write(base.join("bench/grading/current/grades.json"), "{}\n").unwrap();
+        let root = Root::new(base.to_str().unwrap().as_bytes()).unwrap();
+        let copy = PyPath::new(round.join("grades.json").to_str().unwrap().as_bytes());
+        let sample = |sha256: &str| {
+            crate::pyjson::loads(
+                &format!(
+                    r#"{{"grades": {{"path": "bench/grading/current/grades.json", "sha256": "{sha256}"}}}}"#
+                ),
+                crate::pyjson::Duplicates::KeepLast,
+            )
+            .unwrap()
+        };
+        let Err(Failure::Inconsistent(message)) =
+            save_drawn_grades(&root, &sample(&"0".repeat(64)), &copy)
+        else {
+            panic!("a copy that differs from the pin is refused");
+        };
+        assert_eq!(
+            String::from_utf8(message).unwrap(),
+            "the copy of grades.json saved in the round's directory is not the file the sample pins, so it was \
+             removed and nothing was concluded"
+        );
+        assert!(!round.join("grades.json").exists());
+        save_drawn_grades(&root, &sample(&crate::sha256::hex_digest(b"{}\n")), &copy).unwrap();
+        assert_eq!(std::fs::read(round.join("grades.json")).unwrap(), b"{}\n");
         std::fs::remove_dir_all(&base).unwrap();
     }
 

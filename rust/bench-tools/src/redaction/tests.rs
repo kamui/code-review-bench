@@ -435,3 +435,297 @@ fn check_keeps_the_findings_behind_its_lines() {
     assert!(advice.contains("redaction apply") && advice.contains("leave it out"));
     assert!(!advice.contains("person@"));
 }
+
+/// The start of the owner's personal instructions inside a JSON string, assembled so that this source holds no match.
+fn instructions(rest: &str) -> String {
+    let nl = "\\n";
+    format!(
+        "# AGENTS.md{nl}{nl}{} {rest}",
+        "Make the smallest complete change that satisfies the request."
+    )
+}
+
+#[test]
+fn personal_instructions_end_at_the_string_or_the_reminder() {
+    let rules = Rules::fields();
+    let nl = "\\n";
+    let attachment = format!(
+        "{{\"content\":\"{}\",\"type\":\"Project\"}}",
+        instructions(&format!("Quote \\\"x\\\"{nl}more text."))
+    );
+    assert_eq!(
+        text(attachment.as_bytes(), &rules),
+        "{\"content\":\"[redacted-instructions]\",\"type\":\"Project\"}"
+    );
+    let reminder = format!(
+        "{{\"text\":\"Contents of f (private):{nl}{nl}{}{nl}</system-reminder>\"}}",
+        instructions("Body.")
+    );
+    assert_eq!(
+        text(reminder.as_bytes(), &rules),
+        format!(
+            "{{\"text\":\"Contents of f (private):{nl}{nl}[redacted-instructions]{nl}</system-reminder>\"}}"
+        )
+    );
+    let codex = format!(
+        "{{\"text\":\"<INSTRUCTIONS>{nl}{}{nl}{nl}--- project-doc ---{nl}{nl}# Other\"}}",
+        instructions("Body.")
+    );
+    assert_eq!(
+        text(codex.as_bytes(), &rules),
+        format!(
+            "{{\"text\":\"<INSTRUCTIONS>{nl}[redacted-instructions]{nl}{nl}--- project-doc ---{nl}{nl}# Other\"}}"
+        )
+    );
+    let plain = "# AGENTS.md\n\nSomething else";
+    assert!(redact(plain.as_bytes(), &rules).bytes(plain.as_bytes()) == plain.as_bytes());
+}
+
+#[test]
+fn windows_account_and_skill_names_are_replaced_once() {
+    let rules = Rules::fields();
+    let path = format!(
+        "/mnt/c/{}/someone/iCloudDrive/m/.agents/skills/my-skill/SKILL.md",
+        "Users"
+    );
+    let replaced = format!(
+        "/mnt/c/{}/[redacted-user]/iCloudDrive/m/.agents/skills/[redacted-skill]/SKILL.md",
+        "Users"
+    );
+    assert_eq!(text(path.as_bytes(), &rules), replaced);
+    let again = redact(replaced.as_bytes(), &rules);
+    assert!(again.clean());
+    let other = format!("path = \"/mnt/d/{}/someone/.claude/x\"", "Users");
+    assert_eq!(
+        text(other.as_bytes(), &rules),
+        format!("path = \"/mnt/d/{}/[redacted-user]/.claude/x\"", "Users")
+    );
+}
+
+#[test]
+fn service_user_skill_folders_are_replaced_except_builtin_ones() {
+    let rules = Rules::fields();
+    let line =
+        |dir: &str, name: &str| format!("path = \"/home/t3/.t3/agents/{dir}/{name}/SKILL.md\"");
+    assert_eq!(
+        text(line(".agents_skills", "my-skill").as_bytes(), &rules),
+        line(".agents_skills", "[redacted-skill]")
+    );
+    let builtin = line(".codex/skills", ".system");
+    assert!(redact(builtin.as_bytes(), &rules).clean());
+}
+
+#[test]
+fn the_installed_skill_list_is_replaced_once() {
+    let rules = Rules::fields();
+    let nl = "\\n";
+    let list = format!("{nl}### Available {}{nl}", "skills");
+    let message =
+        format!("{{\"text\":\"head{list}- a: b (file: c){nl}- d: e{nl}</skills_instructions>\"}}");
+    let replaced =
+        format!("{{\"text\":\"head{list}[redacted-skill-list]{nl}</skills_instructions>\"}}");
+    assert_eq!(text(message.as_bytes(), &rules), replaced);
+    assert!(redact(replaced.as_bytes(), &rules).clean());
+}
+
+/// What [`replaced_values`] finds in what `rules` make of `data`.
+fn confirmed(data: &[u8], rules: &Rules) -> Result<Vec<Replaced>> {
+    let redacted = redact(data, rules);
+    replaced_values(data, redacted.bytes(data), &rules.stand_ins())
+}
+
+fn counted(pairs: &[(&[u8], usize)]) -> Vec<Replaced> {
+    pairs
+        .iter()
+        .map(|(text, count)| (text.to_vec(), *count))
+        .collect()
+}
+
+#[test]
+fn the_check_without_values_accepts_what_each_rule_writes() {
+    let nl = "\\n";
+    let rules = values();
+    let fields = format!(
+        "{} {} {} {}",
+        pair("organizationUuid", ORGANIZATION_ID),
+        sentence("someone@example.org"),
+        escaped("creator_account_id", "user-abc123"),
+        pair("plan_type", "plus"),
+    );
+    assert_eq!(
+        confirmed(fields.as_bytes(), &Rules::fields()).unwrap(),
+        counted(&[(ACCOUNT, 1), (EMAIL, 1), (ORGANIZATION, 1), (PLAN, 1)])
+    );
+    let literals =
+        "ssh examplehost; mail person@example.com, then person@example.com; examplehost.local\n";
+    assert_eq!(
+        confirmed(literals.as_bytes(), &rules).unwrap(),
+        counted(&[(EMAIL, 2), (b"host-01-xyz", 2)])
+    );
+    let attachment = format!(
+        "{{\"content\":\"{}\",\"type\":\"Project\"}}",
+        instructions(&format!("Quote \\\"x\\\"{nl}more text."))
+    );
+    let list = format!("{nl}### Available {}{nl}", "skills");
+    let skills = format!("{{\"text\":\"head{list}- a: b{nl}- d: e{nl}</skills_instructions>\"}}");
+    let paths = format!(
+        "/mnt/c/{}/someone/iCloudDrive/m/.agents/skills/my-skill/SKILL.md and /home/t3/.t3/agents/{}/x/y",
+        "Users", ".agents_skills"
+    );
+    assert_eq!(
+        confirmed(attachment.as_bytes(), &rules).unwrap(),
+        counted(&[(INSTRUCTIONS, 1)])
+    );
+    assert_eq!(
+        confirmed(skills.as_bytes(), &rules).unwrap(),
+        counted(&[(SKILL_LIST, 1)])
+    );
+    assert_eq!(
+        confirmed(paths.as_bytes(), &rules).unwrap(),
+        counted(&[(SKILL, 2), (USER, 1)])
+    );
+    let again = "already [redacted-email] and host-01-xyz, now examplehost";
+    assert_eq!(
+        confirmed(again.as_bytes(), &rules).unwrap(),
+        counted(&[(b"host-01-xyz", 1)])
+    );
+}
+
+#[test]
+fn the_check_without_values_refuses_anything_else() {
+    let refused = |before: &str, after: &str, stand_ins: &[&[u8]]| {
+        replaced_values(before.as_bytes(), after.as_bytes(), stand_ins)
+            .unwrap_err()
+            .0
+    };
+    let parted = |at: usize| {
+        format!(
+            "the redacted bytes are not the earlier bytes with values replaced by placeholders; they part at byte \
+             {at} of the redacted bytes"
+        )
+    };
+    let stand_in: &[&[u8]] = &[b"host-01-xyz"];
+    assert_eq!(
+        refused("mail a@b.example now", "mail [redacted-email] then", &[]),
+        parted(5)
+    );
+    assert_eq!(
+        refused(
+            "one\ntwo three\nfour\n",
+            "one\n[redacted-account]\nfour\n",
+            &[]
+        ),
+        parted(4)
+    );
+    let long = format!("x {} y", "a".repeat(300));
+    assert_eq!(refused(&long, "x [redacted-account] y", &[]), parted(2));
+    assert_eq!(refused("abc", "abcd", &[]), parted(0));
+    assert_eq!(
+        refused("ssh shorthost now", "ssh host-01-xyz now", stand_in),
+        parted(4)
+    );
+    assert_eq!(
+        refused(
+            "ssh examplehost or examplehost",
+            "ssh host-01-xyz or examplehost",
+            stand_in
+        ),
+        parted(4)
+    );
+    assert_eq!(
+        refused(
+            "ssh examplehost or otherhost00",
+            "ssh host-01-xyz or host-01-xyz",
+            stand_in
+        ),
+        "the stand-in 'host-01-xyz' replaced two different values"
+    );
+    assert_eq!(
+        refused("a b", "a b", &[b"ab"]),
+        "'ab' cannot be the stand-in of a machine name"
+    );
+    assert_eq!(
+        replaced_values(b"same", b"same", &[]).unwrap(),
+        Vec::<Replaced>::new()
+    );
+}
+
+#[test]
+fn a_gap_holds_only_what_its_rule_can_replace() {
+    let parted = |at: usize| {
+        format!(
+            "the redacted bytes are not the earlier bytes with values replaced by placeholders; they part at byte \
+             {at} of the redacted bytes"
+        )
+    };
+    let refused = |before: &str, after: &str, stand_ins: &[&[u8]]| {
+        replaced_values(before.as_bytes(), after.as_bytes(), stand_ins)
+            .unwrap_err()
+            .0
+    };
+    assert_eq!(
+        refused(
+            "to a@b.example,cc everyone",
+            "to [redacted-email] everyone",
+            &[]
+        ),
+        parted(3)
+    );
+    assert_eq!(
+        refused("id acct-1,acct-2 here", "id [redacted-account] here", &[]),
+        parted(3)
+    );
+    assert_eq!(
+        refused("on box(1) now", "on host(1) now", &[b"host(1)"]),
+        "'host(1)' cannot be the stand-in of a machine name"
+    );
+    assert_eq!(
+        refused(
+            "on box(1)xyzab now",
+            "on host-01-xyz now",
+            &[b"host-01-xyz"]
+        ),
+        parted(3)
+    );
+    let users = format!("/srv/{}/someone/x", "Users");
+    assert_eq!(
+        refused(&users, &users.replace("someone", "[redacted-user]"), &[]),
+        parted(11)
+    );
+    let mounted = format!("/mnt/c/{}/some.one", "Users");
+    assert_eq!(
+        refused(&mounted, &mounted.replace("some", "[redacted-user]"), &[]),
+        parted(13)
+    );
+    let skills = format!("/x/.agents/{}/my-skill.extra/", "skills");
+    assert_eq!(
+        refused(
+            &skills,
+            &skills.replace("my-skill", "[redacted-skill]"),
+            &[]
+        ),
+        parted(18)
+    );
+    assert_eq!(
+        replaced_values(
+            b"to a@b.example everyone",
+            b"to [redacted-email] everyone",
+            &[]
+        )
+        .unwrap(),
+        counted(&[(EMAIL, 1)])
+    );
+}
+
+#[test]
+fn an_alignment_with_too_many_ways_is_refused() {
+    let before = "a".repeat(5000);
+    let after = "[redacted-account]a".repeat(40);
+    assert_eq!(
+        replaced_values(before.as_bytes(), after.as_bytes(), &[])
+            .unwrap_err()
+            .0,
+        "the redacted bytes align with the earlier bytes in too many ways to re-check, from byte 304 of the redacted \
+         bytes"
+    );
+}

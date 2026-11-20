@@ -1,0 +1,61 @@
+{
+  "reviewer": "correctness",
+  "findings": [
+    {
+      "title": "Isolate client certificates from the shared context",
+      "severity": "P1",
+      "file": "src/requests/adapters.py",
+      "line": 95,
+      "why_it_matters": "A request with a client certificate modifies the shared context, so a later request without that certificate can present it to another server that requests client authentication. Concurrent requests with different certificates can also present the wrong identity. urllib3 loads each supplied certificate into the passed SSLContext, so use a separate context when a client certificate is supplied to keep identities isolated.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Use a fresh context for requests with a client certificate and reserve the preloaded context for requests without one; test sequential and concurrent requests with different client certificates.",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:95 -- pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context",
+        "src/requests/adapters.py:102-105 -- if client_cert is not None: ... pool_kwargs[\"cert_file\"] = client_cert[0]",
+        "/usr/lib/python3.10/site-packages/pip/_vendor/urllib3/util/ssl_.py:416-418 -- if certfile: ... context.load_cert_chain(certfile, keyfile)"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Preserve SSL settings supplied by custom adapters",
+      "severity": "P1",
+      "file": "src/requests/adapters.py",
+      "line": 95,
+      "why_it_matters": "Applications that configure an SSL context in a custom HTTPAdapter silently lose its TLS settings on default-verified requests, potentially breaking connections or weakening their chosen TLS policy. The per-request context overrides the pool manager's context, and a prebuilt context also bypasses urllib3's creation of a context using the pool's ssl_version setting, as used by the documented adapter example. Only select the shared context when the pool manager has no custom TLS context or settings.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Respect custom pool manager SSL contexts and TLS configuration before choosing the default preloaded context, with regression tests for a subclassed adapter.",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:95 -- pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context",
+        "src/requests/adapters.py:400-402 -- conn = self.poolmanager.connection_from_host(**host_params, pool_kwargs=pool_kwargs)",
+        "docs/user/advanced.rst:1030-1033 -- def init_poolmanager(self, connections, maxsize, block=False): ... block=block, ssl_version=ssl.PROTOCOL_SSLv3)",
+        "/usr/lib/python3.10/site-packages/pip/_vendor/urllib3/poolmanager.py:311-320 -- for key, value in override.items(): ... base_pool_kwargs[key] = value"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "Defer default CA loading until it is needed",
+      "severity": "P2",
+      "file": "src/requests/adapters.py",
+      "line": 76,
+      "why_it_matters": "If the default CA bundle is unavailable or invalid, importing requests now raises an exception even for HTTP-only applications and HTTPS users who supply their own CA bundle. Previously the bundle was loaded only for a default-verified HTTPS request, so those uses could continue. Lazy initialization confines a default bundle failure to requests that actually need it.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Initialize and cache the default SSL context lazily when a default-verified HTTPS connection first needs it, with thread-safe initialization.",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:76 -- _preloaded_ssl_context.load_verify_locations(",
+        "src/requests/adapters.py:94-95 -- elif verify is True: pool_kwargs[\"ssl_context\"] = _preloaded_ssl_context"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [],
+  "testing_gaps": []
+}

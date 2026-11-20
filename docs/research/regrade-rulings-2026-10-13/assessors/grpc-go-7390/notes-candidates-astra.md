@@ -6,4 +6,4 @@ If that use is supported, the idle CONNECTING report would fail Delivered 1; rec
 The nearest rulings illustrate the competing readings, but none settles this combination under the current rule.
 A definitive pre-cut-off owner position on support for empty updates and their state reporting would settle the question; the packet supplies none.
 Later statements and unestablished external reliance do not decide this answer.
-Additional file opened under a mandatory higher-priority skill instruction: /mnt/c/Users/kamui/iCloudDrive/host-01/.agents/skills/unslop/SKILL.md; no repository or web was read.
+Additional file opened under a mandatory higher-priority skill instruction: /mnt/c/Users/[redacted-user]/iCloudDrive/host-01/.agents/skills/[redacted-skill]/SKILL.md; no repository or web was read.

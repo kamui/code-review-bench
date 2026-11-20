@@ -199,7 +199,7 @@ Claude Code records the signed-in account's email address and organization id in
 
 ### Rules
 
-Two groups of rules apply.
+Three groups of rules apply.
 
 The field rules need no private value and always apply:
 
@@ -211,6 +211,15 @@ The field rules need no private value and always apply:
 | The value of the Codex `plan_type` field | `[redacted-plan]` |
 
 They match plain JSON and JSON nested inside JSON strings, where each quote is escaped by any number of backslashes. A value that is already a placeholder is left alone, so a second pass changes nothing.
+
+The structure rules need no private value either. They match only plain JSON strings (newlines escaped once) and text, and leave a value that is already a placeholder alone:
+
+| Where | Replacement |
+| --- | --- |
+| The owner's personal agent instructions, from their heading and first sentence to the end of the string, the closing `</system-reminder>` or `</INSTRUCTIONS>`, or the project-doc divider | `[redacted-instructions]` |
+| The list a Codex session gives under `### Available skills`, to the next heading, the closing `</skills_instructions>` or the end of the string | `[redacted-skill-list]` |
+| The account in `/mnt/<drive>/Users/<account>`, and the skill folder name under that account's `iCloudDrive/<machine>/.agents/skills/` | `[redacted-user]`, `[redacted-skill]` |
+| The skill folder name under `/.t3/agents/.agents_skills/` and `/.t3/agents/.codex/skills/` (a name that starts with a dot, such as Codex's own `.system`, stays) | `[redacted-skill]` |
 
 The literal rules come from a private values file outside the repository: `BENCH_REDACTION_VALUES` when it is set, else `~/.config/code-review-bench/redaction.json`. Its shape:
 
@@ -254,15 +263,112 @@ bench/tools/bench-tools redaction check --staged          # the staged content i
 bench/tools/bench-tools redaction check --message FILE    # a commit message
 bench/tools/bench-tools redaction check --changed BASE    # files that differ from the merge base with BASE
 bench/tools/bench-tools redaction apply PATH...           # rewrite in place, printing each path changed
+bench/tools/bench-tools redaction repin PATH --receipt RULING  # redact an evidence file a claim or decision pins
 ```
 
 `check` exits 0 when nothing would change, 1 listing each file, or `file!member` inside an archive, that would change or cannot be redacted, and 2 on an error. `--require-values` makes it fail when the values file is absent. Fix a `would change` line with `redaction apply` before any record pins the file's hash. A `cannot redact` line names a file the tool does not rewrite, such as a SQLite database or a zip member: redact it by other means or leave it out, and do not commit or publish it.
 
-The committed hooks in `.githooks/` run `check --staged --require-values` before each commit and `check --message --require-values` on each commit message. `bun install` installs them through the `hooks:install` script, which sets `core.hooksPath`.
+The committed hooks in `.githooks/` run `check --staged --require-values` before each commit and `check --message --require-values` on each commit message. When a commit adds an entry to `bench/grading/current/redacted-evidence.json`, `check --staged` also runs the [exact re-check](#re-checks) on it. `bun install` installs the hooks through the `hooks:install` script, which sets `core.hooksPath`.
 
 The hooks do not use the runtime store. The launcher runs only the runtime selected for the crate at `HEAD`, so a hook that went through it would need a new selection after every Rust change. `bun run hooks:tool` builds the check once and keeps it under `~/.cache/code-review-bench/redaction-check/`, named by the Git blob of `rust/bench-tools/src/redaction.rs` at `HEAD`. Every checkout on the machine with the same rules shares that build, and a change to the rules asks for a new one. A hook refuses the commit when the check cannot run: when that build is absent, or when the values file is missing.
 
 CI runs `check --changed` on every pull request and push with the field rules only, since it holds no values.
+
+### Redact a pinned evidence file
+
+Use `redaction apply` on a file nothing pins yet. A claim's `evidence[].source` and an eligibility decision's `evidence[]` name an evidence file by its hash, and that hash is part of the input fingerprint of each batch the claim or decision applies to. Changing such a pin by hand makes those grades stale. When no grader read the file, only its hash string entered the fingerprint. For such a file, use `repin` with the owner's saved approval:
+
+```sh
+bench/tools/bench-tools redaction repin PATH --receipt bench/grading/rulings/<approval>.md
+```
+
+The owner's ruling approves the exact bytes. It must hold one line that names the file's path, its current SHA-256 and the SHA-256 of its redacted bytes, as separate words, each optionally in backticks. `repin` prints that line when the ruling lacks it:
+
+```text
+Redaction approved for `<path>` from sha256 `<before.sha256>` to sha256 `<after.sha256>`
+```
+
+So the use takes two steps. Run `repin`; it computes the redacted bytes, refuses, writes nothing, and prints the line, which names only the path and two hashes. Add the line to the owner's saved ruling, then run `repin` again. A ruling may hold several such lines, for several entries or several redactions of one file, and history lines as well; a history line names the blob instead of the redacted hash, so one line cannot serve as the other. An entry pins its ruling by hash, though, so a ruling an entry already pins cannot change; save the line for a later redaction in a new ruling.
+
+`repin` needs the values file. It refuses the file unless:
+
+- its bytes are the ones committed at `HEAD`, so its earlier bytes stay in the history;
+- the current record passes the load checks below;
+- the receipt is a file under `bench/grading/rulings/`, and holds the approval line for this redaction;
+- the rules change it, and can rewrite it;
+- the re-check without values, below, accepts the redacted bytes;
+- no saved assessment receipt lists it, at any hash, as a source of the evidence prepared for its batch's grader;
+- every tracked JSON file that pins it at its current hash pins it only as a claim's `evidence[].source` in `bench/grading/current/claims.json` or an eligibility decision's `evidence[]` in `bench/grading/current/adjudications.json`, and at least one does;
+- each of those claim and decision pins names its current hash.
+
+The scan reads every tracked JSON file in the working tree, found with `git grep` and `git ls-files`, including records under `docs/research/` and tracked evidence extract manifests such as `bench/claims/evidence-extracts.v1.json`. It recognises two shapes of pin. The file's path counts as written from the repository's top or, in a JSON file in a directory above the file, from that directory.
+
+- An object with a string member equal to the path and a string member equal to the file's current SHA-256, under any keys. This covers `{path, sha256}` pins, the import manifest's and the evidence manifests' file and member entries, extract manifest sources, and `expected_sha256` and similar fields.
+- A member whose key is the path and whose value is the current SHA-256, as in the `artifact-hashes.json` maps under `docs/research/`.
+
+A pin of an earlier hash of the file does not block it: that record names bytes the file no longer holds. The scan does not recognise a hash in a nested object beside the path, a path escaped in the JSON text, a manifest that is not JSON, or a file that is not tracked, such as a receipt that exists only inside an evidence archive or an extract manifest passed to `--claim-evidence` from outside the repository.
+
+It checks and builds everything in memory, then writes the redacted file, the record and the documents with the new hash, in that order. The documents differ only in those hash strings. It prints what it replaced, each document it changed and the record, never a value. Run `current-grading check`, then commit the file, the record and the documents together. If `repin` is interrupted, the file already differs from `HEAD`: `current-grading check` reports `source hash changed`, and the next `repin` refuses the file. Restore the file and `bench/grading/current/` from `HEAD`, then run `repin` again.
+
+The path covers evidence files of claims and decisions that no grader read. A batch prepared with `--claim-evidence` gives its grader text extracted from the evidence files of its claims, and its assessment receipt lists those files under `claim_snapshot.evidence.packets[].sources`; such a file is refused. A review, an attempt record, an assessment receipt, `grades.json`, an audit record, an imported or frozen file, and any file pinned another way are refused too: those bytes are what a grader, an audit or a frozen run read. A file that is not pinned is refused; use `redaction apply`. An extract manifest that is not tracked and pins the earlier bytes refuses the next `--claim-evidence` grading until it pins the redacted file.
+
+`bench/grading/current/redacted-evidence.json` ([schema](../bench/schema/current-redacted-evidence.schema.json)) has one entry for each redaction:
+
+| Field | Holds |
+| --- | --- |
+| `path` | The evidence file, relative to the repository |
+| `before` | `sha256` of the bytes the pins named, and `blob`, the Git object id of those bytes |
+| `after` | `sha256` of the redacted bytes |
+| `placeholders` | Each placeholder or machine stand-in that now stands where a value stood, and how many values it replaced |
+| `receipt` | A pin of the owner's ruling under `bench/grading/rulings/` that holds the approval line for this entry's `path`, `before.sha256` and `after.sha256` |
+| `history` | Optional: a pin of the owner's receipt for a history rewrite that removed the `before` blob; see below |
+
+A missing record means no entries. With an entry, a batch's input fingerprint hashes a claim evidence source or an eligibility decision evidence pin that names the file at a redacted hash with the `before` hash of the file's first entry. The pins in the documents still name the redacted bytes, and `current-grading check` verifies them. Nothing else is substituted: a review pin, an attempt record, a family's evidence and the validation policy keep their hashes. A file redacted twice has two entries, and the second starts from the first one's `after`.
+
+`blob` lets a check read the earlier bytes without knowing a commit. A squash merge keeps only the last state of a branch, so commit the file on the main branch before you redact it.
+
+Every load of the current record checks the record's shape, its receipt and history pins, that each receipt holds the approval line for its entry, that each `history` pin qualifies (see below), that each file exists and hashes to the `after` of its last entry, that no two entries of a file share an `after`, and that each later entry of a file starts from the `after` before it.
+
+An entry stays as long as its file. To correct or delete a recorded file on purpose, remove the file's entries from the record and grade the affected batches again: without the entries, their fingerprints no longer match.
+
+#### Re-checks
+
+Two checks confirm that an entry replaced values and nothing else.
+
+`current-grading check`, and so CI's `verify:current`, needs no values. For each entry, it reads the `before` blob from the object store and confirms its hash. Then it splits the redacted bytes at every placeholder and at every stand-in the entry records. The literal pieces must occur in the earlier bytes in the same order, from the first byte to the last. Each gap between them in the earlier bytes must be the same placeholder or a value its rule can replace:
+
+| Placeholder | Gap in the earlier bytes |
+| --- | --- |
+| `[redacted-email]` | An address the field rule matches: 1 to 128 letters, digits, `.`, `_`, `%`, `+` and `-`, an `@`, then 1 to 254 letters, digits, `.` and `-` ending in a letter or digit |
+| `[redacted-organization]` | 4 to 64 letters, digits and `-` |
+| `[redacted-account]` | 1 to 256 letters, digits, `.`, `_` and `-` |
+| `[redacted-plan]` | 2 to 20 letters, digits, `_` and `-` |
+| `[redacted-user]` | Right after `/mnt/<drive>/Users/`, the whole account up to the next `/`, quote, backslash or whitespace, at most 255 bytes, not starting with `[` |
+| `[redacted-skill]` | Right after `/.agents/skills/`, `/.agents_skills/` or `/.codex/skills/`, the whole folder name: 1 to 255 letters, digits, `.`, `_` and `-`, starting with a letter, a digit or `_` |
+| `[redacted-instructions]` | The personal instructions, from their heading to where the rule ends them |
+| `[redacted-skill-list]` | The skill list after its heading, to where the rule ends it |
+| A machine stand-in | A name as long as the stand-in, of letters, digits, `.`, `_` and `-`, that no longer occurs in the redacted bytes; each stand-in replaces one name, and is itself at least 4 such bytes |
+
+Apart from the two blocks the structure rules replace, no gap holds whitespace, a line break, a quote or a backslash, so a gap is never a sentence, a line or a paragraph. Only an address and a Windows account may hold other punctuation, as their rules allow. The longest values are the field rules' own bounds. The instruction and skill-list gaps are found by running those rules on the earlier bytes. The recorded counts must match what the check finds. When the piece after one placeholder could align at more than 4096 places, the check refuses the entry rather than search them all; an honest redaction aligns at one.
+
+The check can refuse an honest redaction. The `creator_*` field rule takes any characters but a quote and a backslash, and the values file may list an address, an account or a machine name with characters outside the classes above, such as a space, a comma or a colon. `repin` then refuses the file, writes nothing, and prints `the redaction-only re-check would refuse this redaction of <path> (… they part at byte <N> of the redacted bytes); repin cannot record it`. Such a file cannot use this path. The check has two limits that no rule without the values can close, because the values are what it lacks:
+
+- The entry's author chooses the stand-ins the check splits at. A stand-in may replace an ordinary word of its length that occurs nowhere else.
+- A gap may take neighbouring characters of its own class with it, such as `-suffix` joined to an account id or `.example` joined to an address, because those are characters the values themselves can hold.
+
+Neither limit lets an entry through on its own: the entry's receipt must approve its exact `before` and `after` hashes, so a change these limits miss needs a ruling that names it. That falls under what remains, below.
+
+The exact re-check closes both. The commit hook's `check --staged --require-values` holds the values. When a commit changes the record, it refuses a change to an entry already at `HEAD` in anything but its `history` pin, since that entry decides which hash a batch's fingerprint takes. It also refuses moving an entry already at `HEAD`, or removing one while a later entry of its file stays, since that would change the file's earliest hash. Removing a file's last entries, or all of them, makes its batches stale, which is safe. For each entry the staged record adds to the one at `HEAD`, it requires `before.blob` to be the file's blob at `HEAD` and to hash to `before.sha256`, applies the rules to that blob, and requires the staged file to equal the result byte for byte and to hash to `after`. A commit with an entry the rules do not make is refused. A commit made without the hook, such as one made with `--no-verify`, in a checkout whose `core.hooksPath` is not `.githooks`, or on the forge's web editor, gets no exact re-check: only the check without values, in CI, covers it.
+
+When a history rewrite removes a `before` blob, `current-grading check` cannot read it and fails. The owner's receipt for that rewrite is what lets the check skip the entry. Save it under `bench/grading/rulings/`, write in it one line that holds the entry's `path`, `before.blob` and `before.sha256` as separate words, and pin it as the entry's `history`. A word may be wrapped in backticks; other punctuation joined to it does not count. For example:
+
+```text
+History rewrite removed `<path>` blob `<before.blob>` sha256 `<before.sha256>`
+```
+
+With such a pin the check skips that entry and prints a line that says so. With the blob gone, that line is the only thing that ties the entry's `before.sha256` to the bytes the batches were graded from. A `history` pin whose resolved path is not a file below `bench/grading/rulings/`, or whose text has no such line, fails every load and every `repin`. Nothing else skips the re-check.
+
+What remains: every entry CI accepts traces to a line in a file under `bench/grading/rulings/` that names its exact bytes, the approval line and, when its blob is gone, the history line. Getting a substantive change past CI therefore takes a commit made without the hook that also adds or edits such a ruling: one approving a change of a word by an author-chosen stand-in, or of a word of a value's shape by a placeholder, or naming a made-up blob in a history line. CI cannot tell such a ruling from the owner's; the rulings directory is the repository's ordinary trust boundary.
 
 ### Pushes
 

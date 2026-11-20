@@ -1310,6 +1310,15 @@ enum RedactionCommand {
         #[arg(required = true)]
         paths: Vec<PathBuf>,
     },
+    /// Redact an evidence file that claims or eligibility decisions pin, update those pins and record the redaction
+    /// in bench/grading/current/redacted-evidence.json, so their grades keep their fingerprints.
+    #[command(infer_long_args = true)]
+    Repin {
+        path: PathBuf,
+        /// The owner's saved ruling under bench/grading/rulings/ that holds the approval line repin prints.
+        #[arg(long, value_name = "RULING")]
+        receipt: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -4777,38 +4786,45 @@ fn pytext_resolved(path: &Path) -> PathBuf {
     )))
 }
 
-/// `redaction check` and `redaction apply`: exit 0 when nothing is left, 1 when something is, 2 on an error.
+/// `redaction check`, `redaction apply` and `redaction repin`: exit 0 when nothing is left, 1 when something is or
+/// `repin` refuses, 2 on an error.
 fn run_redaction(command: RedactionCommand) -> Result<ExitCode, ExitCode> {
     let failed = |redaction::Error(message)| {
         eprintln!("bench-tools redaction: {message}");
         ExitCode::from(2)
     };
     let rules = redaction::Rules::load().map_err(failed)?;
+    let require_values = || {
+        if rules.values_file().is_some() {
+            return Ok(());
+        }
+        let place = redaction::values_path().map_or_else(
+            || {
+                format!(
+                    "{} or {}",
+                    redaction::VALUES_VARIABLE,
+                    redaction::DEFAULT_VALUES
+                )
+            },
+            |path| path.display().to_string(),
+        );
+        eprintln!(
+            "bench-tools redaction: no redaction values file at {place}; only the field rules would \
+             apply. Write it as docs/evidence-storage.md describes, or set {} to its path.",
+            redaction::VALUES_VARIABLE
+        );
+        Err(ExitCode::from(2))
+    };
     match command {
         RedactionCommand::Check {
             paths,
             staged,
             message,
             changed,
-            require_values,
+            require_values: required,
         } => {
-            if require_values && rules.values_file().is_none() {
-                let place = redaction::values_path().map_or_else(
-                    || {
-                        format!(
-                            "{} or {}",
-                            redaction::VALUES_VARIABLE,
-                            redaction::DEFAULT_VALUES
-                        )
-                    },
-                    |path| path.display().to_string(),
-                );
-                eprintln!(
-                    "bench-tools redaction: no redaction values file at {place}; only the field rules would \
-                     apply. Write it as docs/evidence-storage.md describes, or set {} to its path.",
-                    redaction::VALUES_VARIABLE
-                );
-                return Err(ExitCode::from(2));
+            if required {
+                require_values()?;
             }
             let sources = redaction::Sources {
                 paths,
@@ -4827,14 +4843,30 @@ fn run_redaction(command: RedactionCommand) -> Result<ExitCode, ExitCode> {
                 return Err(ExitCode::from(2));
             }
             let checked = redaction::check(&sources, &rules).map_err(failed)?;
-            if checked.lines.is_empty() {
+            if checked.lines.is_empty() && checked.entries.is_empty() {
                 return Ok(ExitCode::SUCCESS);
             }
-            write_stdout(format!("{}\n", checked.lines.join("\n")).as_bytes())?;
-            eprintln!(
-                "bench-tools redaction: account identifiers or machine names remain; {}, and never quote the values",
-                redaction::remedy(&checked.findings)
-            );
+            let lines: String = checked
+                .lines
+                .iter()
+                .chain(&checked.entries)
+                .flat_map(|line| [line.as_str(), "\n"])
+                .collect();
+            write_stdout(lines.as_bytes())?;
+            if !checked.lines.is_empty() {
+                eprintln!(
+                    "bench-tools redaction: account identifiers or machine names remain; {}, and never quote the values",
+                    redaction::remedy(&checked.findings)
+                );
+            }
+            if !checked.entries.is_empty() {
+                eprintln!(
+                    "bench-tools redaction: the staged redacted evidence record is not what the rules confirm; once an \
+                     entry is committed only its history pin may change, and a new entry must be the rules' output \
+                     of the file at HEAD. Restore the file and bench/grading/current from HEAD, then run bench-tools \
+                     redaction repin with the values file"
+                );
+            }
             Ok(ExitCode::from(1))
         }
         RedactionCommand::Apply { paths } => {
@@ -4850,6 +4882,35 @@ fn run_redaction(command: RedactionCommand) -> Result<ExitCode, ExitCode> {
                 eprintln!("bench-tools redaction: {}", redaction::LEAVE_OUT);
             }
             Ok(ExitCode::from(u8::from(!applied.unredactable.is_empty())))
+        }
+        RedactionCommand::Repin { path, receipt } => {
+            require_values()?;
+            let top = redaction::top_level().map_err(failed)?;
+            let outcome = current_grading::Root::new(top.as_os_str().as_bytes()).and_then(|root| {
+                current_grading::redacted_evidence::repin(
+                    &root,
+                    path.as_os_str().as_bytes(),
+                    receipt.as_os_str().as_bytes(),
+                    &rules,
+                )
+            });
+            match outcome {
+                Ok(lines) => {
+                    write_stdout(format!("{}\n", lines.join("\n")).as_bytes())?;
+                    Ok(ExitCode::SUCCESS)
+                }
+                Err(current_grading::Failure::Inconsistent(message)) => {
+                    eprintln!("bench-tools redaction: {}", pytext::stderr_text(&message));
+                    Ok(ExitCode::from(1))
+                }
+                Err(
+                    current_grading::Failure::Input(message)
+                    | current_grading::Failure::Crash(message),
+                ) => {
+                    eprintln!("bench-tools redaction: {message}");
+                    Err(ExitCode::from(2))
+                }
+            }
         }
     }
 }
@@ -5734,6 +5795,8 @@ fn run_current_grading(arguments: CurrentGradingArgs) -> Result<ExitCode, ExitCo
                 let (selected, documents) = current_grading::load_current(&root, current, true)?;
                 let status = current_grading::coverage_status(&selected, &documents)?;
                 if operation == "check" {
+                    let notes =
+                        current_grading::redacted_evidence::recheck(&root, &documents.redacted)?;
                     let count = |field: &str| {
                         status
                             .as_object()
@@ -5741,8 +5804,12 @@ fn run_current_grading(arguments: CurrentGradingArgs) -> Result<ExitCode, ExitCo
                             .map(bench_tools::pyjson::Value::py_str)
                             .unwrap_or_default()
                     };
+                    let notes: String = notes
+                        .iter()
+                        .flat_map(|note| [note.as_str(), "\n"])
+                        .collect();
                     Ok(format!(
-                        "current evidence valid; {}/{} admitted reviews assessed\n",
+                        "current evidence valid; {}/{} admitted reviews assessed\n{notes}",
                         count("assessed_reviews"),
                         count("required_reviews")
                     )

@@ -7,11 +7,11 @@ Not run. The owner chose "Test on Vercel first" for question 3 on 2026-11-07 ([`
 All of it is under [`../../rule-v4-candidates-2026-10-27/o-astro-16079/vercel-run/`](../../rule-v4-candidates-2026-10-27/o-astro-16079/vercel-run/) (`RESULTS.md`, `scripts/`, `step01` to `step15` logs, `app-10.0.3/`, `app-10.0.2/`).
 
 - **Approval.** The owner wrote "Yes to vercel test, $40 cap is o\nok" (`../../rule-v4-candidates-2026-10-27/blind-limits.v1.json`). The $40 cap covered the round's blind sessions; the Vercel run cost nothing.
-- **Account.** Vercel CLI 65.4.0, account `jack-7095`, team scope `jackchu-com`, the free Hobby plan with no payment method (`RESULTS.md` lines 3 to 4). The saved files name no token or environment variable. The run used a CLI session that was already signed in, on another host. This host has no Vercel CLI installed.
+- **Account.** Vercel CLI 65.4.0, account `[redacted-account]`, team scope `[redacted-account]`, the free Hobby plan with no payment method (`RESULTS.md` lines 3 to 4). The saved files name no token or environment variable. The run used a CLI session that was already signed in, on another host. This host has no Vercel CLI installed.
 - **Site.** Two projects, `app-10.0.3` (`@astrojs/vercel` 10.0.3, astro 6.1.0, the head) and `app-10.0.2` (10.0.2, astro 6.0.7, the commit before). The adapters came from local tarballs. `isr: { expiration: 120, exclude: ['/account'] }`. A middleware answered `/account` from a dummy `session` cookie. The build wrote `allowQuery: ["x_astro_path"]` and `passQuery: true`, and routed `/one`, `/` and `/404` to `/_isr?x_astro_path=$0`.
 - **Commands.** `npm i`, `astro build`, `npx vercel deploy --prebuilt --prod --yes`, then `curl -sS -D -` probes, each three times about 6 s apart (`scripts/attack.sh`, `req.sh`, `sanity.sh`).
 - **What it showed.** `/_isr?x_astro_path=/account` rendered the account page at 10.0.3 and was cached for later visitors. `/one?x_astro_path=/account` returned `/one`'s cached copy (`x-vercel-cache: HIT`) three times. The function never ran, so the order Vercel uses was not seen.
-- **Cleanup.** `npx vercel remove <project> --yes` for both, then `vercel project ls` ("No projects found under jackchu-com") and every URL answering 404 (`step10` to `step15`). `vercel ls` listed both for a few minutes afterwards, which `RESULTS.md` reads as listing lag.
+- **Cleanup.** `npx vercel remove <project> --yes` for both, then `vercel project ls` ("No projects found under [redacted-account]") and every URL answering 404 (`step10` to `step15`). `vercel ls` listed both for a few minutes afterwards, which `RESULTS.md` reads as listing lag.
 
 ## Why the cache hid the order
 
@@ -49,6 +49,6 @@ It shows how Vercel combines the two query strings today, on 2026-11-07 or later
 ## What's needed from the owner
 
 1. Approval to deploy one throwaway public site on Vercel, send the probes above, and delete it right after.
-2. A Vercel account to use: `jack-7095` on team `jackchu-com` again, on the free Hobby plan with no payment method.
+2. A Vercel account to use: `[redacted-account]` on team `[redacted-account]` again, on the free Hobby plan with no payment method.
 3. A way to sign in from this host, which has no Vercel CLI: the owner runs `bunx vercel login` here, or provides a token for the run through the vault. The token is deleted afterwards.
 4. Confirmation that a $0 free-tier run is the limit, with no paid features.

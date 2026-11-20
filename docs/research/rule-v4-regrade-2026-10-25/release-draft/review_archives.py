@@ -35,7 +35,7 @@ CRED_NAMES = {"auth.json", ".credentials.json", ".claude.json", "credentials", "
               "installation_id", "models_cache.json"}
 EMAILS = {"owner": rb"(?i)kamuigt@gmail\.com", "git-author": rb"(?i)jack@jackchu\.com"}
 ANY_EMAIL = rb"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}"
-HOME = rb"/home/jack\b"; WIN = rb"/mnt/c/Users/kamui\b"; WIN2 = rb"(?i)C:\\\\?Users\\\\?kamui"
+HOME = rb"/home/jack\b"; WIN = rb"/mnt/c/Users/[redacted-user]\b"; WIN2 = rb"(?i)C:\\\\?Users\\\\?kamui"
 
 def secret_values():
     vals = set()

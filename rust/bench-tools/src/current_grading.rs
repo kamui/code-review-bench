@@ -24,6 +24,8 @@ use crate::sha256;
 use std::borrow::Cow;
 use std::collections::HashMap;
 
+pub mod redacted_evidence;
+
 pub const CURRENT: &str = "bench/grading/current";
 pub const PROGRAM: &str = "bench-tools current-grading";
 const KINDS: [&str; 6] = [
@@ -93,7 +95,7 @@ const ADMISSION_FACTS: [&str; 7] = [
     "outcome",
 ];
 
-const SCHEMAS: [(&str, &str); 10] = [
+const SCHEMAS: [(&str, &str); 11] = [
     (
         "current-cohort-input",
         include_str!("current_grading/current-cohort-input.schema.json"),
@@ -133,6 +135,10 @@ const SCHEMAS: [(&str, &str); 10] = [
     (
         "current-audit",
         include_str!("current_grading/current-audit.schema.json"),
+    ),
+    (
+        "current-redacted-evidence",
+        include_str!("current_grading/current-redacted-evidence.schema.json"),
     ),
 ];
 
@@ -1688,11 +1694,12 @@ fn faults_message(identifier: &Value, faults: &[String]) -> String {
     format!("{}: {}", identifier.py_str(), faults.join("; "))
 }
 
-/// The loaded record: the inventory and the current documents by kind, with `policy` and `audit`, and the remedy
-/// policy pin `remedy-policy.json` selects, if the record has one.
+/// The loaded record: the inventory and the current documents by kind, with `policy` and `audit`, the remedy policy
+/// pin `remedy-policy.json` selects, if the record has one, and the recorded redactions of evidence files.
 pub struct Documents {
     pub kinds: Vec<(&'static str, Value)>,
     pub remedy_policy: Option<Value>,
+    pub redacted: Vec<redacted_evidence::Entry>,
 }
 
 impl Documents {
@@ -2508,8 +2515,9 @@ pub fn grading_inputs(
         sort_by_id(&mut admissions)?;
         inputs.insert("pre_existing_admissions".into(), Value::Array(admissions));
     }
-    let inputs = Value::Object(inputs);
+    let mut inputs = Value::Object(inputs);
     verify_pins(root, &inputs)?;
+    redacted_evidence::as_graded(&mut inputs, &documents.redacted);
     Ok(inputs)
 }
 
@@ -3993,9 +4001,11 @@ pub fn load_current(root: &Root, current: &[u8], grades: bool) -> R<(Value, Docu
     } else {
         None
     };
+    let redacted = redacted_evidence::load(root, &directory)?;
     let documents = Documents {
         kinds,
         remedy_policy,
+        redacted,
     };
     validate_documents(root, &documents, &selected, grades)?;
     Ok((selected, documents))

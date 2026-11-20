@@ -5,13 +5,20 @@
 //! `creator_account_id` and `plan_type` values, in plain JSON or inside JSON strings whose quotes are escaped any
 //! number of times. The literal rules come from a private values file outside the repository
 //! ([`values_path`]): each listed email address, organization id and account id becomes its placeholder, and each
-//! machine name becomes its stand-in of the same length. A missing file leaves the field rules alone.
+//! machine name becomes its stand-in of the same length. A missing file leaves the field rules alone. The
+//! structure rules replace the owner's personal agent instructions, the list of installed skills a Codex session
+//! gives, the Windows account in a `/mnt/<drive>/Users/` path and the skill folder names under it.
 //!
 //! [`redact`] follows the bytes into what it can rewrite: gzip streams and tar archives (rebuilt only when a member
 //! changes, keeping names, modes and order). A SQLite database, a SQLite write-ahead log or a zip member that holds
 //! an identifier is reported as beyond rewriting and left as it is, because a replacement cannot keep a database
 //! valid without SQLite and a zip member would need the archive rebuilt. An xz stream is not opened. Bytes no rule
 //! changes come back as `None`, so redaction never rewrites clean evidence.
+//!
+//! [`replaced_values`] decides, without private values, whether redacted bytes are earlier bytes with only values
+//! replaced. With `--staged`, [`check`] also requires each entry a commit adds to [`RECORD`] to be exactly what the
+//! rules make of the file at `HEAD`, and the entries already at `HEAD` to stay as they were but for their `history`
+//! pins; the commit hook runs it with the values file.
 
 use crate::archive;
 use crate::pyjson::{self, Duplicates, Value};
@@ -28,6 +35,10 @@ pub const EMAIL: &[u8] = b"[redacted-email]";
 pub const ORGANIZATION: &[u8] = b"[redacted-organization]";
 pub const ACCOUNT: &[u8] = b"[redacted-account]";
 pub const PLAN: &[u8] = b"[redacted-plan]";
+pub const INSTRUCTIONS: &[u8] = b"[redacted-instructions]";
+pub const USER: &[u8] = b"[redacted-user]";
+pub const SKILL: &[u8] = b"[redacted-skill]";
+pub const SKILL_LIST: &[u8] = b"[redacted-skill-list]";
 /// The environment variable that names the private values file.
 pub const VALUES_VARIABLE: &str = "BENCH_REDACTION_VALUES";
 /// The values file under the home directory when [`VALUES_VARIABLE`] is unset.
@@ -37,6 +48,8 @@ pub const SHORTEST_LITERAL: usize = 4;
 const PLACEHOLDER_PREFIX: &[u8] = b"[redacted";
 /// How far past a field's name its value may end.
 const FIELD_WINDOW: usize = 1024;
+/// The record of evidence files redacted after a claim or decision pinned them, which `redaction repin` writes.
+pub const RECORD: &str = "bench/grading/current/redacted-evidence.json";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Error(pub String);
@@ -98,6 +111,99 @@ static FIELDS: LazyLock<[Field; 4]> = LazyLock::new(|| {
         ),
     ]
 });
+
+/// Where the owner's personal agent instructions start inside a JSON string, newlines escaped once.
+const INSTRUCTIONS_ANCHOR: &[u8] =
+    b"# AGENTS.md\\n\\nMake the smallest complete change that satisfies the request";
+/// What ends those instructions inside the string, besides an unescaped quote.
+const INSTRUCTIONS_ENDS: [&[u8]; 4] = [
+    b"\\n</system-reminder>",
+    b"\\n</INSTRUCTIONS>",
+    b"\\n\\n--- project-doc ---",
+    b"\\n\\nContents of ",
+];
+
+/// The owner's personal instructions, from [`INSTRUCTIONS_ANCHOR`] to the first end, become [`INSTRUCTIONS`].
+fn instruction_block(rest: &[u8]) -> Option<(usize, Vec<u8>)> {
+    let mut at = INSTRUCTIONS_ANCHOR.len();
+    while at < rest.len() {
+        if rest[at] == b'"'
+            || INSTRUCTIONS_ENDS
+                .iter()
+                .any(|end| rest[at..].starts_with(end))
+        {
+            return Some((at, INSTRUCTIONS.to_vec()));
+        }
+        at += if rest[at] == b'\\' { 2 } else { 1 };
+    }
+    None
+}
+
+/// Where the list of installed skills starts inside a JSON string, newlines escaped once.
+const SKILL_LIST_ANCHOR: &[u8] = b"\\n### Available skills\\n";
+/// What ends that list, besides an unescaped quote.
+const SKILL_LIST_ENDS: [&[u8]; 3] = [b"\\n</skills_instructions>", b"\\n### ", b"\\n## "];
+
+/// The skills a Codex session lists as available, from [`SKILL_LIST_ANCHOR`] to the first end, become [`SKILL_LIST`].
+fn skill_list(rest: &[u8]) -> Option<(usize, Vec<u8>)> {
+    let start = SKILL_LIST_ANCHOR.len();
+    let mut at = start;
+    while at < rest.len() {
+        if rest[at] == b'"'
+            || SKILL_LIST_ENDS
+                .iter()
+                .any(|end| rest[at..].starts_with(end))
+        {
+            return (at > start)
+                .then(|| {
+                    let mut new = SKILL_LIST_ANCHOR.to_vec();
+                    new.extend_from_slice(SKILL_LIST);
+                    (at, new)
+                })
+                .filter(|(_, new)| rest[..at] != new[..]);
+        }
+        at += if rest[at] == b'\\' { 2 } else { 1 };
+    }
+    None
+}
+
+static MOUNT_PATH: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?-u)\A(/mnt/[a-z]/Users/)(\[redacted-user\]|[^/"\s\\\[][^/"\s\\]*)((?:/iCloudDrive/[^/"\s\\]+/\.agents/skills/)(?:\[redacted-skill\]|[A-Za-z0-9_][A-Za-z0-9._-]*))?"#,
+    )
+    .expect("the mount path pattern compiles")
+});
+
+static SKILL_PATH: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?-u)\A(/\.t3/agents/(?:\.agents_skills|\.codex/skills)/)(\[redacted-skill\]|[A-Za-z0-9_][A-Za-z0-9._-]*)"#,
+    )
+    .expect("the skill path pattern compiles")
+});
+
+/// The Windows account in `/mnt/<drive>/Users/<account>` becomes [`USER`], and the skill folder name under the
+/// account's `iCloudDrive/<machine>/.agents/skills/` becomes [`SKILL`].
+fn mount_path(rest: &[u8]) -> Option<(usize, Vec<u8>)> {
+    let found = MOUNT_PATH.captures(rest)?;
+    let whole = found.get(0)?;
+    let mut new = found.get(1)?.as_bytes().to_vec();
+    new.extend_from_slice(USER);
+    if let Some(tail) = found.get(3) {
+        let tail = tail.as_bytes();
+        let cut = tail.len() - tail.iter().rev().position(|byte| *byte == b'/')?;
+        new.extend_from_slice(&tail[..cut]);
+        new.extend_from_slice(SKILL);
+    }
+    Some((whole.end(), new))
+}
+
+/// A skill folder name under the service user's skill directories becomes [`SKILL`].
+fn skill_path(rest: &[u8]) -> Option<(usize, Vec<u8>)> {
+    let found = SKILL_PATH.captures(rest)?;
+    let mut new = found.get(1)?.as_bytes().to_vec();
+    new.extend_from_slice(SKILL);
+    Some((found.get(0)?.end(), new))
+}
 
 fn find(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
     let first = *needle.first()?;
@@ -309,6 +415,14 @@ impl Rules {
         self.values.as_deref()
     }
 
+    /// The stand-ins that replace machine names. They are written into redacted files, so they are not private.
+    pub fn stand_ins(&self) -> Vec<&[u8]> {
+        self.hosts
+            .iter()
+            .map(|(_, stand_in)| stand_in.as_slice())
+            .collect()
+    }
+
     fn apply(&self, data: &[u8]) -> Option<Vec<u8>> {
         let mut current = None;
         for literal in &self.literals {
@@ -332,6 +446,23 @@ impl Rules {
                     new.extend_from_slice(field.placeholder);
                     Some((value.end(), new))
                 })
+            });
+        }
+        chain(&mut current, data, |bytes| {
+            rewrite(bytes, INSTRUCTIONS_ANCHOR, instruction_block)
+        });
+        chain(&mut current, data, |bytes| {
+            rewrite(bytes, SKILL_LIST_ANCHOR, skill_list)
+        });
+        chain(&mut current, data, |bytes| {
+            rewrite(bytes, b"/mnt/", mount_path)
+        });
+        for anchor in [
+            &b"/.t3/agents/.agents_skills/"[..],
+            b"/.t3/agents/.codex/skills/",
+        ] {
+            chain(&mut current, data, |bytes| {
+                rewrite(bytes, anchor, skill_path)
             });
         }
         for (name, stand_in) in &self.hosts {
@@ -418,6 +549,315 @@ pub fn redact(data: &[u8], rules: &Rules) -> Redacted {
 /// Whether redaction would change `data` or finds something it cannot rewrite.
 pub fn would_change(data: &[u8], rules: &Rules) -> bool {
     !redact(data, rules).clean()
+}
+
+/// What a rule can have replaced where a placeholder now stands.
+#[derive(Clone, Copy)]
+enum Gap {
+    /// One token of at most `longest` bytes, with no whitespace, quote or backslash, that `fits` accepts as the
+    /// earlier bytes from `from` to `to`.
+    Token {
+        longest: usize,
+        fits: fn(before: &[u8], from: usize, to: usize) -> bool,
+    },
+    /// The personal instructions, from their anchor to where [`instruction_block`] ends them.
+    Instructions,
+    /// The installed skills after their heading, to where [`skill_list`] ends them.
+    SkillList,
+    /// A machine name, as long as its stand-in.
+    Host,
+}
+
+fn token_byte(byte: u8) -> bool {
+    !(byte.is_ascii_whitespace() || matches!(byte, 0x0b | b'"' | b'\\'))
+}
+
+/// A byte of an id or a machine name.
+fn id_byte(byte: &u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+}
+
+fn email_value(before: &[u8], from: usize, to: usize) -> bool {
+    let gap = &before[from..to];
+    let Some(at) = gap.iter().position(|byte| *byte == b'@') else {
+        return false;
+    };
+    let (local, domain) = (&gap[..at], &gap[at + 1..]);
+    (1..=128).contains(&local.len())
+        && local
+            .iter()
+            .all(|byte| id_byte(byte) || matches!(byte, b'%' | b'+'))
+        && (1..=254).contains(&domain.len())
+        && domain
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+        && domain.last().is_some_and(u8::is_ascii_alphanumeric)
+}
+
+fn organization_value(before: &[u8], from: usize, to: usize) -> bool {
+    to - from >= SHORTEST_LITERAL
+        && before[from..to]
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
+}
+
+fn account_value(before: &[u8], from: usize, to: usize) -> bool {
+    before[from..to].iter().all(id_byte)
+}
+
+fn plan_value(before: &[u8], from: usize, to: usize) -> bool {
+    to - from >= 2
+        && before[from..to]
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+static MOUNT_USERS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?-u)/mnt/[a-z]/Users/\z").expect("the mount prefix pattern compiles")
+});
+
+/// The account in a mount path, all of it, as [`MOUNT_PATH`] takes it.
+fn user_value(before: &[u8], from: usize, to: usize) -> bool {
+    MOUNT_USERS.is_match(&before[..from])
+        && before[from] != b'['
+        && !before[from..to].contains(&b'/')
+        && before
+            .get(to)
+            .is_none_or(|byte| matches!(byte, b'/' | b'"' | b'\\') || !token_byte(*byte))
+}
+
+/// A skill folder name in one of the skill directories, all of it, as [`MOUNT_PATH`] and [`SKILL_PATH`] take it.
+fn skill_value(before: &[u8], from: usize, to: usize) -> bool {
+    ["/.agents/skills/", "/.agents_skills/", "/.codex/skills/"]
+        .iter()
+        .any(|directory| before[..from].ends_with(directory.as_bytes()))
+        && (before[from].is_ascii_alphanumeric() || before[from] == b'_')
+        && before[from..to].iter().all(id_byte)
+        && !before.get(to).is_some_and(id_byte)
+}
+
+/// Each placeholder and what it can stand for. The longest values are the field rules' own bounds: an address of
+/// 128, 1 and 254 bytes, a Codex account id of 256 and a plan of 20; a path segment is at most 255.
+const GAPS: [(&[u8], Gap); 8] = [
+    (
+        EMAIL,
+        Gap::Token {
+            longest: 383,
+            fits: email_value,
+        },
+    ),
+    (
+        ORGANIZATION,
+        Gap::Token {
+            longest: 64,
+            fits: organization_value,
+        },
+    ),
+    (
+        ACCOUNT,
+        Gap::Token {
+            longest: 256,
+            fits: account_value,
+        },
+    ),
+    (
+        PLAN,
+        Gap::Token {
+            longest: 20,
+            fits: plan_value,
+        },
+    ),
+    (
+        USER,
+        Gap::Token {
+            longest: 255,
+            fits: user_value,
+        },
+    ),
+    (
+        SKILL,
+        Gap::Token {
+            longest: 255,
+            fits: skill_value,
+        },
+    ),
+    (INSTRUCTIONS, Gap::Instructions),
+    (SKILL_LIST, Gap::SkillList),
+];
+
+/// Where each placeholder or stand-in stands in `after`, the longest at each place.
+fn marks(after: &[u8], stand_ins: &[&[u8]]) -> Vec<(usize, usize, Gap)> {
+    let mut found = Vec::new();
+    let mut at = 0;
+    while at < after.len() {
+        let longest = GAPS
+            .iter()
+            .copied()
+            .chain(stand_ins.iter().map(|text| (*text, Gap::Host)))
+            .filter(|(text, _)| after[at..].starts_with(text))
+            .max_by_key(|(text, _)| text.len());
+        match longest {
+            Some((text, gap)) => {
+                found.push((at, at + text.len(), gap));
+                at += text.len();
+            }
+            None => at += 1,
+        }
+    }
+    found
+}
+
+/// Where a value that `placeholder` replaced can end in `before`, when it starts at `from`. The placeholder itself,
+/// already in the earlier bytes, is one of them.
+fn gap_ends(before: &[u8], from: usize, placeholder: &[u8], gap: Gap, after: &[u8]) -> Vec<usize> {
+    let mut ends = Vec::new();
+    if before[from..].starts_with(placeholder) {
+        ends.push(from + placeholder.len());
+    }
+    match gap {
+        Gap::Token { longest, fits } => {
+            let mut to = from;
+            while to < before.len() && to - from < longest && token_byte(before[to]) {
+                to += 1;
+                if fits(before, from, to) && before[from..to] != *placeholder {
+                    ends.push(to);
+                }
+            }
+        }
+        Gap::Instructions => {
+            if before[from..].starts_with(INSTRUCTIONS_ANCHOR)
+                && let Some((length, _)) = instruction_block(&before[from..])
+            {
+                ends.push(from + length);
+            }
+        }
+        Gap::SkillList => {
+            let heading = from.checked_sub(SKILL_LIST_ANCHOR.len());
+            if let Some(heading) = heading
+                && before[heading..].starts_with(SKILL_LIST_ANCHOR)
+                && let Some((length, _)) = skill_list(&before[heading..])
+                && heading + length > from
+            {
+                ends.push(heading + length);
+            }
+        }
+        Gap::Host => {
+            let to = from + placeholder.len();
+            if to <= before.len() {
+                let name = &before[from..to];
+                if name != placeholder && name.iter().all(id_byte) && find(after, name, 0).is_none()
+                {
+                    ends.push(to);
+                }
+            }
+        }
+    }
+    ends
+}
+
+/// The most places the literal piece after one placeholder may align at. An honest redaction aligns at one; the bound
+/// keeps a crafted record from making the alignment's memory grow with the square of its length.
+const WIDEST: usize = 4096;
+
+/// A placeholder or stand-in and how many values it replaced.
+pub type Replaced = (Vec<u8>, usize);
+
+/// Whether `text` is one of the placeholders the rules write, rather than a stand-in.
+pub fn is_placeholder(text: &[u8]) -> bool {
+    GAPS.iter().any(|(placeholder, _)| *placeholder == text)
+}
+
+/// How many values each placeholder and stand-in replaced, when `after` is `before` with values replaced and nothing
+/// else. Split at every placeholder and at each of `stand_ins`, `after` must give literal pieces that occur in
+/// `before` in the same order from its start to its end, and each gap between them must be the same placeholder or
+/// what [`GAPS`] lets its rule replace. A stand-in replaces one value as long as itself, which no longer occurs in
+/// `after`. Messages never quote the bytes.
+pub fn replaced_values(before: &[u8], after: &[u8], stand_ins: &[&[u8]]) -> Result<Vec<Replaced>> {
+    for stand_in in stand_ins {
+        if stand_in.len() < SHORTEST_LITERAL
+            || !stand_in.iter().all(id_byte)
+            || GAPS.iter().any(|(text, _)| text == stand_in)
+        {
+            return Err(fail(format!(
+                "{} cannot be the stand-in of a machine name",
+                pytext::repr_str(&String::from_utf8_lossy(stand_in))
+            )));
+        }
+    }
+    let marks = marks(after, stand_ins);
+    let piece = |k: usize| {
+        let start = if k == 0 { 0 } else { marks[k - 1].1 };
+        let end = marks.get(k).map_or(after.len(), |mark| mark.0);
+        &after[start..end]
+    };
+    let parted = |at: usize| {
+        fail(format!(
+            "the redacted bytes are not the earlier bytes with values replaced by placeholders; they part at byte \
+             {at} of the redacted bytes"
+        ))
+    };
+    if !before.starts_with(piece(0)) || (marks.is_empty() && before.len() != after.len()) {
+        return Err(parted(0));
+    }
+    let mut layers = vec![std::collections::BTreeMap::from([(piece(0).len(), 0)])];
+    for (k, &(start, end, gap)) in marks.iter().enumerate() {
+        let next = piece(k + 1);
+        let last = k + 1 == marks.len();
+        let mut reached = std::collections::BTreeMap::new();
+        for &from in layers[k].keys() {
+            for to in gap_ends(before, from, &after[start..end], gap, after) {
+                let fits = if last {
+                    before[to..] == *next
+                } else {
+                    before[to..].starts_with(next)
+                };
+                if fits {
+                    reached.entry(to + next.len()).or_insert(from);
+                }
+            }
+        }
+        if reached.is_empty() {
+            return Err(parted(start));
+        }
+        if reached.len() > WIDEST {
+            return Err(fail(format!(
+                "the redacted bytes align with the earlier bytes in too many ways to re-check, from byte {start} of \
+                 the redacted bytes"
+            )));
+        }
+        layers.push(reached);
+    }
+    let mut counts: Vec<Replaced> = Vec::new();
+    let mut names: Vec<(&[u8], &[u8])> = Vec::new();
+    let mut at = before.len();
+    for k in (1..layers.len()).rev() {
+        let from = layers[k][&at];
+        let (start, end, gap) = marks[k - 1];
+        let placeholder = &after[start..end];
+        let value = &before[from..at - piece(k).len()];
+        at = from;
+        if value == placeholder {
+            continue;
+        }
+        if matches!(gap, Gap::Host) {
+            match names.iter().find(|(known, _)| *known == placeholder) {
+                Some((_, name)) if *name != value => {
+                    return Err(fail(format!(
+                        "the stand-in {} replaced two different values",
+                        pytext::repr_str(&String::from_utf8_lossy(placeholder))
+                    )));
+                }
+                Some(_) => {}
+                None => names.push((placeholder, value)),
+            }
+        }
+        match counts.iter_mut().find(|(known, _)| known == placeholder) {
+            Some((_, count)) => *count += 1,
+            None => counts.push((placeholder.to_vec(), 1)),
+        }
+    }
+    counts.sort();
+    Ok(counts)
 }
 
 const XZ: &[u8] = b"\xfd7zXZ\x00";
@@ -638,7 +1078,8 @@ fn git(directory: Option<&Path>, arguments: &[&str]) -> Result<Vec<u8>> {
     Ok(output.stdout)
 }
 
-fn top_level() -> Result<PathBuf> {
+/// The top level of the repository the current directory is in.
+pub fn top_level() -> Result<PathBuf> {
     let output = git(None, &["rev-parse", "--show-toplevel"])?;
     let text = output.strip_suffix(b"\n").unwrap_or(&output);
     Ok(PathBuf::from(std::ffi::OsStr::new(
@@ -777,14 +1218,165 @@ fn shown(path: &Path) -> String {
 }
 
 /// What `redaction check` found: one line for each file or member that redaction would change or cannot rewrite,
-/// and the findings behind them.
+/// and the findings behind them, then one line for each staged [`RECORD`] entry the rules do not confirm.
 #[derive(Clone, Debug, Default)]
 pub struct Checked {
     pub lines: Vec<String>,
     pub findings: Vec<Finding>,
+    pub entries: Vec<String>,
 }
 
-/// `redaction check`: what redaction would change or cannot rewrite in `sources`.
+/// One entry of a [`RECORD`]: its `path`, `before.sha256`, `before.blob` and `after.sha256`, and the entry without its
+/// `history` pin, in canonical form.
+struct Recorded {
+    path: String,
+    before: String,
+    blob: String,
+    after: String,
+    fixed: String,
+}
+
+/// The entries of a [`RECORD`], or `None` for another document.
+fn record_entries(text: &[u8]) -> Option<Vec<Recorded>> {
+    let document = pyjson::loads(std::str::from_utf8(text).ok()?, Duplicates::Refuse).ok()?;
+    let field = |value: &Value, names: &[&str]| -> Option<String> {
+        let mut value = value;
+        for name in names {
+            value = value.as_object()?.get(name)?;
+        }
+        value.as_str().map(str::to_string)
+    };
+    document
+        .as_object()?
+        .get("entries")?
+        .as_array()?
+        .iter()
+        .map(|entry| {
+            let fixed: pyjson::Object = entry
+                .as_object()?
+                .iter()
+                .filter(|(key, _)| key.as_str() != "history")
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect();
+            Some(Recorded {
+                path: field(entry, &["path"])?,
+                before: field(entry, &["before", "sha256"])?,
+                blob: field(entry, &["before", "blob"])?,
+                after: field(entry, &["after", "sha256"])?,
+                fixed: pyjson::dumps(
+                    &Value::Object(fixed),
+                    &pyjson::Dumps {
+                        sort_keys: true,
+                        ..pyjson::Dumps::default()
+                    },
+                ),
+            })
+        })
+        .collect()
+}
+
+/// A line for each file whose entries at `HEAD` the staged `record` does not keep as they were, in order and first,
+/// apart from `history` pins and from removing a file's last entries; then for each entry it adds whose earlier blob
+/// is not the file at `HEAD` with the recorded hash, or whose staged file is not what `rules` make of that blob, byte
+/// for byte. An entry at `HEAD` decides which hash a batch's fingerprint takes, so only its `history` may change, and
+/// removing an earlier entry while a later one stays would move the file's earliest hash.
+fn unconfirmed(top: &Path, record: &[u8], rules: &Rules) -> Vec<String> {
+    let Some(staged) = record_entries(record) else {
+        return vec![format!(
+            "cannot confirm: {RECORD} is not a redacted evidence record"
+        )];
+    };
+    let committed = git(Some(top), &["cat-file", "blob", &format!("HEAD:{RECORD}")])
+        .ok()
+        .and_then(|text| record_entries(&text))
+        .unwrap_or_default();
+    let mut lines = Vec::new();
+    let mut paths: Vec<&str> = committed.iter().map(|entry| entry.path.as_str()).collect();
+    paths.sort_unstable();
+    paths.dedup();
+    for path in paths {
+        let head: Vec<&Recorded> = committed
+            .iter()
+            .filter(|entry| entry.path == path)
+            .collect();
+        let now: Vec<&Recorded> = staged.iter().filter(|entry| entry.path == path).collect();
+        let kept: Vec<&&Recorded> = head
+            .iter()
+            .filter(|old| now.iter().any(|new| new.after == old.after))
+            .collect();
+        let in_place = kept
+            .iter()
+            .zip(&head)
+            .chain(kept.iter().zip(&now))
+            .all(|(old, other)| old.after == other.after);
+        if !in_place {
+            lines.push(format!(
+                "an entry already at HEAD was moved, or removed while a later entry of its file stays: {path} \
+                 ({RECORD})"
+            ));
+        }
+    }
+    for entry in &staged {
+        let Recorded {
+            path,
+            before,
+            blob,
+            after,
+            fixed,
+        } = entry;
+        if let Some(old) = committed
+            .iter()
+            .find(|old| old.path == *path && old.after == *after)
+        {
+            if old.fixed != *fixed {
+                lines.push(format!(
+                    "an entry already at HEAD changed in more than its history pin: {path} ({RECORD})"
+                ));
+            }
+            continue;
+        }
+        if rules.values_file().is_none() {
+            lines.push(format!(
+                "cannot confirm without the values file: {path} ({RECORD})"
+            ));
+            continue;
+        }
+        let committed = git(
+            Some(top),
+            &["rev-parse", "--verify", "--quiet", &format!("HEAD:{path}")],
+        )
+        .ok()
+        .filter(|id| String::from_utf8_lossy(id).trim() == blob);
+        let earlier = committed
+            .and_then(|_| git(Some(top), &["cat-file", "blob", blob]).ok())
+            .filter(|earlier| crate::sha256::hex_digest(earlier) == *before);
+        let Some(earlier) = earlier else {
+            lines.push(format!(
+                "the entry's earlier bytes are not the file at HEAD: {path} ({RECORD})"
+            ));
+            continue;
+        };
+        let now = git(Some(top), &["cat-file", "blob", &format!(":{path}")]);
+        let confirmed = match now {
+            Ok(now) => {
+                let redacted = redact(&earlier, rules);
+                !redacted.findings.iter().any(Finding::unredactable)
+                    && redacted.data.as_deref() == Some(now.as_slice())
+                    && crate::sha256::hex_digest(&now) == *after
+            }
+            _ => false,
+        };
+        if !confirmed {
+            lines.push(format!(
+                "not what the rules make of its earlier bytes: {path} ({RECORD})"
+            ));
+        }
+    }
+    lines
+}
+
+/// `redaction check`: what redaction would change or cannot rewrite in `sources`, and with `staged`, each entry the
+/// staged [`RECORD`] adds that the rules do not confirm.
 pub fn check(sources: &Sources, rules: &Rules) -> Result<Checked> {
     let mut checked = Checked::default();
     let mut scan = |name: &str, data: &[u8]| {
@@ -806,10 +1398,18 @@ pub fn check(sources: &Sources, rules: &Rules) -> Result<Checked> {
     if let Some(message) = &sources.message {
         scan(&shown(message), &read(message)?);
     }
+    let mut record = None;
     if sources.staged {
-        for (path, blob) in staged(&top_level()?)? {
+        let top = top_level()?;
+        for (path, blob) in staged(&top)? {
             scan(&path, &blob);
+            if path == RECORD {
+                record = Some((top.clone(), blob));
+            }
         }
+    }
+    if let Some((top, blob)) = record {
+        checked.entries = unconfirmed(&top, &blob, rules);
     }
     Ok(checked)
 }
