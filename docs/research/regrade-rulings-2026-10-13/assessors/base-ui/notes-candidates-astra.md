@@ -1,4 +1,4 @@
-Extra file opened: `/mnt/c/Users/kamui/iCloudDrive/host-01/.agents/skills/unslop/SKILL.md`, required by the higher-priority skill instructions; no other outside file was opened.
+Extra file opened: `/mnt/c/Users/[redacted-user]/iCloudDrive/host-01/.agents/skills/[redacted-skill]/SKILL.md`, required by the higher-priority skill instructions; no other outside file was opened.
 C3n: the announced prop-based handling covers consumer rewrites, but no precedent settles a spelling that remains visible and changes the submitted text.
 Before 4: C3n's independent repairs distinguish it from GT-r5; sharing a block or a combined repair alone does not establish one fault.
 M1: the cost threshold and the scope of the test comment remain open; the added test has not lost existing protection, so its missing coverage alone is an improvement.

@@ -6,4 +6,4 @@ The reversal fact for each case is whether its shared replacement leaves either 
 No earlier-rulings.md was present; the rule's examples offer analogies but no established grouping precedent for these distinctions.
 Second-pass 6 and 7 establish supported uses, not a decision to separate their faults.
 Later releases and fixes did not decide either answer, under Before 3.
-An additional file was read because session instructions required it: /mnt/c/Users/kamui/iCloudDrive/host-01/.agents/skills/unslop/SKILL.md; it supplied no case evidence.
+An additional file was read because session instructions required it: /mnt/c/Users/[redacted-user]/iCloudDrive/host-01/.agents/skills/[redacted-skill]/SKILL.md; it supplied no case evidence.

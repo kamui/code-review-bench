@@ -5,4 +5,4 @@ The intact condition does not deliver the event that the documented debugging pa
 The protobuf symptom does not erase the proved JSON failure of the same cut; no known reference problem exists to duplicate.
 The reversal fact is whether JSON records the required event, and the integration run settles that it does not.
 No later evidence, untraced in-tree text, or estimate of real-world frequency supports the decision.
-A higher-priority instruction required reading /mnt/c/Users/kamui/iCloudDrive/host-01/.agents/skills/unslop/SKILL.md for writing style; it supplied no case evidence. No other extra file was opened.
+A higher-priority instruction required reading /mnt/c/Users/[redacted-user]/iCloudDrive/host-01/.agents/skills/[redacted-skill]/SKILL.md for writing style; it supplied no case evidence. No other extra file was opened.

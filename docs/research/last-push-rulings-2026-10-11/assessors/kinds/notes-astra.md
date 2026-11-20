@@ -6,4 +6,4 @@ K3 retains failure detection and truthful warnings, so improving immediacy or pr
 K4 remains in scope despite no worsening in the runs because the change edits the failing operation and claims to fix session invalidation during rotation.
 K4 needs a ruling on whether the rotation promise includes mixed-key rolling deployments; an explicit inclusion or exclusion would settle the answer.
 Later statements do not decide any answer; searches the cases say were unavailable or omitted remain unperformed.
-The required writing skill /mnt/c/Users/kamui/iCloudDrive/host-01/.agents/skills/unslop/SKILL.md was also read under a higher-priority instruction; no other outside file was opened.
+The required writing skill /mnt/c/Users/[redacted-user]/iCloudDrive/host-01/.agents/skills/[redacted-skill]/SKILL.md was also read under a higher-priority instruction; no other outside file was opened.

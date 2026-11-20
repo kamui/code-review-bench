@@ -7,4 +7,4 @@ B7's suppression promise, rather than the mere validator invocation, decides the
 N3's comment names rejected values and field state directly, unlike a general aim; the handbook expressly includes server errors in field state, so promised-2a applies.
 N3 is not the known checkbox/radio fault: the lines overlap, but its value prop really does carry edited state, and a fix distinguishing checkbox/radio state would leave rejected text unchanged.
 For N3, a continuing promise to clear errors on rejected edits would reverse the answer; the supplied documentation and comment instead condition handling on the stored value, and no exact reliance was shown.
-An extra file was read to satisfy a higher-priority mandatory writing-skill instruction: /mnt/c/Users/kamui/iCloudDrive/host-01/.agents/skills/unslop/SKILL.md; no other extra file was opened.
+An extra file was read to satisfy a higher-priority mandatory writing-skill instruction: /mnt/c/Users/[redacted-user]/iCloudDrive/host-01/.agents/skills/[redacted-skill]/SKILL.md; no other extra file was opened.
