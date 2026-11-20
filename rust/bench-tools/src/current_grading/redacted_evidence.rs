@@ -1,8 +1,8 @@
 //! The record of evidence files redacted after a claim or an eligibility decision pinned them: its checks, what it
 //! changes in an input fingerprint, and `bench-tools redaction repin`, which writes it.
 //!
-//! A batch's input fingerprint describes what the batch was graded from. Of an evidence file, only its pinned hash
-//! travels into the fingerprint; no grader receives the replaced values. So where a claim's evidence source or an
+//! A batch's input fingerprint describes what the batch was graded from. Of an evidence file no grader read, only its
+//! pinned hash travels into the fingerprint. So where a claim's evidence source or an
 //! eligibility decision's evidence pin names a recorded file at its redacted hash, the fingerprint holds the hash the
 //! file had before its first recorded redaction, and the batch stays current.
 
@@ -89,6 +89,21 @@ pub fn load(root: &Root, directory: &PyPath) -> R<Vec<Entry>> {
             entry.before != entry.after,
             format!("{}: an entry records no change", shown(&entry)),
         )?;
+        if let Some(history) = &entry.history {
+            let receipt = pyvalue::read_bytes(&root.local(history.as_bytes())?)?;
+            require(
+                history.starts_with(RULINGS)
+                    && receipt
+                        .windows(entry.blob.len())
+                        .any(|window| window == entry.blob.as_bytes()),
+                format!(
+                    "{}: the history pin {history} is not the owner's receipt for the history rewrite; save that \
+                     receipt under {RULINGS} and name blob {} in it, since nothing else skips the re-check",
+                    shown(&entry),
+                    entry.blob
+                ),
+            )?;
+        }
         let earlier: Vec<&Entry> = entries
             .iter()
             .filter(|known| known.path == entry.path)
@@ -119,11 +134,13 @@ pub fn load(root: &Root, directory: &PyPath) -> R<Vec<Entry>> {
         {
             continue;
         }
+        let file = root.local(entry.path.as_bytes())?;
         require(
-            file_hash(&root.local(entry.path.as_bytes())?)? == entry.after,
+            file.to_path_buf().is_file() && file_hash(&file)? == entry.after,
             format!(
-                "{}: the file is not the redacted bytes its last entry records; restore it from git, or record its \
-                 redaction with bench-tools redaction repin",
+                "{}: the file is not the redacted bytes its last entry records; restore it from git or record its \
+                 redaction with bench-tools redaction repin, or, to correct or remove the file on purpose, remove \
+                 its entries from the record and grade the affected batches again",
                 shown(entry)
             ),
         )?;
@@ -314,35 +331,78 @@ fn pointer(location: &[Step]) -> String {
         .collect()
 }
 
-/// Where each object with `"path": path` and a `sha256` sits in `value`, and that object.
-fn pins_of(
+/// Where each object that names the file, as one of `names`, sits in `value`, and that object.
+fn naming(
     value: &Value,
-    path: &str,
+    names: &[String],
     location: &mut Vec<Step>,
     found: &mut Vec<(Vec<Step>, Object)>,
 ) {
     match value {
         Value::Object(object) => {
-            if object.get("path").and_then(Value::as_str) == Some(path)
-                && object.get("sha256").is_some()
-            {
+            if object.iter().any(|(_, member)| {
+                member
+                    .as_str()
+                    .is_some_and(|text| names.iter().any(|name| name == text))
+            }) {
                 found.push((location.clone(), object.clone()));
             }
             for (key, member) in object.iter() {
                 location.push(Step::Key(key.as_bytes().to_vec()));
-                pins_of(member, path, location, found);
+                naming(member, names, location, found);
                 location.pop();
             }
         }
         Value::Array(members) => {
             for (at, member) in members.iter().enumerate() {
                 location.push(Step::Index(at));
-                pins_of(member, path, location, found);
+                naming(member, names, location, found);
                 location.pop();
             }
         }
         _ => {}
     }
+}
+
+/// Where a saved assessment receipt lists a source of the evidence it prepared for the batch's grader.
+fn prepared_for_a_grader(location: &[Step]) -> bool {
+    let key = |step: &Step, name: &[u8]| matches!(step, Step::Key(key) if key == name);
+    let index = |step: &Step| matches!(step, Step::Index(_));
+    location.len() >= 7 && {
+        let tail = &location[location.len() - 7..];
+        key(&tail[0], b"claim_snapshot")
+            && key(&tail[1], b"evidence")
+            && key(&tail[2], b"packets")
+            && index(&tail[3])
+            && key(&tail[4], b"sources")
+            && index(&tail[5])
+            && key(&tail[6], b"source")
+    }
+}
+
+/// Whether `location` in `document` is a claim's evidence source or an eligibility decision's evidence pin.
+fn evidence_pin(document: &str, parsed: &Value, location: &[Step]) -> R<bool> {
+    let key = |step: &Step, name: &[u8]| matches!(step, Step::Key(key) if key == name);
+    Ok(match location {
+        [list, Step::Index(_), field, Step::Index(_), source]
+            if document == format!("{CURRENT}/{CLAIMS}") =>
+        {
+            key(list, b"claims") && key(field, b"evidence") && key(source, b"source")
+        }
+        [list, Step::Index(at), field, Step::Index(_)]
+            if document == format!("{CURRENT}/{DECISIONS}") =>
+        {
+            key(list, b"decisions")
+                && key(field, b"evidence")
+                && each(item(parsed, "decisions")?)?
+                    .get(*at)
+                    .map(|decision| text(decision, "dimension"))
+                    .transpose()?
+                    .as_deref()
+                    == Some("eligibility")
+        }
+        _ => false,
+    })
 }
 
 /// Reads JSON text far enough to give the byte range of each string value at one of the `wanted` locations.
@@ -526,29 +586,59 @@ fn rehashed(
     Ok(written)
 }
 
-/// Every JSON file at or below `directory`, by its path relative to `root`.
-fn documents(root: &[u8], directory: &[u8], found: &mut Vec<Vec<u8>>) -> R<()> {
-    let path = PyPath::new(root).join(directory);
-    let entries = std::fs::read_dir(path.to_path_buf())
-        .map_err(|error| Failure::Input(pytext::os_error(&error, path.as_bytes())))?;
-    let mut names: Vec<Vec<u8>> = Vec::new();
-    for entry in entries {
-        let entry =
-            entry.map_err(|error| Failure::Input(pytext::os_error(&error, path.as_bytes())))?;
-        names.push(pytext::os_bytes(&entry.file_name()).to_vec());
-    }
-    names.sort();
-    for name in names {
-        let relative = [directory, b"/", &name].concat();
-        let metadata = std::fs::symlink_metadata(PyPath::new(root).join(&relative).to_path_buf())
-            .map_err(|error| Failure::Input(pytext::os_error(&error, &relative)))?;
-        if metadata.is_dir() {
-            documents(root, &relative, found)?;
-        } else if metadata.is_file() && relative.ends_with(b".json") {
-            found.push(relative);
+/// The tracked JSON files that may pin `path`, with the names they would give it: every file that names it in full,
+/// and every file in a directory above it, which may name it relative to its own directory.
+fn tracked_documents(root: &Root, path: &str) -> R<Vec<(String, Vec<String>)>> {
+    let listed = |arguments: &[&str]| -> R<Vec<String>> {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root.path.to_path_buf())
+            .args(arguments)
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|error| Failure::Input(format!("cannot run git: {error}")))?;
+        match output.status.code() {
+            Some(0) => Ok(output
+                .stdout
+                .split(|byte| *byte == 0)
+                .filter(|name| !name.is_empty())
+                .map(|name| String::from_utf8_lossy(name).into_owned())
+                .collect()),
+            Some(1) if arguments[0] == "grep" => Ok(Vec::new()),
+            _ => Err(Failure::Input(format!(
+                "git {} failed: {}",
+                arguments[0],
+                String::from_utf8_lossy(&output.stderr).trim()
+            ))),
+        }
+    };
+    let mut found: Vec<(String, Vec<String>)> = listed(&[
+        "grep",
+        "-l",
+        "-z",
+        "--fixed-strings",
+        "-e",
+        path,
+        "--",
+        "*.json",
+    ])?
+    .into_iter()
+    .map(|document| (document, vec![path.to_string()]))
+    .collect();
+    for document in listed(&["ls-files", "-z", "--", "*.json"])? {
+        let Some((directory, _)) = document.rsplit_once('/') else {
+            continue;
+        };
+        let Some(relative) = path.strip_prefix(&format!("{directory}/")) else {
+            continue;
+        };
+        match found.iter_mut().find(|(known, _)| *known == document) {
+            Some((_, names)) => names.push(relative.to_string()),
+            None => found.push((document, vec![relative.to_string()])),
         }
     }
-    Ok(())
+    found.sort();
+    Ok(found)
 }
 
 fn git(root: &Root, arguments: &[&str]) -> Option<Vec<u8>> {
@@ -616,8 +706,9 @@ fn write(path: &PyPath, data: &[u8]) -> R<()> {
     written.map_err(failed)
 }
 
-/// `bench-tools redaction repin PATH --receipt RULING`: redact an evidence file that claims or eligibility decisions
-/// pin, update exactly those pins and record the redaction, so their batches keep their fingerprints. Everything is
+/// `bench-tools redaction repin PATH --receipt RULING`: redact an evidence file that only claims or eligibility
+/// decisions pin, in every tracked JSON file, and that no grader read, update exactly those pins and record the
+/// redaction, so their batches keep their fingerprints. Everything is
 /// checked and built in memory first. The file is written first, then the record, then the documents, so an
 /// interruption never leaves a pin naming bytes that do not exist, and the next run refuses the changed file.
 pub fn repin(root: &Root, path: &[u8], receipt: &[u8], rules: &redaction::Rules) -> R<Vec<String>> {
@@ -639,6 +730,7 @@ pub fn repin(root: &Root, path: &[u8], receipt: &[u8], rules: &redaction::Rules)
              interrupted, restore it and the current grading documents from HEAD and run repin again"
         ),
     )?;
+    load(root, &root.local(CURRENT.as_bytes())?)?;
     let receipt = relative(root, receipt)?;
     let receipt_file = root.local(receipt.as_bytes())?;
     require(
@@ -671,79 +763,61 @@ pub fn repin(root: &Root, path: &[u8], receipt: &[u8], rules: &redaction::Rules)
     )?;
     let old = sha256::hex_digest(&bytes);
     let new = sha256::hex_digest(&clean);
-    let mut found = Vec::new();
-    documents(root.path.as_bytes(), CURRENT.as_bytes(), &mut found)?;
     let mut rewritten: Vec<(String, usize, Vec<u8>)> = Vec::new();
-    for document in found {
-        let document = String::from_utf8_lossy(&document).into_owned();
-        let raw = pyvalue::read_bytes(&root.local(document.as_bytes())?)?;
-        if !raw
-            .windows(path.len())
-            .any(|window| window == path.as_bytes())
-        {
+    for (document, names) in tracked_documents(root, &path)? {
+        let local = root.local(document.as_bytes())?;
+        let raw = pyvalue::read_bytes(&local)?;
+        if !names.iter().any(|name| {
+            raw.windows(name.len())
+                .any(|window| window == name.as_bytes())
+        }) {
             continue;
         }
-        let parsed = read_json(&root.local(document.as_bytes())?)?;
-        let mut pins = Vec::new();
-        pins_of(&parsed, &path, &mut Vec::new(), &mut pins);
-        if pins.is_empty() {
-            continue;
-        }
-        let name = document
-            .strip_prefix(&format!("{CURRENT}/"))
-            .unwrap_or(&document);
-        for (location, pin) in &pins {
-            let evidence = pin.len() == 2
-                && match (name, &location[..]) {
-                    (
-                        CLAIMS,
-                        [
-                            Step::Key(list),
-                            Step::Index(_),
-                            Step::Key(field),
-                            Step::Index(_),
-                            Step::Key(source),
-                        ],
-                    ) => list == b"claims" && field == b"evidence" && source == b"source",
-                    (
-                        DECISIONS,
-                        [
-                            Step::Key(list),
-                            Step::Index(at),
-                            Step::Key(field),
-                            Step::Index(_),
-                        ],
-                    ) => {
-                        list == b"decisions"
-                            && field == b"evidence"
-                            && each(item(&parsed, "decisions")?)?
-                                .get(*at)
-                                .map(|decision| text(decision, "dimension"))
-                                .transpose()?
-                                .as_deref()
-                                == Some("eligibility")
-                    }
-                    _ => false,
-                };
+        let parsed = read_json(&local)?;
+        let mut objects = Vec::new();
+        naming(&parsed, &names, &mut Vec::new(), &mut objects);
+        let mut locations = Vec::new();
+        for (location, object) in objects {
+            let at = pointer(&location);
             require(
-                evidence,
+                !prepared_for_a_grader(&location),
                 format!(
-                    "{document} pins {path} at {}, which is not claim or eligibility decision evidence; repin covers \
-                     evidence files of claims and decisions only",
-                    pointer(location)
+                    "{document} lists {path} at {at} as an evidence source prepared for its batch's grader; the \
+                     grader read from this file, so redaction repin does not cover it"
                 ),
             )?;
-            require(
-                pin.get("sha256").and_then(Value::as_str) == Some(old.as_str()),
-                format!(
-                    "{document} pins {path} at {} with a hash other than its current bytes; correct that pin first",
-                    pointer(location)
-                ),
-            )?;
+            let holds = |hash: &str| {
+                object
+                    .iter()
+                    .any(|(_, member)| member.as_str() == Some(hash))
+            };
+            if object.len() == 2
+                && object.get("path").and_then(Value::as_str) == Some(path.as_str())
+                && object.get("sha256").is_some()
+                && evidence_pin(&document, &parsed, &location)?
+            {
+                require(
+                    holds(&old),
+                    format!(
+                        "{document} pins {path} at {at} with a hash other than its current bytes; correct that pin \
+                         first"
+                    ),
+                )?;
+                locations.push(location);
+            } else {
+                require(
+                    !holds(&old),
+                    format!(
+                        "{document} pins {path} at {at}, which is not claim or eligibility decision evidence; repin \
+                         covers evidence files of claims and decisions only"
+                    ),
+                )?;
+            }
         }
-        let locations: Vec<Vec<Step>> = pins.into_iter().map(|(location, _)| location).collect();
-        let written = rehashed(&raw, &parsed, &locations, &old, &new)?;
-        rewritten.push((document, locations.len(), written));
+        if !locations.is_empty() {
+            let written = rehashed(&raw, &parsed, &locations, &old, &new)?;
+            rewritten.push((document, locations.len(), written));
+        }
     }
     require(
         !rewritten.is_empty(),
@@ -764,19 +838,6 @@ pub fn repin(root: &Root, path: &[u8], receipt: &[u8], rules: &redaction::Rules)
             .collect(),
         )
     };
-    let mut last = None;
-    for entry in each(item(&record, "entries")?)?.iter() {
-        if text(entry, "path")? == path {
-            last = Some(text(item(entry, "after")?, "sha256")?);
-        }
-    }
-    require(
-        last.as_ref().is_none_or(|last| *last == old),
-        format!(
-            "{} records other bytes of {path} than the file holds; run bench-tools current-grading check",
-            redaction::RECORD
-        ),
-    )?;
     let pin = |path: &str, sha256: String| {
         Value::Object(
             [

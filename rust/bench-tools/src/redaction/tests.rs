@@ -649,3 +649,83 @@ fn the_check_without_values_refuses_anything_else() {
         Vec::<Replaced>::new()
     );
 }
+
+#[test]
+fn a_gap_holds_only_what_its_rule_can_replace() {
+    let parted = |at: usize| {
+        format!(
+            "the redacted bytes are not the earlier bytes with values replaced by placeholders; they part at byte \
+             {at} of the redacted bytes"
+        )
+    };
+    let refused = |before: &str, after: &str, stand_ins: &[&[u8]]| {
+        replaced_values(before.as_bytes(), after.as_bytes(), stand_ins)
+            .unwrap_err()
+            .0
+    };
+    assert_eq!(
+        refused(
+            "to a@b.example,cc everyone",
+            "to [redacted-email] everyone",
+            &[]
+        ),
+        parted(3)
+    );
+    assert_eq!(
+        refused("id acct-1,acct-2 here", "id [redacted-account] here", &[]),
+        parted(3)
+    );
+    assert_eq!(
+        refused("on box(1) now", "on host(1) now", &[b"host(1)"]),
+        "'host(1)' cannot be the stand-in of a machine name"
+    );
+    assert_eq!(
+        refused(
+            "on box(1)xyzab now",
+            "on host-01-xyz now",
+            &[b"host-01-xyz"]
+        ),
+        parted(3)
+    );
+    let users = format!("/srv/{}/someone/x", "Users");
+    assert_eq!(
+        refused(&users, &users.replace("someone", "[redacted-user]"), &[]),
+        parted(11)
+    );
+    let mounted = format!("/mnt/c/{}/some.one", "Users");
+    assert_eq!(
+        refused(&mounted, &mounted.replace("some", "[redacted-user]"), &[]),
+        parted(13)
+    );
+    let skills = format!("/x/.agents/{}/my-skill.extra/", "skills");
+    assert_eq!(
+        refused(
+            &skills,
+            &skills.replace("my-skill", "[redacted-skill]"),
+            &[]
+        ),
+        parted(18)
+    );
+    assert_eq!(
+        replaced_values(
+            b"to a@b.example everyone",
+            b"to [redacted-email] everyone",
+            &[]
+        )
+        .unwrap(),
+        counted(&[(EMAIL, 1)])
+    );
+}
+
+#[test]
+fn an_alignment_with_too_many_ways_is_refused() {
+    let before = "a".repeat(5000);
+    let after = "[redacted-account]a".repeat(40);
+    assert_eq!(
+        replaced_values(before.as_bytes(), after.as_bytes(), &[])
+            .unwrap_err()
+            .0,
+        "the redacted bytes align with the earlier bytes in too many ways to re-check, from byte 304 of the redacted \
+         bytes"
+    );
+}

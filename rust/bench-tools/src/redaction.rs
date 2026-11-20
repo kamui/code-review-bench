@@ -553,10 +553,11 @@ pub fn would_change(data: &[u8], rules: &Rules) -> bool {
 /// What a rule can have replaced where a placeholder now stands.
 #[derive(Clone, Copy)]
 enum Gap {
-    /// One token of at most `longest` bytes, with no whitespace, quote or backslash, that `fits` accepts.
+    /// One token of at most `longest` bytes, with no whitespace, quote or backslash, that `fits` accepts as the
+    /// earlier bytes from `from` to `to`.
     Token {
         longest: usize,
-        fits: fn(&[u8]) -> bool,
+        fits: fn(before: &[u8], from: usize, to: usize) -> bool,
     },
     /// The personal instructions, from their anchor to where [`instruction_block`] ends them.
     Instructions,
@@ -570,37 +571,68 @@ fn token_byte(byte: u8) -> bool {
     !(byte.is_ascii_whitespace() || matches!(byte, 0x0b | b'"' | b'\\'))
 }
 
-fn email_value(gap: &[u8]) -> bool {
-    gap.len() >= 3 && gap.contains(&b'@')
+/// A byte of an id or a machine name.
+fn id_byte(byte: &u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
 }
 
-fn organization_value(gap: &[u8]) -> bool {
-    gap.len() >= SHORTEST_LITERAL
-        && gap
+fn email_value(before: &[u8], from: usize, to: usize) -> bool {
+    let gap = &before[from..to];
+    let Some(at) = gap.iter().position(|byte| *byte == b'@') else {
+        return false;
+    };
+    let (local, domain) = (&gap[..at], &gap[at + 1..]);
+    (1..=128).contains(&local.len())
+        && local
+            .iter()
+            .all(|byte| id_byte(byte) || matches!(byte, b'%' | b'+'))
+        && (1..=254).contains(&domain.len())
+        && domain
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+        && domain.last().is_some_and(u8::is_ascii_alphanumeric)
+}
+
+fn organization_value(before: &[u8], from: usize, to: usize) -> bool {
+    to - from >= SHORTEST_LITERAL
+        && before[from..to]
             .iter()
             .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
 }
 
-fn account_value(_: &[u8]) -> bool {
-    true
+fn account_value(before: &[u8], from: usize, to: usize) -> bool {
+    before[from..to].iter().all(id_byte)
 }
 
-fn plan_value(gap: &[u8]) -> bool {
-    gap.len() >= 2
-        && gap
+fn plan_value(before: &[u8], from: usize, to: usize) -> bool {
+    to - from >= 2
+        && before[from..to]
             .iter()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
-fn user_value(gap: &[u8]) -> bool {
-    gap[0] != b'[' && !gap.contains(&b'/')
+static MOUNT_USERS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?-u)/mnt/[a-z]/Users/\z").expect("the mount prefix pattern compiles")
+});
+
+/// The account in a mount path, all of it, as [`MOUNT_PATH`] takes it.
+fn user_value(before: &[u8], from: usize, to: usize) -> bool {
+    MOUNT_USERS.is_match(&before[..from])
+        && before[from] != b'['
+        && !before[from..to].contains(&b'/')
+        && before
+            .get(to)
+            .is_none_or(|byte| matches!(byte, b'/' | b'"' | b'\\') || !token_byte(*byte))
 }
 
-fn skill_value(gap: &[u8]) -> bool {
-    (gap[0].is_ascii_alphanumeric() || gap[0] == b'_')
-        && gap
-            .iter()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+/// A skill folder name in one of the skill directories, all of it, as [`MOUNT_PATH`] and [`SKILL_PATH`] take it.
+fn skill_value(before: &[u8], from: usize, to: usize) -> bool {
+    ["/.agents/skills/", "/.agents_skills/", "/.codex/skills/"]
+        .iter()
+        .any(|directory| before[..from].ends_with(directory.as_bytes()))
+        && (before[from].is_ascii_alphanumeric() || before[from] == b'_')
+        && before[from..to].iter().all(id_byte)
+        && !before.get(to).is_some_and(id_byte)
 }
 
 /// Each placeholder and what it can stand for. The longest values are the field rules' own bounds: an address of
@@ -686,7 +718,7 @@ fn gap_ends(before: &[u8], from: usize, placeholder: &[u8], gap: Gap, after: &[u
             let mut to = from;
             while to < before.len() && to - from < longest && token_byte(before[to]) {
                 to += 1;
-                if fits(&before[from..to]) && before[from..to] != *placeholder {
+                if fits(before, from, to) && before[from..to] != *placeholder {
                     ends.push(to);
                 }
             }
@@ -712,9 +744,7 @@ fn gap_ends(before: &[u8], from: usize, placeholder: &[u8], gap: Gap, after: &[u
             let to = from + placeholder.len();
             if to <= before.len() {
                 let name = &before[from..to];
-                if name != placeholder
-                    && name.iter().all(|byte| token_byte(*byte))
-                    && find(after, name, 0).is_none()
+                if name != placeholder && name.iter().all(id_byte) && find(after, name, 0).is_none()
                 {
                     ends.push(to);
                 }
@@ -723,6 +753,10 @@ fn gap_ends(before: &[u8], from: usize, placeholder: &[u8], gap: Gap, after: &[u
     }
     ends
 }
+
+/// The most places the literal piece after one placeholder may align at. An honest redaction aligns at one; the bound
+/// keeps a crafted record from making the alignment's memory grow with the square of its length.
+const WIDEST: usize = 4096;
 
 /// A placeholder or stand-in and how many values it replaced.
 pub type Replaced = (Vec<u8>, usize);
@@ -740,7 +774,7 @@ pub fn is_placeholder(text: &[u8]) -> bool {
 pub fn replaced_values(before: &[u8], after: &[u8], stand_ins: &[&[u8]]) -> Result<Vec<Replaced>> {
     for stand_in in stand_ins {
         if stand_in.len() < SHORTEST_LITERAL
-            || !stand_in.iter().all(|byte| token_byte(*byte))
+            || !stand_in.iter().all(id_byte)
             || GAPS.iter().any(|(text, _)| text == stand_in)
         {
             return Err(fail(format!(
@@ -783,6 +817,12 @@ pub fn replaced_values(before: &[u8], after: &[u8], stand_ins: &[&[u8]]) -> Resu
         }
         if reached.is_empty() {
             return Err(parted(start));
+        }
+        if reached.len() > WIDEST {
+            return Err(fail(format!(
+                "the redacted bytes align with the earlier bytes in too many ways to re-check, from byte {start} of \
+                 the redacted bytes"
+            )));
         }
         layers.push(reached);
     }
@@ -1185,8 +1225,9 @@ pub struct Checked {
     pub entries: Vec<String>,
 }
 
-/// The `path`, `before.blob` and `after.sha256` of each entry of a [`RECORD`], or `None` for another document.
-fn record_entries(text: &[u8]) -> Option<Vec<(String, String, String)>> {
+/// The `path`, `before.sha256`, `before.blob` and `after.sha256` of each entry of a [`RECORD`], or `None` for another
+/// document.
+fn record_entries(text: &[u8]) -> Option<Vec<(String, String, String, String)>> {
     let document = pyjson::loads(std::str::from_utf8(text).ok()?, Duplicates::Refuse).ok()?;
     let field = |value: &Value, names: &[&str]| -> Option<String> {
         let mut value = value;
@@ -1203,6 +1244,7 @@ fn record_entries(text: &[u8]) -> Option<Vec<(String, String, String)>> {
         .map(|entry| {
             Some((
                 field(entry, &["path"])?,
+                field(entry, &["before", "sha256"])?,
                 field(entry, &["before", "blob"])?,
                 field(entry, &["after", "sha256"])?,
             ))
@@ -1210,8 +1252,8 @@ fn record_entries(text: &[u8]) -> Option<Vec<(String, String, String)>> {
         .collect()
 }
 
-/// A line for each entry the staged `record` adds to the one at `HEAD` whose staged file is not what `rules` make of
-/// its earlier blob, byte for byte.
+/// A line for each entry the staged `record` adds to the one at `HEAD` whose earlier blob is not the file at `HEAD` with
+/// the recorded hash, or whose staged file is not what `rules` make of that blob, byte for byte.
 fn unconfirmed(top: &Path, record: &[u8], rules: &Rules) -> Vec<String> {
     let Some(staged) = record_entries(record) else {
         return vec![format!(
@@ -1223,10 +1265,10 @@ fn unconfirmed(top: &Path, record: &[u8], rules: &Rules) -> Vec<String> {
         .and_then(|text| record_entries(&text))
         .unwrap_or_default();
     let mut lines = Vec::new();
-    for (path, blob, after) in staged {
+    for (path, before, blob, after) in staged {
         if committed
             .iter()
-            .any(|(known, _, hash)| *known == path && *hash == after)
+            .any(|(known, _, _, hash)| *known == path && *hash == after)
         {
             continue;
         }
@@ -1236,15 +1278,24 @@ fn unconfirmed(top: &Path, record: &[u8], rules: &Rules) -> Vec<String> {
             ));
             continue;
         }
-        let object_id = blob.len() == 40 && blob.bytes().all(|byte| byte.is_ascii_hexdigit());
-        let earlier = if object_id {
-            git(Some(top), &["cat-file", "blob", &blob])
-        } else {
-            Err(fail("not an object id"))
+        let committed = git(
+            Some(top),
+            &["rev-parse", "--verify", "--quiet", &format!("HEAD:{path}")],
+        )
+        .ok()
+        .filter(|id| String::from_utf8_lossy(id).trim() == blob);
+        let earlier = committed
+            .and_then(|_| git(Some(top), &["cat-file", "blob", &blob]).ok())
+            .filter(|earlier| crate::sha256::hex_digest(earlier) == before);
+        let Some(earlier) = earlier else {
+            lines.push(format!(
+                "the entry's earlier bytes are not the file at HEAD: {path} ({RECORD})"
+            ));
+            continue;
         };
         let now = git(Some(top), &["cat-file", "blob", &format!(":{path}")]);
-        let confirmed = match (earlier, now) {
-            (Ok(earlier), Ok(now)) => {
+        let confirmed = match now {
+            Ok(now) => {
                 let redacted = redact(&earlier, rules);
                 !redacted.findings.iter().any(Finding::unredactable)
                     && redacted.data.as_deref() == Some(now.as_slice())
