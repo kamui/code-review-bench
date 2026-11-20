@@ -14,6 +14,10 @@
 //! an identifier is reported as beyond rewriting and left as it is, because a replacement cannot keep a database
 //! valid without SQLite and a zip member would need the archive rebuilt. An xz stream is not opened. Bytes no rule
 //! changes come back as `None`, so redaction never rewrites clean evidence.
+//!
+//! [`replaced_values`] decides, without private values, whether redacted bytes are earlier bytes with only values
+//! replaced. With `--staged`, [`check`] also requires each entry a commit adds to [`RECORD`] to be exactly what the
+//! rules make of its earlier blob; the commit hook runs it with the values file.
 
 use crate::archive;
 use crate::pyjson::{self, Duplicates, Value};
@@ -43,6 +47,8 @@ pub const SHORTEST_LITERAL: usize = 4;
 const PLACEHOLDER_PREFIX: &[u8] = b"[redacted";
 /// How far past a field's name its value may end.
 const FIELD_WINDOW: usize = 1024;
+/// The record of evidence files redacted after a claim or decision pinned them, which `redaction repin` writes.
+pub const RECORD: &str = "bench/grading/current/redacted-evidence.json";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Error(pub String);
@@ -408,6 +414,14 @@ impl Rules {
         self.values.as_deref()
     }
 
+    /// The stand-ins that replace machine names. They are written into redacted files, so they are not private.
+    pub fn stand_ins(&self) -> Vec<&[u8]> {
+        self.hosts
+            .iter()
+            .map(|(_, stand_in)| stand_in.as_slice())
+            .collect()
+    }
+
     fn apply(&self, data: &[u8]) -> Option<Vec<u8>> {
         let mut current = None;
         for literal in &self.literals {
@@ -534,6 +548,275 @@ pub fn redact(data: &[u8], rules: &Rules) -> Redacted {
 /// Whether redaction would change `data` or finds something it cannot rewrite.
 pub fn would_change(data: &[u8], rules: &Rules) -> bool {
     !redact(data, rules).clean()
+}
+
+/// What a rule can have replaced where a placeholder now stands.
+#[derive(Clone, Copy)]
+enum Gap {
+    /// One token of at most `longest` bytes, with no whitespace, quote or backslash, that `fits` accepts.
+    Token {
+        longest: usize,
+        fits: fn(&[u8]) -> bool,
+    },
+    /// The personal instructions, from their anchor to where [`instruction_block`] ends them.
+    Instructions,
+    /// The installed skills after their heading, to where [`skill_list`] ends them.
+    SkillList,
+    /// A machine name, as long as its stand-in.
+    Host,
+}
+
+fn token_byte(byte: u8) -> bool {
+    !(byte.is_ascii_whitespace() || matches!(byte, 0x0b | b'"' | b'\\'))
+}
+
+fn email_value(gap: &[u8]) -> bool {
+    gap.len() >= 3 && gap.contains(&b'@')
+}
+
+fn organization_value(gap: &[u8]) -> bool {
+    gap.len() >= SHORTEST_LITERAL
+        && gap
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
+}
+
+fn account_value(_: &[u8]) -> bool {
+    true
+}
+
+fn plan_value(gap: &[u8]) -> bool {
+    gap.len() >= 2
+        && gap
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+fn user_value(gap: &[u8]) -> bool {
+    gap[0] != b'[' && !gap.contains(&b'/')
+}
+
+fn skill_value(gap: &[u8]) -> bool {
+    (gap[0].is_ascii_alphanumeric() || gap[0] == b'_')
+        && gap
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+/// Each placeholder and what it can stand for. The longest values are the field rules' own bounds: an address of
+/// 128, 1 and 254 bytes, a Codex account id of 256 and a plan of 20; a path segment is at most 255.
+const GAPS: [(&[u8], Gap); 8] = [
+    (
+        EMAIL,
+        Gap::Token {
+            longest: 383,
+            fits: email_value,
+        },
+    ),
+    (
+        ORGANIZATION,
+        Gap::Token {
+            longest: 64,
+            fits: organization_value,
+        },
+    ),
+    (
+        ACCOUNT,
+        Gap::Token {
+            longest: 256,
+            fits: account_value,
+        },
+    ),
+    (
+        PLAN,
+        Gap::Token {
+            longest: 20,
+            fits: plan_value,
+        },
+    ),
+    (
+        USER,
+        Gap::Token {
+            longest: 255,
+            fits: user_value,
+        },
+    ),
+    (
+        SKILL,
+        Gap::Token {
+            longest: 255,
+            fits: skill_value,
+        },
+    ),
+    (INSTRUCTIONS, Gap::Instructions),
+    (SKILL_LIST, Gap::SkillList),
+];
+
+/// Where each placeholder or stand-in stands in `after`, the longest at each place.
+fn marks(after: &[u8], stand_ins: &[&[u8]]) -> Vec<(usize, usize, Gap)> {
+    let mut found = Vec::new();
+    let mut at = 0;
+    while at < after.len() {
+        let longest = GAPS
+            .iter()
+            .copied()
+            .chain(stand_ins.iter().map(|text| (*text, Gap::Host)))
+            .filter(|(text, _)| after[at..].starts_with(text))
+            .max_by_key(|(text, _)| text.len());
+        match longest {
+            Some((text, gap)) => {
+                found.push((at, at + text.len(), gap));
+                at += text.len();
+            }
+            None => at += 1,
+        }
+    }
+    found
+}
+
+/// Where a value that `placeholder` replaced can end in `before`, when it starts at `from`. The placeholder itself,
+/// already in the earlier bytes, is one of them.
+fn gap_ends(before: &[u8], from: usize, placeholder: &[u8], gap: Gap, after: &[u8]) -> Vec<usize> {
+    let mut ends = Vec::new();
+    if before[from..].starts_with(placeholder) {
+        ends.push(from + placeholder.len());
+    }
+    match gap {
+        Gap::Token { longest, fits } => {
+            let mut to = from;
+            while to < before.len() && to - from < longest && token_byte(before[to]) {
+                to += 1;
+                if fits(&before[from..to]) && before[from..to] != *placeholder {
+                    ends.push(to);
+                }
+            }
+        }
+        Gap::Instructions => {
+            if before[from..].starts_with(INSTRUCTIONS_ANCHOR)
+                && let Some((length, _)) = instruction_block(&before[from..])
+            {
+                ends.push(from + length);
+            }
+        }
+        Gap::SkillList => {
+            let heading = from.checked_sub(SKILL_LIST_ANCHOR.len());
+            if let Some(heading) = heading
+                && before[heading..].starts_with(SKILL_LIST_ANCHOR)
+                && let Some((length, _)) = skill_list(&before[heading..])
+                && heading + length > from
+            {
+                ends.push(heading + length);
+            }
+        }
+        Gap::Host => {
+            let to = from + placeholder.len();
+            if to <= before.len() {
+                let name = &before[from..to];
+                if name != placeholder
+                    && name.iter().all(|byte| token_byte(*byte))
+                    && find(after, name, 0).is_none()
+                {
+                    ends.push(to);
+                }
+            }
+        }
+    }
+    ends
+}
+
+/// A placeholder or stand-in and how many values it replaced.
+pub type Replaced = (Vec<u8>, usize);
+
+/// Whether `text` is one of the placeholders the rules write, rather than a stand-in.
+pub fn is_placeholder(text: &[u8]) -> bool {
+    GAPS.iter().any(|(placeholder, _)| *placeholder == text)
+}
+
+/// How many values each placeholder and stand-in replaced, when `after` is `before` with values replaced and nothing
+/// else. Split at every placeholder and at each of `stand_ins`, `after` must give literal pieces that occur in
+/// `before` in the same order from its start to its end, and each gap between them must be the same placeholder or
+/// what [`GAPS`] lets its rule replace. A stand-in replaces one value as long as itself, which no longer occurs in
+/// `after`. Messages never quote the bytes.
+pub fn replaced_values(before: &[u8], after: &[u8], stand_ins: &[&[u8]]) -> Result<Vec<Replaced>> {
+    for stand_in in stand_ins {
+        if stand_in.len() < SHORTEST_LITERAL
+            || !stand_in.iter().all(|byte| token_byte(*byte))
+            || GAPS.iter().any(|(text, _)| text == stand_in)
+        {
+            return Err(fail(format!(
+                "{} cannot be the stand-in of a machine name",
+                pytext::repr_str(&String::from_utf8_lossy(stand_in))
+            )));
+        }
+    }
+    let marks = marks(after, stand_ins);
+    let piece = |k: usize| {
+        let start = if k == 0 { 0 } else { marks[k - 1].1 };
+        let end = marks.get(k).map_or(after.len(), |mark| mark.0);
+        &after[start..end]
+    };
+    let parted = |at: usize| {
+        fail(format!(
+            "the redacted bytes are not the earlier bytes with values replaced by placeholders; they part at byte \
+             {at} of the redacted bytes"
+        ))
+    };
+    if !before.starts_with(piece(0)) || (marks.is_empty() && before.len() != after.len()) {
+        return Err(parted(0));
+    }
+    let mut layers = vec![std::collections::BTreeMap::from([(piece(0).len(), 0)])];
+    for (k, &(start, end, gap)) in marks.iter().enumerate() {
+        let next = piece(k + 1);
+        let last = k + 1 == marks.len();
+        let mut reached = std::collections::BTreeMap::new();
+        for &from in layers[k].keys() {
+            for to in gap_ends(before, from, &after[start..end], gap, after) {
+                let fits = if last {
+                    before[to..] == *next
+                } else {
+                    before[to..].starts_with(next)
+                };
+                if fits {
+                    reached.entry(to + next.len()).or_insert(from);
+                }
+            }
+        }
+        if reached.is_empty() {
+            return Err(parted(start));
+        }
+        layers.push(reached);
+    }
+    let mut counts: Vec<Replaced> = Vec::new();
+    let mut names: Vec<(&[u8], &[u8])> = Vec::new();
+    let mut at = before.len();
+    for k in (1..layers.len()).rev() {
+        let from = layers[k][&at];
+        let (start, end, gap) = marks[k - 1];
+        let placeholder = &after[start..end];
+        let value = &before[from..at - piece(k).len()];
+        at = from;
+        if value == placeholder {
+            continue;
+        }
+        if matches!(gap, Gap::Host) {
+            match names.iter().find(|(known, _)| *known == placeholder) {
+                Some((_, name)) if *name != value => {
+                    return Err(fail(format!(
+                        "the stand-in {} replaced two different values",
+                        pytext::repr_str(&String::from_utf8_lossy(placeholder))
+                    )));
+                }
+                Some(_) => {}
+                None => names.push((placeholder, value)),
+            }
+        }
+        match counts.iter_mut().find(|(known, _)| known == placeholder) {
+            Some((_, count)) => *count += 1,
+            None => counts.push((placeholder.to_vec(), 1)),
+        }
+    }
+    counts.sort();
+    Ok(counts)
 }
 
 const XZ: &[u8] = b"\xfd7zXZ\x00";
@@ -754,7 +1037,8 @@ fn git(directory: Option<&Path>, arguments: &[&str]) -> Result<Vec<u8>> {
     Ok(output.stdout)
 }
 
-fn top_level() -> Result<PathBuf> {
+/// The top level of the repository the current directory is in.
+pub fn top_level() -> Result<PathBuf> {
     let output = git(None, &["rev-parse", "--show-toplevel"])?;
     let text = output.strip_suffix(b"\n").unwrap_or(&output);
     Ok(PathBuf::from(std::ffi::OsStr::new(
@@ -893,14 +1177,92 @@ fn shown(path: &Path) -> String {
 }
 
 /// What `redaction check` found: one line for each file or member that redaction would change or cannot rewrite,
-/// and the findings behind them.
+/// and the findings behind them, then one line for each staged [`RECORD`] entry the rules do not confirm.
 #[derive(Clone, Debug, Default)]
 pub struct Checked {
     pub lines: Vec<String>,
     pub findings: Vec<Finding>,
+    pub entries: Vec<String>,
 }
 
-/// `redaction check`: what redaction would change or cannot rewrite in `sources`.
+/// The `path`, `before.blob` and `after.sha256` of each entry of a [`RECORD`], or `None` for another document.
+fn record_entries(text: &[u8]) -> Option<Vec<(String, String, String)>> {
+    let document = pyjson::loads(std::str::from_utf8(text).ok()?, Duplicates::Refuse).ok()?;
+    let field = |value: &Value, names: &[&str]| -> Option<String> {
+        let mut value = value;
+        for name in names {
+            value = value.as_object()?.get(name)?;
+        }
+        value.as_str().map(str::to_string)
+    };
+    document
+        .as_object()?
+        .get("entries")?
+        .as_array()?
+        .iter()
+        .map(|entry| {
+            Some((
+                field(entry, &["path"])?,
+                field(entry, &["before", "blob"])?,
+                field(entry, &["after", "sha256"])?,
+            ))
+        })
+        .collect()
+}
+
+/// A line for each entry the staged `record` adds to the one at `HEAD` whose staged file is not what `rules` make of
+/// its earlier blob, byte for byte.
+fn unconfirmed(top: &Path, record: &[u8], rules: &Rules) -> Vec<String> {
+    let Some(staged) = record_entries(record) else {
+        return vec![format!(
+            "cannot confirm: {RECORD} is not a redacted evidence record"
+        )];
+    };
+    let committed = git(Some(top), &["cat-file", "blob", &format!("HEAD:{RECORD}")])
+        .ok()
+        .and_then(|text| record_entries(&text))
+        .unwrap_or_default();
+    let mut lines = Vec::new();
+    for (path, blob, after) in staged {
+        if committed
+            .iter()
+            .any(|(known, _, hash)| *known == path && *hash == after)
+        {
+            continue;
+        }
+        if rules.values_file().is_none() {
+            lines.push(format!(
+                "cannot confirm without the values file: {path} ({RECORD})"
+            ));
+            continue;
+        }
+        let object_id = blob.len() == 40 && blob.bytes().all(|byte| byte.is_ascii_hexdigit());
+        let earlier = if object_id {
+            git(Some(top), &["cat-file", "blob", &blob])
+        } else {
+            Err(fail("not an object id"))
+        };
+        let now = git(Some(top), &["cat-file", "blob", &format!(":{path}")]);
+        let confirmed = match (earlier, now) {
+            (Ok(earlier), Ok(now)) => {
+                let redacted = redact(&earlier, rules);
+                !redacted.findings.iter().any(Finding::unredactable)
+                    && redacted.data.as_deref() == Some(now.as_slice())
+                    && crate::sha256::hex_digest(&now) == after
+            }
+            _ => false,
+        };
+        if !confirmed {
+            lines.push(format!(
+                "not what the rules make of its earlier bytes: {path} ({RECORD})"
+            ));
+        }
+    }
+    lines
+}
+
+/// `redaction check`: what redaction would change or cannot rewrite in `sources`, and with `staged`, each entry the
+/// staged [`RECORD`] adds that the rules do not confirm.
 pub fn check(sources: &Sources, rules: &Rules) -> Result<Checked> {
     let mut checked = Checked::default();
     let mut scan = |name: &str, data: &[u8]| {
@@ -922,10 +1284,18 @@ pub fn check(sources: &Sources, rules: &Rules) -> Result<Checked> {
     if let Some(message) = &sources.message {
         scan(&shown(message), &read(message)?);
     }
+    let mut record = None;
     if sources.staged {
-        for (path, blob) in staged(&top_level()?)? {
+        let top = top_level()?;
+        for (path, blob) in staged(&top)? {
             scan(&path, &blob);
+            if path == RECORD {
+                record = Some((top.clone(), blob));
+            }
         }
+    }
+    if let Some((top, blob)) = record {
+        checked.entries = unconfirmed(&top, &blob, rules);
     }
     Ok(checked)
 }

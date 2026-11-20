@@ -353,6 +353,7 @@ pub fn batch_inputs(
             Documents {
                 kinds: documents.kinds.clone(),
                 remedy_policy: documents.remedy_policy.clone(),
+                redacted: documents.redacted.clone(),
             },
         ),
         None => current::load_current(root, current, false)?,
