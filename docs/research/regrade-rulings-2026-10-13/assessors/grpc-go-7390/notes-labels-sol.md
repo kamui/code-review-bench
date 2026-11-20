@@ -4,5 +4,5 @@ S4 points the other way because policies act on the misleading CONNECTING state;
 S3 does not establish a regression because the same operation already failed, and none of the five exceptions fits this card.
 Neither earlier ruling describes the same shape or establishes a precedent under the current reading.
 A new head-only stalled state or call failure would reverse the answer; the card's comparative runs establish that those tested consequences are unchanged.
-Higher-priority writing instructions required reading /mnt/c/Users/kamui/iCloudDrive/host-01/.agents/skills/unslop/SKILL.md; it supplied no impact evidence.
+Higher-priority writing instructions required reading /mnt/c/Users/[redacted-user]/iCloudDrive/host-01/.agents/skills/[redacted-skill]/SKILL.md; it supplied no impact evidence.
 No other file was encountered accidentally or opened.

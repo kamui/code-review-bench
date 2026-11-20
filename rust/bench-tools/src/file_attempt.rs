@@ -340,15 +340,29 @@ fn copy2(source: &str, destination: &str) -> Result<()> {
         .map_err(failed)
 }
 
-/// `copy2` of the bytes redaction leaves; whether it changed them.
-fn copy2_redacted(source: &str, destination: &str, rules: &redaction::Rules) -> Result<bool> {
+/// What `copy2_redacted` did to the bytes it copied.
+struct Redaction {
+    changed: bool,
+    unredactable: bool,
+}
+
+/// `copy2` of the bytes redaction leaves.
+fn copy2_redacted(source: &str, destination: &str, rules: &redaction::Rules) -> Result<Redaction> {
     copy2(source, destination)?;
     let failed = |error: std::io::Error| {
         FileError(format!("cannot copy {source} to {destination}: {error}"))
     };
     let data = fs::read(destination).map_err(failed)?;
-    let Some(clean) = redaction::redact(&data, rules).data else {
-        return Ok(false);
+    let redacted = redaction::redact(&data, rules);
+    let unredactable = redacted
+        .findings
+        .iter()
+        .any(redaction::Finding::unredactable);
+    let Some(clean) = redacted.data else {
+        return Ok(Redaction {
+            changed: false,
+            unredactable,
+        });
     };
     let metadata = fs::metadata(source).map_err(failed)?;
     fs::write(destination, clean).map_err(failed)?;
@@ -358,7 +372,10 @@ fn copy2_redacted(source: &str, destination: &str, rules: &redaction::Rules) -> 
     fs::File::open(destination)
         .and_then(|handle| handle.set_times(times))
         .map_err(failed)?;
-    Ok(true)
+    Ok(Redaction {
+        changed: true,
+        unredactable,
+    })
 }
 
 fn remove(path: &str) -> Result<()> {
@@ -2953,9 +2970,14 @@ fn file_attempt(arguments: &Arguments) -> Result<(Value, String)> {
     let o = |name: &str| join(&out, name);
     let rules = redaction::Rules::load().map_err(|error| FileError(error.0))?;
     let mut redacted_files = Vec::new();
+    let mut unredactable_files = Vec::new();
     let mut file = |source: &str, destination: &str| -> Result<()> {
-        if copy2_redacted(source, destination, &rules)? {
+        let copied = copy2_redacted(source, destination, &rules)?;
+        if copied.changed {
             redacted_files.push(basename(destination).to_string());
+        }
+        if copied.unredactable {
+            unredactable_files.push(basename(destination).to_string());
         }
         Ok(())
     };
@@ -3106,6 +3128,25 @@ fn file_attempt(arguments: &Arguments) -> Result<(Value, String)> {
         notes.push(format!(
             "account identifiers or machine names replaced in the filed copies of {}",
             redacted_files.join(", ")
+        ));
+    }
+    let mut remaining = Vec::new();
+    if !archived.unredactable.is_empty() {
+        remaining.push(format!(
+            "{} archived transcripts",
+            archived.unredactable.len()
+        ));
+    }
+    if !unredactable_files.is_empty() {
+        remaining.push(format!(
+            "the filed copies of {}",
+            unredactable_files.join(", ")
+        ));
+    }
+    if !remaining.is_empty() {
+        notes.push(format!(
+            "account identifiers or machine names that redaction cannot rewrite remain in {}",
+            remaining.join(" and ")
         ));
     }
     let archive = pyjson::loads(&archived.json(), Duplicates::KeepLast)

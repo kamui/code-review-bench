@@ -2717,3 +2717,38 @@ fn files_redacted_copies_and_pins_the_filed_payload() {
         "passed"
     );
 }
+
+#[test]
+fn notes_what_redaction_could_not_rewrite() {
+    let t = SelfTest::new("unrewritable");
+    let root = t.root().to_path_buf();
+    let values = root.join("values.json");
+    write(
+        &values,
+        r#"{"schema_version": 1, "email": ["person@example.com"]}"#,
+    );
+    let database = |name: &str| {
+        let mut bytes = b"SQLite format 3\0".to_vec();
+        bytes.extend_from_slice(b" mail person@example.com");
+        fs::write(t.att.join(name), bytes).unwrap();
+    };
+    database("prompt.txt");
+    database("home/.claude/projects/p/s2.jsonl");
+    let done = Command::new(env!("CARGO_BIN_EXE_bench-tools"))
+        .args(t.arguments("o", &[t.archive()], &["--legacy-rate-billing"]))
+        .env("BENCH_REDACTION_VALUES", &values)
+        .output()
+        .unwrap();
+    assert!(done.status.success(), "{}", report(&done));
+    let record = t.record("o");
+    assert!(
+        has_note(
+            &record,
+            "that redaction cannot rewrite remain in 1 archived transcripts and the filed copies of prompt.txt"
+        ),
+        "{:?}",
+        notes(&record)
+    );
+    assert!(!has_note(&record, "replaced in"), "{:?}", notes(&record));
+    assert!(!String::from_utf8_lossy(&done.stdout).contains("person@"));
+}

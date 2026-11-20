@@ -1,0 +1,60 @@
+Probe environment for mui/base-ui #5460: does the rewritten 'avoids rerendering for uncontrolled input changes' test still catch the regression its original version was written for?
+Run date: 2026-11-14, 20:40 to 20:43 UTC
+
+Commits
+  base (before the change):              30b8ea2004fa999bed151204208676c6c0a9d261
+  head (the reviewed commit, last push): 14d39e5d1ad6b7aca2fb067415dba09c6bea219b
+  the original fix and test:             7412736f5f8401bcc47f7d150c7f925f87a1a338 "[field] Prevent re-renders when `Field.Control` is uncontrolled (#3820)", 2026-01-22
+Source: a fresh clone of the local mirror .local/regrade-v5-2/dependency-cache/mirrors/r-base-ui-5460.git at <scratch>/source.
+  The lockfile is identical at base and head, so one install served both. 7412736f5's parent has a different lockfile
+  (pnpm-lock.yaml differs by about 13,700 lines), so the probe does not run at that commit. It puts the regression back
+  into base and head instead (below).
+
+Machine: Debian GNU/Linux 13 (trixie) x86_64
+Node: v24.22.3
+Package manager: pnpm 11.17.0 through corepack 0.36.0, from the benchmark's dependency archive
+  .local/regrade-v5-2/dependency-cache/archives/r-base-ui-5460.a406d8e0b379e2d815dc3e9bc5129e87994c26d92a82afb89981313c94603f5b.tar.gz,
+  unpacked by hand into its own directory <deps>:
+  COREPACK_HOME=<deps>/corepack COREPACK_ENABLE_NETWORK=0 corepack pnpm install --frozen-lockfile --ignore-scripts --offline --store-dir <deps>/pnpm-store
+  Every package came from the archive's store (resolved 1789, reused 1789, downloaded 0).
+
+Test stack (the project's own, from its lockfile):
+  vitest 4.1.8, jsdom 27.4.0, react 19.2.5, react-dom 19.2.5, @testing-library/react 16.3.2
+  No Chromium: no Playwright browser is installed on this host, so only jsdom ran.
+
+Later versions: Node 24.22.3 is later than the cut-off (2026-08-10). The fact under test is how many times React calls
+a component function, which depends on React 19.2.5 from the project's lockfile, not on Node. The project's own tests run
+under the same lockfile at head and pass (output.txt, "patch: none" sections), so the toolchain does not change the result.
+
+The regression put back (regression-base.diff, regression-head.diff):
+  7412736f5 removed an internal `setValueUnwrapped(nextValue)` from Field.Control's change handler, which re-rendered an
+  uncontrolled Field.Control on every keystroke. Each patch restores that call: it takes the setter from `useControlled`
+  and calls `setValueUnwrapped(inputValue)` right after `onValueChange`. Nothing else changes. This reproduces the state
+  of the code before #3820 in the one respect the test is about; it is not the parent commit byte for byte (that commit
+  also wrapped the call in a cancel check, which does not apply to an uncancelled keystroke).
+
+How the probe is run: ./run.sh <scratch>/source <commit> <none|patch> output.txt, four times:
+  base with no patch, base with regression-base.diff, head with no patch, head with regression-head.diff.
+  For each, it copies probe.test.tsx to packages/react/src/field/control/zzprobe.test.tsx and runs
+    VITEST_ENV=jsdom TZ=UTC ./node_modules/.bin/vitest run --project @base-ui/react --maxWorkers=1 packages/react/src/field/control/zzprobe.test.tsx
+  then the project's own test at that commit:
+    VITEST_ENV=jsdom TZ=UTC ./node_modules/.bin/vitest run --project @base-ui/react --maxWorkers=1 packages/react/src/field/control/FieldControl.test.tsx -t 'avoids rerendering for uncontrolled input changes'
+  This is the project's own test setup.
+
+Files
+  probe.test.tsx   two cases that print one PROBE line each and assert nothing: OLD counts renders the base's way
+                   (a wrapper component around Field.Control), NEW counts them the head's way (Field.Control's render
+                   prop). Each applies the test's own two assertions and prints PASS or FAIL.
+  regression-base.diff, regression-head.diff   the restored re-render, for each commit.
+  run.sh           the runner.
+  output.txt       saved output of all four runs.
+
+Result (output.txt):
+  base, no patch:          OLD 1/1/1 PASS; NEW 2/3/3 PASS; base's own test passes.
+  base, regression:        OLD 1/1/1 PASS; NEW 2/3/5 FAIL; base's own test (the wrapper) still passes.
+  head, no patch:          OLD 1/1/1 PASS; NEW 2/3/3 PASS; head's own test passes.
+  head, regression:        OLD 1/1/1 PASS; NEW 2/3/5 FAIL; head's own test fails: "expected 5 to be 3".
+  The wrapper count never moves, with or without the regression: the wrapper is a stable child element, so it does not
+  re-render when Field.Control's own state changes. The render-prop count rises by one per keystroke with the regression.
+
+Scratch cleanup: the clone, installed dependencies and unpacked archive under <scratch> were deleted after the last run.

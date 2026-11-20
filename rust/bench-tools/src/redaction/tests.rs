@@ -383,7 +383,147 @@ fn apply_rewrites_only_what_changes() {
         ..Sources::default()
     };
     assert_eq!(
-        check(&sources, &Rules::fields()).unwrap(),
+        check(&sources, &Rules::fields()).unwrap().lines,
         Vec::<String>::new()
     );
+}
+
+fn finding(unredactable: Option<&'static str>) -> Finding {
+    Finding {
+        member: vec![],
+        unredactable,
+    }
+}
+
+#[test]
+fn the_remedy_fits_each_kind_of_finding() {
+    let changes = remedy(&[finding(None)]);
+    assert!(changes.contains("redaction apply") && !changes.contains("leave it out"));
+    let beyond = remedy(&[finding(Some("SQLite files are not rewritten"))]);
+    assert!(!beyond.contains("redaction apply") && beyond.contains("leave it out"));
+    let both = remedy(&[
+        finding(None),
+        finding(Some("zip members are not rewritten")),
+    ]);
+    assert!(both.contains("redaction apply") && both.contains("leave it out"));
+}
+
+#[test]
+fn check_keeps_the_findings_behind_its_lines() {
+    let base = crate::test_scratch("redaction-tests").join(crate::evidence::random_name("k-"));
+    std::fs::create_dir_all(&base).unwrap();
+    let mut database = SQLITE.to_vec();
+    database.extend_from_slice(ADDRESS.as_bytes());
+    std::fs::write(base.join("a.db"), database).unwrap();
+    std::fs::write(base.join("b.txt"), "mail person@example.com").unwrap();
+    let sources = Sources {
+        paths: vec![base.clone()],
+        ..Sources::default()
+    };
+    let checked = check(&sources, &values()).unwrap();
+    assert_eq!(
+        checked.lines,
+        [
+            format!(
+                "cannot redact: {} (SQLite files are not rewritten)",
+                shown(&base.join("a.db"))
+            ),
+            format!("would change: {}", shown(&base.join("b.txt"))),
+        ]
+    );
+    let advice = remedy(&checked.findings);
+    assert!(advice.contains("redaction apply") && advice.contains("leave it out"));
+    assert!(!advice.contains("person@"));
+}
+
+/// The start of the owner's personal instructions inside a JSON string, assembled so that this source holds no match.
+fn instructions(rest: &str) -> String {
+    let nl = "\\n";
+    format!(
+        "# AGENTS.md{nl}{nl}{} {rest}",
+        "Make the smallest complete change that satisfies the request."
+    )
+}
+
+#[test]
+fn personal_instructions_end_at_the_string_or_the_reminder() {
+    let rules = Rules::fields();
+    let nl = "\\n";
+    let attachment = format!(
+        "{{\"content\":\"{}\",\"type\":\"Project\"}}",
+        instructions(&format!("Quote \\\"x\\\"{nl}more text."))
+    );
+    assert_eq!(
+        text(attachment.as_bytes(), &rules),
+        "{\"content\":\"[redacted-instructions]\",\"type\":\"Project\"}"
+    );
+    let reminder = format!(
+        "{{\"text\":\"Contents of f (private):{nl}{nl}{}{nl}</system-reminder>\"}}",
+        instructions("Body.")
+    );
+    assert_eq!(
+        text(reminder.as_bytes(), &rules),
+        format!(
+            "{{\"text\":\"Contents of f (private):{nl}{nl}[redacted-instructions]{nl}</system-reminder>\"}}"
+        )
+    );
+    let codex = format!(
+        "{{\"text\":\"<INSTRUCTIONS>{nl}{}{nl}{nl}--- project-doc ---{nl}{nl}# Other\"}}",
+        instructions("Body.")
+    );
+    assert_eq!(
+        text(codex.as_bytes(), &rules),
+        format!(
+            "{{\"text\":\"<INSTRUCTIONS>{nl}[redacted-instructions]{nl}{nl}--- project-doc ---{nl}{nl}# Other\"}}"
+        )
+    );
+    let plain = "# AGENTS.md\n\nSomething else";
+    assert!(redact(plain.as_bytes(), &rules).bytes(plain.as_bytes()) == plain.as_bytes());
+}
+
+#[test]
+fn windows_account_and_skill_names_are_replaced_once() {
+    let rules = Rules::fields();
+    let path = format!(
+        "/mnt/c/{}/someone/iCloudDrive/m/.agents/skills/my-skill/SKILL.md",
+        "Users"
+    );
+    let replaced = format!(
+        "/mnt/c/{}/[redacted-user]/iCloudDrive/m/.agents/skills/[redacted-skill]/SKILL.md",
+        "Users"
+    );
+    assert_eq!(text(path.as_bytes(), &rules), replaced);
+    let again = redact(replaced.as_bytes(), &rules);
+    assert!(again.clean());
+    let other = format!("path = \"/mnt/d/{}/someone/.claude/x\"", "Users");
+    assert_eq!(
+        text(other.as_bytes(), &rules),
+        format!("path = \"/mnt/d/{}/[redacted-user]/.claude/x\"", "Users")
+    );
+}
+
+#[test]
+fn service_user_skill_folders_are_replaced_except_builtin_ones() {
+    let rules = Rules::fields();
+    let line =
+        |dir: &str, name: &str| format!("path = \"/home/t3/.t3/agents/{dir}/{name}/SKILL.md\"");
+    assert_eq!(
+        text(line(".agents_skills", "my-skill").as_bytes(), &rules),
+        line(".agents_skills", "[redacted-skill]")
+    );
+    let builtin = line(".codex/skills", ".system");
+    assert!(redact(builtin.as_bytes(), &rules).clean());
+}
+
+#[test]
+fn the_installed_skill_list_is_replaced_once() {
+    let rules = Rules::fields();
+    let nl = "\\n";
+    let list = format!("{nl}### Available {}{nl}", "skills");
+    let message =
+        format!("{{\"text\":\"head{list}- a: b (file: c){nl}- d: e{nl}</skills_instructions>\"}}");
+    let replaced =
+        format!("{{\"text\":\"head{list}[redacted-skill-list]{nl}</skills_instructions>\"}}");
+    assert_eq!(text(message.as_bytes(), &rules), replaced);
+    assert!(redact(replaced.as_bytes(), &rules).clean());
 }

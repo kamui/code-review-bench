@@ -5,12 +5,15 @@
 //! `creator_account_id` and `plan_type` values, in plain JSON or inside JSON strings whose quotes are escaped any
 //! number of times. The literal rules come from a private values file outside the repository
 //! ([`values_path`]): each listed email address, organization id and account id becomes its placeholder, and each
-//! machine name becomes its stand-in of the same length. A missing file leaves the field rules alone.
+//! machine name becomes its stand-in of the same length. A missing file leaves the field rules alone. The
+//! structure rules replace the owner's personal agent instructions, the list of installed skills a Codex session
+//! gives, the Windows account in a `/mnt/<drive>/Users/` path and the skill folder names under it.
 //!
-//! [`redact`] follows the bytes into what it can rewrite, as `redactlib.transform` of the 2026-11-13 redaction does:
-//! gzip streams and tar archives (rebuilt only when a member changes, keeping names, modes and order). A SQLite
-//! database, a SQLite write-ahead log or a zip member that would change is reported, never rewritten. An xz stream
-//! is not opened. Bytes no rule changes come back as `None`, so redaction never rewrites clean evidence.
+//! [`redact`] follows the bytes into what it can rewrite: gzip streams and tar archives (rebuilt only when a member
+//! changes, keeping names, modes and order). A SQLite database, a SQLite write-ahead log or a zip member that holds
+//! an identifier is reported as beyond rewriting and left as it is, because a replacement cannot keep a database
+//! valid without SQLite and a zip member would need the archive rebuilt. An xz stream is not opened. Bytes no rule
+//! changes come back as `None`, so redaction never rewrites clean evidence.
 
 use crate::archive;
 use crate::pyjson::{self, Duplicates, Value};
@@ -27,6 +30,10 @@ pub const EMAIL: &[u8] = b"[redacted-email]";
 pub const ORGANIZATION: &[u8] = b"[redacted-organization]";
 pub const ACCOUNT: &[u8] = b"[redacted-account]";
 pub const PLAN: &[u8] = b"[redacted-plan]";
+pub const INSTRUCTIONS: &[u8] = b"[redacted-instructions]";
+pub const USER: &[u8] = b"[redacted-user]";
+pub const SKILL: &[u8] = b"[redacted-skill]";
+pub const SKILL_LIST: &[u8] = b"[redacted-skill-list]";
 /// The environment variable that names the private values file.
 pub const VALUES_VARIABLE: &str = "BENCH_REDACTION_VALUES";
 /// The values file under the home directory when [`VALUES_VARIABLE`] is unset.
@@ -97,6 +104,99 @@ static FIELDS: LazyLock<[Field; 4]> = LazyLock::new(|| {
         ),
     ]
 });
+
+/// Where the owner's personal agent instructions start inside a JSON string, newlines escaped once.
+const INSTRUCTIONS_ANCHOR: &[u8] =
+    b"# AGENTS.md\\n\\nMake the smallest complete change that satisfies the request";
+/// What ends those instructions inside the string, besides an unescaped quote.
+const INSTRUCTIONS_ENDS: [&[u8]; 4] = [
+    b"\\n</system-reminder>",
+    b"\\n</INSTRUCTIONS>",
+    b"\\n\\n--- project-doc ---",
+    b"\\n\\nContents of ",
+];
+
+/// The owner's personal instructions, from [`INSTRUCTIONS_ANCHOR`] to the first end, become [`INSTRUCTIONS`].
+fn instruction_block(rest: &[u8]) -> Option<(usize, Vec<u8>)> {
+    let mut at = INSTRUCTIONS_ANCHOR.len();
+    while at < rest.len() {
+        if rest[at] == b'"'
+            || INSTRUCTIONS_ENDS
+                .iter()
+                .any(|end| rest[at..].starts_with(end))
+        {
+            return Some((at, INSTRUCTIONS.to_vec()));
+        }
+        at += if rest[at] == b'\\' { 2 } else { 1 };
+    }
+    None
+}
+
+/// Where the list of installed skills starts inside a JSON string, newlines escaped once.
+const SKILL_LIST_ANCHOR: &[u8] = b"\\n### Available skills\\n";
+/// What ends that list, besides an unescaped quote.
+const SKILL_LIST_ENDS: [&[u8]; 3] = [b"\\n</skills_instructions>", b"\\n### ", b"\\n## "];
+
+/// The skills a Codex session lists as available, from [`SKILL_LIST_ANCHOR`] to the first end, become [`SKILL_LIST`].
+fn skill_list(rest: &[u8]) -> Option<(usize, Vec<u8>)> {
+    let start = SKILL_LIST_ANCHOR.len();
+    let mut at = start;
+    while at < rest.len() {
+        if rest[at] == b'"'
+            || SKILL_LIST_ENDS
+                .iter()
+                .any(|end| rest[at..].starts_with(end))
+        {
+            return (at > start)
+                .then(|| {
+                    let mut new = SKILL_LIST_ANCHOR.to_vec();
+                    new.extend_from_slice(SKILL_LIST);
+                    (at, new)
+                })
+                .filter(|(_, new)| rest[..at] != new[..]);
+        }
+        at += if rest[at] == b'\\' { 2 } else { 1 };
+    }
+    None
+}
+
+static MOUNT_PATH: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?-u)\A(/mnt/[a-z]/Users/)(\[redacted-user\]|[^/"\s\\\[][^/"\s\\]*)((?:/iCloudDrive/[^/"\s\\]+/\.agents/skills/)(?:\[redacted-skill\]|[A-Za-z0-9_][A-Za-z0-9._-]*))?"#,
+    )
+    .expect("the mount path pattern compiles")
+});
+
+static SKILL_PATH: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?-u)\A(/\.t3/agents/(?:\.agents_skills|\.codex/skills)/)(\[redacted-skill\]|[A-Za-z0-9_][A-Za-z0-9._-]*)"#,
+    )
+    .expect("the skill path pattern compiles")
+});
+
+/// The Windows account in `/mnt/<drive>/Users/<account>` becomes [`USER`], and the skill folder name under the
+/// account's `iCloudDrive/<machine>/.agents/skills/` becomes [`SKILL`].
+fn mount_path(rest: &[u8]) -> Option<(usize, Vec<u8>)> {
+    let found = MOUNT_PATH.captures(rest)?;
+    let whole = found.get(0)?;
+    let mut new = found.get(1)?.as_bytes().to_vec();
+    new.extend_from_slice(USER);
+    if let Some(tail) = found.get(3) {
+        let tail = tail.as_bytes();
+        let cut = tail.len() - tail.iter().rev().position(|byte| *byte == b'/')?;
+        new.extend_from_slice(&tail[..cut]);
+        new.extend_from_slice(SKILL);
+    }
+    Some((whole.end(), new))
+}
+
+/// A skill folder name under the service user's skill directories becomes [`SKILL`].
+fn skill_path(rest: &[u8]) -> Option<(usize, Vec<u8>)> {
+    let found = SKILL_PATH.captures(rest)?;
+    let mut new = found.get(1)?.as_bytes().to_vec();
+    new.extend_from_slice(SKILL);
+    Some((found.get(0)?.end(), new))
+}
 
 fn find(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
     let first = *needle.first()?;
@@ -333,6 +433,23 @@ impl Rules {
                 })
             });
         }
+        chain(&mut current, data, |bytes| {
+            rewrite(bytes, INSTRUCTIONS_ANCHOR, instruction_block)
+        });
+        chain(&mut current, data, |bytes| {
+            rewrite(bytes, SKILL_LIST_ANCHOR, skill_list)
+        });
+        chain(&mut current, data, |bytes| {
+            rewrite(bytes, b"/mnt/", mount_path)
+        });
+        for anchor in [
+            &b"/.t3/agents/.agents_skills/"[..],
+            b"/.t3/agents/.codex/skills/",
+        ] {
+            chain(&mut current, data, |bytes| {
+                rewrite(bytes, anchor, skill_path)
+            });
+        }
         for (name, stand_in) in &self.hosts {
             chain(&mut current, data, |bytes| {
                 rewrite(bytes, name, |_| Some((name.len(), stand_in.clone())))
@@ -363,6 +480,29 @@ impl Finding {
             None => format!("would change: {shown}"),
         }
     }
+}
+
+impl Finding {
+    /// Whether the finding is something the tool cannot rewrite.
+    pub fn unredactable(&self) -> bool {
+        self.unredactable.is_some()
+    }
+}
+
+/// What to do about a file `redaction check` lists as one the tool cannot rewrite.
+pub const LEAVE_OUT: &str = "redact each file marked cannot redact by other means or leave it out, and do not commit or publish it";
+
+/// What a refusal tells the reader to do about `findings`: `redaction apply` for a file that would change, other
+/// means or leaving it out for a file the tool cannot rewrite.
+pub fn remedy(findings: &[Finding]) -> String {
+    let mut steps = Vec::new();
+    if findings.iter().any(|finding| !finding.unredactable()) {
+        steps.push("run bench-tools redaction apply on each file marked would change before anything pins its hash");
+    }
+    if findings.iter().any(Finding::unredactable) {
+        steps.push(LEAVE_OUT);
+    }
+    steps.join("; ")
 }
 
 /// The redacted bytes, when any rule changed them, and what was found.
@@ -752,16 +892,22 @@ fn shown(path: &Path) -> String {
     pytext::stderr_text(pytext::os_bytes(path.as_os_str()))
 }
 
-/// `redaction check`: one line for each file or member that redaction would change or cannot rewrite.
-pub fn check(sources: &Sources, rules: &Rules) -> Result<Vec<String>> {
-    let mut lines = Vec::new();
+/// What `redaction check` found: one line for each file or member that redaction would change or cannot rewrite,
+/// and the findings behind them.
+#[derive(Clone, Debug, Default)]
+pub struct Checked {
+    pub lines: Vec<String>,
+    pub findings: Vec<Finding>,
+}
+
+/// `redaction check`: what redaction would change or cannot rewrite in `sources`.
+pub fn check(sources: &Sources, rules: &Rules) -> Result<Checked> {
+    let mut checked = Checked::default();
     let mut scan = |name: &str, data: &[u8]| {
-        lines.extend(
-            redact(data, rules)
-                .findings
-                .iter()
-                .map(|finding| finding.describe(name)),
-        );
+        for finding in redact(data, rules).findings {
+            checked.lines.push(finding.describe(name));
+            checked.findings.push(finding);
+        }
     };
     let mut paths = Vec::new();
     for path in &sources.paths {
@@ -781,7 +927,7 @@ pub fn check(sources: &Sources, rules: &Rules) -> Result<Vec<String>> {
             scan(&path, &blob);
         }
     }
-    Ok(lines)
+    Ok(checked)
 }
 
 /// What `redaction apply` did: the files it rewrote, and a line for each member it cannot rewrite.
@@ -806,7 +952,7 @@ pub fn apply(paths: &[PathBuf], rules: &Rules) -> Result<Applied> {
             redacted
                 .findings
                 .iter()
-                .filter(|finding| finding.unredactable.is_some())
+                .filter(|finding| finding.unredactable())
                 .map(|finding| finding.describe(&name)),
         );
         if let Some(clean) = &redacted.data {

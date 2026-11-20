@@ -204,14 +204,14 @@ Card: [`p-hono-5067/cards/N1.md`](p-hono-5067/cards/N1.md). Record: `rulings/04-
 
 Plan: [`o-astro-16079/vercel-plan.md`](o-astro-16079/vercel-plan.md).
 
-- The 2026-10-27 run used account `jack-7095` on team `jackchu-com`, on the free Hobby plan with no payment method. It cost $0, and both projects were deleted right after the probes (read).
+- The 2026-10-27 run used account `[redacted-account]` on team `[redacted-account]`, on the free Hobby plan with no payment method. It cost $0, and both projects were deleted right after the probes (read).
 - That run's probe got a cached page, so the function never ran. The new plan sends a Draft Mode cookie, which Vercel's documentation says bypasses its caching, and uses a path and value nowhere else used, so the function has to run. A page that prints every `x_astro_path` value it receives shows Vercel's order (read).
 - It shows today's Vercel, not Vercel at the cut-off of 2026-03-25 (read).
 - This host has no Vercel CLI, and the October run's sign-in was on another host. You would sign in here with `bunx vercel login`, or give a token through the vault, deleted after the run (read).
 - About 20 to 30 minutes, $0. The site is deleted right after (read).
 - Then question 3 comes back to you with the result.
 
-**Question:** Run the throwaway Vercel test as planned, on `jack-7095`'s free Hobby plan?
+**Question:** Run the throwaway Vercel test as planned, on `[redacted-account]`'s free Hobby plan?
 
 - Run it as planned (Recommended)
 - Close question 3 as not shown, without a run

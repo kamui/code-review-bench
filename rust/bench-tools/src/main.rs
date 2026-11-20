@@ -4826,14 +4826,14 @@ fn run_redaction(command: RedactionCommand) -> Result<ExitCode, ExitCode> {
                 );
                 return Err(ExitCode::from(2));
             }
-            let lines = redaction::check(&sources, &rules).map_err(failed)?;
-            if lines.is_empty() {
+            let checked = redaction::check(&sources, &rules).map_err(failed)?;
+            if checked.lines.is_empty() {
                 return Ok(ExitCode::SUCCESS);
             }
-            write_stdout(format!("{}\n", lines.join("\n")).as_bytes())?;
+            write_stdout(format!("{}\n", checked.lines.join("\n")).as_bytes())?;
             eprintln!(
-                "bench-tools redaction: account identifiers or machine names remain; run bench-tools redaction \
-                 apply on each file before anything pins its hash, and never quote the values"
+                "bench-tools redaction: account identifiers or machine names remain; {}, and never quote the values",
+                redaction::remedy(&checked.findings)
             );
             Ok(ExitCode::from(1))
         }
@@ -4846,6 +4846,9 @@ fn run_redaction(command: RedactionCommand) -> Result<ExitCode, ExitCode> {
                 .chain(applied.unredactable.iter().map(|line| format!("{line}\n")))
                 .collect();
             write_stdout(lines.as_bytes())?;
+            if !applied.unredactable.is_empty() {
+                eprintln!("bench-tools redaction: {}", redaction::LEAVE_OUT);
+            }
             Ok(ExitCode::from(u8::from(!applied.unredactable.is_empty())))
         }
     }
@@ -5047,7 +5050,7 @@ fn run_ruling_check(
     let mut output = Vec::new();
     let outcome = (|| -> pyvalue::Py<u8> {
         let record = ruling::record::read_before(&repo, &before_path)?;
-        let mut problems = ruling::record::faults(&repo, &record)?;
+        let mut problems = ruling::record::faults(&repo, &record, &before_path)?;
         let after = match after {
             Some(path) => repo.load(&PyPath::new(pytext::os_bytes(path)))?,
             None => bench_tools::pyjson::Value::Null,
@@ -5113,7 +5116,7 @@ fn run_ruling_route(
     let before_path = PyPath::new(pytext::os_bytes(before));
     let outcome = (|| -> pyvalue::Py<(Vec<u8>, u8)> {
         let record = ruling::record::read_before(&repo, &before_path)?;
-        let mut problems = ruling::record::faults(&repo, &record)?;
+        let mut problems = ruling::record::faults(&repo, &record, &before_path)?;
         let two = bench_tools::pyjson::Value::Int("2".into());
         if !pyvalue::get(&record, "contract")?.py_eq(&two) {
             problems.push(

@@ -6,4 +6,4 @@ C2's thread-check statement concerns an already-connected wrapper; its initial-a
 C2 would flip if the stated thread-check failure were part of GT-v1's initial failure; the source order and runs establish that acquisition blocks before the check.
 Second-27 supports recording a shared cause without recovery when the comment's stated impact does not describe the known problem.
 The unobserved original probes in C2 are unnecessary because the case supplies independent runs.
-Additional file read required by higher-priority writing instructions: /mnt/c/Users/kamui/iCloudDrive/host-01/.agents/skills/unslop/SKILL.md.
+Additional file read required by higher-priority writing instructions: /mnt/c/Users/[redacted-user]/iCloudDrive/host-01/.agents/skills/[redacted-skill]/SKILL.md.

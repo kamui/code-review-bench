@@ -144,3 +144,53 @@ fn changed_files_are_checked_against_the_merge_base_and_apply_fixes_them() {
     let (code, _, _) = shown(&repository.run(&["check", "--changed", "main", "new.txt"]));
     assert_eq!(code, 0);
 }
+
+fn write_database(repository: &Repository, name: &str) {
+    let mut bytes = b"SQLite format 3\0".to_vec();
+    bytes.extend_from_slice(b" mail person@example.com");
+    let path = repository.root.join(name);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, bytes).unwrap();
+}
+
+#[test]
+fn a_refusal_advises_by_the_kind_of_file_listed() {
+    let repository = Repository::new("advice");
+    repository.write("notes/a.txt", "ssh examplehost\n");
+    let (code, stdout, stderr) = shown(&repository.run(&["check", "notes"]));
+    assert_eq!(code, 1);
+    assert!(stdout.starts_with("would change: "), "{stdout}");
+    assert!(stderr.contains("redaction apply"), "{stderr}");
+    assert!(!stderr.contains("leave it out"), "{stderr}");
+
+    std::fs::remove_file(repository.root.join("notes/a.txt")).unwrap();
+    write_database(&repository, "notes/a.db");
+    let (code, stdout, stderr) = shown(&repository.run(&["check", "notes"]));
+    assert_eq!(code, 1);
+    assert!(stdout.starts_with("cannot redact: "), "{stdout}");
+    assert!(
+        stderr.contains("leave it out") && !stderr.contains("redaction apply"),
+        "{stderr}"
+    );
+
+    repository.write("notes/a.txt", "ssh examplehost\n");
+    let (_, _, stderr) = shown(&repository.run(&["check", "notes"]));
+    assert!(
+        stderr.contains("redaction apply") && stderr.contains("leave it out"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn apply_says_what_to_do_with_a_file_it_cannot_rewrite() {
+    let repository = Repository::new("apply-advice");
+    write_database(&repository, "a.db");
+    let (code, stdout, stderr) = shown(&repository.run(&["apply", "a.db"]));
+    assert_eq!(code, 1);
+    assert!(stdout.starts_with("cannot redact: "), "{stdout}");
+    assert!(stderr.contains("leave it out"), "{stderr}");
+
+    repository.write("b.txt", "ssh examplehost\n");
+    let (code, _, stderr) = shown(&repository.run(&["apply", "b.txt"]));
+    assert_eq!((code, stderr.as_str()), (0, ""));
+}

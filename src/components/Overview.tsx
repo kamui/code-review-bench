@@ -10,7 +10,7 @@ import type { Axis as ChartAxis, DetectionView, Reading, Summary } from '../lib/
 import type { Configuration } from '../lib/data'
 import { labelSegments, overviewFirstDirection, overviewOrder } from '../lib/scoring'
 import type { LabelSegment, Measure, OverviewColumn, Scorecard } from '../lib/scoring'
-import { axisLabels, Chart, Mark, pairedAxis, reviewColor, SetupName, setupParts } from './Chart'
+import { axisLabels, Chart, Mark, panelAxes, reviewColor, SetupName, setupParts } from './Chart'
 import { segmentLabels, trueSegments } from './ClaimLabels'
 import { VendorMark } from './VendorMark'
 import { costScaleNote, costText, Glossed, GuideItem, KeyTerms, Notes, notesFor, PeerBadge, Value } from './Reading'
@@ -146,16 +146,16 @@ export function Overview({ summaries, detection, axis, matching, basis, onSelect
   return <div className="overview" data-focusing={active ? '' : undefined} onMouseLeave={() => { setTip(null); setFocus(null) }}>
     <div className="measure-grid">
       <section className="measure-card lead-card" data-lead aria-labelledby="measure-lead">
-        <header className="measure-head"><div><h3 id="measure-lead">{foundLabels[detection.band]} against {pairedLabels[axis]} and {pairedLabels[pairedAxis(axis)]}</h3>
+        <header className="measure-head"><div><h3 id="measure-lead">{foundLabels[detection.band]} against {panelAxes(axis).map(on => pairedLabels[on]).join(' and ')}</h3>
           <p className="lead-about">Each setup sits at the same height in both panels; up and left is better. <span className="lead-scope">This comparison: {[`${basis.prs} PRs`,
             detection.band === 'all' ? `${basis.known} known problems` : `${basis.problems} of ${basis.known} known problems are ${lowerFirst(bandLabels[detection.band])}`,
             basis.awaiting > 0 && `${basis.awaiting} awaiting a ruling`].filter(Boolean).join(' · ')}</span></p></div></header>
-        <Chart summaries={summaries} detection={detection} matching={matching} axis={axis} view="tradeoff" height={290} onSelect={onSelect} linked={{ id: active, point: setFocus, pin }}
+        <Chart summaries={summaries} detection={detection} matching={matching} axis={axis} view="tradeoff" height={280} onSelect={onSelect} linked={{ id: active, point: setFocus, pin }}
           guide={<><GuideItem label="Terms"><KeyTerms terms={['Review setup', 'Known problem', 'Impact band', 'Problems or PRs weighted equally', 'Refuted or unproven', 'Admitted review']} /></GuideItem>
             {weight(detection, basis) && <GuideItem label="Weight">{weight(detection, basis)}</GuideItem>}
             <GuideItem label="Charts below">Each ranks the setups by one measure, on its own scale; a setup without a value comes last. No single number ranks the setups. Select a setup to open its evidence.</GuideItem></>} />
       </section>
-      <header className="measure-section-head"><h3>Each measure, ranked on its own</h3><p>Every chart below sorts the setups by one measure, on its own scale.</p></header>
+      <header className="measure-section-head"><h3>One chart per measure</h3><p>Every chart below sorts the setups by one measure, on its own scale.</p></header>
       {columns.map(column => {
         const panel = panels[column], id = `measure-${column}`
         return <section key={column} className="measure-card" data-lead={column === 'detection' || undefined} aria-labelledby={id}>

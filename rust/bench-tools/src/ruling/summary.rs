@@ -114,7 +114,8 @@ pub fn records(repo: &Repo) -> Py<Vec<Pair>> {
 }
 
 /// The records as [`records`] orders them, each checked alone: an agent settlement is not yet checked against the
-/// history before it, and no declared answers are restored.
+/// history before it, and no declared answers are restored. A round that a later round replaces decided nothing, so
+/// its records are checked and left out.
 pub fn ordered_records(repo: &Repo) -> Py<Vec<Pair>> {
     let research = repo.join("docs/research");
     for round_path in rglob(&research, "round.json")? {
@@ -131,7 +132,7 @@ pub fn ordered_records(repo: &Repo) -> Py<Vec<Pair>> {
     let mut pairs = Vec::new();
     for path in rglob(&research, "*.before.json")? {
         let before = record::read_before(repo, &path)?;
-        let mut problems = record::faults(repo, &before)?;
+        let mut problems = record::faults(repo, &before, &path)?;
         let directory = parent_bytes(path.as_bytes());
         let round_path = PyPath::new(directory).join(b"round.json");
         if !pyvalue::is_file(&round_path) {
@@ -158,6 +159,9 @@ pub fn ordered_records(repo: &Repo) -> Py<Vec<Pair>> {
             return value_error(format!("{}: {}", text_path(&path), problems.join("; ")));
         }
         let sheet = repo.load(&round_path)?;
+        if pyvalue::has(&sheet, "replaced_by")? {
+            continue;
+        }
         let relative = crate::pyfs::relative_to(path.as_bytes(), repo.root.as_bytes())
             .map_err(Raised::Value)?;
         let relative = String::from_utf8(relative).map_err(|error| {
@@ -225,7 +229,7 @@ pub fn ordered_records(repo: &Repo) -> Py<Vec<Pair>> {
         .collect())
 }
 
-fn parent_bytes(path: &[u8]) -> &[u8] {
+pub(super) fn parent_bytes(path: &[u8]) -> &[u8] {
     match path.iter().rposition(|byte| *byte == b'/') {
         Some(0) => b"/",
         Some(position) => &path[..position],
@@ -1140,6 +1144,8 @@ pub struct Summary {
     citations: Vec<(Value, u64)>,
     pending: Vec<String>,
     reservations: Vec<Value>,
+    /// The round that replaces the selected round, which then decided nothing.
+    replaced_by: Option<Value>,
 }
 
 fn object(members: Vec<(&str, Value)>) -> Value {
@@ -1155,13 +1161,38 @@ fn int(value: impl ToString) -> Value {
     Value::Int(value.to_string())
 }
 
+/// The name of the round that replaces round `name`, from the opening its round file pins in `replaced_by`; `None`
+/// when no round file under docs/research names `name` with `replaced_by`. [`ordered_records`] has checked the pin.
+fn replacing_round(repo: &Repo, name: &str) -> Py<Option<Value>> {
+    for round_path in rglob(&repo.join("docs/research"), "round.json")? {
+        let sheet = repo.load(&round_path)?;
+        if pyvalue::is(item(&sheet, "round")?, name) && pyvalue::has(&sheet, "replaced_by")? {
+            let pin = item(&sheet, "replaced_by")?;
+            let opening = repo.load(&repo.path(item(pin, "path")?)?)?;
+            return Ok(Some(item(&opening, "round")?.clone()));
+        }
+    }
+    Ok(None)
+}
+
 /// `summarize(pairs, root, round_name)`.
 pub fn summarize(repo: &Repo, pairs: &[Pair], round_name: Option<&str>) -> Py<Summary> {
     let named = round_name.filter(|name| !name.is_empty());
     if let Some(name) = named
         && !pairs.iter().any(|pair| pyvalue::is(&pair.round, name))
     {
-        return value_error(format!("unknown round: {name}"));
+        let Some(replacing) = replacing_round(repo, name)? else {
+            return value_error(format!("unknown round: {name}"));
+        };
+        return Ok(Summary {
+            adopted: delegation::policy(repo, &repo.join(delegation::POLICY))?.is_some(),
+            round: round_name.map(str::to_string),
+            sections: [Vec::new(), Vec::new()],
+            citations: Vec::new(),
+            pending: Vec::new(),
+            reservations: Vec::new(),
+            replaced_by: Some(replacing),
+        });
     }
     let selected: Vec<usize> = (0..pairs.len())
         .filter(|position| named.is_none_or(|name| pyvalue::is(&pairs[*position].round, name)))
@@ -1225,6 +1256,7 @@ pub fn summarize(repo: &Repo, pairs: &[Pair], round_name: Option<&str>) -> Py<Su
         citations,
         pending,
         reservations,
+        replaced_by: None,
     })
 }
 
@@ -1608,7 +1640,7 @@ impl Summary {
         };
         let baseline = section(&self.sections[0])?;
         let contract_2 = section(&self.sections[1])?;
-        Ok(object(vec![
+        let mut members = vec![
             ("policy", pyvalue::text(self.policy())),
             (
                 "round",
@@ -1630,12 +1662,23 @@ impl Summary {
                 "reservation_only_cannot_tell",
                 Value::Array(self.reservations.clone()),
             ),
-        ]))
+        ];
+        if let Some(replacing) = &self.replaced_by {
+            members.push(("replaced_by", replacing.clone()));
+        }
+        Ok(object(members))
     }
 
     /// The summary as text.
     pub fn render(&self) -> Py<String> {
         let mut lines = vec![format!("Policy: {}", self.policy()), String::new()];
+        if let Some(replacing) = &self.replaced_by {
+            lines.push(format!(
+                "Replaced by round {}: its before-records are not decisions and count nowhere.",
+                replacing.py_str()
+            ));
+            return Ok(lines.join("\n"));
+        }
         for (section, title) in self
             .sections
             .iter()
