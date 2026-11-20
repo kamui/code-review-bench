@@ -2609,7 +2609,11 @@ fn standing_faults(
 /// a sampled grade afterwards leaves the round's comparison derivable and no conclusion stands without its copy.
 fn save_drawn_grades(root: &Root, sample: &Value, copy: &PyPath) -> R<()> {
     let pinned = at(sample, "grades")?;
-    write_new(copy, &read_bytes(&under(root, at(pinned, "path")?)?)?)?;
+    let drawn = read_bytes(&under(root, at(pinned, "path")?)?)?;
+    if let Err(failure) = write_new(copy, &drawn) {
+        let _ = std::fs::remove_file(copy.to_path_buf());
+        return Err(failure);
+    }
     if Value::Str(current_grading::file_hash(copy)?).py_eq(at(pinned, "sha256")?) {
         return Ok(());
     }
