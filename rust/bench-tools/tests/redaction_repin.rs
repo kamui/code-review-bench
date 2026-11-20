@@ -288,6 +288,12 @@ impl Fixture {
     fn save_grade(&self) {
         let (fingerprint, state) = self.batch();
         assert_eq!(state, "missing");
+        self.grade_at(&fingerprint);
+        assert_eq!(self.batch(), (fingerprint, "current".to_string()));
+    }
+
+    /// Saves a manual grade of the batch at `fingerprint`, under the selected remedy policy.
+    fn grade_at(&self, fingerprint: &str) {
         let directory = format!("{CURRENT}/assessments/{RUN}/{TARGET}/assessment-1");
         let verdicts = format!("{directory}/verdicts.json");
         let receipt = format!("{directory}/receipt.json");
@@ -297,7 +303,7 @@ impl Fixture {
             ("contract", s("current-assessment-receipt/v1")),
             ("run", s(&format!("runs/{RUN}"))),
             ("target", s(TARGET)),
-            ("input_fingerprint", s(&fingerprint)),
+            ("input_fingerprint", s(fingerprint)),
             ("mapped_at", s("2026-01-01T00:10:00Z")),
             (
                 "provenance",
@@ -317,7 +323,7 @@ impl Fixture {
                 Value::Array(vec![o(vec![
                     ("run", s(&format!("runs/{RUN}"))),
                     ("target", s(TARGET)),
-                    ("input_fingerprint", s(&fingerprint)),
+                    ("input_fingerprint", s(fingerprint)),
                     ("verdicts", s("current-verdicts/v3")),
                     (
                         "assessor",
@@ -332,7 +338,6 @@ impl Fixture {
             ),
         ]);
         self.write(GRADES, &grading_fixture::json(&grades));
-        assert_eq!(self.batch(), (fingerprint, "current".to_string()));
     }
 
     fn receipt_path(&self) -> String {
@@ -658,6 +663,21 @@ fn repin_refuses_what_it_cannot_record() {
     );
     git(&fixture.root, &["reset", "-q", "--hard", "HEAD~1"]);
 
+    let hashes = "docs/research/fixture/artifact-hashes.json";
+    fixture.write(
+        hashes,
+        &grading_fixture::json(&o(vec![("RESULTS.md", s(&hex_digest(TEXT.as_bytes())))])),
+    );
+    fixture.commit("a map from paths to hashes");
+    assert_eq!(
+        refused_path(EVIDENCE),
+        format!(
+            "bench-tools redaction: {hashes} pins {EVIDENCE} at /RESULTS.md, which is not claim or eligibility \
+             decision evidence; repin covers evidence files of claims and decisions only\n"
+        )
+    );
+    git(&fixture.root, &["reset", "-q", "--hard", "HEAD~1"]);
+
     let receipt = format!("{CURRENT}/assessments/{RUN}/{TARGET}/assessment-0/receipt.json");
     fixture.write(
         &receipt,
@@ -774,11 +794,12 @@ fn the_check_without_values_accepts_only_replaced_values() {
 }
 
 #[test]
-fn only_the_owners_receipt_naming_the_blob_skips_the_recheck() {
+fn only_the_owners_receipt_naming_the_entry_skips_the_recheck() {
     let fixture = Fixture::new("history");
     repinned(&fixture);
     fixture.commit("redacted");
     let gone = "0123456789abcdef0123456789abcdef01234567";
+    let graded = hex_digest(TEXT.as_bytes());
     let with_history = |history: &str, text: &str| {
         fixture.write(history, text.as_bytes());
         let pinned = fixture.pin(history);
@@ -789,34 +810,45 @@ fn only_the_owners_receipt_naming_the_blob_skips_the_recheck() {
             }
         });
     };
-    let refused = |history: &str| {
+    let refused = |history: &str, sha256: &str| {
         format!(
             "redacted evidence {EVIDENCE}: the history pin {history} is not the owner's receipt for the history \
-             rewrite; save that receipt under bench/grading/rulings/ and name blob {gone} in it, since nothing \
-             else skips the re-check\n"
+             rewrite; save that receipt under bench/grading/rulings/ with one line that holds, as separate words, \
+             {EVIDENCE} {gone} {sha256}, since nothing else skips the re-check\n"
         )
     };
+    let line = format!("Rewrite removed `{EVIDENCE}` blob `{gone}` sha256 `{graded}`");
 
     let elsewhere = "docs/research/fixture/history-rewrite.md";
-    with_history(
-        elsewhere,
-        &format!("# History rewrite\n\nBlob {gone} is gone.\n"),
-    );
-    assert_eq!(fixture.check(), (1, refused(elsewhere)));
+    with_history(elsewhere, &format!("# History rewrite\n\n{line}\n"));
+    assert_eq!(fixture.check(), (1, refused(elsewhere, &graded)));
     let (code, _, stderr) = fixture.repin(&[EVIDENCE, "--receipt", RECEIPT]);
     assert_eq!(
         (code, stderr),
-        (1, format!("bench-tools redaction: {}", refused(elsewhere)))
+        (
+            1,
+            format!("bench-tools redaction: {}", refused(elsewhere, &graded))
+        )
     );
+
+    let climbing = "bench/grading/rulings/../../../docs/research/fixture/history-rewrite.md";
+    with_history(climbing, &format!("# History rewrite\n\n{line}\n"));
+    assert_eq!(fixture.check(), (1, refused(climbing, &graded)));
 
     let ruling = "bench/grading/rulings/history-rewrite.md";
-    with_history(ruling, "# History rewrite\n\nThe history was rewritten.\n");
-    assert_eq!(fixture.check(), (1, refused(ruling)));
+    for text in [
+        format!("{EVIDENCE} {gone}0123456789abcdef01234567 {graded}"),
+        format!("{EVIDENCE} 0{gone} {graded}"),
+        format!("{EVIDENCE}.old {gone} {graded}"),
+        format!("{gone} {graded}"),
+        format!("{EVIDENCE} {gone}"),
+        format!("{EVIDENCE} {gone}\n{graded}"),
+    ] {
+        with_history(ruling, &format!("# History rewrite\n\n{text}\n"));
+        assert_eq!(fixture.check(), (1, refused(ruling, &graded)), "{text}");
+    }
 
-    with_history(
-        ruling,
-        &format!("# History rewrite\n\nThe owner approves the rewrite that removed blob {gone}.\n"),
-    );
+    with_history(ruling, &format!("# History rewrite\n\n{line}\n"));
     assert_eq!(
         fixture.check(),
         (
@@ -827,12 +859,107 @@ fn only_the_owners_receipt_naming_the_blob_skips_the_recheck() {
             )
         )
     );
+
+    let earlier = "c".repeat(64);
+    fixture.edit_record(|record| {
+        *member(record, &["entries", "0", "before", "sha256"]) = s(&earlier);
+        if let Value::Object(entry) = member(record, &["entries", "0"]) {
+            *entry = entry
+                .iter()
+                .filter(|(key, _)| key.as_str() != "history")
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect();
+        }
+    });
+    let (stale, _) = fixture.batch();
+    fixture.grade_at(&stale);
+    with_history(ruling, &format!("# History rewrite\n\n{line}\n"));
+    assert_eq!(fixture.check(), (1, refused(ruling, &earlier)));
+    git(&fixture.root, &["checkout", "-q", "--", CURRENT]);
+
+    with_history(ruling, &format!("# History rewrite\n\n{line}\n"));
     fixture.write(ruling, b"# History rewrite\n\nEdited.\n");
     let (code, output) = fixture.check();
     assert_eq!(
         (code, output.as_str()),
         (1, format!("source hash changed: {ruling}\n").as_str())
     );
+}
+
+#[test]
+fn the_commit_hook_keeps_recorded_entries_as_they_were() {
+    let fixture = Fixture::new("hook-kept");
+    repinned(&fixture);
+    fixture.commit("first redaction");
+    let staged = || {
+        git(&fixture.root, &["add", "-A"]);
+        let outcome = fixture.run(
+            &fixture.values,
+            &["redaction", "check", "--staged", "--require-values"],
+        );
+        git(&fixture.root, &["reset", "-q", "--hard", "HEAD"]);
+        (outcome.0, outcome.1)
+    };
+    let gone = "0123456789abcdef0123456789abcdef01234567";
+    let earlier = "c".repeat(64);
+    let ruling = "bench/grading/rulings/history-rewrite.md";
+
+    fixture.write(ruling, format!("{EVIDENCE} {gone} {earlier}\n").as_bytes());
+    let pinned = fixture.pin(ruling);
+    fixture.edit_record(|record| {
+        *member(record, &["entries", "0", "before", "sha256"]) = s(&earlier);
+        *member(record, &["entries", "0", "before", "blob"]) = s(gone);
+        if let Value::Object(entry) = member(record, &["entries", "0"]) {
+            entry.insert("history".into(), pinned.clone());
+        }
+    });
+    assert_eq!(
+        staged(),
+        (
+            1,
+            "an entry already at HEAD changed in more than its history pin: docs/research/fixture/RESULTS.md \
+             (bench/grading/current/redacted-evidence.json)\n"
+                .to_string()
+        )
+    );
+
+    fixture.write(ruling, b"# History rewrite\n");
+    let pinned = fixture.pin(ruling);
+    fixture.edit_record(|record| {
+        if let Value::Object(entry) = member(record, &["entries", "0"]) {
+            entry.insert("history".into(), pinned.clone());
+        }
+    });
+    assert_eq!(staged(), (0, String::new()));
+
+    let more = fixture.root.parent().unwrap().join("more-values.json");
+    std::fs::write(&more, MORE_VALUES).unwrap();
+    let (code, _, stderr) = fixture.run(
+        &more,
+        &["redaction", "repin", EVIDENCE, "--receipt", RECEIPT],
+    );
+    assert_eq!(code, 0, "{stderr}");
+    fixture.commit("second redaction");
+    fixture.edit_record(|record| {
+        if let Value::Array(entries) = member(record, &["entries"]) {
+            entries.remove(0);
+        }
+    });
+    assert_eq!(
+        staged(),
+        (
+            1,
+            "an entry already at HEAD was moved, or removed while a later entry of its file stays: \
+             docs/research/fixture/RESULTS.md (bench/grading/current/redacted-evidence.json)\n"
+                .to_string()
+        )
+    );
+    fixture.edit_record(|record| {
+        if let Value::Array(entries) = member(record, &["entries"]) {
+            entries.pop();
+        }
+    });
+    assert_eq!(staged(), (0, String::new()));
 }
 
 #[test]

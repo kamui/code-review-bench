@@ -42,6 +42,30 @@ fn shown(entry: &Entry) -> String {
     format!("redacted evidence {}", entry.path)
 }
 
+/// Whether `name`, resolved, is a file below [`RULINGS`].
+fn saved_ruling(root: &Root, name: &str) -> R<bool> {
+    let rulings = root.local(RULINGS.trim_end_matches('/').as_bytes())?;
+    let file = root.local(name.as_bytes())?;
+    Ok(pyfs::relative_parts(file.as_bytes(), rulings.as_bytes())
+        .is_some_and(|parts| !parts.is_empty())
+        && file.to_path_buf().is_file())
+}
+
+/// Whether one line of `receipt` holds the entry's path, `before.blob` and `before.sha256` as separate words, each
+/// optionally in backticks.
+fn names_entry(receipt: &[u8], entry: &Entry) -> bool {
+    receipt.split(|byte| *byte == b'\n').any(|line| {
+        let words: Vec<&[u8]> = line
+            .split(u8::is_ascii_whitespace)
+            .map(|word| word.strip_prefix(b"`").unwrap_or(word))
+            .map(|word| word.strip_suffix(b"`").unwrap_or(word))
+            .collect();
+        [&entry.path, &entry.blob, &entry.before]
+            .iter()
+            .all(|wanted| words.contains(&wanted.as_bytes()))
+    })
+}
+
 /// The entries of the record in `directory`, none when it has no record, after checking the record's shape, its
 /// receipt and history pins, that each file holds the bytes its last entry redacted to, and that each file's entries
 /// form one chain.
@@ -79,7 +103,7 @@ pub fn load(root: &Root, directory: &PyPath) -> R<Vec<Entry>> {
             },
         };
         require(
-            text(item(value, "receipt")?, "path")?.starts_with(RULINGS),
+            saved_ruling(root, &text(item(value, "receipt")?, "path")?)?,
             format!(
                 "{}: the receipt of an entry is the owner's approval, saved under {RULINGS}",
                 shown(&entry)
@@ -90,17 +114,20 @@ pub fn load(root: &Root, directory: &PyPath) -> R<Vec<Entry>> {
             format!("{}: an entry records no change", shown(&entry)),
         )?;
         if let Some(history) = &entry.history {
-            let receipt = pyvalue::read_bytes(&root.local(history.as_bytes())?)?;
             require(
-                history.starts_with(RULINGS)
-                    && receipt
-                        .windows(entry.blob.len())
-                        .any(|window| window == entry.blob.as_bytes()),
+                saved_ruling(root, history)?
+                    && names_entry(
+                        &pyvalue::read_bytes(&root.local(history.as_bytes())?)?,
+                        &entry,
+                    ),
                 format!(
                     "{}: the history pin {history} is not the owner's receipt for the history rewrite; save that \
-                     receipt under {RULINGS} and name blob {} in it, since nothing else skips the re-check",
+                     receipt under {RULINGS} with one line that holds, as separate words, {} {} {}, since nothing \
+                     else skips the re-check",
                     shown(&entry),
-                    entry.blob
+                    entry.path,
+                    entry.blob,
+                    entry.before
                 ),
             )?;
         }
@@ -331,15 +358,24 @@ fn pointer(location: &[Step]) -> String {
         .collect()
 }
 
-/// Where each object that names the file, as one of `names`, sits in `value`, and that object.
+/// Where each object that names the file, as one of `names`, sits in `value`, and that object; and where each member
+/// whose key names the file sits, and its value.
 fn naming(
     value: &Value,
     names: &[String],
     location: &mut Vec<Step>,
     found: &mut Vec<(Vec<Step>, Object)>,
+    keyed: &mut Vec<(Vec<Step>, Value)>,
 ) {
     match value {
         Value::Object(object) => {
+            for (key, member) in object.iter() {
+                if names.iter().any(|name| name == key) {
+                    let mut at = location.clone();
+                    at.push(Step::Key(key.as_bytes().to_vec()));
+                    keyed.push((at, member.clone()));
+                }
+            }
             if object.iter().any(|(_, member)| {
                 member
                     .as_str()
@@ -349,14 +385,14 @@ fn naming(
             }
             for (key, member) in object.iter() {
                 location.push(Step::Key(key.as_bytes().to_vec()));
-                naming(member, names, location, found);
+                naming(member, names, location, found, keyed);
                 location.pop();
             }
         }
         Value::Array(members) => {
             for (at, member) in members.iter().enumerate() {
                 location.push(Step::Index(at));
-                naming(member, names, location, found);
+                naming(member, names, location, found, keyed);
                 location.pop();
             }
         }
@@ -734,7 +770,7 @@ pub fn repin(root: &Root, path: &[u8], receipt: &[u8], rules: &redaction::Rules)
     let receipt = relative(root, receipt)?;
     let receipt_file = root.local(receipt.as_bytes())?;
     require(
-        receipt.starts_with(RULINGS) && receipt_file.to_path_buf().is_file(),
+        saved_ruling(root, &receipt)?,
         format!("the receipt {receipt} is not a saved ruling under {RULINGS}"),
     )?;
     let redacted = redaction::redact(&bytes, rules);
@@ -774,8 +810,18 @@ pub fn repin(root: &Root, path: &[u8], receipt: &[u8], rules: &redaction::Rules)
             continue;
         }
         let parsed = read_json(&local)?;
-        let mut objects = Vec::new();
-        naming(&parsed, &names, &mut Vec::new(), &mut objects);
+        let (mut objects, mut keyed) = (Vec::new(), Vec::new());
+        naming(&parsed, &names, &mut Vec::new(), &mut objects, &mut keyed);
+        for (location, value) in &keyed {
+            require(
+                value.as_str() != Some(old.as_str()),
+                format!(
+                    "{document} pins {path} at {}, which is not claim or eligibility decision evidence; repin \
+                     covers evidence files of claims and decisions only",
+                    pointer(location)
+                ),
+            )?;
+        }
         let mut locations = Vec::new();
         for (location, object) in objects {
             let at = pointer(&location);

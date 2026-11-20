@@ -4861,8 +4861,9 @@ fn run_redaction(command: RedactionCommand) -> Result<ExitCode, ExitCode> {
             }
             if !checked.entries.is_empty() {
                 eprintln!(
-                    "bench-tools redaction: a staged redacted evidence entry is not what the rules make of the file's \
-                     earlier bytes; restore the file and bench/grading/current from HEAD, then run bench-tools \
+                    "bench-tools redaction: the staged redacted evidence record is not what the rules confirm; once an \
+                     entry is committed only its history pin may change, and a new entry must be the rules' output \
+                     of the file at HEAD. Restore the file and bench/grading/current from HEAD, then run bench-tools \
                      redaction repin with the values file"
                 );
             }

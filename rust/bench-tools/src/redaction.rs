@@ -17,7 +17,8 @@
 //!
 //! [`replaced_values`] decides, without private values, whether redacted bytes are earlier bytes with only values
 //! replaced. With `--staged`, [`check`] also requires each entry a commit adds to [`RECORD`] to be exactly what the
-//! rules make of its earlier blob; the commit hook runs it with the values file.
+//! rules make of the file at `HEAD`, and the entries already at `HEAD` to stay as they were but for their `history`
+//! pins; the commit hook runs it with the values file.
 
 use crate::archive;
 use crate::pyjson::{self, Duplicates, Value};
@@ -1225,9 +1226,18 @@ pub struct Checked {
     pub entries: Vec<String>,
 }
 
-/// The `path`, `before.sha256`, `before.blob` and `after.sha256` of each entry of a [`RECORD`], or `None` for another
-/// document.
-fn record_entries(text: &[u8]) -> Option<Vec<(String, String, String, String)>> {
+/// One entry of a [`RECORD`]: its `path`, `before.sha256`, `before.blob` and `after.sha256`, and the entry without its
+/// `history` pin, in canonical form.
+struct Recorded {
+    path: String,
+    before: String,
+    blob: String,
+    after: String,
+    fixed: String,
+}
+
+/// The entries of a [`RECORD`], or `None` for another document.
+fn record_entries(text: &[u8]) -> Option<Vec<Recorded>> {
     let document = pyjson::loads(std::str::from_utf8(text).ok()?, Duplicates::Refuse).ok()?;
     let field = |value: &Value, names: &[&str]| -> Option<String> {
         let mut value = value;
@@ -1242,18 +1252,34 @@ fn record_entries(text: &[u8]) -> Option<Vec<(String, String, String, String)>> 
         .as_array()?
         .iter()
         .map(|entry| {
-            Some((
-                field(entry, &["path"])?,
-                field(entry, &["before", "sha256"])?,
-                field(entry, &["before", "blob"])?,
-                field(entry, &["after", "sha256"])?,
-            ))
+            let fixed: pyjson::Object = entry
+                .as_object()?
+                .iter()
+                .filter(|(key, _)| key.as_str() != "history")
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect();
+            Some(Recorded {
+                path: field(entry, &["path"])?,
+                before: field(entry, &["before", "sha256"])?,
+                blob: field(entry, &["before", "blob"])?,
+                after: field(entry, &["after", "sha256"])?,
+                fixed: pyjson::dumps(
+                    &Value::Object(fixed),
+                    &pyjson::Dumps {
+                        sort_keys: true,
+                        ..pyjson::Dumps::default()
+                    },
+                ),
+            })
         })
         .collect()
 }
 
-/// A line for each entry the staged `record` adds to the one at `HEAD` whose earlier blob is not the file at `HEAD` with
-/// the recorded hash, or whose staged file is not what `rules` make of that blob, byte for byte.
+/// A line for each file whose entries at `HEAD` the staged `record` does not keep as they were, in order and first,
+/// apart from `history` pins and from removing a file's last entries; then for each entry it adds whose earlier blob
+/// is not the file at `HEAD` with the recorded hash, or whose staged file is not what `rules` make of that blob, byte
+/// for byte. An entry at `HEAD` decides which hash a batch's fingerprint takes, so only its `history` may change, and
+/// removing an earlier entry while a later one stays would move the file's earliest hash.
 fn unconfirmed(top: &Path, record: &[u8], rules: &Rules) -> Vec<String> {
     let Some(staged) = record_entries(record) else {
         return vec![format!(
@@ -1265,11 +1291,48 @@ fn unconfirmed(top: &Path, record: &[u8], rules: &Rules) -> Vec<String> {
         .and_then(|text| record_entries(&text))
         .unwrap_or_default();
     let mut lines = Vec::new();
-    for (path, before, blob, after) in staged {
-        if committed
+    let mut paths: Vec<&str> = committed.iter().map(|entry| entry.path.as_str()).collect();
+    paths.sort_unstable();
+    paths.dedup();
+    for path in paths {
+        let head: Vec<&Recorded> = committed
             .iter()
-            .any(|(known, _, _, hash)| *known == path && *hash == after)
+            .filter(|entry| entry.path == path)
+            .collect();
+        let now: Vec<&Recorded> = staged.iter().filter(|entry| entry.path == path).collect();
+        let kept: Vec<&&Recorded> = head
+            .iter()
+            .filter(|old| now.iter().any(|new| new.after == old.after))
+            .collect();
+        let in_place = kept
+            .iter()
+            .zip(&head)
+            .chain(kept.iter().zip(&now))
+            .all(|(old, other)| old.after == other.after);
+        if !in_place {
+            lines.push(format!(
+                "an entry already at HEAD was moved, or removed while a later entry of its file stays: {path} \
+                 ({RECORD})"
+            ));
+        }
+    }
+    for entry in &staged {
+        let Recorded {
+            path,
+            before,
+            blob,
+            after,
+            fixed,
+        } = entry;
+        if let Some(old) = committed
+            .iter()
+            .find(|old| old.path == *path && old.after == *after)
         {
+            if old.fixed != *fixed {
+                lines.push(format!(
+                    "an entry already at HEAD changed in more than its history pin: {path} ({RECORD})"
+                ));
+            }
             continue;
         }
         if rules.values_file().is_none() {
@@ -1285,8 +1348,8 @@ fn unconfirmed(top: &Path, record: &[u8], rules: &Rules) -> Vec<String> {
         .ok()
         .filter(|id| String::from_utf8_lossy(id).trim() == blob);
         let earlier = committed
-            .and_then(|_| git(Some(top), &["cat-file", "blob", &blob]).ok())
-            .filter(|earlier| crate::sha256::hex_digest(earlier) == before);
+            .and_then(|_| git(Some(top), &["cat-file", "blob", blob]).ok())
+            .filter(|earlier| crate::sha256::hex_digest(earlier) == *before);
         let Some(earlier) = earlier else {
             lines.push(format!(
                 "the entry's earlier bytes are not the file at HEAD: {path} ({RECORD})"
@@ -1299,7 +1362,7 @@ fn unconfirmed(top: &Path, record: &[u8], rules: &Rules) -> Vec<String> {
                 let redacted = redact(&earlier, rules);
                 !redacted.findings.iter().any(Finding::unredactable)
                     && redacted.data.as_deref() == Some(now.as_slice())
-                    && crate::sha256::hex_digest(&now) == after
+                    && crate::sha256::hex_digest(&now) == *after
             }
             _ => false,
         };
