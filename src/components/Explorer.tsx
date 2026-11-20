@@ -223,7 +223,7 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
           <div><dt>{hero.awaitingEligibility ? 'provisional problems' : 'known problems'}</dt><dd>{hero.problems}</dd></div>
           <div><dt>review methods</dt><dd>{hero.methods}</dd></div>
           <div><dt>models tested</dt><dd>{hero.models}</dd></div>
-        </dl></div>
+        </dl>{hero.experiments > 0 && <p className="corpus-note">{hero.experiments === 1 ? 'One method is a skill experiment' : `${hero.experiments} methods are skill experiments`}, off by default.</p>}</div>
       </section>
 
       <section id="scorecard" className="leaderboard-section">
