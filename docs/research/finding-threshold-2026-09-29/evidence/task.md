@@ -6,4 +6,4 @@ Read grounding.md and its referenced local policies and examples. Inspect additi
 
 Write the complete assessment to candidate-b/proposal.md and the short rationale to candidate-b/rationale.md. Your candidate output directory is /tmp/arena-threshold-2026-09-29/candidate-b. The candidate A is reused prior GPT-6.1-Sol High output. You see it intentionally because this task is a review and revision, not an independent blind generation experiment.
 
-Apply /mnt/c/Users/kamui/iCloudDrive/host-01/.agents/skills/unslop/SKILL.md to authored prose. No extra skill-driven delegation.
+Apply /mnt/c/Users/[redacted-user]/iCloudDrive/host-01/.agents/skills/[redacted-skill]/SKILL.md to authored prose. No extra skill-driven delegation.
