@@ -199,7 +199,7 @@ Claude Code records the signed-in account's email address and organization id in
 
 ### Rules
 
-Two groups of rules apply.
+Three groups of rules apply.
 
 The field rules need no private value and always apply:
 
@@ -211,6 +211,15 @@ The field rules need no private value and always apply:
 | The value of the Codex `plan_type` field | `[redacted-plan]` |
 
 They match plain JSON and JSON nested inside JSON strings, where each quote is escaped by any number of backslashes. A value that is already a placeholder is left alone, so a second pass changes nothing.
+
+The structure rules need no private value either. They match only plain JSON strings (newlines escaped once) and text, and leave a value that is already a placeholder alone:
+
+| Where | Replacement |
+| --- | --- |
+| The owner's personal agent instructions, from their heading and first sentence to the end of the string, the closing `</system-reminder>` or `</INSTRUCTIONS>`, or the project-doc divider | `[redacted-instructions]` |
+| The list a Codex session gives under `### Available skills`, to the next heading, the closing `</skills_instructions>` or the end of the string | `[redacted-skill-list]` |
+| The account in `/mnt/<drive>/Users/<account>`, and the skill folder name under that account's `iCloudDrive/<machine>/.agents/skills/` | `[redacted-user]`, `[redacted-skill]` |
+| The skill folder name under `/.t3/agents/.agents_skills/` and `/.t3/agents/.codex/skills/` (a name that starts with a dot, such as Codex's own `.system`, stays) | `[redacted-skill]` |
 
 The literal rules come from a private values file outside the repository: `BENCH_REDACTION_VALUES` when it is set, else `~/.config/code-review-bench/redaction.json`. Its shape:
 
