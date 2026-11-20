@@ -1,7 +1,7 @@
 # RESULTS — Vercel ISR cache test for astro#16079 (task o-astro-16079)
 
-Run date: 2026-10-27 (UTC). Operator: Vercel CLI 65.4.0 (native), account `jack-7095`
-(deployments created under team scope `jackchu-com`), free Hobby plan, no payment method added.
+Run date: 2026-10-27 (UTC). Operator: Vercel CLI 65.4.0 (native), account `[redacted-account]`
+(deployments created under team scope `[redacted-account]`), free Hobby plan, no payment method added.
 Runtime: `nodejs24.x` (adapter default). All deployments were production (`--prebuilt --prod`),
 public (Standard Protection exempts production domains). No secrets used; `session` cookie values
 are dummies (`alice`, `carol`).
@@ -127,9 +127,9 @@ Commands (full output in step10-step15 logs):
   (removing the project removes all its deployments)
 
 Verification:
-- `npx vercel project ls` → **"No projects found under jackchu-com"** (authoritative: both projects deleted).
+- `npx vercel project ls` → **"No projects found under [redacted-account]"** (authoritative: both projects deleted).
 - URL probes after removal → all **HTTP/2 404** (deployment not found):
-  `app-1003.vercel.app/one`, `app-1002.vercel.app/one`, and both `*-jackchu-com.vercel.app` URLs.
+  `app-1003.vercel.app/one`, `app-1002.vercel.app/one`, and both `*-[redacted-account].vercel.app` URLs.
 - `npx vercel remove <both deployment URLs> --yes` → "Could not find any deployments or projects
   matching …" (nothing left to remove).
 - `npx vercel ls` still listed the two deployments as Ready for several minutes — this is the
