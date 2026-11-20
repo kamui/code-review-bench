@@ -1315,7 +1315,7 @@ enum RedactionCommand {
     #[command(infer_long_args = true)]
     Repin {
         path: PathBuf,
-        /// The owner's saved approval under bench/grading/rulings/.
+        /// The owner's saved ruling under bench/grading/rulings/ that holds the approval line repin prints.
         #[arg(long, value_name = "RULING")]
         receipt: PathBuf,
     },

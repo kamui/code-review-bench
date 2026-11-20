@@ -51,19 +51,28 @@ fn saved_ruling(root: &Root, name: &str) -> R<bool> {
         && file.to_path_buf().is_file())
 }
 
-/// Whether one line of `receipt` holds the entry's path, `before.blob` and `before.sha256` as separate words, each
-/// optionally in backticks.
-fn names_entry(receipt: &[u8], entry: &Entry) -> bool {
-    receipt.split(|byte| *byte == b'\n').any(|line| {
+/// Whether one line of `ruling` holds each of `wanted` as a separate word, each optionally in backticks.
+fn names_on_one_line(ruling: &[u8], wanted: &[&str]) -> bool {
+    ruling.split(|byte| *byte == b'\n').any(|line| {
         let words: Vec<&[u8]> = line
             .split(u8::is_ascii_whitespace)
             .map(|word| word.strip_prefix(b"`").unwrap_or(word))
             .map(|word| word.strip_suffix(b"`").unwrap_or(word))
             .collect();
-        [&entry.path, &entry.blob, &entry.before]
+        wanted
             .iter()
             .all(|wanted| words.contains(&wanted.as_bytes()))
     })
+}
+
+/// The line the owner's ruling holds to approve redacting `path` from `before` to `after`.
+fn approval(path: &str, before: &str, after: &str) -> String {
+    format!("Redaction approved for `{path}` from sha256 `{before}` to sha256 `{after}`")
+}
+
+/// Whether `ruling` approves redacting `path` from `before` to `after`.
+fn approves(ruling: &[u8], path: &str, before: &str, after: &str) -> bool {
+    names_on_one_line(ruling, &[path, before, after])
 }
 
 /// The entries of the record in `directory`, none when it has no record, after checking the record's shape, its
@@ -116,9 +125,9 @@ pub fn load(root: &Root, directory: &PyPath) -> R<Vec<Entry>> {
         if let Some(history) = &entry.history {
             require(
                 saved_ruling(root, history)?
-                    && names_entry(
+                    && names_on_one_line(
                         &pyvalue::read_bytes(&root.local(history.as_bytes())?)?,
-                        &entry,
+                        &[&entry.path, &entry.blob, &entry.before],
                     ),
                 format!(
                     "{}: the history pin {history} is not the owner's receipt for the history rewrite; save that \
@@ -131,6 +140,21 @@ pub fn load(root: &Root, directory: &PyPath) -> R<Vec<Entry>> {
                 ),
             )?;
         }
+        let receipt = text(item(value, "receipt")?, "path")?;
+        require(
+            approves(
+                &pyvalue::read_bytes(&root.local(receipt.as_bytes())?)?,
+                &entry.path,
+                &entry.before,
+                &entry.after,
+            ),
+            format!(
+                "{}: the receipt {receipt} does not approve this entry; save this line in the owner's ruling under \
+                 {RULINGS} and pin that ruling as the entry's receipt: {}",
+                shown(&entry),
+                approval(&entry.path, &entry.before, &entry.after)
+            ),
+        )?;
         let earlier: Vec<&Entry> = entries
             .iter()
             .filter(|known| known.path == entry.path)
@@ -869,6 +893,14 @@ pub fn repin(root: &Root, path: &[u8], receipt: &[u8], rules: &redaction::Rules)
         !rewritten.is_empty(),
         format!(
             "no claim or decision evidence pins {path}; redact it with bench-tools redaction apply"
+        ),
+    )?;
+    require(
+        approves(&pyvalue::read_bytes(&receipt_file)?, &path, &old, &new),
+        format!(
+            "the receipt {receipt} does not approve this redaction; save this line in the owner's ruling under \
+             {RULINGS}, in a new ruling if an entry already pins this one, then run repin again with it:\n{}",
+            approval(&path, &old, &new)
         ),
     )?;
     let record_path = root.path.join(redaction::RECORD.as_bytes());

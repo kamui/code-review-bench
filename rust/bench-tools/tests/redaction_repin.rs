@@ -24,6 +24,16 @@ const REVIEW: &str = "bench/runs/2026-01-01-grade-test/attempts/att-001/normaliz
 const TEXT: &str = "# Fixture run results\n\nThe run deployed from examplehost as acct-0000-example.\nMail went to person@example.com after the build.\n\nThe cache key keeps the visitor path,\nso a second visitor reads the first visitor's page.\n";
 const REDACTED: &str = "# Fixture run results\n\nThe run deployed from host-01-xyz as acct-0000-example.\nMail went to [redacted-email] after the build.\n\nThe cache key keeps the visitor path,\nso a second visitor reads the first visitor's page.\n";
 
+/// The line an owner's ruling holds to approve the redaction of `path` from `before` to `after`.
+fn approval(path: &str, before: &str, after: &str) -> String {
+    format!("Redaction approved for `{path}` from sha256 `{before}` to sha256 `{after}`")
+}
+
+/// [`REDACTED`] once [`MORE_VALUES`] also replace the account.
+fn redacted_twice() -> String {
+    REDACTED.replace("acct-0000-example", "[redacted-account]")
+}
+
 fn s(text: &str) -> Value {
     Value::Str(text.to_string())
 }
@@ -132,7 +142,15 @@ impl Fixture {
         );
         fixture.write(
             RECEIPT,
-            b"# Redaction approval\n\nThe owner approves redaction repin for the fixture's run results.\n",
+            format!(
+                "# Redaction approval\n\nThe owner approves redaction repin for the fixture's run results.\n\n{}\n",
+                approval(
+                    EVIDENCE,
+                    &hex_digest(TEXT.as_bytes()),
+                    &hex_digest(REDACTED.as_bytes())
+                )
+            )
+            .as_bytes(),
         );
         let evidence = fixture.pin(EVIDENCE);
         let mut decisions = parse(&fixture.read(DECISIONS));
@@ -346,6 +364,40 @@ impl Fixture {
 
     /// Replaces the redacted evidence with `text` and points the record's last entry and both pins at it by hand.
     fn swap_evidence(&self, text: &str) {
+        self.swap_evidence_unapproved(text);
+        let record = parse(&self.read(RECORD));
+        let last = record
+            .as_object()
+            .unwrap()
+            .get("entries")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len()
+            - 1;
+        let at = last.to_string();
+        let ruling = "bench/grading/rulings/swap-approval.md";
+        self.write(
+            ruling,
+            format!(
+                "{}\n",
+                approval(
+                    EVIDENCE,
+                    &field(&record, &["entries", &at, "before", "sha256"]),
+                    &field(&record, &["entries", &at, "after", "sha256"])
+                )
+            )
+            .as_bytes(),
+        );
+        let pinned = self.pin(ruling);
+        self.edit_record(|record| {
+            *member(record, &["entries", &at, "receipt"]) = pinned;
+        });
+    }
+
+    /// Replaces the redacted evidence with `text` and points the record's last entry and both pins at it by hand,
+    /// leaving the entry's receipt as it was.
+    fn swap_evidence_unapproved(&self, text: &str) {
         let old = hex_digest(&self.read(EVIDENCE));
         let new = hex_digest(text.as_bytes());
         self.write(EVIDENCE, text.as_bytes());
@@ -481,9 +533,33 @@ fn a_file_redacted_twice_resolves_to_its_earliest_hash() {
     fixture.commit("first redaction");
     let more = fixture.root.parent().unwrap().join("more-values.json");
     std::fs::write(&more, MORE_VALUES).unwrap();
+    let line = approval(
+        EVIDENCE,
+        &hex_digest(REDACTED.as_bytes()),
+        &hex_digest(redacted_twice().as_bytes()),
+    );
     let (code, stdout, stderr) = fixture.run(
         &more,
         &["redaction", "repin", EVIDENCE, "--receipt", RECEIPT],
+    );
+    assert_eq!(
+        (code, stdout.as_str(), stderr),
+        (
+            1,
+            "",
+            format!(
+                "bench-tools redaction: the receipt {RECEIPT} does not approve this redaction; save this line in \
+                 the owner's ruling under bench/grading/rulings/, in a new ruling if an entry already pins this \
+                 one, then run repin again with it:\n{line}\n"
+            )
+        )
+    );
+    assert_eq!(git(&fixture.root, &["status", "--porcelain"]), "");
+    let second = "bench/grading/rulings/redaction-approval-2.md";
+    fixture.write(second, format!("# Second approval\n\n{line}\n").as_bytes());
+    let (code, stdout, stderr) = fixture.run(
+        &more,
+        &["redaction", "repin", EVIDENCE, "--receipt", second],
     );
     assert_eq!(
         (code, stdout.as_str(), stderr.as_str()),
@@ -848,7 +924,15 @@ fn only_the_owners_receipt_naming_the_entry_skips_the_recheck() {
         assert_eq!(fixture.check(), (1, refused(ruling, &graded)), "{text}");
     }
 
-    with_history(ruling, &format!("# History rewrite\n\n{line}\n"));
+    let approved = approval(EVIDENCE, &graded, &hex_digest(REDACTED.as_bytes()));
+    with_history(
+        ruling,
+        &format!("# History rewrite\n\n{approved}\n{line}\n"),
+    );
+    let both = fixture.pin(ruling);
+    fixture.edit_record(|record| {
+        *member(record, &["entries", "0", "receipt"]) = both;
+    });
     assert_eq!(
         fixture.check(),
         (
@@ -861,7 +945,18 @@ fn only_the_owners_receipt_naming_the_entry_skips_the_recheck() {
     );
 
     let earlier = "c".repeat(64);
+    let earlier_approval = "bench/grading/rulings/earlier-approval.md";
+    fixture.write(
+        earlier_approval,
+        format!(
+            "{}\n",
+            approval(EVIDENCE, &earlier, &hex_digest(REDACTED.as_bytes()))
+        )
+        .as_bytes(),
+    );
+    let approving = fixture.pin(earlier_approval);
     fixture.edit_record(|record| {
+        *member(record, &["entries", "0", "receipt"]) = approving;
         *member(record, &["entries", "0", "before", "sha256"]) = s(&earlier);
         if let Value::Object(entry) = member(record, &["entries", "0"]) {
             *entry = entry
@@ -934,9 +1029,22 @@ fn the_commit_hook_keeps_recorded_entries_as_they_were() {
 
     let more = fixture.root.parent().unwrap().join("more-values.json");
     std::fs::write(&more, MORE_VALUES).unwrap();
+    let second = "bench/grading/rulings/redaction-approval-2.md";
+    fixture.write(
+        second,
+        format!(
+            "{}\n",
+            approval(
+                EVIDENCE,
+                &hex_digest(REDACTED.as_bytes()),
+                &hex_digest(redacted_twice().as_bytes())
+            )
+        )
+        .as_bytes(),
+    );
     let (code, _, stderr) = fixture.run(
         &more,
-        &["redaction", "repin", EVIDENCE, "--receipt", RECEIPT],
+        &["redaction", "repin", EVIDENCE, "--receipt", second],
     );
     assert_eq!(code, 0, "{stderr}");
     fixture.commit("second redaction");
@@ -1063,7 +1171,14 @@ fn an_entry_changes_no_other_pin() {
                 ("count", Value::Int("1".into())),
             ])]),
         ),
-        ("receipt", fixture.pin(RECEIPT)),
+        ("receipt", {
+            let ruling = "bench/grading/rulings/review-approval.md";
+            fixture.write(
+                ruling,
+                format!("{}\n", approval(REVIEW, &"1".repeat(64), &review)).as_bytes(),
+            );
+            fixture.pin(ruling)
+        }),
     ]);
     fixture.write(
         RECORD,
@@ -1073,4 +1188,72 @@ fn an_entry_changes_no_other_pin() {
         ])),
     );
     assert_eq!(fixture.batch(), saved);
+}
+
+#[test]
+fn the_receipt_must_approve_the_exact_bytes() {
+    let fixture = Fixture::new("approval");
+    let graded = hex_digest(TEXT.as_bytes());
+    let changed = TEXT.replace("visitor", "session");
+    let after = hex_digest(changed.as_bytes());
+    let blob = git(&fixture.root, &["rev-parse", &format!("HEAD:{EVIDENCE}")]);
+    fixture.write(EVIDENCE, changed.as_bytes());
+    for path in [CLAIMS, DECISIONS] {
+        let bytes = String::from_utf8(fixture.read(path)).unwrap();
+        fixture.write(path, bytes.replace(&graded, &after).as_bytes());
+    }
+    let entry = |receipt: Value| {
+        o(vec![
+            ("schema_version", Value::Int("1".into())),
+            (
+                "entries",
+                Value::Array(vec![o(vec![
+                    ("path", s(EVIDENCE)),
+                    (
+                        "before",
+                        o(vec![("sha256", s(&graded)), ("blob", s(&blob))]),
+                    ),
+                    ("after", o(vec![("sha256", s(&after))])),
+                    (
+                        "placeholders",
+                        Value::Array(vec![o(vec![
+                            ("text", s("session")),
+                            ("count", Value::Int("3".into())),
+                        ])]),
+                    ),
+                    ("receipt", receipt),
+                ])]),
+            ),
+        ])
+    };
+    let refused = |receipt: &str| {
+        (
+            1,
+            format!(
+                "redacted evidence {EVIDENCE}: the receipt {receipt} does not approve this entry; save this line in \
+                 the owner's ruling under bench/grading/rulings/ and pin that ruling as the entry's receipt: {}\n",
+                approval(EVIDENCE, &graded, &after)
+            ),
+        )
+    };
+
+    fixture.write(RECORD, &grading_fixture::json(&entry(fixture.pin(RECEIPT))));
+    fixture.commit("an entry that changes a word");
+    assert_eq!(fixture.check(), refused(RECEIPT));
+
+    let other = "bench/grading/rulings/other-approval.md";
+    fixture.write(
+        other,
+        format!("{}\n", approval(EVIDENCE, &graded, &"f".repeat(64))).as_bytes(),
+    );
+    fixture.write(RECORD, &grading_fixture::json(&entry(fixture.pin(other))));
+    assert_eq!(fixture.check(), refused(other));
+
+    let named = "bench/grading/rulings/named-approval.md";
+    fixture.write(
+        named,
+        format!("# Approval\n\n{}\n", approval(EVIDENCE, &graded, &after)).as_bytes(),
+    );
+    fixture.write(RECORD, &grading_fixture::json(&entry(fixture.pin(named))));
+    assert_eq!(fixture.check(), (0, VALID.to_string()));
 }
