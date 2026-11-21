@@ -5,8 +5,14 @@
 INVENTORY.json is a list of {"path", "sha256"} rows (the selection's archives and evidence.json hashes). Every member of
 each archive is read in memory; nothing is extracted or run. FILE_LIST optionally names loose files to scan as well.
 OUT.json gets counts only; OUT.hits.json gets each pattern hit with surrounding text and stays local. The live values
-of ~/.codex/auth.json and ~/.claude/.credentials.json are compared in memory and never written."""
-import collections, hashlib, io, json, re, sys, tarfile
+of ~/.codex/auth.json and ~/.claude/.credentials.json are compared in memory and never written.
+
+No identifier is written in this file. The identity patterns are built when it runs: addresses, organization ids and
+account ids from the redaction values file (BENCH_REDACTION_VALUES, else ~/.config/code-review-bench/redaction.json),
+the git author email from `git config user.email`, the home path from Path.home(), and the Windows account name from
+REVIEW_WINDOWS_ACCOUNT. Each missing input is printed and listed in OUT.json as identity_inputs_missing; the scan still
+runs, but its identity counts then cover only the inputs it had."""
+import collections, hashlib, io, json, os, re, subprocess, sys, tarfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -33,9 +39,33 @@ LOOSE = {"bearer-any": rb"(?i)\bbearer ", "sk-any": rb"\bsk-[A-Za-z0-9]", "gho-a
 CRED_NAMES = {"auth.json", ".credentials.json", ".claude.json", "credentials", "credentials.json", ".netrc", ".npmrc",
               ".pypirc", "id_rsa", "id_ed25519", ".env", "hosts.yml", ".git-credentials", "config.toml",
               "installation_id", "models_cache.json"}
-EMAILS = {"owner": rb"(?i)kamuigt@gmail\.com", "git-author": rb"(?i)jack@jackchu\.com"}
 ANY_EMAIL = rb"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}"
-HOME = rb"/home/jack\b"; WIN = rb"/mnt/c/Users/[redacted-user]\b"; WIN2 = rb"(?i)C:\\\\?Users\\\\?kamui"
+def load_values():
+    path = os.environ.get("BENCH_REDACTION_VALUES") or str(Path.home() / ".config/code-review-bench/redaction.json")
+    try: values = json.loads(Path(path).read_text())
+    except (OSError, ValueError) as e: MISSING.append("redaction values file (" + type(e).__name__ + ")"); return {}
+    for key in ("email", "organization", "account"):
+        if not values.get(key): MISSING.append("redaction values file has no " + key)
+    return values
+def git_email():
+    try: email = subprocess.run(["git", "config", "--get", "user.email"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
+    except OSError: email = ""
+    if not email: MISSING.append("git author email (git config user.email)")
+    return email.lower()
+def any_of(values): return rb"(?i)(?:" + b"|".join(re.escape(v.encode()) for v in values) + rb")"
+MISSING = []
+VALUES = load_values()
+OWNER_EMAILS = {e.lower() for e in VALUES.get("email", [])}
+GIT_EMAIL = git_email()
+WIN_ACCOUNT = os.environ.get("REVIEW_WINDOWS_ACCOUNT", "")
+if not WIN_ACCOUNT: MISSING.append("Windows account name (REVIEW_WINDOWS_ACCOUNT)")
+for m in MISSING: print("identity input missing:", m)
+EMAILS = {k: any_of(v) for k, v in (("owner", OWNER_EMAILS), ("git-author", {GIT_EMAIL} - {""})) if v}
+IDENTITY = {"home": re.escape(str(Path.home()).encode()) + rb"\b"}
+IDENTITY.update({k: any_of(VALUES[k]) for k in ("organization", "account") if VALUES.get(k)})
+if WIN_ACCOUNT:
+    IDENTITY["winprofile"] = rb"(?i)/mnt/[a-z]/users/" + re.escape(WIN_ACCOUNT.encode()) + rb"\b"
+    IDENTITY["winprofile-backslash"] = rb"(?i)[a-z]:\\+users\\+" + re.escape(WIN_ACCOUNT.encode())
 
 def secret_values():
     vals = set()
@@ -68,8 +98,8 @@ def kind(name):
 
 def classify_email(addr):
     a = addr.lower()
-    if a == "[redacted-email]": return "owner"
-    if a == "jack@jackchu.com": return "git-author"
+    if a in OWNER_EMAILS: return "owner"
+    if a == GIT_EMAIL: return "git-author"
     if "noreply" in a: return "noreply"
     if re.search(r"@(example|test|localhost|domain|email)\.|@example$", a): return "example"
     return "other"
@@ -101,7 +131,7 @@ def scan_bytes(label, name, data):
     for mk, b in personal_markers.items():
         n = data.count(b)
         if n: marker[mk] += n; marker_where[mk][k] += n
-    for lab, rx in (("home", HOME), ("winprofile", WIN), ("winprofile-backslash", WIN2)):
+    for lab, rx in IDENTITY.items():
         n = len(re.findall(rx, data))
         if n: agg[lab][label] += n; agg_files[lab].add((label, name)); email_where[lab][k] += n
     for key in (b"creator_user_id", b"creator_account_id", b"plan_type"):
@@ -150,7 +180,8 @@ res = {"archives": len(per), "members": total_members, "uncompressed_bytes": tot
        "ids": {k: dict(v) for k, v in ids.items()}, "secret_value_hits": secret_hits, "secret_values_checked": len(SECRETS),
        "markers": dict(marker), "marker_where": {k: dict(v) for k, v in marker_where.items()},
        "other_emails_by_class": dict(collections.Counter(c for c, _ in other_emails)),
-       "other_email_distinct": len(other_emails), "per_archive": per, "extra_files": len(extra)}
+       "other_email_distinct": len(other_emails), "per_archive": per, "extra_files": len(extra),
+       "identity_inputs_missing": MISSING}
 out.write_text(json.dumps(res, indent=1))
 (out.parent / (out.stem + ".hits.json")).write_text(json.dumps({"cred_hits": cred_hits, "cred_names": cred_names,
     "other_emails": [[c, a, n] for (c, a), n in other_emails.most_common()]}, indent=1))
